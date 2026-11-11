@@ -28,6 +28,31 @@ const ok = (cond, msg) => { cond ? pass++ : fail++; console.log(`${cond ? "ok" :
 const initBody = (id) => ({ jsonrpc: "2.0", id, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "r11-test", version: "1" } } });
 const callBody = (id) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "hash", params: { text: "hi", algorithm: "sha256" } } } });
 
+// ---- the limiter's wait, on a stubbed clock (no server) ----
+// Whole seconds until the key has room again, never 0: a hit that leaves the
+// window in under a second still reads 1, never "retry now".
+{
+  delete process.env.RATE_LIMIT_REPLICAS;
+  const { createLimiter } = await import("../src/rate-limit.js");
+  const realNow = Date.now;
+  try {
+    const T = 1_800_000_000_000;
+    let now = T;
+    Date.now = () => now;
+    const lim = createLimiter("retry-after-unit", { perMin: 3, perHour: 1000 });
+    for (let i = 0; i < 3; i++) lim.check("k");
+    now = T + 30_000;
+    const half = lim.check("k");
+    ok(half.limited && half.retryAfterSeconds === 30, `half a minute after a full burst the wait is 30 s (${half.retryAfterSeconds})`);
+    now = T + 59_500;
+    const edge = lim.check("k");
+    ok(edge.limited && edge.retryAfterSeconds === 1, `half a second before room the wait is 1 s, never 0 (${edge.retryAfterSeconds})`);
+    ok(lim.peek("k").retryAfterSeconds === 1, "a read that spends nothing gives the same wait");
+    now = T + 60_000;
+    ok(!lim.check("k").limited, "and at the minute there is room");
+  } finally { Date.now = realNow; }
+}
+
 let srv = null;
 try {
   srv = await bootServer({
@@ -75,33 +100,51 @@ if (srv) {
     ok(build === BUILD && !srv.exited(), `the server answering is the one this test booted (build ${build} vs ${BUILD}, port ${srv.port})`);
 
     // First request under the cap: a valid initialize should NOT be 429.
+    // The outer limiter's first hit is this request: its window frees at
+    // that moment plus a minute, so every later 429 waits the seconds left.
+    const firstAt = [Date.now()];
     const first = await post(initBody(1));
+    firstAt.push(Date.now());
     ok(first.status !== 429, `first initialize is served, not rate-limited (got ${first.status})`);
     await first.arrayBuffer();
 
     // The free-tier tool budget: the first call runs, the next is refused with
     // the wait in whole seconds.
+    const call1At = [Date.now()];
     const call1 = await rpcJson(await post(callBody(2)));
+    call1At.push(Date.now());
     ok(call1?.result && !call1.result.isError, `the first free tool call runs (${JSON.stringify(call1?.result?.content?.[0]?.text || call1?.error || "").slice(0, 80)})`);
+    const call2At = [Date.now()];
     const call2 = await rpcJson(await post(callBody(3)));
+    call2At.push(Date.now());
     const text = String(call2?.result?.content?.[0]?.text || "");
     const m = /^Free-tier rate limit reached \([^)]*\); room again in about (\d+) s\. /.exec(text);
-    ok(call2?.result?.isError === true && !!m && Number(m[1]) >= 1 && Number(m[1]) <= 60, `the refused tool call says when there is room again, in whole seconds inside the minute window (${text.slice(0, 110)})`);
+    // The seconds the limiter computed: the first call's hit plus a minute,
+    // less the moment of the refusal, rounded up (bounds from the clock
+    // readings around each request, so a slow machine widens them, never fails them).
+    const waitLo = Math.max(1, Math.ceil((call1At[0] + 60_000 - call2At[1]) / 1000));
+    const waitHi = Math.max(1, Math.ceil((call1At[1] + 60_000 - call2At[0]) / 1000));
+    ok(call2?.result?.isError === true && !!m && Number(m[1]) >= waitLo && Number(m[1]) <= waitHi, `the refused tool call says when there is room again, the limiter's own whole seconds (${m?.[1]} in ${waitLo}..${waitHi}: ${text.slice(0, 110)})`);
 
     // Flood well past the per-IP cap; the tail must be 429 with a JSON-RPC error.
     let saw429 = false, sawJsonRpc429 = false;
     const badRetryAfter = [];
     for (let i = 0; i < CAP + 8; i++) {
+      const sentAt = Date.now();
       const r = await post(initBody(100 + i));
+      const gotAt = Date.now();
       if (r.status === 429) {
         saw429 = true;
         const j = await r.json().catch(() => null);
         if (j && j.jsonrpc === "2.0" && j.error) sawJsonRpc429 = true;
         const wait = r.headers.get("retry-after");
-        if (!/^[1-9][0-9]*$/.test(wait || "") || Number(wait) > 3600) badRetryAfter.push(wait);
+        // The first hit (the opening initialize) frees the burst window.
+        const lo = Math.max(1, Math.ceil((firstAt[0] + 60_000 - gotAt) / 1000));
+        const hi = Math.max(1, Math.ceil((firstAt[1] + 60_000 - sentAt) / 1000));
+        if (!/^[1-9][0-9]*$/.test(wait || "") || Number(wait) < lo || Number(wait) > hi) badRetryAfter.push(`${wait} not in ${lo}..${hi}`);
       } else await r.arrayBuffer();
     }
-    ok(saw429 && badRetryAfter.length === 0, `every 429 carries Retry-After as whole seconds inside the limiter's window (bad: ${JSON.stringify(badRetryAfter.slice(0, 3))})`);
+    ok(saw429 && badRetryAfter.length === 0, `every 429 carries Retry-After as the limiter's own whole seconds to room (bad: ${JSON.stringify(badRetryAfter.slice(0, 3))})`);
     ok(saw429, "a burst past the per-IP cap is bounded with 429");
     ok(sawJsonRpc429, "the 429 preserves the JSON-RPC error envelope");
 
