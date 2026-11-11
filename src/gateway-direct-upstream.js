@@ -40,6 +40,9 @@
 // src/gateway-direct-pricebook.js passes (listed prices of both routes, a
 // measured backstop, a private threshold; fails closed).
 
+import { createUnansweredTracker } from "./unanswered-rule.js";
+import { currentCallerKey } from "./request-timing.js";
+
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const MODEL_ID = /^[a-z0-9][a-z0-9._:\/-]{0,127}$/i;
 const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -245,7 +248,7 @@ const COUNTED = new Set(DIRECT_BREAKER_COUNTED);
 const blankBreaker = () => ({ fails: 0, openUntil: 0, opens: 0, trialAt: 0, trialId: 0 });
 let breaker = blankBreaker();
 let breakerNow = Date.now;
-export function _resetDirectBreakerForTest() { breaker = blankBreaker(); breakerNow = Date.now; }
+export function _resetDirectBreakerForTest() { breaker = blankBreaker(); breakerNow = Date.now; directUnanswered.clear(); }
 export function _setDirectBreakerNowForTest(fn) { breakerNow = typeof fn === "function" ? fn : Date.now; }
 /** True when a direct attempt may be made now. Once the open period ends one
  *  caller takes the trial; a trial that never reports holds it for at most
@@ -271,9 +274,25 @@ export function directBreakerRelease(grant) {
   if (!grant?.trial || breaker.trialId !== grant.id || !breaker.trialAt) return;
   breaker.trialAt = 0;
 }
-/** The outcome of one direct attempt: ok, or the failure's bucket. */
-export function noteDirectOutcome(ok, reason) {
-  if (ok) { breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
+// Our own timeout on the direct link: one never counts (a long prompt is one
+// caller's input), but the pattern of src/unanswered-rule.js (many calls,
+// several callers, one window, no answer between) opens the breaker so the
+// next callers go to OpenRouter; logged as "did not answer within our limit".
+const directUnanswered = createUnansweredTracker();
+/** The outcome of one direct attempt: ok, or the failure's bucket. `caller`
+ *  is the request's caller key (src/request-timing.js) when known. */
+export function noteDirectOutcome(ok, reason, caller = currentCallerKey()) {
+  if (ok) { directUnanswered.clear(); breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
+  if (String(reason) === "timeout" && directUnanswered.note(caller)) {
+    const st = directUnanswered.state();
+    directUnanswered.clear();
+    console.warn(`[direct-upstream] the direct link did not answer within our limit on ${st.deadlines} calls from ${st.callers} callers; the next calls go to OpenRouter for the open period`);
+    const now = breakerNow();
+    if (!breaker.openUntil || now >= breaker.openUntil) breaker.opens++;
+    breaker.openUntil = now + breakerOpenMs();
+    breaker.trialAt = 0;
+    return;
+  }
   if (!COUNTED.has(String(reason))) { breaker.trialAt = 0; return; }
   breaker.fails++;
   if (breaker.fails >= breakerFails()) {

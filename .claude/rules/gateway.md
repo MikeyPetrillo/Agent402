@@ -100,7 +100,7 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   (402), 429, 404/405, 5xx, a refused or reset connection (`connect`), malformed or oversized
   body, late error, missing cost. Our own timeout (`timeout`), a DNS or egress error on our side
   (`egress`), a stream cut with no status (`stream`), a refusal of the request itself (any other
-  4xx, bucket `refused`), a client gone and an empty answer do not count; an answer resets it. No call
+  4xx, bucket `refused`), a client gone and an empty answer do not count; an answer resets it. One exception: our own `timeout` on the direct link on `UPSTREAM_UNANSWERED_MIN` calls from `UPSTREAM_UNANSWERED_MIN_CALLERS` callers inside `UPSTREAM_UNANSWERED_WINDOW_MS`, with no answer between, opens it at once (`src/unanswered-rule.js`; the log says "did not answer within our limit"). No call
   goes direct while open (`DIRECT_UPSTREAM_BREAKER_OPEN_MS`, default 5 minutes, skip bucket
   `breaker_open`); after that it is half-open (reads ok publicly) and the next call that passes the
   price check and the share draw takes the one trial: a success closes it, a counted failure
