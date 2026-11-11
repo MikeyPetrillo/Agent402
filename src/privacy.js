@@ -160,7 +160,9 @@ so every claim below is verifiable in code.</p>
     address then answers that it was removed.</li>` : ""}
   </ul></li>
   <li><b>IP addresses.</b> Used for rate limiting and in standard operational logs (request path, status
-  code) for abuse prevention and debugging. When the onchain data service cannot answer an
+  code) for abuse prevention and debugging. The log line written for a refused payment, and the timing
+  line written for each paid call, also hold the payment's network, the route and the first characters of
+  the paying address. When the onchain data service cannot answer an
   <code>onchain-sql</code> query, the text of that query is written to the same operational log so the
   failure can be reproduced; it is kept with the log and not used for anything else. Most rate-limit counters are kept in process memory for up
   to one hour. The free trial's counters (the <code>?trial=1</code> allowance on the pure-CPU tools, see the

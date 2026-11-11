@@ -252,5 +252,18 @@ ok(/\?trial=1/.test(terms) && /\?trial=1/.test(privacy), "/terms and /privacy bo
   ok(reads.includes(`on chain, until the authorization's own validBefore plus ${margin} minutes`), `/.well-known/x402 dataHandling states the unsettled grant's hold`);
 }
 
+// The payment log lines /privacy describes: the refused-payment line and the
+// paid-call timing line hold the network, the route and the first characters
+// of the paying address, never the whole address.
+{
+  const { verifyFailureLine } = await import("../src/verify-failure-log.js");
+  const payer = "0x" + "ab12".repeat(10);
+  const line = verifyFailureLine({ verb: "rejected", network: "eip155:8453", scheme: "exact", reason: `insufficient funds for ${payer}`, slug: "hash", payer });
+  ok(line.includes("eip155:8453") && line.includes("route=hash") && line.includes(`payer=${payer.slice(0, 6)}`) && !line.includes(payer), `control: the refused-payment line holds the network, route and a short payer (${line})`);
+  const timing = src("src/paid-phase-timing.js");
+  ok(/String\(w\.payer\)\.slice\(0, 6\)/.test(timing) && /net=\$\{row\.network/.test(timing) && /\[paid-timing\] \$\{row\.slug\}/.test(timing), "control: the timing line holds the network, the route and the payer's first six characters");
+  ok(/The log line written for a refused payment, and the timing line written for each paid call, also hold the payment's network, the route and the first characters of the paying address\./.test(privacy), "/privacy states what the payment log lines hold");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
