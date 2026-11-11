@@ -63,6 +63,7 @@ const PAGES = [
   { path: "/x402-test",    titleSubstr: "Test your x402 client" },
   { path: "/markets",     titleSubstr: "market data" },
   { path: "/security",    titleSubstr: "Security" },
+  { path: "/trust",       titleSubstr: "Trust" },
   { path: "/crawler",     titleSubstr: "crawler" },
   { path: "/company",     titleSubstr: "Havok Holdings" },
   { path: "/reports/sample/dossier", titleSubstr: "sample" },

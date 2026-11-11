@@ -280,6 +280,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
     { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
     { loc: `${baseUrl}/proof`, priority: "0.7" },
@@ -365,6 +366,7 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
     { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
     { loc: `${baseUrl}/glossary`, priority: "0.8" },
@@ -678,6 +680,7 @@ ${toolSections}
 - [Skill packs JSON](${baseUrl}/api/skill-packs.json): machine-readable pack index
 - [Tool docs](${baseUrl}/tools): human-readable documentation per tool
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
+- [Trust](${baseUrl}/trust): subprocessors, what is stored and where, encryption, nightly backups and restore tests, incident response
 - [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it

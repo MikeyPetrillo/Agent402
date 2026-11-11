@@ -60,6 +60,7 @@ export const PAGE_SOURCES = {
   "/markets": ["src/markets.js"],
   "/decide": ["src/decide-page.js"],
   "/security": ["src/security-page.js"],
+  "/trust": ["src/trust-page.js"],
   "/crawler": ["src/crawler-page.js"],
   "/company": ["src/company.js"],
   "/proof": ["src/proof.js"],
