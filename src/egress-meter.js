@@ -23,7 +23,7 @@
 //     would capture buyer-supplied inputs (a render target, a search query),
 //     which is customer data we have no reason to hold
 //   * bounded memory: hosts are capped, and the counter resets daily
-import { hardCapRefusalForHost } from "./upstream-hard-caps.js";
+import { hardCapRefusalForHost, hardCapNameForHost, releaseHardCap, neverReachedUpstream } from "./upstream-hard-caps.js";
 
 const MAX_HOSTS = 2000;          // far above the ~1,300 seen in a census run
 const counts = new Map();        // host -> { n, callers:Set, firstAt, lastAt }
@@ -160,6 +160,9 @@ export function installEgressMeter() {
     globalThis.fetch = function meteredFetch(input, init) {
       let h = "";
       let path = null;
+      let capName = null;
+      let takenAt = 0;
+      let abortedAtCall = false;
       try {
         const u = typeof input === "string" ? new URL(input)
           : input instanceof URL ? input
@@ -172,8 +175,22 @@ export function installEgressMeter() {
         // call is made (src/upstream-hard-caps.js).
         const refusal = h ? hardCapRefusalForHost(h) : null;
         if (refusal) return Promise.reject(refusal);
+        capName = h ? hardCapNameForHost(h) : null;
+        if (capName) {
+          takenAt = Date.now();
+          const sig = init?.signal ?? (input && typeof input === "object" && !(input instanceof URL) ? input.signal : null);
+          abortedAtCall = sig?.aborted === true;
+        }
       } catch { /* an unparseable input is the caller's problem, not ours */ }
       const p = origFetch.apply(this, arguments);
+      // The ceiling counts calls that may have reached the upstream: one that
+      // provably never left this process gives its unit back. The caller's
+      // promise is untouched (this branch handles its own rejection).
+      if (capName) {
+        p.then(undefined, (err) => {
+          try { if (neverReachedUpstream(err, { abortedAtCall })) releaseHardCap(capName, takenAt); } catch { /* the guard never breaks a call */ }
+        });
+      }
       // The outcome observer (src/tool-failure-monitor.js) sees the host and
       // the promise; it attaches its own handlers and never changes either.
       if (outcomeObserver && h) { try { outcomeObserver(h, p, init, path); } catch { /* observing must never break a request */ } }

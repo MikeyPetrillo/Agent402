@@ -81,3 +81,8 @@ Loaded when a media, document or worker-pool tool file is read.
   size buffers from fields inside their own stream. A new decoder path gets a reader that
   follows the decoder, a small-file test and a decode of the format's ordinary shapes
   (`scripts/test-image.js`).
+- **Transcription length:** the per-tier cap of `transcribe` and `transcribe-pro` holds the longer of the duration a
+  file's headers declare and the length its audio measures. `measureAudioSeconds` (`src/tools/media-kit.js`) decodes
+  the first audio stream to nowhere with ffmpeg (audio-only whitelist, its own two-slot pool that queues, 10 s
+  deadline) and never refuses: where it cannot measure (no ffmpeg, a failed or slow decode) a lossy file is held to
+  the shortest its bytes can play (`byteFloorSeconds`, `src/tools/stt-kit.js`). Suite: `scripts/test-stt-cap.js`.

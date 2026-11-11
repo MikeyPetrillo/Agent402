@@ -149,3 +149,12 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `DIRECT_UPSTREAM_MODELS` Actions secrets are set (unset: skipped with a note); since the ids are a
   secret its lines carry counts and reason codes only, never an id or a price
   (`scripts/test-model-drift-redaction.js`). Suite: `scripts/test-direct-upstream-cost-guard.js`.
+- **Hard daily ceilings** (`src/upstream-hard-caps.js`, `HARDCAP_*`): a unit is a call that may have reached the
+  upstream. It is taken before the call and given back only when the call provably never left this process
+  (`neverReachedUpstream`: the name did not resolve, the connection was refused or never opened, or the signal was
+  already aborted at the call). An upstream error answer, a timeout and a reset keep their unit. The operator view
+  counts the units given back as `releasedToday`. Suite: `scripts/test-upstream-hard-caps.js`.
+- **Quoted material:** every report kit hands the model third-party text inside `quotedMaterial` blocks
+  (`src/report-grounding.js`) and carries `QUOTED_MATERIAL_RULE`, or `QUOTED_DATA_RULE` (the same rule without its
+  citation sentence) where the report lists no numbered sources: the domain audit's probe blocks and the token risk
+  report's token, holder, liquidity and web blocks. `scripts/test-report-grounding.js` runs each with a planted directive.

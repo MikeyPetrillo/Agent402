@@ -104,23 +104,32 @@ assert(
   typeof init.result?.serverInfo?.websiteUrl === "string" && init.result.serverInfo.websiteUrl.includes("http"),
   "initialize.serverInfo.websiteUrl is set"
 );
-// Writers: demand.request (wish) + memory.write (durable state). Everything else
-// is read-only so clients that trust readOnlyHint are not misled.
+// Each hint says what the tool does to the world. A lookup (the catalog, a
+// web search, a quote, a memory read, the leaderboards) is read-only; the tools
+// that leave something behind are not: catalog.call (it can run any slug),
+// memory.write, demand.request, and the decide tools that run or record.
+const tool = (n) => (list.result?.tools ?? []).find((t) => t.name === n);
 const writers = (list.result?.tools ?? []).filter((t) => t.annotations?.readOnlyHint === false).map((t) => t.name).sort();
-// With the decide service configured, decide.execute (runs a paid plan) and
-// decide.feedback (records a verdict) write too.
-// catalog.call writes too when this connector can take a payment (MPP): a paid
-// call can run any slug, memory writes and on-chain attests included.
 const mppHere = !!init.result?.capabilities?.experimental?.payment;
-// Only the two local lookups (describe, payment info) stay read-only; every tool
-// that reaches the network is not read-only, so hosts ask before running it.
-const LOCAL_LOOKUPS = ["payment.info", "server.describe"];
-const expectedWriters = (list.result?.tools ?? []).map((t) => t.name).filter((n) => !LOCAL_LOOKUPS.includes(n)).sort();
-void [mppHere, served];
+const WRITERS = ["catalog.call", "memory.write", "demand.request", "decide.execute", "decide.feedback"];
+const expectedWriters = (list.result?.tools ?? []).map((t) => t.name).filter((n) => WRITERS.includes(n)).sort();
+void served;
 assert(
   writers.join(",") === expectedWriters.join(","),
   `writers are ${expectedWriters.join(" + ")} (got ${writers.join(",") || "none"})`
 );
+for (const n of ["catalog.search", "catalog.find", "web.search", "web.answer", "web.news", "market.quote", "memory.read", "payment.info", "server.describe"]) {
+  if (!tool(n)) continue;
+  assert(tool(n).annotations.readOnlyHint === true && tool(n).annotations.destructiveHint === false, `${n} is annotated read-only`);
+}
+assert(tool("catalog.search") && tool("web.search"), "catalog.search and web.search are listed");
+for (const n of ["web.search", "web.answer", "web.news", "browser.render", "market.quote"]) {
+  if (tool(n)) assert(tool(n).annotations.openWorldHint === true, `${n} reads outside this service (open-world)`);
+}
+{
+  const ann = tool("memory.write")?.annotations || {};
+  assert(ann.readOnlyHint === false && ann.destructiveHint === true, `memory.write is annotated as a write that replaces a stored value (got ${JSON.stringify(ann)})`);
+}
 {
   const call = (list.result?.tools ?? []).find((t) => t.name === "catalog.call");
   const ann = call?.annotations || {};

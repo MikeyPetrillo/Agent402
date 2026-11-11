@@ -59,14 +59,18 @@ try {
 
     // Flood well past the per-IP cap; the tail must be 429 with a JSON-RPC error.
     let saw429 = false, sawJsonRpc429 = false;
+    const badRetryAfter = [];
     for (let i = 0; i < CAP + 8; i++) {
       const r = await post(initBody(100 + i));
       if (r.status === 429) {
         saw429 = true;
         const j = await r.json().catch(() => null);
         if (j && j.jsonrpc === "2.0" && j.error) sawJsonRpc429 = true;
+        const wait = r.headers.get("retry-after");
+        if (!/^[1-9][0-9]*$/.test(wait || "") || Number(wait) > 3600) badRetryAfter.push(wait);
       }
     }
+    ok(saw429 && badRetryAfter.length === 0, `every 429 carries Retry-After as whole seconds inside the limiter's window (bad: ${JSON.stringify(badRetryAfter.slice(0, 3))})`);
     ok(saw429, "a burst past the per-IP cap is bounded with 429");
     ok(sawJsonRpc429, "the 429 preserves the JSON-RPC error envelope");
 

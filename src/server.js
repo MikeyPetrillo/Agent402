@@ -6,7 +6,7 @@ import { securityHeaders, answerClientError } from "./security-headers.js";
 import { operatorRoutesOf } from "./operator-routes.js";
 import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAID_LIMITS as LARGE_BODY_UNPAID_LIMITS } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
-import { retiredEntryFor, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
+import { retiredEntryFor, retiredEntryForSlug, assertRetiredRegistryConsistent, retirementHeaders, RETIRED_CONVERTERS_AT } from "./retired-tools.js";
 import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
@@ -3790,6 +3790,26 @@ function notFoundPage(res, { what = "Page", href = "/", label = "Home" } = {}) {
     </div>${ledgerFooterCompact()}`;
   return res.status(404).type("html").send(ledgerShell({ title: `${what} not found - Agent402`, description: `${what} not found`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
 }
+// The page of a tool or skill pack we retired: 410 with the retirement date and
+// the replacement's page, the same answer its API route gives
+// (src/retired-tools.js). A 404 here read as a broken link, not a retirement.
+function retiredPage(res, gone) {
+  const what = gone.kind === "pack" ? "Skill pack" : "Tool";
+  const rep = gone.replacement ? Object.values(CATALOG).find((d) => d.slug === gone.replacement) : null;
+  const repHref = rep ? `/tools/${rep.slug}` : null;
+  const all = gone.kind === "pack" ? { href: "/skills", label: "All skill packs" } : { href: "/tools", label: "All tools" };
+  const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
+      <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">410</div>
+      <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} retired</h1>
+      <p style="color:var(--muted);margin:0 0 28px;font-weight:300;"><code>${escHtml(gone.slug)}</code> was retired on ${escHtml(gone.retiredAt)}.${rep ? ` ${escHtml(rep.name)} answers the nearest question.` : ""}</p>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+        ${rep ? `<a class="btn btn-secondary" href="${escHtml(repHref)}">${escHtml(rep.name)}</a>` : ""}
+        <a class="btn btn-secondary" href="${all.href}">${all.label}</a>
+      </div>
+    </div>${ledgerFooterCompact()}`;
+  res.set(retirementHeaders(gone.retiredAt, repHref ? `${BASE_URL}${repHref}` : null));
+  return res.status(410).type("html").send(ledgerShell({ title: `${what} retired - Agent402`, description: `${what} ${gone.slug} was retired on ${gone.retiredAt}`, canonical: `${BASE_URL}/`, baseUrl: BASE_URL, activePath: "__none__", robots: "noindex, nofollow", body }));
+}
 const htmlCache = (res, maxAge, swr) =>
   res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
 app.get("/", (_req, res) => {
@@ -6977,7 +6997,11 @@ app.get("/guides/:slug", (req, res) => {
 app.get("/skills", (_req, res) => htmlCache(res, 300, 900).send(skillsIndex(BASE_URL)));
 app.get("/skills/:slug", (req, res) => {
   const html = skillPackPage(BASE_URL, req.params.slug, CATALOG);
-  if (!html) return notFoundPage(res, { what: "Skill pack", href: "/skills", label: "All skill packs" });
+  if (!html) {
+    const gone = retiredEntryForSlug(`skill-${req.params.slug}`);
+    if (gone) return retiredPage(res, gone);
+    return notFoundPage(res, { what: "Skill pack", href: "/skills", label: "All skill packs" });
+  }
   htmlCache(res, 300, 900).send(html);
 });
 // Machine-readable skill packs — the canonical source for the `agent402-mcp`
@@ -9741,7 +9765,11 @@ app.get("/tools/category/:cat", (req, res) => {
 app.get("/tools/:slug", (req, res) => {
   const tools = toolList(CATALOG);
   const tool = tools.find((t) => t.slug === req.params.slug);
-  if (!tool) return notFoundPage(res, { what: "Tool", href: "/tools", label: "All tools" });
+  if (!tool) {
+    const gone = retiredEntryForSlug(req.params.slug);
+    if (gone) return retiredPage(res, gone);
+    return notFoundPage(res, { what: "Tool", href: "/tools", label: "All tools" });
+  }
   const related = relatedTools(tool, tools, 6);
   const cachePolicy = tool.method === "GET" ? CACHEABLE_ROUTES[tool.path] : null;
   // The method alias (POST on a GET-only path, GET/HEAD on a POST-only path)
@@ -11046,7 +11074,9 @@ if (FREE_MODE) {
       if (solution) {
         const result = verifySolution(solution, slug);
         if (result.ok) {
-          if (powHttpLimiter.check(req.ip || "unknown").limited) {
+          const powBudget = powHttpLimiter.check(req.ip || "unknown");
+          if (powBudget.limited) {
+            res.setHeader("Retry-After", String(powBudget.retryAfterSeconds));
             res.setHeader("X-Pow-Rate-Limited", "true");
             res.setHeader("X-Pow-Limits", POW_LIMITS_LABEL);
             return res.status(429).json({

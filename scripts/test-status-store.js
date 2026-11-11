@@ -296,9 +296,30 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
   check("a quiet heartbeat beside a current Worker: the source is listed unknown with its age and bound",
     pc2.state === "operational" && pc2.source === CF && hb.state === "unknown" && hb.ageMs === 6.4 * H && hb.staleAfterMs === 3 * H && cf.state === "operational" && cf.staleAfterMs === 45 * MIN);
   const lines = observerLines(of(snap, "paid-call"));
-  check("the card names the quiet observer as not current with its age", /GitHub heartbeat: not current, last observed 6h ago\. Cloudflare probe: operational, observed 4m ago\./.test(lines) || /Cloudflare probe: operational, observed 4m ago\. GitHub heartbeat: not current, last observed 6h ago\./.test(lines));
+  check("the card names the quiet observer as not current with its age", /Scheduled heartbeat: not current, last observed 6h ago\. Outside probe: operational, observed 4m ago\./.test(lines) || /Outside probe: operational, observed 4m ago\. Scheduled heartbeat: not current, last observed 6h ago\./.test(lines));
   const html = statusPage("https://example.test", {}, snap);
-  check("the page renders that line on the paid call card", html.includes("GitHub heartbeat: not current, last observed 6h ago"));
+  check("the page renders that line on the paid call card", html.includes("Scheduled heartbeat: not current, last observed 6h ago"));
+  // The observer labels say what each observer does, in our own words.
+  {
+    const { OBSERVER_LABEL, staleLine } = await import("../src/status.js");
+    const labels = Object.values(OBSERVER_LABEL);
+    check("every paid-call observer has a label", Object.values(PAID_CALL_SOURCES).every((k) => typeof OBSERVER_LABEL[k] === "string" && OBSERVER_LABEL[k].length > 3));
+    check(`the observer labels name no vendor (${labels.join(", ")})`, labels.every((l) => !/github|cloudflare|actions|worker|railway/i.test(l)));
+    // Each card: its label, word, blurb and observer lines (the text up to its bars).
+    const cards = [...snap.components, ...snap.railComponents].map((c) => { const at = html.indexOf(`<span class="comp-n">${c.label}</span>`); return at < 0 ? "" : html.slice(at, html.indexOf('<div class="bars">', at) > at ? html.indexOf('<div class="bars">', at) : at + 1500); });
+    check("every component card is found on the page", cards.length >= COMPONENTS.length && cards.every((t) => t.length > 40));
+    check("no component card names a vendor", !/github|cloudflare/i.test(cards.join("\n")));
+    // A component whose only reading is stale reads Not measured AND says the reading is stale, with its age.
+    const staleSnap = view(storeAt((key) => (key === "api" ? 5 * H : fresh(key)), { [HB]: 4 * MIN, [CF]: 4 * MIN }));
+    const api = of(staleSnap, "api");
+    check("a stale reading is never shown as operational", api.current.state === "unknown" && api.current.reason === "no recent observation" && api.current.ageMs === 5 * H);
+    check("the card says the observation is stale, with its age", staleLine(api) === '<p class="comp-b">The last observation is stale: recorded 5h ago.</p>');
+    const staleHtml = statusPage("https://example.test", {}, staleSnap);
+    const apiCard = staleHtml.slice(staleHtml.indexOf(">Tool serving<"), staleHtml.indexOf(">Catalog<"));
+    check("the page renders Not measured and the stale line on that card, never Operational", /Not measured/.test(apiCard) && /The last observation is stale: recorded 5h ago\./.test(apiCard) && !/Operational/.test(apiCard));
+    check("control: a current component carries no stale line", staleLine(of(snap, "api")) === "" && staleLine(of(staleSnap, "paid-call")) === "");
+    check("a never-observed component carries no stale line", staleLine({ current: { state: "unknown", reason: "never observed" } }) === "");
+  }
   check("a component with one observer gets no observer line", observerLines(of(snap, "api")) === "");
   check("/api/status states the two-observer rule", /two observers \(paid-call\) is read from the observers whose readings are current/.test(snap.measurement.note));
 }
