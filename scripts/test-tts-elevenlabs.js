@@ -336,7 +336,7 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
       const errs = [];
       for (let i = 0; i < 5; i++) { stub([["openrouter.ai", hung()]]); errs.push(await asCaller(`203.0.113.${i + 1}`, () => throwsWith(() => run("tts", { text: "hello" })))); }
       ok(elevenLabsBreakerState() === "cooling", `five callers whose calls the link held past our limit open the breaker (state ${elevenLabsBreakerState()})`);
-      ok(errs.every((e) => e?.statusCode === 503 && /^Speech upstream did not answer the speech read within \d+ s/.test(e.message)), "each held call is still its own uncharged 503");
+      ok(errs.every((e) => e?.statusCode === 503 && /^Speech upstream did not answer the speech read within our \d+ s limit/.test(e.message)), "each held call is still its own uncharged 503");
       const line = warned.find((w) => w.startsWith("[tts] the speech link"));
       ok(!!line && /did not answer within our limit on 5 calls from 5 callers/.test(line) && !/elevenlabs|fail|outage|is down/i.test(line) && !/203\.0\.113/.test(line), `the log line is neutral and carries no address (${line})`);
       stub([["openrouter.ai", (_u, init) => { if (isEleven(init)) throw new Error("ElevenLabs must not be called while cooling"); return backupAudio(init); }]]);
