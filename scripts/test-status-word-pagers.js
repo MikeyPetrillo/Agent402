@@ -1,6 +1,8 @@
 // Three words on /api/gateway-status and their two observers: gatewayBalance
 // (withdraw), sharedLimits (degraded) and replayStore (pending). Also the spend
-// words (xDataSpend, exaSpend, routerSpendWindow: over and capped).
+// words (xDataSpend, exaSpend, routerSpendWindow: over and capped), and
+// upstreamHealth and facilitatorFunds driven end to end from the monitor (our
+// own timeouts, DNS failures and unread balances page nothing).
 //
 // gatewayBalance=withdraw holds from the read that reaches the mark until an
 // operator moves the balance, so it pages at once. The other two flicker in
@@ -339,6 +341,78 @@ for (const [name, T, field, sameBody] of SPEND) {
     }
     for (const word of ["over", "capped", "unknown"]) assert.deepEqual(await runStep(step, { [field]: { status: word } }, [{ number: 9, title: T }]), [], word);
     assert.deepEqual(await runStep(step, undefined, [{ number: 9, title: T }]), [], "a blind read never closes");
+  });
+}
+// ---- upstreamHealth and facilitatorFunds, end to end -----------------------------
+// The words come from a real monitor fed the outcomes the server sees: our own
+// AbortSignal.timeout and DNS failures through the egress observer, then the
+// upstream's own 5xx answers; the gas checker's unread rows, then a real low
+// reading. Each reading is judged by the Worker and run through heartbeat.yml's
+// step as written: our own failures page nothing, the upstream's own failure
+// pages once, and recovery closes it.
+{
+  const { createToolFailureMonitor } = await import("../src/tool-failure-monitor.js");
+  const UH = "upstreamHealth: an upstream is timing out or failing";
+  const FG = "facilitatorFunds: a facilitator's settlement gas is running low";
+  const step = steps.find((s) => String(s.name || "").startsWith("Tool, upstream and facilitator failure checks"));
+  let t = Date.parse("2026-11-10T12:00:00Z");
+  const m = createToolFailureMonitor({ now: () => t, env: {} });
+  const words = async () => {
+    const st = await m.status({ fresh: true, t });
+    return { upstreamHealth: st.upstreamHealth, facilitatorFunds: st.facilitatorFunds };
+  };
+  const created = (calls, T) => calls.filter((c) => c[1] === "create" && argOf(c, "--title") === T).length;
+  const closedNum = (calls) => calls.filter((c) => c[1] === "close").map((c) => c[2]);
+  const ourTimeout = () => { const ac = new AbortController(); ac.abort(new DOMException("t", "TimeoutError")); const p = Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")); p.catch(() => {}); return [p, { signal: ac.signal }]; };
+  const ourDns = () => { const p = Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } })); p.catch(() => {}); return [p, {}]; };
+  for (let i = 0; i < 40; i++) { const [p, init] = i % 2 ? ourTimeout() : ourDns(); m.observeFetch("hist.databento.com", p, init, "outside"); }
+  await new Promise((r) => setTimeout(r, 0));
+  let gw = await words();
+  await check("upstreamHealth: forty of our own timeouts and DNS failures read ok; the Worker and the heartbeat page nothing", async () => {
+    assert.equal(gw.upstreamHealth.status, "ok");
+    assert.notEqual(judge({ gateway: gw })[UH], "bad");
+    assert.equal(created(await runStep(step, gw), UH), 0);
+  });
+  for (let i = 0; i < 6; i++) m.observeFetch("hist.databento.com", Promise.resolve(new Response("x", { status: 502 })), {}, "outside");
+  await new Promise((r) => setTimeout(r, 0));
+  gw = await words();
+  await check("upstreamHealth: the upstream's own 502s page once under the title, and an open issue is not duplicated", async () => {
+    assert.ok(["degraded", "failing"].includes(gw.upstreamHealth.status), gw.upstreamHealth.status);
+    assert.equal(judge({ gateway: gw })[UH], "bad");
+    assert.equal(created(await runStep(step, gw), UH), 1);
+    assert.equal(created(await runStep(step, gw, [{ number: 7, title: UH }]), UH), 0);
+  });
+  t += 2 * 3_600_000; // the hour the word reads has passed
+  gw = await words();
+  await check("upstreamHealth: once the failures age out the word reads ok and the issue closes", async () => {
+    assert.equal(gw.upstreamHealth.status, "ok");
+    assert.equal(judge({ gateway: gw })[UH], "good");
+    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 7, title: UH }])), ["7"]);
+  });
+  // Gas: our failed balance reads are not a low balance.
+  const NET = "eip155:4663";
+  const row = (status, extra = {}) => ({ network: NET, facilitator: "listed", signer: "0x" + "1".repeat(40), status, runway: status === "low" ? 10 : status === "ok" ? 5000 : null, at: t, ...extra });
+  m.noteRelayerGas([row("unread", { failures: 3 })]);
+  gw = await words();
+  await check("facilitatorFunds: a signer our checker could not read reads unknown, and neither pages nor closes", async () => {
+    assert.equal(gw.facilitatorFunds.status, "unknown");
+    assert.equal(judge({ gateway: gw })[FG], "quiet");
+    assert.equal(created(await runStep(step, gw), FG), 0);
+    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 8, title: FG }])), []);
+  });
+  m.noteRelayerGas([row("low"), row("unread", { signer: "0x" + "2".repeat(40) })]);
+  gw = await words();
+  await check("facilitatorFunds: a real low balance still pages once, unread rows beside it or not", async () => {
+    assert.equal(gw.facilitatorFunds.status, "low");
+    assert.equal(judge({ gateway: gw })[FG], "bad");
+    assert.equal(created(await runStep(step, gw), FG), 1);
+  });
+  m.noteRelayerGas([row("ok")]);
+  gw = await words();
+  await check("facilitatorFunds: a funded signer reads ok and closes the issue", async () => {
+    assert.equal(gw.facilitatorFunds.status, "ok");
+    assert.equal(judge({ gateway: gw })[FG], "good");
+    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 8, title: FG }])), ["8"]);
   });
 }
 await rm(dir, { recursive: true, force: true });
