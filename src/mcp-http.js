@@ -52,7 +52,7 @@ import { stripeEnabled } from "./mpp-stripe.js";
 import { findTools, findRelatedSellers, applyFrontDoorTerms } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { partialFields, clampFields } from "./partial-answer.js";
-import { boundAnswer, withAnswerBound } from "./mcp-answer-bound.js";
+import { boundAnswer, withAnswerBound, mcpMaxAnswerBytes } from "./mcp-answer-bound.js";
 import { routableSellerSummaries, screenSellerNameOn } from "./x402-index.js";
 import { logSafe } from "./log-safe.js";
 import { withoutPaymentRequired } from "./payment-required-body.js";
@@ -1505,12 +1505,22 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // the raw tool JSON agents already parse.
         // A free answer past the connector's ceiling is cut and says so in
         // fields (src/mcp-answer-bound.js).
-        const { value, bound } = boundAnswer(result);
+        // The text block is built once: when it fits the ceiling the compact
+        // form fits too (it is the same JSON less whitespace), so it is sent
+        // as built and the answer is not serialized again to be measured.
+        const maxBytes = mcpMaxAnswerBytes();
+        let pretty;
+        try { pretty = JSON.stringify(result, null, 2); } catch { pretty = undefined; }
+        if (typeof pretty === "string" && (pretty.length * 3 <= maxBytes || Buffer.byteLength(pretty) <= maxBytes)) {
+          if (isNamed) return mcpJsonResult(result, pretty);
+          return { content: [{ type: "text", text: pretty }], structuredContent: { slug: entry.def.slug, result } };
+        }
+        const { value, bound } = boundAnswer(result, maxBytes);
         if (bound) result = withAnswerBound(value, bound);
-        if (isNamed) return mcpJsonResult(result);
+        if (isNamed) return bound ? mcpJsonResult(result) : mcpJsonResult(result, pretty);
         return {
           // A cut answer is already large: no indentation on top of it.
-          content: [{ type: "text", text: bound ? JSON.stringify(result) : JSON.stringify(result, null, 2) }],
+          content: [{ type: "text", text: bound ? JSON.stringify(result) : pretty }],
           structuredContent: { slug: entry.def.slug, result, ...(bound ? { answerBound: bound } : {}) },
         };
       } catch (err) {

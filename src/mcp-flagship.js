@@ -514,9 +514,9 @@ export function outputSchemaFromExample(example) {
 }
 
 /** Wrap a JSON object as MCP CallToolResult with structuredContent. */
-export function mcpJsonResult(obj) {
+export function mcpJsonResult(obj, text = JSON.stringify(obj, null, 2)) {
   return {
-    content: [{ type: "text", text: JSON.stringify(obj, null, 2) }],
+    content: [{ type: "text", text }],
     structuredContent: obj && typeof obj === "object" && !Array.isArray(obj) ? obj : { result: obj },
   };
 }

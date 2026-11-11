@@ -113,9 +113,12 @@ const def = (slug, handler) => ({
   tags: ["widget"], discovery: { inputSchema: { properties: { q: { type: "string" } } }, input: { q: "x" } }, handler,
 });
 const BIG_ROWS = Array.from({ length: 4000 }, (_, i) => ({ i, pad: "p".repeat(60) }));
+const AIRY_ROWS = Array.from({ length: 6000 }, () => [1]);
 const CATALOG = {
   "GET /api/big": def("big", async () => ({ label: "big", rows: BIG_ROWS })),
   "GET /api/small": def("small", async () => ({ label: "small", rows: [1, 2, 3] })),
+  // Under the ceiling compact, over it once indented: sent whole and indented.
+  "GET /api/airy": { ...def("airy", async () => ({ label: "airy", rows: AIRY_ROWS })), description: "airy test tool", tags: ["airy"] },
 };
 // Enough tools that an unclamped search would return more than the maximum.
 for (let i = 0; i < 60; i++) CATALOG[`GET /api/w${i}`] = def(`w${i}`, async () => ({ ok: true }));
@@ -152,6 +155,11 @@ try {
 
   const small = (await rpc("tools/call", { name: "catalog.call", arguments: { slug: "small", params: {} } })).result;
   ok(small.content[0].text === JSON.stringify({ label: "small", rows: [1, 2, 3] }, null, 2) && small.structuredContent.answerBound === undefined && small.structuredContent.result.answerBound === undefined, "an answer under the ceiling is unchanged and carries no answerBound");
+
+  const airyWant = { label: "airy", rows: AIRY_ROWS };
+  ok(bytes(airyWant) < MAX && Buffer.byteLength(JSON.stringify(airyWant, null, 2)) > MAX, "setup: the airy answer fits the ceiling compact and passes it indented");
+  const airy = (await rpc("tools/call", { name: "catalog.call", arguments: { slug: "airy", params: {} } })).result;
+  ok(airy.content[0].text === JSON.stringify(airyWant, null, 2) && airy.structuredContent.answerBound === undefined && airy.structuredContent.result.rows.length === AIRY_ROWS.length, "an answer that fits compact is sent whole, indented as built, with no answerBound");
 
   const search = async (limit) => (await rpc("tools/call", { name: "catalog.search", arguments: { query: "widget", ...(limit === undefined ? {} : { limit }) } })).result.structuredContent;
   const dflt = await search(undefined);
