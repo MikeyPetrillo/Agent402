@@ -1921,6 +1921,31 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     const b = validateRequest({ model: MER, messages: [{ role: "user", content: "hi" }] }, tier);
     ok(b.model === MER_USE && b.__substitutedFrom === MER, `on ${tier}: mercury-2.5 served as ${MER_USE} with the swap named`);
   }
+  // llama-3.2-1b-instruct (upstream expiration 2026-11-20): SCHEDULED. Served
+  // as itself on nano, base and metered until the date, then by
+  // llama-3.2-3b-instruct on the tier of the route called, the swap named.
+  {
+    const L1 = "meta-llama/llama-3.2-1b-instruct", L3 = "meta-llama/llama-3.2-3b-instruct";
+    const HOMES = ["v1-chat-nano", "v1-chat", "v1-chat-metered"];
+    ok(RETIRING_MODELS[L1]?.until === "2026-11-20" && RETIRING_MODELS[L1].use === L3 && RETIRING_MODELS[L1].asItselfUntil === true && !RETIRING_MODELS[L3], "llama-3.2-1b-instruct: scheduled to retire 2026-11-20, successor llama-3.2-3b-instruct, itself not retiring");
+    ok(!Object.values(TIERS).some((t) => (t.fallbacks || []).includes(L1) || t.defaultModel === L1) && !Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()).includes(L1) && !K.FLEX_MODELS.includes(L1) && !Object.hasOwn(K.AVAILABILITY_SUCCESSORS, L1), "no fallback, default, ranking, flex or availability entry names llama-3.2-1b-instruct");
+    ok(cf(L3) === cf(L1) && cf(L3) !== null && !rp(L1) && !rp(L3), "the successor is priced by the row that prices the retiring id, and neither has a reasoning row");
+    const on = (tier) => validateRequest({ model: L1, messages: [{ role: "user", content: "hi" }] }, tier);
+    K.setRetiringClockForTest(() => Date.parse("2026-11-19T23:59:59Z"));
+    ok(!retiringModel(L1) && tierFor(L1) === "v1-chat-nano" && JSON.stringify(Object.keys(TIERS).filter((t) => tierAllows(t, L1))) === JSON.stringify(HOMES), "before 2026-11-20: llama-3.2-1b-instruct homes on nano, admitted on base and metered");
+    for (const tier of HOMES) {
+      const b = on(tier);
+      ok(b.model === L1 && !b.__substitutedFrom, `before 2026-11-20 on ${tier}: llama-3.2-1b-instruct served as itself`);
+    }
+    K.setRetiringClockForTest(() => Date.parse("2026-11-20T00:00:00Z"));
+    ok(retiringModel(L1)?.use === L3 && K.canonicalModel(L1) === L3 && K.substitutedFrom(L1) === L1 && Object.keys(TIERS).every((t) => tierAllows(t, L1) === tierAllows(t, L3)), "from 2026-11-20: llama-3.2-1b-instruct is admitted exactly where its successor is");
+    for (const tier of HOMES) {
+      const b = on(tier);
+      ok(b.model === L3 && b.__substitutedFrom === L1, `from 2026-11-20 on ${tier}: llama-3.2-1b-instruct served as ${L3} with the swap named`);
+    }
+    ok(K.flatTierQuoteUsd("v1-chat-nano", L1) === TIERS["v1-chat-nano"].price && K.crossTierHome("v1-chat-nano", L1) === null && K.meteredModelVerdict(L1) === null, "from 2026-11-20: a nano call naming it keeps the nano price, and the metered pre-payment check leaves it to its successor");
+    K.setRetiringClockForTest(null);
+  }
   // qwen-2.5-7b-instruct (gone from the upstream catalog 2026-11-11): out of
   // every tier list, fallback, ranking, availability-successor row and
   // /v1/models; a call naming it is served as ministral-8b-2512 on each tier

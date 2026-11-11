@@ -91,7 +91,7 @@ Questions your code can branch on instead of prose to parse. Model-backed, walle
 
 ## Retired model ids
 
-A request that names a model the upstream has retired is served by its successor, and the reply says so in `agent402_model_substituted`. Current mappings include `anthropic/claude-sonnet-4` to `anthropic/claude-sonnet-5.5`, `qwen/qwen3.5-9b` to `qwen/qwen3.7-flash`, `qwen/qwen-2.5-7b-instruct` to `mistralai/ministral-8b-2512`, the Gemini 2.5 models to their Gemini 3.x successors and the Laguna 2.1 models to Ministral. GPT-4o, GPT-4o mini, GPT-4.1 and GPT-4.1 mini are scheduled to be retired upstream on 2027-01-14.
+A request that names a model the upstream has retired is served by its successor, and the reply says so in `agent402_model_substituted`. Current mappings include `anthropic/claude-sonnet-4` to `anthropic/claude-sonnet-5.5`, `qwen/qwen3.5-9b` to `qwen/qwen3.7-flash`, `qwen/qwen-2.5-7b-instruct` to `mistralai/ministral-8b-2512`, the Gemini 2.5 models to their Gemini 3.x successors and the Laguna 2.1 models to Ministral. `meta-llama/llama-3.2-1b-instruct` is served as itself until its upstream expiration on 2026-11-20, then by `meta-llama/llama-3.2-3b-instruct`. GPT-4o, GPT-4o mini, GPT-4.1 and GPT-4.1 mini are scheduled to be retired upstream on 2027-01-14.
 
 ## Reasoning that fits the output cap
 
