@@ -571,7 +571,7 @@ export function refusalNamesValidity(headers, bodyText = "") {
     }
   };
   const raw = String(get("payment-required") || get("x-payment-required") || "").trim();
-  if (raw) { try { errOf(JSON.parse(Buffer.from(raw.slice(0, 16384), "base64").toString("utf8"))); } catch { /* not readable */ } }
+  if (raw) { try { errOf(JSON.parse(decodeUtf8(Buffer.from(raw.slice(0, 16384), "base64")))); } catch { /* not readable */ } }
   const text = String(bodyText || "").slice(0, 4096);
   try { errOf(JSON.parse(text)); } catch { said.push(text); }
   return said.some((t) => VALIDITY_TEXT.test(String(t).slice(0, 1000)));
