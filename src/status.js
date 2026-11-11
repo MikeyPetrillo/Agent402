@@ -229,8 +229,8 @@ export function statusSnapshot({ baseUrl = "", nowMs = Date.now(), historyDays =
     generatedAt: new Date(nowMs).toISOString(),
     overall: overallState(components, railComponents),
     measurement: {
-      observer: "Two independent observers outside production: a Cloudflare cron probe and the GitHub Actions heartbeat",
-      cadence: "every 5 minutes (Cloudflare), plus the GitHub heartbeat",
+      observer: "Two independent observers outside production: an outside probe and a scheduled heartbeat",
+      cadence: "every 5 minutes (outside probe), plus the scheduled heartbeat",
       verify: HEARTBEAT_RUNS,
       measuringSince: firstObs ? new Date(firstObs).toISOString() : null,
       totalObservations: store.totalObservations(),
@@ -295,8 +295,8 @@ function bars(daily) {
 // A component read from two observers lists each one's own reading and its
 // age, so an observer that has gone quiet is shown as not current beside the
 // one the component's word comes from, never folded into it.
-// First-party names for what each observer does; where an observer runs is
-// said once, in the page's method notes.
+// First-party names for what each observer does, the same names the method
+// notes and /api/status measurement use (no vendor is named on either).
 export const OBSERVER_LABEL = Object.freeze({ [PAID_CALL_SOURCES.heartbeat]: "Scheduled heartbeat", [PAID_CALL_SOURCES.worker]: "Outside probe" });
 const ageStr = (ms) => {
   const s = Math.max(0, Number(ms) || 0) / 1000;
@@ -573,7 +573,7 @@ ${liveSection(snap.live, stats)}
 <h2 id="method">How this is measured</h2>
 <div class="method">
 <ul>
-<li><b>The observers sit outside the service.</b> A Cloudflare cron probe checks production every 5 minutes and a GitHub Actions heartbeat checks it again; each records what it saw, and this page only stores and renders those observations.</li>
+<li><b>The observers sit outside the service.</b> An outside probe checks production every 5 minutes and a scheduled heartbeat checks it again; each records what it saw, and this page only stores and renders those observations.</li>
 <li><b>An outage appears as a gap.</b> When production is down the probe cannot report in either, so the record shows missing observations rather than a tidy row of failures. Gaps are never counted as uptime or as downtime: each percentage is taken over the probes that reported.</li>
 <li><b>Percentages carry their denominator.</b> 100% of three probes is a weaker claim than 100% of three thousand, and the page shows which one you are reading.</li>
 <li><b>Stale means unknown, not healthy.</b> A component whose most recent observation has aged out is reported as not measured. The paid call path has two observers; each one's reading and age is listed on its card, and one that has gone quiet is shown as not current.</li>

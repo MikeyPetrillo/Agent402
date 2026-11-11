@@ -309,6 +309,30 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
     const cards = [...snap.components, ...snap.railComponents].map((c) => { const at = html.indexOf(`<span class="comp-n">${c.label}</span>`); return at < 0 ? "" : html.slice(at, html.indexOf('<div class="bars">', at) > at ? html.indexOf('<div class="bars">', at) : at + 1500); });
     check("every component card is found on the page", cards.length >= COMPONENTS.length && cards.every((t) => t.length > 40));
     check("no component card names a vendor", !/github|cloudflare/i.test(cards.join("\n")));
+    // The whole page's visible text and every prose value of /api/status name
+    // no vendor. The names are carried as hashes (the approach of
+    // scripts/test-no-third-party-names.js): the upstream vendor list plus the
+    // two services the observers run on. A link (a URL value) and an
+    // identifier (a source id such as the Worker's, one token with no space)
+    // are contract values, not copy.
+    {
+      const { h, loadVendorData } = await import("./lib/vendor-names.js");
+      const { pageText } = await import("./lib/html-text.js");
+      const OBSERVER_HOSTS = ["738e22f0acab814cc0c6", "c0b0109d9439de57fe3c"];
+      const vendors = new Set([...loadVendorData().vendors, ...OBSERVER_HOSTS]);
+      const named = (text) => [...new Set((String(text).toLowerCase().match(/[a-z0-9][a-z0-9-]{2,}/g) || []).flatMap((w) => [w, ...w.split("-")]))].filter((w) => vendors.has(h(w)));
+      check("control: a hashed observer vendor is caught in prose", named("probed by a " + "cloud" + "flare cron").length === 1 && named("an outside probe").length === 0);
+      const prose = [];
+      const walk = (v) => {
+        if (typeof v === "string") { if (!/^https?:\/\//.test(v) && /\s/.test(v)) prose.push(v); }
+        else if (Array.isArray(v)) v.forEach(walk);
+        else if (v && typeof v === "object") Object.values(v).forEach(walk);
+      };
+      walk(snap);
+      const pageHits = named(pageText(html)), apiHits = named(prose.join("\n"));
+      check(`/status names no vendor in its text (${pageHits.length} hit(s))`, pageText(html).length > 2000 && pageHits.length === 0);
+      check(`/api/status names no vendor in its prose (${prose.length} strings, ${apiHits.length} hit(s))`, prose.length > 10 && apiHits.length === 0 && /outside probe/.test(snap.measurement.observer) && /outside probe/.test(snap.measurement.cadence));
+    }
     // A component whose only reading is stale reads Not measured AND says the reading is stale, with its age.
     const staleSnap = view(storeAt((key) => (key === "api" ? 5 * H : fresh(key)), { [HB]: 4 * MIN, [CF]: 4 * MIN }));
     const api = of(staleSnap, "api");
