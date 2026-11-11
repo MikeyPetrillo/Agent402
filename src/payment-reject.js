@@ -66,9 +66,45 @@ export const REJECTION_REASONS = Object.freeze([
   { reason: "insufficient-funds", means: "The facilitator simulated the transfer and the paying wallet holds less of the asset than this route's price. Nothing was charged. Fund the wallet, or pay on another network listed in accepts, then sign a new authorization. `needs` on the 402 carries the network, asset and amount (base units) this call asked for." },
   { reason: "no-token-account", means: "The paying wallet has no account for the asset on that network (no USDC token account on Solana, no trustline on Stellar, not opted in on Algorand), so the transfer could not run in the facilitator's simulation. Nothing was charged. Create the account and fund it (on Solana, receiving USDC creates it) or pay on another network listed in accepts; retry is fund-wallet, `needs` carries the network, asset and amount (base units), and Retry-After says when to try again." },
   { reason: "unclassified", means: "It decoded and still matched nothing, in a way this server has no name for. The refusal lists the field NAMES received so you can compare them yourself, and we would like to hear about it: an unclassified refusal is as likely to be our defect as yours." },
+  { reason: "not-checked", means: "The payment never got a verdict: this server's verify request to the facilitator did not complete (a connection error or this server's own time limit), the facilitator answered with an HTTP error, or an on-chain signature check could not finish. Nothing was charged and nothing is known to be wrong with the payment. retry is same-payment: send the same payment again after Retry-After, with no new signature, while its authorization is still valid." },
   { reason: "facilitator-quota", means: "The payment verified and the call ran, then the facilitator for that network refused to settle it under a billing quota on this server's own account. Nothing was charged and nothing is wrong with your wallet. Ask the route for a fresh 402 without paying and pay on another network it lists." },
   { reason: "settlement-unconfirmed", means: "A facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait, so the answer was withheld. The transfer may still land. If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof. Watch the listed transaction; a new authorization for the same call is a new payment, not a step in that repayment." },
 ]);
+
+// A verify failure that carries no verdict on the payment. Read from the
+// failure's own reason text (src/payments.js recordVerifyFailure: a
+// facilitator's code, or our summary of what its client threw), first, so
+// that words a facilitator's error body happens to contain ("network",
+// "balance") are never read as advice about the buyer's payment.
+const NOT_CHECKED_UNVERIFIABLE = /(?:^|[_\s])unverifiable\b|_check_failed\b/i;
+const NOT_CHECKED_STATUS = /\bfailed \((\d{3})\)|\bHTTP (\d{3})\b|_http_(\d{3})\b/i;
+const NOT_CHECKED_TRANSPORT = /\bfetch failed\b|\btimed out\b|\btimeout\b|\babort(?:ed)?\b|\bnetwork_error\b|socket hang up|\b(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EPIPE|UND_ERR_[A-Z_]{1,40})\b|\bfailed \(0\)/i;
+/** Retry-After for a payment that was not checked. */
+export const NOT_CHECKED_RETRY_AFTER_SECONDS = 5;
+
+/**
+ * The not-checked refusal for a verify failure `reason`, or null when the
+ * reason may be a verdict. `chain` is the network's name as the buyer reads
+ * it ("" for none). Kinds: a check of ours that could not finish
+ * (`*_unverifiable`, `*_check_failed`); the facilitator refusing this
+ * server's own credentials (HTTP 401/403); the facilitator answering a 5xx,
+ * 408 or 429 (named with that status); and our request not completing (a
+ * timeout, a DNS or connection error). Pure.
+ */
+export function notCheckedRefusal(reason, { chain = "" } = {}) {
+  const r = String(typeof reason === "string" ? reason : "").slice(0, 2000);
+  if (!r) return null;
+  const on = typeof chain === "string" && chain ? ` on ${chain}` : "";
+  const again = "Nothing was charged. Send the same payment again in a few seconds; it needs no new signature while its authorization is still valid.";
+  const out = (why) => ({ reason: "not-checked", retry: "same-payment", retryAfterSeconds: NOT_CHECKED_RETRY_AFTER_SECONDS, detail: `${why}, so the payment was not checked. ${again}` });
+  if (NOT_CHECKED_UNVERIFIABLE.test(r)) return out(`This server could not finish its own on-chain check of the payment's signature${on}`);
+  const m = NOT_CHECKED_STATUS.exec(r);
+  const status = m ? Number(m[1] || m[2] || m[3]) : 0;
+  if (status === 401 || status === 403) return out(`The facilitator${on} refused this server's own credentials (HTTP ${status})`);
+  if (status >= 500 || status === 408 || status === 429) return out(`The facilitator${on} answered HTTP ${status} to this server's verify request`);
+  if (NOT_CHECKED_TRANSPORT.test(r)) return out(`This server's verify request to the facilitator${on} did not complete (a connection error or this server's own time limit)`);
+  return null;
+}
 
 /** The most transactions an unconfirmed-settlement 402 names. */
 export const PENDING_REFUSAL_MAX_TXS = 8;
