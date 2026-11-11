@@ -5875,7 +5875,7 @@ function closeCrawlCycleTally() {
 }
 export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0 }; }
 /** May this failed crawl keep `prev` as it was? Only an entry whose last
- *  completed crawl succeeded with a catalogue the origin itself served. */
+ *  completed crawl succeeded with a catalog the origin itself served. */
 export function crawlHoldsLastGood(prev, now = Date.now()) {
   if (!prev || typeof prev !== "object" || prev.error || prev.originResponded === false) return false;
   const h = prev.history;

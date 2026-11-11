@@ -736,6 +736,29 @@ async function withWarnings(fn) {
   server.close();
 }
 
+// Case N5: the same 503 classes for a PUSH credential (payload type "hash").
+// Its transfer is already final on chain, so the answer never says "nothing
+// was charged" or "nothing was broadcast": it says the transfer was not
+// claimed and still pays for this request, with transferClaimed:false. The
+// pull control beside it keeps the pull wording.
+{
+  for (const cls of ["relay-unreachable", "chain-unreachable", "relay-unavailable"]) {
+    for (const push of [true, false]) {
+      let handlerRan = false;
+      const app = express();
+      app.use(createTempoGate({ ...GATE, validate: async () => ({ ok: false, cls, reason: "x", error: "probe" }), broadcast: async () => ({ ok: true, receipt: {} }) }));
+      app.use(paywallStub);
+      app.get("/paid", (req, res) => { handlerRan = true; res.json({ served: true }); });
+      const { server, url } = await listen(app);
+      const { value: r } = await withWarnings(async () => { const x = await fetch(`${url}/paid`, { headers: { Authorization: buildTempoCredential({ push }) } }); return { status: x.status, body: await x.json().catch(() => ({})) }; });
+      const words = `${r.body.detail || ""} ${r.body.hint || ""}`;
+      if (push) ok(r.status === 503 && !handlerRan && r.body.details?.reason === cls && r.body.details?.transferClaimed === false && !("charged" in (r.body.details || {})) && !/nothing was charged|nothing was broadcast|another method/i.test(words) && /has not been claimed, so it still pays for this request/.test(r.body.detail || "") && /same credential/.test(r.body.hint || ""), `case N5: push ${cls} -> 503 says not claimed, still pays, same credential (${r.status} ${words})`);
+      else ok(r.status === 503 && !handlerRan && r.body.details?.charged === false && /nothing was charged/.test(r.body.detail || "") && !("transferClaimed" in (r.body.details || {})), `case N5: pull ${cls} keeps "nothing was charged" (${r.status} ${words})`);
+      server.close();
+    }
+  }
+}
+
 // Case N3: OUR read failed with no verdict in it (direct mode reads the chain
 // itself; viem's HttpRequestError carries the request body, whose
 // validBefore once classified as "expired"). Classified as chain-unreachable:

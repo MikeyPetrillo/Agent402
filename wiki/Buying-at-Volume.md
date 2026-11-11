@@ -79,6 +79,10 @@ The long routes (report products, video, the slow media tiers) take x402 exact o
 - 402: the first-contact body carries the offer, `howToCall` and, on a job route, `async`.
 - 409: the same keyed call is still running; resend after `Retry-After`.
 - 429, 503: a limit or a busy route; wait `Retry-After`. image-ocr answers 503 `large-image-busy` while it reads another large image.
-- 502, 504 with `attribution: "upstream"`: a source the tool reads failed, not the input.
+- 422 with `attribution: "caller"` or `"upstream-access"`: a URL you supplied answered with a 4xx, or refused this server's access.
+- 502, 503 with `attribution: "upstream"`: a source the tool reads answered with a failure (its own status rides in `upstreamStatus`), not the input; retry later or pick another source.
+- 502, 503, 504 with `attribution: "ours"`: our side: our time limit passed (`hint: "our-deadline"` or `"budget-spent"`), our DNS lookup failed (`"our-egress"`), the source refused our own key (`"our-key"`), our own allowance or pacing (`"our-allowance"`, `"our-pacing"`), or a defect in our own code (`"internal"`); `hint: "smaller-input"` means an input this long outlasts the limit. Retry the same call, or send a shorter input when the hint says so.
+- 502, 503 with `attribution: "unknown"` and `hint: "connect-failed"`: the connection to a source failed before any answer (refused, reset or unreachable), and nothing shows which side failed; retry the same call later.
+- 504 with `hint: "source-timeout"` or `"source-unreachable"` (`attribution: "unknown"`): a URL you supplied did not answer within our limit, or could not be connected to; check the URL, or retry.
 
 See also: [[Paying with x402]], [[Paying with MPP]], [[LLM Gateway (OpenAI /v1)|LLM-Gateway]], [[Agentic Finance]].

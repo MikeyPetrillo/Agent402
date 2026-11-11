@@ -124,7 +124,7 @@ try {
     ok(!e.message.includes(secret) && !e.message.includes("req_123"), "the upstream body is not echoed (no key, no request id)");
     upstream = [openAIError(400, { message: "Your request was rejected as a result of our safety system.", type: "invalid_request_error", param: null, code: "content_policy_violation" })];
     const e2 = await thrown("image-gen", { prompt: "a", moderation: "auto" });
-    ok(e2?.statusCode === 400 && sent.length === 1 && sent[0].body.moderation === "auto" && /This call used moderation "auto"; "low", the default, filters less strictly\./.test(e2.message), `a "safety system" message on an auto call: 400, no retry, and says low is the default (${e2?.message})`);
+    ok(e2?.statusCode === 400 && sent.length === 1 && sent[0].body.moderation === "auto" && /This call chose moderation "auto", the stricter level; "low" is the default level\./.test(e2.message) && !/filters less strictly|try "low"|send "low"|use "low"/i.test(e2.message), `a "safety system" message on an auto call: 400, no retry, states the default and the stricter choice, with no advice to change the level (${e2?.message})`);
     // Never routed elsewhere: every request in the refusal went to the one images endpoint and model.
     ok(sent.every((x) => new URL(x.url).pathname === "/v1/images/generations" && x.body.model === "gpt-image-2"), "a refused prompt goes to no other model or endpoint");
     upstream = [];
@@ -137,6 +137,7 @@ try {
   for (const t of IMAGE_GEN_TOOLS) {
     const p = t.discovery.inputSchema.properties.moderation;
     ok(p?.enum?.join() === "low,auto" && /usage policies/.test(p.description) && /"low"/.test(t.description) && /usage policies still apply/.test(t.description), `${t.slug}: schema and description name moderation, its default and the provider's usage policies`);
+    ok(/"low" content filtering level is sent by default/.test(t.description) && /does not take the setting, the call runs at the provider's standard level/.test(t.description) && /does not take the setting, the call runs at the provider's standard level/.test(p.description), `${t.slug}: description and schema say low is sent by default and a model without the setting runs at the provider's standard level`);
   }
   const pd = bySlug("image-gen-premium");
   ok(pd.discovery.output.example.size === "1536x1024" && pd.discovery.inputSchema.properties.orientation?.enum?.join() === "landscape,portrait,square", "premium example + schema match the handler (landscape default, three orientations)");

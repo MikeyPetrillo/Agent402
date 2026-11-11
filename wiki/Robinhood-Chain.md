@@ -107,8 +107,9 @@ example: [`0xae8e3e40…f826`](https://robinhoodchain.blockscout.com/tx/0xae8e3e
   balance on the chain. Fewer settlements left than
   `FACILITATOR_GAS_MIN_SETTLEMENTS` (default 500) reads
   `facilitatorFunds=low` on `/api/gateway-status`; a balance that cannot be
-  read three times running reads `facilitatorFunds=unknown`, which does not
-  page. The detail is on the operator endpoint.
+  read three times running reads `facilitatorFunds=unknown`, which pages
+  only once it has held past `FACILITATOR_UNREAD_PAGE_HOURS` (default 6). The
+  detail is on the operator endpoint.
   `FACILITATOR_GAS_CHECK=off` turns the check off. Your own relayer, when
   `ROBINHOOD_RELAYER_KEY` is set, is read the same way, as its own entry.
 - **Relayer first**: while the first listed facilitator's signer reads under
