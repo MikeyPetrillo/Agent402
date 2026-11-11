@@ -11,7 +11,8 @@
 // runner shared by several lanes saw it.
 //
 // A side-effect import: when STATS_DB_DIR is unset it is pointed at a fresh
-// temp directory, removed when this process exits. A value the caller already
+// temp directory, removed when this process exits (or is stopped by SIGTERM
+// or SIGINT). A value the caller already
 // exported (a parent suite's directory, a path the suite chose) is kept, so a
 // suite and its children share one store, as they did on the default path.
 // The state database is left as the caller has it: with one, the file is only
@@ -30,5 +31,20 @@ import { join } from "node:path";
 if (!String(process.env.STATS_DB_DIR || "").trim()) {
   const dir = mkdtempSync(join(tmpdir(), "a402-stats-"));
   process.env.STATS_DB_DIR = dir;
-  process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+  const remove = () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } };
+  process.on("exit", remove);
+  // A suite stopped by SIGTERM or SIGINT never reaches "exit" on its own. When
+  // nothing else listens for the signal, remove the directory and raise the
+  // signal again with this listener gone, so the process ends exactly as it
+  // would have (killed by that signal). When the suite has its own listener,
+  // that listener decides how the process ends, and "exit" removes it.
+  for (const sig of ["SIGTERM", "SIGINT"]) {
+    const onSignal = () => {
+      if (process.listenerCount(sig) > 1) return;
+      remove();
+      process.removeListener(sig, onSignal);
+      process.kill(process.pid, sig);
+    };
+    process.on(sig, onSignal);
+  }
 }

@@ -16,7 +16,7 @@
 //   node scripts/test-stats-store-hygiene.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,6 +89,29 @@ for (const pin of ["own-stats.js", "offline-stores.js", "file-mode.js"]) {
   ok(k.dir === mine && k.file === true, "a directory the caller exported is kept and used");
   ok(existsSync(mine), "...and is not removed by the child that did not create it");
   rmSync(mine, { recursive: true, force: true });
+}
+
+// A suite stopped by a signal removes its directory too, and ends as it would
+// have without the pin: killed by that signal, or, with a listener of its
+// own, the way that listener ends it.
+{
+  const PIN = new URL("./lib/own-stats.js", import.meta.url).href;
+  const stopped = (sig, own) => new Promise((resolve) => {
+    const code = `await import(${JSON.stringify(PIN)});${own ? ` process.on(${JSON.stringify(sig)}, () => process.exit(7));` : ""} process.stdout.write(process.env.STATS_DB_DIR + "\\n"); setInterval(() => {}, 1000);`;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, STATS_DB_DIR: "" }, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", sent = false;
+    const deadline = setTimeout(() => child.kill("SIGKILL"), 60_000);
+    child.stdout.on("data", (b) => { out += b; if (!sent && out.includes("\n")) { sent = true; child.kill(sig); } });
+    child.on("exit", (code, signal) => { clearTimeout(deadline); resolve({ dir: out.trim(), code, signal }); });
+  });
+  for (const sig of ["SIGTERM", "SIGINT"]) {
+    const a = await stopped(sig, false);
+    ok(a.dir.includes("a402-stats-") && a.signal === sig && a.code === null, `${sig}: the suite still ends killed by ${sig} (code ${a.code}, signal ${a.signal})`);
+    ok(a.dir && !existsSync(a.dir), `${sig}: the directory is removed when the suite is stopped by it`);
+    const b = await stopped(sig, true);
+    ok(b.code === 7 && b.signal === null, `${sig}: a suite with its own listener ends the way that listener says (code ${b.code}, signal ${b.signal})`);
+    ok(b.dir && !existsSync(b.dir), `${sig}: and its directory is removed on that exit`);
+  }
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

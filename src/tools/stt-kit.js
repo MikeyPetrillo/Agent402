@@ -143,8 +143,9 @@ async function fetchAudio(url) {
 }
 
 /** What the container says about itself, read locally (no upstream call):
- *  the duration its headers declare, whether its codec is lossy, and the
- *  bytes of embedded pictures. Null when the container cannot be read. */
+ *  the duration its headers declare, whether its codec is lossy, whether it
+ *  carries a video track, its channel count, and the bytes of embedded
+ *  pictures. Null when the container cannot be read. */
 async function probeContainer(buf, filename) {
   try {
     const { parseBuffer } = await loadMusicMetadata();
@@ -153,7 +154,8 @@ async function probeContainer(buf, filename) {
     if (!(Number.isFinite(d) && d > 0)) return null;
     let pictureBytes = 0;
     for (const pic of meta?.common?.picture || []) pictureBytes += pic?.data?.length || 0;
-    return { durationSec: d, lossy: meta?.format?.lossless === false, pictureBytes };
+    const channels = Number(meta?.format?.numberOfChannels);
+    return { durationSec: d, lossy: meta?.format?.lossless === false, hasVideo: meta?.format?.hasVideo, channels: Number.isInteger(channels) ? channels : null, pictureBytes };
   } catch {
     return null;
   }
@@ -178,11 +180,21 @@ export function byteFloorSeconds(bytes, pictureBytes = 0) {
   return (audioBytes * 8) / LOSSY_MAX_BITS_PER_SECOND;
 }
 
+/** Whether the byte floor bounds this container: lossy audio the parser read
+ *  as holding no video track, in one or two channels. A video track's bytes
+ *  are not audio, and more channels can carry more bits a second than the
+ *  floor's rate, so either one would make the floor longer than the audio
+ *  plays. Those files keep their declared length when unmeasured. Pure;
+ *  exported for tests. */
+export function byteFloorApplies(container) {
+  return !!container && container.lossy === true && container.hasVideo === false && (container.channels === 1 || container.channels === 2);
+}
+
 let measureImpl = measureAudioSeconds;
 /** Test seam: replace the decode measurement (null restores it). */
 export function __setMeasureForTest(fn) { measureImpl = fn || measureAudioSeconds; }
 let unmeasured = 0;
-/** Files whose audio could not be measured by decoding since boot (the byte floor bounded them). */
+/** Files whose audio could not be measured by decoding since boot (the byte floor bounded the ones it applies to). */
 export const sttUnmeasuredSinceBoot = () => unmeasured;
 
 /** Throws 422 when the audio exceeds the tier's advertised duration cap, or
@@ -193,9 +205,11 @@ export const sttUnmeasuredSinceBoot = () => unmeasured;
  *  The length that is capped is the longer of what the headers declare and
  *  what the audio measures: the file is decoded locally (ffmpeg, no upstream
  *  call) and the decoder's own clock is read. Where it cannot be decoded here
- *  (no ffmpeg on this server, a failed or slow decode), a lossy file is held
- *  to the shortest its byte count can play. A file inside the cap passes
- *  either way; the returned duration is the one the margin math uses. */
+ *  (no ffmpeg on this server, a failed or slow decode), a lossy audio-only
+ *  file in one or two channels is held to the shortest its byte count can
+ *  play (byteFloorApplies); any other file keeps its declared length. A
+ *  file inside the cap passes either way; the returned duration is the one
+ *  the margin math uses. */
 export async function assertWithinDurationCap(buf, filename, tierSlug) {
   const tier = TIERS[tierSlug];
   const container = await probeContainer(buf, filename);
@@ -210,7 +224,7 @@ export async function assertWithinDurationCap(buf, filename, tierSlug) {
     if (Number.isFinite(measured) && measured > 0) durationSec = Math.max(durationSec, measured);
     else {
       unmeasured++;
-      if (container.lossy) durationSec = Math.max(durationSec, byteFloorSeconds(buf.length, container.pictureBytes));
+      if (byteFloorApplies(container)) durationSec = Math.max(durationSec, byteFloorSeconds(buf.length, container.pictureBytes));
     }
   }
   if (durationSec > capSec + 2) {

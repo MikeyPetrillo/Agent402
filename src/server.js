@@ -666,7 +666,7 @@ const X_DATA_TOOLS_ENABLED = xDataEnabled() ? X_DATA_TOOLS : [];
 // advertising routes that can only 503.
 const EXA_TOOLS_ENABLED = exaEnabled() ? EXA_TOOLS : [];
 const B2B_ENRICH_TOOLS_ENABLED = b2bEnrichEnabled();
-import { STT_TOOLS } from "./tools/stt-kit.js";
+import { STT_TOOLS, sttUnmeasuredSinceBoot } from "./tools/stt-kit.js";
 import { EMBED_TOOLS } from "./tools/embed-kit.js";
 import { USAGE_TOOLS } from "./tools/usage-kit.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
@@ -3096,12 +3096,15 @@ startSharedLimitsProbe();
 // sent, by how each call ended, and the budget refusals (counts only;
 // src/sql-query-stats.js; also at /__operator/onchain-sql-queries.json). xSearchAuthors: per UTC day, how many distinct
 // authors and posts x-search-recent calls that answered a final 200 returned,
-// bucketed (counts only; src/x-search-stats.js).
+// bucketed (counts only; src/x-search-stats.js). transcriptionUnmeasured:
+// transcription files this process could not measure by decoding since boot
+// (a busy or slow decode, no ffmpeg), which the cap then read from the
+// declared length or the byte floor (src/tools/stt-kit.js; a count only).
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
-  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors });
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors, transcriptionUnmeasured: { sinceBoot: sttUnmeasuredSinceBoot() } });
 });
 // Upstream queries per onchain-sql call (src/sql-query-stats.js): per UTC day,
 // calls by the queries each sent (0 to the call budget) and by how the call

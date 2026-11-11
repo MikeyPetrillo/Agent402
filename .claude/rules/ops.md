@@ -63,7 +63,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   contains both. On main the markers job reads commit subjects from the head of the last push run
   whose markers job finished (`scripts/marker-base.js`, the job's token has `actions: read`), so a
   replaced push's markers are read by the run that replaced it and by no later one; with no such
-  run, or the API unreadable, it reads its own pushed range; `MARKER_WORKFLOW_FILE` (default
+  run, the API unreadable, or no answer inside the lookup's one deadline (`MARKER_BASE_DEADLINE_MS`,
+  default 40000, also its most; half the job's 2-minute limit), it reads its own pushed range; `MARKER_WORKFLOW_FILE` (default
   `deploy.yml`) names the workflow whose runs it lists (`scripts/test-ci-gating.js` runs the
   step on a three-push sequence and evaluates the group for every mode a job reads).
 - **Drain:** in-flight composites are aborted on SIGTERM (`src/drain-abort.js`); drain starts
@@ -143,8 +144,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   as `onchainSqlQueries` on `/__operator/tool-failures.json`. A day an earlier build stored
   (final-200 counts with no outcome) reads as charged. A failed count or store write is
   counted (`failures`), logged at most once a UTC day, and never reaches the call. Env:
-  `SQL_QUERY_STATS_KEEP_DAYS` (default 35, today included; 1 to 400; a malformed value keeps
-  the default), `SQL_QUERY_STATS_FILE` (default
+  `SQL_QUERY_STATS_KEEP_DAYS` (default 121: today and the 120 days before it, as earlier builds
+  kept; up to 400; a lower or malformed value keeps the default, so no setting drops a stored day
+  an earlier build kept), `SQL_QUERY_STATS_FILE` (default
   `/data/onchain-sql-query-stats.json`), `SQL_QUERY_STATS_FLUSH_MS` (default 60000, at least
   1000), `X_SEARCH_STATS_FILE` (default `/data/x-search-author-stats.json`),
   `X_SEARCH_STATS_FLUSH_MS` (default 60000, at least 1000). The files are used only without a

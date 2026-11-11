@@ -148,7 +148,7 @@ const redact = (text) => {
   const NOW = Date.parse("2030-03-01T00:00:00Z");
   const tiers = {
     small: { prefixes: ["fake/tiny-1b", "fake/tiny-3b", "fam/"] },
-    big: { prefixes: ["fake/large", "fake/late", "fake/covered", "fake/stale-entry"] },
+    big: { prefixes: ["fake/large", "fake/late", "fake/covered", "fake/stale-entry", "fake/no-successor"] },
   };
   const models = [
     { id: "fake/tiny-1b", expiration_date: "2030-03-10" },       // listed, 9 days out, no successor
@@ -157,6 +157,7 @@ const redact = (text) => {
     { id: "fake/late", expiration_date: "2030-03-15" },          // listed, exactly at the horizon: not yet
     { id: "fake/covered", expiration_date: "2030-03-05" },       // listed, successor scheduled on the date
     { id: "fake/stale-entry", expiration_date: "2030-03-05" },   // listed, its entry starts after the date
+    { id: "fake/no-successor", expiration_date: "2030-03-05" },  // listed, its entry is dated but names no successor
     { id: "fam/member", expiration_date: "2030-03-02" },         // under a family prefix only: not advertised by name
     { id: "fake/printed", expiration_date: "2030-03-03" },       // on /v1/models only
     { id: "other/unlisted", expiration_date: "2030-03-02" },     // nowhere
@@ -164,12 +165,14 @@ const redact = (text) => {
   const retiring = {
     "fake/covered": { until: "2030-03-05", use: "fake/tiny-3b", asItselfUntil: true },
     "fake/stale-entry": { until: "2030-03-06", use: "fake/tiny-3b", asItselfUntil: true },
+    "fake/no-successor": { until: "2030-03-04", asItselfUntil: true },
   };
   const advertised = advertisedIds(tiers, ["fake/printed", "fam/*", "bare-id"]);
-  ok(advertised.has("fake/tiny-1b") && advertised.has("fake/printed") && !advertised.has("fam/") && !advertised.has("fam/*") && !advertised.has("bare-id") && advertised.size === 7, `advertised ids are the tiers' named ids and the exact ids /v1/models prints (${advertised.size})`);
+  ok(advertised.has("fake/tiny-1b") && advertised.has("fake/printed") && !advertised.has("fam/") && !advertised.has("fam/*") && !advertised.has("bare-id") && advertised.size === 8, `advertised ids are the tiers' named ids and the exact ids /v1/models prints (${advertised.size})`);
   const due = advertisedExpiring({ models, advertised, retiring, now: NOW });
   const open = due.filter((d) => !d.covered).map((d) => d.id);
-  ok(JSON.stringify(open) === JSON.stringify(["fake/large", "fake/printed", "fake/stale-entry", "fake/tiny-1b"]), `a listed id dated inside 14 days with no successor for its date is a finding (${open.join(", ")})`);
+  ok(JSON.stringify(open) === JSON.stringify(["fake/large", "fake/no-successor", "fake/printed", "fake/stale-entry", "fake/tiny-1b"]), `a listed id dated inside 14 days with no successor for its date is a finding, an entry dated in time that names no successor included (${open.join(", ")})`);
+  ok(due.find((d) => d.id === "fake/no-successor")?.successor === null, "an entry that names no successor reports none");
   const covered = due.filter((d) => d.covered);
   ok(covered.length === 1 && covered[0].id === "fake/covered" && covered[0].successor === "fake/tiny-3b" && covered[0].expires === "2030-03-05", "an id whose retirement entry takes over on its date is reported as covered, with the successor");
   ok(!due.some((d) => ["fake/late", "fake/tiny-3b", "fam/member", "other/unlisted"].includes(d.id)), "an id at the horizon, an undated id, a family member and an unlisted id are not findings");

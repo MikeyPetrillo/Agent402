@@ -343,6 +343,15 @@ const NOW = Date.UTC(2026, 6, 25, 12, 0, 0); // 2026-07-25T12:00:00Z
     check("the page renders Not measured and the stale line on that card, never Operational", /Not measured/.test(apiCard) && /The last observation is stale: recorded 5h ago\./.test(apiCard) && !/Operational/.test(apiCard));
     check("control: a current component carries no stale line", staleLine(of(snap, "api")) === "" && staleLine(of(staleSnap, "paid-call")) === "");
     check("a never-observed component carries no stale line", staleLine({ current: { state: "unknown", reason: "never observed" } }) === "");
+    check("an unknown reading for any other reason carries no stale line, whatever its age", staleLine({ current: { state: "unknown", reason: "never observed", ageMs: 5 * H } }) === "" && staleLine({ current: { state: "unknown", reason: "probe failed to report", ageMs: 5 * H } }) === "");
+    check("control: the same age with the stale reason does carry it", staleLine({ current: { state: "unknown", reason: "no recent observation", ageMs: 5 * H } }) !== "");
+    {
+      // Both observers gone quiet: the card's observer lines already give each
+      // one's age, so no second stale line is added.
+      const quiet = { current: { state: "unknown", reason: "no recent observation", ageMs: 6 * H, sources: [{ source: PAID_CALL_SOURCES.heartbeat, state: "unknown", ageMs: 6 * H }, { source: PAID_CALL_SOURCES.worker, state: "unknown", ageMs: 7 * H }] } };
+      check("control: a card with two quiet observers has observer lines", /not current, last observed 6h ago/.test(observerLines(quiet)));
+      check("a card with observer lines carries no stale line of its own", staleLine(quiet) === "");
+    }
   }
   check("a component with one observer gets no observer line", observerLines(of(snap, "api")) === "");
   check("/api/status states the two-observer rule", /two observers \(paid-call\) is read from the observers whose readings are current/.test(snap.measurement.note));

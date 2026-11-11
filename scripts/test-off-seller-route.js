@@ -196,5 +196,35 @@ for (let i = 0; i < 6000; i++) {
   ok(textKeys > keys / 2 && textLeave > 1000 && textStay > 1000, `...and ${textKeys} of the ${keys} keys decide every plain route from the key's one parse (${textPairs} pairs with no parse: ${textLeave} leave, ${textStay} stay)`);
 }
 
+// --- 5. The kept answer per seller key: keyed on the key as written, bounded.
+{
+  // Two keys that lowercase to the same text: the first's path is ASCII (no
+  // plain route leaves), the second's holds the Kelvin sign, which lowercases
+  // to "k" but which a parser percent-encodes (every route leaves). Read in
+  // that order, the second must not take the first's kept answer.
+  const first = "HTTPS://case-memo.example/kpp", second = "HTTPS://case-memo.example/\u212App";
+  ok(first.toLowerCase() === second.toLowerCase() && first !== second, "setup: the two keys share their lowercase text");
+  const a = x._routeLeavesSellerForTest(first, "/r"), b = x._routeLeavesSellerForTest(second, "/r");
+  ok(a === x._routeLeavesSellerParsedForTest(first, "/r") && a === false, `the ASCII key keeps its routes (${a})`);
+  ok(b === x._routeLeavesSellerParsedForTest(second, "/r") && b === true, `the Kelvin-sign key read second still reads its own parsed answer, never the first key's (${b})`);
+
+  // The kept answers are bounded like the plain-key memo: past its size the
+  // table starts over, so the first key of a long run is parsed again (one
+  // parse), where an unbounded table would answer it from memory (none).
+  const keyAt = (i) => `HTTPS://memo-${i}.example/app/`;
+  ok(x._routeLeavesSellerForTest(keyAt(0), "/x") === false, "setup: a key that is not plain text decides its plain routes from its one kept read");
+  let parses = 0;
+  const CountedURL = class extends RealURL { constructor(...args) { parses++; super(...args); } };
+  globalThis.URL = CountedURL;
+  try { x._routeLeavesSellerForTest(keyAt(0), "/y"); } finally { globalThis.URL = RealURL; }
+  ok(parses === 0, `control: a kept key is answered from memory (${parses} parses)`);
+  for (let i = 1; i <= 20_000; i++) x._routeLeavesSellerForTest(keyAt(i), "/x");
+  parses = 0;
+  globalThis.URL = CountedURL;
+  let again;
+  try { again = x._routeLeavesSellerForTest(keyAt(0), "/y"); } finally { globalThis.URL = RealURL; }
+  ok(parses === 1 && again === false, `after 20,000 more keys the first is read again, once (${parses} parses), with the same answer (${again})`);
+}
+
 console.log(`\n${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
