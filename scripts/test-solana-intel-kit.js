@@ -10,6 +10,7 @@
 // allowed hosts with the validated mint in the path.
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { urlMatches } from "./lib/url-host.js";
 import { SOLANA_INTEL_TOOLS, MINTS, __test, jupiterBase, jupiterHeaders } from "../src/tools/solana-intel-kit.js";
 
 const realFetch = globalThis.fetch;
@@ -428,7 +429,7 @@ try {
       const routed = route({ jup: () => { jupCalls++; return Promise.resolve(jsonRes(JUP_WIF)); } });
       stub((url) => {
         // The pair search is answered at the very end of the call's budget.
-        if (url.startsWith("https://api.dexscreener.com/latest/dex/search?q=")) { const t = realNow(); Date.now = () => t + __test.DEADLINES.HANDLER_BUDGET_MS; }
+        if (urlMatches(url, "api.dexscreener.com", "/latest/dex/search")) { const t = realNow(); Date.now = () => t + __test.DEADLINES.HANDLER_BUDGET_MS; }
         return routed(url);
       });
       try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: spent budget with no rows resolved"); }
