@@ -143,8 +143,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   as `onchainSqlQueries` on `/__operator/tool-failures.json`. A day an earlier build stored
   (final-200 counts with no outcome) reads as charged. A failed count or store write is
   counted (`failures`), logged at most once a UTC day, and never reaches the call. Env:
-  `SQL_QUERY_STATS_KEEP_DAYS` (default 35, today included; 1 to 400; a malformed value keeps
-  the default), `SQL_QUERY_STATS_FILE` (default
+  `SQL_QUERY_STATS_KEEP_DAYS` (default 121: today and the 120 days before it, as earlier builds
+  kept; up to 400; a lower or malformed value keeps the default, so no setting drops a stored day
+  an earlier build kept), `SQL_QUERY_STATS_FILE` (default
   `/data/onchain-sql-query-stats.json`), `SQL_QUERY_STATS_FLUSH_MS` (default 60000, at least
   1000), `X_SEARCH_STATS_FILE` (default `/data/x-search-author-stats.json`),
   `X_SEARCH_STATS_FLUSH_MS` (default 60000, at least 1000). The files are used only without a

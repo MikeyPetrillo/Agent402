@@ -150,7 +150,7 @@ try {
   const rep = await reportOf(paid);
   const j = JSON.parse(rep.text);
   ok(rep.status === 200 && j.queriesPerChargedCall === 2 && j.summary.outside.calls.charged === 2 && j.summary.outside.queries.uncharged === 2 && j.summary.outside.allQueriesPerChargedCall === 3, `queries per charged call is (1 + 3) / 2, and every query sent (6) over 2 (${j.queriesPerChargedCall}, ${j.summary?.outside?.allQueriesPerChargedCall})`);
-  ok(Array.isArray(j.days) && j.days.length === 1 && j.days[0].day === new Date().toISOString().slice(0, 10) && j.keepDays === 35, `one UTC day, 35 kept (${j.days?.length}, ${j.keepDays})`);
+  ok(Array.isArray(j.days) && j.days.length === 1 && j.days[0].day === new Date().toISOString().slice(0, 10) && j.keepDays === 121, `one UTC day, 121 kept (${j.days?.length}, ${j.keepDays})`);
   ok(!/base\.blocks|SELECT|DROP|nope_column|rowsize_|0x[0-9a-f]{6}|organizations/i.test(rep.text) && !/\$|usd/i.test(rep.text), "the answer carries counts only: no query text, no payer, no key, no dollar figure");
   ok(/private/.test(rep.cache || "") && /no-store/.test(rep.cache || ""), `the answer is private, no-store (${rep.cache})`);
 

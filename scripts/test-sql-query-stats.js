@@ -43,7 +43,7 @@ ok(stats.outcomeOf({ status: 402, sale: "charged" }) === "uncharged" && stats.ou
 ok(stats.outcomeOf({ status: 200 }) === "uncharged" && stats.outcomeOf({ status: 200, sale: "none" }) === "uncharged", "a 200 with no settle evidence is not read as charged");
 ok(stats.bucketOf(0) === "q0" && stats.bucketOf(1) === "q1" && stats.bucketOf(3) === "q3" && stats.bucketOf(9) === "q3" && stats.bucketOf(-1) === "q0", "a call is bucketed by the queries it sent, inside the buckets");
 ok(SQL_QUERY_BUDGET === 3 && stats.BUCKETS.length === SQL_QUERY_BUDGET + 1, "the histogram's buckets cover zero to the call budget");
-ok(stats.SQL_STATS_KEEP_DAYS() === 35, `35 days are kept by default (${stats.SQL_STATS_KEEP_DAYS()})`);
+ok(stats.SQL_STATS_KEEP_DAYS() === 121, `today and the 120 days before it are kept by default, as earlier builds kept (${stats.SQL_STATS_KEEP_DAYS()})`);
 
 // --- the query service, stubbed -------------------------------------------------
 const realFetch = globalThis.fetch;
@@ -198,25 +198,36 @@ try {
     ok(H(lane.charged) === "0/6/1/2" && lane.q1 === undefined && lane.budgetSpent === 3, `and is stored in the current shape, counted once (${JSON.stringify(lane)})`);
   }
 
-  // Retention: today and the 34 days before it stay; day 36 is dropped on the next write.
+  // Retention: today and the 120 days before it stay (what every earlier
+  // build kept: a day dropped only once it is older than 120 days); the day
+  // before that is dropped on the next write. No setting keeps fewer.
   {
     const KEEP = stats.SQL_STATS_KEEP_DAYS();
     const now = Date.now();
-    const day35 = now - (KEEP - 1) * 86_400_000, day36 = now - KEEP * 86_400_000;
-    stats.noteSqlCall({ status: 200, queries: 1, sale: "charged", now: day35 });
-    stats.noteSqlCall({ status: 200, queries: 1, sale: "charged", now: day36 });
+    const oldest = now - (KEEP - 1) * 86_400_000, past = now - KEEP * 86_400_000;
+    ok(dayOf(oldest) === dayOf(now - 120 * 86_400_000), "the oldest day kept is the one 120 days before today, as earlier builds kept");
+    stats.noteSqlCall({ status: 200, queries: 1, sale: "charged", now: oldest });
+    stats.noteSqlCall({ status: 200, queries: 1, sale: "charged", now: now - 40 * 86_400_000 });
+    stats.noteSqlCall({ status: 200, queries: 1, sale: "charged", now: past });
     await stats.flushSqlQueryStats({ now });
     const stored = JSON.parse(readFileSync(STATS_FILE, "utf8"));
     const days = Object.keys((stored.body ?? stored).days || {});
-    ok(days.includes(dayOf(day35)) && !days.includes(dayOf(day36)) && days.includes(today), `day 35 is kept and day 36 is dropped (${days.sort().join(", ")})`);
+    ok(days.includes(dayOf(oldest)) && days.includes(dayOf(now - 40 * 86_400_000)) && !days.includes(dayOf(past)) && days.includes(today), `days up to 120 back are kept and day 121 back is dropped (${days.sort().join(", ")})`);
     rep = await stats.sqlQueryStatsReport({ now });
-    ok(rep.keepDays === 35 && rep.windowDays === 35 && rep.days.some((r) => r.day === dayOf(day35)) && !rep.days.some((r) => r.day === dayOf(day36)), "the report's window is the keep window");
-    process.env.SQL_QUERY_STATS_KEEP_DAYS = "2";
+    ok(rep.keepDays === 121 && rep.windowDays === 121 && rep.days.some((r) => r.day === dayOf(oldest)) && !rep.days.some((r) => r.day === dayOf(past)), "the report's window is the keep window");
+    for (const low of ["2", "35", "120", "0", "-3", "abc", ""]) {
+      process.env.SQL_QUERY_STATS_KEEP_DAYS = low;
+      ok(stats.SQL_STATS_KEEP_DAYS() === 121, `SQL_QUERY_STATS_KEEP_DAYS=${JSON.stringify(low)} keeps the default (no setting keeps fewer days)`);
+    }
+    process.env.SQL_QUERY_STATS_KEEP_DAYS = "35";
     stats.noteSqlCall({ status: 200, queries: 1, sale: "charged", now });
     await stats.flushSqlQueryStats({ now });
-    const kept = Object.keys(((JSON.parse(readFileSync(STATS_FILE, "utf8"))).body ?? JSON.parse(readFileSync(STATS_FILE, "utf8"))).days || {}).sort();
-    ok(kept.length === 2 && kept[1] === today && kept[0] === dayOf(now - 86_400_000), `SQL_QUERY_STATS_KEEP_DAYS=2 keeps today and yesterday (${kept.join(", ")})`);
-    for (const bad of ["0", "-3", "abc", ""]) { process.env.SQL_QUERY_STATS_KEEP_DAYS = bad; ok(stats.SQL_STATS_KEEP_DAYS() === 35, `SQL_QUERY_STATS_KEEP_DAYS=${JSON.stringify(bad)} keeps the default`); }
+    const again = Object.keys(((JSON.parse(readFileSync(STATS_FILE, "utf8"))).body ?? JSON.parse(readFileSync(STATS_FILE, "utf8"))).days || {});
+    ok(again.includes(dayOf(oldest)) && again.includes(dayOf(now - 40 * 86_400_000)), "a flush under a low setting deletes no stored day an earlier build kept");
+    process.env.SQL_QUERY_STATS_KEEP_DAYS = "200";
+    ok(stats.SQL_STATS_KEEP_DAYS() === 200, "a longer setting keeps longer");
+    process.env.SQL_QUERY_STATS_KEEP_DAYS = "9999";
+    ok(stats.SQL_STATS_KEEP_DAYS() === 400, "at most 400 days");
     delete process.env.SQL_QUERY_STATS_KEEP_DAYS;
   }
 

@@ -32,10 +32,12 @@
 import { createJsonDocument } from "./json-document.js";
 
 export const SQL_STATS_DOC = "onchain-sql-query-stats";
-/** UTC days kept, today included (SQL_QUERY_STATS_KEEP_DAYS, default 35, 1 to 400). */
+/** The fewest UTC days kept, today included: today and the 120 days before it, as every earlier build kept. */
+export const SQL_STATS_MIN_KEEP_DAYS = 121;
+/** UTC days kept, today included (SQL_QUERY_STATS_KEEP_DAYS, default 121, up to 400; never fewer than the default). */
 export const SQL_STATS_KEEP_DAYS = () => {
   const n = Math.floor(Number(process.env.SQL_QUERY_STATS_KEEP_DAYS));
-  return Number.isFinite(n) && n >= 1 ? Math.min(n, 400) : 35;
+  return Number.isFinite(n) && n > SQL_STATS_MIN_KEEP_DAYS ? Math.min(n, 400) : SQL_STATS_MIN_KEEP_DAYS;
 };
 export const SQL_STATS_FLUSH_MS = () => Math.max(1_000, Number(process.env.SQL_QUERY_STATS_FLUSH_MS) || 60_000);
 export const LANES = ["outside", "synthetic"];
