@@ -72,6 +72,7 @@ if (process.env.SPEND_WORDS_CHILD) {
       else if (verb === "book") { kit.book(Number(arg) * kit.E); out.push("booked"); }
       else if (verb === "refresh") { const t = performance.now(); await kit.refresh(); out.push(Math.round(performance.now() - t)); }
       else if (verb === "status") { const s = kit.status(); out.push(s.status); }
+      else if (verb === "minute") out.push(Math.floor(Date.now() / 60_000)); // the shared counter's fixed minute
       else if (verb === "sleep") { await new Promise((r) => setTimeout(r, Number(arg))); out.push("slept"); }
     } catch (e) { out.push(`threw:${String(e?.message || e).slice(0, 80)}`); }
   }
@@ -226,6 +227,36 @@ for (const kit of ["exa", "x"]) {
   ok(d.out?.[1] === "capped", `router: a new process reads capped while another process's refusal is inside its hold (${show(d)})`);
   const other = await container({ ...base, steps: ["refresh", "status"] }, { prefix: `${prefix}-other` });
   ok(other.out?.[1] === "ok", `router: a process on another prefix still reads ok (${show(other)})`);
+  // Holds that pass the alarm, then the stop, only when summed across
+  // processes. Above, every process also crosses each line on its own (A's
+  // three holds pass the alarm of 2, C's fifth passes the stop of 4.5), so
+  // those words would read the same with no shared counter. Here no process
+  // holds more than 2 (the alarm, not past it): only the shared minute's
+  // total can mark over and refuse. The four processes must book in one
+  // clock minute; a run that straddles a minute is run again on a new prefix.
+  let sum = null;
+  for (let attempt = 0; attempt < 4 && !sum; attempt++) {
+    const p = `${prefix}-sum${attempt}`;
+    const one = (steps) => container({ ...base, steps }, { prefix: p });
+    const p1 = await one(["minute", "call", "call", "status", "minute"]);
+    const p2 = await one(["minute", "call", "status", "refresh", "status", "minute"]);
+    const p3 = await one(["minute", "call", "status", "refresh", "minute"]);
+    const p4 = await one(["minute", "call", "status", "refresh", "status", "minute"]);
+    const minutes = [p1, p2, p3, p4].flatMap((r) => (r.out ? [r.out[0], r.out[r.out.length - 1]] : [NaN]));
+    if (minutes.every((m) => m === minutes[0])) sum = { p1, p2, p3, p4, p };
+  }
+  ok(sum, "router: four processes booked inside one clock minute (four attempts)");
+  if (sum) {
+    const { p1, p2, p3, p4 } = sum;
+    ok(p1.out?.[1] === 200 && p1.out?.[2] === 200 && p1.out?.[3] === "ok", `router: control, two holds in one process stay at the alarm and read ok (${show(p1)})`);
+    ok(p2.out?.[1] === 200 && p2.out?.[2] === "over", `router: a process holding one reads over once the shared minute passes the alarm (${show(p2)})`);
+    ok(p2.out?.[4] === "over", `router: and the over mark is shared (${show(p2)})`);
+    ok(p3.out?.[1] === 200 && p3.out?.[2] === "over", `router: a hold that keeps the shared minute under the stop is served (${show(p3)})`);
+    ok(p4.out?.[1] === 429, `router: a process holding one is refused 429 once the shared minute would pass the stop (${show(p4)})`);
+    ok(p4.out?.[2] === "capped" && p4.out?.[4] === "capped", `router: and that process reads capped (${show(p4)})`);
+    const p5 = await container({ ...base, steps: ["refresh", "status"] }, { prefix: sum.p });
+    ok(p5.out?.[1] === "capped", `router: a new process reads the shared refusal as capped (${show(p5)})`);
+  }
   const closed = createServer();
   const closedPort = await new Promise((r) => closed.listen(0, "127.0.0.1", () => r(closed.address().port)));
   await new Promise((r) => closed.close(r));
