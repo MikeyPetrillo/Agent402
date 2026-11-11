@@ -30,7 +30,11 @@
 //      is on a read taken after it; so is a local run that leaves while the
 //      window is being read. A wallet's burst beside another container's run
 //      (at once, or one run after another) shares one read at a time and
-//      nobody in it is refused or admitted unread.
+//      nobody in it is refused or admitted unread. At the production
+//      default, a run beside another container's run that stays is refused
+//      after about five seconds, a run that leaves before the wait runs out is
+//      seen by a last look, and a waiting run's reservation is out of the
+//      window while it waits and back in it before it is judged.
 // Under CI a missing REDIS_URL fails (a skipped integration test is not
 // coverage); a local run says the Redis half was skipped. The two-process
 // case is scripts/test-shared-limits-crossprocess.js.
@@ -99,62 +103,23 @@ if (ROLE === "memory") {
   ok(typeof c.release === "function", "memory: once the run leaves, the next is admitted");
   c.release();
   {
-    // The read lane (8 at once across wallets): a ninth and tenth wallet's
-    // reads wait for a place and are answered, never read as unknown.
+    // The read lane (8 at once across wallets), as it always was: a ninth
+    // and tenth wallet's reads find it full and read as unknown at once,
+    // inside the unread allowance; nothing waits for a place.
     C._resetInflightCoverForTest();
     const gated = [];
     C._setBalanceReaderForTest(() => new Promise((res) => gated.push(res)));
     const wallets = Array.from({ length: 10 }, (_, i) => "0x" + (0x10 + i).toString(16).repeat(20));
     const firsts = [];
     for (const w of wallets) firsts.push(await attempt(C, w));
+    const t0 = performance.now();
     const seconds = wallets.map((w) => attempt(C, w));
-    for (let i = 0; i < 5; i++) await turn();
-    ok(firsts.every((x) => typeof x.release === "function") && gated.length === 8, `memory: ten wallets each ask for a read at once: eight are under way, two wait for a place (under way ${gated.length})`);
-    let answered = 0;
-    const end = Date.now() + 10_000;
-    while (answered < 10 && Date.now() < end) { while (answered < gated.length) gated[answered++](2n * PRICE); await turn(); }
-    const out = await Promise.all(seconds);
-    const s = C.inflightCoverStatus();
-    ok(out.every((x) => typeof x.release === "function") && answered === 10 && s.admittedByRead === 10 && s.admittedUnread === 0 && s.refusedUnread === 0, `memory: all ten are admitted on a read of their own balance, none unread (reads ${answered}, by read ${s.admittedByRead}, unread ${s.admittedUnread})`);
-    // The reads holding the lane never answer: a read that gets no place
-    // within the wait is unread (the bounded allowance), not a hang.
-    C._resetInflightCoverForTest();
-    gated.length = 0;
-    C._setBalanceReaderForTest(() => new Promise((res) => gated.push(res)));
-    const held = [];
-    for (const w of wallets.slice(0, 9)) held.push(await attempt(C, w));
-    const stuck = wallets.slice(0, 8).map((w) => attempt(C, w));
-    for (let i = 0; i < 5; i++) await turn();
-    const t0 = Date.now();
-    let ninth; try { ninth = { release: await C.admitCoveredRun(reqFor(wallets[8]), { laneWaitMs: 120 }) }; } catch (e) { ninth = { err: e }; }
-    ok(gated.length === 8 && typeof ninth.release === "function" && Date.now() - t0 >= 100 && C.inflightCoverStatus().admittedUnread === 1, `memory: with every place held by a read that does not answer, a wallet's second run waits its bound and is admitted under the unread allowance (${ninth.err?.statusCode || "admitted"}, ${Date.now() - t0} ms)`);
+    const late = await Promise.all(seconds.slice(8));
+    const lateMs = performance.now() - t0;
+    ok(firsts.every((x) => typeof x.release === "function") && gated.length === 8 && late.every((x) => typeof x.release === "function") && C.inflightCoverStatus().admittedUnread === 2 && lateMs < 1_000,
+      `memory: with eight reads under way, a ninth and tenth wallet's second runs read as unknown at once and are admitted inside the unread allowance (under way ${gated.length}, unread ${C.inflightCoverStatus().admittedUnread}, ${Math.round(lateMs)} ms)`);
     for (const g of gated) g(2n * PRICE);
-    await Promise.all(stuck);
-    // A run leaves while another's read has been asked for but has not begun
-    // (it waits for a place in the lane). That read begins after the
-    // departure, so it stays the wallet's read: one read, not two.
-    C._resetInflightCoverForTest();
-    gated.length = 0;
-    const asked = new Map();
-    C._setBalanceReaderForTest((terms) => new Promise((res) => { asked.set(terms.payer, (asked.get(terms.payer) || 0) + 1); gated.push(res); }));
-    const others8 = [];
-    for (const w of wallets.slice(0, 8)) others8.push(await attempt(C, w));
-    const holding = wallets.slice(0, 8).map((w) => attempt(C, w));
-    await until(() => gated.length === 8, "eight reads to hold the lane");
-    const W = wallets[9];
-    const a = await attempt(C, W);
-    a.release.settling();
-    const bp = attempt(C, W, { settleWaitMs: 0 });
-    for (let i = 0; i < 5; i++) await turn();
-    a.release();
-    for (let i = 0; i < 5; i++) await turn();
-    gated[0](2n * PRICE);
-    await until(() => gated.length >= 9, "the waiting read to take the freed place");
-    for (let i = 0; i < 5; i++) await turn();
-    for (let i = 1; i < gated.length; i++) gated[i](2n * PRICE);
-    const b = await bp;
-    ok(typeof b.release === "function" && asked.get(W) === 1, `memory: a read asked for before a run left and begun after it is the one read the waiting run is judged on (${b.err?.statusCode || "admitted"}, reads for the wallet ${asked.get(W)}, want 1)`);
-    await Promise.all(holding);
+    await Promise.all(seconds);
     // A run waiting on a settling one is woken when that run leaves, not
     // when its wait runs out (ten minutes here).
     C._resetInflightCoverForTest();
@@ -281,7 +246,7 @@ if (ROLE === "model") {
 // fixed at boot) ----------------------------------------------------------------------
 const here = fileURLToPath(import.meta.url);
 for (const [role, extra, min] of [
-  ["memory", { REDIS_URL: "" }, 8],
+  ["memory", { REDIS_URL: "" }, 5],
   ["model", { REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "on" }, 7],
   ["degraded", { REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "on", SHARED_LIMITS_OP_MS: "150" }, 7],
 ]) {
@@ -617,12 +582,12 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   const ap = attempt(C, W);
   await until(() => gated.length === 1, "run a's read");
   const t0 = Date.now();
-  const bp = C.admitCoveredRun(reqFor(W), { laneWaitMs: 120 }).then((release) => ({ release }), (err) => ({ err }));
+  const bp = C.admitCoveredRun(reqFor(W), QUICK).then((release) => ({ release }), (err) => ({ err }));
   await until(() => gated.length === 2, "run b's own read, begun although the read ahead has not answered");
   const waited = Date.now() - t0;
   gated[1](3n * PRICE);
   const b = await bp;
-  ok(typeof b.release === "function" && waited >= 100 && C.inflightCoverStatus().admittedUnread === 0, `a read ahead that does not answer: the run behind it begins its own read after the bound and is admitted on it (${b.err?.statusCode || "admitted"}, waited ${waited} ms)`);
+  ok(typeof b.release === "function" && waited >= 240 && waited < 2_000 && C.inflightCoverStatus().admittedUnread === 0, `a read ahead that does not answer: the run behind it begins its own read after 250 ms and is admitted on it (${b.err?.statusCode || "admitted"}, waited ${waited} ms)`);
   gated[0](3n * PRICE);
   const a = await ap;
   a.release?.(); b.release?.();
@@ -677,6 +642,47 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   const took = performance.now() - t0;
   ok(u.err?.statusCode === 429 && /does not cover this one as well/.test(u.err.message) && took >= 290 && C.inflightCoverStatus().foreignWaits === 1 && reads <= 2, `control: beside a run that stays, a run the balance does not cover is refused when the wait ends, with the same answer (${u.err?.statusCode || "admitted"}, ${Math.round(took)} ms, reads ${reads})`);
   await unforeign(U, "d9");
+}
+{
+  // 8. At the production default (no wait given). Three wallets at once,
+  // each beside another container's run:
+  //   bound: that run stays and the balance does not cover both; the run is
+  //     refused when the five-second wait runs out, not sooner, not later.
+  //   last look: that run (settled on chain) leaves at 4.75 s, after the last
+  //     timed look and before the wait runs out; the look taken when the wait
+  //     runs out sees it gone and the run is admitted.
+  //   reservation: the run's reservation is in the window while it is
+  //     judged, out of it while it waits, and back in it once admitted.
+  C._resetInflightCoverForTest();
+  const want = new Map([["0x" + "b1".repeat(20), PRICE + PRICE / 2n], ["0x" + "b2".repeat(20), PRICE], ["0x" + "b3".repeat(20), PRICE]]);
+  const gate = new Map();
+  C._setBalanceReaderForTest(async (terms) => {
+    const w = terms.payer;
+    if (w === "0x" + "b3".repeat(20) && !gate.has(w)) { gate.set(w, null); await new Promise((res) => gate.set(w, res)); }
+    return want.get(w);
+  });
+  const [B1, B2, B3] = [...want.keys()];
+  for (const w of [B1, B2, B3]) await foreign(w, "p8");
+  const ownIn = async (w) => (await windowOf(w)).entries?.some((e) => !String(e.member).startsWith("otherproc-")) === true;
+  const timed = async (w) => { const t = performance.now(); const r = await attempt(C, w, {}); return { ...r, ms: performance.now() - t }; };
+  const guard = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res({ err: { statusCode: "no answer within 9 s" }, ms: 9_000 }), 9_000))]);
+  const p1 = guard(timed(B1));
+  const p2 = guard(timed(B2));
+  const p3 = guard(timed(B3));
+  await until(() => typeof gate.get(B3) === "function", "the third wallet's read to be under way");
+  const heldWhileJudged = await ownIn(B3);
+  gate.get(B3)();
+  await until(() => C.inflightCoverStatus().withdrawals >= 3, "all three runs to wait");
+  const heldWhileWaiting = await ownIn(B3);
+  setTimeout(() => { void unforeign(B2, "p8"); }, 4_750 - 50);
+  setTimeout(() => { void unforeign(B3, "p8"); }, 1_000);
+  const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+  ok(r1.err?.statusCode === 429 && r1.ms >= 4_900 && r1.ms < 6_500, `production default: beside another container's run that stays, an uncovered run is refused when the wait runs out, about five seconds (${r1.err?.statusCode || "admitted"}, ${Math.round(r1.ms)} ms)`);
+  ok(typeof r2.release === "function" && r2.ms >= 4_500 && r2.ms < 6_500, `production default: a run that leaves after the last timed look and before the wait runs out is seen by the look taken at the end, and the run is admitted (${r2.err?.statusCode || "admitted"}, ${Math.round(r2.ms)} ms)`);
+  const heldAdmitted = await ownIn(B3);
+  ok(heldWhileJudged && !heldWhileWaiting && typeof r3.release === "function" && heldAdmitted, `a run's reservation is in the window while it is judged (${heldWhileJudged}), out while it waits (${!heldWhileWaiting}), and back once it is admitted (${heldAdmitted})`);
+  r2.release?.(); r3.release?.();
+  await unforeign(B1, "p8");
 }
 shared.windowAdd = realAdd; shared.windowRead = realRead;
 // Clean up this run's keys.

@@ -33,8 +33,8 @@ const coverReq = (from, value) => {
   const h = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", asset: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" }, payload: { signature: "0x11", authorization: { from, to: "0x" + "cd".repeat(20), value: String(value), validAfter: "0", validBefore: "9999999999", nonce: "0x01" } } })).toString("base64");
   return { header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined) };
 };
-let coverBalance = 0n;
-C._setBalanceReaderForTest(async () => coverBalance);
+let coverBalance = 0n, coverReadMs = 0;
+C._setBalanceReaderForTest(async () => { const v = coverBalance; if (coverReadMs) await new Promise((r) => setTimeout(r, coverReadMs)); return v; });
 // A paid request as the breaker sees it: keyed on the client IP (no payment
 // header here), with a response the outcome listener can arm on.
 function fakeReq(ip) {
@@ -101,15 +101,18 @@ async function run(cmd) {
     // the in-flight run cover
     case "ic.admit": {
       coverBalance = BigInt(cmd.balance);
+      coverReadMs = Number(cmd.readMs) || 0;
+      const t0 = performance.now();
       try {
         // A refusal beside another container's run comes after a wait for that
-        // run to leave; the two-process cases hold their runs, so keep it short.
-        const release = await C.admitCoveredRun(coverReq(cmd.payer, cmd.atomic), { settleWaitMs: 200 });
+        // run to leave; the two-process cases hold their runs, so keep it
+        // short unless the case runs at the production default.
+        const release = await C.admitCoveredRun(coverReq(cmd.payer, cmd.atomic), cmd.prodWait ? undefined : { settleWaitMs: 200 });
         if (typeof release !== "function") return { admitted: false, uncovered: true };
         runs.set(cmd.run, release);
         await barrier();
-        return { admitted: true, local: C.inflightCoverStatus().runsInFlight };
-      } catch (e) { return { admitted: false, status: e.statusCode, message: String(e.message).slice(0, 120) }; }
+        return { admitted: true, local: C.inflightCoverStatus().runsInFlight, ms: Math.round(performance.now() - t0) };
+      } catch (e) { return { admitted: false, status: e.statusCode, message: String(e.message).slice(0, 120), ms: Math.round(performance.now() - t0) }; }
     }
     case "ic.release": { runs.get(cmd.run)?.(); runs.delete(cmd.run); await barrier(); await barrier(); return { ok: true }; }
     case "ic.status": { const s = C.inflightCoverStatus(); return { shared: s.shared, runsInFlight: s.runsInFlight, foreignReads: s.foreignReads, sharedMisses: s.sharedMisses }; }

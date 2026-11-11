@@ -21,18 +21,15 @@
 //     seconds and shared by concurrent callers, so a burst costs one read.
 //     One wallet has one read under way at a time: a run that needs a later
 //     read than the one under way waits for it and shares the single read
-//     that follows, with every run that asks meanwhile. A read that finds
-//     the lane full waits for a place in it, first come first served. Either
-//     wait is bounded (LANE_WAIT_MS): a read ahead that has not answered by
-//     then is no longer waited for.
+//     that follows, with every run that asks meanwhile. That one begins
+//     when the read ahead ends, or after READ_AHEAD_WAIT_MS if it has not.
 //   - That proof holds only until a run of the same wallet leaves the
 //     ledger: the departed run's settlement may have come out of the balance
 //     this payment was verified against. A run judged across such a departure
 //     is judged on a balance read taken after it, whether or not the ledger
 //     is empty by then; a read already under way when a run leaves is neither
 //     used for the decision nor cached.
-//   - An unreadable balance (RPC down, or no place in the read lane within
-//     LANE_WAIT_MS because the reads holding it do not answer) admits up to
+//   - An unreadable balance (RPC down, the read lane full) admits up to
 //     INFLIGHT_COVER_UNREAD_MAX runs in flight (default 4) and refuses beyond.
 //   - A run leaves the ledger when its settlement SUCCEEDS (the x402
 //     afterSettle hook with a success result, markCoveredRunSettled in
@@ -58,10 +55,16 @@
 //     reservation is still in the window. A run the balance would not cover
 //     beside one waits the same way, inside the same SETTLE_WAIT_MS: it looks
 //     at the window again (after FOREIGN_POLL_MS, then twice as long each
-//     time up to FOREIGN_POLL_MAX_MS; a look costs no balance read) until a
-//     run leaves, here or there, and is then judged again on a fresh read.
-//     When the wait ends with nobody gone the run is refused as it would
-//     have been at once, on the same read.
+//     time up to FOREIGN_POLL_MAX_MS, and once more when the wait runs out;
+//     a look costs no balance read) until a run leaves, here or there. While
+//     it waits it takes its own reservation out of the window: it is not
+//     admitted, so it draws on nothing, and a run of this wallet waiting on
+//     the other container for the same reason sees it gone and is judged
+//     again instead of waiting on it in turn. Before it is judged again on a
+//     fresh read it puts its reservation back, so that judgment, like every
+//     other, is made with the reservation in the window. When the wait ends
+//     with nobody gone the run is refused as it would have been at once, on
+//     the same read.
 //   - Across containers (src/shared-limits.js): every admitted run is also a
 //     reservation in a shared window keyed by wallet and chain (member = run
 //     id, weight = atomic amount), written before the run is judged and
@@ -99,7 +102,7 @@ const CAIP2_BY_NAME = Object.freeze(Object.fromEntries(Object.entries(CHAIN_BY_C
 const CACHE_MS = 10_000;
 const READ_TIMEOUT_MS = 2_500;
 const MAX_READS_IN_FLIGHT = 8;
-const LANE_WAIT_MS = READ_TIMEOUT_MS;
+const READ_AHEAD_WAIT_MS = 250;
 const LAST_VIEW_MAX_KEYS = 10_000;
 const SETTLE_WAIT_MS = 5_000;
 const FOREIGN_POLL_MS = 100;
@@ -124,10 +127,8 @@ export const _inflightCoverShared = SHARED;
 const ledger = new Map(); // coverKey -> { count, atomic: bigint, settling }
 const waiters = new Map(); // coverKey -> Set<() => void>, woken when a run leaves
 const balances = new Map(); // coverKey -> { atomic: bigint, at, seq } (seq: when its read began)
-const pendingReads = new Map(); // coverKey -> { p: Promise<bigint|null>, seq }, the read under way (or about to begin)
+const pendingReads = new Map(); // coverKey -> { p: Promise<bigint|null>, seq }, the read under way
 const queuedReads = new Map(); // coverKey -> { p, seq: Infinity }, the one read that follows the read under way
-const laneQueue = []; // reads waiting for a place in the lane, first come first served
-let laneEpoch = 0; // moves on a test reset: a read from before it gives no place back
 // The other containers' runs the latest view of a wallet showed, kept while
 // it shows any: coverKey -> { members: Set, at }. Most recently viewed last.
 const lastForeign = new Map();
@@ -139,7 +140,7 @@ let readsInFlight = 0;
 // The settled-release of an admitted run, kept on its request (own,
 // non-enumerable) for the settle hook, which sees only the request.
 const SETTLED = Symbol("a402.inflightCoverSettled");
-const stats = { admitted: 0, admittedByRead: 0, admittedUnread: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, sharedMisses: 0, foreignReads: 0 };
+const stats = { admitted: 0, admittedByRead: 0, admittedUnread: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, withdrawals: 0, sharedMisses: 0, foreignReads: 0 };
 
 /**
  * The OTHER runs a shared window read reports: everything but this run's own
@@ -192,15 +193,13 @@ function foreignHeld(others, held, judgesHere = 1) {
 /**
  * A run of this wallet has left (here or on another container), so its
  * settlement may have come out of the balance: the cached read is dropped, a
- * read that has begun is detached (it is neither shared from here on nor
- * cached), every run being judged is told, and every run waiting for one to
- * leave is woken. A read that has not begun yet begins after the departure
- * and stays.
+ * read under way is detached (it is neither shared from here on nor cached),
+ * every run being judged is told, and every run waiting for one to leave is
+ * woken. The read queued behind it begins after the departure and stays.
  */
 function noteDeparture(coverKey) {
   balances.delete(coverKey);
-  const pending = pendingReads.get(coverKey);
-  if (pending && pending.seq !== Infinity) pendingReads.delete(coverKey);
+  pendingReads.delete(coverKey);
   const judges = judging.get(coverKey);
   if (judges) for (const j of judges) j.left += 1;
   const set = waiters.get(coverKey);
@@ -297,28 +296,6 @@ function settledWithin(p, ms) {
     p.then(() => { clearTimeout(timer); resolve(); });
   });
 }
-/** A place in the read lane: true once held, false after `waitMs` without one. */
-function takeLane(waitMs) {
-  if (readsInFlight < MAX_READS_IN_FLIGHT) { readsInFlight++; return true; }
-  return new Promise((resolve) => {
-    const w = { resolve, timer: null };
-    w.timer = setTimeout(() => {
-      const i = laneQueue.indexOf(w);
-      if (i >= 0) laneQueue.splice(i, 1);
-      resolve(false);
-    }, Math.max(0, waitMs));
-    laneQueue.push(w);
-  });
-}
-/** Gives the place back: it passes straight to the read that has waited longest. */
-function freeLane(epoch) {
-  if (epoch !== laneEpoch) return;
-  const w = laneQueue.shift();
-  if (!w) { readsInFlight--; return; }
-  clearTimeout(w.timer);
-  w.resolve(true);
-}
-
 // `minSeq`: the caller's shared view. A cached or pending read that began
 // before it does not count (another container's run may have drawn on the
 // balance since), however recently it finished. A read begins one microtask
@@ -326,27 +303,32 @@ function freeLane(epoch) {
 // so runs whose views land together share the one read that follows them all.
 // A wallet has one read under way at a time: a caller the read under way is
 // too early for shares the one queued behind it, which begins when that one
-// ends (or has not answered within the wait), so a staggered burst costs a
-// read at a time, never one read per run.
-function balanceFor(coverKey, terms, now, minSeq = 0, laneWaitMs = LANE_WAIT_MS) {
+// ends (or after READ_AHEAD_WAIT_MS), so a staggered burst costs a read at a
+// time, never one read per run. A full lane reads as unknown, never queued.
+function balanceFor(coverKey, terms, now, minSeq = 0) {
   const hit = balances.get(coverKey);
   if (hit && now - hit.at < CACHE_MS && hit.seq > minSeq) return hit.atomic;
   const pending = pendingReads.get(coverKey);
   if (pending && pending.seq > minSeq) return pending.p;
   const queued = queuedReads.get(coverKey);
   if (queued) return queued.p;
+  let held = false;
+  if (!pending) {
+    if (readsInFlight >= MAX_READS_IN_FLIGHT) return null; // never queue: a full lane reads as unknown
+    readsInFlight++;
+    held = true;
+  }
   const entry = { p: null, seq: Infinity };
   entry.p = (async () => {
-    let held = false;
-    const epoch = laneEpoch;
     try {
       if (pending) {
-        await settledWithin(pending.p, laneWaitMs);
+        await settledWithin(pending.p, READ_AHEAD_WAIT_MS);
         if (queuedReads.get(coverKey) === entry) queuedReads.delete(coverKey);
         pendingReads.set(coverKey, entry);
+        if (readsInFlight >= MAX_READS_IN_FLIGHT) return null;
+        readsInFlight++;
+        held = true;
       } else await null;
-      held = await takeLane(laneWaitMs);
-      if (!held) return null; // the lane did not move: unread
       entry.seq = ++eventSeq;
       const atomic = await reader(terms);
       if (typeof atomic !== "bigint" || atomic < 0n) return null;
@@ -357,7 +339,7 @@ function balanceFor(coverKey, terms, now, minSeq = 0, laneWaitMs = LANE_WAIT_MS)
       return atomic;
     } catch { return null; }
     finally {
-      if (held) freeLane(epoch);
+      if (held) readsInFlight--;
       if (pendingReads.get(coverKey) === entry) pendingReads.delete(coverKey);
       if (queuedReads.get(coverKey) === entry) queuedReads.delete(coverKey);
     }
@@ -390,7 +372,7 @@ function nextRelease(coverKey, ms) {
  * The release function carries settling(): call it when the run's handler has
  * returned and its settlement is under way.
  */
-export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SETTLE_WAIT_MS, laneWaitMs = LANE_WAIT_MS } = {}) {
+export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SETTLE_WAIT_MS } = {}) {
   if (!inflightCoverEnabled()) return null;
   const terms = coverTermsOf(paymentHeaderOf(req));
   if (!terms) return null;
@@ -426,7 +408,7 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
       // settlement, so only a read begun after the shared view decides.
       const foreign = foreignHeld(others, held, judges.size);
       if (foreign) stats.foreignReads++;
-      const balance = await balanceFor(coverKey, terms, at, foreign ? sharedSeq : 0, laneWaitMs);
+      const balance = await balanceFor(coverKey, terms, at, foreign ? sharedSeq : 0);
       // A run left while the balance was being read: the read may predate its
       // settlement. Judge again on a read taken after the departure.
       if (me.left !== leftBefore) { at = Date.now(); continue; }
@@ -464,23 +446,44 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
       if (!unread && (cur.settling > 0 || beside) && mono() < waitUntil) {
         if (cur.settling > 0) stats.settleWaits++; else stats.foreignWaits++;
         const leftAtWait = me.left;
+        // Beside another container's run, step out of the window while
+        // waiting (put back below, before any judgment).
+        let withdrawn = false;
+        if (beside && sharedId) {
+          withdrawn = true;
+          stats.withdrawals++;
+          await removeShared(coverKey, sharedId, terms.atomic);
+        }
         let pollMs = FOREIGN_POLL_MS;
-        while (me.left === leftAtWait) {
-          const remaining = waitUntil - mono();
-          if (remaining <= 0) break;
+        for (;;) {
+          const remaining = Math.max(0, waitUntil - mono());
           await nextRelease(coverKey, beside ? Math.min(remaining, pollMs) : remaining);
-          if (!beside || me.left !== leftAtWait || mono() >= waitUntil) break;
+          if (me.left !== leftAtWait || !beside) break;
+          // A look at the window, and one last look when the wait runs out.
           const r = await shared.windowRead(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS() });
           if (r.ok) {
             const seen = othersOf(r, sharedId, terms.atomic);
             if (!noteView(coverKey, seen) && (!others.foreign || !seen.foreign) && foreignDeparted(others, seen)) noteDeparture(coverKey);
           } else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
+          if (me.left !== leftAtWait || mono() >= waitUntil) break;
           pollMs = Math.min(pollMs * 2, FOREIGN_POLL_MAX_MS);
         }
-        // Nobody left the window in the whole wait and no local run was
-        // settling: nothing this judgment rests on has changed, so it stands
-        // (no further read). Otherwise judge again.
-        if (me.left !== leftAtWait || cur.settling > 0) { at = Date.now(); continue; }
+        if (me.left !== leftAtWait) {
+          // A run left: back into the window, then judged again on a view
+          // taken now and a read begun after it.
+          if (withdrawn) {
+            const r = await shared.windowAdd(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS(), member: sharedId, weight: Number(terms.atomic), now: Date.now() });
+            if (r.ok) { others = othersOf(r, sharedId, terms.atomic); sharedSeq = ++eventSeq; noteView(coverKey, others); }
+            else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
+          }
+          at = Date.now();
+          continue;
+        }
+        // Nobody left in the whole wait: nothing this judgment rests on has
+        // changed, so it stands (no further read). A run that stayed in the
+        // window (it waited on a settling run here only) is judged again, as
+        // it always was; it reuses the read it was judged on.
+        if (!withdrawn && cur.settling > 0) { at = Date.now(); continue; }
       }
       stats.refused++;
       if (unread) stats.refusedUnread++;
@@ -557,8 +560,7 @@ export function inflightCoverStatus() {
 
 /** Test-only. */
 export function _resetInflightCoverForTest() {
-  ledger.clear(); balances.clear(); pendingReads.clear(); queuedReads.clear(); lastForeign.clear(); judging.clear(); readsInFlight = 0; laneEpoch++; reader = readTokenBalance;
-  for (const w of laneQueue.splice(0)) { clearTimeout(w.timer); w.resolve(false); }
+  ledger.clear(); balances.clear(); pendingReads.clear(); queuedReads.clear(); lastForeign.clear(); judging.clear(); readsInFlight = 0; reader = readTokenBalance;
   for (const set of waiters.values()) for (const wake of [...set]) wake();
   waiters.clear();
   for (const k of Object.keys(stats)) stats[k] = 0;

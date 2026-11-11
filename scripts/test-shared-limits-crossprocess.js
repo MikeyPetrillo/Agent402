@@ -317,6 +317,21 @@ ok((await A.ready) && (await B.ready), "two control replicas started");
   r = await B.send({ op: "ic.admit", run: "b4", payer: W, atomic: PRICE, balance: PRICE });
   ok(r.admitted, "every run released on both: the wallet's next run is admitted on its own proof");
   await B.send({ op: "ic.release", run: "b4" });
+  // At the production default: a balance for two, one run in flight on A,
+  // then a run on A and a run on B 100 ms apart, each read taking 120 ms.
+  // Each sees the other as another container's run, so neither is covered
+  // at first. Exactly one more fits: one of them runs, the other is refused,
+  // and neither waits on the other until the wait runs out.
+  const U = "0x" + "f8".repeat(20);
+  r = await A.send({ op: "ic.admit", run: "ax", payer: U, atomic: PRICE, balance: 2 * PRICE, prodWait: true });
+  ok(r.admitted, "cover, two waiting runs: the first run on A is admitted");
+  const onA = A.send({ op: "ic.admit", run: "ay", payer: U, atomic: PRICE, balance: 2 * PRICE, readMs: 120, prodWait: true });
+  await new Promise((res) => setTimeout(res, 100));
+  const onB = B.send({ op: "ic.admit", run: "bw", payer: U, atomic: PRICE, balance: 2 * PRICE, readMs: 120, prodWait: true });
+  const [ya, wb] = await Promise.all([onA, onB]);
+  const served = [ya, wb].filter((v) => v.admitted);
+  ok(served.length === 1 && served[0].ms < 2_000 && [ya, wb].some((v) => !v.admitted && v.status === 429), `cover, two waiting runs on two containers: one of the two is admitted within two seconds and the other is refused (A ${ya.admitted ? "admitted" : ya.status} ${ya.ms} ms, B ${wb.admitted ? "admitted" : wb.status} ${wb.ms} ms)`);
+  for (const [rep, run] of [[A, "ax"], [A, "ay"], [B, "bw"]]) await rep.send({ op: "ic.release", run });
 }
 // --- the paid-quote trust (an address that paid on one container is not held to the unpaid-quote limiters on the other) ---
 {
