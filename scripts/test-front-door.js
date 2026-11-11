@@ -31,6 +31,7 @@ import { FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
 import { isComputePayable } from "../src/pow.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { firstCallAllowanceEnabled } from "../src/first-call-allowance.js";
+import { stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, failed = 0;
@@ -295,7 +296,7 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
     const { leadSentence } = await import("../src/positioning.js");
     const lead = leadSentence({ mpp });
     const home = await (await fetch(`${B}/`)).text();
-    const lede = ((home.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "").replace(/<[^>]*>/g, "");
+    const lede = stripTags((home.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "", "");
     ok(lede === lead, `${tag} GET /: the hero lede is the lead sentence for MPP ${mpp ? "on" : "off"} ("${lede}")`);
     const init = await fetch(`${B}/mcp`, {
       method: "POST",

@@ -4,6 +4,7 @@
 // (rails, leaderboard, router-share disclosure), the commercial-sensitivity
 // rule, JSON-LD honesty, and copy hygiene.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { stripTags } from "./lib/html-text.js";
 import { ledgerHomePage } from "../src/ledger-home.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { CATEGORY_LINE, LEAD_SENTENCE } from "../src/positioning.js";
@@ -145,7 +146,7 @@ const catalog = {
   // stronger invariant now is its absence.
   ok(!/<script src="https?:\/\//.test(html), "homepage loads no third-party script (no CDN tags)");
   ok(html.includes('<script src="/js/home-hero.js">'), "homepage behavior script is first-party");
-  const heroText = html.slice(html.indexOf("<header"), html.indexOf("</header>")).replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+  const heroText = stripTags(html.slice(html.indexOf("<header"), html.indexOf("</header>")), "").replace(/\s+/g, " ");
   ok(heroText.includes(CATEGORY_LINE) && heroText.includes(LEAD_SENTENCE) && heroText.includes("Web search, browser rendering, SEC filings, market data and more: an agent sends a request, gets a price back") && !/plus [\d,]+ utilities/.test(html), "the hero states the category, then the lead sentence (500+ tools), then what they do and how a call is paid");
   const proof = homeProofFigures({ external: { value: { count: 40000 }, at: Date.UTC(2026, 10, 11) } });
   const withExt = ledgerHomePage(BASE_URL, catalog, { toolCallsServed: { viaUSDC: 35138, viaProofOfWork: 1, viaMPPWire: 0, viaRouter: 0, viaUSDCByNetwork: {} } }, { leaderboard: [] }, [], { settledOnChain: 46007, external: { count: 40000, usd: 1234.5 }, proof });

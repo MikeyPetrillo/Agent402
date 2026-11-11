@@ -21,6 +21,7 @@
 //   TARGET_URL=http://127.0.0.1:3000 node scripts/test-a11y-controls.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { chromium } from "playwright";
+import { stripScripts } from "./lib/html-text.js";
 
 const BASE = process.env.TARGET_URL || "http://127.0.0.1:3000";
 let pass = 0, fail = 0;
@@ -201,7 +202,7 @@ try {
       ok(after.clip === after.text, `${path}: the clipboard holds the block's text exactly`);
       // No script: the served HTML is the plain block, no dead button.
       const raw = await (await fetch(`${BASE}${path}`)).text();
-      ok(/<pre\b/.test(raw) && !/ml-code-copy/.test(raw.replace(/<style[\s\S]*?<\/style>/g, "")), `${path}: without script the block is a plain <pre> with no button in the HTML`);
+      ok(/<pre\b/.test(raw) && !/ml-code-copy/.test(stripScripts(raw)), `${path}: without script the block is a plain <pre> with no button in the HTML`);
     }
 
     // Prose step on long-form pages.
