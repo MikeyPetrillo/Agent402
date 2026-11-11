@@ -197,8 +197,30 @@ const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
     for (const until = realNow() + 5000; builds < 2 && realNow() < until;) await new Promise((r) => setImmediate(r));
     ok(builds === 2, `a catalog holding an unread count is re-read after minutes, not kept 30 (${builds} builds)`);
   } finally { globalThis.fetch = realFetch; mod.setAlgorandCrawlSources({}); mod._resetForTest(); }
-  const srvText = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(!/if \(!r\.ok\) return 0;\s*\n\s*const txs = r\.json\?\.transactions/.test(srvText) && /indexer read did not complete/.test(srvText), "the server's chain read throws on a read that did not complete instead of answering 0");
+}
+// The chain read the server injects (makeIndexerInboundCount), run with
+// stubbed indexer answers: a 404 is a definite 0, a read that did not
+// complete throws (unknown, never 0), and only inbound transfers from
+// another account count.
+{
+  const mod = await import("../src/algorand-sellers.js");
+  const PAY = "P".repeat(58), OTHER = "O".repeat(58);
+  const read = (answer) => mod.makeIndexerInboundCount(async () => answer, ["https://indexer.example"]);
+  const outcome = async (answer) => { try { return await read(answer)(PAY); } catch (e) { return `throws: ${e.message}`; } };
+  ok(await outcome({ ok: true, status: 404, json: null }) === 0, "the indexer's 404 (no such account) is a definite 0");
+  for (const [label, answer] of [["a failed read", { ok: false, status: 0 }], ["a 500", { ok: false, status: 500 }], ["a body with no transaction list", { ok: true, status: 200, json: {} }]]) {
+    ok(await outcome(answer) === "throws: indexer read did not complete", `${label} throws (unknown), never answers 0`);
+  }
+  const txs = [
+    { sender: OTHER, "asset-transfer-transaction": { receiver: PAY } },
+    { sender: OTHER, "asset-transfer-transaction": { receiver: PAY } },
+    { sender: PAY, "asset-transfer-transaction": { receiver: PAY } },
+    { sender: OTHER, "asset-transfer-transaction": { receiver: OTHER } },
+  ];
+  ok(await outcome({ ok: true, status: 200, json: { transactions: txs } }) === 2, "only inbound transfers from another account count");
+  let asked = null;
+  await mod.makeIndexerInboundCount(async (bases, path) => { asked = { bases, path }; return { ok: true, status: 200, json: { transactions: [] } }; }, ["https://indexer.example"])(PAY);
+  ok(asked?.path === `/v2/accounts/${PAY}/transactions?asset-id=${mod.ALGORAND_USDC_ASSET_ID}&tx-type=axfer&limit=200` && asked.bases[0] === "https://indexer.example", `it reads the payTo's USDC transfers (${asked?.path})`);
 }
 
 // The halves only matter if the catalog build reaches them and the server
@@ -211,7 +233,7 @@ const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
   ok(/catch \{ out = resources; \}/.test(mod), "a failure in either half falls back to the facilitator catalog untouched");
   const srv = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/setAlgorandCrawlSources\(\{[\s\S]{0,1600}countInbound:/.test(srv), "the server supplies both halves");
-  ok(/receiver === payTo && t\?\.sender !== payTo/.test(srv), "the inbound count excludes a seller paying itself");
+  ok(/countInbound: makeIndexerInboundCount\(getJsonAcross, ALGORAND_INDEXER_BASES\)/.test(srv), "the server's chain read is makeIndexerInboundCount (its behavior is checked above)");
 }
 
 // THE ADDRESS THAT EARNED PROVEN-NESS MUST BE THE ADDRESS BEING PAID

@@ -58,7 +58,7 @@ import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { createUnansweredTracker } from "../unanswered-rule.js";
 import { currentCallerKey } from "../request-timing.js";
-import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { upstreamFetch, upstreamDeadline, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, KIND } from "../upstream-deadline.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_SPEECH_URL = "https://openrouter.ai/api/v1/audio/speech";
@@ -265,11 +265,14 @@ const BREAKER_MAX_MS = 15 * 60_000;
 // (a call in flight when another tripped must not close the breaker).
 const breaker = { openUntil: 0, trips: 0, serverErrors: 0, probing: false, epoch: 0 };
 let elevenInFlight = 0;
-// Our own deadline on the ElevenLabs link: one call (a long text, one
-// caller's input) never counts, but the pattern of src/unanswered-rule.js
-// (many calls, several callers, one window, no answer from the link between)
-// opens the breaker so the next callers use the backups for the cool-down.
-// Logged as "did not answer within our limit"; it names no failure.
+// Our own deadline on the ElevenLabs link. On a short text (under
+// HEAVY_INPUT_SHARE of the cap, src/upstream-deadline.js) nothing about the
+// input explains it, so it counts toward the breaker like a server error:
+// three in a row move even a single caller to the backups. On a long text
+// one call never counts (it may need more than the cap), but the pattern of
+// src/unanswered-rule.js (many calls, several callers, one window, no answer
+// from the link between) opens the breaker for the next callers. Both are
+// logged as "did not answer within our limit"; they name no failure.
 const elevenUnanswered = createUnansweredTracker();
 // Voxtral first: its SPEECH_MODELS map (shared with /v1/audio/speech, so the
 // two surfaces cannot drift) gives nine of the ten names their own voice id,
@@ -304,8 +307,9 @@ function tripBreaker(retryAfterMs = 0, now = Date.now()) {
   breaker.probing = false;
 }
 /** `e` null = served. Throttles trip at once; server errors, dropped
- *  connections and empty answers (`unhealthy`) trip after three in a row.
- *  Our own deadline passing is not counted (callSpeechModel, ourDeadline). */
+ *  connections, empty answers and our deadline passing on a short text
+ *  (`unhealthy`) trip after three in a row. Our deadline on a long text is
+ *  not counted here (callSpeechModel, linkHeld). */
 function noteElevenOutcome(gate, e) {
   const stale = gate.epoch !== breaker.epoch;
   if (!e) {
@@ -316,7 +320,10 @@ function noteElevenOutcome(gate, e) {
   if (e.throttle) return tripBreaker(e.retryAfterMs);
   if (stale && !gate.probe) return;
   if (gate.probe) return tripBreaker(); // a failed probe re-opens, longer
-  if ((e.outage || e.unhealthy) && ++breaker.serverErrors >= 3) tripBreaker();
+  if ((e.outage || e.unhealthy) && ++breaker.serverErrors >= 3) {
+    if (e.shortHang) console.warn("[tts] the speech link did not answer within our limit on a short text, the third unanswered call in a row; the next callers use the backup voices for the cool-down");
+    tripBreaker();
+  }
 }
 /** Bucketed state for status surfaces: ok | cooling | probing. */
 export function elevenLabsBreakerState(now = Date.now()) {
@@ -366,14 +373,16 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
     }, { label: "Speech upstream", step: "speech", timeoutMs, tag: "[tts]", fetchImpl: probe, input: { size: text.length, max: TIERS.tts.maxChars } });
   } catch (e) {
     // Our own cap passing (the per-link limit, or what the walk had left) is
-    // not an answer from the vendor: a long text can need more than the cap,
-    // so it stays final for this call but never counts toward the breaker.
+    // final for this call. On a short text (the plain our-deadline kind, not
+    // smaller-input) it counts toward the breaker (`shortHang`); a long text
+    // can need more than the cap, so it never counts on its own.
     // Only "unreachable" is a failure of the connection itself.
-    // `linkHeld`: our cap passed while a request was out on the link (not a
-    // budget spent before any request left), the one case the unanswered
-    // rule reads.
+    // `linkHeld`: our cap passed on a long text while a request was out on
+    // the link (not a budget spent before any request left), the one case
+    // the unanswered rule reads.
     const ourDeadline = !!e?.upstreamFailure && e.upstreamFailure !== "unreachable";
-    throw Object.assign(e, { outage: neverConnected, unhealthy: !ourDeadline, ourDeadline, linkHeld: ourDeadline && sent });
+    const shortHang = ourDeadline && sent && e.hint === KIND.OUR_DEADLINE;
+    throw Object.assign(e, { outage: neverConnected, unhealthy: !ourDeadline || shortHang, ourDeadline, shortHang, linkHeld: ourDeadline && sent && !shortHang });
   }
   if (!res.ok) {
     const errText = await res.text().catch(() => "");

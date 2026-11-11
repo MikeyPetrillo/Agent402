@@ -8,6 +8,7 @@
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
+import { ourKeyRefusedError } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -52,7 +53,7 @@ async function callOpenAI(text, tierSlug) {
 
   const body = await res.text();
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw bad("OpenAI upstream auth failed", 502);
+    if (res.status === 401 || res.status === 403) throw ourKeyRefusedError("Embedding", res.status);
     if (res.status === 429) throw bad("OpenAI rate-limited - retry shortly", 503);
     if (res.status >= 500) throw bad(`OpenAI upstream error (HTTP ${res.status})`, 502);
     // Redact the FULL body BEFORE slicing/parsing (a secret straddling the

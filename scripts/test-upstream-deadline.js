@@ -106,6 +106,14 @@ const keepAlive = setInterval(() => {}, 1000);
   const dns = upstreamUnreachable("Chain data", "eth_call", Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo EAI_AGAIN"), { code: "EAI_AGAIN" }) }));
   ok(dns.statusCode === 503 && dns.attribution === "ours" && dns.hint === "our-egress" && dns.upstreamFailure === "unreachable" && /this server's DNS lookup/.test(dns.message) && runnerProbeLabel(503, { error: dns.message }) === null,
     `our own DNS lookup failing is ours, kind our-egress, and names no upstream as down (${dns.message})`);
+  const dnsRug = upstreamUnreachable("RugCheck", "report", Object.assign(new TypeError("fetch failed"), { cause: { code: "EAI_AGAIN" } }));
+  ok(runnerProbeLabel(503, { error: dnsRug.message }) === "RugCheck", `the strict sweep's runner probe reads our resolver wording too, so a runner that cannot resolve the host is probed (${dnsRug.message})`);
+  for (const code of ["ENOTFOUND", "EAI_NONAME", "EAI_NODATA"]) {
+    const nx = upstreamUnreachable("RugCheck", "report", Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(`getaddrinfo ${code}`), { code }) }));
+    ok(nx.statusCode === 503 && nx.attribution === "unknown" && nx.hint === "connect-failed" && nx.upstreamFailure === "unreachable" && /its host name did not resolve/.test(nx.message) && !/this server's DNS/.test(nx.message) && isUpstreamFailure(nx),
+      `a host name answered no such name (${code}) is unknown, never our DNS (${nx.message})`);
+    ok(runnerProbeLabel(503, { error: nx.message }) === "RugCheck", `the strict sweep's runner probe reads the no-such-name wording (${code})`);
+  }
   const sp = budgetSpentError("RugCheck", "report", 20_000);
   ok(sp.statusCode === 503 && sp.attribution === "ours" && sp.hint === "budget-spent" && sp.budgetSpent === true && sp.upstreamFailure === "deadline" && SPENT_RE.test(sp.message) && !/did not answer/.test(sp.message),
     `a budget spent before any request left names no upstream as unresponsive (${sp.message})`);
@@ -308,6 +316,49 @@ ok(!stallCalls.some((c) => /\btest-(alchemy|brave|neynar|exa|hunter|openrouter|t
   const t1 = Date.now();
   const e3 = await upstreamFetch("https://stalled.test/some", {}, { label: "Some", step: "read", timeoutMs: 5000, tag: null, budget: budgetOf(60), fetchImpl: seam }).catch((x) => x);
   ok(e3?.upstreamFailure === "deadline" && left === 1 && Date.now() - t1 < 60 + SLACK_MS, `a budget with 60 ms left still runs the read under that cap (${left} read(s), ${Date.now() - t1} ms)`);
+}
+
+// A read on a long input marks its signal, so the failure monitor leaves its
+// deadline out of the rule that needs no second caller; a short one does not.
+{
+  const MARK = Symbol.for("agent402.upstreamHeavyInput");
+  const seen = [];
+  const grab = async (_u, init) => { seen.push(init.signal[MARK] === true); return new Response("{}"); };
+  await upstreamFetch("https://mark.test/a", {}, { label: "Mark", step: "read", timeoutMs: 1000, tag: null, budget: null, fetchImpl: grab, input: { size: 1500, max: 2000 } });
+  await upstreamFetch("https://mark.test/b", {}, { label: "Mark", step: "read", timeoutMs: 1000, tag: null, budget: null, fetchImpl: grab, input: { size: 40, max: 2000 } });
+  await upstreamFetch("https://mark.test/c", {}, { label: "Mark", step: "read", timeoutMs: 1000, tag: null, budget: null, fetchImpl: grab });
+  ok(seen.join() === "true,false,false", `only a read on a long input carries the long-input mark (${seen.join()})`);
+}
+
+// Our own key refused (401/403) names our side, kind our-key, on every kit
+// that calls a model provider with this server's key: never an upstream
+// failure and never the buyer's input.
+{
+  const prevKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-key";
+  const kits = [
+    ["image-gen", "../src/tools/image-gen-kit.js", "IMAGE_GEN_TOOLS"],
+    ["embed", "../src/tools/embed-kit.js", "EMBED_TOOLS"],
+    ["moderate", "../src/tools/moderate-kit.js", "MODERATE_TOOLS"],
+    ["llm", "../src/tools/llm-kit.js", "LLM_TOOLS"],
+  ];
+  for (const status of [401, 403]) {
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: "Incorrect API key provided", code: "invalid_api_key" } }), { status, headers: { "content-type": "application/json" } });
+    for (const [slug, path, list] of kits) {
+      const mod = await import(path);
+      const tool = mod[list].find((t) => t.slug === slug);
+      const input = tool?.discovery?.input ?? tool?.discovery?.example ?? {};
+      const e = await Promise.resolve().then(() => tool.handler(input)).catch((x) => x);
+      ok(e instanceof Error && e.attribution === "ours" && e.hint === "our-key" && /refused this server's key \(HTTP \d{3}\)/.test(e.message) && /on our side, not your input/.test(e.message) && !/upstream auth failed/i.test(e.message),
+        `${slug}: our own key refused (${status}) is ours, kind our-key (${e?.statusCode} ${e?.message})`);
+    }
+    const G = await import("../src/tools/llm-gateway-kit.js");
+    const ge = await G.throwUpstreamError(new Response("{}", { status })).catch((x) => x);
+    ok(ge?.attribution === "ours" && ge?.hint === "our-key" && ge?.statusCode === 502 && /refused this server's key/.test(ge.message) && !/upstream auth failed/i.test(ge.message),
+      `the model gateway: our own key refused (${status}) is ours, kind our-key, and still a walkable 502 (${ge?.message})`);
+  }
+  globalThis.fetch = realFetch;
+  if (prevKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = prevKey;
 }
 
 clearInterval(keepAlive);

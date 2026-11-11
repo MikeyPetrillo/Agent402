@@ -62,9 +62,11 @@ Loaded when an index, discovery, router or buyer file is read.
   re-checks). A seller that keeps failing is stamped again and waits a whole window; a passing verdict
   stays on the rotation; an explicit re-registration probes whenever probes are on (`paywallVerdictExpired` in
   `src/x402-index.js`, `scripts/test-index-paywall-recheck.js`).
-- **Our read is not the seller's answer:** a crawl read that failed with no answer from the seller
-  (our time limit, a connection that did not finish, our resolver, our byte cap:
-  `crawlReadFailureIsOurs` in `src/x402-index.js`) never counts toward a path's backoff. A failed
+- **Our read is not the seller's answer:** a crawl read that failed on our side (our time limit, our
+  resolver, our byte cap: `crawlReadFailureIsOurs` in `src/x402-index.js`) counts toward a path's
+  backoff only once per `CRAWL_OURS_PER_STEP` (3) in a row; a connection the seller's host refused,
+  reset or failed TLS on (`source-unreachable`) and a name that does not resolve are the seller's
+  answer and count like any other. A failed
   crawl with such a read keeps an entry whose last completed crawl succeeded as it was, with
   `readIncomplete` beside it (`lastReadIncomplete` on `?seller=` and the index rows), while that crawl
   is under `INDEX_CRAWL_HOLD_HOURS` old (default 6), or whatever its age when at least half of the last

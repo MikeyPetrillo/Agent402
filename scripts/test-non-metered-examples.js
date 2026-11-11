@@ -259,8 +259,10 @@ export function runnerProbeLabel(status, body, slug = null) {
   if (status === 502 && RELAYED_HOST_PROBES[slug] && /^Source URL's host returned HTTP 5\d\d\b/.test(String(body?.error || ""))) return RELAYED_HOST_PROBES[slug];
   if (status !== 503) return null;
   // A report the upstream itself declined to build ("<Label> could not produce a
-  // report right now (upstream)") is the same class: probed directly below.
-  const m = /^([\w ]+?) (?:did not answer the [\w -]+ read within our \d+ s limit|is unreachable from here|could not produce a report right now \(upstream\))/.exec(String(body?.error || ""));
+  // report right now (upstream)") is the same class: probed directly below, as
+  // are both DNS answers (src/upstream-deadline.js upstreamUnreachable): a
+  // lookup the resolver could not finish and a host name that did not resolve.
+  const m = /^([\w ]+?) (?:did not answer the [\w -]+ read within our \d+ s limit|is unreachable from here|could not be reached: (?:this server's DNS lookup for its host failed|its host name did not resolve)|could not produce a report right now \(upstream\))/.exec(String(body?.error || ""));
   return m && RUNNER_PROBES[m[1]] ? m[1] : null;
 }
 const RUNNER_PROBE_UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";

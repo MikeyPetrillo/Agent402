@@ -16,11 +16,11 @@
 //   upstreams  per named upstream host, every outbound fetch the egress
 //              meter sees, by outcome: ok, s5xx, timeout (the transport's own
 //              connect or socket timeout), network (refused or reset before
-//              an answer), throttled (429), aborted (the caller canceled: a
+//              an answer, or a host name that does not resolve), throttled (429), aborted (the caller canceled: a
 //              buyer who left, a drain), deadline (our own deadline passed:
 //              an AbortSignal.timeout of ours, a health check's limit, a
-//              handler budget) and egress (our side could not resolve or
-//              route to the host: DNS, no route). aborted, deadline and egress
+//              handler budget) and egress (our side could not finish a
+//              lookup or route to the host: resolver, no route). aborted, deadline and egress
 //              prove nothing about the upstream: they are shown on the
 //              operator view and never counted as its failure. One pattern of
 //              them is read: our deadline firing on ONE upstream on many
@@ -106,6 +106,7 @@ import { unansweredSettings, callerOf } from "./unanswered-rule.js";
 // The cap src/upstream-deadline.js records on the signal it sends (the same
 // registered symbol, read here without importing that module).
 const LIMIT_MS = Symbol.for("agent402.upstreamLimitMs");
+const HEAVY_INPUT_MARK = Symbol.for("agent402.upstreamHeavyInput");
 const secondsOfMs = (ms) => String(Math.max(1, Math.round(ms / 1000)));
 
 export const BUCKET_MS = 5 * 60_000;
@@ -195,8 +196,11 @@ export function toolClassOf(status, { shed = false } = {}) {
 }
 
 const TIMEOUT_CODES = new Set(["UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "ETIMEDOUT", "ESOCKETTIMEDOUT"]);
-// Our side could not resolve or route to the host: no answer from it at all.
-const EGRESS_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "EAI_FAIL", "EAI_NODATA", "EAI_NONAME", "ENETUNREACH", "ENETDOWN", "EHOSTUNREACH", "EADDRNOTAVAIL"]);
+// Our side could not finish a lookup or route to the host: no answer from it
+// at all. A name answered "no such name" (ENOTFOUND, EAI_NONAME, EAI_NODATA)
+// is not here: the host's own name not resolving counts as `network`, so a
+// vendor whose domain stops resolving still drives upstreamHealth.
+const EGRESS_CODES = new Set(["EAI_AGAIN", "EAI_FAIL", "ESERVFAIL", "EREFUSED", "ETIMEOUT", "ECANCELLED", "EDNSLOOKUPTIMEOUT", "EDNSUNAVAILABLE", "ENETUNREACH", "ENETDOWN", "EHOSTUNREACH", "EADDRNOTAVAIL"]);
 /** The outcome of an outbound fetch from its rejection (or null for a response). */
 export function upstreamKindOfError(err, init) {
   const reason = init?.signal?.reason;
@@ -388,7 +392,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
     lastToolError.set(s, { at, status: Number(status), message: String(message || "").slice(0, 200), synthetic: !!synthetic });
   }
 
-  function noteUpstream(host, kind, { origin = "background", status = null, at = now(), path = null, caller = null, limitMs = null } = {}) {
+  function noteUpstream(host, kind, { origin = "background", status = null, at = now(), path = null, caller = null, limitMs = null, heavy = false } = {}) {
     const name = upstreamNameOf(host, path);
     if (!name || !UPSTREAM_KINDS.includes(kind)) return null;
     let m = upstreams.get(name);
@@ -404,6 +408,10 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       const c = callerOf(caller);
       const dc = (row.dc ||= []);
       if (dc.length < 32 && !dc.includes(c)) dc.push(c);
+      // A deadline on an input long enough to outlast our limit (`hv`): it
+      // still counts toward the several-callers rule, never toward the rule
+      // that needs no second caller.
+      if (heavy) row.hv = (row.hv || 0) + 1;
     }
     const limit = kind === "deadline" && Number(limitMs) > 0 ? Math.round(Number(limitMs)) : null;
     if (kind !== "ok") lastUpstream.set(name, { at, kind, host: String(host).slice(0, 120), status, ...(limit ? { limitMs: limit } : {}) });
@@ -475,7 +483,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
         // (hashed only for a deadline, the one kind that keeps it).
         let who = null;
         if (kind === "deadline") { try { who = typeof caller === "function" ? caller() : caller; } catch { /* no key */ } }
-        noteUpstream(host, kind, { origin, path, caller: who, limitMs: init?.signal?.[LIMIT_MS] ?? null });
+        noteUpstream(host, kind, { origin, path, caller: who, limitMs: init?.signal?.[LIMIT_MS] ?? null, heavy: kind === "deadline" && init?.signal?.[HEAVY_INPUT_MARK] === true });
       },
     );
   }
@@ -555,10 +563,20 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       }
       return out;
     };
+    // Caller keys are read only inside the unanswered window: a bucket older
+    // than that window plus one bucket is published without them.
+    const dcFloor = bucketOf(t - unansweredSettings(env).windowMs) - 1;
+    const packUpstreams = () => {
+      const out = pack(upstreams);
+      for (const rows of Object.values(out)) {
+        for (const [b, row] of Object.entries(rows)) if (row.dc && Number(b) < dcFloor) { const { dc, ...rest } = row; void dc; rows[b] = rest; }
+      }
+      return out;
+    };
     return {
       at: t,
       tools: pack(tools),
-      upstreams: pack(upstreams),
+      upstreams: packUpstreams(),
       answers: pack(answers),
       lastAnswer: Object.fromEntries([...lastAnswer].map(([k, v]) => [k, v.filter((x) => x.at > t - DAY_MS)]).filter(([, v]) => v.length)),
       lastToolError: Object.fromEntries([...lastToolError].filter(([, v]) => v.at > t - DAY_MS)),
@@ -635,6 +653,7 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
           const d = (dst[b] ||= { o: emptyUp(), s: emptyUp(), b: emptyUp() });
           add(d.o, row.o); add(d.s, row.s); add(d.b, row.b);
           if (Array.isArray(row.dc)) for (const c of row.dc) { d.dc ||= []; if (d.dc.length < 64 && !d.dc.includes(c)) d.dc.push(c); }
+          if (Number(row.hv) > 0) d.hv = (d.hv || 0) + Number(row.hv);
         }
       }
       for (const [slug, rows] of Object.entries(s.answers || {})) {
@@ -717,7 +736,9 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       });
     }
     // Unanswered: our deadline firing on one upstream across many calls from
-    // several callers inside the window (src/unanswered-rule.js), while other
+    // several callers inside the window (src/unanswered-rule.js), or on every
+    // one of at least allHeldMin calls when fewer callers (or background work
+    // alone) reach it, while other
     // upstreams answer in the same five-minute buckets. Says only "did not
     // answer within our limit". When most upstreams with traffic are held at
     // once, or no other upstream answered while this one was held, the cause
@@ -738,22 +759,28 @@ export function createToolFailureMonitor({ now = () => Date.now(), store = null,
       const callers = new Set();
       const okB = new Map();
       const dlBuckets = [];
+      let heavyDl = 0;
       for (const [b, row] of Object.entries(rows)) {
         if (!(Number(b) > unFloor)) continue;
         for (const k of row.dc || []) callers.add(k);
+        heavyDl += Number(row.hv) || 0;
         const ok = (row.o?.[iOk] || 0) + (row.b?.[iOk] || 0);
         if (ok) okB.set(Number(b), ok);
         if ((row.o?.[iDl] || 0) + (row.b?.[iDl] || 0)) dlBuckets.push(Number(b));
       }
       okBy.set(name, okB);
-      unStats.push({ upstream: name, deadline: c.deadline, egress: c.egress, answered, calls: answered + held, callers: callers.size, dlBuckets });
+      unStats.push({ upstream: name, deadline: c.deadline, shortDeadline: Math.max(0, c.deadline - heavyDl), egress: c.egress, answered, calls: answered + held, callers: callers.size, dlBuckets });
     }
     const heldShare = (x) => (x.calls ? (x.deadline + x.egress) / x.calls : 0);
     const heldUps = unStats.filter((x) => x.calls >= un.minCalls && heldShare(x) >= un.rate);
     const ourSide = heldUps.length > 0 && heldUps.length > unStats.length / 2;
     // Another upstream answered (an ok) in a bucket where this one was held.
     const othersAnswered = (x) => unStats.some((y) => y.upstream !== x.upstream && heldShare(y) < un.rate && x.dlBuckets.some((b) => okBy.get(y.upstream)?.get(b)));
-    const candidates = unStats.filter((x) => x.deadline >= un.minCalls && x.callers >= un.minCallers && x.deadline / x.calls >= un.rate);
+    // Several callers, or (one caller, or background work alone) an upstream
+    // that answered none of its calls in the window on allHeldMin of ours
+    // whose input was not long enough to outlast the limit.
+    const candidates = unStats.filter((x) => x.deadline >= un.minCalls && x.deadline / x.calls >= un.rate
+      && (x.callers >= un.minCallers || (x.answered === 0 && x.shortDeadline >= un.allHeldMin)));
     const unanswered = ourSide ? [] : candidates.filter(othersAnswered);
     for (const x of unanswered) {
       const r = upRows.find((u) => u.upstream === x.upstream);

@@ -27,6 +27,7 @@
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
+import { ourKeyRefusedError } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 
@@ -75,8 +76,22 @@ function moderationFor(input) {
 // prompt, payer or upstream text is kept.
 const moderationStats = { calls: { low: 0, auto: 0 }, refusals: { low: 0, auto: 0 }, unknownParamFallbacks: 0 };
 let fallbackLogged = false;
+// A model that refused the parameter is remembered in this process for
+// MODERATION_RECHECK_MS: its next requests go without it (one request, not
+// two). After that the parameter is sent again, so a model that starts to
+// take it is read again, and the fallback above still covers a refusal.
+export const MODERATION_RECHECK_MS = 6 * 3_600_000;
+const noModerationParam = new Map(); // model -> until (ms)
+const skipsModeration = (model, now = Date.now()) => {
+  const until = noModerationParam.get(model);
+  if (until === undefined) return false;
+  if (now < until) return true;
+  noModerationParam.delete(model);
+  return false;
+};
+export function _resetImageModerationMemoForTest() { noModerationParam.clear(); fallbackLogged = false; }
 export function imageModerationStats() {
-  return { sinceBoot: { calls: { ...moderationStats.calls }, refusals: { ...moderationStats.refusals }, unknownParamFallbacks: moderationStats.unknownParamFallbacks } };
+  return { sinceBoot: { calls: { ...moderationStats.calls }, refusals: { ...moderationStats.refusals }, unknownParamFallbacks: moderationStats.unknownParamFallbacks, modelsWithoutParam: noModerationParam.size } };
 }
 
 function validateInput(input, tierSlug) {
@@ -161,18 +176,20 @@ async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATIO
   // once the parameter has been dropped.
   let sentLevel = moderation;
   let fellBack = false;
+  if (skipsModeration(tier.model)) { delete body.moderation; sentLevel = "auto"; fellBack = true; }
 
   let res = await postImages(key, body, tier.timeoutMs);
   let text = await res.text();
-  if (res.status === 400) {
+  if (res.status === 400 && "moderation" in body) {
     const first = parseError(text);
     if (isModerationParamError(res.status, first.error)) {
       // Once, never in a loop: the second answer is final whatever it is.
       moderationStats.unknownParamFallbacks++;
       if (!fallbackLogged) {
         fallbackLogged = true;
-        console.warn(`[image-gen] ${tier.model} refused the moderation parameter; serving without it (counted on the operator failure view)`);
+        console.warn(`[image-gen] ${tier.model} refused the moderation parameter; serving without it, and sending it again to this model after ${MODERATION_RECHECK_MS / 3_600_000} h (counted on the operator failure view)`);
       }
+      noModerationParam.set(tier.model, Date.now() + MODERATION_RECHECK_MS);
       delete body.moderation;
       sentLevel = "auto";
       fellBack = true;
@@ -181,7 +198,7 @@ async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATIO
     }
   }
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw bad("OpenAI upstream auth failed", 502);
+    if (res.status === 401 || res.status === 403) throw ourKeyRefusedError("Image generation", res.status);
     if (res.status === 429) throw bad("OpenAI rate-limited - retry shortly", 503);
     if (res.status >= 500) throw bad(`OpenAI upstream error (HTTP ${res.status})`, 502);
     const { msg, error, code } = parseError(text);
