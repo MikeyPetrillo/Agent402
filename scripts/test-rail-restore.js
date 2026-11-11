@@ -78,6 +78,16 @@ function fakeTimers() {
   ok(reads === 4, "a finished loop reads nothing more");
 }
 {
+  // Lists the network under another scheme only: never handed to restore.
+  const tm = fakeTimers();
+  let restores = 0;
+  const upto = { kinds: [{ x402Version: 2, scheme: "upto", network: CELO }], extensions: [], signers: {} };
+  const rc = createRailRecheck({ failed: [{ client: { getSupported: async () => upto }, label: "F" }], dropped: [CELO], restore: () => { restores++; return true; }, firstMs: 100, maxMs: 100, log: () => {}, warn: () => {}, setTimer: tm.setTimer, clearTimer: tm.clearTimer });
+  rc.start();
+  await tm.fire(new Set([100]));
+  ok(restores === 0 && rc.pendingNetworks().length === 0, `a listing of the network under a scheme other than exact restores nothing (${restores} restores)`);
+}
+{
   // Answers without the network: never restored, and the loop ends.
   const tm = fakeTimers();
   let reads = 0, restores = 0;
@@ -147,7 +157,7 @@ const payai = await stubFacilitator();
 const celo = await stubFacilitator();
 
 const RECHECK_MS = 300;
-const boot = (label) => bootServer({
+const boot = (label, extra = {}) => bootServer({
   stores: `rail-restore-${label}`,
   env: {
     FREE_MODE: "", NODE_ENV: "test",
@@ -160,6 +170,7 @@ const boot = (label) => bootServer({
     NETWORK_PRICE_PREMIUMS: `${CELO}=0.001`, NETWORK_PRICE_FLOORS: "",
     X402_RAIL_RECHECK_MS: String(RECHECK_MS), X402_RAIL_RECHECK_MAX_MS: String(RECHECK_MS * 2),
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
+    ...extra,
   },
 });
 const offerOf = async (url) => {
@@ -214,6 +225,9 @@ try {
     const pricing = (await getJson(srv.url, "/api/pricing")).payment || {};
     const openapi = await openapiPremiums();
     ok(wellKnown.includes(CELO), "/.well-known/x402 names Celo");
+    const wkNets = JSON.parse(wellKnown).payment?.x402?.networks || [];
+    const wkNetsBefore = JSON.parse(before.wellKnown).payment?.x402?.networks || [];
+    ok(!wkNetsBefore.includes("celo") && wkNets.includes("celo"), `its manifest is built again: payment.x402.networks lists Celo (${wkNets.join(", ")})`);
     ok((pricing.networks || []).includes("celo") && pricing.premiumUsdByNetwork?.celo === 0.001, `/api/pricing lists it with its premium (${(pricing.networks || []).join(", ")}; ${JSON.stringify(pricing.premiumUsdByNetwork)})`);
     ok(openapi.celo === 0.001, `/openapi.json, built once and cached, is built again and quotes its premium (${JSON.stringify(openapi)})`);
     ok(microOf(celoAccept.amount) === microOf(baseAccept0.amount) + 1000, `and the Celo accept carries that premium over the Base price (${celoAccept.amount} vs ${baseAccept0.amount})`);
@@ -267,6 +281,31 @@ try {
     celo.mode = exact(CELO);
     await until(async () => celo.supported, (n) => n > reads, RECHECK_MS * 8, 50);
     ok(celo.supported === reads && !(await offerOf(srv.url)).nets.has(CELO), "a facilitator that answered without the network is not read again and never gains it");
+    await srv.stop();
+  }
+
+  // ---- E. the re-read switched off ----
+  payai.mode = exact(BASE); celo.mode = "die";
+  {
+    const srv = await boot("e", { X402_RAIL_RECHECK_MS: "off" });
+    servers.push(srv);
+    ok(!(await offerOf(srv.url)).nets.has(CELO) && /dropping eip155:42220/.test(srv.log()), "X402_RAIL_RECHECK_MS=off, the Celo facilitator failing at boot: Celo is dropped");
+    celo.mode = exact(CELO);
+    const reads = celo.supported;
+    await until(async () => celo.supported, (n) => n > reads, RECHECK_MS * 8, 50);
+    ok(celo.supported === reads && !/rail re-read/.test(srv.log()) && !(await offerOf(srv.url)).nets.has(CELO), `with the re-read off nothing is read again and Celo does not rejoin (${celo.supported - reads} reads)`);
+    await srv.stop();
+  }
+
+  // ---- F. it answers with Celo at a protocol version the routes do not take ----
+  payai.mode = exact(BASE); celo.mode = "die";
+  {
+    const srv = await boot("f"); servers.push(srv);
+    celo.mode = { kinds: [{ x402Version: 1, scheme: "exact", network: CELO }], extensions: [], signers: {} };
+    const said = await until(async () => srv.log(), (l) => /rail re-read: eip155:42220 (was not restored|is offered again)|lists eip155:42220 but not in a form/.test(l), 30_000);
+    const after = await offerOf(srv.url);
+    ok(!/is offered again/.test(said) && after.status === 402 && after.nets.has(BASE) && !after.nets.has(CELO), `a listing the routes cannot be built on leaves Celo out of the offer and every paid route answering 402 (${after.status}: ${[...after.nets].join(", ")})`);
+    ok((await celoRail(srv.url))?.offered === false, "and /api/rails does not offer it");
     await srv.stop();
   }
 

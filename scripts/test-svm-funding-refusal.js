@@ -381,6 +381,7 @@ try {
   ok(/checked again after/.test(held.body.hint) && /Nothing was charged\./.test(held.body.hint), `held: the hint says it repeats the last check (${held.body.hint})`);
   ok(decode(held.required).error === "wallet_not_funded", `held: the PAYMENT-REQUIRED error names it (${decode(held.required).error})`);
   ok(!held.receipt && st.settles === 0, "held: nothing charged");
+  ok(held.body.needs && held.body.needs.network === SOL && held.body.needs.asset === solAccept.asset && held.body.needs.amount === solAccept.amount, `held: the 402 still says what the call needs (${JSON.stringify(held.body.needs)})`);
 
   // Another wallet, no token account (thrown shape): reaches verify, its own hint.
   const noacct = await kit.generateKeyPairSigner();
