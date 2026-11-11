@@ -160,7 +160,7 @@ async function probeContainer(buf, filename) {
 }
 
 /** Audio duration in seconds as the container headers declare it, or null
- *  when it cannot be determined. Pure local parse — no upstream call, no cost.
+ *  when it cannot be determined. Pure local parse: no upstream call, no cost.
  *  A declared duration is the file's own claim: assertWithinDurationCap
  *  measures the audio as well. */
 export async function probeDurationSeconds(buf, filename) {
