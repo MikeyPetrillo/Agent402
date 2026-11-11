@@ -11,7 +11,8 @@
 // handed back the same request still in flight, so a hung read was one long
 // wait, not two tries.
 //
-// THE READ. Try 1 asks the client as every caller does (the memo, so the
+// THE READ. A third try is made only after a try of ours timed out (two
+// error answers keep the two tries they had). Try 1 asks the client as every caller does (the memo, so the
 // x402 init that follows reads the same request, as before). Tries 2 and 3
 // each start a NEW request (`readFresh`), and every request still out keeps
 // counting: whichever answers first inside the bound is the answer, so a slow
@@ -100,6 +101,10 @@ export async function readSupportedAtBoot({ read, readFresh = read, tryMs = BOOT
   let last = null;
   for (let i = 0; i < tries && !winner; i++) {
     if (i > 0) {
+      // Only a try of ours that timed out earns a third: two error answers
+      // from the facilitator are its own answer, and keep the two tries (and
+      // the boot time) they had before.
+      if (i >= 2 && last?.settled && !isOurTimeout(last.error)) break;
       const gap = gapsMs[i - 1] ?? gapsMs[gapsMs.length - 1] ?? 0;
       if (now() + gap + minTryMs > end) break;
       // An earlier request may still answer during the pause.

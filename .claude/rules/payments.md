@@ -139,7 +139,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
 - **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`, with `returnedPayers` (granted wallets with a later outside paid sale, and within 7 days; one batched ledger read per chunk, cached `FIRST_CALL_ALLOWANCE_RETURNED_CACHE_MS` (default 5 minutes), reported with the switch off). The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
 - **Rails dropped at boot, re-read:** the boot guard offers only networks a facilitator's
   `/supported` read confirms (`src/boot-supported-read.js`): up to three tries (6 s each, at 0,
-  8 and 22 s; tries 2 and 3 are new requests, and any request still out counts), every boot read
+  8 and 22 s; tries 2 and 3 are new requests, and any request still out counts; a third only
+  after a try of ours timed out, so two error answers keep today's two tries), every boot read
   at once (the guard, Arc's read, which is the guard's own read of the Circle client, and the
   Gateway batched read), inside a bound no longer than the boot held before for that
   configuration: 14 s plus 8 s each for Arc and the batched option (so a deployment with neither

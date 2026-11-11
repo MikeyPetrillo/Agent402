@@ -157,7 +157,7 @@ function fakeTimers() {
   ok(r.supported === null && r.reason === "probe-timeout" && made === 3 && Date.now() - t0 < 1_500, `no answer: probe-timeout after three tries, inside the bound (${r.reason}, ${made} tries, ${Date.now() - t0} ms)`);
   // An error answer every time: read-failed.
   r = await readSupportedAtBoot(opts({ read: async () => { throw new Error("Facilitator getSupported failed (500)"); } }));
-  ok(r.supported === null && r.reason === "read-failed" && r.tries === 3, `an error answer every time reads read-failed (${r.reason}, ${r.tries})`);
+  ok(r.supported === null && r.reason === "read-failed" && r.tries === 2, `an error answer every time reads read-failed after the two tries it had before (${r.reason}, ${r.tries})`);
   // A client's own timeout error is ours too.
   r = await readSupportedAtBoot(opts({ read: async () => { throw Object.assign(new Error("timeout"), { reason: "timeout" }); } }));
   ok(r.reason === "probe-timeout", `a client timeout of ours reads probe-timeout (${r.reason})`);
