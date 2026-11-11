@@ -1003,6 +1003,19 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
   };
+  paths["/api/scorecard"] = {
+    get: {
+      operationId: "getBuyerScorecard",
+      security: [],
+      summary: "Buyer scorecard: outside paying wallets per UTC month",
+      description: "Free. Per UTC calendar month (the current month to date and the six before it), from the sales ledger: distinct outside paying wallets, wallets that also paid in an earlier month, wallets with paid calls on 2 or more days, settled paid calls and USD by settlement network. Our own wallets, canary and test traffic, free proof-of-work calls and calls with no paying wallet are left out. A count of 1 or 2 reads \"<3\", and a month with fewer than 3 paying wallets publishes that alone. The method is stated in the method field. Refreshed on a timer; asOf says when.",
+      tags: ["transparency"],
+      responses: {
+        200: { description: "The scorecard.", content: { "application/json": { schema: { type: "object", required: ["asOf", "months", "method"], properties: { asOf: { type: "string", format: "date-time" }, months: { type: "array", items: { type: "object" } }, method: { type: "object" } } } } } },
+        503: { description: "Not computed yet; retry after Retry-After seconds." },
+      },
+    },
+  };
   // Instance-wide MPP offer, read from the same config the 402 middlewares read.
   const mppShort = mppOfferShortProse();
   return {
@@ -1070,6 +1083,7 @@ export function openapiSpec(baseUrl, catalog) {
     tags: [
       ...Object.entries(CATEGORIES).map(([k, v]) => ({ name: k, description: v.label })),
       { name: "workflows", description: "Curated multi-tool workflows (skill packs) - task-level templates that compose catalog tools." },
+      { name: "transparency", description: "Figures about this service computed from its own ledgers." },
     ],
     paths,
     // Top-level extension so OpenAPI consumers can enumerate workflows without

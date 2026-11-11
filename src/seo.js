@@ -180,6 +180,7 @@ export function robotsTxt(baseUrl) {
     "Allow: /api/stats",
     "Allow: /api/status",
     "Allow: /api/reliability",
+    "Allow: /api/scorecard",
     "Allow: /api/leaderboard",
     "Allow: /api/cacheable",
     "Allow: /api/cache-stats",
@@ -281,6 +282,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
     { loc: `${baseUrl}/proof`, priority: "0.7" },
+    { loc: `${baseUrl}/scorecard`, priority: "0.7" },
     { loc: `${baseUrl}/terms`, priority: "0.3" },
     { loc: `${baseUrl}/privacy`, priority: "0.3" },
     { loc: `${baseUrl}/glossary`, priority: "0.8" },
@@ -637,6 +639,7 @@ ${flatTiersLine()}
 - [/.well-known/agent-card.json](${baseUrl}/.well-known/agent-card.json): our A2A AgentCard (also at /.well-known/agent.json) - name, skills, transport. It declares HTTP+JSON rather than the spec's default JSONRPC because that is what we actually serve
 - [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. ${erc8004AgentId(baseUrl) ? `The identity is agent ${erc8004AgentId(baseUrl)} in the registry at ${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}, owned by the wallet our 402s name as payTo, and the` : "The"} file lists every way to reach us with x402Support declared
 - [/api/reliability](${baseUrl}/api/reliability): structured reliability / SLA report with a verification URL per claim
+- [/api/scorecard](${baseUrl}/api/scorecard): buyer scorecard per UTC month from our sales ledger: outside paying wallets, returning and multi-day wallets, settled paid calls and USD by network; our own wallets and test traffic left out, counts of 1 or 2 read "<3" (page: [/scorecard](${baseUrl}/scorecard))
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
 - [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool
 - [/api/wishes](${baseUrl}/api/wishes): the demand board, aggregated; request a tool we do not have yet with \`POST /api/wish\` (clustered by demand; repeated asks get built)

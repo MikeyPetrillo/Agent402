@@ -5076,6 +5076,8 @@ jobs:
           t node scripts/test-svm-funding-refusal.js
           # A top paying buyer's failed paid calls raise topBuyerFailures within minutes, word only in public; challenges, verify refusals and payers outside the top ten never do (paid boot, Solana, stub facilitator)
           t node scripts/test-top-buyer-failures.js
+          # Buyer scorecard: monthly outside wallets, returning and multi-day wallets, calls and USD by network from the sales ledger; our wallets and test traffic left out, "<3" buckets, no address; a Solana sale books its payer as written; 300k-row refresh bound (offline seeded ledger + paid boot, Solana, stub facilitator)
+          t node scripts/test-scorecard.js
           # A verify refused for lack of funds names its class, the amount and the asset on every rail, and its log line carries the slug and a short payer (offline)
           t node scripts/test-verify-refusal-reason.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)

@@ -63,6 +63,7 @@ export const PAGE_SOURCES = {
   "/crawler": ["src/crawler-page.js"],
   "/company": ["src/company.js"],
   "/proof": ["src/proof.js"],
+  "/scorecard": ["src/scorecard.js"],
   "/glossary": ["src/glossary.js"],
   "/101": ["src/x402-101.js"],
   "/revenue": ["src/revenue-live.js"],

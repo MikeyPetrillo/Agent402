@@ -734,7 +734,8 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs } from "./sales-ledger.js";
+import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -4474,6 +4475,31 @@ app.get("/api/refunds/lookup", serveRefundLookup);
 app.post("/api/refunds/lookup", express.json({ limit: "4kb" }), serveRefundLookup);
 app.get("/api/proof", (_req, res) => { res.set("Cache-Control", "public, max-age=60"); res.json(memoSurface("proof:feed", 60_000, () => proofFeed())); });
 app.get("/proof", (_req, res) => htmlCache(res, 60, 300).send(proofPage(BASE_URL, memoSurface("proof:feed", 60_000, () => proofFeed()), standingFigures())));
+// Buyer scorecard (src/scorecard.js): monthly outside-buyer aggregates from
+// the sales ledger, computed on a timer off the request path. The operator
+// view also lists the sample settlements (explorer links).
+const scorecard = createScorecard({
+  compute: async () => {
+    await salesLedgerReady();
+    const raw = await buyerScorecardAsync({ months: SCORECARD_MONTHS, minGroup: SCORECARD_MIN_GROUP, samples: SCORECARD_SAMPLES, sampleOk: scorecardSampleOk, networkKey: scorecardNetworkKey });
+    const first = firstRecordedTs();
+    return { raw, asOf: new Date(raw.now).toISOString(), firstRecordedAt: first == null ? null : new Date(first).toISOString() };
+  },
+});
+scorecard.start();
+const scorecardOf = (v, operator = false) => scorecardBody(v.raw, { asOf: v.asOf, firstRecordedAt: v.firstRecordedAt, publishTx: operator || scorecardPublishesTx() });
+app.get("/api/scorecard", async (req, res) => {
+  try {
+    const { value } = await scorecard.get();
+    const elevated = operatorView(req, res);
+    if (!elevated) res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
+    res.json(scorecardOf(value, elevated));
+  } catch { res.status(503).set("Retry-After", "30").json({ error: "The scorecard is not computed yet; retry shortly." }); }
+});
+app.get("/scorecard", async (_req, res) => {
+  try { const { value } = await scorecard.get(); htmlCache(res, 300, 600).send(scorecardPage(BASE_URL, scorecardOf(value))); }
+  catch { res.status(503).set("Retry-After", "30").type("text").send("The scorecard is not computed yet; retry shortly."); }
+});
 app.get("/glossary", (_req, res) => htmlCache(res, 300, 900).send(glossaryPage(BASE_URL)));
 // x402 & MPP 101 - the presenter-mode walkthrough with the live demo (src/x402-101.js).
 app.get("/101", (_req, res) => htmlCache(res, 300, 900).send(x402101Page(BASE_URL)));
