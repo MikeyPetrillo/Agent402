@@ -1,6 +1,7 @@
-// Three words on /api/gateway-status and their two observers: gatewayBalance
-// (withdraw), sharedLimits (degraded) and replayStore (pending). Also the spend
-// words (xDataSpend, exaSpend, routerSpendWindow: over and capped).
+// Words on /api/gateway-status and their two observers: gatewayBalance
+// (withdraw), topBuyerFailures (alert), sharedLimits (degraded) and
+// replayStore (pending). Also the spend words (xDataSpend, exaSpend,
+// routerSpendWindow: over and capped).
 //
 // gatewayBalance=withdraw holds from the read that reaches the mark until an
 // operator moves the balance, so it pages at once. The other two flicker in
@@ -137,6 +138,7 @@ const GB = "Gateway balance READY to withdraw";
 const SLT = "Shared limits store DEGRADED (Redis)";
 const RS = "Replay store marks PENDING (Redis)";
 const RSW = "Router spend per minute OVER its ceiling";
+const TBF = "topBuyerFailures: a top paying buyer is getting failed answers";
 const j = (gateway) => judge({ gateway });
 
 await check("Worker: routerSpendWindow pages on over and capped, clears on ok and off", () => {
@@ -148,6 +150,18 @@ await check("Worker: routerSpendWindow pages on over and capped, clears on ok an
   const b = a.body({ gateway: { routerSpendWindow: { status: "<x>", alarmAtomic: "77", hardAtomic: "77" } } });
   assert.equal(b, a.body({ gateway: {} }), "the body does not read the response");
   assert.doesNotMatch(b, /[0-9]|<x>|`|"|\$/, "no figure, and nothing a shell would expand");
+});
+
+await check("Worker: topBuyerFailures pages on alert, clears on ok; unknown, off and absent do neither", () => {
+  assert.equal(j({ topBuyerFailures: { status: "alert" } })[TBF], "bad");
+  assert.equal(j({ topBuyerFailures: { status: "ok" } })[TBF], "good");
+  for (const w of ["unknown", "off", "something-new"]) assert.equal(j({ topBuyerFailures: { status: w } })[TBF], "quiet", w);
+  assert.equal(j({})[TBF], "quiet", "a build without the word changes nothing");
+  const a = ALARMS.find((x) => x.title === TBF);
+  const b = a.body({ gateway: { topBuyerFailures: { status: "alert", alerting: [{ payer: "7xKX", rank: 1, failures: [{ slug: "onchain-sql", status: 502, error: "<x>" }] }] } } });
+  assert.equal(b, a.body({ gateway: {} }), "the body does not read the response");
+  assert.doesNotMatch(b, /[0-9]|<x>|7xKX|onchain-sql|`|"|\$/, "no payer, no tool, no figure, and nothing a shell would expand");
+  assert.match(b, /operator view of \/api\/gateway-status \(topBuyerFailures/, "it points at the operator view");
 });
 
 await check("Worker: gatewayBalance pages on withdraw at once, clears on ok and off", () => {
@@ -173,7 +187,7 @@ await check("Worker: replayStore pages only on alert=sustained, clears on ok", (
   assert.equal(j({})[RS], "quiet");
 });
 await check("Worker: the three bodies are fixed text with no figure", () => {
-  for (const T of [GB, SLT, RS]) {
+  for (const T of [GB, SLT, RS, TBF]) {
     const a = ALARMS.find((x) => x.title === T);
     assert.ok(a, `the Worker has "${T}"`);
     const b = a.body({ gateway: { gatewayBalance: { status: "<x>", usd: 77 }, sharedLimits: { failures: 77 }, replayStore: { pending: 77 } } });
@@ -201,6 +215,7 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
   const CASES = [
     [GB, { gatewayBalance: { status: "withdraw" } }, { gatewayBalance: { status: "ok" } }, null],
     [RSW, { routerSpendWindow: { status: "over" } }, { routerSpendWindow: { status: "ok" } }, null],
+    [TBF, { topBuyerFailures: { status: "alert" } }, { topBuyerFailures: { status: "ok" } }, { topBuyerFailures: { status: "unknown" } }],
     [RSW, { routerSpendWindow: { status: "capped" } }, { routerSpendWindow: { status: "off" } }, null],
     [SLT, { sharedLimits: { status: "degraded", alert: "sustained" } }, { sharedLimits: { status: "on", alert: "ok" } }, { sharedLimits: { status: "degraded", alert: "ok" } }],
     [RS, { replayStore: { status: "pending", alert: "sustained" } }, { replayStore: { status: "ok", alert: "ok" } }, { replayStore: { status: "pending", alert: "ok" } }],
@@ -264,6 +279,7 @@ const argOf = (call, flag) => call[call.indexOf(flag) + 1];
 const HB = [
   // [step name prefix, title, field, alert reading, readings that neither open nor close, healthy readings]
   ["Gateway balance check", GB, "gatewayBalance", { status: "withdraw" }, [{ status: "unknown" }], [{ status: "ok" }, { status: "off" }]],
+  ["Top buyer failures check", TBF, "topBuyerFailures", { status: "alert" }, [{ status: "unknown" }, { status: "off" }], [{ status: "ok" }]],
   ["Shared limits store check", SLT, "sharedLimits", { status: "degraded", alert: "sustained" }, [{ status: "degraded", alert: "ok" }, { status: "degraded" }, { status: "unknown" }], [{ status: "on", alert: "ok" }, { status: "memory", alert: "ok" }]],
   ["Replay store check", RS, "replayStore", { status: "pending", alert: "sustained" }, [{ status: "pending", alert: "ok" }, { status: "pending" }, { status: "unknown" }], [{ status: "ok", alert: "ok" }]],
 ];

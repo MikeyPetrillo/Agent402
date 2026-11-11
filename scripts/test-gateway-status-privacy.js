@@ -75,6 +75,8 @@ ok(["ok", "repeating"].includes(pubBody?.containedTurns?.status) && Object.keys(
 ok(Array.isArray(opBody?.containedTurns?.repeating) && ["ok", "repeating"].includes(opBody?.containedTurns?.status), "the operator view of containedTurns carries the repeating names");
 ok(pubBody?.brokenListings?.status === "ok" && Object.keys(pubBody.brokenListings).join(",") === "status", `brokenListings publishes its word only (${JSON.stringify(pubBody?.brokenListings)})`);
 ok(opBody?.brokenListings?.status === "ok" && typeof opBody.brokenListings.origins === "number" && typeof opBody.brokenListings.indexedOrigins === "number" && typeof opBody.brokenListings.widespreadMin === "number" && !/https?:\/\//.test(JSON.stringify(opBody.brokenListings)), `the operator view of brokenListings carries the window's counts and rule, never an origin (${JSON.stringify(opBody?.brokenListings)})`);
+// FREE_MODE verifies no payment, so nothing is watched: the word reads off on both views.
+ok(pubBody?.topBuyerFailures?.status === "off" && Object.keys(pubBody.topBuyerFailures).join(",") === "status" && opBody?.topBuyerFailures?.status === "off", `topBuyerFailures publishes its word only, off in FREE_MODE (${JSON.stringify(pubBody?.topBuyerFailures)})`);
 ok(["ok", "refusing"].includes(pubBody?.buyerRefusals?.status) && Object.keys(pubBody.buyerRefusals).join(",") === "status", `buyerRefusals publishes its word only (${JSON.stringify(pubBody?.buyerRefusals)})`);
 ok(typeof opBody?.buyerRefusals?.refusalsWindow === "number" && typeof opBody?.buyerRefusals?.refusals24h === "number", "the operator view of buyerRefusals carries the counts");
 for (const w of ["settleFailures", "unsettledReports"]) {
