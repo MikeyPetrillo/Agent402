@@ -90,3 +90,13 @@ Loaded when a media, document or worker-pool tool file is read.
   sample rate (192 kHz Vorbis passes 640 kbps) or no reported sample rate keeps its declared length, since its bytes
   are not all audio at the floor's rate. The unmeasured count since boot is `transcriptionUnmeasured.sinceBoot` on
   `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
+- **Image generation moderation:** the three GPT Image tiers (`src/tools/image-gen-kit.js`) send
+  `moderation: "low"` unless the caller sends `"auto"` (any other value is a 400 naming the field).
+  A 400 whose OpenAI error names the `moderation` parameter (`error.param`, or an
+  unknown/unsupported-parameter code quoting it) sends the same request once more without the
+  field (never a loop; one console line per boot). A content-check refusal (`moderation_blocked`
+  or a "safety system" message) is a 400 with a plain rephrase message, never retried and never
+  sent to another model or provider. Renders and refusals by level and the fallback count since
+  boot are `imageGenModeration.sinceBoot` on `/__operator/tool-failures.json` (counts only). The
+  `/v1/images/*` routes ride the OpenRouter image links and do not send this parameter.
+  Suite: `scripts/test-image-gen-kit.js`.

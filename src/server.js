@@ -618,7 +618,7 @@ const GATEWAY_TOOLS_ENABLED = [
   // OpenAI Responses wire on the same five tiers (src/tools/llm-responses-kit.js).
   ...LLM_RESPONSES_TOOLS,
 ];
-import { IMAGE_GEN_TOOLS } from "./tools/image-gen-kit.js";
+import { IMAGE_GEN_TOOLS, imageModerationStats } from "./tools/image-gen-kit.js";
 import { CODE_RUN_TOOLS } from "./tools/code-run-kit.js";
 import { TTS_TOOLS, elevenLabsBreakerState } from "./tools/tts-kit.js";
 // Translate-and-speak: composes the chat gateway and the tts kit in-process (src/tools/dub-kit.js).
@@ -3100,11 +3100,14 @@ startSharedLimitsProbe();
 // transcription files this process could not measure by decoding since boot
 // (a busy or slow decode, no ffmpeg), which the cap then read from the
 // declared length or the byte floor (src/tools/stt-kit.js; a count only).
+// imageGenModeration: image-gen renders and content-check refusals by the
+// moderation level sent, and requests sent again without the parameter, since
+// boot (src/tools/image-gen-kit.js; counts only).
 app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
-  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors, transcriptionUnmeasured: { sinceBoot: sttUnmeasuredSinceBoot() } });
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors, transcriptionUnmeasured: { sinceBoot: sttUnmeasuredSinceBoot() }, imageGenModeration: imageModerationStats() });
 });
 // Upstream queries per onchain-sql call (src/sql-query-stats.js): per UTC day,
 // calls by the queries each sent (0 to the call budget) and by how the call
