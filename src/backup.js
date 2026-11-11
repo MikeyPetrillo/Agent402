@@ -66,6 +66,10 @@ const cfg = () => ({
 /** Days a nightly backup is kept before retention deletes it (the legal and
  *  security pages quote this, so the stated period is the one the code runs). */
 export const backupKeepDays = () => cfg().keepDays;
+/** The UTC hour the nightly run starts in, and the hours without a successful
+ *  run after which the backup word reads stale (the trust page quotes both). */
+export const backupUtcHour = () => cfg().utcHour;
+export const backupStaleHours = () => clampInt(process.env.BACKUP_STALE_HOURS, 26, 2, 24 * 30);
 function clampInt(v, dflt, lo, hi) {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
@@ -449,7 +453,7 @@ export function backupAlarmStatus(now = Date.now()) {
   if (statusUnread() && !status.lastAttempt) return "unknown";
   const result = status.lastResult || (status.lastAttempt ? (status.lastError ? "failed" : "ok") : null);
   if (result === "failed" || result === "held") return result;
-  const staleMs = clampInt(process.env.BACKUP_STALE_HOURS, 26, 2, 24 * 30) * 3600_000;
+  const staleMs = backupStaleHours() * 3600_000;
   const last = Date.parse(status.lastSuccess || "");
   if (!Number.isFinite(last) || now - last > staleMs) return "stale";
   if (keyState === "unset" && backupProduction()) return "unencrypted";

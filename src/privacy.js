@@ -107,7 +107,8 @@ the cookie stays off, you are not asked, and the page counter does not load. Pag
 link (a paid report, a receipt, a shared answer, a signed alert or manage link) do not load Google Analytics. Free email
 alerts are the form that takes an address, and it
 says so where you enter it; a card purchase gives us the email you enter at checkout. Everything we
-keep, and for how long, is listed below, including the backups of it. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
+keep, and for how long, is listed below, including the backups of it. The providers that receive it and how
+the stores are protected are summarized at <a href="/trust">/trust</a>. The entire server is <a href="${REPO_URL}" rel="noopener">open source</a>,
 so every claim below is verifiable in code.</p>
 
 <h2>What we process, and why</h2>

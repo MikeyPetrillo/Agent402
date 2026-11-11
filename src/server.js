@@ -416,6 +416,7 @@ import { speechPage } from "./speech-page.js";
 import { agenticFinancePage } from "./agentic-finance.js";
 import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
+import { trustPage } from "./trust-page.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
@@ -4373,6 +4374,7 @@ app.get("/x402-test", (_req, res) => htmlCache(res, 300, 900).send(x402TestPage(
 // Dev shortlinks (agent402.sh/<word> redirects here path-preserved) + the install script.
 mountShortlinks(app, BASE_URL);
 app.get("/security", (_req, res) => htmlCache(res, 300, 900).send(securityPage(BASE_URL)));
+app.get("/trust", (_req, res) => htmlCache(res, 300, 900).send(trustPage(BASE_URL)));
 app.get("/company", (_req, res) => htmlCache(res, 300, 900).send(companyPage(BASE_URL)));
 // Who our crawler is, what it reads, and how to be removed. The crawler's own
 // User-Agent points here (src/tools/fetch-guard.js), so an operator who finds

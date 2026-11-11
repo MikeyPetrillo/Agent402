@@ -25,7 +25,7 @@ const SECTIONS = [
       `No accounts and no passwords. Agents pay per call from their own wallets; what we keep is the wallet address and transaction id, both already public on-chain. A card purchase leaves the email Stripe collected, the session id, the input and the finished report, held while the report link or subscription is live. Wallet-keyed memory belongs to its owner and lives until they delete it. Free email alerts send a signed confirmation link to the address given, delete an unconfirmed signup after three days, and drop an address the moment it unsubscribes.`,
       `Operational logs carry request paths and status codes and are kept for our hosting platform's log retention period. The full inventory, retention per class and the erasure path are in the privacy policy.`,
     ],
-    links: [["/privacy", "Privacy policy"]],
+    links: [["/privacy", "Privacy policy"], ["/trust", "Trust"]],
   },
   {
     h: "Key handling",
@@ -61,7 +61,7 @@ const SECTIONS = [
     p: [
       `Uptime is measured from outside production by two independent observers on separate infrastructure, and the status page renders only what they observed: a day with no observation is shown as no data, never as uptime. A real-money canary buys through every on-chain payment rail daily. Nightly backups of the state database go to separate object storage and are deleted after ${backupKeepDays()} days.`,
     ],
-    links: [["/status", "Status"]],
+    links: [["/status", "Status"], ["/trust", "Backups and incidents"]],
   },
 ];
 

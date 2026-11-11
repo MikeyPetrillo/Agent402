@@ -2179,6 +2179,8 @@ jobs:
           t node scripts/test-legal-dates.js
           # Legal, security and machine copy state what the code does (backups, refunds, CSP, MPP chains; offline)
           t node scripts/test-legal-claims.js
+          # /trust and the /company contact block state only what the code runs (offline)
+          t node scripts/test-trust-page.js
           # Sentences a review found contradicting the code, pinned to its constants: card charge timing, job and screening retention on /privacy and /terms, the payTo variables in Self-Hosting, the leaderboard cadence (offline)
           t node scripts/test-copy-truth.js
           # FACILITATOR_PUBLIC_INDEX_CHAINS: the privacy paragraph and terms pointer appear only for the listed chains, with their exact wording (offline)

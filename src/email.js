@@ -89,6 +89,12 @@ export function emailEnabled() {
 // Unset, mail still goes out (a missing variable must not black out a paying
 // subscriber's monitor report) and each send logs a warning.
 let postalWarnAt = 0;
+/** The sender's postal address as one line ("a, b, c"), or null when unset.
+ *  /company prints this same value, so the page and the mail footer agree. */
+export function companyPostalLine() {
+  const a = (process.env.COMPANY_POSTAL_ADDRESS || "").trim();
+  return a ? a.replace(/\s*\n\s*/g, ", ") : null;
+}
 export function postalAddress() {
   const a = (process.env.COMPANY_POSTAL_ADDRESS || "").trim();
   if (a) return a;
