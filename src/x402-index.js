@@ -5554,8 +5554,23 @@ export function probeDue(originUrl, path, now = Date.now()) {
   const b = crawlBackoff.get(bkey(originUrl, path));
   return !b || now >= b.nextAt;
 }
-export function noteProbeOutcome(originUrl, path, ok, now = Date.now()) {
+// Our own side failing a read (crawlReadFailureIsOurs) is not the seller's
+// answer, but a path that never completes on our side still costs a crawl
+// slot every cycle: every CRAWL_OURS_PER_STEP consecutive such failures count
+// as one step of the same backoff (a slower one).
+export const CRAWL_OURS_PER_STEP = 3;
+const crawlOursStreak = new Map();
+export function noteProbeOursFailure(originUrl, path, now = Date.now()) {
   const k = bkey(originUrl, path);
+  const n = (crawlOursStreak.get(k) || 0) + 1;
+  if (n >= CRAWL_OURS_PER_STEP) { crawlOursStreak.delete(k); noteProbeOutcome(originUrl, path, false, now, { keepStreak: true }); return true; }
+  if (!crawlOursStreak.has(k) && crawlOursStreak.size >= 20_000) crawlOursStreak.delete(crawlOursStreak.keys().next().value);
+  crawlOursStreak.set(k, n);
+  return false;
+}
+export function noteProbeOutcome(originUrl, path, ok, now = Date.now(), { keepStreak = false } = {}) {
+  const k = bkey(originUrl, path);
+  if (!keepStreak) crawlOursStreak.delete(k);
   if (ok) { crawlBackoff.delete(k); return; }
   const fails = (crawlBackoff.get(k)?.fails || 0) + 1;
   const step = CRAWL_BACKOFF_STEPS_MS[Math.min(fails, CRAWL_BACKOFF_STEPS_MS.length - 1)];
@@ -5837,16 +5852,17 @@ let crawlFetch = (url, opts) => safeFetch(url, opts);
 export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "function" ? fn : (url, opts) => safeFetch(url, opts); }
 export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller(originUrl, opts); }
 
-/** Did this crawl read fail with no answer from the seller? Our own deadline
- *  or abort, a connection that never completed, our resolver failing, or our
- *  own byte cap on the document. Positive identification only: an HTTP status
- *  the seller sent (upstreamStatus), a body that is not the document, a
- *  redirect it chose, its robots.txt or a name that does not resolve is the
- *  seller's own answer and reads false. Exported for the test. */
+/** Did this crawl read fail on our side? Our own deadline or abort, our
+ *  resolver failing to finish a lookup, or our own byte cap on the document.
+ *  Positive identification only: an HTTP status the seller sent
+ *  (upstreamStatus), a body that is not the document, a redirect it chose,
+ *  its robots.txt, a name that does not resolve, and a connection its host
+ *  refused, reset or failed TLS on (source-unreachable) are the seller's
+ *  host answering and read false. Exported for the test. */
 export function crawlReadFailureIsOurs(e) {
   if (!e || typeof e !== "object") return false;
   if (e.upstreamStatus != null || e.robotsBlocked) return false;
-  if (e.hint === "source-timeout" || e.hint === "source-unreachable") return true;
+  if (e.hint === "source-timeout") return true;
   if (e.code === "EDNSUNAVAILABLE") return true; // fetch-guard's lookupUnavailable: our resolver
   if (e.statusCode === 413) return true;         // fetch-guard's own maxBytes cut, not a seller 413
   return e.name === "AbortError" || e.name === "TimeoutError";
@@ -5875,7 +5891,7 @@ function closeCrawlCycleTally() {
 }
 export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0 }; }
 /** May this failed crawl keep `prev` as it was? Only an entry whose last
- *  completed crawl succeeded with a catalogue the origin itself served. */
+ *  completed crawl succeeded with a catalog the origin itself served. */
 export function crawlHoldsLastGood(prev, now = Date.now()) {
   if (!prev || typeof prev !== "object" || prev.error || prev.originResponded === false) return false;
   const h = prev.history;
@@ -5894,7 +5910,7 @@ export function crawlReadFields(v) {
     const at = Number(v.readIncomplete.at);
     out.lastReadIncomplete = {
       at: Number.isFinite(at) ? new Date(at).toISOString() : null,
-      note: "our last read of this seller's documents did not complete (our time limit or a connection that did not finish); the listing from the last completed read stands",
+      note: "our last read of this seller's documents did not complete (our time limit, our resolver or our size limit); the listing from the last completed read stands",
     };
   }
   if (v?.error) out.errorKind = v.errorOurs ? "our-read-incomplete" : "seller-answer";
@@ -5907,7 +5923,8 @@ function heldEntry(prev, message, now = Date.now()) {
 /** Fetch `path` on `originUrl` unless it is backed off, recording the outcome.
  *  Every per-origin probe in the crawl goes through here so a new one cannot be
  *  added ungated the way /agents.json and /llms.txt were. Only a definite
- *  answer from the seller counts toward the backoff (crawlReadFailureIsOurs). */
+ *  answer from the seller counts toward the backoff (crawlReadFailureIsOurs);
+ *  our own side's failures count a slower step (noteProbeOursFailure). */
 async function probePath(originUrl, path, { manifestPublished = false, conditional = true, ...opts } = {}) {
   if (!probeDue(originUrl, path)) throw new Error(`probe backed off: ${path}`);
   // Every per-origin probe already funnels through here, so this is the one
@@ -5954,6 +5971,7 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
     return res;
   } catch (e) {
     if (!crawlReadFailureIsOurs(e)) noteProbeOutcome(originUrl, path, false);
+    else noteProbeOursFailure(originUrl, path);
     throw e;
   }
 }

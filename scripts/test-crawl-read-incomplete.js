@@ -43,16 +43,18 @@ const accepts = [{ scheme: "exact", network: "eip155:8453", amount: "5000", asse
 const manifestFor = (o) => ({ x402Version: 2, name: "Read seller", resources: [{ resource: `${o}/v1/read`, method: "GET", description: "One read.", price: "$0.005", accepts }] });
 
 // What safeFetch throws (src/tools/fetch-guard.js): our deadline, a connection
-// that never completed, and the seller's own HTTP answer.
+// the seller's host refused or reset, and the seller's own HTTP answer.
 const ourTimeout = () => Object.assign(new Error("Source URL did not respond within 15s - host may be slow or unreachable"), { statusCode: 504, attribution: "upstream", hint: "source-timeout" });
 const ourConnect = () => Object.assign(new Error("Could not connect to source URL: fetch failed (ECONNRESET)"), { statusCode: 504, attribution: "upstream", hint: "source-unreachable" });
 const their404 = () => Object.assign(new Error("Source URL returned HTTP 404 - check the URL is correct and publicly reachable"), { statusCode: 422, upstreamStatus: 404, attribution: "caller" });
 
 const mode = new Map(); // host -> "ok" | "timeout" | "connect" | "404"
 const served = new Map();
+let fetchCount = 0;
 __setCrawlFetchForTest(async (url) => {
   const u = new URL(url);
   if (u.pathname === "/robots.txt") return { html: "User-agent: *\nAllow: /\n", finalUrl: url, validators: null };
+  fetchCount++;
   const m = mode.get(u.hostname) || "ok";
   if (m === "timeout") throw ourTimeout();
   if (m === "connect") throw ourConnect();
@@ -71,7 +73,8 @@ const backedOff = (o) => crawlBackoffState().filter((b) => b.origin === o && !b.
 __testResetSubmitted();
 
 // ---- the classifier
-ok(crawlReadFailureIsOurs(ourTimeout()) && crawlReadFailureIsOurs(ourConnect()), "our time limit and a connection that did not finish are ours");
+ok(crawlReadFailureIsOurs(ourTimeout()), "our time limit is ours");
+ok(!crawlReadFailureIsOurs(ourConnect()), "a connection the seller's host refused or reset (source-unreachable) is the seller's host answering");
 ok(!crawlReadFailureIsOurs(their404()) && !crawlReadFailureIsOurs(Object.assign(new Error("x"), { robotsBlocked: true })), "the seller's HTTP answer and its robots.txt are the seller's");
 ok(crawlReadFailureIsOurs(Object.assign(new Error("Resource exceeds 4MB limit"), { statusCode: 413 })) && !crawlReadFailureIsOurs(Object.assign(new Error("HTTP 413"), { statusCode: 422, upstreamStatus: 413 })), "our byte cap is ours; a 413 the seller sent is the seller's");
 ok(crawlReadFailureIsOurs(Object.assign(new Error("lookup"), { code: "EDNSUNAVAILABLE" })), "our resolver failing is ours");
@@ -85,8 +88,8 @@ ok(!crawlReadFailureIsOurs(new SyntaxError("Unexpected token < in JSON")), "a do
   const before = _cacheForTests().get(o);
   const historyBefore = JSON.stringify(before.history);
   const backoffBefore = backedOff(o);
-  for (const m of ["timeout", "connect", "timeout", "timeout", "timeout", "timeout"]) {
-    mode.set(host(o), m);
+  for (let i = 0; i < 6; i++) {
+    mode.set(host(o), "timeout");
     await crawl(o);
   }
   const d = sellerDetail(o);
@@ -94,7 +97,9 @@ ok(!crawlReadFailureIsOurs(new SyntaxError("Unexpected token < in JSON")), "a do
   ok(d?.toolCount === 1, "with its catalog");
   ok(d?.lastReadIncomplete && /did not complete/.test(d.lastReadIncomplete.note) && d.lastReadIncomplete.at, `the record says our read did not complete (${JSON.stringify(d?.lastReadIncomplete)})`);
   ok(JSON.stringify(_cacheForTests().get(o).history) === historyBefore, "the history is untouched: no failure was rolled in");
-  ok(backedOff(o) === backoffBefore && !/well-known/.test(backedOff(o)), `no failure of ours was counted toward any path's backoff (${backedOff(o) || "none"} before and after)`);
+  const steps = crawlBackoffState().filter((b) => b.origin === o && !b.path.startsWith("quote:"));
+  ok(steps.some((b) => b.path === "/.well-known/x402" && b.fails === 2) && steps.every((b) => b.fails <= 3 && !(b.nextAt > Date.now())),
+    `six crawls of our timeouts count only slower steps (one per three reads of a path) and back nothing off yet (${backoffBefore || "none"} before, ${backedOff(o)} after)`);
   ok(cycleOkFraction([o]) === 0, "the cycle's ok fraction does not count a held entry as a read that worked");
   const dossier = composeSellerDossier({ origin: o, detail: d, entry: _cacheForTests().get(o) });
   const flags = (dossier?.flags || []).join(" | ");
@@ -113,6 +118,25 @@ ok(!crawlReadFailureIsOurs(new SyntaxError("Unexpected token < in JSON")), "a do
   const d = sellerDetail(o);
   ok(d?.routable === false && d.error && d.errorKind === "seller-answer", `a 404 on every document is the seller's answer: unroutable (${JSON.stringify({ routable: d?.routable, errorKind: d?.errorKind })})`);
   ok(crawlBackoffState().some((b) => b.origin === o && b.path === "/.well-known/x402" && b.nextAt > Date.now()), "and the manifest path backs off after four of them");
+}
+
+// ---- 2b. a seller whose host refuses connections is its own answer: the
+// path backs off and it reads unroutable (never held as our read)
+{
+  const o = seller("refusing");
+  await registerOrigin(o, {});
+  mode.set(host(o), "connect");
+  let fetches = 0;
+  const per = [];
+  for (let i = 0; i < 10; i++) {
+    const before = fetchCount;
+    await crawl(o);
+    per.push(fetchCount - before);
+    fetches += fetchCount - before;
+  }
+  const d = sellerDetail(o);
+  ok(d?.routable === false && d.errorKind === "seller-answer" && !d.lastReadIncomplete, `a refused connection is the seller's answer: unroutable, not held (${JSON.stringify({ routable: d?.routable, errorKind: d?.errorKind })})`);
+  ok(per.slice(-1)[0] === 0 && fetches <= 20, `and its paths back off: fetches per crawl ${per.join(",")}`);
 }
 
 // ---- 3. past the hold: a last good entry older than 6 h reads as before
