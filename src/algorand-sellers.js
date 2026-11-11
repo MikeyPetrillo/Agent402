@@ -209,6 +209,20 @@ const UNKNOWN_COUNT_RETRY_MS = 5 * 60 * 1000;
 let sources = { crawledResources: null, countInbound: null };
 /** Inject the index-backed halves (server.js). Both optional: with neither,
  *  this module behaves exactly as it did before 2026-09-18. */
+/** The chain read server.js injects as `countInbound`: inbound USDC
+ *  transfers to `payTo` from the indexer, through `getJson(bases, path, opts)`
+ *  (src/revenue-live.js getJsonAcross). The indexer's 404 (no such account)
+ *  is a definite 0; any other read that did not complete throws (unknown,
+ *  never a count of 0). Inbound only, and never the seller paying itself. */
+export const ALGORAND_USDC_ASSET_ID = 31566704;
+export function makeIndexerInboundCount(getJson, bases) {
+  return async (payTo) => {
+    const r = await getJson(bases, `/v2/accounts/${payTo}/transactions?asset-id=${ALGORAND_USDC_ASSET_ID}&tx-type=axfer&limit=200`, { timeoutMs: 8000, okStatuses: [404] });
+    if (r?.ok && r.status === 404) return 0;
+    if (!r?.ok || !Array.isArray(r.json?.transactions)) throw new Error("indexer read did not complete");
+    return r.json.transactions.filter((t) => t?.["asset-transfer-transaction"]?.receiver === payTo && t?.sender !== payTo).length;
+  };
+}
 export function setAlgorandCrawlSources({ crawledResources, countInbound } = {}) {
   sources = { crawledResources: crawledResources || null, countInbound: countInbound || null };
 }

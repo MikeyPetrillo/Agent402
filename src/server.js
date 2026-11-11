@@ -456,7 +456,7 @@ import { acpFeed, acpManifest } from "./acp.js";
 import { findTools, findRelatedSellers, markWeakMatches, markMissRows } from "./find.js";
 import { buildPlanSketch } from "./plan-sketch.js";
 import { recordWish, getWishesAggregate, annotateServedAsync, WISH_SERVED_MIN_SCORE, startWishRotation } from "./wish.js";
-import { setAlgorandCrawlSources } from "./algorand-sellers.js";
+import { setAlgorandCrawlSources, makeIndexerInboundCount } from "./algorand-sellers.js";
 import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
@@ -12951,17 +12951,9 @@ bootStep("setAlgorandCrawlSources", () => {
       }
       return out;
     },
-    countInbound: async (payTo) => {
-      const r = await getJsonAcross(ALGORAND_INDEXER_BASES, `/v2/accounts/${payTo}/transactions?asset-id=31566704&tx-type=axfer&limit=200`, { timeoutMs: 8000, okStatuses: [404] });
-      // The indexer's 404 (no such account) is a definite 0; any other read
-      // that did not complete is unknown, never a count of 0.
-      if (r.ok && r.status === 404) return 0;
-      if (!r.ok || !Array.isArray(r.json?.transactions)) throw new Error("indexer read did not complete");
-      const txs = r.json?.transactions || [];
-      // Inbound only, and never the seller paying itself: the same rule the
-      // Base credit read applies (balance rose AND a non-self account paid).
-      return txs.filter((t) => t?.["asset-transfer-transaction"]?.receiver === payTo && t?.sender !== payTo).length;
-    },
+    // The indexer's 404 is a definite 0; any other read that did not
+    // complete is unknown (src/algorand-sellers.js makeIndexerInboundCount).
+    countInbound: makeIndexerInboundCount(getJsonAcross, ALGORAND_INDEXER_BASES),
   });
 });
 bootStep("startLeaderboardRefresh", () => startLeaderboardRefresh({
