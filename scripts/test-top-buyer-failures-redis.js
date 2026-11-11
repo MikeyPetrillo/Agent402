@@ -19,6 +19,7 @@
 //
 // Under CI a missing REDIS_URL fails the test: a skipped integration test is
 // not coverage. Locally it prints how to point one at the test and exits 0.
+import "./lib/own-stats.js"; // a stats store of its own (scripts/lib/own-stats.js); REDIS_URL stays as the lane sets it
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";

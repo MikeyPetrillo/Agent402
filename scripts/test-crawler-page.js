@@ -50,7 +50,7 @@ for (const [name, src] of [["x402-index.js", idxSrc], ["mpp-index.js", mppSrc]])
   const seam = /let probeFetch = \(url, opts\) => probePublicUrl\(url, opts\);/.test(src) ? 1 : 0;
   const probes = direct + (viaSeller > 0 && seam ? viaSeller : 0);
   ok(raw === 0 && probes > 0, `${name}: every 402 probe (${probes}) goes through probePublicUrl and none is a raw fetch (${raw}), so "on every request" holds`);
-  ok(/^import \{ safeFetch, probePublicUrl \} from "\.\/tools\/fetch-guard\.js";/m.test(src), `${name} imports the probe statically from fetch-guard.js`);
+  ok(/^import \{ safeFetch, probePublicUrl\b[^}]*\} from "\.\/tools\/fetch-guard\.js";/m.test(src), `${name} imports the probe statically from fetch-guard.js`);
 }
 ok(text.includes(`re-reads an origin ${crawlIntervalLabel()}`), "the re-crawl cadence is derived (crawl-cadence.js)");
 ok(!/That is all|2026-09-21|same effect|honours robots\.txt, including for the discovery paths/.test(text), "no stale or overstated claims (complete-list, dated history, robots-as-removal)");
