@@ -313,6 +313,15 @@ const proc = spawn(process.execPath, ["src/server.js"], {
 const log = [];
 const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 400)); if (log.length > 120) log.splice(0, log.length - 120); };
 proc.stdout.on("data", keep); proc.stderr.on("data", keep);
+// Every verify-failure line the server prints, whole (the tail above is cut).
+const verifyLines = [];
+let lineBuf = "";
+const keepVerify = (c) => { lineBuf += c; const parts = lineBuf.split("\n"); lineBuf = parts.pop(); for (const l of parts) if (/facilitator VERIFY (failed|rejected)/.test(l)) verifyLines.push(l); };
+proc.stdout.on("data", keepVerify); proc.stderr.on("data", keepVerify);
+const verifyLine = async (test, ms = 10_000) => {
+  for (const until = Date.now() + ms; Date.now() < until;) { const l = verifyLines.find(test); if (l) return l; await sleep(50); }
+  return null;
+};
 
 const PATH = "/api/hash";
 const BODY = JSON.stringify({ text: "x", algo: "sha256" });
@@ -354,6 +363,15 @@ try {
     ok(Buffer.byteLength(JSON.stringify(own)) <= 2048, `our own body fields stay under the 2,048-byte cap test-bazaar-contracts holds (${Buffer.byteLength(JSON.stringify(own))})`);
   }
   ok(st.verifiesBy.get(short.address) === HOLD_AFTER(), `the first ${HOLD_AFTER()} attempts reached verify (${st.verifiesBy.get(short.address)})`);
+  // What the call needs, in fields, from the accept this server issued.
+  ok(f.body.needs && f.body.needs.network === SOL && f.body.needs.asset === solAccept.asset && f.body.needs.amount === solAccept.amount && f.body.needs.usd === Number(solAccept.amount) / 1e6, `the 402 says what the call needs: network, asset and amount (${JSON.stringify(f.body.needs)})`);
+  // The log line: the route's slug and the payer's first four characters, case kept, never the whole address.
+  {
+    const want = `facilitator VERIFY rejected on ${SOL} exact route=hash payer=${short.address.slice(0, 4)}: transaction_simulation_failed`;
+    const l = await verifyLine((x) => x.includes(want));
+    ok(!!l, `graceful refusal: the log line names the slug and the short payer (${want}; saw ${verifyLines.slice(-2).join(" | ")})`);
+    ok(verifyLines.every((x) => !x.includes(short.address)) && (short.address.slice(0, 4) === short.address.slice(0, 4).toLowerCase() || !verifyLines.some((x) => x.includes(`payer=${short.address.slice(0, 4).toLowerCase()}:`))), "the whole address is never logged, and the short form is not case-folded");
+  }
 
   // The next attempt is answered from the hold, without a verify.
   const held = await pay(short, { source: shortSrc });
@@ -371,6 +389,12 @@ try {
   ok(st.verifiesBy.get(noacct.address) === 1, "a different wallet is not held: it reached verify");
   ok(n.status === 402 && n.body.reason === "no-token-account" && n.body.retry === "fund-wallet" && n.retryAfter === String(HOLD_S), `no account: reason, retry and Retry-After (${n.body.reason}, ${n.body.retry}, ${n.retryAfter})`);
   ok(/has no USDC token account on Solana/.test(n.body.hint), `no account: the hint says so (${n.body.hint})`);
+  ok(n.body.hint.includes(`so the transfer (${catalogPriceText(Number(solAccept.amount) / 1e6)}) cannot run`) && n.body.needs?.asset === solAccept.asset && n.body.needs.amount === solAccept.amount, `no account: the sentence and needs carry the amount and asset (${JSON.stringify(n.body.needs)})`);
+  {
+    const want = `facilitator VERIFY failed on ${SOL} exact route=hash payer=${noacct.address.slice(0, 4)}: `;
+    const l = await verifyLine((x) => x.includes(want));
+    ok(!!l && !l.includes(noacct.address), `thrown refusal: the log line names the slug and the short payer, and the facilitator's own copy of the address is cut (${l || verifyLines.slice(-2).join(" | ")})`);
+  }
 
   // The same wallet paying from another source account is another key.
   await pay(short);
@@ -398,11 +422,32 @@ try {
   ok(st.evmVerifies - evmBefore === HOLD_AFTER() + 2, `EVM: every attempt reached verify (${st.evmVerifies - evmBefore})`);
   ok(last.status === 402 && last.body.retry === "fund-wallet" && last.retryAfter === "60" && /on Base|another network/.test(last.body.hint) && !/Solana/.test(last.body.hint), `EVM: the same Base funding hint and Retry-After 60 (${last.retryAfter}: ${last.body.hint})`);
 
+  ok(last.body.reason === "insufficient-funds" && last.body.needs?.network === "eip155:8453" && last.body.needs.asset === evmAccept.asset && last.body.needs.amount === evmAccept.amount, `EVM: reason and needs on the 402 (${JSON.stringify(last.body.needs)})`);
+  ok(!!(await verifyLine((x) => x.includes("facilitator VERIFY rejected on eip155:8453 exact route=hash payer=0x0000: insufficient_funds"))), `EVM: the log line names the slug and the short payer (${verifyLines.slice(-1)[0]})`);
+
   // The operator view counts refusals and held answers by network and reason.
   const op = await (await fetch(`${B}/__operator/tool-failures.json`, { headers: { Authorization: `Bearer ${OP}` } })).json();
   const rowS = (op.fundingRefusals || []).find((r) => r.network === SOL && r.reason === "insufficient-funds");
   const rowN = (op.fundingRefusals || []).find((r) => r.network === SOL && r.reason === "no-token-account");
   ok(rowS && rowS.day.refused === HOLD_AFTER() + 3 && rowS.day.held === 1 && rowN && rowN.day.refused === 1 && rowN.day.held === 0, `operator: refused and held by network and reason (${JSON.stringify(op.fundingRefusals)})`);
+
+  // A payer or a network that cannot be coerced to a string: the same 402, no 500, and the server keeps answering.
+  {
+    const send = async (payload) => {
+      const r = await fetch(`${B}${PATH}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": Buffer.from(JSON.stringify(payload)).toString("base64") }, body: BODY });
+      await r.arrayBuffer();
+      return r.status;
+    };
+    const auth = (from) => ({ signature: "0x" + "11".repeat(65), authorization: { from, to: evmAccept.payTo, value: evmAccept.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x" + "ee".repeat(32) } });
+    const before = verifyLines.length;
+    const hostilePayer = await send({ x402Version: 2, resource: offer.resource, accepted: evmAccept, payload: auth({ toString: 1 }) });
+    const hostileNetwork = await send({ x402Version: 2, resource: offer.resource, accepted: { ...evmAccept, network: { toString: 1 } }, payload: auth(EVM_PAYER) });
+    const hostileSvm = await send({ x402Version: 2, resource: solAccept.__resource, accepted: (({ __resource, ...a }) => a)(solAccept), payload: { transaction: { toString: 1 } } });
+    ok(hostilePayer === 402 && hostileNetwork === 402 && hostileSvm === 402, `a hostile payer, network or transaction is still a 402 (${hostilePayer}, ${hostileNetwork}, ${hostileSvm})`);
+    const l = await verifyLine((x) => verifyLines.indexOf(x) >= before && x.includes("route=hash payer=?: "));
+    ok(!!l, `the refusal of a payer that cannot be read is logged with payer=? (${verifyLines.slice(before).join(" | ")})`);
+    ok((await fetch(`${B}/health`)).ok, "the server keeps answering");
+  }
 } catch (e) {
   failed++; console.error("FAIL -", e?.stack || e);
 } finally {

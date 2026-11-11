@@ -119,6 +119,17 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   and, after `SVM_FUNDING_HOLD_AFTER` (3) such refusals per wallet and source account in
   `SVM_FUNDING_WINDOW_MS` (10 min), answers from a beforeVerify hold lasting the Retry-After, shared
   through shared-limits; a valid verify clears it; `SVM_FUNDING_THROTTLE=off` disables the hold.
+- **Verify refusals, said and logged:** a verify refused for funds carries `reason`
+  (`insufficient-funds`, or `no-token-account` for no USDC account on Solana, no trustline on
+  Stellar, not opted in on Algorand), a sentence with the price, and `needs` (network, asset,
+  base-unit amount and dollars from our own requirements, `needsOf` in `src/verify-hint.js`;
+  Stellar amounts read at 7 decimals). On Stellar and Algorand the facilitator's message is read
+  for the class, never echoed; on EVM only the reason code is. With no balance read (any EVM
+  chain but Base) a reverted simulation is worded as either reading, never as a wallet that
+  covers the price. The log line (`src/verify-failure-log.js`) carries `route=<slug>` and
+  `payer=<first 4 characters>` (`0x` plus four hex on EVM, case kept, never the address), one
+  bounded line, and prints `?` for any field that is not a string
+  (`scripts/test-verify-refusal-reason.js`, `scripts/test-svm-funding-refusal.js`).
 - **Algorand sub-cent offer gate:** `src/avm-sponsorship.js` drops the Algorand accept from
   sub-cent 402s while the facilitator cannot sponsor sub-cent settlement (fails open;
   a status row last updated in an earlier UTC month, or with an unreadable `updatedTs`, is
@@ -126,6 +137,21 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `AVM_SPONSORSHIP_REFUSAL_HOLD_MS`; published on `/api/rails`, the only excuse the canaries
   accept for a missing sub-cent accept; `AVM_SUBCENT_GATE=off`).
 - **First-call allowance:** `src/first-call-allowance.js`, off unless `FIRST_CALL_ALLOWANCE=on`: a wallet with no paid sale gets one unsettled first call (x402 EVM exact, a flagship or `FIRST_CALL_ALLOWANCE_SLUGS` route at or under `FIRST_CALL_ALLOWANCE_MAX_USD`), inside `FIRST_CALL_ALLOWANCE_DAILY_USD` and `FIRST_CALL_ALLOWANCE_IP_PER_DAY` claimed on Redis before a balance read bounded by `FIRST_CALL_ALLOWANCE_BALANCE_MS` (default 1000); a call asking for a share link is never granted; the wallet key expires (`FIRST_CALL_ALLOWANCE_WALLET_TTL_DAYS`, default 400; a claim after 30 minutes), the state record does not; an onBeforeSettle `skip` leaves its 200 unsettled and unbooked; figures on `/__operator/refunds.json`, with `returnedPayers` (granted wallets with a later outside paid sale, and within 7 days; one batched ledger read per chunk, cached `FIRST_CALL_ALLOWANCE_RETURNED_CACHE_MS` (default 5 minutes), reported with the switch off). The `firstCallAllowance` word on `/api/gateway-status` (on, spent, unavailable) pages nothing: a store that does not answer grants nothing, so every call is paid as usual.
+- **Rails dropped at boot, re-read:** the boot guard offers only networks a facilitator's
+  `/supported` read confirms (6 s, one retry). A network dropped while a read had FAILED (error or
+  timeout) is read again in the background (`src/rail-recheck.js`): the facilitators whose read
+  failed, one read each per tick, first after `X402_RAIL_RECHECK_MS` (default 30000; `off`
+  disables), doubling to `X402_RAIL_RECHECK_MAX_MS` (default 600000). When one lists the network,
+  `restoreRail` (`src/payments.js`) writes, in one synchronous turn, the scheme registration, the
+  resource server's two lookup entries for that network, the offered list and every route's
+  `accepts` (the vendor reads `accepts` per request), asks the vendor's route check, and rolls the
+  offer back if it objects; `initialize()` is never called again (it clears its maps before
+  awaiting facilitators). `/api/rails`, `/.well-known/x402`, `/api/pricing`, the cached
+  `/openapi.json` and the nav follow (`onRailRestored`). A facilitator leaves the list as soon as
+  it answers, so a network it does not list stays dropped, and one dropped while every
+  facilitator answered is never re-read. Left for the next restart: Arc (fails closed on Circle's
+  own read; its contract-wallet gate is registered only with Arc in the boot offer) and, on a
+  restored network, the `upto` and Gateway batched accepts (`scripts/test-rail-restore.js`).
 - **Facilitators:** boot guard in `src/payments.js` and `src/x402-boot-init.js`; diagnostics in
   `src/facilitator-diagnostics.js`; Stellar confirm in `src/stellar-confirm.js`; Tempo
   chain-truth confirm in `src/tempo-confirm.js`. Arc (`eip155:5042`) settles through Circle's
