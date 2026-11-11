@@ -192,7 +192,7 @@ const NO_OUTCOME = Symbol.for("agent402.noOutcome");
 // The Solana check is bounded by block_time, the table's only pruning key
 // (see solanaRangeRefusal), so it reads the newest rows and nothing else.
 export const QUERY_HEALTH_SQL = Object.freeze({
-  solana: "SELECT block_slot FROM solana.instructions WHERE block_time > now() - INTERVAL 1 HOUR LIMIT 1",
+  solana: "SELECT block_slot FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY LIMIT 1",
   base: "SELECT block_number FROM base.blocks LIMIT 1",
 });
 export const HEALTH_TTL_MS = 5 * 60_000;

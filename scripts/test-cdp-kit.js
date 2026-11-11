@@ -739,7 +739,7 @@ await rejects(() => tool("onramp-link").handler({ address: "0x111111111111111111
       ok(solanaRangeRefusal("SELECT COUNT(*) FROM base.transactions WHERE block_number > 1") === null, "a Base query is not judged by the Solana rule");
       {
         const { QUERY_HEALTH_SQL: H } = await import("../src/tools/cdp-kit.js");
-        ok(solanaRangeRefusal(H.solana) === null && /\bWHERE block_time > now\(\) - INTERVAL 1 HOUR LIMIT 1$/.test(H.solana), `the Solana health query is bounded by block_time, the table's pruning key (${H.solana})`);
+        ok(solanaRangeRefusal(H.solana) === null && /\bWHERE block_time > now\(\) - INTERVAL 1 DAY LIMIT 1$/.test(H.solana), `the Solana health query is bounded by block_time, the table's pruning key (${H.solana})`);
       }
       ok(solanaRangeRefusal("SELECT count() FROM solana.instructions") === null && solanaRangeRefusal("SELECT COUNT(*) AS n FROM solana.instructions") === null, "a bare count is sent (answered from metadata, measured 0.2 s)");
       ok(solanaRangeRefusal("SELECT anything, any_data FROM solana.instructions LIMIT 5") === null, "a column named like an aggregate is not an aggregate");
