@@ -3030,6 +3030,8 @@ jobs:
           # Index warm-start (crawl cache survives a redeploy; no half-crawled marketplace — offline)
           t node scripts/test-index-warmstart.js
           t node scripts/test-index-persist-last-good.js
+          # A crawl read of ours that did not complete keeps the last good entry: no unroutable seller, no backoff (offline)
+          t node scripts/test-crawl-read-incomplete.js
           # A seller without /.well-known/x402 keeps its catalog when its /openapi.json, /agents.json or /llms.txt answers 304 (offline)
           t node scripts/test-index-fallback-304.js
           # A crawled entry keeps the slim manifest; a 304 derives the same catalog from the packed body (offline)

@@ -60,10 +60,10 @@ const DAY = 86_400_000;
 
 // ---------------------------------------------------------------- loopback seller
 // One listener stands in for every seller host: the probe seam sends
-// https://<host>/<path> to /<host>/<path> on it, and it answers 400 or 402 by
-// the host's current mode. The live-quote enrichment asks the same routes, so
+// https://<host>/<path> to /<host>/<path> on it, and it answers 500 (a broken
+// paid route), 400 (our bare request's shape) or 402 by the host's current mode. The live-quote enrichment asks the same routes, so
 // paywall probes are counted at the seam by their caller.
-const mode = new Map();   // host -> 400 | 402
+const mode = new Map();   // host -> status (402 default)
 const hits = new Map();   // host -> paywall probes
 const server = createServer((req, res) => {
   const [, host] = req.url.split("/");
@@ -112,12 +112,12 @@ const hostOf = (o) => new URL(o).hostname;
 const crawl = async (origin, opts) => { __resetRobotsCacheForTest(); await __crawlSellerForTest(origin, opts); return _cacheForTests().get(origin); };
 const age = (origin, ms) => { const v = _cacheForTests().get(origin); v.paywall = { ...v.paywall, at: v.paywall.at - ms }; return v.paywall.at; };
 
-// 1. Answers 400, then 402. A fresh failure stands; an expired one flips.
+// 1. Answers 500, then 402. A fresh failure stands; an expired one flips.
 {
   const o = seller("flip");
-  mode.set(hostOf(o), 400);
+  mode.set(hostOf(o), 500);
   const first = await crawl(o, { forcePaywall: true });
-  ok(first?.paywall?.ok === false && first.paywall.status === 400, `the first reading is the 400 (${JSON.stringify(first?.paywall)})`);
+  ok(first?.paywall?.ok === false && first.paywall.status === 500, `the first reading is the 500 (${JSON.stringify(first?.paywall)})`);
   mode.set(hostOf(o), 402);
   const at0 = first.paywall.at;
   hits.set(hostOf(o), 0);
@@ -135,7 +135,7 @@ const age = (origin, ms) => { const v = _cacheForTests().get(origin); v.paywall 
 {
   __resetPaywallProbeForTest({ cursor: 1 });
   const o = seller("stuck");
-  mode.set(hostOf(o), 400);
+  mode.set(hostOf(o), 500);
   await crawl(o, { forcePaywall: true });
   const aged = age(o, 25 * 3_600_000);
   hits.set(hostOf(o), 0);
@@ -153,11 +153,11 @@ const age = (origin, ms) => { const v = _cacheForTests().get(origin); v.paywall 
   __resetPaywallProbeForTest({ cursor: 1 });
   __resetForcedCrawlForTest();
   const o = seller("reregister");
-  mode.set(hostOf(o), 400);
+  mode.set(hostOf(o), 500);
   const r0 = await registerOrigin(o, {});
   ok(r0?.listed === true, `a first registration lists it (${JSON.stringify({ listed: r0?.listed, error: r0?.error })})`);
   const v0 = _cacheForTests().get(o);
-  ok(v0?.paywall?.ok === false && v0.paywall.status === 400, `and probes the paywall on its first crawl (${JSON.stringify(v0?.paywall)})`);
+  ok(v0?.paywall?.ok === false && v0.paywall.status === 500, `and probes the paywall on its first crawl (${JSON.stringify(v0?.paywall)})`);
   mode.set(hostOf(o), 402);
   __resetForcedCrawlForTest();
   const r1 = await registerOrigin(o, {});
@@ -170,7 +170,7 @@ const age = (origin, ms) => { const v = _cacheForTests().get(origin); v.paywall 
 {
   const names = ["budget-a", "budget-b", "budget-c"];
   const origins = names.map((n) => seller(n));
-  for (const o of origins) { mode.set(hostOf(o), 400); await crawl(o, { forcePaywall: true }); }
+  for (const o of origins) { mode.set(hostOf(o), 500); await crawl(o, { forcePaywall: true }); }
   const before = origins.map((o) => age(o, 25 * 3_600_000));
   __resetPaywallProbeForTest({ cursor: 1, recheckBudget: 2 });
   for (const o of origins) await crawl(o);
@@ -197,6 +197,38 @@ const age = (origin, ms) => { const v = _cacheForTests().get(origin); v.paywall 
   v.paywall = { ok: false, status: 400, url: `${o}/v1/token/:param`, at: Date.now(), mpp: false };
   const w = await crawl(o);
   ok(w?.paywall?.ok === true && w.paywall.url === `${o}/v1/quote`, `a fresh failure measured on a template is re-probed at once (${JSON.stringify(w?.paywall)})`);
+}
+
+// 6. OUR PROBE IS NOT THE SELLER'S VERDICT. A 400 or 422 to our bare unpaid
+// request (no parameters, or an empty `{}` body) answers our request's
+// shape, and a probe that never completed (our time limit, a connection
+// that did not finish) read nothing: both are no verdict (ok null), never
+// "not answering 402". A stored status-0 failure from an earlier build is
+// re-probed at once.
+{
+  for (const st of [400, 422]) {
+    __resetPaywallProbeForTest({ cursor: 1 });
+    const o = seller(`shape${st}`);
+    mode.set(hostOf(o), st);
+    const v = await crawl(o, { forcePaywall: true });
+    ok(v?.paywall?.ok === null && v.paywall.unknown === true && v.paywall.status === st && /not a well-formed request/.test(v.paywall.error || ""), `a ${st} to our bare probe is no verdict, never a failure (${JSON.stringify(v?.paywall)})`);
+    ok(paywallVerdictExpired(v.paywall, Date.now()) === false && paywallVerdictExpired(v.paywall, Date.now() + 25 * 3_600_000) === true, "no verdict is re-read after the failure window, not every crawl");
+  }
+  {
+    __resetPaywallProbeForTest({ cursor: 1 });
+    const o = "https://postshape.example.test";
+    served.set(`${o}/.well-known/x402`, { x402Version: 2, name: "Post seller", resources: [{ resource: `${o}/v1/run`, method: "POST", description: "Run one job.", price: "$0.005", accepts }] });
+    mode.set(hostOf(o), 422);
+    const v = await crawl(o, { forcePaywall: true });
+    ok(v?.paywall?.ok === null && v.paywall.unknown === true && /an empty JSON body/.test(v.paywall.error || ""), `a 422 to our empty-body POST probe is no verdict (${JSON.stringify(v?.paywall)})`);
+  }
+  __resetPaywallProbeForTest({ cursor: 1 });
+  const t = seller("timeout");
+  const realProbe = (url, opts) => Promise.reject(Object.assign(new Error("Source URL did not respond within 8s - host may be slow or unreachable"), { statusCode: 504, hint: "source-timeout" }));
+  __setProbeFetchForTest(realProbe);
+  const vt = await crawl(t, { forcePaywall: true });
+  ok(vt?.paywall?.ok === null && vt.paywall.unknown === true && vt.paywall.status === 0 && /did not complete/.test(vt.paywall.error || ""), `a probe of ours that timed out is no verdict (${JSON.stringify(vt?.paywall)})`);
+  ok(paywallVerdictExpired({ ok: false, status: 0, at: Date.now(), url: `${t}/v1/quote`, error: "timeout" }, Date.now()) === true, "a stored status-0 failure (our probe, an earlier build) is re-probed at once");
 }
 
 server.close();
