@@ -56,7 +56,7 @@ try {
 
   ok(safety.status === 503, `a stalled RugCheck summary answers 503, not 504 (got ${safety.status} in ${safety.ms} ms)`);
   ok(/^RugCheck did not answer the report summary read within our 8 s limit/.test(safety.body?.error || ""), `the body names the upstream and the step (got: ${safety.body?.error})`);
-  ok(safety.body?.attribution === "upstream" && safety.body?.tool === "sol-token-safety", `the body is attributed upstream and names the tool (got ${JSON.stringify(safety.body)})`);
+  ok(safety.body?.attribution === "ours" && safety.body?.hint === "our-deadline" && safety.body?.tool === "sol-token-safety", `the body is attributed to our own limit and names the tool (got ${JSON.stringify(safety.body)})`);
   ok(safety.ms >= D.RUGCHECK_SUMMARY_MS - 100 && safety.ms < D.RUGCHECK_SUMMARY_MS + SLACK_MS, `it answers at the summary cap (${safety.ms} ms against ${D.RUGCHECK_SUMMARY_MS})`);
 
   ok(holders.status === 503, `a stalled RugCheck report answers 503, not 504 (got ${holders.status} in ${holders.ms} ms)`);

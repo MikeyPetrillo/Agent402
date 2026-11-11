@@ -378,10 +378,10 @@ try { await h("token-allowance")({ contract: USDC, owner: V, spender: V }); fail
 catch (e) { ok(e.statusCode === 502 && e.rpcCode === -32602 && !e.message.includes("secret echo") && !e.message.includes("test-key"), `JSON-RPC error -> 502 with code, message not relayed`); }
 responder = () => { const err = new Error("aborted"); err.name = "TimeoutError"; throw err; };
 try { await h("tx-receipt")({ hash: HASH }); ok(false, "deadline expiry resolved"); }
-catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^Chain data did not answer the batch of 2 calls read within our \d+ s limit; nothing was charged/.test(e.message), `deadline expiry -> 503 naming the upstream and the step, attributed upstream (got ${e.statusCode} "${e.message}")`); }
+catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "our-deadline" && /^Chain data did not answer the batch of 2 calls read within our \d+ s limit; nothing was charged/.test(e.message), `deadline expiry -> 503 naming the step, attributed to our own limit (got ${e.statusCode} "${e.message}")`); }
 responder = () => { throw Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" }); };
 try { await h("tx-receipt")({ hash: HASH }); ok(false, "connection refused resolved"); }
-catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream" && /^Chain data is unreachable from here \(batch of 2 calls read failed before any answer\)/.test(e.message), `connection refused -> 503 unreachable naming the step (got ${e.statusCode} "${e.message}")`); }
+catch (e) { ok(e.statusCode === 503 && e.attribution === "unknown" && e.hint === "connect-failed" && /^Chain data is unreachable from here \(batch of 2 calls read failed before any answer\)/.test(e.message), `connection refused -> 503 unreachable naming the step, attribution unknown (got ${e.statusCode} "${e.message}")`); }
 responder = () => ({ json: "not an array" });
 await expectStatus(() => h("tx-receipt")({ hash: HASH }), 502, "malformed batch -> 502");
 responder = () => ({ status: 404, json: {} });
