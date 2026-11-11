@@ -1062,7 +1062,10 @@ export function codeBlock(text, { label = "", name = "", html = false, wrap = fa
   return `<div class="${cls}"${named ? ` data-name="${esc(named)}"` : ""}${style ? ` style="${esc(style)}"` : ""}>${label ? `<div class="ml-code-head"><span>${esc(label)}</span></div>` : ""}<pre>${html ? String(text) : esc(text)}</pre></div>`;
 }
 
-/** Rendered markdown: every <pre> block becomes the shared code block. */
+/** Rendered markdown: every <pre> block becomes the shared code block. A
+ * block codeBlock() already made is left as it is, so a page that mixes the two
+ * never nests one block in another. */
+const IN_CODE_BLOCK = /<div class="ml-code[^"<>]*"[^<>]*>(?:<div class="ml-code-head"><span>[^<>]*<\/span><\/div>)?$/;
 export function wrapCodeBlocks(html) {
   const src = String(html);
   let out = "", at = 0;
@@ -1072,7 +1075,8 @@ export function wrapCodeBlocks(html) {
     if (!/[\s>]/.test(src.charAt(open + 4))) { out += src.slice(at, open + 4); at = open + 4; continue; }
     const end = src.indexOf("</pre>", open);
     if (end < 0) break;
-    out += src.slice(at, open) + `<div class="ml-code">${src.slice(open, end + 6)}</div>`;
+    const wrapped = IN_CODE_BLOCK.test(src.slice(Math.max(at, open - 600), open));
+    out += src.slice(at, open) + (wrapped ? src.slice(open, end + 6) : `<div class="ml-code">${src.slice(open, end + 6)}</div>`);
     at = end + 6;
   }
   return out + src.slice(at);

@@ -223,7 +223,7 @@ export function docsLayoutHtml(currentSlug, mainHtml) {
   return `<div class="ml-docs-layout">
     <button type="button" class="ml-docs-mobile-toggle" id="ml-docs-mobile-toggle" aria-expanded="false" aria-controls="ml-docs-side">Browse docs &#9776;</button>
     <aside class="ml-docs-side" id="ml-docs-side">${renderSidebar(currentSlug)}</aside>
-    <div class="ml-docs-main">${wrapCodeBlocks(mainHtml)}</div>
+    <div class="ml-docs-main">${mainHtml}</div>
   </div>`;
 }
 
@@ -340,7 +340,7 @@ function shell(baseUrl, title, description, path, body, currentSlug) {
 }
 
 function renderMarkdown(md) {
-  return marked.parse(transformWikilinks(md))
+  return wrapCodeBlocks(marked.parse(transformWikilinks(md)))
     .replace(/<table>/g, '<div class="ml-docs-tw"><table>')
     .replace(/<\/table>/g, "</table></div>")
     // A row of related-page links wraps balanced, so it never ends on one stray link.

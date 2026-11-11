@@ -178,10 +178,13 @@ try {
       const blocks = await page.evaluate(() => {
         const pres = [...document.querySelectorAll("main pre")].filter((p) => window.__a11y.visible(p));
         const missing = pres.filter((p) => { const w = p.closest(".ml-code"); return !w || !w.querySelector("button.ml-code-copy"); }).map((p) => p.textContent.trim().slice(0, 30));
-        return { n: pres.length, missing, live: !!document.querySelector("[aria-live].ml-code-live, .ml-code-live[aria-live]") };
+        // One block, one button: a block never sits inside another.
+        const doubled = [...document.querySelectorAll("main .ml-code")].filter((b) => b.parentElement.closest(".ml-code") || b.querySelectorAll("button.ml-code-copy").length !== 1).length;
+        return { n: pres.length, missing, doubled, live: !!document.querySelector("[aria-live].ml-code-live, .ml-code-live[aria-live]") };
       });
       if (path === "/") { ok(blocks.missing.length === 0, `[${theme}] /: every code block has a copy button (${blocks.n} blocks)`); continue; }
       ok(blocks.n > 0 && blocks.missing.length === 0, `[${theme}] ${path}: all ${blocks.n} code blocks carry a copy button${blocks.missing.length ? ` (missing on: ${list(blocks.missing)})` : ""}`);
+      ok(blocks.doubled === 0, `[${theme}] ${path}: no code block is nested in another and each has one copy button (${blocks.doubled} are not)`);
       if (!blocks.n || blocks.missing.length) continue;
       ok(blocks.live, `[${theme}] ${path}: a polite live region announces the copy`);
       if (theme !== "light") continue;
