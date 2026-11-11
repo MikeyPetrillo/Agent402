@@ -70,6 +70,8 @@ export const DEFAULT_READ_MS = 8_000;
  *  (measured 2026-11-03: a second read left with a 1 ms cap at 601 ms of a
  *  600 ms budget). */
 export const MIN_READ_MS = 5;
+/** The key under which upstreamFetch records its cap on the signal it sends. */
+export const LIMIT_MS = Symbol.for("agent402.upstreamLimitMs");
 
 const store = new AsyncLocalStorage();
 
@@ -296,7 +298,11 @@ export async function upstreamFetch(url, init = {}, ctx = {}) {
   if (cap < MIN_READ_MS) throw budgetSpentError(label, step, budget?.totalMs ?? timeoutMs);
   const fetchImpl = ctx.fetchImpl || fetch;
   try {
-    return await fetchImpl(url, { ...init, signal: AbortSignal.timeout(cap) });
+    const signal = AbortSignal.timeout(cap);
+    // The cap rides on the signal so the failure monitor can name our limit
+    // when it fires ("did not answer within our N s limit").
+    signal[LIMIT_MS] = cap;
+    return await fetchImpl(url, { ...init, signal });
   } catch (err) {
     // A daily ceiling refusal (src/upstream-hard-caps.js) is already the
     // answer: it names the limit and the retry time, and nothing was sent.

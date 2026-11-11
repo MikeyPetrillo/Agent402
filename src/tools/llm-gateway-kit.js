@@ -3119,9 +3119,13 @@ async function fetchDirectUpstream(body, { signal, timeoutMs, cfg = directUpstre
     // An abort from the stream relay's own controller (its first-frame timer,
     // which then marks upstreamTimeout itself, or the buyer leaving).
     if (e?.name === "AbortError") throw directFailure("Direct upstream request aborted", 504, "aborted");
-    throw directFailure("Direct upstream unreachable", 502, "connect");
+    // A name that did not resolve or a route our side lacks is not the
+    // upstream's answer (the breaker leaves "egress" out); a refused or reset
+    // connection is.
+    throw directFailure("Direct upstream unreachable", 502, DIRECT_EGRESS_CODES.has(e?.cause?.code || e?.code) ? "egress" : "connect");
   }
 }
+const DIRECT_EGRESS_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "EAI_FAIL", "EAI_NODATA", "ENETUNREACH", "ENETDOWN", "EHOSTUNREACH", "EADDRNOTAVAIL"]);
 function directStatusFailure(status) {
   if (status === 429) return directFailure("Direct upstream at capacity", 503, "rate_limited");
   if (status === 402) return directFailure("Direct upstream balance exhausted", 502, "quota");

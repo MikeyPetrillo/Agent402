@@ -1,9 +1,9 @@
 // A rail dropped at boot because a facilitator's /supported read FAILED is
 // read again in the background and restored when the facilitator lists it.
 //
-// The boot guard (src/payments.js) reads every facilitator's /supported once
-// (6 s, one retry) and offers only the networks a reachable facilitator
-// lists. A read that fails or times out is not an answer: the facilitator may
+// The boot guard (src/payments.js) reads every facilitator's /supported (up
+// to three tries inside the boot's bound, src/boot-supported-read.js) and
+// offers only the networks a reachable facilitator lists. A read that fails or times out is not an answer: the facilitator may
 // list the network a moment later, and until this module the rail stayed off
 // the offer until the next restart. So the facilitators whose boot read
 // failed are read again on a backoff (first delay doubling to a ceiling), and
@@ -47,6 +47,8 @@ export function createRailRecheck({ failed = [], dropped = [], restore, firstMs 
   const waiting = [...failed];
   const pending = new Set(dropped);
   const notRestorable = new Set();
+  // Networks every failed facilitator has since answered without.
+  const unlisted = new Set();
   let timer = null, delay = firstMs, ticks = 0, running = false, done = false;
 
   const readOnce = (client) => {
@@ -89,7 +91,10 @@ export function createRailRecheck({ failed = [], dropped = [], restore, firstMs 
         if (!deferred) waiting.splice(waiting.indexOf(f), 1);
       }
       if (!pending.size) return finish(notRestorable.size ? `[payments] rail re-read: done; ${[...notRestorable].join(", ")} can only rejoin the offer at the next restart` : null);
-      if (!waiting.length) return finish(`[payments] rail re-read: every facilitator has answered and none lists ${[...pending].join(", ")} - it stays dropped`);
+      if (!waiting.length) {
+        for (const c of pending) unlisted.add(c);
+        return finish(`[payments] rail re-read: every facilitator has answered and none lists ${[...pending].join(", ")} - it stays dropped`);
+      }
     } finally {
       running = false;
     }
@@ -111,6 +116,9 @@ export function createRailRecheck({ failed = [], dropped = [], restore, firstMs 
     /** Networks still waiting on a facilitator's answer. */
     pendingNetworks: () => (done ? [] : [...pending]),
     failedLabels: () => waiting.map((f) => f.label),
+    /** "pending" (still read), "unlisted" (every facilitator has since answered
+     *  without it), "restart" (listed, but only a restart can offer it), or null. */
+    outcomeOf: (caip2) => (!done && pending.has(caip2) ? "pending" : unlisted.has(caip2) ? "unlisted" : notRestorable.has(caip2) ? "restart" : null),
     ticks: () => ticks,
   };
 }

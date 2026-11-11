@@ -334,6 +334,38 @@ setEnv(ON);
   D._setDirectBreakerNowForTest(null);
   setEnv(ON);
 }
+// Our own timeout and a DNS or egress failure on our side are not the
+// upstream's answer: any number of them leaves the breaker closed and the
+// next call still goes direct. A refused connection is the host's answer.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_FAILS: "2", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  for (const [label, code] of [["our own timeout", null], ["a DNS failure on our side", "ENOTFOUND"], ["our resolver timing out", "EAI_AGAIN"]]) {
+    reset();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      if (String(url) === `${DIRECT_BASE}/chat/completions`) {
+        direct.hits.push({ url: String(url) });
+        if (!code) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+        throw Object.assign(new TypeError("fetch failed"), { cause: { code } });
+      }
+      return prevFetch(url, init);
+    };
+    try { for (let i = 0; i < 4; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); }
+    finally { globalThis.fetch = prevFetch; }
+    ok(direct.hits.length === 4 && or.hits.length === 4 && !D.directBreakerState().open && D.directBreakerState().fails === 0, `${label} four times: the breaker stays closed and every call still goes direct (direct ${direct.hits.length}, fails ${D.directBreakerState().fails})`);
+  }
+  reset();
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === `${DIRECT_BASE}/chat/completions`) { direct.hits.push({ url: String(url) }); throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }); }
+    return prevFetch(url, init);
+  };
+  try { for (let i = 0; i < 2; i++) await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); }
+  finally { globalThis.fetch = prevFetch; }
+  ok(D.directBreakerState().open, "control: two connections the upstream's host refused open the breaker");
+  D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
+}
 // A refusal of the request itself (any 4xx but auth, quota, capacity and a
 // missing endpoint) is the buyer's request, which OpenRouter refuses too: it
 // never opens the breaker, the word stays ok, honest traffic keeps going direct.
@@ -403,6 +435,35 @@ setEnv(ON);
   D.noteDirectOutcome(true);
   ok(!D.directBreakerState().open && !D.directBreakerState().halfOpen, "a success closes it");
   D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
+}
+// Our own timeout on the direct link for several callers in a row
+// (src/unanswered-rule.js, defaults 5 calls, 3 callers, 15 minutes, no answer
+// between) opens the breaker so the next callers go to OpenRouter; one
+// caller's long prompts, or an answer between, do not.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  reset();
+  for (let i = 0; i < 8; i++) D.noteDirectOutcome(false, "timeout", "caller-long");
+  ok(!D.directBreakerState().open && D.directBreakerAllows(), "eight of our timeouts for one caller leave the direct link in use");
+  reset();
+  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", `caller-${i}`);
+  D.noteDirectOutcome(true);
+  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", `caller-${i + 4}`);
+  ok(!D.directBreakerState().open, "an answer between clears the count");
+  reset();
+  const warned = [];
+  const realWarn = console.warn;
+  console.warn = (...a) => { warned.push(a.join(" ")); };
+  try {
+    for (let i = 0; i < 5; i++) D.noteDirectOutcome(false, "timeout", `caller-${i % 3}`);
+  } finally { console.warn = realWarn; }
+  ok(D.directBreakerState().open && !D.directBreakerAllows(), "five of our timeouts from three callers open the breaker");
+  const line = warned.find((w) => w.startsWith("[direct-upstream]"));
+  ok(!!line && /did not answer within our limit on 5 calls from 3 callers/.test(line) && !/fail|outage|is down/i.test(line), `the log line is neutral (${line})`);
+  const before = or.hits.length, dBefore = direct.hits.length;
+  await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 });
+  ok(direct.hits.length === dBefore && or.hits.length === before + 1, "and the next call goes to OpenRouter without a direct attempt");
   setEnv(ON);
 }
 // A half-open trial granted to a call whose payment window cannot fit an

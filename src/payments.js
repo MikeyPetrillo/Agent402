@@ -59,6 +59,7 @@ import { existsSync } from "node:fs";
 import { refusingHook, passingHook, HOOK_NAMES, ARC_CONTRACT_WALLET_CHECK_FAILED, WALLET_CHECK_FAILED } from "./x402-hook-guard.js";
 import { verifyFailureLine, payerNamedBy } from "./verify-failure-log.js";
 import { createRailRecheck, railRecheckSettings } from "./rail-recheck.js";
+import { bootReadSettings, readSupportedAtBoot } from "./boot-supported-read.js";
 import { svmTransferAccounts, svmPayerFromPayload } from "./svm-payer.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
@@ -1066,6 +1067,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         throw e;
       }
     };
+    // A request of its own, past any read still in flight (the boot read's
+    // later tries, src/boot-supported-read.js): an answer becomes the memo,
+    // so the x402 init and every later caller read it; a failure leaves the
+    // memo as it was.
+    client.__a402FreshSupported = async () => {
+      const value = await orig().then(pinFacilitatorSigners);
+      cache = { at: Date.now(), promise: Promise.resolve(value) };
+      return value;
+    };
     return client;
   };
   // Every facilitator base URL we register, so a non-JSON error from one of
@@ -1728,11 +1738,12 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // eip155:42220" on all paid routes from the 12:28Z boot until the rail was
   // dropped by hand ~4h later. Free surfaces stayed up; paid revenue was $0.
   //
-  // So: probe every client's /supported once at boot (6s timeout, one retry
-  // after 2s — the heartbeat's single-retry doctrine, so a deploy-window blip
-  // doesn't drop a healthy rail), and drop any offered network that no
-  // REACHABLE facilitator advertises `exact` on, with the same loud warning
-  // shape as the misconfiguration guards. A rail dropped while a read had
+  // So: read every client's /supported at boot (up to three tries inside a
+  // bound no longer than the boot held before, src/boot-supported-read.js, so
+  // one slow answer of ours does not drop a healthy rail), and drop any
+  // offered network that no REACHABLE facilitator advertises `exact` on, with
+  // the same loud warning shape as the misconfiguration guards and a reason
+  // word on /api/rails (probe-timeout, read-failed, not-advertised). A rail dropped while a read had
   // FAILED is read again in the background and rejoins the offer when its
   // facilitator lists it (src/rail-recheck.js, restoreRail below); one
   // dropped when every facilitator answered returns on the next boot where
@@ -1761,37 +1772,56 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // dropped.
   const failedReads = [];
   const droppedOnFailedRead = [];
+  railDropWords = new Map();
+  gatewayBatchedStatus = null;
   const recheck = railRecheckSettings();
-  if (supportedGuardOn && facilitatorClients.length) {
-    const probeOne = async (client, label) => {
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const kinds = (await Promise.race([
-            client.getSupported(),
-            new Promise((_, reject) => {
-              const t = setTimeout(() => reject(new Error("timeout after 6000ms")), 6000);
-              if (typeof t.unref === "function") t.unref();
-            }),
-          ]))?.kinds;
-          return Array.isArray(kinds) ? kinds : [];
-        } catch (e) {
-          if (attempt === 1) {
-            await new Promise((r) => setTimeout(r, 2000));
-            continue;
-          }
-          console.warn(
-            `WARNING: facilitator ${label} failed /supported at boot after a retry ` +
-              `(${String(e?.message || e).slice(0, 140)}) - networks only it advertises will be ` +
-              "dropped from the offer so the rest keep serving."
-          );
-          return null;
-        }
-      }
-      return null;
+  // Every boot read starts now and runs at once: the exact guard's read of
+  // each facilitator (Circle's is Arc's read), and the Circle Gateway
+  // batched read. Each gets up to three tries inside one bound that is never
+  // longer than the boot held before for this configuration
+  // (src/boot-supported-read.js).
+  const gatewayOn = gatewayNanopaymentsEnabled();
+  const gatewayConfigured = gatewayOn ? gatewayNanopaymentNetworks() : [];
+  const gatewayWantedAtBoot = gatewayConfigured.filter((c) => evmCaip2.includes(c));
+  const bootRead = bootReadSettings(process.env, { extraReads: (circleClient && syncOnStart ? 1 : 0) + (gatewayWantedAtBoot.length && syncOnStart ? 1 : 0) });
+  const bootDeadline = Date.now() + bootRead.budgetMs;
+  const readAtBoot = (client, extra = {}) => readSupportedAtBoot({
+    read: () => client.getSupported(),
+    readFresh: typeof client.__a402FreshSupported === "function" ? () => client.__a402FreshSupported() : () => client.getSupported(),
+    tryMs: bootRead.tryMs, tries: bootRead.tries, gapsMs: bootRead.gapsMs, minTryMs: bootRead.minTryMs, deadline: bootDeadline, ...extra,
+  });
+  // The batched option's client and its read, started before the guard
+  // waits (the networks it may offer are narrowed to the final plain offer
+  // below; a kind for a network the guard drops is never offered).
+  let gatewayClient = null;
+  let gatewayRead = null;
+  if (gatewayOn) {
+    // Each entry carries the catalog slug of the route it paid for, read
+    // from the request's method and path, so a debt it becomes is booked
+    // under that slug (the resolver falls back to the path for a route the
+    // catalog does not list).
+    const slugForResource = (resource) => {
+      const def = typeof resource === "string" && catalog && Object.prototype.hasOwnProperty.call(catalog, resource) ? catalog[resource] : null;
+      return typeof def?.slug === "string" ? def.slug : null;
     };
-    const probed = await Promise.all(
-      facilitatorClients.map((c, i) => probeOne(c, facilitatorLabels[i] || `#${i}`))
-    );
+    const bookPending = async (entry) => (await gatewayPendingBook()).book({ ...entry, slug: slugForResource(entry.resource) });
+    gatewayClient = new GatewayNanopaymentsClient({ networks: gatewayWantedAtBoot, onPending: bookPending });
+    if (gatewayWantedAtBoot.length && syncOnStart) gatewayRead = readAtBoot(gatewayClient);
+  }
+  // Per facilitator (same index as facilitatorClients): the guard's read.
+  let probedReads = null;
+  if (supportedGuardOn && facilitatorClients.length) {
+    probedReads = await Promise.all(facilitatorClients.map((c) => readAtBoot(c)));
+    probedReads.forEach((r, i) => {
+      if (r.supported) return;
+      const label = facilitatorLabels[i] || `#${i}`;
+      console.warn(
+        `WARNING: facilitator ${label} ${r.reason === "probe-timeout" ? `gave no /supported answer within our ${Math.round(bootRead.tryMs / 1000)} s limit` : "failed /supported"} at boot after ${r.tries} ${r.tries === 1 ? "try" : "tries"} ` +
+          `(${r.reason}${r.error ? `: ${String(r.error?.message || r.error).slice(0, 120)}` : ""}) - networks only it advertises will be ` +
+          "dropped from the offer so the rest keep serving."
+      );
+    });
+    const probed = probedReads.map((r) => (r.supported ? (Array.isArray(r.supported?.kinds) ? r.supported.kinds : []) : null));
     if (probed.every((kinds) => kinds === null)) {
       console.error(
         "ERROR: EVERY facilitator failed /supported at boot - REFUSING to filter the offer " +
@@ -1823,13 +1853,20 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
         }
       }
       probed.forEach((kinds, i) => { if (kinds === null) failedReads.push({ client: facilitatorClients[i], label: facilitatorLabels[i] || `#${i}` }); });
+      // Why a dropped network is not offered: a facilitator whose read got
+      // no answer within our limit may list it (probe-timeout), one whose
+      // read failed may (read-failed); with every facilitator answering,
+      // none lists it (not-advertised).
+      const failedWords = probedReads.filter((r) => !r.supported).map((r) => r.reason);
+      const dropWord = failedWords.includes("probe-timeout") ? "probe-timeout" : failedWords.length ? "read-failed" : "not-advertised";
       const reread = failedReads.length > 0 && recheck.enabled;
       const dropUnadvertised = (list) => {
         const dropped = list.filter((c) => !advertisedExact.has(c));
         if (dropped.length) {
           if (failedReads.length) droppedOnFailedRead.push(...dropped);
+          for (const c of dropped) railDropWords.set(c, dropWord);
           console.warn(
-            `WARNING: dropping ${dropped.join(", ")} from the offered networks - no reachable ` +
+            `WARNING: dropping ${dropped.join(", ")} from the offered networks (${dropWord}) - no reachable ` +
               "facilitator advertises `exact` settlement there (see /supported failures above). " +
               "Other chains are unaffected; " +
               (reread
@@ -1848,31 +1885,31 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // Arc fails CLOSED, on Circle's own answer. The guard above fails open when
   // every probe fails, and is skipped outright offline or with its escape
   // hatch; Arc is not offered on either path. It stays only when Circle's
-  // /supported (memoized, so this is the guard's own read when it ran) lists
-  // exact on eip155:5042 for Arc USDC. A malformed or failing /supported, a
-  // timeout, or an answer without that kind drops Arc and nothing else.
+  // /supported lists exact on eip155:5042 for Arc USDC: the guard's own read
+  // of the Circle client when the guard ran (no second read), else a boot
+  // read of its own. A malformed or failing /supported, no answer inside our
+  // limit, or an answer without that kind drops Arc and nothing else.
   let arcDeliberatelyAbsent = false;
   if (circleClient) {
     let arcListed = false;
     let why = "boot probe skipped (X402_SYNC_ON_START=false)";
     if (syncOnStart) {
-      try {
-        const s = await Promise.race([
-          circleClient.getSupported(),
-          new Promise((_, reject) => {
-            const t = setTimeout(() => reject(Object.assign(new Error("timeout"), { reason: "timeout" })), 8000);
-            if (typeof t.unref === "function") t.unref();
-          }),
-        ]);
-        arcListed = (s?.kinds || []).some((k) => k?.scheme === "exact" && k?.network === ARC_CAIP2);
+      const idx = facilitatorClients.indexOf(circleClient);
+      const r = probedReads && idx >= 0 ? probedReads[idx] : await readAtBoot(circleClient);
+      if (r.supported) {
+        arcListed = (r.supported?.kinds || []).some((k) => k?.scheme === "exact" && k?.network === ARC_CAIP2);
         // Circle answered, and does not settle Arc for us: a rail this server
         // never offered is not an outage. One it offered on an earlier boot
         // and now cannot is (src/gated-rails.js history).
         if (!arcListed && !(await gatedRailWasOffered(ARC_CAIP2))) arcDeliberatelyAbsent = true;
         why = arcListed ? "" : "Circle's /supported does not list exact on eip155:5042";
-      } catch (e) {
+        if (!arcListed) railDropWords.set(ARC_CAIP2, "not-advertised");
+      } else {
         // Only our own reason code is printed (src/circle-facilitator.js).
-        why = `Circle's /supported failed (${String(e?.reason || "error").slice(0, 40)})`;
+        why = r.reason === "probe-timeout"
+          ? `no answer from Circle's /supported within our ${Math.round(bootRead.tryMs / 1000)} s limit (probe-timeout)`
+          : `Circle's /supported failed (${String(r.error?.reason || "error").slice(0, 40)}; read-failed)`;
+        railDropWords.set(ARC_CAIP2, r.reason);
       }
     }
     if (!arcListed && evmCaip2.includes(ARC_CAIP2)) {
@@ -1888,40 +1925,37 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // plain accepts are untouched. The client is never a routing facilitator
   // (src/gateway-nanopayments.js installGatewayRouting hands it a batched
   // payment by scope), so it can never take a plain payment on any chain.
+  // What it was asked for and what it offers are published on /api/rails
+  // (gatewayBatchedStatus), so a dropped option reaches the heartbeat.
   let gatewayKinds = new Map();
-  let gatewayClient = null;
-  if (gatewayNanopaymentsEnabled()) {
-    const wanted = gatewayNanopaymentNetworks().filter((c) => evmCaip2.includes(c));
-    const skipped = gatewayNanopaymentNetworks().filter((c) => !evmCaip2.includes(c));
+  if (gatewayOn) {
+    const configured = gatewayConfigured;
+    const wanted = gatewayWantedAtBoot.filter((c) => evmCaip2.includes(c));
+    const skipped = configured.filter((c) => !evmCaip2.includes(c));
     if (skipped.length) console.warn(`[gateway] batched option not offered on ${skipped.join(", ")}: not in the plain offer`);
-    // Each entry carries the catalog slug of the route it paid for, read
-    // from the request's method and path, so a debt it becomes is booked
-    // under that slug (the resolver falls back to the path for a route the
-    // catalog does not list).
-    const slugForResource = (resource) => {
-      const def = typeof resource === "string" && catalog && Object.prototype.hasOwnProperty.call(catalog, resource) ? catalog[resource] : null;
-      return typeof def?.slug === "string" ? def.slug : null;
-    };
-    const bookPending = async (entry) => (await gatewayPendingBook()).book({ ...entry, slug: slugForResource(entry.resource) });
-    gatewayClient = new GatewayNanopaymentsClient({ networks: wanted, onPending: bookPending });
     let why = "boot probe skipped (X402_SYNC_ON_START=false)";
-    if (wanted.length && syncOnStart) {
-      try {
-        await Promise.race([
-          gatewayClient.getSupported(),
-          new Promise((_, reject) => {
-            const t = setTimeout(() => reject(Object.assign(new Error("timeout"), { reason: "timeout" })), 8000);
-            if (typeof t.unref === "function") t.unref();
-          }),
-        ]);
+    let word = "probe-skipped";
+    if (wanted.length && gatewayRead) {
+      const r = await gatewayRead;
+      if (r.supported) {
         gatewayKinds = new Map([...gatewayClient.kinds()].filter(([c]) => wanted.includes(c)));
         const unlisted = wanted.filter((c) => !gatewayKinds.has(c));
         why = unlisted.length ? `Gateway's /supported does not list the batched kind on ${unlisted.join(", ")}` : "";
-      } catch (e) {
+        word = "not-advertised";
+      } else {
         // Only our own reason code is printed (src/gateway-nanopayments.js).
-        why = `Gateway's /supported failed (${String(e?.reason || "error").slice(0, 40)})`;
+        why = r.reason === "probe-timeout"
+          ? `no answer from Gateway's /supported within our ${Math.round(bootRead.tryMs / 1000)} s limit (probe-timeout)`
+          : `Gateway's /supported failed (${String(r.error?.reason || "error").slice(0, 40)}; read-failed)`;
+        word = r.reason;
       }
+    } else if (!wanted.length) {
+      why = "";
     }
+    gatewayBatchedStatus = {
+      configured,
+      dropped: configured.filter((c) => !gatewayKinds.has(c)).map((c) => ({ network: c, reason: !evmCaip2.includes(c) ? "not-in-offer" : word })),
+    };
     if (gatewayKinds.size) {
       console.log(`Circle Gateway batched option: offered on ${[...gatewayKinds.keys()].join(", ")} (gas-free for the buyer; settled off chain into the Gateway balance)`);
       if (syncOnStart && walletAddress) {
@@ -2993,6 +3027,15 @@ export function lastResortFallbackOverrides({ networks, payAiClient, solvadorCli
 // decision, it never influences it.
 let railsConfigured = [];
 let railsOffered = [];
+// Why a rail the boot read dropped is not offered, by CAIP-2: probe-timeout
+// (our read got no answer within our limit), read-failed (the facilitator or
+// the connection answered with an error) or not-advertised (it answered
+// without the network). A rail some other guard dropped (a missing key or URL)
+// has no entry and reads "config".
+let railDropWords = new Map();
+// The Circle Gateway batched option as asked for at boot: { configured,
+// dropped: [{ network, reason }] }, null while the option is off.
+let gatewayBatchedStatus = null;
 // The background re-read of rails dropped on a failed boot /supported read
 // (src/rail-recheck.js), and who is told when one rejoins the offer.
 let railRecheck = null;
@@ -3060,20 +3103,45 @@ export async function facilitatorSupportReport() {
     }
   }));
 }
+/** The reason word of a configured rail that is not offered (null when it is):
+ *  probe-timeout (our boot read got no answer within our limit; says nothing
+ *  about the facilitator), read-failed (the facilitator or the connection
+ *  answered /supported with an error), not-advertised (the facilitator
+ *  answered without the network), or config (another guard dropped it: a
+ *  missing key or URL; the boot log names which). */
+export const RAIL_REASON_WORDS = Object.freeze(["probe-timeout", "read-failed", "not-advertised", "config"]);
+function railReasonWord(caip2) {
+  const outcome = railRecheck?.outcomeOf?.(caip2) ?? null;
+  if (outcome === "unlisted") return "not-advertised";
+  return railDropWords.get(caip2) || "config";
+}
+const RAIL_REASON_TEXT = {
+  "probe-timeout": "not offered - our /supported read of its facilitator got no answer within our limit at boot (probe-timeout: our timeout, not the facilitator's answer)",
+  "read-failed": "not offered - its facilitator answered /supported with an error at boot, or the connection to it failed (read-failed)",
+  "not-advertised": "not offered - its facilitator answered /supported without this network (not-advertised)",
+  config: "not offered - its facilitator config is incomplete (see boot log for the specific guard)",
+};
 export function railStatus() {
-  return railsConfigured.map((n) => ({
-    network: n,
-    caip2: NETWORKS[n] || null,
-    offered: railsOffered.includes(n),
-    // Deliberately one honest sentence rather than a guess at which of the
-    // several guards fired: the guards already log their specific reason at
-    // boot, and inventing a more precise one here could contradict them.
-    reason: railsOffered.includes(n)
-      ? null
-      : railRecheck && railRecheck.pendingNetworks().includes(NETWORKS[n])
-        ? "not offered - its facilitator did not answer /supported at boot; it is read again in the background and the rail rejoins the offer when the facilitator lists it"
-        : "not offered - no reachable facilitator advertises it, or its facilitator config is incomplete (see boot log for the specific guard)",
-  }));
+  return railsConfigured.map((n) => {
+    const caip2 = NETWORKS[n] || null;
+    const offered = railsOffered.includes(n);
+    const word = offered ? null : railReasonWord(caip2);
+    const outcome = offered ? null : railRecheck?.outcomeOf?.(caip2) ?? null;
+    const then = outcome === "pending"
+      ? "; it is read again in the background and the rail rejoins the offer when the facilitator lists it"
+      : word === "probe-timeout" || word === "read-failed" ? "; it rejoins the offer at the next restart where the facilitator lists it" : "";
+    return { network: n, caip2, offered, reason: offered ? null : `${RAIL_REASON_TEXT[word]}${then}`, reasonWord: word };
+  });
+}
+/** The Circle Gateway batched option on /api/rails: null while it is off;
+ *  else the networks asked for, those offered and each one dropped with its
+ *  reason word (probe-timeout, read-failed, not-advertised, not-in-offer:
+ *  its plain rail is not offered, probe-skipped). */
+export function gatewayBatchedRailStatus() {
+  if (!gatewayBatchedStatus) return null;
+  const dropped = gatewayBatchedStatus.dropped.map((d) => ({ network: d.network, reason: d.reason }));
+  const offered = gatewayBatchedStatus.configured.filter((c) => !dropped.some((d) => d.network === c));
+  return { status: !dropped.length ? "offered" : offered.length ? "partial" : "dropped", configured: [...gatewayBatchedStatus.configured], offered, dropped };
 }
 
 // One recorder for BOTH verify-failure shapes @x402/core produces: a

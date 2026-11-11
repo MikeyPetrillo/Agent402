@@ -28,7 +28,7 @@ const TITLES = {
   upstreamHealth: "upstreamHealth: an upstream is timing out or failing",
   facilitatorFunds: "facilitatorFunds: a facilitator refused settlement",
   // facilitatorFunds=low (a settlement signer short of gas) has its own title.
-  facilitatorGas: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
+  facilitatorGas: "facilitatorFunds: a facilitator's settlement gas is running low",
   buyerRefusals: "buyerRefusals: a paying buyer was refused by the settle breaker",
   // Distinct buyers' /v1 payments failing to settle (an alarm; nothing is refused for it).
   settleFailures: "settleFailures: a burst of buyers' payments verified and then failed to settle",

@@ -3,7 +3,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import assert from "node:assert/strict";
 import http from "node:http";
 import express from "express";
-import { recordTiming, routeTimings, installRequestTimingFetch, requestTimingMiddleware, oldestInFlight, inFlightCount, requestsDuring, __resetTimingForTest } from "../src/request-timing.js";
+import { recordTiming, routeTimings, installRequestTimingFetch, requestTimingMiddleware, oldestInFlight, inFlightCount, requestsDuring, __resetTimingForTest, callerKeyOf, currentCallerKey } from "../src/request-timing.js";
 
 let n = 0;
 const ok = (c, m) => { n++; assert.ok(c, m); console.log(`ok - ${m}`); };
@@ -19,6 +19,21 @@ ok(routeTimings({ top: 1000 }).length <= 301 && routeTimings({ top: 1000 }).some
 recordTiming("POST /api/paid-route", 5, 0, true);
 ok(routeTimings({ top: 1000 }).some((r) => r.route === "POST /api/paid-route"), "a reserved (catalog) route keeps its own ring even when the free slots are full");
 __resetTimingForTest();
+
+// --- the caller key: a keyed hash of req.ip, read only inside a request
+{
+  const a = callerKeyOf({ ip: "203.0.113.5" }), b = callerKeyOf({ ip: "203.0.113.6" });
+  ok(/^[0-9a-f]{12}$/.test(a) && a === callerKeyOf({ ip: "203.0.113.5" }) && a !== b, `one address, one key; two addresses, two keys (${a}, ${b})`);
+  const { createHash } = await import("node:crypto");
+  ok(!a.includes("203") && createHash("sha256").update("203.0.113.5").digest("hex").slice(0, 12) !== a, "the key is not the address and not its plain hash");
+  ok(callerKeyOf({}) === null && currentCallerKey() === null, "no address, no key; outside a request, null");
+  let seen;
+  const ends = [];
+  requestTimingMiddleware(() => "k")({ ip: "198.51.100.1" }, { on(ev, fn) { ends.push(fn); }, headersSent: true, statusCode: 200, writableFinished: true }, () => { seen = currentCallerKey(); });
+  for (const fn of ends) fn();
+  __resetTimingForTest();
+  ok(seen === callerKeyOf({ ip: "198.51.100.1" }), "inside a request the scope carries the caller's key");
+}
 
 // --- end to end through express: upstream wait charged to the right request
 installRequestTimingFetch();

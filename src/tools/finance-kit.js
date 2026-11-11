@@ -55,10 +55,14 @@ const MAX_QUERY_USD = 0.0035;
 // caveat a reader needs for that dataset; `volume` is the market total only
 // when the dataset is consolidated, and null otherwise.
 const SUMMARY_NOTE = "Official consolidated end-of-day bars across all US exchanges and ATSs; volume is the consolidated total and includes post-market trading. Prices are unadjusted for splits and dividends.";
+// The fallback note says the consolidated dataset was unavailable only when
+// that dataset answered so for this read (read.primaryUnavailable); a read
+// that went to the fallback for any other reason says only where it came from.
 const FALLBACK_NOTE = "Daily bars from a three-venue consolidation (the consolidated dataset was unavailable for this read); venueVolume counts those venues only, not the consolidated tape, and volume is null.";
-function provenance(dataset) {
+const FALLBACK_NOTE_PLAIN = "Daily bars from a three-venue consolidation; venueVolume counts those venues only, not the consolidated tape, and volume is null.";
+function provenance(dataset, read = null) {
   const c = COVERAGE[dataset];
-  return { dataset: c.dataset, coverage: c.coverage, venues: c.venues, source: "databento.com " + c.dataset, note: c.consolidated ? SUMMARY_NOTE : FALLBACK_NOTE };
+  return { dataset: c.dataset, coverage: c.coverage, venues: c.venues, source: "databento.com " + c.dataset, note: c.consolidated ? SUMMARY_NOTE : read?.primaryUnavailable ? FALLBACK_NOTE : FALLBACK_NOTE_PLAIN };
 }
 const COVERAGE_COPY = "Built from the official consolidated end-of-day summary across all US exchanges and ATSs, so price, range and volume are market totals. If that dataset is unavailable for a read, the answer comes from a consolidation of three U.S. exchange venues instead and says so: coverage reads three-venue, venueVolume counts those venues only and volume is null.";
 
@@ -124,7 +128,7 @@ export const FINANCE_TOOLS = [
       if (!ctx?.selfcheck) noteQuoteSymbol(symbol);
       const bars = read.bars;
       const last = bars.at(-1), prev = bars.at(-2) || null;
-      const where = provenance(read.dataset);
+      const where = provenance(read.dataset, read);
       return {
         symbol,
         currency: "USD",
@@ -230,7 +234,7 @@ export const FINANCE_TOOLS = [
         days: bars.length,
         bars,
         asOf: bars.at(-1)?.day ?? null,
-        ...provenance(read.dataset),
+        ...provenance(read.dataset, read),
         // The session boundary's refresh failed: the bars end at the last
         // confirmed end, which `rangeCheckedAt` dates.
         ...(range.stale ? { rangeStale: true, rangeCheckedAt: range.checkedAt } : {}),

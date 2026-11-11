@@ -301,6 +301,49 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   stub([["openrouter.ai", withBackups(audio(Buffer.from("ID3eleven")))]]);
   ok((await run("tts", { text: "hi" })).model === FIRST_BACKUP, "and the next buyer is served by a backup");
   keepBreaker = false;
+  // Our own per-link cap passing (a long text) is not an ElevenLabs failure:
+  // three in a row leave the breaker closed and the next buyer on ElevenLabs.
+  __resetTtsBreakerForTest(); keepBreaker = true;
+  for (let i = 0; i < 4; i++) { stub([["openrouter.ai", withBackups(() => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); })]]); await throwsWith(() => run("tts", { text: "x".repeat(2000) })); }
+  ok(elevenLabsBreakerState() === "ok" && __ttsBreakerForTest().serverErrors === 0, `our own deadline passing four times does not count toward the breaker (state ${elevenLabsBreakerState()}, count ${__ttsBreakerForTest().serverErrors})`);
+  stub([["openrouter.ai", withBackups(audio(Buffer.from("ID3eleven")))]]);
+  ok((await run("tts", { text: "hi" })).model === TTS_TIERS.tts.chain[0], "and the next buyer is still served by ElevenLabs");
+  keepBreaker = false;
+  // The same deadline on the ElevenLabs link for several callers in a row
+  // (src/unanswered-rule.js) moves the next callers to the backups for the
+  // cool-down; the log says only that the link did not answer within our
+  // limit. One caller's long texts, and a link that answers between, do not.
+  {
+    const { requestTimingMiddleware } = await import("../src/request-timing.js");
+    const mw = requestTimingMiddleware(() => "tts");
+    const asCaller = (ip, fn) => new Promise((resolve, reject) => { mw({ ip }, { on() {}, headersSent: false }, () => { Promise.resolve().then(fn).then(resolve, reject); }); });
+    const hung = () => withBackups(() => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); });
+    const warned = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => { warned.push(a.join(" ")); };
+    try {
+      __resetTtsBreakerForTest(); keepBreaker = true;
+      for (let i = 0; i < 6; i++) { stub([["openrouter.ai", hung()]]); await asCaller("198.51.100.7", () => throwsWith(() => run("tts", { text: "x".repeat(2000) }))); }
+      ok(elevenLabsBreakerState() === "ok", `one caller's six long texts past our limit leave the speech link in use (state ${elevenLabsBreakerState()})`);
+      __resetTtsBreakerForTest();
+      for (let i = 0; i < 4; i++) { stub([["openrouter.ai", hung()]]); await asCaller(`198.51.100.${10 + i}`, () => throwsWith(() => run("tts", { text: "hello" }))); }
+      stub([["openrouter.ai", withBackups(audio(Buffer.from("ID3eleven")))]]);
+      await asCaller("198.51.100.20", () => run("tts", { text: "hi" }));
+      for (let i = 0; i < 4; i++) { stub([["openrouter.ai", hung()]]); await asCaller(`198.51.100.${30 + i}`, () => throwsWith(() => run("tts", { text: "hello" }))); }
+      ok(elevenLabsBreakerState() === "ok", "an answer from the link between clears the count: four, an answer, four more do not move callers");
+      __resetTtsBreakerForTest();
+      warned.length = 0;
+      const errs = [];
+      for (let i = 0; i < 5; i++) { stub([["openrouter.ai", hung()]]); errs.push(await asCaller(`203.0.113.${i + 1}`, () => throwsWith(() => run("tts", { text: "hello" })))); }
+      ok(elevenLabsBreakerState() === "cooling", `five callers whose calls the link held past our limit open the breaker (state ${elevenLabsBreakerState()})`);
+      ok(errs.every((e) => e?.statusCode === 503 && /^Speech upstream did not answer the speech read within \d+ s/.test(e.message)), "each held call is still its own uncharged 503");
+      const line = warned.find((w) => w.startsWith("[tts] the speech link"));
+      ok(!!line && /did not answer within our limit on 5 calls from 5 callers/.test(line) && !/elevenlabs|fail|outage|is down/i.test(line) && !/203\.0\.113/.test(line), `the log line is neutral and carries no address (${line})`);
+      stub([["openrouter.ai", (_u, init) => { if (isEleven(init)) throw new Error("ElevenLabs must not be called while cooling"); return backupAudio(init); }]]);
+      const next = await asCaller("203.0.113.99", () => run("tts", { text: "hi" }));
+      ok(next.model === FIRST_BACKUP && calls.every((c) => !isEleven(c.init)), `and the next caller is served by the first backup without trying ElevenLabs (${next.model})`);
+    } finally { console.warn = realWarn; keepBreaker = false; }
+  }
   // A backup answering 200 with no audio may have been billed: final, no next backup.
   __resetTtsBreakerForTest();
   stub([["openrouter.ai", (_u, init) => (isEleven(init) ? err(429) : audio(Buffer.alloc(0)))]]);

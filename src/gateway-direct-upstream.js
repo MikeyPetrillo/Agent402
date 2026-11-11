@@ -40,6 +40,9 @@
 // src/gateway-direct-pricebook.js passes (listed prices of both routes, a
 // measured backstop, a private threshold; fails closed).
 
+import { createUnansweredTracker } from "./unanswered-rule.js";
+import { currentCallerKey } from "./request-timing.js";
+
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const MODEL_ID = /^[a-z0-9][a-z0-9._:\/-]{0,127}$/i;
 const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -215,14 +218,16 @@ export function stripVendorExtensions(obj) {
 }
 
 // ---- breaker (per process) ---------------------------------------------------
-// A hung or failing direct upstream would otherwise add its whole timeout to
-// every call of a mapped model. A failure that says the upstream is unwell
-// counts: auth (401/403), quota (402), capacity (429), 5xx, a timeout, a
-// connect error, a malformed or oversized body, a late error in a 200, a
-// missing cost. A refusal of the request itself (any other 4xx: a parameter
-// out of range, a prompt over the context) is the buyer's request, which
-// OpenRouter would refuse too, and does not count; nor does a client that went
-// away or an empty answer. An answered attempt resets the count.
+// A failing direct upstream would otherwise be tried first on every call of a
+// mapped model. Only the upstream's own answer counts (DIRECT_BREAKER_COUNTED):
+// auth (401/403), quota (402), capacity (429), 5xx, a missing endpoint, a
+// malformed or oversized body, a late error in a 200, a missing cost, and a
+// connection its host refused or reset. Our own timeout, a DNS or egress
+// error on our side, a stream cut with no status, a refusal of the request
+// itself (any other 4xx: a parameter out of range, a prompt over the context,
+// which OpenRouter would refuse too), a client that went away and an empty
+// answer prove nothing about the upstream and do not count. An answered
+// attempt resets the count.
 //
 // States: closed; open (no call goes direct) while now < openUntil; half-open
 // once that passes, when the next call that would go direct (it passed the
@@ -235,13 +240,15 @@ const breakerEnv = (name, dflt, min) => {
 };
 const breakerFails = () => breakerEnv("DIRECT_UPSTREAM_BREAKER_FAILS", 3, 1);
 const breakerOpenMs = () => breakerEnv("DIRECT_UPSTREAM_BREAKER_OPEN_MS", 5 * 60_000, 1000);
-/** Failure buckets that say nothing about the upstream's health. */
-export const DIRECT_BREAKER_NOT_COUNTED = Object.freeze(["client_gone", "aborted", "refused", "empty"]);
-const NOT_COUNTED = new Set(DIRECT_BREAKER_NOT_COUNTED);
+/** Failure buckets that are the upstream's own answer: only these count. */
+export const DIRECT_BREAKER_COUNTED = Object.freeze(["auth", "quota", "rate_limited", "unavailable", "server_error", "not_found", "malformed", "late_error", "no_cost", "connect"]);
+/** Failure buckets that say nothing proven about the upstream's health. */
+export const DIRECT_BREAKER_NOT_COUNTED = Object.freeze(["client_gone", "aborted", "refused", "empty", "timeout", "egress", "stream", "other", "unconfigured"]);
+const COUNTED = new Set(DIRECT_BREAKER_COUNTED);
 const blankBreaker = () => ({ fails: 0, openUntil: 0, opens: 0, trialAt: 0, trialId: 0 });
 let breaker = blankBreaker();
 let breakerNow = Date.now;
-export function _resetDirectBreakerForTest() { breaker = blankBreaker(); breakerNow = Date.now; }
+export function _resetDirectBreakerForTest() { breaker = blankBreaker(); breakerNow = Date.now; directUnanswered.clear(); }
 export function _setDirectBreakerNowForTest(fn) { breakerNow = typeof fn === "function" ? fn : Date.now; }
 /** True when a direct attempt may be made now. Once the open period ends one
  *  caller takes the trial; a trial that never reports holds it for at most
@@ -267,10 +274,26 @@ export function directBreakerRelease(grant) {
   if (!grant?.trial || breaker.trialId !== grant.id || !breaker.trialAt) return;
   breaker.trialAt = 0;
 }
-/** The outcome of one direct attempt: ok, or the failure's bucket. */
-export function noteDirectOutcome(ok, reason) {
-  if (ok) { breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
-  if (NOT_COUNTED.has(String(reason))) { breaker.trialAt = 0; return; }
+// Our own timeout on the direct link: one never counts (a long prompt is one
+// caller's input), but the pattern of src/unanswered-rule.js (many calls,
+// several callers, one window, no answer between) opens the breaker so the
+// next callers go to OpenRouter; logged as "did not answer within our limit".
+const directUnanswered = createUnansweredTracker();
+/** The outcome of one direct attempt: ok, or the failure's bucket. `caller`
+ *  is the request's caller key (src/request-timing.js) when known. */
+export function noteDirectOutcome(ok, reason, caller = currentCallerKey()) {
+  if (ok) { directUnanswered.clear(); breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
+  if (String(reason) === "timeout" && directUnanswered.note(caller)) {
+    const st = directUnanswered.state();
+    directUnanswered.clear();
+    console.warn(`[direct-upstream] the direct link did not answer within our limit on ${st.deadlines} calls from ${st.callers} callers; the next calls go to OpenRouter for the open period`);
+    const now = breakerNow();
+    if (!breaker.openUntil || now >= breaker.openUntil) breaker.opens++;
+    breaker.openUntil = now + breakerOpenMs();
+    breaker.trialAt = 0;
+    return;
+  }
+  if (!COUNTED.has(String(reason))) { breaker.trialAt = 0; return; }
   breaker.fails++;
   if (breaker.fails >= breakerFails()) {
     const now = breakerNow();
