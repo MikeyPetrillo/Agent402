@@ -43,7 +43,7 @@ const helper = readFileSync(new URL("./ci-apt-install.sh", import.meta.url), "ut
 ok(DIRECT[2].test("npx playwright install-deps chromium"), "install-deps is caught (control)");
 ok(DIRECT[0].test(helper) && DIRECT[1].test(helper), "the patterns match the helper's own apt-get and Playwright calls (control)");
 ok(!DIRECT.some((re) => re.test(code("# npx playwright install --with-deps chromium\necho hi"))), "a commented-out install is not counted (control)");
-ok(/timeout 170 npx playwright install --with-deps chromium/.test(helper) && /sudo timeout 170 apt-get update -qq && sudo timeout 170 apt-get install /.test(helper) && /for i in 1 2 3/.test(helper) && /--playwright-chromium/.test(helper), "the helper bounds each attempt, retries three times and serves the Playwright install");
+ok(/timeout 170 npx playwright install --with-deps chromium/.test(helper) && /sudo timeout 170 apt-get update -q\b[^\n]*&& sudo timeout 170 apt-get install /.test(helper) && /tail -n 25 "\$LOG"/.test(helper) && /for i in 1 2 3/.test(helper) && /--playwright-chromium/.test(helper), "the helper bounds each attempt, retries three times, prints apt's last lines on a failed attempt and serves the Playwright install");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

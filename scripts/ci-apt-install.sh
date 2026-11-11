@@ -17,9 +17,12 @@ attempt() {
   if [ "$PLAYWRIGHT" = 1 ]; then
     timeout 170 npx playwright install --with-deps chromium
   else
-    sudo timeout 170 apt-get update -qq && sudo timeout 170 apt-get install -y -qq "$@" >/dev/null
+    sudo timeout 170 apt-get update -q >"$LOG" 2>&1 && sudo timeout 170 apt-get install -y -q "$@" >>"$LOG" 2>&1
   fi
 }
+# apt's own output goes to a log that is printed (last lines, with the time
+# taken) when an attempt fails, so a failed install names its cause.
+LOG=$(mktemp)
 printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "2";\n' \
   | sudo tee /etc/apt/apt.conf.d/99-ci-mirror-timeouts >/dev/null
 set_mirrors() {  # $1 = with-azure | no-azure
@@ -32,10 +35,13 @@ set_mirrors() {  # $1 = with-azure | no-azure
 }
 set_mirrors with-azure
 for i in 1 2 3; do
+  t0=$(date +%s)
   if attempt "$@"; then
     exit 0
   fi
-  echo "apt install attempt $i failed or stalled (apt mirror?) - retrying without the azure mirror"
+  echo "apt install attempt $i failed or stalled after $(( $(date +%s) - t0 )) s - retrying without the azure mirror; apt's last lines:"
+  tail -n 25 "$LOG" 2>/dev/null | sed 's/^/  | /'
+  [ -f /etc/apt/apt-mirrors.txt ] && sed 's/^/  mirror: /' /etc/apt/apt-mirrors.txt
   # A stalled apt-get may outlive the killed parent (sudo can detach it from
   # the group); clear it so the retry is not blocked on its lock.
   sudo pkill -TERM -f 'apt-get' 2>/dev/null || true
