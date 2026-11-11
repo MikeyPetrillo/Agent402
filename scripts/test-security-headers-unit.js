@@ -6,7 +6,7 @@
 // middleware in a throwaway Express app with the four answer shapes.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import express from "express";
-import { securityHeaders, headIsHtml } from "../src/security-headers.js";
+import { securityHeaders, headIsHtml, clientErrorHead, answerClientError } from "../src/security-headers.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -82,6 +82,39 @@ const fake = { getHeader: () => "application/json" };
 ok(headIsHtml(fake, [200, { "content-type": "TEXT/HTML; charset=utf-8" }]), "headIsHtml reads a header object passed to writeHead, any case");
 ok(!headIsHtml(fake, [200, "OK", ["content-type", "text/html"]]), "headIsHtml ignores a non-object argument");
 ok(!headIsHtml({ getHeader: () => "text/htmlish" }, [200]), "headIsHtml needs a word boundary after text/html");
+
+// A request the HTTP parser refuses: the status line Node writes by default
+// for that error, with the headers every answer carries.
+const statusOf = (code) => /^HTTP\/1\.1 (\d{3} [^\r]*)\r\n/.exec(clientErrorHead(code))?.[1];
+ok(statusOf("ERR_HTTP_REQUEST_TIMEOUT") === "408 Request Timeout", `a request that never finished arriving answers 408 (${statusOf("ERR_HTTP_REQUEST_TIMEOUT")})`);
+ok(statusOf("HPE_CHUNK_EXTENSIONS_OVERFLOW") === "413 Payload Too Large", `chunk extensions past the limit answer 413 (${statusOf("HPE_CHUNK_EXTENSIONS_OVERFLOW")})`);
+ok(statusOf("HPE_HEADER_OVERFLOW") === "431 Request Header Fields Too Large", `a header block past the limit answers 431 (${statusOf("HPE_HEADER_OVERFLOW")})`);
+ok(["HPE_INVALID_METHOD", undefined, "toString", "__proto__", 7].every((c) => statusOf(c) === "400 Bad Request"), "any other parser error, or a code that is no own key, answers 400");
+{
+  const head = clientErrorHead("HPE_INVALID_METHOD").toLowerCase();
+  ok(ALWAYS.every((n) => head.includes(`\r\n${n}: `)) && head.includes("\r\ncontent-length: 0\r\n") && head.includes("\r\nconnection: close\r\n") && head.endsWith("\r\n\r\n"), "the parser answer carries the three headers, an empty body and closes");
+}
+// Nothing is written into an answer already under way, or to a socket that
+// can no longer take one; the socket is destroyed in every case.
+const fakeSocket = (o) => ({ writes: [], destroyed: 0, write(x) { this.writes.push(String(x)); }, destroy() { this.destroyed++; }, ...o });
+{
+  const err = Object.assign(new Error("bad"), { code: "HPE_INVALID_METHOD" });
+  const fresh = fakeSocket({ writable: true });
+  answerClientError(err, fresh);
+  ok(fresh.writes.length === 1 && fresh.writes[0].startsWith("HTTP/1.1 400 ") && fresh.destroyed === 1, "a socket with no answer under way gets the parser answer, then is closed");
+  const idle = fakeSocket({ writable: true, _httpMessage: { _headerSent: false } });
+  answerClientError(err, idle);
+  ok(idle.writes.length === 1 && idle.destroyed === 1, "a socket whose answer has not sent its head gets the parser answer");
+  const busy = fakeSocket({ writable: true, _httpMessage: { _headerSent: true } });
+  answerClientError(err, busy);
+  ok(busy.writes.length === 0 && busy.destroyed === 1, "a socket whose answer already sent its head gets nothing written into it, and is closed");
+  const gone = fakeSocket({ writable: false });
+  answerClientError(err, gone);
+  ok(gone.writes.length === 0 && gone.destroyed === 1, "a socket that can no longer be written gets nothing, and is closed");
+  const throws = fakeSocket({ writable: true, write() { throw new Error("EPIPE"); } });
+  answerClientError(err, throws);
+  ok(throws.destroyed === 1, "a write that throws still closes the socket");
+}
 
 server.close();
 console.log(`${pass} passed, ${fail} failed`);
