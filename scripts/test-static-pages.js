@@ -393,10 +393,13 @@ try {
     ok(/<a class="ml-nav-link[^"]*" href="\/tools">Tools /.test(navHtml), `${p} nav names /tools "Tools"`);
     ok(/href="\/tools" style="color:var\(--muted\);text-decoration:none;">tools<\/a>/.test(footHtml), `${p} footer names /tools "tools"`);
     ok(!/>catalog</.test(chrome), `${p} nav/footer never label /tools "catalog"`);
-    ok(!/href="\/company["#]/.test(chrome), `${p} nav/footer carries no /company link`);
+    // Company is a plain top-level header link (with Pricing and Status), not a footer row.
+    ok(/<a class="ml-nav-link[^"]*" href="\/company">Company<\/a>/.test(navHtml) && !/href="\/company["#]/.test(footHtml), `${p} header links /company as a plain link; the footer does not repeat it`);
     ok(/© \d{4} <a href="https:\/\/havok\.holdings" rel="noopener"[^>]*>Havok Holdings LLC<\/a>/.test(footHtml), `${p} footer links the copyright entity to https://havok.holdings`);
-    // Reports stay one click away: the CTA everywhere but /reports itself, and the footer.
-    ok(!/class="ml-nav-cta"/.test(navHtml) && /href="\/reports"[^>]*>\s*Reports/.test(navHtml), `${p} nav lists Reports as a plain link and carries no button`);
+    // Reports stay a plain link; the header's one button is the primary action
+    // (src/ledger-chrome.js NAV_PRIMARY_ACTION), left to the hero on the home page.
+    const navButtons = [...navHtml.matchAll(/<a class="btn btn-primary[^"]*" href="([^"]+)">([^<]*)<\/a>/g)].map((m) => `${m[2]} ${m[1]}`);
+    ok(/href="\/reports"[^>]*>\s*Reports/.test(navHtml) && (p === "/" ? navButtons.length === 0 : new Set(navButtons).size === 1 && navButtons[0] === "Add to your agent /docs#add"), `${p} nav lists Reports as a plain link and its one button is the primary action (${navButtons.join(" | ") || "none"})`);
     ok(footHtml.includes('href="/reports"') && footHtml.includes('href="/monitors"'), `${p} footer links reports and monitors`);
   }
   const reports = await (await fetch(`${BASE}/reports`)).text();

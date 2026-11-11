@@ -320,6 +320,10 @@ body { transition: background-color .18s ease, color .18s ease; }
 .ml-mm-chip { display:block; padding:9px 12px; border:1px solid var(--hairline); border-radius:var(--radius); background:var(--card); color:var(--ink); text-decoration:none; font-family:var(--font-mono); font-size:var(--fs-sm); text-align:center; }
 .ml-mm-chip.ml-mm-active { border-color:var(--accent); color:var(--accent); }
 .ml-mm-link:hover, .ml-mm-link:active { background:var(--card-zebra); }
+/* The header's primary action sits in the bar down to 600px, then first in the
+   tap menu, so exactly one copy shows at any width. */
+.ml-mm-cta { display:none; padding:14px 20px; border-bottom:1px solid var(--hairline); }
+@media (max-width:600px){ .ml-nav-cta { display:none !important; } .ml-mm-cta { display:block; } .ml-mm-cta .btn { width:100%; } }
 .ml-mm-active { color:var(--accent); font-weight:700; }
 /* Two-stage collapse (Aug 2026 revamp): the link row + github hide first at
    1100px and the burger takes over; the CTA button keeps its own slot next to
@@ -639,8 +643,7 @@ const DECIDE_NAV_ITEM = { href: "/decide", label: "Decide" };
 const NAV_ZONES = [
   [
     // Buy side: our tools, the report products (/reports also offers
-    // monitors), then every seller's. A plain link, not a button: the header
-    // carries no call to action of its own.
+    // monitors), then every seller's.
     { href: "/tools", label: "Tools", panel: "tools" },
     { href: "/reports", label: "Reports" },
     // ONE marketplace word: the x402 index, the MPP index and the leaderboard
@@ -654,7 +657,19 @@ const NAV_ZONES = [
     // so its panel opens right-aligned.
     { href: "/docs", label: "Docs", panel: "docs", align: "end" },
   ],
+  // The three a newcomer looks for first, as plain links. Pricing stays in the
+  // Tools panel and Status in the Docs panel too.
+  [
+    { href: "/pricing", label: "Pricing" },
+    { href: "/company", label: "Company" },
+    { href: "/status", label: "Status" },
+  ],
 ];
+
+// The header's one primary action: the home hero's own primary, so a
+// newcomer sees the same next step on every page. Left out on the home page,
+// where the hero carries it (one primary per view).
+export const NAV_PRIMARY_ACTION = Object.freeze({ href: "/docs#add", label: "Add to your agent" });
 
 // Fallback by-chain rows used whenever no live index-snapshot data is wired
 // (offline unit tests, early boot, a throwing/null provider) - the dropdown
@@ -856,6 +871,12 @@ function mobileMenuHtml(chainInfo, activePath) {
   // other destination below the fold on a phone); each still a real <a href>
   // (test-nav-chains asserts every rail's href is present here).
   return `<div id="ml-mobile-menu" class="ml-mobile-menu">
+    ${activePath === "" ? "" : `<div class="ml-mm-cta"><a class="btn btn-primary" href="${esc(NAV_PRIMARY_ACTION.href)}">${esc(NAV_PRIMARY_ACTION.label)}</a></div>`}
+    <div class="ml-mm-group">
+      ${mmLink("/pricing", "pricing", activePath === "/pricing")}
+      ${mmLink("/company", "company", activePath === "/company")}
+      ${mmLink("/status", "status · uptime", activePath === "/status")}
+    </div>
     <div class="ml-mm-group">${mmLink("/reports", "reports · finished reports and monitors", activePath === "/reports")}</div>
     ${DECIDE_LIVE ? `<div class="ml-mm-h">Decide</div>
     <div class="ml-mm-group">
@@ -869,7 +890,6 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/tools/category/llm", "images, video & LLM gateway", activePath === "/tools/category/llm")}
       ${mmLink("/speech", "speech & transcription", activePath === "/speech")}
       ${mmLink("/playground", "playground · free", activePath === "/playground")}
-      ${mmLink("/pricing", "pricing", activePath === "/pricing")}
     </div>
     <div class="ml-mm-h">Marketplaces</div>
     <div class="ml-mm-group">
@@ -901,23 +921,15 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/changelog", "changelog", activePath === "/changelog")}
       ${mmLink("https://live.agent402.tools", "live · payments as they settle", false)}
       ${mmLink("/revenue", "transactions · on-chain", activePath === "/revenue")}
-      ${mmLink("/status", "status · uptime", activePath === "/status")}
       ${mmLink("/integrations", "integrations", activePath === "/integrations")}
       ${mmLink("/llms.txt", "llms.txt · for agents", false)}
     </div>
   </div>`;
 }
 
-// Nav CTA is "List your API →" -> /sell (Aug 2026 revamp): seller signup is
-// now priority 1 across the whole site (every page's nav CTA points at
-// /sell), replacing the old buyer-facing "ADD TO CLAUDE" -> /docs#add button.
-// Suppressed on / and /sell themselves, where each page's own hero already
-// carries an equivalent CTA - nav + hero both on screen at first paint with
-// the same label/destination reads as showing the same button twice. The
-// /sell page is expected to grow its own contextual nav-CTA label (e.g.
-// "REGISTER NOW ->") once its body is ported in a later stage; suppressing
-// for now is the conservative choice rather than guessing at an anchor that
-// doesn't exist yet.
+// The header: Tools, Reports, Marketplace | Sell, Docs | Pricing, Company,
+// Status, then the one primary action (NAV_PRIMARY_ACTION), which the home
+// page leaves to its hero.
 function nav(activePath) {
   const chainInfo = chainRows();
   const groupHrefs = {
@@ -926,13 +938,16 @@ function nav(activePath) {
     // its own top-level item (not folded into this set) since it's no longer
     // inside the marketplace panel either.
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
-    docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/status", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
+    // /status and /pricing light their own top-level link, not a panel's.
+    docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
     sell: new Set(["/sell", "/tollbooth", "/contribute"]),
-    tools: new Set(["/tools", "/skills", "/speech", "/playground", "/pricing"]),
+    tools: new Set(["/tools", "/skills", "/speech", "/playground"]),
   };
 
   const zone1 = (DECIDE_LIVE ? [DECIDE_NAV_ITEM, ...NAV_ZONES[0]] : NAV_ZONES[0]).map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
   const zone2 = NAV_ZONES[1].map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
+  const zone3 = NAV_ZONES[2].map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
+  const cta = activePath === "" ? "" : `<a class="btn btn-primary btn-sm ml-nav-cta" href="${esc(NAV_PRIMARY_ACTION.href)}">${esc(NAV_PRIMARY_ACTION.label)}</a>`;
   const divider = `<span style="width:1px;height:15px;background:var(--hairline);flex:none;"></span>`;
 
   return `<nav style="border-bottom:1px solid var(--hairline);background:var(--nav-bg);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);position:sticky;top:0;z-index:50;">
@@ -945,12 +960,15 @@ function nav(activePath) {
       ${zone1}
       ${divider}
       ${zone2}
+      ${divider}
+      ${zone3}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
       <button type="button" class="ml-theme-toggle" aria-label="Switch between dark and light theme" title="Theme">
         <svg class="ml-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
         <svg class="ml-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
       </button>
+      ${cta}
       <button type="button" class="ml-burger" aria-label="Open menu" aria-expanded="false">
         <svg class="ml-burger-open" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
         <svg class="ml-burger-close" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>

@@ -137,14 +137,15 @@ function assertAccess(label, text, powCount, wires) {
   ok(offAgents.includes("the x402 offer (`PAYMENT-REQUIRED`)") && !offAgents.includes("both offers"), "unit: MPP off, /agents.md Connect names the x402 offer only");
   const { llmsTxt } = await import("../src/seo.js");
   const llmsSummary = () => llmsTxt(B, c).split("\n").find((l) => l.startsWith("> ")) || "";
-  { const s = llmsSummary(); ok(s.includes("payable over **x402** ") && !/MPP/.test(s), "unit: MPP off, the llms.txt summary names x402 only"); }
+  const { leadSentence } = await import("../src/positioning.js");
+  { const s = llmsSummary(); ok(s.startsWith(`> ${leadSentence({ mpp: false })}`) && !/MPP/.test(s), "unit: MPP off, the llms.txt summary (the lead sentence) names x402 only"); }
   process.env.MPP_SECRET_KEY = "unit";
   ok(paidWiresPhrase() === `${coins} over x402 or MPP`, `unit: MPP on, the access line adds MPP (${paidWiresPhrase()})`);
   ok(frontDoorJson(c, B).access.includes(`in ${coins} over x402 or MPP,`), "unit: MPP on, the memoized JSON follows the switch");
   const onAgents = agentsMd(B, c);
   ok(onAgents.includes("both offers (x402 `PAYMENT-REQUIRED` and MPP `WWW-Authenticate: Payment`)"), "unit: MPP on, /agents.md Connect names both offers (the memo follows the switch)");
   ok(!/Tempo push payment/.test(onAgents), "unit: MPP on without Tempo, no Tempo push sentence");
-  { const s = llmsSummary(); ok(s.includes("**x402 or MPP**") && /both offers/.test(s) && /MPP on Base[^)]*\(USDC\)/.test(s) && !/Tempo/.test(s), "unit: MPP on (EVM), the llms.txt summary names MPP and its EVM rails, not Tempo"); }
+  { const s = llmsSummary(); ok(s.startsWith(`> ${leadSentence({ mpp: true })}`) && /both offers/.test(s) && /MPP on Base[^)]*\(USDC\)/.test(s) && !/Tempo/.test(s), "unit: MPP on (EVM), the llms.txt summary names MPP and its EVM rails, not Tempo"); }
   process.env.TEMPO_API_KEY = "unit"; process.env.TEMPO_RECIPIENT_ADDRESS = "0x000000000000000000000000000000000000dEaD";
   const tempoAgents = agentsMd(B, c);
   ok(paidWiresPhrase().includes("Tempo"), "unit: a relay key and a recipient turn Tempo on");

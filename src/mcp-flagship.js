@@ -11,6 +11,7 @@
 // Exactly 8 catalog flagships so hosted tools/list stays ~15 with meta tools
 // (Glama's well-scoped band is 3–15).
 
+import { LEAD_SENTENCE } from "./positioning.js";
 
 export const FLAGSHIP_SLUGS = [
   "search",
@@ -119,7 +120,7 @@ export const FLAGSHIP_WRITERS = new Set(["memory-write", "decide-execute"]);
 
 /** initialize.serverInfo description (MCP Implementation.description). */
 export const MCP_SERVER_DESCRIPTION =
-  "Agent402 - pay-per-call tools and models for AI agents: live web search and cited answers, news, browser render, market data, speech-to-text, wallet-keyed memory, plus 500+ long-tail tools via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.";
+  `${LEAD_SENTENCE} Flagships: live web search and cited answers, news, browser render, market data, speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via x402 or MPP (Machine Payments Protocol) on the same 402, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.`;
 
 /** initialize.serverInfo.websiteUrl */
 export const MCP_SERVER_WEBSITE = "https://agent402.tools";
@@ -577,7 +578,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
-    "Agent402 is the applied layer of Agentic Finance: a catalog of 500+ tools for AI agents: per-call tools and metered models, paid in USDC over x402 or MPP, or free through proof-of-work for the pure-CPU tools.",
+    `${LEAD_SENTENCE} Per-call tools and metered models, paid in USDC, or free through proof-of-work for the pure-CPU tools; the applied layer of Agentic Finance.`,
     "Flagship tools: web.search (live web search), web.answer (answers with citations), web.news, browser.render, market.quote, audio.transcribe, memory.read, memory.write.",
     "Long tail: catalog.search lists tools by keyword, catalog.find returns the best match with its input schema and price, catalog.call runs a tool by slug.",
     // Only where the decide tools are listed: an instruction must never name a

@@ -1,5 +1,7 @@
 # agent402-client
 
+Agent402 is a catalog of 500+ tools that AI agents find, pay for per request over x402 or MPP, and call with no account or API key.
+
 A tiny buyer-side client for [Agent402](https://agent402.tools) (and any Agent402
 instance) - the buy side of [Agentic Finance](https://agent402.tools/agentic-finance),
 agents paying per request over x402 or MPP. **Resolve a task to a tool, then call it - with payment handled for

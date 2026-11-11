@@ -695,6 +695,7 @@ import { adapterDocsIndex, adapterRedirectTarget } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
 import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore, ASSET_VERSION } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";
+import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
 import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
@@ -3839,9 +3840,35 @@ function retiredPage(res, gone) {
 }
 const htmlCache = (res, maxAge, swr) =>
   res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
+// The home hero's first-party figures (src/home-proof.js). Every source is a
+// value another surface already keeps, read without waiting: the /status
+// snapshot through a cell that refreshes in the background, the /revenue
+// external count's memo, the rails list, and the /api/stats performance
+// cache. A source with nothing yet leaves its figure out of the page.
+const homeUptimeCell = proofCell(async () => {
+  const snap = await cachedStatusSnapshot();
+  const w = (snap?.components || []).find((c) => c.key === "api")?.windows?.["90d"];
+  return w && w.observed && Number.isFinite(w.pct) ? { value: { pct: w.pct, observed: w.observed, windowDays: 90 }, at: Date.parse(snap.generatedAt) || Date.now() } : null;
+});
+function homeProof() {
+  const settled = settledOnChainCount();
+  const external = settledExternalCount();
+  const perf = getPerformance24h();
+  return {
+    settled,
+    external,
+    figures: homeProofFigures({
+      uptime: homeUptimeCell.peek(),
+      external: external && __settledMemo.at ? { value: { count: external.count }, at: __settledMemo.at } : null,
+      chains: { value: { count: RAILS.length }, at: Date.now() },
+      latency: perf && perfCache.at ? { value: { p50Ms: perf.p50LatencyMs }, at: perfCache.at } : null,
+    }),
+  };
+}
 app.get("/", (_req, res) => {
+  const proof = homeProof();
   htmlCache(res, 60, 300).send(
-    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS, { settledOnChain: settledOnChainCount(), external: settledExternalCount() })
+    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS, { settledOnChain: proof.settled, external: proof.external, proof: proof.figures })
   );
 });
 // /marketplaces — legacy surface, merged into /marketplace (301 keeps SEO equity).
@@ -9983,6 +10010,10 @@ app.get("/api/stats", (_req, res) => {
   const perf = getPerformance24h();
   if (perf) base.performance24h = perf;
   base.settledOnChain = settledOnChainCount();
+  // Payments from buyers outside our own wallets (the /revenue headline and
+  // the home hero's paid figure), with the time the count was read.
+  const ext = settledExternalCount();
+  if (ext && __settledMemo.at) base.settledExternal = { count: ext.count, asOf: new Date(__settledMemo.at).toISOString() };
   // Every chain this instance takes and the MPP methods its 402 offers, not
   // only the primary network (the same sources /api/pricing and the manifest read).
   base.payment = { ...base.payment, networks: publicNetworks(), mpp: mppMethodsSummary() };
