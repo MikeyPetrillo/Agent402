@@ -6,6 +6,65 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-11 (whose side failed, settle verdicts and rail reasons)
+Payments:
+- A paid /v1 call whose settlement failed counts toward the paying wallet's
+  settle refusal only when the failure is a verdict on that payment: too
+  little of the asset, a bad signature, an authorization already used or
+  expired, or a refused payload. A timeout, a store failure or a facilitator
+  error on our side does not count against the wallet. Settlements of unknown
+  cause refuse the wallet only at three times that count, and that answer says
+  only that settlement did not complete.
+- A payment whose verification could not be completed (a timeout, a connection
+  that failed, a facilitator 5xx, 408 or 429, or an on-chain signature check
+  that could not finish) answers reason not-checked with retry same-payment
+  and Retry-After 5, before any other reading of the error: nothing was
+  charged, and the same payment can be sent again.
+- On Tempo, a payment our server could not read on chain answers 503
+  not-checked, nothing charged, and the same credential can be sent again; the
+  client keeps Tempo first.
+- /api/rails gives each payment network left off at startup a reason word
+  (probe-timeout, read-failed, not-advertised or config) and, while the
+  batched option is on, its status and the networks it dropped. The startup
+  read of each facilitator takes up to three tries when it times out and two
+  when it answers with an error.
+Router:
+- The seller index keeps a seller routable when our own read of it fails (our
+  time limit, a connection that did not finish, our resolver, our byte cap)
+  and its last completed crawl succeeded within 6 hours. ?seller= and the
+  index rows carry lastReadIncomplete and errorKind, the seller dossier says
+  our read did not complete, and a paywall probe that read no status records
+  no verdict.
+- Route-and-execute counts one delivery strike per distinct request, and a
+  seller's 500 whose body names the request's own input is not a strike. No
+  refusal is noted against a seller for a payment method our buyer cannot
+  make, for a challenge that differs only in the caller's query, or for a
+  validity window we shortened.
+- A seller's payment count read on Algorand or Solana that did not complete
+  reads unknown, never zero.
+Tools:
+- A tool error names an upstream as failing only when that upstream answered
+  so. Our own read limit, a call budget spent before any request was sent, our
+  DNS lookup, our own key, allowance or request pacing, and our own internal
+  errors say they are ours; an input long enough to outlast the limit is told
+  to send a shorter one, and a caller's URL that did not answer is told to
+  check it or retry. The hosted connector's free answers read the same.
+- The onchain query health check keeps a failing reading for one minute, then
+  reads the service again.
+- Stock quotes keep reading the consolidated dataset after a single refused
+  request, and the three-venue note says the consolidated dataset was
+  unavailable only when it answered so for that read.
+- Text to speech keeps its primary voices when long texts reach our own time
+  limit; later callers move to the backup voices when the primary link stops
+  answering for several callers. Model calls on the direct upstream link move
+  to the fallback route on the upstream's own answers, not on our timeout or
+  DNS failure.
+Surfaces:
+- /api/gateway-status carries topBuyerFailures (ok, alert, unknown or off);
+  upstreamHealth reads unanswered when one upstream did not answer within our
+  limit for several callers while others answered, and facilitatorFunds reads
+  unknown when a settlement signer's balance could not be read.
+
 ### 2026-11-11 (spend alarm, funding refusals and connector answers)
 Gateway:
 - A call naming qwen/qwen-2.5-7b-instruct, which has left the upstream model
