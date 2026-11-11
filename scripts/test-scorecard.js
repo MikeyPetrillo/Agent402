@@ -196,6 +196,18 @@ ok(!JSON.stringify(body).includes("0.75") && !JSON.stringify(body).includes("0.2
 ok(!/"payer"|"payers"/.test(JSON.stringify(pub)), "no payer field in the body");
 ok(page.includes("&lt;3") && page.includes("/api/scorecard") && page.includes("November 2026") && /<h1[^>]*>Who pays, month by month\.<\/h1>/.test(page), "the page renders the months, the bucket and its machine-readable link");
 
+// Phone width (DESIGN.md "Layout", test-wrap-quality at 360px): the By network
+// grid's one column may shrink below its content, and each network's figures
+// sit in one-line cells of a table that scrolls in its own wrapper, never in a
+// tag run whose one tag is wider than a phone's card.
+{
+  const sect = (page.match(/<section[^>]*>\s*<h2[^>]*>By network<\/h2>[\s\S]*?<\/section>/) || [""])[0];
+  ok(/^<section[^>]*display:grid;grid-template-columns:minmax\(0,1fr\);/.test(sect), "the By network grid column is minmax(0,1fr), so a wide card cannot widen the page");
+  const card = (sect.match(/<h3[^>]*>November 2026[\s\S]*?<\/table><\/div>/) || [""])[0];
+  const cells = [...card.matchAll(/<td style="([^"]*)">/g)].map((m) => m[1]);
+  ok(card && /<div style="overflow-x:auto;"><table/.test(card) && cells.length >= 4 && cells.every((c) => c.includes("white-space:nowrap")) && !/class="ml-meta"[^>]*>[^<]*<span>[^<]*calls,/.test(sect), `each network's figures are one-line cells of a scrolling table (${cells.length} cells)`);
+}
+
 // The refresh loop: computes once in flight, keeps the last figures on a failed read.
 {
   let n = 0, fail = false;

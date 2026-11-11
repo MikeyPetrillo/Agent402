@@ -195,13 +195,20 @@ function monthRowHtml(m) {
 function monthDetailHtml(m) {
   if (m.withheld) return `<p style="margin:0;color:var(--muted);font-size:var(--fs-base);">${esc(monthName(m.month))}: fewer than 3 paying wallets, so only that is published.</p>`;
   if (!m.wallets) return `<p style="margin:0;color:var(--muted);font-size:var(--fs-base);">${esc(monthName(m.month))}: no outside paid calls recorded.</p>`;
-  const nets = m.networks.map((n) => `<span>${esc(n.network)}${n.includes ? ` (${esc(n.includes.join(", "))})` : ""}: ${esc(cell(n.settledCalls))} calls, ${esc(usdCell(n.usd))}, ${esc(cell(n.wallets))} wallets</span>`).join("");
+  // One row per network, every cell on one line: the figures stay whole and a
+  // phone scrolls the table in its own wrapper (DESIGN.md "Layout").
+  const td = (v, num) => `<td style="padding:6px 12px 6px 0;white-space:nowrap;${num ? "text-align:right;font-variant-numeric:tabular-nums;" : ""}">${v}</td>`;
+  const th = (v, num) => `<th style="padding:0 12px 6px 0;font-weight:400;white-space:nowrap;text-align:${num ? "right" : "left"};">${v}</th>`;
+  const nets = m.networks.map((n) => `<tr>${td(`${esc(n.network)}${n.includes ? ` <span style="color:var(--faint);">(${esc(n.includes.join(", "))})</span>` : ""}`)}${td(esc(cell(n.settledCalls)), true)}${td(esc(usdCell(n.usd)), true)}${td(esc(cell(n.wallets)), true)}</tr>`).join("");
   const proof = m.proof?.samples?.length
     ? m.proof.samples.map((s) => `<a href="${esc(s.url)}" rel="noopener" style="color:var(--ink);word-break:break-all;">${esc(s.chain || s.network)} ${esc(s.tx.slice(0, 10))}...${esc(s.tx.slice(-6))}</a>`).join("")
     : "";
   return `<div style="background:var(--card);border:1px solid var(--hairline);border-radius:var(--radius);padding:18px 22px;">
     <h3 style="font-weight:600;font-size:var(--fs-lg);margin:0 0 10px;color:var(--ink);">${esc(monthName(m.month))}${m.monthToDate ? " to date" : ""}</h3>
-    <p class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);margin:0;">${nets}</p>
+    <div style="overflow-x:auto;"><table style="border-collapse:collapse;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);">
+      <thead><tr style="font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.12em;color:var(--faint);">${th("network")}${th("calls", true)}${th("usd", true)}${th("wallets", true)}</tr></thead>
+      <tbody>${nets}</tbody>
+    </table></div>
     ${proof ? `<p class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-sm);margin:10px 0 0;">${proof}</p>` : ""}
   </div>`;
 }
@@ -237,7 +244,7 @@ export function scorecardPage(baseUrl, body) {
   </div>
   <p class="ml-meta" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;"><span>as of ${esc(asOf)}</span><span>refreshes every ${esc(String(Math.round((body?.refreshesEverySeconds || 0) / 60)))} min</span></p>
 </section>
-<section style="max-width:1180px;margin:0 auto;padding:40px 30px 56px;display:grid;gap:14px;">
+<section style="max-width:1180px;margin:0 auto;padding:40px 30px 56px;display:grid;grid-template-columns:minmax(0,1fr);gap:14px;">
   <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 4px;color:var(--ink);">By network</h2>
   ${months.map(monthDetailHtml).join("")}
   <p class="ml-measure" style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:10px 0 0;">Returning wallets also paid in an earlier month; 2+ days counts wallets with paid calls on two or more days of the month. Every settlement is checkable on chain: our receiving wallets and transactions by rail are on <a href="/revenue" style="color:var(--ink);">/revenue</a>, metered receipts on <a href="/proof" style="color:var(--ink);">/proof</a>.</p>

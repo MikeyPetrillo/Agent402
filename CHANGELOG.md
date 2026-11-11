@@ -26,7 +26,8 @@ Site:
   are at least 24px, and code blocks share one component with a copy button.
 Payments:
 - GET /api/refunds?tx=<hash> looks up a refund by settlement transaction, with
-  found, priceUsd and txUrl fields; /api/refunds/lookup keeps answering.
+  found, priceUsd and txUrl fields; the /api/refunds/lookup path answers the
+  same lookup.
 - The /v1 settle breaker keys a Solana, Algorand or Stellar payment by its
   signed payer.
 Surfaces:

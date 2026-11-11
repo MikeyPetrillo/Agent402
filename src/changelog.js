@@ -10,7 +10,7 @@ const ENTRIES = [
       "Site: the home page hero shows uptime, external payments, the chains live and median latency, rendered on the server. The site navigation adds Pricing, Company and Status and one primary action, Add to your agent.",
       "Site: one lead sentence describes Agent402 on the home page, README, llms.txt, the MCP connector and the package READMEs in the repository.",
       "Site: design: form controls share one border token, every control shows a 2px focus ring, pages open with a skip link, prose reads at 16px, small targets are at least 24px, and code blocks share one component with a copy button.",
-      "Payments: GET /api/refunds?tx=<hash> looks up a refund by settlement transaction, with found, priceUsd and txUrl fields; /api/refunds/lookup keeps answering.",
+      "Payments: GET /api/refunds?tx=<hash> looks up a refund by settlement transaction, with found, priceUsd and txUrl fields; the /api/refunds/lookup path answers the same lookup.",
       "Payments: the /v1 settle breaker keys a Solana, Algorand or Stellar payment by its signed payer.",
       "Surfaces: /api/gateway-status carries onchainSqlBusy (ok, alert, unknown or off): alert while a top paying buyer was recently told the onchain query service is busy. Busy refusals are counted per day on the operator views; the query limit is unchanged.",
     ],
