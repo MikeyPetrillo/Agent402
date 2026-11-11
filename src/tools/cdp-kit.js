@@ -179,51 +179,79 @@ export function sqlShape(sql) {
 const NO_OUTCOME = Symbol.for("agent402.noOutcome");
 
 // Whether the query service answers a known-good query, read only when a
-// buyer's query fails slowly (at most once per HEALTH_TTL_MS), so a query
-// too heavy for the service is told apart from an outage of the service.
-// The known-good query reads the table the buyer's query read, so a table
-// that fails on its own is not read as the buyer's fault.
+// buyer's query fails slowly, so a query too heavy for the service is told
+// apart from an outage of the service. The known-good query reads the table
+// the buyer's query read, so a table that fails on its own is not read as
+// the buyer's fault. Three verdicts:
+//   "ok"       it answered 2xx: kept HEALTH_TTL_MS.
+//   "failing"  it answered a 5xx: the service is failing; kept HEALTH_TTL_MS.
+//   "unknown"  our own check timed out, could not reach the host, or got any
+//              other answer: nothing is known about the service, so it is
+//              never read as an outage. Kept HEALTH_UNKNOWN_TTL_MS only, so a
+//              burst of slow failures sends one check, not one per call.
+// The Solana check is bounded by block_time, the table's only pruning key
+// (see solanaRangeRefusal), so it reads the newest rows and nothing else.
 export const QUERY_HEALTH_SQL = Object.freeze({
-  solana: "SELECT block_slot FROM solana.instructions LIMIT 1",
+  solana: "SELECT block_slot FROM solana.instructions WHERE block_time > now() - INTERVAL 1 DAY LIMIT 1",
   base: "SELECT block_number FROM base.blocks LIMIT 1",
 });
 export const HEALTH_TTL_MS = 5 * 60_000;
-export const HEALTH_TIMEOUT_MS = 5_000;
+export const HEALTH_UNKNOWN_TTL_MS = 30_000;
+// The service's gateway answers a query that runs past its window with a
+// 502 at about 10 s, so a check given 12 s always gets the service's own
+// answer (rows, or that 502) rather than our timeout, while a busy service
+// still has its full window. The buyer's call is then at most CDP_READ_MS
+// plus this, far inside the payment-window budget the handler runs under,
+// which the check's cap also composes with.
+export const HEALTH_TIMEOUT_MS = 12_000;
 let healthTimeoutMs = HEALTH_TIMEOUT_MS;
-const queryHealth = new Map(); // table -> { ok, at }
+const queryHealth = new Map(); // table -> { verdict, at }
 const healthInflight = new Map(); // table -> promise
 function healthTableOf(sql) { return /\bsolana\s*\.\s*instructions\b/i.test(sqlNorm(sql)) ? "solana" : "base"; }
-async function queryServiceHealthy(sql = "", now = Date.now()) {
+const healthTtl = (verdict) => verdict === "unknown" ? HEALTH_UNKNOWN_TTL_MS : HEALTH_TTL_MS;
+async function queryServiceHealth(sql = "", now = Date.now()) {
   const table = healthTableOf(sql);
   const known = queryHealth.get(table);
-  if (known && now - known.at < HEALTH_TTL_MS) return known.ok;
+  if (known && now - known.at < healthTtl(known.verdict)) return known.verdict;
   if (!healthInflight.has(table)) {
     healthInflight.set(table, (async () => {
-      let ok = false;
+      let verdict = "unknown";
+      // Its own cap, composed with the buyer's remaining budget: it runs on
+      // an error path, after the buyer's call. Its outcome is logged here, as
+      // our check's, never as the service's.
+      const ctx = { label: "Coinbase Developer Platform", step: "query health", timeoutMs: healthTimeoutMs, tag: null };
       try {
         const path = "/platform/v2/data/query/run";
         const jwt = await mintCdpJwt({ method: "POST", path });
-        // Its own budget and timeout: it runs on an error path, after the
-        // buyer's call, and must not outlive a short wait.
         const r = await upstreamFetch(`https://${CDP_HOST}${path}`, {
           method: "POST",
           headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
           body: JSON.stringify({ sql: QUERY_HEALTH_SQL[table] }),
-        }, { label: "Coinbase Developer Platform", step: "query health", timeoutMs: healthTimeoutMs, tag: "[cdp]", budget: null });
-        ok = r.ok;
+        }, ctx);
         await r.text().catch(() => "");
-      } catch { ok = false; }
-      queryHealth.set(table, { ok, at: Date.now() });
-      return ok;
+        verdict = r.ok ? "ok" : r.status >= 500 ? "failing" : "unknown";
+        if (!r.ok) console.warn(`[cdp] query health: the known-good ${table} query answered HTTP ${r.status}: ${verdict === "failing" ? "the query service is failing" : "verdict unknown"}`);
+      } catch (e) {
+        verdict = "unknown";
+        console.warn(e?.upstreamFailure === "deadline"
+          ? `[cdp] query health: our check of the ${table} table timed out after ${ctx.cap ?? healthTimeoutMs} ms; verdict unknown (a timeout of our check, not a failure of the service)`
+          : `[cdp] query health: our check of the ${table} table could not be sent (${e?.upstreamFailure || e?.name || "error"}); verdict unknown`);
+      }
+      queryHealth.set(table, { verdict, at: Date.now() });
+      return verdict;
     })().finally(() => { healthInflight.delete(table); }));
   }
   return healthInflight.get(table);
 }
+/** true / false / "unknown" set a reading ("ok" / "failing" / "unknown"); null clears it. */
 export function _setQueryHealthForTest(ok, table = null) {
   const tables = table ? [table] : Object.keys(QUERY_HEALTH_SQL);
-  for (const t of tables) { if (ok === null) queryHealth.delete(t); else queryHealth.set(t, { ok, at: Date.now() }); }
+  const verdict = ok === true ? "ok" : ok === false ? "failing" : ok;
+  for (const t of tables) { if (ok === null) queryHealth.delete(t); else queryHealth.set(t, { verdict, at: Date.now() }); }
 }
 export function _setHealthTimeoutMsForTest(ms) { healthTimeoutMs = ms || HEALTH_TIMEOUT_MS; }
+/** Moves every kept reading `ms` into the past (a later call, without waiting). */
+export function _ageQueryHealthForTest(ms) { for (const v of queryHealth.values()) v.at -= ms; }
 
 // Buyer queries in flight at once: the query service rate-limits the
 // project, whose keys also sign facilitator calls, so a burst of heavy
@@ -277,9 +305,10 @@ export function _cdpLogOnceForTest(key, now) { return logOnce(key, now); }
 // and the same query fails the same way, so it is tried twice at most, a
 // slow 502/504 once, and the answer says how to narrow it.
 const QUERY_ATTEMPTS = 2;
-// A slow 502/504 while the service answers a known-good query is this query
-// running past the service's time window: the caller's to narrow, answered
-// 422 so one buyer's heavy query is a buyer outcome, not a tool failure. With
+// A slow 502/504 is this query running past the service's time window
+// unless a known-good query is answered with a 5xx too: the caller's to
+// narrow, answered 422 so one buyer's heavy query is a buyer outcome, not a
+// tool failure, also when our check of the service could not finish. With
 // the known-good query failing too, or an instant 500 (twice), it stays a
 // 502, so an outage of the service still reads as one.
 function narrowQueryError(status, tookMs, sql = "", answerStatus = 502) {
@@ -310,8 +339,9 @@ export const SQL_SEND_LIMIT_BYTES = 500_000;
 // could reach six per call. The budget is one counter on the call, spent
 // where a query is sent (cdpFetch), so no path can send a fifth; with it
 // spent the recovery answers the uncharged narrow-query 422. The health
-// probe (queryServiceHealthy) is not counted: it runs at most once per table
-// every HEALTH_TTL_MS across every call, under its own memo and timeout.
+// probe (queryServiceHealth) is not counted: it runs at most once per table
+// every HEALTH_TTL_MS (HEALTH_UNKNOWN_TTL_MS for an unknown verdict) across
+// every call, under its own memo and timeout.
 export const SQL_QUERY_BUDGET = 3;
 function newQueryBudget() { return { sent: 0, max: SQL_QUERY_BUDGET, left() { return this.max - this.sent; } }; }
 // Wraps the onchain-sql handler so every run inside a request is counted once
@@ -494,9 +524,11 @@ async function cdpFetch(method, path, body, { idempotent = method === "GET", buy
     if (buyerQuery && res.status >= 500) {
       if ((res.status === 502 || res.status === 504) && tookMs >= slowQueryGatewayMs) {
         logFailed(res.status, tookMs);
-        // The query, or the service? Only a service that answers a
-        // known-good query makes this the buyer's to narrow.
-        if (await queryServiceHealthy(body?.sql)) throw narrowQueryError(res.status, tookMs, body?.sql, 422);
+        // The query, or the service? Only a known-good query that the
+        // service answers with a 5xx makes this an outage; answered, or not
+        // known (our check timed out), a query at the gateway's time limit
+        // is the common cause and is the buyer's to narrow.
+        if (await queryServiceHealth(body?.sql) !== "failing") throw narrowQueryError(res.status, tookMs, body?.sql, 422);
         throw bad(`CDP's query service is failing (HTTP ${res.status} after ${(tookMs / 1000).toFixed(1)} s, and a known-good query failed too); retry later. Nothing was charged.`, 502);
       }
       // An instant 500 is the result too large to send: never resent as is
@@ -1069,7 +1101,7 @@ export const CDP_TOOLS = [
               const text = tries
                 ? `Even ${SQL_RECOVER_ROWS} rows of this query could not be sent by the query service${tries > 1 ? `, ${tries} times` : ""} (it answers its internal error, HTTP ${last.cdpStatus}; ${sendRuleText()}): select fewer or narrower columns (map and array columns are the usual cause). Nothing was charged.`
                 : queryBudgetSpentError().message;
-              if (await queryServiceHealthy(sql)) { const e3 = bad(text, 422); e3.hint = "narrow-query"; e3.queryBudgetSpent = true; throw e3; }
+              if (await queryServiceHealth(sql) !== "failing") { const e3 = bad(text, 422); e3.hint = "narrow-query"; e3.queryBudgetSpent = true; throw e3; }
               throw bad(`CDP's query service is failing (HTTP ${last?.cdpStatus ?? 500} on this query and on a known-good query); retry later. Nothing was charged.`, 502);
             }
             tries++;
