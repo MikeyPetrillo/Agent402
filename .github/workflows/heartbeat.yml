@@ -171,14 +171,17 @@ jobs:
             exit 0
           fi
           # The Circle Gateway batched option, when switched on, counts too: a
-          # network it was asked for and does not offer (its reason word, e.g.
-          # probe-timeout) is listed beside the rails. Absent field = 0.
-          BATCHED=$(echo "$RAILS" | jq -r '[.gatewayBatched.dropped // [] | .[]] | length' 2>/dev/null || echo 0)
+          # network it was asked for and does not offer for a failure (its
+          # reason word, e.g. probe-timeout or read-failed) is listed beside the
+          # rails. not-in-offer (the network's plain rail is not configured) and
+          # probe-skipped (the boot probe is switched off) are configuration
+          # facts and never page. Absent field = 0.
+          BATCHED=$(echo "$RAILS" | jq -r '[.gatewayBatched.dropped // [] | .[] | select(.reason != "not-in-offer" and .reason != "probe-skipped")] | length' 2>/dev/null || echo 0)
           case "$BATCHED" in ''|*[!0-9]*) BATCHED=0;; esac
           echo "rails: degraded=$DEGRADED batched-dropped=$BATCHED"
           if [ "$DEGRADED" -gt 0 ] || [ "$BATCHED" -gt 0 ]; then
             if [ -z "$OPEN" ]; then
-              echo "$RAILS" | jq -r '[(.rails[] | select(.offered==false) | "- **\(.network)** - \(.reason)"), (.gatewayBatched.dropped // [] | .[] | "- **Circle Gateway batched option on \(.network)** - not offered (\(.reason)); the plain accept there is unaffected, and the option returns at the next restart where Gateway lists it")] | join("\n")' > /tmp/rail-body.md
+              echo "$RAILS" | jq -r '[(.rails[] | select(.offered==false) | "- **\(.network)** - \(.reason)"), (.gatewayBatched.dropped // [] | .[] | select(.reason != "not-in-offer" and .reason != "probe-skipped") | "- **Circle Gateway batched option on \(.network)** - not offered (\(.reason)); the plain accept there is unaffected, and the option returns at the next restart once the Gateway /supported read answers and lists it there")] | join("\n")' > /tmp/rail-body.md
               {
                 echo ""
                 echo "Revenue is unaffected on the other rails: a rail nobody can settle is dropped deliberately so the rest keep earning. This is a notice, not an outage."
@@ -1288,6 +1291,10 @@ jobs:
           # A balance our checker could not read reads unknown and pages nothing.
           TITLE="facilitatorFunds: a facilitator's settlement gas is running low"
           check_word facilitatorFunds "low" "ok"
+          # Close-only: the issue opened under the title before its rename
+          # closes on ok. The bad list is a word no status reads, so it never opens.
+          TITLE="facilitatorFunds: a facilitator's settlement gas is running low or could not be read"
+          check_word facilitatorFunds "_close-only_" "ok"
           # The settle breaker refused a buyer that had settled a call in its
           # window (src/gateway-settle-breaker.js): refusing pages, ok closes.
           TITLE="buyerRefusals: a paying buyer was refused by the settle breaker"

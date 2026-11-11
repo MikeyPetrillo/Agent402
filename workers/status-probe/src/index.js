@@ -724,6 +724,14 @@ Auto-closes when nothing is owed.`,
     body: () => `${failureWordBody("facilitatorFunds", "low")} low means a settlement signer's gas runway is under the floor (relayersLow). A balance our checker could not read reads unknown and pages nothing; the operator detail counts it (relayersUnread).`,
   },
   {
+    // Close-only: the issue opened under this title before it was renamed
+    // (above) closes once the word reads ok. Never opens: the verdict is
+    // "good" or "quiet", never "bad". Title matches heartbeat.yml's.
+    title: "facilitatorFunds: a facilitator's settlement gas is running low or could not be read",
+    verdict: ({ gateway: b }) => (b.facilitatorFunds?.status === "ok" ? "good" : "quiet"),
+    body: () => failureWordBody("facilitatorFunds", "low"),
+  },
+  {
     // The settle breaker refused a buyer that had settled a call in its
     // window (buyerRefusals, src/gateway-settle-breaker.js): refusing pages,
     // ok clears, unknown does neither. Title matches heartbeat.yml's.

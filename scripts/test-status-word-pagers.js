@@ -432,6 +432,40 @@ for (const [name, T, field, sameBody] of SPEND) {
     assert.equal(judge({ gateway: gw })[FG], "good");
     assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 8, title: FG }])), ["8"]);
   });
+  // The issue opened under the title before its rename: both pagers close it
+  // when the word reads ok, and neither ever opens it, on any word.
+  const OLD = "facilitatorFunds: a facilitator's settlement gas is running low or could not be read";
+  await check("facilitatorFunds: the issue under the old title closes on ok and is never opened", async () => {
+    assert.equal(judge({ gateway: gw })[OLD], "good");
+    assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 11, title: OLD }, { number: 4, title: `Other ${OLD}` }])), ["11"]);
+    for (const w of ["low", "unknown", "refused", "demoted", "", "something-new"]) {
+      const g = { facilitatorFunds: { status: w } };
+      assert.equal(judge({ gateway: g })[OLD], "quiet", `Worker: ${w || "(empty)"}`);
+      const calls = await runStep(step, g, [{ number: 11, title: OLD }]);
+      assert.equal(calls.filter((c) => argOf(c, "--title") === OLD || c[2] === "11").length, 0, `heartbeat: ${w || "(empty)"}: ${JSON.stringify(calls)}`);
+      assert.equal(created(await runStep(step, g), OLD), 0, `heartbeat: ${w || "(empty)"} opens nothing under the old title`);
+    }
+    assert.deepEqual(closedNum(await runStep(step, undefined, [{ number: 11, title: OLD }])), [], "a blind read never closes it");
+    // The Worker's own sync: ok closes the open issue; low opens only the new title.
+    const realFetch = globalThis.fetch;
+    let made = [], shut = [];
+    globalThis.fetch = async (url, init = {}) => {
+      const u = String(url); const meth = (init.method || "GET").toUpperCase();
+      if (u === "https://api.github.com/user") return Response.json({ login: "probe-bot" });
+      if (u.includes("/issues?state=open")) return Response.json([{ number: 11, title: OLD, user: { login: "probe-bot" } }]);
+      if (meth === "POST" && /\/issues$/.test(u)) { made.push(JSON.parse(init.body).title); return new Response("{}", { status: 201 }); }
+      if (meth === "PATCH" && /\/issues\/\d+$/.test(u)) { shut.push(u); return new Response("{}", { status: 200 }); }
+      return new Response("{}", { status: 200 });
+    };
+    try {
+      const sync = (g) => syncAlarms({ GITHUB_ISSUES_TOKEN: "t" }, { sleep: async () => {}, confirmDelayMs: 0, fetchStatus: async () => ({ gateway: g, status: null }) });
+      let r = await sync({ facilitatorFunds: { status: "low" } });
+      assert.ok(!r.opened.includes(OLD) && !r.closed.includes(OLD) && !made.includes(OLD), `Worker: low leaves the old issue alone (${JSON.stringify(r)})`);
+      made = []; shut = [];
+      r = await sync({ facilitatorFunds: { status: "ok" } });
+      assert.ok(r.closed.includes(OLD) && shut.some((u) => /\/issues\/11$/.test(u)) && made.length === 0, `Worker: ok closes the old issue (${JSON.stringify(r)})`);
+    } finally { globalThis.fetch = realFetch; }
+  });
 }
 // ---- upstreamHealth=unanswered, end to end -----------------------------------------
 // A hung stub upstream: our AbortSignal.timeout fires on every call to it, for
@@ -533,6 +567,19 @@ for (const [name, T, field, sameBody] of SPEND) {
     assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "3", JSON.stringify(calls));
     assert.deepEqual((await runRail(rails(undefined))).calls, [], "the option off: no issue");
     assert.deepEqual((await runRail(undefined, [{ number: 3, title: RT }])).calls, [], "a blind read never closes");
+  });
+  await check("rail check: not-in-offer and probe-skipped are configuration facts: they never open the issue, and alone they close it", async () => {
+    for (const reason of ["not-in-offer", "probe-skipped"]) {
+      assert.deepEqual((await runRail(rails([{ network: "arc", reason }]))).calls, [], `${reason}: no issue`);
+      const { calls } = await runRail(rails([{ network: "arc", reason }]), [{ number: 3, title: RT }]);
+      assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "3", `${reason}: closes (${JSON.stringify(calls)})`);
+    }
+    for (const reason of ["probe-timeout", "read-failed", "not-advertised"]) {
+      const { calls, file } = await runRail(rails([{ network: "arc", reason: "not-in-offer" }, { network: "eip155:8453", reason }]));
+      assert.equal(calls.filter((c) => c[1] === "create").length, 1, `${reason} beside not-in-offer pages once`);
+      assert.match(file, new RegExp(`batched option on eip155:8453\\*\\* - not offered \\(${reason}\\)`));
+      assert.doesNotMatch(file, /not-in-offer/, `${reason}: the body lists only the failure`);
+    }
   });
   await check("rail check: a degraded plain rail still pages as before", async () => {
     const { calls, file } = await runRail(rails(undefined, 1));
