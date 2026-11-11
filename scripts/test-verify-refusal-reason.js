@@ -31,6 +31,19 @@ const B58 = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"; // mixed case
   ok(shortPayer(B58) === "7xKX" && shortPayer(B58) !== B58.slice(0, 4).toLowerCase() && shortPayer(B58.toLowerCase()) === "7xkx", "a base58 payer keeps its case in the short form");
   ok(shortPayer("GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3B2WSQHG4W37") === "GDQP", "a Stellar payer keeps its case");
   ok(shortPayer("0xAbCd000000000000000000000000000000000001") === "0xAbCd", "an EVM payer prints 0x and four hex digits, as written");
+  {
+    // The facilitator's text repeating the payer: cut to the short form. An
+    // EVM address in any letter case; any other address only as written.
+    const EVM = "0xAbCdEf0000000000000000000000000000c0FFee";
+    for (const said of [EVM, EVM.toLowerCase(), "0x" + EVM.slice(2).toUpperCase()]) {
+      const l = verifyFailureLine({ verb: "rejected", network: "eip155:8453", scheme: "exact", reason: `insufficient balance for ${said} (payer ${said})`, slug: "uuid", payer: EVM });
+      ok(!l.toLowerCase().includes(EVM.toLowerCase().slice(6)) && l.includes("for 0xAbCd... (payer 0xAbCd...)"), `an EVM payer the facilitator writes as ${said.slice(0, 8)} is cut to the short form (${l.slice(-60)})`);
+    }
+    const b = verifyFailureLine({ network: SOL, scheme: "exact", reason: `account ${B58} has no token account`, slug: "hash", payer: B58 });
+    ok(!b.includes(B58) && b.includes("account 7xKX... has no token account"), `a base58 payer in the facilitator's text is cut (${b.slice(-50)})`);
+    const other = verifyFailureLine({ network: SOL, scheme: "exact", reason: `account ${B58.toLowerCase()} differs`, slug: "hash", payer: B58 });
+    ok(other.includes(B58.toLowerCase()), "a base58 address that differs from the payer by case is another wallet and is not cut");
+  }
   ok(verifyFailureLine({ verb: "rejected", network: "eip155:8453", scheme: "exact", reason: "insufficient_funds", slug: "uuid", payer: "0xAbCd000000000000000000000000000000000001" }).startsWith("[payments] facilitator VERIFY rejected on eip155:8453 exact route=uuid payer=0xAbCd: insufficient_funds"), "the graceful shape prints the same fields");
 }
 {

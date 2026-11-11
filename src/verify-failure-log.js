@@ -14,6 +14,7 @@
 // full address is never printed.
 const MAX_LINE = 480;
 const MAX_REASON = 300;
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
 /** A printable token of at most `max` characters, or "?" for anything that is not a string or a finite number. Never throws. */
 export function safeLogToken(value, max = 64) {
@@ -66,9 +67,15 @@ export function shortPayer(value) {
  */
 export function verifyFailureLine({ verb = "failed", network, scheme, reason, slug, payer } = {}) {
   // A facilitator's text can repeat the payer it was asked about: the whole
-  // address is cut to the same short form there too.
+  // address is cut to the same short form there too. An EVM address is hex,
+  // so it is found in any letter case (a facilitator may write it checksummed
+  // or lowercased); any other address is matched exactly, case and all.
   const short = shortPayer(payer);
-  if (short !== "?" && typeof reason === "string" && reason.includes(payer)) reason = reason.slice(0, 4 * MAX_REASON).split(payer).join(`${short}...`);
+  if (short !== "?" && typeof reason === "string") {
+    const text = reason.slice(0, 4 * MAX_REASON);
+    if (EVM_ADDRESS.test(payer)) reason = text.replace(new RegExp(payer, "gi"), `${short}...`);
+    else if (text.includes(payer)) reason = text.split(payer).join(`${short}...`);
+  }
   const line = `[payments] facilitator VERIFY ${verb === "rejected" ? "rejected" : "failed"} on ${safeLogToken(network, 80)} ${safeLogToken(scheme, 24)}` +
     ` route=${safeLogToken(slug, 64)} payer=${short}: ${safeLogText(reason, MAX_REASON)}`;
   return line.length > MAX_LINE ? line.slice(0, MAX_LINE) : line;
