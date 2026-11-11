@@ -120,7 +120,7 @@ try {
     upstream = [openAIError(400, { message: `Your request was rejected by the safety system. If you believe this is an error, contact us and include the request ID req_123. safety_violations=[violence]. ${secret}`, type: "image_generation_user_error", param: null, code: "moderation_blocked" })];
     const e = await thrown("image-gen-premium", { prompt: "a" });
     ok(e?.statusCode === 400 && sent.length === 1, `a refusal is a 400 and is not retried (${e?.statusCode}, ${sent.length} requests)`);
-    ok(/^The model's content check refused this prompt\. Nothing was charged; rephrase the prompt and try again\./.test(e?.message || "") && /Flagged: violence\./.test(e.message) && !/"auto"/.test(e.message), `refusal message is plain and names what was flagged (${e?.message})`);
+    ok(/^The model's content check refused this prompt\. This 400 is not charged on x402; rephrase the prompt and try again\./.test(e?.message || "") && /Flagged: violence\./.test(e.message) && !/"auto"/.test(e.message), `refusal message is plain and names what was flagged (${e?.message})`);
     ok(!e.message.includes(secret) && !e.message.includes("req_123"), "the upstream body is not echoed (no key, no request id)");
     upstream = [openAIError(400, { message: "Your request was rejected as a result of our safety system.", type: "invalid_request_error", param: null, code: "content_policy_violation" })];
     const e2 = await thrown("image-gen", { prompt: "a", moderation: "auto" });
