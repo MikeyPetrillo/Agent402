@@ -247,8 +247,10 @@ const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENE
 //   - a 429 or an auth refusal (401/403) stops the ElevenLabs walk at once and
 //     opens a breaker shared by both tiers (one credential): for the cooldown
 //     every call goes straight to the backups, then ONE call probes;
-//   - three failed calls in a row open it too; a server error or a connection
-//     that never opened still tries the next ElevenLabs model (unbilled);
+//   - three failed calls in a row open it too (a 5xx, a dropped connection,
+//     an empty answer; never our own deadline passing on a long text); a
+//     server error or a connection that never opened still tries the next
+//     ElevenLabs model (unbilled);
 //   - at most ELEVEN_MAX_IN_FLIGHT calls run at once; the rest use a backup.
 // Backups, in order: the non-ElevenLabs speech models in TTS_BACKUP_MODELS,
 // each on the same wire. The answer always names the model that spoke.
@@ -292,9 +294,9 @@ function tripBreaker(retryAfterMs = 0, now = Date.now()) {
   breaker.serverErrors = 0;
   breaker.probing = false;
 }
-/** `e` null = served. Throttles trip at once; server errors, timeouts and
- *  empty answers (`unhealthy`) trip after three in a row, so a hanging
- *  ElevenLabs moves later buyers to the backups. */
+/** `e` null = served. Throttles trip at once; server errors, dropped
+ *  connections and empty answers (`unhealthy`) trip after three in a row.
+ *  Our own deadline passing is not counted (callSpeechModel, ourDeadline). */
 function noteElevenOutcome(gate, e) {
   const stale = gate.epoch !== breaker.epoch;
   if (!e) {
@@ -352,7 +354,12 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
       body: JSON.stringify({ model, input: text, voice: nativeVoice, response_format: wireFormat, provider: audioProviderPolicy(model) }),
     }, { label: "Speech upstream", step: "speech", timeoutMs, tag: "[tts]", fetchImpl: probe });
   } catch (e) {
-    throw Object.assign(e, { outage: neverConnected, unhealthy: true });
+    // Our own cap passing (the per-link limit, or what the walk had left) is
+    // not an answer from the vendor: a long text can need more than the cap,
+    // so it stays final for this call but never counts toward the breaker.
+    // Only "unreachable" is a failure of the connection itself.
+    const ourDeadline = !!e?.upstreamFailure && e.upstreamFailure !== "unreachable";
+    throw Object.assign(e, { outage: neverConnected, unhealthy: !ourDeadline, ourDeadline });
   }
   if (!res.ok) {
     const errText = await res.text().catch(() => "");

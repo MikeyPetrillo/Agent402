@@ -293,6 +293,14 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   stub([["openrouter.ai", withBackups(audio(Buffer.from("ID3eleven")))]]);
   ok((await run("tts", { text: "hi" })).model === FIRST_BACKUP, "and the next buyer is served by a backup");
   keepBreaker = false;
+  // Our own per-link cap passing (a long text) is not an ElevenLabs failure:
+  // three in a row leave the breaker closed and the next buyer on ElevenLabs.
+  __resetTtsBreakerForTest(); keepBreaker = true;
+  for (let i = 0; i < 4; i++) { stub([["openrouter.ai", withBackups(() => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); })]]); await throwsWith(() => run("tts", { text: "x".repeat(2000) })); }
+  ok(elevenLabsBreakerState() === "ok" && __ttsBreakerForTest().serverErrors === 0, `our own deadline passing four times does not count toward the breaker (state ${elevenLabsBreakerState()}, count ${__ttsBreakerForTest().serverErrors})`);
+  stub([["openrouter.ai", withBackups(audio(Buffer.from("ID3eleven")))]]);
+  ok((await run("tts", { text: "hi" })).model === TTS_TIERS.tts.chain[0], "and the next buyer is still served by ElevenLabs");
+  keepBreaker = false;
   // A backup answering 200 with no audio may have been billed: final, no next backup.
   __resetTtsBreakerForTest();
   stub([["openrouter.ai", (_u, init) => (isEleven(init) ? err(429) : audio(Buffer.alloc(0)))]]);
