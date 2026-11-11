@@ -53,6 +53,15 @@
 //     against every run in flight at that moment. Runs woken together share
 //     that read and are admitted one at a time, each counting the ones before
 //     it, so they are covered together too.
+//   - A run another container holds may be settling too, and this process
+//     cannot see that: its payment may be off the wallet while its
+//     reservation is still in the window. A run the balance would not cover
+//     beside one waits the same way, inside the same SETTLE_WAIT_MS: it looks
+//     at the window again (after FOREIGN_POLL_MS, then twice as long each
+//     time up to FOREIGN_POLL_MAX_MS; a look costs no balance read) until a
+//     run leaves, here or there, and is then judged again on a fresh read.
+//     When the wait ends with nobody gone the run is refused as it would
+//     have been at once, on the same read.
 //   - Across containers (src/shared-limits.js): every admitted run is also a
 //     reservation in a shared window keyed by wallet and chain (member = run
 //     id, weight = atomic amount), written before the run is judged and
@@ -93,6 +102,10 @@ const MAX_READS_IN_FLIGHT = 8;
 const LANE_WAIT_MS = READ_TIMEOUT_MS;
 const LAST_VIEW_MAX_KEYS = 10_000;
 const SETTLE_WAIT_MS = 5_000;
+const FOREIGN_POLL_MS = 100;
+const FOREIGN_POLL_MAX_MS = 1_000;
+// The waits are measured on a clock that only moves forward.
+const mono = () => performance.now();
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
 const UINT = /^\d{1,78}$/;
 
@@ -126,7 +139,7 @@ let readsInFlight = 0;
 // The settled-release of an admitted run, kept on its request (own,
 // non-enumerable) for the settle hook, which sees only the request.
 const SETTLED = Symbol("a402.inflightCoverSettled");
-const stats = { admitted: 0, admittedByRead: 0, admittedUnread: 0, refused: 0, refusedUnread: 0, settleWaits: 0, sharedMisses: 0, foreignReads: 0 };
+const stats = { admitted: 0, admittedByRead: 0, admittedUnread: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, sharedMisses: 0, foreignReads: 0 };
 
 /**
  * The OTHER runs a shared window read reports: everything but this run's own
@@ -180,8 +193,9 @@ function foreignHeld(others, held, judgesHere = 1) {
  * A run of this wallet has left (here or on another container), so its
  * settlement may have come out of the balance: the cached read is dropped, a
  * read that has begun is detached (it is neither shared from here on nor
- * cached), and every run being judged is told. A read that has not begun yet
- * begins after the departure and stays.
+ * cached), every run being judged is told, and every run waiting for one to
+ * leave is woken. A read that has not begun yet begins after the departure
+ * and stays.
  */
 function noteDeparture(coverKey) {
   balances.delete(coverKey);
@@ -189,6 +203,8 @@ function noteDeparture(coverKey) {
   if (pending && pending.seq !== Infinity) pendingReads.delete(coverKey);
   const judges = judging.get(coverKey);
   if (judges) for (const j of judges) j.left += 1;
+  const set = waiters.get(coverKey);
+  if (set) for (const wake of [...set]) wake();
 }
 /**
  * Records a listed view of the shared window. True when a run another
@@ -379,7 +395,7 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
   const terms = coverTermsOf(paymentHeaderOf(req));
   if (!terms) return null;
   const coverKey = `${terms.network}|${terms.asset || "-"}|${terms.payer}`;
-  const waitUntil = Date.now() + settleWaitMs;
+  const waitUntil = mono() + settleWaitMs;
   // `left` counts this wallet's runs that leave the ledger while this one is
   // judged (release() bumps it). Once one has, verify's proof no longer holds
   // and the no-read admission is off: this run is judged on a read.
@@ -442,11 +458,29 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
       }
       // A settling run may already be paid for on chain while it still counts
       // here: wait for it to leave, then judge again against a fresh read.
-      if (!unread && cur.settling > 0 && Date.now() < waitUntil) {
-        stats.settleWaits++;
-        await nextRelease(coverKey, waitUntil - Date.now());
-        at = Date.now();
-        continue;
+      // So may a run another container holds, whose settling this process
+      // cannot see: the window is looked at again until a run leaves it.
+      const beside = foreignHeld(others, ledger.get(coverKey), judges.size);
+      if (!unread && (cur.settling > 0 || beside) && mono() < waitUntil) {
+        if (cur.settling > 0) stats.settleWaits++; else stats.foreignWaits++;
+        const leftAtWait = me.left;
+        let pollMs = FOREIGN_POLL_MS;
+        while (me.left === leftAtWait) {
+          const remaining = waitUntil - mono();
+          if (remaining <= 0) break;
+          await nextRelease(coverKey, beside ? Math.min(remaining, pollMs) : remaining);
+          if (!beside || me.left !== leftAtWait || mono() >= waitUntil) break;
+          const r = await shared.windowRead(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS() });
+          if (r.ok) {
+            const seen = othersOf(r, sharedId, terms.atomic);
+            if (!noteView(coverKey, seen) && (!others.foreign || !seen.foreign) && foreignDeparted(others, seen)) noteDeparture(coverKey);
+          } else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
+          pollMs = Math.min(pollMs * 2, FOREIGN_POLL_MAX_MS);
+        }
+        // Nobody left the window in the whole wait and no local run was
+        // settling: nothing this judgment rests on has changed, so it stands
+        // (no further read). Otherwise judge again.
+        if (me.left !== leftAtWait || cur.settling > 0) { at = Date.now(); continue; }
       }
       stats.refused++;
       if (unread) stats.refusedUnread++;
@@ -486,8 +520,6 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
     // concurrent check reads it again, a read already under way is detached
     // from the cache, and every run being judged is told a run has left.
     noteDeparture(coverKey);
-    const set = waiters.get(coverKey);
-    if (set) for (const wake of [...set]) wake();
   };
   release.settling = () => {
     if (released || settling) return;
@@ -520,7 +552,7 @@ export function markCoveredRunSettled(req) {
 export function inflightCoverStatus() {
   let runs = 0;
   for (const e of ledger.values()) runs += e.count;
-  return { enabled: inflightCoverEnabled(), shared: SHARED, walletsInFlight: ledger.size, runsInFlight: runs, unreadMax: unreadMax(), ...stats };
+  return { enabled: inflightCoverEnabled(), shared: SHARED, walletsInFlight: ledger.size, runsInFlight: runs, viewsKept: lastForeign.size, unreadMax: unreadMax(), ...stats };
 }
 
 /** Test-only. */

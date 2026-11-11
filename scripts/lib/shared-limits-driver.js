@@ -102,7 +102,9 @@ async function run(cmd) {
     case "ic.admit": {
       coverBalance = BigInt(cmd.balance);
       try {
-        const release = await C.admitCoveredRun(coverReq(cmd.payer, cmd.atomic));
+        // A refusal beside another container's run comes after a wait for that
+        // run to leave; the two-process cases hold their runs, so keep it short.
+        const release = await C.admitCoveredRun(coverReq(cmd.payer, cmd.atomic), { settleWaitMs: 200 });
         if (typeof release !== "function") return { admitted: false, uncovered: true };
         runs.set(cmd.run, release);
         await barrier();
