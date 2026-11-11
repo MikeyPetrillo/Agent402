@@ -417,6 +417,24 @@ try {
     await throws(h("sol-token-search")({ query: "wif" }), 502, "search fallback: both pair reads fail with no rows -> 5xx");
     stub(route({ jup: () => Promise.resolve(jsonRes({ error: "bad" }, 400)) }));
     await throws(h("sol-token-search")({ query: "wif" }), 503, "search fallback: Jupiter 4xx with no rows -> 503, not a 422 blaming the query");
+    // A definite Jupiter 4xx is Jupiter's own answer: attributed upstream.
+    try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: Jupiter 4xx with no rows resolved"); }
+    catch (e) { ok(e.statusCode === 503 && e.attribution === "upstream", `search fallback: Jupiter 4xx with no rows is attributed upstream (got ${e.statusCode} ${e.attribution})`); }
+    // The call's budget runs out during the pair search, before the Jupiter
+    // read is sent: no request left, so the 503 is ours (budget-spent).
+    {
+      const realNow = Date.now;
+      let jupCalls = 0;
+      const routed = route({ jup: () => { jupCalls++; return Promise.resolve(jsonRes(JUP_WIF)); } });
+      stub((url) => {
+        // The pair search is answered at the very end of the call's budget.
+        if (url.startsWith("https://api.dexscreener.com/latest/dex/search?q=")) { const t = realNow(); Date.now = () => t + __test.DEADLINES.HANDLER_BUDGET_MS; }
+        return routed(url);
+      });
+      try { await h("sol-token-search")({ query: "wif" }); ok(false, "search fallback: spent budget with no rows resolved"); }
+      catch (e) { ok(e.statusCode === 503 && e.attribution === "ours" && e.hint === "budget-spent" && jupCalls === 0 && /^Solana token search found no pairs\. No Jupiter token search read was sent: our \d+ s limit for this call was used up by its earlier steps; nothing was charged/.test(e.message), `search fallback: budget spent before the Jupiter read -> 503 attributed ours, budget-spent, no request sent (got ${e.statusCode} ${e.attribution} ${e.hint} ${jupCalls} "${e.message}")`); }
+      finally { Date.now = realNow; }
+    }
 
     // One pair read fails: what the other read gave, flagged partial.
     stub(route({ all: () => Promise.resolve(textRes("x", 500)) }));

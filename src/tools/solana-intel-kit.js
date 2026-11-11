@@ -34,7 +34,7 @@
 import { markUntrusted } from "./provenance.js";
 import { partialFields } from "../partial-answer.js";
 import { createTtlCache } from "./ttl-dedupe.js";
-import { HANDLER_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, capOf, currentBudget } from "../upstream-deadline.js";
+import { HANDLER_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, budgetSpentError, upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, capOf, currentBudget } from "../upstream-deadline.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../rugcheck-switch.js";
 import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugcheck-pause.js";
 export { RUGCHECK_SLUGS, rugcheckEnabled };
@@ -1059,6 +1059,12 @@ export const SOLANA_INTEL_TOOLS = [
         // after the handler).
         const e = fb.error;
         if (e && e.statusCode >= 500) throw e;
+        // No read was sent: the call's own budget ran out first. That is ours.
+        if (fb.unavailable.reason === "budget") {
+          const spent = budgetSpentError(fb.unavailable.upstream, fb.unavailable.step, budget.totalMs);
+          spent.message = `Solana token search found no pairs. ${spent.message}`;
+          throw spent;
+        }
         throw Object.assign(bad(`Solana token search found no pairs and the ${fb.unavailable.upstream} ${fb.unavailable.step} read did not answer - retry shortly`, 503), { attribution: "upstream" });
       }
       const incomplete = fb.status === "unavailable" || fb.status === "partial";
