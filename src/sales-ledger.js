@@ -996,6 +996,33 @@ const qExternalByNetworkPage = db.prepare(`
 const qExternalByNetworkPayersPage = db.prepare(`
   SELECT DISTINCT network, payer
   ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL`);
+// The outside payers that spent the most over a window, for the top-buyer
+// failure alarm (src/top-buyer-failures.js): money rails only, external rows
+// only, and every wallet of ours left out again by address (BURNERS: the
+// canary and burner wallets and the spending wallets the router buys with),
+// so a row recorded before a wallet joined the set never ranks. Exact
+// nano-dollar sums, read a page at a time. [{ payer, usd }], highest first,
+// ties by address; at most `limit`.
+const qTopPayersPage = db.prepare(`
+  SELECT payer, SUM(CAST(ROUND(price_usd * ${NANO_PER_USD}) AS INTEGER)) AS nano
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL
+  GROUP BY payer`);
+function* topExternalPayersSteps({ days = 7, limit = 10, now = Date.now() } = {}) {
+  const since = now - days * 86_400_000;
+  const nano = new Map();
+  yield* windowPages(since, (a, b) => {
+    for (const r of qTopPayersPage.all(a, b, since)) nano.set(r.payer, (nano.get(r.payer) || 0) + (Number(r.nano) || 0));
+  });
+  return [...nano]
+    .filter(([p, n]) => n > 0 && !BURNERS.has(p) && !BURNERS.has(String(p).toLowerCase()))
+    .sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0))
+    .slice(0, Math.max(0, limit))
+    .map(([payer, n]) => ({ payer, usd: n / NANO_PER_USD }));
+}
+// Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
+/** topExternalPayers, spread over event-loop turns on elapsed time (same answer). */
+export function topExternalPayersAsync({ days = 7, limit = 10, now = Date.now() } = {}) { return runStepsAsync(topExternalPayersSteps({ days, limit, now })); }
+
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function externalByNetwork({ days = 30 } = {}) { return runSteps(externalByNetworkSteps({ days })); }
 /** externalByNetwork, spread over event-loop turns on elapsed time (same answer). */

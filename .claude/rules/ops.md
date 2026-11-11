@@ -128,6 +128,29 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `ceiling=reached` pages (the status Worker and `heartbeat.yml`, one issue "Subscription gas sponsor
   CEILING reached"), and `ok` closes it.
 - **Failure monitor:** `src/tool-failure-monitor.js` counts every catalog answer past the gates by slug, class, origin (outside vs our own synthetic traffic) and payment rail (`outcomeRailOf` in `src/payment-rail.js`; a free proof-of-work or trial outcome counts on its own lane, shown in the detail and read by `toolFailures` only when a tool fails nearly every free call: `TOOL_FREE_FAIL_RATE`, default 0.9, over `TOOL_FREE_FAIL_MIN_CALLS`, default 20, in an hour) and every named upstream's fetch outcomes through the egress meter's observer, in five-minute buckets merged across replicas through Redis (`upstreamHealth` counts only the upstream's own failures, `UPSTREAM_FAILURE_KINDS`: 5xx, a transport timeout, a refused or reset connection; our own deadline (`deadline`: an AbortSignal.timeout of ours, a health check's limit), our DNS or routing failure (`egress`) and a caller's cancel (`aborted`) are operator detail only, with one exception: our deadline firing on ONE upstream on at least `UPSTREAM_UNANSWERED_MIN` (default 5) calls from at least `UPSTREAM_UNANSWERED_MIN_CALLERS` (default 3) distinct callers, at least `UPSTREAM_UNANSWERED_RATE` (default 0.5) of its calls, inside `UPSTREAM_UNANSWERED_WINDOW_MS` (default 15 minutes), while another upstream answered in the same five-minute buckets, reads `upstreamHealth=unanswered` and pages under its own neutral title, "did not answer within our limit"; when more than half the upstreams with traffic are held at once, or none other answered, nothing is named (`ourSide`). A caller is a keyed hash of `req.ip` held in memory (`src/request-timing.js`), never an address; the rule lives in `src/unanswered-rule.js`, and the speech link (`src/tools/tts-kit.js`) and the direct LLM link (`src/gateway-direct-upstream.js`) apply the same thresholds to route the next callers to their backups); `toolFailures`, `upstreamHealth` and `facilitatorFunds` (also `low` while a facilitator signer is short of gas, and `unknown`, which pages nothing, while a signer's balance could not be read; a dry Robinhood signer our relayer covers is left out and pages as `robinhoodSettler=relayer` instead, `.claude/rules/payments.md`) are words on `/api/gateway-status`, detail on `/__operator/tool-failures.json`. Every final 200 is also classified by body (`src/answer-shape.js`: ok, empty, error-shaped, unchecked; a tool whose contract allows an empty answer goes in `EMPTY_RESULT_OK` or sets `discovery.emptyOk`) into the `toolAnswers` word; the same detail lists live-data slugs whose sales all returned one response digest. `src/settle-demotion.js` puts Celo's alternates first after consecutive out-of-funds refusals.
+- **Top buyer failures:** `src/top-buyer-failures.js` records every verified paid request (past
+  every gate and on to the dispatcher: x402 on every rail, the MPP shim, Tempo, credits) whose final
+  answer is not a 2xx, under the payer its gate proved (`verifiedPayerOf` in server.js: the signed
+  EVM `from`, the Tempo sender the gate proved, the settle receipt, else the signer of the signed
+  Solana, Algorand or Stellar transaction, case kept; a credits key by id; a card payment names
+  none), with the slug, status, time and the first 160 characters of the error text we sent
+  (`redactSecrets`). An unpaid 402 challenge and a refusal before the gate never reach it; our own
+  traffic and wallets are left out. Kept in process (at most 2000 payers, 50 failures each) and,
+  with Redis, in a per-payer window in the shared store (`top-buyer-fail`), so every container
+  reads every container's failures. The watched payers are the top `TOP_BUYERS_COUNT` (default 10)
+  outside payers by paid spend over `TOP_BUYERS_DAYS` (default 7) from the sales ledger
+  (`topExternalPayersAsync`: external rows on money rails, our wallets left out by address), read
+  shortly after boot and every `TOP_BUYERS_REFRESH_MS` (default 300000), never on a request's
+  path. `topBuyerFailures` on `/api/gateway-status` reads `alert` while a watched payer has
+  `TOP_BUYER_FAIL_MIN` (default 3) or more failures inside `TOP_BUYER_FAIL_WINDOW_MS` (default
+  600000), held `TOP_BUYER_FAIL_HOLD_MS` (default 1200000) after the failure that met the rule so
+  the 5- and 15-minute pagers read it; `ok` otherwise, `unknown` before the first read of the top
+  payers, `off` in FREE_MODE. Publicly the word only; the operator view lists per alerting payer
+  its short id (`shortPayer`), spend rank and failures (slug, status, time, error text), never a
+  full address or a spend figure. The status Worker and `heartbeat.yml` page once on `alert`
+  ("topBuyerFailures: a top paying buyer is getting failed answers", fixed text) and close on `ok`.
+  An alarm only: nothing is refused for it (`scripts/test-top-buyer-failures.js`,
+  `scripts/test-top-buyer-failures-redis.js`).
 - **Per-call count documents:** `src/sql-query-stats.js` (onchain-sql queries per call) and
   `src/x-search-stats.js` (x-search-recent authors and posts per call) keep per-UTC-day
   histograms as state documents (`src/json-document.js`), folded into the document on a timer

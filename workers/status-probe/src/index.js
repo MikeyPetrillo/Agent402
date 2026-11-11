@@ -806,6 +806,16 @@ Auto-closes when nothing is owed.`,
     body: () => "/api/gateway-status reports brokenListings.status=widespread: inside the last 15 minutes the seller listings of many distinct origins (past a floor and a share of the indexed origins) threw while they were read and were dropped, which one seller's bad data does not do; a code bug in how listings are read is emptying external routing while the process stays up. The origins and counts are on the operator endpoint, /__operator/perf.json (brokenListings, operator token). Auto-closes after two ok reads in a row.",
   },
   {
+    // A top outside payer's verified paid calls are failing
+    // (topBuyerFailures, src/top-buyer-failures.js): alert pages, ok clears,
+    // unknown and off do neither. The payer, the tools and our error text are
+    // on the operator view only; this text names none of them. Title
+    // matches heartbeat.yml's.
+    title: "topBuyerFailures: a top paying buyer is getting failed answers",
+    verdict: ({ gateway: b }) => wordVerdict(b.topBuyerFailures?.status, ["alert"], ["ok"]),
+    body: () => "/api/gateway-status reports topBuyerFailures.status=alert: one of our top outside payers by paid spend over the last week has had TOP_BUYER_FAIL_MIN or more failed final answers (any status that is not a success) to verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS. The payer's short id, its spend rank, the tools, statuses, times and the first characters of the error text we sent are on the operator view of /api/gateway-status (topBuyerFailures, operator token). Read them, fix the failing tool or path, and check whether what we told the buyer was true. Nothing is refused for it. Auto-closes when the word reads ok.",
+  },
+  {
     // Redis persistence (redisPersistence on /api/gateway-status,
     // src/redis-persistence.js): what INFO persistence says about the Redis
     // behind REDIS_URL. off and degraded page; on clears; unknown does

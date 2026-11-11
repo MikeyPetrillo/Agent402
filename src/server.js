@@ -63,7 +63,7 @@ import {
   grant, revoke, listGrants, getLog, remember, recall, forget,
   PERSISTENT as memoryPersistent,
 } from "./tools/memory.js";
-import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf, identityPayerOf, FREE_MODE_IDENTITY_NOTE } from "./payer.js";
+import { payerFromRequest, payerFromPaymentResponse, paymentHeaderOf, identityPayerOf, FREE_MODE_IDENTITY_NOTE, normalizePayerAddress } from "./payer.js";
 import { paidPriceUsd, quotedOnNetworkUsd, ticketPriceUsd } from "./paid-price.js";
 import { runInAbortableScope, abortInFlightComposites, installDrainAwareFetch, isDrainAbort, drainSignal } from "./drain-abort.js";
 import { sharedClaimRequired, markListening } from "./replay-topology.js";
@@ -400,6 +400,8 @@ import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redact
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
+import { noteVerifiedPaidOutcome, errorTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs } from "./top-buyer-failures.js";
+import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
 import { operatorPage, operatorLoginPage } from "./operator.js";
@@ -732,7 +734,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync } from "./sales-ledger.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -3090,6 +3092,11 @@ startRedisPersistenceMonitor();
 // the store shortly after boot and then on a timer, so sharedLimits on
 // /api/gateway-status is measured (on / memory / degraded), never assumed.
 startSharedLimitsProbe();
+// The top outside payers by paid spend (src/top-buyer-failures.js), read from
+// the sales ledger shortly after boot and then on a timer, never on a
+// request's path: topBuyerFailures on /api/gateway-status watches their
+// verified paid calls for failures.
+if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerReady(); return topExternalPayersAsync(o); }, isOwn: (p) => isOwnWallet(p), firstMs: Math.min(5_000, topRefreshMs()) });
 // Per-tool and per-upstream failure detail (src/tool-failure-monitor.js):
 // slugs, classes, last messages, upstream outcomes, facilitator refusals.
 // onchainSqlQueries: per UTC day, how many upstream queries onchain-sql calls
@@ -4229,6 +4236,16 @@ app.get("/api/gateway-status", async (req, res) => {
     // the indexed origins and the rule are on the operator view; origins on
     // /__operator/perf.json.
     brokenListings: (() => { try { return brokenListingsStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // topBuyerFailures reads alert while one of the top outside payers by
+    // paid spend (TOP_BUYERS_COUNT over TOP_BUYERS_DAYS, from the sales
+    // ledger) has TOP_BUYER_FAIL_MIN or more non-2xx final answers to
+    // verified paid requests inside TOP_BUYER_FAIL_WINDOW_MS, held
+    // TOP_BUYER_FAIL_HOLD_MS after the failure that met the rule; ok
+    // otherwise, unknown before the first read of the top payers, off in
+    // FREE_MODE (src/top-buyer-failures.js). The word publicly; per alerting
+    // payer its short id, spend rank, tools, statuses, times and our error
+    // text for the operator. An alarm only: nothing is refused for it.
+    topBuyerFailures: await topBuyerFailuresStatus({ full, off: FREE_MODE }),
     // robinhoodSettler reads ok while the listed Robinhood Chain facilitator
     // settles first, relayer once our own relayer has settled first in its
     // place (src/robinhood-order.js: its signer read dry) for longer than
@@ -11809,6 +11826,40 @@ function answerContractFor(def) {
   if (!c) { c = answerContractOf(def, { deterministic: isComputePayable(def) }); answerContracts.set(def, c); }
   return c;
 }
+// The payer a verified paid request's gate proved, for the top-buyer failure
+// alarm, in the form the sales ledger books it (so it matches a ledger row):
+// the signed EVM `from` (lowercased), the Tempo sender the gate proved, the
+// facilitator's settle receipt, else the signer of the signed Solana,
+// Algorand or Stellar transaction (src/non-evm-payer.js, case kept); a
+// credits key by its id. A card (Stripe) payment names no wallet. Read after
+// the response closed, never on the request's path.
+async function verifiedPayerOf(req, res) {
+  const rail = railOf(req);
+  if (rail === "credits") {
+    const k = Object.hasOwn(req, "creditsKeyId") ? req.creditsKeyId : null;
+    return typeof k === "string" && k ? `credits:${k}` : null;
+  }
+  if (rail === "mpp-stripe") return null;
+  if (rail === "mpp-tempo") {
+    await new Promise((done) => { whenTempoLedgerPayerKnown(req, "top-buyers", done); });
+    return normalizePayerAddress(tempoLedgerPayer(req));
+  }
+  const evm = payerFromRequest(req);
+  if (evm) return evm;
+  const receipt = res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE");
+  const fromReceipt = payerFromPaymentResponse(String(receipt || ""));
+  if (fromReceipt) return fromReceipt;
+  const signer = await nonEvmPayerFromRequest(req);
+  return signer ? normalizePayerAddress(signer.slice(signer.indexOf(":") + 1)) : null;
+}
+function noteTopBuyerFailure(req, res, slug, status, answer) {
+  let error = null;
+  try { error = answer?.has?.() ? errorTextOf(answer.body()) : null; } catch { error = null; }
+  const at = Date.now();
+  verifiedPayerOf(req, res).then((payer) => {
+    if (payer && !isOwnWallet(payer)) noteVerifiedPaidOutcome({ payer, slug, status, error, at });
+  }, () => {});
+}
 function noteToolOutcomeOnClose(req, res, slug, def = null) {
   if (req.__a402OutcomeNoted) return;
   req.__a402OutcomeNoted = true;
@@ -11824,6 +11875,9 @@ function noteToolOutcomeOnClose(req, res, slug, def = null) {
       // Free (proof-of-work, trial) outcomes count on their own lane, which
       // the toolFailures word does not read.
       toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted, path: salePathOf(req), rail: outcomeRailOf(req, res) });
+      // A verified paid request (past every gate, src/top-buyer-failures.js)
+      // whose final answer was not a 2xx, under the payer its gate proved.
+      if (!synthetic && (status < 200 || status >= 300) && ownTrue(req, "__a402Dispatched")) noteTopBuyerFailure(req, res, slug, status, answer);
       if (answer && status === 200) {
         const { klass, reasons } = answer.has() ? classifyAnswer(answerContractFor(def), answer.body()) : { klass: "unchecked", reasons: ["not-json"] };
         toolFailureMonitor().noteAnswer(slug, klass, { synthetic, reasons });
