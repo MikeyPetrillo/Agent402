@@ -14,6 +14,10 @@ const OUR_BUG_TYPES = new Set(["TypeError", "ReferenceError", "RangeError", "Syn
 const OUR_BUG_MESSAGE =
   /is not a function|is not iterable|is not async iterable|Cannot read propert|Cannot destructure|Cannot convert|is not defined|Assignment to constant|Reduce of empty array|Invalid array length/i;
 
+/** A third party's own status that means it refused, throttled or timed out
+ *  the request (not that the request named something it does not have). */
+const UPSTREAM_REFUSALS = new Set([403, 408, 425, 429]);
+
 /** Third-party unreachable or unhappy. Never our build's problem. */
 const UPSTREAM_MESSAGE =
   /fetch failed|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|socket hang up|network|timeout|timed out|aborted|abort|rate limit|too many requests|HTTP (4[0-9]{2}|5[0-9]{2})|\b(429|500|502|503|504)\b|upstream|unavailable|temporarily/i;
@@ -29,6 +33,15 @@ export function classifyProbeFailure(err) {
   // A programming error is our bug even when it mentions a network word - the
   // type is the stronger signal, so it is checked first and never overridden.
   if (OUR_BUG_TYPES.has(name) || OUR_BUG_MESSAGE.test(msg)) return "our-bug";
+
+  // The kit names the third party's own answer in `upstreamStatus` (the field
+  // the API error carries out as attribution "upstream"). A refusal, a
+  // throttle or an outage there is the source's, whatever status the kit
+  // maps it to for the buyer (EDGAR's 403 rate limit is answered 422). The
+  // source saying the subject does not exist (404) or the request is
+  // malformed (400) is still the probe asking wrongly, so ours.
+  const upstreamStatus = Number(err?.upstreamStatus);
+  if (Number.isInteger(upstreamStatus) && (UPSTREAM_REFUSALS.has(upstreamStatus) || upstreamStatus >= 500)) return "upstream";
 
   // Our own `bad(msg, status)` with a 4xx: the probe rejected its INPUT. That
   // is this test calling it wrongly, or a contract change - either way ours.
