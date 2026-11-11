@@ -103,7 +103,7 @@
 import { payerFromRequest, paymentHeaderOf } from "./payer.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
-import { settleFailureFault, SETTLE_FAULT, RAW_SETTLE_RECEIPT } from "./settle-fault.js";
+import { settleFailureFault, isBlocklistSettleVerdict, SETTLE_FAULT, RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
 import { isGatewayPendingAnswer } from "./gateway-wire.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
@@ -152,6 +152,11 @@ const unprovenFails = new Map();
 // key -> number[]: failures of unknown cause inside the window, the count the
 // consult refuses at UNKNOWN_MAX_FAILS (shared window gwb-unk).
 const unknownFails = new Map();
+// key -> number[]: the buyer failures that were our own blocklist's verdict
+// (wallet_blocked). A key refused with one of these in its window is told
+// that settlement did not proceed for the wallet, never a balance or
+// signature story the receipt does not tell.
+const blocklistFails = new Map();
 const unprovenAlarmed = new Map(); // key -> until when its run has raised the alarm
 let unprovenTrips = 0;
 // buyer -> the time of its latest settle failure inside the window: the burst
@@ -173,8 +178,9 @@ let multiNetworkTrips = 0;
 // ---- the shared half ----------------------------------------------------------
 // Window names: gwb-fail (per key, one entry per verdict counted against
 // the wallet), gwb-unk (per key, one entry per failure of unknown cause),
-// gwb-ok (per key, one entry per settled call),
-// gwb-global (one entry per distinct buyer; a keyless failure is its own
+// gwb-ok (per key, one entry per settled call), gwb-blk (per key, one entry
+// per counted verdict that was our blocklist's: it only picks the refusal's
+// words), gwb-global (one entry per distinct buyer; a keyless failure is its own
 // entry), gwb-nets (per payer, one entry per network its count reads
 // refusing on), and the flag gwb-alarm. A window add returns the shared count, so
 // the trip decision is made on the count every replica contributed to. An
@@ -209,7 +215,7 @@ function write(p) {
   w.finally(() => pendingWrites.delete(w));
   return w;
 }
-function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true, unknown = false }) {
+function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true, unknown = false, blocklisted = false }) {
   const member = `${PROC}:${++sharedSeq}`;
   if (global) {
     void write(shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(buyerOf(key)) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
@@ -224,6 +230,7 @@ function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true, 
     });
   }
   if (key && unknown) void write(shared.windowAdd("gwb-unk", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
+  if (key && walletCount && blocklisted) void write(shared.windowAdd("gwb-blk", sharedKey(key), { windowMs: WINDOW_MS, member, now }));
   if (!key || !walletCount) return;
   void write(shared.windowAdd("gwb-fail", sharedKey(key), { windowMs: WINDOW_MS, member, now })).then((r) => {
     // A /v1 failure that brings this key's shared count to the refusing
@@ -262,14 +269,16 @@ async function sharedBlocked(key, now) {
     { name: "gwb-fail", key: sharedKey(key), windowMs: WINDOW_MS },
     { name: "gwb-ok", key: sharedKey(key), windowMs: WINDOW_MS },
     { name: "gwb-unk", key: sharedKey(key), windowMs: WINDOW_MS },
+    { name: "gwb-blk", key: sharedKey(key), windowMs: WINDOW_MS },
   ], { now });
   if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return local; }
-  const [f, o, u] = r.results;
+  const [f, o, u, k] = r.results;
   const timesOf = (w, localCount, map) => (w.count > localCount && Array.isArray(w.entries) ? w.entries.map((e) => e.score).sort((x, y) => x - y) : inWindow(map.get(key) || [], now));
   const nOks = Math.max(o.count, local.oks);
   return combined(
     verdict(timesOf(f, local.fails, fails), Math.max(f.count, local.fails), nOks),
     verdict(timesOf(u, local.unknownFails, unknownFails), Math.max(u.count, local.unknownFails), nOks, UNKNOWN_MAX_FAILS),
+    local.blocklisted || (k?.count || 0) > 0,
   );
 }
 /** The alarm with the shared flag folded in. Read by the status word only,
@@ -355,8 +364,8 @@ function verdict(failTimes, nFails, nOks, max = MAX_FAILS) {
 /** One key's state from its two counts: refused when its verdicts or its
  *  unknown failures are at their limit; `kind` says which (a verdict first),
  *  and the refusal's words follow it. */
-function combined(v, u) {
-  const out = { blocked: v.blocked || u.blocked, fails: v.fails, oks: v.oks, unknownFails: u.fails };
+function combined(v, u, blocklisted = false) {
+  const out = { blocked: v.blocked || u.blocked, fails: v.fails, oks: v.oks, unknownFails: u.fails, blocklisted: !!blocklisted };
   if (v.blocked) return { ...out, kind: "buyer", until: v.until };
   if (u.blocked) return { ...out, kind: "unknown", until: u.until };
   return out;
@@ -402,14 +411,16 @@ function pruneGlobal(now) { for (const [k, t] of globalFailKeys) if (now - t >= 
 
 /** Per-key state (this process): see `verdict`. */
 export function gatewaySettleBreakerBlocked(key, now = Date.now()) {
-  if (!key) return { blocked: false, fails: 0, oks: 0, unknownFails: 0 };
+  if (!key) return { blocked: false, fails: 0, oks: 0, unknownFails: 0, blocklisted: false };
   const arr = inWindow(fails.get(key) || [], now);
   if (arr.length) fails.set(key, arr); else fails.delete(key);
   const unk = inWindow(unknownFails.get(key) || [], now);
   if (unk.length) unknownFails.set(key, unk); else unknownFails.delete(key);
   const ok = inWindow(oks.get(key) || [], now);
   if (ok.length) oks.set(key, ok); else oks.delete(key);
-  return combined(verdict(arr, arr.length, ok.length), verdict(unk, unk.length, ok.length, UNKNOWN_MAX_FAILS));
+  const blk = inWindow(blocklistFails.get(key) || [], now);
+  if (blk.length) blocklistFails.set(key, blk); else blocklistFails.delete(key);
+  return combined(verdict(arr, arr.length, ok.length), verdict(unk, unk.length, ok.length, UNKNOWN_MAX_FAILS), blk.length > 0);
 }
 
 /** The burst alarm (this process): raised for WINDOW_MS once GLOBAL_MAX_FAILS buyers fail to settle inside a window (a failure recorded with no buyer counts on its own), or once one payer's failures read refusing on MULTI_NETWORK_MIN networks. It refuses nothing. */
@@ -451,10 +462,10 @@ function noteUnprovenFailure(key, now) {
  *  `fault` (WHO IS COUNTED): "buyer" counts at MAX_FAILS, "unknown" at
  *  UNKNOWN_MAX_FAILS, "not-buyer" never; both of the latter feed the one-key
  *  alarm. `walletCount:false` keeps a buyer failure off the wallet. */
-export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, withdrawn = false, walletCount = true, fault = "buyer" } = {}) {
+export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, withdrawn = false, walletCount = true, fault = "buyer", blocklisted = false } = {}) {
   const isBuyer = fault !== "unknown" && fault !== "not-buyer";
   const unknown = fault === "unknown" && !!key;
-  if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown });
+  if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown, blocklisted: blocklisted && isBuyer });
   if (!isBuyer && key) noteUnprovenFailure(key, now);
   if (unknown) {
     const u = inWindow(unknownFails.get(key) || [], now);
@@ -488,6 +499,12 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
   const arr = inWindow(fails.get(key) || [], now);
   arr.push(now);
   fails.set(key, arr);
+  if (blocklisted) {
+    const blk = inWindow(blocklistFails.get(key) || [], now);
+    blk.push(now);
+    if (blk.length > MAX_OKS_KEPT) blk.splice(0, blk.length - MAX_OKS_KEPT);
+    blocklistFails.set(key, blk);
+  }
   const v = verdict(arr, arr.length, inWindow(oks.get(key) || [], now).length);
   // A /v1 failure that leaves the key refusing is one network at its limit
   // for this payer (the catalog consult's failures, global:false, are the
@@ -578,7 +595,8 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
         const fault = receipt?.success === false
           ? settleFailureFault({ receipt, raw: req[RAW_SETTLE_RECEIPT] || null, network: gatewaySettleBreakerNetwork(req) })
           : marked === "buyer" || marked === "not-buyer" ? marked : "unknown";
-        recordGatewaySettleFailure(key, Date.now(), { global, fault });
+        const blocklisted = receipt?.success === false && isBlocklistSettleVerdict({ receipt, raw: req[RAW_SETTLE_RECEIPT] || null });
+        recordGatewaySettleFailure(key, Date.now(), { global, fault, blocklisted });
       } else if (st === 200) recordGatewaySettleSuccess(key);
       // Anything else (a 4xx/5xx the handler threw) was never settled and is
       // not this wallet's doing: neither counted nor cleared.
@@ -624,8 +642,13 @@ function decide(req, key, now, global, b) {
     const until = `paid tools refuse new calls from it${on} until ${new Date(b.until).toISOString()} (about ${secs} s).${network ? ` That holds ${network} only: this wallet can pay on any other network this route offers right now (the networks are accepts[].network in the route's 402).` : ""} Nothing was charged for this request.`;
     // A verdict on the buyer's payment is named; a run of unknown cause is
     // said as what it is, with no claim about whose fault it was.
+    // A wallet whose strikes include our blocklist's verdict is told only
+    // that settlement did not proceed for it (each receipt carries the reason
+    // code): no balance or signature story the receipt does not tell.
     const e = new Error(b.kind === "unknown"
       ? `Settlement of this wallet's recent payments${on} did not complete (${b.unknownFails} in the last ${mins} min: each verified and was served, and its settlement did not complete); ${until}`
+      : b.blocklisted
+      ? `Recent payments from this wallet${on} were not settled (${b.fails} in the last ${mins} min: each verified and was served, and settlement did not proceed for this wallet; each refused settlement's PAYMENT-RESPONSE receipt carries its reason code); ${until}`
       : `Recent payments from this wallet${on} failed to settle (${b.fails} in the last ${mins} min: they verified, the call was served, and the settlement then refused the payment itself, for its balance, its signature, or an authorization already used or expired); ${until} ${network ? `Before paying on ${network} again, check the wallet's balance of the payment token there and sign a new authorization.` : "Check the wallet's USDC balance on the paying chain and sign a new authorization before retrying."}`);
     e.statusCode = 429;
     e.retryAfterMs = b.until - now;
@@ -687,13 +710,13 @@ export async function gatewaySettleFailuresStatus({ full = false, now = Date.now
  *  shared windows and flag are cleared after them; await it. */
 export function _gatewaySettleBreakerReset() {
   const keys = new Set([...fails.keys(), ...oks.keys(), ...unknownFails.keys()]);
-  fails.clear(); unknownFails.clear(); unprovenFails.clear(); unprovenAlarmed.clear(); unprovenTrips = 0; oks.clear(); globalFailKeys = new Map(); globalAlarmUntil = 0; globalTrips = 0;
+  fails.clear(); unknownFails.clear(); blocklistFails.clear(); unprovenFails.clear(); unprovenAlarmed.clear(); unprovenTrips = 0; oks.clear(); globalFailKeys = new Map(); globalAlarmUntil = 0; globalTrips = 0;
   networksAtLimit.clear(); multiNetworkTrips = 0;
   if (!SHARED) return undefined;
   return (async () => {
     while (pendingWrites.size) await Promise.allSettled([...pendingWrites]);
     await Promise.allSettled([
-      ...[...keys].flatMap((k) => ["gwb-fail", "gwb-ok", "gwb-unk"].map((name) => shared.windowClear(name, sharedKey(k)))),
+      ...[...keys].flatMap((k) => ["gwb-fail", "gwb-ok", "gwb-unk", "gwb-blk"].map((name) => shared.windowClear(name, sharedKey(k)))),
       ...[...new Set([...keys].filter((k) => networkOf(k)).map((k) => sharedKey(buyerOf(k))))].map((payer) => shared.windowClear("gwb-nets", payer)),
       shared.flagSet("gwb-alarm", "all", 0), shared.windowClear("gwb-global", "all"),
     ]);

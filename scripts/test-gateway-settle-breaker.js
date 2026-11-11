@@ -500,6 +500,10 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     ["network_error", null, BASE, "ours: connection or DNS", "not-buyer"],
     ["circle_http_503", null, BASE, "facilitator: HTTP 503", "not-buyer"],
     ["gateway_http_502", null, BASE, "facilitator: HTTP 502", "not-buyer"],
+    ["circle_http_429", null, BASE, "facilitator: HTTP 429", "not-buyer"],
+    ["gateway_http_401", null, BASE, "ours: our credentials at the facilitator", "not-buyer"],
+    ["gateway_http_400", null, BASE, "unknown: a bare 400 may be a verdict the body did not name", "unknown"],
+    ["circle_http_409", null, BASE, "unknown: a bare 409 may be a verdict the body did not name", "unknown"],
     ["non_json_response", null, BASE, "facilitator: unreadable answer", "not-buyer"],
     ["free_tier_exhausted", null, BASE, "facilitator billing on our account", "not-buyer"],
     ["insufficient_credits", null, BASE, "facilitator billing on our account", "not-buyer"],
@@ -527,7 +531,13 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     // EVM payer, the client address for a rail whose payload signs none.
     const k = b.gatewaySettleBreakerCountKey(fakeReq({ from: W, network: net }));
     await b._gatewaySettleBreakerReset();
-    if (fault === "buyer") {
+    if (fault === "buyer" && reason === "wallet_blocked") {
+      // Our blocklist's verdict: refused at the verdict count, in words that
+      // claim no balance or signature problem and name no reason beyond the
+      // receipt's own code.
+      const { err } = await runRow(reason, message, net, 3);
+      ok(err?.statusCode === 429 && b.gatewaySettleBreakerBlocked(k).fails === 3 && b.gatewaySettleBreakerBlocked(k).blocklisted === true && /settlement did not proceed for this wallet/.test(err.message) && !/balance|signature|authorization|refused the payment itself|terms|block/i.test(err.message) && /Nothing was charged for this request/.test(err.message), `${label}: three refuse the wallet in neutral words (${err?.statusCode}: ${String(err?.message).slice(0, 120)})`);
+    } else if (fault === "buyer") {
       const { err } = await runRow(reason, message, net, 3);
       ok(err?.statusCode === 429 && b.gatewaySettleBreakerBlocked(k).fails === 3 && /refused the payment itself/.test(err.message) && /check the wallet's (?:USDC )?balance/i.test(err.message), `${label}: a verdict, three refuse the wallet with the verdict words (${err?.statusCode})`);
     } else if (fault === "unknown") {
@@ -541,6 +551,35 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
       ok(err === null && refusedEarly === 0 && b.gatewaySettleBreakerBlocked(k).fails === 0 && b.gatewaySettleBreakerBlocked(k).unknownFails === 0, `${label}: ours or a third party's, twelve refuse nothing (${err ? `${err.statusCode} ${err.message.slice(0, 60)}` : "served"})`);
       ok(b.gatewaySettleBreakerStatus().unprovenTrips === 1 && (await b.gatewaySettleFailuresStatus()).status === "burst", `${label}: the run raises the burst alarm instead`);
     }
+  }
+  // circle_http_NNN / gateway_http_NNN (a status whose body named no
+  // reason): only 5xx, 401, 403, 408 and 429 prove the fault is not the
+  // buyer's; any other 4xx reads unknown.
+  {
+    const { settleFailureFault } = await import("../src/settle-fault.js");
+    const wrong = [];
+    for (const prefix of ["circle", "gateway"]) {
+      for (const st of [400, 402, 404, 409, 410, 422]) if (settleFailureFault({ receipt: { errorReason: `${prefix}_http_${st}`, network: BASE } }) !== "unknown") wrong.push(`${prefix}_${st}`);
+      for (const st of [401, 403, 408, 429, 500, 502, 503, 504]) if (settleFailureFault({ receipt: { errorReason: `${prefix}_http_${st}`, network: BASE } }) !== "not-buyer") wrong.push(`${prefix}_${st}`);
+      for (const st of [400, 409, 422]) if (settleFailureFault({ receipt: { errorReason: "settlement_failed", network: BASE }, raw: { errorReason: `${prefix}_http_${st}` } }) !== "unknown") wrong.push(`raw ${prefix}_${st}`);
+      for (const st of [401, 503]) if (settleFailureFault({ receipt: { errorReason: "settlement_failed", network: BASE }, raw: { errorReason: `${prefix}_http_${st}` } }) !== "not-buyer") wrong.push(`raw ${prefix}_${st}`);
+    }
+    ok(wrong.length === 0, `facilitator HTTP codes: 400/402/404/409/410/422 unknown, 401/403/408/429/5xx not-buyer, on both prefixes (${wrong.join(", ")})`);
+  }
+  // A wallet whose counted verdicts include our blocklist's, beside balance
+  // verdicts, gets the neutral words too: the refusal never tells a story
+  // one of its strikes does not.
+  await b._gatewaySettleBreakerReset();
+  {
+    for (const r of ["insufficient_funds", "wallet_blocked", "insufficient_funds"]) { const req = fakeReq({ from: W, network: BASE }); await b.gatewaySettleBreakerCheck(req); failWith(req, r, null, { network: BASE }); }
+    let err = null;
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W, network: BASE })); } catch (e) { err = e; }
+    ok(err?.statusCode === 429 && /settlement did not proceed for this wallet/.test(err.message) && !/balance|signature/i.test(err.message), `strikes that include wallet_blocked: neutral refusal words (${String(err?.message).slice(0, 100)})`);
+    await b._gatewaySettleBreakerReset();
+    for (let i = 0; i < 3; i++) { const req = fakeReq({ from: W, network: BASE }); await b.gatewaySettleBreakerCheck(req); failWith(req, "insufficient_funds", null, { network: BASE }); }
+    err = null;
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W, network: BASE })); } catch (e) { err = e; }
+    ok(err?.statusCode === 429 && /refused the payment itself/.test(err.message) && b.gatewaySettleBreakerBlocked(b.gatewaySettleBreakerCountKey(fakeReq({ from: W, network: BASE }))).blocklisted === false, "control: balance verdicts alone keep the verdict words");
   }
   // The unknown count keeps the share rule: a wallet settling most of its
   // calls is not refused for nine unknown failures beside them.

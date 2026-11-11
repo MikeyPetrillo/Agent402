@@ -31,7 +31,14 @@ import { classifySvmFundingRefusal } from "./svm-funding-refusal.js";
 export const RAW_SETTLE_RECEIPT = "__settleReceiptRaw";
 
 const TEXT_MAX = 2000;
-const NOT_BUYER_CODE = /^(?:timeout|network_error|non_json_response|redirect_refused|client_disconnected|own_relayer_refused|relayer_error)$|_check_failed$|_hook_error$|_mark_failed$|_unverifiable$|^invalid_(?:network|scheme|payment_requirements|x402_version)$|_requirements$|_not_configured$|_auth_store$|_unauthenticated$|_verifier_error$|^unsupported_|^(?:circle|gateway)_http_\d{3}$/i;
+const NOT_BUYER_CODE = /^(?:timeout|network_error|non_json_response|redirect_refused|client_disconnected|own_relayer_refused|relayer_error)$|_check_failed$|_hook_error$|_mark_failed$|_unverifiable$|^invalid_(?:network|scheme|payment_requirements|x402_version)$|_requirements$|_not_configured$|_auth_store$|_unauthenticated$|_verifier_error$|^unsupported_|^(?:circle|gateway)_http_(?:5\d\d|401|403|408|429)$/i;
+// circle_http_NNN / gateway_http_NNN are the codes those settle clients give a
+// 4xx/5xx whose body names no reason (src/circle-facilitator.js,
+// src/gateway-nanopayments.js). Only a 5xx, our credentials refused (401,
+// 403), our request timing out (408) or a rate limit (429) proves the fault is
+// not the buyer's; any other 4xx (400, 402, 409, 422) may be a verdict on the
+// payment the body did not name, so it reads unknown (the bounded count), as
+// notCheckedRefusal reads a facilitator's bare 4xx.
 
 // The chain's own words that the paying wallet held too little of the asset
 // for the transfer, per rail. Each is read only on its own rail, and never
@@ -63,6 +70,15 @@ export function isBalanceShortfallText(text, network) {
   if (/^stellar:/.test(net)) return STELLAR_SHORT.test(t);
   if (/^algorand:/.test(net)) return ALGO_SHORT.test(t);
   return false;
+}
+
+/** True when a failed settle receipt is our own blocklist's verdict on the
+ *  paying wallet (the exact code only: a facilitator message that names it is
+ *  not our verdict). Pure. */
+export function isBlocklistSettleVerdict({ receipt = null, raw = null } = {}) {
+  const code = String(receipt?.errorReason || "").trim();
+  const rawReason = typeof raw?.errorReason === "string" ? raw.errorReason.trim() : "";
+  return code === "wallet_blocked" || rawReason === "wallet_blocked";
 }
 
 /**
