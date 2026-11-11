@@ -620,7 +620,7 @@ const OP = "test-hangup-operator-token-0123456789";
 
 // Stub facilitator: verify/settle counters with optional delays. Every settle
 // answers a DISTINCT tx hash (the refund ledger is idempotent on it).
-const fac = { verify: 0, settle: 0, verifyDelayMs: 0, settleDelayMs: 0, settleFails: false };
+const fac = { verify: 0, settle: 0, verifyDelayMs: 0, settleDelayMs: 0, settleFails: false, settleReason: "unexpected_settle_error" };
 const txFor = (n) => (n === 1 ? TX : `0x${n.toString(16).padStart(64, "0")}`);
 facilitator = createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
@@ -638,7 +638,7 @@ facilitator = createServer((req, res) => {
     let parsed = {}; try { parsed = b ? JSON.parse(b) : {}; } catch { /* ignore */ }
     const payer = parsed.paymentPayload?.payload?.authorization?.from;
     if (req.url === "/verify") { fac.verify++; if (fac.verifyDelayMs) await sleep(fac.verifyDelayMs); return reply({ isValid: true, payer }); }
-    if (req.url === "/settle") { const n = ++fac.settle; fac.lastTx = txFor(n); if (fac.settleDelayMs) await sleep(fac.settleDelayMs); if (fac.settleFails) return reply({ success: false, errorReason: "unexpected_settle_error", transaction: "", network: "eip155:8453", payer }); return reply({ success: true, transaction: txFor(n), network: "eip155:8453", payer }); }
+    if (req.url === "/settle") { const n = ++fac.settle; fac.lastTx = txFor(n); if (fac.settleDelayMs) await sleep(fac.settleDelayMs); if (fac.settleFails) return reply({ success: false, errorReason: fac.settleReason, transaction: "", network: "eip155:8453", payer }); return reply({ success: true, transaction: txFor(n), network: "eip155:8453", payer }); }
     reply({});
   });
 });
@@ -932,14 +932,17 @@ try {
   // max 3) ran upstream three times, and the wallet's next CONNECTED call is
   // refused 429 before any upstream call. Before this rule the released
   // ticket still read as forgiven, every settle listener was skipped, and
-  // the fourth call was served.
+  // the fourth call was served. The facilitator answers what a drained
+  // wallet gets at settle (insufficient_funds): a verdict on the payment,
+  // counted at the breaker's normal count. (A failure of unknown cause is
+  // bounded too, at three times the count: scripts/test-paid-settle-breaker.js.)
   {
     const W4 = wallet(0xb4);
     const hfBefore = (await refundsDoc()).hangupForgiveness;
     const c0 = or.chat, s0 = fac.settle, logAt = serverLog.length;
     const unconfirmed = () => (logSince(logAt).match(/\[hangup\] SETTLE UNCONFIRMED: [^\n]*POST \/v1\/nano\/chat\/completions/g) || []).length;
     for (let i = 1; i <= 3; i++) {
-      fac.settleDelayMs = 1_000; fac.settleFails = true;
+      fac.settleDelayMs = 1_000; fac.settleFails = true; fac.settleReason = "insufficient_funds";
       const sBefore = fac.settle;
       const settleSeen = waitFor(() => fac.settle > sBefore, 8000);
       await hangUp(`${B}${CHAT.path}`, { method: "POST", headers: await headersFor(CHAT, W4, "10.0.0.24"), body: CHAT.body, abortWhen: settleSeen.then(() => sleep(100)) });
@@ -948,7 +951,7 @@ try {
       await waitFor(() => unconfirmed() >= i, 10_000);
       await sleep(300);
     }
-    fac.settleDelayMs = 0; fac.settleFails = false;
+    fac.settleDelayMs = 0; fac.settleFails = false; fac.settleReason = "unexpected_settle_error";
     ok(or.chat - c0 === 3 && fac.settle - s0 === 3, `b4. three residual-window failed settles from one wallet each ran upstream and were sent to settle (chat +${or.chat - c0}, settles +${fac.settle - s0})`);
     ok(unconfirmed() === 3, "b4. each is logged as unconfirmed");
     const hfAfter = (await refundsDoc()).hangupForgiveness;

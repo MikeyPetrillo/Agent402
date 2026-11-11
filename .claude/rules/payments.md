@@ -49,7 +49,18 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   that sweep for at most `CREDITS_HOLD_REFRESH_MAX_MS` (default 6 hours, never under the abandoned
   window) (`src/credits.js`).
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet on `/v1` and other
-  wallet-only tools). A signed EVM payer is counted per network its payment named (key
+  wallet-only tools). Each failed settle is read for the fault it proves (`settleFailureFault` in
+  `src/settle-fault.js`, from the receipt code and the facilitator's raw words the receipt guard
+  keeps on the request; the Tempo gate's `SETTLE_FAULT` mark): a verdict on the buyer's payment
+  (balance, signature, an authorization used or expired, or the chain's own balance words: an EVM
+  token's "exceeds balance", Solana's transfer `Custom:1` or `InvalidAccountData`, Stellar `#10` or
+  `op_underfunded`, an Algorand asset underflow) counts at `GATEWAY_SETTLE_BREAKER_MAX`; a failure
+  of unknown cause (a revert or simulation naming no balance, a bare `settlement_failed`, a 402
+  with no receipt, a pending settle) counts at `GATEWAY_SETTLE_BREAKER_UNKNOWN_MAX` (default 3x)
+  and its 429 says only that settlement did not complete; ours or a third party's (timeouts,
+  store or hook failures, our relayer or credentials, facilitator HTTP errors, billing refusals)
+  never counts. Unknown and not-buyer runs at the normal count also raise the burst alarm
+  (`unprovenTrips`). A signed EVM payer is counted per network its payment named (key
   `payer@network`, read through `decodePaymentHeader`), so its 429 holds that network only, says the
   wallet can pay on another at once and carries `retry`, `refusedNetwork`, `retryAfterSeconds` and
   `otherNetworksFrom` (`src/tool-error-fields.js`); a Tempo sender, a credits key and the IP

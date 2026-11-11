@@ -44,6 +44,13 @@ function fakeRes() {
   res.setHeader = (n, v) => { res._headers[String(n).toLowerCase()] = v; };
   return res;
 }
+// A settle receipt as the vendor writes it on a failed settle (the buyer-facing
+// form: a code-shaped reason). `failWith` sets the final 402 and the receipt.
+// `message` is the facilitator's own words (the guard below cuts them from
+// what the buyer reads and keeps them on the request, as in the server).
+const receiptOf = (errorReason, extra = {}) => Buffer.from(JSON.stringify({ success: false, errorReason, errorMessage: errorReason, transaction: "", ...extra })).toString("base64");
+const failWith = (req, errorReason = "insufficient_funds", message = null, extra = {}) => { req.res.statusCode = 402; if (errorReason) req.res.setHeader("PAYMENT-RESPONSE", receiptOf(errorReason, { ...(message ? { errorMessage: message } : {}), ...extra })); req.res.emit("finish"); };
+const { settleReceiptHeaderGuard } = await import("../src/facilitator-diagnostics.js");
 function fakeReq({ from = null, tempo = null, ip = "203.0.113.7", withRes = true, network = null, v1 = false } = {}) {
   const hdr = from ? paymentHeader(from, network, v1) : null;
   const req = {
@@ -51,7 +58,7 @@ function fakeReq({ from = null, tempo = null, ip = "203.0.113.7", withRes = true
     headers: {}, ip,
   };
   if (tempo) req.mppTempoSender = tempo;
-  if (withRes) req.res = fakeRes();
+  if (withRes) { req.res = fakeRes(); req.method = "POST"; req.path = "/v1/chat"; settleReceiptHeaderGuard({ log: () => {} })(req, req.res, () => {}); }
   return req;
 }
 
@@ -260,14 +267,21 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
   await b._gatewaySettleBreakerReset();
   const key = ADDR.toLowerCase();
   // Three served requests whose FINAL status is 402 (the settlement-failure
-  // rewrite): each one counts, the third blocks.
+  // rewrite) with a verdict on the buyer's payment: each one counts, the third blocks.
   for (let i = 0; i < 3; i++) {
     const req = fakeReq({ from: ADDR });
     await nano.handler(chatBody, req);
-    req.res.statusCode = 402;
-    req.res.emit("finish");
+    failWith(req, "insufficient_funds");
   }
-  ok(b.gatewaySettleBreakerBlocked(key).blocked, "three served-then-402 responses (settle failed after the handler) block the wallet");
+  ok(b.gatewaySettleBreakerBlocked(key).blocked, "three served-then-402 responses refused for the buyer's balance block the wallet");
+  await b._gatewaySettleBreakerReset();
+  // A 402 with no receipt names no verdict: it is not counted against the wallet.
+  for (let i = 0; i < 3; i++) {
+    const req = fakeReq({ from: ADDR });
+    await nano.handler(chatBody, req);
+    failWith(req, null);
+  }
+  ok(b.gatewaySettleBreakerBlocked(key).fails === 0 && b.gatewaySettleBreakerUnproven(key).fails === 3, "three served-then-402 responses with no receipt are unproven: off the wallet's count");
   await b._gatewaySettleBreakerReset();
   // A settle receipt saying success:false counts whatever the status says.
   {
@@ -328,12 +342,13 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     const pause = () => s.noteAvmSettleRefusal({ network: ALGO, payTo: PAYTO, reason: "subcent_quota_exceeded" });
     ok(b.gatewaySettleBreakerKey(avmReq()) === avmKey, "an Algorand buyer is keyed by client IP (its payload signs no EVM authorization)");
 
-    // No gate on the resource server: nothing withdraws the offer, so it counts.
+    // No gate on the resource server: a billing refusal on our account is
+    // still not the wallet's, so it is unproven (off the wallet, in the alarm).
     s._resetAvmSponsorshipForTest({ logger: () => {}, installed: false });
     await b._gatewaySettleBreakerReset();
     pause();
     await finishWith("subcent_quota_exceeded");
-    ok(walletFails() === 1 && globalFails() === 1, `with no offer gate installed a subcent_quota_exceeded refusal counts like any failed settle (wallet ${walletFails()}, global ${globalFails()})`);
+    ok(walletFails() === 0 && globalFails() === 1 && b.gatewaySettleBreakerUnproven(avmKey).fails === 1, `with no offer gate installed a subcent_quota_exceeded refusal is unproven: off the wallet, in the burst alarm (wallet ${walletFails()}, global ${globalFails()})`);
 
     // Gate installed and the payTo paused: off the WALLET, still global.
     s._resetAvmSponsorshipForTest({ logger: () => {}, installed: true });
@@ -371,56 +386,38 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     await finishWith("subcent_quota_exceeded");
     ok(walletFails() === 1, "a withdrawn refusal does not CLEAR a real earlier failure either");
 
-    // Paused, but the refusal is NOT one this gate withdraws: each counts.
-    // (a) a payment verdict whose message merely names the allowance;
+    // A payment verdict whose message merely names the allowance counts:
+    // the reason is read, never the message. A reverted transfer
+    // (transaction_failed) is not a verdict on the wallet (the settler's own
+    // gas can revert it): unproven.
     await b._gatewaySettleBreakerReset();
-    await finishWith("transaction_failed", { errorMessage: "simulate failed: subcent_quota_exceeded" });
     await finishWith("insufficient_funds", { errorMessage: "subcent_quota_exceeded" });
-    ok(walletFails() === 2, `a payment verdict (transaction_failed, insufficient_funds) naming subcent_quota_exceeded in its message counts against the wallet (got ${walletFails()})`);
-    // (b) a requirement the gate never withdraws: one cent, or a payTo not paused;
-    await b._gatewaySettleBreakerReset();
-    await finishWith("subcent_quota_exceeded", {}, { paid: CENT });
-    await finishWith("subcent_quota_exceeded", {}, { paid: { ...SUB, payTo: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" } });
-    ok(walletFails() === 2, `a one-cent requirement, and a sub-cent one paid to a payTo that is not paused, each count (got ${walletFails()})`);
-    // (c) a route whose ONLY accept is the paused one: the never-empty rule
-    // keeps it in the next 402, so nothing closes the loop - bounded per buyer.
+    await finishWith("transaction_failed", { errorMessage: "simulate failed: subcent_quota_exceeded" });
+    ok(walletFails() === 1 && b.gatewaySettleBreakerUnproven(avmKey).fails === 1, `insufficient_funds naming subcent_quota_exceeded in its message counts against the wallet; transaction_failed does not (wallet ${walletFails()})`);
+
+    // A route whose ONLY accept is the paused one, and AVM_SUBCENT_GATE=off:
+    // nothing withdraws the offer, and the refusal is still on our account,
+    // so the buyer is never refused for it: the call is served, and the run
+    // raises the burst alarm instead (one key, at the refusing count).
     await b._gatewaySettleBreakerReset();
     for (let i = 0; i < 3; i++) await finishWith("subcent_quota_exceeded", {}, { offered: [SUB] });
     let err = await nextCall();
-    ok(walletFails() === 3 && err?.statusCode === 429, `an Algorand-only route: its refusals are not exempt (nothing was withdrawn), so three count and the fourth call is refused 429 (got ${err?.statusCode})`);
-    ok(/billing limit on this server's own account/.test(err?.message || ""), "...and that 429 names the facilitator's billing limit");
-
-    // Installed, but no payTo paused right now (the refusal hook never flipped
-    // it, or the evidence went stale): the offer is still out, so it counts.
+    ok(walletFails() === 0 && err === null, `an Algorand-only route: three billing refusals refuse nothing; the fourth call is served (got ${err?.statusCode || "served"})`);
+    ok(b.gatewaySettleBreakerGlobalAlarm().alarm && b.gatewaySettleBreakerStatus().unprovenTrips === 1, "...and one key's run of unproven failures raises the burst alarm instead");
     s._resetAvmSponsorshipForTest({ logger: () => {}, installed: true });
-    await b._gatewaySettleBreakerReset();
-    await finishWith("subcent_quota_exceeded");
-    ok(walletFails() === 1, "installed but nothing paused: the refusal counts against the wallet");
-
-    // AVM_SUBCENT_GATE=off: the escape hatch withdraws nothing, so nothing is exempt.
     await b._gatewaySettleBreakerReset();
     s.noteSponsorshipStatus(PAYTO, { chain: "algorand", usedMonth: 1013, quota: 1000, suBalance: 0 });
     process.env.AVM_SUBCENT_GATE = "off";
     for (let i = 0; i < 3; i++) await finishWith("subcent_quota_exceeded");
     err = await nextCall();
-    ok(walletFails() === 3 && err?.statusCode === 429, `AVM_SUBCENT_GATE=off: three refusals count and the fourth call is refused 429, never served free without bound (got ${err?.statusCode})`);
-    ok(/billing limit on this server's own account/.test(err?.message || "") && /not because of the wallet/.test(err?.message || "") && !/USDC balance/.test(err?.message || ""), `...and the 429 names the facilitator's billing limit, not the wallet's balance (got: ${String(err?.message).slice(0, 120)})`);
+    ok(walletFails() === 0 && err === null && b.gatewaySettleBreakerStatus().unprovenTrips === 1, `AVM_SUBCENT_GATE=off: three refusals refuse nothing and page instead (got ${err?.statusCode || "served"})`);
     delete process.env.AVM_SUBCENT_GATE;
 
-    // Paused, but a subcent refusal on ANOTHER network is not withdrawn by this gate.
-    await b._gatewaySettleBreakerReset();
-    pause();
-    await finishWith("subcent_quota_exceeded", { network: "eip155:43114" });
-    ok(walletFails() === 1, "the same reason on a non-Algorand network counts");
-
-    // Every other billing shape counts per wallet AND globally, as before.
+    // Every other billing shape: off the wallet, in the alarm.
     await b._gatewaySettleBreakerReset();
     await finishWith("free_tier_exhausted", { network: "eip155:43114" });
     await finishWith("unexpected_settle_error", { network: "eip155:1329", errorMessage: "Facilitator settle failed (403): payment required: buy more credits" });
-    ok(walletFails() === 2 && globalFails() === 1, `free_tier_exhausted and a credits wall named only in errorMessage count per wallet and globally (wallet ${walletFails()}; global ${globalFails()}: one buyer, counted once)`);
-    await finishWith("transaction_failed", { network: "eip155:43114", errorMessage: "rpc quota exceeded" });
-    err = await nextCall();
-    ok(err?.statusCode === 429 && /2 of them were a facilitator billing refusal/.test(err?.message || "") && /USDC balance/.test(err?.message || ""), `a mixed window names the billing share and still points at the wallet for the rest - transaction_failed is a payment verdict, whatever its message says (got: ${String(err?.message).slice(0, 160)})`);
+    ok(walletFails() === 0 && globalFails() === 1, `free_tier_exhausted and a credits wall named only in errorMessage are off the wallet and in the alarm (wallet ${walletFails()}; global ${globalFails()}: one buyer, counted once)`);
 
     // Control: a buyer-side reason on the same 402 shape counts, and three trip the 429 as before.
     await b._gatewaySettleBreakerReset();
@@ -446,6 +443,153 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
     ok(b.armGatewaySettleBreaker(fakeReq({ withRes: false }), key) === false, "a request without a response object arms nothing and does not throw");
     ok(req.res.listenerCount("finish") === 1, "exactly one finish listener per request");
   }
+}
+
+// --- who a failed settle is counted against: one row per reason class -------
+// Every reason that can reach the listener on a failed settle, with what it
+// proves (src/settle-fault.js). A verdict on the buyer's payment counts at
+// MAX (3); a failure of unknown cause counts at UNKNOWN_MAX (9) and is
+// refused in words that blame no one; ours or a third party's never counts.
+// Each row drives the real listener through the real receipt guard.
+{
+  const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", BASE = "eip155:8453", XLM = "stellar:pubnet", ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+  ok(b.UNKNOWN_MAX_FAILS === 9, `unknown failures refuse at three times the verdict count (${b.UNKNOWN_MAX_FAILS})`);
+  const ROWS = [
+    // [errorReason, facilitator's message, network, proves, fault]
+    ["insufficient_funds", null, BASE, "buyer: balance", "buyer"],
+    ["insufficient_balance", null, BASE, "buyer: balance (Gateway deposit)", "buyer"],
+    ["invalid_exact_evm_insufficient_balance", null, BASE, "buyer: balance", "buyer"],
+    ["invalid_exact_evm_payload_signature", null, BASE, "buyer: signature", "buyer"],
+    ["invalid_exact_evm_payload_authorization_valid_before", null, BASE, "buyer: window closed", "buyer"],
+    ["invalid_payload", null, BASE, "buyer: payload", "buyer"],
+    ["nonce_already_used", null, BASE, "buyer: authorization used", "buyer"],
+    ["duplicate_authorization", null, BASE, "buyer: same authorization resent", "buyer"],
+    ["transaction_served_elsewhere", null, BASE, "buyer: same transfer resent", "buyer"],
+    // The chain's own words that the wallet came up short, per rail (the shapes in our logs and tests).
+    ["invalid_exact_evm_transaction_failed", "execution reverted: ERC20: transfer amount exceeds balance", BASE, "buyer: EVM token revert, balance", "buyer"],
+    ["invalid_exact_evm_transaction_failed", "execution reverted: ERC20InsufficientBalance(0x0, 10, 5000)", BASE, "buyer: EVM token revert, balance (OZ v5)", "buyer"],
+    ["transaction_simulation_failed", "transaction_simulation_failed: InstructionError:[2 map[Custom:1]]", SOL, "buyer: SPL token insufficient funds", "buyer"],
+    ["transaction_simulation_failed", "InstructionError:[2 InvalidAccountData]", SOL, "buyer: no USDC token account", "buyer"],
+    ["invalid_exact_stellar_payload_simulation_failed", "HostError: Error(Contract, #10) balance is not sufficient to spend", XLM, "buyer: Stellar asset balance", "buyer"],
+    ["transaction_failed", "op_underfunded", XLM, "buyer: Stellar payment underfunded", "buyer"],
+    ["invalid_exact_avm_simulation_failed", "transaction X: underflow on subtracting 5000 from sender amount 100", ALGO, "buyer: Algorand asset underflow", "buyer"],
+    // The same families without a balance proof: unknown.
+    ["invalid_exact_evm_transaction_failed", "execution reverted", BASE, "unknown: revert, no balance named (the settler's gas can cause it)", "unknown"],
+    ["invalid_exact_evm_transaction_failed", "insufficient funds for gas * price + value", BASE, "unknown: the settler's own gas", "unknown"],
+    ["transaction_simulation_failed", "InstructionError:[2 map[Custom:1]]", BASE, "unknown: a Solana error shape on an EVM network", "unknown"],
+    ["transaction_simulation_failed", "InstructionError:[0 map[Custom:1]]", SOL, "unknown: not the transfer instruction", "unknown"],
+    ["invalid_exact_avm_simulation_failed", "overspend (account FEEPAYER, data {...})", ALGO, "unknown: ALGO overspend may be the fee payer's", "unknown"],
+    ["transaction_failed", null, BASE, "unknown: revert", "unknown"],
+    ["invalid_exact_stellar_payload_simulation_failed", "fee payer balance is not sufficient for the fee", XLM, "unknown: the settler's fee payer, not the buyer", "unknown"],
+    ["settlement_failed", null, BASE, "unknown: no words at all", "unknown"],
+    ["settlement_pending", null, BASE, "unknown: still settling", "unknown"],
+    ["wallet_blocked", null, BASE, "unknown-weight: our blocklist (bounded, no blame words)", "unknown"],
+    // Ours or a third party's, proven: never counted.
+    ["settlement_failed", "fetch failed [ECONNRESET syscall=read]", BASE, "ours: connection reset", "not-buyer"],
+    ["settlement_failed", "Facilitator settle failed (503): upstream unavailable", BASE, "facilitator: HTTP 503", "not-buyer"],
+    ["settlement_failed", "Facilitator settle failed (401): unauthorized", BASE, "ours: our credentials", "not-buyer"],
+    ["wallet_check_failed", null, BASE, "ours: blocklist store unreadable", "not-buyer"],
+    ["contract_wallet_check_failed", null, BASE, "ours: contract-wallet gate could not run", "not-buyer"],
+    ["settle_mark_failed", null, BASE, "ours: settle-sent mark store failed", "not-buyer"],
+    ["before_settle_hook_error", null, BASE, "ours: a settle hook threw", "not-buyer"],
+    ["contract_signature_unverifiable", null, BASE, "ours: on-chain signature check did not finish", "not-buyer"],
+    ["timeout", null, BASE, "ours: our time limit", "not-buyer"],
+    ["network_error", null, BASE, "ours: connection or DNS", "not-buyer"],
+    ["circle_http_503", null, BASE, "facilitator: HTTP 503", "not-buyer"],
+    ["gateway_http_502", null, BASE, "facilitator: HTTP 502", "not-buyer"],
+    ["non_json_response", null, BASE, "facilitator: unreadable answer", "not-buyer"],
+    ["free_tier_exhausted", null, BASE, "facilitator billing on our account", "not-buyer"],
+    ["insufficient_credits", null, BASE, "facilitator billing on our account", "not-buyer"],
+    ["own_relayer_refused", null, BASE, "ours: our relayer", "not-buyer"],
+    ["relayer_error", null, BASE, "ours: our relayer", "not-buyer"],
+    ["invalid_network", null, BASE, "ours: requirements", "not-buyer"],
+    ["invalid_payment_requirements", null, BASE, "ours: requirements", "not-buyer"],
+    ["client_disconnected", null, BASE, "buyer left (forgiven, never sent)", "not-buyer"],
+  ];
+  const W = "0x" + "c".repeat(40);
+  const runRow = async (reason, message, net, n) => {
+    let refusedEarly = 0;
+    for (let i = 0; i < n; i++) {
+      const req = fakeReq({ from: W, network: net });
+      try { await b.gatewaySettleBreakerCheck(req); } catch { refusedEarly++; continue; }
+      failWith(req, reason, message, { network: net });
+    }
+    let err = null;
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W, network: net })); } catch (e) { err = e; }
+    return { err, refusedEarly };
+  };
+  for (const [reason, message, net, proves, fault] of ROWS) {
+    const label = `${reason}${message ? ` "${message.slice(0, 40)}"` : ""} on ${net.split(":")[0]} (${proves})`;
+    // The count key as the consult derives it: payer@network for a signed
+    // EVM payer, the client address for a rail whose payload signs none.
+    const k = b.gatewaySettleBreakerCountKey(fakeReq({ from: W, network: net }));
+    await b._gatewaySettleBreakerReset();
+    if (fault === "buyer") {
+      const { err } = await runRow(reason, message, net, 3);
+      ok(err?.statusCode === 429 && b.gatewaySettleBreakerBlocked(k).fails === 3 && /refused the payment itself/.test(err.message) && /check the wallet's (?:USDC )?balance/i.test(err.message), `${label}: a verdict, three refuse the wallet with the verdict words (${err?.statusCode})`);
+    } else if (fault === "unknown") {
+      const r8 = await runRow(reason, message, net, 8);
+      ok(r8.err === null && r8.refusedEarly === 0 && b.gatewaySettleBreakerBlocked(k).fails === 0 && b.gatewaySettleBreakerBlocked(k).unknownFails === 8, `${label}: unknown, eight are served (${r8.err ? r8.err.statusCode : "served"})`);
+      await b._gatewaySettleBreakerReset();
+      const { err } = await runRow(reason, message, net, 9);
+      ok(err?.statusCode === 429 && /did not complete/.test(err.message) && !/balance|signature|refused the payment|failed to settle/.test(err.message) && /Nothing was charged for this request/.test(err.message), `${label}: unknown, nine refuse the wallet in words that blame no one (${err?.statusCode}: ${String(err?.message).slice(0, 90)})`);
+    } else {
+      const { err, refusedEarly } = await runRow(reason, message, net, 12);
+      ok(err === null && refusedEarly === 0 && b.gatewaySettleBreakerBlocked(k).fails === 0 && b.gatewaySettleBreakerBlocked(k).unknownFails === 0, `${label}: ours or a third party's, twelve refuse nothing (${err ? `${err.statusCode} ${err.message.slice(0, 60)}` : "served"})`);
+      ok(b.gatewaySettleBreakerStatus().unprovenTrips === 1 && (await b.gatewaySettleFailuresStatus()).status === "burst", `${label}: the run raises the burst alarm instead`);
+    }
+  }
+  // The unknown count keeps the share rule: a wallet settling most of its
+  // calls is not refused for nine unknown failures beside them.
+  await b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 20; i++) b.recordGatewaySettleSuccess(`${W}@${BASE}`);
+  const busy = await runRow("transaction_failed", null, BASE, 9);
+  ok(busy.err === null, `nine unknown failures beside twenty settled calls refuse nothing (${busy.err?.statusCode || "served"})`);
+  // The Tempo gate carries no x402 receipt: its own fault mark decides, and no mark is unknown.
+  const { SETTLE_FAULT } = await import("../src/settle-fault.js");
+  for (const [mark, n, refused] of [["buyer", 3, true], ["not-buyer", 12, false], [undefined, 8, false], [undefined, 9, true], ["unknown", 9, true]]) {
+    await b._gatewaySettleBreakerReset();
+    for (let i = 0; i < n; i++) { const req = fakeReq({ tempo: "0xtempopayer" }); await b.gatewaySettleBreakerCheck(req); if (mark !== undefined) req[SETTLE_FAULT] = mark; failWith(req, null); }
+    let err = null;
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ tempo: "0xtempopayer" })); } catch (e) { err = e; }
+    ok(refused ? err?.statusCode === 429 : err === null, `Tempo 402 marked ${mark}, ${n} of them: ${refused ? "refused" : "served"} (${err?.statusCode || "served"})`);
+  }
+  await b._gatewaySettleBreakerReset();
+}
+
+// --- our store failing never refuses a funded wallet ----------------------------
+// While the shared store or Redis is down, every settle of a served call fails
+// on our side (the blocklist read: wallet_check_failed; the settle-sent mark:
+// settle_mark_failed; a hook throwing: before_settle_hook_error). Fifty such
+// failures inside the window, from a wallet with settled calls and from a
+// brand-new one, refuse neither: the next call reaches the upstream.
+{
+  await b._gatewaySettleBreakerReset();
+  const FUNDED = "0x" + "d".repeat(40), NEW = "0x" + "e".repeat(40);
+  for (let i = 0; i < 3; i++) b.recordGatewaySettleSuccess(FUNDED.toLowerCase());
+  const OURS = [["wallet_check_failed"], ["settle_mark_failed"], ["before_settle_hook_error"], ["timeout"], ["settlement_failed", "fetch failed [ETIMEDOUT]"], ["settlement_failed", "Facilitator settle failed (502): bad gateway"]];
+  let refusedDuring = 0;
+  for (let i = 0; i < 50; i++) {
+    for (const who of [FUNDED, NEW]) {
+      const req = fakeReq({ from: who });
+      try { await b.gatewaySettleBreakerCheck(req); } catch { refusedDuring++; continue; }
+      failWith(req, ...OURS[i % OURS.length]);
+    }
+  }
+  ok(refusedDuring === 0, `no call of the hundred is refused while our side fails (refused ${refusedDuring})`);
+  globalThis.fetch = async (url, init) => { fetchCalls++; return okChat(init); };
+  fetchCalls = 0;
+  let e1 = null, e2 = null;
+  try { await nano.handler(chatBody, fakeReq({ from: FUNDED })); } catch (e) { e1 = e; }
+  try { await nano.handler(chatBody, fakeReq({ from: NEW })); } catch (e) { e2 = e; }
+  ok(e1 === null && e2 === null && fetchCalls === 2, `fifty store-failure settles each refuse neither a funded wallet nor a new one: both reach the upstream (${e1?.statusCode || "served"}, ${e2?.statusCode || "served"}, upstream ${fetchCalls})`);
+  ok(b.gatewaySettleBreakerStatus().unprovenTrips === 2 && (await b.gatewaySettleFailuresStatus()).status === "burst", "...and the run is paged on: the burst alarm, once per key");
+  // Control beside it: three verdicts on the same funded wallet's balance do refuse it.
+  for (let i = 0; i < 6; i++) { const req = fakeReq({ from: FUNDED }); try { await b.gatewaySettleBreakerCheck(req); } catch { /* refused */ } if (req.__gatewaySettleBreakerArmed) failWith(req, "insufficient_funds"); }
+  let e3 = null;
+  try { await nano.handler(chatBody, fakeReq({ from: FUNDED })); } catch (e) { e3 = e; }
+  ok(e3?.statusCode === 429, `control: balance verdicts on the same wallet still refuse it (${e3?.statusCode})`);
+  await b._gatewaySettleBreakerReset();
 }
 
 globalThis.fetch = realFetch;
@@ -488,8 +632,7 @@ delete process.env.OPENAI_API_KEY;
   const failOnce = (consults) => {
     const req = fakeReq({ from: ADDR });
     for (const g of consults) b.armGatewaySettleBreaker(req, "0xscope", { global: g });
-    req.res.statusCode = 402;
-    req.res.emit("finish");
+    failWith(req);
   };
   failOnce([false]);
   ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 0, "a catalog-only consult (global:false) feeds nothing global");
@@ -500,8 +643,7 @@ delete process.env.OPENAI_API_KEY;
   const req = fakeReq({ from: ADDR });
   b.armGatewaySettleBreaker(req, "0xscope2", { global: true });
   b.armGatewaySettleBreaker(req, "0xscope2", { global: false });
-  req.res.statusCode = 402;
-  req.res.emit("finish");
+  failWith(req);
   ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 1, "a later global:false consult never downgrades an armed global listener");
   await b._gatewaySettleBreakerReset();
 }
@@ -550,14 +692,14 @@ delete process.env.OPENAI_API_KEY;
   const st = b.gatewaySettleBreakerBlocked(key);
   ok(st.fails === 0 && !st.blocked, `three settlement_pending answers count nothing against the wallet (got ${JSON.stringify(st)})`);
   ok(b.gatewaySettleBreakerStatus().globalFailsInWindow === 1, "...and count once toward the /v1 burst alarm, as that one buyer");
-  // Control: the same word on a PLAIN payment (Circle's Arc facilitator,
-  // whose resend its held claim refuses) is not this exemption.
+  // The same word on a PLAIN payment (Circle's Arc facilitator) is no
+  // verdict on the wallet either: unproven, off the wallet's count.
   const plainReq = fakeReq({ from: ADDR });
   b.armGatewaySettleBreaker(plainReq, key);
   plainReq.res.statusCode = 402;
   plainReq.res.setHeader("PAYMENT-RESPONSE", pendingReceipt);
   plainReq.res.emit("finish");
-  ok(b.gatewaySettleBreakerBlocked(key).fails === 1, "control: settlement_pending on a plain payment still counts against the wallet");
+  ok(b.gatewaySettleBreakerBlocked(key).fails === 0 && b.gatewaySettleBreakerUnproven(key).fails === 1, "settlement_pending on a plain payment is unproven: off the wallet's count");
   await b._gatewaySettleBreakerReset();
   const req = batchedReq();
   b.armGatewaySettleBreaker(req, key);
@@ -610,7 +752,7 @@ delete process.env.OPENAI_API_KEY;
   for (let i = 0; i < 3; i++) {
     const req = fakeReq({ from: ADDR, network: X });
     await b.gatewaySettleBreakerCheck(req, { global: false });
-    req.res.statusCode = 402; req.res.emit("finish"); req.res.emit("close");
+    failWith(req); req.res.emit("close");
   }
   ok(b.gatewaySettleBreakerBlocked(`${P}@${X}`).blocked && b.gatewaySettleBreakerBlocked(`${P}@${Y}`).fails === 0 && b.gatewaySettleBreakerBlocked(P).fails === 0, "three failed settles on X are counted under payer@X only");
   const keyWas = process.env.OPENROUTER_API_KEY;
@@ -625,7 +767,7 @@ delete process.env.OPENAI_API_KEY;
   globalThis.fetch = realFetch;
   if (keyWas === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = keyWas;
   const m = String(errX?.message || "");
-  ok(m.includes(`from this wallet on ${X} failed to settle`) && m.includes(`refuse new calls from it on ${X} until `) && /That holds eip155:8453 only: this wallet can pay on any other network this route offers right now \(the networks are accepts\[\]\.network in the route's 402\)\./.test(m) && /Nothing was charged for this request\./.test(m) && m.includes(`Before paying on ${X} again, check the wallet's balance of the payment token there.`), `the 429 names X, says another network works now, when X opens again and what to check (${m})`);
+  ok(m.includes(`from this wallet on ${X} failed to settle`) && m.includes(`refuse new calls from it on ${X} until `) && /That holds eip155:8453 only: this wallet can pay on any other network this route offers right now \(the networks are accepts\[\]\.network in the route's 402\)\./.test(m) && /Nothing was charged for this request\./.test(m) && m.includes(`Before paying on ${X} again, check the wallet's balance of the payment token there and sign a new authorization.`) && /refused the payment itself, for its balance, its signature, or an authorization already used or expired/.test(m), `the 429 names X, says another network works now, when X opens again and what to check (${m})`);
   ok(!m.includes(Y), "and it names no network it did not refuse");
   // The machine-readable fields, as the dispatcher writes them beside the message.
   const { toolErrorFields } = await import("../src/tool-error-fields.js");
@@ -639,14 +781,13 @@ delete process.env.OPENAI_API_KEY;
   let errIp = null;
   try { await b.gatewaySettleBreakerCheck(fakeReq()); } catch (e) { errIp = e; }
   const fi = toolErrorFields(errIp);
-  ok(errIp?.statusCode === 429 && fi.refusedNetwork === undefined && fi.retry === undefined && Number.isInteger(fi.retryAfterSeconds) && /Check the wallet's USDC balance on the paying chain before retrying\./.test(errIp.message) && !/That holds/.test(errIp.message), `a key with no network keeps its text and carries retryAfterSeconds only (${JSON.stringify(fi)})`);
-  // A billing refusal on X: the same scoping, the billing words, no balance advice.
+  ok(errIp?.statusCode === 429 && fi.refusedNetwork === undefined && fi.retry === undefined && Number.isInteger(fi.retryAfterSeconds) && /Check the wallet's USDC balance on the paying chain and sign a new authorization before retrying\./.test(errIp.message) && !/That holds/.test(errIp.message), `a key with no network keeps its text and carries retryAfterSeconds only (${JSON.stringify(fi)})`);
+  // A billing refusal on X, through the listener: refuses neither network.
   await b._gatewaySettleBreakerReset();
-  for (let i = 0; i < 3; i++) b.recordGatewaySettleFailure(`${P}@${X}`, Date.now(), { global: false, billing: true });
-  let errB = null, okB = null;
+  for (let i = 0; i < 3; i++) { const req = fakeReq({ from: ADDR, network: X }); await b.gatewaySettleBreakerCheck(req, { global: false }); failWith(req, "free_tier_exhausted"); }
+  let errB = null;
   try { await b.gatewaySettleBreakerCheck(fakeReq({ from: ADDR, network: X })); } catch (e) { errB = e; }
-  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: ADDR, network: Y })); okB = true; } catch { okB = false; }
-  ok(errB?.statusCode === 429 && okB === true && /billing limit on this server's own account/.test(errB.message) && /That holds eip155:8453 only/.test(errB.message) && !/balance/.test(errB.message) && toolErrorFields(errB).refusedNetwork === X, `a billing refusal on X refuses X only, in the billing words (${String(errB?.message).slice(0, 90)})`);
+  ok(errB === null && b.gatewaySettleBreakerUnproven(`${P}@${X}`).fails === 3, `three billing refusals on X refuse nothing there (${errB ? errB.message.slice(0, 90) : "served"})`);
   // The burst alarm counts the BUYER once, on however many networks it failed.
   await b._gatewaySettleBreakerReset();
   for (const n of [X, Y, "eip155:42161", "eip155:10", "eip155:43114", "eip155:56", "eip155:100"]) b.recordGatewaySettleFailure(`${P}@${n}`);
@@ -789,8 +930,7 @@ if (process.env.REDIS_URL) {
     for (let i = 0; i < 3; i++) {
       const req = fakeReq({ from: spellings[n], network: NETS[n] });
       await b.gatewaySettleBreakerCheck(req);
-      req.res.statusCode = 402;
-      req.res.emit("finish");
+      failWith(req);
     }
   }
   ok((await word()) === "burst" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 1, "through the consult: one EVM wallet whose header spells it in three cases, at the limit on three networks, is one payer: burst");

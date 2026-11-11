@@ -27,6 +27,7 @@
 // settlement would be worse than the blindness it cures.
 
 import { FACILITATOR_BILLING_REFUSAL } from "./payment-reject.js";
+import { RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 /** Response headers worth having when an edge refuses us. Cloudflare's ray id
  *  and `cf-mitigated` identify a block; `retry-after` identifies a rate limit;
  *  `server` says whose edge answered at all. */
@@ -295,6 +296,7 @@ export function sanitizeSettleReceiptHeader(value) {
   if (!receipt || typeof receipt !== "object" || receipt.success !== false) return { value, changed: false, raw: null };
   const reason = typeof receipt.errorReason === "string" ? receipt.errorReason : "";
   const message = typeof receipt.errorMessage === "string" ? receipt.errorMessage : "";
+  const failed = { errorReason: reason.slice(0, 2000), errorMessage: message.slice(0, 2000) };
   const codeReason = CODE_SHAPED.test(reason) ? reason : "";
   const billing = FACILITATOR_BILLING_REFUSAL.exec(`${reason} ${message}`)?.[0] || "";
   const clean = {
@@ -302,8 +304,8 @@ export function sanitizeSettleReceiptHeader(value) {
     errorReason: codeReason || "settlement_failed",
     errorMessage: billing ? `Settlement refused: ${billing}` : (message && message === codeReason ? message : GENERIC_SETTLE_FAILURE_MESSAGE),
   };
-  if (clean.errorReason === receipt.errorReason && clean.errorMessage === receipt.errorMessage) return { value, changed: false, raw: null };
-  return { value: Buffer.from(JSON.stringify(clean)).toString("base64"), changed: true, raw: { errorReason: reason, errorMessage: message } };
+  if (clean.errorReason === receipt.errorReason && clean.errorMessage === receipt.errorMessage) return { value, changed: false, raw: null, failed };
+  return { value: Buffer.from(JSON.stringify(clean)).toString("base64"), changed: true, raw: { errorReason: reason, errorMessage: message }, failed };
 }
 
 /** Middleware: every PAYMENT-RESPONSE set on this response is the
@@ -317,6 +319,9 @@ export function settleReceiptHeaderGuard({ log = console.warn } = {}) {
       if (typeof name === "string" && SETTLE_RECEIPT_HEADERS.has(name.toLowerCase())) {
         try {
           const s = sanitizeSettleReceiptHeader(value);
+          // The facilitator's own reason and message, bounded, for the
+          // settle breaker's fault read (src/settle-fault.js); never sent.
+          if (s.failed) { try { Object.defineProperty(req, RAW_SETTLE_RECEIPT, { value: s.failed, configurable: true, writable: true, enumerable: false }); } catch { /* bookkeeping only */ } }
           if (s.changed) {
             if (!logged) {
               logged = true;
