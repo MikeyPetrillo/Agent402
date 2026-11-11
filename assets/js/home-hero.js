@@ -50,15 +50,21 @@
       if (p < 1) requestAnimationFrame(step);
     })(t0);
   }
+  // A read the live view does not answer is given up after 8 s, so a slow
+  // answer there never leaves this page with a request open until the
+  // browser's own limit; the figures stay as they were.
   function pollLive() {
-    fetch('https://live.agent402.tools/api/stats').then(function(r) { return r.ok ? r.json() : null; }).then(function(d) {
+    var ac = typeof AbortController === 'function' ? new AbortController() : null;
+    var giveUp = ac ? setTimeout(function() { ac.abort(); }, 8000) : null;
+    fetch('https://live.agent402.tools/api/stats', ac ? { signal: ac.signal } : undefined).then(function(r) { return r.ok ? r.json() : null; }).then(function(d) {
+      clearTimeout(giveUp);
       var a = d && d.all, h = a && a.h1; if (!h) return;
       var u = Number(h.usd || 0);
       tween('hm-live-n', Number(h.payments || 0), function(v) { return Math.round(v).toLocaleString('en-US'); });
       tween('hm-live-usd', u, function(v) { return '$' + (u >= 100 ? Math.round(v).toLocaleString('en-US') : v.toFixed(2)); });
       tween('hm-live-buyers', Number(h.buyers || 0), function(v) { return Math.round(v).toLocaleString('en-US'); });
       tween('hm-live-pm', Number(a.perMinute || 0), function(v) { return v.toFixed(1); });
-    }).catch(function() {});
+    }).catch(function() { clearTimeout(giveUp); });
   }
   if (document.getElementById('hm-live-n')) { pollLive(); setInterval(pollLive, 30000); }
 
