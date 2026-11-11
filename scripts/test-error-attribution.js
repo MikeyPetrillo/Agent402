@@ -191,7 +191,11 @@ const realFetch = globalThis.fetch;
     sig?.addEventListener("abort", () => reject(sig.reason ?? Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" })), { once: true });
   });
   let leg = null;
-  try { await buyer.payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, deadlineMs: 300, minLegMs: 0 }); } catch (e) { leg = e; } finally { globalThis.fetch = realFetch; }
+  // The call's clock is held still, so the 300 ms deadline is what clamps the
+  // price leg however long this process takes to reach it (a loaded machine
+  // otherwise spends the budget first and answers "Too little ... budget").
+  const heldAt = Date.now();
+  try { await buyer.payX402("https://seller.example/x", { maxAtomic: 500000n, method: "POST", body: {}, deadlineMs: 300, minLegMs: 0, now: () => heldAt }); } catch (e) { leg = e; } finally { globalThis.fetch = realFetch; }
   ok(leg && leg.statusCode === 502 && !/unreachable/i.test(leg.message) && /our limit/.test(leg.message) && leg.attribution === "ours",
     `payX402: a price leg our call deadline cut short is never "Seller unreachable" (${leg?.message})`);
 
@@ -203,8 +207,15 @@ const realFetch = globalThis.fetch;
       `a price leg our clamp cut is never "Seller unreachable" (${clamped.message})`);
     const own = bareLegFailure(timeout, { capMs: 20_000 });
     ok(/within our 20 s limit/.test(own.message) && own.hint === "our-deadline", `a price leg that used its whole cap names our limit (${own.message})`);
-    const dns = bareLegFailure(Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } }), { capMs: 20_000 });
-    ok(/DNS lookup/.test(dns.message) && dns.attribution === "ours" && dns.hint === "our-egress", `our DNS lookup failing is ours (${dns.message})`);
+    for (const code of ["EAI_AGAIN", "ESERVFAIL", "ETIMEOUT", "EREFUSED"]) {
+      const dns = bareLegFailure(Object.assign(new TypeError("fetch failed"), { cause: { code } }), { capMs: 20_000 });
+      ok(/DNS lookup/.test(dns.message) && dns.attribution === "ours" && dns.hint === "our-egress", `our resolver failing (${code}) is ours (${dns.message})`);
+    }
+    for (const code of ["ENOTFOUND", "EAI_NONAME", "EAI_NODATA"]) {
+      const nx = bareLegFailure(Object.assign(new TypeError("fetch failed"), { cause: { code } }), { capMs: 20_000 });
+      ok(!/DNS lookup/.test(nx.message) && /host name does not resolve/.test(nx.message) && nx.attribution === "unknown" && nx.hint === "connect-failed",
+        `a seller host whose name does not resolve (${code}) is not our resolver (${nx.message}, ${nx.attribution})`);
+    }
   } else ok(false, "bareLegFailure: the price leg's failure is classified by whose side it is");
 
   const { buildRouteExecuteTool } = await import("../src/tools/route-execute.js");

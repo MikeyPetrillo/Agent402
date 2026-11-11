@@ -220,14 +220,14 @@ const origin = base;
   // not a payment was taken: a delivery strike (so the router stops choosing
   // it), never an outbound or spend row (nothing moved).
   mode = { status: 502, receipt: false };
-  const e5 = await buy("/bad5");
+  const e5 = await buy("/bad5", { payer: "tempo:0xpayer-a" });
   ok(e5 && e5.committed === false && e5.signedUsd === undefined && /before taking payment \(HTTP 502\)/.test(e5.message), "a proven-unused 502 says nothing was charged and carries no committed stamp");
   const strikes = () => sellerDeliveryMemoEntries().filter((m) => m.chain === "tempo" && m.origin === origin);
   ok(strikes().length === 1 && strikes()[0].strikes === 1 && strikes()[0].status === 502, `...and is a first delivery strike on tempo (got ${JSON.stringify(sellerDeliveryMemoEntries())})`);
   ok(outbound().length === before, "...and records no outbound payment");
-  await buy("/bad5");
-  ok(strikes()[0]?.strikes === 1 && !sellerDeliveryFailingRecently(origin, "tempo"), "the same request failing again is one strike, not a skip");
-  await buy("/bad5", { body: { url: "https://example.org" } });
+  await buy("/bad5", { payer: "tempo:0xpayer-a" });
+  ok(strikes()[0]?.strikes === 1 && !sellerDeliveryFailingRecently(origin, "tempo"), "one payer's same request failing again is one strike, not a skip");
+  await buy("/bad5", { body: { url: "https://example.org" }, payer: "tempo:0xpayer-a" });
   ok(strikes()[0]?.strikes === 2 && sellerDeliveryFailingRecently(origin, "tempo"), "a second proven-unused 5xx on a different request makes the router skip the seller");
   ok(outbound().length === before, "...still with no outbound row");
   __resetSellerDeliveryFailuresForTest();
@@ -240,7 +240,7 @@ const origin = base;
   // A 500 whose body names the request is the request's input: no strike, on any request.
   mode = { status: 500, receipt: false };
   await buy("/input500", { body: { url: "https://example.com/1" } }); await buy("/input500", { body: { url: "https://example.com/2" } });
-  ok(sellerDeliveryMemoEntries().length === 0, `a 500 naming the request strikes nothing on tempo (${JSON.stringify(sellerDeliveryMemoEntries())})`);
+  ok(sellerDeliveryMemoEntries().length === 0, `a 500 naming the request that the chain proves uncharged strikes nothing on tempo (${JSON.stringify(sellerDeliveryMemoEntries())})`);
   mode = { status: 502, receipt: false };
   __resetSellerDeliveryFailuresForTest();
   const e5x = await buy("/bad5", { memoizeDelivery: false });
@@ -264,6 +264,19 @@ for (const [label, setup] of [
     if (status >= 500) ok(rows.length === 1 && rows[0].result === "undelivered" && rows[0].chain === "tempo" && sellerDeliveryMemoEntries().some((m) => m.chain === "tempo" && m.origin === origin), `${label}, HTTP 500: one undelivered outbound row and a first delivery strike, as before`);
     else ok(rows.length === 0, `${label}, HTTP 400 with no receipt: no outbound row, as before`);
   }
+}
+{
+  // A 500 naming the request when we may have paid (a debit from the signer,
+  // or a receipt on the error) strikes: its text is the seller's own.
+  for (const [label, setup, receipt] of [["a debit from the signer", () => { rpcNow = chain({ logs: () => [{ topics: [TRANSFER_TOPIC] }] }); }, false], ["a receipt on the error", () => { rpcNow = chain(); }, true]]) {
+    setup();
+    __resetSellerDeliveryFailuresForTest();
+    mode = { status: 500, receipt };
+    const e = await buy("/input500", { body: { url: "https://example.com/1" }, payer: "tempo:0xpayer-a" });
+    const m = sellerDeliveryMemoEntries().find((x) => x.chain === "tempo" && x.origin === origin);
+    ok(e && e.committed === true && m?.strikes === 1, `${label}: a 500 naming the request is a delivery strike on tempo (${JSON.stringify(sellerDeliveryMemoEntries())})`);
+  }
+  __resetSellerDeliveryFailuresForTest();
 }
 {
   // A receipt on the error: the seller says it took the payment. No chain wait.

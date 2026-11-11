@@ -73,8 +73,11 @@ Loaded when an index, discovery, router or buyer file is read.
   that read no status, or a 400/415/422 to our bare request, is no verdict (`ok: null`, `unknown`), never
   a failure. A chain count we could not read is unknown, never 0: Algorand keeps the last completed count
   and re-reads the catalog in minutes; Solana throws `countUnknown` when unread transactions could reach
-  the floor. The delivery memo counts one strike per request (method, URL, body) and none for a 500 whose
-  body names the request; a refusal note is never written for an accept this signer cannot make
+  the floor. The delivery memo counts one payer's same request (method, URL, body) once, and again at its
+  3rd and 5th failure; the same request from another payer, or a call naming no payer, is its own strike.
+  A 500 whose body names the request goes unstruck only when the chain proves the credential expired
+  unused; whenever we may have paid (a receipt, a debit, a live credential, an unreadable chain or no
+  chain read on the rail) it strikes, on every rail; a refusal note is never written for an accept this signer cannot make
   (Gateway rail, transfer-then-prove), a challenge differing only in the caller's query, or a refusal
   naming validBefore after our window cut the seller's; each note records its `kind` (`offer` or
   `paid-retry`) for the dossier.

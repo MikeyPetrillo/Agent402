@@ -646,19 +646,67 @@ const near = (a, b) => Math.abs(a - b) < 1e-9;
     ok(memo("window-uncut.example")?.kind === "paid-retry", "CONTROL: the same refusal with the seller's own window uncut benches the route, recorded as a paid-retry refusal");
   }
   buyer.__resetSellerRefusalsForTest();
-  // The delivery memo: one strike per request, none for a 500 naming the input.
+  // The delivery memo: one payer's same request is one strike until it
+  // repeats; the same request from another payer, or a call naming no payer,
+  // strikes; a 500 naming the input goes unstruck only when the chain proves
+  // nothing was charged.
   chainReader = CHAIN.consumed;
   buyer.__resetSellerDeliveryFailuresForTest();
   const failing = (host) => buyer.sellerDeliveryFailingRecently(`https://${host}`, "base");
-  await thrice(() => buy("broken.example", { memoizeDelivery: true, body: { q: "same" } }));
-  ok(!failing("broken.example"), "RULE: one buyer's same request failing three times is one strike, not a skip");
-  await buy("broken.example", { memoizeDelivery: true, body: { q: "another" } });
+  const memoOf = (host) => buyer.sellerDeliveryMemoEntries().find((m) => m.origin === `https://${host}`);
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "same" }, payer: "0xpayer-a" });
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "same" }, payer: "0xpayer-a" });
+  ok(!failing("broken.example") && memoOf("broken.example")?.strikes === 1, "RULE: one payer's same request failing twice is one strike, not a skip");
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "same" }, payer: "0xpayer-a" });
+  ok(failing("broken.example")?.strikes === 2, "RULE: one payer's same request failing a third time counts again and makes the skip");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "same" }, payer: "0xpayer-a" });
+  await buy("broken.example", { memoizeDelivery: true, body: { q: "another" }, payer: "0xpayer-a" });
   ok(failing("broken.example")?.strikes === 2, "CONTROL: a second, different request failing makes the skip (a real outage fails every input)");
-  await thrice(() => buy("inputfault500.example", { memoizeDelivery: true, body: { q: Math.random() } }));
-  ok(!failing("inputfault500.example") && !buyer.sellerDeliveryMemoEntries().some((m) => m.origin === "https://inputfault500.example"), "RULE: a 500 naming the request as the problem writes no strike, for any input");
-  await buy("outage502.example", { memoizeDelivery: true, body: { q: 1 } });
-  await buy("outage502.example", { memoizeDelivery: true, body: { q: 2 } });
+  buyer.__resetSellerDeliveryFailuresForTest();
+  // A parameterless route: every caller sends the same request.
+  const outcomes = [];
+  for (const payer of ["0xpayer-a", "0xpayer-b", "0xpayer-c", "0xpayer-d", "0xpayer-e"]) {
+    await buy("broken.example", { memoizeDelivery: true, method: "GET", body: undefined, payer });
+    outcomes.push(!!failing("broken.example"));
+  }
+  ok(outcomes.join() === "false,true,true,true,true", `RULE: five charged failures of the same request from different payers bench the seller at the second (${outcomes.join()})`);
+  buyer.__resetSellerDeliveryFailuresForTest();
+  await buy("broken.example", { memoizeDelivery: true, method: "GET", body: undefined });
+  await buy("broken.example", { memoizeDelivery: true, method: "GET", body: undefined });
+  ok(failing("broken.example")?.strikes === 2, "RULE: a call naming no payer is counted per call");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  // Charged (the signed authorization was consumed): a 500 naming the input strikes.
+  chainReader = CHAIN.consumed;
+  await buy("inputfault500.example", { memoizeDelivery: true, body: { q: 1 }, payer: "0xpayer-a" });
+  await buy("inputfault500.example", { memoizeDelivery: true, body: { q: 2 }, payer: "0xpayer-a" });
+  ok(failing("inputfault500.example")?.strikes === 2, "RULE: a charged 500 naming the request strikes like any charged failure");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  for (const [label, reader] of [["a live credential", CHAIN.live], ["an unreadable chain", CHAIN.unreadable]]) {
+    chainReader = reader;
+    await buy("inputfault500.example", { memoizeDelivery: true, body: { q: 1 }, payer: "0xpayer-a" });
+    ok(memoOf("inputfault500.example")?.strikes === 1, `RULE: a 500 naming the request with ${label} (not proven uncharged) strikes`);
+    buyer.__resetSellerDeliveryFailuresForTest();
+  }
+  // Proven uncharged (expired unused): one payer's bad input benches nothing.
+  chainReader = CHAIN.unused;
+  for (let i = 0; i < 3; i++) await buy("inputfault500.example", { memoizeDelivery: true, body: { q: i }, payer: "0xpayer-a" });
+  ok(!failing("inputfault500.example") && !memoOf("inputfault500.example"), "RULE: a 500 naming the request that the chain proves uncharged writes no strike, for any input");
+  chainReader = CHAIN.consumed;
+  await buy("outage502.example", { memoizeDelivery: true, body: { q: 1 }, payer: "0xpayer-a" });
+  await buy("outage502.example", { memoizeDelivery: true, body: { q: 2 }, payer: "0xpayer-a" });
   ok(failing("outage502.example")?.strikes === 2, "CONTROL: a 502 always strikes, whatever its body says");
+  buyer.__resetSellerDeliveryFailuresForTest();
+  // The caller path: route-execute hands its spend key in as the payer.
+  {
+    guard.__reset(); chainReader = CHAIN.consumed;
+    const asCaller = (ip) => routeTool([cand("broken.example")]).handler({ task: "t", include: "external", params: { q: "same" } }, { ip }).catch((e) => e);
+    await asCaller("192.0.2.77"); await asCaller("192.0.2.77");
+    ok(memoOf("broken.example")?.strikes === 1, `RULE: route-execute's same caller and request failing twice is one strike (${JSON.stringify(memoOf("broken.example")?.strikes)})`);
+    await asCaller("192.0.2.78");
+    ok(failing("broken.example")?.strikes === 2, "CONTROL: the same request from a second caller through route-execute makes the skip");
+    guard.__reset();
+  }
   ok(buyer.deliveryFailureIsInputFault(500, "Internal Server Error") === false && buyer.deliveryFailureIsInputFault(500, "database connection refused: missing env") === false
     && buyer.deliveryFailureIsInputFault(500, '{"message":"\"amount\" is required"}') === true && buyer.deliveryFailureIsInputFault(503, "invalid input") === false,
     "the input-fault reading: only a 500 whose body names the request");

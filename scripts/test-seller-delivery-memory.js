@@ -163,8 +163,8 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   // Each purchase is a different request unless `body` is given: a strike
   // is per request, so the same request failing twice is one strike.
   let bodySeq = 0;
-  const buy = (origin, { asRouter = true, body = { n: ++bodySeq } } = {}) => payX402(`${origin}/x`, {
-    maxAtomic: 500000n, method: "POST", body, chain: "base",
+  const buy = (origin, { asRouter = true, body = { n: ++bodySeq }, payer = null } = {}) => payX402(`${origin}/x`, {
+    maxAtomic: 500000n, method: "POST", body, chain: "base", payer,
     notDebited: async () => ({ debited: true, observed: 1 }), memoizeDelivery: asRouter,
   }).then((r) => r, (e) => e);
 
@@ -179,10 +179,14 @@ const { dispatchEligibility, DISPATCH_REASONS, dispatchLegend } = await import("
   await buy("https://broken.example");
   const memo = sellerDeliveryFailingRecently("https://broken.example", "base");
   ok(memo && memo.strikes === 2 && memo.status === 500, "the paid leg RECORDED both strikes - without those lines the memo is decorative");
-  // ONE REQUEST, ONE STRIKE: a buyer resending the request its own input
-  // breaks cannot bench the seller for everyone.
-  await buy("https://same.example", { body: { q: "x" } }); await buy("https://same.example", { body: { q: "x" } }); await buy("https://same.example", { body: { q: "x" } });
-  eq(sellerDeliveryFailingRecently("https://same.example", "base"), null, "the same request failing three times is one strike, not a skip");
+  // ONE PAYER'S REQUEST, ONE STRIKE UNTIL IT REPEATS: a buyer resending the
+  // request its own input breaks once cannot bench the seller for everyone,
+  // and a seller that keeps taking the payment and failing it is benched.
+  const same = { body: { q: "x" }, payer: "0xpayer-a" };
+  await buy("https://same.example", same); await buy("https://same.example", same);
+  eq(sellerDeliveryFailingRecently("https://same.example", "base"), null, "one payer's same request failing twice is one strike, not a skip");
+  await buy("https://same.example", same);
+  ok(sellerDeliveryFailingRecently("https://same.example", "base")?.strikes === 2, "its third failure counts again and benches the seller");
   eq(sellerRefusedRecently("https://broken.example", "base"), null, "and it is NOT filed as a refusal: a refusal means nobody was charged, and this seller took the payment");
 
   // (b) THE SAME FAILURE through a caller-parameterised tool writes NOTHING.

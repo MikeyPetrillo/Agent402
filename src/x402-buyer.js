@@ -9,7 +9,7 @@
 // settlement can cost us the one upstream payment (the LLM-gateway risk class),
 // so the margin guard below refuses any upstream quote over the caller's cap.
 import { assertPublicUrl, ssrfDispatcher, freshSsrfDispatcher } from "./tools/fetch-guard.js";
-import { isAbortError, isDnsFailure } from "./upstream-deadline.js";
+import { isAbortError, isDnsFailure, transportCodeOf } from "./upstream-deadline.js";
 import { Agent as UndiciAgent } from "undici";
 import { withDistrust } from "./tls-distrust.js";
 
@@ -82,15 +82,21 @@ const sellerSaid = (e) => Object.assign(e, { attribution: "upstream" });
 
 /** The bare (price) leg that got no answer. Our own limit passing is ours
  *  and names the limit (the call's remaining budget when that cut the leg
- *  short); our DNS lookup failing is ours; any other transport failure
- *  proves nothing about whose side failed. Never "Seller unreachable" for a
- *  leg our own clamp ended. */
+ *  short); our resolver failing (a timeout, a refused or unavailable lookup)
+ *  is ours; an answer that the seller's host name does not exist (NXDOMAIN,
+ *  no data) is the seller's name, not our resolver, and like any other
+ *  transport failure proves nothing about whose side failed. Never "Seller
+ *  unreachable" for a leg our own clamp ended. */
+const NAME_DOES_NOT_RESOLVE = new Set(["ENOTFOUND", "EAI_NONAME", "EAI_NODATA"]);
 export function bareLegFailure(err, { capMs, clamped = false } = {}) {
   const secs = Math.max(1, Math.round(Number(capMs) / 1000) || 1);
   if (isAbortError(err)) {
     return Object.assign(bad(clamped
       ? `Seller did not answer the price request within the ${secs} s left of our limit for this call`
       : `Seller did not answer the price request within our ${secs} s limit`, 502), { attribution: "ours", hint: "our-deadline" });
+  }
+  if (NAME_DOES_NOT_RESOLVE.has(transportCodeOf(err) || "")) {
+    return Object.assign(bad("The seller's host name does not resolve; no request was sent", 502), { attribution: "unknown", hint: "connect-failed" });
   }
   if (isDnsFailure(err)) {
     return Object.assign(bad("This server's DNS lookup for the seller's host failed; no request was sent", 502), { attribution: "ours", hint: "our-egress" });
@@ -756,20 +762,26 @@ const deliveryFailures = new Map(); // "chain|origin" -> { at, firstAt, status, 
  * url, method and body. Without the opt-in, one paid call was a 24-hour
  * routing ban against any origin on the internet, chosen by the buyer.
  */
-export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = null, input = null } = {}) {
+export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = null, input = null, payer = null } = {}) {
   if (!origin || !chain) return;
   const key = refusalKey(origin, chain);
   const prev = deliveryFailures.get(key);
   const ttl = deliveryFailTtlMs();
   // A strike older than the TTL is not part of this pattern; start again.
   const live = prev && ttl > 0 && Date.now() - prev.at <= ttl ? prev : null;
-  // ONE REQUEST, ONE STRIKE. The same request failing again is what that
-  // request does, which a buyer's own input can decide; a seller failing two
-  // DIFFERENT requests is a pattern. So a repeat of an input already struck
-  // refreshes the time and adds no strike (deliveryInputKey; a caller that
-  // hands no input is counted per call, as before).
-  const inputs = Array.isArray(live?.inputs) ? live.inputs : [];
-  if (typeof input === "string" && input && inputs.includes(input)) {
+  // ONE PAYER'S SAME REQUEST IS ONE STRIKE, UNTIL IT REPEATS. A request the
+  // same payer sends again and that fails again is what that payer's input
+  // does, so its repeat adds no strike; every DELIVERY_SAME_INPUT_RECOUNT-th
+  // repeat counts again, so one payer's same request benches a seller that
+  // keeps failing it by its third failure. The same request from ANOTHER
+  // payer is its own strike: a parameterless route, or a popular input,
+  // failing for two payers is the seller failing. A call that names no payer
+  // or no input is counted per call.
+  const seen = live?.seen && typeof live.seen === "object" ? live.seen : {};
+  const repeatKey = typeof input === "string" && input && typeof payer === "string" && payer ? deliveryRepeatKey(payer, input) : null;
+  const repeats = repeatKey ? (seen[repeatKey] || 0) + 1 : 1;
+  if (repeatKey && live && repeats > 1 && (repeats - 1) % DELIVERY_SAME_INPUT_RECOUNT !== 0) {
+    live.seen = { ...seen, [repeatKey]: repeats };
     live.at = Date.now();
     live.status = Number.isFinite(status) ? status : live.status;
     return;
@@ -783,18 +795,33 @@ export function noteSellerDeliveryFailure(origin, chain, { status = null, ms = n
   // the update path.)
   deliveryFailures.delete(key);
   if (deliveryFailures.size >= DELIVERY_FAIL_MAX) deliveryFailures.delete(deliveryFailures.keys().next().value);
+  let nextSeen = seen;
+  if (repeatKey) {
+    nextSeen = { ...seen, [repeatKey]: repeats };
+    const keys = Object.keys(nextSeen);
+    if (keys.length > DELIVERY_SEEN_MAX) for (const k of keys.slice(0, keys.length - DELIVERY_SEEN_MAX)) delete nextSeen[k];
+  }
   const entry = {
     at: Date.now(),
     firstAt: live ? live.firstAt : Date.now(),
     status: Number.isFinite(status) ? status : null,
     ms: Number.isFinite(ms) ? Math.round(ms) : null,
     strikes: (live?.strikes || 0) + 1,
-    ...(typeof input === "string" && input ? { inputs: [...inputs, input].slice(-8) } : (inputs.length ? { inputs } : {})),
+    ...(Object.keys(nextSeen).length ? { seen: nextSeen } : {}),
   };
   deliveryFailures.set(key, entry);
-  // Shared under the input's own member, so a repeat on another replica is
-  // the same member and still one strike.
-  memoShare(DELIVERY_MEMO, key, ttl, status, entry.at, entry, typeof input === "string" && input ? `in:${input}` : null);
+  // Shared under the payer's request and its repeat count, so the same
+  // strike written on another replica is the same member.
+  memoShare(DELIVERY_MEMO, key, ttl, status, entry.at, entry, repeatKey ? `in:${repeatKey}:${repeats}` : null);
+}
+// Every second repeat of one payer's same request counts again (strikes at
+// its 1st, 3rd, 5th failure): one stray failure and one retry never bench a
+// seller, and what one payer's request can cost our wallet at a seller that
+// takes the payment and fails is bounded at three payments.
+const DELIVERY_SAME_INPUT_RECOUNT = 2;
+const DELIVERY_SEEN_MAX = 16;
+function deliveryRepeatKey(payer, input) {
+  return createHash("sha256").update(`${payer}\n${input}`).digest("hex").slice(0, 24);
 }
 
 /** The request a delivery strike is about: method, URL (with the query the
@@ -1077,7 +1104,7 @@ export function atomicForMessage(v) {
  * A 200 on the bare request means the endpoint is free — returned with no
  * spend. Only a 402 triggers a payment; anything else is a 502.
  */
-export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, slug = null, signBy = null, sellerKey = null, deadlineMs = null, minLegMs = PAY_X402_MIN_LEG_MS, now = Date.now, onSigned = recordSignedPurchase } = {}) {
+export async function payX402(url, { maxAtomic, method = "GET", body, headers = {}, timeoutMs = PAY_X402_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, chain = "base", provenPayTo = null, evidenceWallets = null, sellerProof = null, notDebited = null, allowUnproven = false, refusalMaxWaitMs = refusalMaxWaitMsDefault(), memoizeDelivery = false, payer = null, slug = null, signBy = null, sellerKey = null, deadlineMs = null, minLegMs = PAY_X402_MIN_LEG_MS, now = Date.now, onSigned = recordSignedPurchase } = {}) {
   assertSigningAllowed("an external x402 payment");
   // ONE DEADLINE FOR THE CALL, fixed here. A caller whose own buyer's payment
   // lives a short time (a Solana blockhash, an Algorand round window) hands
@@ -1712,6 +1739,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // buyers is the leak the 2026-08-19 review closed for the MPP relay.
       let why = "";
       let refusalText = "";
+      let inputFaultPending = false;
       try {
         refusalText = await readTextCapped(paid, MAX_REFUSAL_BODY_BYTES);
         why = refusalText.slice(0, 400).replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
@@ -1737,13 +1765,17 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         });
       }
       if (memoizeDelivery && paid.status >= 500 && !(paid.headers.get("payment-response") || paid.headers.get("x-payment-response"))) {
-        // A 500 naming the request as the problem is the caller's input, not
-        // the seller's backend: no strike (deliveryFailureIsInputFault).
+        // A 500 naming the request as the problem may be the caller's input
+        // (deliveryFailureIsInputFault), but its text is the seller's own: it
+        // goes unstruck only when the chain read below proves the credential
+        // expired unused. A rail with no such read, a debit, a live
+        // credential or an unreadable chain strikes, since we may have paid.
         if (deliveryFailureIsInputFault(paid.status, refusalText)) {
-          console.warn(`[x402-buyer] ${where} answered HTTP ${paid.status} naming the request as the problem - read as the request's input, not memoized`);
+          inputFaultPending = true;
+          console.warn(`[x402-buyer] ${where} answered HTTP ${paid.status} naming the request as the problem - struck unless the chain proves nothing was charged`);
         } else {
-          noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput });
-          console.warn(`[x402-buyer] ${where} failed to deliver after payment (HTTP ${paid.status}, no receipt, ${Date.now() - sentAtMs}ms) - noted on ${chain}; the resolver skips it after two different requests fail`);
+          noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer });
+          console.warn(`[x402-buyer] ${where} failed to deliver after payment (HTTP ${paid.status}, no receipt, ${Date.now() - sentAtMs}ms) - noted on ${chain}; the resolver skips it after two strikes`);
         }
       }
       // A 4xx AFTER A CHARGE (2026-09-28). The memo above sees only a 5xx, so a
@@ -1759,6 +1791,12 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // CHARGED 400/413/415/422 (isCallerInputStatus): an upfront-settling
       // seller takes the payment before reading the body the caller wrote.
       let deliveryStruck = false;
+      const strikeInputFault = () => {
+        if (!inputFaultPending) return;
+        inputFaultPending = false;
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer });
+        console.warn(`[x402-buyer] ${where} answered HTTP ${paid.status} after payment and the chain does not prove it uncharged - noted on ${chain}`);
+      };
       const strikeChargedFailure = (how) => {
         if (deliveryStruck || !(paid.status >= 400 && paid.status < 500) || isCallerInputStatus(paid.status)) return;
         deliveryStruck = true;
@@ -1768,7 +1806,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
           slug: slug || null, origin: sellerOrigin, result: "undelivered", tx: null,
         });
         if (!memoizeDelivery) return;
-        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput });
+        noteSellerDeliveryFailure(memoSeller, chain, { status: paid.status, ms: Date.now() - sentAtMs, input: deliveryInput, payer });
         console.warn(`[x402-buyer] ${where} took the payment and answered HTTP ${paid.status} (${how}) - memoized as failing on ${chain}`);
       };
       if (receiptSaysSettled(paid.headers)) strikeChargedFailure("its own settle receipt");
@@ -1798,9 +1836,14 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
       // stance; unused-but-still-live (the bound cut the wait short, or a
       // checker that could not attach an expiry) keeps it too - only
       // expired + unused releases the hold and falls through.
+      // One read, before any branch: a 500 naming the request (held above)
+      // strikes unless this verdict proves the credential expired unused. A
+      // rail with no such read has no verdict, so it strikes.
+      const maxWaitMs = Math.max(0, refusalEndAt - Date.now());
+      let verdict = null;
+      if (chainCheckable) { try { verdict = await readChainVerdict(where); } catch { verdict = null; } }
+      if (!(verdict && verdict.debited === false && verdict.expired === true)) strikeInputFault();
       if (chainCheckable) {
-        const maxWaitMs = Math.max(0, refusalEndAt - Date.now());
-        const verdict = await readChainVerdict(where);
         if (evmCheckable && verdict && verdict.debited === true) strikeChargedFailure("the signed authorization was consumed on chain");
         if (verdict && verdict.debited === false && verdict.expired === true) {
           committed = false; // provably unpaid: the finally releases the hold
