@@ -1517,7 +1517,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         const { value, bound } = boundAnswer(result, maxBytes);
         if (bound) result = withAnswerBound(value, bound);
-        if (isNamed) return bound ? mcpJsonResult(result) : mcpJsonResult(result, pretty);
+        // A cut answer is sent compact, as it was sized.
+        if (isNamed) return bound ? mcpJsonResult(result, JSON.stringify(result)) : mcpJsonResult(result, pretty);
         return {
           // A cut answer is already large: no indentation on top of it.
           content: [{ type: "text", text: bound ? JSON.stringify(result) : pretty }],

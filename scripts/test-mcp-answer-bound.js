@@ -9,8 +9,13 @@
 //  - the text block and structuredContent agree on a cut answer;
 //  - catalog.search never returns more than its published maximum, whatever
 //    the caller sends as `limit` (negative, fractional, huge, not a number);
-//  - a limiter that refuses says how many seconds until it has room.
+//  - a limiter that refuses says how many seconds until it has room;
+//  - text of three-byte characters under the ceiling in characters and over
+//    it in bytes is cut (the fast path measures characters times three);
+//  - a cut flagship answer under FREE_MODE carries the cut text, not the
+//    handler's whole answer.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+process.env.FREE_MODE = "true";
 process.env.AGENT402_MCP_MAX_PER_MIN = "1000000";
 process.env.AGENT402_MCP_MAX_PER_HOUR = "1000000";
 process.env.AGENT402_MCP_REQ_PER_MIN = "1000000";
@@ -120,6 +125,13 @@ const CATALOG = {
   // Under the ceiling compact, over it once indented: sent whole and indented.
   "GET /api/airy": { ...def("airy", async () => ({ label: "airy", rows: AIRY_ROWS })), description: "airy test tool", tags: ["airy"] },
 };
+// Three-byte characters: under the ceiling counted in characters (and twice
+// that), over it in bytes.
+const WIDE_TEXT = "\u20ac".repeat(Math.floor(MAX / 2.5));
+CATALOG["GET /api/wide"] = { ...def("wide", async () => ({ label: "wide", text: WIDE_TEXT })), description: "wide test tool", tags: ["wide"] };
+// A flagship (web.search) whose answer is past the ceiling.
+const FLAG_ROWS = Array.from({ length: 3000 }, (_, i) => ({ title: `t${i}`, url: `https://example.com/${i}`, description: "d".repeat(40), age: null }));
+CATALOG["GET /api/search"] = { ...def("search", async () => ({ query: "q", count: FLAG_ROWS.length, results: FLAG_ROWS })), description: "flagship test tool", tags: ["flagship"] };
 // Enough tools that an unclamped search would return more than the maximum.
 for (let i = 0; i < 60; i++) CATALOG[`GET /api/w${i}`] = def(`w${i}`, async () => ({ ok: true }));
 
@@ -160,6 +172,21 @@ try {
   ok(bytes(airyWant) < MAX && Buffer.byteLength(JSON.stringify(airyWant, null, 2)) > MAX, "setup: the airy answer fits the ceiling compact and passes it indented");
   const airy = (await rpc("tools/call", { name: "catalog.call", arguments: { slug: "airy", params: {} } })).result;
   ok(airy.content[0].text === JSON.stringify(airyWant, null, 2) && airy.structuredContent.answerBound === undefined && airy.structuredContent.result.rows.length === AIRY_ROWS.length, "an answer that fits compact is sent whole, indented as built, with no answerBound");
+
+  const wideWant = { label: "wide", text: WIDE_TEXT };
+  const widePretty = JSON.stringify(wideWant, null, 2);
+  ok(widePretty.length * 2 <= MAX && Buffer.byteLength(widePretty) > MAX, `setup: the wide answer is under the ceiling in characters (${widePretty.length}) and over it in bytes (${Buffer.byteLength(widePretty)})`);
+  const wide = (await rpc("tools/call", { name: "catalog.call", arguments: { slug: "wide", params: {} } })).result;
+  const wideText = wide?.content?.[0]?.text || "";
+  ok(Buffer.byteLength(wideText) <= MAX && JSON.parse(wideText).answerBound?.truncated === true && wide.structuredContent?.answerBound?.cuts?.some((c) => c.path === "text" && c.matched === WIDE_TEXT.length), `multi-byte text over the ceiling in bytes is cut under it (${Buffer.byteLength(wideText)} of ${MAX})`);
+
+  ok(bytes({ query: "q", count: FLAG_ROWS.length, results: FLAG_ROWS }) > MAX, "setup: the flagship answer is past the ceiling");
+  const flag = (await rpc("tools/call", { name: "web.search", arguments: { query: "q" } })).result;
+  const flagText = flag?.content?.[0]?.text || "";
+  let flagParsed = null;
+  try { flagParsed = JSON.parse(flagText); } catch { /* asserted below */ }
+  ok(flag?.isError !== true && Buffer.byteLength(flagText) <= MAX, `a cut flagship answer's text block is under the ceiling (${Buffer.byteLength(flagText)} of ${MAX})`);
+  ok(flagParsed?.answerBound?.truncated === true && flagParsed.results.length < FLAG_ROWS.length && flagParsed.results.length === flag.structuredContent?.results?.length && JSON.stringify(flagParsed) === JSON.stringify(flag.structuredContent), "the flagship's text block is the cut answer, the same as its structuredContent, never the handler's whole answer");
 
   const search = async (limit) => (await rpc("tools/call", { name: "catalog.search", arguments: { query: "widget", ...(limit === undefined ? {} : { limit }) } })).result.structuredContent;
   const dflt = await search(undefined);
