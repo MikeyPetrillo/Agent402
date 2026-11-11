@@ -184,7 +184,10 @@ const srv = createServer((req, res) => {
     const h = { "content-type": "application/json" };
     if (mode.receipt) h["payment-receipt"] = "x";
     res.writeHead(mode.status, h);
-    res.end('{"error":"bad request"}');
+    // A 5xx body that names nothing about the request (a 500 naming the
+    // request is read as the request's input, x402-buyer.js).
+    if (path.startsWith("/input500")) return res.end('{"error":"validation error: field symbol is required"}');
+    res.end(mode.status >= 500 ? '{"error":"internal error"}' : '{"error":"bad request"}');
   });
 });
 await new Promise((r) => srv.listen(0, "127.0.0.1", r));
@@ -223,14 +226,22 @@ const origin = base;
   ok(strikes().length === 1 && strikes()[0].strikes === 1 && strikes()[0].status === 502, `...and is a first delivery strike on tempo (got ${JSON.stringify(sellerDeliveryMemoEntries())})`);
   ok(outbound().length === before, "...and records no outbound payment");
   await buy("/bad5");
-  ok(strikes()[0]?.strikes === 2 && sellerDeliveryFailingRecently(origin, "tempo"), "a second proven-unused 5xx makes the router skip the seller");
+  ok(strikes()[0]?.strikes === 1 && !sellerDeliveryFailingRecently(origin, "tempo"), "the same request failing again is one strike, not a skip");
+  await buy("/bad5", { body: { url: "https://example.org" } });
+  ok(strikes()[0]?.strikes === 2 && sellerDeliveryFailingRecently(origin, "tempo"), "a second proven-unused 5xx on a different request makes the router skip the seller");
   ok(outbound().length === before, "...still with no outbound row");
   __resetSellerDeliveryFailuresForTest();
   // A seller that shares its host is struck under its own key, the one the
   // resolver reads, and the host's root is not.
   const tenant = `${origin}/app/tenant-a`;
-  await buy("/app/tenant-a/bad5", { sellerKey: tenant }); await buy("/app/tenant-a/bad5", { sellerKey: tenant });
+  await buy("/app/tenant-a/bad5", { sellerKey: tenant }); await buy("/app/tenant-a/bad5", { sellerKey: tenant, body: { url: "https://example.org" } });
   ok(!!sellerDeliveryFailingRecently(tenant, "tempo") && !sellerDeliveryFailingRecently(origin, "tempo"), `two strikes at a path-scoped seller bench that seller, not its host's root (${JSON.stringify(sellerDeliveryMemoEntries().map((m) => m.origin))})`);
+  __resetSellerDeliveryFailuresForTest();
+  // A 500 whose body names the request is the request's input: no strike, on any request.
+  mode = { status: 500, receipt: false };
+  await buy("/input500", { body: { url: "https://example.com/1" } }); await buy("/input500", { body: { url: "https://example.com/2" } });
+  ok(sellerDeliveryMemoEntries().length === 0, `a 500 naming the request strikes nothing on tempo (${JSON.stringify(sellerDeliveryMemoEntries())})`);
+  mode = { status: 502, receipt: false };
   __resetSellerDeliveryFailuresForTest();
   const e5x = await buy("/bad5", { memoizeDelivery: false });
   ok(e5x && e5x.committed === false && sellerDeliveryMemoEntries().length === 0, "a purchase that is not the router's own (no memoizeDelivery) strikes nothing");
