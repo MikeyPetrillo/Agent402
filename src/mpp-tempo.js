@@ -511,7 +511,15 @@ export function quotableRelayMessage(message) {
  *  prose (quotableRelayMessage): it is the relay naming which of its
  *  dependencies is down, which the buyer can act on, and that class never
  *  carries a verdict on the credential. */
-export function tempoRefusalProblem(cls, fallbackReason, { relayMessage = null } = {}) {
+// A PUSH credential (payload type "hash") names a transfer already final on
+// chain, so a 503 that checked nothing cannot say "nothing was charged" or
+// "nothing was broadcast": the transfer was not claimed, so it still pays for
+// this request when the same credential is sent again. Exported for tests.
+export const TEMPO_PUSH_NOT_CHECKED = Object.freeze({
+  tail: ", so the transfer this credential names was not checked. That transfer is final on chain and has not been claimed, so it still pays for this request.",
+  hint: "Retry the same request with the same credential shortly; do not pay again.",
+});
+export function tempoRefusalProblem(cls, fallbackReason, { relayMessage = null, push = false } = {}) {
   const c = TEMPO_REFUSAL_CLASSES[cls] || TEMPO_REFUSAL_CLASSES.unknown;
   let detail = c.detail;
   if (cls === "unknown" && fallbackReason) detail = `Payment verification failed: ${String(fallbackReason).slice(0, 160)}`;
@@ -519,7 +527,12 @@ export function tempoRefusalProblem(cls, fallbackReason, { relayMessage = null }
     const said = quotableRelayMessage(relayMessage);
     if (said) detail = `The Tempo payment relay reported one of its own dependencies temporarily unavailable ("${said}"), so the credential was not checked and nothing was charged.`;
   }
-  return mppProblem(c.kind, detail, { status: c.status, hint: c.hint, details: { reason: cls in TEMPO_REFUSAL_CLASSES ? cls : "unknown", charged: false } });
+  const reason = cls in TEMPO_REFUSAL_CLASSES ? cls : "unknown";
+  if (push && c.status === 503) {
+    const pushDetail = detail.replace(/, so the credential was not checked and nothing was charged\.$/, TEMPO_PUSH_NOT_CHECKED.tail);
+    return mppProblem(c.kind, pushDetail === detail ? `${detail.replace(/\.$/, "")}${TEMPO_PUSH_NOT_CHECKED.tail}` : pushDetail, { status: c.status, hint: TEMPO_PUSH_NOT_CHECKED.hint, details: { reason, transferClaimed: false } });
+  }
+  return mppProblem(c.kind, detail, { status: c.status, hint: c.hint, details: { reason, charged: false } });
 }
 
 // Operator log line for EVERY refused Tempo credential: reason class, route,
@@ -1619,7 +1632,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           // says that; a bare 402 after a 10-22 s wait said "your payment
           // failed". No demotion: the buyer's Tempo credential was never judged.
           res.setHeader("Retry-After", String(c.retryAfter || 5));
-          return sendMppProblem(res, tempoRefusalProblem(cls, null, { relayMessage: v.relayMessage }));
+          return sendMppProblem(res, tempoRefusalProblem(cls, null, { relayMessage: v.relayMessage, push: binding.payloadType === "hash" }));
         }
         // This client's next 402 lists the evm challenge first (see tempoLeads).
         noteTempoRefusal(req);
