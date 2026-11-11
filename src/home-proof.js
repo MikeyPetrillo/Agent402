@@ -61,7 +61,7 @@ const fmtPct = (v) => `${v >= 99.995 ? "100" : v.toFixed(v >= 99.9 ? 3 : 2)}%`;
 export function homeProofFigures({ uptime, external, chains, latency } = {}) {
   const out = [];
   const u = uptime?.value;
-  if (u && Number.isFinite(u.pct) && Number(u.observed) > 0) {
+  if (u && Number.isFinite(u.pct) && u.pct >= 0 && u.pct <= 100 && Number(u.observed) > 0) {
     out.push({ key: "uptime", value: fmtPct(u.pct), label: `uptime · ${u.windowDays}d`, href: "/status", asOf: iso(uptime.at) });
   }
   const e = external?.value;
@@ -69,7 +69,7 @@ export function homeProofFigures({ uptime, external, chains, latency } = {}) {
     out.push({ key: "paid", value: fmtInt(e.count), label: "external payments", href: "/revenue", asOf: iso(external.at) });
   }
   const c = chains?.value;
-  if (c && Number(c.count) > 0) {
+  if (c && Number.isFinite(Number(c.count)) && Number(c.count) > 0) {
     out.push({ key: "chains", value: fmtInt(c.count), label: "chains live", href: "/how-to-pay", asOf: iso(chains.at) });
   }
   const l = latency?.value;

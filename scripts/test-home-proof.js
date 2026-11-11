@@ -95,6 +95,13 @@ const full = homeProofFigures({
   ok(zeroChains.map((f) => f.key).join(",") === "latency", `zero offered chains draw no chains figure (${zeroChains.map((f) => `${f.key}=${f.value}`).join(",")})`);
   const unobserved = homeProofFigures({ uptime: { value: { pct: 100, observed: 0, windowDays: 90 }, at: AT.u }, latency: { value: { p50Ms: 90 }, at: AT.l } });
   ok(unobserved.map((f) => f.key).join(",") === "latency", `uptime with no observations draws no uptime figure (${unobserved.map((f) => `${f.key}=${f.value}`).join(",")})`);
+  // A count that is not a number (NaN, a word, Infinity, negative) is "nothing
+  // measured", never drawn: the hero must not print NaN or a minus figure.
+  for (const bad of [NaN, "n/a", undefined, null, Infinity, -4, "12abc"]) {
+    const figs = homeProofFigures({ external: { value: { count: bad }, at: AT.e }, uptime: { value: { pct: bad, observed: 10, windowDays: 90 }, at: AT.u }, latency: { value: { p50Ms: bad }, at: AT.l }, chains: { value: { count: bad }, at: AT.c } });
+    const hh = hero(ledgerHomePage("https://agent402.tools", catalog, {}, {}, [], { proof: figs }));
+    ok(figs.length === 0 && !/NaN|Infinity|∞|>-\d/.test(hh), `the value ${typeof bad === "string" ? `"${bad}"` : String(bad)} draws no figure (${figs.map((f) => `${f.key}=${f.value}`).join(",") || "none"})`);
+  }
   const zh = hero(ledgerHomePage("https://agent402.tools", catalog, {}, {}, [], { proof: homeProofFigures({ uptime: { value: { pct: 100, observed: 0, windowDays: 90 }, at: AT.u }, external: { value: { count: 0 }, at: AT.e }, chains: { value: { count: 0 }, at: AT.c } }) }));
   ok(!/class="hm-own"/.test(zh) && !/id="hm-own-/.test(zh), "a hero fed only zero sources draws no figure at all");
   // The status line beside the buttons follows the same offer.
@@ -133,7 +140,24 @@ const full = homeProofFigures({
 // --- the served page -------------------------------------------------------------------
 {
   const token = "home-proof-probe-token";
-  const srv = await bootServer({ env: { FREE_MODE: "true", STATUS_PROBE_TOKEN: token }, stores: "home-proof" });
+  // Three outside payments in the revenue ledger the server reads (a file of
+  // its own, written by a child so this process never opens a ledger), so the
+  // paid figure has something to draw and a server that drops it is seen.
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const ledgerDir = mkdtempSync(join(tmpdir(), "a402-home-proof-ledger-"));
+  const ledger = join(ledgerDir, "rev.db");
+  const WALLET = "0x00000000000000000000000000000000000a4021";
+  const seed = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    await import(${JSON.stringify(new URL("./lib/offline-stores.js", import.meta.url).href)});
+    const { recordTransfer } = await import(${JSON.stringify(new URL("../src/revenue-ledger.js", import.meta.url).href)});
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 1; i <= 3; i++) recordTransfer({ chain: "base", wallet: ${JSON.stringify(WALLET)}, txid: "0x" + String(i).padStart(64, "0") + ":0", tx_hash: "0x" + String(i).padStart(64, "0"), block: 1000 + i, when_ts: now - i * 60, payer: "0x" + String(i).padStart(40, "b"), usd: 0.05, asset: "USDC", external: 1 });
+  `], { env: { ...process.env, REVENUE_LEDGER_DB: ledger, STATE_DATABASE_URL: "" }, encoding: "utf8" });
+  ok(seed.status === 0, `seeded three outside payments in a ledger of the test's own (${seed.status}${seed.stderr ? `: ${seed.stderr.slice(0, 200)}` : ""})`);
+  const srv = await bootServer({ env: { FREE_MODE: "true", STATUS_PROBE_TOKEN: token, WALLET_ADDRESS: WALLET, REVENUE_LEDGER_DB: ledger }, stores: "home-proof" });
   try {
     const now = Date.now();
     const probes = Array.from({ length: 12 }, (_, i) => ({ component: "api", ok: i !== 3, ts: now - (12 - i) * 300_000 }));
@@ -165,8 +189,15 @@ const full = homeProofFigures({
 
     const stats = await fetch(`${srv.url}/api/stats`);
     ok(stats.status === 200, `/api/stats still answers (${stats.status})`);
+    // The paid figure: the server reads the seeded outside payments and the
+    // hero draws the same count /api/stats publishes.
+    const ext = (await stats.json())?.settledExternal;
+    const paid = (hero(await (await fetch(`${srv.url}/`)).text()).match(/<a class="hm-own-fig" id="hm-own-paid"[^>]*>[\s\S]*?<\/a>/) || [""])[0];
+    ok(ext?.count === 3, `/api/stats reads the three seeded outside payments (${JSON.stringify(ext ?? null)})`);
+    ok(/>3</.test(paid) && /external payments/.test(paid) && /data-as-of="\d{4}-/.test(paid), `GET / draws the external payments figure the server measured (${paid.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() || "absent"})`);
   } finally {
     await srv.stop();
+    rmSync(ledgerDir, { recursive: true, force: true });
   }
 }
 
