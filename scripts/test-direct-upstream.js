@@ -424,6 +424,34 @@ setEnv(ON);
   for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", "caller-clamped", { clamped: true });
   ok(!D.directBreakerState().open && D.directBreakerState().fails === 0, "the outcome reader ignores clamped timeouts");
   ok(D.directHeavyOutput({ max_completion_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS }) && !D.directHeavyOutput({ max_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS - 1 }), "max_completion_tokens reads as the output cap too");
+  // Clamped timeouts still feed the unanswered rule (many calls, several
+  // callers): a hung link whose every caller is on a short window opens.
+  reset();
+  await quietWarn(async () => { for (let i = 0; i < 30; i++) D.noteDirectOutcome(false, "timeout", `caller-clamped-${i % 10}`, { clamped: true }); });
+  ok(D.directBreakerState().open && D.directBreakerState().opens >= 1 && D.directBreakerState().fails === 0, `clamped timeouts from ten callers open the breaker through the unanswered rule (opens ${D.directBreakerState().opens}, fails ${D.directBreakerState().fails})`);
+  reset();
+  await quietWarn(async () => { for (let i = 0; i < 30; i++) D.noteDirectOutcome(false, "timeout", "caller-clamped-one", { clamped: true }); });
+  ok(!D.directBreakerState().open && D.directBreakerState().opens === 0 && D.directBreakerState().fails === 0, "thirty clamped timeouts from one caller leave it closed");
+  setEnv(ON);
+}
+// A configured direct timeout above the route's default: the attempt runs
+// the default (attemptTimeoutMs takes the lower), and with no payment window
+// that is the full unclamped length, so its timeouts count.
+{
+  ok(!K.directAttemptClamped(K.UPSTREAM_TIMEOUT_MS, K.UPSTREAM_TIMEOUT_MS + 30_000, K.UPSTREAM_TIMEOUT_MS) && K.directAttemptClamped(K.UPSTREAM_TIMEOUT_MS - 1, K.UPSTREAM_TIMEOUT_MS + 30_000, K.UPSTREAM_TIMEOUT_MS) && K.directAttemptClamped(399, 400, K.UPSTREAM_TIMEOUT_MS), "clamped compares against the lower of the direct timeout and the route default");
+  setEnv({ ...ON, DIRECT_UPSTREAM_TIMEOUT_MS: String(K.UPSTREAM_TIMEOUT_MS + 30_000), DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  reset();
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === `${DIRECT_BASE}/chat/completions`) { direct.hits.push({ url: String(url) }); throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); }
+    return prevFetch(url, init);
+  };
+  const states = [];
+  const w = console.warn; console.warn = () => {};
+  try {
+    for (let i = 0; i < 3; i++) { await base.handler({ model: MODEL, messages: msgs, max_tokens: 32 }); states.push(D.directBreakerState().open ? "open" : "closed"); }
+  } finally { globalThis.fetch = prevFetch; console.warn = w; }
+  ok(direct.hits.length === 3 && states.join(" ") === "closed closed open", `a direct timeout set above the route default: three full-length light timeouts open the breaker by the third (${states.join(" ")})`);
   setEnv(ON);
 }
 // A refusal of the request itself (any 4xx but auth, quota, capacity and a

@@ -889,6 +889,30 @@ if (process.env.REDIS_URL) {
   await b._gatewaySettleBreakerReset();
   await shared.flagSet("gwb-pause", "all", 0);
   await shared.windowClear("gwb-fail", legacy);
+  // Another replica's strikes for a wallet, one of them our blocklist's
+  // verdict, written to the shared windows that replica writes (gwb-fail,
+  // gwb-blk); this process holds none of them. Its refusal reads the shared
+  // blocklist count and uses the neutral words; the same strikes without the
+  // gwb-blk entry keep the verdict words (the control).
+  for (const [label, withBlk] of [["blocklisted", true], ["control: balance only", false]]) {
+    await b._gatewaySettleBreakerReset();
+    const W2 = "0x" + (withBlk ? "5" : "6").repeat(40);
+    const k2 = b.gatewaySettleBreakerCountKey(fakeReq({ from: W2, network: X }));
+    const now = Date.now();
+    for (let i = 0; i < 3; i++) await shared.windowAdd("gwb-fail", k2, { windowMs: 900, member: `other:${i}`, now });
+    if (withBlk) await shared.windowAdd("gwb-blk", k2, { windowMs: 900, member: "other:0", now });
+    const localBefore = b.gatewaySettleBreakerBlocked(k2);
+    let err = null;
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W2, network: X })); } catch (e) { err = e; }
+    ok(localBefore.fails === 0 && !localBefore.blocklisted, `${label}: this process holds none of the strikes (fails ${localBefore.fails})`);
+    ok(withBlk
+      ? err?.statusCode === 429 && /settlement did not proceed for this wallet/.test(err.message) && !/balance|signature|refused the payment itself/i.test(err.message)
+      : err?.statusCode === 429 && /refused the payment itself/.test(err.message),
+    `${label}: another replica's shared strikes refuse here in the ${withBlk ? "neutral blocklist" : "verdict"} words (${err?.statusCode}: ${String(err?.message).slice(0, 90)})`);
+    await shared.windowClear("gwb-fail", k2);
+    await shared.windowClear("gwb-blk", k2);
+  }
+  await b._gatewaySettleBreakerReset();
 }
 
 // --- one payer at the limit on several networks raises the same alarm ----------

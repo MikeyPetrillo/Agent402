@@ -286,10 +286,10 @@ export function directBreakerRelease(grant) {
 // Our own timeout on the direct link. On a light call that ran the full
 // configured direct timeout it counts like the upstream's own failure (so one
 // caller is moved to OpenRouter by the third). One whose attempt timeout the
-// caller's own window cut short (clamped) never counts and feeds nothing: a
+// caller's own window cut short (clamped) never counts as that failure: a
 // buyer who signs a short authorization would otherwise open the link for
-// everyone. On a heavy call (a long prompt, or a large output cap) one never
-// counts (it may need more than the cap), but the
+// everyone. On a clamped call, and on a heavy call (a long prompt, or a large
+// output cap, which may need more than the cap), only the
 // pattern of src/unanswered-rule.js (many calls, several callers, one window,
 // no answer between) opens the breaker so the next callers go to OpenRouter.
 // Both are logged as "did not answer within our limit".
@@ -309,12 +309,12 @@ export function directHeavyOutput(body) {
  *  cap is at or past DIRECT_HEAVY_OUTPUT_TOKENS (a timeout on it then reads
  *  the unanswered rule instead of counting); `clamped` says the attempt's
  *  timeout was shorter than the configured direct timeout (the caller's own
- *  window cut it), and a timeout on it is not counted at all. */
+ *  window cut it), and a timeout on it reads the unanswered rule too, never
+ *  the single-caller count. */
 export function noteDirectOutcome(ok, reason, caller = undefined, { heavy = false, clamped = false } = {}) {
   if (ok) { directUnanswered.clear(); breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
   const timeout = String(reason) === "timeout";
-  if (timeout && clamped) { breaker.trialAt = 0; return; }
-  if (timeout && !heavy) {
+  if (timeout && !heavy && !clamped) {
     breaker.fails++;
     if (breaker.fails >= breakerFails()) {
       const now = breakerNow();
@@ -327,7 +327,8 @@ export function noteDirectOutcome(ok, reason, caller = undefined, { heavy = fals
     }
     return;
   }
-  // The caller key is read (hashed) only here, for a long prompt's timeout.
+  // The caller key is read (hashed) only here, for a heavy or clamped
+  // timeout: one caller alone never reaches the rule's caller count.
   if (timeout && directUnanswered.note(caller === undefined ? currentCallerKey() : caller)) {
     const st = directUnanswered.state();
     directUnanswered.clear();

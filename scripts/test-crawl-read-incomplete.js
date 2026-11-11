@@ -78,9 +78,9 @@ ok(!crawlReadFailureIsOurs(ourConnect()), "a connection the seller's host refuse
 ok(!crawlReadFailureIsOurs(their404()) && !crawlReadFailureIsOurs(Object.assign(new Error("x"), { robotsBlocked: true })), "the seller's HTTP answer and its robots.txt are the seller's");
 ok(crawlReadFailureIsOurs(Object.assign(new Error("Resource exceeds 4MB limit"), { statusCode: 413 })) && !crawlReadFailureIsOurs(Object.assign(new Error("HTTP 413"), { statusCode: 422, upstreamStatus: 413 })), "our byte cap is ours; a 413 the seller sent is the seller's");
 ok(crawlReadFailureIsOurs(Object.assign(new Error("lookup"), { code: "EDNSUNAVAILABLE" })), "our resolver failing is ours");
-// Our own network path failing to connect (no route out, no route to the
-// host from here, no local address) is ours; the host refusing or resetting
-// is the host's. Driven through the real safeFetch (a public IP literal, so
+// Our own network path failing to connect (no local address) is ours; the
+// host refusing or resetting, or no route to the host or its network (an
+// ICMP answer near the host can carry that), is the host's. Driven through the real safeFetch (a public IP literal, so
 // no lookup, and a stubbed transport), so the code it carries is the one the
 // classifier reads.
 {
@@ -90,15 +90,15 @@ ok(crawlReadFailureIsOurs(Object.assign(new Error("lookup"), { code: "EDNSUNAVAI
     globalThis.fetch = async () => { throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(`connect ${code}`), { code }) }); };
     try { await safeFetch("http://93.184.216.34/.well-known/x402", { timeoutMs: 2_000 }); return null; } catch (e) { return e; } finally { globalThis.fetch = prev; }
   };
-  for (const code of ["ENETUNREACH", "EHOSTUNREACH", "EADDRNOTAVAIL"]) {
+  for (const code of ["EADDRNOTAVAIL"]) {
     const e = await thrownFor(code);
     ok(e?.hint === "source-unreachable" && e.transportCode === code && crawlReadFailureIsOurs(e), `a connect that failed with ${code} on our side is ours (${e?.hint} ${e?.transportCode})`);
   }
-  for (const code of ["ECONNREFUSED", "ECONNRESET", "CERT_HAS_EXPIRED"]) {
+  for (const code of ["ECONNREFUSED", "ECONNRESET", "CERT_HAS_EXPIRED", "EHOSTUNREACH", "ENETUNREACH"]) {
     const e = await thrownFor(code);
     ok(e?.hint === "source-unreachable" && e.transportCode === code && !crawlReadFailureIsOurs(e), `a connect the host answered with ${code} is the host's (${e?.hint} ${e?.transportCode})`);
   }
-  ok(!crawlReadFailureIsOurs(Object.assign(new Error("x"), { statusCode: 504, hint: "source-timeout-not", transportCode: "ENETUNREACH" })), "the code counts only on a source-unreachable answer");
+  ok(!crawlReadFailureIsOurs(Object.assign(new Error("x"), { statusCode: 504, hint: "source-timeout-not", transportCode: "EADDRNOTAVAIL" })), "the code counts only on a source-unreachable answer");
 }
 ok(!crawlReadFailureIsOurs(new SyntaxError("Unexpected token < in JSON")), "a document that is not JSON is the seller's answer");
 

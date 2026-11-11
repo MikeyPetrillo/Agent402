@@ -1022,6 +1022,15 @@ export const PAYMENT_WINDOW_TAIL_MS = 5_000;
  *  `defaultMs` when the request carries none; throws a 504 (not charged)
  *  when too little is left to start another attempt. */
 const windowAttempted = new WeakSet();
+/** Whether a direct attempt's timeout was cut short by the caller's own
+ *  window: shorter than the timeout it would have had with no window (the
+ *  configured direct timeout capped by the route's default). Exported for
+ *  tests. */
+export function directAttemptClamped(timeoutMs, directMs, defaultMs) {
+  if (!Number.isFinite(timeoutMs) || !Number.isFinite(directMs)) return false;
+  const unclamped = Number.isFinite(defaultMs) ? Math.min(directMs, defaultMs) : directMs;
+  return timeoutMs < unclamped;
+}
 export function paymentWindowTimeoutMs(req, defaultMs) {
   // Through the CDN proxy the answer must also start inside the proxy's wait
   // (src/cdn-sync-window.js); the nearer of the two bounds applies.
@@ -4261,10 +4270,12 @@ function makeHandler(routeTier) {
     }, 0);
     // A large output cap is heavy too (a long expected generation), and an
     // attempt whose timeout the caller's own window clamped below the
-    // configured direct timeout is not counted at all.
-    const directOpts = (model, timeoutMs, directBody) => ({
+    // unclamped one (the configured direct timeout, itself capped by the
+    // route's default, as attemptTimeoutMs takes it) never counts as the
+    // single-caller failure (it reads the unanswered rule instead).
+    const directOpts = (model, timeoutMs, directBody, defaultMs) => ({
       heavy: heavyInput({ size: promptChars, max: maxInputCharsFor(tierSlug, model) }) || directHeavyOutput(directBody) || directHeavyOutput(body),
-      clamped: Number.isFinite(timeoutMs) && Number.isFinite(directCfg?.timeoutMs) && timeoutMs < directCfg.timeoutMs,
+      clamped: directAttemptClamped(timeoutMs, directCfg?.timeoutMs, defaultMs),
     });
     const attempts = withDirectAttempts(attemptsFor(chain, body).slice(0, TIERS[tierSlug].maxAttempts || Infinity), directCfg);
     const directPlanFor = (direct, outbound, stream) => {
@@ -4328,7 +4339,7 @@ function makeHandler(routeTier) {
                 return out;
               } catch (e) {
                 if (abListed) noteDirectAb(directBody ? "direct" : "openrouter", { ok: false, reason: failureBucket(e) });
-                if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody));
+                if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody, STREAM_TIMEOUT_MS));
                 if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
                 if (!directBody || !lastErr) lastErr = e;
                 // A direct attempt's timeout is not one of the buyer's timed-out
@@ -4470,7 +4481,7 @@ function makeHandler(routeTier) {
         return data;
       } catch (e) {
         if (abListed) noteDirectAb(abLabel, { ok: false, reason: failureBucket(e) });
-        if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody));
+        if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody, UPSTREAM_TIMEOUT_MS));
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
         if (!directBody || !lastErr) lastErr = e;
         // Not counted for a direct attempt (see the stream walk above).

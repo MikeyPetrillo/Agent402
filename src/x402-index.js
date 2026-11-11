@@ -5855,12 +5855,12 @@ export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller
 /** Did this crawl read fail on our side? Our own deadline or abort, our
  *  resolver failing to finish a lookup, our own byte cap on the document, or
  *  a connection our own network path could not make (source-unreachable with
- *  ENETUNREACH, EHOSTUNREACH or EADDRNOTAVAIL, OUR_EGRESS_CONNECT_CODES).
- *  Positive identification only: an HTTP status the seller sent
- *  (upstreamStatus), a body that is not the document, a redirect it chose,
- *  its robots.txt, a name that does not resolve, and a connection its host
- *  refused, reset or failed TLS on (source-unreachable) are the seller's
- *  host answering and read false. Exported for the test. */
+ *  EADDRNOTAVAIL, OUR_EGRESS_CONNECT_CODES). Positive identification only: an
+ *  HTTP status the seller sent (upstreamStatus), a body that is not the
+ *  document, a redirect it chose, its robots.txt, a name that does not
+ *  resolve, a connection its host refused, reset or failed TLS on, and no
+ *  route to its host or network (EHOSTUNREACH, ENETUNREACH, which an ICMP
+ *  answer near the host can carry) are the seller's host and read false. Exported for the test. */
 export function crawlReadFailureIsOurs(e) {
   if (!e || typeof e !== "object") return false;
   if (e.upstreamStatus != null || e.robotsBlocked) return false;

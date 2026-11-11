@@ -444,10 +444,11 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
 }
 
 /** Connect failures that are this server's own network path, not the
- *  host's answer: no route out of our network (ENETUNREACH), no route to the
- *  host from here (EHOSTUNREACH), and no local address to send from
- *  (EADDRNOTAVAIL). A refused, reset or TLS-failed connection is the host's. */
-export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["ENETUNREACH", "EHOSTUNREACH", "EADDRNOTAVAIL"]));
+ *  host's answer: no local address to send from (EADDRNOTAVAIL). No route to
+ *  the host or its network (EHOSTUNREACH, ENETUNREACH) can come from an ICMP
+ *  answer near the host, so it reads as the host not answering, as a refused,
+ *  reset or TLS-failed connection does. */
+export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"]));
 
 /**
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.

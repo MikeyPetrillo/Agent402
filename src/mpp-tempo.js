@@ -1512,8 +1512,8 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // request (in flight) is never booked as owed for a call it paid. The
       // shared claim is required when another container may serve (see the
       // paid path below); with the store out the answer is the paid path's
-      // 503 with Retry-After: the transfer is final on chain and nothing was
-      // checked, claimed or booked, so the same credential sent again once
+      // 503 with Retry-After: the transfer was not read on chain and nothing
+      // was checked, claimed or booked, so the same credential sent again once
       // the store answers is confirmed and booked as owed then (a plain 402
       // here would read as a verdict on the credential, which none was
       // given).
