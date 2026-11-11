@@ -98,8 +98,10 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
   T.setTopBuyers([TOP], t0);
   for (let i = 0; i < 3; i++) T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 500, at: t0 + i * 6 * MIN }, env);
   ok((await T.topBuyerFailuresStatus({ now: t0 + 12 * MIN + 1, env })).status === "ok", "three failures twelve minutes end to end are not three inside ten minutes");
-  T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 404, at: t0 + 13 * MIN }, env);
-  ok((await T.topBuyerFailuresStatus({ now: t0 + 13 * MIN + 1, env })).status === "alert", "a 4xx counts: a fourth failure puts three inside ten minutes");
+  for (const st of [400, 404, 409, 413, 415, 422]) T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: st, at: t0 + 13 * MIN }, env);
+  ok((await T.topBuyerFailuresStatus({ now: t0 + 13 * MIN + 1, env })).status === "ok", "the caller's own input refused (400, 404, 409, 413, 415, 422) is never kept: six of them leave ok");
+  T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 503, at: t0 + 13 * MIN }, env);
+  ok((await T.topBuyerFailuresStatus({ now: t0 + 13 * MIN + 1, env })).status === "alert", "a 5xx counts: a fourth failure puts three inside ten minutes");
   // Env: threshold, window, hold.
   T._resetTopBuyerFailures();
   T.setTopBuyers([TOP], t0);
@@ -120,6 +122,16 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
   for (let p = 0; p < 2_500; p++) for (let i = 0; i < (p < 3 ? 80 : 1); i++) T.noteVerifiedPaidOutcome({ payer: `payer-${p}-${"x".repeat(30)}`, slug: "x", status: 500, at: t0 + i }, env);
   const sz = T._localSizes();
   ok(sz.payers <= 2_000 && sz.events <= 2_000 + 3 * 50, `memory is bounded: at most 2000 payers and 50 failures each (${JSON.stringify(sz)})`);
+  {
+    const span = T.failWindowMs({}) + T.failHoldMs({});
+    T._resetTopBuyerFailures();
+    const at0 = Date.parse("2026-11-10T00:00:00Z");
+    for (let i = 0; i < 50; i++) T.noteVerifiedPaidOutcome({ payer: evm(0x5000 + i), slug: "x", status: 502, at: at0 }, {});
+    T.noteVerifiedPaidOutcome({ payer: evm(0x6000), slug: "x", status: 502, at: at0 + span }, {});
+    const dropped = T.sweepIdleTopBuyerFailures(at0 + span + 1, {});
+    ok(dropped === 50 && T._localSizes().payers === 1, `the idle sweep drops every payer with nothing inside the window plus the hold and keeps the rest (${dropped} dropped, ${T._localSizes().payers} kept)`);
+    T._resetTopBuyerFailures();
+  }
   T._resetTopBuyerFailures();
 }
 
@@ -134,12 +146,14 @@ const L = await import("../src/sales-ledger.js");
   sale(SPEND_EVM, 100);                                                             // our router spending wallet
   sale(evm(0xbeef), 100, { synthetic: true });                                      // our synthetic traffic
   sale(evm(0xf00d), 100, { rail: "pow" });                                          // a free rail
+  sale("a1b2c3d4e5f6", 100, { rail: "credits", network: "stripe" });                // a prepaid credits key (its id)
   await L.salesLedgerFlush();
   const rows = await L.topExternalPayersAsync({ days: 7, limit: 10 });
   const payers = rows.map((r) => r.payer);
   ok(payers.length === 10 && payers[0] === topSol.address && payers[1] === evm(10) && payers[9] === evm(2), `the top ten by seven-day spend, highest first (${payers.map((p) => p.slice(0, 6)).join(",")})`);
   ok(!payers.includes(CANARY_SOL) && !payers.includes(SPEND_EVM) && !payers.includes(evm(0xbeef)) && !payers.includes(evm(0xf00d)) && !payers.includes(nonTopSol.address), "our canary, our spending wallet, synthetic rows and free rails never rank; the twelfth payer is out");
   ok(payers[0] === topSol.address && topSol.address !== topSol.address.toLowerCase(), "the Solana address is kept as written, never case-folded");
+  ok(!payers.some((p) => /a1b2c3d4e5f6/.test(String(p))), "a credits key is booked with no payer, so it never ranks (server.js records no credits payer for that reason)");
   ok((await L.topExternalPayersAsync({ days: 7, limit: 10, now: Date.now() + 8 * 86_400_000 })).length === 0, "sales older than the window do not rank");
   const got = await T.refreshTopBuyers({ read: () => Promise.resolve([{ payer: CANARY_SOL }, ...rows]), isOwn: (p) => OUR_SOLANA_WALLETS.has(p) });
   ok(got.length === 10 && !got.includes(CANARY_SOL) && got[0] === topSol.address, "the refresh drops any wallet of ours a row still names and keeps ten");

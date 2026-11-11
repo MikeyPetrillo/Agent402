@@ -6,15 +6,18 @@
 // settled sales, so a buyer whose verified, paid calls fail was in neither.
 //
 // What is recorded: every paid request that passed its gate (x402 on every
-// rail, the MPP shim, Tempo, credits) and reached our dispatcher, whose final
+// rail, the MPP shim, Tempo) and reached our dispatcher, whose final
 // answer was not a 2xx, under the payer that gate proved (server.js reads it:
 // the signed EVM `from`, the Solana, Algorand or Stellar signer of the signed
-// transaction, the Tempo sender the gate proved, the credits key). An unpaid
+// transaction, the Tempo sender the gate proved). Credits and card payments
+// name no payer in the sales ledger, so they cannot rank and are not
+// recorded. An unpaid
 // 402 challenge and a refusal before the gate never reach here. Each failure
 // keeps the slug, the status, the time and the first 160 characters of the
 // error text we sent (scrubbed), in this process (bounded) and, when the
 // shared store is Redis, in a per-payer window there, so every container
-// reads every container's failures.
+// reads every container's failures. A payer with nothing inside the window
+// plus the hold is swept from this process on the refresh timer.
 //
 // The word (topBuyerFailures on /api/gateway-status): alert while any of the
 // top outside payers by paid spend over the last TOP_BUYERS_DAYS has
@@ -88,11 +91,17 @@ export function errorTextOf(body) {
 }
 
 const okPayer = (p) => typeof p === "string" && p.length >= 1 && p.length <= 160;
-const isFailure = (status) => !(Number.isInteger(status) && status >= 200 && status < 300);
+// The caller's own input refused (a malformed body, a missing resource, a
+// conflict, a body too large or of the wrong type, a value out of range):
+// never settled, and a looping client of the payer's could page us with it.
+export const CALLER_INPUT_STATUSES = Object.freeze([400, 404, 409, 413, 415, 422]);
+const CALLER_INPUT = new Set(CALLER_INPUT_STATUSES);
+const isFailure = (status) => !(Number.isInteger(status) && status >= 200 && status < 300) && !CALLER_INPUT.has(status);
 
 /**
- * Records one final answer to a verified paid request. Only a non-2xx is
- * kept; a 2xx costs one comparison. Never throws, never awaits on the caller.
+ * Records one final answer to a verified paid request. Only a non-2xx that
+ * is not the caller's own input refused (CALLER_INPUT_STATUSES) is kept; a
+ * 2xx costs one comparison. Never throws, never awaits on the caller.
  */
 export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, at = Date.now() } = {}, env = process.env) {
   try {
@@ -115,6 +124,18 @@ export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, at 
     }
     return true;
   } catch { return false; }
+}
+
+/** Drops every payer whose newest kept failure is older than the window
+ *  plus the hold (nothing it holds can raise the word again). Run on the
+ *  refresh timer, so an idle payer's list never outlives its use. */
+export function sweepIdleTopBuyerFailures(now = Date.now(), env = process.env) {
+  const cutoff = now - keepSpan(env);
+  let dropped = 0;
+  for (const [payer, list] of local) {
+    if (!list.length || list[list.length - 1].at <= cutoff) { local.delete(payer); dropped++; }
+  }
+  return dropped;
 }
 
 /** Sets the watched payers, highest spend first (the refresh does this). */
@@ -152,6 +173,7 @@ let timer = null, warned = 0;
 export function startTopBuyerRefresh({ read, isOwn, firstMs = 5_000, env = process.env, log = console } = {}) {
   if (timer) return;
   const tick = async () => {
+    try { sweepIdleTopBuyerFailures(Date.now(), env); } catch { /* bookkeeping only */ }
     try { await refreshTopBuyers({ read, isOwn, env }); }
     catch (e) {
       const t = Date.now();

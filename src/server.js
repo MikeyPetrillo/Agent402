@@ -11833,16 +11833,14 @@ function answerContractFor(def) {
 // alarm, in the form the sales ledger books it (so it matches a ledger row):
 // the signed EVM `from` (lowercased), the Tempo sender the gate proved, the
 // facilitator's settle receipt, else the signer of the signed Solana,
-// Algorand or Stellar transaction (src/non-evm-payer.js, case kept); a
-// credits key by its id. A card (Stripe) payment names no wallet. Read after
-// the response closed, never on the request's path.
+// Algorand or Stellar transaction (src/non-evm-payer.js, case kept). A
+// credits key and a card (Stripe) payment name no wallet: the ledger books
+// those sales with no payer (normalizePayerAddress), so neither can rank as
+// a top payer and neither is recorded. Read after the response closed, never
+// on the request's path.
 async function verifiedPayerOf(req, res) {
   const rail = railOf(req);
-  if (rail === "credits") {
-    const k = Object.hasOwn(req, "creditsKeyId") ? req.creditsKeyId : null;
-    return typeof k === "string" && k ? `credits:${k}` : null;
-  }
-  if (rail === "mpp-stripe") return null;
+  if (rail === "credits" || rail === "mpp-stripe") return null;
   if (rail === "mpp-tempo") {
     await new Promise((done) => { whenTempoLedgerPayerKnown(req, "top-buyers", done); });
     return normalizePayerAddress(tempoLedgerPayer(req));
