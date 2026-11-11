@@ -5064,6 +5064,8 @@ jobs:
           # A rejected payment is answered in the buyer's terms (balance vs stale authorization) on the 402 (offline)
           t node scripts/test-verify-hint.js
           t node scripts/test-verify-hint-live.js
+          # A refused payment resent before its 402's write completes is refused again, never held as a replay; a 200 keeps its claim until "finish" marks it consumed (paid boot, stub facilitator, "finish" held back by a test preload)
+          t node scripts/test-replay-release-at-end.js
           # A Solana wallet with no USDC account or too little USDC is told to fund it (retry fund-wallet, Retry-After), and a re-signing loop is held without a verify until the Retry-After passes (paid boot, stub facilitator)
           t node scripts/test-svm-funding-refusal.js
           # A verify refused for lack of funds names its class, the amount and the asset on every rail, and its log line carries the slug and a short payer (offline)
