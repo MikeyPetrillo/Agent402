@@ -175,6 +175,20 @@ if (ROLE === "model") {
     }
   }
   {
+    // A window too large to list, and a run waiting outside it beside runs
+    // that stay: its own absence is not a departure, so it looks without
+    // reading the balance again and is refused once, on its first read.
+    C._resetInflightCoverForTest();
+    reads = 0; balance = 600n * PRICE + PRICE / 2n; unlisted = true;
+    C._setBalanceReaderForTest(async () => { reads++; return balance; });
+    const W = "0x" + "c4".repeat(20), k = coverKeyOf(W);
+    for (let i = 0; i < 600; i++) winOf(k).set(`otherproc-1:v${i}`, P);
+    const r = await attempt(C, W, { settleWaitMs: 800 });
+    const st = C.inflightCoverStatus();
+    ok(r.err?.statusCode === 429 && reads === 1 && st.withdrawals === 1, `model, unlisted window: a run waiting outside it does not take its own absence for a departure (${r.err?.statusCode || "admitted"}, reads ${reads}, want 1; waits ${st.withdrawals}, want 1)`);
+    unlisted = false;
+  }
+  {
     // The last-view memory is bounded: past 10,000 wallets the least recently
     // viewed goes, and a view older than the shared window is dropped.
     C._resetInflightCoverForTest();
@@ -247,7 +261,7 @@ if (ROLE === "model") {
 const here = fileURLToPath(import.meta.url);
 for (const [role, extra, min] of [
   ["memory", { REDIS_URL: "" }, 5],
-  ["model", { REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "on" }, 7],
+  ["model", { REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "on" }, 8],
   ["degraded", { REDIS_URL: "redis://127.0.0.1:1", SHARED_LIMITS: "on", SHARED_LIMITS_OP_MS: "150" }, 7],
 ]) {
   const env = { ...process.env, INFLIGHT_COVER: "", ...extra };
@@ -454,7 +468,14 @@ C._setBalanceReaderForTest(async () => { reads++; return balance; });
 // test can run just before the next read of the window.
 let adds = 0, beforeWindowRead = null;
 const realAdd = shared.windowAdd, realRead = shared.windowRead;
-shared.windowAdd = async (...a) => { const r = await realAdd(...a); if (String(a[2]?.member || "").indexOf("otherproc-") !== 0) adds++; return r; };
+let failOwnAdd = false;
+shared.windowAdd = async (...a) => {
+  const own = String(a[2]?.member || "").indexOf("otherproc-") !== 0;
+  if (own && failOwnAdd) { failOwnAdd = false; return { ok: false, error: "injected" }; }
+  const r = await realAdd(...a);
+  if (own) adds++;
+  return r;
+};
 shared.windowRead = async (...a) => { const step = beforeWindowRead; beforeWindowRead = null; if (step) await step(); return realRead(...a); };
 for (const [label, settledBalance, admitted] of [["the balance left does not cover it", PRICE, false], ["control: the balance left covers it", 2n * PRICE, true]]) {
   // 1. A read is CACHED when the other container's run leaves. Run b reads
@@ -656,14 +677,20 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   C._resetInflightCoverForTest();
   const want = new Map([["0x" + "b1".repeat(20), PRICE + PRICE / 2n], ["0x" + "b2".repeat(20), PRICE], ["0x" + "b3".repeat(20), PRICE]]);
   const gate = new Map();
+  const ownIn = async (w) => (await windowOf(w)).entries?.some((e) => !String(e.member).startsWith("otherproc-")) === true;
+  // The third wallet's later reads look at the window first: a judgment
+  // after the wait must be made with the run's reservation back in it.
+  const heldAtRejudge = [];
   C._setBalanceReaderForTest(async (terms) => {
     const w = terms.payer;
-    if (w === "0x" + "b3".repeat(20) && !gate.has(w)) { gate.set(w, null); await new Promise((res) => gate.set(w, res)); }
+    if (w === "0x" + "b3".repeat(20)) {
+      if (!gate.has(w)) { gate.set(w, null); await new Promise((res) => gate.set(w, res)); }
+      else heldAtRejudge.push(await ownIn(w));
+    }
     return want.get(w);
   });
   const [B1, B2, B3] = [...want.keys()];
   for (const w of [B1, B2, B3]) await foreign(w, "p8");
-  const ownIn = async (w) => (await windowOf(w)).entries?.some((e) => !String(e.member).startsWith("otherproc-")) === true;
   const timed = async (w) => { const t = performance.now(); const r = await attempt(C, w, {}); return { ...r, ms: performance.now() - t }; };
   const guard = (p) => Promise.race([p, new Promise((res) => setTimeout(() => res({ err: { statusCode: "no answer within 9 s" }, ms: 9_000 }), 9_000))]);
   const p1 = guard(timed(B1));
@@ -681,8 +708,35 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   ok(typeof r2.release === "function" && r2.ms >= 4_500 && r2.ms < 6_500, `production default: a run that leaves after the last timed look and before the wait runs out is seen by the look taken at the end, and the run is admitted (${r2.err?.statusCode || "admitted"}, ${Math.round(r2.ms)} ms)`);
   const heldAdmitted = await ownIn(B3);
   ok(heldWhileJudged && !heldWhileWaiting && typeof r3.release === "function" && heldAdmitted, `a run's reservation is in the window while it is judged (${heldWhileJudged}), out while it waits (${!heldWhileWaiting}), and back once it is admitted (${heldAdmitted})`);
+  ok(heldAtRejudge.length >= 1 && heldAtRejudge.every(Boolean), `a run judged again after its wait has its reservation back in the window before its balance read (${JSON.stringify(heldAtRejudge)})`);
   r2.release?.(); r3.release?.();
   await unforeign(B1, "p8");
+}
+{
+  // 9. The run waits beside another container's settled run and is woken
+  // when it leaves, but its reservation cannot be put back (the write
+  // fails). Judged now it would be unseen by the other container; it is
+  // refused instead, as it was judged before the wait. Control: the same
+  // with the write answered admits the run.
+  for (const [label, fails] of [["the put-back fails", true], ["control: the put-back is written", false]]) {
+    C._resetInflightCoverForTest();
+    C._setBalanceReaderForTest(async () => PRICE);
+    const W = "0x" + (fails ? "b4" : "b5").repeat(20);
+    await foreign(W, "p9");
+    const p = attempt(C, W, { settleWaitMs: 5_000 });
+    await until(() => C.inflightCoverStatus().withdrawals >= 1, "the run to wait outside the window");
+    failOwnAdd = fails;
+    await unforeign(W, "p9");
+    const r = await p;
+    failOwnAdd = false;
+    const own = (await windowOf(W)).entries?.filter((e) => !String(e.member).startsWith("otherproc-")).length;
+    const st = C.inflightCoverStatus();
+    ok(fails
+      ? r.err?.statusCode === 429 && /does not cover this one as well/.test(r.err.message) && own === 0 && st.runsInFlight === 0 && st.putBackMisses === 1
+      : typeof r.release === "function" && own === 1 && !(st.putBackMisses > 0),
+      `${label}: the waiting run is ${fails ? "refused with the answer it was judged on, and holds nothing" : "admitted with its reservation in the window"} (${r.err?.statusCode || "admitted"}, own reservations ${own})`);
+    r.release?.();
+  }
 }
 shared.windowAdd = realAdd; shared.windowRead = realRead;
 // Clean up this run's keys.

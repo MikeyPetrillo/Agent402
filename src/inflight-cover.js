@@ -140,15 +140,17 @@ let readsInFlight = 0;
 // The settled-release of an admitted run, kept on its request (own,
 // non-enumerable) for the settle hook, which sees only the request.
 const SETTLED = Symbol("a402.inflightCoverSettled");
-const stats = { admitted: 0, admittedByRead: 0, admittedUnread: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, withdrawals: 0, sharedMisses: 0, foreignReads: 0 };
+const stats = { admitted: 0, admittedByRead: 0, admittedUnread: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, withdrawals: 0, putBackMisses: 0, sharedMisses: 0, foreignReads: 0 };
 
 /**
  * The OTHER runs a shared window read reports: everything but this run's own
  * reservation. `foreign` are the members another container holds, with their
  * count and sum (`foreignCount`, `foreignAtomic`); all three are null when the
- * window was too large to list, and the totals stand in.
+ * window was too large to list, and the totals stand in. `selfIn`: the run's
+ * own reservation is in the window (false while it waits outside it), so an
+ * unlisted total is not reduced by a reservation it does not hold.
  */
-function othersOf(r, selfId, selfAtomic) {
+function othersOf(r, selfId, selfAtomic, selfIn = true) {
   const entries = Array.isArray(r.entries) ? r.entries.filter((e) => e.member !== selfId) : null;
   if (entries) {
     let atomic = 0n, foreignAtomic = 0n;
@@ -160,8 +162,8 @@ function othersOf(r, selfId, selfAtomic) {
     }
     return { count: entries.length, atomic, foreign, foreignCount: foreign.size, foreignAtomic };
   }
-  const count = Math.max(0, (Number(r.count) || 0) - 1);
-  const atomic = BigInt(Math.max(0, Math.round(Number(r.sum) || 0))) - selfAtomic;
+  const count = Math.max(0, (Number(r.count) || 0) - (selfIn ? 1 : 0));
+  const atomic = BigInt(Math.max(0, Math.round(Number(r.sum) || 0))) - (selfIn ? selfAtomic : 0n);
   return { count, atomic: atomic > 0n ? atomic : 0n, foreign: null, foreignCount: null, foreignAtomic: null };
 }
 /**
@@ -462,7 +464,7 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
           // A look at the window, and one last look when the wait runs out.
           const r = await shared.windowRead(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS() });
           if (r.ok) {
-            const seen = othersOf(r, sharedId, terms.atomic);
+            const seen = othersOf(r, sharedId, terms.atomic, !withdrawn);
             if (!noteView(coverKey, seen) && (!others.foreign || !seen.foreign) && foreignDeparted(others, seen)) noteDeparture(coverKey);
           } else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
           if (me.left !== leftAtWait || mono() >= waitUntil) break;
@@ -470,20 +472,25 @@ export async function admitCoveredRun(req, { now = Date.now(), settleWaitMs = SE
         }
         if (me.left !== leftAtWait) {
           // A run left: back into the window, then judged again on a view
-          // taken now and a read begun after it.
+          // taken now and a read begun after it. A reservation that could not
+          // be put back would leave this run unseen by the other container,
+          // which could then admit beside it: the run is refused instead, as
+          // it was judged before the wait.
+          let back = true;
           if (withdrawn) {
             const r = await shared.windowAdd(SHARED_NAME, coverKey, { windowMs: SHARED_WINDOW_MS(), member: sharedId, weight: Number(terms.atomic), now: Date.now() });
             if (r.ok) { others = othersOf(r, sharedId, terms.atomic); sharedSeq = ++eventSeq; noteView(coverKey, others); }
-            else { stats.sharedMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
+            else { back = false; stats.sharedMisses++; stats.putBackMisses++; noteSharedLimitsDegraded(SHARED_NAME, r); }
           }
+          if (back) { at = Date.now(); continue; }
+        } else if (!withdrawn && cur.settling > 0) {
+          // Nobody left in the whole wait: nothing this judgment rests on has
+          // changed, so it stands (no further read). A run that stayed in the
+          // window (it waited on a settling run here only) is judged again, as
+          // it always was; it reuses the read it was judged on.
           at = Date.now();
           continue;
         }
-        // Nobody left in the whole wait: nothing this judgment rests on has
-        // changed, so it stands (no further read). A run that stayed in the
-        // window (it waited on a settling run here only) is judged again, as
-        // it always was; it reuses the read it was judged on.
-        if (!withdrawn && cur.settling > 0) { at = Date.now(); continue; }
       }
       stats.refused++;
       if (unread) stats.refusedUnread++;
