@@ -597,7 +597,7 @@ ${ledgerFooterCompact()}`;
       "Availability for Agent402.Tools, measured every few minutes by two independent observers outside production: per-component uptime history, incidents derived from real probes, and daily real-money payment checks.",
     canonical: `${baseUrl}/status`,
     baseUrl,
-    activePath: "__none__",
+    activePath: "/status",
     extraCss: CSS,
     body,
   });

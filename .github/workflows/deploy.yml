@@ -3262,7 +3262,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (160 scripts, one process each)
+      - name: Offline suites (161 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3316,6 +3316,8 @@ jobs:
           t node scripts/test-algorand-page.js
           # Homepage tests (offline, fixture snapshot)
           t node scripts/test-home-page.js
+          # Header: Pricing, Company, Status as plain links, one primary action, every earlier destination still linked (offline)
+          t node scripts/test-nav-primary.js
           t node scripts/test-badge-contrast.js
           t node scripts/test-ga-snippet.js
           # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
