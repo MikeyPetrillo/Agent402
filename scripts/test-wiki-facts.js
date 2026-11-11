@@ -71,6 +71,46 @@ const wiki = readdirSync(join(ROOT, "wiki")).filter((f) => f.endsWith(".md")).ma
   }
   for (const f of ["wiki/Buying-at-Volume.md", "README.md"]) check(f, readFileSync(join(ROOT, f), "utf8"));
 }
+// A model id the LLM-Gateway page says is served as itself until its upstream
+// expiration: the day and the successor are the ones RETIRING_MODELS holds.
+{
+  const { RETIRING_MODELS } = await import("../src/tools/llm-gateway-kit.js");
+  const gw = (wiki.find(([f]) => f === "LLM-Gateway.md")?.[1] || "").replace(/\s+/g, " ");
+  const stated = [...gw.matchAll(/`([a-z0-9./-]{3,80})` is served as itself until its upstream expiration on (\d{4}-\d{2}-\d{2}), then by `([a-z0-9./-]{3,80})`/g)];
+  ok(stated.length >= 1, `LLM-Gateway names a model served as itself until its expiration (${stated.length})`);
+  for (const [, id, until, use] of stated) {
+    const r = RETIRING_MODELS[id];
+    ok(r?.asItselfUntil === true && r.until === until && r.use === use, `LLM-Gateway's ${id}: until ${until}, then ${use} (RETIRING_MODELS: ${r ? `${r.until}, ${r.use}${r.asItselfUntil ? "" : ", not served as itself"}` : "no entry"})`);
+  }
+}
+// The funding refusal classes as the Paying-with-x402 page documents them:
+// each class the hints carry, the retry verb they share, the rails a
+// no-account refusal comes from and every field of needs (needsOf).
+{
+  const { hintFor, needsOf } = await import("../src/verify-hint.js");
+  const { REJECTION_REASONS } = await import("../src/payment-reject.js");
+  const { RAILS } = await import("../src/rails.js");
+  const { ALGORAND_MAINNET_CAIP2 } = await import("../src/avm-network.js");
+  const pw = readFileSync(join(ROOT, "wiki", "Paying-with-x402.md"), "utf8").replace(/\s+/g, " ");
+  const SOL = RAILS.find((r) => /^solana:/.test(r.caip2)).caip2;
+  const noAccount = [
+    hintFor({ reason: "transaction_simulation_failed", detail: "InstructionError:[2 InvalidAccountData]", network: SOL, priceUsd: 0.01 }),
+    hintFor({ reason: "simulation_failed", detail: "HostError: Error(Contract, #13) trustline entry is missing", network: "stellar:pubnet", priceUsd: 0.01 }),
+    hintFor({ reason: "simulation_failed", detail: `asset 31566704 missing from ${"A".repeat(58)}`, payTo: "B".repeat(58), network: ALGORAND_MAINNET_CAIP2, priceUsd: 0.01 }),
+  ];
+  const short = hintFor({ reason: "invalid_exact_evm_insufficient_balance", network: "eip155:137", priceUsd: 0.01 });
+  const classes = [short.reason, ...new Set(noAccount.map((h) => h.reason))];
+  const retry = short.retry;
+  ok(classes.length === 2 && classes.every((c) => REJECTION_REASONS.some((r) => r.reason === c)) && noAccount.every((h) => h.retry === retry), `control: the funding classes are ${classes.join(", ")}, retry ${retry}`);
+  for (const c of classes) ok(pw.includes(`(\`reason: "${c}"\``) || pw.includes(`(\`reason: "${c}"\`:`), `Paying-with-x402 names reason ${c}`);
+  ok(pw.includes(`\`${retry}\` means the paying wallet holds too little of the asset`), `Paying-with-x402 says what ${retry} means`);
+  const rails = noAccount.map((h) => RAILS.find((r) => h.hint.includes(` on ${r.name}`))?.name);
+  const naSentence = (pw.split(`reason: "${classes[1]}"`)[1] || "").split(")")[0];
+  ok(rails.every(Boolean) && rails.every((r) => naSentence.includes(r)), `Paying-with-x402's no-account sentence names each rail it comes from (${rails.join(", ")})`);
+  const keys = Object.keys(needsOf({ network: "eip155:137", asset: "0x" + "ab".repeat(20), amount: "10000" }) || {});
+  const needsSentence = (pw.split("carries `needs`:")[1] || "").split(".")[0];
+  ok(keys.length >= 4 && keys.every((k) => needsSentence.includes(`\`${k}\``)), `Paying-with-x402's needs sentence names every field needsOf returns (${keys.join(", ")})`);
+}
 const card = cardReportPriceRange(HUMAN_PRODUCTS);
 const agent = agentReportPriceRange();
 const monthly = reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly;

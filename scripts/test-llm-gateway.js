@@ -2135,5 +2135,24 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(strays.length === 0, `no answer path deletes or names a billing field outside BILLING_USAGE_FIELDS (${strays.join(", ") || "none"})`);
 }
 
+// The nano tier's model list, as its tool description and the LLM-Gateway
+// wiki row print it, names only families the tier serves: every word of the
+// list is part of one of the tier's own prefixes (a family that left the tier,
+// such as the retired qwen id, leaves both texts).
+{
+  const { readFileSync } = await import("node:fs");
+  const prefixes = TIERS["v1-chat-nano"].prefixes;
+  const words = (list) => list.split(",").flatMap((item) => item.replace(/\([^)]*\)|\bby default\b|\bsmall\b/g, " ").split(/[\s/]+/)).map((w) => w.trim().toLowerCase()).filter(Boolean);
+  const unserved = (ws) => ws.filter((w) => !prefixes.some((p) => p.includes(w)));
+  const desc = LLM_GATEWAY_TOOLS.find((x) => x.slug === "v1-chat-nano")?.description || "";
+  const dList = (desc.split("nano tier: ")[1] || "").split(" - $")[0];
+  const wiki = readFileSync(new URL("../wiki/LLM-Gateway.md", import.meta.url), "utf8");
+  const wList = (wiki.split("nano models (")[1] || "").split(";")[0];
+  const dw = words(dList), ww = words(wList);
+  ok(dw.length >= 6 && unserved(dw).length === 0, `the nano description names only families the tier serves (${dw.join(" ")}${unserved(dw).length ? `; not served: ${unserved(dw).join(", ")}` : ""})`);
+  ok(ww.length >= 6 && unserved(ww).length === 0, `the wiki's nano row names only families the tier serves (${ww.join(" ")}${unserved(ww).length ? `; not served: ${unserved(ww).join(", ")}` : ""})`);
+  ok(unserved(words("small qwen")).length === 1, "control: a family the tier does not serve is caught");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

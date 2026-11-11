@@ -258,6 +258,27 @@ ok(r5.out.hint === undefined, "no remembered failure for this credential -> no h
   const phantom = [...documented].filter((r) => !emitted.has(r));
   ok(phantom.length === 0, `and the table documents nothing the classifier cannot emit${phantom.length ? ` - phantom: ${phantom.join(", ")}` : ""}`);
   ok(REJECTION_REASONS.every((r) => typeof r.means === "string" && r.means.length > 30), "each documented reason explains itself in a sentence, not a restated slug");
+  // The two funding classes are documented as the hints word them: the
+  // retry verb each hint carries, the rails a no-account refusal comes from
+  // (read from the hints themselves), and what `needs` carries (needsOf).
+  const { needsOf } = await import("../src/verify-hint.js");
+  const { RAILS } = await import("../src/rails.js");
+  const { ALGORAND_MAINNET_CAIP2 } = await import("../src/avm-network.js");
+  const SOL = RAILS.find((r) => /^solana:/.test(r.caip2)).caip2;
+  const noAccount = [
+    hintFor({ reason: "transaction_simulation_failed", detail: "InstructionError:[2 InvalidAccountData]", network: SOL, priceUsd: 0.01 }),
+    hintFor({ reason: "simulation_failed", detail: "HostError: Error(Contract, #13) trustline entry is missing", network: "stellar:pubnet", priceUsd: 0.01 }),
+    hintFor({ reason: "simulation_failed", detail: `asset 31566704 missing from ${"A".repeat(58)}`, payTo: "B".repeat(58), network: ALGORAND_MAINNET_CAIP2, priceUsd: 0.01 }),
+  ];
+  const short = hintFor({ reason: "invalid_exact_evm_insufficient_balance", network: "eip155:137", priceUsd: 0.01 });
+  const needsKeys = Object.keys(needsOf({ network: "eip155:137", asset: "0x" + "ab".repeat(20), amount: "10000" }) || {});
+  const means = Object.fromEntries(REJECTION_REASONS.map((r) => [r.reason, r.means]));
+  ok(noAccount.every((h) => h.reason === "no-token-account" && h.retry === noAccount[0].retry) && short.reason === "insufficient-funds", "control: each rail's no-account hint and the short-balance hint carry their class");
+  const railsNamed = noAccount.map((h) => RAILS.find((r) => h.hint.includes(` on ${r.name}`))?.name);
+  const m = String(means["no-token-account"] || "");
+  ok(railsNamed.every(Boolean) && railsNamed.every((r) => m.includes(r)) && m.includes(`retry is ${noAccount[0].retry}`) && m.includes("`needs`") && ["network", "asset", "amount"].every((k) => needsKeys.includes(k) && m.includes(k)) && /Retry-After/.test(m), `no-token-account means: the rails (${railsNamed.join(", ")}), retry ${noAccount[0].retry}, needs and Retry-After`);
+  const s = String(means["insufficient-funds"] || "");
+  ok(s.includes("`needs`") && ["network", "asset", "amount"].every((k) => s.includes(k)) && /Fund the wallet/.test(short.hint) && /Fund the wallet/.test(s), "insufficient-funds means: what needs carries and the same remedy as the hint");
 }
 
 // Every hint that names where the payment was refused names a chain a buyer

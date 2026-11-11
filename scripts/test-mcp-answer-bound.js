@@ -51,6 +51,16 @@ const bytes = (v) => Buffer.byteLength(JSON.stringify(v));
   ok(cut && cut.kind === "array" && cut.matched === 5000 && cut.returned === big.value.rows.length && cut.returned < 5000 && cut.truncated === true, "the cut list is named by path with its row counts");
   ok(big.value.rows.every((row, i) => row.i === i), "the kept rows are the first rows, in order");
   ok(bytes(withAnswerBound(big.value, big.bound)) <= MAX, "the cut answer with its answerBound block still fits the ceiling");
+  // catalog.call's outputSchema names every field the bound carries, and every
+  // field of a cut entry, as boundAnswer emits them.
+  {
+    const { META_OUTPUT_SCHEMAS } = await import("../src/mcp-flagship.js");
+    const d = String(META_OUTPUT_SCHEMAS["catalog.call"]?.properties?.answerBound?.description || "");
+    const named = (k) => new RegExp(`(^|[^A-Za-z])${k}([^A-Za-z]|$)`).test(d);
+    const keys = [...Object.keys(big.bound), ...Object.keys(big.bound.cuts[0] || {})];
+    const missing = [...new Set(keys)].filter((k) => !named(k));
+    ok(keys.length >= 12 && missing.length === 0, `the answerBound outputSchema names every field the bound carries${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
+  }
 
   const str = boundAnswer({ text: "y".repeat(500_000) }, MAX);
   const sc = str.bound?.cuts.find((c) => c.path === "text");
