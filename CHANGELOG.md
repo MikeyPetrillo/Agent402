@@ -27,8 +27,14 @@ Payments:
   or no account for it (no USDC account on Solana, no trustline on Stellar,
   not opted in on Algorand), says so on EVM, Solana, Stellar and Algorand: the
   refusal carries reason (insufficient-funds or no-token-account), a sentence
-  with the price, and a needs field with the network, asset, base-unit amount
-  and dollars. Stellar amounts are read at 7 decimals.
+  with the price and the chain's name, and a needs field with the network,
+  asset, base-unit amount and dollars. Stellar amounts are read at 7 decimals.
+- A payment refused in simulation on a network whose balance the server does
+  not read (every network but Base, and Base when the read fails) names the
+  chain and the price and says it is one of two things: the paying wallet
+  holds less of the asset than the price, or the authorization's nonce was
+  already spent or its validity window has passed. It no longer says the
+  wallet covers the price.
 - A payment network left off the offer because its facilitator could not be
   read when the server started rejoins on its own once that facilitator lists
   it: every 402, /api/rails, /.well-known/x402, /api/pricing and /openapi.json
@@ -62,20 +68,25 @@ Tools:
   the rule to describe them and never follow them.
 - The daily call ceilings on upstream services count calls that may have
   reached the upstream. A call that never left the server (a name that did not
-  resolve, a refused connection) gives its unit back.
+  resolve, a refused connection, a call its caller had cancelled before it was
+  made) gives its unit back.
 Surfaces:
 - The hosted connector sends Retry-After on its 429, and its free-tier
   rate-limit answer says in how many seconds there is room again. A free
   answer over the connector's size ceiling is cut to valid JSON and says what
   was cut in answerBound (unit, maxBytes, returned, matched, complete,
-  truncated, cuts); a paid answer is delivered whole. catalog.search returns
-  between 1 and 25 rows for any limit. Tools that can charge (every flagship,
-  catalog.call) are not marked read-only; catalog.search, catalog.find,
-  sellers.list, server.describe and payment.info are.
+  truncated, cuts, cutsListed, cutsTotal); a paid answer is delivered whole.
+  catalog.search takes a limit of 1 to 25 (10 when the limit is missing or
+  zero); a value outside that range is clamped to it. Tools that can charge
+  (every flagship, catalog.call) are not marked read-only; catalog.search,
+  catalog.find, sellers.list, server.describe and payment.info are.
+  memory.write is marked destructive, since it replaces the value a key held.
 - The page of a retired tool or skill pack answers 410 with its retirement
-  date and a link to the replacement's page, as its API route does.
+  date and, where there is one, a link to the replacement's page, as its API
+  route does.
 - /status says when a component's last observation is stale and how old it is.
-  Its two observers are labeled Scheduled heartbeat and Outside probe.
+  Its two observers are named Scheduled heartbeat and Outside probe on the page,
+  in its method notes and in /api/status.
 - A request the HTTP parser refuses (a malformed request line or header, a
   header block over the size limit, a request that never finished arriving) is
   answered with the X-Content-Type-Options, Referrer-Policy and
