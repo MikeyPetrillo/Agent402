@@ -250,5 +250,48 @@ try {
   } finally { s9.close(); local.stop(); }
 }
 
+// 10. An answer other than 200 is never stored, so its claim is released when
+// the response is ended, not on "finish". "finish" waits for the socket write
+// to complete; a client that resends the same payment as soon as a 402's
+// headers arrive could land in between and be told the first call was still
+// running. Here "finish" is held back until the check has been made, as a
+// write that completes late holds it.
+{
+  const { createLocalIdempotencyStore } = await import("../src/idempotency-store.js");
+  const local = createLocalIdempotencyStore();
+  const released = [];
+  const spy = { ...local, get: (k) => local.get(k), claim: (k) => local.claim(k), renew: (k) => local.renew(k), set: (k, b, n) => local.set(k, b, n),
+    release: (k) => { released.push(k); return local.release(k); } };
+  const seen = {};
+  const app10 = express();
+  app10.use(express.json());
+  app10.use(createIdempotency({ isCatalogRoute: () => true, freeMode: true, store: spy }));
+  app10.post("/api/z", async (req, res) => {
+    const status = Number(req.body?.status) || 200;
+    released.length = 0;
+    let finished = false, heldFinish = null;
+    const emit = res.emit;
+    res.emit = function heldEmit(ev, ...args) {
+      if (ev === "finish" && !heldFinish) { heldFinish = () => { finished = true; return emit.call(this, ev, ...args); }; return true; }
+      return emit.call(this, ev, ...args);
+    };
+    res.status(status).json({ status });
+    await new Promise((r) => setTimeout(r, 30));
+    seen[status] = { released: released.length, finished };
+    heldFinish?.();
+  });
+  const s10 = app10.listen(0);
+  await new Promise((r) => s10.once("listening", r));
+  const send = (status, key) => fetch(`http://127.0.0.1:${s10.address().port}/api/z`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": key, "x-pow-solution": `t:${key}` }, body: JSON.stringify({ status }) });
+  try {
+    await (await send(402, "k10a")).text();
+    await waitFor(() => seen[402]);
+    ok(seen[402] && seen[402].finished === false && seen[402].released === 1, `a 402's claim is released when it is ended, before "finish" (released ${seen[402]?.released}, finished ${seen[402]?.finished})`);
+    await (await send(200, "k10b")).text();
+    await waitFor(() => seen[200]);
+    ok(seen[200] && seen[200].finished === false && seen[200].released === 0, `a 200 keeps its claim until "finish" commits it (released ${seen[200]?.released}, finished ${seen[200]?.finished})`);
+  } finally { s10.close(); local.stop(); }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -11310,6 +11310,18 @@ if (FREE_MODE) {
         else replayGuard.release(replayKey).catch(() => {}); // not granted (facilitator rejected, handler errored)
       };
       res.on("finish", finishGuard);
+      // A refusal (anything but a 200) is released when it is ended: "finish"
+      // waits for the socket write, and a buyer that resent the same payment
+      // as soon as the 402's headers arrived was refused as a replay in that
+      // window. The paywall buffers the handler's answer and ends the
+      // response through this wrapper once settlement is decided, so the
+      // status read here is the final one; a 200 still waits for "finish".
+      const endBeforeGuard = res.end;
+      res.end = function replayGuardEnd(...args) {
+        const out = endBeforeGuard.apply(this, args);
+        if (res.statusCode !== 200) finishGuard();
+        return out;
+      };
       // Client left before the response finished. On a close before the first
       // byte, statusCode is still Node's default 200 (the paywall buffers the
       // handler's status), so the key is marked CONSUMED even though the

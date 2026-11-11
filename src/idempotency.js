@@ -218,10 +218,15 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       const out = priorEnd.apply(this, args);
       if (!ended) {
         ended = true;
+        // An answer other than 200 is never stored, so the run is over here:
+        // release now. Waiting for "finish" left a window in which a client
+        // that resent the same payment as soon as the 402's headers arrived
+        // was told its first call was still running.
+        if (res.statusCode !== 200) releaseClaim();
         // Ended on a live socket: "finish" commits, then releases. Ended after
         // the client left (no "finish" comes): an undelivered commit ran inside
         // the call above, so release once its write lands.
-        if (socketGone()) setImmediate(releaseClaim);
+        else if (socketGone()) setImmediate(releaseClaim);
       }
       return out;
     };
