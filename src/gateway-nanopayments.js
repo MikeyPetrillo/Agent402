@@ -59,6 +59,7 @@
 // the verify failover or our relayer (src/payments.js): Gateway alone can
 // settle a GatewayWalletBatched authorization.
 import { SettleError, VerifyError } from "@x402/core/types";
+import { shortPayer } from "./verify-failure-log.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature } from "viem";
 import { createJsonDocument } from "./json-document.js";
@@ -949,7 +950,7 @@ function holdLost(e, log = console.error) {
     lostPending = lostPending.slice(1);
     lostEvictedAt = Date.now();
     lostEvictedCount++;
-    try { log(`[gateway] EVICTED from memory (more than ${LOST_MAX} bookings held outside the pending book): ${gone.key} on ${gone.network}, buyer ${gone.payer}, amount ${gone.amount ?? "?"}, nonce ${gone.nonce}; ${lostDurable ? "still in the durable store, offered to the book once memory has room" : "no durable store: resolve it by hand from this line"}`); } catch { /* logging never throws */ }
+    try { log(`[gateway] EVICTED from memory (more than ${LOST_MAX} bookings held outside the pending book): ${gone.key} on ${gone.network}, buyer ${lostDurable ? shortPayer(gone.payer) : gone.payer}, amount ${gone.amount ?? "?"}, nonce ${gone.nonce}; ${lostDurable ? "still in the durable store, offered to the book once memory has room" : "no durable store: resolve it by hand from this line"}`); } catch { /* logging never throws */ }
   }
   return true;
 }
@@ -1049,7 +1050,7 @@ export function notePendingLost(entry, log = console.error) {
   };
   // Logged first, so a line naming the booking always comes before any
   // eviction line it causes.
-  try { log(`[gateway] a batched settlement on ${e.network} left unresolved could NOT be booked (book and journal both refused); if Gateway settled it the buyer ${e.payer} is owed ${e.amount ?? "?"} (nonce ${e.nonce}). Kept on local disk${lostDurable ? " and in the durable store" : ""} and offered to the book again every ${Math.round(LOST_RETRY_MS / 1000)} s; resolve it by hand on /__operator/gateway-pending.json`); } catch { /* logging never throws */ }
+  try { log(`[gateway] a batched settlement on ${e.network} left unresolved could NOT be booked (book and journal both refused); if Gateway settled it the buyer ${shortPayer(e.payer)} is owed ${e.amount ?? "?"} (nonce ${e.nonce}). Kept on local disk${lostDurable ? " and in the durable store" : ""} and offered to the book again every ${Math.round(LOST_RETRY_MS / 1000)} s; resolve it by hand on /__operator/gateway-pending.json`); } catch { /* logging never throws */ }
   if (holdLost(e, log)) void durableWrite("booking", (d) => d.put(e), log);
   persistLost(log);
   scheduleLostRetry();

@@ -43,6 +43,7 @@
 // insert-if-absent by transaction (src/refund-ledger.js), so one transfer is
 // never owed twice.
 import { createJsonDocument } from "./json-document.js";
+import { shortPayer } from "./verify-failure-log.js";
 import { trackStoreReady } from "./state-db.js";
 import { rpc, evmTransferredInReceipt } from "./payment-verify.js";
 import { evmRpcFor } from "./evm-rpcs.js";
@@ -371,7 +372,7 @@ export function createLateSettleBook({
       const r = await put(entry);
       if (r === "made") {
         log(byAuth
-          ? `[late-settle] ${network} authorization ${c.payer} nonce ${c.nonce} (via ${entry.via}): outcome unknown; booked until it is read on chain`
+          ? `[late-settle] ${network} authorization ${shortPayer(c.payer)} nonce ${c.nonce} (via ${entry.via}): outcome unknown; booked until it is read on chain`
           : `[late-settle] ${network} settlement failed naming tx ${c.tx} (via ${entry.via}); booked until its receipt is read`);
         return true;
       }
@@ -389,8 +390,8 @@ export function createLateSettleBook({
         return false;
       }
       log(r === "full"
-        ? `[late-settle] book is full (${maxEntries} open); ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}) kept in the journal until there is room`
-        : `[late-settle] ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}): the store write failed; kept in the journal until the next reconcile lands it`);
+        ? `[late-settle] book is full (${maxEntries} open); ${network} ${byAuth ? `auth ${shortPayer(c.payer)}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}) kept in the journal until there is room`
+        : `[late-settle] ${network} ${byAuth ? `auth ${shortPayer(c.payer)}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}): the store write failed; kept in the journal until the next reconcile lands it`);
       return true;
     },
     /** The entries as last read; call refresh() first for the shared view. */

@@ -1233,6 +1233,8 @@ jobs:
           t node scripts/test-no-third-party-names.js
           # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module
           t node scripts/test-hidden-chars.js
+          # A payment log line in src/ prints a wallet by its first characters only (shortPayer), outside a reasoned allowlist (offline)
+          t node scripts/test-log-payer-short.js
           # US spelling in public copy: README, wiki, docs, package READMEs, legal and guide pages, tool descriptions (offline)
           t node scripts/test-us-spelling.js
           # No filesystem path built from a URL pathname (percent-encoded: a checkout path with a space breaks) and no hand-made file:// entry check, in every source tree (offline)

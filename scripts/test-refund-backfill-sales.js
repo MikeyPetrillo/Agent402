@@ -10,8 +10,10 @@
 //     price are the sales ledger's row (a base58 payer byte for byte), with
 //     the note stored on the row;
 //   - a payer, price, slug or network in the request is never read;
-//   - a tx with no sale, an internal sale, and a tx recorded for two sales
-//     are named in `skipped` and mint nothing;
+//   - a tx with no sale, an internal sale, a tx recorded for two sales, a
+//     sale with no payer and a sale at no price are named in `skipped` and
+//     mint nothing;
+//   - only ?write=1 writes: ?write=0 or any other value is a dry run;
 //   - a second write mints nothing new;
 //   - a missing note, an empty list and a list over the cap are a 400;
 //   - without the operator token the route answers 404 (the same request
@@ -46,12 +48,16 @@ const EVM_TX_2 = "0x" + "cd".repeat(32);
 const INTERNAL_TX = "0x" + "ee".repeat(32);
 const TWICE_TX = "0x" + "77".repeat(32);
 const UNKNOWN_TX = "0x" + "99".repeat(32);
+const NOPAYER_TX = "0x" + "a5".repeat(32);
+const ZERO_TX = "0x" + "b6".repeat(32);
 ins.run(NOW, "json-diff", 0.05, "usdc", "solana", SOL_PAYER, SOL_TX, 0);
 ins.run(NOW, "web-search", 0.02, "usdc", "base", EVM_PAYER, EVM_TX, 0);
 ins.run(NOW, "web-search", 0.02, "usdc", "base", EVM_PAYER, EVM_TX_2, 0);
 ins.run(NOW, "web-search", 0.02, "usdc", "base", "0x00000000000000000000000000000000000000b2", INTERNAL_TX, 1); // ours
 ins.run(NOW, "web-search", 0.02, "usdc", "base", EVM_PAYER, TWICE_TX, 0);
 ins.run(NOW, "json-diff", 0.03, "usdc", "base", EVM_PAYER, TWICE_TX, 0); // one tx, two sales
+ins.run(NOW, "web-search", 0.02, "usdc", "base", null, NOPAYER_TX, 0); // no one to pay
+ins.run(NOW, "web-search", 0, "usdc", "base", EVM_PAYER, ZERO_TX, 0); // nothing to pay
 seed.close();
 
 let srv = null;
@@ -64,8 +70,8 @@ try {
     },
   });
   const AUTH = { Authorization: `Bearer ${OP_TOKEN}` };
-  const post = async (body, { write = false, headers = AUTH } = {}) => {
-    const r = await fetch(`${srv.url}/__operator/refunds/backfill-sales${write ? "?write=1" : ""}`, {
+  const post = async (body, { write = false, headers = AUTH, query = write ? "?write=1" : "" } = {}) => {
+    const r = await fetch(`${srv.url}/__operator/refunds/backfill-sales${query}`, {
       method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
     });
     const text = await r.text();
@@ -110,6 +116,21 @@ try {
   const over = await post({ txs: Array.from({ length: 101 }, (_, i) => "0x" + i.toString(16).padStart(64, "0")), note: NOTE }, { write: true });
   ok(over.status === 400 && /max 100/.test(over.text), `a list over the cap is a 400, never a partial run (${over.status})`);
   ok((await ledger()).length === 0, "none of the refused requests recorded anything");
+
+  // --- a sale the executor could not pay ----------------------------------------------
+  const unpayable = await post({ txs: [NOPAYER_TX, ZERO_TX], note: NOTE });
+  ok(unpayable.json?.matched === 0 && unpayable.json?.wouldMint === 0 && unpayable.json?.owedUsd === 0, `a sale with no payer and one at no price match nothing (${unpayable.json?.matched}, ${unpayable.json?.wouldMint})`);
+  ok(reasonOf(unpayable.json, NOPAYER_TX) === "no_payer", `a sale with no payer is named and skipped (${reasonOf(unpayable.json, NOPAYER_TX)})`);
+  ok(reasonOf(unpayable.json, ZERO_TX) === "no_amount", `a sale at no price is named and skipped (${reasonOf(unpayable.json, ZERO_TX)})`);
+  const unpayableWrite = await post({ txs: [NOPAYER_TX, ZERO_TX], note: NOTE }, { write: true });
+  ok(unpayableWrite.json?.minted === 0 && (await ledger()).length === 0, `and a write mints no row for either (${unpayableWrite.json?.minted})`);
+
+  // --- only write=1 writes ------------------------------------------------------------
+  for (const query of ["?write=0", "?write=true", "?write="]) {
+    const r = await post({ txs: ALL, note: NOTE }, { query });
+    ok(r.status === 200 && r.json?.write === false && r.json?.minted === 0 && r.json?.wouldMint === 2, `${query} is a dry run (write ${r.json?.write}, minted ${r.json?.minted})`);
+  }
+  ok((await ledger()).length === 0, "and none of those recorded anything");
 
   // --- write: the ledger row decides, never the request -----------------------------
   const ATTACKER = "0x000000000000000000000000000000000000beef";

@@ -95,6 +95,7 @@
 // Deliberately NOT gated on TEMPO_API_KEY: that key is the relay credential for
 // tempo/charge, and no subscription call ever touches the relay.
 import { readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { shortPayer } from "./verify-failure-log.js";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { leaseOwnerId, leased, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withLease } from "./state-db.js";
@@ -1689,7 +1690,7 @@ export function createMppSubscriptions({
     };
     await writeRec(rec);
     bookCharge(rec, rec.lastChargedPeriod, rec.lastChargeTx);
-    log(`[mpp-subs] activated ${subId} (${rec.product} -> ${rec.target}) payer=${payer} tx=${rec.lastChargeTx || "?"}`);
+    log(`[mpp-subs] activated ${subId} (${rec.product} -> ${rec.target}) payer=${shortPayer(payer)} tx=${rec.lastChargeTx || "?"}`);
     return { ...publicView(rec), manageToken: manageToken(subId), receipt: receiptHeader(receipt), replay: false };
   }
 

@@ -61,6 +61,25 @@ ok(reads === 0 && hintForCredential(credentialKeyOf(C2), { now })?.retry === "fr
   let gwReads = 0;
   const g = await noteVerifyFailure({ paymentPayload: batched, network: "eip155:8453", reason: "insufficient_balance", priceUsd: 0.005, now, balanceReader: async () => { gwReads++; return 12; } });
   ok(gwReads === 0 && g.balanceUsd === null, "a batched payment on Base reads no wallet balance (the deposit is what paid)");
+  {
+    // `needs` names the wallet's asset on the network: a batched payment is
+    // paid from the deposit, so its refusal carries none; the same refusal of
+    // a plain payment does (the control).
+    const reqs = { network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "5000", payTo: "0x" + "ee".repeat(20) };
+    const gN = await noteVerifyFailure({ paymentPayload: batched, network: "eip155:8453", reason: "insufficient_balance", priceUsd: 0.005, requirements: reqs, now, balanceReader: async () => 0 });
+    const plain = await noteVerifyFailure({ paymentPayload: cred("0x" + "de".repeat(32)), network: "eip155:8453", reason: "insufficient_balance", priceUsd: 0.005, requirements: reqs, now, balanceReader: async () => 0 });
+    ok(gN.reasonClass === "insufficient-funds" && !("needs" in gN), `a short Gateway deposit carries no needs (${JSON.stringify(gN.needs)})`);
+    ok(plain.reasonClass === "insufficient-funds" && plain.needs?.asset === reqs.asset && plain.needs?.amount === reqs.amount, `control: a plain payment's short balance carries needs (${JSON.stringify(plain.needs)})`);
+    // Algorand: "asset missing from <address>" is the paying wallet's missing
+    // opt-in only when the address is not the payee, read from the accept's payTo.
+    const ALGO_NET = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=";
+    const PAYTO = "B".repeat(58), BUYER = "A".repeat(58);
+    const algoReqs = { network: ALGO_NET, asset: "31566704", amount: "5000", payTo: PAYTO };
+    const optIn = await noteVerifyFailure({ paymentPayload: cred("0x" + "ad".repeat(32)), network: ALGO_NET, reason: `simulation_failed: asset 31566704 missing from ${BUYER}`, priceUsd: 0.005, requirements: algoReqs, now, balanceReader: async () => null });
+    ok(optIn.reasonClass === "no-token-account" && optIn.needs?.network === ALGO_NET, `an Algorand wallet not opted in is classified from the accept's payTo (${optIn.reasonClass})`);
+    const payee = await noteVerifyFailure({ paymentPayload: cred("0x" + "ae".repeat(32)), network: ALGO_NET, reason: `simulation_failed: asset 31566704 missing from ${PAYTO}`, priceUsd: 0.005, requirements: algoReqs, now, balanceReader: async () => null });
+    ok(payee.reasonClass !== "no-token-account", `control: the payee's own missing opt-in is not the buyer's (${payee.reasonClass})`);
+  }
   ok(g.reasonClass === "insufficient-funds" && g.retry === "fund-gateway-deposit" && /Circle Gateway balance holds less than this call costs \(\$0\.0050\) on Base\./.test(g.hint) && /Deposit USDC into Circle Gateway/.test(g.hint) && /NEW authorization/.test(g.hint), `a short Gateway balance says to deposit, with its own retry verb and the price (${g.hint})`);
   {
     // The middleware reads the wall clock: note the failure under it.

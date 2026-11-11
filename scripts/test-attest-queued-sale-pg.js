@@ -18,9 +18,14 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const DIR = mkdtempSync(join(tmpdir(), "attest-queued-"));
 process.env.SALES_LEDGER_DB = join(DIR, "sales.db");
 process.env.LEDGER_MIRROR_REFRESH_MS = "3600000";
+// A held write gives up at the statement limit (default 10 s) and resolves
+// its queued entry; case 1c holds one past the lookup's own bound, so the
+// limit is set well above both.
+process.env.STATE_DB_STATEMENT_TIMEOUT_MS = "60000";
 const BUYER = "0x5555555555555555555555555555555555555555";
 const OTHER = "0x6666666666666666666666666666666666666666";
 const TX1 = "0x" + "c1".repeat(32), TX2 = "0x" + "c2".repeat(32), TX3 = "0x" + "c3".repeat(32);
+const TX4 = "0x" + "c4".repeat(32), TX5 = "0x" + "c5".repeat(32), TX6 = "0x" + "c6".repeat(32);
 
 const sl = await import("../src/sales-ledger.js");
 const { makeAttestHandler } = await import("../src/tools/attest-kit.js");
@@ -39,7 +44,7 @@ async function until(test, ms = 15_000) {
 const insertWaiting = async () => (await locker.query(
   "SELECT count(*)::int AS n FROM pg_locks l JOIN pg_class c ON c.oid = l.relation JOIN pg_namespace ns ON ns.oid = c.relnamespace WHERE ns.nspname = $1 AND c.relname = 'sales' AND NOT l.granted", [schema])).rows[0].n > 0;
 /** Book a sale whose write is held in Postgres, run `ask` while it is held, release, and report what `ask` did. */
-async function whileSaleIsQueued(tx, ask) {
+async function whileSaleIsQueued(tx, ask, { answerWithinMs = 0 } = {}) {
   await locker.query("BEGIN");
   await locker.query(`LOCK TABLE "${schema}".sales IN SHARE MODE`);
   let released = false;
@@ -51,6 +56,8 @@ async function whileSaleIsQueued(tx, ask) {
     const held = await until(insertWaiting);
     // Give an answer that does not wait every chance to arrive first.
     for (let i = 0; i < 50 && !settled; i++) await tick();
+    // Or, for a lookup that must answer while the write is still held, until it does.
+    if (answerWithinMs) await until(() => settled, answerWithinMs);
     const answeredWhileQueued = settled;
     const queued = sl.queuedSaleWrites();
     await locker.query("COMMIT"); released = true;
@@ -73,6 +80,18 @@ try {
   ok(a.answeredWhileQueued === null, `a lookup of a sale whose write is queued does not answer before it lands (answered: ${JSON.stringify(a.answeredWhileQueued?.v ?? a.answeredWhileQueued?.e?.message ?? null)})`);
   ok(a.out.v?.tx === TX1 && a.out.v?.payer === BUYER, `the lookup answers the sale once its write lands (${JSON.stringify(a.out.v?.slug ?? a.out.e?.message ?? null)})`);
   ok(sl.queuedSaleWrites().count === 0, "nothing is counted as queued once the write has landed");
+
+  // 1b. A lookup waits on its own sale's queued write only: a hash that is
+  //     no sale here answers while another sale's write is held, inside
+  //     the wait bound (the database read is let through by the lock).
+  const t0 = Date.now();
+  const other = await whileSaleIsQueued(TX4, () => sl.saleByTxFresh(TX5), { answerWithinMs: sl.QUEUED_SALE_WAIT_MS - 500 });
+  ok(other.held && other.answeredWhileQueued && other.answeredWhileQueued.v === null, `a lookup of another tx answers no sale while this sale's write is queued, without waiting on it (${JSON.stringify(other.answeredWhileQueued)}, ${Date.now() - t0} ms)`);
+  // 1c. The wait is bounded: a write held past the bound leaves the lookup
+  //     answering from what is readable, while the write is still held.
+  const held = await whileSaleIsQueued(TX6, () => sl.saleByTxFresh(TX6), { answerWithinMs: sl.QUEUED_SALE_WAIT_MS * 3 });
+  ok(held.held && held.answeredWhileQueued && held.answeredWhileQueued.v === null, `a lookup whose own write stays held past the bound answers before it lands (${JSON.stringify(held.answeredWhileQueued)})`);
+  ok(held.out.v === null && sl.saleByTx(TX6)?.tx === TX6, "and the sale is readable once its write lands");
 
   // 2. The attest route's handler, as the buyer, moments after the purchase.
   const lines = [];

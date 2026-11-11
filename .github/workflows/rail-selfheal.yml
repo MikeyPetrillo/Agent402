@@ -7,11 +7,19 @@
 # where its facilitator answers". So a third party recovering left the rail dead
 # until a human redeployed. Celo sat that way, and nobody should have to notice.
 #
-# This closes that loop from OUTSIDE the serving process. A live in-process swap
-# of the offer was prototyped and rejected: rebuilding `accepts` while serving
-# produced an EMPTY offer in testing, and the failure mode there is "nobody can
-# pay". Restarting is the boring path, and the boot sequence it re-runs is the
-# most tested code we have (quiet gate, drain, healthcheck).
+# Inside the serving process, src/rail-recheck.js covers one case live: a rail
+# dropped because its facilitator's boot read FAILED is read again on a backoff
+# (X402_RAIL_RECHECK_MS, X402_RAIL_RECHECK_MAX_MS) and rejoins the offer once
+# that facilitator lists it `exact`, with the route check run on the new offer
+# and the old offer put back if that check fails. Arc, upto and batched
+# accepts are not restored that way, and the re-read ends once every failed
+# facilitator has answered.
+#
+# This workflow closes the rest of the loop from OUTSIDE the serving process: a
+# rail the live re-read does not restore (a facilitator that answered at boot
+# without the network, a rail not restorable live, the re-read switched off)
+# comes back by a restart, whose boot sequence re-runs the full guard (quiet
+# gate, drain, healthcheck).
 #
 # It only acts on a REAL recovery transition:
 #   1. /api/rails reports a configured rail that is not offered
