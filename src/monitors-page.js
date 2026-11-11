@@ -4,7 +4,7 @@
 // one-shot reports pages. External JS (site CSP drops inline script).
 import { MONITOR_PRODUCTS, RENEWAL_TERMS } from "./stripe-subscriptions.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
-import { REPORTS_CSS } from "./human-reports-page.js";
+import { REPORTS_CSS, cardField, cardError } from "./human-reports-page.js";
 import { MAX_FULL_PER_SUB_30D, MIN_FULL_GAP_MS } from "./monitor-scheduler.js";
 
 // The per-subscription report cap, read from the scheduler that enforces it.
@@ -44,9 +44,9 @@ export function monitorsPage(baseUrl = "https://agent402.tools", prefill = null)
       <h3>${esc(p.label)}</h3>
       <div style="font-family:var(--font-mono);font-size:var(--fs-xl);color:var(--ink);margin:6px 0 8px;">$${(p.price / 100).toFixed(0)}<span style="font-size:var(--fs-xs);color:var(--faint);letter-spacing:.04em;"> / month</span></div>
       <p>${esc(p.blurb)}</p>
-      <div class="field"><input id="in-${esc(key)}" type="text" aria-label="${esc(p.label)}: ${esc(p.inputLabel)}" placeholder="${esc(p.inputLabel)}"${key === wanted && wantedTarget ? ` value="${esc(wantedTarget)}" autofocus` : ""}></div>
-      <div class="err" id="err-${esc(key)}"></div>
-      <button class="btn btn-primary" style="width:100%;justify-content:center" data-sub="${esc(key)}">Subscribe →</button>
+      <form class="pcard-form" data-product="${esc(key)}" novalidate>${cardField(key, p.inputLabel.charAt(0).toUpperCase() + p.inputLabel.slice(1), "", key === wanted && wantedTarget ? { value: wantedTarget, autofocus: true } : {})}
+      ${cardError(key)}
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center" data-sub="${esc(key)}">Subscribe →</button></form>
       <p class="renew">${esc(RENEWAL_TERMS)} <a href="/terms">Terms</a></p>
     </div>`).join("");
   const body = `
@@ -66,8 +66,9 @@ export function monitorsPage(baseUrl = "https://agent402.tools", prefill = null)
     <h2>Already subscribed? Manage or cancel</h2>
     <p>Enter the email you used at checkout. If it has an active card subscription, we email you a new link to change your card or cancel.</p>
     <form class="manage-form" method="post" action="/monitors/manage-link">
-      <div class="field"><input type="email" name="email" required autocomplete="email" maxlength="254" placeholder="you@example.com" aria-label="Email you used at checkout"><button class="btn btn-secondary" type="submit">Email me a link</button></div>
-      <p class="msg" role="status"></p>
+      <label class="flabel" for="manage-email">Email</label>
+      <div class="field"><input id="manage-email" type="email" name="email" required autocomplete="email" maxlength="254" placeholder="you@example.com" aria-describedby="manage-msg"><button class="btn btn-secondary" type="submit">Email me a link</button></div>
+      <p class="msg" id="manage-msg" role="status"></p>
     </form>
     <p>Subscribed with a wallet over MPP? Use the manage link in your monitor emails, or the manage token returned when the subscription started.</p>
   </section>

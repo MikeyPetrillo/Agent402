@@ -35,7 +35,7 @@ export function termsPage(baseUrl) {
 .tm-eyebrow{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:18px}
 .tm-h1{font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 14px}
 .tm-updated{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin:0 0 32px}
-.tm-body p,.tm-body li{font-size:var(--fs-base);line-height:1.55;color:var(--muted)}
+.tm-body p,.tm-body li{font-size:var(--fs-prose);line-height:1.6;color:var(--muted)}
 .tm-body p{margin:0 0 14px}
 .tm-body ul{margin:0 0 18px;padding:0 0 0 22px}
 .tm-body li{margin-bottom:8px}

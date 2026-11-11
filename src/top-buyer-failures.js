@@ -29,6 +29,16 @@
 // the operator view names each alerting payer by its first characters, its
 // spend rank, and the failures (slug, status, time, our error text).
 //
+// onchainSqlBusy (also on /api/gateway-status): alert while a watched payer
+// got onchain-sql's busy refusal (the server-wide in-flight query cap,
+// src/tools/cdp-kit.js: a 429, never charged) inside TOP_BUYER_FAIL_HOLD_MS;
+// one refusal is enough, since a top payer sends one query at a time. The
+// refusal is kept as one of the payer's failures with its kind ("sql-busy"),
+// so it is read from the same per-payer window. ok otherwise; unknown before
+// the first read of the top payers; off in FREE_MODE. Publicly the word only;
+// the operator view names each alerting payer by its first characters, its
+// spend rank and the refusal times.
+//
 // An alarm only: nothing here refuses, slows or changes a call.
 import { shared, sharedLimitsEnabled } from "./shared-limits.js";
 import { shortPayer } from "./verify-failure-log.js";
@@ -90,6 +100,9 @@ export function errorTextOf(body) {
   return out || null;
 }
 
+/** The kind a busy refusal of onchain-sql is kept under (onchainSqlBusy). */
+export const SQL_BUSY_KIND = "sql-busy";
+const okKind = (k) => (k === SQL_BUSY_KIND ? k : null);
 const okPayer = (p) => typeof p === "string" && p.length >= 1 && p.length <= 160;
 // The caller's own input refused (a malformed body, a missing resource, a
 // conflict, a body too large or of the wrong type, a value out of range):
@@ -118,10 +131,10 @@ export function attributionTextOf(body) {
  * the caller or to no one) is kept; a 2xx costs one comparison. Never
  * throws, never awaits on the caller.
  */
-export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, attribution = null, at = Date.now() } = {}, env = process.env) {
+export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, attribution = null, kind = null, at = Date.now() } = {}, env = process.env) {
   try {
     if (!isFailure(status, typeof attribution === "string" ? attribution : null) || !okPayer(payer)) return false;
-    const ev = { id: `${PROC}-${++seq}`, at: Number(at) || Date.now(), slug: String(slug || "unknown").slice(0, 80), status: Number.isInteger(status) ? status : 0, error: typeof error === "string" ? error.slice(0, ERROR_CHARS) : null };
+    const ev = { id: `${PROC}-${++seq}`, at: Number(at) || Date.now(), slug: String(slug || "unknown").slice(0, 80), status: Number.isInteger(status) ? status : 0, error: typeof error === "string" ? error.slice(0, ERROR_CHARS) : null, kind: okKind(kind) };
     const cutoff = ev.at - keepSpan(env);
     let list = local.get(payer);
     if (list) local.delete(payer); // re-insert: Map order is the eviction order
@@ -132,7 +145,7 @@ export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, att
     while (local.size > MAX_PAYERS) local.delete(local.keys().next().value);
     counts.recorded++;
     if (sharedLimitsEnabled()) {
-      const p = shared.windowAdd(NAME, sharedKey(payer), { windowMs: keepSpan(env), member: JSON.stringify({ i: ev.id, s: ev.slug, c: ev.status, e: ev.error }), now: ev.at, score: ev.at })
+      const p = shared.windowAdd(NAME, sharedKey(payer), { windowMs: keepSpan(env), member: JSON.stringify({ i: ev.id, s: ev.slug, c: ev.status, e: ev.error, ...(ev.kind ? { k: ev.kind } : {}) }), now: ev.at, score: ev.at })
         .then((r) => { if (r?.ok) counts.sharedWrites++; else counts.sharedWriteFailures++; }, () => { counts.sharedWriteFailures++; })
         .finally(() => pending.delete(p));
       pending.add(p);
@@ -160,6 +173,8 @@ export function setTopBuyers(payers, at = Date.now()) {
   top = { payers: list, at };
   sharedCache = { at: 0, key: "", byPayer: null };
 }
+/** Whether a payer is one of the watched top payers now (exact match: an address is never case-folded). */
+export function isWatchedTopBuyer(payer) { return !!top && okPayer(payer) && top.payers.includes(payer); }
 /** The watched payers (test and operator seam). */
 export function topBuyers() { return top ? { payers: [...top.payers], at: top.at } : null; }
 
@@ -208,7 +223,7 @@ function parseMember(m) {
   try {
     const o = JSON.parse(m);
     if (!o || typeof o !== "object" || typeof o.i !== "string") return null;
-    return { id: o.i, slug: typeof o.s === "string" ? o.s.slice(0, 80) : "unknown", status: Number.isInteger(o.c) ? o.c : 0, error: typeof o.e === "string" ? o.e.slice(0, ERROR_CHARS) : null };
+    return { id: o.i, slug: typeof o.s === "string" ? o.s.slice(0, 80) : "unknown", status: Number.isInteger(o.c) ? o.c : 0, error: typeof o.e === "string" ? o.e.slice(0, ERROR_CHARS) : null, kind: okKind(o.k) };
   } catch { return null; }
 }
 
@@ -284,6 +299,42 @@ export async function topBuyerFailuresStatus({ full = false, now = Date.now(), o
       recorded: counts.recorded,
       sharedWriteFailures: counts.sharedWriteFailures,
       sharedReadFailures: counts.sharedReadFailures,
+    };
+  } catch { return { status: "unknown" }; }
+}
+
+/**
+ * onchainSqlBusy for /api/gateway-status. alert while a watched payer has a
+ * busy refusal of onchain-sql inside TOP_BUYER_FAIL_HOLD_MS (one is enough);
+ * ok otherwise; unknown before the first read of the top payers; off in
+ * FREE_MODE. Public: { status } only. Operator (`full`): the rule and, per
+ * alerting payer, its short id, its spend rank and the refusal times. Never
+ * a full address, never a spend figure. Never rejects.
+ */
+export async function onchainSqlBusyStatus({ full = false, now = Date.now(), off = false, env = process.env } = {}) {
+  try {
+    if (off) return { status: "off" };
+    if (!top) return { status: "unknown" };
+    const holdMs = failHoldMs(env);
+    const cutoff = now - holdMs;
+    let fromShared = null, sharedRead = sharedLimitsEnabled() ? "unread" : "memory";
+    try { fromShared = await sharedEvents(top.payers, now, env); if (fromShared) sharedRead = "on"; } catch { fromShared = null; }
+    const alerting = [];
+    top.payers.forEach((payer, i) => {
+      const seen = new Map();
+      for (const e of [...(local.get(payer) || []), ...(fromShared?.get(payer) || [])]) if (e.kind === SQL_BUSY_KIND && e.at >= cutoff && e.at <= now && !seen.has(e.id)) seen.set(e.id, e);
+      if (!seen.size) return;
+      alerting.push({ payer, rank: i + 1, events: [...seen.values()].sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1)) });
+    });
+    const status = alerting.length ? "alert" : "ok";
+    if (!full) return { status };
+    return {
+      status,
+      rule: { refusals: 1, holdMinutes: holdMs / 60_000, topBuyers: topCount(env), days: topDays(env) },
+      watched: top.payers.length,
+      topReadAt: top.at ? new Date(top.at).toISOString() : null,
+      sharedStore: sharedRead,
+      alerting: alerting.map((a) => ({ payer: shortPayer(a.payer), rank: a.rank, refusals: a.events.slice(-SHOWN_EVENTS).map((e) => ({ at: new Date(e.at).toISOString(), slug: e.slug, status: e.status })) })),
     };
   } catch { return { status: "unknown" }; }
 }

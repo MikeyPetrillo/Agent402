@@ -71,7 +71,7 @@ ok(AS.wantsShare(true) && AS.wantsShare("true") && AS.wantsShare("1"), "share=tr
 }
 const checkHostile = (html, where) => {
   ok(!/<script(?![^>]*src="\/js\/)/i.test(html.replace(/<script type="application\/(ld\+)?json"[^>]*>[\s\S]*?<\/script>/g, "").replace(/<script src="\/js\/[^"]*"( defer)?><\/script>/g, "")), `${where}: no inline script survives`);
-  ok(!/<img/i.test(html.split("<main>")[1] || html), `${where}: no image survives`);
+  ok(!/<img/i.test(html.split(/<main\b[^>]*>/)[1] || html), `${where}: no image survives`);
   ok(!/href="javascript:/i.test(html) && !/href="data:/i.test(html), `${where}: no javascript: or data: link`);
   ok(!/href="https?:\/\/evil\.example/i.test(html), `${where}: no link to a host no citation names`);
   ok(!/onerror=|onmouseover=/i.test(html.replace(/&lt;[^&]*&gt;/g, "")), `${where}: no live event-handler attribute`);

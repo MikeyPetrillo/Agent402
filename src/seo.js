@@ -16,6 +16,7 @@ import { CHAIN_PAGES } from "./market-page.js";
 import { EXEC_TIERS } from "./tools/route-execute.js";
 import { stripeEnabled } from "./mpp-stripe.js";
 import { mppMethodsProse, mppMethodsSummary } from "./mpp-offers.js";
+import { leadSentence } from "./positioning.js";
 import { mppFlagshipLlmsBlock } from "./mpp-flagship.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
@@ -180,6 +181,7 @@ export function robotsTxt(baseUrl) {
     "Allow: /api/stats",
     "Allow: /api/status",
     "Allow: /api/reliability",
+    "Allow: /api/scorecard",
     "Allow: /api/leaderboard",
     "Allow: /api/cacheable",
     "Allow: /api/cache-stats",
@@ -191,7 +193,7 @@ export function robotsTxt(baseUrl) {
     "Allow: /api/solana-leaderboard",
     "Allow: /api/x402-economy",
     "Allow: /api/skill-packs.json",
-    "Allow: /api/refunds/lookup",
+    "Allow: /api/refunds",
     "Allow: /api/gateway-status",
     "Allow: /api/wishes",
   ];
@@ -278,9 +280,11 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
     { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
     { loc: `${baseUrl}/proof`, priority: "0.7" },
+    { loc: `${baseUrl}/scorecard`, priority: "0.7" },
     { loc: `${baseUrl}/terms`, priority: "0.3" },
     { loc: `${baseUrl}/privacy`, priority: "0.3" },
     { loc: `${baseUrl}/glossary`, priority: "0.8" },
@@ -362,8 +366,10 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/markets`, priority: "0.8" },
     ...(catalog && catalog["POST /api/decide"] ? [{ loc: `${baseUrl}/decide`, priority: "0.9" }] : []),
     { loc: `${baseUrl}/security`, priority: "0.7" },
+    { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
+    { loc: `${baseUrl}/scorecard`, priority: "0.7" },
     { loc: `${baseUrl}/glossary`, priority: "0.8" },
     { loc: `${baseUrl}/101`, priority: "0.9" },
     { loc: `${baseUrl}/pricing`, priority: "0.8" },
@@ -568,7 +574,7 @@ function llmsFullBody(baseUrl, catalog) {
 
   return `# Agent402.Tools
 
-> Pay-per-call web tools for AI agents, payable over **${mppMethodsSummary().enabled ? "x402 or MPP" : "x402"}** - the applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
+> ${leadSentence({ mpp: mppMethodsSummary().enabled })} The applied layer of Agentic Finance: agents that pay and get paid on their own (explainer: /agentic-finance). **First job: search the web and answer questions** (\`/api/search\`, \`/api/answer\`, \`/api/search-news\`) - then the long catalog of 500+ tools via \`/api/find\`: deterministic utilities, a metered model gateway on four wires (OpenAI chat, OpenAI Responses, Anthropic Messages and Gemini; for example \`POST /v1/metered/chat/completions\`, \`POST /v1/metered/messages\`) and finished report products. Call an endpoint, receive an HTTP 402 carrying ${mppMethodsSummary().enabled ? "both offers (x402 PAYMENT-REQUIRED and MPP WWW-Authenticate: Payment)" : "the x402 offer (PAYMENT-REQUIRED)"}, and settle from your own wallet - USDC via x402${mppRailsProse()}${stripeEnabled() ? ", or by **card** on premium tools >= $0.50 (a card payment token over MPP's \`stripe\` charge method - no wallet, no stablecoin)" : ""} - or, on ${powCount} of the ${tools.length} tools, pay with proof-of-work (CPU) and skip the wallet entirely. No human, no signup, no API key: the payment is the identity. Per-call prices from $0.001 (the metered gateway quotes each request from its body) - most tools ${TYPICAL_PRICE_RANGE.text}, with premium AI and media tiers higher and multi-tool packs ${PACK_PRICE_RANGE.text}; every price is in /api/pricing and quoted in the 402.
 
 Base URL: ${baseUrl}
 
@@ -637,7 +643,9 @@ ${flatTiersLine()}
 - [/.well-known/agent-card.json](${baseUrl}/.well-known/agent-card.json): our A2A AgentCard (also at /.well-known/agent.json) - name, skills, transport. It declares HTTP+JSON rather than the spec's default JSONRPC because that is what we actually serve
 - [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. ${erc8004AgentId(baseUrl) ? `The identity is agent ${erc8004AgentId(baseUrl)} in the registry at ${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}, owned by the wallet our 402s name as payTo, and the` : "The"} file lists every way to reach us with x402Support declared
 - [/api/reliability](${baseUrl}/api/reliability): structured reliability / SLA report with a verification URL per claim
+- [/api/scorecard](${baseUrl}/api/scorecard): buyer scorecard per UTC month from our sales ledger: outside paying wallets, returning and multi-day wallets, settled paid calls and USD by network; our own wallets and test traffic left out, counts of 1 or 2 read "<3" (page: [/scorecard](${baseUrl}/scorecard))
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
+- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status for one payment, keyed by its own on-chain payment transaction (\`?tx=\`, 0x plus 64 hex on EVM chains, a signature on Solana, a transaction id on Stellar or Algorand): \`found\`, \`status\` (owed, sending, paid, void or none), \`priceUsd\`, \`network\`, explorer links and our \`refundTx\` once sent. It answers that one payment only, never a wallet's list, and an unknown transaction answers \`none\` in the same shape (also at /api/refunds/lookup)
 - [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool
 - [/api/wishes](${baseUrl}/api/wishes): the demand board, aggregated; request a tool we do not have yet with \`POST /api/wish\` (clustered by demand; repeated asks get built)
 - [/terms](${baseUrl}/terms): terms of service + acceptable-use policy - using the service (including programmatically) constitutes acceptance
@@ -674,6 +682,7 @@ ${toolSections}
 - [Skill packs JSON](${baseUrl}/api/skill-packs.json): machine-readable pack index
 - [Tool docs](${baseUrl}/tools): human-readable documentation per tool
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
+- [Trust](${baseUrl}/trust): subprocessors, what is stored and where, encryption, nightly backups and restore tests, incident response
 - [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it
@@ -715,12 +724,18 @@ export function llmsTxt(baseUrl, catalog) {
   const summary = full.find((l) => l.startsWith("> "));
   // The optional reading list lives in /llms-full.txt; the short index stays under 15 KB.
   const keep = ["Call a model (metered, the default)", "Key machine surfaces", "Connect via MCP", "Framework adapters (zero-dependency npm)", "Settlement chains"];
+  // Entries the short index names in one clause; /llms-full.txt keeps each in full.
+  const brief = [
+    [`- [/api/scorecard](`, `- [/api/scorecard](${baseUrl}/api/scorecard): monthly buyer scorecard`],
+    [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status for one payment`],
+  ];
+  const briefOf = (line) => (brief.find(([prefix]) => line.startsWith(prefix)) || [])[1] || line;
   const sections = keep.map((name) => {
     const start = full.indexOf(`## ${name}`);
     if (start < 0) return "";
     let end = start + 1;
     while (end < full.length && !full[end].startsWith("## ")) end += 1;
-    return full.slice(start, end).join("\n").trimEnd();
+    return full.slice(start, end).map(briefOf).join("\n").trimEnd();
   }).filter(Boolean);
   const identity = `## Identity and receiving wallet
 - Receiving wallet: agent402.base.eth on Base, verifiable on Basescan. Every stablecoin call settles to the payTo its 402 names.

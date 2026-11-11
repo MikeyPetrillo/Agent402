@@ -4,6 +4,7 @@
 // other revamped pages, it takes only baseUrl).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { skillsIndex, SKILL_PACKS, PACK_PRICES, skillPackPage, skillPacksJson, PACK_PRICE_RANGE } from "../src/skills.js";
+import { pageCtaHrefs, inPageHtml } from "./lib/page-ctas.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -20,9 +21,9 @@ ok(/<h1[^>]*>Skill packs<\/h1>/.test(html) && html.includes("Auditing a domain t
 // One call to action per target (a repeated "Browse the packs" or a second
 // /docs#add link was cut): each CTA button points somewhere different.
 {
-  const ctas = [...html.matchAll(/<a class="btn[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+  const ctas = pageCtaHrefs(html);
   ok(ctas.length === new Set(ctas).size, `no two buttons share a target (${ctas.join(", ")})`);
-  ok((html.match(/href="\/docs#add"/g) || []).length === 1, "the connector setup target is linked once");
+  ok((inPageHtml(html).match(/href="\/docs#add"/g) || []).length === 1, "the connector setup target is linked once in the page");
 }
 ok(html.includes(`${SKILL_PACKS.length} packs, ${PACK_PRICE_RANGE.text}`) && html.includes("none priced above the sum of its tools"), "hero cites the real live pack count, the derived price range and the rule");
 ok(!/\d\+ (skill )?packs|\d\+ multi-tool/.test(html), "the pack count is exact (derived from SKILL_PACKS), never written as a floor");

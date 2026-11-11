@@ -37,6 +37,45 @@ const reqWith = (payload) => {
   const payload = { x402Version: 2, accepted: { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", extra: { feePayer: feePayer.address } }, payload: { transaction: tx } };
   ok(await nonEvmPayerFromRequest(reqWith(payload)) === `svm:${buyer.address}`, "Solana: the key is the buyer signer, not the fee payer, case kept");
 }
+{
+  // A transaction with a third signer ahead of the transfer authority: the key
+  // is the TransferChecked authority (the wallet whose tokens move), never the
+  // first signer that is not the fee payer.
+  const kit = await import("@solana/kit");
+  const { svmRequiredSigners } = await import("../src/svm-payer.js");
+  const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", CB = "ComputeBudget111111111111111111111111111111", USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const u64 = (n) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(n), true); return b; };
+  const feePayer = await kit.generateKeyPairSigner(), payTo = await kit.generateKeyPairSigner();
+  let buyer = null;
+  do buyer = await kit.generateKeyPairSigner(); while (buyer.address === buyer.address.toLowerCase());
+  const decoy = await kit.generateKeyPairSigner();
+  const src = (await kit.generateKeyPairSigner()).address;
+  const blockhash = { blockhash: kit.blockhash("11111111111111111111111111111111"), lastValidBlockHeight: 0n };
+  for (const version of [0, "legacy"]) {
+    const ixs = [
+      { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([2, 0x20, 0x4e, 0, 0]) },
+      { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([3, ...u64(1)]) },
+      { programAddress: kit.address(TOKEN), accounts: [
+        { address: kit.address(src), role: kit.AccountRole.WRITABLE },
+        { address: kit.address(USDC), role: kit.AccountRole.READONLY },
+        { address: payTo.address, role: kit.AccountRole.WRITABLE },
+        { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer },
+        // A writable signer orders ahead of the read-only authority.
+        { address: decoy.address, role: kit.AccountRole.WRITABLE_SIGNER, signer: decoy },
+      ], data: new Uint8Array([12, ...u64(1000), 6]) },
+    ];
+    const msg = kit.pipe(kit.createTransactionMessage({ version }),
+      (m) => kit.setTransactionMessageFeePayer(feePayer.address, m),
+      (m) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
+      (m) => kit.appendTransactionMessageInstructions(ixs, m));
+    const tx = kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction([decoy.keyPair, buyer.keyPair], kit.compileTransaction(msg)));
+    const signers = svmRequiredSigners(tx) || [];
+    ok(signers.length === 3 && signers[0] === feePayer.address && signers[1] === decoy.address, `${version} message: control: the decoy is the first signer after the fee payer (${signers.length} signers)`);
+    const payload = { x402Version: 2, accepted: { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", extra: { feePayer: feePayer.address } }, payload: { transaction: tx } };
+    const key = await nonEvmPayerFromRequest(reqWith(payload));
+    ok(key === `svm:${buyer.address}`, `${version} message: Solana with three signers keys on the transfer authority, case kept (${key === `svm:${decoy.address}` ? "got the decoy" : key})`);
+  }
+}
 
 // --- Algorand -------------------------------------------------------------------
 {

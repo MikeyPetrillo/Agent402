@@ -11,6 +11,7 @@ import { buildSellerPayabilityTool } from "../src/tools/seller-payability-kit.js
 import { routingProofSentence } from "../src/routing-proof.js";
 import { ROUTE_ORDER } from "../src/route-order.js";
 import { decodeEntities, stripScripts, stripTags } from "./lib/html-text.js";
+import { pageCtaHrefs, inPageHtml } from "./lib/page-ctas.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -26,9 +27,9 @@ const text = decodeEntities(stripTags(html)).replace(/\s+/g, " ");
 // each call to action appears once (the hero's register and tollbooth buttons).
 ok(/<h1[^>]*>Sell your API to AI agents<\/h1>/.test(html) && !/Agents are buying/.test(html), "hero H1 says what the page is for, no slogan");
 {
-  const ctaHrefs = [...html.matchAll(/<a class="btn[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+  const ctaHrefs = pageCtaHrefs(html);
   ok(ctaHrefs.length > 0 && new Set(ctaHrefs).size === ctaHrefs.length, `one call to action per target (${ctaHrefs.join(", ")})`);
-  ok((html.match(/class="btn btn-primary"/g) || []).length === 1 && ctaHrefs.includes("#register"), "one primary CTA, to the register form");
+  ok((inPageHtml(html).match(/class="btn btn-primary"/g) || []).length === 1 && ctaHrefs.includes("#register"), "one primary CTA in the page, to the register form");
 }
 ok(html.includes("WHAT IT COSTS YOU"), "cost table header renders");
 ok(html.includes(">$0<") && html.includes(">0%<"), "cost table shows $0 listing fee and 0% deducted");

@@ -63,6 +63,7 @@ const PAGES = [
   { path: "/x402-test",    titleSubstr: "Test your x402 client" },
   { path: "/markets",     titleSubstr: "market data" },
   { path: "/security",    titleSubstr: "Security" },
+  { path: "/trust",       titleSubstr: "Trust" },
   { path: "/crawler",     titleSubstr: "crawler" },
   { path: "/company",     titleSubstr: "Havok Holdings" },
   { path: "/reports/sample/dossier", titleSubstr: "sample" },
@@ -370,7 +371,10 @@ try {
   const home = await (await fetch(`${BASE}/`)).text();
   ok(!/class="hm-proof"/.test(home), "the home page has no full-width stats strip");
   ok(!/settlement rails · x402 \+ MPP|deducted from sellers · open source|priced tools · \d+ are skill packs/.test(home), "none of the strip's labels remain");
-  ok(/\d+ chains( \+ Tempo)? live/.test(home), "control: the hero still states the live chain count");
+  // The hero's chains-live line counts the chains /api/rails offers, and says
+  // no count when none is offered (a free-mode boot configures no rail).
+  const offered = Number((await (await fetch(`${BASE}/api/rails`)).json().catch(() => ({}))).offered) || 0;
+  ok(offered > 0 ? new RegExp(`>${offered} chains( \\+ Tempo)? live<`).test(home.replace(/<span class="ml-dot"><\/span>/g, "")) : !/\d+ chains( \+ Tempo)? live/.test(home), `control: the hero states the offered chain count (${offered}) and no other`);
   // The hero is the agent story: no report button, no card, one primary pill.
   const hero = (home.match(/<header[\s\S]*?<\/header>/) || [""])[0];
   ok(hero.includes('href="/docs#add"') && /btn-primary" href="\/docs#add">Add to your agent</.test(hero), "hero primary is Add to your agent");
@@ -393,10 +397,13 @@ try {
     ok(/<a class="ml-nav-link[^"]*" href="\/tools">Tools /.test(navHtml), `${p} nav names /tools "Tools"`);
     ok(/href="\/tools" style="color:var\(--muted\);text-decoration:none;">tools<\/a>/.test(footHtml), `${p} footer names /tools "tools"`);
     ok(!/>catalog</.test(chrome), `${p} nav/footer never label /tools "catalog"`);
-    ok(!/href="\/company["#]/.test(chrome), `${p} nav/footer carries no /company link`);
+    // Company is a plain top-level header link (with Pricing and Status), not a footer row.
+    ok(/<a class="ml-nav-link[^"]*" href="\/company">Company<\/a>/.test(navHtml) && !/href="\/company["#]/.test(footHtml), `${p} header links /company as a plain link; the footer does not repeat it`);
     ok(/© \d{4} <a href="https:\/\/havok\.holdings" rel="noopener"[^>]*>Havok Holdings LLC<\/a>/.test(footHtml), `${p} footer links the copyright entity to https://havok.holdings`);
-    // Reports stay one click away: the CTA everywhere but /reports itself, and the footer.
-    ok(!/class="ml-nav-cta"/.test(navHtml) && /href="\/reports"[^>]*>\s*Reports/.test(navHtml), `${p} nav lists Reports as a plain link and carries no button`);
+    // Reports stay a plain link; the header's one button is the primary action
+    // (src/ledger-chrome.js NAV_PRIMARY_ACTION), left to the hero on the home page.
+    const navButtons = [...navHtml.matchAll(/<a class="btn btn-primary[^"]*" href="([^"]+)">([^<]*)<\/a>/g)].map((m) => `${m[2]} ${m[1]}`);
+    ok(/href="\/reports"[^>]*>\s*Reports/.test(navHtml) && (p === "/" ? navButtons.length === 0 : new Set(navButtons).size === 1 && navButtons[0] === "Add to your agent /docs#add"), `${p} nav lists Reports as a plain link and its one button is the primary action (${navButtons.join(" | ") || "none"})`);
     ok(footHtml.includes('href="/reports"') && footHtml.includes('href="/monitors"'), `${p} footer links reports and monitors`);
   }
   const reports = await (await fetch(`${BASE}/reports`)).text();
@@ -463,7 +470,7 @@ const MOVED = { "/compare": "/docs#why-compare", "/use-cases": "/docs#examples",
     const img = await fetch(`${BASE}/badges/${b.style}.svg`);
     ok(img.status === 200 && (img.headers.get("content-type") || "").includes("image/svg+xml") && (await img.text()).startsWith("<svg"), `/badges/${b.style}.svg still serves an SVG (got ${img.status})`);
   }
-  ok(docs.includes('<script src="/js/copy-buttons.js"></script>'), "/docs loads the copy-button script for the badge snippets");
+  ok((bd.match(/<div class="ml-code[^"]*"[^>]*><pre>/g) || []).length === BADGE_STYLES.length * 2 && !/bdg-copy/.test(bd), "/docs#badges: each snippet is a shared code block (its copy button comes from site-chrome.js)");
 }
 
 // --- the weekly digest is retired ----------------------------------------------

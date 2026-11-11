@@ -119,7 +119,7 @@ export const LEDGER_CSS = `
    announces heading LEVEL as structure, so h1 straight to h3 tells a listener
    there is a section title they have missed. Where a visual design genuinely
    has no title, this supplies one without changing the page for anyone else. */
-.sr-section{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.sr-section,.ml-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 /* Hard stop on page-level horizontal scroll: no content should ever push the
    document sideways on a phone. Both the root and the body use overflow-x:
    clip (never hidden, auto or scroll): any of those on html or body turns that
@@ -155,6 +155,10 @@ html { overflow-x: clip; }
   --faint: #8B929A;
   --hairline: #24282C;
   --dash: #353B41;
+  /* --control bounds a form field, a select and an outlined button: 3:1 or
+     more against --paper, --card, --card-zebra and --footer-bg (WCAG 1.4.11),
+     computed in scripts/test-design-tokens.js. --dash stays for rules. */
+  --control: #6A727B;
   --panel-rule: #2C3136;
   --panel-rule-2: #3A4148;
   --panel: #16191D;
@@ -215,6 +219,8 @@ html { overflow-x: clip; }
   --fs-sm: 13px;
   --fs-md: 14px;
   --fs-base: 15px;
+  /* Running text on long-form pages (docs, guides, blog, legal). UI text stays --fs-base. */
+  --fs-prose: 16px;
   --fs-lg: 17px;
   --fs-xl: 22px;
   --fs-2xl: 28px;
@@ -240,6 +246,7 @@ html { overflow-x: clip; }
   --faint: #626970;
   --hairline: #D9DDE1;
   --dash: #C3C9CF;
+  --control: #7F868E;
   --panel-rule: #24282C;
   --panel-rule-2: #353B41;
   --panel: #0C0D0F;
@@ -308,9 +315,9 @@ body { transition: background-color .18s ease, color .18s ease; }
 /* --- mobile hamburger menu (the hover nav dropdowns don't work on touch, and
    the inline links get squeezed to zero on a phone - so ≤880px collapses the
    whole nav into a tap menu) --- */
-.ml-burger { display:none; align-items:center; justify-content:center; width:38px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
+.ml-burger { display:none; align-items:center; justify-content:center; width:38px; height:34px; padding:0; border:1px solid var(--control); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-burger .ml-burger-close { display:none; }
-.ml-theme-toggle { display:inline-flex; align-items:center; justify-content:center; width:36px; height:34px; padding:0; border:1px solid var(--hairline); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
+.ml-theme-toggle { display:inline-flex; align-items:center; justify-content:center; width:36px; height:34px; padding:0; border:1px solid var(--control); border-radius:var(--radius); background:var(--card); color:var(--ink); cursor:pointer; }
 .ml-theme-toggle .ml-moon { display:none; } :root[data-theme="dark"] .ml-theme-toggle .ml-moon { display:inline; } :root[data-theme="dark"] .ml-theme-toggle .ml-sun { display:none; }
 .ml-mobile-menu { display:none; border-top:1px solid var(--hairline); background:var(--paper); max-height:calc(100vh - 62px); overflow-y:auto; -webkit-overflow-scrolling:touch; }
 .ml-mm-h { padding:12px 20px 4px; font-family:var(--font-mono); font-size:var(--fs-2xs); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); }
@@ -320,6 +327,10 @@ body { transition: background-color .18s ease, color .18s ease; }
 .ml-mm-chip { display:block; padding:9px 12px; border:1px solid var(--hairline); border-radius:var(--radius); background:var(--card); color:var(--ink); text-decoration:none; font-family:var(--font-mono); font-size:var(--fs-sm); text-align:center; }
 .ml-mm-chip.ml-mm-active { border-color:var(--accent); color:var(--accent); }
 .ml-mm-link:hover, .ml-mm-link:active { background:var(--card-zebra); }
+/* The header's primary action sits in the bar down to 600px, then first in the
+   tap menu, so exactly one copy shows at any width. */
+.ml-mm-cta { display:none; padding:14px 20px; border-bottom:1px solid var(--hairline); }
+@media (max-width:600px){ .ml-nav-cta { display:none !important; } .ml-mm-cta { display:block; } .ml-mm-cta .btn { width:100%; } }
 .ml-mm-active { color:var(--accent); font-weight:700; }
 /* Two-stage collapse (Aug 2026 revamp): the link row + github hide first at
    1100px and the burger takes over; the CTA button keeps its own slot next to
@@ -380,13 +391,14 @@ body { overflow-wrap: break-word; }
 .pv-updated, .tm-updated { font-family: var(--font-body) !important; }
 /* Footer link rows: wrap as whole links; on a phone, a two-column list so no row ends on one stray link. */
 .ml-foot-links { display: flex; gap: 6px 16px; flex-wrap: wrap; }
-.ml-foot-links > a { white-space: nowrap; }
-.ml-foot-links > button { white-space: nowrap; font: inherit; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.ml-foot-links > a { white-space: nowrap; display: inline-flex; align-items: center; min-height: 24px; min-width: 24px; }
+.ml-foot-links > button { white-space: nowrap; font: inherit; color: var(--muted); background: none; border: 0; padding: 0; min-height: 24px; cursor: pointer; text-align: left; }
 .ml-foot-links > button[hidden] { display: none; }
 @media (max-width: 600px) { .ml-foot-links { display: grid; grid-template-columns: repeat(2, max-content); gap: 8px 28px; width: 100%; } }
 /* The legal line: the entity and the contact address are two whole items, joined by a dot on one row and stacked when the row is too narrow, so neither breaks inside itself. */
 .ml-foot-legal { display: flex; flex-wrap: wrap; gap: 4px 0; }
 .ml-foot-legal > span { white-space: nowrap; }
+.ml-foot-legal a, .ml-foot-brand { display: inline-flex; align-items: center; min-height: 24px; }
 .ml-foot-legal > span + span::before { content: "·"; padding: 0 8px; }
 @media (max-width: 600px) { .ml-foot-legal { flex-direction: column; } .ml-foot-legal > span + span::before { content: none; } }
 /* A table cell that is a list of code names (site-chrome.js marks it .ml-codelist): on a phone each name takes its own
@@ -437,7 +449,7 @@ a { color: inherit; }
 .mlnav-faint { color: var(--faint); }
 .mlnav-row:hover { background: var(--card-zebra); }
 /* nowrap: a dropdown trigger and its caret are one unit; at 1180px with the CTA the row is tight and the caret used to wrap under the label. */
-.ml-nav-link { white-space: nowrap; color: var(--muted); text-decoration: none; border-bottom: 1.5px solid transparent; padding-bottom: 2px; transition: color .15s ease, border-color .15s ease; }
+.ml-nav-link { display: inline-block; min-height: 24px; white-space: nowrap; color: var(--muted); text-decoration: none; border-bottom: 1.5px solid transparent; padding-bottom: 2px; transition: color .15s ease, border-color .15s ease; }
 .ml-nav-link:hover { color: var(--ink); border-bottom-color: var(--dash); }
 .ml-nav-link-on { color: var(--ink); font-weight: 500; border-bottom-color: var(--ink); }
 .ml-nav-link-on:hover { border-bottom-color: var(--accent); }
@@ -544,13 +556,45 @@ a { color: inherit; }
 .ml-reveal.ml-reveal-in { opacity: 1; transform: none; }
 /* A breadcrumb link is told apart from the plain crumbs by more than color
    (WCAG 1.4.1): an underline, whatever the page's inline style says. */
-nav[aria-label="Breadcrumb"] a { text-decoration: underline !important; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+nav[aria-label="Breadcrumb"] a { text-decoration: underline !important; text-underline-offset: 3px; text-decoration-thickness: 1px; display: inline-block; padding: 4px 0; }
 /* The same rule for a plain link inside running text: underlined unless it
    is a styled component (a class) or already carries a border underline. */
 p a:not([class]):not([style*="border"]), li a:not([class]):not([style*="border"]) { text-decoration: underline !important; text-underline-offset: 3px; text-decoration-thickness: 1px; }
-/* A code block that scrolls sideways takes keyboard focus (site-chrome.js
-   adds tabindex), and shows it. */
-pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-table-wrap[tabindex="0"]:focus-visible, .wx-scroll[tabindex="0"]:focus-visible, .gp-tw[tabindex="0"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* --- controls and focus (DESIGN.md "Controls and focus") -------------------
+   One focus ring for every interactive element, keyboard focus only: 2px of
+   --accent, 2px off the element (6.2:1 or more on every page ground, both
+   themes). It wins over any page rule that drops the outline. On an obsidian
+   panel or a code block (dark in both themes) the ring is --accent-lit. A code
+   block or table that scrolls sideways takes focus too (site-chrome.js adds
+   tabindex), and shows the same ring. */
+:focus-visible { outline: 2px solid var(--accent) !important; outline-offset: 2px; }
+.on-panel :focus-visible, .on-panel:focus-visible, .hm-obsidian :focus-visible, .on-panel-ground :focus-visible, .ml-code :focus-visible, .ml-code:focus-visible, .ml-cta-panel :focus-visible, [style*="background:var(--panel)"] :focus-visible, [style*="background:var(--obsidian-bg)"] :focus-visible { outline-color: var(--accent-lit) !important; }
+/* The milled surface's darkest stop (#E3E6E9) holds --control at 2.94:1, so a control on it takes --faint (4.4:1 or more, both themes). */
+.hm-milled { --control: var(--faint); }
+/* The skip link target: the main landmark takes focus from the skip link without a ring around the page. */
+main:focus, main:focus-visible { outline: none !important; }
+/* Skip link: the first focusable element of every page, shown when focused. */
+.ml-skip { position: absolute; left: 16px; top: -200px; z-index: 100; display: inline-flex; align-items: center; min-height: 24px; padding: 10px 16px; background: var(--card); color: var(--ink); border: 1px solid var(--control); border-radius: var(--radius); font-family: var(--font-body); font-size: var(--fs-md); font-weight: 500; text-decoration: none; }
+.ml-skip:focus { top: 12px; }
+/* A field, a select and a text area are bounded by --control unless a page sets its own control token. */
+:where(input:not([type=checkbox], [type=radio], [type=hidden], [type=submit], [type=button], [type=range], [type=color], [type=file]), select, textarea) { border-color: var(--control); }
+/* --- code block (DESIGN.md "Code blocks") ----------------------------------
+   codeBlock() renders it: a panel holding one pre block. site-chrome.js adds the
+   copy button and the live region that says the copy happened, so with no
+   script it is a plain pre block. The right padding keeps the button off the text. */
+.ml-code { position: relative; margin: 0 0 16px; background: var(--panel); border: 1px solid var(--panel-rule); }
+.ml-code > pre { margin: 0; padding: 16px 84px 16px 20px; background: transparent; border: 0; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6; color: var(--on-panel); white-space: pre; overflow-x: auto; overflow-wrap: normal; word-break: normal; }
+.ml-code > pre code { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
+.ml-code-xs > pre { font-size: var(--fs-xs); }
+.ml-code-wrap > pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ml-code-labeled > pre { padding-right: 20px; }
+/* A labeled block carries its copy button in the header row, beside the label; the label stays on one line. */
+.ml-code-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; min-height: 36px; padding: 4px 8px 4px 20px; border-bottom: 1px solid var(--panel-rule-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .06em; color: var(--on-panel-dim); }
+.ml-code-head > span { white-space: nowrap; }
+.ml-code-head > .ml-code-copy { position: static; }
+.ml-code-copy { position: absolute; top: 7px; right: 8px; z-index: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 28px; padding: 4px 10px; background: var(--panel); color: var(--on-panel); border: 1px solid var(--on-panel-faint); border-radius: var(--radius); font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1; cursor: pointer; }
+.ml-code-copy:hover { border-color: var(--on-panel); }
+.ml-code-copy.is-done { color: var(--accent-lit); border-color: var(--accent-lit); }
 /* Home hero color field (assets/js/hero-aura.js): a canvas behind the hero,
    faded out toward the bottom so the hero meets the page ground without an
    edge. Hidden until the script has drawn, so a browser without WebGL keeps
@@ -584,10 +628,10 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
 .btn:disabled { opacity:.5; cursor:default; transform:none; }
 .btn-sm { font-size:var(--fs-sm); padding:9px 14px; }
 .btn-primary { background:var(--btn-bg); color:var(--btn-fg); box-shadow:var(--btn-shadow); border-radius:var(--radius-pill); }
-.btn-secondary { background:transparent; color:var(--ink); border-color:var(--dash); border-radius:var(--radius); }
+.btn-secondary { background:transparent; color:var(--ink); border-color:var(--control); border-radius:var(--radius); }
 .btn-secondary:hover { border-color:var(--ink); }
 .on-panel .btn-primary, .btn-primary.on-panel { background:var(--accent-lit); color:var(--on-accent-lit); box-shadow:none; }
-.on-panel .btn-secondary, .btn-secondary.on-panel { color:var(--on-panel); border-color:var(--panel-rule-2); }
+.on-panel .btn-secondary, .btn-secondary.on-panel { color:var(--on-panel); border-color:var(--on-panel-faint); }
 .on-panel .btn-secondary:hover, .btn-secondary.on-panel:hover { border-color:var(--on-panel); }
 @media (prefers-reduced-motion: reduce) { .btn, .btn:hover { transition:none; transform:none; } }
 .mfb-label{font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:700;}
@@ -602,7 +646,7 @@ pre[tabindex="0"]:focus-visible, .tablewrap[tabindex="0"]:focus-visible, .pg-tab
 .mfb-tabs{display:block;text-wrap:balance;flex:1 1 auto;min-width:0;line-height:2.15;}
 .mfb-tabs .mfb-tab{display:inline-block;margin:0 5px 5px 0;line-height:1.4;}
 @media (max-width:600px){.mfb-tabs{display:flex;flex-wrap:nowrap !important;overflow-x:auto;max-width:100%;padding-bottom:4px;gap:5px;}.mfb-tabs .mfb-tab{margin:0;}}
-.mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);color:var(--ink);}
+.mfb-sel,.mfb-search{font-family:var(--font-mono);font-size:var(--fs-xs);padding:6px 10px;border:1px solid var(--control);border-radius:var(--radius);background:var(--card);color:var(--ink);}
 .mfb-search{flex:1;min-width:120px;}
 `;
 
@@ -639,8 +683,7 @@ const DECIDE_NAV_ITEM = { href: "/decide", label: "Decide" };
 const NAV_ZONES = [
   [
     // Buy side: our tools, the report products (/reports also offers
-    // monitors), then every seller's. A plain link, not a button: the header
-    // carries no call to action of its own.
+    // monitors), then every seller's.
     { href: "/tools", label: "Tools", panel: "tools" },
     { href: "/reports", label: "Reports" },
     // ONE marketplace word: the x402 index, the MPP index and the leaderboard
@@ -654,7 +697,19 @@ const NAV_ZONES = [
     // so its panel opens right-aligned.
     { href: "/docs", label: "Docs", panel: "docs", align: "end" },
   ],
+  // The three a newcomer looks for first, as plain links. Pricing stays in the
+  // Tools panel and Status in the Docs panel too.
+  [
+    { href: "/pricing", label: "Pricing" },
+    { href: "/company", label: "Company" },
+    { href: "/status", label: "Status" },
+  ],
 ];
+
+// The header's one primary action: the home hero's own primary, so a
+// newcomer sees the same next step on every page. Left out on the home page,
+// where the hero carries it (one primary per view).
+export const NAV_PRIMARY_ACTION = Object.freeze({ href: "/docs#add", label: "Add to your agent" });
 
 // Fallback by-chain rows used whenever no live index-snapshot data is wired
 // (offline unit tests, early boot, a throwing/null provider) - the dropdown
@@ -856,6 +911,12 @@ function mobileMenuHtml(chainInfo, activePath) {
   // other destination below the fold on a phone); each still a real <a href>
   // (test-nav-chains asserts every rail's href is present here).
   return `<div id="ml-mobile-menu" class="ml-mobile-menu">
+    ${activePath === "" ? "" : `<div class="ml-mm-cta"><a class="btn btn-primary" href="${esc(NAV_PRIMARY_ACTION.href)}">${esc(NAV_PRIMARY_ACTION.label)}</a></div>`}
+    <div class="ml-mm-group">
+      ${mmLink("/pricing", "pricing", activePath === "/pricing")}
+      ${mmLink("/company", "company", activePath === "/company")}
+      ${mmLink("/status", "status · uptime", activePath === "/status")}
+    </div>
     <div class="ml-mm-group">${mmLink("/reports", "reports · finished reports and monitors", activePath === "/reports")}</div>
     ${DECIDE_LIVE ? `<div class="ml-mm-h">Decide</div>
     <div class="ml-mm-group">
@@ -869,7 +930,6 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/tools/category/llm", "images, video & LLM gateway", activePath === "/tools/category/llm")}
       ${mmLink("/speech", "speech & transcription", activePath === "/speech")}
       ${mmLink("/playground", "playground · free", activePath === "/playground")}
-      ${mmLink("/pricing", "pricing", activePath === "/pricing")}
     </div>
     <div class="ml-mm-h">Marketplaces</div>
     <div class="ml-mm-group">
@@ -901,23 +961,15 @@ function mobileMenuHtml(chainInfo, activePath) {
       ${mmLink("/changelog", "changelog", activePath === "/changelog")}
       ${mmLink("https://live.agent402.tools", "live · payments as they settle", false)}
       ${mmLink("/revenue", "transactions · on-chain", activePath === "/revenue")}
-      ${mmLink("/status", "status · uptime", activePath === "/status")}
       ${mmLink("/integrations", "integrations", activePath === "/integrations")}
       ${mmLink("/llms.txt", "llms.txt · for agents", false)}
     </div>
   </div>`;
 }
 
-// Nav CTA is "List your API →" -> /sell (Aug 2026 revamp): seller signup is
-// now priority 1 across the whole site (every page's nav CTA points at
-// /sell), replacing the old buyer-facing "ADD TO CLAUDE" -> /docs#add button.
-// Suppressed on / and /sell themselves, where each page's own hero already
-// carries an equivalent CTA - nav + hero both on screen at first paint with
-// the same label/destination reads as showing the same button twice. The
-// /sell page is expected to grow its own contextual nav-CTA label (e.g.
-// "REGISTER NOW ->") once its body is ported in a later stage; suppressing
-// for now is the conservative choice rather than guessing at an anchor that
-// doesn't exist yet.
+// The header: Tools, Reports, Marketplace | Sell, Docs | Pricing, Company,
+// Status, then the one primary action (NAV_PRIMARY_ACTION), which the home
+// page leaves to its hero.
 function nav(activePath) {
   const chainInfo = chainRows();
   const groupHrefs = {
@@ -926,13 +978,16 @@ function nav(activePath) {
     // its own top-level item (not folded into this set) since it's no longer
     // inside the marketplace panel either.
     marketplace: new Set(["/marketplace", "/mpp-marketplace", "/leaderboard", "/revenue", "/marketplace/tools", ...chainInfo.chains.map((c) => c.href)]),
-    docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/status", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
+    // /status and /pricing light their own top-level link, not a panel's.
+    docs: new Set(["/docs", "/quickstart", "/how-to-pay", "/guides", "/integrations", "/blog", "/changelog", "/proof", "/101", "/what-is-x402", "/what-is-mpp", "/agentic-finance", "/glossary"]),
     sell: new Set(["/sell", "/tollbooth", "/contribute"]),
-    tools: new Set(["/tools", "/skills", "/speech", "/playground", "/pricing"]),
+    tools: new Set(["/tools", "/skills", "/speech", "/playground"]),
   };
 
   const zone1 = (DECIDE_LIVE ? [DECIDE_NAV_ITEM, ...NAV_ZONES[0]] : NAV_ZONES[0]).map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
   const zone2 = NAV_ZONES[1].map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
+  const zone3 = NAV_ZONES[2].map((item) => navItemHtml(item, activePath, chainInfo, groupHrefs)).join("\n      ");
+  const cta = activePath === "" ? "" : `<a class="btn btn-primary btn-sm ml-nav-cta" href="${esc(NAV_PRIMARY_ACTION.href)}">${esc(NAV_PRIMARY_ACTION.label)}</a>`;
   const divider = `<span style="width:1px;height:15px;background:var(--hairline);flex:none;"></span>`;
 
   return `<nav style="border-bottom:1px solid var(--hairline);background:var(--nav-bg);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);position:sticky;top:0;z-index:50;">
@@ -945,12 +1000,15 @@ function nav(activePath) {
       ${zone1}
       ${divider}
       ${zone2}
+      ${divider}
+      ${zone3}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;">
       <button type="button" class="ml-theme-toggle" aria-label="Switch between dark and light theme" title="Theme">
         <svg class="ml-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
         <svg class="ml-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
       </button>
+      ${cta}
       <button type="button" class="ml-burger" aria-label="Open menu" aria-expanded="false">
         <svg class="ml-burger-open" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
         <svg class="ml-burger-close" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -983,12 +1041,12 @@ export function ledgerFooterCompact() {
   return `<footer style="border-top:1px solid var(--hairline);background:var(--footer-bg);">
   <div style="max-width:1180px;margin:0 auto;padding:26px 30px;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
-      <a href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:var(--fs-md);font-family:var(--font-body);letter-spacing:-.01em;">Agent402</span></a>
+      <a href="/" class="ml-foot-brand" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);">${brandMark(20, "f")}<span style="font-weight:600;font-size:var(--fs-md);font-family:var(--font-body);letter-spacing:-.01em;">Agent402</span></a>
       <span class="ml-foot-links"><a href="/reports" style="color:var(--muted);text-decoration:none;">reports</a><a href="/monitors" style="color:var(--muted);text-decoration:none;">monitors</a><a href="/tools" style="color:var(--muted);text-decoration:none;">tools</a>${DECIDE_LIVE ? `<a href="/decide" style="color:var(--muted);text-decoration:none;">decide</a>` : ""}<a href="/pricing" style="color:var(--muted);text-decoration:none;">pricing</a><a href="/marketplace" style="color:var(--muted);text-decoration:none;">marketplace</a><a href="/revenue" style="color:var(--muted);text-decoration:none;">transactions</a><a href="/sell" style="color:var(--muted);text-decoration:none;">sell</a><a href="/docs" style="color:var(--muted);text-decoration:none;">docs</a></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--hairline);">
       <span class="ml-foot-legal"><span>© 2026 <a href="https://havok.holdings" rel="noopener" style="color:var(--muted);text-decoration:underline;">Havok Holdings LLC</a></span><span><a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:underline;">mike@agent402.tools</a></span></span>
-      <span class="ml-foot-links"><a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:none;">contact</a><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a><button type="button" data-analytics-choices hidden>analytics choices</button></span>
+      <span class="ml-foot-links"><a href="mailto:mike@agent402.tools" style="color:var(--muted);text-decoration:none;">contact</a><a href="/status" style="color:var(--muted);text-decoration:none;">status</a><a href="/scorecard" style="color:var(--muted);text-decoration:none;">scorecard</a><a href="/security" style="color:var(--muted);text-decoration:none;">security</a><a href="/trust" style="color:var(--muted);text-decoration:none;">trust</a><a href="/transparency" style="color:var(--muted);text-decoration:none;">transparency</a><a href="/privacy" style="color:var(--muted);text-decoration:none;">privacy</a><a href="/terms" style="color:var(--muted);text-decoration:none;">terms</a><a href="${REPO_URL}" rel="noopener" aria-label="GitHub" title="GitHub" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${GITHUB_ICON_SVG}</a><a href="https://x.com/Agent402Tools" rel="noopener" aria-label="X" title="X" style="display:inline-flex;align-items:center;color:var(--muted);text-decoration:none;">${X_ICON_SVG}</a><button type="button" data-analytics-choices hidden>analytics choices</button></span>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:10px;">
       <span style="letter-spacing:.1em;text-transform:uppercase;">for agents</span>
@@ -996,6 +1054,50 @@ export function ledgerFooterCompact() {
     </div>
   </div>
 </footer>`;
+}
+
+// ---------------------------------------------------------------------------
+// Code block (DESIGN.md "Code blocks")
+// ---------------------------------------------------------------------------
+
+/**
+ * One code block: a panel holding a <pre>. /js/site-chrome.js adds a copy
+ * button (keyboard reachable, announced through a polite live region), so a
+ * page with no script shows the plain block.
+ *
+ * @param {string} text           the code; escaped here unless `html` is set
+ * @param {object} [o]
+ * @param {string} [o.label]      a header line over the block ("terminal")
+ * @param {string} [o.name]       what the copy button copies, for its accessible name
+ * @param {boolean} [o.html]      `text` is markup already escaped by the caller (syntax spans)
+ * @param {boolean} [o.wrap]      soft-wrap long lines instead of scrolling sideways
+ * @param {"sm"|"xs"} [o.size]    type step of the code
+ * @param {string} [o.style]      inline layout for the block (margin, max-width)
+ */
+export function codeBlock(text, { label = "", name = "", html = false, wrap = false, size = "sm", style = "" } = {}) {
+  const cls = `ml-code${label ? " ml-code-labeled" : ""}${wrap ? " ml-code-wrap" : ""}${size === "xs" ? " ml-code-xs" : ""}`;
+  const named = name || label;
+  return `<div class="${cls}"${named ? ` data-name="${esc(named)}"` : ""}${style ? ` style="${esc(style)}"` : ""}>${label ? `<div class="ml-code-head"><span>${esc(label)}</span></div>` : ""}<pre>${html ? String(text) : esc(text)}</pre></div>`;
+}
+
+/** Rendered markdown: every <pre> block becomes the shared code block. A
+ * block codeBlock() already made is left as it is, so a page that mixes the two
+ * never nests one block in another. */
+const IN_CODE_BLOCK = /<div class="ml-code[^"<>]*"[^<>]*>(?:<div class="ml-code-head"><span>[^<>]*<\/span><\/div>)?$/;
+export function wrapCodeBlocks(html) {
+  const src = String(html);
+  let out = "", at = 0;
+  for (;;) {
+    const open = src.indexOf("<pre", at);
+    if (open < 0) break;
+    if (!/[\s>]/.test(src.charAt(open + 4))) { out += src.slice(at, open + 4); at = open + 4; continue; }
+    const end = src.indexOf("</pre>", open);
+    if (end < 0) break;
+    const wrapped = IN_CODE_BLOCK.test(src.slice(Math.max(at, open - 600), open));
+    out += src.slice(at, open) + (wrapped ? src.slice(open, end + 6) : `<div class="ml-code">${src.slice(open, end + 6)}</div>`);
+    at = end + 6;
+  }
+  return out + src.slice(at);
 }
 
 // ---------------------------------------------------------------------------
@@ -1192,8 +1294,9 @@ ${posthogSnippet(baseUrl)}
 ${gaSnippet(canonical)}
 </head>
 <body style="overflow-x:clip;"><!--email_off-->
+<a class="ml-skip" href="#main">Skip to content</a>
 ${nav(activePath)}
-<main>${body}</main>
+<main id="main" tabindex="-1">${body}</main>
 <!--/email_off--></body>
 </html>`;
 }

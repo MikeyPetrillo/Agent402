@@ -10,7 +10,7 @@ import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
 import { responseSchemaFor } from "./openapi-schema.js";
 import { captureNote } from "./tool-output-examples.js";
-import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE } from "./skills.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { agentReportPriceRange, cardReportPriceRange, reportLadderProse } from "./report-tiers.js";
@@ -478,7 +478,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   .tp-table td, .tp-table th { border:1px solid var(--hairline); padding:10px 12px; text-align:left; vertical-align:top; }
   .tp-table th { background:var(--card); font-weight:700; }
   .tp-tw { overflow-x:auto; }
-  .tp-pre { background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); font-size:var(--fs-sm); line-height:1.6; padding:18px 20px; overflow-x:auto; border:none; white-space:pre; }
+  .tp-wrap .ml-code { margin:13px 0; }
+  /* Target size (DESIGN.md): a link that is not inside a sentence is at least 24px tall. */
+  .tp-meta a, .tp-card h3 a { display:inline-block; padding:4px 0; }
   .tp-grid { display:grid; gap:14px; margin:20px 0; }
   @media (min-width:640px){ .tp-grid { grid-template-columns:repeat(3,1fr); } }
   .tp-card { background:var(--card); border:1px solid var(--hairline); padding:18px 20px; display:flex; flex-direction:column; gap:8px; min-width:0; overflow-wrap:break-word; }
@@ -511,24 +513,24 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   ${paramRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Name</th><th>Type</th><th>Required</th><th>Description</th></tr>${paramRows}</table></div>` : `<p class="tp-sub">${e(tool.name)} takes no parameters.</p>`}
 
   <h2 class="tp-h2">Example request</h2>
-  <pre class="tp-pre">${e(curlExample(baseUrl, tool))}</pre>
+  ${codeBlock(curlExample(baseUrl, tool), { name: "the request" })}
   <p class="tp-sub">Without payment this returns <code>HTTP 402 Payment Required</code> with the exact price for ${e(tool.slug)}; any x402 v2${orMpp} client pays it and retries.</p>
 
   <h2 class="tp-h2">Example response</h2>
   ${binaryTypes
     ? `<p class="tp-sub">A 200 carries ${binaryPhrase}: the file itself.</p>`
-    : `<pre class="tp-pre">${e(JSON.stringify(example ?? {}, null, 2))}</pre>${captured ? `\n  <p class="tp-sub tp-captured">${e(captureNote(captured))}</p>` : ""}`}
+    : `${codeBlock(JSON.stringify(example ?? {}, null, 2), { name: "the response" })}${captured ? `\n  <p class="tp-sub tp-captured">${e(captureNote(captured))}</p>` : ""}`}
   ${respRows ? `<div class="tp-tw"><table class="tp-table"><tr><th>Field</th><th>Type</th><th>Always present</th><th>In the example</th></tr>${respRows}</table></div>` : ""}
 
   <h2 class="tp-h2">From an MCP client</h2>
-  <pre class="tp-pre">catalog.call ${e(mcpArgs)}</pre>
+  ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}
   <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.31</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
 
   <h2 class="tp-h2">Paid call (JavaScript agent)</h2>
-  <pre class="tp-pre">${e(`import { wrapFetchWithPayment } from "@x402/fetch";
+  ${codeBlock(`import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
@@ -538,18 +540,18 @@ client.setSpendControls?.({ maxAmountPerPayment: "${spendCap}" }); // refuse any
 registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });
 const payFetch = wrapFetchWithPayment(fetch, client);
 
-${payExample(baseUrl, tool)}`)}</pre>
+${payExample(baseUrl, tool)}`, { name: "the paid call" })}
 
   ${
     computePayable
       ? `<h2 class="tp-h2">No wallet? Pay with compute</h2>
   <p class="tp-sub">Fetch a challenge, solve the sha256 puzzle (${e(String(powDifficulty))} leading zero bits, a fraction of a second of CPU), and resend with the <code>X-Pow-Solution</code> header:</p>
-  <pre class="tp-pre">${e(`import { createHash } from "node:crypto";
+  ${codeBlock(`import { createHash } from "node:crypto";
 const lz = (b) => { let t = 0; for (const x of b) { if (!x) { t += 8; continue; } t += Math.clz32(x) - 24; break; } return t; };
 const c = await (await fetch("${baseUrl}/api/pow/challenge?slug=${tool.slug}")).json();
 let n = 0;
 while (lz(createHash("sha256").update(c.challenge + ":" + n).digest()) < c.difficulty) n++;
-await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`)}</pre>`
+await fetch("${powSnippetRequest(baseUrl, tool).url}", { method: "${tool.method}", headers: { "X-Pow-Solution": c.token + ":" + n${tool.method === "POST" ? ', "Content-Type": "application/json"' : ""} }${tool.method === "POST" ? `, body: JSON.stringify(${JSON.stringify(input)})` : ""} });`, { name: "the proof-of-work call" })}`
       : ""
   }
 
@@ -772,6 +774,29 @@ const ASYNC_JOB_SCHEMA = {
     error: { type: "object", description: "On failed: { httpStatus, body or message }." },
   },
 };
+// A well-formed Base payment hash: a generator or sweep that sends the
+// published example gets the real answer shape (status none for a payment
+// with no refund recorded), never a 400.
+const REFUND_LOOKUP_EXAMPLE_TX = "0x3f9c2a7d41b8e06c5d2f7a9b13e48c60d7a2f95b1c3e8d40a6f2b97c5d1e3a08";
+const REFUND_LOOKUP_SCHEMA = {
+  type: "object",
+  required: ["tx", "found", "status"],
+  properties: {
+    tx: { type: "string" },
+    found: { type: "boolean", description: "True exactly when status is not none." },
+    status: { type: "string", enum: ["owed", "sending", "paid", "void", "none"] },
+    priceUsd: { type: ["number", "null"], description: "Price of the call this payment bought; the amount a refund repays." },
+    amountUsd: { type: ["number", "null"], description: "Same as priceUsd." },
+    network: { type: ["string", "null"], description: "CAIP-2 network the payment settled on." },
+    chain: { type: ["string", "null"] },
+    txUrl: { type: ["string", "null"], description: "The payment on its explorer." },
+    refundTx: { type: ["string", "null"], description: "Our refund transaction, once paid." },
+    refundTxUrl: { type: ["string", "null"] },
+    refundedAt: { type: ["string", "null"], format: "date-time" },
+    note: { type: "string" },
+  },
+};
+
 export function openapiSpec(baseUrl, catalog) {
   const paths = {};
   // MPP start-here set (src/mpp-flagship.js), already filtered to routes the
@@ -954,6 +979,22 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
   };
+  // The free refund lookup: one payment, keyed by its own transaction.
+  const refundLookupOp = (operationId) => ({
+    operationId,
+    security: [],
+    summary: "Refund status of one payment, by its payment transaction",
+    description: "Free. Answers whether a payment that was charged and not delivered is refunded: found, status (owed, sending, paid, void, or none for a transaction with no refund recorded, which is also the answer for one never seen), priceUsd of the call it paid for, network, chain, the payment's and the refund's explorer links, and refundTx once sent. One payment per ask, keyed by its own on-chain transaction; never a list, never a wallet address, never the payer or the tool bought. Rate limited per client address (429 with Retry-After).",
+    tags: ["refunds"],
+    parameters: [{ name: "tx", in: "query", required: true, description: "The payment's transaction: 0x plus 64 hex on EVM chains, 64 hex on Stellar, a base58 signature on Solana, a 52-character id on Algorand.", schema: { type: "string", maxLength: 100 }, example: REFUND_LOOKUP_EXAMPLE_TX }],
+    responses: {
+      200: { description: "The refund status of that one payment.", content: { "application/json": { schema: REFUND_LOOKUP_SCHEMA } } },
+      400: { description: "tx is not one transaction hash." },
+      429: { description: "Too many lookups from this address; retry after Retry-After seconds." },
+    },
+  });
+  paths["/api/refunds"] = { get: refundLookupOp("getRefundStatus") };
+  paths["/api/refunds/lookup"] = { get: refundLookupOp("lookupRefund") };
   // Document the skill-pack discovery surface so SDK generators and agent
   // frameworks that consume the OpenAPI spec learn about the curated multi-tool
   // workflows. Free, no payment required — these are discovery/composition
@@ -1000,6 +1041,19 @@ export function openapiSpec(baseUrl, catalog) {
           content: { "application/json": { schema: { type: "object" } } },
         },
         404: { description: "Unknown slug. Use /api/skill-packs.json to list." },
+      },
+    },
+  };
+  paths["/api/scorecard"] = {
+    get: {
+      operationId: "getBuyerScorecard",
+      security: [],
+      summary: "Buyer scorecard: outside paying wallets per UTC month",
+      description: "Free. Per UTC calendar month (the current month to date and the six before it), from the sales ledger: distinct outside paying wallets, wallets that also paid in an earlier month, wallets with paid calls on 2 or more days, settled paid calls and USD by settlement network. Our own wallets, canary and test traffic, free proof-of-work calls and calls with no paying wallet are left out. A count of 1 or 2 reads \"<3\", and a month with fewer than 3 paying wallets publishes that alone. The method is stated in the method field. Refreshed on a timer; asOf says when.",
+      tags: ["transparency"],
+      responses: {
+        200: { description: "The scorecard.", content: { "application/json": { schema: { type: "object", required: ["asOf", "months", "method"], properties: { asOf: { type: "string", format: "date-time" }, months: { type: "array", items: { type: "object" } }, method: { type: "object" } } } } } },
+        503: { description: "Not computed yet; retry after Retry-After seconds." },
       },
     },
   };
@@ -1070,6 +1124,7 @@ export function openapiSpec(baseUrl, catalog) {
     tags: [
       ...Object.entries(CATEGORIES).map(([k, v]) => ({ name: k, description: v.label })),
       { name: "workflows", description: "Curated multi-tool workflows (skill packs) - task-level templates that compose catalog tools." },
+      { name: "transparency", description: "Figures about this service computed from its own ledgers." },
     ],
     paths,
     // Top-level extension so OpenAPI consumers can enumerate workflows without

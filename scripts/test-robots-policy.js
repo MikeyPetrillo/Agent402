@@ -140,7 +140,7 @@ try {
   // page); the documented machine-readable surfaces stay open by explicit
   // Allow, and the seller-scoped index view stays closed beside them.
   const PRICED = ["/api/uuid", "/api/hash", "/api/search", "/api/edgar-company-lookup", "/api/skill/financial-analysis"];
-  const SURFACES = ["/api/pricing", "/api/find?q=hash", "/api/route?q=ocr", "/api/index", "/api/index?limit=1", "/api/stats", "/api/status", "/api/reliability", "/api/leaderboard", "/api/cacheable", "/api/cache-stats", "/api/rails", "/api/revenue", "/api/revenue/daily", "/api/calls/daily", "/api/mpp-index", "/api/mpp-leaderboard", "/api/solana-leaderboard", "/api/x402-economy", "/api/skill-packs.json", "/api/refunds/lookup?tx=0x1", "/api/gateway-status", "/api/wishes"];
+  const SURFACES = ["/api/pricing", "/api/find?q=hash", "/api/route?q=ocr", "/api/index", "/api/index?limit=1", "/api/stats", "/api/status", "/api/reliability", "/api/leaderboard", "/api/cacheable", "/api/cache-stats", "/api/rails", "/api/revenue", "/api/revenue/daily", "/api/calls/daily", "/api/mpp-index", "/api/mpp-leaderboard", "/api/solana-leaderboard", "/api/x402-economy", "/api/skill-packs.json", "/api/refunds/lookup?tx=0x1", "/api/refunds?tx=0x1", "/api/gateway-status", "/api/wishes"];
   const SEARCH = ["Googlebot", "Bingbot", "Applebot", "DuckDuckBot", "some-unnamed-bot/1.0"];
   const AI_AGENTS = ["GPTBot", "ClaudeBot", "PerplexityBot", "ChatGPT-User", "Claude-Web"];
   for (const ua of SEARCH) {

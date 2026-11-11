@@ -2041,6 +2041,119 @@ export function mppAgentsWeekly({ weeks = 12, now = Date.now() } = {}) {
   };
 }
 
+// The buyer scorecard's monthly figures (src/scorecard.js, GET /api/scorecard):
+// outside paying wallets per UTC calendar month, how many of them paid in an
+// earlier month too or on two or more days of the month, and settled calls and
+// USD by network. Rows counted: internal = 0 (the heartbeat token and our
+// wallets at record time), a paying rail, a recorded paying wallet, and a payer
+// outside every wallet of ours read again now (BURNERS: canary and burner
+// wallets and the spending wallets the router buys with), so a row recorded
+// before a wallet joined the set is left out too. The whole ledger is read one
+// page of row ids at a time (bounded work per page, spread over event-loop
+// turns by runStepsAsync): rows before the window only answer "paid before".
+// Wallet sets never leave this function: a network (keyed by `networkKey`)
+// with fewer than `minGroup` wallets in a month is folded into one "other"
+// row, and the smallest named network joins it until that row holds
+// `minGroup` or more, so no row's calls or USD are one or two wallets' own.
+// Sample settlements are the month's first `samples` rows by ledger id whose
+// transaction `sampleOk(network, tx)` accepts (never a Circle Gateway batch
+// id), the same pick on every read; settlementsWithTx counts the month's rows
+// that carry a transaction. The sample read runs only on a page holding rows
+// of a month that still lacks its samples.
+const SCORECARD_ROWS = `FROM sales NOT INDEXED
+  WHERE id >= ? AND id < ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL
+    AND payer NOT IN (SELECT value FROM json_each(?))`;
+const qScorecardPriorPage = db.prepare(`SELECT DISTINCT payer ${SCORECARD_ROWS} AND ts < ?`).pluck();
+const qScorecardPage = db.prepare(`
+  SELECT payer, network, CAST(ts / 86400000 AS INTEGER) AS day, COUNT(*) AS n,
+         SUM(CAST(ROUND(price_usd * ${NANO_PER_USD}) AS INTEGER)) AS nano,
+         SUM(CASE WHEN tx IS NOT NULL AND (wire IS NULL OR wire <> '${GATEWAY_WIRE}') THEN 1 ELSE 0 END) AS with_tx
+  ${SCORECARD_ROWS} AND ts >= ? AND ts < ?
+  GROUP BY payer, network, day`);
+const qScorecardTxPage = db.prepare(`
+  SELECT ts, network, tx ${SCORECARD_ROWS} AND ts >= ? AND ts < ?
+    AND tx IS NOT NULL AND (wire IS NULL OR wire <> '${GATEWAY_WIRE}')
+  ORDER BY id`);
+const qAllIdSpan = db.prepare("SELECT MIN(id) AS lo, MAX(id) AS hi FROM sales");
+function* buyerScorecardSteps({ now = Date.now(), months = 7, minGroup = 3, samples = 3, sampleOk = () => true, networkKey = canonRail } = {}) {
+  const d = new Date(now);
+  const keys = [];
+  for (let i = months - 1; i >= 0; i--) keys.push(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1)).toISOString().slice(0, 7));
+  const windowStart = Date.parse(`${keys[0]}-01T00:00:00Z`);
+  const burners = JSON.stringify([...BURNERS]);
+  const before = new Set(); // payers with a paid row before the window
+  const firstDay = new Map(); // payer -> first paying day inside the window
+  const month = new Map(keys.map((k) => [k, { payerDays: new Map(), nets: new Map(), calls: 0, nano: 0, withTx: 0, txs: [] }]));
+  // Month of a UTC day number by comparison with the months' first days (no date object per row).
+  const startDays = keys.map((k) => Math.floor(Date.parse(`${k}-01T00:00:00Z`) / 86_400_000));
+  const monthOfDay = (day) => { let i = startDays.length - 1; while (i >= 0 && day < startDays[i]) i--; return i < 0 ? null : keys[i]; };
+  const { lo, hi } = qAllIdSpan.get() || {};
+  if (lo != null && hi != null) {
+    for (let a = lo; a <= hi; a += SUMMARY_PAGE_IDS) {
+      const b = Math.min(a + SUMMARY_PAGE_IDS, hi + 1);
+      for (const p of qScorecardPriorPage.all(a, b, burners, windowStart)) before.add(p);
+      const wanting = new Set();
+      for (const r of qScorecardPage.all(a, b, burners, windowStart, now)) {
+        const day = Number(r.day);
+        const f = firstDay.get(r.payer);
+        if (f === undefined || day < f) firstDay.set(r.payer, day);
+        const key = monthOfDay(day);
+        const m = key && month.get(key);
+        if (!m) continue;
+        let days = m.payerDays.get(r.payer);
+        if (!days) m.payerDays.set(r.payer, (days = new Set()));
+        days.add(day);
+        const nk = networkKey(r.network);
+        let net = m.nets.get(nk);
+        if (!net) m.nets.set(nk, (net = { payers: new Set(), calls: 0, nano: 0 }));
+        net.payers.add(r.payer);
+        net.calls += r.n; net.nano += Number(r.nano) || 0;
+        m.calls += r.n; m.nano += Number(r.nano) || 0;
+        m.withTx += Number(r.with_tx) || 0;
+        if (r.with_tx > 0 && m.txs.length < samples) wanting.add(key);
+      }
+      if (wanting.size) {
+        for (const r of qScorecardTxPage.all(a, b, burners, windowStart, now)) {
+          const m = month.get(monthOfDay(Math.floor(r.ts / 86_400_000)));
+          if (m && m.txs.length < samples && sampleOk(r.network, String(r.tx))) m.txs.push({ network: r.network, tx: String(r.tx) });
+        }
+      }
+      if (pageCostForTests) pageCostForTests();
+      yield;
+    }
+  }
+  const rows = [];
+  for (const k of keys) {
+    const m = month.get(k);
+    const monthStartDay = Math.floor(Date.parse(`${k}-01T00:00:00Z`) / 86_400_000);
+    let returning = 0, multiDay = 0;
+    for (const [p, days] of m.payerDays) {
+      if (before.has(p) || firstDay.get(p) < monthStartDay) returning++;
+      if (days.size >= 2) multiDay++;
+    }
+    // Fold small networks: never a row whose figures are one or two wallets' own.
+    const named = [...m.nets].map(([network, v]) => ({ network, ...v })).sort((x, y) => y.payers.size - x.payers.size || y.calls - x.calls || (x.network < y.network ? -1 : 1));
+    const kept = named.filter((n) => n.payers.size >= minGroup);
+    let folded = named.filter((n) => n.payers.size < minGroup);
+    const foldedPayers = () => { const s = new Set(); for (const n of folded) for (const p of n.payers) s.add(p); return s; };
+    while (folded.length && kept.length && foldedPayers().size < minGroup) folded = [...folded, kept.pop()];
+    const networks = kept.map((n) => ({ network: n.network, wallets: n.payers.size, calls: n.calls, usd: nanoToUsd4(n.nano) }));
+    if (folded.length) {
+      const fp = foldedPayers();
+      networks.push({ network: "other", networks: folded.map((n) => n.network).sort(), wallets: fp.size, calls: folded.reduce((s, n) => s + n.calls, 0), usd: nanoToUsd4(folded.reduce((s, n) => s + n.nano, 0)) });
+    }
+    rows.push({ month: k, wallets: m.payerDays.size, returningWallets: returning, multiDayWallets: multiDay, calls: m.calls, usd: nanoToUsd4(m.nano), networks, samples: m.txs, settlementsWithTx: m.withTx });
+    // One month's fold walks every payer of that month: a turn of its own.
+    yield;
+  }
+  return { months: rows, windowStart, now };
+}
+/** The buyer scorecard's monthly aggregates (see buyerScorecardSteps). Spread
+ *  over event-loop turns on elapsed time. Database mode: the mirror. */
+export function buyerScorecardAsync(opts = {}) { return runStepsAsync(buyerScorecardSteps(opts)); }
+/** The same answer in one pass (tests). */
+export function buyerScorecard(opts = {}) { return runSteps(buyerScorecardSteps(opts)); }
+
 // Operator heap read (/__operator/heap.json `stores`).
 registerSqliteStore("sales-ledger.db", () => db, { note: "sales ledger (in memory with a state database)" });
 registerSqliteStore("sales-ledger.fileDb", () => fileDb, { note: "sales ledger write-through file" });

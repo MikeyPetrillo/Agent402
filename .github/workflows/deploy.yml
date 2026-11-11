@@ -1917,7 +1917,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (61 scripts, one process each)
+      - name: Offline suites (62 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -2041,6 +2041,8 @@ jobs:
           t node scripts/test-repo-link.js
           # Surface copy gate (every package, README, wiki page, connector string and machine surface names Agentic Finance + both wires - offline)
           t node scripts/test-surface-copy.js
+          # The lead sentence and category line (src/positioning.js) on the home hero, llms.txt, both MCP connectors, the READMEs and package descriptions (offline)
+          t node scripts/test-positioning.js
           # Leaderboard SEO/discovery surfaces (robots, sitemap, llms.txt, manifest, landing JSON-LD)
           t node scripts/test-leaderboard-surface.js
           # filing watch kit (offline)
@@ -2179,6 +2181,8 @@ jobs:
           t node scripts/test-legal-dates.js
           # Legal, security and machine copy state what the code does (backups, refunds, CSP, MPP chains; offline)
           t node scripts/test-legal-claims.js
+          # /trust and the /company contact block state only what the code runs (offline)
+          t node scripts/test-trust-page.js
           # Sentences a review found contradicting the code, pinned to its constants: card charge timing, job and screening retention on /privacy and /terms, the payTo variables in Self-Hosting, the leaderboard cadence (offline)
           t node scripts/test-copy-truth.js
           # FACILITATOR_PUBLIC_INDEX_CHAINS: the privacy paragraph and terms pointer appear only for the listed chains, with their exact wording (offline)
@@ -2982,7 +2986,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (104 scripts, one process each)
+      - name: Offline suites (105 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3071,6 +3075,8 @@ jobs:
           t node scripts/test-stats-store-hygiene.js
           # scripts/lib/boot-server.js: PORT=0 boots read the bound port back, two at once get two ports, a crash rejects with its log (boots the server; offline)
           t node scripts/test-boot-server.js
+          # Home hero first-party figures: served with an as-of each, no dash or loading placeholder, a slow source never holds the page (boots the server; offline)
+          t node scripts/test-home-proof.js
           # Stubbed fetches route by the parsed host (scripts/lib/url-host.js), never a URL substring; older files frozen with counts (static; offline)
           t node scripts/test-url-host-match.js
           # Every offline suite pins its stores first: ./lib/offline-stores.js is its first import, so an exported REDIS_URL, STATE_DATABASE_URL or LEDGER_JOURNAL_REDIS never reaches a src/ module (static; offline)
@@ -3262,7 +3268,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (160 scripts, one process each)
+      - name: Offline suites (161 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -3316,6 +3322,8 @@ jobs:
           t node scripts/test-algorand-page.js
           # Homepage tests (offline, fixture snapshot)
           t node scripts/test-home-page.js
+          # Header: Pricing, Company, Status as plain links, one primary action, every earlier destination still linked (offline)
+          t node scripts/test-nav-primary.js
           t node scripts/test-badge-contrast.js
           t node scripts/test-ga-snippet.js
           # Page analytics in a DOM: PostHog URLs keep only utm_*, Global Privacy Control loads nothing, the footer reopens the choice
@@ -4896,6 +4904,9 @@ jobs:
       - name: Input labels (every text input has an accessible name; session replay stays off)
         run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-input-labels.js
 
+      - name: Controls and focus in a browser (skip link, focus ring, control contrast, target size, code block copy, storefront labels)
+        run: TARGET_URL=http://127.0.0.1:3000 node scripts/test-a11y-controls.js
+
       - name: gov-data Catalog API v4 (retired CKAN v3 proxy 404s on catalog-old)
         run: node scripts/test-gov-data.js
       - name: Runner kills and memory (on failure)
@@ -5076,6 +5087,8 @@ jobs:
           t node scripts/test-svm-funding-refusal.js
           # A top paying buyer's failed paid calls raise topBuyerFailures within minutes, word only in public; challenges, verify refusals and payers outside the top ten never do (paid boot, Solana, stub facilitator)
           t node scripts/test-top-buyer-failures.js
+          # Buyer scorecard: monthly outside wallets, returning and multi-day wallets, calls and USD by network from the sales ledger; our wallets and test traffic left out, "<3" buckets, no address; a Solana sale books its payer as written; 300k-row refresh bound (offline seeded ledger + paid boot, Solana, stub facilitator)
+          t node scripts/test-scorecard.js
           # A verify refused for lack of funds names its class, the amount and the asset on every rail, and its log line carries the slug and a short payer (offline)
           t node scripts/test-verify-refusal-reason.js
           # Settle-failure breaker on EVERY wallet-only tool (paid boot, stub facilitator verifies then refuses to settle)

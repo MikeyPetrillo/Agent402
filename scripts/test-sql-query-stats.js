@@ -198,6 +198,27 @@ try {
     ok(H(lane.charged) === "0/6/1/2" && lane.q1 === undefined && lane.budgetSpent === 3, `and is stored in the current shape, counted once (${JSON.stringify(lane)})`);
   }
 
+  // Busy refusals (the in-flight cap's 429) are counted per day by caller:
+  // a watched top payer or other, outside or synthetic; a day stored before
+  // the split reads zero busy and keeps them once written.
+  {
+    const y = dayOf(Date.now() - 86_400_000);
+    ok(stats.noteSqlBusy({ topBuyer: true }) && stats.noteSqlBusy({}) && stats.noteSqlBusy({ topBuyer: "yes" }) && stats.noteSqlBusy({ synthetic: true, topBuyer: true }), "noteSqlBusy counts synchronously");
+    stats.noteSqlBusy({ topBuyer: true, now: Date.now() - 86_400_000 });
+    rep = await stats.sqlQueryStatsReport();
+    const todayRow = rep.days.find((r) => r.day === today), yRow = rep.days.find((r) => r.day === y);
+    ok(todayRow?.outside.busy.topBuyer === 1 && todayRow.outside.busy.other === 2 && todayRow.synthetic.busy.topBuyer === 1 && todayRow.synthetic.busy.other === 0, `today: one top payer's and two other busy refusals outside (only a true topBuyer counts as top), one synthetic (${JSON.stringify(todayRow?.outside.busy)})`);
+    ok(yRow?.outside.busy.topBuyer === 1 && yRow.outside.busy.other === 0, `yesterday's day, stored before the split, adds its busy count (${JSON.stringify(yRow?.outside.busy)})`);
+    ok(rep.summary.outside.busy.topBuyer === 2 && rep.summary.outside.busy.other === 2 && rep.busyKinds.join() === "topBuyer,other", `the summary totals them by caller (${JSON.stringify(rep.summary.outside.busy)})`);
+    await stats.flushSqlQueryStats();
+    stats._resetSqlQueryStats();
+    rep = await stats.sqlQueryStatsReport();
+    ok(rep.days.find((r) => r.day === today)?.outside.busy.topBuyer === 1 && rep.summary.outside.busy.other === 2, "the busy counts survive a fresh process state");
+    const raw = readFileSync(STATS_FILE, "utf8");
+    ok(!/0x[0-9a-f]{8}|payer/i.test(raw), "the stored document holds counts only, no payer");
+    ok(stats.noteSqlBusy({ now: NaN }) === false, "a busy count that throws returns false, never the throw");
+  }
+
   // Retention: today and the 120 days before it stay (what every earlier
   // build kept: a day dropped only once it is older than 120 days); the day
   // before that is dropped on the next write. No setting keeps fewer.

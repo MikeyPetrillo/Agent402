@@ -576,6 +576,29 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "topBuyerFailures is ok; closing." || true
           fi
 
+      # A top outside payer got onchain-sql's busy refusal (onchainSqlBusy,
+      # src/top-buyer-failures.js): alert pages once, ok closes; unknown, off
+      # and a blind read do neither. The payer and times are on the operator
+      # view only; this issue names none of them.
+      - name: Onchain SQL busy check (alarm when a top paying buyer gets a busy refusal)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.onchainSqlBusy.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "onchain sql busy: $STATUS"
+          TITLE="onchainSqlBusy: a top paying buyer was told the query service is busy"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "alert" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week got the busy refusal of the onchain query tool (the server-wide limit on queries in flight; never charged, told to retry in a few seconds) inside TOP_BUYER_FAIL_HOLD_MS. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok." || true
+            fi
+          elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "onchainSqlBusy is ok; closing." || true
+          fi
+
       # The shared limits store (src/shared-limits.js): status reads degraded for
       # a minute after any one failed command, so this pages on the second
       # word, alert=sustained (degraded held ten minutes without a break). on

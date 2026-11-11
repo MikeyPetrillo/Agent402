@@ -31,6 +31,7 @@ import { FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
 import { isComputePayable } from "../src/pow.js";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { firstCallAllowanceEnabled } from "../src/first-call-allowance.js";
+import { stripTags } from "./lib/html-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, failed = 0;
@@ -137,14 +138,15 @@ function assertAccess(label, text, powCount, wires) {
   ok(offAgents.includes("the x402 offer (`PAYMENT-REQUIRED`)") && !offAgents.includes("both offers"), "unit: MPP off, /agents.md Connect names the x402 offer only");
   const { llmsTxt } = await import("../src/seo.js");
   const llmsSummary = () => llmsTxt(B, c).split("\n").find((l) => l.startsWith("> ")) || "";
-  { const s = llmsSummary(); ok(s.includes("payable over **x402** ") && !/MPP/.test(s), "unit: MPP off, the llms.txt summary names x402 only"); }
+  const { leadSentence } = await import("../src/positioning.js");
+  { const s = llmsSummary(); ok(s.startsWith(`> ${leadSentence({ mpp: false })}`) && !/MPP/.test(s), "unit: MPP off, the llms.txt summary (the lead sentence) names x402 only"); }
   process.env.MPP_SECRET_KEY = "unit";
   ok(paidWiresPhrase() === `${coins} over x402 or MPP`, `unit: MPP on, the access line adds MPP (${paidWiresPhrase()})`);
   ok(frontDoorJson(c, B).access.includes(`in ${coins} over x402 or MPP,`), "unit: MPP on, the memoized JSON follows the switch");
   const onAgents = agentsMd(B, c);
   ok(onAgents.includes("both offers (x402 `PAYMENT-REQUIRED` and MPP `WWW-Authenticate: Payment`)"), "unit: MPP on, /agents.md Connect names both offers (the memo follows the switch)");
   ok(!/Tempo push payment/.test(onAgents), "unit: MPP on without Tempo, no Tempo push sentence");
-  { const s = llmsSummary(); ok(s.includes("**x402 or MPP**") && /both offers/.test(s) && /MPP on Base[^)]*\(USDC\)/.test(s) && !/Tempo/.test(s), "unit: MPP on (EVM), the llms.txt summary names MPP and its EVM rails, not Tempo"); }
+  { const s = llmsSummary(); ok(s.startsWith(`> ${leadSentence({ mpp: true })}`) && /both offers/.test(s) && /MPP on Base[^)]*\(USDC\)/.test(s) && !/Tempo/.test(s), "unit: MPP on (EVM), the llms.txt summary names MPP and its EVM rails, not Tempo"); }
   process.env.TEMPO_API_KEY = "unit"; process.env.TEMPO_RECIPIENT_ADDRESS = "0x000000000000000000000000000000000000dEaD";
   const tempoAgents = agentsMd(B, c);
   ok(paidWiresPhrase().includes("Tempo"), "unit: a relay key and a recipient turn Tempo on");
@@ -287,6 +289,28 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
     ok(/^You need live web data/.test(t) && /; not when you already hold the URL/.test(t) && /local computation/.test(t), `${label}: use when and do not use when share one line`);
     ok(t.endsWith(`When a call fails: ${AGENTS_MD_PATH}.`), `${label}: the use line points at ${AGENTS_MD_PATH} for failures`);
   };
+
+  // The lead sentence follows the MPP switch on every served surface: the
+  // home hero, the connector's serverInfo, its instructions and server.describe.
+  {
+    const { leadSentence } = await import("../src/positioning.js");
+    const lead = leadSentence({ mpp });
+    const home = await (await fetch(`${B}/`)).text();
+    const lede = stripTags((home.match(/<p class="hm-lede"[^>]*>([\s\S]*?)<\/p>/) || [])[1] || "", "");
+    ok(lede === lead, `${tag} GET /: the hero lede is the lead sentence for MPP ${mpp ? "on" : "off"} ("${lede}")`);
+    const init = await fetch(`${B}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "front-door-test", version: "0" } } }),
+    });
+    const t = await init.text();
+    const r = (init.headers.get("content-type") || "").startsWith("text/event-stream") ? JSON.parse(t.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("")) : JSON.parse(t);
+    const desc = r.result?.serverInfo?.description || "", instr = r.result?.instructions || "";
+    ok(desc.startsWith(lead) && (mpp || !/MPP/.test(desc)), `${tag} MCP initialize: serverInfo.description opens with that lead sentence${mpp ? "" : " and names no MPP"}`);
+    ok(instr.split("\n")[0].startsWith(lead), `${tag} MCP initialize: the instructions open with that lead sentence`);
+    const pos = (await describeOf(B)).positioning || "";
+    ok(pos.startsWith(lead) && (mpp || !/MPP/.test(pos)), `${tag} server.describe: positioning opens with that lead sentence${mpp ? "" : " and names no MPP"}`);
+  }
 
   // /llms.txt: title, summary blockquote, then the three lines, then the rest.
   const llmsRes = await fetch(`${B}/llms.txt`);

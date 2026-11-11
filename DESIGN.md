@@ -18,6 +18,7 @@ colors:
     faint:        { light: "#626970", dark: "#8B929A" }   # tertiary text, AA at 11px+
     hairline:     { light: "#D9DDE1", dark: "#24282C" }   # 1px rules, card borders
     dash:         { light: "#C3C9CF", dark: "#353B41" }   # dashed/dotted rules, empty bars
+    control:      { light: "#7F868E", dark: "#6A727B" }   # boundary of a field, select, outlined button: 3:1+ on every page ground
   accent:
     accent:       { light: "#0F5E43", dark: "#34A877" }   # the ONE saturated color
     accent-lit:   { light: "#9EF0B0", dark: "#9EF0B0" }   # accent on dark panels only
@@ -63,7 +64,8 @@ typography:
     xs: 12px      # mono meta, captions, code in dense tables
     sm: 13px      # secondary UI text, mono links, chips
     md: 14px      # table body, form controls, nav
-    base: 15px    # running text
+    base: 15px    # running text, UI
+    prose: 16px   # running text on long-form pages: docs, guides, blog, legal
     lg: 17px      # lede, card titles
     xl: 22px      # h3, panel titles
     2xl: 28px     # h2 in dense pages
@@ -92,15 +94,18 @@ surfaces:
   obsidian: { bg: --obsidian-bg, border: --obsidian-border, text: --on-panel*, note: "dark in both themes" }
 components:
   button-primary: { class: "btn btn-primary", bg: --btn-bg, fg: --btn-fg, radius: pill, shadow: --btn-shadow, font: "Geist 500 md", use: "the one main action of a view: buy, subscribe, add to your agent, list your API" }
-  button-secondary: { class: "btn btn-secondary", bg: transparent, border: 1px --dash, fg: --ink, radius: 4px, font: "Geist 500 md", use: "everything else: docs, quickstart, playground, browse, submit a form" }
-  button-on-panel: { class: "on-panel (on the wrapper or the button)", primary: "--accent-lit on --on-accent-lit", secondary: "--on-panel text, --panel-rule-2 border" }
+  button-secondary: { class: "btn btn-secondary", bg: transparent, border: 1px --control, fg: --ink, radius: 4px, font: "Geist 500 md", use: "everything else: docs, quickstart, playground, browse, submit a form" }
+  button-on-panel: { class: "on-panel (on the wrapper or the button)", primary: "--accent-lit on --on-accent-lit", secondary: "--on-panel text, --on-panel-faint border" }
   button-small: { class: btn-sm, font: "sm", padding: "9px 14px" }
   card: { bg: --card, border: 1px --hairline, radius: 4px, padding: 18-24px }
   receipt-edge: { class: receipt, what: "half-circle notches in --receipt-ground (default --paper) along the bottom edge plus a dashed tear line 13px above it; gradients only", where: "home live panel, report product cards on /reports, the pricing pair; nowhere else", needs: ">= 20px bottom padding" }
   table: { head: "2xs mono uppercase --faint", body: "md", rule: 1px --hairline, zebra: --card-zebra, numbers: tabular }
   chip: { bg: --chip-bg, border: 1px --hairline, radius: 4px, size: sm }
   nav: { bg: --nav-bg (glass), link: "md --muted, active --ink with 1.5px underline", cta: button-primary, wrap: never }
-  code-block: { bg: --panel, fg: --on-panel, comment: --on-panel-faint, string: --accent-lit, number: --on-panel-warn, keyword: --on-panel-violet, size: xs-sm mono }
+  code-block: { helper: "codeBlock() / wrapCodeBlocks() in ledger-chrome.js", class: ml-code, bg: --panel, border: 1px --panel-rule, fg: --on-panel, comment: --on-panel-faint, string: --accent-lit, number: --on-panel-warn, keyword: --on-panel-violet, size: "sm mono (xs for dense snippets)", copy: "button added by site-chrome.js, announced in a polite live region; no script = plain <pre>" }
+  field: { class: "field (wrapper) or the input itself", border: 1px --control, label: "visible <label for>, sm 500 --ink", error: "line tied by aria-describedby, aria-live polite, --bad" }
+  focus-ring: { rule: ":focus-visible", outline: "2px solid --accent, 2px offset", on-panel: --accent-lit }
+  skip-link: { class: ml-skip, target: "main#main", where: "first focusable element of every page (ledgerShell)" }
   status-badge: { ok: --ok, degraded: --warn, failed: --bad, unknown: --dash; on a panel use --accent-lit / --on-panel-warn / --on-panel-bad }
 ---
 
@@ -138,6 +143,39 @@ rules below.
 - New color: add a token to both theme blocks in `ledger-chrome.js` and to this file. A page
   never defines its own palette. `rgba()` overlays and `color-mix()` over a token are fine.
 
+## Controls and focus
+- **Boundaries are 3:1.** A text field, a select, a text area and an outlined button are bounded
+  by `--control` (3.05:1 or more on `--paper`, `--card`, `--card-zebra` and `--footer-bg`, both
+  themes; WCAG 1.4.11). `--hairline` and `--dash` are for rules and cards, never for a control.
+  On the milled surface `--control` resolves to `--faint`; on an obsidian panel an outlined button
+  takes `--on-panel-faint`. The guard computes each ratio and rejects a field rule that uses
+  `--hairline` or `--dash`.
+- **One focus ring.** Every interactive element shows `outline: 2px solid var(--accent)` with a
+  2px offset on keyboard focus (`:focus-visible`), defined once in `ledger-chrome.js` and winning
+  over any page rule that drops the outline. On a panel or a code block it is `--accent-lit`. A
+  field may add its own focus border; it never removes the ring.
+- **Skip link first.** The shell's first focusable element is "Skip to content" (`.ml-skip`),
+  shown on focus, landing on `main#main`.
+- **Targets are 24px.** A link or button in the nav, the footer, a tool page or a form is at
+  least 24 by 24 CSS px (WCAG 2.5.8). A link inside a sentence is exempt.
+  `scripts/test-a11y-controls.js` measures all of this in a browser, both themes, at 1280 and 375 px.
+
+## Code blocks
+- One component: `codeBlock(text, { label, name, wrap, size })` for a block a module writes, and
+  `wrapCodeBlocks(html)` for rendered markdown (guides, docs, blog). A page never styles its own
+  `<pre>`; it may set the block's margin or max width.
+- The copy button comes from `site-chrome.js`: a real button, named for what it copies ("Copy the
+  request"), whose result ("Copied to the clipboard") is read out by a polite live region. With no
+  script the block is a plain `<pre>`, with no dead button.
+
+## Forms
+- Every field has a visible `<label for>` above it; a placeholder is an example ("e.g. AAPL"),
+  never the label, and keeps normal case.
+- The error line under a field is tied to it by `aria-describedby`, is `aria-live="polite"`, and
+  the field takes `aria-invalid="true"` and keeps focus while it is wrong.
+- A field and its button sit in a `<form>`, so Enter submits. The storefront cards use
+  `cardField()` and `cardError()` (`human-reports-page.js`).
+
 ## Type
 - Three families, each with one job: Geist for language, Geist Mono for things that are
   literal, Instrument Serif (`--font-display`) for the largest headline on a page.
@@ -148,7 +186,8 @@ rules below.
   ledger, eyebrows. Prose is never mono, even short notes under a table.
 - **Numbers are tabular**: any column or stat of figures uses
   `font-variant-numeric: tabular-nums` (Geist Mono is already fixed-width).
-- Use only `var(--fs-*)`. Body text is `--fs-base`; a lede is `--fs-lg`; inner-page h1 is
+- Use only `var(--fs-*)`. Body text is `--fs-base`; running text on a long-form page (docs,
+  guides, blog, legal) is `--fs-prose` at line height 1.6; a lede is `--fs-lg`; inner-page h1 is
   `--fs-3xl` to `--fs-5xl` (`--fs-2xl` on a phone for a template h1 that carries a catalog
   name: tool, skill pack, guide).
 - **One weight per heading level**: display h1 400 (serif), other h1 800, h2 700, h3 600.

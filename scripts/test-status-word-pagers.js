@@ -1,5 +1,5 @@
 // Words on /api/gateway-status and their two observers: gatewayBalance
-// (withdraw), topBuyerFailures (alert), sharedLimits (degraded) and
+// (withdraw), topBuyerFailures (alert), onchainSqlBusy (alert), sharedLimits (degraded) and
 // replayStore (pending). Also the spend words (xDataSpend, exaSpend,
 // routerSpendWindow: over and capped), and upstreamHealth and facilitatorFunds
 // driven end to end from the monitor (our own timeouts, DNS failures and
@@ -143,6 +143,7 @@ const SLT = "Shared limits store DEGRADED (Redis)";
 const RS = "Replay store marks PENDING (Redis)";
 const RSW = "Router spend per minute OVER its ceiling";
 const TBF = "topBuyerFailures: a top paying buyer is getting failed answers";
+const OSB = "onchainSqlBusy: a top paying buyer was told the query service is busy";
 const j = (gateway) => judge({ gateway });
 
 await check("Worker: routerSpendWindow pages on over and capped, clears on ok and off", () => {
@@ -166,6 +167,19 @@ await check("Worker: topBuyerFailures pages on alert, clears on ok; unknown, off
   assert.equal(b, a.body({ gateway: {} }), "the body does not read the response");
   assert.doesNotMatch(b, /[0-9]|<x>|7xKX|onchain-sql|`|"|\$/, "no payer, no tool, no figure, and nothing a shell would expand");
   assert.match(b, /operator view of \/api\/gateway-status \(topBuyerFailures/, "it points at the operator view");
+});
+
+await check("Worker: onchainSqlBusy pages on alert, clears on ok; unknown, off and absent do neither", () => {
+  assert.equal(j({ onchainSqlBusy: { status: "alert" } })[OSB], "bad");
+  assert.equal(j({ onchainSqlBusy: { status: "ok" } })[OSB], "good");
+  for (const w of ["unknown", "off", "something-new"]) assert.equal(j({ onchainSqlBusy: { status: w } })[OSB], "quiet", w);
+  assert.equal(j({})[OSB], "quiet", "a build without the word changes nothing");
+  assert.equal(j({ topBuyerFailures: { status: "alert" } })[OSB], "quiet", "a top payer's other failures do not raise it");
+  const a = ALARMS.find((x) => x.title === OSB);
+  const b = a.body({ gateway: { onchainSqlBusy: { status: "alert", alerting: [{ payer: "7xKX", rank: 1, refusals: [{ at: "2026-11-11T00:00:00.000Z", slug: "onchain-sql", status: 429 }] }] } } });
+  assert.equal(b, a.body({ gateway: {} }), "the body does not read the response");
+  assert.doesNotMatch(b, /[0-9]|7xKX|onchain-sql|`|"|\$/, "no payer, no slug, no figure, and nothing a shell would expand");
+  assert.match(b, /operator view of \/api\/gateway-status \(onchainSqlBusy/, "it points at the operator view");
 });
 
 await check("Worker: gatewayBalance pages on withdraw at once, clears on ok and off", () => {
@@ -220,6 +234,7 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
     [GB, { gatewayBalance: { status: "withdraw" } }, { gatewayBalance: { status: "ok" } }, null],
     [RSW, { routerSpendWindow: { status: "over" } }, { routerSpendWindow: { status: "ok" } }, null],
     [TBF, { topBuyerFailures: { status: "alert" } }, { topBuyerFailures: { status: "ok" } }, { topBuyerFailures: { status: "unknown" } }],
+    [OSB, { onchainSqlBusy: { status: "alert" } }, { onchainSqlBusy: { status: "ok" } }, { onchainSqlBusy: { status: "unknown" } }],
     [RSW, { routerSpendWindow: { status: "capped" } }, { routerSpendWindow: { status: "off" } }, null],
     [SLT, { sharedLimits: { status: "degraded", alert: "sustained" } }, { sharedLimits: { status: "on", alert: "ok" } }, { sharedLimits: { status: "degraded", alert: "ok" } }],
     [RS, { replayStore: { status: "pending", alert: "sustained" } }, { replayStore: { status: "ok", alert: "ok" } }, { replayStore: { status: "pending", alert: "ok" } }],
@@ -284,6 +299,7 @@ const HB = [
   // [step name prefix, title, field, alert reading, readings that neither open nor close, healthy readings]
   ["Gateway balance check", GB, "gatewayBalance", { status: "withdraw" }, [{ status: "unknown" }], [{ status: "ok" }, { status: "off" }]],
   ["Top buyer failures check", TBF, "topBuyerFailures", { status: "alert" }, [{ status: "unknown" }, { status: "off" }], [{ status: "ok" }]],
+  ["Onchain SQL busy check", OSB, "onchainSqlBusy", { status: "alert" }, [{ status: "unknown" }, { status: "off" }], [{ status: "ok" }]],
   ["Shared limits store check", SLT, "sharedLimits", { status: "degraded", alert: "sustained" }, [{ status: "degraded", alert: "ok" }, { status: "degraded" }, { status: "unknown" }], [{ status: "on", alert: "ok" }, { status: "memory", alert: "ok" }]],
   ["Replay store check", RS, "replayStore", { status: "pending", alert: "sustained" }, [{ status: "pending", alert: "ok" }, { status: "pending" }, { status: "unknown" }], [{ status: "ok", alert: "ok" }]],
 ];

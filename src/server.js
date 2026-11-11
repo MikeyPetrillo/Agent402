@@ -314,7 +314,7 @@ function recordHangupDebt(req, res) {
   // How long the buyer waited and which phase it left in: the figure that
   // names the client's own timeout (src/paid-phase-timing.js hangupWaitOf).
   const wait = (() => { try { return hangupWaitOf(req); } catch { return null; } })();
-  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}${wait ? ` net=${wait.network || "-"} waited=${wait.waitedMs ?? "-"}ms left-during=${wait.during}` : ""}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}`);
+  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}${wait ? ` net=${wait.network || "-"} waited=${wait.waitedMs ?? "-"}ms left-during=${wait.during}` : ""}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}${lookupKeys(row.tx) ? `; buyer status: GET /api/refunds?tx=${row.tx}` : ""}`);
   return row;
 }
 // Every close-before-the-first-byte on a paid request ends here (the hang-up
@@ -400,7 +400,7 @@ import { initAnalyticsDb, recordToolCall, getAnalytics, analyticsEnabled, redact
 import { databasesStatus } from "./db-status.js";
 import { initWithRetry } from "./db-init-retry.js";
 import { railOf, outcomeRailOf } from "./payment-rail.js";
-import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs } from "./top-buyer-failures.js";
+import { noteVerifiedPaidOutcome, errorTextOf, attributionTextOf, topBuyerFailuresStatus, startTopBuyerRefresh, topRefreshMs, isWatchedTopBuyer, onchainSqlBusyStatus, SQL_BUSY_KIND } from "./top-buyer-failures.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
 import { initPostHog, capturePostHogWrongMethod, capturePostHogToolError, capturePostHogToolCall, telemetryKeyOf, capturePostHogDiscovery, capturePostHogPaywall, capturePostHogPowChallenge, capturePostHogSettlement, capturePostHogChargedFailure, capturePostHogSettleFailed, capturePostHogToolGone, toolGoneSourceOf, capturePostHogHumanFunnel, shutdownPostHog, posthogEnabled } from "./posthog.js";
 import { analyticsPage } from "./analytics-page.js";
@@ -416,11 +416,12 @@ import { speechPage } from "./speech-page.js";
 import { agenticFinancePage } from "./agentic-finance.js";
 import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
+import { trustPage } from "./trust-page.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
 import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND, hostnameShapedToken } from "./free-alerts.js";
-import { refundLookup } from "./refund-lookup.js";
+import { refundLookup, lookupKeys } from "./refund-lookup.js";
 import { createFollowups } from "./followups.js";
 import { createTweetQueue, tweetQueueOptionsFromEnv } from "./tweet-queue.js";
 import { monitorForKind as fuMonitorForKind } from "./report-upgrade.js";
@@ -695,6 +696,7 @@ import { adapterDocsIndex, adapterRedirectTarget } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
 import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore, ASSET_VERSION } from "./ledger-chrome.js";
 import { ledgerHomePage } from "./ledger-home.js";
+import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
 import { revenueSnapshot, revenueLiveStatus, revenueWarmupEnabled, withFreshRecent, revenueApiHandlers, revenuePage, railThroughput, stellarRail, stellarActivity, algorandRail, algorandActivity, evmActivity, solanaActivity, robinhoodActivity, baseActivityViaSql, evmActivityStatus, EVM as EVM_CHAINS, rpcCall, getJsonAcross, ALGORAND_INDEXER_BASES, OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
@@ -721,7 +723,7 @@ import { startRedisPersistenceMonitor, redisPersistenceStatus } from "./redis-pe
 import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sharedLimitsEnabled, sharedWrite as sharedLimitsWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
-import { flushSqlQueryStats, sqlQueryStatsReport } from "./sql-query-stats.js";
+import { flushSqlQueryStats, sqlQueryStatsReport, noteSqlBusy } from "./sql-query-stats.js";
 import { flushXSearchStats, xSearchStatsReport } from "./x-search-stats.js";
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
@@ -734,7 +736,8 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs } from "./sales-ledger.js";
+import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
 import { ledgerLeaderboardPage } from "./ledger-leaderboard.js";
@@ -3838,9 +3841,40 @@ function retiredPage(res, gone) {
 }
 const htmlCache = (res, maxAge, swr) =>
   res.set("Cache-Control", `public, max-age=${maxAge}, stale-while-revalidate=${swr}`).type("html");
+// The home hero's first-party figures (src/home-proof.js). Every source is a
+// value another surface already keeps, read without waiting: the /status
+// snapshot through a cell that refreshes in the background, the /revenue
+// external count's memo, the rails list, and the /api/stats performance
+// cache. A source with nothing yet leaves its figure out of the page.
+const homeUptimeCell = proofCell(async () => {
+  const snap = await cachedStatusSnapshot();
+  const w = (snap?.components || []).find((c) => c.key === "api")?.windows?.["90d"];
+  return w && w.observed && Number.isFinite(w.pct) ? { value: { pct: w.pct, observed: w.observed, windowDays: 90 }, at: Date.parse(snap.generatedAt) || Date.now() } : null;
+});
+function homeProof() {
+  const settled = settledOnChainCount();
+  const external = settledExternalCount();
+  const perf = getPerformance24h();
+  // The x402 chains the 402 offers right now (/api/rails "offered"), not the
+  // static list: a rail dropped at boot is not live. Null (no rail
+  // configured) or zero leaves the figure out.
+  const offered = offeredChainCount();
+  return {
+    settled,
+    external,
+    chainsOffered: offered || 0,
+    figures: homeProofFigures({
+      uptime: homeUptimeCell.peek(),
+      external: external && __settledMemo.at ? { value: { count: external.count }, at: __settledMemo.at } : null,
+      chains: offered ? { value: { count: offered }, at: Date.now() } : null,
+      latency: perf && perfCache.at ? { value: { p50Ms: perf.p50LatencyMs }, at: perfCache.at } : null,
+    }),
+  };
+}
 app.get("/", (_req, res) => {
+  const proof = homeProof();
   htmlCache(res, 60, 300).send(
-    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS, { settledOnChain: settledOnChainCount(), external: settledExternalCount() })
+    ledgerHomePage(BASE_URL, CATALOG, getStats({ wallet: WALLET_ADDRESS, walletName: WALLET_ENS, network: NETWORK, toolCount: Object.keys(CATALOG).length, baseUrl: BASE_URL, prices: TOOL_PRICES }), getLeaderboardSnapshot(), SKILL_PACKS, { settledOnChain: proof.settled, external: proof.external, proof: proof.figures, chainsOffered: proof.chainsOffered, mpp: mppMethodsSummary().enabled })
   );
 });
 // /marketplaces — legacy surface, merged into /marketplace (301 keeps SEO equity).
@@ -4249,6 +4283,15 @@ app.get("/api/gateway-status", async (req, res) => {
     // payer its short id, spend rank, tools, statuses, times and our error
     // text for the operator. An alarm only: nothing is refused for it.
     topBuyerFailures: await topBuyerFailuresStatus({ full, off: FREE_MODE }),
+    // onchainSqlBusy reads alert while one of the same watched top payers got
+    // onchain-sql's busy refusal (the server-wide in-flight query cap, a 429
+    // never charged) inside TOP_BUYER_FAIL_HOLD_MS; one is enough. ok
+    // otherwise, unknown before the first read of the top payers, off in
+    // FREE_MODE (src/top-buyer-failures.js). The word publicly; per alerting
+    // payer its short id, spend rank and refusal times for the operator. The
+    // daily counts by caller are on /__operator/tool-failures.json
+    // (onchainSqlQueries busy). An alarm only: nothing is refused for it.
+    onchainSqlBusy: await onchainSqlBusyStatus({ full, off: FREE_MODE }),
     // robinhoodSettler reads ok while the listed Robinhood Chain facilitator
     // settles first, relayer once our own relayer has settled first in its
     // place (src/robinhood-order.js: its signer read dry) for longer than
@@ -4373,6 +4416,7 @@ app.get("/x402-test", (_req, res) => htmlCache(res, 300, 900).send(x402TestPage(
 // Dev shortlinks (agent402.sh/<word> redirects here path-preserved) + the install script.
 mountShortlinks(app, BASE_URL);
 app.get("/security", (_req, res) => htmlCache(res, 300, 900).send(securityPage(BASE_URL)));
+app.get("/trust", (_req, res) => htmlCache(res, 300, 900).send(trustPage(BASE_URL)));
 app.get("/company", (_req, res) => htmlCache(res, 300, 900).send(companyPage(BASE_URL)));
 // Who our crawler is, what it reads, and how to be removed. The crawler's own
 // User-Agent points here (src/tools/fetch-guard.js), so an operator who finds
@@ -4470,10 +4514,38 @@ async function serveRefundLookup(req, res) {
   try { return res.json(refundLookup(tx)); }
   catch (e) { return res.status(e?.statusCode === 400 ? 400 : 500).json({ error: e?.statusCode === 400 ? e.message : "Refund lookup failed" }); }
 }
+// GET /api/refunds?tx=<payment tx> is the short name of the same lookup (same
+// limiter, same answer); it takes no other parameter and never lists rows.
+app.get("/api/refunds", serveRefundLookup);
 app.get("/api/refunds/lookup", serveRefundLookup);
 app.post("/api/refunds/lookup", express.json({ limit: "4kb" }), serveRefundLookup);
 app.get("/api/proof", (_req, res) => { res.set("Cache-Control", "public, max-age=60"); res.json(memoSurface("proof:feed", 60_000, () => proofFeed())); });
 app.get("/proof", (_req, res) => htmlCache(res, 60, 300).send(proofPage(BASE_URL, memoSurface("proof:feed", 60_000, () => proofFeed()), standingFigures())));
+// Buyer scorecard (src/scorecard.js): monthly outside-buyer aggregates from
+// the sales ledger, computed on a timer off the request path. The operator
+// view also lists the sample settlements (explorer links).
+const scorecard = createScorecard({
+  compute: async () => {
+    await salesLedgerReady();
+    const raw = await buyerScorecardAsync({ months: SCORECARD_MONTHS, minGroup: SCORECARD_MIN_GROUP, samples: SCORECARD_SAMPLES, sampleOk: scorecardSampleOk, networkKey: scorecardNetworkKey });
+    const first = firstRecordedTs();
+    return { raw, asOf: new Date(raw.now).toISOString(), firstRecordedAt: first == null ? null : new Date(first).toISOString() };
+  },
+});
+scorecard.start();
+const scorecardOf = (v, operator = false) => scorecardBody(v.raw, { asOf: v.asOf, firstRecordedAt: v.firstRecordedAt, publishTx: operator || scorecardPublishesTx() });
+app.get("/api/scorecard", async (req, res) => {
+  try {
+    const { value } = await scorecard.get();
+    const elevated = operatorView(req, res);
+    if (!elevated) res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=600");
+    res.json(scorecardOf(value, elevated));
+  } catch (e) { res.status(503).set("Retry-After", String(e?.retryAfterSeconds || 30)).json({ error: "The scorecard is not computed yet; retry shortly." }); }
+});
+app.get("/scorecard", async (_req, res) => {
+  try { const { value } = await scorecard.get(); htmlCache(res, 300, 600).send(scorecardPage(BASE_URL, scorecardOf(value))); }
+  catch (e) { res.status(503).set("Retry-After", String(e?.retryAfterSeconds || 30)).type("text").send("The scorecard is not computed yet; retry shortly."); }
+});
 app.get("/glossary", (_req, res) => htmlCache(res, 300, 900).send(glossaryPage(BASE_URL)));
 // x402 & MPP 101 - the presenter-mode walkthrough with the live demo (src/x402-101.js).
 app.get("/101", (_req, res) => htmlCache(res, 300, 900).send(x402101Page(BASE_URL)));
@@ -9957,6 +10029,10 @@ app.get("/api/stats", (_req, res) => {
   const perf = getPerformance24h();
   if (perf) base.performance24h = perf;
   base.settledOnChain = settledOnChainCount();
+  // Payments from buyers outside our own wallets (the /revenue headline and
+  // the home hero's paid figure), with the time the count was read.
+  const ext = settledExternalCount();
+  if (ext && __settledMemo.at) base.settledExternal = { count: ext.count, asOf: new Date(__settledMemo.at).toISOString() };
   // Every chain this instance takes and the MPP methods its 402 offers, not
   // only the primary network (the same sources /api/pricing and the manifest read).
   base.payment = { ...base.payment, networks: publicNetworks(), mpp: mppMethodsSummary() };
@@ -11853,20 +11929,27 @@ async function verifiedPayerOf(req, res) {
   const signer = await nonEvmPayerFromRequest(req);
   return signer ? normalizePayerAddress(signer.slice(signer.indexOf(":") + 1)) : null;
 }
-function noteTopBuyerFailure(req, res, slug, status, answer) {
+// sqlBusy: the answer was onchain-sql's busy refusal (src/tools/cdp-kit.js
+// marks the request). It is counted by caller once the payer is known
+// (src/sql-query-stats.js noteSqlBusy: a watched top payer or other) and kept
+// under its kind, which raises onchainSqlBusy for a top payer.
+function noteTopBuyerFailure(req, res, slug, status, answer, sqlBusy = false) {
   let error = null, attribution = null;
   try { error = answer?.has?.() ? errorTextOf(answer.body()) : null; } catch { error = null; }
   try { attribution = answer?.has?.() ? attributionTextOf(answer.body()) : null; } catch { attribution = null; }
   const at = Date.now();
   verifiedPayerOf(req, res).then((payer) => {
-    if (payer && !isOwnWallet(payer)) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, at });
-  }, () => {});
+    const outside = !!payer && !isOwnWallet(payer);
+    if (outside) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, kind: sqlBusy ? SQL_BUSY_KIND : null, at });
+    if (sqlBusy) noteSqlBusy({ topBuyer: outside && isWatchedTopBuyer(payer), now: at });
+  }, () => { if (sqlBusy) noteSqlBusy({ now: at }); });
 }
 function noteToolOutcomeOnClose(req, res, slug, def = null) {
   if (req.__a402OutcomeNoted) return;
   req.__a402OutcomeNoted = true;
   const synthetic = callIsOurs(req);
-  if (synthetic) { const scope = currentRequestScope(); if (scope) scope.synthetic = true; }
+  const scope = currentRequestScope();
+  if (synthetic && scope) scope.synthetic = true;
   // The JSON body handed to res.json, held by reference (nothing is copied or
   // serialized) and read only after the response closed, so classifying it
   // never delays, changes or bills the answer.
@@ -11877,9 +11960,13 @@ function noteToolOutcomeOnClose(req, res, slug, def = null) {
       // Free (proof-of-work, trial) outcomes count on their own lane, which
       // the toolFailures word does not read.
       toolFailureMonitor().noteTool(slug, status, { synthetic, shed: !!res.locals?.shed || drainSignal().aborted, path: salePathOf(req), rail: outcomeRailOf(req, res) });
+      // onchain-sql's busy refusal (the handler marks the request scope),
+      // counted by caller in either branch below.
+      const sqlBusy = status === 429 && scope?.onchainSqlBusy === true;
       // A verified paid request (past every gate, src/top-buyer-failures.js)
       // whose final answer was not a 2xx, under the payer its gate proved.
-      if (!synthetic && (status < 200 || status >= 300) && ownTrue(req, "__a402Dispatched")) noteTopBuyerFailure(req, res, slug, status, answer);
+      if (!synthetic && (status < 200 || status >= 300) && ownTrue(req, "__a402Dispatched")) noteTopBuyerFailure(req, res, slug, status, answer, sqlBusy);
+      else if (sqlBusy) noteSqlBusy({ synthetic });
       if (answer && status === 200) {
         const { klass, reasons } = answer.has() ? classifyAnswer(answerContractFor(def), answer.body()) : { klass: "unchecked", reasons: ["not-json"] };
         toolFailureMonitor().noteAnswer(slug, klass, { synthetic, reasons });

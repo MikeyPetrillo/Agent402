@@ -20,6 +20,13 @@
 // are also counted on their own. Each count is split by lane: outside (a
 // buyer) or synthetic (our own probes and wallets).
 //
+// Busy refusals (the server-wide in-flight query cap in src/tools/cdp-kit.js:
+// a 429, never charged) are counted per day as well, split by whether the
+// caller was one of the watched top payers (src/top-buyer-failures.js) when
+// its response ended: busy.topBuyer and busy.other (server.js counts them
+// with noteSqlBusy once the payer is known; a call with no proven payer is
+// other).
+//
 // Counts only: never the SQL text, a request field, a payer or an address.
 //
 // Stored as one state document (src/json-document.js): the state database
@@ -44,12 +51,15 @@ export const LANES = ["outside", "synthetic"];
 export const OUTCOMES = ["charged", "free", "uncharged"];
 // Queries a call sent: 0 (refused before any query) to the call budget.
 export const BUCKETS = ["q0", "q1", "q2", "q3"];
+// Busy refusals by caller: one of the watched top payers, or anyone else.
+export const BUSY_KINDS = ["topBuyer", "other"];
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; };
 const emptyHist = () => Object.fromEntries(BUCKETS.map((b) => [b, 0]));
-const emptyLane = () => ({ ...Object.fromEntries(OUTCOMES.map((o) => [o, emptyHist()])), budgetSpent: 0 });
+const emptyBusy = () => Object.fromEntries(BUSY_KINDS.map((k) => [k, 0]));
+const emptyLane = () => ({ ...Object.fromEntries(OUTCOMES.map((o) => [o, emptyHist()])), budgetSpent: 0, busy: emptyBusy() });
 const emptyDay = () => Object.fromEntries(LANES.map((l) => [l, emptyLane()]));
 
 let doc = null;
@@ -112,6 +122,24 @@ export function noteSqlCall({ status, queries = 0, budgetSpent = false, syntheti
   }
 }
 
+/**
+ * Count one busy refusal of onchain-sql, once its response has ended.
+ * `topBuyer` is whether the proven payer was a watched top payer then.
+ * Synchronous; the store write is deferred. Never throws.
+ */
+export function noteSqlBusy({ topBuyer = false, synthetic = false, now = Date.now() } = {}) {
+  try {
+    const d = utcDay(now);
+    const lane = (pending[d] ||= emptyDay())[synthetic ? "synthetic" : "outside"];
+    lane.busy[topBuyer === true ? "topBuyer" : "other"]++;
+    startTimer();
+    return true;
+  } catch {
+    noteFailure("a busy refusal could not be counted");
+    return false;
+  }
+}
+
 // A lane as stored by any build. Before the outcome split a lane held q1..q3
 // for calls that answered a final 200 (the tool has no free tier, so those
 // were settled calls); they are read as charged.
@@ -120,6 +148,8 @@ function addLane(into, from) {
   for (const o of OUTCOMES) for (const b of BUCKETS) into[o][b] += num(from[o]?.[b]);
   for (const b of BUCKETS) into.charged[b] += num(from[b]);
   into.budgetSpent += num(from.budgetSpent);
+  // A build before the busy split stored no busy counts: read as zero.
+  for (const k of BUSY_KINDS) into.busy[k] += num(from.busy?.[k]);
   return into;
 }
 function mergeInto(days, add) {
@@ -176,7 +206,7 @@ function summaryOf(lane) {
   const calls = Object.fromEntries(OUTCOMES.map((o) => [o, callsIn(lane[o])]));
   const queries = Object.fromEntries(OUTCOMES.map((o) => [o, queriesIn(lane[o])]));
   const all = OUTCOMES.reduce((n, o) => n + queries[o], 0);
-  return { calls, queries, queriesPerChargedCall: ratio(queries.charged, calls.charged), allQueriesPerChargedCall: ratio(all, calls.charged) };
+  return { calls, queries, queriesPerChargedCall: ratio(queries.charged, calls.charged), allQueriesPerChargedCall: ratio(all, calls.charged), busy: { ...lane.busy } };
 }
 
 /** The histogram for the operator view: stored days plus this process's unflushed counts, newest first. Counts only. */
@@ -196,7 +226,7 @@ export async function sqlQueryStatsReport({ days = SQL_STATS_KEEP_DAYS(), now = 
   for (const r of rows) for (const l of LANES) addLane(totals[l], r[l]);
   const summary = Object.fromEntries(LANES.map((l) => [l, summaryOf(totals[l])]));
   return {
-    outcomes: OUTCOMES, buckets: BUCKETS, days: rows, totals, summary,
+    outcomes: OUTCOMES, buckets: BUCKETS, busyKinds: BUSY_KINDS, days: rows, totals, summary,
     // The outside lane's ratio: upstream queries its charged calls sent, per charged call.
     queriesPerChargedCall: summary.outside.queriesPerChargedCall,
     windowDays: window, keepDays: SQL_STATS_KEEP_DAYS(), scope, failures,

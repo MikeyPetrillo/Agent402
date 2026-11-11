@@ -3,6 +3,20 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-11",
+    title: "Buyer scorecard, trust page and one story",
+    items: [
+      "Site: /scorecard and GET /api/scorecard publish monthly buyer counts: outside paying wallets, returning wallets, wallets with paid calls on two or more days, and settled calls and USD by chain, for the current month to date and the six before. Our own wallets and internal traffic are not counted; small counts read <3.",
+      "Site: /trust gathers subprocessors, encryption, incident response and restore testing on one page; /company lists the business phone, postal address and role mailboxes.",
+      "Site: the home page hero shows uptime, external payments, the chains live and median latency, rendered on the server. The site navigation adds Pricing, Company and Status and one primary action, Add to your agent.",
+      "Site: one lead sentence describes Agent402 on the home page, README, llms.txt, the MCP connector and the package READMEs in the repository.",
+      "Site: design: form controls share one border token, every control shows a 2px focus ring, pages open with a skip link, prose reads at 16px, small targets are at least 24px, and code blocks share one component with a copy button.",
+      "Payments: GET /api/refunds?tx=<hash> looks up a refund by settlement transaction, with found, priceUsd and txUrl fields; the /api/refunds/lookup path answers the same lookup.",
+      "Payments: the /v1 settle breaker keys a Solana, Algorand or Stellar payment by its signed payer.",
+      "Surfaces: /api/gateway-status carries onchainSqlBusy (ok, alert, unknown or off): alert while a top paying buyer was recently told the onchain query service is busy. Busy refusals are counted per day on the operator views; the query limit is unchanged.",
+    ],
+  },
+  {
+    date: "2026-11-11",
     title: "Whose side failed, settle verdicts and rail reasons",
     items: [
       "Payments: a paid /v1 call whose settlement failed counts toward the paying wallet's settle refusal only when the failure is a verdict on that payment: too little of the asset, a bad signature, an authorization already used or expired, or a refused payload. A timeout, a store failure or a facilitator error on our side does not count against the wallet. Settlements of unknown cause refuse the wallet only at three times that count, and that answer says only that settlement did not complete.",

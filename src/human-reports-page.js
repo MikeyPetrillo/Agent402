@@ -17,6 +17,14 @@ import { INSIDER_TIERS, INSIDER_DEFAULT_DAYS } from "./tools/insider-flow-kit.js
 import { RECALL_TIERS } from "./tools/recall-report-kit.js";
 import { REPORT_MODEL_NOTE, CODE_WRITTEN_REPORT_KINDS } from "./report-disclosure.js";
 
+// One field of a product card (DESIGN.md "Forms"): a visible label tied to its
+// input, the input tied to its error line by aria-describedby, and the error
+// line announced when it changes. The ids are the ones the storefront scripts read.
+export function cardField(id, label, placeholder = "", { upper = false, value = "", autofocus = false } = {}) {
+  return `<label class="flabel" for="in-${esc(id)}">${esc(label)}</label><div class="field"><input id="in-${esc(id)}" name="input" type="text" autocomplete="off" aria-describedby="err-${esc(id)}"${placeholder ? ` placeholder="${esc(placeholder)}"` : ""}${upper ? ' style="text-transform:uppercase"' : ""}${value ? ` value="${esc(value)}"` : ""}${autofocus ? " autofocus" : ""}></div>`;
+}
+export const cardError = (id) => `<div class="err" id="err-${esc(id)}" aria-live="polite"></div>`;
+
 // How long a report takes, said once: the storefront said "about two minutes"
 // while the page a buyer waits on said one to three, the deepest up to five.
 export const REPORT_TURNAROUND = "one to three minutes, the deepest up to five";
@@ -50,11 +58,15 @@ export const REPORTS_CSS = `
   .tablewrap td{padding:9px 12px;border-bottom:1px solid var(--hairline);vertical-align:top;font-variant-numeric:tabular-nums}
   .tablewrap tr:last-child td{border-bottom:0}
   .pcard.sel{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
-  .field{display:flex;gap:8px;background:var(--paper);border:1px solid var(--dash);border-radius:var(--radius);padding:6px 6px 6px 14px;margin-bottom:12px}
+  .pcard-form{display:contents}
+  .flabel{display:block;font-size:var(--fs-sm);font-weight:500;color:var(--ink);margin:0 0 6px}
+  .field{display:flex;gap:8px;background:var(--paper);border:1px solid var(--control);border-radius:var(--radius);padding:6px 6px 6px 14px;margin-bottom:12px}
   .field:focus-within{border-color:var(--ink)}
-  .field input{flex:1;border:0;background:transparent;color:var(--ink);font-family:var(--font-body);font-size:var(--fs-lg);outline:none;min-width:0}
+  .field input{flex:1;min-height:32px;border:0;background:transparent;color:var(--ink);font-family:var(--font-body);font-size:var(--fs-lg);min-width:0}
+  .field input::placeholder{text-transform:none;color:var(--faint)}
+  .field:has(input[aria-invalid="true"]){border-color:var(--bad)}
   .gets{font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0 0 6px}.gets b{color:var(--ink);font-weight:500}
-  .note{font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin-top:16px}.pcard .note a{white-space:nowrap;margin-right:12px}.note a{white-space:nowrap}
+  .note{font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin-top:16px}.pcard .note a{white-space:nowrap;margin-right:12px;display:inline-flex;align-items:center;min-height:24px}.note a{white-space:nowrap}
   .err{color:var(--bad);font-size:var(--fs-md);margin-top:8px;min-height:18px}
   .trust{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:var(--fs-md);margin-top:16px}
   .trust span{display:inline-flex;gap:7px;align-items:center;white-space:nowrap}
@@ -128,7 +140,7 @@ export function humanReportsPage(baseUrl) {
   // no price anywhere until the Stripe page, which is the worst place to learn
   // one. `data-price` also lets the tier buttons update it without a reload.
   const usd = (cents) => (cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`);
-  const buyBtn = (kind, key, label) => `<button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:12px" data-buy="${esc(kind)}" data-price-for="${esc(kind)}">${esc(label)} <span class="bprice">${usd(R[key].price)}</span></button>`;
+  const buyBtn = (kind, key, label) => `<button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:12px" data-buy="${esc(kind)}" data-price-for="${esc(kind)}">${esc(label)} <span class="bprice">${usd(R[key].price)}</span></button>`;
   const body = `
 <div class="wrap">
   <div id="checkout-note" hidden class="note" style="margin:0 0 18px;padding:12px 16px;border:1px solid var(--hairline);border-radius:var(--radius);background:var(--card);">
@@ -154,40 +166,40 @@ export function humanReportsPage(baseUrl) {
         <div class="k">Deep research</div>
         <h3>Ask a hard question</h3>
         <p>Multiple live web searches, ranked sources, a cited report on whatever you ask.</p>
-        <div class="field"><input id="in-research" type="text" aria-label="Ask a hard question" placeholder="e.g. How do AI agents pay for APIs in 2026?"></div>
+        <form class="pcard-form" data-kind="research" novalidate>${cardField("research", "Your question", "e.g. How do AI agents pay for APIs in 2026?")}
         <div class="gets"><b>What you get:</b> a cited answer and the ranked sources with links, delivered in ${REPORT_TURNAROUND}.</div>
-        <div class="err" id="err-research"></div>
-        ${buyBtn("research", "research", "Get report")}
+        ${cardError("research")}
+        ${buyBtn("research", "research", "Get report")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("research")}<a href="/tools/research" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="dossier">
         <div class="k">Due-diligence dossier</div>
         <h3>Everything on a public company</h3>
         <p>SEC filings, insider filings, financials and red flags, each one cited to the filing it came from.</p>
-        <div class="field"><input id="in-dossier" type="text" aria-label="Everything on a public company" placeholder="A US ticker, e.g. AAPL" style="text-transform:uppercase"></div>
+        <form class="pcard-form" data-kind="dossier" novalidate>${cardField("dossier", "US ticker", "e.g. AAPL", { upper: true })}
         <div class="gets"><b>What you get:</b> business, financials, filings, insider activity and red flags, every figure cited to the filing, plus the financial tables.</div>
-        <div class="err" id="err-dossier"></div>
-        ${buyBtn("dossier", "dossier", "Get dossier")}
+        ${cardError("dossier")}
+        ${buyBtn("dossier", "dossier", "Get dossier")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("dossier")}<a href="/tools/dossier" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="filing">
         <div class="k">SEC filing report</div>
         <h3>What did they just file</h3>
         <p>The company's newest SEC filings, with the document itself read and explained in plain language, cited to the filing.</p>
-        <div class="field"><input id="in-filing" type="text" aria-label="What did they just file" placeholder="A US ticker, e.g. AAPL" style="text-transform:uppercase"></div>
+        <form class="pcard-form" data-kind="filing" novalidate>${cardField("filing", "US ticker", "e.g. AAPL", { upper: true })}
         <div class="gets"><b>What you get:</b> the newest 10-K, 10-Q or 8-K read for you: what changed, what the numbers say, what the notes disclose, cited to the document.</div>
-        <div class="err" id="err-filing"></div>
-        ${buyBtn("filing", "filing-report", "Get the report")}
+        ${cardError("filing")}
+        ${buyBtn("filing", "filing-report", "Get the report")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("filing-report")}<a href="/tools/filing-report" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="ticker">
         <div class="k">Ticker pack</div>
         <h3>One ticker, the whole picture</h3>
         <p>Company dossier, recent SEC filings, insider buying and selling, and its 5%+ holders from Schedule 13D/13G, in one cited report.</p>
-        <div class="field"><input id="in-ticker" type="text" aria-label="One ticker, the whole picture" placeholder="A US ticker, e.g. AAPL" style="text-transform:uppercase"></div>
+        <form class="pcard-form" data-kind="ticker" novalidate>${cardField("ticker", "US ticker", "e.g. AAPL", { upper: true })}
         <div class="gets"><b>What you get:</b> the dossier, the insider-flow report and the 5%+ holders (Schedule 13D/13G) in one bundle.</div>
-        <div class="err" id="err-ticker"></div>
-        ${buyBtn("ticker", "ticker-pack", "Get the pack")}
+        ${cardError("ticker")}
+        ${buyBtn("ticker", "ticker-pack", "Get the pack")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("ticker-pack")}<a href="/tools/ticker-pack" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
 ${R["token-brief"] ? `
@@ -195,70 +207,70 @@ ${R["token-brief"] ? `
         <div class="k">Token due diligence</div>
         <h3>Solana token risk evidence</h3>
         <p>Mint and freeze authority, LP lock, holder concentration, liquidity and every named risk flag, each cited from on-chain sources.</p>
-        <div class="field"><input id="in-token" type="text" aria-label="Solana token risk evidence" placeholder="A Solana mint address"></div>
+        <form class="pcard-form" data-kind="token" novalidate>${cardField("token", "Solana mint address", "")}
         <div class="gets"><b>What you get:</b> risk evidence, not a rating: authorities, liquidity, holder concentration, trading flow and every named risk flag, cited on-chain.</div>
-        <div class="err" id="err-token"></div>
-        ${buyBtn("token", "token-brief", "Get the brief")}
+        ${cardError("token")}
+        ${buyBtn("token", "token-brief", "Get the brief")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("token-brief")}<a href="/tools/token-brief" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
 ` : ""}      <div class="pcard receipt" data-kind="fund">
         <div class="k">Fund tracker</div>
         <h3>A fund's 13F holdings</h3>
         <p>What a fund holds, and what it bought, added, trimmed and exited last quarter, from SEC 13F filings, cited.</p>
-        <div class="field"><input id="in-fund" type="text" aria-label="A fund's 13F holdings" placeholder="A fund, e.g. Berkshire Hathaway"></div>
+        <form class="pcard-form" data-kind="fund" novalidate>${cardField("fund", "Fund", "e.g. Berkshire Hathaway")}
         <div class="gets"><b>What you get:</b> the top holdings, what the fund bought, added, trimmed and exited last quarter, with the full 13F table to download.</div>
-        <div class="err" id="err-fund"></div>
-        ${buyBtn("fund", "fund-report", "Get report")}
+        ${cardError("fund")}
+        ${buyBtn("fund", "fund-report", "Get report")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("fund-report")}<a href="/tools/fund-report" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="insider">
         <div class="k">Insider flow</div>
         <h3>Who's buying, who's selling</h3>
         <p>The newest Form 4 filings against a company (up to ${INSIDER_MAX_FILINGS}, last ${INSIDER_DEFAULT_DAYS} days) with the actual transactions parsed: open-market buys and sales by insider, awards and exercises set apart, a grounded signal read. SEC EDGAR, cited.</p>
-        <div class="field"><input id="in-insider" type="text" aria-label="Who's buying, who's selling" placeholder="A US ticker, e.g. AAPL" style="text-transform:uppercase"></div>
+        <form class="pcard-form" data-kind="insider" novalidate>${cardField("insider", "US ticker", "e.g. AAPL", { upper: true })}
         <div class="gets"><b>What you get:</b> each Form 4 read parsed: who bought and sold on the open market, awards and exercises set apart, a net-flow read, the transactions table.</div>
-        <div class="err" id="err-insider"></div>
-        ${buyBtn("insider", "insider-report", "Get report")}
+        ${cardError("insider")}
+        ${buyBtn("insider", "insider-report", "Get report")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("insider-report")}<a href="/tools/insider-report" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="market">
         <div class="k">Market / competitor brief</div>
         <h3>Who's in the market, and how they differ</h3>
         <p>Market at a glance, the key players and pricing, recent moves, differentiation, risks and a bottom line. Live web research with citations, nothing from memory.</p>
-        <div class="field"><input id="in-market" type="text" aria-label="Who's in the market, and how they differ" placeholder="A market, category or company, e.g. AI agent payment rails"></div>
+        <form class="pcard-form" data-kind="market" novalidate>${cardField("market", "Market, category or company", "e.g. AI agent payment rails")}
         <div class="gets"><b>What you get:</b> the market, the key players and their pricing, recent moves, differentiation and risks, cited to live sources.</div>
-        <div class="err" id="err-market"></div>
-        ${buyBtn("market", "market-brief", "Get brief")}
+        ${cardError("market")}
+        ${buyBtn("market", "market-brief", "Get brief")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("market-brief")}<a href="/tools/market-brief" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="linkedin">
         <div class="k">LinkedIn article</div>
         <h3>A publish-ready LinkedIn article, with the images</h3>
         <p>Grounded research with cited sources, three headline options, a hook-first body with facts linked to their sources, key takeaways, a companion post with hashtags, and generated images at LinkedIn's own sizes: cover 1920x1080, link-share 1200x627, feed square and portrait. Paste and publish.</p>
-        <div class="field"><input id="in-linkedin" type="text" aria-label="A publish-ready LinkedIn article, with the images" placeholder="Your topic, e.g. why AI agents will pay for APIs with stablecoins"></div>
+        <form class="pcard-form" data-kind="linkedin" novalidate>${cardField("linkedin", "Topic", "e.g. why AI agents will pay for APIs with stablecoins")}
         <div class="gets"><b>What you get:</b> the article, three headline options, key takeaways, a companion post and cover plus inline images cut to LinkedIn's sizes.</div>
-        <div class="err" id="err-linkedin"></div>
-        ${buyBtn("linkedin", "linkedin-article", "Get the article")}
+        ${cardError("linkedin")}
+        ${buyBtn("linkedin", "linkedin-article", "Get the article")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("linkedin-article")}<a href="/tools/linkedin-article" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="recall">
         <div class="k">FDA recall report</div>
         <h3>Is it recalled?</h3>
         <p>The newest FDA drug, food and device recall records for a product, brand or ingredient (up to ${RECALL_PER_FEED} per feed): firm, class, reason, status, distribution. Organized and explained, cited to the FDA feeds.</p>
-        <div class="field"><input id="in-recall" type="text" aria-label="Is it recalled?" placeholder="A drug, food, brand or device, e.g. losartan"></div>
+        <form class="pcard-form" data-kind="recall" novalidate>${cardField("recall", "Drug, food, brand or device", "e.g. losartan")}
         <div class="gets"><b>What you get:</b> the newest recall records for the product with firm, class, reason, status and distribution, explained, with the FDA rows to download.</div>
-        <div class="err" id="err-recall"></div>
-        ${buyBtn("recall", "recall-report", "Get report")}
+        ${cardError("recall")}
+        ${buyBtn("recall", "recall-report", "Get report")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("recall-report")}<a href="/tools/recall-report" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
       <div class="pcard receipt" data-kind="domain">
         <div class="k">Domain audit</div>
         <h3>Is your domain secure?</h3>
         <p>SPF, DMARC, DKIM, TLS and security headers, one graded report with the exact fixes. Why your mail hits spam, answered.</p>
-        <div class="field"><input id="in-domain" type="text" aria-label="Is your domain secure?" placeholder="A domain, e.g. example.com"></div>
+        <form class="pcard-form" data-kind="domain" novalidate>${cardField("domain", "Domain", "e.g. example.com")}
         <div class="gets"><b>What you get:</b> a letter grade, SPF, DMARC, DKIM, MX, TLS, security headers and the www twin checked live, and a numbered fix list you can act on today.</div>
-        <div class="err" id="err-domain"></div>
-        ${buyBtn("domain", "domain-audit", "Get audit")}
+        ${cardError("domain")}
+        ${buyBtn("domain", "domain-audit", "Get audit")}</form>
         <div class="note" style="margin-top:10px;">${sampleLink("domain-audit")}<a href="/tools/domain-audit" style="color:var(--muted);">Sample output + API docs →</a></div>
       </div>
     </div>

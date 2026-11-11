@@ -2087,7 +2087,7 @@ export function revenueChartSection(range = null) {
   .rvr-chip:focus-visible,.rvr-custom input:focus-visible,.rvr-custom button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .rvr-custom{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0}
   .rvr-custom label{display:inline-flex;gap:6px;align-items:center;font-size:var(--fs-sm);color:var(--muted)}
-  .rvr-custom input{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);background:var(--card);border:1px solid var(--dash);border-radius:var(--radius);padding:5px 8px;min-width:0}
+  .rvr-custom input{font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);background:var(--card);border:1px solid var(--control);border-radius:var(--radius);padding:5px 8px;min-width:0}
   .rvr-custom button{padding:6px 12px}
   .rvr-window,.rvr-totals,.rvr-note{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 8px}
   .rvr-totals{color:var(--ink);font-variant-numeric:tabular-nums;display:flex;flex-wrap:wrap;gap:4px 0}

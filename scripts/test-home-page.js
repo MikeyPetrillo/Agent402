@@ -4,8 +4,11 @@
 // (rails, leaderboard, router-share disclosure), the commercial-sensitivity
 // rule, JSON-LD honesty, and copy hygiene.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { stripTags } from "./lib/html-text.js";
 import { ledgerHomePage } from "../src/ledger-home.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
+import { CATEGORY_LINE, LEAD_SENTENCE } from "../src/positioning.js";
+import { homeProofFigures } from "../src/home-proof.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -39,7 +42,9 @@ const catalog = {
   const leaderboardSnapshot = { leaderboard: board, windowLabel: "7d", totalSellers: 824 };
   const html = ledgerHomePage(BASE_URL, catalog, stats, leaderboardSnapshot, Array.from({ length: 42 }));
 
-  ok(html.includes("40,233"), "live counter seeds from the real server-rendered viaUSDC value");
+  // The hero's paid figure is external payments only (src/home-proof.js); the
+  // served-call tally, which includes our own test purchases, is not a figure.
+  ok(!html.includes("40,233"), "the served-call tally (our own purchases included) is not drawn as a hero figure");
   ok(html.includes("918,422") && html.includes("free calls via proof-of-work"), "free-tier (PoW) count renders");
   // The per-rail tile grid and its footer line left the home page: the tiles
   // left empty cells, and the MPP-wire figure read as a mismatch against the
@@ -73,8 +78,10 @@ const catalog = {
   // as served copy: a visitor arriving before the ledger warms read it as the
   // site describing itself. The empty state must still not fabricate a 0.
   ok(!/Listening for on-chain payments/.test(html), "no internal widget state string in served copy");
-  ok(html.includes("Settlement count loading"), "the empty state says what is missing, in words a visitor can read");
-  ok(!/>0</.test(html.slice(html.indexOf('id="hm-counter"'), html.indexOf('id="hm-counter"') + 400)), "counter does not render a fabricated 0 with no data");
+  // A figure with no reading is left out (src/home-proof.js): no loading
+  // line and no dash is served in its place.
+  ok(!/Settlement count loading/.test(html) && !/>\s*-\s*</.test(html.slice(html.indexOf("<header"), html.indexOf("</header>"))), "the empty state serves no loading line and no dash placeholder");
+  ok(!/class="hm-own"/.test(html), "with no reading, no figure grid is served (never a fabricated 0)");
   const sellerSeg = html.slice(html.indexOf('id="sell"'), html.indexOf("</section>", html.indexOf('id="sell"')));
   ok(sellerSeg.length > 80, "control: the seller section was located in the empty state too");
   ok(!/came through the router|paid calls|%/.test(sellerSeg), "no router-share disclosure to degrade: the figure is not published at all");
@@ -139,35 +146,26 @@ const catalog = {
   // stronger invariant now is its absence.
   ok(!/<script src="https?:\/\//.test(html), "homepage loads no third-party script (no CDN tags)");
   ok(html.includes('<script src="/js/home-hero.js">'), "homepage behavior script is first-party");
-  ok(html.includes("500+ tools: web search, browser rendering, SEC filings, market data and more.") && !/plus [\d,]+ utilities/.test(html) && html.includes("An agent sends a request, gets a price back"), "hero headline says 500+ tools and names what they do (no category count beside the marketing figure); the payment line is the subheading");
-  const withExt = ledgerHomePage(BASE_URL, catalog, { toolCallsServed: { viaUSDC: 35138, viaProofOfWork: 1, viaMPPWire: 0, viaRouter: 0, viaUSDCByNetwork: {} } }, { leaderboard: [] }, [], { settledOnChain: 46007, external: { count: 40000, usd: 1234.5 } });
+  const heroText = stripTags(html.slice(html.indexOf("<header"), html.indexOf("</header>")), "").replace(/\s+/g, " ");
+  ok(heroText.includes(CATEGORY_LINE) && heroText.includes(LEAD_SENTENCE) && heroText.includes("Web search, browser rendering, SEC filings, market data and more: an agent sends a request, gets a price back") && !/plus [\d,]+ utilities/.test(html), "the hero states the category, then the lead sentence (500+ tools), then what they do and how a call is paid");
+  const proof = homeProofFigures({ external: { value: { count: 40000 }, at: Date.UTC(2026, 10, 11) } });
+  const withExt = ledgerHomePage(BASE_URL, catalog, { toolCallsServed: { viaUSDC: 35138, viaProofOfWork: 1, viaMPPWire: 0, viaRouter: 0, viaUSDCByNetwork: {} } }, { leaderboard: [] }, [], { settledOnChain: 46007, external: { count: 40000, usd: 1234.5 }, proof });
   ok(/external payments/.test(withExt) && withExt.includes("40,000") && /of our own test purchases are not counted/.test(withExt) && !/>46,007</.test(withExt),
-    "with the external split the counter leads with external payments and footnotes our own test purchases");
+    "with the external split the hero leads with external payments and footnotes our own test purchases");
 }
 
 
-// --- the hero counter's label must follow its metric --------------------------
-// heroCount falls back from settledOnChain (inbound on-chain TRANSFERS to our
-// wallets, ours included) to viaUSDC (calls this server SERVED for a stablecoin
-// payment). Those differ by about ten thousand in production, and which one a
-// visitor sees depends on whether the ledger has warmed since the last deploy.
-// A shared label made the most important number on the site mean two things.
-// Pinned because the tempting simplification is one nice short label for both.
+// --- the hero's paid figure is external payments, or nothing ------------------
+// settledOnChain counts inbound on-chain TRANSFERS to our wallets (ours
+// included) and viaUSDC counts calls this server SERVED for a stablecoin
+// payment. Neither is the external figure, so without an external reading
+// neither is drawn: the figure is left out rather than changing meaning.
 {
   const stats = { toolCallsServed: { viaUSDC: 35138, viaProofOfWork: 1, viaMPPWire: 0, viaRouter: 0, viaUSDCByNetwork: {} } };
   const chain = ledgerHomePage(BASE_URL, catalog, stats, { leaderboard: [] }, [], { settledOnChain: 46007 });
   const served = ledgerHomePage(BASE_URL, catalog, stats, { leaderboard: [] }, [], { settledOnChain: 0 });
-
-  ok(chain.includes("46,007"), "control: with a chain figure the hero renders it");
-  ok(/on-chain settlements/.test(chain) && /including our own test purchases/i.test(chain),
-    "the chain figure is labelled as settlements, and says it includes our own traffic");
-  ok(!/on-chain settlements/.test(served), "the served-call fallback does NOT claim to be on-chain settlements");
-  ok(served.includes("35,138") && /calls served<\/span><span>paid in stablecoin/.test(served),
-    "the fallback renders viaUSDC and is labelled as calls served");
-  // A transfer is not a call. Whichever value is in play, the word "calls" may
-  // not sit on the chain-derived figure.
-  const heroSeg = chain.slice(chain.indexOf("46,007") - 300, chain.indexOf("46,007") + 300);
-  ok(!/\bcalls\b/.test(heroSeg), "the chain-derived hero figure is never called a call count");
+  ok(!chain.includes("46,007") && !/on-chain settlements received/.test(chain), "a settled total that includes our own wallets is not drawn as the hero figure");
+  ok(!served.includes("35,138") && !/calls served<\/span><span>paid in stablecoin/.test(served), "the served-call tally is not drawn as the hero figure either");
 }
 
 // --- Tempo on the homepage ---------------------------------------------------
@@ -199,7 +197,7 @@ const catalog = {
   const shared = srv.slice(srv.indexOf("const revenueAllTime = "), srv.indexOf("const revenueAllTime = ") + 400);
   ok(/railThroughput\(\{ allTime, mpp \}\)/.test(store) && /storeSettledCount\(\{ allTime: ledgerSummary\(/.test(fn) && /revenueAllTime\(\{ awaitRebuild: true \}\)\.then\(storeSettledCount\)/.test(fn) && /ledgerSummary(Async)?\(/.test(shared) && /mppSales\(\{ detailed: false \}\)/.test(shared), "the homepage hero counter uses the /revenue throughput arithmetic (Tempo once, Base/Celo MPP never twice)");
   const hero = await readFile(new URL("../assets/js/home-hero.js", import.meta.url), "utf8");
-  ok(/j\.settledOnChain/.test(hero), "the live poll reads the same settledOnChain figure the server renders");
+  ok(/j\.settledExternal/.test(hero) && !/j\.settledOnChain/.test(hero), "the live poll refreshes the external figure the server renders, never the total that includes our own wallets");
 }
 
 

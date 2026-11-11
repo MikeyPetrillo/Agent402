@@ -24,6 +24,7 @@ import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 import { REPO_URL } from "./repo-link.js";
 import { powCostPhrase } from "./pow.js";
 import { METERED_WIRES, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
+import { CATEGORY_LINE, leadSentence } from "./positioning.js";
 // PRICES IN COPY ARE DERIVED, NEVER TYPED.
 //
 // These chips were hardcoded and went stale at the 2026-08-23 repricing: the
@@ -95,41 +96,50 @@ function decideRowHtml() {
 
 // leaderboardSnapshot is still passed by the server; the seller board itself
 // lives on /leaderboard since the 2026-11 trim, so the home page reads nothing from it.
-export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null } = {}) {
+// `proof` is the hero's first-party figures (src/home-proof.js
+// homeProofFigures), read from caches by the server so the page never waits on
+// a source; a figure the server has no value for is simply absent.
+export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true } = {}) {
   const tools = toolList(catalog);
   const count = tools.length;
   const packCount = Array.isArray(skillPacks) ? skillPacks.length : 42;
   const served = stats?.toolCallsServed || {};
-  const viaUsdc = Number(served.viaUSDC) || 0;
-  // Hero counter = the chain-derived settled count (same two ledger reads as
-  // /revenue - the numbers must agree across surfaces); the in-process tally
-  // is the fallback only while the ledger is still warming after a boot.
-  // Two DIFFERENT quantities, so the label has to follow which one we got:
-  // settledOnChain counts inbound on-chain transfers to our wallets (ours
-  // included), viaUsdc counts calls this server actually served for a
-  // stablecoin payment. The fallback exists because the ledger warms after a
-  // boot, but a number that changes meaning silently is worse than a number
-  // that is briefly missing.
-  const heroFromChain = Number(settledOnChain) > 0;
-  // The headline leads with EXTERNAL payments (buyers outside our wallets) and
-  // external revenue; our own test purchases sit in a footnote beneath it.
-  const hasExternal = external && Number.isFinite(Number(external.count)) && heroFromChain;
+  // The hero's paid figure is EXTERNAL payments only (buyers outside our
+  // wallets, the /revenue headline); our own test purchases are footnoted
+  // under it, and with no external reading the figure is left out rather than
+  // replaced by a total that includes our own traffic.
+  const hasExternal = external && Number.isFinite(Number(external.count)) && Number(settledOnChain) > 0;
   const ownTestPurchases = hasExternal ? Math.max(0, Number(settledOnChain) - Number(external.count)) : 0;
-  const heroCount = hasExternal ? Number(external.count) : heroFromChain ? Number(settledOnChain) : viaUsdc;
   // The live view's /embed may be framed only by agent402.tools, so a server
   // on any other origin (a self-hosted copy, CI on 127.0.0.1) links to it
   // instead of rendering a frame the browser would refuse.
   const liveEmbed = /^https:\/\/(www\.)?agent402\.tools\/?$/i.test(String(baseUrl || ""));
-  // Tags, each kept on one line, wrapping between tags at phone width.
-  const heroLabel = (hasExternal
-    ? ["external payments", `$${Number(external.usd || 0).toFixed(2)} external revenue`]
-    : heroFromChain ? ["on-chain settlements received", "all rails", "including our own test purchases"] : ["calls served", "paid in stablecoin"]).map((t) => `<span>${t}</span>`).join("");
-  const heroFootnote = hasExternal ? `<div class="ml-meta" style="font-size:var(--fs-2xs);color:var(--on-panel-faint);margin-top:6px;">${fmtNum(ownTestPurchases)} of our own test purchases are not counted above.</div>` : "";
+  const figures = (Array.isArray(proof) ? proof : []).filter((f) => f && f.value);
+  // The revenue tag and the footnote speak to the paid figure, so they show only beside it.
+  const paidShown = hasExternal && figures.some((f) => f.key === "paid");
+  const heroFootnote = paidShown && ownTestPurchases > 0 ? `<div class="ml-meta" style="font-size:var(--fs-2xs);color:var(--on-panel-faint);margin:0;">${fmtNum(ownTestPurchases)} of our own test purchases are not counted above.</div>` : "";
+  const proofMeta = ["Agent402", ...(paidShown ? [`$${Number(external.usd || 0).toFixed(2)} external revenue`] : [])];
+  const proofHtml = figures.length
+    ? `<div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-dim);margin:0;">${proofMeta.map((t) => `<span>${esc(t)}</span>`).join("")}</div>
+          <div class="hm-own" style="--hm-own-n:${figures.length};">${figures.map((f) => `<a class="hm-own-fig" id="hm-own-${esc(f.key)}" href="${esc(f.href)}" data-as-of="${esc(f.asOf)}" title="as of ${esc(f.asOf)}"><span class="hm-own-v">${esc(f.value)}</span><span class="hm-own-l">${esc(f.label)}</span></a>`).join("")}</div>
+          ${heroFootnote}`
+    : "";
+  // The lead sentence (src/positioning.js) with the wires this server offers
+  // (the "/" route passes the MPP switch), each wire name linked.
+  const wireLink = (href, t) => `<a href="${href}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">${t}</a>`;
+  const leadHtml = mpp
+    ? esc(leadSentence({ mpp: true })).replace("x402 or MPP", `${wireLink("/what-is-x402", "x402")} or ${wireLink("/what-is-mpp", "MPP")}`)
+    : esc(leadSentence({ mpp: false })).replace("over x402,", `over ${wireLink("/what-is-x402", "x402")},`);
   const viaPow = Number(served.viaProofOfWork) || 0;
   const rails = railsByVolume(stats);
   // One noun on every surface: the x402 chains, plus Tempo over MPP when it is
   // on. "N rails" counted Tempo as a chain beside copy that said N-1 chains.
-  const railCountLabel = `${RAILS.length} chains${rails.length > RAILS.length ? " + Tempo" : ""} live`;
+  // The x402 chains the 402 offers right now when the server says (the "/"
+  // route passes /api/rails "offered"); the static list only for a caller
+  // that does not. Zero offered leaves the count out rather than claim it.
+  const liveChains = chainsOffered === undefined ? RAILS.length : Number(chainsOffered) || 0;
+  const tempoLive = rails.length > RAILS.length;
+  const railCountLabel = liveChains > 0 ? `${liveChains} chains${tempoLive ? " + Tempo" : ""} live` : tempoLive ? "Tempo live" : "";
   // The chains the router can pay an outside seller on right now: its map
   // plus the EVM chains SOR_EVM_CHAINS lists.
   const routerChains = routerPayChains();
@@ -162,6 +172,14 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 
   const extraCss = `
 .hm-hero { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
+.hm-live-stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px 10px; padding: 16px 22px 14px; border-top: 1px solid rgba(255,255,255,.07); }
+.hm-live-stats[hidden] { display: none; }
+.hm-own { display: grid; grid-template-columns: repeat(2, auto); justify-content: start; gap: 14px 48px; }
+@media (min-width: 601px) and (max-width: 900px) { .hm-own { grid-template-columns: repeat(var(--hm-own-n), auto); justify-content: space-between; column-gap: 18px; } }
+.hm-own-fig { display: flex; flex-direction: column; gap: 6px; text-decoration: none; min-width: 0; }
+.hm-own-v { font-weight: 500; font-size: var(--fs-2xl); line-height: 1; letter-spacing: -.03em; color: var(--on-panel); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hm-own-l { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .12em; text-transform: uppercase; color: var(--on-panel-faint); white-space: nowrap; }
+.hm-own-fig:hover .hm-own-l { color: var(--accent-lit); }
 .hm-doors { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .hm-claims { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 20px; }
 .hm-card { border-radius: var(--radius); background: var(--card); border: 1px solid var(--hairline); box-shadow: inset 0 1px 0 var(--card-inset), 0 1px 2px rgba(0,0,0,.08); }
@@ -187,7 +205,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 .hm-marks a:hover { color: var(--ink); }
 .hm-marks .hm-marks-k { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--faint); letter-spacing: .14em; text-transform: uppercase; }
 @media (max-width: 900px) { .hm-hero, .hm-doors, .hm-claims { grid-template-columns: minmax(0,1fr) !important; } .hm-h2 { font-size: var(--fs-2xl); } }
-@media (max-width: 600px) { .hm-live-stats { grid-template-columns: 1fr 1fr !important; } .hm-live-tail { display: none; } .hm-ptable a { flex-wrap: wrap; } .hm-ptable a > span { white-space: nowrap; } }
+@media (max-width: 600px) { .hm-live-stats, .hm-own { grid-template-columns: 1fr 1fr !important; } .hm-own { column-gap: 10px; } .hm-own-l { letter-spacing: .08em; } .hm-live-tail { display: none; } .hm-ptable a { flex-wrap: wrap; } .hm-ptable a > span { white-space: nowrap; } }
 `;
 
   // The chain marks as one compact row of icon links, each to that chain's
@@ -219,15 +237,15 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   <div style="max-width:1180px;margin:0 auto;padding:84px 30px 56px;position:relative;">
     <div class="hm-hero">
       <div class="ml-stagger" style="display:flex;flex-direction:column;gap:26px;">
-        <div class="ml-hero-eyebrow" style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--faint);">For AI agents</div>
-        <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">500+ tools: web search, browser rendering, SEC filings, market data and more.</h1>
-        <p class="hm-lede" style="margin:0;text-wrap:pretty;">An agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);color:var(--ink);">402</span>, pays it from its own wallet over <a href="/what-is-x402" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">x402</a> or <a href="/what-is-mpp" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);">MPP</a>, and gets the answer. No account and no API key.</p>
+        <h1 class="ml-hero-h1" style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-hero);line-height:.98;margin:0;color:var(--ink);text-wrap:balance;">${esc(CATEGORY_LINE)}</h1>
+        <p class="hm-lede" style="margin:0;text-wrap:pretty;">${leadHtml}</p>
+        <p style="margin:0;font-size:var(--fs-base);line-height:1.55;color:var(--muted);text-wrap:pretty;">Web search, browser rendering, SEC filings, market data and more: an agent sends a request, gets a price back in the <span style="font-family:var(--font-mono);color:var(--ink);">402</span>, pays it from its own wallet, and gets the answer.</p>
         <div class="ml-hero-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
           <a class="btn btn-primary" href="/docs#add">Add to your agent</a>
           <a class="btn btn-secondary" href="/tools">Browse tools</a>
         </div>
         <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--muted);gap:8px 18px;align-items:center;">
-          <span style="display:inline-flex;align-items:center;gap:10px;white-space:nowrap;"><span class="ml-dot"></span>${railCountLabel}</span>
+          ${railCountLabel ? `<span style="display:inline-flex;align-items:center;gap:10px;white-space:nowrap;"><span class="ml-dot"></span>${railCountLabel}</span>` : ""}
           <a href="${REPO_URL}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);white-space:nowrap;">open source</a>
         </div>
       </div>
@@ -240,23 +258,12 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
         ${liveEmbed
           ? `<link rel="preconnect" href="https://live.agent402.tools"><iframe id="hm-live" src="https://live.agent402.tools/embed" title="Live x402 and MPP payments, read from the chain" style="display:block;width:100%;height:400px;border:0;background:var(--panel);"></iframe>`
           : `<a id="hm-live-link" href="https://live.agent402.tools" style="display:flex;align-items:center;justify-content:center;height:400px;background:var(--panel);color:var(--accent-lit);font-family:var(--font-mono);font-size:var(--fs-sm);text-decoration:none;">watch every x402 and MPP payment, live ↗</a>`}
-        <div class="hm-live-stats" style="padding:16px 22px 14px;border-top:1px solid rgba(255,255,255,.07);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 10px;">
+        <div class="hm-live-stats" id="hm-live-stats" hidden>
           <div class="ml-meta" style="grid-column:1/-1;font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-dim);"><span>whole x402 + MPP ecosystem</span><span>last hour</span><span>all sellers, not only us</span></div>
-          <div><div id="hm-live-n" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;white-space:nowrap;">payments · 1h</div></div>
-          <div><div id="hm-live-usd" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;white-space:nowrap;">settled</div></div>
-          <div><div id="hm-live-buyers" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;white-space:nowrap;">paying agents</div></div>
-          <div><div id="hm-live-pm" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;">-</div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;white-space:nowrap;">per minute</div></div>
+          ${[["hm-live-n", "payments · 1h"], ["hm-live-usd", "settled"], ["hm-live-buyers", "paying agents"], ["hm-live-pm", "per minute"]].map(([id, label]) => `<div><div id="${id}" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;"></div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;white-space:nowrap;">${label}</div></div>`).join("")}
         </div>
-        <div style="padding:12px 22px 16px;border-top:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:10px;">
-          <div>
-            <div id="hm-counter" data-via-usdc="${esc(heroCount)}" style="font-family:var(--font-body);font-weight:500;font-size:var(--fs-2xl);line-height:.95;letter-spacing:-.035em;color:var(--on-panel);font-variant-numeric:tabular-nums;">${heroCount ? fmtNum(heroCount) : ""}</div>
-            <div id="hm-counter-empty" style="display:${heroCount ? "none" : "flex"};align-items:center;gap:11px;">
-              <span style="width:8px;height:8px;border-radius:50%;background:var(--accent-lit);flex:none;animation:ml-pulse 1.6s ease-in-out infinite;"></span>
-              <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--on-panel-soft);">Settlement count loading</span>
-            </div>
-            <div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:8px;">${heroLabel}</div>
-            ${heroFootnote}
-          </div>
+        <div style="padding:14px 22px 16px;border-top:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:12px;">
+          ${proofHtml}
           <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);gap:4px 16px;"><a href="https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns" style="color:var(--accent-lit);text-decoration:none;">verify settlements on Basescan ↗</a><span>+ <strong id="hm-freepow" style="color:var(--on-panel-soft);font-weight:500;">${fmtNum(viaPow)}</strong> free calls via proof-of-work</span></div>
         </div>
       </div>
