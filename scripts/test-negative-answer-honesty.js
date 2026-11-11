@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readinessOf } from "../src/x402-index.js";
 import { upstreamFailure, retryAfterSeconds, retryTransient } from "../src/tools/fetch-guard.js";
+import { notCallersInput, faultAdvice } from "../src/tool-error-fields.js";
 import { getFreePort } from "./lib/free-port.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -128,8 +129,10 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
     "a page of a still-loading index never calls itself complete");
   ok(/!result\.error && !result\.indexing/.test(server),
     "a discovery answer computed while the index is loading is not written to the 60 s cache (it would outlive the window that produced it)");
-  ok(/const fromUpstream = attribution === "upstream" \|\| attribution === "upstream-access"/.test(server)
-    && /status >= 400 && status < 500 && !fromUpstream/.test(server),
+  ok(/const fromUpstream = notCallersInput\(err, 0\)/.test(server)
+    && /status >= 400 && status < 500 && !fromUpstream/.test(server)
+    && notCallersInput({ attribution: "upstream" }, 422) && notCallersInput({ attribution: "upstream-access" }, 422)
+    && notCallersInput({ upstreamStatus: 404 }, 422) && !notCallersInput({ attribution: "caller" }, 422) && !notCallersInput({}, 400),
     "the route binder suppresses the input-schema envelope when the failure was attributed upstream: re-reading a schema cannot fix a host that is refusing us");
   ok(/if \(Number\.isInteger\(err\?\.retryAfter\)\) res\.set\("Retry-After"/.test(server),
     "...and an upstream that named a Retry-After has it relayed as the header, not only as prose");
@@ -148,15 +151,16 @@ const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++;
     `no CODE copy of the bare relay survives to drift from the helper (found ${bareRelay.length})`);
 
   const mcp = readFileSync(join(ROOT, "src/mcp-http.js"), "utf8");
-  ok(/whoseFault: "not your input/.test(mcp) && /fromUpstream \|\| status >= 500/.test(mcp),
+  ok(/notCallersInput\(handlerErr, status\)/.test(mcp) && /faultAdvice\(handlerErr, status\)/.test(mcp)
+    && /^not your input/.test(faultAdvice({ attribution: "upstream" }, 502).whoseFault),
     "the hosted connector stops telling an agent to reshape its input when a third party refused us - same envelope, same defect, one surface over from the HTTP binder");
-  ok(/retry the SAME call later; changing the input will not help/.test(mcp),
+  ok(faultAdvice({ attribution: "upstream" }, 502).nextStep === "retry the SAME call later; changing the input will not help",
     "...and names the next step, because an agent reading a schema hint retries into the host that is throttling us");
   // The free (proof-of-work) path carries no credential, so its envelope
   // names no Tempo transfer; the push exception belongs to the paid path.
-  const whoseFault = /whoseFault: "([^"]*)"/.exec(mcp)?.[1] || "";
-  ok(whoseFault.length > 0 && !/Tempo/.test(whoseFault) && /nothing to charge/.test(whoseFault),
-    `the free-tier envelope says nothing was presented to charge and names no Tempo transfer (${whoseFault.slice(-80)})`);
+  const advices = [{ attribution: "upstream" }, { attribution: "upstream-access" }, { attribution: "ours", hint: "our-deadline" }, { attribution: "unknown", hint: "source-timeout" }, {}].map((e) => faultAdvice(e, 500).whoseFault);
+  ok(advices.every((w) => !/Tempo/.test(w) && /nothing to charge/.test(w)),
+    `the free-tier envelope says nothing was presented to charge and names no Tempo transfer (${advices[0].slice(-80)})`);
 
   const kit = readFileSync(join(ROOT, "src/tools/x402-kit.js"), "utf8");
   ok(/freshness: \{/.test(kit) && /staleFromDisk: !!snap\?\.staleFromDisk/.test(kit) && /refreshFailing: !!snap\?\.cache\?\.lastError/.test(kit),

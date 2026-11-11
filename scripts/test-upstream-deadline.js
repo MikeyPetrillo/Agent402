@@ -11,7 +11,7 @@
 //      stubbed to stall until the signal the tool passed aborts (the way undici
 //      ends a request at AbortSignal.timeout), under a short handler budget
 //      (UPSTREAM_HANDLER_BUDGET_MS, the knob the helper reads for exactly
-//      this), answers 503, attributed upstream, naming the upstream and the
+//      this), answers 503 naming our limit (attributed to our side), the upstream and the
 //      step, at the budget and never at a kit's own longer cap: the proof that
 //      the caps compose and that no kit kept a fixed 504.
 //   3. Composition: two sequential reads under one budget end as one deadline
@@ -43,6 +43,7 @@ import { generateKeyPairSync } from "node:crypto";
 import {
   HANDLER_BUDGET_MS, PAYMENT_WINDOW_BUDGET_MS, OPTIONAL_READ_FLOOR_MS, budgetOf, capOf, currentBudget, underBudget, withBudget, budgetSpent,
   upstreamFetch, bodyUnderDeadline, workUnderDeadline, upstreamDeadline, upstreamUnreachable, isUpstreamFailure, handlerBudgetMs,
+  budgetSpentError, ATTRIBUTION, KIND,
 } from "../src/upstream-deadline.js";
 import { runnerProbeLabel } from "./test-non-metered-examples.js";
 
@@ -50,7 +51,9 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 const BUDGET = handlerBudgetMs();
 const SLACK_MS = 1500;
-const DEADLINE_RE = /^([\w .-]+?) did not answer the ([\w -]+) read within (\d+) s \(upstream deadline\); nothing was charged - retry shortly(?:; Memento fallback also failed: .*)?$/;
+const DEADLINE_RE = /^([\w .-]+?) did not answer the ([\w -]+) read within our (\d+) s limit; nothing was charged - retry shortly(?:; Memento fallback also failed: .*)?$/;
+// Our budget spent before any request left: names no upstream as slow.
+const SPENT_RE = /^No ([\w .-]+?) ([\w -]+) read was sent: our (\d+) s limit for this call was used up by its earlier steps; nothing was charged - retry shortly$/;
 const UNREACHABLE_RE = /^([\w .-]+?) is unreachable from here \(([\w -]+) read failed before any answer\); nothing was charged - retry shortly$/;
 const timeoutErr = () => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
 /** A fetch that never answers and rejects only when the tool's signal aborts.
@@ -93,12 +96,26 @@ const keepAlive = setInterval(() => {}, 1000);
   }
 
   const d = upstreamDeadline("RugCheck", "report summary", 8000);
-  ok(d.statusCode === 503 && d.attribution === "upstream" && d.upstreamFailure === "deadline" && DEADLINE_RE.test(d.message) && isUpstreamFailure(d),
-    `the deadline class is a 503 attributed upstream in the probe's words (${d.message})`);
+  ok(d.statusCode === 503 && d.attribution === "ours" && d.hint === "our-deadline" && d.upstreamFailure === "deadline" && DEADLINE_RE.test(d.message) && isUpstreamFailure(d)
+    && !/upstream deadline/.test(d.message) && /our 8 s limit/.test(d.message),
+    `the deadline class is a 503 naming OUR limit, attributed to our side (our limit passing is no verdict on the upstream), in the probe's words (${d.message})`);
   ok(runnerProbeLabel(503, { error: d.message }) === "RugCheck", "the strict sweep's runner probe reads the shared wording");
   const u = upstreamUnreachable("Chain data", "eth_call");
-  ok(u.statusCode === 503 && u.attribution === "upstream" && u.upstreamFailure === "unreachable" && UNREACHABLE_RE.test(u.message) && isUpstreamFailure(u),
-    `the unreachable class is a 503 attributed upstream (${u.message})`);
+  ok(u.statusCode === 503 && u.attribution === "unknown" && u.hint === "connect-failed" && u.upstreamFailure === "unreachable" && UNREACHABLE_RE.test(u.message) && isUpstreamFailure(u),
+    `the unreachable class is a 503 whose side is unknown: no answer came back (${u.message})`);
+  const dns = upstreamUnreachable("Chain data", "eth_call", Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo EAI_AGAIN"), { code: "EAI_AGAIN" }) }));
+  ok(dns.statusCode === 503 && dns.attribution === "ours" && dns.hint === "our-egress" && dns.upstreamFailure === "unreachable" && /this server's DNS lookup/.test(dns.message) && runnerProbeLabel(503, { error: dns.message }) === null,
+    `our own DNS lookup failing is ours, kind our-egress, and names no upstream as down (${dns.message})`);
+  const sp = budgetSpentError("RugCheck", "report", 20_000);
+  ok(sp.statusCode === 503 && sp.attribution === "ours" && sp.hint === "budget-spent" && sp.budgetSpent === true && sp.upstreamFailure === "deadline" && SPENT_RE.test(sp.message) && !/did not answer/.test(sp.message),
+    `a budget spent before any request left names no upstream as unresponsive (${sp.message})`);
+  const heavy = upstreamDeadline("Speech upstream", "speech", 25_000, { input: { size: 1900, max: 2000 } });
+  ok(heavy.statusCode === 503 && heavy.attribution === "ours" && heavy.hint === "smaller-input" && /our 25 s limit/.test(heavy.message) && /shorter one/.test(heavy.message) && !/retry shortly/.test(heavy.message),
+    `an input near its cap whose read outlives our limit is told a shorter one is more likely to finish (${heavy.message})`);
+  const light = upstreamDeadline("Speech upstream", "speech", 25_000, { input: { size: 40, max: 2000 } });
+  ok(light.hint === "our-deadline" && DEADLINE_RE.test(light.message), "control: a short input keeps the plain retry advice");
+  ok(Object.values(ATTRIBUTION).join() === "upstream,upstream-access,caller,ours,unknown" && Object.values(KIND).every((k) => /^[a-z][a-z0-9-]{0,39}$/.test(k)),
+    "the vocabulary: five sides, and every kind is a code the answer's hint field carries");
   ok(!isUpstreamFailure(Object.assign(new Error("x"), { statusCode: 503 })) && !isUpstreamFailure(null), "a 503 in other words is not an upstream failure class");
 
   // A stalled read ends at the cap, through the real signal.
@@ -107,7 +124,7 @@ const keepAlive = setInterval(() => {}, 1000);
     let err = null;
     try { await upstreamFetch("https://stalled.test/x", {}, { label: "Stalled", step: "probe", timeoutMs: 400, budget: null, tag: null, fetchImpl: stall }); } catch (e) { err = e; }
     const ms = Date.now() - t0;
-    ok(err?.upstreamFailure === "deadline" && /within 1 s/.test(err.message) && ms >= 350 && ms < 400 + SLACK_MS, `a stalled read ends at its own cap as the deadline class (${ms} ms, "${err?.message}")`);
+    ok(err?.upstreamFailure === "deadline" && /within our 1 s limit/.test(err.message) && ms >= 350 && ms < 400 + SLACK_MS, `a stalled read ends at its own cap as the deadline class (${ms} ms, "${err?.message}")`);
   }
   // The budget's remainder wins when shorter, and the message says the cap it ran under.
   {
@@ -122,10 +139,10 @@ const keepAlive = setInterval(() => {}, 1000);
     let called = false;
     let err = null;
     try { await upstreamFetch("https://x.test/", {}, { label: "Spent", step: "read", timeoutMs: 8000, budget: { remaining: () => 0 }, tag: null, fetchImpl: async () => { called = true; } }); } catch (e) { err = e; }
-    ok(err?.upstreamFailure === "deadline" && called === false && /within 8 s/.test(err.message), "a spent budget with no total is the deadline class before any egress, naming the read's own cap");
+    ok(err?.upstreamFailure === "deadline" && err?.hint === "budget-spent" && called === false && SPENT_RE.test(err.message) && /our 8 s limit/.test(err.message), "a spent budget with no total refuses before any egress, naming the read's own cap as our limit and no upstream as slow");
     err = null;
     try { await upstreamFetch("https://x.test/", {}, { label: "Spent", step: "read", timeoutMs: 8000, budget: { remaining: () => 0, totalMs: 20_000 }, tag: null, fetchImpl: async () => { called = true; } }); } catch (e) { err = e; }
-    ok(err?.upstreamFailure === "deadline" && called === false && /within 20 s/.test(err.message), "a spent handler budget names the budget the earlier reads used up");
+    ok(err?.upstreamFailure === "deadline" && err?.hint === "budget-spent" && called === false && SPENT_RE.test(err.message) && /our 20 s limit/.test(err.message), "a spent handler budget names the budget the earlier steps used up");
   }
   // A refused connection is the unreachable class; the init rides through.
   {
@@ -141,7 +158,7 @@ const keepAlive = setInterval(() => {}, 1000);
     const ctx = { label: "Body", step: "text", cap: 5000 };
     let err = null;
     try { await bodyUnderDeadline(Promise.reject(timeoutErr()), ctx); } catch (e) { err = e; }
-    ok(err?.upstreamFailure === "deadline" && /within 5 s/.test(err.message), "an abort while the body streams is the deadline class at the read's cap");
+    ok(err?.upstreamFailure === "deadline" && /within our 5 s limit/.test(err.message), "an abort while the body streams is the deadline class at the read's cap");
     err = null;
     try { await bodyUnderDeadline(Promise.reject(new SyntaxError("bad json")), ctx); } catch (e) { err = e; }
     ok(err instanceof SyntaxError, "any other body failure is rethrown unchanged for the kit's own mapping");
@@ -230,8 +247,8 @@ for (let i = 0; i < KITS.length; i++) {
   const [, , slug, , labelRe, stepRe] = KITS[i];
   const { err, out, ms } = runs[i];
   const m = DEADLINE_RE.exec(err?.message || "");
-  ok(err?.statusCode === 503 && err?.attribution === "upstream" && err?.upstreamFailure === "deadline",
-    `${slug}: a stalled upstream answers 503 attributed upstream, never a 504 (got ${err ? `${err.statusCode} "${err.message}"` : `served ${JSON.stringify(out).slice(0, 80)}`})`);
+  ok(err?.statusCode === 503 && err?.attribution === "ours" && err?.hint === "our-deadline" && err?.upstreamFailure === "deadline",
+    `${slug}: a stalled upstream answers 503 naming our limit (attributed to our side, no verdict on the upstream), never a 504 (got ${err ? `${err.statusCode} "${err.message}"` : `served ${JSON.stringify(out).slice(0, 80)}`})`);
   ok(!!m && labelRe.test(m[1]) && stepRe.test(m[2]), `${slug}: the body names the upstream and the step (${m ? `"${m[1]}" / "${m[2]}"` : err?.message})`);
   ok(ms >= BUDGET - 100 && ms < BUDGET + SLACK_MS, `${slug}: it answers at the handler budget, not at the kit's own longer cap (${ms} ms against ${BUDGET})`);
 }
@@ -267,7 +284,7 @@ ok(!stallCalls.some((c) => /\btest-(alchemy|brave|neynar|exa|hunter|openrouter|t
     }, 600);
   } catch (e) { err = e; }
   const ms = Date.now() - t0;
-  ok(err?.upstreamFailure === "deadline" && /the second read within 1 s/.test(err.message) && reads === 1 && ms >= 550 && ms < 600 + SLACK_MS,
+  ok(err?.upstreamFailure === "deadline" && err?.hint === "budget-spent" && /^No Twice second read was sent: our 1 s limit/.test(err.message) && reads === 1 && ms >= 550 && ms < 600 + SLACK_MS,
     `two sequential reads under one 600 ms budget end as one deadline inside it: the second never leaves (${reads} read(s), ${ms} ms, "${err?.message}")`);
 }
 
@@ -281,7 +298,7 @@ ok(!stallCalls.some((c) => /\btest-(alchemy|brave|neynar|exa|hunter|openrouter|t
   const seam = (u, i) => { left++; return stall(u, i); };
   const tiny = budgetOf(MIN_READ_MS - 2);
   const e1 = await upstreamFetch("https://stalled.test/tiny", {}, { label: "Tiny", step: "lookup", timeoutMs: 5000, tag: null, budget: tiny, fetchImpl: seam }).catch((x) => x);
-  ok(e1?.upstreamFailure === "deadline" && left === 0 && /the lookup read within/.test(e1.message), `a budget with ${MIN_READ_MS - 2} ms left refuses the read before any egress (${left} read(s), "${e1?.message}")`);
+  ok(e1?.upstreamFailure === "deadline" && e1?.hint === "budget-spent" && left === 0 && /^No Tiny lookup read was sent/.test(e1.message), `a budget with ${MIN_READ_MS - 2} ms left refuses the read before any egress (${left} read(s), "${e1?.message}")`);
   // The work is a promise (the function takes a promise, raced against the
   // expiry); a refusal never arms the expiry, so onExpire is never called.
   let expired = 0;

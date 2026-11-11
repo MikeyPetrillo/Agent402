@@ -40,17 +40,17 @@ try {
   const ms = Date.now() - t0;
   ok(err && err.statusCode === 504, `a trickled body ends in a 504 (got ${err ? err.statusCode + " " + err.message : "a body"})`);
   ok(ms < 3000, `cut off near timeoutMs, not when the body ends (${ms} ms)`);
-  ok(err && /did not finish sending within 1s/.test(err.message), "the message says the body did not finish in time");
-  ok(err?.attribution === "upstream" && err?.hint === "source-timeout", `a trickled body is attributed to the source host (${err?.attribution}, ${err?.hint})`);
+  ok(err && /did not finish sending within our 1 s limit/.test(err.message), "the message says the body did not finish inside our limit");
+  ok(err?.attribution === "unknown" && err?.hint === "source-timeout", `a trickled body is a source timeout whose side is unknown (${err?.attribution}, ${err?.hint})`);
 
   let silent = null;
   const t1 = Date.now();
   try { await safeFetch("http://8.8.8.8/silent", { timeoutMs: 1000, binary: true }); } catch (e) { silent = e; }
-  ok(silent?.statusCode === 504 && /did not respond within 1s/.test(silent?.message), `a host that sends no headers ends in a 504 (got ${silent?.statusCode} ${silent?.message})`);
+  ok(silent?.statusCode === 504 && /did not respond within our 1 s limit; check that the URL is correct and publicly reachable, or retry$/.test(silent?.message), `a host that sends no headers ends in a 504 that advises checking the URL or retrying (got ${silent?.statusCode} ${silent?.message})`);
   ok(Date.now() - t1 < 3000, "cut off near timeoutMs");
-  ok(silent?.attribution === "upstream" && silent?.hint === "source-timeout", `no headers is attributed to the source host (${silent?.attribution}, ${silent?.hint})`);
+  ok(silent?.attribution === "unknown" && silent?.hint === "source-timeout", `no headers is a source timeout whose side is unknown (${silent?.attribution}, ${silent?.hint})`);
   const fields = toolErrorFields(silent);
-  ok(fields.attribution === "upstream" && fields.hint === "source-timeout", "the tool error answer carries attribution and hint");
+  ok(fields.attribution === "unknown" && fields.hint === "source-timeout", "the tool error answer carries attribution and hint");
   const fast = await safeFetch("http://8.8.8.8/fast", { timeoutMs: 1000 });
   ok(fast.html === "hello", "a body that arrives in time is served");
   // The timer is cleared after a success: nothing fires later.

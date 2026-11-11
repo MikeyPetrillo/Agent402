@@ -21,7 +21,7 @@ const run = async (c) => { code = c; try { await t.handler({ host: "example.com"
 
 for (const c of ["EAI_AGAIN", "ESERVFAIL", "ETIMEOUT"]) {
   const e = await run(c);
-  ok(e?.statusCode === 503 && e.retryAfter > 0 && e.attribution === "upstream" && e.message === LOOKUP_UNAVAILABLE, `${c}: a retryable 503 attributed upstream (${e?.statusCode} ${e?.message})`);
+  ok(e?.statusCode === 503 && e.retryAfter > 0 && e.attribution === "ours" && e.hint === "our-egress" && e.message === LOOKUP_UNAVAILABLE, `${c}: a retryable 503 attributed to our own resolver (${e?.statusCode} ${e?.message})`);
 }
 for (const c of ["ENOTFOUND", "ENODATA"]) {
   const e = await run(c);
