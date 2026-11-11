@@ -406,11 +406,13 @@ try {
       const [b] = assertMirror(`B4b ${path}`, r, await r.text());
       ok(b.meteredTwin?.route === twin && b.meteredTwin?.url === `${BASE_URL}${twin.split(" ")[1]}`, `B4b ${path} names its metered twin ${twin} (${JSON.stringify(b.meteredTwin?.route)})`);
       ok(/settlement never exceeds that quote/.test(b.meteredTwin?.note || ""), `B4b ${path}: the twin note says settlement never exceeds the quote`);
+      ok(!("clientTimeout" in b), `B4b ${path}: a flat tier's first-contact 402 carries no clientTimeout (the wait is the metered routes')`);
     }
     for (const path of ["/v1/auto/chat/completions", "/v1/embeddings"]) {
       const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(path.includes("embed") ? { input: "x" } : chat) });
       const b = JSON.parse(await r.text());
       ok(r.status === 402 && !("meteredTwin" in b), `B4b control: ${path} (not a flat chat tier) carries no meteredTwin (${r.status})`);
+      ok(!("clientTimeout" in b), `B4b control: ${path} (not a metered route) carries no clientTimeout`);
     }
     for (const path of ["/v1/metered/chat/completions", "/v1/metered/messages", "/v1/metered/responses"]) {
       const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(path.endsWith("responses") ? { input: "hi", max_output_tokens: 16 } : { ...chat, model: "openai/gpt-4o-mini" }) });
