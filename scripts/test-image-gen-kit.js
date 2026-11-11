@@ -8,7 +8,7 @@
 //   node scripts/test-image-gen-kit.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.OPENAI_API_KEY = "sk-test-not-a-real-key";
-const { IMAGE_GEN_TOOLS, TIERS, imageModerationStats, isModerationParamError } = await import("../src/tools/image-gen-kit.js");
+const { IMAGE_GEN_TOOLS, TIERS, imageModerationStats, isModerationParamError, _resetImageModerationMemoForTest, MODERATION_RECHECK_MS } = await import("../src/tools/image-gen-kit.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -89,22 +89,43 @@ try {
     const before = imageModerationStats().sinceBoot;
     const warns = []; const cw = console.warn; console.warn = (...a) => warns.push(a.join(" "));
     upstream = [openAIError(400, { message: "Unknown parameter: 'moderation'.", type: "invalid_request_error", param: "moderation", code: "unknown_parameter" })];
+    _resetImageModerationMemoForTest();
     const r = await call("image-gen", { prompt: "a" });
     ok(r.out.image && sent.length === 2 && sent[0].body.moderation === "low" && !("moderation" in sent[1].body) && sent[1].body.prompt === "a" && sent[1].body.quality === "low",
       `an unknown-parameter 400 sends the same request once more without moderation and serves it (${sent.length} requests)`);
+    // The model is remembered: its next request goes once, without the parameter.
+    const r2 = await call("image-gen-hd", { prompt: "b" });
+    ok(r2.out.image && sent.length === 1 && !("moderation" in sent[0].body) && imageModerationStats().sinceBoot.modelsWithoutParam === 1,
+      `after one refusal the same model's next request is sent once, without the parameter (${sent.length} request)`);
+    _resetImageModerationMemoForTest();
     upstream = [openAIError(400, { message: "Invalid value: 'low'. Supported values are: 'auto'.", type: "invalid_request_error", param: null, code: "invalid_value" })];
     upstream[0].body.error.message = "Invalid value for 'moderation': 'low'. Supported values are: 'auto'.";
     ok((await call("image-gen-hd", { prompt: "a" })).out.image && sent.length === 2 && !("moderation" in sent[1].body), "an invalid-value 400 quoting 'moderation' (no param field) also falls back once");
+    _resetImageModerationMemoForTest();
     // Both answers refuse the parameter: never a loop, the second answer is final.
     upstream = [openAIError(400, { message: "Unknown parameter: 'moderation'.", param: "moderation", code: "unknown_parameter" }), openAIError(400, { message: "Unknown parameter: 'moderation'.", param: "moderation", code: "unknown_parameter" })];
     const e = await thrown("image-gen", { prompt: "a" });
     ok(e?.statusCode === 400 && sent.length === 2, `a second refusal of the parameter is final: two requests, a 400 (${sent.length}, ${e?.statusCode})`);
+    _resetImageModerationMemoForTest();
     upstream = [];
     console.warn = cw;
     const after = imageModerationStats().sinceBoot;
     ok(after.unknownParamFallbacks - before.unknownParamFallbacks === 3, `each fallback is counted (${after.unknownParamFallbacks - before.unknownParamFallbacks})`);
-    ok(warns.filter((w) => /refused the moderation parameter/.test(w)).length === 1, `one console line per boot, not per fallback (${warns.length})`);
-    ok(after.calls.auto - before.calls.auto === 2, "a render served without the parameter counts under the provider default, auto");
+    ok(warns.filter((w) => /refused the moderation parameter/.test(w)).length === 3, `one console line per remembered refusal (the memo was reset between cases) (${warns.length})`);
+    ok(after.calls.auto - before.calls.auto === 3, "a render served without the parameter counts under the provider default, auto");
+    // Past the recheck period the parameter is sent again.
+    {
+      const realNow = Date.now;
+      upstream = [openAIError(400, { message: "Unknown parameter: 'moderation'.", param: "moderation", code: "unknown_parameter" })];
+      await call("image-gen", { prompt: "a" });
+      const t0 = realNow();
+      Date.now = () => t0 + MODERATION_RECHECK_MS + 1;
+      try {
+        upstream = [];
+        const r3 = await call("image-gen", { prompt: "c" });
+        ok(r3.out.image && sent.length === 1 && sent[0].body.moderation === "low", `after the recheck period the parameter is sent again (${JSON.stringify(sent[0]?.body?.moderation)})`);
+      } finally { Date.now = realNow; _resetImageModerationMemoForTest(); }
+    }
     // Another 400 that names some other field is not a moderation fallback.
     upstream = [openAIError(400, { message: "Invalid value: 'x'.", param: "size", code: "invalid_value" })];
     const e2 = await thrown("image-gen", { prompt: "a" });
