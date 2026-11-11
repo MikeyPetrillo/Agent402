@@ -49,6 +49,7 @@ import { noteOwnedPrice, staleHighRows, describeStaleHigh, STALE_HIGH_TOLERANCE,
 import { modelCostRows } from "../src/tools/llm-gateway-kit.js";
 import { PRIORITY_ENDPOINT_TAG, parseDirectPricing, listedNotCheaperAnywhere } from "../src/gateway-direct-pricebook.js";
 import { directUpstreamConfig } from "../src/gateway-direct-upstream.js";
+import { advertisedIds, advertisedExpiring } from "./lib/advertised-expiry.js";
 requireUpstreamCosts("test-gateway-model-ids");
 
 // STEALTH listings (stealth/ox-alpha) are the ONE id class this guard must not
@@ -411,6 +412,20 @@ const expiryOf = (m) => m.expiration_date || m.deprecation_date || null;
 const watched = new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(TIERS).flatMap((t) => t.fallbacks || [])]);
 const expiring = models.filter((m) => watched.has(m.id) && expiryOf(m) && Date.parse(expiryOf(m)) < soon).map((m) => `${m.id} (${expiryOf(m)})`);
 ok(expiring.length === 0, `no ranked/fallback model expires within 14 days${expiring.length ? ` (${expiring.join(", ")})` : ""}`);
+// 5d. ADVERTISED ids: every id a tier lists by name or /v1/models prints is
+//     one a caller reads and sends verbatim. Until 2026-11-10 rule 5 watched
+//     ranked and fallback ids only, and llama-3.2-1b-instruct sat on the nano
+//     list with a date ten days out, unseen. Inside the same 14-day horizon
+//     such an id fails unless RETIRING_MODELS already names the successor that
+//     takes over on or before the upstream date (rule 5a grades that successor).
+{
+  const advertised = advertisedIds(TIERS, modelsList().data.map((m) => m.id));
+  ok(advertised.size >= 20 && Object.values(TIERS).every((t) => t.prefixes.filter((p) => !p.endsWith("/")).every((p) => advertised.has(p))), `the expiry watch covers every id a tier lists by name (${advertised.size})`);
+  const due = advertisedExpiring({ models, advertised, retiring: RETIRING_MODELS, now: Date.now() });
+  for (const d of due.filter((x) => x.covered)) console.log(`note - advertised id ${d.id} expires upstream ${d.expires}; RETIRING_MODELS serves ${d.successor} from its date`);
+  const open = due.filter((x) => !x.covered);
+  ok(open.length === 0, `no advertised model expires within 14 days without a scheduled successor${open.length ? ` (${open.map((x) => `${x.id} ${x.expires}`).join(", ")}: add it to RETIRING_MODELS with a successor dated on or before that day)` : ""}`);
+}
 // 5-media. Every image, speech and video chain id, read from whichever
 //     catalog lists it (image ids are mostly absent from the chat list).
 //     Until 2026-11-05 rule 5 watched chat ids only, and gpt-5-image-mini
