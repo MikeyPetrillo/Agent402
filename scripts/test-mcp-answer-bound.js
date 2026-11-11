@@ -82,6 +82,16 @@ const bytes = (v) => Buffer.byteLength(JSON.stringify(v));
   ok(many.bound.cuts.length <= 20 && many.bound.cutsListed === many.bound.cuts.length && many.bound.cutsTotal >= many.bound.cutsListed, "the list of cuts is itself bounded and counted");
 
   ok(mcpMaxAnswerBytes({}) === MCP_MAX_ANSWER_DEFAULT_BYTES && mcpMaxAnswerBytes({ AGENT402_MCP_MAX_ANSWER_BYTES: "nope" }) === MCP_MAX_ANSWER_DEFAULT_BYTES && mcpMaxAnswerBytes({ AGENT402_MCP_MAX_ANSWER_BYTES: "0" }) === MCP_MAX_ANSWER_DEFAULT_BYTES, "an unset or unusable ceiling reads as the default");
+  ok(["1", "512", "1023", "-5"].every((v) => mcpMaxAnswerBytes({ AGENT402_MCP_MAX_ANSWER_BYTES: v }) === MCP_MAX_ANSWER_DEFAULT_BYTES), "a ceiling under the 1024-byte floor reads as the default");
+  ok(mcpMaxAnswerBytes({ AGENT402_MCP_MAX_ANSWER_BYTES: "1024" }) === 1024 && mcpMaxAnswerBytes({ AGENT402_MCP_MAX_ANSWER_BYTES: "2048.7" }) === 2048, "a ceiling at or over the floor is used, in whole bytes");
+
+  // Room is kept for the answerBound block: rows whose estimate is exact (short
+  // strings) fill the budget to the byte, and the answer with its block must
+  // still fit the ceiling.
+  const tight = boundAnswer(Array.from({ length: 20_000 }, (_, i) => String(i).padStart(10, "x")), MAX);
+  const tightSent = withAnswerBound(tight.value, tight.bound);
+  ok(tight.bound && bytes(tightSent) <= MAX, `a list of short strings cut to the budget still fits with its answerBound block (${bytes(tightSent)} of ${MAX})`);
+  ok(tight.bound && bytes(tight.value) > MAX / 2, `and the cut keeps most of the ceiling (${bytes(tight.value)} of ${MAX})`);
 }
 
 // --------------------------------------------------------------- limiter
