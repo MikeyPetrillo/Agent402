@@ -1354,7 +1354,7 @@ await check("refund proof at Gateway: batched (not confirmed), another token, an
 // ---------------------------------------------------------------- part 2
 console.log("part 2: the paid server");
 
-const [P_PAYAI, P_CIRCLE, P_GW, ...SERVER_PORTS] = await getFreePorts(17);
+const [P_PAYAI, P_CIRCLE, P_GW, ...SERVER_PORTS] = await getFreePorts(18);
 // transfers: Gateway's transfer records the stub answers lookups from;
 // acceptOnPending: a settle answered settlement_pending also writes a
 // `received` record for that authorization (Gateway accepted it a moment later).
@@ -1390,6 +1390,7 @@ const gwStub = createServer(async (req, res) => {
   }
   if (req.url === "/v1/x402/supported") {
     if (st.gwSupported === "die") return rawJson(res, 500, `<html>${MARKER}</html>`, "text/html");
+    if (st.gwSupported === "hang") return undefined; // never answers
     if (st.gwSupported === "baseonly") return rawJson(res, 200, { ...SUPPORTED, kinds: SUPPORTED.kinds.filter((k) => k.network === "eip155:8453") });
     return rawJson(res, 200, SUPPORTED);
   }
@@ -1557,6 +1558,8 @@ await check("switch on: the 402 carries the batched accept on Arc and Base only,
     const rails = await (await fetch(`${base}/api/rails`)).json();
     assert.equal(rails.gatewayBatched?.kind, GATEWAY_KIND_NAME, "/api/rails: the batched kind");
     assert.deepEqual([...rails.gatewayBatched.networks].sort(), ["arc", "base"], "/api/rails: the batched networks");
+    assert.equal(rails.gatewayBatched.status, "offered", "/api/rails: the option reads offered");
+    assert.deepEqual(rails.gatewayBatched.dropped, [], "/api/rails: nothing dropped");
     const pinfo = await mcpPaymentInfo(base);
     assert.match(pinfo.pay.batched || "", /Circle Gateway batched accept \(extra\.name GatewayWalletBatched\)/, "payment.info: the batched line");
     assert.match(pinfo.pay.batched, /agent402-mcp and agent402-client pay the plain accept/, "payment.info: which accept the packages pay");
@@ -1985,9 +1988,34 @@ await check("switch on, Gateway /supported unreadable: the option is dropped eve
     const { env } = await read402(base);
     assert.deepEqual(env.accepts.map((a) => a.network), ["eip155:8453", "eip155:137", "eip155:5042"]);
     assert.ok(env.accepts.every((a) => a.extra?.name !== GATEWAY_KIND_NAME));
-    assert.match(log.text, /Circle Gateway batched option not offered - Gateway's \/supported failed \(non_json_response\)/);
+    assert.match(log.text, /Circle Gateway batched option not offered - Gateway's \/supported failed \(non_json_response; read-failed\)/);
     assert.ok(!leaks(log.text), "the upstream body never reaches the log");
     assert.equal((await (await fetch(`${base}/api/pricing`)).json()).payment.gatewayNanopayments, undefined);
+    // The dropped option is reported where the heartbeat's rail check reads.
+    const rails = await (await fetch(`${base}/api/rails`)).json();
+    assert.equal(rails.gatewayBatched?.status, "dropped", "/api/rails: the batched option reads dropped");
+    const byNet = [...rails.gatewayBatched.dropped].sort((a, b) => a.network.localeCompare(b.network));
+    assert.deepEqual(byNet, [{ network: "eip155:5042", reason: "read-failed" }, { network: "eip155:8453", reason: "read-failed" }], "/api/rails: each network with its reason word");
+    assert.equal(rails.gatewayBatched.kind, undefined, "no live kind while dropped");
+  } finally { proc.kill("SIGKILL"); st.gwSupported = "full"; }
+});
+
+await check("switch on, Gateway /supported never answers: dropped as probe-timeout (our limit), reported on /api/rails, boot bounded", async () => {
+  st.gwSupported = "hang";
+  const t0 = Date.now();
+  const { base, log, proc } = await boot({ X402_SUPPORTED_TRY_MS: "1000" });
+  const bootMs = Date.now() - t0;
+  try {
+    const { env } = await read402(base);
+    assert.ok(env.accepts.every((a) => a.extra?.name !== GATEWAY_KIND_NAME), "no batched accept");
+    assert.deepEqual(env.accepts.map((a) => a.network), ["eip155:8453", "eip155:137", "eip155:5042"], "the plain accepts are untouched");
+    assert.match(log.text, /Circle Gateway batched option not offered - no answer from Gateway's \/supported within our 1 s limit \(probe-timeout\)/);
+    const rails = await (await fetch(`${base}/api/rails`)).json();
+    assert.equal(rails.gatewayBatched?.status, "dropped");
+    assert.ok(rails.gatewayBatched.dropped.length === 2 && rails.gatewayBatched.dropped.every((d) => d.reason === "probe-timeout"), `each dropped network reads probe-timeout (${JSON.stringify(rails.gatewayBatched.dropped)})`);
+    assert.equal(rails.degraded, 0, "no plain rail is degraded");
+    assert.ok(st.gwHits.filter((h) => h.url === "/v1/x402/supported").length >= 3, "three boot tries were made");
+    assert.ok(bootMs < 60_000, `boot bounded (${bootMs} ms)`);
   } finally { proc.kill("SIGKILL"); st.gwSupported = "full"; }
 });
 
@@ -2042,6 +2070,10 @@ await check("switch on, Gateway lists Base only: the batched accept rides on Bas
     const pricing = await (await fetch(`${base}/api/pricing`)).json();
     assert.deepEqual(pricing.payment.acceptKinds.arc, ["exact"]);
     assert.deepEqual(Object.keys(pricing.payment.gatewayNanopayments.networks), ["eip155:8453"]);
+    const rails = await (await fetch(`${base}/api/rails`)).json();
+    assert.equal(rails.gatewayBatched?.status, "partial", "/api/rails: partly offered");
+    assert.deepEqual(rails.gatewayBatched.dropped, [{ network: "eip155:5042", reason: "not-advertised" }], "/api/rails: Arc's batched kind is not advertised");
+    assert.deepEqual(rails.gatewayBatched.networks, ["base"], "the live networks are unchanged in shape");
   } finally { proc.kill("SIGKILL"); st.gwSupported = "full"; }
 });
 

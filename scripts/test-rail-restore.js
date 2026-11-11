@@ -132,6 +132,41 @@ function fakeTimers() {
   ok(tm.due.length === 0 && none.pendingNetworks().length === 0, "no failed facilitator: nothing is scheduled and nothing reads as pending");
 }
 
+// ---- Part 1b: the boot read itself (src/boot-supported-read.js) ---------------------
+{
+  const { bootReadSettings, readSupportedAtBoot, BOOT_TRY_MS } = await import("../src/boot-supported-read.js");
+  const d0 = bootReadSettings({}), d1 = bootReadSettings({}, { extraReads: 1 }), d2 = bootReadSettings({}, { extraReads: 2 });
+  ok(d0.tryMs === BOOT_TRY_MS && d0.tries === 3 && d0.budgetMs === 14_000 && d1.budgetMs === 22_000 && d2.budgetMs === 30_000,
+    `the bound is what the boot held before: 14 s, plus 8 s per read that followed the guard (${d0.budgetMs}, ${d1.budgetMs}, ${d2.budgetMs})`);
+  ok(JSON.stringify(d0.gapsMs) === "[2000,8000]", `tries start at 0, 8 and 22 s (${d0.gapsMs})`);
+  const t = bootReadSettings({ X402_SUPPORTED_TRY_MS: "600" }, { extraReads: 2 });
+  ok(t.tryMs === 600 && t.budgetMs === 3000 && bootReadSettings({ X402_SUPPORTED_TRY_MS: "600", X402_SUPPORTED_BOOT_MS: "5000" }).budgetMs === 5000, "the try and the bound can be set; the bound scales with the try");
+  const opts = (extra) => ({ tryMs: 200, gapsMs: [50, 100], tries: 3, minTryMs: 50, deadline: Date.now() + 2_000, ...extra });
+  const hang = () => new Promise(() => {});
+  // A hung first read: the second try is a request of its own, and it answers.
+  let fresh = 0;
+  let r = await readSupportedAtBoot(opts({ read: hang, readFresh: async () => { fresh++; return exact(CELO); } }));
+  ok(r.supported?.kinds?.[0]?.network === CELO && r.tries === 2 && fresh === 1, `a hung first read does not decide: the second try's own request answers (tries ${r.tries})`);
+  // A slow first answer that lands during the second try is used.
+  r = await readSupportedAtBoot(opts({ read: () => new Promise((res) => setTimeout(() => res(exact(BASE)), 300)), readFresh: hang }));
+  ok(r.supported?.kinds?.[0]?.network === BASE, "an earlier request that answers late, inside the bound, is the answer");
+  // No answer at all inside the bound: probe-timeout, with every try made.
+  const t0 = Date.now();
+  let made = 0;
+  r = await readSupportedAtBoot(opts({ read: () => { made++; return hang(); }, readFresh: () => { made++; return hang(); }, deadline: Date.now() + 1_000 }));
+  ok(r.supported === null && r.reason === "probe-timeout" && made === 3 && Date.now() - t0 < 1_500, `no answer: probe-timeout after three tries, inside the bound (${r.reason}, ${made} tries, ${Date.now() - t0} ms)`);
+  // An error answer every time: read-failed.
+  r = await readSupportedAtBoot(opts({ read: async () => { throw new Error("Facilitator getSupported failed (500)"); } }));
+  ok(r.supported === null && r.reason === "read-failed" && r.tries === 3, `an error answer every time reads read-failed (${r.reason}, ${r.tries})`);
+  // A client's own timeout error is ours too.
+  r = await readSupportedAtBoot(opts({ read: async () => { throw Object.assign(new Error("timeout"), { reason: "timeout" }); } }));
+  ok(r.reason === "probe-timeout", `a client timeout of ours reads probe-timeout (${r.reason})`);
+  // A bound too short for a second try stops after one.
+  made = 0;
+  r = await readSupportedAtBoot(opts({ read: () => { made++; return hang(); }, readFresh: () => { made++; return hang(); }, deadline: Date.now() + 260 }));
+  ok(made === 1 && r.reason === "probe-timeout", `a try that cannot run its minimum inside the bound is not started (${made} tries)`);
+}
+
 // Arc is never restored live: its contract-wallet route gate is registered
 // only when Arc is in the boot offer. Its facilitator has no stub here (the
 // client reads Circle's own host), so the two places that keep it out are
@@ -147,7 +182,9 @@ function fakeTimers() {
 
 // ---- Part 2: the wire ----------------------------------------------------------------
 const stubs = [];
-// mode: an object -> 200 with it; "die" -> 500; { slowMs, then } -> the first read answers `then` after slowMs, later reads at once.
+// mode: an object -> 200 with it; "die" -> 500; { slowMs, then, slowReads } -> the first
+// slowReads reads (default 1) answer `then` after slowMs, later reads at once;
+// { hangReads, then } -> the first hangReads reads never answer, later reads answer `then`.
 function stubFacilitator() {
   const state = { mode: "die", supported: 0, verifies: 0 };
   const srv = createServer((req, res) => {
@@ -157,7 +194,16 @@ function stubFacilitator() {
       state.supported++;
       const m = state.mode;
       if (m === "die") { res.writeHead(500, { Connection: "close" }); return res.end("Internal Server Error"); }
-      if (m && typeof m.slowMs === "number") { state.mode = m.then; const t = setTimeout(() => json(200, m.then), m.slowMs); res.on("close", () => clearTimeout(t)); return undefined; }
+      if (m && typeof m.hangReads === "number") {
+        if (m.hangReads <= 0) return json(200, m.then);
+        m.hangReads--;
+        return undefined; // never answers
+      }
+      if (m && typeof m.slowMs === "number") {
+        const left = (m.slowReads ?? 1) - 1;
+        state.mode = left > 0 ? { ...m, slowReads: left } : m.then;
+        const t = setTimeout(() => json(200, m.then), m.slowMs); res.on("close", () => clearTimeout(t)); return undefined;
+      }
       return json(200, m);
     }
     if (req.url === "/verify") { state.verifies++; return json(200, { isValid: false, invalidReason: "invalid_exact_evm_payload_signature" }); }
@@ -209,6 +255,7 @@ try {
     ok(/failed \/supported at boot/.test(srv.log()) && /dropping eip155:42220/.test(srv.log()) && /rail re-read: eip155:42220 dropped on a failed \/supported read/.test(srv.log()), "the boot log names the failed read, the drop and the re-read");
     const waiting = await celoRail(srv.url);
     ok(waiting && waiting.offered === false && /read again in the background/.test(waiting.reason || ""), `/api/rails says the rail waits on a re-read (${waiting?.reason})`);
+    ok(waiting?.reasonWord === "read-failed", `a facilitator answering 500 reads read-failed, not probe-timeout or not-advertised (${waiting?.reasonWord})`);
     const openapiPremiums = async () => { const m = /"premiumUsdByNetwork":(\{[^{}]{0,400}\})/.exec(JSON.stringify(await getJson(srv.url, "/openapi.json"))); return m ? JSON.parse(m[1]) : {}; };
     const before = {
       wellKnown: JSON.stringify(await getJson(srv.url, "/.well-known/x402")),
@@ -266,11 +313,15 @@ try {
     await srv.stop();
   }
 
-  // ---- B. the first read is slow ----
-  payai.mode = exact(BASE); celo.mode = { slowMs: 17_000, then: exact(CELO) };
+  // ---- B. the boot reads are slow ----
+  // Both boot tries (a deployment without Arc or the batched option has two
+  // inside its 14 s bound) answer after 17 s, past the bound.
+  payai.mode = exact(BASE); celo.mode = { slowMs: 17_000, then: exact(CELO), slowReads: 2 };
   {
     const srv = await boot("b"); servers.push(srv);
-    ok(/failed \/supported at boot/.test(srv.log()) && /dropping eip155:42220/.test(srv.log()), "a read slower than the boot guard waits is a failed read: Celo is dropped at boot");
+    ok(/gave no \/supported answer within our 6 s limit at boot after 2 tries \(probe-timeout/.test(srv.log()) && /dropping eip155:42220 from the offered networks \(probe-timeout\)/.test(srv.log()), "reads slower than the boot bound are our probe timing out: Celo is dropped at boot, and the log says probe-timeout");
+    const waiting = await celoRail(srv.url);
+    ok(waiting?.offered === false && waiting.reasonWord === "probe-timeout" && /our timeout/.test(waiting.reason || "") && /read again in the background/.test(waiting.reason || ""), `/api/rails says probe-timeout, not that the facilitator does not advertise it (${waiting?.reasonWord}: ${waiting?.reason})`);
     const back = await until(() => celoRail(srv.url), (r) => r?.offered === true, 60_000);
     const after = await offerOf(srv.url);
     ok(back?.offered === true && after.status === 402 && after.nets.has(CELO) && after.nets.has(BASE), `the slow facilitator's answer restores Celo without a restart (${after.status}: ${[...after.nets].join(", ")})`);
@@ -289,6 +340,7 @@ try {
     const rail = await celoRail(srv.url);
     const after = await offerOf(srv.url);
     ok(after.status === 402 && !after.nets.has(CELO) && rail?.offered === false && !/read again/.test(rail.reason || ""), `Celo is not offered and no longer waits on a re-read (${rail?.reason})`);
+    ok(rail?.reasonWord === "not-advertised", `once the facilitator answers without Celo, /api/rails says not-advertised (${rail?.reasonWord})`);
     // It lists Celo later: this process has stopped reading, so only a restart adds it.
     const reads = celo.supported;
     celo.mode = exact(CELO);
@@ -329,10 +381,47 @@ try {
     const first = await offerOf(srv.url);
     ok(first.status === 402 && !first.nets.has(CELO) && /dropping eip155:42220/.test(srv.log()), "a facilitator that answers without Celo: dropped at boot");
     ok(!/rail re-read/.test(srv.log()) && !/read again in the background/.test((await celoRail(srv.url))?.reason || ""), "nothing is scheduled to re-read it");
+    ok((await celoRail(srv.url))?.reasonWord === "not-advertised", "and /api/rails says not-advertised: the facilitator answered without it");
     const reads = celo.supported;
     celo.mode = exact(CELO);
     await until(async () => celo.supported, (n) => n > reads, RECHECK_MS * 8, 50);
     ok(celo.supported === reads && !(await offerOf(srv.url)).nets.has(CELO), "it is never read again, and never gains the network without a restart");
+    await srv.stop();
+  }
+
+  // ---- G. one read of ours times out, the next is answered: never dropped ----
+  // The first /supported request never answers; the boot's second try is a
+  // request of its own (not the hung one again), and its answer keeps Celo.
+  payai.mode = exact(BASE); celo.mode = { hangReads: 1, then: exact(CELO) };
+  {
+    const t0 = Date.now();
+    const srv = await boot("g"); servers.push(srv);
+    const bootMs = Date.now() - t0;
+    const first = await offerOf(srv.url);
+    ok(first.status === 402 && first.nets.has(CELO) && first.nets.has(BASE) && !/dropping eip155:42220/.test(srv.log()), `one timed-out read of ours does not drop the rail: Celo is in the first 402 (${[...first.nets].join(", ")})`);
+    ok((await celoRail(srv.url))?.offered === true, "and /api/rails offers it");
+    ok(bootMs < 60_000, `boot stays bounded (${bootMs} ms)`);
+    await srv.stop();
+  }
+
+  // ---- H. three tries when the bound holds them ----
+  payai.mode = exact(BASE); celo.mode = { hangReads: 2, then: exact(CELO) };
+  {
+    const srv = await boot("h", { X402_SUPPORTED_TRY_MS: "1500", X402_SUPPORTED_BOOT_MS: "8000" });
+    servers.push(srv);
+    const first = await offerOf(srv.url);
+    ok(first.nets.has(CELO) && !/dropping eip155:42220/.test(srv.log()) && celo.supported >= 3, `two timed-out reads, the third answered inside the bound: Celo is offered at boot (${celo.supported} reads)`);
+    await srv.stop();
+  }
+
+  // ---- I. every boot read of ours times out: probe-timeout, never not-advertised ----
+  payai.mode = exact(BASE); celo.mode = { hangReads: 1e9, then: exact(CELO) };
+  {
+    const srv = await boot("i", { X402_SUPPORTED_TRY_MS: "1500", X402_RAIL_RECHECK_MS: "off" });
+    servers.push(srv);
+    const rail = await celoRail(srv.url);
+    ok(rail?.offered === false && rail.reasonWord === "probe-timeout" && /our timeout, not the facilitator's answer/.test(rail.reason || "") && /next restart/.test(rail.reason || ""), `no answer within our limit reads probe-timeout on /api/rails (${rail?.reasonWord}: ${rail?.reason})`);
+    ok(/dropping eip155:42220 from the offered networks \(probe-timeout\)/.test(srv.log()), "and the boot log names probe-timeout");
     await srv.stop();
   }
 } catch (e) {

@@ -489,7 +489,7 @@ const decideLedger = () => {
 if (stateDbEnabled()) decideLedger();
 import { settlePreferenceMiddleware } from "./settle-preference.js";
 import { fromUsdOf } from "./quoted-from.js";
-import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
+import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, gatewayBatchedRailStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
 import { networkFloorUsd } from "./network-floors.js";
@@ -7229,6 +7229,17 @@ app.get("/.well-known/x402", serveManifest);
 // Public on purpose: the 402 already advertises the offered set, so this adds
 // no secret. It adds the part that was invisible. `degraded` non-zero means one
 // chain is down, not the service.
+function gatewayBatchedRailField() {
+  const st = gatewayBatchedRailStatus();
+  const live = gatewayOfferPublic();
+  if (!st && !live) return {};
+  return {
+    gatewayBatched: {
+      ...(live ? { kind: live.kind, networks: gatewayOfferNetworkNames(), settlement: live.settlement } : { networks: [] }),
+      ...(st ? { status: st.status, dropped: st.dropped } : {}),
+    },
+  };
+}
 app.get("/api/rails", (_req, res) => {
   const rails = railStatus();
   const offered = rails.filter((r) => r.offered);
@@ -7249,10 +7260,12 @@ app.get("/api/rails", (_req, res) => {
     // sub-cent allowance is spent (src/avm-sponsorship.js). Status words and
     // times only. Empty when nothing is restricted.
     restrictions: avmSubcentOfferStatus(),
-    // The Circle Gateway batched option, where it is live: one more accept on
-    // these networks beside the plain one (src/gateway-nanopayments.js).
-    // Absent while it is off.
-    ...(gatewayOfferPublic() ? { gatewayBatched: { kind: gatewayOfferPublic().kind, networks: gatewayOfferNetworkNames(), settlement: gatewayOfferPublic().settlement } } : {}),
+    // The Circle Gateway batched option while it is switched on: one more
+    // accept beside the plain one where it is live (src/gateway-nanopayments.js),
+    // and status offered / partial / dropped with each network the boot read
+    // left out and its reason word (railStatus's words, plus not-in-offer), so
+    // a dropped option reaches the heartbeat's rail check. Absent while off.
+    ...gatewayBatchedRailField(),
   });
 });
 app.get("/api/reliability", async (_req, res) =>

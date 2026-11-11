@@ -415,6 +415,41 @@ for (const [name, T, field, sameBody] of SPEND) {
     assert.deepEqual(closedNum(await runStep(step, gw, [{ number: 8, title: FG }])), ["8"]);
   });
 }
+// ---- the rail check: a dropped Circle Gateway batched option ---------------------
+// /api/rails carries gatewayBatched.dropped (each network with its reason word)
+// while the option is switched on; the heartbeat's rail check counts it beside
+// degraded rails, opens one "Settlement rail DEGRADED" issue naming it, and
+// closes it once nothing is dropped.
+{
+  const RT = "Settlement rail DEGRADED";
+  const step = steps.find((s) => String(s.name || "").startsWith("Rail check"));
+  const rails = (dropped, degraded = 0) => ({ configured: 2, offered: 2 - degraded, degraded, rails: [{ network: "base", caip2: "eip155:8453", offered: true, reason: null }, ...(degraded ? [{ network: "celo", caip2: "eip155:42220", offered: false, reason: "not offered - x (probe-timeout)", reasonWord: "probe-timeout" }] : [])], ...(dropped === undefined ? {} : { gatewayBatched: { networks: [], status: dropped.length ? "dropped" : "offered", dropped } }) });
+  const runRail = async (body, issues = []) => {
+    const calls = await runStep(step, body, issues);
+    let file = "";
+    try { file = await readFile("/tmp/rail-body.md", "utf8"); } catch { /* not written */ }
+    return { calls, file };
+  };
+  await check("rail check: a batched option dropped on probe-timeout opens one issue naming it; the plain rails all offered", async () => {
+    assert.ok(step, "heartbeat.yml has the rail check");
+    const { calls, file } = await runRail(rails([{ network: "eip155:8453", reason: "probe-timeout" }]));
+    assert.equal(calls.length, 1, JSON.stringify(calls));
+    assert.deepEqual([calls[0][0], calls[0][1], argOf(calls[0], "--title")], ["issue", "create", RT]);
+    assert.match(file, /Circle Gateway batched option on eip155:8453\*\* - not offered \(probe-timeout\)/);
+    assert.deepEqual((await runRail(rails([{ network: "eip155:8453", reason: "probe-timeout" }]), [{ number: 3, title: RT }])).calls, [], "an open issue is not duplicated");
+  });
+  await check("rail check: nothing dropped closes the issue; no batched field and an unreadable read do nothing", async () => {
+    const { calls } = await runRail(rails([]), [{ number: 3, title: RT }]);
+    assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "3", JSON.stringify(calls));
+    assert.deepEqual((await runRail(rails(undefined))).calls, [], "the option off: no issue");
+    assert.deepEqual((await runRail(undefined, [{ number: 3, title: RT }])).calls, [], "a blind read never closes");
+  });
+  await check("rail check: a degraded plain rail still pages as before", async () => {
+    const { calls, file } = await runRail(rails(undefined, 1));
+    assert.equal(calls.filter((c) => c[1] === "create").length, 1);
+    assert.match(file, /\*\*celo\*\* - not offered - x \(probe-timeout\)/);
+  });
+}
 await rm(dir, { recursive: true, force: true });
 
 console.log(`\n${pass} passed, ${fail} failed`);
