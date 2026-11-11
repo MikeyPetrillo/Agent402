@@ -56,6 +56,8 @@ Payments:
   soon as the payment is confirmed, with no further poll needed. A poll for a
   refund still being sent answers within the same wait, with the refund shown
   as being processed.
+- A refused payment credential sent again as soon as its 402 arrives gets that
+  402 and its retry hint again, not a 409.
 Router:
 - Route-and-execute keeps buying for paying callers through a busy minute. The
   per-minute spend ceiling is an alarm: past it purchases are still made and
@@ -103,6 +105,10 @@ Surfaces:
   header block over the size limit, a request that never finished arriving) is
   answered with the X-Content-Type-Options, Referrer-Policy and
   Strict-Transport-Security headers every other answer carries.
+- The home page's live figures give up a read that stalls for 8 seconds and
+  keep the values they last showed.
+- The 429 from a direct proof-of-work redemption carries Retry-After, the
+  seconds until there is room again.
 
 ### 2026-11-10 (wire parity and payment answers)
 Gateway:
