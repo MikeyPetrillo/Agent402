@@ -198,6 +198,29 @@ const USDC_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   ok(threw === 0, `noteVerifyFailure never throws on a payer, network or requirement that cannot be coerced (${threw} threw)`);
   _testResetForTest();
 }
+{
+  // The caller path: the payment hooks read the price from the accept's base
+  // units at the rail's decimals, so a Stellar 50000 is $0.005, not $0.05.
+  _testResetForTest();
+  const { registerFacilitatorFailureHooks } = await import("../src/payments.js");
+  const hooks = {};
+  const server = { onVerifyFailure(fn) { hooks.fail = fn; return this; }, onAfterVerify(fn) { hooks.after = fn; return this; }, onAfterSettle() { return this; }, onSettleFailure() { return this; } };
+  registerFacilitatorFailureHooks(server, null, null, {});
+  const payload = { x402Version: 2, payload: { transaction: "AQIDBA" } };
+  const header = Buffer.from(JSON.stringify(payload)).toString("base64");
+  const requirements = { scheme: "exact", network: STELLAR, asset: "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75", amount: "50000", payTo: "GDQP2KPQGKIHYJGXNUIYOMHARUARCA7DJT5FO2FFOOKY3B2WSQHG4W37" };
+  const warn = console.warn; console.warn = () => {};
+  try {
+    await hooks.after({ paymentPayload: payload, requirements, result: { isValid: false, invalidReason: "invalid_exact_stellar_payload_simulation_failed", invalidMessage: "HostError: Error(Contract, #10) balance is not sufficient to spend" } });
+  } finally { console.warn = warn; }
+  const mw = verifyHintMiddleware();
+  const res = { statusCode: 402, headers: {}, headersSent: false, setHeader(k, v) { this.headers[k] = v; }, getHeader() { return undefined; }, json(b) { this.out = b; return this; } };
+  mw({ headers: { "payment-signature": header } }, res, () => {});
+  res.json({ accepts: [] });
+  const hint = typeof res.out?.hint === "string" ? res.out.hint : "";
+  ok(res.out?.reason === "insufficient-funds" && /\(\$0\.0050\) on Stellar\./.test(hint) && !/\$0\.05\b|\$0\.0500/.test(hint), `a Stellar refusal through the payment hooks prices the call at 7 decimals (${hint})`);
+  _testResetForTest();
+}
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${pass} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
