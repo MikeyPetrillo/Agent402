@@ -191,7 +191,7 @@ export function robotsTxt(baseUrl) {
     "Allow: /api/solana-leaderboard",
     "Allow: /api/x402-economy",
     "Allow: /api/skill-packs.json",
-    "Allow: /api/refunds/lookup",
+    "Allow: /api/refunds",
     "Allow: /api/gateway-status",
     "Allow: /api/wishes",
   ];
@@ -638,6 +638,7 @@ ${flatTiersLine()}
 - [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. ${erc8004AgentId(baseUrl) ? `The identity is agent ${erc8004AgentId(baseUrl)} in the registry at ${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}, owned by the wallet our 402s name as payTo, and the` : "The"} file lists every way to reach us with x402Support declared
 - [/api/reliability](${baseUrl}/api/reliability): structured reliability / SLA report with a verification URL per claim
 - [/api/pricing](${baseUrl}/api/pricing): machine-readable catalog (every endpoint, price, category, docs URL)
+- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status for one payment, keyed by its own on-chain payment transaction (\`?tx=\`, 0x plus 64 hex on EVM chains, a signature on Solana, a transaction id on Stellar or Algorand): \`found\`, \`status\` (owed, sending, paid, void or none), \`priceUsd\`, \`network\`, explorer links and our \`refundTx\` once sent. It answers that one payment only, never a wallet's list, and an unknown transaction answers \`none\` in the same shape (also at /api/refunds/lookup)
 - [/openapi.json](${baseUrl}/openapi.json): full OpenAPI 3.1 spec with input / output schemas for every tool
 - [/api/wishes](${baseUrl}/api/wishes): the demand board, aggregated; request a tool we do not have yet with \`POST /api/wish\` (clustered by demand; repeated asks get built)
 - [/terms](${baseUrl}/terms): terms of service + acceptable-use policy - using the service (including programmatically) constitutes acceptance

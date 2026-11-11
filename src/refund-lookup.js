@@ -87,17 +87,26 @@ const NOTES = {
   void: "This payment was reviewed and no refund is due (for example, the call was delivered after all).",
 };
 
-/** The public answer for one row (or null = none). Same key set always. */
+/** The public answer for one row (or null = none). Same key set always.
+ *  `found` is true exactly when status is not "none" (so it says no more than
+ *  status does); `priceUsd` is the price of the call that payment bought, the
+ *  amount a refund repays (`amountUsd`, kept for earlier readers); `txUrl`
+ *  is the payment itself on its explorer. */
 export function publicRefundView(tx, row) {
   const status = row && NOTES[row.status] ? row.status : "none";
   const has = status !== "none";
   const refundTx = has && status === "paid" && row.paidTx ? String(row.paidTx) : null;
+  const price = has ? Number(Number(row.priceUsd || 0).toFixed(6)) : null;
   return {
     tx,
+    found: has,
     status,
-    amountUsd: has ? Number(Number(row.priceUsd || 0).toFixed(6)) : null,
+    priceUsd: price,
+    amountUsd: price,
     network: has ? (row.network || null) : null,
     chain: has ? chainOf(row.network) : null,
+    // Only a real transaction hash links out (a fallback ledger key is not one).
+    txUrl: has && lookupKeys(tx) ? explorerTxUrl(row.network, tx) : null,
     refundTx,
     refundTxUrl: refundTx ? explorerTxUrl(row.network, refundTx) : null,
     refundedAt: refundTx && row.resolvedAt ? new Date(row.resolvedAt).toISOString() : null,

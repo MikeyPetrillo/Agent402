@@ -772,6 +772,25 @@ const ASYNC_JOB_SCHEMA = {
     error: { type: "object", description: "On failed: { httpStatus, body or message }." },
   },
 };
+const REFUND_LOOKUP_SCHEMA = {
+  type: "object",
+  required: ["tx", "found", "status"],
+  properties: {
+    tx: { type: "string" },
+    found: { type: "boolean", description: "True exactly when status is not none." },
+    status: { type: "string", enum: ["owed", "sending", "paid", "void", "none"] },
+    priceUsd: { type: ["number", "null"], description: "Price of the call this payment bought; the amount a refund repays." },
+    amountUsd: { type: ["number", "null"], description: "Same as priceUsd." },
+    network: { type: ["string", "null"], description: "CAIP-2 network the payment settled on." },
+    chain: { type: ["string", "null"] },
+    txUrl: { type: ["string", "null"], description: "The payment on its explorer." },
+    refundTx: { type: ["string", "null"], description: "Our refund transaction, once paid." },
+    refundTxUrl: { type: ["string", "null"] },
+    refundedAt: { type: ["string", "null"], format: "date-time" },
+    note: { type: "string" },
+  },
+};
+
 export function openapiSpec(baseUrl, catalog) {
   const paths = {};
   // MPP start-here set (src/mpp-flagship.js), already filtered to routes the
@@ -954,6 +973,22 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
   };
+  // The free refund lookup: one payment, keyed by its own transaction.
+  const refundLookupOp = (operationId) => ({
+    operationId,
+    security: [],
+    summary: "Refund status of one payment, by its payment transaction",
+    description: "Free. Answers whether a payment that was charged and not delivered is refunded: found, status (owed, sending, paid, void, or none for a transaction with no refund recorded, which is also the answer for one never seen), priceUsd of the call it paid for, network, chain, the payment's and the refund's explorer links, and refundTx once sent. One payment per ask, keyed by its own on-chain transaction; never a list, never a wallet address, never the payer or the tool bought. Rate limited per client address (429 with Retry-After).",
+    tags: ["refunds"],
+    parameters: [{ name: "tx", in: "query", required: true, description: "The payment's transaction: 0x plus 64 hex on EVM chains, 64 hex on Stellar, a base58 signature on Solana, a 52-character id on Algorand.", schema: { type: "string", maxLength: 100 } }],
+    responses: {
+      200: { description: "The refund status of that one payment.", content: { "application/json": { schema: REFUND_LOOKUP_SCHEMA } } },
+      400: { description: "tx is not one transaction hash." },
+      429: { description: "Too many lookups from this address; retry after Retry-After seconds." },
+    },
+  });
+  paths["/api/refunds"] = { get: refundLookupOp("getRefundStatus") };
+  paths["/api/refunds/lookup"] = { get: refundLookupOp("lookupRefund") };
   // Document the skill-pack discovery surface so SDK generators and agent
   // frameworks that consume the OpenAPI spec learn about the curated multi-tool
   // workflows. Free, no payment required — these are discovery/composition
