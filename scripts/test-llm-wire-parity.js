@@ -42,8 +42,12 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const MODEL = "openai/gpt-4o-mini";            // listed, on the base and metered tiers, 128k window
 const UNLISTED = "openai/gpt-4o-mnii";         // one transposition away from a listed id
 const RETIRED = "google/gemini-2.5-flash";     // retired upstream; its successor serves the call
+// Gone from the upstream catalog with no date announced (2026-11-11); the
+// stub's live list does not carry it, and its named successor serves the call.
+const RETIRED_GONE = "qwen/qwen-2.5-7b-instruct";
+const SUCCESSOR_OF = { [RETIRED]: "google/gemini-3.5-flash-lite", [RETIRED_GONE]: "mistralai/ministral-8b-2512" };
 const NO_SAMPLING = "anthropic/claude-haiku-5.5"; // takes no temperature on any wire
-const LISTED = [MODEL, "openai/gpt-4o", "openai/gpt-6-luna", "openai/gpt-4.1", "anthropic/claude-haiku-4.5", NO_SAMPLING, "google/gemini-3.1-flash-lite", "google/gemini-3.5-flash-lite", "deepseek/deepseek-v4-flash"];
+const LISTED = [MODEL, "openai/gpt-4o", "openai/gpt-6-luna", "openai/gpt-4.1", "anthropic/claude-haiku-4.5", NO_SAMPLING, "google/gemini-3.1-flash-lite", "google/gemini-3.5-flash-lite", "deepseek/deepseek-v4-flash", SUCCESSOR_OF[RETIRED_GONE]];
 for (let i = 0; i < 120; i++) LISTED.push(`filler/model-${i}`); // the live list is read only at a plausible size
 const CTX = { [MODEL]: 128_000, "deepseek/deepseek-v4-flash": 1_048_576 };
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
@@ -142,6 +146,8 @@ const CALLER_ROWS = [
   { id: "unknown model", tier: "v1-chat-metered", expect: "4xx", opts: { model: UNLISTED }, prepay: "unknown_model" },
   { id: "input over the model cap", tier: "v1-chat-metered", expect: "4xx", opts: { text: "x".repeat(OVER_CAP_CHARS) }, prepay: "input_too_large" },
   { id: "retired model with a successor", tier: "v1-chat-metered", expect: "2xx", opts: { model: RETIRED }, servedBySuccessor: true },
+  { id: "model gone upstream with a successor", tier: "v1-chat-metered", expect: "2xx", opts: { model: RETIRED_GONE }, servedBySuccessor: true },
+  { id: "model gone upstream with a successor (nano tier)", tier: "v1-chat-nano", expect: "2xx", opts: { model: RETIRED_GONE }, servedBySuccessor: true },
   { id: "missing messages", tier: "v1-chat-metered", expect: "4xx", build: without({ chat: ["messages"], messages: ["messages"], responses: ["input"], gemini: ["contents"] }) },
   // The output cap is optional on three wires, where an unreadable value
   // reads the tier default; the Messages API requires max_tokens, and this
@@ -252,6 +258,7 @@ async function runRow(srv, row, { stream = false } = {}) {
     ok(r?.code === "unknown_model" && r.status === 400 && r.suggestions?.[0] === MODEL, `${name}: the shared check refuses an unlisted id and suggests the closest listed one (${r?.code} ${JSON.stringify(r?.suggestions)})`);
     const big = meteredPrePaymentRefusal(slug, WIRES[name].body({ text: "x".repeat(OVER_CAP_CHARS) }));
     ok(big?.code === "input_too_large" && big.fields.maxInputChars === 384_000 && big.fields.inputChars >= OVER_CAP_CHARS && big.message.includes(WIRES[name].path("v1-chat-metered")), `${name}: the shared check refuses an input over the cap and names this wire's route (${big?.message?.slice(0, 90)})`);
+    ok(meteredPrePaymentRefusal(slug, WIRES[name].body({ model: RETIRED_GONE })) === null, `${name}: an id gone upstream that has a named successor is not refused before payment`);
     ok(meteredPrePaymentRefusal(slug, WIRES[name].body({})) === null && meteredPrePaymentRefusal(slug, WIRES[name].body({ model: RETIRED })) === null && meteredPrePaymentRefusal(slug, null) === null, `${name}: a servable body, a retired id with a successor and a non-object pass`);
   }
   ok(meteredPrePaymentRefusal("v1-chat", WIRES.chat.body({ model: UNLISTED })) === null, "a flat route is never judged by the metered check");
@@ -288,7 +295,15 @@ try {
   await catalogRead(); await sleep(300);
   for (const row of CALLER_ROWS) {
     const out = await runRow(free, row);
-    if (row.servedBySuccessor) ok(upstreamCalls.filter((c) => c.model === RETIRED).length === 0, `${row.id}: no wire sends the retired id upstream`);
+    if (row.servedBySuccessor) {
+      const asked = row.opts.model, want = SUCCESSOR_OF[asked];
+      ok(upstreamCalls.filter((c) => c.model === asked).length === 0, `${row.id}: no wire sends the retired id upstream`);
+      for (const [name, o] of Object.entries(out)) {
+        const sub = o.j?.agent402_model_substituted;
+        const servedAs = name === "gemini" ? o.j?.modelVersion : o.j?.model;
+        ok(sub?.requested === asked && sub.served === want && /retired upstream/.test(sub.reason || "") && servedAs === want, `${row.id}: ${name} is served by ${want} and names the swap (${servedAs}, ${JSON.stringify(sub)})`);
+      }
+    }
     if (row.prepay) ok(Object.values(out).every((o) => o.j?.error && JSON.stringify(o.j).includes("Nothing was charged")), `${row.id}: every wire says nothing was charged`);
   }
   for (const tier of ["v1-chat-metered", "v1-chat"]) {
@@ -350,6 +365,8 @@ try {
     ok(verifies > v0, `${name}: a payment on a servable request reaches the facilitator (${attempted.status}, verify calls ${verifies - v0})`);
     const successor = await send(paid, name, M, w.body({ model: RETIRED }));
     ok(successor.status === 402 && successor.paymentRequired, `${name}: a retired id with a successor is quoted, never refused (${successor.status})`);
+    const gone = await send(paid, name, M, w.body({ model: RETIRED_GONE }));
+    ok(gone.status === 402 && gone.paymentRequired, `${name}: an id gone upstream with a named successor is quoted, never refused (${gone.status})`);
     for (const [code, opts] of [["unknown_model", { model: UNLISTED }], ["input_too_large", { text: "x".repeat(OVER_CAP_CHARS) }]]) {
       const before = verifies;
       const r = await send(paid, name, M, w.body(opts));
