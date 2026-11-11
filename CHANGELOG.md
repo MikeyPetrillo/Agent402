@@ -15,6 +15,8 @@ Payments:
   error on our side does not count against the wallet. Settlements of unknown
   cause refuse the wallet only at three times that count, and that answer says
   only that settlement did not complete.
+- A facilitator's definite 4xx answer to a settlement is no longer read as a
+  settlement that did not complete.
 - A payment whose verification could not be completed (a timeout, a connection
   that failed, a facilitator 5xx, 408 or 429, or an on-chain signature check
   that could not finish) answers reason not-checked with retry same-payment
@@ -34,12 +36,16 @@ Payments:
   when it answers with an error.
 Router:
 - The seller index keeps a seller routable when our own read of it fails (our
-  time limit, a connection that did not finish, our resolver, our byte cap)
-  and its last completed crawl succeeded within 6 hours. ?seller= and the
-  index rows carry lastReadIncomplete and errorKind, the seller dossier says
-  our read did not complete, and a paywall probe that read no status records
-  no verdict.
-- Route-and-execute counts one delivery strike per distinct request, and a
+  time limit, our resolver, our byte cap) and its last completed crawl
+  succeeded within 6 hours; a connection the seller's host refused, reset or
+  failed TLS on is the seller's own answer. ?seller= and the index rows carry
+  lastReadIncomplete and errorKind, the seller dossier says our read did not
+  complete, and a paywall probe that read no status records no verdict.
+- The seller index backs off a seller whose host refuses connections and stops
+  routing to it.
+- Route-and-execute stops buying from a seller that takes payment and then
+  fails. It counts one delivery strike per payer and distinct request, and the
+  same request from the same payer counts again at its third failure; a
   seller's 500 whose body names the request's own input is not a strike. No
   refusal is noted against a seller for a payment method our buyer cannot
   make, for a challenge that differs only in the caller's query, or for a
@@ -53,11 +59,17 @@ Tools:
   errors say they are ours; an input long enough to outlast the limit is told
   to send a shorter one, and a caller's URL that did not answer is told to
   check it or retry. The hosted connector's free answers read the same.
+- A seller or tool host whose name does not resolve reads attribution unknown
+  and counts toward upstream health; only a lookup our resolver could not
+  finish is ours.
+- When a provider refuses this server's own key, image generation, embeddings,
+  moderation, text generation and the model gateway say the failure is on our
+  side.
 - The onchain query health check keeps a failing reading for one minute, then
   reads the service again.
-- Stock quotes keep reading the consolidated dataset after a single 400
-  answer (400s for two different symbols or a symbol and the range read inside
-  the skip window, or one 401 or 403, still switch to the three-venue dataset),
+- Stock quotes keep reading the consolidated dataset after a single 400 answer
+  (400s for two different symbols or a symbol and the range read inside the
+  skip window, or one 401 or 403, still switch to the three-venue dataset),
   and the three-venue note says the consolidated dataset was unavailable only
   when it answered so for that read.
 - Text to speech keeps its primary voices when long texts reach our own time
@@ -65,17 +77,23 @@ Tools:
   answering for several callers. Model calls on the direct upstream link move
   to the fallback route on the upstream's own answers, not on our timeout or
   DNS failure.
+- Text to speech and model calls on the direct upstream link move even a
+  single caller to the backup after three unanswered short requests.
 - The GPT Image tools (image-gen, image-gen-hd and image-gen-premium) send the
   provider's less restrictive content filter level by default (send moderation
   "auto" for stricter filtering; a model that does not take the setting runs
   at the provider's standard level), and a prompt the model's content check
   refuses gets a plain 400, not charged on x402.
+- Image generation sends one request instead of two to a model that does not
+  take the moderation setting.
 Surfaces:
 - /api/gateway-status carries topBuyerFailures (ok, alert, unknown or off);
   upstreamHealth reads unanswered when one upstream did not answer within our
   limit for several callers while others answered, and facilitatorFunds reads
   unknown when a settlement signer's balance could not be read, with alert
   sustained once that has held past FACILITATOR_UNREAD_PAGE_HOURS (default 6).
+- The upstreamHealth word also reads unanswered for an upstream that answered
+  none of its calls with one caller or background work alone.
 
 ### 2026-11-11 (spend alarm, funding refusals and connector answers)
 Gateway:
