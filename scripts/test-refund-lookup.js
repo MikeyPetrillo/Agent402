@@ -39,17 +39,22 @@ const TX_VOID = "0x" + "c3".repeat(32);
 const TX_B = "0x" + "d4".repeat(32);
 const TX_SOL = "5VfydnLu4XwV2H2dLHPv22JxhLbYJruaM9YTaGY3aTZjd4re" + "Aq1ucRUVVSb2PVw6mZXV9tA4CBLyGXV4G2bV1zbu";
 const RF_PAID = "0x" + "e5".repeat(32);
+const TX_SEND = "0x" + "f6".repeat(32);
+const STELLAR_TX = "ab".repeat(32);
 
 recordRefundOwed({ slug: "secret-tool", network: "eip155:8453", payer: PAYER_A, priceUsd: 0.005, tx: TX_PAID, httpStatus: 502, note: "internal note: upstream X failed" });
-recordRefundOwed({ slug: "other-tool", network: "eip155:137", payer: PAYER_A, priceUsd: 0.01, tx: TX_OWED, httpStatus: 500 });
+recordRefundOwed({ slug: "other-tool", network: "eip155:137", payer: PAYER_A, priceUsd: 0.01, tx: TX_OWED, httpStatus: 500, note: "internal note: owed detail" });
 recordRefundOwed({ slug: "void-tool", network: "eip155:8453", payer: PAYER_A, priceUsd: 0.002, tx: TX_VOID, httpStatus: 499 });
 recordRefundOwed({ slug: "b-tool", network: "eip155:8453", payer: PAYER_B, priceUsd: 0.05, tx: TX_B, httpStatus: 502 });
 recordRefundOwed({ slug: "sol-tool", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payer: SOL_PAYER, priceUsd: 0.003, tx: TX_SOL, httpStatus: 502 });
 recordRefundOwed({ slug: "no-tx-tool", network: "eip155:8453", payer: PAYER_A, priceUsd: 0.004, httpStatus: 502 }); // payer|slug|minute fallback key
+recordRefundOwed({ slug: "send-tool", network: "eip155:42220", payer: PAYER_B, priceUsd: 0.02, tx: TX_SEND, httpStatus: 499, hangupReason: "settled in flight" });
+recordRefundOwed({ slug: "xlm-tool", network: "stellar:pubnet", payer: "G" + "A".repeat(55), priceUsd: 0.001, tx: STELLAR_TX, httpStatus: 502 });
 const rows = listRefunds({ status: "all" });
 const idOf = (tx) => rows.find((r) => r.evidence === tx).id;
 ok(claimRefundForSend(idOf(TX_PAID)) && markRefundPaid(idOf(TX_PAID), RF_PAID), "fixture: one refund claimed and paid");
 ok(markRefundVoid(idOf(TX_VOID), "served after all"), "fixture: one refund voided");
+ok(claimRefundForSend(idOf(TX_SEND)), "fixture: one refund claimed for sending");
 
 // ---- the public answer
 const paid = refundLookup(TX_PAID);
@@ -63,9 +68,27 @@ ok(refundLookup(TX_VOID).status === "void", "a voided debt answers void");
 ok(refundLookup(TX_SOL).status === "owed" && refundLookup(TX_SOL).chain === "solana", "a Solana signature matches exactly");
 ok(refundLookup(TX_SOL.replace("V", "v")).status === "none", "base58 is never case-folded: a different spelling is a different signature");
 
+// every status, with found / priceUsd / the payment's explorer link
+const KEYS = "tx,found,status,priceUsd,amountUsd,network,chain,txUrl,refundTx,refundTxUrl,refundedAt,note";
+ok(Object.keys(paid).join() === KEYS, `the answer carries exactly the public fields (${Object.keys(paid).join()})`);
+ok(paid.found === true && paid.priceUsd === 0.005 && paid.txUrl === `https://basescan.org/tx/${TX_PAID}`, "paid: found, the call's price and the payment on its explorer");
+const sending = refundLookup(TX_SEND);
+ok(sending.status === "sending" && sending.found === true && sending.refundTx === null && sending.priceUsd === 0.02 && sending.chain === "celo" && sending.txUrl === `https://celoscan.io/tx/${TX_SEND}`, "a refund being sent answers sending, with no refund tx yet");
+ok(refundLookup(STELLAR_TX).status === "owed" && refundLookup(STELLAR_TX).txUrl === `https://stellar.expert/explorer/public/tx/${STELLAR_TX}`, "a Stellar transaction id (64 hex, no 0x) is looked up");
+ok(owed.found === true && refundLookup(TX_VOID).found === true, "owed and void are found");
+for (const t of [TX_PAID, TX_OWED, TX_VOID, TX_SEND, STELLAR_TX]) {
+  const blobT = JSON.stringify(refundLookup(t));
+  ok(![PAYER_A, PAYER_B, SOL_PAYER].some((p) => blobT.toLowerCase().includes(p.toLowerCase().slice(2))) && !/-tool|internal note|served after all|settled in flight|"id"|evidence|hangup|httpStatus|createdAt/.test(blobT), `the answer for ${t.slice(0, 10)} carries no payer, tool, note, hang-up reason or internal id`);
+}
+// a wallet address is never a key, on any rail
+throws400(() => refundLookup(PAYER_A), "an EVM wallet address is refused (0x + 40 hex is not a transaction)");
+throws400(() => refundLookup(SOL_PAYER), "a Solana wallet address is refused (a signature is 64 to 90 base58 characters)");
+throws400(() => refundLookup("G" + "A".repeat(55)), "a Stellar account is refused");
+throws400(() => refundLookup("A".repeat(58)), "an Algorand address is refused (a transaction id is 52 characters)");
+
 // unknown vs no refund: same shape, same status
 const unknown = refundLookup("0x" + "99".repeat(32));
-ok(unknown.status === "none" && Object.keys(unknown).join() === Object.keys(paid).join(), "an unknown tx answers status none in exactly the key set of a known one");
+ok(unknown.status === "none" && unknown.found === false && unknown.priceUsd === null && unknown.txUrl === null && Object.keys(unknown).join() === Object.keys(paid).join(), "an unknown tx answers status none, found false, in exactly the key set of a known one");
 const unknownBody = { ...unknown, tx: null }, noneBody = { ...publicRefundView("0x" + "77".repeat(32), null), tx: null };
 ok(JSON.stringify(unknownBody) === JSON.stringify(noneBody), "and the body is identical apart from the echoed tx, so it does not say whether we ever saw the payment");
 
@@ -85,6 +108,7 @@ ok(refundsForPayer(SOL_PAYER.toLowerCase()).length === 0 && refundsForPayer(SOL_
 ok(refundsForPayer("").length === 0 && refundsForPayer(null).length === 0, "no payer, no rows");
 const view = ownRefundsView(mine);
 ok(view.count === 4 && view.paidUsd === 0.005 && view.owedUsd === 0.014 && view.rows.find((r) => r.status === "owed" && r.amountUsd === 0.004).tx === null, "the own-refunds view totals owed and paid and hides the fallback key (tx null), never the payer");
+ok(view.rows.find((r) => r.amountUsd === 0.004).txUrl === null, "a fallback ledger key never becomes an explorer link (it would name the payer)");
 
 const myUsage = USAGE_TOOLS.find((t) => t.slug === "my-usage");
 const reqFor = (from) => { const h = Buffer.from(JSON.stringify({ x402Version: 2, payload: { signature: "0x00", authorization: { from } } })).toString("base64"); return { header: (k) => (k === "payment-signature" ? h : undefined) }; };
@@ -92,7 +116,7 @@ const outA = await myUsage.handler({}, reqFor(PAYER_A));
 ok(outA.refunds && outA.refunds.count === 4 && outA.refunds.rows.some((r) => r.tx === TX_PAID && r.refundTx === RF_PAID), "my-usage lists the signed payer's refunds with our refund tx");
 ok(!JSON.stringify(outA.refunds).includes(TX_B), "and never another wallet's");
 const outB = await myUsage.handler({}, reqFor(PAYER_B));
-ok(outB.refunds.count === 1 && outB.refunds.rows[0].tx === TX_B, "control: the other wallet sees exactly its own row");
+ok(outB.refunds.count === 2 && outB.refunds.rows.every((r) => r.tx === TX_B || r.tx === TX_SEND), "control: the other wallet sees exactly its own rows");
 try { await myUsage.handler({}, { header: () => undefined }); ok(false, "an unsigned caller is refused"); } catch (e) { ok(e?.statusCode === 400, "an unsigned caller is refused (no refunds without the payment identity)"); }
 
 // ---- the route, booted: free, same shape, rate limited
@@ -116,9 +140,19 @@ try {
   ok(u.status === "none" && Object.keys(u).join() === Object.keys(gj).join(), "unknown tx over HTTP: status none, same key set");
   const bad = await fetch(`${base}/api/refunds/lookup?tx=0xa1a1`);
   ok(bad.status === 400, "a malformed tx is a 400");
-  let limited = null;
-  for (let i = 0; i < 40 && !limited; i++) { const r = await fetch(`${base}/api/refunds/lookup?tx=0x${"98".repeat(32)}`); if (r.status === 429) limited = r; }
-  ok(limited && limited.headers.get("retry-after") === "60", "a spray is rate limited with Retry-After");
+  const short = await fetch(`${base}/api/refunds?tx=${TX_SEND}`);
+  const sj = await short.json();
+  ok(short.status === 200 && sj.status === "sending" && sj.found === true && sj.priceUsd === 0.02 && /no-store/.test(short.headers.get("cache-control") || ""), "GET /api/refunds?tx= answers the same lookup, free and uncached");
+  ok((await fetch(`${base}/api/refunds?payer=${PAYER_B}`)).status === 400 && (await fetch(`${base}/api/refunds`)).status === 400, "no tx, no answer: /api/refunds never lists rows or takes a wallet");
+  ok((await fetch(`${base}/api/refunds?tx=${PAYER_B}`)).status === 400, "a wallet address as tx is a 400 over HTTP");
+  const spec = await (await fetch(`${base}/openapi.json`)).json();
+  const op = spec?.paths?.["/api/refunds"]?.get;
+  ok(op && Array.isArray(op.security) && op.security.length === 0 && op.parameters?.[0]?.name === "tx" && op.responses?.[200]?.content?.["application/json"]?.schema?.properties?.status?.enum?.join() === "owed,sending,paid,void,none" && !("payer" in (op.responses[200].content["application/json"].schema.properties || {})), "openapi documents GET /api/refunds: free, one tx, every status, no payer field");
+  const llms = await (await fetch(`${base}/llms.txt`)).text();
+  ok(/\/api\/refunds\]\([^)]*\/api\/refunds\?tx=\): free refund status for one payment/.test(llms), "llms.txt names the refund lookup");
+  let limited = null, n = 0;
+  for (let i = 0; i < 40 && !limited; i++) { const r = await fetch(`${base}/api/refunds${i % 2 ? "/lookup" : ""}?tx=0x${"98".repeat(32)}`); n++; if (r.status === 429) limited = r; }
+  ok(limited && limited.headers.get("retry-after") === "60", `a spray is rate limited with Retry-After, both names in one bucket (429 after ${n})`);
 } finally {
   proc.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 300));

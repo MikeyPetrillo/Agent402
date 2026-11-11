@@ -314,7 +314,7 @@ function recordHangupDebt(req, res) {
   // How long the buyer waited and which phase it left in: the figure that
   // names the client's own timeout (src/paid-phase-timing.js hangupWaitOf).
   const wait = (() => { try { return hangupWaitOf(req); } catch { return null; } })();
-  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}${wait ? ` net=${wait.network || "-"} waited=${wait.waitedMs ?? "-"}ms left-during=${wait.during}` : ""}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}`);
+  console.warn(`[hangup] CHARGED-BUT-NOT-SERVED: client disconnected before the settled response was delivered (${req.method} ${req.path} rail=${row.wire} tx=${row.tx || "?"}${wait ? ` net=${wait.network || "-"} waited=${wait.waitedMs ?? "-"}ms left-during=${wait.during}` : ""}) - ${created ? "recorded as owed in the refund ledger" : "already on the books"}${denied ? `; not forgiven: ${denied}` : ""}${lookupKeys(row.tx) ? `; buyer status: GET /api/refunds?tx=${row.tx}` : ""}`);
   return row;
 }
 // Every close-before-the-first-byte on a paid request ends here (the hang-up
@@ -421,7 +421,7 @@ import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
 import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND, hostnameShapedToken } from "./free-alerts.js";
-import { refundLookup } from "./refund-lookup.js";
+import { refundLookup, lookupKeys } from "./refund-lookup.js";
 import { createFollowups } from "./followups.js";
 import { createTweetQueue, tweetQueueOptionsFromEnv } from "./tweet-queue.js";
 import { monitorForKind as fuMonitorForKind } from "./report-upgrade.js";
@@ -4500,6 +4500,9 @@ async function serveRefundLookup(req, res) {
   try { return res.json(refundLookup(tx)); }
   catch (e) { return res.status(e?.statusCode === 400 ? 400 : 500).json({ error: e?.statusCode === 400 ? e.message : "Refund lookup failed" }); }
 }
+// GET /api/refunds?tx=<payment tx> is the short name of the same lookup (same
+// limiter, same answer); it takes no other parameter and never lists rows.
+app.get("/api/refunds", serveRefundLookup);
 app.get("/api/refunds/lookup", serveRefundLookup);
 app.post("/api/refunds/lookup", express.json({ limit: "4kb" }), serveRefundLookup);
 app.get("/api/proof", (_req, res) => { res.set("Cache-Control", "public, max-age=60"); res.json(memoSurface("proof:feed", 60_000, () => proofFeed())); });

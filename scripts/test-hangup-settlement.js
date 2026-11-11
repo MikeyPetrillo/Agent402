@@ -824,6 +824,7 @@ try {
       `b. the debt carries the settle tx, rail and a 499 marker (${JSON.stringify(rows[0])})`);
     ok(rows[0].hangupReason === "settled in flight", `b. the debt records that a granted ticket lost the race to the settle (${rows[0].hangupReason})`);
     ok(/\[hangup\] CHARGED-BUT-NOT-SERVED/.test(logSince(logAt)), "b. the log says CHARGED-BUT-NOT-SERVED");
+    ok(logSince(logAt).includes(`buyer status: GET /api/refunds?tx=${fac.lastTx}`), "b. the log line names the buyer's free refund lookup for that settle tx");
     // The settle was sent while the buyer was connected, so it is a
     // settlement outcome whether or not the buyer stayed: the sale is on the
     // ledger beside the owed debt (before this rule the released ticket still
