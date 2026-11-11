@@ -182,6 +182,9 @@ installEgressMeter();
   inner = async () => { throw new DOMException("This operation was aborted", "AbortError"); };
   await call({ signal: dead });
   ok(await settled(0) === 0, "a call made on an already-aborted signal is not counted");
+  // The same signal carried on a Request object rather than in init.
+  await (async () => { try { await fetch(new Request("https://api.search.brave.com/res/v1/web/search?q=a", { signal: dead })); } catch { /* read from the count */ } })();
+  ok(await settled(0) === 0, "a Request whose own signal was already aborted is not counted");
 
   // Everything below MAY have reached the upstream: each keeps its unit.
   let want = 0;
@@ -205,6 +208,11 @@ installEgressMeter();
     for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
     ok(used() === want, `a call aborted after it was made is counted (used ${used()} of ${want})`);
   }
+  // Several addresses tried, one of them reset after connecting: counted.
+  inner = async () => { throw Object.assign(new TypeError("fetch failed"), { cause: new AggregateError([Object.assign(new Error("a"), { code: "ECONNREFUSED" }), Object.assign(new Error("b"), { code: "ECONNRESET" })], "all failed") }); };
+  await call(); want++;
+  for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  ok(used() === want, `a failure on several addresses where one may have been read is counted (used ${used()} of ${want})`);
   inner = async () => { throw new Error("no code at all"); };
   await call(); want++;
   for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
@@ -240,6 +248,11 @@ installEgressMeter();
   ok(releaseHardCap("brave", T0, T0) === false, "nothing is given back when nothing was taken");
   takeHardCap("brave", T0);
   ok(releaseHardCap("brave", T0, T0 + 86_400_000) === false && hardCapStatus(T0 + 86_400_000).upstreams.brave.usedToday === 0, "a unit taken on an earlier day is not given back to today");
+  // Across UTC midnight with a unit taken today too: yesterday's unit is not
+  // given back out of today's count.
+  takeHardCap("brave", T0 + 86_400_000);
+  ok(releaseHardCap("brave", T0, T0 + 86_400_000) === false && hardCapStatus(T0 + 86_400_000).upstreams.brave.usedToday === 1, `a unit taken yesterday leaves today's taken unit counted (used ${hardCapStatus(T0 + 86_400_000).upstreams.brave.usedToday})`);
+  ok(releaseHardCap("brave", T0 + 86_400_000, T0 + 86_400_000) === true && hardCapStatus(T0 + 86_400_000).upstreams.brave.usedToday === 0, "control: today's unit is given back on today's release");
   delete process.env.HARDCAP_BRAVE_CALLS;
 }
 inner = async () => new Response("{}");
