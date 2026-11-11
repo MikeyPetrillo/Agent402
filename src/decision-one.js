@@ -9,7 +9,7 @@
 // Enabled when OPENROUTER_API_KEY is set and DECISION_ONE is not "off".
 // Model-backed: an answer is a model's judgment, not a computed value.
 import { OPENROUTER_ATTRIBUTION } from "./openrouter-attribution.js";
-import { upstreamFetch, bodyUnderDeadline } from "./upstream-deadline.js";
+import { upstreamFetch, bodyUnderDeadline, attributed, ATTRIBUTION, KIND } from "./upstream-deadline.js";
 
 export const DECISION_ONE_MODEL = "microsoft/microsoft-decision-1";
 const ENDPOINT = () => (process.env.DECISION_ONE_URL || "https://openrouter.ai/api/alpha/decisions").trim();
@@ -39,6 +39,10 @@ export function _decisionOneSpendReset() { spend.day = ""; spend.bytes = 0; }
 export const decisionOneEnabled = (apiKey = keyOf()) =>
   !!String(apiKey || "").trim() && String(process.env.DECISION_ONE || "").trim().toLowerCase() !== "off";
 
+/** Our own key refused, or our own balance with the provider spent: ours,
+ *  never the caller's input, and never the provider's outage. */
+export const JUDGMENT_KEY_REFUSED = "Judgment is unavailable right now: the judgment provider refused this server's key. This is on our side, not your input; nothing was charged. Retry later.";
+export const JUDGMENT_BALANCE_OUT = "Judgment is unavailable right now: this server's balance with the judgment provider is spent. This is on our side, not your input; nothing was charged. Retry later.";
 const fail = (msg, statusCode, mayBeBilled = false) => {
   const e = new Error(msg);
   e.statusCode = statusCode;
@@ -70,15 +74,16 @@ export async function askDecisionOne(body, { fetchImpl = fetch, timeoutMs = TIME
       body: payload,
     }, ctx);
   } catch (err) {
-    if (err?.upstreamFailure === "deadline") err.mayBeBilled = true;
+    // A budget spent before the request left sent nothing, so nothing was billed.
+    if (err?.upstreamFailure === "deadline" && !err.budgetSpent) err.mayBeBilled = true;
     throw err;
   }
   let text;
   try { text = await bodyUnderDeadline(res.text(), ctx); }
   catch (err) { if (err?.statusCode) { err.mayBeBilled = true; throw err; } throw fail("Judgment upstream returned an unreadable body.", 502, true); }
   if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw fail("Judgment upstream rejected our credentials.", 503);
-    if (res.status === 402) throw fail("Judgment upstream is unavailable.", 503);
+    if (res.status === 401 || res.status === 403) throw attributed(fail(JUDGMENT_KEY_REFUSED, 503), ATTRIBUTION.OURS, KIND.OUR_KEY);
+    if (res.status === 402) throw attributed(fail(JUDGMENT_BALANCE_OUT, 503), ATTRIBUTION.OURS, KIND.OUR_ALLOWANCE);
     if (res.status === 429) throw fail("Judgment upstream is rate limiting. Retry shortly.", 503);
     if (res.status >= 400 && res.status < 500) throw fail(`Judgment upstream refused the request (${res.status}). Check the question shapes against /v1/judge's schema.`, 400);
     throw fail(`Judgment upstream returned ${res.status}.`, 502);

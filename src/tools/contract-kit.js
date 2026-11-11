@@ -103,13 +103,21 @@ async function blockscoutContract(chainId, address) {
   return { verified: true, host, data };
 }
 
-// Sourcify failed upstream, so "Blockscout doesn't have it" is NOT "not
+// The Sourcify read failed, so "Blockscout doesn't have it" is NOT "not
 // verified" — Sourcify may have it and we can't tell. Never a false miss.
-function verificationSourcesUnavailable() {
-  return bad(
-    "Verification sources unavailable - Sourcify is unreachable and Blockscout could not confirm this contract. Try again shortly.",
+// The words say how the Sourcify read failed (its own status, or our limit
+// passing, or no connection) and carry that error's attribution: our own
+// timeout never reads as Sourcify being down.
+function verificationSourcesUnavailable(sourcifyErr) {
+  const how = String(sourcifyErr?.message || "the Sourcify read failed").split(";")[0].trim();
+  return Object.assign(bad(
+    `Verification sources could not confirm this contract: ${how}, and Blockscout does not list it as verified. Try again shortly.`,
     502
-  );
+  ), {
+    ...(typeof sourcifyErr?.attribution === "string" ? { attribution: sourcifyErr.attribution } : {}),
+    ...(typeof sourcifyErr?.hint === "string" ? { hint: sourcifyErr.hint } : {}),
+    ...(Number.isInteger(sourcifyErr?.upstreamStatus) ? { upstreamStatus: sourcifyErr.upstreamStatus } : {}),
+  });
 }
 
 // Blockscout's verification-strength flags mapped onto Sourcify's match
@@ -174,8 +182,8 @@ function deriveAbiViews(abi) {
 async function getJson(url, upstream, step = "lookup") {
   const ctx = { label: upstream, step, timeoutMs: TIMEOUT_MS, tag: "[contract]" };
   const res = await upstreamFetch(url, { headers: { Accept: "application/json" }, dispatcher: ssrfDispatcher }, ctx);
-  if (res.status === 429) throw bad(`${upstream} rate limit reached - retry shortly`, 503);
-  if (!res.ok && res.status !== 404) throw bad(`${upstream} error (HTTP ${res.status})`, 502);
+  if (res.status === 429) throw Object.assign(bad(`${upstream} rate limit reached - retry shortly`, 503), { upstreamStatus: 429, attribution: "upstream" });
+  if (!res.ok && res.status !== 404) throw Object.assign(bad(`${upstream} error (HTTP ${res.status})`, 502), { upstreamStatus: res.status, attribution: "upstream" });
   let data;
   try { data = await bodyUnderDeadline(res.json(), ctx); } catch (err) { if (err?.statusCode) throw err; throw bad(`${upstream} returned non-JSON`, 502); }
   return { status: res.status, data };
@@ -572,7 +580,7 @@ export const CONTRACT_TOOLS = [
         let bs = null;
         try { bs = await blockscoutContract(chain.chainId, address); } catch { /* both down → unavailable below */ }
         if (!bs) throw e; // no Blockscout host for this chain — surface the Sourcify error
-        if (!bs.verified) throw verificationSourcesUnavailable();
+        if (!bs.verified) throw verificationSourcesUnavailable(e);
         const { sources, truncated } = capSourceTree(blockscoutSources(bs.data));
         return {
           address, network: chain.name, chainId: chain.chainId,
@@ -669,7 +677,7 @@ export const CONTRACT_TOOLS = [
         let bs = null;
         try { bs = await blockscoutContract(chain.chainId, address); } catch { /* both down → unavailable below */ }
         if (!bs) throw e; // no Blockscout host for this chain — surface the Sourcify error
-        if (!bs.verified || !Array.isArray(bs.data.abi)) throw verificationSourcesUnavailable();
+        if (!bs.verified || !Array.isArray(bs.data.abi)) throw verificationSourcesUnavailable(e);
         const { functions, events } = deriveAbiViews(bs.data.abi);
         return {
           address, network: chain.name, chainId: chain.chainId,

@@ -193,14 +193,15 @@ async function callKokoro(text, voice, format, tierSlug) {
   const tier = TIERS[tierSlug];
   // OpenAI voice name -> Kokoro's own id, from the shared table.
   const nativeVoice = KOKORO?.map?.[voice] || KOKORO?.map?.alloy || "af_alloy";
-  // One read under its cap; a read that outlives it is the upstream's 503
-  // (src/upstream-deadline.js), never a 504. Kokoro's measured tail runs past
+  // One read under its cap; a read that outlives it is the 503 naming our
+  // limit (src/upstream-deadline.js), never a 504, and a long text is told a
+  // shorter one is more likely to finish. Kokoro's measured tail runs past
   // 30 s, so its cap stays at 60 s.
   const res = await upstreamFetch(OPENROUTER_SPEECH_URL, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
     body: JSON.stringify({ model: tier.model, input: text, voice: nativeVoice, response_format: format, provider: audioProviderPolicy(tier.model) }),
-  }, { label: "Speech upstream", step: "speech", timeoutMs: KOKORO_READ_MS, tag: "[tts]" });
+  }, { label: "Speech upstream", step: "speech", timeoutMs: KOKORO_READ_MS, tag: "[tts]", input: { size: text.length, max: tier.maxChars } });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
     const safe = redactSecrets(errText);
@@ -341,7 +342,8 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
   // a connection that was never set up is certainly unbilled (an outage, so
   // a backup may be tried). Anything later (a deadline, a socket dropped
   // mid-answer) may have been generated and billed, so it is final. Both are
-  // the upstream's 503 classes (src/upstream-deadline.js), never a 504.
+  // the shared 503 classes (src/upstream-deadline.js), never a 504; a long
+  // text whose read outlives our limit is told to send a shorter one.
   let neverConnected = false;
   const probe = (url, init) => fetch(url, init).catch((e) => { neverConnected = CONNECT_FAILURES.has(e?.cause?.code || e?.code); throw e; });
   let res;
@@ -350,7 +352,7 @@ async function callSpeechModel(model, nativeVoice, text, format, timeoutMs) {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...OPENROUTER_ATTRIBUTION },
       body: JSON.stringify({ model, input: text, voice: nativeVoice, response_format: wireFormat, provider: audioProviderPolicy(model) }),
-    }, { label: "Speech upstream", step: "speech", timeoutMs, tag: "[tts]", fetchImpl: probe });
+    }, { label: "Speech upstream", step: "speech", timeoutMs, tag: "[tts]", fetchImpl: probe, input: { size: text.length, max: TIERS.tts.maxChars } });
   } catch (e) {
     throw Object.assign(e, { outage: neverConnected, unhealthy: true });
   }

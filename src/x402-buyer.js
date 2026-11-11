@@ -9,6 +9,7 @@
 // settlement can cost us the one upstream payment (the LLM-gateway risk class),
 // so the margin guard below refuses any upstream quote over the caller's cap.
 import { assertPublicUrl, ssrfDispatcher, freshSsrfDispatcher } from "./tools/fetch-guard.js";
+import { isAbortError, isDnsFailure } from "./upstream-deadline.js";
 import { Agent as UndiciAgent } from "undici";
 import { withDistrust } from "./tls-distrust.js";
 
@@ -69,7 +70,31 @@ function bad(message, statusCode = 400) {
 function sellerRejected(status) {
   const e = bad(`Seller rejected the paid retry (HTTP ${status})`, 502);
   e.sellerStatus = status;
+  e.attribution = "upstream";
   return e;
+}
+// An answer the seller itself gave (a status, a redirect): the one class a
+// caller may read as the seller's (attribution "upstream", the vocabulary of
+// src/upstream-deadline.js). Everything else this payer throws is ours or
+// unknown, and route-execute words it without blaming the seller.
+const sellerSaid = (e) => Object.assign(e, { attribution: "upstream" });
+
+/** The bare (price) leg that got no answer. Our own limit passing is ours
+ *  and names the limit (the call's remaining budget when that cut the leg
+ *  short); our DNS lookup failing is ours; any other transport failure
+ *  proves nothing about whose side failed. Never "Seller unreachable" for a
+ *  leg our own clamp ended. */
+export function bareLegFailure(err, { capMs, clamped = false } = {}) {
+  const secs = Math.max(1, Math.round(Number(capMs) / 1000) || 1);
+  if (isAbortError(err)) {
+    return Object.assign(bad(clamped
+      ? `Seller did not answer the price request within the ${secs} s left of our limit for this call`
+      : `Seller did not answer the price request within our ${secs} s limit`, 502), { attribution: "ours", hint: "our-deadline" });
+  }
+  if (isDnsFailure(err)) {
+    return Object.assign(bad("This server's DNS lookup for the seller's host failed; no request was sent", 502), { attribution: "ours", hint: "our-egress" });
+  }
+  return Object.assign(bad(`Seller could not be reached from here: ${String(err?.message || err).slice(0, 80)}`, 502), { attribution: "unknown", hint: "connect-failed" });
 }
 
 // Per-chain buyer config. x402 v1 accepts label the network as a bare string
@@ -1060,14 +1085,15 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // Too little of the call's budget left to ask for the price and still pay:
   // refused before the seller is contacted at all.
   if (callLeftMs() < legFloorMs) throw bad("Too little of this call's time budget is left to pay a seller. Nothing was signed.", 504);
-  const reject3xx = (r) => { if (r.status >= 300 && r.status < 400) throw bad("Seller returned a redirect - refusing to follow off the validated host", 502); };
+  const reject3xx = (r) => { if (r.status >= 300 && r.status < 400) throw sellerSaid(bad("Seller returned a redirect - refusing to follow off the validated host", 502)); };
   let bare;
-  try { bare = await fetch(url, { ...reqInit, signal: AbortSignal.timeout(legTimeoutMs()) }); }
-  catch (e) { throw bad(`Seller unreachable: ${String(e?.message || e).slice(0, 80)}`, 502); }
+  const bareCapMs = legTimeoutMs();
+  try { bare = await fetch(url, { ...reqInit, signal: AbortSignal.timeout(bareCapMs) }); }
+  catch (e) { throw bareLegFailure(e, { capMs: bareCapMs, clamped: bareCapMs < timeoutMs }); }
   reject3xx(bare);
   if (bare.status === 200) return { result: await readCapped(bare, maxBytes), quote: null, receipt: null };
-  if (bare.status === 404) throw bad("Seller returned 404 for that request", 404);
-  if (bare.status !== 402) throw bad(`Seller upstream error (HTTP ${bare.status})`, 502);
+  if (bare.status === 404) throw sellerSaid(bad("Seller returned 404 for that request", 404));
+  if (bare.status !== 402) throw sellerSaid(bad(`Seller upstream error (HTTP ${bare.status})`, 502));
 
   let paymentRequired;
   try {
@@ -1076,7 +1102,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     let bareBody;
     try { bareBody = JSON.parse(await readTextCapped(bare, MAX_402_BODY_BYTES)); } catch { bareBody = undefined; }
     paymentRequired = http.getPaymentRequiredResponse((n) => bare.headers.get(n), bareBody);
-  } catch { throw bad("Seller sent an unparseable 402 challenge", 502); }
+  } catch { throw sellerSaid(bad("Seller sent an unparseable 402 challenge", 502)); }
 
   // F2: pin to the EXACT accept the client will actually sign — the requested
   // chain + scheme "exact" + that chain's mainnet USDC asset — and cap-check
@@ -1085,7 +1111,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   // hand the client a single validated accept, so what we cap-check is what
   // we sign.
   const payable = pickPayableAccept(paymentRequired.accepts, chain);
-  if (!payable) throw bad(`Seller offers no ${chain}/exact/${chainCfg.symbol || "USDC"} accept - cannot pay from the ${chain} spending wallet`, 502);
+  if (!payable) throw sellerSaid(bad(`Seller offers no ${chain}/exact/${chainCfg.symbol || "USDC"} accept - cannot pay from the ${chain} spending wallet`, 502));
   // THE CHALLENGE MUST BE FOR THE URL WE ASKED FOR. A 402 names the resource
   // it sells (x402 v2 at the top level, v1 on each accept); a challenge for
   // another origin or path is not an offer for this request, whatever it

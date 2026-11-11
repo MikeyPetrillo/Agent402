@@ -55,6 +55,7 @@ import { capturePostHogGatewayUsage } from "../posthog.js";
 import { audioProviderPolicy } from "../openrouter-audio-policy.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
+import { attributed, ATTRIBUTION, KIND, secondsOf, isDnsFailure } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -244,6 +245,11 @@ export function isOurBillingLimit(status, bodyText) {
   const code = String(err?.code || err?.type || "").toLowerCase();
   return BILLING_CODES.has(code) || (status === 402);
 }
+/** The refusal for our own key (401/403): names our side, keeps the status.
+ *  The charge sentence and the retry advice are added by finalFailure. */
+export function ourKeyRefused(status) {
+  return Object.assign(attributed(bad(`Transcription is unavailable right now: the speech-to-text provider refused this server's key (HTTP ${status}); this is on our side, not your input`, 502), ATTRIBUTION.OURS, KIND.OUR_KEY), { upstreamStatus: status });
+}
 /** The refusal for our billing limit: names our side, no upstream name. */
 export function ourBillingLimit() {
   return Object.assign(bad("Transcription is unavailable right now because this server reached its own spending limit for speech-to-text. This is on our side, not your input; you were not charged. Retry later.", 503), { noRetry: true });
@@ -269,10 +275,15 @@ const retryable = (err, cls, extra = {}) => Object.assign(err, { sttRetry: cls, 
 const isTimeout = (e) => e?.name === "TimeoutError" || e?.name === "AbortError" || e?.cause?.name === "TimeoutError";
 /** Maps a fetch that threw. A daily-ceiling refusal keeps its own 503; a
  *  timeout is final (it spent the whole cap, and may have been billed). */
-function transportFailure(e, message) {
+function transportFailure(e, message, { label = "Transcription upstream", ms = null } = {}) {
   if (e?.hardCap) return e;
-  const err = bad(message, 504);
-  if (isTimeout(e)) return err;
+  // Our own limit passing is ours: it names the limit, never the upstream as down.
+  if (isTimeout(e)) {
+    return attributed(bad(`${label} did not answer within our ${ms ? `${secondsOf(ms)} s ` : ""}limit for this transcription`, 504), ATTRIBUTION.OURS, KIND.OUR_DEADLINE);
+  }
+  const err = isDnsFailure(e)
+    ? attributed(bad(`${label} could not be reached: this server's DNS lookup for its host failed`, 504), ATTRIBUTION.OURS, KIND.OUR_EGRESS)
+    : attributed(bad(message, 504), ATTRIBUTION.UNKNOWN, KIND.CONNECT_FAILED);
   return retryable(err, CONNECT_FAILURES.has(e?.cause?.code || e?.code) ? "unbilled" : "maybe-billed", { sttCause: "connection" });
 }
 /** Retry-After in ms from a 429 (seconds form, or the -ms header); null when absent or unreadable. */
@@ -310,7 +321,7 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
-    throw transportFailure(e, `OpenAI request failed: ${e.message}`);
+    throw transportFailure(e, `OpenAI request failed: ${e.message}`, { label: "OpenAI", ms: timeoutMs });
   }
 
   const text = await res.text();
@@ -319,7 +330,8 @@ async function callOpenAI(audioBuffer, filename, model, language, probedDuration
     // quota or billing) is this server's own limit, not the buyer's request
     // and not a rate limit worth an immediate retry.
     if (isOurBillingLimit(res.status, text)) throw ourBillingLimit();
-    if (res.status === 401 || res.status === 403) throw bad("OpenAI upstream auth failed", 502);
+    // Our key refused: ours, never the caller's input or the vendor's outage.
+    if (res.status === 401 || res.status === 403) throw ourKeyRefused(res.status);
     if (res.status === 429) throw rateLimited(res, "OpenAI rate-limited - retry shortly");
     if (res.status >= 500) throw retryable(bad(`OpenAI upstream error (HTTP ${res.status})`, 502), "unbilled", { sttCause: `HTTP ${res.status}` });
     // Redact the FULL body BEFORE slicing/parsing (a secret straddling the
@@ -372,7 +384,7 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
   try {
     res = await fetch(OPENROUTER_STT_URL, { method: "POST", headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION }, body: form, signal: AbortSignal.timeout(timeoutMs) });
   } catch (e) {
-    throw transportFailure(e, `Transcription upstream request failed: ${String(e?.message || e).slice(0, 120)}`);
+    throw transportFailure(e, `Transcription upstream request failed: ${String(e?.message || e).slice(0, 120)}`, { ms: timeoutMs });
   }
   const text = await res.text();
   if (!res.ok) {
@@ -381,7 +393,7 @@ async function callScribe(audioBuffer, filename, model, language, probedDuration
     try { msg = JSON.parse(safe).error?.message || msg; } catch {}
     if (isOurBillingLimit(res.status, text)) throw ourBillingLimit();
     if (res.status === 429) throw rateLimited(res, "Transcription upstream rate-limited - retry shortly");
-    if (res.status === 401 || res.status === 403) throw bad(`Transcription upstream error (HTTP ${res.status})`, 502);
+    if (res.status === 401 || res.status === 403) throw ourKeyRefused(res.status);
     if (res.status >= 500) throw retryable(bad(`Transcription upstream error (HTTP ${res.status})`, 502), "unbilled", { sttCause: `HTTP ${res.status}` });
     throw bad(`Transcription upstream rejected the request: ${msg}`, 400);
   }
