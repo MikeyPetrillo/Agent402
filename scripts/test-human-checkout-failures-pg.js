@@ -125,7 +125,9 @@ try {
     for (let i = 0; i < 40 && (await row(id))?.status !== "error"; i++) await wait(100);
     const owed = await row(id);
     ok(owed?.status === "error" && owed.refundOwed === true && owed.refundId === null, `...the owed record lands once the database is back (${owed?.status}, owed ${owed?.refundOwed})`);
-    const issues = (await row("_issues")) || {};
+    // The operator's index is written in a call of its own after the record.
+    let issues = {};
+    for (let i = 0; i < 40 && (issues = (await row("_issues")) || {})[id]?.kind !== "refund-owed"; i++) await wait(100);
     ok(issues[id]?.kind === "refund-owed", "...and is listed for the operator");
     const polled = await hc.fulfill(id);
     const r = await row(id);
