@@ -151,6 +151,9 @@ proc = spawn("node", ["src/server.js"], {
     // 6 s deadline -> the paid loopback is bounded at 3.5 s (case 6).
     AGENT402_MCP_REQ_DEADLINE_MS: "6000",
     AGENT402_OPERATOR_TOKEN: OP, REFUND_DB_DIR: REFUND_DIR,
+    // The connector's free-answer ceiling at its floor: a paid answer past it
+    // must still come back whole (case 3), a free one is cut (case 4).
+    AGENT402_MCP_MAX_ANSWER_BYTES: "1024",
   },
   stdio: "ignore",
 });
@@ -198,6 +201,10 @@ try {
   // 4. Free tool untouched
   const free = await plain.callTool({ name: "catalog.call", arguments: { slug: "uuid", params: {} } });
   ok(!free.isError && JSON.stringify(free.content).includes("uuid"), "a free tool still runs free on the connector, no challenge");
+  // The live control for the paid case below: a free answer past the 1 KB
+  // ceiling is cut and says so.
+  const freeBig = await plain.callTool({ name: "catalog.call", arguments: { slug: "uuid", params: { count: "100" } } });
+  ok(!freeBig.isError && freeBig.structuredContent?.answerBound?.truncated === true && Buffer.byteLength(freeBig.content?.[0]?.text || "") <= 1024, `a free answer past the ceiling is cut, with answerBound (${Buffer.byteLength(freeBig.content?.[0]?.text || "")} bytes)`);
 
   // 2. mppx McpClient pays it
   const account = privateKeyToAccount(generatePrivateKey());
@@ -230,6 +237,16 @@ try {
   // 3. Same wallet reads it back (payer attribution survived the loopback)
   const read = await payer.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key } } });
   ok(!read.isError && JSON.stringify(read.structuredContent?.result || read.content).includes("\"hello\""), `the paying wallet reads its own write back over MPP (${JSON.stringify(read.structuredContent?.result || "").slice(0, 80)})`);
+  // A paid answer is delivered whole, past the free-answer ceiling: a 3 KB
+  // value written and read back over MPP keeps every byte and no answerBound.
+  {
+    const bigKey = `${key}-big`, pad = "p".repeat(3000);
+    const w = await payer.callTool({ name: "catalog.call", arguments: { slug: "memory-write", params: { key: bigKey, value: { pad } } } });
+    const r = await payer.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key: bigKey } } });
+    const text = r.content?.[0]?.text || "";
+    ok(!w.isError && !r.isError && Buffer.byteLength(text) > 3000 && text.includes(pad) && !text.includes("answerBound") && r.structuredContent?.answerBound === undefined && JSON.stringify(r.structuredContent?.result || "").includes(pad),
+      `a paid answer past the 1 KB free ceiling comes back whole, with no answerBound (${Buffer.byteLength(text)} bytes)`);
+  }
 
   // 5. Tampered credential -> -32043 (spec: verification failed, mppx 0.9.1+) with RFC 9457 problem
   const evmCh = challenges.find((c) => c.method === "evm");
