@@ -511,12 +511,14 @@ export function quotableRelayMessage(message) {
  *  prose (quotableRelayMessage): it is the relay naming which of its
  *  dependencies is down, which the buyer can act on, and that class never
  *  carries a verdict on the credential. */
-// A PUSH credential (payload type "hash") names a transfer already final on
-// chain, so a 503 that checked nothing cannot say "nothing was charged" or
-// "nothing was broadcast": the transfer was not claimed, so it still pays for
-// this request when the same credential is sent again. Exported for tests.
+// A PUSH credential (payload type "hash") names a transfer the buyer already
+// sent, so a 503 that checked nothing cannot say "nothing was charged" or
+// "nothing was broadcast"; nor can it say the transfer is final, since the
+// chain was not read. The transfer was not claimed, so once final it still
+// pays for this request when the same credential is sent again. Exported for
+// tests.
 export const TEMPO_PUSH_NOT_CHECKED = Object.freeze({
-  tail: ", so the transfer this credential names was not checked. That transfer is final on chain and has not been claimed, so it still pays for this request.",
+  tail: ", so the transfer this credential names was not checked. It has not been claimed, so once final it still pays for this request.",
   hint: "Retry the same request with the same credential shortly; do not pay again.",
 });
 export function tempoRefusalProblem(cls, fallbackReason, { relayMessage = null, push = false } = {}) {
@@ -1521,7 +1523,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           logTempoRefusal(req, { cls: "replay-store", amountAtomic: amount, timings: { total: Date.now() - tStart }, detail: `before validate: ${binding.reason}; push credential, shared replay store did not answer; refused before the claim, nothing checked, claimed or booked` });
           res.setHeader("Retry-After", "30");
           res.setHeader("Cache-Control", "no-store");
-          return res.status(503).json({ error: `This route is briefly unavailable: the shared payment store did not answer, so the transfer this credential names was not checked, claimed or recorded. That transfer is final on chain. Send the same request again with the same credential in about 30 seconds: this route does not accept it (${b.detail}), so it is then confirmed and recorded as owed to the sending wallet, to be refunded; before the challenge expires the same credential instead pays for a request on a route that offers Tempo.`, reason: "replay-store-unavailable", transferClaimed: false });
+          return res.status(503).json({ error: `This route is briefly unavailable: the shared payment store did not answer, so the transfer this credential names was not checked, claimed or recorded. Send the same request again with the same credential in about 30 seconds: this route does not accept it (${b.detail}), so it is then confirmed and recorded as owed to the sending wallet, to be refunded; before the challenge expires the same credential instead pays for a request on a route that offers Tempo.`, reason: "replay-store-unavailable", transferClaimed: false });
         }
         if (verdict !== "ok") return plain(`replay guard: ${verdict}`);
       }
@@ -1683,6 +1685,12 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           logTempoRefusal(req, { cls: "replay-store", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: "shared replay store did not answer; refused before the claim, nothing claimed or broadcast" });
           res.setHeader("Retry-After", "30");
           res.setHeader("Cache-Control", "no-store");
+          // A PUSH credential names a transfer the buyer already sent, so its
+          // body never says "not charged": it was not claimed, so once final
+          // it still pays for this request when the same credential comes back.
+          if (binding.payloadType === "hash") {
+            return res.status(503).json({ error: `This route is briefly unavailable: the shared payment store did not answer and no run was started${TEMPO_PUSH_NOT_CHECKED.tail} Send the same request again with the same credential in about 30 seconds; do not pay again.`, hint: TEMPO_PUSH_NOT_CHECKED.hint, reason: "replay-store-unavailable", transferClaimed: false });
+          }
           return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and this credential was not claimed or charged. Send the same request again in about 30 seconds.", reason: "replay-store-unavailable", charged: false, transferClaimed: false });
         }
         if (verdict !== "ok") {
