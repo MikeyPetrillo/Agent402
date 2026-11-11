@@ -46,6 +46,7 @@ globalThis.fetch = async (url, init) => {
       if (up.summary === "timeout") throw Object.assign(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
       if (up.summary === "500") return new Response("internal", { status: 500 });
       if (up.summary === "403") return new Response("not entitled", { status: 403 });
+      if (up.summary === "401") return new Response("unauthorized", { status: 401 });
       if (up.summary === "400") return new Response('{"detail":"bad request"}', { status: 400 });
       if (up.summary === "empty") return new Response("", { status: 200 });
       if (up.summary === "422range") return new Response('{"detail":"end is after the available range"}', { status: 422 });
@@ -123,8 +124,8 @@ try {
   const again = await quote({ symbol: "MSFT" });
   ok(again.cached === true && again.dataset === "EQUS.SUMMARY" && dataReads().length === before, "a repeat inside the session answers from the primary's cache");
 
-  // ---- a primary that refuses the request is skipped for a while
-  for (const mode of ["400", "403"]) {
+  // ---- a primary that refuses our credentials is skipped for a while
+  for (const mode of ["401", "403"]) {
     reset(); up.summary = mode;
     await quote({ symbol: "AAPL" });
     up.calls = [];
@@ -132,6 +133,53 @@ try {
     ok(r.dataset === "DBEQ.BASIC" && JSON.stringify(dataReads()) === JSON.stringify(["data:DBEQ.BASIC"]),
       `after a primary ${mode}, the next read goes straight to the fallback (${dataReads().join(" ")})`);
     ok(db.quoteWarmerStatus().primarySkip?.skipping === true && db.quoteWarmerStatus().primarySkip.skippedReads >= 1, "the operator view says the primary is being skipped");
+    ok(!/unavailable for this read/.test(r.note) && /three-venue consolidation/.test(r.note), `a read the skip sent to the fallback does not say the consolidated dataset was unavailable for it (${r.note})`);
+  }
+  // ---- one 400 may be our own malformed request: the primary is still read first
+  {
+    reset(); up.summary = "400";
+    const first = await quote({ symbol: "AAPL" });
+    ok(first.dataset === "DBEQ.BASIC" && !/unavailable for this read/.test(first.note), `a primary 400 falls back without saying the consolidated dataset was unavailable (${first.note})`);
+    up.calls = []; up.summary = "ok";
+    const r = await quote({ symbol: "NVDA" });
+    ok(r.dataset === "EQUS.SUMMARY" && dataReads()[0] === "data:EQUS.SUMMARY", `after one primary 400 the next read still asks the primary first (${dataReads().join(" ")})`);
+    ok(db.quoteWarmerStatus().primarySkip?.skipping === false, "one 400 starts no skip");
+    // A second 400 on the SAME symbol is still one symbol's request.
+    reset(); up.summary = "400";
+    await quote({ symbol: "AAPL" });
+    await history({ symbol: "AAPL", days: 2 });
+    ok(db.quoteWarmerStatus().primarySkip?.skipping === false, "two 400s on one symbol start no skip");
+    // 400s on two different symbols are the dataset refusing us: skipped.
+    await quote({ symbol: "MSFT" });
+    up.calls = [];
+    const s = await quote({ symbol: "TSLA" });
+    ok(db.quoteWarmerStatus().primarySkip?.skipping === true && JSON.stringify(dataReads()) === JSON.stringify(["data:DBEQ.BASIC"]),
+      `400s on two different symbols skip the primary (${dataReads().join(" ")})`);
+    ok(!/unavailable for this read/.test(s.note), "a skipped read's note does not claim the consolidated dataset was unavailable");
+  }
+  // ---- the note says unavailable only when the primary answered so for this read
+  for (const mode of ["500", "empty", "422range"]) {
+    reset(); up.summary = mode;
+    const r = await quote({ symbol: "AAPL" });
+    ok(/unavailable for this read/.test(r.note), `a primary ${mode} for this read says the consolidated dataset was unavailable (${r.note})`);
+  }
+  {
+    reset(); process.env.DATABENTO_SUMMARY = "off";
+    const r = await quote({ symbol: "AAPL" });
+    ok(!/unavailable for this read/.test(r.note), "the pinned fallback does not say the consolidated dataset was unavailable");
+    delete process.env.DATABENTO_SUMMARY;
+  }
+  // ---- the range read's log line says the deadline was our read
+  {
+    reset(); up.rangeAll = "timeout";
+    const lines = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => { lines.push(a.join(" ")); };
+    try { await db.availableEnd(); } catch { /* no confirmed end yet: the call fails */ }
+    finally { console.warn = realWarn; }
+    const line = lines.find((l) => /dataset range/.test(l)) || "";
+    ok(/our 6 s read passed/.test(line) && !/did not answer within/.test(line), `the range timeout log says it was our 6 s read (${line})`);
+    up.rangeAll = "ok";
   }
   {
     reset(); up.summary = "403"; process.env.DATABENTO_PRIMARY_SKIP_MS = "40";

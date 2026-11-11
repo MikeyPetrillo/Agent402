@@ -48,28 +48,57 @@ export const COVERAGE = Object.freeze({
   }),
 });
 const summaryOn = () => String(process.env.DATABENTO_SUMMARY || "").trim().toLowerCase() !== "off";
-// A primary that refuses the request itself (HTTP 400, 401 or 403) refuses
-// the next one too: such a refusal is remembered for
-// DATABENTO_PRIMARY_SKIP_MS (default 1 h), and reads go straight to the
-// fallback meanwhile instead of spending a refused read on every call. A
-// timeout, a 5xx or a date-range 422 is not remembered.
-const PRIMARY_SKIP_STATUSES = new Set([400, 401, 403]);
+// A primary that refuses our credentials (HTTP 401 or 403) refuses the next
+// read too: that refusal is remembered for DATABENTO_PRIMARY_SKIP_MS (default
+// 1 h), and reads go straight to the fallback meanwhile instead of spending a
+// refused read on every call. A 400 may be our own malformed request rather
+// than the dataset's state, so one 400 is not remembered: the skip starts only
+// once 400s on two different symbols (the range read counts as its own) land
+// inside one skip window. A timeout, a 5xx or a date-range 422 is not
+// remembered.
+const PRIMARY_SKIP_STATUSES = new Set([401, 403]);
 const primarySkipMs = () => { const n = Number(process.env.DATABENTO_PRIMARY_SKIP_MS); return Number.isFinite(n) && n > 0 ? n : 3600_000; };
 let primaryRefusedAt = 0;
 let primarySkips = 0;
-export function notePrimaryRefusal(dataset, err) {
-  if (dataset !== PRIMARY_DATASET || !PRIMARY_SKIP_STATUSES.has(err?.upstreamStatus)) return;
+// symbol -> when the primary last answered 400 for it (inside the skip window).
+const primaryBadRequests = new Map();
+export function notePrimaryRefusal(dataset, err, symbol = null) {
+  if (dataset !== PRIMARY_DATASET) return;
+  const status = err?.upstreamStatus;
+  if (status === 400) {
+    const now = Date.now();
+    for (const [k, at] of primaryBadRequests) if (now - at >= primarySkipMs()) primaryBadRequests.delete(k);
+    const key = symbol ? String(symbol).toUpperCase() : "(range)";
+    primaryBadRequests.delete(key);
+    primaryBadRequests.set(key, now);
+    while (primaryBadRequests.size > 16) primaryBadRequests.delete(primaryBadRequests.keys().next().value);
+    if (primaryBadRequests.size < 2) {
+      console.warn(`[databento] ${PRIMARY_DATASET} answered HTTP 400 for one read (possibly our request); still reading it first`);
+      return;
+    }
+  } else if (!PRIMARY_SKIP_STATUSES.has(status)) return;
   if (!primaryRefusedAt || Date.now() - primaryRefusedAt >= primarySkipMs()) {
-    console.warn(`[databento] ${PRIMARY_DATASET} refused a read (HTTP ${err.upstreamStatus}); reading ${FALLBACK_DATASET} directly for ${Math.round(primarySkipMs() / 60_000)} min`);
+    const why = status === 400 ? `HTTP 400 on ${primaryBadRequests.size} different reads` : `HTTP ${status}`;
+    console.warn(`[databento] ${PRIMARY_DATASET} refused reads (${why}); reading ${FALLBACK_DATASET} directly for ${Math.round(primarySkipMs() / 60_000)} min`);
   }
   primaryRefusedAt = Date.now();
+}
+/** True when the primary's failure is the dataset's own answer that it could
+ *  not serve the read (an error status other than a plain 4xx refusal of the
+ *  request, no rows, a range it does not hold, an unreadable answer); false
+ *  for a 400-class refusal that may be our own request. */
+export function primaryProvenUnavailable(err) {
+  const s = Number(err?.upstreamStatus);
+  if (!err?.datasetError) return false;
+  if (Number.isFinite(s) && s >= 400 && s < 500) return s === 401 || s === 403;
+  return true;
 }
 const primarySkipped = () => primaryRefusedAt > 0 && Date.now() - primaryRefusedAt < primarySkipMs();
 /** Operator view of the remembered refusal. */
 export function primarySkipStatus() {
   return { skipping: primarySkipped(), since: primaryRefusedAt ? new Date(primaryRefusedAt).toISOString() : null, skippedReads: primarySkips };
 }
-export function __resetPrimarySkip() { primaryRefusedAt = 0; primarySkips = 0; }
+export function __resetPrimarySkip() { primaryRefusedAt = 0; primarySkips = 0; primaryBadRequests.clear(); }
 /** The datasets a read tries, in order. */
 export const datasetOrder = () => {
   if (!summaryOn()) return [FALLBACK_DATASET];
@@ -112,8 +141,8 @@ export const DATABENTO_TIMEOUTS_MS = { range: capMs("DATABENTO_RANGE_TIMEOUT_MS"
 // stalls past it rejects with a bare TimeoutError ("The operation was aborted
 // due to timeout"), which carries no status and used to surface as a 500.
 // bodyUnderDeadline maps that abort to the same 503 as a header timeout.
-async function readUnderDeadline(url, init, timeoutMs, step) {
-  const ctx = { label: "Market data upstream", step, timeoutMs, tag: "[databento]" };
+async function readUnderDeadline(url, init, timeoutMs, step, { tag = "[databento]" } = {}) {
+  const ctx = { label: "Market data upstream", step, timeoutMs, tag };
   const res = await upstreamFetch(url, init, ctx);
   return { res, body: (read) => bodyUnderDeadline(read(res), ctx) };
 }
@@ -211,7 +240,17 @@ async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
 async function get(path, params) {
   const url = `${HOST}/${path}?${new URLSearchParams(params)}`;
   await checkHost(url);
-  const { res, body } = await readUnderDeadline(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range, "dataset range");
+  // The range read logs its own line: its deadline is our 6 s read, and the
+  // answer is then usually served from the cached range (availableEndInfo).
+  let read;
+  try {
+    read = await readUnderDeadline(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range, "dataset range", { tag: null });
+  } catch (e) {
+    const s = Math.max(1, Math.round(DATABENTO_TIMEOUTS_MS.range / 1000));
+    console.warn(`[databento] dataset range (${params?.dataset || "?"}): ${e?.upstreamFailure === "unreachable" ? "the host could not be reached from here" : `our ${s} s read passed with no answer`}`);
+    throw e;
+  }
+  const { res, body } = read;
   if (!res.ok) throw Object.assign(datasetFailure(bad(`Market data upstream returned ${res.status}.`, 502)), { upstreamStatus: res.status });
   const text = await body((r) => r.text());
   try { return JSON.parse(text); } catch { throw datasetFailure(bad("Market data upstream returned an unreadable range answer.", 502)); }
@@ -278,7 +317,7 @@ function readRange() {
           sharedSet("range", rangeState, SHARED_RANGE_TTL_S);
           return end;
         } catch (e) {
-          notePrimaryRefusal(dataset, e);
+          notePrimaryRefusal(dataset, e, null);
           if (!e.datasetError || i === order.length - 1) throw e;
         }
       }
@@ -330,7 +369,8 @@ export async function availableEndInfo({ demand = true } = {}) {
     rangeStats.staleServed++;
     if (Date.now() - staleWarnAt > 60_000) {
       staleWarnAt = Date.now();
-      console.warn(`[databento] range refresh failed (${e?.statusCode || "error"}); answering on the last confirmed end (${Math.round((Date.now() - rangeState.at) / 60_000)} min old)`);
+      const why = e?.upstreamFailure === "unreachable" ? "host unreachable from here" : e?.upstreamFailure ? `our ${Math.max(1, Math.round(DATABENTO_TIMEOUTS_MS.range / 1000))} s read passed` : `HTTP ${e?.upstreamStatus || e?.statusCode || "error"}`;
+      console.warn(`[databento] range refresh failed (${why}); answering on the last confirmed end (${Math.round((Date.now() - rangeState.at) / 60_000)} min old)`);
     }
     return cachedRange({ stale: true });
   }
@@ -411,10 +451,17 @@ const barsKey = (p) => `${p.dataset}|${p.symbols}|${p.schema}|${p.start}|${p.end
 export async function dailyBarsRead({ symbol, start, end, maxUsd, lastGoodOk = false }) {
   const order = datasetOrder();
   if (summaryOn() && order[0] !== PRIMARY_DATASET) primarySkips++;
+  // Set when the primary answered, for this read, that it could not serve it
+  // (primaryProvenUnavailable): only then may the answer say so.
+  let primaryUnavailable = false;
   for (const [i, dataset] of order.entries()) {
-    try { return await dailyBarsOf(dataset, { symbol, start, end, maxUsd }); }
+    try {
+      const r = await dailyBarsOf(dataset, { symbol, start, end, maxUsd });
+      return primaryUnavailable && dataset !== PRIMARY_DATASET ? { ...r, primaryUnavailable: true } : r;
+    }
     catch (e) {
-      notePrimaryRefusal(dataset, e);
+      notePrimaryRefusal(dataset, e, symbol);
+      if (dataset === PRIMARY_DATASET) primaryUnavailable = primaryProvenUnavailable(e);
       if (lastGoodOk && !e.datasetError && isUpstreamFailure(e)) {
         const copy = lastGoodQuoteBars({ symbol, start, end });
         if (copy) return copy;
