@@ -7,7 +7,7 @@
 // and its cap dropped 5 -> 4 minutes to stay inside the margin rule). Offline: synthetic WAV buffers, no network.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { probeDurationSeconds, assertWithinDurationCap, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS, byteFloorSeconds, __setMeasureForTest, sttUnmeasuredSinceBoot } from "../src/tools/stt-kit.js";
-import { measureAudioSeconds } from "../src/tools/media-kit.js";
+import { measureAudioSeconds, __setExecFileForTest } from "../src/tools/media-kit.js";
 import * as sttKit from "../src/tools/stt-kit.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -148,6 +148,34 @@ const reject = (p) => p.then(() => null, (e) => e);
     ok(!applies({ lossy: false, hasVideo: false, channels: 2 }) && !applies(null), "a lossless file is not held to the floor");
   }
   __setMeasureForTest(null);
+
+  // The decode's own bounds and readings, on a stubbed ffmpeg (no process, no
+  // clock): each run has a time and an output-size bound, at most two run at
+  // once and a third waits for a slot, and only a decode that succeeded and
+  // reported how far it got is a measurement.
+  {
+    const held = [];
+    __setExecFileForTest((bin, args, opts, cb) => { held.push({ bin, args, opts, cb }); });
+    try {
+      const mp3 = makeMp3(5);
+      const first = measureAudioSeconds(mp3), second = measureAudioSeconds(mp3), third = measureAudioSeconds(mp3);
+      const until = async (cond) => { for (let i = 0; i < 2000 && !cond(); i++) await new Promise((r) => setImmediate(r)); return cond(); };
+      ok(await until(() => held.length === 2), `two decodes start at once (${held.length})`);
+      for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r));
+      ok(held.length === 2, `a third waits for a slot while two run (${held.length} started)`);
+      const o = held[0].opts || {};
+      ok(held[0].bin === "ffmpeg" && o.timeout === 10_000, `each decode has a 10 s time bound (${o.timeout})`);
+      ok(Number.isFinite(o.maxBuffer) && o.maxBuffer > 0 && o.maxBuffer <= 8 * 1024 * 1024, `each decode's output is bounded (${o.maxBuffer} bytes)`);
+      ok(held[0].args.includes("0:a:0") && held[0].args.includes("-vn"), "the decode reads the first audio stream only");
+      held[0].cb(null, "out_time_us=1000000\nprogress=continue\nout_time_us=5000000\nprogress=end\n");
+      ok((await first) === 5, "a decode that finished reports its last out_time in seconds");
+      ok(await until(() => held.length === 3), "the waiting decode starts when a slot frees");
+      held[1].cb(Object.assign(new Error("exit 1"), { code: 1 }), "out_time_us=4000000\n");
+      ok((await second) === null, "a decode that failed is no measurement, whatever it printed before failing");
+      held[2].cb(null, "progress=end\n");
+      ok((await third) === null, "a decode that never reported how far it got is no measurement (null, never a guess)");
+    } finally { __setExecFileForTest(null); }
+  }
 
   // The real decode. Under CI a missing ffmpeg fails the suite: the lane installs it.
   let ffmpeg = true;
