@@ -15,6 +15,7 @@ import { docsLayoutHtml, DOCS_LAYOUT_CSS, docPrevNextHtml, DOCS_SEARCH_SCRIPT } 
 import { toolList } from "./pages.js";
 import { isComputePayable } from "./pow.js";
 import { decideConfig } from "./decide/config.js";
+import { meteredTimeoutSentence } from "./metered-lead.js";
 import { whyDocsSectionHtml, whyJsonLd, WHY_SECTION_CSS } from "./why.js";
 import { examplesSectionHtml, examplesJsonLd, EXAMPLES_SECTION_CSS } from "./use-cases.js";
 import { badgesSectionHtml, BADGES_SECTION_CSS } from "./badges.js";
@@ -175,7 +176,7 @@ const out = await a.call("hash", { text: "hello", algo: "sha256" });</pre></div>
       <!-- GATEWAY -->
       <section>
       <h2 id="gateway" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 14px;">/v1 - OpenAI-compatible LLM gateway.</h2>
-      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 18px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> and pay per call in USDC over x402 - no API key, no signup, same wallet-is-the-identity model as every other tool. These routes are model-backed. ${gateway.prose} A flat-tier answer carries <code>agent402_metered</code> whenever the same body would have been materially cheaper on the metered route, with the two figures and the endpoint to point at.</p>
+      <p style="font-size:var(--fs-base);line-height:1.55;color:var(--muted);max-width:76ch;margin:0 0 18px;">Point any OpenAI SDK at <code>base_url https://agent402.tools/v1</code> and pay per call in USDC over x402 - no API key, no signup, same wallet-is-the-identity model as every other tool. These routes are model-backed. ${gateway.prose} A flat-tier answer carries <code>agent402_metered</code> whenever the same body would have been materially cheaper on the metered route, with the two figures and the endpoint to point at. ${meteredTimeoutSentence()}</p>
       <div style="border:1px solid var(--hairline);background:var(--card);font-family:var(--font-mono);font-size:var(--fs-sm);margin-bottom:44px;">
 ${gateway.rows}
       </div>

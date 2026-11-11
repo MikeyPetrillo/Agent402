@@ -79,7 +79,7 @@ import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus } from "./gatewa
 import Stripe from "stripe";
 import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
-import { meteredTwinSlug, meteredQuoteSentence } from "./metered-lead.js";
+import { meteredTwinSlug, meteredQuoteSentence, isMeteredChatSlug, meteredClientTimeoutField } from "./metered-lead.js";
 import { paymentRequiredBodyMiddleware, decodePaymentRequired } from "./payment-required-body.js";
 import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
@@ -10924,6 +10924,20 @@ if (FREE_MODE) {
               url: `${BASE_URL}${twinPath}`,
               note: `Same models, priced per request from this body. ${meteredQuoteSentence()} This route stays one flat price per call.`,
             };
+          }
+          return origJson(body);
+        };
+      }
+      // A metered route's unpaid 402 says how long the caller's client should
+      // wait (additive `clientTimeout`, src/metered-lead.js): the answer is
+      // generated and the payment settled before the response is sent. Body
+      // only; the PAYMENT-REQUIRED header and every other field are untouched.
+      // First contact only, like the twin above.
+      if (firstContact && isMeteredChatSlug(def.slug)) {
+        const origJson = res.json.bind(res);
+        res.json = (body) => {
+          if (res.statusCode === 402 && body && typeof body === "object" && !Array.isArray(body) && !body.clientTimeout) {
+            body.clientTimeout = meteredClientTimeoutField();
           }
           return origJson(body);
         };

@@ -41,6 +41,36 @@ const wiki = readdirSync(join(ROOT, "wiki")).filter((f) => f.endsWith(".md")).ma
   const m = /client timeout of at least (\d+) s/.exec(gw);
   ok(!!m && Number(m[1]) === meteredClientTimeoutSeconds(), `wiki/LLM-Gateway.md metered timeout (${m?.[1]}) matches meteredClientTimeoutSeconds() (${meteredClientTimeoutSeconds()})`);
 }
+// The same advice as one sentence on every surface that describes a metered
+// call: the pages are read from the booted server, the typed markdown from the
+// tree, and each must carry meteredTimeoutSentence() word for word. A surface
+// that words the advice another way (the lead-in without the sentence) fails.
+{
+  const { meteredTimeoutSentence, METERED_WIRES } = await import("../src/metered-lead.js");
+  const sentence = meteredTimeoutSentence();
+  const LEAD = "Set a client timeout of at least";
+  ok(sentence.startsWith(LEAD) && sentence.length > 120, "the derived sentence opens with the lead-in the surfaces are searched for");
+  // Page text with its markup left out, in one pass; whitespace runs are one space.
+  const flat = (t) => { let out = "", inTag = false; for (const ch of t) { if (inTag) { if (ch === ">") inTag = false; } else if (ch === "<") inTag = true; else out += ch; } return out.replace(/\s+/g, " "); };
+  const count = (hay, needle) => hay.split(needle).length - 1;
+  const check = (label, text) => {
+    const body = flat(text);
+    const whole = count(body, sentence), leads = count(body, LEAD);
+    ok(whole >= 1 && leads === whole, `${label} carries the derived metered client-timeout sentence, and only that wording (${whole} whole, ${leads} lead-ins)`);
+  };
+  const pages = [
+    ...METERED_WIRES.map((w) => `/tools/${w.slug}`),
+    "/pricing", "/docs", "/guides/buying-at-volume", "/guides/agent-hosts", "/guides/openclaw-model-provider",
+  ];
+  ok(METERED_WIRES.length === 3, `the metered route has a tool page per wire (${METERED_WIRES.length})`);
+  for (const path of pages) {
+    const r = await fetch(`${TARGET}${path}`);
+    const html = await r.text();
+    ok(r.status === 200, `${path} answers 200 (${r.status})`);
+    check(path, html.replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&"));
+  }
+  for (const f of ["wiki/Buying-at-Volume.md", "README.md"]) check(f, readFileSync(join(ROOT, f), "utf8"));
+}
 const card = cardReportPriceRange(HUMAN_PRODUCTS);
 const agent = agentReportPriceRange();
 const monthly = reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly;
