@@ -508,20 +508,20 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     }
 
     // Titles + safety annotations on every tool are required for listing in
-    // Anthropic's connector directory. Each hint says what the tool does to
-    // the world: a lookup (the catalog, a web search, a quote, a memory read)
-    // is read-only, and open-world when it reads outside this service; the
-    // tools that leave something behind (memory.write, a run plan, a recorded
-    // request, catalog.call, which can run any of them) are not.
+    // Anthropic's connector directory. A host may run a read-only tool without
+    // asking its user, so readOnlyHint is true only for a tool that can never
+    // charge and never writes on any path here: the catalog lookups, the
+    // leaderboard read, describe and payment info. Every tool that can charge
+    // (each flagship, catalog.call) or leaves something behind is not.
     const SAFE = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     const OPEN = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
     const WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
     const CALL_PAID = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
-    // memory.write replaces the value a key held; decide.execute runs a paid plan.
+    // A flagship reaches the network and can charge: not read-only, open-world.
+    const NET = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+    // memory.write replaces the value a key held.
     const OVERWRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
-    const flagshipHints = (slug) => slug === "memory-write" ? OVERWRITE
-      : FLAGSHIP_WRITERS.has(slug) ? CALL_PAID
-      : FLAGSHIP_OPEN_WORLD.has(slug) ? OPEN : SAFE;
+    const flagshipHints = (slug) => (slug === "memory-write" ? OVERWRITE : NET);
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: listable([
         {
