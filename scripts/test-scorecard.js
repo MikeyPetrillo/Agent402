@@ -212,11 +212,18 @@ ok(page.includes("&lt;3") && page.includes("/api/scorecard") && page.includes("N
 {
   let n = 0, fail = false;
   const sc = S.createScorecard({ compute: async () => { n++; await sleep(20); if (fail) throw new Error("x"); return { v: n }; }, log: { warn() {} } });
-  // Before the first computation a request never waits on it: both are refused
-  // at once with a retry time, and the one read they started is shared.
+  // Before the first computation two requests share one read and wait for it
+  // briefly, so the first visitor after a boot gets figures, not a 503.
   const early = await Promise.allSettled([sc.get(), sc.get()]);
-  ok(n === 1 && early.every((r) => r.status === "rejected" && r.reason.retryAfterSeconds >= 1), `two first reads answer at once, unready, and start one computation (${n})`);
-  await sc.refresh();
+  ok(n === 1 && early.every((r) => r.status === "fulfilled" && r.value.value.v === 1), `two first reads start one computation and both get its figures (${n})`);
+  // With no wait the same requests are refused at once with a retry time.
+  {
+    let k = 0;
+    const nw = S.createScorecard({ compute: async () => { k++; await sleep(20); return { v: k }; }, waitMs: 0, log: { warn() {} } });
+    const r = await Promise.allSettled([nw.get(), nw.get()]);
+    ok(k === 1 && r.every((x) => x.status === "rejected" && x.reason.retryAfterSeconds >= 1), `with no wait, first reads answer at once, unready, and start one computation (${k})`);
+  }
+  ok(S.SCORECARD_FIRST_WAIT_MS > 0 && S.SCORECARD_FIRST_WAIT_MS <= 5_000, `the first-read wait is short (${S.SCORECARD_FIRST_WAIT_MS} ms)`);
   const [a, b] = await Promise.all([sc.get(), sc.get()]);
   ok(n === 1 && a === b && a.value.v === 1, `once computed, both read the figures (${n} computation)`);
   fail = true;
@@ -229,23 +236,21 @@ ok(page.includes("&lt;3") && page.includes("/api/scorecard") && page.includes("N
   let n = 0, fail = true, t = 1_000_000;
   const sc = S.createScorecard({ compute: async () => { n++; await sleep(5); if (fail) throw new Error("ledger down"); return { v: n }; }, now: () => t, retryMs: 30_000, log: { warn() {} } });
   let first = null; try { await sc.get(); } catch (e) { first = e; }
-  await sc.refresh().catch(() => {});
-  ok(first && n === 1, `the first request is refused while its read runs, and that read fails (${n} read)`);
+  ok(first && n === 1, `the first request waits for its read, which fails, and is refused (${n} read)`);
   const refused = [];
   for (let i = 0; i < 5; i++) { t += 1_000; try { await sc.get(); refused.push(null); } catch (e) { refused.push(e.retryAfterSeconds); } }
   ok(n === 1 && refused.every((r) => Number.isInteger(r) && r >= 1 && r <= 30), `five requests inside the backoff start no ledger read (${n} read; retry after ${refused.join(",")} s)`);
   ok(refused[0] > refused[4], "the retry time counts down to the end of the backoff");
   t += 30_000; fail = false;
-  let pending = null; try { await sc.get(); } catch (e) { pending = e.retryAfterSeconds; }
-  await sc.refresh();
   const got = await sc.get();
-  ok(pending === 5 && n === 2 && got.value.v === 2, `past the backoff a request starts one read (retry after ${pending} s) and its figures are served next (${n} reads)`);
+  ok(n === 2 && got.value.v === 2, `past the backoff a request starts one read and is served its figures (${n} reads)`);
   {
     // A read that never answers does not hold a request.
-    const hung = S.createScorecard({ compute: () => new Promise(() => {}), log: { warn() {} } });
+    const hung = S.createScorecard({ compute: () => new Promise(() => {}), waitMs: 60, log: { warn() {} } });
     const t0 = performance.now();
     let e = null; try { await hung.get(); } catch (x) { e = x; }
-    ok(e?.retryAfterSeconds >= 1 && performance.now() - t0 < 50, `a request before the first computation answers at once, even with a hung read (${(performance.now() - t0).toFixed(1)} ms)`);
+    const took = performance.now() - t0;
+    ok(e?.retryAfterSeconds >= 1 && took >= 50 && took < 1_000, `a hung first read holds a request only for the wait, then 503 with a retry time (${took.toFixed(1)} ms)`);
   }
   const [x, y] = await Promise.all([sc.get(), sc.get()]);
   ok(n === 2 && x === y, "once computed, reads answer from the cache");
@@ -359,8 +364,8 @@ ok(page.includes("&lt;3") && page.includes("/api/scorecard") && page.includes("N
       ins.run(Date.now(), `0x${"a".repeat(40)}`, OTHER_TX[0]); ins.run(Date.now(), `0x${"b".repeat(40)}`, OTHER_TX[1]);
       h.close();
     }
-    // The first request starts the read and is answered 503 with Retry-After
-    // at once; the figures arrive once it lands (deadline, not a fixed sleep).
+    // The first request starts the read and waits briefly for it: figures, or
+    // a 503 with Retry-After when the read outlasts the wait (deadline, not a fixed sleep).
     let res = await fetch(`${B}/api/scorecard`);
     const firstStatus = res.status, firstRetry = res.headers.get("retry-after");
     for (const end = Date.now() + 30_000; res.status === 503 && Date.now() < end;) { await sleep(100); res = await fetch(`${B}/api/scorecard`); }

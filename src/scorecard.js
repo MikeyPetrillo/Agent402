@@ -130,7 +130,9 @@ export function scorecardBody(raw, { asOf = new Date().toISOString(), refreshMs 
 export const SCORECARD_RETRY_MS = 30_000;
 // Retry-After while the first read is running.
 const SCORECARD_PENDING_RETRY_S = 5;
-export function createScorecard({ compute, env = process.env, now = () => Date.now(), log = console, retryMs = SCORECARD_RETRY_MS } = {}) {
+export const SCORECARD_FIRST_WAIT_MS = 4_000;
+
+export function createScorecard({ compute, env = process.env, now = () => Date.now(), log = console, retryMs = SCORECARD_RETRY_MS, waitMs = SCORECARD_FIRST_WAIT_MS } = {}) {
   let cached = null, inFlight = null, timer = null, warned = 0, lastMs = null, failedAt = null;
   const refresh = () => {
     if (inFlight) return inFlight;
@@ -158,6 +160,14 @@ export function createScorecard({ compute, env = process.env, now = () => Date.n
         const wait = failedAt === null ? 0 : failedAt + retryMs - now();
         if (wait > 0) throw notYet(wait / 1000);
         void refresh().catch(() => { /* failedAt holds off the next one */ });
+      }
+      // The read already running (one at a time) gets a short wait, so the
+      // first visitor after a boot sees figures rather than a 503.
+      if (inFlight && waitMs > 0) {
+        let t;
+        await Promise.race([inFlight.catch(() => {}), new Promise((r) => { t = setTimeout(r, waitMs); })]);
+        clearTimeout(t);
+        if (cached) return cached;
       }
       throw notYet(SCORECARD_PENDING_RETRY_S);
     },
