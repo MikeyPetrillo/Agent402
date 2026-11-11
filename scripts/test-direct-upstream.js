@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import { getFreePort } from "./lib/free-port.js";
 
@@ -370,6 +371,59 @@ setEnv(ON);
     ok(direct.hits.length === dBefore, `and the next call goes to OpenRouter without a direct attempt (${label})`);
   }
   D._setDirectBreakerNowForTest(null);
+  setEnv(ON);
+}
+// Our own timeout on a light call counts only when the attempt ran the full
+// configured direct timeout. A buyer whose payment authorization is close to
+// its end gets a shorter attempt (paymentWindowTimeoutMs): its timeouts say
+// nothing about the upstream and never count, however many. A large output
+// cap (DIRECT_HEAVY_OUTPUT_TOKENS) is a heavy call: one buyer's timeouts on it
+// do not count either.
+{
+  setEnv({ ...ON, DIRECT_UPSTREAM_TIMEOUT_MS: "60000", DIRECT_UPSTREAM_BREAKER_OPEN_MS: "60000" });
+  const timeoutFetch = (prevFetch) => async (url, init) => {
+    if (String(url) === `${DIRECT_BASE}/chat/completions`) {
+      direct.hits.push({ url: String(url) });
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    }
+    return prevFetch(url, init);
+  };
+  // A buyer-signed EVM exact authorization whose validBefore leaves ~24 s of
+  // settleable life: the direct attempt is clamped well under 60 s, and the
+  // OpenRouter attempt after it still has room to start.
+  const windowReq = () => {
+    const vb = Math.floor(Date.now() / 1000) + 30;
+    const payload = { x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: { signature: "0x" + "1".repeat(130), authorization: { from: "0x" + "a".repeat(40), to: "0x" + "b".repeat(40), value: "1000", validAfter: "0", validBefore: String(vb), nonce: "0x" + randomBytes(32).toString("hex") } } };
+    const hdr = Buffer.from(JSON.stringify(payload)).toString("base64");
+    return { headers: { "payment-signature": hdr }, get(h) { return this.headers[String(h).toLowerCase()]; }, header(h) { return this.get(h); } };
+  };
+  const clampedMs = K.paymentWindowTimeoutMs(windowReq(), 60_000);
+  ok(clampedMs > 0 && clampedMs < 60_000, `a short authorization clamps the attempt under the configured direct timeout (${clampedMs} ms)`);
+  const run = async (n, { max_tokens = 32, withReq = false } = {}) => {
+    reset();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = timeoutFetch(prevFetch);
+    const states = [];
+    try {
+      for (let i = 0; i < n; i++) {
+        await base.handler({ model: MODEL, messages: msgs, max_tokens }, withReq ? windowReq() : undefined);
+        states.push(D.directBreakerState().open ? "open" : "closed");
+      }
+    } finally { globalThis.fetch = prevFetch; }
+    return states;
+  };
+  const quietWarn = async (fn) => { const w = console.warn; console.warn = () => {}; try { return await fn(); } finally { console.warn = w; } };
+  let states = await quietWarn(() => run(5, { withReq: true }));
+  ok(direct.hits.length === 5 && states.every((x) => x === "closed") && D.directBreakerState().fails === 0, `five clamped short-prompt timeouts from one buyer never count (direct ${direct.hits.length}, fails ${D.directBreakerState().fails}, ${states.join(" ")})`);
+  states = await quietWarn(() => run(3));
+  ok(states.join(" ") === "closed closed open", `three full-length short-prompt timeouts open the breaker by the third (${states.join(" ")})`);
+  ok(D.DIRECT_HEAVY_OUTPUT_TOKENS > 32 && D.DIRECT_HEAVY_OUTPUT_TOKENS <= K.TIERS["v1-chat"].maxTokens, `the heavy output threshold sits inside the tier's output cap (${D.DIRECT_HEAVY_OUTPUT_TOKENS})`);
+  states = await quietWarn(() => run(4, { max_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS }));
+  ok(direct.hits.length === 4 && states.every((x) => x === "closed") && D.directBreakerState().fails === 0, `four full-length timeouts on a large output cap (max_tokens ${D.DIRECT_HEAVY_OUTPUT_TOKENS}) count as heavy and leave the breaker closed (direct ${direct.hits.length}, fails ${D.directBreakerState().fails})`);
+  reset();
+  for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", "caller-clamped", { clamped: true });
+  ok(!D.directBreakerState().open && D.directBreakerState().fails === 0, "the outcome reader ignores clamped timeouts");
+  ok(D.directHeavyOutput({ max_completion_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS }) && !D.directHeavyOutput({ max_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS - 1 }), "max_completion_tokens reads as the output cap too");
   setEnv(ON);
 }
 // A refusal of the request itself (any 4xx but auth, quota, capacity and a

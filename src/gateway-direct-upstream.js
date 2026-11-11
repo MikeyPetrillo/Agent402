@@ -223,9 +223,13 @@ export function stripVendorExtensions(obj) {
 // auth (401/403), quota (402), capacity (429), 5xx, a missing endpoint, a
 // malformed or oversized body, a late error in a 200, a missing cost, and a
 // connection its host refused or reset (or a host name that does not
-// resolve), and our own timeout on a short prompt (under HEAVY_INPUT_SHARE of
-// the tier's input cap: nothing about the input explains it). Our own timeout
-// on a long prompt, a lookup our resolver could not finish or a route our
+// resolve), and our own timeout on a light call (a prompt under
+// HEAVY_INPUT_SHARE of the tier's input cap and an output cap under
+// DIRECT_HEAVY_OUTPUT_TOKENS: nothing about the call explains it) that ran the
+// full configured direct timeout. Our own timeout on a heavy call (it reads
+// the unanswered rule instead), one cut short by the caller's own payment or
+// connection window (it says nothing about the upstream), a lookup our
+// resolver could not finish or a route our
 // side lacks, a stream cut with no status, a refusal of the request
 // itself (any other 4xx: a parameter out of range, a prompt over the context,
 // which OpenRouter would refuse too), a client that went away and an empty
@@ -245,7 +249,9 @@ const breakerFails = () => breakerEnv("DIRECT_UPSTREAM_BREAKER_FAILS", 3, 1);
 const breakerOpenMs = () => breakerEnv("DIRECT_UPSTREAM_BREAKER_OPEN_MS", 5 * 60_000, 1000);
 /** Failure buckets that are the upstream's own answer: only these count. */
 export const DIRECT_BREAKER_COUNTED = Object.freeze(["auth", "quota", "rate_limited", "unavailable", "server_error", "not_found", "malformed", "late_error", "no_cost", "connect"]);
-/** Failure buckets that say nothing proven about the upstream's health. */
+/** Failure buckets that say nothing proven about the upstream's health
+ *  ("timeout" counts only on a light call that ran the full direct timeout;
+ *  see noteDirectOutcome). */
 export const DIRECT_BREAKER_NOT_COUNTED = Object.freeze(["client_gone", "aborted", "refused", "empty", "timeout", "egress", "stream", "other", "unconfigured"]);
 const COUNTED = new Set(DIRECT_BREAKER_COUNTED);
 const blankBreaker = () => ({ fails: 0, openUntil: 0, opens: 0, trialAt: 0, trialId: 0 });
@@ -277,21 +283,37 @@ export function directBreakerRelease(grant) {
   if (!grant?.trial || breaker.trialId !== grant.id || !breaker.trialAt) return;
   breaker.trialAt = 0;
 }
-// Our own timeout on the direct link. On a short prompt it counts like the
-// upstream's own failure (so one caller is moved to OpenRouter by the third).
-// On a long prompt one never counts (it may need more than the cap), but the
+// Our own timeout on the direct link. On a light call that ran the full
+// configured direct timeout it counts like the upstream's own failure (so one
+// caller is moved to OpenRouter by the third). One whose attempt timeout the
+// caller's own window cut short (clamped) never counts and feeds nothing: a
+// buyer who signs a short authorization would otherwise open the link for
+// everyone. On a heavy call (a long prompt, or a large output cap) one never
+// counts (it may need more than the cap), but the
 // pattern of src/unanswered-rule.js (many calls, several callers, one window,
 // no answer between) opens the breaker so the next callers go to OpenRouter.
 // Both are logged as "did not answer within our limit".
 const directUnanswered = createUnansweredTracker();
+/** A requested output cap (max_tokens, or its alias max_completion_tokens)
+ *  at or past this many tokens is a long expected generation: a timeout on it
+ *  is not the upstream's fault, as with a long prompt. */
+export const DIRECT_HEAVY_OUTPUT_TOKENS = 2048;
+export function directHeavyOutput(body) {
+  const n = Number(body?.max_tokens ?? body?.max_completion_tokens);
+  return Number.isFinite(n) && n >= DIRECT_HEAVY_OUTPUT_TOKENS;
+}
 /** The outcome of one direct attempt: ok, or the failure's bucket. `caller`
  *  is the request's caller key (src/request-timing.js; read only when the
  *  unanswered rule needs it); `heavy`
- *  says the prompt is at or past HEAVY_INPUT_SHARE of its cap (a timeout on
- *  it then reads the unanswered rule instead of counting). */
-export function noteDirectOutcome(ok, reason, caller = undefined, { heavy = false } = {}) {
+ *  says the prompt is at or past HEAVY_INPUT_SHARE of its cap or the output
+ *  cap is at or past DIRECT_HEAVY_OUTPUT_TOKENS (a timeout on it then reads
+ *  the unanswered rule instead of counting); `clamped` says the attempt's
+ *  timeout was shorter than the configured direct timeout (the caller's own
+ *  window cut it), and a timeout on it is not counted at all. */
+export function noteDirectOutcome(ok, reason, caller = undefined, { heavy = false, clamped = false } = {}) {
   if (ok) { directUnanswered.clear(); breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
   const timeout = String(reason) === "timeout";
+  if (timeout && clamped) { breaker.trialAt = 0; return; }
   if (timeout && !heavy) {
     breaker.fails++;
     if (breaker.fails >= breakerFails()) {
