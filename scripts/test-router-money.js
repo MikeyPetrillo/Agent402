@@ -400,6 +400,9 @@ const json200 = () => new Response(JSON.stringify({ ok: true }), { status: 200, 
   const consumed = async () => ({ debited: true, observed: 1 }); // the chain says the payment settled
   // The server's own wiring: the router's purchases write the memo.
   const payExternal = (u, o) => buyer.payX402(u, { ...o, memoizeDelivery: true, notDebited: consumed, onSigned: null });
+  // Each call a different request (the caller's params): a delivery strike is
+  // per request, so the same request failing twice is one strike.
+  let paramSeq = 0;
   const buy = async (seller) => {
     guard.__reset(); buyer.releaseSpend(1_000_000n, { window: -1 });
     const exec = buildRouteExecuteTool({
@@ -407,7 +410,7 @@ const json200 = () => new Response(JSON.stringify({ ok: true }), { status: 200, 
       resolveExternal: async () => [{ seller, slug: "paid", url: `${seller}/paid`, method: "POST", price: "$0.001", networks: ["eip155:8453"] }],
       payExternal, externalEnabled: () => true, externalChains: () => ["base"], spendingWalletStatus: () => null, recordPurchase: () => true,
     });
-    return exec.handler({ task: "t", include: "external" }, { ...reqBase }).then(() => "delivered", (e) => e.statusCode);
+    return exec.handler({ task: "t", include: "external", params: { n: ++paramSeq } }, { ...reqBase }).then(() => "delivered", (e) => e.statusCode);
   };
   const benched = (seller) => !!buyer.sellerDeliveryFailingRecently(seller, "base");
   // The resolver's own read (resolveExternalSeller): the candidate's seller key.
@@ -426,7 +429,7 @@ const json200 = () => new Response(JSON.stringify({ ok: true }), { status: 200, 
   // CONTROL: a caller that hands in no seller key is keyed on the URL's origin.
   buyer.__resetSellerDeliveryFailuresForTest();
   answer = () => new Response("down", { status: 500 });
-  for (let i = 0; i < 2; i++) { buyer.releaseSpend(1_000_000n, { window: -1 }); await buyer.payX402(`${tenantA}/paid`, { maxAtomic: 5000n, method: "POST", body: {}, chain: "base", memoizeDelivery: true, notDebited: consumed, refusalMaxWaitMs: 0, onSigned: null }).catch(() => {}); }
+  for (let i = 0; i < 2; i++) { buyer.releaseSpend(1_000_000n, { window: -1 }); await buyer.payX402(`${tenantA}/paid`, { maxAtomic: 5000n, method: "POST", body: { n: i }, chain: "base", memoizeDelivery: true, notDebited: consumed, refusalMaxWaitMs: 0, onSigned: null }).catch(() => {}); }
   ok(benched(HOST) && !benched(tenantA), "CONTROL: with no seller key the memo is keyed on the paid URL's origin");
   buyer.__resetSellerDeliveryFailuresForTest();
   buyer.releaseSpend(1_000_000n, { window: -1 });

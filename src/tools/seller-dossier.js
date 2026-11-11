@@ -138,6 +138,12 @@ export function composeSellerDossier(a) {
     mppDualStack: detail.mpp === true,
     originResponded: detail.originResponded !== false,
     crawlError: detail.error || null,
+    // "our-read-incomplete": our own read did not finish (our time limit, a
+    // connection that did not complete); "seller-answer": what the seller
+    // served. lastReadIncomplete: a read of ours that did not finish while
+    // the listing from the last completed read stands.
+    crawlErrorKind: detail.errorKind || null,
+    lastReadIncomplete: detail.lastReadIncomplete || null,
     robotsBlocked: entry?.robotsBlocked === true,
     lastCrawledAt: iso(detail.fetchedAt),
     firstRegisteredAt: iso(registration?.first_seen),
@@ -145,7 +151,10 @@ export function composeSellerDossier(a) {
     lastSettledSeenAt: iso(registration?.last_settled_seen),
     listingTextLooksInjected: injected,
   };
-  if (detail.error) flags.push(`last crawl failed: ${String(detail.error).slice(0, 120)}`);
+  if (detail.error) flags.push(detail.errorKind === "our-read-incomplete"
+    ? `our last read of this origin did not complete (${String(detail.error).slice(0, 120)}); that is our read, not an answer from the seller`
+    : `last crawl failed: ${String(detail.error).slice(0, 120)}`);
+  if (detail.lastReadIncomplete) flags.push("our last read of this origin did not complete; the listing from the last completed read stands");
   if (entry?.robotsBlocked) flags.push("the seller's robots.txt blocks our crawler; the catalog below may be stale");
   if (detail.originResponded === false) flags.push("the origin did not respond on the last crawl");
   // Describe the MATCH, never a purpose. "instructions aimed at agents" asserts
@@ -156,17 +165,22 @@ export function composeSellerDossier(a) {
 
   // ------------------------------------------------------------------ health
   const paywall = detail.paywall || null;
+  // A probe of ours that read no verdict: our time limit or a connection that
+  // did not finish (no status), or our own malformed request (an earlier build
+  // stored those as failures with status 0).
+  const paywallUnknown = Boolean(paywall) && (paywall.unknown === true || (paywall.ok === false && !(Number(paywall.status) > 0)));
   const health = {
     crawlHealthScore: typeof detail.health === "number" ? detail.health : null,
     routable: detail.routable === true,
     paywallProbe: paywall
-      ? { ok: paywall.ok === true, status: paywall.status ?? null, url: paywall.url || null, at: PLAIN(paywall.at), mpp: paywall.mpp === true, error: paywall.error || null }
+      ? { ok: paywall.ok === true, unknown: paywallUnknown, status: paywall.status ?? null, url: paywall.url || null, at: PLAIN(paywall.at), mpp: paywall.mpp === true, error: paywall.error || null }
       : { probed: false },
-    note: "crawlHealthScore says the manifest parsed on recent crawls; paywallProbe says a paid route answered a real 402. Read both.",
+    note: "crawlHealthScore says recent completed crawls read a catalog from the seller's own documents; paywallProbe says a paid route answered a real 402. Read both.",
   };
-  if (paywall && paywall.ok === false) flags.push(`the last paywall probe failed (${paywall.error || `HTTP ${paywall.status}`}): paid routes may not be answering 402s`);
+  if (paywallUnknown) flags.push("our last unpaid probe of a paid route read no verdict (our probe did not complete, or was not a well-formed request for the route); nothing is concluded about its paywall");
+  else if (paywall && paywall.ok === false) flags.push(`the last paywall probe failed (${paywall.error || `HTTP ${paywall.status}`}): paid routes may not be answering 402s`);
   if (!paywall) flags.push("no paywall probe on record yet");
-  if (typeof detail.health === "number" && detail.health < 0.5) flags.push(`crawl health ${detail.health.toFixed(2)}: the manifest failed to parse on most recent crawls`);
+  if (typeof detail.health === "number" && detail.health < 0.5) flags.push(`crawl health ${detail.health.toFixed(2)}: most recent completed crawls read no catalog from the seller's own documents`);
 
   // ----------------------------------------------------------------- catalog
   const tools = (detail.tools || []).slice(0, 500);
@@ -401,7 +415,10 @@ export function composeSellerDossier(a) {
       underlyingCapUsd: thresholds.sorCap ?? null,
       cheapestPaidToolUsd: prices.length ? prices[0] : null,
     },
-    refusals: (refusals || []).map((r) => ({ chain: r.chain, at: iso(r.at), status: r.status ?? null })),
+    // kind: "paid-retry" (the seller's payment layer turned away a payment we
+    // sent), "offer" (its 402 offer could not be paid as listed: nothing was
+    // signed or sent), or null when another replica recorded it.
+    refusals: (refusals || []).map((r) => ({ chain: r.chain, at: iso(r.at), status: r.status ?? null, kind: r.kind === "offer" || r.kind === "paid-retry" ? r.kind : null })),
     // A refusal is the seller declining our payment (nobody charged). This is
     // the other outcome: the payment went out and nothing came back.
     //
@@ -421,7 +438,13 @@ export function composeSellerDossier(a) {
     // useful to them for no gain.
     deliveryFailures: (deliveryFailures || []).map((r) => ({ chain: r.chain, at: iso(r.at) })),
   };
-  if (router.refusals.length) flags.push(`our router's paid retries to one of this seller's routes were refused on ${router.refusals.map((r) => r.chain).join(", ")}; that route is skipped there until the memo expires`);
+  for (const r of router.refusals) {
+    flags.push(r.kind === "paid-retry"
+      ? `our router's paid retries to one of this seller's routes were refused on ${r.chain}; that route is skipped there until the memo expires`
+      : r.kind === "offer"
+        ? `one of this seller's routes on ${r.chain} answered with a 402 offer our router could not pay as listed (nothing was signed); that route is skipped there until the memo expires`
+        : `our router noted two refusals on one of this seller's routes on ${r.chain}; that route is skipped there until the memo expires`);
+  }
   for (const f of router.deliveryFailures) flags.push(`our router paid this seller on ${f.chain} and the call did not deliver, so that chain is skipped until the memo expires or a call succeeds (what we observed is not published here; ask us)`);
   if (!self && dispatch && dispatch.routerDispatchEligible !== true && dispatch.routerDispatchReason) flags.push(`router verdict: ${dispatch.routerDispatchReason}`);
   if (!self && dispatch?.routerDispatchEligible !== true && lanes?.unproven?.eligible === true) flags.push(unprovenLaneFlag(lanes));
@@ -524,8 +547,8 @@ export function buildSellerDossierTool({
         example: {
           origin: "https://seller.example",
           listed: true,
-          identity: { displayName: "Example Seller", homepage: "https://seller.example", discoveryPath: "/.well-known/x402", mppDualStack: false, originResponded: true, crawlError: null, robotsBlocked: false, lastCrawledAt: "2026-09-08T01:00:00.000Z", firstRegisteredAt: "2026-08-01T00:00:00.000Z", lastRoutableSeenAt: "2026-09-08T01:00:00.000Z", lastSettledSeenAt: null, listingTextLooksInjected: false },
-          health: { crawlHealthScore: 1, routable: true, paywallProbe: { ok: true, status: 402, url: "https://seller.example/api/x", at: "2026-09-08T01:00:00.000Z", mpp: false, error: null }, note: "crawlHealthScore says the manifest parsed on recent crawls; paywallProbe says a paid route answered a real 402. Read both." },
+          identity: { displayName: "Example Seller", homepage: "https://seller.example", discoveryPath: "/.well-known/x402", mppDualStack: false, originResponded: true, crawlError: null, crawlErrorKind: null, lastReadIncomplete: null, robotsBlocked: false, lastCrawledAt: "2026-09-08T01:00:00.000Z", firstRegisteredAt: "2026-08-01T00:00:00.000Z", lastRoutableSeenAt: "2026-09-08T01:00:00.000Z", lastSettledSeenAt: null, listingTextLooksInjected: false },
+          health: { crawlHealthScore: 1, routable: true, paywallProbe: { ok: true, unknown: false, status: 402, url: "https://seller.example/api/x", at: "2026-09-08T01:00:00.000Z", mpp: false, error: null }, note: "crawlHealthScore says recent completed crawls read a catalog from the seller's own documents; paywallProbe says a paid route answered a real 402. Read both." },
           catalog: { toolCount: 2, paidToolCount: 2, priceRangeUsd: { min: 0.01, max: 0.04 }, networksAdvertised: ["eip155:8453"], tools: [{ method: "POST", route: "/api/x", name: "X", priceUsd: 0.01, networks: ["eip155:8453"], price: { source: "live-402", observedAt: "2026-09-08T01:00:00.000Z", carriedForward: false, stale: false, originDeclaredUsd: 0.01, disagreesWithOrigin: false, conflict: null }, method_provenance: { inferred: false, correctedFrom: null }, networksVerifiedAt: null, networksVerificationDue: false, urlTemplate: null, dispatch: "settlement_required", ourPaidCalls: null }], toolsTruncated: false, priceProvenance: { stale: 0, carriedForward: 0, disagreeWithOrigin: 0, unpriced: 0, urlTemplates: 0, methodInferred: 0, methodCorrected: 0, networksVerificationDue: 0 } },
           wallets: { advertisedByNetwork: { "eip155:8453": ["0x1111111111111111111111111111111111111111"] }, base: { advertised: "0x1111111111111111111111111111111111111111", ownEvidence: { settled: 12, payers: 4, note: "chain join on this origin's OWN advertised address, plus any committed seed" }, inheritedFrom: [], inheritedNote: null, sharedWithOrigins: [] }, routerDispatchDetail: null },
           settlementEvidence: { base: { source: "on-chain leaderboard (Base USDC, ours)", callsSettled: 12, uniqueBuyers: 4, totalUsd: 0.18, wallets: ["0x1111111111111111111111111111111111111111"], window: null }, bazaar: { source: "Coinbase Bazaar, last 30 days (their measurement, not ours)", calls30d: 30, payers30d: 5, lastCalledAt: "2026-09-07T20:00:00.000Z", payTos: ["0x1111111111111111111111111111111111111111"] }, solana: { source: "Solana SPL leaderboard", observed: false }, mpp: { source: "MPP index", observed: false } },

@@ -124,23 +124,52 @@ export async function solanaInboundCount(payTo, { windowMs = SVM_WINDOW_MS(), li
   const truncated = recent.length > toRead.length;
   const funders = new Set();
   const CHUNK = Number(process.env.SOR_SVM_TX_CONCURRENCY || "12");
+  // A read that failed (an RPC 429, a timeout) is UNREAD, not "no credit".
+  const UNREAD = Symbol("unread");
   const readOne = (signature) =>
     rpcCall("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }], { fetchImpl })
-      .catch(() => null);                            // one unreadable tx is not fatal
+      .catch(() => UNREAD);
   let credits = 0;
-  for (let off = 0; off < toRead.length && credits < stopAt; off += CHUNK) {
-    const batch = await Promise.all(toRead.slice(off, off + CHUNK).map(readOne));
-    for (const tx of batch) {
-    if (credits >= stopAt) break;
+  const unread = [];
+  const take = (tx, signature) => {
+    if (tx === UNREAD) { unread.push(signature); return; }
+    if (credits >= stopAt) return;
     const verdict = creditFromTx(tx?.meta, payTo);
-    if (!verdict.credited) continue;
+    if (!verdict.credited) return;
     credits++;
     if (verdict.funder) funders.add(verdict.funder);
+  };
+  let readCount = 0;
+  for (let off = 0; off < toRead.length && credits < stopAt; off += CHUNK) {
+    const slice = toRead.slice(off, off + CHUNK);
+    const batch = await Promise.all(slice.map(readOne));
+    readCount += slice.length;
+    batch.forEach((tx, i) => take(tx, slice[i]));
+  }
+  // One more pass over the reads that failed, then what is still unread
+  // stays unread.
+  let stillUnread = 0;
+  if (unread.length && credits < stopAt) {
+    const again = unread.splice(0);
+    for (let off = 0; off < again.length && credits < stopAt; off += CHUNK) {
+      const slice = again.slice(off, off + CHUNK);
+      const batch = await Promise.all(slice.map(readOne));
+      batch.forEach((tx, i) => take(tx, slice[i]));
     }
+    stillUnread = unread.length;
+  }
+  // AN UNDERCOUNT IS NOT A COUNT. Below the floor with reads still missing
+  // (failed, or past our own read cap) that could lift it to the floor, the
+  // count is unknown: thrown as such, never returned as "N payments, below
+  // the floor". With too few missing to reach the floor it is a definite
+  // answer and returned as before.
+  const missing = stillUnread + (recent.length - toRead.length);
+  if (Number.isFinite(stopAt) && credits < stopAt && credits + missing >= stopAt) {
+    throw Object.assign(new Error(`${missing} of ${recent.length} recent transactions could not be read by us; count unknown (at least ${credits})`), { countUnknown: true, atLeast: credits });
   }
   // detail: the leaderboard's batched scan wants the funder count and whether
   // the read cap was hit; the gates keep the bare number.
-  if (detail) return { credits, payers: funders.size, truncated, read: toRead.length, recent: recent.length };
+  if (detail) return { credits, payers: funders.size, truncated, read: readCount, recent: recent.length, unread: stillUnread };
   return credits;
 }
 
@@ -217,8 +246,16 @@ export async function cachedSolanaInboundCount(payTo, opts = {}) {
  */
 export async function assertProvenSolanaSeller(payTo, { minCount = Number(process.env.SOR_SVM_MIN_SETTLED_TX || process.env.SOR_MIN_SETTLED_TX || "20"), inboundFn = cachedSolanaInboundCount, allowUnprovenUpToAtomic = 0n, quotedAtomic = null } = {}) {
   let inbound;
+  let countUnknown = false;
   try { inbound = await inboundFn(payTo, { stopAt: minCount }); }
-  catch (e) { throw bad(`Cannot verify seller settlement history on Solana (${String(e?.message || e).slice(0, 80)}) - refusing to spend`, 503); }
+  catch (e) {
+    // Our read did not finish. A count we could not read never answers "below
+    // the floor"; it may still take the unproven allowance below, which a
+    // seller with no history at all can take.
+    if (!e?.countUnknown) throw bad(`Cannot verify seller settlement history on Solana (${String(e?.message || e).slice(0, 80)}) - refusing to spend`, 503);
+    countUnknown = true;
+    inbound = Number(e.atLeast) || 0;
+  }
   if (inbound < minCount) {
     // UNPROVEN ALLOWANCE (2026-09-02). The chain was readable and the seller
     // simply has too little history. The floor exists so a spend cannot be
@@ -229,9 +266,10 @@ export async function assertProvenSolanaSeller(payTo, { minCount = Number(proces
     let quote = null;
     try { quote = quotedAtomic != null ? BigInt(String(quotedAtomic)) : null; } catch { quote = null; }
     if (allowUnprovenUpToAtomic > 0n && quote != null && quote > 0n && quote <= allowUnprovenUpToAtomic) {
-      console.log(`[solana-buyer] paying UNPROVEN seller ${String(payTo).slice(0, 8)}… (${inbound} recent credits, floor ${minCount}) - quote ${quote} atomic is within the unproven allowance ${allowUnprovenUpToAtomic}`);
+      console.log(`[solana-buyer] paying UNPROVEN seller ${String(payTo).slice(0, 8)}… (${countUnknown ? `at least ${inbound}; our read of its history did not complete` : `${inbound} recent credits`}, floor ${minCount}) - quote ${quote} atomic is within the unproven allowance ${allowUnprovenUpToAtomic}`);
       return inbound;
     }
+    if (countUnknown) throw bad(`Cannot verify seller settlement history on Solana (our read of its recent payments did not complete; at least ${inbound}, floor ${minCount}) - refusing to spend`, 503);
     throw bad(`Seller payTo ${String(payTo).slice(0, 8)}… has ${inbound} recent inbound USDC payments on Solana (floor ${minCount}) - not routable yet`, 409);
   }
   return inbound;
@@ -516,7 +554,7 @@ export async function passesSolanaResolveGate({ header, body, inboundFn = cached
   if (!payTo) return { ok: false, payTo: null, reason: "no readable solana accept on the live 402" };
   let inbound;
   try { inbound = await inboundFn(payTo, { stopAt: minCount }); }
-  catch (e) { return { ok: false, payTo, reason: `chain unreadable (${String(e?.message || e).slice(0, 60)})` }; }
+  catch (e) { return { ok: false, payTo, ...(e?.countUnknown ? { countUnknown: true, inbound: Number(e.atLeast) || 0 } : {}), reason: `chain unreadable by us (${String(e?.message || e).slice(0, 60)})` }; }
   if (inbound < minCount) return { ok: false, payTo, inbound, reason: `${inbound} recent inbound USDC payments (floor ${minCount})` };
   return { ok: true, payTo, inbound };
 }

@@ -197,6 +197,10 @@ export const QUERY_HEALTH_SQL = Object.freeze({
 });
 export const HEALTH_TTL_MS = 5 * 60_000;
 export const HEALTH_UNKNOWN_TTL_MS = 30_000;
+// A "failing" reading is kept a minute, not five: one 5xx on the known-good
+// query then speaks for at most a minute of buyers, while a real outage is
+// re-read and still reported to every buyer after it.
+export const HEALTH_FAILING_TTL_MS = 60_000;
 // The service's gateway answers a query that runs past its window with a
 // 502 at about 10 s, so a check given 12 s always gets the service's own
 // answer (rows, or that 502) rather than our timeout, while a busy service
@@ -208,7 +212,7 @@ let healthTimeoutMs = HEALTH_TIMEOUT_MS;
 const queryHealth = new Map(); // table -> { verdict, at }
 const healthInflight = new Map(); // table -> promise
 function healthTableOf(sql) { return /\bsolana\s*\.\s*instructions\b/i.test(sqlNorm(sql)) ? "solana" : "base"; }
-const healthTtl = (verdict) => verdict === "unknown" ? HEALTH_UNKNOWN_TTL_MS : HEALTH_TTL_MS;
+const healthTtl = (verdict) => verdict === "unknown" ? HEALTH_UNKNOWN_TTL_MS : verdict === "failing" ? HEALTH_FAILING_TTL_MS : HEALTH_TTL_MS;
 async function queryServiceHealth(sql = "", now = Date.now()) {
   const table = healthTableOf(sql);
   const known = queryHealth.get(table);

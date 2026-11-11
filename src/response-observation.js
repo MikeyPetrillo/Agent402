@@ -69,6 +69,10 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
     if (!origin || !route) return null;
     const paths = (Array.isArray(guaranteedPaths) ? guaranteedPaths : []).slice(0, MAX_PATHS_PER_ROUTE);
     if (!paths.length) return null;              // no promise, nothing to verify
+    // A body we cut at our own byte limit (readAfterSpend marks it
+    // `_truncated`) or could not read is not what the seller sent: a missing
+    // path there is ours, so the call is not observed either way.
+    if (body && typeof body === "object" && (body._truncated === true || typeof body.relayError === "string")) return null;
     const k = key(origin, method, route);
     // Bounded: drop the oldest route rather than growing without limit. This
     // map is observation, so losing the least recently used one costs nothing
