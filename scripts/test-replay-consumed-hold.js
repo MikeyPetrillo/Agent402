@@ -126,7 +126,11 @@ try {
     ok(r.status === 200 && settles === s0 + 1, `${label}: a connected buyer is served and settled once (${r.status}, settle +${settles - s0})`);
     let ttl = -2;
     for (const t0 = Date.now(); Date.now() - t0 < 5000 && ttl <= 0;) { ttl = await redis.ttl(consumedKey(nonce)); if (ttl <= 0) await sleep(20); }
-    return { nonce, cred, ttl, twin: await redis.ttl(legacyKey(nonce)) };
+    // The twin under the earlier key name is written in a second store call
+    // after the main key, so it gets the same deadline of its own.
+    let twin = -2;
+    for (const t0 = Date.now(); Date.now() - t0 < 5000 && twin <= 0;) { twin = await redis.ttl(legacyKey(nonce)); if (twin <= 0) await sleep(20); }
+    return { nonce, cred, ttl, twin };
   };
   {
     // a. Stock expiry (five minutes): the default hour, as before.
