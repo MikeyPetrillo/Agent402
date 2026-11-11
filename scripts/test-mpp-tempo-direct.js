@@ -240,6 +240,45 @@ globalThis.fetch = realFetch;
     await new Promise((resolve) => setTimeout(resolve, 50));
     ok(again.status !== 200 && runs === 1 && booked === 1 && rpc.filter((x) => /^eth_sendRawTransaction/.test(x)).length === 1, `the same credential again is not served, booked or sent twice (${again.status}; runs ${runs}, booked ${booked})`);
     server.close();
+
+    // OUR read of the chain failing (the node unreachable: a reset socket)
+    // is no verdict on the credential. viem's error carries the request body,
+    // validBefore included, which once classified it as "expired": the buyer
+    // was told its window had closed and moved off Tempo. It is
+    // chain-unreachable: the real gate answers 503 with Retry-After, "not
+    // checked, nothing charged", runs no handler, and keeps Tempo first for
+    // that client. The same credential then pays once the node answers.
+    {
+      const { tempoLeads, _resetTempoDemotion } = mod;
+      _resetTempoDemotion();
+      let down = true, runs2 = 0;
+      globalThis.fetch = async (input, init) => {
+        const u = String(input?.url || input);
+        if (down && /rpc\.tempo\.xyz/.test(u)) throw new TypeError("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+        if (!/rpc\.tempo\.xyz/.test(u)) return new Response(JSON.stringify({ success: false, error: { code: "invalid_request", message: "stub" } }), { status: 200, headers: { "content-type": "application/json" } });
+        const body = JSON.parse(init?.body || "null");
+        return new Response(JSON.stringify(Array.isArray(body) ? body.map(rpcAnswer) : rpcAnswer(body)), { status: 200, headers: { "content-type": "application/json" } });
+      };
+      const c3 = await pullCredential();
+      pendingMemo = c3.memo;
+      const v3 = await mod.validateTempoCredential(c3.auth);
+      ok(v3.ok === false && v3.cls === "chain-unreachable", `a node we cannot reach is chain-unreachable, not a verdict (${v3.cls})`);
+      const app3 = express();
+      app3.use(mod.createTempoGate({ secretKey: SECRET, realm: REALM, replayGuard: createReplayGuard(), priceFor: () => ({ priceUsd: 0.001 }) }));
+      app3.use((req, res, next) => (req.tempoSettling ? next() : res.status(402).json({ error: "Payment Required" })));
+      app3.get("/paid", (req, res) => { runs2++; res.json({ ok: true }); });
+      const server3 = await new Promise((r) => { const s3 = app3.listen(0, "127.0.0.1", () => r(s3)); });
+      const url3 = `http://127.0.0.1:${server3.address().port}/paid`;
+      const r3 = await realFetch(url3, { headers: { Authorization: c3.auth, "User-Agent": "agent/direct" } });
+      const b3 = await r3.json().catch(() => ({}));
+      ok(r3.status === 503 && Number(r3.headers.get("retry-after")) > 0 && b3.details?.reason === "chain-unreachable" && b3.details?.charged === false && /not checked and nothing was charged/.test(b3.detail || "") && runs2 === 0, `the gate answers 503 not checked, nothing charged, no handler (${r3.status} ${b3.details?.reason}: ${String(b3.detail).slice(0, 80)})`);
+      ok(tempoLeads({ ip: "127.0.0.1", headers: { "user-agent": "agent/direct" } }) === true, "our failed read does not move the client off Tempo");
+      down = false;
+      const r4 = await realFetch(url3, { headers: { Authorization: c3.auth, "User-Agent": "agent/direct" } });
+      ok(r4.status === 200 && runs2 === 1, `the same credential pays once the node answers (${r4.status}, runs ${runs2})`);
+      server3.close();
+      _resetTempoDemotion();
+    }
   } finally {
     console.warn = w0;
     globalThis.fetch = realFetch;

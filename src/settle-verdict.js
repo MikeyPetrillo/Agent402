@@ -62,3 +62,37 @@ export function isPaymentVerdictReason(reason) {
   if (NOT_THE_BUYER.test(r)) return false;
   return PROSE_VERDICTS.some((re) => re.test(r));
 }
+
+// ---- who a failed settle proves at fault (the settle breaker's count) ------
+// A settle that failed after the handler served is counted against the
+// paying wallet (src/gateway-settle-breaker.js) only when the answer is a
+// definite verdict on the buyer's own payment: too little balance, a bad
+// signature, an authorization or nonce already used, a window that closed,
+// a payload the facilitator refused, or the same authorization already
+// settling for another request (our claim store, src/settlement-claims.js).
+// Everything else proves nothing about the wallet and is never counted
+// against it: a timeout or connection error on our side, a hook of ours
+// that could not run (wallet_check_failed, settle_mark_failed,
+// before_settle_hook_error), a facilitator's HTTP error or billing refusal
+// on our account, a reverted transfer (the settler's own gas can cause it),
+// a settle still pending, a check that could not complete (*_unverifiable),
+// and requirements that are ours (invalid_network, invalid_payment_requirements).
+// The receipt a buyer gets carries a code-shaped reason
+// (src/facilitator-diagnostics.js), so only codes are read here.
+const SETTLE_NOT_BUYER = /(?:transaction|simulation|verification)_failed$|_unverifiable$|_check_failed$|_hook_error$|^invalid_(?:network|scheme|payment_requirements|x402_version|transaction_state)$|_requirements$|_not_configured$|_auth_store$|_unauthenticated$|_broadcast$|_verifier_error$|^unsupported_|credits/i;
+const SETTLE_BUYER_EXTRA = /^(?:insufficient_(?:funds|balance)|duplicate_authorization|transaction_served_elsewhere)$|_insufficient_(?:funds|balance)$|(?:^|_)expired$/i;
+
+/** True when a failed settle's `errorReason` is a definite verdict on the
+ *  buyer's payment (see above): the one class the settle breaker counts. */
+export function isBuyerSettleVerdict(reason) {
+  const r = String(reason || "").trim();
+  if (!r || !CODE.test(r)) return false;
+  if (isUsedAuthorizationReason(r)) return true;
+  if (SETTLE_NOT_BUYER.test(r)) return false;
+  return SETTLE_BUYER_EXTRA.test(r) || isPaymentVerdictCode(r);
+}
+
+/** The request property a payment gate with no x402 receipt (the Tempo
+ *  gate) sets to true when its post-handler refusal was a definite verdict
+ *  on the buyer's payment; the settle breaker reads it. */
+export const SETTLE_VERDICT_PROVEN = "__settleVerdictProven";

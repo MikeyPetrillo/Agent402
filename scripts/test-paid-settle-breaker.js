@@ -61,6 +61,9 @@ facilitator = createServer((req, res) => {
       // graceful 200 {success:false} and a thrown non-2xx settle response.
       if (settleMode === "quota") return reply(200, { success: false, errorReason: "free_tier_exhausted", transaction: "", network: net, payer });
       if (settleMode === "quota-thrown") return reply(403, { success: false, errorReason: "free_tier_exhausted", errorMessage: "free tier exhausted", transaction: "", network: net, payer });
+      // The facilitator failing on its side (an HTTP 503 whose body is no
+      // settle answer): no verdict on the payment.
+      if (settleMode === "down") return reply(503, { error: "upstream network unavailable" });
       return reply(200, { success: true, transaction: "0x" + "cd".repeat(32), network: net, payer });
     }
     if (req.url === "/rpc") return reply(200, { jsonrpc: "2.0", id: 1, result: "0x0" });
@@ -120,29 +123,6 @@ const pay = async (t, payer, network = BASE) => fetch(`${B}${t.path}`, { method:
 try {
   for (let i = 0; i < 120; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch { /* booting */ } await sleep(500); }
 
-  // A FACILITATOR billing refusal on an EVM rail (free_tier_exhausted, both
-  // wire shapes). Nothing withdraws that offer from the next 402 - only the
-  // Algorand sub-cent gate does that, for its own refusal - so the per-wallet
-  // bound is what stops a served-never-charged loop, and it holds: MAX are
-  // served, the next is 429. What changed on 2026-09-28 is the WORDS: each 402
-  // names the rail, and the 429 names the facilitator's billing limit instead
-  // of telling the buyer to check a wallet that was never the problem.
-  {
-    const PAYER_Q = "0x00000000000000000000000000000000000000d4";
-    for (let i = 1; i <= MAX; i++) {
-      settleMode = i % 2 ? "quota" : "quota-thrown";
-      const before = settles;
-      const r = await pay(WALLET_ONLY, PAYER_Q);
-      const body = await r.json().catch(() => ({}));
-      ok(r.status === 402 && settles === before + 1, `quota refusal ${i} (${settleMode}): served, then refused at settle -> 402 (status ${r.status}, settles ${settles})`);
-      ok(body.reason === "facilitator-quota" && body.retry === "other-network" && /not because of your wallet/.test(body.hint || "") && !/failed to settle/.test(body.error || ""), `quota refusal ${i}: the 402 names the rail, not the wallet (got ${body.reason}: ${String(body.error).slice(0, 50)})`);
-    }
-    const before = settles;
-    const r = await pay(WALLET_ONLY, PAYER_Q);
-    const body = await r.json().catch(() => ({}));
-    ok(r.status === 429 && settles === before, `quota refusal ${MAX + 1}: refused 429 BEFORE the handler - an EVM billing refusal stays bounded per wallet (status ${r.status}, settles ${settles} == ${before})`);
-    ok(/billing limit on this server's own account/.test(body.error || "") && /not because of the wallet/.test(body.error || "") && !/USDC balance/.test(body.error || ""), `...and that 429 names the facilitator's billing limit, not the wallet's balance (got: ${String(body.error).slice(0, 110)})`);
-  }
   settleMode = "fail";
 
   // MAX failed settlements from wallet A: each one ran the handler (settles advanced) and ended 402.
@@ -165,7 +145,7 @@ try {
     ok(verifies === v + 1, "the refusal came after verify (the paywall still verified the credential) and before any handler work");
     // The exact text, and the fields an agent acts on without parsing it.
     const secs = Number(r.headers.get("retry-after"));
-    const m = /^Recent payments from this wallet on eip155:8453 failed to settle \(3 in the last 10 min: they verified, the call was served, and the transfer did not go through\); paid tools refuse new calls from it on eip155:8453 until (\d{4}-\d\d-\d\dT[\d:.]+Z) \(about (\d+) s\)\. That holds eip155:8453 only: this wallet can pay on any other network this route offers right now \(the networks are accepts\[\]\.network in the route's 402\)\. Nothing was charged for this request\. Before paying on eip155:8453 again, check the wallet's balance of the payment token there\.$/.exec(body.error || "");
+    const m = /^Recent payments from this wallet on eip155:8453 failed to settle \(3 in the last 10 min: they verified, the call was served, and the settlement then refused the payment itself, for its balance, its signature, or an authorization already used or expired\); paid tools refuse new calls from it on eip155:8453 until (\d{4}-\d\d-\d\dT[\d:.]+Z) \(about (\d+) s\)\. That holds eip155:8453 only: this wallet can pay on any other network this route offers right now \(the networks are accepts\[\]\.network in the route's 402\)\. Nothing was charged for this request\. Before paying on eip155:8453 again, check the wallet's balance of the payment token there and sign a new authorization\.$/.exec(body.error || "");
     ok(!!m && Number(m[2]) === secs, `the 429 names the refused network, says another network works now, when Base opens again and what to check (${body.error})`);
     ok(body.retry === "other-network" && body.refusedNetwork === BASE && body.retryAfterSeconds === secs && secs >= 1 && body.otherNetworksFrom === "accepts[].network in this route's 402", `machine-readable fields ride beside the message (${JSON.stringify({ retry: body.retry, refusedNetwork: body.refusedNetwork, retryAfterSeconds: body.retryAfterSeconds, otherNetworksFrom: body.otherNetworksFrom })})`);
     // THE SAME WALLET ON ANOTHER NETWORK, in the same instant: the route's 402
@@ -302,6 +282,32 @@ try {
     const own = await pay(V1(310), w);
     ok(own.status === 429 && settles === b1, `control: during the alarm a wallet with ${MAX} failed settles of its own is refused 429 before the handler (status ${own.status})`);
   }
+  // A FACILITATOR billing refusal on an EVM rail (free_tier_exhausted, both
+  // wire shapes), and the facilitator answering HTTP 503 at settle. Neither is
+  // a verdict on the buyer's payment, so neither is counted against the
+  // wallet: every call is served and answered 402 (nothing charged), the
+  // billing one naming the rail, and the wallet is never refused 429 for
+  // them. The run raises the burst alarm instead (scripts/test-gateway-settle-breaker.js),
+  // which is why this runs after the alarm checks above.
+  {
+    const PAYER_Q = "0x00000000000000000000000000000000000000d4";
+    for (let i = 1; i <= MAX + 1; i++) {
+      settleMode = i % 2 ? "quota" : "quota-thrown";
+      const before = settles;
+      const r = await pay(WALLET_ONLY, PAYER_Q);
+      const body = await r.json().catch(() => ({}));
+      ok(r.status === 402 && settles === before + 1, `quota refusal ${i} (${settleMode}): served, then refused at settle -> 402 (status ${r.status}, settles ${settles})`);
+      ok(body.reason === "facilitator-quota" && body.retry === "other-network" && /not because of your wallet/.test(body.hint || "") && !/failed to settle/.test(body.error || ""), `quota refusal ${i}: the 402 names the rail, not the wallet (got ${body.reason}: ${String(body.error).slice(0, 50)})`);
+    }
+    settleMode = "down";
+    const PAYER_D = "0x00000000000000000000000000000000000000d5";
+    for (let i = 1; i <= MAX + 1; i++) {
+      const before = settles;
+      const r = await pay(WALLET_ONLY, PAYER_D);
+      ok(r.status === 402 && settles === before + 1, `facilitator 503 at settle ${i}: served, not settled -> 402, never 429 (status ${r.status}, settles ${settles})`);
+    }
+  }
+  settleMode = "fail";
   // Status surface stays counts-only.
   {
     const s = await (await fetch(`${B}/api/gateway-status`)).json().catch(() => ({}));

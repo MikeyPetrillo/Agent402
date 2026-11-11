@@ -49,7 +49,14 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   that sweep for at most `CREDITS_HOLD_REFRESH_MAX_MS` (default 6 hours, never under the abandoned
   window) (`src/credits.js`).
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet on `/v1` and other
-  wallet-only tools). A signed EVM payer is counted per network its payment named (key
+  wallet-only tools). Only a definite verdict on the buyer's payment counts toward a wallet's
+  refusal (`isBuyerSettleVerdict` in `src/settle-verdict.js`: balance, signature, an authorization
+  used or expired, a payload refused, `duplicate_authorization`; on Tempo, the gate's
+  `SETTLE_VERDICT_PROVEN` mark for `TEMPO_BUYER_VERDICT_CLASSES`). Our timeouts, store or hook
+  failures (`wallet_check_failed`, `settle_mark_failed`, `before_settle_hook_error`), facilitator
+  HTTP errors and billing refusals, reverts, pending settles and a 402 with no receipt never refuse
+  the wallet: they feed the burst alarm, and one key's run of them at the refusing count raises it
+  too (`unprovenTrips`). A signed EVM payer is counted per network its payment named (key
   `payer@network`, read through `decodePaymentHeader`), so its 429 holds that network only, says the
   wallet can pay on another at once and carries `retry`, `refusedNetwork`, `retryAfterSeconds` and
   `otherNetworksFrom` (`src/tool-error-fields.js`); a Tempo sender, a credits key and the IP
