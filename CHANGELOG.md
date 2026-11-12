@@ -12,6 +12,8 @@ Server:
   pin their API version; the MPP, viem and Solana libraries take their current
   releases.
 - The Railway configuration runbook covers the December 2026 cutover.
+- /api/gateway-status reports xSearchAuthors (a day of X search author reads
+  past its alert level) and mppSubscriptions (on, off, or failed to start).
 
 ### 2026-11-12 (leftovers: payer keys, lookups, retirements, site polish)
 Payments:
