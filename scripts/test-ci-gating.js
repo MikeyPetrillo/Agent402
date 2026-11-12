@@ -14,6 +14,16 @@ const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.m
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.error("FAIL:", m); } };
 
+// GitHub starts no run from a workflow file over 500 KB (512,000 bytes): the
+// push run fails with zero jobs and "a workflow file issue". Keep headroom so
+// a batch that adds tests fails here, locally, instead of on the push.
+{
+  for (const f of readdirSync(new URL("../.github/workflows/", import.meta.url)).filter((n) => /\.ya?ml$/.test(n))) {
+    const bytes = Buffer.byteLength(readFileSync(new URL(`../.github/workflows/${f}`, import.meta.url), "utf8"));
+    ok(bytes <= 512_000 - 4_096, `${f} is ${bytes} bytes; GitHub runs no workflow over 512000 bytes, keep 4096 of headroom (move logic into scripts or trim comments)`);
+  }
+}
+
 const jobs = wf.jobs || {};
 // A "test lane" is any job whose steps actually run scripts/test-*.js. Derived,
 // never a list: a hand-kept list is the thing that just went wrong one layer up.
