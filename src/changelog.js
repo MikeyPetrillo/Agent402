@@ -5,7 +5,7 @@ const ENTRIES = [
     date: "2026-11-12",
     title: "Vendor updates: security releases",
     items: [
-      "Server: the HTTP client takes the November undici security release; Stripe calls pin their API version; the MPP, viem and Solana libraries take their current releases.",
+      "Server: the HTTP client takes the November undici security release; Stripe calls pin their API version; the MPP and Solana libraries take their current releases.",
       "Server: the Railway configuration runbook covers the December 2026 cutover.",
       "Server: /api/gateway-status reports xSearchAuthors (a day of X search author reads past its alert level) and mppSubscriptions (on, off, or failed to start).",
     ],

@@ -9,7 +9,7 @@ carries its own version on npm.
 ### 2026-11-12 (vendor updates: security releases)
 Server:
 - The HTTP client takes the November undici security release; Stripe calls
-  pin their API version; the MPP, viem and Solana libraries take their current
+  pin their API version; the MPP and Solana libraries take their current
   releases.
 - The Railway configuration runbook covers the December 2026 cutover.
 - /api/gateway-status reports xSearchAuthors (a day of X search author reads
