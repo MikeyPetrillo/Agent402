@@ -7,6 +7,7 @@
 // required query names first, then bare. Offline: fetch is stubbed;
 // example.com resolves publicly so the SSRF guard is happy.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import assert from "node:assert/strict";
 
 process.env.X402_INDEX_CRAWL = "off";

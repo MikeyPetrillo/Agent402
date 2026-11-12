@@ -4,6 +4,7 @@
 // assertion breaks or if EVERY live call fails (which would mean our
 // integration is broken, not one upstream).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
 import { MACRO_TOOLS, retryTransient, withStaleFallback } from "../src/tools/macro-kit.js";
 
 const h = (slug) => MACRO_TOOLS.find((t) => t.slug === slug).handler;
@@ -31,6 +32,7 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
 // (stubbed fetch; no key spent) ---
 {
   const realFetch = globalThis.fetch, realKey = process.env.FRED_API_KEY;
+  const undoDns = stubGuardResolver(offlineGuardAnswer); // stubbed fetch: the guard's lookup answers here too
   process.env.FRED_API_KEY = "fred-test-not-a-key";
   let calls = 0;
   try {
@@ -48,6 +50,7 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
     ok(e?.statusCode === 503 && /not configured/.test(e.message) && !/registered|api_key/.test(e.message), "a key refusal says not configured and relays no key detail");
   } finally {
     globalThis.fetch = realFetch;
+    undoDns();
     if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
   }
 }
@@ -56,6 +59,7 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
 // outage: a 503 with a retry hint, never a generic 502 (stubbed fetch) ---
 {
   const realFetch = globalThis.fetch, realKey = process.env.FRED_API_KEY;
+  const undoDns = stubGuardResolver(offlineGuardAnswer); // stubbed fetch: the guard's lookup answers here too
   process.env.FRED_API_KEY = "fred-test-not-a-key";
   const page = '<!doctype html>\n<html lang="en">\n<head>\n    <title>Site Maintenance | St. Louis Fed</title>';
   try {
@@ -67,6 +71,7 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
     }
   } finally {
     globalThis.fetch = realFetch;
+    undoDns();
     if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
   }
 }
@@ -207,6 +212,7 @@ if (process.env.FRED_API_KEY) {
 // reported, not silently dropped. Stubbed upstream, forced key. ---
 {
   const realFetch = globalThis.fetch, realKey = process.env.FRED_API_KEY;
+  const undoDns = stubGuardResolver(offlineGuardAnswer); // stubbed fetch: the guard's lookup answers here too
   process.env.FRED_API_KEY = "0123456789abcdef0123456789abcdef";
   try {
     let keyCalls = 0;
@@ -225,6 +231,7 @@ if (process.env.FRED_API_KEY) {
     ok(f.current === 3.88 && f.missingDates === undefined, "no missingDates field when nothing is missing");
   } finally {
     globalThis.fetch = realFetch;
+    undoDns();
     if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
   }
 }

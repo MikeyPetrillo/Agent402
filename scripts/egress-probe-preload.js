@@ -71,6 +71,17 @@ if (LOG) {
       dns.promises[fn] = function (...a) { record(`dns.promises.${fn}`, a[0]); return orig.apply(this, a); };
     }
   }
+  // The address guard (src/tools/fetch-guard.js) resolves with a
+  // dns.Resolver instance, whose methods live on the class prototypes, not on
+  // the module functions above. Recorded at the query, so a tool that asks
+  // for a name is seen whether or not the name then answers.
+  for (const [proto, label] of [[dns.Resolver?.prototype, "dns.Resolver"], [dns.promises?.Resolver?.prototype, "dns.promises.Resolver"]]) {
+    for (const fn of ["resolve", "resolve4", "resolve6", "resolveMx", "resolveTxt"]) {
+      if (!proto || typeof proto[fn] !== "function") continue;
+      const orig = proto[fn];
+      proto[fn] = function (...a) { record(`${label}.${fn}`, a[0]); return orig.apply(this, a); };
+    }
+  }
   for (const fn of ["spawn", "spawnSync", "exec", "execSync", "execFile", "fork"]) {
     const orig = cp[fn];
     cp[fn] = function (...a) { record(`child_process.${fn}`, a[0]); return orig.apply(this, a); };

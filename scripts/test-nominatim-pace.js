@@ -4,6 +4,7 @@
 // get a slot within the wait budget is refused (the geo kit then answers from
 // Photon). Offline: an in-memory stand-in for the Redis commands it uses.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import { __setTestClient } from "../src/shared-limit.js";
 
 import { spawnSync } from "node:child_process";

@@ -17,6 +17,7 @@
 // Live coverage is the catalog sweep (answers its own example on sec.gov).
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import zlib from "node:zlib";
 import {
   parseDataSetFilename, parseDataSetIndex, parseCentralDirectory, inflateMemberHead, parseTsvHead,

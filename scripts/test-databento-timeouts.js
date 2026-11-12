@@ -3,6 +3,7 @@
 // upstream, never a bare 500 (a fetch timeout carries no status of its own).
 // Offline: global fetch is stubbed.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 const { dailyBars, availableEnd, DATABENTO_TIMEOUTS_MS } = await import("../src/tools/databento.js");
 

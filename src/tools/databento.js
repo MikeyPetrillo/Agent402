@@ -218,10 +218,12 @@ const validBars = (v) => v && typeof v.fetchedAt === "string" && Array.isArray(v
 
 async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
   const url = `${HOST}/${path}`;
+  // With no key the answer is "not configured" before any name lookup.
+  const authorization = auth();
   await checkHost(url);
   const { res, body } = await readUnderDeadline(url, {
     method: "POST",
-    headers: { authorization: auth(), "content-type": "application/x-www-form-urlencoded" },
+    headers: { authorization, "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params),
   }, timeoutMs, path.replace(/^.*\./, "").replace(/_/g, " "));
   const text = await body((r) => r.text());
@@ -239,12 +241,13 @@ async function post(path, params, timeoutMs = DATABENTO_TIMEOUTS_MS.data) {
 
 async function get(path, params) {
   const url = `${HOST}/${path}?${new URLSearchParams(params)}`;
+  const authorization = auth();
   await checkHost(url);
   // The range read logs its own line: its deadline is our 6 s read, and the
   // answer is then usually served from the cached range (availableEndInfo).
   let read;
   try {
-    read = await readUnderDeadline(url, { headers: { authorization: auth() } }, DATABENTO_TIMEOUTS_MS.range, "dataset range", { tag: null });
+    read = await readUnderDeadline(url, { headers: { authorization } }, DATABENTO_TIMEOUTS_MS.range, "dataset range", { tag: null });
   } catch (e) {
     const s = Math.max(1, Math.round(DATABENTO_TIMEOUTS_MS.range / 1000));
     console.warn(`[databento] dataset range (${params?.dataset || "?"}): ${e?.upstreamFailure === "unreachable" ? "the host could not be reached from here" : `our ${s} s read passed with no answer`}`);
