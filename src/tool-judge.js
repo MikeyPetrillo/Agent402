@@ -55,14 +55,17 @@ const freeShare = () => {
   const n = Number(process.env.ROUTE_JUDGE_FREE_SHARE ?? 0.5);
   return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.5;
 };
-const spend = { day: "", tokens: 0, freeTokens: 0, calls: 0, refused: 0, cacheHits: 0 };
+const spend = { day: "", tokens: 0, freeTokens: 0, calls: 0, refused: 0, capRefused: 0, cacheHits: 0 };
 const today = () => new Date().toISOString().slice(0, 10);
-function rollDay() { const d = today(); if (spend.day !== d) { spend.day = d; spend.tokens = 0; spend.freeTokens = 0; spend.calls = 0; spend.refused = 0; spend.cacheHits = 0; } }
-/** Counts only. */
+function rollDay() { const d = today(); if (spend.day !== d) { spend.day = d; spend.tokens = 0; spend.freeTokens = 0; spend.calls = 0; spend.refused = 0; spend.capRefused = 0; spend.cacheHits = 0; } }
+/** Counts only. `capped` once a call was refused against the total ceiling
+ *  (this process's or the shared day's) today: a call that would cross the
+ *  ceiling is never booked, so the booked total alone stays under it. A
+ *  refusal by the free share alone leaves the paid path open and reads ok. */
 export function jevSpendStatus() {
   rollDay();
   const cap = jevDailyMaxTokens();
-  return { day: spend.day, tokens: spend.tokens, capTokens: cap, freeTokens: spend.freeTokens, freeCapTokens: Math.floor(cap * freeShare()), calls: spend.calls, cacheHits: spend.cacheHits, refusedToday: spend.refused, status: cap > 0 && spend.tokens >= cap ? "capped" : "ok" };
+  return { day: spend.day, tokens: spend.tokens, capTokens: cap, freeTokens: spend.freeTokens, freeCapTokens: Math.floor(cap * freeShare()), calls: spend.calls, cacheHits: spend.cacheHits, refusedToday: spend.refused, status: cap > 0 && (spend.tokens >= cap || spend.capRefused > 0) ? "capped" : "ok" };
 }
 export function _jevReset() { spend.day = ""; rollDay(); cache.clear(); jevShared.reset(); jevSharedFree.reset(); }
 /** Test seam: the day's shared token totals (null without a shared store). */
@@ -87,15 +90,16 @@ function remember(key, value) {
 // given back on a refusal, by either counter); this process's counters then
 // decide as before, so a refusal here is never looser than one replica's.
 async function book(est, cap, free, outcome) {
-  const refuse = () => { spend.refused++; if (outcome) outcome.skipped = "budget"; return false; };
+  const refuse = (total) => { spend.refused++; if (total) spend.capRefused++; if (outcome) outcome.skipped = "budget"; return false; };
   if (jevShared.enabled) {
-    if (!(await jevShared.reserve(est, cap))) { rollDay(); return refuse(); }
+    if (!(await jevShared.reserve(est, cap))) { rollDay(); return refuse(true); }
     if (free && !(await jevSharedFree.reserve(est, Math.floor(cap * freeShare())))) { jevShared.book(-est); rollDay(); return refuse(); }
   }
   rollDay();
-  if (spend.tokens + est > cap || (free && spend.freeTokens + est > cap * freeShare())) {
+  const overTotal = spend.tokens + est > cap;
+  if (overTotal || (free && spend.freeTokens + est > cap * freeShare())) {
     if (jevShared.enabled) { jevShared.book(-est); if (free) jevSharedFree.book(-est); }
-    return refuse();
+    return refuse(overTotal);
   }
   spend.tokens += est; spend.calls++;
   if (free) spend.freeTokens += est;

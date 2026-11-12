@@ -51,16 +51,31 @@ ok(files.length >= 6, `the tracked Dockerfiles are found (${files.length}: ${fil
 ok(nodeBases >= files.length, `every tracked Dockerfile builds on a node base (${nodeBases} bases)`);
 ok(patches.size === 1, `every node base runs one Node patch (${[...patches].map(([v, fs]) => `${v}: ${fs.join(", ")}`).join("; ")})`);
 
-// The tollbooth image: unprivileged, and its replay record's directory is writable by that user.
+// The tollbooth image: the proxy runs as node, reached through an entrypoint
+// that starts as root only to hand the replay record (TOLLBOOTH_REPLAY_SQLITE)
+// to node. A record an earlier root image wrote stays root's on its volume, and
+// a proxy started as node (a Dockerfile USER) opens it read-only: it boots,
+// then refuses every claim. Proved in Docker (old image as root writes the
+// record on a named volume, this image boots on it and a claim writes); these
+// checks keep that shape.
 {
   const df = readFileSync(join(ROOT, "tollbooth/deploy/docker/Dockerfile"), "utf8");
+  const ep = readFileSync(join(ROOT, "tollbooth/deploy/docker/tollbooth-entrypoint.sh"), "utf8");
   const lines = df.split("\n");
-  const userAt = lines.findIndex((l) => /^\s*USER\s+node\s*$/.test(l));
-  const cmdAt = lines.findIndex((l) => /^\s*(CMD|ENTRYPOINT)\b/.test(l));
-  ok(userAt >= 0 && cmdAt > userAt, "tollbooth image: USER node is set before the CMD");
-  ok(!lines.slice(userAt + 1).some((l) => /^\s*USER\s+(root|0)\b/.test(l)), "tollbooth image: nothing switches back to root");
+  const code = (t) => t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  const entryAt = lines.findIndex((l) => /^\s*ENTRYPOINT\s+\["\/usr\/local\/bin\/tollbooth-entrypoint\.sh"\]\s*$/.test(l));
+  const cmdAt = lines.findIndex((l) => /^\s*CMD\b/.test(l));
+  ok(entryAt >= 0 && cmdAt > entryAt, "tollbooth image: the entrypoint runs before the CMD");
+  ok(/COPY\s+tollbooth-entrypoint\.sh\s+\/usr\/local\/bin\/tollbooth-entrypoint\.sh/.test(df), "tollbooth image: the entrypoint is copied under its own name (the base image has a docker-entrypoint.sh)");
+  ok(!lines.some((l) => /^\s*USER\b/.test(l)), "tollbooth image: no Dockerfile USER (a node start cannot take back a root-owned replay record)");
+  ok(/apk add --no-cache su-exec && su-exec node true/.test(df), "tollbooth image: su-exec is installed and checked at build");
   ok(/chown\s+node:node\s+\/var\/lib\/tollbooth/.test(df), "tollbooth image: /var/lib/tollbooth (the replay record's directory) belongs to node");
   ok(!/\bnpx\b/.test(lines[cmdAt] || ""), "tollbooth image: the CMD runs the installed bin, not npx");
+  const epCode = code(ep);
+  const execs = epCode.split("\n").filter((l) => /^\s*exec\b/.test(l)).map((l) => l.trim());
+  ok(execs.length === 2 && execs[0] === 'exec su-exec "$TARGET_USER" "$@"' && execs[1] === 'exec "$@"' && /TARGET_USER=node/.test(epCode), `entrypoint: as root it execs the proxy as node; started as another user it runs as that user (${execs.join(" | ")})`);
+  ok(/\$TOLLBOOTH_REPLAY_SQLITE-wal/.test(epCode) && /\$TOLLBOOTH_REPLAY_SQLITE-shm/.test(epCode) && /chown -h "\$TARGET_USER:\$TARGET_USER" -- "\$f"/.test(epCode), "entrypoint: hands the record and its -wal/-shm files to node, never following a link");
+  ok(!/chown\s+-[a-zA-Z]*R/.test(epCode) && /"\$dir" = "\/var\/lib\/tollbooth" \] \|\| on_volume "\$dir"/.test(epCode), "entrypoint: hands over the directory only where it is the record's own place (never recursive, never part of the image)");
 }
 
 console.log(`\ntest-dockerfile-node-patch: ${pass} passed, ${fail} failed`);

@@ -150,7 +150,7 @@ const NEW_WORDS = [
   ["External spend global ceiling REFUSING", "externalSpendGlobal", ["refusing"], ["ok", "off"], ["near", "unknown"]],
   ["Solana history reads FAILING on every lane", "solanaHistory", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
   ["EVM log reads FAILING on every lane", "evmLogs", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
-  ["Speech upstream breaker COOLING (backup voices serving)", "speechUpstream", ["cooling"], ["ok"], ["probing", "unknown"]],
+  ["Speech upstream breaker COOLING (backup voices serving)", "speechUpstream", ["cooling"], ["ok", "probing"], ["unknown"]],
   ["First-call allowance UNAVAILABLE (shared store)", "firstCallAllowance", ["unavailable"], ["on", "spent"], ["off", "unknown"]],
 ];
 const j = (gateway) => judge({ gateway });
@@ -331,7 +331,7 @@ const HB = [
   ["External spend global ceiling check", NEW_WORDS[1][0], "externalSpendGlobal", { status: "refusing" }, [{ status: "near" }, { status: "unknown" }], [{ status: "ok" }, { status: "off" }]],
   ["Solana history reads check", NEW_WORDS[2][0], "solanaHistory", { status: "failing" }, [{ status: "idle" }, { status: "unknown" }], [{ status: "publics" }, { status: "fallback" }]],
   ["EVM log reads check", NEW_WORDS[3][0], "evmLogs", { status: "failing" }, [{ status: "idle" }, { status: "unknown" }], [{ status: "publics" }, { status: "fallback" }]],
-  ["Speech upstream check", NEW_WORDS[4][0], "speechUpstream", { status: "cooling" }, [{ status: "probing" }, { status: "unknown" }], [{ status: "ok" }]],
+  ["Speech upstream check", NEW_WORDS[4][0], "speechUpstream", { status: "cooling" }, [{ status: "unknown" }], [{ status: "ok" }, { status: "probing" }]],
   ["First-call allowance check", NEW_WORDS[5][0], "firstCallAllowance", { status: "unavailable" }, [{ status: "off" }, { status: "unknown" }], [{ status: "on" }, { status: "spent" }]],
 ];
 for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {

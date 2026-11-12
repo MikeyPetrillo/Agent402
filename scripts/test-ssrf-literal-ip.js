@@ -85,6 +85,8 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
     if (mode === null) return undefined;
     if (mode === "PRIVATE") return family === 4 ? ["10.1.2.3"] : Promise.reject(resolverError("ENODATA"));
     if (mode === "PUBLIC") return family === 4 ? ["93.184.215.14"] : Promise.reject(resolverError("ENODATA"));
+    // A public A listed first beside a private A: every answer is checked at connect, not the first.
+    if (mode === "MIXED") return family === 4 ? ["93.184.215.14", "10.1.2.3"] : Promise.reject(resolverError("ENODATA"));
     if (mode === "HANG") return new Promise(() => {});
     return Promise.reject(resolverError(mode));
   });
@@ -98,7 +100,7 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
     globalThis.fetch = (u, o) => { mode = m; return real("http://hop-target.example/", o); };
     try { await safeFetch("https://some-host.example/"); return null; } catch (e) { return e; } finally { globalThis.fetch = real; }
   };
-  for (const m of ["ENOTFOUND", "ENODATA", "EAI_FAIL", "PRIVATE"]) {
+  for (const m of ["ENOTFOUND", "ENODATA", "EAI_FAIL", "PRIVATE", "MIXED"]) {
     const e = await upfront(m);
     ok(e?.statusCode === 400 && e.message === UNRESOLVED_OR_PRIVATE && e.retryAfter === undefined, `lookup ${m}: one 400, one sentence (${e?.statusCode} ${e?.message})`);
     const h = await hop(m);
