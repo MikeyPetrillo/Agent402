@@ -1141,6 +1141,16 @@ async function withWarnings(fn) {
   const proof = buildTempoCredential({ payload: { signature: `0x${"cd".repeat(65)}`, type: "proof" } });
   const bp = checkTempoCredentialBinding(proof, { secretKey: GATE_SECRET, realm: REALM, priceFor, method: "GET", path: "/paid" });
   ok(bp.ok === false && /payload type "proof" does not pay/.test(bp.reason || ""), `case T: a proof credential is refused at the binding check (${bp.reason})`);
+  // mppx 0.18 adds a "zone" payload (a hash, a sender tag and a zone id): it
+  // is not a kind this gate settles, so the binding refuses it like "proof".
+  // Only "transaction" and "hash" pass; any other or missing type is refused.
+  const zone = buildTempoCredential({ payload: { hash: `0x${"ab".repeat(32)}`, senderTag: `0x${"cd".repeat(32)}`, type: "zone", zoneId: 1 } });
+  const bz = checkTempoCredentialBinding(zone, { secretKey: GATE_SECRET, realm: REALM, priceFor, method: "GET", path: "/paid" });
+  ok(bz.ok === false && /payload type "zone" does not pay/.test(bz.reason || ""), `case T: a zone credential is refused at the binding check (${bz.reason})`);
+  for (const payload of [{ hash: `0x${"ab".repeat(32)}` }, { signature: SIGNED_TX, type: "Transaction" }, { hash: `0x${"ab".repeat(32)}`, type: "zone-hash" }]) {
+    const b = checkTempoCredentialBinding(buildTempoCredential({ payload }), { secretKey: GATE_SECRET, realm: REALM, priceFor, method: "GET", path: "/paid" });
+    ok(b.ok === false && /does not pay this challenge/.test(b.reason || ""), `case T: payload type ${JSON.stringify(payload.type ?? null)} is refused at the binding check (${b.reason})`);
+  }
   ok(checkTempoCredentialBinding(buildTempoCredential(), { secretKey: GATE_SECRET, realm: REALM, priceFor, method: "GET", path: "/paid" }).payloadType === "transaction" && checkTempoCredentialBinding(buildTempoCredential({ push: true }), { secretKey: GATE_SECRET, realm: REALM, priceFor, method: "GET", path: "/paid" }).payloadType === "hash", "case T: the binding reports the credential kind");
   let validateCalls = 0;
   const app = express();
@@ -1151,6 +1161,9 @@ async function withWarnings(fn) {
   const r = await fetch(`${url}/paid`, { headers: { Authorization: proof } });
   const body = await r.json();
   ok(r.status === 402 && validateCalls === 0 && body.type === "https://paymentauth.org/problems/malformed-credential", `case T: the gate refuses a proof credential before validate() (${r.status}, ${body.type})`);
+  const rz = await fetch(`${url}/paid`, { headers: { Authorization: zone } });
+  const bodyZ = await rz.json();
+  ok(rz.status === 402 && validateCalls === 0 && bodyZ.type === "https://paymentauth.org/problems/malformed-credential" && bodyZ.served !== true, `case T: the gate refuses a zone credential before validate() (${rz.status}, ${bodyZ.type})`);
   // The gate stamps the recovered sender on an accepted pull request.
   const app2 = express();
   app2.use(createTempoGate({ ...GATE, validate: async () => ({ ok: true, validation: {} }), broadcast: async () => ({ ok: true, receipt: { method: "tempo", status: "success", reference: "0x0t", timestamp: new Date().toISOString() } }) }));
