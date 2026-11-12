@@ -10,7 +10,7 @@
 import { redactSecrets } from "./redact.js";
 import { payerFromRequest } from "../payer.js";
 import { perReplica } from "../rate-limit.js";
-import { takeHardCap, hardCapError, releaseHardCap, neverReachedUpstream } from "../upstream-hard-caps.js";
+import { takeHardCap, hardCapError, releaseHardCap, neverReachedUpstream, upstreamRefusedBeforeWork } from "../upstream-hard-caps.js";
 
 let Sandbox;
 
@@ -118,9 +118,11 @@ async function runInSandbox(code, language, tierSlug) {
       // running the code and reading its output use the sandbox's inbound side.
       sbx = await Sandbox.create({ apiKey: key, timeoutMs: tier.timeoutMs + 10_000, allowInternetAccess: false });
     } catch (e) {
-      // A create that never reached the sandbox service started nothing: its
-      // unit goes back. Any other failure keeps it (a sandbox may have started).
-      if (neverReachedUpstream(e)) releaseHardCap("e2b", capTakenAt);
+      // A create that never reached the sandbox service, or that the service
+      // refused (our key, a rate limit, its busy answer, a 4xx), started
+      // nothing: its unit goes back. Any other failure keeps it (a sandbox may
+      // have started).
+      if (neverReachedUpstream(e) || upstreamRefusedBeforeWork(e)) releaseHardCap("e2b", capTakenAt);
       // The SDK text wraps the upstream error body (account state, the key):
       // log it redacted, answer the buyer generically.
       console.warn(`[code-run] sandbox creation failed: ${redactSecrets(String(e?.message || e)).slice(0, 300)}`);

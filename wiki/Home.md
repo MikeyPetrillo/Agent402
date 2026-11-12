@@ -38,7 +38,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[x402-Index-and-Router]] | The cross-seller index + Smart Order Router (cheapest healthy tool across the ecosystem) |
 | [[x402-Leaderboard]] | Public on-chain ranking of x402 sellers by Base USDC settled volume, served as the top N |
 | [[LLM Gateway (OpenAI /v1)|LLM-Gateway]] | OpenAI-compatible chat, embeddings, rerank, images, video and speech at `/v1` (plus the Anthropic Messages and OpenAI Responses wires) - flat chat tiers from $0.003 per call, a metered tier whose 402 quotes each request from its body, embeddings and rerank from $0.002, model-optional auto-routing, streaming, response caching; any OpenAI SDK adopts it by changing `base_url` |
-| [[LLM Proxy Gateway|LLM-Proxy]] | Three tiers of OpenAI inference via x402 - GPT-4o-mini, GPT-4o/4.1, o3/o3-mini |
+| [[LLM Proxy Gateway|LLM-Proxy]] | Three tiers of OpenAI inference via x402 - GPT-4o-mini, GPT-4o/4.1, gpt-5.6-terra |
 | [[Image Generation Gateway|Image-Gen]] | Three tiers of GPT Image generation via x402 - text-to-image, no API key needed |
 | [[Code Execution Sandbox|Code-Execution]] | Sandboxed Python/JS execution via E2B - isolated cloud VMs, pay per run |
 | [[Text-to-Speech|TTS]] | Convert text to speech - three tiers, 10 voices, up to 6 formats depending on tier, pay per call |

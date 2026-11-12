@@ -7,7 +7,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import {
   HARD_CAPS, hardCapOf, takeHardCap, hardCapRefusalForHost, hardCapStatus, _resetHardCaps,
-  neverReachedUpstream, releaseHardCap,
+  neverReachedUpstream, releaseHardCap, upstreamRefusedBeforeWork,
 } from "../src/upstream-hard-caps.js";
 
 let pass = 0, fail = 0;
@@ -156,9 +156,10 @@ installEgressMeter();
   }
   delete process.env.HARDCAP_ALCHEMY_CALLS;
 }
-// --- a unit is a call that may have reached the upstream -----------------------
-// A call that provably never left this process gives its unit back; an
-// upstream that answered an error, a timeout and a reset all keep theirs.
+// --- a unit is a call the upstream may have served ----------------------------
+// A call that provably never left this process, or that the upstream refused
+// with a 4xx before doing any work, gives its unit back; a 2xx, a 5xx, a
+// timeout and a reset all keep theirs.
 {
   const used = () => hardCapStatus().upstreams.brave.usedToday;
   const fetchFailed = (code) => Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(code), { code }) });
@@ -186,12 +187,21 @@ installEgressMeter();
   await (async () => { try { await fetch(new Request("https://api.search.brave.com/res/v1/web/search?q=a", { signal: dead })); } catch { /* read from the count */ } })();
   ok(await settled(0) === 0, "a Request whose own signal was already aborted is not counted");
 
-  // Everything below MAY have reached the upstream: each keeps its unit.
-  let want = 0;
-  for (const status of [200, 400, 401, 403, 429, 500, 503]) {
+  // A 4xx answer is a refusal before any work (a bad request, our key
+  // refused, a rate limit): its unit goes back.
+  const releasedBefore = hardCapStatus().upstreams.brave.releasedToday;
+  for (const status of [400, 401, 402, 403, 404, 408, 413, 422, 429]) {
     inner = async () => new Response("{}", { status });
+    await call();
+    ok(await settled(0) === 0, `an upstream refusal of ${status} served nothing and is not counted (used ${used()})`);
+  }
+  ok(hardCapStatus().upstreams.brave.releasedToday === releasedBefore + 9, "each refusal's unit shows as given back on the operator view");
+  // Everything below MAY have been served: each keeps its unit.
+  let want = 0;
+  for (const status of [200, 201, 204, 302, 500, 502, 503]) {
+    inner = async () => new Response(status === 204 ? null : "{}", { status });
     await call(); want++;
-    await new Promise((r) => setImmediate(r));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
     ok(used() === want, `an upstream answer of ${status} is counted (used ${used()} of ${want})`);
   }
   for (const code of ["ECONNRESET", "UND_ERR_SOCKET", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "EPIPE", "ETIMEDOUT"]) {
@@ -241,7 +251,21 @@ installEgressMeter();
   await call();
   ok(reached === 1, "and the one after that meets the ceiling");
 
+  // A rate-limited call frees its unit for the next call too.
+  _resetHardCaps();
+  process.env.HARDCAP_BRAVE_CALLS = "1";
+  inner = async () => new Response("{}", { status: 429 });
+  await call();
+  await settled(0);
+  reached = 0;
+  inner = async () => { reached++; return new Response("{}"); };
+  await call();
+  ok(reached === 1, "after a call the upstream refused with 429, the next call still has its unit");
+  await call();
+  ok(reached === 1, "and the one after that meets the ceiling");
+
   // The classifier and the release, read directly.
+  ok(upstreamRefusedBeforeWork(new Response("{}", { status: 429 })) && !upstreamRefusedBeforeWork(new Response("{}", { status: 200 })) && !upstreamRefusedBeforeWork(new Response("{}", { status: 503 })) && !upstreamRefusedBeforeWork(null) && !upstreamRefusedBeforeWork(new Error("x")), "the refusal classifier: 4xx only, 2xx and 5xx counted, unknown counted");
   ok(neverReachedUpstream(fetchFailed("ENOTFOUND")) && !neverReachedUpstream(fetchFailed("ECONNRESET")) && !neverReachedUpstream(null) && !neverReachedUpstream(new Error("x")), "the classifier reads the cause chain and defaults to counted");
   _resetHardCaps();
   process.env.HARDCAP_BRAVE_CALLS = "5";
@@ -283,10 +307,28 @@ inner = async () => new Response("{}");
   err = null;
   try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
   ok(err?.statusCode === 503 && e2bUsed() === before, `code-run: a sandbox service that could not be reached does not count a sandbox (used ${e2bUsed()} of ${before})`);
+  // The sandbox service's own refusals (the SDK's error classes): nothing
+  // started, the unit goes back.
+  const e2bErr = (name, message, statusCode) => Object.assign(new Error(message), { name, ...(statusCode ? { statusCode } : {}) });
+  for (const [label, e] of [
+    ["AuthenticationError (401)", e2bErr("AuthenticationError", "Unauthorized, please check your credentials.")],
+    ["RateLimitError (429)", e2bErr("RateLimitError", "Rate limit exceeded, please try again later", 429)],
+    ["ServiceBusyError (503)", e2bErr("ServiceBusyError", "Service temporarily unavailable, please retry", 503)],
+    ["SandboxError 400", e2bErr("SandboxError", "400: template not found", 400)],
+  ]) {
+    codeRunTest.setSandbox({ create: async () => { throw e; } });
+    err = null;
+    try { await run.handler({ code: "print(1)", language: "python" }); } catch (x) { err = x; }
+    ok(err?.statusCode === 503 && e2bUsed() === before, `code-run: a create the service refused with ${label} does not count a sandbox (used ${e2bUsed()} of ${before})`);
+  }
   codeRunTest.setSandbox({ create: async () => { throw new Error("502 from the sandbox service"); } });
   err = null;
   try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
   ok(err?.statusCode === 503 && e2bUsed() === before + 1, `code-run: a create that failed after reaching the service keeps its unit (used ${e2bUsed()} of ${before + 1})`);
+  codeRunTest.setSandbox({ create: async () => { throw e2bErr("SandboxError", "500: internal", 500); } });
+  err = null;
+  try { await run.handler({ code: "print(1)", language: "python" }); } catch (e) { err = e; }
+  ok(err?.statusCode === 503 && e2bUsed() === before + 2, `code-run: a 500 from the sandbox service keeps its unit (used ${e2bUsed()} of ${before + 2})`);
   codeRunTest.setSandbox(undefined);
   delete process.env.HARDCAP_E2B_SANDBOXES;
   delete process.env.E2B_API_KEY;

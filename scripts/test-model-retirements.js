@@ -6,6 +6,9 @@
 // a caller naming the retired id served by its successor, so it stays.
 //
 //   node scripts/test-model-retirements.js
+//   MODEL_RETIREMENTS_NOW=2026-12-12 node scripts/test-model-retirements.js
+// The second form reads the code as of that day (an ISO date or time), so a
+// change can prove it passes after a retirement date before the date comes.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -30,7 +33,10 @@ function sources(dir, out = []) {
 const files = sources(fileURLToPath(new URL("../src", import.meta.url)));
 const RETIREMENT_KEY = /(["'`])[^"'`\n]+\1:\s*\{\s*until:/g;
 const text = new Map(files.map((f) => [f, readFileSync(f, "utf8").replace(RETIREMENT_KEY, "")]));
-const now = Date.now();
+const NOW_OVERRIDE = process.env.MODEL_RETIREMENTS_NOW;
+const now = NOW_OVERRIDE ? Date.parse(NOW_OVERRIDE) : Date.now();
+if (!Number.isFinite(now)) { console.log(`FAIL MODEL_RETIREMENTS_NOW is not a date: ${NOW_OVERRIDE}`); process.exit(1); }
+if (NOW_OVERRIDE) console.log(`reading as of ${new Date(now).toISOString()}`);
 let fail = 0, pass = 0;
 for (const r of RETIRING) {
   const days = Math.ceil((Date.parse(r.retires) - now) / 86_400_000);
