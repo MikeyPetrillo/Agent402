@@ -173,7 +173,26 @@ for (const junk of [null, undefined, "", "!!!", "AAAA", "gA==", Buffer.alloc(300
   const staticTx = await altTx({ inTable: [] });
   ok(svmPaymentAuthority(asPayload(staticTx), { feePayer: fp.address }) === buyer.address && svmTransferAccounts(staticTx)?.authority === buyer.address, "all static: the authority, and the four-account read agrees");
   const named = await altTx({ inTable: [payTo], authority: "named" });
-  ok(svmPaymentAuthority(asPayload(named), { feePayer: fp.address }) === null, "an authority that is not a signer gives no payer, never the co-signer");
+  const namedGot = svmPaymentAuthority(asPayload(named), { feePayer: fp.address });
+  ok(namedGot === buyer.address, `an authority that is a static key but not a signer (an SPL multisig account) is the payer, never the co-signer (${namedGot === decoy.address ? "got the decoy" : namedGot})`);
+  const namedInTable = await altTx({ inTable: [payTo, buyer.address], authority: "named" });
+  ok(svmPaymentAuthority(asPayload(namedInTable), { feePayer: fp.address }) === null, "an authority that is a lookup-table entry gives no payer, never the co-signer");
+  // A header that claims more signers than there are static keys: account 3
+  // at index 2 of a two-key message would read the recent blockhash's bytes.
+  {
+    const enc = kit.getAddressEncoder();
+    const bh = new Uint8Array(32).fill(7);
+    const raw = (numReq) => {
+      const sigCount = numReq;
+      const keys = [enc.encode(kit.address(fp.address)), enc.encode(kit.address(TOKEN))];
+      const ix = [1, 4, 0, 0, 0, 2, 10, 12, ...u64(1000), 6];
+      const bytes = [sigCount, ...new Array(64 * sigCount).fill(0), numReq, 0, 1, keys.length, ...keys.flatMap((k) => [...k]), ...bh, 1, ...ix];
+      return Buffer.from(bytes).toString("base64");
+    };
+    ok(svmTransferAuthority(raw(2))?.authority === base58Encode(bh) || svmTransferAuthority(raw(2))?.found === true, "control: the same layout with a valid header reads a transfer");
+    ok(svmTransferAuthority(raw(3)) === null, `a header claiming more signers than static keys is malformed, never the blockhash as authority (${JSON.stringify(svmTransferAuthority(raw(3)))})`);
+    ok(svmPaymentAuthority({ payload: { transaction: raw(3) } }) === null, "and gives no payer");
+  }
   const other = await kit.generateKeyPairSigner();
   const twoAuth = await altTx({ inTable: [payTo], second: other });
   ok(svmPaymentAuthority(asPayload(twoAuth), { feePayer: fp.address }) === null, "two transfers with different authorities give no payer");

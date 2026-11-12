@@ -166,16 +166,19 @@ function readTransfer(txBase64, index) {
 
 /**
  * The transfer authority of a Solana payment: account 3 of its TransferChecked
- * instruction(s), read only when that index is one of the message's required
- * signers. Signers always sit in the static account keys (a v0 lookup table
- * holds no signer), so the authority reads with no RPC even when the source,
- * mint or destination is a lookup-table entry.
+ * instruction(s), read only when that index is a static account key. A signing
+ * authority is the wallet itself, and signers always sit in the static keys (a
+ * v0 lookup table holds no signer), so it reads with no RPC even when the
+ * source, mint or destination is a lookup-table entry. A static key that does
+ * not sign is an SPL multisig account, a stable address for its owner. Never a
+ * co-signer the transfer does not name.
  *   - `{ found: false }`: the transaction parses and holds no TransferChecked of
  *     a token program, so the caller may fall back to the signer order;
- *   - `{ found: true, authority }`: every TransferChecked names this one signer;
- *   - `{ found: true, authority: null }`: a transfer exists but its authority
- *     is not a signer or the transfers disagree, so no signer stands in for it;
- *   - null: the bytes do not parse.
+ *   - `{ found: true, authority }`: every TransferChecked names this one key;
+ *   - `{ found: true, authority: null }`: a transfer's authority sits in a
+ *     lookup table or the transfers disagree, so no key stands in for it;
+ *   - null: the bytes do not parse, or the header claims more signers than
+ *     there are static keys.
  * @param {string} txBase64
  */
 export function svmTransferAuthority(txBase64) {
@@ -183,12 +186,20 @@ export function svmTransferAuthority(txBase64) {
     const m = readMessage(txBase64);
     if (!m) return null;
     if (m.numRequiredSignatures < 1 || m.numRequiredSignatures !== m.sigCount) return null;
+    // The signers are the first static keys, so a header that claims more
+    // signers than there are static keys is malformed: index 3 would read
+    // past the keys into the blockhash.
+    if (m.numRequiredSignatures > m.keyCount) return null;
     const transfers = m.instructions.filter((ix) => isTransferChecked(m, ix));
     if (transfers.length === 0) return { found: false, authority: null };
     const names = new Set();
     for (const ix of transfers) {
       const a = ix.accountIdx[3];
-      if (a >= m.numRequiredSignatures) return { found: true, authority: null };
+      // A signer is the wallet itself; a static key that does not sign is an
+      // SPL multisig account (its member signers follow in the instruction),
+      // a stable address for the same payer. A lookup-table entry cannot be
+      // read without an RPC.
+      if (a >= m.keyCount) return { found: true, authority: null };
       names.add(base58Encode(m.keyBytes(a)));
     }
     return { found: true, authority: names.size === 1 ? [...names][0] : null };
