@@ -20,7 +20,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
 import {
-  TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, retirementPending, FLEX_MODELS, REASONING_MODELS, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
+  TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, retirementPending, flexModelIds, reasoningRows, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
   IMAGES_MODEL, AVAILABILITY_SUCCESSORS, MARGIN,
 } from "../src/tools/llm-gateway-kit.js";
 import { meterMarkup } from "../src/gateway-meter.js";
@@ -526,7 +526,8 @@ for (const [id, r] of Object.entries(RETIRING_MODELS)) {
 // 6. Flex table: every FLEX_MODELS entry must still carry a "*/flex" endpoint
 //    upstream - flex on a model without one 404s and costs a failed attempt
 //    per call (the same wasted-round-trip class as a dead chain link).
-for (const id of FLEX_MODELS) {
+//    flexModelIds() adds a retiring id's flex row while it is served as itself.
+for (const id of flexModelIds()) {
   let tags = null;
   try {
     const r = await fetch(`https://openrouter.ai/api/v1/models/${id}/endpoints`, { signal: AbortSignal.timeout(30_000) });
@@ -537,7 +538,7 @@ for (const id of FLEX_MODELS) {
 // Informational, never fails: ranked/fallback models that gained flex since the table was written.
 {
   const watchedIds = [...new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(TIERS).flatMap((t) => t.fallbacks || [])])]
-    .filter((m) => /^(openai|google)\//.test(m) && !FLEX_MODELS.some((p) => m === p || m.startsWith(p + "-")));
+    .filter((m) => /^(openai|google)\//.test(m) && !flexModelIds().some((p) => m === p || m.startsWith(p + "-")));
   const gained = [];
   for (const id of watchedIds) {
     try {
@@ -553,8 +554,9 @@ for (const id of FLEX_MODELS) {
 //    (an effort we might inject that upstream dropped = a 400 per call), and
 //    whose reasoning is default-on or mandatory (else the default injection is
 //    pointless). Prefix rows (gpt-5.6-) are checked against every live id
-//    that matches.
-for (const row of REASONING_MODELS) {
+//    that matches. reasoningRows() adds a retiring id's row while it is served
+//    as itself, so the row stops being graded on the id's retirement date.
+for (const row of reasoningRows()) {
   const label = row.id || row.prefix;
   const matches = models.filter((m) => reasoningRowMatches(row, m.id));
   if (matches.length === 0 && isStealth(label)) {
@@ -566,7 +568,7 @@ for (const row of REASONING_MODELS) {
   // so a prefix row is graded only on the ids no longer row claims
   // (meta/muse-spark-open has its own row under the meta/muse-spark prefix).
   const keyLen = (r) => (r.id || r.prefix).length;
-  const governs = (m) => !REASONING_MODELS.some((o) => o !== row && keyLen(o) > keyLen(row) && reasoningRowMatches(o, m.id));
+  const governs = (m) => !reasoningRows().some((o) => o !== row && keyLen(o) > keyLen(row) && reasoningRowMatches(o, m.id));
   for (const m of matches.filter(governs)) {
     const r = m.reasoning || {};
     const live = Array.isArray(r.supported_efforts) ? r.supported_efforts : [];
@@ -706,7 +708,7 @@ for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(
 // (they would get no default effort and could return paid empty "length" answers).
 {
   const watchedIds = [...new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(TIERS).flatMap((t) => t.fallbacks || [])])];
-  const untabled = watchedIds.filter((id) => { const m = models.find((x) => x.id === id); const r = m?.reasoning; return r && (r.mandatory === true || r.default_enabled === true) && Array.isArray(r.supported_efforts) && !REASONING_MODELS.some((row) => reasoningRowMatches(row, id)); });
+  const untabled = watchedIds.filter((id) => { const m = models.find((x) => x.id === id); const r = m?.reasoning; return r && (r.mandatory === true || r.default_enabled === true) && Array.isArray(r.supported_efforts) && !reasoningRows().some((row) => reasoningRowMatches(row, id)); });
   if (untabled.length) console.log(`note - ranked/fallback models that reason by default but have no REASONING_MODELS row: ${untabled.join(", ")}`);
 }
 
