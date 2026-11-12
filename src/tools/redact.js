@@ -288,18 +288,28 @@ const BREAK_RE = /\r?\n[ \t]*/g;
 function spansAcrossBreaks(text, find) {
   const s = String(text);
   const keep = [];
-  let joined = "";
-  const map = []; // joined index -> s index
-  let at = 0;
+  // One entry per kept segment: [start in the joined text, start in s]. A
+  // joined index maps back by the segment it falls in, so the map grows with
+  // the line breaks, not with the length of the text.
+  const segs = [];
+  const parts = [];
+  let at = 0, joinedLen = 0;
   for (const m of s.matchAll(BREAK_RE)) {
-    for (let i = at; i < m.index; i++) map.push(i);
-    joined += s.slice(at, m.index);
+    segs.push([joinedLen, at]);
+    parts.push(s.slice(at, m.index));
+    joinedLen += m.index - at;
     at = m.index + m[0].length;
   }
-  for (let i = at; i < s.length; i++) map.push(i);
-  joined += s.slice(at);
+  segs.push([joinedLen, at]);
+  parts.push(s.slice(at));
+  const joined = parts.join("");
+  const toS = (j) => {
+    let lo = 0, hi = segs.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (segs[mid][0] <= j) lo = mid; else hi = mid - 1; }
+    return segs[lo][1] + (j - segs[lo][0]);
+  };
   for (const [a, b] of find(joined)) {
-    const start = map[a], end = map[b - 1] + 1;
+    const start = toS(a), end = toS(b - 1) + 1;
     if (end - start !== b - a) keep.push([start, end]);
   }
   return keep;
