@@ -7,8 +7,11 @@
 // middleware, turns the handler's 200 into a 402 after the handler ran. A
 // call is counted by the distinct authors in `includes.users` and the posts
 // in `data` only on a FINAL 200; a settle failure, an upstream error and a
-// call outside a request count nothing. The answer is unchanged by the
-// counting. The counts land in the state document (file backend here),
+// call outside a request count nothing there. The day's author reads
+// (`authorReads`) count every page X answered, a settle failure and a call
+// outside a request included, since X bills them either way. The answer is
+// unchanged by the counting. The xSearchAuthors word shares one bounded store
+// read across concurrent requests and keeps a flushed batch in its figure. The counts land in the state document (file backend here),
 // survive a fresh module state, never hold a username, id or query text, and
 // days past the keep window are pruned.
 //
@@ -36,6 +39,8 @@ const stats = await import("../src/x-search-stats.js");
 
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
+// One sold call, as the handler records it: author reads, then the final 200.
+const sale = (o) => { stats.noteXSearchAuthorReads(o); return stats.noteXSearchCall({ status: 200, ...o }); };
 
 // --- the bucket rule, pure ----------------------------------------------------
 const B = (n) => stats.bucketOf(n);
@@ -126,20 +131,164 @@ try {
   ok(rep.totals.outside.calls === 4 && rep.totals.synthetic.calls === 1 && rep.scope === "stored", "the counts survive a fresh process state");
 
   // Increments from two writers add up (read-modify-write, never a whole-body replace).
-  stats.noteXSearchCall({ status: 200, authors: 12, posts: 12 });
+  sale({ authors: 12, posts: 12 });
   await stats.flushXSearchStats();
-  stats.noteXSearchCall({ status: 200, authors: 5, posts: 10 });
+  sale({ authors: 5, posts: 10 });
   rep = await stats.xSearchStatsReport();
   ok(rep.totals.outside.calls === 6 && rep.totals.outside.authors["11+"] === 1 && rep.totals.outside.authors["4-6"] === 1, `stored and unflushed counts merge on read (${rep.totals.outside.calls})`);
   await stats.flushXSearchStats();
 
+  // The xSearchAuthors word: today's exact author reads (both lanes, stored
+  // and unflushed) against X_SEARCH_AUTHOR_DAILY_ALERT; an alarm only.
+  ok(stats.X_SEARCH_AUTHOR_DAILY_ALERT_DEFAULT === 500 && stats.xSearchAuthorDailyAlert() === 500, "the alert mark defaults to 500 author reads a day");
+  // Stored so far: outside 3+10+1+0, plus 5 from the settle failure and 4
+  // from the out-of-request call (X billed both), plus 12+5 = 40; synthetic 7.
+  rep = await stats.xSearchStatsReport();
+  ok(rep.totals.outside.authorReads === 40 && rep.totals.synthetic.authorReads === 7, `each lane keeps the exact author reads beside the histogram, every page X answered included (${rep.totals.outside.authorReads}, ${rep.totals.synthetic.authorReads})`);
+  ok(rep.totals.outside.calls === 6, `the settle failure and the out-of-request call still add no call (${rep.totals.outside.calls})`);
+  let w = await stats.xSearchAuthorsStatus();
+  ok(JSON.stringify(w) === JSON.stringify({ status: "ok" }), `under the mark the public word is ok, with no figure (${JSON.stringify(w)})`);
+  w = await stats.xSearchAuthorsStatus({ full: true });
+  ok(w.status === "ok" && w.authorReadsToday === 47 && w.alertAbove === 500 && w.scope === "stored", `the operator view counts both lanes, stored and unflushed (${JSON.stringify(w)})`);
+  process.env.X_SEARCH_AUTHOR_DAILY_ALERT = "47";
+  ok((await stats.xSearchAuthorsStatus()).status === "ok", "at the mark the word stays ok");
+  sale({ authors: 1, posts: 1 });
+  ok((await stats.xSearchAuthorsStatus()).status === "alert", "one author read past the mark reads alert (unflushed counts included)");
+  await stats.flushXSearchStats();
+  stats._resetXSearchStats();
+  ok((await stats.xSearchAuthorsStatus()).status === "alert", "a fresh process reads alert from the stored day");
+  ok((await stats.xSearchAuthorsStatus({ now: Date.now() + 86_400_000 })).status === "ok", "the next UTC day reads ok");
+  // The answer path is never refused for it: a call past the mark still answers 200 and is counted.
+  const past = await call(() => J(200, page(10, 10)));
+  ok(past.status === 200 && past.body.count === 10, `a call past the mark is served as usual (${past.status})`);
+  process.env.X_SEARCH_AUTHOR_DAILY_ALERT = "0";
+  ok(stats.xSearchAuthorDailyAlert() === 500, "a zero or malformed mark falls back to the default");
+  delete process.env.X_SEARCH_AUTHOR_DAILY_ALERT;
+  await stats.flushXSearchStats();
+
+  // One store read serves every concurrent status request, and it is bounded.
+  {
+    const noon = Date.parse(`${new Date().toISOString().slice(0, 10)}T12:00:00.000Z`);
+    stats._resetXSearchStats();
+    const d = stats._xSearchStatsDoc();
+    const realRead = d.read.bind(d);
+    let reads = 0;
+    d.read = (...a) => { reads++; return new Promise((r) => setTimeout(r, 30)).then(() => realRead(...a)); };
+    const first = await Promise.all(Array.from({ length: 200 }, () => stats.xSearchAuthorsStatus({ now: noon })));
+    ok(reads === 1 && first.every((x) => x.status === "ok"), `200 concurrent status requests make one store read (${reads})`);
+    const lapsed = await Promise.all(Array.from({ length: 200 }, () => stats.xSearchAuthorsStatus({ now: noon + 31_000 })));
+    ok(reads === 2 && lapsed.every((x) => x.status === "ok"), `after the 30 s reuse, 200 concurrent requests make one more read (${reads})`);
+    d.read = () => new Promise(() => {});
+    const t0 = Date.now();
+    const hung = await Promise.race([stats.xSearchAuthorsStatus({ now: noon + 62_000 }), new Promise((r) => setTimeout(() => r({ status: "still waiting" }), 3_000).unref())]);
+    ok(hung.status === "unknown" && Date.now() - t0 < 2_000, `a store read that never answers is cut at its deadline and reads unknown (${hung.status}, ${Date.now() - t0} ms)`);
+    d.read = realRead;
+  }
+
+  // A flush keeps the flushed reads in the word: no alert -> ok -> alert flap.
+  {
+    const day = Date.parse(`${new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10)}T12:00:00.000Z`);
+    process.env.X_SEARCH_AUTHOR_DAILY_ALERT = "500";
+    stats._resetXSearchStats();
+    stats.noteXSearchAuthorReads({ authors: 490, now: day });
+    await stats.flushXSearchStats({ now: day });
+    stats._resetXSearchStats();
+    let f = await stats.xSearchAuthorsStatus({ now: day, full: true });
+    ok(f.status === "ok" && f.authorReadsToday === 490, `490 stored reads under a mark of 500 read ok (${JSON.stringify(f)})`);
+    stats.noteXSearchAuthorReads({ authors: 20, now: day });
+    f = await stats.xSearchAuthorsStatus({ now: day + 1_000, full: true });
+    ok(f.status === "alert" && f.authorReadsToday === 510, `490 stored and 20 unflushed read alert (${JSON.stringify(f)})`);
+    // While the batch is being written it still counts.
+    const d = stats._xSearchStatsDoc();
+    const realUpdate = d.update.bind(d);
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    d.update = (...a) => gate.then(() => realUpdate(...a));
+    const flushing = stats.flushXSearchStats({ now: day });
+    f = await stats.xSearchAuthorsStatus({ now: day + 2_000, full: true });
+    ok(f.status === "alert" && f.authorReadsToday === 510, `a batch being written still counts (${JSON.stringify(f)})`);
+    release();
+    const fr = await flushing;
+    d.update = realUpdate;
+    ok(fr.ok && fr.flushed, "the flush lands");
+    f = await stats.xSearchAuthorsStatus({ now: day + 3_000, full: true });
+    ok(f.status === "alert" && f.authorReadsToday === 510, `after the flush, inside the 30 s reuse, it still reads alert (${JSON.stringify(f)})`);
+    f = await stats.xSearchAuthorsStatus({ now: day + 40_000, full: true });
+    ok(f.status === "alert" && f.authorReadsToday === 510, `the next store read agrees, with no double count (${JSON.stringify(f)})`);
+    // A status read that started before a flush landed and answers after it
+    // may hold the row from before the write: the larger figure stands.
+    const day2 = day + 86_400_000;
+    stats._resetXSearchStats();
+    stats.noteXSearchAuthorReads({ authors: 490, now: day2 });
+    await stats.flushXSearchStats({ now: day2 });
+    stats._resetXSearchStats();
+    ok((await stats.xSearchAuthorsStatus({ now: day2 })).status === "ok", "the second day starts at 490 stored, ok");
+    stats.noteXSearchAuthorReads({ authors: 20, now: day2 });
+    const d2 = stats._xSearchStatsDoc();
+    const realRead2 = d2.read.bind(d2);
+    let releaseRead;
+    const readGate = new Promise((r) => { releaseRead = r; });
+    let snapshotTaken;
+    const taken = new Promise((r) => { snapshotTaken = r; });
+    d2.read = async (...a) => { const before = await realRead2(...a); snapshotTaken(); await readGate; return before; };
+    const overlapping = stats.xSearchAuthorsStatus({ now: day2 + 40_000, full: true });
+    await taken;
+    await stats.flushXSearchStats({ now: day2 });
+    releaseRead();
+    f = await overlapping;
+    d2.read = realRead2;
+    ok(f.status === "alert" && f.authorReadsToday === 510, `a status read from before a flush landed keeps the flushed reads (${JSON.stringify(f)})`);
+    // A status read that lands after the flush's write committed but before the
+    // flush returns already holds the batch: it is counted once, not twice.
+    const day3 = day2 + 86_400_000;
+    stats._resetXSearchStats();
+    stats.noteXSearchAuthorReads({ authors: 470, now: day3 });
+    await stats.flushXSearchStats({ now: day3 });
+    stats._resetXSearchStats();
+    ok((await stats.xSearchAuthorsStatus({ now: day3, full: true })).authorReadsToday === 470, "the third day starts at 470 stored");
+    stats.noteXSearchAuthorReads({ authors: 20, now: day3 });
+    const d3 = stats._xSearchStatsDoc();
+    const realUpdate3 = d3.update.bind(d3);
+    let midRead;
+    d3.update = async (...a) => { const r = await realUpdate3(...a); midRead = await stats.xSearchAuthorsStatus({ now: day3 + 40_000, full: true }); return r; };
+    await stats.flushXSearchStats({ now: day3 });
+    d3.update = realUpdate3;
+    ok(midRead && midRead.authorReadsToday === 490 && midRead.status === "ok", `a read between the write and the flush's return counts the batch once (${JSON.stringify(midRead)})`);
+    f = await stats.xSearchAuthorsStatus({ now: day3 + 41_000, full: true });
+    ok(f.authorReadsToday === 490 && f.status === "ok", `after that flush returns the day is not counted twice (${JSON.stringify(f)})`);
+    // A cold cache (first read after boot) whose read predates this process's
+    // landed write still counts the landed batch.
+    const day4 = day3 + 86_400_000;
+    stats._resetXSearchStats();
+    stats.noteXSearchAuthorReads({ authors: 470, now: day4 });
+    await stats.flushXSearchStats({ now: day4 });
+    stats._resetXSearchStats();
+    stats.noteXSearchAuthorReads({ authors: 20, now: day4 });
+    const d4 = stats._xSearchStatsDoc();
+    const realRead4 = d4.read.bind(d4);
+    let releaseRead4, snap4;
+    const gate4 = new Promise((r) => { releaseRead4 = r; });
+    const taken4 = new Promise((r) => { snap4 = r; });
+    d4.read = async (...a) => { const before = await realRead4(...a); snap4(); await gate4; return before; };
+    process.env.X_SEARCH_AUTHOR_DAILY_ALERT = "480";
+    const cold = stats.xSearchAuthorsStatus({ now: day4 + 1_000, full: true });
+    await taken4;
+    await stats.flushXSearchStats({ now: day4 });
+    releaseRead4();
+    f = await cold;
+    d4.read = realRead4;
+    ok(f.authorReadsToday === 490 && f.status === "alert", `a cold read that predates a landed write still counts it (${JSON.stringify(f)})`);
+    process.env.X_SEARCH_AUTHOR_DAILY_ALERT = "500";
+    delete process.env.X_SEARCH_AUTHOR_DAILY_ALERT;
+  }
+
   // Days past the keep window are pruned on the next write.
   const old = Date.now() - (stats.X_SEARCH_STATS_KEEP_DAYS + 5) * 86_400_000;
-  stats.noteXSearchCall({ status: 200, authors: 1, posts: 1, now: old });
+  sale({ authors: 1, posts: 1, now: old });
   await stats.flushXSearchStats();
   const body = JSON.parse(readFileSync(STATS_FILE, "utf8"));
   const days = Object.keys((body.body ?? body).days || {});
-  ok(days.length === 1 && !days.includes(new Date(old).toISOString().slice(0, 10)), `a day past the keep window is pruned (${days.join(", ")})`);
+  ok(days.length === 5 && !days.includes(new Date(old).toISOString().slice(0, 10)), `a day past the keep window is pruned (${days.join(", ")})`);
 } finally {
   server.close();
   globalThis.fetch = realFetch;

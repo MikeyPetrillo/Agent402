@@ -25,9 +25,9 @@ async function check(name, fn) {
 
 const TITLE = "subscriptionRenewals: a monitor renewal has stayed unconfirmed for hours";
 
-await check("gateway-status carries the word: the engine's read, full only for the operator, off without an engine", () => {
+await check("gateway-status carries the word: the engine's read, full only for the operator, off without an engine, unknown when a configured engine failed", () => {
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  assert.ok(/subscriptionRenewals: \(\(\) => \{ try \{ return _mppSubs \? _mppSubs\.renewalsStatus\(\{ full \}\) : \{ status: "off" \}; \} catch \{ return \{ status: "unknown" \}; \} \}\)\(\),/.test(server));
+  assert.ok(/subscriptionRenewals: \(\(\) => \{ try \{ return _mppSubs \? _mppSubs\.renewalsStatus\(\{ full \}\) : \{ status: _mppSubsState === "failed" \? "unknown" : "off" \}; \} catch \{ return \{ status: "unknown" \}; \} \}\)\(\),/.test(server));
   const subs = readFileSync(new URL("../src/mpp-subscriptions.js", import.meta.url), "utf8");
   assert.ok(/function renewalsStatus\(\{ full = false, env = process\.env, at = now\(\) \} = \{\}\) \{\n\s*refreshMirror\(\);\n\s*return renewalsWord\(\[\.\.\.cache\.values\(\)\], \{ hours: renewalUnconfirmedAlertHours\(env\), at, full \}\);/.test(subs), "the engine reads its mirror with the env threshold");
 });

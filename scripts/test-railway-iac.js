@@ -82,8 +82,19 @@ ok(existsSync(join(ROOT, ".railway/package-lock.json")), "the SDK has a lockfile
 const lock = JSON.parse(readFileSync(join(ROOT, ".railway/package-lock.json"), "utf8"));
 ok(lock.packages?.["node_modules/railway"]?.version === pkg.dependencies?.railway, "the lockfile resolves the pinned version");
 
+// The file type-checks against the SDK it is planned with: each service
+// config is checked against the SDK's service type (a readonly `as const`
+// array is refused there), and the folder carries the compiler and the
+// script the runbook runs.
+const src = readFileSync(join(ROOT, ".railway/railway.ts"), "utf8");
+ok(!/\bas const\b/.test(src), "no config object is declared `as const` (its readonly arrays do not match the SDK's mutable types)");
+ok((src.match(/\}\s*satisfies IntentServiceConfig;/g) || []).length === 2, "both service configs are checked against IntentServiceConfig");
+ok(/^\d+\.\d+\.\d+$/.test(pkg.devDependencies?.typescript || ""), `the type checker is pinned to an exact version (${pkg.devDependencies?.typescript})`);
+ok(/\btsc --noEmit\b.*\brailway\.ts\b/.test(pkg.scripts?.typecheck || ""), "the folder has a typecheck script for railway.ts");
+ok(lock.packages?.["node_modules/typescript"]?.version === pkg.devDependencies?.typescript, "the lockfile resolves the pinned type checker");
+
 // The runbook names each owner step.
-for (const step of ["railway config plan", "0 to destroy", "railway config apply", "outside a CI run", "Config as Code path", "meta.build"]) {
+for (const step of ["railway config migrate status", "npm run --prefix .railway typecheck", "railway config plan", "0 to destroy", "railway config apply", "outside a CI run", "Config as Code path", "meta.build"]) {
   ok(runbook.includes(step), `the runbook covers "${step}"`);
 }
 

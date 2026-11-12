@@ -114,7 +114,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   primary link, so a quiet service does not hold the page open; closes on the second clear read in
   a row, `closeAfterTwoOk`, so a failed probe between cool-downs does not reopen it each cycle),
   `firstCallAllowance` unavailable
-  (on, spent: spent is the day's cap working as set; present only while the trial is on). `loopLag`
+  (on, spent: spent is the day's cap working as set; present only while the trial is on),
+  `xSearchAuthors` alert (ok; see the X search author alarm below), `mppSubscriptions` failed (on,
+  off: the MPP subscription engine is configured but did not build at boot, including an installed
+  mppx with no subscription method; `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`;
+  `subscriptionRenewals` then reads unknown). `loopLag`
   and `mppEvmDomainFallback` publish a flag, not a word, and page nothing.
 - **Ended MPP subscriptions:** the private half of a subscription's access key is deleted when a
   cancel is stored or the subscription ends (`finishEnded` in `src/mpp-subscriptions.js`, reached from
@@ -255,6 +259,15 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   container does not read `ok` on a day already past a ceiling, and a refusal on any replica
   holds `capped` for `REFUSAL_HOLD_MS` (an hour; a refused call books nothing, so the total can
   sit under the ceiling) (`src/daily-ceilings.js`, `scripts/test-spend-words-shared-redis.js`).
+- **X search author alarm:** x-search-recent's author expansion stays at the listed price; an
+  alarm watches the day's author reads (owner decision 2026-11-12; the permanent exception in
+  `scripts/test-pricing-margin.js`). `src/x-search-stats.js` keeps each day's exact expanded-author
+  reads per lane (`authorReads`), and `xSearchAuthors` on `/api/gateway-status` reads `alert` once
+  the day's reads (both lanes, stored and unflushed) pass `X_SEARCH_AUTHOR_DAILY_ALERT` (default
+  500: at most `X_MAX_POSTS_PER_CALL` authors a page, so 50 full pages a day at its default of 10), `ok` under it,
+  `unknown` when the stored day cannot be read. One store read per status answer, reused 30 s.
+  An alarm only: no call is refused or capped for it. Paged under "X search author reads OVER the
+  daily alert", closed on `ok` (`scripts/test-x-search-stats.js`, `scripts/test-status-word-pagers.js`).
 - **Exa ceilings:** the same two ceilings and words, read the same way (`src/daily-ceilings.js`): `EXA_DAILY_MAX_USD`
   (default 1; `0` refuses every call) is the alarm and `exaSpend` reads `over` past it while the
   Exa tools keep serving; `EXA_DAILY_HARD_MAX_USD` (default 5 times the alarm ceiling; never

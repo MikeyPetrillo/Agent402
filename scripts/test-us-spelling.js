@@ -2,8 +2,8 @@
 // Public copy is written in US English. This reads the prose a visitor, a
 // package user or an agent sees: the README, the wiki and docs trees, the
 // package READMEs, every served page module (legal, guides, FAQ, home, the
-// explainer and product pages, llms.txt and the connector's instructions), and
-// every tool description, and fails on a British spelling. Code comments and
+// explainer and product pages, llms.txt and the connector's instructions),
+// every changelog title and item, and every tool description, and fails on a British spelling. Code comments and
 // identifiers are not read, and neither is a quoted token or an object key: a
 // status token such as "cancelled" is a contract and stays as it is.
 //
@@ -140,6 +140,19 @@ ok(markdown.length >= 40 && pageModules.length >= 20 && kits.length >= 40, `read
 for (const f of markdown) scanProse(f, readFileSync(f, "utf8"), () => true);
 for (const f of pageModules) scanProse(f, readFileSync(f, "utf8"), (line) => !isComment(line));
 for (const f of kits) scanDescriptions(f, readFileSync(f, "utf8"));
+// The changelog (/changelog and its RSS feed): every entry's title and item
+// strings, read from the module itself so a string split across lines or
+// joined with + is read whole.
+const { CHANGELOG_ENTRIES } = await import("../src/changelog.js");
+let changelogStrings = 0;
+for (const [i, e] of CHANGELOG_ENTRIES.entries()) {
+  for (const [k, text] of [["title", e.title], ...(e.items || []).map((t, j) => [`item ${j + 1}`, t])]) {
+    if (typeof text !== "string") continue;
+    changelogStrings++;
+    for (const m of text.matchAll(WORD)) if (!isToken(text, m)) hits.push(`src/changelog.js: entry ${i + 1} (${e.date}) ${k}: "${m[1]}" (US: ${BRITISH[m[1].toLowerCase()]})`);
+  }
+}
+ok(changelogStrings >= 100, `read ${changelogStrings} changelog titles and items`);
 ok(hits.length === 0, `no British spelling in public copy${hits.length ? `:\n    ${hits.join("\n    ")}` : ""}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);

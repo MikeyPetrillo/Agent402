@@ -3,6 +3,16 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-12",
+    title: "Vendor updates: security releases",
+    items: [
+      "Server: the HTTP client takes the November undici security release; Stripe calls pin their API version; the MPP and Solana libraries take their current releases.",
+      "Server: the Railway configuration runbook covers the December 2026 cutover.",
+      "Server: the sanctions list refresh reads the list and builds its address and name sets in short slices, so it no longer holds other requests while it runs.",
+      "Server: /api/gateway-status reports xSearchAuthors (a day of X search author reads past its alert level) and mppSubscriptions (on, off, or failed to start).",
+    ],
+  },
+  {
+    date: "2026-11-12",
     title: "Leftovers: payer keys, lookups, retirements, site polish",
     items: [
       "Payments: a Solana payment is keyed on its transfer authority when other transfer accounts sit in a lookup table, and x402 v1 Solana payments carry a payer key.",
@@ -98,7 +108,7 @@ const ENTRIES = [
       "Tools: an attest or feedback call made right after a purchase finds that purchase while its ledger write is still landing: the lookup waits up to 5 seconds for the write.",
       "Tools: the transcription duration caps hold the audio a file plays: the audio is decoded on the server and its length read, and the cap applies to the longer of that and the duration the file's headers declare. A file the server cannot decode is held to the shortest length its byte count can play when it is lossy audio-only in one or two channels at a sample rate of 48 kHz or less; any other file (a lossless one, one with a video track, more than two channels, a higher sample rate or no reported sample rate) keeps its declared length.",
       "Tools: the domain audit and token risk reports (model-backed) pass the records they read (DNS, header and certificate values, registration text, token names, symbols and labels, web reputation text) to the model as quoted data, with the rule to describe them and never follow them.",
-      "Tools: the daily call ceilings on upstream services count calls that may have reached the upstream. A call that never left the server (a name that did not resolve, a refused connection, a call its caller had cancelled before it was made) gives its unit back.",
+      "Tools: the daily call ceilings on upstream services count calls that may have reached the upstream. A call that never left the server (a name that did not resolve, a refused connection, a call its caller had canceled before it was made) gives its unit back.",
       "Surfaces: the hosted connector sends Retry-After on its 429, and its free-tier rate-limit answer says in how many seconds there is room again. A free answer over the connector's size ceiling is cut to valid JSON and says what was cut in answerBound (unit, maxBytes, returned, matched, complete, truncated, cuts, cutsListed, cutsTotal); a paid answer is delivered whole. catalog.search takes a limit of 1 to 25 (10 when the limit is missing or zero); a value outside that range is clamped to it. Tools that can charge (every flagship, catalog.call) are not marked read-only; catalog.search, catalog.find, sellers.list, server.describe and payment.info are. memory.write is marked destructive, since it replaces the value a key held.",
       "Surfaces: the page of a retired tool or skill pack answers 410 with its retirement date and, where there is one, a link to the replacement's page, as its API route does.",
       "Surfaces: /status says when a component's last observation is stale and how old it is. Its two observers are named Scheduled heartbeat and Outside probe on the page, in its method notes and in /api/status.",

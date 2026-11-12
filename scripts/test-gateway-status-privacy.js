@@ -60,6 +60,9 @@ ok(pubBody?.replayStore?.status === "ok" && pubBody.replayStore.alert === "ok" &
 ok(opBody?.replayStore?.status === "ok" && typeof opBody?.replayStore?.pending === "number" && typeof opBody?.replayStore?.consumedWriteFailures === "number", `the operator view of replayStore carries the counts (${JSON.stringify(opBody?.replayStore)})`);
 // --- the subscription renewal word:one word publicly; off with no wallet-billed subscription engine here ---
 ok(pubBody?.subscriptionRenewals?.status === "off" && Object.keys(pubBody.subscriptionRenewals).join(",") === "status", `subscriptionRenewals publishes its word only (${JSON.stringify(pubBody?.subscriptionRenewals)})`);
+ok(pubBody?.mppSubscriptions?.status === "off" && Object.keys(pubBody.mppSubscriptions).join(",") === "status", `mppSubscriptions publishes its word only, off without the engine configured (${JSON.stringify(pubBody?.mppSubscriptions)})`);
+ok(pubBody?.xSearchAuthors?.status === "ok" && Object.keys(pubBody.xSearchAuthors).join(",") === "status", `xSearchAuthors publishes its word only (${JSON.stringify(pubBody?.xSearchAuthors)})`);
+ok(opBody?.xSearchAuthors?.status === "ok" && typeof opBody?.xSearchAuthors?.authorReadsToday === "number" && typeof opBody?.xSearchAuthors?.alertAbove === "number", `the operator view of xSearchAuthors carries the day's count and the mark (${JSON.stringify(opBody?.xSearchAuthors)})`);
 ok(opBody?.subscriptionRenewals?.status === "off", `the operator view reads the same word without a subscription engine (${JSON.stringify(opBody?.subscriptionRenewals)})`);
 ok(pubBody?.directUpstream?.status === "off" && Object.keys(pubBody.directUpstream).join(",") === "status" && opBody?.directUpstream?.status === "off" && Object.keys(opBody.directUpstream).join(",") === "status", `directUpstream publishes its word only, on both views (${JSON.stringify(pubBody?.directUpstream)})`);
 

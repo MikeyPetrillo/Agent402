@@ -66,11 +66,83 @@ const CURRENCY_RE = /^Digital Currency Address\s*-\s*([A-Za-z0-9.]+)\s*$/i;
  *  `addresses` keeps every Digital Currency Address id of the entry, in list
  *  order, with its asset ticker uppercased and its value exactly as listed. */
 export function parseSdnXml(xml) {
-  const text = String(xml || "");
-  const entries = [];
-  let digitalCurrencyIds = 0;
-  for (const m of text.matchAll(/<sdnEntry>([\s\S]*?)<\/sdnEntry>/g)) {
-    const block = m[1];
+  return runWhole(sdnParseSteps(xml));
+}
+
+/** Run a step generator (one `yield` per unit of work) to its return value
+ *  in one go. */
+export function runWhole(steps) {
+  let r;
+  do r = steps.next(); while (!r.done);
+  return r.value;
+}
+
+/** Sort strings (default code-unit order, the same as Array#sort) as step
+ *  generator: sorted runs of SORT_RUN, then bottom-up merges, yielding every
+ *  SORT_STEP element moves. runSliced(sortSteps(a)) equals [...a].sort(). */
+const SORT_RUN = 4096, SORT_STEP = 4096;
+export function* sortSteps(items) {
+  let a = [];
+  for (const v of items) { a.push(v); if (a.length % SORT_STEP === 0) yield; }
+  for (let i = 0; i < a.length; i += SORT_RUN) {
+    const run = a.slice(i, i + SORT_RUN).sort();
+    for (let j = 0; j < run.length; j++) a[i + j] = run[j];
+    yield;
+  }
+  let b = new Array(a.length);
+  for (let width = SORT_RUN; width < a.length; width *= 2) {
+    let moves = 0;
+    for (let lo = 0; lo < a.length; lo += 2 * width) {
+      const mid = Math.min(lo + width, a.length), hi = Math.min(lo + 2 * width, a.length);
+      let i = lo, j = mid, k = lo;
+      while (i < mid && j < hi) { b[k++] = a[j] < a[i] ? a[j++] : a[i++]; if (++moves % SORT_STEP === 0) yield; }
+      while (i < mid) { b[k++] = a[i++]; if (++moves % SORT_STEP === 0) yield; }
+      while (j < hi) { b[k++] = a[j++]; if (++moves % SORT_STEP === 0) yield; }
+    }
+    [a, b] = [b, a];
+  }
+  return a;
+}
+
+/** Run a step generator across event-loop turns: each slice about `sliceMs`
+ *  of loop time (measured, not counted) on a loop pass of its own, never the
+ *  caller's turn. Resolves its return value, the same one runWhole gives.
+ *
+ *  Every runner shares one queue and one setImmediate: Node runs every
+ *  immediate queued for a pass back to back, so two readers each scheduling
+ *  their own slices (the tools' maps and the screen's set, built from one
+ *  list at once) held one pass for two slices. Jobs take turns, one slice
+ *  per pass. */
+const sliceQueue = [];
+let sliceDriving = false;
+export function runSliced(steps, { sliceMs = SDN_PARSE_SLICE_MS } = {}) {
+  return new Promise((resolve, reject) => {
+    sliceQueue.push({ steps, sliceMs, resolve, reject });
+    if (!sliceDriving) { sliceDriving = true; setImmediate(driveSlices); }
+  });
+}
+function driveSlices() {
+  const job = sliceQueue.shift();
+  try {
+    const until = performance.now() + job.sliceMs;
+    let r;
+    do r = job.steps.next(); while (!r.done && performance.now() < until);
+    if (r.done) job.resolve(r.value); else sliceQueue.push(job);
+  } catch (e) { job.reject(e); }
+  if (sliceQueue.length) setImmediate(driveSlices); else sliceDriving = false;
+}
+
+// The export is about 30 MB and 19,000 entries: read in one turn it held the
+// event loop 140 ms on a laptop and over 800 ms on a shared runner, every time
+// a refresh landed. The steps below yield after each entry; parseSdnXmlAsync
+// runs them in slices of SDN_PARSE_SLICE_MS of loop time with a setImmediate
+// between slices (yielding on elapsed time, not on a count of entries), and
+// parseSdnXml runs them in one go, so the two can never read the list
+// differently.
+export const SDN_PARSE_SLICE_MS = 8;
+// One <sdnEntry> block (its inner text) into acc; shared by the string and
+// the stream readers so the two can never read an entry differently.
+function readSdnEntry(block, acc) {
     const programs = [];
     const pl = /<programList>([\s\S]*?)<\/programList>/.exec(block);
     if (pl) for (const p of pl[1].matchAll(/<program>([\s\S]*?)<\/program>/g)) { const v = decodeXml(p[1]); if (v) programs.push(v); }
@@ -80,7 +152,7 @@ export function parseSdnXml(xml) {
       const type = tag(idm[1], "idType");
       const t = type ? CURRENCY_RE.exec(type) : null;
       if (!t) continue;
-      digitalCurrencyIds++;
+      acc.digitalCurrencyIds++;
       const address = tag(idm[1], "idNumber") || "";
       if (!address || /\s/.test(address) || address.length > 200) continue;
       addresses.push({ asset: detach(t[1].toUpperCase()), address });
@@ -91,17 +163,35 @@ export function parseSdnXml(xml) {
     const own = block.replace(/<(\w+List)>[\s\S]*?<\/\1>/g, "").replace(/<vesselInfo>[\s\S]*?<\/vesselInfo>/g, "");
     const uid = tag(own, "uid");
     const lastName = tag(own, "lastName");
-    if (!uid || !lastName) continue;
-    const firstName = tag(own, "firstName") || null;
-    entries.push({ uid, lastName, firstName, name: firstName ? `${lastName}, ${firstName}` : lastName, sdnType: tag(own, "sdnType") || null, programs, addresses });
+    if (uid && lastName) {
+      const firstName = tag(own, "firstName") || null;
+      acc.entries.push({ uid, lastName, firstName, name: firstName ? `${lastName}, ${firstName}` : lastName, sdnType: tag(own, "sdnType") || null, programs, addresses });
+    }
+}
+
+function* sdnParseSteps(xml) {
+  const text = String(xml || "");
+  const acc = { entries: [], digitalCurrencyIds: 0 };
+  for (const m of text.matchAll(/<sdnEntry>([\s\S]*?)<\/sdnEntry>/g)) {
+    readSdnEntry(m[1], acc);
+    yield;
   }
   const pd = /<Publish_Date>([^<]*)<\/Publish_Date>/.exec(text);
-  return { entries, digitalCurrencyIds, publishDate: pd ? detach(pd[1].trim()) : null };
+  return { entries: acc.entries, digitalCurrencyIds: acc.digitalCurrencyIds, publishDate: pd ? detach(pd[1].trim()) : null };
+}
+
+/** parseSdnXml across event-loop turns: the same result, never more than
+ *  about `sliceMs` of loop time per turn. */
+export function parseSdnXmlAsync(xml, { sliceMs = SDN_PARSE_SLICE_MS } = {}) {
+  return runSliced(sdnParseSteps(xml), { sliceMs });
 }
 
 /** The EVM-format addresses of a parse (0x + 40 hex, under any asset ticker),
  *  lowercased, with distinct-address counts per ticker. */
-export function sdnEvmAddresses(parsed) {
+export function sdnEvmAddresses(parsed) { return runWhole(sdnEvmAddressSteps(parsed)); }
+/** sdnEvmAddresses across event-loop turns (runSliced): the same result. */
+export function sdnEvmAddressesAsync(parsed, opts) { return runSliced(sdnEvmAddressSteps(parsed), opts); }
+function* sdnEvmAddressSteps(parsed) {
   const addresses = new Set();
   const perAssetSets = new Map();
   for (const e of parsed?.entries || []) {
@@ -112,6 +202,7 @@ export function sdnEvmAddresses(parsed) {
       if (!perAssetSets.has(asset)) perAssetSets.set(asset, new Set());
       perAssetSets.get(asset).add(key);
     }
+    yield;
   }
   const perAsset = Object.fromEntries([...perAssetSets].sort(([a], [b]) => a.localeCompare(b)).map(([k, s]) => [k, s.size]));
   return { addresses, perAsset };
@@ -124,8 +215,75 @@ const listeners = new Set();
 
 /** Call `fn(list)` after every successful fetch, whoever asked for it, so a
  *  reader adopts a list another reader fetched without waiting for its own
- *  timer. Returns an unsubscribe function. */
+ *  timer. Each reader starts on a turn after the parse's last one and may
+ *  return a promise (a reader that builds its own sets from the list slices
+ *  that work with runSliced and swaps them in whole); the load resolves once
+ *  every reader's promise has settled. Returns an unsubscribe function. */
 export function onSdnList(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+
+// The export is tens of megabytes: decoding it, or holding it as one string,
+// costs loop time in proportion to its size. The response is read as the
+// stream delivers it, decoded at most DECODE_SLICE_BYTES per call, and each
+// complete <sdnEntry> is read out of a small rolling buffer with the same
+// readSdnEntry as the string parser; a turn is yielded once SDN_PARSE_SLICE_MS
+// of work has run. Returns { parsed, chars } or throws past maxChars.
+const DECODE_SLICE_BYTES = 1 << 20;
+const OPEN = "<sdnEntry>", CLOSE = "</sdnEntry>";
+// The longest real entry is a few KB; the header element is under 64 chars.
+export const SDN_ENTRY_MAX_CHARS = 1 << 20;
+const HEAD_KEEP = 256;
+async function parseSdnResponse(res, maxChars) {
+  if (!res.body || typeof res.body.getReader !== "function") {
+    const xml = await res.text();
+    if (xml.length > maxChars) throw new Error(`export is ${xml.length} bytes, over the ${maxChars} cap`);
+    return { parsed: await parseSdnXmlAsync(xml), chars: xml.length };
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  const acc = { entries: [], digitalCurrencyIds: 0 };
+  let buf = "", chars = 0, publishDate = null;
+  // The first slice yields at once: started from the caller's turn, it would
+  // otherwise share one loop pass with the next slice.
+  let until = 0;
+  const due = async () => {
+    if (performance.now() >= until) { await new Promise((r) => setImmediate(r)); until = performance.now() + SDN_PARSE_SLICE_MS; }
+  };
+  const drain = async () => {
+    if (publishDate === null) { const pd = /<Publish_Date>([^<]*)<\/Publish_Date>/.exec(buf); if (pd) publishDate = detach(pd[1].trim()); }
+    let from = 0;
+    for (;;) {
+      const a = buf.indexOf(OPEN, from);
+      // Keep a tail long enough for a split <sdnEntry> tag, and, until the
+      // header is read, for a split <Publish_Date> element.
+      if (a < 0) { from = Math.max(from, buf.length - (publishDate === null ? HEAD_KEEP : OPEN.length)); break; }
+      const b = buf.indexOf(CLOSE, a + OPEN.length);
+      if (b < 0) {
+        // An entry this long is not an SDN entry: a malformed export would
+        // otherwise make every chunk rescan a growing buffer.
+        if (buf.length - a > SDN_ENTRY_MAX_CHARS) throw new Error(`an entry runs past ${SDN_ENTRY_MAX_CHARS} characters; treated as a malformed export`);
+        from = a; break;
+      }
+      readSdnEntry(buf.slice(a + OPEN.length, b), acc);
+      from = b + CLOSE.length;
+      await due();
+    }
+    buf = buf.slice(from);
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    for (let off = 0; off < value.byteLength; off += DECODE_SLICE_BYTES) {
+      const part = decoder.decode(value.subarray(off, Math.min(value.byteLength, off + DECODE_SLICE_BYTES)), { stream: true });
+      chars += part.length;
+      if (chars > maxChars) { try { await reader.cancel(); } catch { /* already closed */ } throw new Error(`export is over the ${maxChars} cap`); }
+      buf += part;
+      await drain();
+    }
+  }
+  buf += decoder.decode();
+  await drain();
+  return { parsed: { entries: acc.entries, digitalCurrencyIds: acc.digitalCurrencyIds, publishDate }, chars };
+}
 
 /** The SDN list, from memory when fetched within `maxAgeMs`, else fetched
  *  (one fetch in flight at a time; a caller arriving mid-fetch joins it).
@@ -136,22 +294,27 @@ export async function loadSdnList({ maxAgeMs = 0, fetchImpl = globalThis.fetch, 
   inFlight = (async () => {
     const res = await fetchImpl(sdnListUrl(), { headers: { accept: "application/xml, text/xml" }, redirect: "follow", signal: AbortSignal.timeout(sdnFetchTimeoutMs()) });
     if (!res.ok) throw new Error(`fetch answered HTTP ${res.status}`);
-    const xml = await res.text();
-    if (xml.length > SDN_MAX_BYTES) throw new Error(`export is ${xml.length} bytes, over the ${SDN_MAX_BYTES} cap`);
-    const parsed = parseSdnXml(xml);
+    const { parsed, chars } = await parseSdnResponse(res, SDN_MAX_BYTES);
     // A parse that yields nothing is a FORMAT CHANGE, not an empty list:
     // serving "no match" off it would make every screen read as clean.
     if (!parsed.entries.length) throw new Error("parsed to zero entries; treated as a format change, not an empty list");
     if (!parsed.entries.some((e) => e.addresses.length)) throw new Error(`parsed to zero digital currency addresses (${parsed.entries.length} entries); treated as a format change`);
-    held = { ...parsed, fetchedAt: now(), bytes: xml.length };
-    for (const fn of listeners) { try { fn(held); } catch (e) { console.warn(`[ofac-sdn] a reader refused the new list: ${String(e?.message || e).slice(0, 120)}`); } }
-    return held;
+    held = { ...parsed, fetchedAt: now(), bytes: chars };
+    const list = held;
+    const refused = (e) => console.warn(`[ofac-sdn] a reader refused the new list: ${String(e?.message || e).slice(0, 120)}`);
+    // Each reader starts on a turn after the parse's last one, and the load
+    // resolves once every reader has adopted (or refused) the list.
+    await Promise.all([...listeners].map((fn) => new Promise((resolve) => setImmediate(resolve)).then(() => fn(list)).catch(refused)));
+    return list;
   })();
   try { return await inFlight; } finally { inFlight = null; }
 }
 
 /** Test seam: forget the held parse. */
 export function __resetSdnListForTests() { held = null; inFlight = null; }
+/** Test seam: hold a parse (with its fetchedAt) as if it had been fetched. */
+export function __holdSdnListForTests(list) { held = list; inFlight = null; }
 
 // Operator heap read (/__operator/heap.json `stores`).
 registerMemoryStore("ofac-sdn.held", () => held, { note: "last good list" });
+export { parseSdnResponse as __parseSdnResponseForTests };

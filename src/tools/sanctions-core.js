@@ -46,7 +46,12 @@ export function normalizeAddress(addr, asset = null) {
  * hint, which is how the router screens a payout address, then missed them.
  * The first listing of an address wins.
  */
-export function sdnCryptoAddresses(list) {
+export function sdnCryptoAddresses(list) { return runWhole(sdnCryptoAddressSteps(list)); }
+// The builders below are step generators (one `yield` per entry): the
+// functions above run them in one go, and the sanctions kit runs the same
+// steps across event-loop turns (src/ofac-sdn.js runSliced), so the two can
+// never build a different map.
+export function* sdnCryptoAddressSteps(list) {
   const out = new Map();
   for (const e of list?.entries || []) {
     for (const { asset, address } of e.addresses || []) {
@@ -54,21 +59,26 @@ export function sdnCryptoAddresses(list) {
       if (!key || out.has(key)) continue;
       out.set(key, { asset, address, entity: e.name, sdnId: e.uid });
     }
+    yield;
   }
   return out;
 }
+function runWhole(steps) { let r; do r = steps.next(); while (!r.done); return r.value; }
 
 /** The entry's type in the vocabulary this tool has always published (the
  *  SDN.CSV column): individual, vessel, aircraft, and -0- for an entity. */
 const SDN_TYPE_WORD = { individual: "individual", vessel: "vessel", aircraft: "aircraft", entity: "-0-" };
 
 /** Names from a parsed OFAC SDN list: the primary name, the entry id and its type. */
-export function sdnNames(list) {
+export function sdnNames(list) { return runWhole(sdnNameSteps(list)); }
+export function* sdnNameSteps(list) {
   const out = [];
   for (const e of list?.entries || []) {
-    if (!e.name || e.name === "-0-") continue;
-    const t = String(e.sdnType || "").trim().toLowerCase();
-    out.push({ id: e.uid, name: e.name, type: t ? (SDN_TYPE_WORD[t] || t) : null });
+    if (e.name && e.name !== "-0-") {
+      const t = String(e.sdnType || "").trim().toLowerCase();
+      out.push({ id: e.uid, name: e.name, type: t ? (SDN_TYPE_WORD[t] || t) : null });
+    }
+    yield;
   }
   return out;
 }

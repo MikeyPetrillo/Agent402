@@ -1059,6 +1059,27 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "/api/gateway-status reports firstCallAllowance.status=unavailable: the first-call allowance could not read its day counters in the shared store (Redis), so no first call is granted. Buyers still meet the usual payment offer and nothing is refused for it, but the trial records nothing while it lasts. Check the Redis service and REDIS_URL on Railway, and the sharedLimits word; the last store error is on /__operator/refunds.json. Auto-closes when the word reads on or spent.",
   },
   {
+    // x-search-recent's expanded-author reads today (xSearchAuthors,
+    // src/x-search-stats.js): alert pages (the day's author reads passed
+    // X_SEARCH_AUTHOR_DAILY_ALERT), ok
+    // clears; unknown and absent do neither. An alarm only: nothing is
+    // refused. Title and body match heartbeat.yml's.
+    title: "X search author reads OVER the daily alert",
+    verdict: ({ gateway: b }) => wordVerdict(b.xSearchAuthors?.status, ["alert"], ["ok"]),
+    body: () =>
+      "/api/gateway-status reports xSearchAuthors.status=alert: x-search-recent returned more expanded authors today than X_SEARCH_AUTHOR_DAILY_ALERT; X bills each expanded author as a user read. Every call is still served and nothing is refused. The day's count and the mark are on the operator view of /api/gateway-status (xSearchAuthors), the per-call histogram on /__operator/tool-failures.json; the daily X ceiling (X_DATA_DAILY_MAX_USD) still bounds the whole X spend. Auto-closes when the word reads ok (the next UTC day, or a raised mark).",
+  },
+  {
+    // The MPP subscription engine (mppSubscriptions, server.js): failed pages
+    // (it is configured but did not build at boot, so the recurring-monitor
+    // routes are not mounted); on and off clear; unknown and absent do
+    // neither. Title and body match heartbeat.yml's.
+    title: "MPP subscription engine FAILED to start",
+    verdict: ({ gateway: b }) => wordVerdict(b.mppSubscriptions?.status, ["failed"], ["on", "off"]),
+    body: () =>
+      "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot (the installed mppx has no subscription method, or the build threw or refused), so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off.",
+  },
+  {
     title: "State database DEGRADED (Postgres)",
     verdict: ({ gateway: b }) => wordVerdict(b.stateDb?.status, ["degraded"], ["on"]),
     body: () =>

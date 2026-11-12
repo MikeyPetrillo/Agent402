@@ -38,7 +38,7 @@ import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
 import { leased, trackStoreReady } from "./state-db.js";
 import { shared, noteSharedLimitsDegraded } from "./shared-limits.js";
-import { parseSdnXml, sdnEvmAddresses, loadSdnList } from "./ofac-sdn.js";
+import { parseSdnXml, sdnEvmAddresses, sdnEvmAddressesAsync, loadSdnList, runSliced, sortSteps } from "./ofac-sdn.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { envAtLeast as envMs } from "./env-num.js";
 
@@ -54,8 +54,8 @@ function retryMs() { return envMs("SANCTIONS_LIST_RETRY_MS", 5 * 60_000, 1000); 
 export function parseSdnXmlEvmAddresses(xml) {
   return fromParse(parseSdnXml(xml));
 }
-function fromParse(parsed) {
-  const { addresses, perAsset } = sdnEvmAddresses(parsed);
+function fromParse(parsed, evm = sdnEvmAddresses(parsed)) {
+  const { addresses, perAsset } = evm;
   return { addresses, perAsset, digitalCurrencyIds: parsed.digitalCurrencyIds, publishDate: parsed.publishDate };
 }
 
@@ -123,7 +123,10 @@ export async function refreshSanctionsScreen({ fetchImpl = globalThis.fetch, now
   } catch (e) {
     return failed(`fetch failed: ${String(e?.message || e).slice(0, 120)}`, log);
   }
-  const parsed = fromParse(list);
+  // The set is built across event-loop turns (the same steps sdnEvmAddresses
+  // runs in one), then checked and swapped in whole on one turn; the stored
+  // body is sorted and written on a turn of its own.
+  const parsed = fromParse(list, await sdnEvmAddressesAsync(list));
   if (!parsed.addresses.size) return failed(`parsed to zero EVM addresses (${parsed.digitalCurrencyIds} digital currency ids); treated as a format change`, log);
   if (state.set && parsed.addresses.size * 2 < state.set.size) return failed(`parsed to ${parsed.addresses.size} EVM addresses against ${state.set.size} held; a drop past half is treated as a bad export`, log);
   state.set = parsed.addresses;
@@ -132,7 +135,8 @@ export async function refreshSanctionsScreen({ fetchImpl = globalThis.fetch, now
   state.publishDate = parsed.publishDate;
   state.source = "fetch";
   state.lastError = null;
-  const body = { v: 1, loadedAt: state.loadedAt, publishDate: state.publishDate, perAsset: state.perAsset, addresses: [...parsed.addresses].sort() };
+  await new Promise((resolve) => setImmediate(resolve));
+  const body = { v: 1, loadedAt: list.fetchedAt, publishDate: parsed.publishDate, perAsset: parsed.perAsset, addresses: await runSliced(sortSteps(parsed.addresses)) };
   const stored = await getDoc().save(body).catch(() => false);
   if (!stored) log(`[sanctions-screen] list loaded but not stored: ${String(getDoc().lastError || "save refused").slice(0, 120)}`);
   console.log(`[sanctions-screen] OFAC SDN loaded: ${parsed.addresses.size} EVM addresses (${Object.entries(parsed.perAsset).map(([k, v]) => `${k} ${v}`).join(", ")})${state.publishDate ? `, published ${state.publishDate}` : ""}`);
@@ -489,6 +493,9 @@ export async function screenFunding(payers, { fetchImpl = globalThis.fetch, now 
 export function __clearOneHopLocalForTests() { oneHopLocal = new Map(); }
 
 /** Test seam: forget everything (and the store handle, so env changes apply). */
+/** Tests only: hold the store (a stand-in with save()) so a run can leave
+ *  out the stored write, which is one turn sized by the address count. */
+export function __setSanctionsScreenStoreForTests(d) { doc = d; }
 export function __resetSanctionsScreenForTests() {
   if (timer) clearTimeout(timer);
   timer = null; ready = null; doc = null; running = false;

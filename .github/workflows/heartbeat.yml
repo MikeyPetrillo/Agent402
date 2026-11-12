@@ -821,6 +821,52 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "firstCallAllowance is ${STATUS}; closing." || true
           fi
 
+      # x-search-recent's expanded-author reads today (xSearchAuthors,
+      # src/x-search-stats.js): alert pages past X_SEARCH_AUTHOR_DAILY_ALERT,
+      # ok clears; unknown and absent do neither. An alarm only.
+      # The status Worker runs the same check under the same title.
+      - name: X search author reads check (alarm past the daily alert)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.xSearchAuthors.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "xSearchAuthors: $STATUS"
+          TITLE="X search author reads OVER the daily alert"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "alert" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports xSearchAuthors.status=alert: x-search-recent returned more expanded authors today than X_SEARCH_AUTHOR_DAILY_ALERT; X bills each expanded author as a user read. Every call is still served and nothing is refused. The day's count and the mark are on the operator view of /api/gateway-status (xSearchAuthors), the per-call histogram on /__operator/tool-failures.json; the daily X ceiling (X_DATA_DAILY_MAX_USD) still bounds the whole X spend. Auto-closes when the word reads ok (the next UTC day, or a raised mark)." || true
+            fi
+          elif { [ "$STATUS" = "ok" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "xSearchAuthors is ${STATUS}; closing." || true
+          fi
+
+      # The MPP subscription engine (mppSubscriptions, server.js): failed
+      # pages (configured, but it did not build at boot); on and off clear;
+      # unknown and absent do neither.
+      # The status Worker runs the same check under the same title.
+      - name: MPP subscription engine check (alarm when it failed to start)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.mppSubscriptions.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "mppSubscriptions: $STATUS"
+          TITLE="MPP subscription engine FAILED to start"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "failed" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot (the installed mppx has no subscription method, or the build threw or refused), so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off." || true
+            fi
+          elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "mppSubscriptions is ${STATUS}; closing." || true
+          fi
+
       # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
       # Apart from the prepaid allowance step above, which reads exaAllowance.
       - name: Exa daily spend over its ceiling

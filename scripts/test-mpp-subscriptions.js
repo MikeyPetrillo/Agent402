@@ -20,7 +20,7 @@ import * as Tempo from "mppx/tempo";
 import { KeyAuthorization } from "ox/tempo";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import {
-  createMppSubscriptions, checkSubscriptionBinding, mppSubscriptionsEnabled,
+  createMppSubscriptions, checkSubscriptionBinding, mppSubscriptionsEnabled, mppSubscriptionsConfigured,
   mppSubscriptionMethodAvailable, periodMs, PERIOD_COUNT, PERIOD_UNIT,
   SUBSCRIPTION_TERM_MS, PAST_DUE_GRACE_MS, CHARGE_BACKOFF_MS, TEMPO_MAINNET_CHAIN_ID,
   OFFER_SWEEP_AFTER_MS, MAX_OPEN_OFFERS,
@@ -31,6 +31,7 @@ import {
   ACTIVATION_VALID_FOR_S, TEMPO_RPC_TIMEOUT_MS,
   guardDestroyedKeys, KEY_GONE_PREFIX, createFileStore, diagnoseError,
   renewalUnconfirmedAlertHours, renewalsWord, RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT,
+  buildMppSubscriptionsEngine,
 } from "../src/mpp-subscriptions.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { HttpRequestError } from "viem";
@@ -88,6 +89,44 @@ ok(mppSubscriptionsEnabled() === false, "rollout switch: no Tempo recipient mean
 process.env.TEMPO_RECIPIENT_ADDRESS = RECIPIENT;
 if (savedWallet === undefined) delete process.env.WALLET_ADDRESS; else process.env.WALLET_ADDRESS = savedWallet;
 ok(createMppSubscriptions({ secretKey: "", realm: REALM }) === null, "fail closed: an engine with no secret refuses to start");
+// The boot build and its gateway-status word (mppSubscriptions): on / off /
+// failed, where failed is configured but the build threw or refused.
+{
+  const warned = [];
+  const warn = (...a) => warned.push(a.join(" "));
+  const engine = { marker: true };
+  const on = buildMppSubscriptionsEngine({ configured: () => true, build: () => engine, warn });
+  ok(on.state === "on" && on.engine === engine && warned.length === 0, "boot build: a configured engine that builds reads on");
+  let built = false;
+  const off = buildMppSubscriptionsEngine({ configured: () => false, build: () => { built = true; return engine; }, warn });
+  ok(off.state === "off" && off.engine === null && !built && warned.length === 0, "boot build: not configured reads off and never builds");
+  const threw = buildMppSubscriptionsEngine({ configured: () => true, build: () => { throw new Error("store unreadable"); }, warn });
+  ok(threw.state === "failed" && threw.engine === null && /init failed: store unreadable/.test(warned.at(-1) || ""), "boot build: a configured engine whose build throws reads failed and logs it");
+  const refused = buildMppSubscriptionsEngine({ configured: () => true, build: () => null, warn });
+  ok(refused.state === "failed" && refused.engine === null, "boot build: a configured engine that refuses to start reads failed");
+  const enabledThrew = buildMppSubscriptionsEngine({ configured: () => { throw new Error("bad env"); }, build: () => engine, warn });
+  ok(enabledThrew.state === "failed" && enabledThrew.engine === null, "boot build: a rollout switch that throws reads failed, never on");
+  // The default switch is the real one: configured here, so a throwing build reads failed.
+  ok(buildMppSubscriptionsEngine({ build: () => { throw new Error("x"); }, warn }).state === "failed", "boot build: the default switch is mppSubscriptionsConfigured (configured in this suite)");
+  // A vendor bump that drops the subscription method: configured, no method.
+  // That reads failed (and pages), never off, and nothing is built.
+  let builtNoMethod = false;
+  const noMethod = buildMppSubscriptionsEngine({ available: () => false, build: () => { builtNoMethod = true; return engine; }, warn });
+  ok(noMethod.state === "failed" && noMethod.engine === null && !builtNoMethod && /no tempo\/subscription method/.test(warned.at(-1) || ""), "boot build: configured but the installed mppx has no subscription method reads failed, logs it and builds nothing");
+  ok(mppSubscriptionsConfigured() === true, "configured reads the env only (secret, recipient, fee payer, switch not off)");
+  process.env.MPP_SUBSCRIPTIONS = "off";
+  ok(mppSubscriptionsConfigured() === false && buildMppSubscriptionsEngine({ available: () => false, build: () => engine, warn }).state === "off", "MPP_SUBSCRIPTIONS=off reads off even with the method missing");
+  delete process.env.MPP_SUBSCRIPTIONS;
+  const savedFp = process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_KEY;
+  delete process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_KEY;
+  ok(mppSubscriptionsConfigured() === false && buildMppSubscriptionsEngine({ available: () => false, build: () => engine, warn }).state === "off", "no fee payer reads off even with the method missing");
+  process.env.TEMPO_SUBSCRIPTION_FEE_PAYER_KEY = savedFp;
+  // subscriptionRenewals agrees: unknown (neither pages nor clears) while the engine failed, off when not configured.
+  ok(/subscriptionRenewals: \(\(\) => \{ try \{ return _mppSubs \? _mppSubs\.renewalsStatus\(\{ full \}\) : \{ status: _mppSubsState === "failed" \? "unknown" : "off" \}/.test(readFileSync(new URL("../src/server.js", import.meta.url), "utf8")), "subscriptionRenewals reads unknown while a configured engine failed, off when none is configured");
+  // server.js builds through it and publishes the state as the word.
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/const \{ engine: _mppSubs, state: _mppSubsState \} = buildMppSubscriptionsEngine\(/.test(server) && /mppSubscriptions: \{ status: _mppSubsState \}/.test(server), "server.js builds the engine through buildMppSubscriptionsEngine and publishes its state on /api/gateway-status");
+}
 
 // ---------------------------------------------------------------------------
 // Harness. Injected settlement: `activate` writes the mppx-shaped record the

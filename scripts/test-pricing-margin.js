@@ -386,34 +386,49 @@ const SQL_WORST_CASE_BOUND = 0.87;
 //     within the MARGIN bound of the tool's fixed price. Every X tool stays
 //     fixed-price. Figures stay in the process: only PASS/FAIL is printed.
 //
-//     DATED EXCEPTION (2026-11-07), x-search-recent: its rows carry author
-//     usernames from the author expansion, and with one expanded user per
-//     post billed at the user-read rate its worst case falls under MARGIN at
-//     the current price. X's notice of 2026-11-05 says expansions will count
-//     toward usage but gives no effective date and no rate, and X's billing
-//     docs still meter posts only. Until then only the worst case WITHOUT
-//     expansion billing is held to MARGIN here. The exception EXPIRES: X bills
-//     expansions from 2026-11-22, and from 2026-11-21 on this test fails until
-//     x-search-recent is repriced from the real rate and the exception removed.
-//     While it stands, the output says plainly (yes/no, never a figure)
-//     whether the worst case with expansions billed is above the list price
-//     itself. The kit's daily cap and spend meter already count expanded
-//     objects either way.
-const X_EXPANSION_BILLING_PENDING = new Map([
-  ["x-search-recent", { dated: "2026-11-07", expires: "2026-11-21", billingStarts: "2026-11-22" }],
+//     OWNER-APPROVED EXCEPTION (2026-11-12), x-search-recent only. Its rows
+//     carry author usernames from the author expansion, and X bills each
+//     expanded user from 2026-11-22. The author expansion stays at the listed
+//     price; the daily X ceiling (X_DATA_DAILY_MAX_USD, whose meter counts
+//     expanded objects) bounds the day's whole X spend, and the xSearchAuthors
+//     word on /api/gateway-status (X_SEARCH_AUTHOR_DAILY_ALERT,
+//     src/x-search-stats.js) watches the day's author reads. For it the worst
+//     case without the author reads is held to MARGIN, and the output prints
+//     one fixed line naming the exception, never a verdict or a figure. The
+//     exception is permanent and names one tool: every other X tool's worst
+//     case is held to MARGIN with expansion billing on, and a second entry
+//     fails this test until it is reviewed here.
+const X_EXPANSION_OWNER_EXCEPTIONS = new Map([
+  ["x-search-recent", { decided: "2026-11-12", reason: "the author expansion stays at the listed price; the daily X ceiling bounds X spend; xSearchAuthors watches the day's author reads" }],
 ]);
-/** Whether a dated exception still stands on `today` (YYYY-MM-DD, UTC). */
-function expansionExceptionStands(entry, today) {
-  return typeof entry?.expires === "string" && today < entry.expires;
+/** The one line printed for an excepted tool: its slug and decision date only, so public CI logs carry no verdict or figure. */
+const xExceptionLine = (slug, decided) => `ok - ${slug}: owner exception applies (${decided})`;
+/** The margin verdict for one X worst case: an excepted tool is held to MARGIN on its reads without expansion billing; every other tool on its reads with expansion billing on. */
+function xMarginVerdict(slug, { usd, usdWithoutExpansions }, price) {
+  const exception = X_EXPANSION_OWNER_EXCEPTIONS.get(slug);
+  const held = exception ? usdWithoutExpansions : usd;
+  return { exception: !!exception, held, within: Number.isFinite(held) && held <= MARGIN * price + 1e-12 };
 }
-const UTC_TODAY = new Date().toISOString().slice(0, 10);
-// The expiry itself is checked against fixed dates, so it is proven before the
-// real expiry date arrives.
+// The rule itself, on fixed figures (no rate from the table): only the named
+// tool is excepted, and any other tool under the margin with expansions billed
+// fails, whatever its worst case without them.
 {
-  const e = X_EXPANSION_BILLING_PENDING.get("x-search-recent");
-  ok(expansionExceptionStands(e, "2026-11-20") === true, "x-search-recent expansion exception stands on 2026-11-20");
-  ok(expansionExceptionStands(e, "2026-11-21") === false && expansionExceptionStands(e, "2026-12-01") === false, "x-search-recent expansion exception has expired on and after 2026-11-21");
-  ok(e.expires < e.billingStarts, "the exception expires before X starts billing expansions");
+  ok(X_EXPANSION_OWNER_EXCEPTIONS.size === 1 && [...X_EXPANSION_OWNER_EXCEPTIONS.keys()][0] === "x-search-recent", "the expansion-billing exception names exactly one tool, x-search-recent");
+  const under = { usd: 2, usdWithoutExpansions: 0.01 };
+  for (const slug of ["x-user", "x-user-tweets", "x-tweet", "x-users-lookup", "x-search-recent-new"]) {
+    ok(xMarginVerdict(slug, under, 1).within === false, `${slug}: a worst case under the margin with expansions billed fails, though it passes without them`);
+  }
+  const line = xExceptionLine("x-search-recent", "2026-11-12");
+  ok(/^ok - [a-z0-9-]+: owner exception applies \(\d{4}-\d{2}-\d{2}\)$/.test(line), "the exception prints one neutral line: slug and decision date, no verdict");
+  // This file is run in public CI logs: no print in it may carry a cost
+  // verdict (outside, above or below a price, a margin figure).
+  {
+    const own = (await import("node:fs")).readFileSync(new URL(import.meta.url), "utf8");
+    const prints = own.split("\n").filter((l) => /console\.(log|info|warn|error)\(/.test(l));
+    const leaky = prints.filter((l) => /outside the margin|above the list|below (the )?(list|cost)|absorb|\bloses?\b/i.test(l));
+    ok(leaky.length === 0, `no print in this file states a cost verdict${leaky.length ? ": " + leaky.map((l) => l.trim().slice(0, 80)).join(" | ") : ""}`);
+  }
+  ok(xMarginVerdict("x-search-recent", under, 1).within === true && xMarginVerdict("x-search-recent", { usd: 2, usdWithoutExpansions: 2 }, 1).within === false, "x-search-recent: held to the margin on its reads without the author reads");
 }
 console.log("\n# X data tools: worst-case reads, expansions included, vs price");
 {
@@ -427,31 +442,23 @@ console.log("\n# X data tools: worst-case reads, expansions included, vs price")
       ok(Number.isFinite(price) && price > 0 && t.quote === undefined && t.tierQuote === undefined, `${t.slug}: a fixed list price`);
       const cases = xToolWorstCases(t.slug);
       ok(cases.length >= 1, `${t.slug}: at least one worst-case body`);
-      const pending = X_EXPANSION_BILLING_PENDING.get(t.slug);
-      if (pending) {
-        const stands = expansionExceptionStands(pending, UTC_TODAY);
-        ok(stands, stands
-          ? `${t.slug}: the expansion-billing exception stands until ${pending.expires} (X bills expansions from ${pending.billingStarts})`
-          : `${t.slug}: the expansion-billing exception expired on ${pending.expires}: ${t.slug} must be repriced before X bills expansions on ${pending.billingStarts}, and the exception removed`);
-      }
-      for (const { body, usd, usdWithoutExpansions } of cases) {
-        const label = `${t.slug} ${JSON.stringify(body)}`;
-        if (pending) {
-          ok(Number.isFinite(usdWithoutExpansions) && usdWithoutExpansions < usd, `${label}: the worst case without expansion billing is computed`);
-          const within = usdWithoutExpansions <= MARGIN * price + 1e-12;
-          ok(within, `${label}: worst-case reads without expansion billing within the margin bound of the list price: ${within ? "PASS" : "FAIL"}`);
-          const aboveList = usd > price;
-          console.log(`EXCEPTION - ${label}: expansion billing not yet priced (dated ${pending.dated}, expires ${pending.expires}; X bills expansions from ${pending.billingStarts}): with expansions billed, the worst case is ${usd <= MARGIN * price + 1e-12 ? "within" : "outside"} the margin bound, and above the list price itself: ${aboveList ? "YES" : "no"}`);
-          table.push({ tier: t.slug, price, worst: usdWithoutExpansions, model: "X reads (expansions unbilled, dated exception)" });
+      for (const c of cases) {
+        const label = `${t.slug} ${JSON.stringify(c.body)}`;
+        const v = xMarginVerdict(t.slug, c, price);
+        if (v.exception) {
+          ok(Number.isFinite(c.usdWithoutExpansions) && c.usdWithoutExpansions < c.usd, `${label}: the worst case without expansion billing is computed`);
+          ok(v.within, `${label}: worst-case reads without the author expansion within the margin bound of the list price: ${v.within ? "PASS" : "FAIL"}`);
+          const decided = X_EXPANSION_OWNER_EXCEPTIONS.get(t.slug).decided;
+          console.log(xExceptionLine(t.slug, decided));
+          table.push({ tier: t.slug, price, worst: c.usdWithoutExpansions, model: "X reads, owner exception" });
         } else {
-          const within = usd <= MARGIN * price + 1e-12;
-          ok(within, `${label}: worst-case reads, expansions included, within the margin bound of the list price: ${within ? "PASS" : "FAIL"}`);
-          table.push({ tier: t.slug, price, worst: usd, model: `X reads ${JSON.stringify(body)}` });
+          ok(v.within, `${label}: worst-case reads, expansions included, within the margin bound of the list price: ${v.within ? "PASS" : "FAIL"}`);
+          table.push({ tier: t.slug, price, worst: c.usd, model: `X reads ${JSON.stringify(c.body)}` });
         }
       }
     }
-    // The exception list names only live X tools.
-    for (const slug of X_EXPANSION_BILLING_PENDING.keys()) ok(X_DATA_TOOLS.some((t) => t.slug === slug), `expansion-billing exception names a live X tool (${slug})`);
+    // The exception names only a live X tool.
+    for (const slug of X_EXPANSION_OWNER_EXCEPTIONS.keys()) ok(X_DATA_TOOLS.some((t) => t.slug === slug), `expansion-billing exception names a live X tool (${slug})`);
   }
 }
 

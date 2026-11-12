@@ -25,7 +25,7 @@
 //
 // Rollout switch = STRIPE_SECRET_KEY + STRIPE_PROFILE_ID both present. Unset =
 // not mounted, no stripe challenge on any 402 (pure evm/tempo/x402).
-import Stripe from "stripe";
+import { newStripeClient } from "./stripe-api-version.js";
 import { sharedClaimRequired } from "./replay-topology.js";
 import { drainSignal } from "./drain-abort.js";
 import { Challenge, Credential, Expires, Method } from "mppx";
@@ -67,7 +67,7 @@ function stripeMethod() {
   const profile = stripeProfileId();
   const sig = `${key}|${profile}`;
   if (cachedMethod && cachedKeyProfile === sig) return cachedMethod;
-  const client = new Stripe(key);
+  const client = newStripeClient(key);
   cachedMethod = stripeMethods.spt({
     client,
     networkId: profile,

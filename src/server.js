@@ -76,7 +76,7 @@ import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus } from "./gatewa
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
 // composites (settle-after on SVM/AVM/Tempo is work done, never charged), but
 // not composite-spend-guarded (one bounded upstream price).
-import Stripe from "stripe";
+import { newStripeClient } from "./stripe-api-version.js";
 import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
 import { meteredTwinSlug, meteredQuoteSentence, isMeteredChatSlug, meteredClientTimeoutField } from "./metered-lead.js";
@@ -91,7 +91,7 @@ import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { kitDisclaimer } from "./report-disclosure.js";
 import { shownGroundingNote } from "./report-grounding.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS, MONITOR_PRODUCTS_ALL } from "./stripe-subscriptions.js";
-import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
+import { createMppSubscriptions, buildMppSubscriptionsEngine, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds, backfillNamedSales } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
@@ -724,7 +724,7 @@ import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sha
 import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport, noteSqlBusy } from "./sql-query-stats.js";
-import { flushXSearchStats, xSearchStatsReport } from "./x-search-stats.js";
+import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x-search-stats.js";
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
@@ -3106,7 +3106,8 @@ if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerRea
 // sent, by how each call ended, and the budget refusals (counts only;
 // src/sql-query-stats.js; also at /__operator/onchain-sql-queries.json). xSearchAuthors: per UTC day, how many distinct
 // authors and posts x-search-recent calls that answered a final 200 returned,
-// bucketed (counts only; src/x-search-stats.js). transcriptionUnmeasured:
+// bucketed, plus the day's author reads on every billed page whatever the
+// answer (counts only; src/x-search-stats.js). transcriptionUnmeasured:
 // transcription files this process could not measure by decoding since boot
 // (a busy or slow decode, no ffmpeg), which the cap then read from the
 // declared length or the byte floor (src/tools/stt-kit.js; a count only).
@@ -3210,7 +3211,7 @@ let _subs = null;
 let _humanCheckout = null; // wired below (card report checkout); read by the webhook hook and the status word
 try {
   _subs = subscriptionsEnabled() ? createStripeSubscriptions({
-    stripe: new Stripe(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
+    stripe: newStripeClient(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
     validateTarget: _monitorTargetValidators,
     onInvoicePaid: ({ invoiceId, product, amountUsd }) => {
       recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" });
@@ -3238,18 +3239,21 @@ try {
 // recurring monitors to agents. validateTarget/onCharge mirror the card path
 // so a target is proven watchable BEFORE a recurring authorization is signed,
 // and every confirmed period lands in the same sales ledger.
-let _mppSubs = null;
-try {
-  _mppSubs = mppSubscriptionsEnabled() ? createMppSubscriptions({
+// The engine's state for /api/gateway-status (mppSubscriptions): on (built),
+// off (not configured) or failed (configured, but the installed mppx has no
+// subscription method, or building it threw or refused, so the
+// recurring-monitor routes are not mounted). The pagers read failed.
+const { engine: _mppSubs, state: _mppSubsState } = buildMppSubscriptionsEngine({
+  build: () => createMppSubscriptions({
     secretKey: process.env.MPP_SECRET_KEY || "",
     realm: new URL(BASE_URL).host,
     validateTarget: _monitorTargetValidators,
     // Rail "usdc" / network "tempo" is what a settled tempo/charge records, so
     // a subscription period reconciles against the same rows on /revenue.
     onCharge: ({ product, priceUsd, payer, tx }) => recordSale({ slug: product || "monitor", priceUsd, rail: "usdc", network: "tempo", payer, tx, wire: "mpp-tempo-subscription" }),
-  }) : null;
-  if (_mppSubs) console.log("MPP recurring subscriptions enabled (native tempo/subscription, pull billing)");
-} catch (e) { console.warn("[mpp-subs] init failed:", String(e?.message || e).slice(0, 200)); _mppSubs = null; }
+  }),
+});
+if (_mppSubs) console.log("MPP recurring subscriptions enabled (native tempo/subscription, pull billing)");
 // Boot sweep: close rail-canary subscriptions a canary run left open (the
 // canary's own product only, never a real subscriber; see sweepStaleCanaries).
 // Deferred and unref'd so it never sits in the boot path.
@@ -3276,7 +3280,7 @@ if (_mppSubs) {
 let _credits = null;
 try {
   _credits = humanCheckoutEnabled() ? createCredits({
-    stripe: new Stripe(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
+    stripe: newStripeClient(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
     // A pack PURCHASE is cash received, not revenue earned: booked on the
     // non-paying rail "card-prepaid" for reconciliation, so /revenue counts
     // the money once - when it is spent (rail "credits" below).
@@ -4079,6 +4083,10 @@ app.get("/api/gateway-status", async (req, res) => {
     exaSpend: full ? spend.exaSpend : publicBucket(spend.exaSpend),
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
+    // x-search-recent's expanded-author reads today (src/x-search-stats.js):
+    // ok / alert past X_SEARCH_AUTHOR_DAILY_ALERT / unknown. An alarm only,
+    // nothing is refused. One word publicly; the figures for the operator.
+    xSearchAuthors: await xSearchAuthorsStatus({ full }).catch(() => ({ status: "unknown" })),
     // The router's per-minute holds for outside sellers
     // (src/router-spend-window.js): ok / over (past the alarm, still serving)
     // / capped (a purchase was refused at the stop inside the last hour) /
@@ -4314,10 +4322,16 @@ app.get("/api/gateway-status", async (req, res) => {
     // renewal has stayed unconfirmed (its send's landing undecided by the
     // chain read, so nothing is signed again) for longer than
     // MPP_SUB_UNCONFIRMED_ALERT_HOURS (default 3), ok otherwise, off with the
-    // alert disabled or no subscription engine. One word publicly; the
+    // alert disabled or no subscription engine configured, unknown while a
+    // configured engine failed at boot (mppSubscriptions pages on that, and
+    // renewals cannot be read). One word publicly; the
     // threshold, the count and the oldest attempt for the operator, each
     // record on /__operator/monitors.json.
-    subscriptionRenewals: (() => { try { return _mppSubs ? _mppSubs.renewalsStatus({ full }) : { status: "off" }; } catch { return { status: "unknown" }; } })(),
+    // The MPP subscription engine (src/mpp-subscriptions.js): on / off (not
+    // configured) / failed (configured, but the installed mppx has no
+    // subscription method, or it did not build at boot). One word.
+    mppSubscriptions: { status: _mppSubsState },
+    subscriptionRenewals: (() => { try { return _mppSubs ? _mppSubs.renewalsStatus({ full }) : { status: _mppSubsState === "failed" ? "unknown" : "off" }; } catch { return { status: "unknown" }; } })(),
     // The direct upstream (src/gateway-direct-pricebook.js): off, starting,
     // ok or degraded (a mapped model is kept on OpenRouter, or the direct
     // breaker is open). The word publicly; the operator read adds a reason
@@ -5067,7 +5081,7 @@ if (!humanCheckoutEnabled()) {
 if (humanCheckoutEnabled()) {
   try {
     _humanCheckout = createHumanCheckout({
-      stripe: new Stripe(process.env.STRIPE_SECRET_KEY), generate: _humanGenerate, baseUrl: BASE_URL,
+      stripe: newStripeClient(process.env.STRIPE_SECRET_KEY), generate: _humanGenerate, baseUrl: BASE_URL,
       // Card sales land in the SAME sales ledger as x402 settlements (rail
       // "card", network "stripe", the PaymentIntent as tx) so /revenue and the
       // operator surfaces see the human front door.
@@ -5537,7 +5551,7 @@ app.get("/__operator/nc-sales-tax.json", async (req, res) => {
     const rows = externalSalesForSlugs(Object.keys(NC_TAXABLE_SLUGS), since, until);
     const keyIds = [...new Set(rows.filter((r) => !r.tx && r.payer).map((r) => r.payer))];
     const keyBilling = _credits ? await _credits.billingByKeyId(keyIds) : new Map();
-    const stripeClient = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+    const stripeClient = process.env.STRIPE_SECRET_KEY ? newStripeClient(process.env.STRIPE_SECRET_KEY) : null;
     const paymentBilling = new Map();
     const report = await ncTaxReport(rows, {
       billingForKey: (id) => keyBilling.get(id) || null,
@@ -6569,7 +6583,7 @@ const mppReconciler = createMppReconciler({
   },
   stripeLookup: (process.env.STRIPE_SECRET_KEY || "").trim() ? async (pi) => {
     if (!/^pi_[A-Za-z0-9]+$/.test(String(pi))) return { error: true };
-    _stripeForReconcile ||= new Stripe(process.env.STRIPE_SECRET_KEY.trim());
+    _stripeForReconcile ||= newStripeClient(process.env.STRIPE_SECRET_KEY.trim());
     const r = await _stripeForReconcile.paymentIntents.retrieve(pi);
     return { status: r.status, amountCents: r.amount_received ?? r.amount };
   } : null,

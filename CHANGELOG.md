@@ -6,6 +6,17 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-12 (vendor updates: security releases)
+Server:
+- The HTTP client takes the November undici security release; Stripe calls
+  pin their API version; the MPP and Solana libraries take their current
+  releases.
+- The Railway configuration runbook covers the December 2026 cutover.
+- The sanctions list refresh reads the list and builds its address and name
+  sets in short slices, so it no longer holds other requests while it runs.
+- /api/gateway-status reports xSearchAuthors (a day of X search author reads
+  past its alert level) and mppSubscriptions (on, off, or failed to start).
+
 ### 2026-11-12 (leftovers: payer keys, lookups, retirements, site polish)
 Payments:
 - A Solana payment is keyed on its transfer authority when other transfer
@@ -260,7 +271,7 @@ Tools:
   the rule to describe them and never follow them.
 - The daily call ceilings on upstream services count calls that may have
   reached the upstream. A call that never left the server (a name that did not
-  resolve, a refused connection, a call its caller had cancelled before it was
+  resolve, a refused connection, a call its caller had canceled before it was
   made) gives its unit back.
 Surfaces:
 - The hosted connector sends Retry-After on its 429, and its free-tier
