@@ -1,5 +1,4 @@
-import { lookup } from "node:dns/promises";
-import { lookup as lookupCb } from "node:dns";
+import { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import { Agent, buildConnector } from "undici";
 import { checkServerIdentity } from "../tls-distrust.js";
@@ -70,22 +69,83 @@ function lookupUnavailableIn(err) {
   return null;
 }
 
-// One bound on an upfront lookup, so a resolver that never answers reads as a
-// lookup that could not finish rather than a request that hangs.
+// Every name this guard checks is resolved with c-ares (dns.Resolver), never
+// with dns.lookup. dns.lookup is getaddrinfo on libuv's thread pool (four
+// threads by default, shared with fs, zlib and crypto): a name whose server
+// answers SERVFAIL or nothing holds a pool thread until getaddrinfo gives up,
+// long after the bound below has answered the caller, so four such names
+// stalled every other lookup and every pool task in the process. A c-ares
+// query is a socket on the event loop: an unanswered one holds no thread.
+// The queries go to the system's name servers with no search-domain suffix
+// and no hosts-file answer, so a name resolves only to what DNS publishes for
+// it (a hosts-only name reads as one that does not resolve: the same 400).
+//
+// One bound per lookup, so a resolver that never answers reads as a lookup
+// that could not finish rather than a request that hangs.
 // DNS_LOOKUP_TIMEOUT_MS overrides the default, read per call.
 const LOOKUP_TIMEOUT_MS = 10_000;
-async function boundedLookup(host) {
-  const timeoutMs = Number(process.env.DNS_LOOKUP_TIMEOUT_MS) > 0 ? Number(process.env.DNS_LOOKUP_TIMEOUT_MS) : LOOKUP_TIMEOUT_MS;
+function lookupBudgetMs() {
+  return Number(process.env.DNS_LOOKUP_TIMEOUT_MS) > 0 ? Number(process.env.DNS_LOOKUP_TIMEOUT_MS) : LOOKUP_TIMEOUT_MS;
+}
+function withDeadline(promise, timeoutMs) {
   let timer;
   const deadline = new Promise((_, reject) => {
+    // Not unref'd: a lookup still waiting keeps the process up until it is answered.
     timer = setTimeout(() => reject(Object.assign(new Error("lookup timed out"), { code: "EDNSLOOKUPTIMEOUT" })), timeoutMs);
-    timer.unref?.();
   });
-  try {
-    return await Promise.race([lookup(host), deadline]);
-  } finally {
-    clearTimeout(timer);
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+// Per-try timeout and tries for the shared channel; the bound above caps the whole.
+const RESOLVER_TIMEOUT_MS = 2_500;
+const RESOLVER_TRIES = 3;
+let guardResolver = null;
+const resolverOf = () => (guardResolver ??= new Resolver({ timeout: RESOLVER_TIMEOUT_MS, tries: RESOLVER_TRIES }));
+// One query per name and family in flight: concurrent checks of one name share it.
+const inflight = new Map();
+function queryFamily(host, family) {
+  const key = `${family} ${host}`;
+  let p = inflight.get(key);
+  if (!p) {
+    const r = resolverOf();
+    p = Promise.resolve()
+      .then(() => (family === 4 ? r.resolve4(host) : r.resolve6(host)))
+      .finally(() => inflight.delete(key));
+    inflight.set(key, p);
   }
+  return p;
+}
+
+/**
+ * Every address DNS publishes for a name: its A answers and, unless
+ * `families` says otherwise, its AAAA answers, as [{ address, family }].
+ * A literal IP is returned as itself. Rejects only when no family answered:
+ * with a transient code (isTransientLookupError) when any family could not
+ * be answered, otherwise with the resolver's own code (ENOTFOUND, ENODATA).
+ * A family that failed beside one that answered contributes nothing.
+ */
+export async function resolveHostAddresses(host, { families = [4, 6] } = {}) {
+  const name = String(host);
+  const literal = isIP(name);
+  if (literal) return [{ address: name, family: literal }];
+  const ms = lookupBudgetMs();
+  const settled = await Promise.allSettled(
+    families.map((f) => withDeadline(queryFamily(name, f), ms).then((list) => (Array.isArray(list) ? list : []).map((address) => ({ address: String(address), family: f }))))
+  );
+  const out = [];
+  let transient = null, other = null;
+  for (const s of settled) {
+    if (s.status === "fulfilled") out.push(...s.value);
+    else if (isTransientLookupError(s.reason)) transient ??= s.reason;
+    else other ??= s.reason;
+  }
+  if (out.length) return out;
+  throw transient || other || Object.assign(new Error("no address"), { code: "ENODATA" });
+}
+
+/** One address for a name, IPv4 first (the order the server sets for dns.lookup). */
+export async function resolveHostAddress(host) {
+  const all = await resolveHostAddresses(host);
+  return all.find((a) => a.family === 4) || all[0];
 }
 
 function isPrivateV4(ip) {
@@ -262,17 +322,19 @@ function guardedLookup(hostname, options, callback) {
   // (the repeatable ~4-7% 504s on treasury-debt/avg-rates, gov-data, fx, edgar).
   // Resolving IPv4-only never attempts v6; an IPv6-only host is unreachable here
   // anyway, so nothing is lost.
-  lookupCb(hostname, { ...options, family: 4 }, (err, address, family) => {
+  resolveHostAddresses(hostname, { families: [4] }).then(
+    (entries) => {
+      for (const e of entries) {
+        if (isPrivateIp(e.address)) return process.nextTick(callback, blockedError());
+      }
+      if (options?.all) return process.nextTick(callback, null, entries);
+      process.nextTick(callback, null, entries[0].address, 4);
+    },
     // A name that does not resolve is refused exactly like a name with a
     // private answer: on a redirect hop the two must read the same. A
     // resolver that could not answer at all is neither, and is retryable.
-    if (err) return callback(isTransientLookupError(err) ? lookupUnavailable(err) : blockedError(err));
-    const entries = Array.isArray(address) ? address : [{ address, family }];
-    for (const e of entries) {
-      if (isPrivateIp(e.address)) return callback(blockedError());
-    }
-    callback(null, address, family);
-  });
+    (err) => process.nextTick(callback, isTransientLookupError(err) ? lookupUnavailable(err) : blockedError(err))
+  );
 }
 
 // Shared dispatcher that pins every connection (and redirect hop) to a
@@ -329,7 +391,7 @@ export async function hostIsPublic(hostname) {
   if (hit && hit.exp > now) return hit.ok;
   let ok = false;
   try {
-    const addrs = await lookup(hostname, { all: true });
+    const addrs = await resolveHostAddresses(hostname);
     ok = addrs.length > 0 && addrs.every((a) => !isPrivateIp(a.address));
   } catch {
     ok = false;
@@ -374,12 +436,13 @@ export async function assertPublicUrl(rawUrl) {
   if (!isIP(host)) {
     let resolved;
     try {
-      resolved = await boundedLookup(host);
+      resolved = await resolveHostAddresses(host);
     } catch (err) {
       if (isTransientLookupError(err)) throw lookupUnavailable(err);
       throw badRequest(UNRESOLVED_OR_PRIVATE);
     }
-    if (isPrivateIp(resolved.address)) {
+    // Every A and AAAA answer is checked, not only the one a connection would pick.
+    if (resolved.some((a) => isPrivateIp(a.address))) {
       throw badRequest(UNRESOLVED_OR_PRIVATE);
     }
   }

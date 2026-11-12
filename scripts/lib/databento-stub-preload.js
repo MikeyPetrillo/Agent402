@@ -8,6 +8,7 @@
 // by scripts/test-paid-phase-timing.js.
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
+import { stubGuardResolver, resolverError } from "./guard-resolver-stub.js";
 
 const STUB = process.env.DATABENTO_STUB_URL;
 if (!STUB) throw new Error("databento-stub-preload: DATABENTO_STUB_URL is unset; refusing to boot a server that could reach the real upstream");
@@ -22,6 +23,8 @@ dnsPromises.lookup = function stubLookup(hostname, options) {
   return realLookup.call(this, hostname, options);
 };
 syncBuiltinESMExports();
+// The address guard resolves with dns.Resolver: the same one host answers there.
+stubGuardResolver((h, family) => (h === HOST ? (family === 4 ? ["1.1.1.1"] : Promise.reject(resolverError("ENODATA"))) : undefined));
 
 globalThis.fetch = function databentoStubFetch(input, init) {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input?.url;

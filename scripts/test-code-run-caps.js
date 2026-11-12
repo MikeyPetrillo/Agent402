@@ -78,7 +78,8 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
   process.env.E2B_API_KEY = "e2b-test-not-a-key";
   const timeoutErr = (msg) => Object.assign(new Error(msg), { name: "TimeoutError" });
   let behavior = null;
-  __test.setSandbox({ create: async () => behavior.create() });
+  const createOpts = [];
+  __test.setSandbox({ create: async (opts) => { createOpts.push(opts); return behavior.create(); } });
   const sandbox = (runCode) => ({ runCode, kill: async () => {} });
   const req = (ip, header) => ({ ip, header: (k) => (header && (k === "payment-signature") ? header : undefined) });
   try {
@@ -86,6 +87,7 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
     behavior = { create: async () => sandbox(async (_code, opts) => { opts.onStdout?.({ line: "tick 1\n" }); opts.onStdout?.({ line: "tick 2\n" }); opts.onStderr?.({ line: "warn\n" }); throw timeoutErr("Execution timed out - the 'timeoutMs' option can be used to increase this timeout"); }) };
     const r = await run({ code: "while True: pass" }, req("10.0.0.1"));
     ok(r.timedOut === true && r.stdout === "tick 1\ntick 2\n" && r.stderr === "warn\n" && r.error === null, "a run that hits the time limit returns 200 with timedOut and the partial output");
+    ok(createOpts.length === 1 && createOpts[0]?.allowInternetAccess === false, `the sandbox is created with no internet access (${JSON.stringify(createOpts[0]?.allowInternetAccess)})`);
     ok(CODE_RUN_TOOLS.every((t) => /timedOut: true/.test(t.description) && /is charged/.test(t.description)), "both tiers disclose that a timed-out run is returned and charged");
 
     // A transport timeout is not the buyer's code: still an uncharged 504.
