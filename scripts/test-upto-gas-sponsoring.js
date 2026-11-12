@@ -1,0 +1,404 @@
+#!/usr/bin/env node
+// Permit2 gas sponsorship on the metered upto accepts, and upto on Arc.
+// Both are default-off switches (src/upto-gas-sponsoring.js):
+//   X402_UPTO_GAS_SPONSORING  declares eip2612GasSponsoring (and, by name,
+//                             erc20ApprovalGasSponsoring) in the 402 of a
+//                             metered /v1 route that offers upto, only when
+//                             the facilitator settling every upto network
+//                             advertises the key.
+//   X402_UPTO_NETWORKS        Arc (eip155:5042) is a valid member, by name
+//                             only ("all" never adds it).
+//
+//   node scripts/test-upto-gas-sponsoring.js
+//   BASELINE_TREE=/path/to/main/checkout node scripts/test-upto-gas-sponsoring.js
+//     (also boots that tree and compares its 402s byte for byte)
+//
+// Every server runs against local stubs (Base facilitator, Circle through a
+// fetch preload, OpenRouter through scripts/lib/openrouter-stub-preload.js):
+// nothing is settled on chain and nothing is sent upstream.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { getFreePorts } from "./lib/free-port.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
+import { privateKeyToAccount } from "viem/accounts";
+import { x402Client } from "@x402/core/client";
+import { UptoEvmScheme as UptoClient } from "@x402/evm/upto/client";
+import { declareEip2612GasSponsoringExtension, declareErc20ApprovalGasSponsoringExtension } from "@x402/extensions";
+import {
+  gasSponsoringWanted, uptoNetworksWanted, uptoListedByName, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute,
+} from "../src/upto-gas-sponsoring.js";
+import { usdcKindsFromSupported, ARC_PROFILE } from "../src/circle-supported.js";
+import { CircleFacilitatorClient, CIRCLE_FACILITATOR_BASE, preflightUptoPayment, pendingNonceOf, CIRCLE_EVM_FALLBACK_PROFILES } from "../src/circle-facilitator.js";
+import { applyMeteredSettlement } from "../src/gateway-meter.js";
+import { setUpstreamCostsForTest } from "../src/upstream-costs.js";
+
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const BASE = "eip155:8453";
+const ARC = "eip155:5042";
+const FAC_BASE = "0x1111111111111111111111111111111111111111";
+const FAC_ARC = "0x2222222222222222222222222222222222222222";
+const PAYTO = "0x000000000000000000000000000000000000dEaD";
+const KEY = "test-circle-key-not-a-secret";
+const EIP = "eip2612GasSponsoring", ERC = "erc20ApprovalGasSponsoring";
+// A throwaway buyer key made up for this test (holds nothing on any chain).
+const buyer = privateKeyToAccount(`0x${"4b".repeat(32)}`);
+
+// --- 1. Switch parsing and the declaration -----------------------------------
+{
+  ok(gasSponsoringWanted({}).length === 0 && gasSponsoringWanted({ X402_UPTO_GAS_SPONSORING: "off" }).length === 0, "unset or off declares nothing");
+  ok(JSON.stringify(gasSponsoringWanted({ X402_UPTO_GAS_SPONSORING: "on" })) === JSON.stringify([EIP]), "on is the EIP-2612 permit only (USDC implements it)");
+  ok(JSON.stringify(gasSponsoringWanted({ X402_UPTO_GAS_SPONSORING: `${EIP},${ERC},bogus` })) === JSON.stringify([EIP, ERC]), "a CSV names keys; an unknown name is ignored");
+  const evm = [BASE, "eip155:137", ARC];
+  ok(JSON.stringify(uptoNetworksWanted({ X402_UPTO_NETWORKS: "all" }, evm)) === JSON.stringify([BASE, "eip155:137"]), "\"all\" never adds Arc");
+  ok(JSON.stringify(uptoNetworksWanted({ X402_UPTO_NETWORKS: `${BASE},${ARC}` }, evm)) === JSON.stringify([BASE, ARC]), "Arc listed by name is wanted");
+  ok(uptoNetworksWanted({}, evm).length === 0 && uptoNetworksWanted({ X402_UPTO_NETWORKS: ARC }, [BASE]).length === 0, "unset is nothing, and a network not offered is never wanted");
+  ok(uptoListedByName(ARC, { X402_UPTO_NETWORKS: `${BASE}, ${ARC}` }) && !uptoListedByName(ARC, { X402_UPTO_NETWORKS: "all" }), "Circle's upto read follows Arc listed by name only");
+  const ex = new Map([[BASE, [EIP, ERC]], [ARC, [EIP]]]);
+  const r = gasSponsoringKeys([EIP, ERC], [BASE, ARC], ex);
+  ok(JSON.stringify(r.keys) === JSON.stringify([EIP]) && r.refused.length === 1 && r.refused[0].key === ERC && r.refused[0].networks[0] === ARC, "a key is declared only when the settler of EVERY upto network advertises it");
+  ok(gasSponsoringKeys([EIP], [BASE], new Map()).keys.length === 0, "a network whose settler read nothing declares nothing");
+  const d = gasSponsoringDeclarations([EIP, ERC]);
+  ok(JSON.stringify(d[EIP].info) === JSON.stringify(declareEip2612GasSponsoringExtension()[EIP].info)
+    && JSON.stringify(d[ERC].info) === JSON.stringify(declareErc20ApprovalGasSponsoringExtension()[ERC].info), "the declared info is the SDK helper's, word for word");
+  ok(!("schema" in d[EIP]) && JSON.stringify(d).length < 400, `the declaration carries no JSON schema, so the challenge stays small (${JSON.stringify(d).length} bytes for both keys)`);
+  ok(isMeteredGatewayRoute({ slug: "v1-chat-metered", quote: () => 1 }) && isMeteredGatewayRoute({ slug: "v1-chat", tierQuote: () => 1 })
+    && !isMeteredGatewayRoute({ slug: "tts", quote: () => 1 }) && !isMeteredGatewayRoute({ slug: "v1-models" }), "only per-request priced /v1 routes carry the declaration");
+}
+
+// --- 2. Circle's /supported read: upto on Arc only when asked ----------------
+{
+  const sup = {
+    kinds: [
+      { x402Version: 2, scheme: "exact", network: ARC, asset: ARC_PROFILE.asset },
+      { x402Version: 2, scheme: "upto", network: ARC, asset: ARC_PROFILE.asset, extra: { facilitatorAddress: FAC_ARC } },
+    ],
+    extensions: [EIP, "settlement-status"], signers: { [ARC]: [FAC_ARC] },
+  };
+  const off = usdcKindsFromSupported(sup, [ARC_PROFILE]);
+  ok(off.kinds.length === 1 && off.kinds[0].scheme === "exact" && !off.extensions.includes(EIP), "read without upto: exact only, and the extension list as before");
+  const on = usdcKindsFromSupported(sup, [ARC_PROFILE], { uptoNetworks: [ARC] });
+  const k = on.kinds.find((x) => x.scheme === "upto");
+  ok(on.kinds.length === 2 && k?.extra?.facilitatorAddress === FAC_ARC && on.extensions.includes(EIP), "read for upto: the Arc upto kind with its facilitator address, and the sponsoring key");
+  const noAddr = usdcKindsFromSupported({ ...sup, kinds: [sup.kinds[0], { ...sup.kinds[1], extra: {} }] }, [ARC_PROFILE], { uptoNetworks: [ARC] });
+  ok(noAddr.kinds.length === 1, "an upto kind without a facilitator address is not one a buyer can sign for: dropped");
+  const noExact = usdcKindsFromSupported({ ...sup, kinds: [sup.kinds[1]] }, [ARC_PROFILE], { uptoNetworks: [ARC] });
+  ok(noExact.kinds.length === 0, "upto is never listed on a network whose exact kind is missing (Arc is dropped then)");
+  const fb = new CircleFacilitatorClient({ apiKey: KEY, profiles: CIRCLE_EVM_FALLBACK_PROFILES, upto: true, fetchImpl: async () => { throw new Error("no fetch"); } });
+  ok(fb._uptoNetworks.length === 0, "the Base and Polygon settle fallback never takes upto, whatever it is passed");
+}
+
+// --- 3. The Arc upto preflight, with payloads the real SDK client signs ------
+const arcAccept = (amount = "50000") => ({
+  scheme: "upto", network: ARC, amount, asset: ARC_PROFILE.asset, payTo: PAYTO, maxTimeoutSeconds: 300,
+  extra: { name: "USDC", version: "2", assetTransferMethod: "permit2", facilitatorAddress: FAC_ARC },
+});
+// The buyer's chain reads, answered locally: no Permit2 allowance yet (so the
+// sponsoring path signs a permit), permit nonce 0.
+const buyerSigner = {
+  address: buyer.address,
+  signTypedData: (m) => buyer.signTypedData(m),
+  readContract: async ({ functionName }) => (functionName === "allowance" ? 0n : 0n),
+  getTransactionCount: async () => 0,
+  estimateFeesPerGas: async () => ({ maxFeePerGas: 1n, maxPriorityFeePerGas: 1n }),
+  signTransaction: async () => "0x00",
+};
+async function signFor(paymentRequired) {
+  const client = new x402Client();
+  client.register(ARC, new UptoClient(buyerSigner));
+  client.register(BASE, new UptoClient(buyerSigner));
+  return client.createPaymentPayload(paymentRequired);
+}
+{
+  const accept = arcAccept();
+  const withExt = await signFor({ x402Version: 2, resource: { url: "http://x/v1" }, accepts: [accept], extensions: gasSponsoringDeclarations([EIP]) });
+  ok(withExt.extensions?.[EIP]?.info?.signature && withExt.extensions[EIP].info.spender, "the SDK upto client signs an EIP-2612 permit when the 402 declares the key and the buyer holds no allowance");
+  const without = await signFor({ x402Version: 2, resource: { url: "http://x/v1" }, accepts: [accept] });
+  ok(!without.extensions?.[EIP], "and signs none when the key is not declared (the switch off)");
+  const now = Math.floor(Date.now() / 1000);
+  ok(await preflightUptoPayment(withExt, accept, now) === null, "a sponsored upto payment the SDK signed passes the local preflight");
+  ok(await preflightUptoPayment(without, accept, now) === null, "an unsponsored one passes too");
+  ok(await preflightUptoPayment(withExt, { ...accept, amount: "40000" }, now, { settle: true }) === null, "settle under the ceiling passes");
+  ok(await preflightUptoPayment(withExt, accept, now, { settle: true }) === null, "settle at the ceiling passes");
+  ok((await preflightUptoPayment(withExt, { ...accept, amount: "50001" }, now, { settle: true }))?.reason === "upto_settlement_exceeds_amount", "settle above the ceiling is refused here, before Circle sees it");
+  ok((await preflightUptoPayment(withExt, { ...accept, amount: "40000" }, now))?.reason === "permit2_amount_mismatch", "verify needs the ceiling to equal the quote");
+  ok((await preflightUptoPayment(withExt, { ...accept, payTo: FAC_BASE }, now))?.reason === "invalid_permit2_recipient_mismatch", "a witness paying someone else is refused");
+  ok((await preflightUptoPayment(withExt, { ...accept, extra: { ...accept.extra, facilitatorAddress: FAC_BASE } }, now))?.reason === "invalid_upto_evm_payload_facilitator_mismatch", "a witness naming another facilitator is refused");
+  const forged = structuredClone(withExt); forged.payload.permit2Authorization.permitted.amount = "5000000";
+  ok((await preflightUptoPayment(forged, { ...accept, amount: "5000000" }, now))?.reason === "invalid_upto_evm_payload_signature", "a raised ceiling the buyer did not sign is refused");
+  const other = structuredClone(withExt); other.extensions[EIP].info.from = FAC_BASE;
+  ok((await preflightUptoPayment(other, accept, now))?.reason === "invalid_eip2612_extension", "a sponsoring permit for another owner is refused");
+  ok((await preflightUptoPayment(withExt, accept, now + 100_000))?.reason === "permit2_deadline_expired", "an expired authorization is refused");
+  ok(/^0x[0-9a-f]{64}$/.test(pendingNonceOf(withExt)) && BigInt(pendingNonceOf(withExt)) === BigInt(withExt.payload.permit2Authorization.nonce), "a pending upto settle is booked under its Permit2 nonce, in the book's 32-byte form");
+
+  // The client: off, upto is refused before any fetch; on, it is forwarded.
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    const body = init?.body ? JSON.parse(init.body) : null;
+    seen.push({ path: url.slice(CIRCLE_FACILITATOR_BASE.length), body });
+    const json = (o) => new Response(JSON.stringify(o), { status: 200, headers: { "content-type": "application/json" } });
+    if (url.endsWith("/verify")) return json({ isValid: true, payer: buyer.address });
+    if (url.endsWith("/settle")) return json({ success: true, transaction: `0x${"ab".repeat(32)}`, network: ARC, payer: buyer.address });
+    return json({});
+  };
+  const offClient = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl });
+  const v0 = await offClient.verify(withExt, accept);
+  ok(v0.isValid === false && v0.invalidReason === "unsupported_scheme" && seen.length === 0, "a client not asked for upto refuses an upto payment and sends nothing");
+  const onClient = new CircleFacilitatorClient({ apiKey: KEY, fetchImpl, upto: true });
+  const v1 = await onClient.verify(withExt, accept);
+  ok(v1.isValid === true && v1.payer === buyer.address && seen.at(-1)?.path === "/verify", "asked for upto, a verified payment is forwarded and the payer is the Permit2 signer");
+  ok(seen.at(-1)?.body?.paymentPayload?.extensions?.[EIP]?.info?.signature, "the sponsoring permit reaches Circle with the payment");
+  const n = seen.length;
+  const s1 = await onClient.settle(withExt, { ...accept, amount: "60000" });
+  ok(s1.success === false && s1.errorReason === "upto_settlement_exceeds_amount" && seen.length === n, "a settle above the signed ceiling is refused and never sent");
+  const s2 = await onClient.settle(withExt, { ...accept, amount: "12345" });
+  ok(s2.success === true && seen.at(-1)?.path === "/settle" && seen.at(-1)?.body?.paymentRequirements?.amount === "12345", "a settle under the ceiling is sent at the amount asked");
+  // The exact path is unchanged on the same client.
+  const v2 = await onClient.verify({ x402Version: 2, payload: {} }, { scheme: "exact", network: ARC, asset: ARC_PROFILE.asset, payTo: PAYTO, amount: "1" });
+  ok(v2.isValid === false && v2.invalidReason === "invalid_payload", "an exact payment still takes the exact preflight");
+}
+
+// --- 4. The meter caps a sponsored upto settle at the quote ------------------
+{
+  setUpstreamCostsForTest({ models: [["fake/", { prompt: 1, completion: 1 }]], meter: { markup: 1.2 } });
+  const payload = await signFor({ x402Version: 2, resource: { url: "http://x/v1" }, accepts: [arcAccept()], extensions: gasSponsoringDeclarations([EIP]) });
+  const hdr = Buffer.from(JSON.stringify(payload)).toString("base64");
+  const req = { header: (n) => (String(n).toLowerCase() === "payment-signature" ? hdr : undefined), __meteredQuoteUsd: 0.05 };
+  const res = { headersSent: false, setHeader: () => {} };
+  let over = null;
+  const amt = applyMeteredSettlement({ result: { ok: true, __meterUpstreamUsd: 5 }, req, tool: { slug: "v1-chat-metered", price: "$0.001" }, res, enabled: true, setOverrides: (_r, o) => { over = o; } });
+  ok(amt === 0.05 && over?.amount === "$0.050000", `a sponsored upto call whose usage exceeds the quote settles AT the quote, never above (${amt})`);
+  let small = null;
+  applyMeteredSettlement({ result: { ok: true, __meterUpstreamUsd: 0.001 }, req, tool: { slug: "v1-chat-metered", price: "$0.001" }, res, enabled: true, setOverrides: (_r, o) => { small = o; } });
+  ok(small && Number(small.amount.slice(1)) < 0.05, `and a small one settles under it (${small?.amount})`);
+}
+
+// --- 5. Paid-mode boots ------------------------------------------------------
+const tmp = mkdtempSync(join(tmpdir(), "a402-upto-gas-"));
+const PORTS = await getFreePorts(24);
+let portIdx = 0;
+const nextPort = () => PORTS[portIdx++];
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+// Facilitator stubs: Base (stock wire) and Circle (redirected by a preload).
+const st = { baseExt: [EIP], circleExt: [EIP], baseSettles: [], circleSettles: [], circleVerifies: 0 };
+const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => { try { r(JSON.parse(b || "null")); } catch { r(null); } }); });
+const send = (res, code, o) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(o)); };
+const P_BASE = nextPort(), P_CIRCLE = nextPort(), P_OR = nextPort();
+const baseStub = createServer(async (req, res) => {
+  const body = await readBody(req);
+  if (req.url === "/supported") return send(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: BASE }, { x402Version: 2, scheme: "upto", network: BASE, extra: { facilitatorAddress: FAC_BASE } }], extensions: st.baseExt, signers: {} });
+  const payer = body?.paymentPayload?.payload?.permit2Authorization?.from || body?.paymentPayload?.payload?.authorization?.from;
+  if (req.url === "/verify") return send(res, 200, { isValid: true, payer });
+  if (req.url === "/settle") { st.baseSettles.push(body); return send(res, 200, { success: true, transaction: `0x${"cd".repeat(32)}`, network: BASE, payer }); }
+  send(res, 404, {});
+});
+const circleStub = createServer(async (req, res) => {
+  const body = await readBody(req);
+  if (req.url === "/supported") {
+    return send(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: ARC, asset: ARC_PROFILE.asset }, { x402Version: 2, scheme: "upto", network: ARC, asset: ARC_PROFILE.asset, extra: { facilitatorAddress: FAC_ARC } }], extensions: st.circleExt, signers: { [ARC]: [FAC_ARC] } });
+  }
+  if (req.headers.authorization !== `Bearer ${KEY}`) return send(res, 401, { code: 401 });
+  const payer = body?.paymentPayload?.payload?.permit2Authorization?.from || body?.paymentPayload?.payload?.authorization?.from;
+  if (req.url === "/verify") { st.circleVerifies++; return send(res, 200, { isValid: true, payer }); }
+  if (req.url === "/settle") { st.circleSettles.push(body); return send(res, 200, { success: true, transaction: `0x${"ef".repeat(32)}`, network: ARC, payer }); }
+  if (req.url === "/rpc") return send(res, 200, { jsonrpc: "2.0", id: 1, result: "0x0" });
+  send(res, 404, {});
+});
+let orMode = "ok";
+const orStub = createServer(async (req, res) => {
+  await readBody(req);
+  if (req.method === "POST" && String(req.url || "").startsWith("/api/v1/chat/completions")) {
+    if (orMode === "fail") return send(res, 500, { error: { message: "stub upstream down" } });
+    return send(res, 200, { id: "gen-test", object: "chat.completion", created: Math.floor(Date.now() / 1000), model: "openai/gpt-4o-mini", choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 } });
+  }
+  send(res, 200, { data: [] });
+});
+await Promise.all([[baseStub, P_BASE], [circleStub, P_CIRCLE], [orStub, P_OR]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+const circlePreload = join(tmp, "circle-redirect.mjs");
+writeFileSync(circlePreload, `
+const BASE = ${JSON.stringify(CIRCLE_FACILITATOR_BASE)};
+const STUB = process.env.UPTO_TEST_CIRCLE_STUB;
+const real = globalThis.fetch;
+globalThis.fetch = function (input, init) {
+  const u = typeof input === "string" ? input : input instanceof URL ? input.href : input && input.url;
+  if (STUB && typeof u === "string" && u.startsWith(BASE)) return real(STUB + u.slice(BASE.length), init);
+  if (STUB && typeof u === "string" && u.startsWith("https://rpc.mainnet.arc.io")) return real(STUB + "/rpc", init);
+  return real(input, init);
+};
+`);
+const orPreload = join(ROOT, "scripts/lib/openrouter-stub-preload.js");
+
+const procs = [];
+async function boot(env, { tree = ROOT, arc = false } = {}) {
+  const port = nextPort();
+  const base = { ...process.env };
+  delete base.STATE_DATABASE_URL; delete base.CIRCLE_FACILITATOR_API_KEY;
+  delete base.X402_UPTO_NETWORKS; delete base.X402_UPTO_GAS_SPONSORING;
+  const child = spawn(process.execPath, ["--import", orPreload, "--import", circlePreload, "src/server.js"], {
+    cwd: tree,
+    env: {
+      ...base, ...ownStoreEnv(`upto-gas-${port}`),
+      // One fixed base URL, so two boots' 402s can be compared byte for byte.
+      PORT: String(port), BASE_URL: "http://upto-gas.test", FREE_MODE: "", NETWORK: "base", PAYMENT_NETWORKS: arc ? "base,arc" : "base",
+      FACILITATOR_URL: `http://127.0.0.1:${P_BASE}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
+      AGENT402_BASE_RPC: `http://127.0.0.1:${P_CIRCLE}/rpc`,
+      WALLET_ADDRESS: PAYTO, X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", SOLANA_LEADERBOARD: "off",
+      STATS_ALLOW_EPHEMERAL: "true", SOLVADOR_KEY: "", PAYMENT_SETTLE_FALLBACK: "", MPP_SECRET_KEY: "", POSTHOG_API_KEY: "", INFLIGHT_COVER: "off",
+      PAYAI_FACILITATOR_URL: `http://127.0.0.1:${P_BASE}`, PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "",
+      LEADERBOARD_FIRST_REFRESH_DELAY_MS: "3600000", RATE_LIMIT_REPLICAS: "1",
+      OPENROUTER_API_KEY: "test-key-never-sent", OPENROUTER_STUB_URL: `http://127.0.0.1:${P_OR}`, OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_FLEX: "off",
+      UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_OPTIONAL: "", UPSTREAM_COSTS_FILE: join(ROOT, "docs/example-upstream-costs.json"),
+      GATEWAY_METERED_BILLING: "on",
+      SALES_LEDGER_DB: join(tmp, `sales-${port}.db`), CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${port}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-${port}.json`), TRAFFIC_DIR: tmp,
+      UPTO_TEST_CIRCLE_STUB: `http://127.0.0.1:${P_CIRCLE}`,
+      ...(arc ? { CIRCLE_FACILITATOR_API_KEY: KEY } : {}),
+      ...env,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  procs.push(child);
+  const log = { text: "" };
+  child.stdout.on("data", (d) => { log.text += d; });
+  child.stderr.on("data", (d) => { log.text += d; });
+  const url = `http://127.0.0.1:${port}`;
+  for (let i = 0; i < 240; i++) {
+    try { if ((await fetch(`${url}/health`)).ok) return { url, log, child }; } catch { /* booting */ }
+    await wait(250);
+  }
+  child.kill("SIGKILL");
+  throw new Error(`server never became healthy: ${log.text.slice(-1500)}`);
+}
+const stop = async (b) => { try { b.child.kill("SIGKILL"); } catch { /* gone */ } await wait(150); };
+const METERED = "/v1/metered/chat/completions";
+const CHAT_BODY = JSON.stringify({ model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 });
+const decode = (h) => JSON.parse(Buffer.from(h, "base64").toString("utf8"));
+async function challenge(url, path = METERED) {
+  const r = path === METERED
+    ? await fetch(`${url}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: CHAT_BODY })
+    : await fetch(`${url}${path}`);
+  const hdr = r.headers.get("payment-required");
+  const body = await r.text();
+  return { status: r.status, hdr, body, pr: hdr ? decode(hdr) : null };
+}
+
+try {
+  // 5a. Switch off: no declaration, and (with BASELINE_TREE) byte-identical to that tree.
+  {
+    const env = { X402_UPTO_NETWORKS: BASE };
+    const b = await boot(env);
+    const m = await challenge(b.url), u = await challenge(b.url, "/api/uuid");
+    ok(m.status === 402 && m.pr?.accepts?.some((a) => a.scheme === "upto"), "switch off: the metered route still offers upto on Base");
+    ok(!GAS_KEYS_IN(m.pr) && !GAS_KEYS_IN(u.pr), "switch off: no sponsoring key in any 402, though the facilitator advertises one");
+    ok(!/gas sponsoring/.test(b.log.text), "switch off: nothing about sponsoring is logged");
+    await stop(b);
+    if (process.env.BASELINE_TREE) {
+      const a = await boot(env, { tree: process.env.BASELINE_TREE });
+      const m0 = await challenge(a.url), u0 = await challenge(a.url, "/api/uuid");
+      ok(m0.hdr === m.hdr && m0.body === m.body, `switch off: the metered 402 header and body are byte-identical to ${process.env.BASELINE_TREE} (${m.hdr?.length} / ${m0.hdr?.length} header bytes)`);
+      ok(u0.hdr === u.hdr && u0.body === u.body, "switch off: an ordinary tool's 402 is byte-identical too");
+      await stop(a);
+      const c = await boot({}, { arc: true });
+      const c0 = await boot({}, { arc: true, tree: process.env.BASELINE_TREE });
+      const [x, x0] = [await challenge(c.url), await challenge(c0.url)];
+      ok(x.hdr === x0.hdr && x.body === x0.body, "Arc offered, upto unset: the 402 is byte-identical to the baseline");
+      await stop(c); await stop(c0);
+    }
+  }
+  // 5b. Switch on, Base only, facilitator advertises the key.
+  {
+    const b = await boot({ X402_UPTO_NETWORKS: BASE, X402_UPTO_GAS_SPONSORING: "on" });
+    const m = await challenge(b.url);
+    ok(m.status === 402 && JSON.stringify(m.pr?.extensions?.[EIP]?.info) === JSON.stringify(declareEip2612GasSponsoringExtension()[EIP].info), "switch on: the metered 402 declares eip2612GasSponsoring with the SDK's info");
+    ok(!m.pr?.extensions?.[ERC], "and not the approval-transaction key, which was not asked for");
+    const u = await challenge(b.url, "/api/uuid");
+    ok(u.status === 402 && !GAS_KEYS_IN(u.pr), "a fixed-price tool carries no declaration (upto buys it nothing over exact)");
+    const mem = await challenge(b.url, "/api/memory?key=k");
+    ok(mem.status === 402 && !GAS_KEYS_IN(mem.pr), "an identity-bound route carries none");
+    ok(!m.pr.accepts.some((a) => a.network === ARC), "Arc is not offered: it is not configured on this boot");
+    console.log(`# metered 402 header: ${m.hdr.length} bytes with the declaration`);
+
+    // A real SDK client pays it on Base: the permit rides along, the settle is metered under the quote.
+    const n0 = st.baseSettles.length;
+    const accepts = m.pr.accepts.filter((a) => a.scheme === "upto" && a.network === BASE);
+    const payload = await signFor({ ...m.pr, accepts });
+    ok(payload.extensions?.[EIP]?.info?.signature, "the SDK client signs a sponsoring permit against our 402");
+    const r = await fetch(`${b.url}${METERED}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": Buffer.from(JSON.stringify(payload)).toString("base64") }, body: CHAT_BODY });
+    await r.text();
+    const settled = st.baseSettles.slice(n0);
+    ok(r.status === 200 && settled.length === 1, `the sponsored upto call is served and settled once (status ${r.status}, settles ${settled.length})`);
+    const amt = BigInt(settled[0]?.paymentRequirements?.amount ?? -1), ceiling = BigInt(accepts[0].amount);
+    ok(amt > 0n && amt <= ceiling, `the settled amount is at or under the quote (${amt} <= ${ceiling})`);
+    ok(settled[0]?.paymentPayload?.extensions?.[EIP]?.info?.signature, "the permit reaches the facilitator with the settle");
+    // A failed call is never charged.
+    orMode = "fail";
+    const p2 = await signFor({ ...m.pr, accepts });
+    const n1 = st.baseSettles.length;
+    const rf = await fetch(`${b.url}${METERED}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": Buffer.from(JSON.stringify(p2)).toString("base64") }, body: CHAT_BODY });
+    await rf.text();
+    orMode = "ok";
+    ok(rf.status >= 400 && st.baseSettles.length === n1, `an upstream failure answers ${rf.status} and settles nothing`);
+    await stop(b);
+  }
+  // 5c. Switch on, the facilitator does not advertise the key: refused, logged.
+  {
+    st.baseExt = [];
+    const b = await boot({ X402_UPTO_NETWORKS: BASE, X402_UPTO_GAS_SPONSORING: "on" });
+    const m = await challenge(b.url);
+    ok(m.status === 402 && !GAS_KEYS_IN(m.pr), "a key the facilitator does not advertise is not declared");
+    ok(/REFUSING eip2612GasSponsoring, the facilitator settling upto on eip155:8453 does not advertise it/.test(b.log.text), "and the refusal is logged");
+    await stop(b);
+    st.baseExt = [EIP];
+  }
+  // 5d. Arc: offered only when listed by name.
+  {
+    for (const [val, want] of [[BASE, false], ["all", false], [`${BASE},${ARC}`, true]]) {
+      const b = await boot({ X402_UPTO_NETWORKS: val, X402_UPTO_GAS_SPONSORING: "on" }, { arc: true });
+      const m = await challenge(b.url);
+      const arcUpto = m.pr?.accepts?.find((a) => a.scheme === "upto" && a.network === ARC);
+      ok(m.status === 402 && !!arcUpto === want, `X402_UPTO_NETWORKS=${val}: Arc upto ${want ? "is" : "is not"} offered`);
+      ok(m.pr?.accepts?.some((a) => a.scheme === "exact" && a.network === ARC), `X402_UPTO_NETWORKS=${val}: Arc exact is offered as before`);
+      ok(!!m.pr?.extensions?.[EIP], `X402_UPTO_NETWORKS=${val}: the declaration holds (every upto settler advertises it)`);
+      if (want) {
+        ok(arcUpto.extra?.facilitatorAddress?.toLowerCase() === FAC_ARC && arcUpto.extra?.assetTransferMethod === "permit2" && arcUpto.amount === m.pr.accepts.find((a) => a.scheme === "exact" && a.network === ARC).amount,
+          "the Arc upto accept names Circle's facilitator, Permit2, and the exact accept's amount");
+        const payload = await signFor({ ...m.pr, accepts: [arcUpto] });
+        const n0 = st.circleSettles.length;
+        const r = await fetch(`${b.url}${METERED}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": Buffer.from(JSON.stringify(payload)).toString("base64") }, body: CHAT_BODY });
+        await r.text();
+        const s = st.circleSettles.slice(n0);
+        ok(r.status === 200 && s.length === 1, `a sponsored Arc upto call passes the local preflight, is served and settled through Circle (status ${r.status}, settles ${s.length})`);
+        const amt = BigInt(s[0]?.paymentRequirements?.amount ?? -1);
+        ok(amt > 0n && amt <= BigInt(arcUpto.amount), `the Arc settle is at or under the quote (${amt} <= ${arcUpto.amount})`);
+      }
+      await stop(b);
+    }
+    // Circle does not advertise the key while Base does: not declared anywhere.
+    st.circleExt = [];
+    const b = await boot({ X402_UPTO_NETWORKS: `${BASE},${ARC}`, X402_UPTO_GAS_SPONSORING: "on" }, { arc: true });
+    const m = await challenge(b.url);
+    ok(m.pr?.accepts?.some((a) => a.scheme === "upto" && a.network === ARC) && !GAS_KEYS_IN(m.pr), "one upto settler lacking the key: upto stays, the declaration is withheld");
+    ok(/REFUSING eip2612GasSponsoring, the facilitator settling upto on eip155:5042/.test(b.log.text), "and the refusal names Arc");
+    await stop(b);
+    st.circleExt = [EIP];
+  }
+} catch (e) {
+  fail++;
+  console.error(`FAIL - ${e?.stack || e}`);
+} finally {
+  for (const p of procs) { try { p.kill("SIGKILL"); } catch { /* gone */ } }
+  for (const s of [baseStub, circleStub, orStub]) { try { s.close(); } catch { /* closed */ } }
+  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
+}
+
+function GAS_KEYS_IN(pr) { return !!(pr?.extensions && (EIP in pr.extensions || ERC in pr.extensions)); }
+
+console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

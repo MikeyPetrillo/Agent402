@@ -5429,12 +5429,13 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (1 script, one process each)
+      - name: Offline suites (2 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
           # upto scheme ships dark, refuses what it cannot price
           t node scripts/test-upto-scheme.js
+          t node scripts/test-upto-gas-sponsoring.js
       - name: Runner kills and memory (on failure)
         if: failure()
         run: |

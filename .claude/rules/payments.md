@@ -128,6 +128,20 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   debts on an x402 settle book what the buyer paid on that chain (`src/paid-price.js`: the
   amount signed on an EVM rail, else the gated price through `priceForNetwork`), so revenue
   reads the premium and the floor and a refund repays what was paid.
+- **`upto` and Permit2 gas sponsorship (both off by default):** `X402_UPTO_NETWORKS` (CSV of
+  CAIP-2 ids, or `all`) offers `upto` beside `exact` on each listed EVM network a routing
+  facilitator advertises upto for at `/supported` (`src/payments.js`, `scripts/test-upto-scheme.js`).
+  Arc (`eip155:5042`) is a member only when named (`all` never adds it); named, the Circle client
+  lists Circle's Arc upto kind and preflights a Permit2 payment locally (signature under Permit2's
+  domain, upto proxy as spender, our payTo and Circle's facilitator in the witness, the ceiling equal
+  to the quote on verify and at or above the settle amount), and books a pending settle under its
+  Permit2 nonce in 32-byte form. `X402_UPTO_GAS_SPONSORING` (`on` = `eip2612GasSponsoring`; or a CSV
+  that may add `erc20ApprovalGasSponsoring`) declares the key in `PaymentRequired.extensions` on a
+  per-request priced `/v1` route that offers upto, only when the first facilitator advertising upto
+  on EVERY offered upto network lists the key in its `/supported` `extensions`; the declaration is
+  the SDK helper's `info` without its schema (header budget). Sponsorship moves the one-time Permit2
+  approval's gas to the facilitator; the settled amount is still the meter's, capped at the quote
+  (`src/upto-gas-sponsoring.js`, `scripts/test-upto-gas-sponsoring.js`).
 - **Solana funding refusals:** `src/svm-funding-refusal.js` words a Solana verify refused for no USDC
   account or too little USDC (`retry: fund-wallet`, Retry-After `SVM_FUNDING_RETRY_AFTER_S`, default 300)
   and, after `SVM_FUNDING_HOLD_AFTER` (3) such refusals per wallet and source account in

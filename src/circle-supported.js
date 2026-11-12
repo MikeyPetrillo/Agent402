@@ -39,10 +39,18 @@ export class CircleResponseError extends Error {
 /** The Arc USDC profile: the one network and token the Arc client settles. */
 export const ARC_PROFILE = Object.freeze({ caip2: ARC_CAIP2, chainId: ARC_CHAIN_ID, ...ARC_USDC });
 
+/** Extension keys Circle may advertise that are not lower snake case: the
+ *  x402 Permit2 gas sponsoring declarations (src/upto-gas-sponsoring.js),
+ *  kept only when the answer is read for upto. */
+const CAMEL_EXTENSIONS = new Set(["eip2612GasSponsoring", "erc20ApprovalGasSponsoring"]);
+
 /** Reduce a /supported answer to the `exact` kinds of the given USDC profiles
  *  ({ caip2, asset, name, version }), one kind per profile, in profile order.
- *  Malformed input throws (the boot check then drops what it guards). */
-export function usdcKindsFromSupported(data, profiles) {
+ *  With `uptoNetworks`, each of those profiles' `upto` kind follows, when
+ *  Circle lists it with a facilitator address (the address an upto buyer
+ *  signs into its Permit2 witness). Malformed input throws (the boot check
+ *  then drops what it guards). */
+export function usdcKindsFromSupported(data, profiles, { uptoNetworks = [] } = {}) {
   if (!isObj(data) || !Array.isArray(data.kinds) || data.kinds.length > 500) {
     throw new CircleResponseError("supported", 200, "invalid_supported_shape");
   }
@@ -65,8 +73,20 @@ export function usdcKindsFromSupported(data, profiles) {
     if (found.size === profiles.length) break;
   }
   const kinds = profiles.map((p) => found.get(p.caip2)).filter(Boolean);
+  const upto = new Map();
+  for (const k of uptoNetworks.length ? data.kinds : []) {
+    if (k.scheme !== "upto") continue;
+    const p = profiles.find((x) => x.caip2 === k.network);
+    if (!p || !uptoNetworks.includes(p.caip2) || upto.has(p.caip2) || !found.has(p.caip2)) continue;
+    if (k.x402Version !== undefined && k.x402Version !== 2) continue;
+    if (k.asset !== undefined && lc(k.asset) !== lc(p.asset)) continue;
+    const extra = isObj(k.extra) ? k.extra : {};
+    if (!ADDR.test(String(extra.facilitatorAddress || ""))) continue;
+    upto.set(p.caip2, { x402Version: 2, scheme: "upto", network: p.caip2, extra: { name: p.name, version: p.version, facilitatorAddress: extra.facilitatorAddress } });
+  }
+  for (const p of profiles) if (upto.has(p.caip2)) kinds.push(upto.get(p.caip2));
   const extensions = Array.isArray(data.extensions)
-    ? data.extensions.filter((e) => typeof e === "string" && REASON.test(e.replace(/-/g, "_")) && e.length <= 64)
+    ? data.extensions.filter((e) => typeof e === "string" && ((uptoNetworks.length && CAMEL_EXTENSIONS.has(e)) || REASON.test(e.replace(/-/g, "_"))) && e.length <= 64)
     : [];
   const signers = {};
   for (const p of profiles) {

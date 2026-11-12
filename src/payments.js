@@ -11,6 +11,7 @@ import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
+import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
@@ -1658,7 +1659,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   };
   const bookPending = async (entry) => (await book()).book(entry);
   if (evmCaip2.includes(ARC_CAIP2)) {
-    circleClient = circleClientFromEnv(process.env, { onPending: bookPending });
+    // Circle lists Arc `upto` to this server only when X402_UPTO_NETWORKS
+    // names eip155:5042 itself; otherwise its answer is exact only, as before.
+    circleClient = circleClientFromEnv(process.env, { onPending: bookPending, upto: uptoListedByName(ARC_CAIP2) });
     if (!circleClient) {
       console.warn(
         "WARNING: PAYMENT_NETWORKS enables `arc` but CIRCLE_FACILITATOR_API_KEY is unset - " +
@@ -2170,10 +2173,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   //      (measured while building the trial test).
   const uptoWanted = String(process.env.X402_UPTO_NETWORKS || "").trim();
   let uptoCaip2 = [];
+  const uptoExtensionsByNetwork = new Map();
   if (uptoWanted) {
-    const wanted = uptoWanted.toLowerCase() === "all"
-      ? evmCaip2
-      : uptoWanted.split(",").map((x) => x.trim()).filter(Boolean).filter((c) => evmCaip2.includes(c));
+    // "all" never adds Arc: Arc offers upto only when listed by name
+    // (src/upto-gas-sponsoring.js UPTO_EXPLICIT_ONLY).
+    const wanted = uptoNetworksWanted(process.env, evmCaip2);
     // Ask each facilitator CLIENT, not its URL.
     //
     // The first version fetched `${url}/supported` directly, which bypasses
@@ -2185,14 +2189,20 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // filter the settle path uses, so the gate can only ever agree with where
     // payments will really go.
     const advertised = new Set();
-    await Promise.all(facilitatorClients.map(async (client) => {
-      try {
-        const kinds = (await client.getSupported())?.kinds || [];
-        for (const k of kinds) {
-          if (String(k?.scheme || "").toLowerCase() === "upto" && k?.network) advertised.add(String(k.network));
-        }
-      } catch { /* a facilitator that cannot be reached advertises nothing */ }
+    // Read in facilitatorClients order, so the first client that advertises
+    // upto on a network (the one @x402/core routes it to) names the
+    // extensions that network's settle can honor.
+    const reads = await Promise.all(facilitatorClients.map(async (client) => {
+      try { return await client.getSupported(); } catch { return null; /* a facilitator that cannot be reached advertises nothing */ }
     }));
+    for (const sup of reads) {
+      for (const k of sup?.kinds || []) {
+        if (String(k?.scheme || "").toLowerCase() !== "upto" || !k?.network) continue;
+        const net = String(k.network);
+        if (!advertised.has(net)) uptoExtensionsByNetwork.set(net, Array.isArray(sup?.extensions) ? sup.extensions : []);
+        advertised.add(net);
+      }
+    }
     const claimed = wanted.filter((c) => advertised.has(c));
 
     // PROVE it, do not take its word. A facilitator advertising upto says
@@ -2228,6 +2238,22 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       console.warn(`x402 upto: REFUSING to offer upto on ${refused.join(", ")} — not advertised by a facilitator we route through, or not priceable here.`);
     }
   }
+  // Permit2 gas sponsorship on the metered upto accepts (X402_UPTO_GAS_SPONSORING,
+  // default off): declared only when the facilitator that settles upto on
+  // EVERY offered upto network advertises the key at /supported.
+  const uptoGasKeys = (() => {
+    const wantedKeys = gasSponsoringWanted(process.env);
+    if (!wantedKeys.length) return [];
+    if (!uptoCaip2.length) {
+      console.warn("x402 upto gas sponsoring: X402_UPTO_GAS_SPONSORING is set but no network offers upto; nothing is declared.");
+      return [];
+    }
+    const { keys, refused: notHonored } = gasSponsoringKeys(wantedKeys, uptoCaip2, uptoExtensionsByNetwork);
+    for (const r of notHonored) console.warn(`x402 upto gas sponsoring: REFUSING ${r.key}, the facilitator settling upto on ${r.networks.join(", ")} does not advertise it.`);
+    if (keys.length) console.log(`x402 upto gas sponsoring: declaring ${keys.join(", ")} on the metered upto routes (${uptoCaip2.join(", ")})`);
+    return keys;
+  })();
+  const uptoGasDeclarations = uptoGasKeys.length ? gasSponsoringDeclarations(uptoGasKeys) : null;
 
   // accepts[0].outputSchema (src/accept-output-schema.js): the accept below
   // declares it, this patch carries it onto the requirement the core builds -
@@ -2541,10 +2567,14 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // copy - the buyer echoes its chosen accept back in the payment).
       const firstAcceptSchema = acceptOutputSchemaEnabled() ? outputSchemaFromExtensions(ext) : null;
       acceptsBuilders.set(route, () => withOutputSchemaOnFirstAccept(acceptsFor(item), firstAcceptSchema));
+      const accepts = acceptsBuilders.get(route)();
+      // Permit2 gas sponsorship: a metered /v1 route that offers upto
+      // (src/upto-gas-sponsoring.js). Top level, one copy per 402.
+      if (uptoGasDeclarations && isMeteredGatewayRoute(item) && accepts.some((a) => a.scheme === "upto")) Object.assign(ext, uptoGasDeclarations);
       return [
         route,
         {
-          accepts: acceptsBuilders.get(route)(),
+          accepts,
           description: listingDescription,
           // Per-TOOL service name, not the host name.
           //
