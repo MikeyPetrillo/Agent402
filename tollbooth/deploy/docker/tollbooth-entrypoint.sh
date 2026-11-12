@@ -27,7 +27,7 @@ if [ "$(id -u)" = "0" ]; then
     # cannot point the chown into the image. The record's files follow the
     # same rule. Only the directory itself and only when it is not already
     # node's: no recursive walk of a volume on every boot.
-    is_mount() { awk -v d="$1" '$5 == d { found = 1 } END { exit !found }' /proc/self/mountinfo 2>/dev/null; }
+    is_mount() { awk -v d="$1" '{ m = $5; gsub(/\\040/, " ", m) } m == d { found = 1 } END { exit !found }' /proc/self/mountinfo 2>/dev/null; }
     on_volume() {
       d=$1
       while [ "$d" != "/" ] && [ "$d" != "." ]; do

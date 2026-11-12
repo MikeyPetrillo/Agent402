@@ -125,13 +125,15 @@ export function deliveryProjection(origin, method, route) {
 // shape, GraphQL's top-level `errors`, RFC 7807 problem details (type, title,
 // status, detail, instance), the ok/success flags and a reason, a framework's
 // default error page (timestamp, path, trace), a retry hint, and the request
-// or trace id an error page carries for support. Any other key holding a value
+// or trace id an error page carries for support, the JSON-RPC frame (jsonrpc,
+// id) and a payment challenge's frame (x402Version, accepts). Any other key holding a value
 // carries content, so the body is the seller's answer even with an error
 // beside it; a key holding null, "", {} or [] carries nothing.
 const ERROR_ENVELOPE_KEYS = new Set([
   "error", "errors", "message", "ok", "success", "status", "statusCode", "code",
   "detail", "details", "type", "title", "instance", "reason",
   "requestId", "request_id", "traceId", "trace_id", "trace", "timestamp", "path",
+  "jsonrpc", "id", "x402Version", "accepts",
   "retryAfter", "retry_after", "retryAfterSeconds", "retry_after_seconds", "retryAfterMs", "retry_after_ms",
 ]);
 

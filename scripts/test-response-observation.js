@@ -198,6 +198,8 @@ ok(o.lastMissing.join(",") === "data.attributes",
   for (const [label, body, why, paths = []] of [
     ["null", null, "empty"], ["{}", {}, "empty"], ["a challenge sent as a 200", challenge, "challenge"],
     ["{error}", { error: "upstream down" }, "error-shaped"],
+    ["a JSON-RPC error", { jsonrpc: "2.0", id: 1, error: { code: -32000, message: "x" } }, "error-shaped"],
+    ["a challenge with no payment options", { x402Version: 1, error: "x", accepts: [] }, "error-shaped"],
     ["{ok:false}", { ok: false }, "error-shaped"],
     ["{ok:false, status:503}", { ok: false, status: 503 }, "error-shaped"],
     ["{error, message, code, requestId}", { error: "x", message: "y", code: "E1", requestId: "r1" }, "error-shaped"],
