@@ -11,11 +11,12 @@ Payments:
 - A Solana payment is keyed on its transfer authority when other transfer
   accounts sit in a lookup table, and x402 v1 Solana payments carry a payer key.
 - A router seller that answers 200 without taking payment and returns no answer
-  is treated as a failed upstream: the buyer is not charged and the next seller
-  is tried.
+  is treated as a failed upstream: the next seller is tried, and if none
+  answers the buyer is not charged on x402 (a Tempo push payment is recorded
+  as owed and refunded).
 - The proof that an EVM authorization went unused reads chain time, not the
   host clock.
-- Bazaar service names end on a whole phrase and stay distinct per tier; the
+- Bazaar service names end on a whole word and stay distinct per tier; the
   OpenAI-compatible image and transcription routes are named "Image gen" and
   "Transcribe".
 Server:
@@ -24,13 +25,14 @@ Server:
   checked before a fetch.
 - The LLM tiers advertise the successors of the OpenAI models retiring
   2026-12-11; the retiring ids are still accepted.
-- The insider, LinkedIn article and IPO reports fence the filer-written text
-  they read.
+- The insider, LinkedIn article and IPO reports fence the filer- and
+  publisher-written text they read.
 - Daily upstream ceilings no longer count a call the upstream refused.
 - /mcp and the revenue view redact secrets from error text.
 - Six more status words page on their alarm values.
 - The tollbooth Docker image runs on Node 22.23.5 as a non-root user; a replay
-  store written by an older image is handed to that user at boot.
+  store in /var/lib/tollbooth or on a mounted volume, written by an older
+  image, is handed to that user at boot.
 Site:
 - Every code block on the site has the shared copy button.
 - /company form fields use the control border; tool page breadcrumbs keep their
