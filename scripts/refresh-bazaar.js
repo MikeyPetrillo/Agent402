@@ -170,6 +170,14 @@ async function readOurRows() {
   return feed;
 }
 
+/** path -> the serviceName the payment middleware lists that route under. */
+export async function expectedServiceNamesByPath(endpoints) {
+  const { catalogServiceNameFor } = await import("../src/payments.js");
+  const list = (Array.isArray(endpoints) ? endpoints : []).filter((e) => e && typeof e.path === "string" && e.path);
+  const nameFor = catalogServiceNameFor(list);
+  return new Map(list.map((e) => [e.path, nameFor(e)]));
+}
+
 async function loadStaleRoutes() {
   // serviceName is PER TOOL since 2026-08-31 ("Extract article", not
   // "Agent402.tools"), because 168 identical rows in a 14,000-row index answer
@@ -178,10 +186,13 @@ async function loadStaleRoutes() {
   // the Bazaar holds differs from the name the catalog declares for that route
   // right now. EXPECT_NAME stays as the fallback for routes the catalog no
   // longer carries.
-  const expected = new Map();
+  // The name the route lists under is the derived serviceName (cut to the
+  // protocol's 32 characters, siblings kept apart), not the raw catalog name:
+  // compared with the raw name, every name over 32 characters reads stale.
+  let expected = new Map();
   try {
     const r = await fetch(`${TARGET}/api/pricing`);
-    if (r.ok) for (const e of ((await r.json()).endpoints || [])) if (e?.path) expected.set(e.path, e.name || EXPECT_NAME);
+    if (r.ok) expected = await expectedServiceNamesByPath((await r.json()).endpoints);
   } catch { /* fall back to the constant below */ }
   const feed = await readOurRows();
   const wantFor = (path) => expected.get(path) ?? EXPECT_NAME;

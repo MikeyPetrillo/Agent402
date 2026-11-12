@@ -949,20 +949,35 @@ export function x402ServiceName(raw) {
   // to the last connective, when what is left still names the tool.
   const next = clean.slice(cut.length).trimStart();
   if (cut && !/^[(\-,:;/+[{]/.test(next)) {
+    // A clause the cut entered after a comma ("LinkedIn article, ready" of
+    // "..., ready to publish") is dropped back to the comma; otherwise the
+    // cut backs off to its last connective.
+    const comma = cut.lastIndexOf(",");
     const m = /^(.*\S)\s+(?:with|for|on|of|to|in|by)\s/i.exec(cut);
-    if (m && m[1].length >= 16 && !/[(\[{]/.test(cut.slice(m[1].length))) cut = tidy(m[1]);
+    if (comma > 0 && !/[(\[{]/.test(cut.slice(comma))) cut = tidy(cut.slice(0, comma));
+    else if (m && m[1].length >= 16 && !/[(\[{]/.test(cut.slice(m[1].length))) cut = tidy(m[1]);
   }
   return cut || hard.trim();
 }
 
 /**
  * serviceNames for a whole catalog: raw name -> serviceName. Each name is cut
- * by x402ServiceName; names that differ but cut to the same serviceName (a
- * tier family such as "Gemini generateContent (nano tier)" and "(pro tier)")
- * each get back the first word only that name carries, before an aside by
- * preference, with words dropped from the end of the cut until it fits:
- * "Gemini generateContent nano". So a cut never makes two listings read alike
- * that their own names told apart.
+ * by x402ServiceName. When names that differ cut to one serviceName, the
+ * group is settled in this order, so only a name that still collides is tagged:
+ *   1. a name that fits whole keeps it (it is the tool's own name);
+ *   2. a name whose own words beyond the shared cut carry a word no sibling
+ *      has ("Company due-diligence dossier - MAX") is tagged with that word;
+ *   3. if then one name is left on the shared cut and no whole name holds it,
+ *      it keeps the cut untagged; two or more left are each tagged from the
+ *      aside that tells them apart ("Gemini generateContent (nano tier)").
+ * A tag is words of the tool's own name: a word no sibling carries, alone
+ * only when it ends its phrase or is a lowercase word followed only by words
+ * every sibling shares ("nano" of "nano tier"); otherwise the run from it to
+ * the phrase's end, so a capitalized modifier (a vendor) never leaves the
+ * noun it modifies ("OpenAI transcription wire" never tags as "OpenAI"). A
+ * hyphenated word is never split. The cut gives up words from its end until
+ * the tag fits, keeping two when it can and never fewer than one, and a
+ * candidate that equals another listing's serviceName is passed over.
  */
 export function x402ServiceNames(rawNames) {
   const out = new Map();
@@ -974,34 +989,81 @@ export function x402ServiceNames(rawNames) {
     if (!groups.has(sn)) groups.set(sn, []);
     groups.get(sn).push(raw);
   }
-  const wordsOf = (t) => cleanServiceName(t).replace(/[()[\]{},;:]/g, " ").split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w) && w !== "-");
-  for (const [base, members] of groups) {
-    const distinct = new Set(members.map((r) => cleanServiceName(r)));
-    if (distinct.size < 2) continue;
-    for (const raw of members) {
-      const clean = cleanServiceName(raw);
-      const others = members.filter((r) => cleanServiceName(r) !== clean).map((r) => new Set(wordsOf(r).map((w) => w.toLowerCase())));
-      const paren = clean.search(/[([{]/);
-      const lead = paren > 0 ? clean.slice(0, paren) : clean;
-      const unique = (w) => others.every((o) => !o.has(w.toLowerCase()));
-      const found = wordsOf(lead).find(unique) || wordsOf(clean).find(unique);
-      if (!found || base.split(" ").includes(found)) continue;
-      // The tag, then (if it does not fit) its first hyphenated part; the cut
-      // gives up words from its end, but keeps at least two.
-      const fit = (tag) => {
-        let words = base.split(" ");
-        let name = `${base} ${tag}`;
-        while (name.length > SERVICE_NAME_MAX && words.length > 2) {
-          words = words.slice(0, -1);
-          name = `${words.join(" ").replace(/[\s\-,:;/&+|.]+$/, "")} ${tag}`;
-        }
-        return name.length <= SERVICE_NAME_MAX ? name : null;
-      };
-      const name = fit(found) || (found.includes("-") ? fit(found.split("-")[0]) : null);
-      if (name) out.set(raw, name);
+  const wordsOf = (t) => t.replace(/[()[\]{},;:+]/g, " ").split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w));
+  // Phrases of a name beyond the shared cut: the lead's remaining words, then
+  // each comma-, semicolon- or plus-separated part of every aside.
+  const phrasesOf = (clean, baseWords) => {
+    const paren = clean.search(/[([{]/);
+    const lead = paren > 0 ? clean.slice(0, paren) : clean;
+    const leadWords = wordsOf(lead);
+    let i = 0;
+    while (i < baseWords.length && i < leadWords.length && leadWords[i].toLowerCase() === baseWords[i].toLowerCase().replace(/[^A-Za-z0-9]+$/, "")) i++;
+    const leadRest = leadWords.slice(i);
+    const asides = paren > 0 ? clean.slice(paren).split(/[()[\]{},;+]/).map(wordsOf).filter((p) => p.length) : [];
+    return { lead: leadRest.length ? [leadRest] : [], asides };
+  };
+  const taken = new Set(out.values());
+  const fit = (base, tag, avoid) => {
+    let words = base.split(" ");
+    for (const min of [2, 1]) {
+      let w = words;
+      for (;;) {
+        const name = `${w.join(" ").replace(/[\s\-,:;/&+|.]+$/, "")} ${tag}`;
+        if (name.length <= SERVICE_NAME_MAX && !avoid.has(name)) return name;
+        if (w.length <= min) break;
+        w = w.slice(0, -1);
+      }
     }
+    return null;
+  };
+  for (const [base, members] of groups) {
+    const cleans = new Map(members.map((r) => [r, cleanServiceName(r)]));
+    if (new Set(cleans.values()).size < 2) continue;
+    const baseWords = base.split(" ");
+    const lower = (r) => new Set(wordsOf(cleans.get(r)).map((w) => w.toLowerCase()));
+    const tagsFor = (raw, which) => {
+      const others = members.filter((r) => cleans.get(r) !== cleans.get(raw)).map(lower);
+      const unique = (w) => others.every((o) => !o.has(w.toLowerCase()));
+      const shared = (w) => others.every((o) => o.has(w.toLowerCase()));
+      const ph = phrasesOf(cleans.get(raw), baseWords);
+      const tags = [];
+      for (const p of ph[which]) {
+        p.forEach((w, i) => {
+          if (!unique(w)) return;
+          const rest = p.slice(i + 1);
+          if (rest.length === 0 || (!/[A-Z]/.test(w) && rest.every(shared))) tags.push(w);
+          if (rest.length) tags.push(p.slice(i).join(" "));
+        });
+      }
+      return tags;
+    };
+    const tagWith = (raw, tags) => {
+      for (const t of tags) {
+        const name = fit(base, t, taken);
+        if (name) { out.set(raw, name); taken.add(name); return true; }
+      }
+      return false;
+    };
+    const whole = members.filter((r) => cleans.get(r) === base);
+    let left = members.filter((r) => cleans.get(r) !== base);
+    left = left.filter((r) => !tagWith(r, tagsFor(r, "lead")));
+    if (left.length === 1 && whole.length === 0) continue;
+    for (const r of left) tagWith(r, [...tagsFor(r, "asides"), ...tagsFor(r, "lead")]);
   }
   return out;
+}
+
+/**
+ * The serviceName of each catalog item, as the payment middleware lists it:
+ * the whole catalog's names settled once (x402ServiceNames), the host name
+ * for an item with no name.
+ */
+export function catalogServiceNameFor(catalog) {
+  const catalogServiceNames = x402ServiceNames(Object.values(catalog || {}).map((i) => i?.name));
+  return (item) =>
+    (typeof item?.name === "string" && item.name.trim())
+      ? (catalogServiceNames.get(item.name) ?? x402ServiceName(item.name))
+      : "Agent402.tools";
 }
 
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
@@ -2375,11 +2437,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // (ResourceInfoSchema); the contract sweep fails the build on 33. Names are
   // cut once for the whole catalog, so two tools whose names differ (a tier
   // family) keep listings that differ (x402ServiceNames).
-  const catalogServiceNames = x402ServiceNames(Object.values(catalog || {}).map((i) => i?.name));
-  const serviceNameFor = (item) =>
-    (typeof item?.name === "string" && item.name.trim())
-      ? (catalogServiceNames.get(item.name) ?? x402ServiceName(item.name))
-      : "Agent402.tools";
+  const serviceNameFor = catalogServiceNameFor(catalog);
   const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds });
   const acceptsFor = (item) => acceptsForItem(item, railsNow());
   // Read at call time, like acceptsFor: a rail dropped or joined after boot
