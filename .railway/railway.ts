@@ -3,9 +3,9 @@
 // Config as Code files on 2026-12-01, and the repo no longer carries one);
 // this file declares the same settings so a plan can show any drift.
 //
-// Prepared, not applied. The owner runbook is docs/railway-iac-migration.md:
-// plan, confirm no deletes, apply outside a CI run, clear each service's
-// config file path, verify /health.
+// Applied by hand, never from CI. The owner runbook is
+// docs/railway-iac-migration.md: check no service reads Config as Code,
+// type-check, plan, confirm no deletes, apply outside a CI run, verify /health.
 //
 // A named partial, so this file owns only the services it declares: every
 // other service, database and variable in the environment is left alone
@@ -15,6 +15,7 @@
 // service declared without `source` would be disconnected from it), and the
 // worker, deployed by upload, declares none.
 import { defineRailway, github, project, service } from "railway/iac";
+import type { IntentServiceConfig } from "railway/iac";
 
 export const partial = "agent402";
 
@@ -34,7 +35,7 @@ export const facilitatorConfig = {
     restartPolicyMaxRetries: 5,
     numReplicas: 1,
   },
-} as const;
+} satisfies IntentServiceConfig;
 
 // Background worker image. It sleeps when idle (set on the service today;
 // left out, the apply would turn it off).
@@ -51,7 +52,7 @@ export const workerConfig = {
     numReplicas: 1,
     sleepApplication: true,
   },
-} as const;
+} satisfies IntentServiceConfig;
 
 export default defineRailway(() => {
   const facilitator = service("agent402-facilitator", facilitatorConfig);
