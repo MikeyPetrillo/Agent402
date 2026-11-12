@@ -18,8 +18,21 @@ EXPOSE 4021
 # runs as the image's unprivileged node user. Its one optional file, the shared
 # proof-of-work replay record (TOLLBOOTH_REPLAY_SQLITE), goes in
 # /var/lib/tollbooth, which that user owns (mount a volume there to keep it).
-RUN mkdir -p /var/lib/tollbooth && chown node:node /var/lib/tollbooth
-USER node
+# su-exec runs the proxy as node from the entrypoint, the alpine counterpart
+# of the gosu step in the repository's main image: an exec with no shell or
+# process of its own left behind, so the proxy stays PID 1 and gets SIGTERM.
+RUN apk add --no-cache su-exec && su-exec node true \
+  && mkdir -p /var/lib/tollbooth && chown node:node /var/lib/tollbooth
+# Its own name: the node base image already has a docker-entrypoint.sh.
+COPY tollbooth-entrypoint.sh /usr/local/bin/tollbooth-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/tollbooth-entrypoint.sh
+# No Dockerfile USER, on purpose: a replay record written by an earlier image
+# that ran as root sits on its volume owned by root, and a proxy started as
+# node opens it read-only, so every claim would fail. The entrypoint starts as
+# root only to hand that record (and its volume directory) to node, then
+# drops to node for good; nothing else runs as root. A container started with
+# --user skips the hand-over and runs as that user.
+ENTRYPOINT ["/usr/local/bin/tollbooth-entrypoint.sh"]
 # Reverse-proxy mode (needs TOLLBOOTH_UPSTREAM); serves the operator dashboard at /__tollbooth.
 # The installed bin runs directly: no npx wrapper between the signal and the process.
 CMD ["/app/node_modules/.bin/agent402-tollbooth"]
