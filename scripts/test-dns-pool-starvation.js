@@ -141,6 +141,34 @@ const dupEnded = await Promise.all(dup);
 ok(dupEnded.every((e) => e?.statusCode === 503), "fifty checks of one unanswered name all end as the 503");
 ok((queries.get("slow-dup.pool.test A") || 0) === 1, `concurrent checks of one name share one query (${queries.get("slow-dup.pool.test A") || 0} A queries)`);
 
+// The query itself, not only the caller's wait, ends near the bound: c-ares
+// grows the per-try timeout on each retry, so without a ceiling on it three
+// tries to one unanswering server kept a query alive well past the 10 s
+// bound (about 13 s measured). Run in a fresh process whose resolver has
+// never heard from its server: c-ares shortens later timeouts from the
+// latencies it has seen, so this process's resolver would hide the growth.
+{
+  const child = `
+    import ${JSON.stringify(new URL("./lib/offline-stores.js", import.meta.url).href)};
+    import dgram from "node:dgram";
+    import dnsPromises from "node:dns/promises";
+    const s = dgram.createSocket("udp4"); let n = 0; s.on("message", () => { n++; });
+    await new Promise((r) => s.bind(0, "127.0.0.1", r));
+    const P = dnsPromises.Resolver.prototype, real = P.resolve4;
+    P.resolve4 = function (...a) { if (!this.__t) { this.setServers(["127.0.0.1:" + s.address().port]); this.__t = true; } return real.apply(this, a); };
+    process.env.DNS_LOOKUP_TIMEOUT_MS = "60000";
+    const { resolveHostAddresses } = await import(${JSON.stringify(new URL("../src/tools/fetch-guard.js", import.meta.url).href)});
+    const t = performance.now();
+    const e = await resolveHostAddresses("never-answered.pool.test", { families: [4] }).catch((x) => x);
+    console.log(JSON.stringify({ code: e?.code, ms: Math.round(performance.now() - t), tries: n }));
+    s.close();
+  `;
+  const { execFileSync } = await import("node:child_process");
+  const { childJson } = await import("./lib/child-json.js");
+  const r = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", child], { encoding: "utf8", timeout: 30_000 }));
+  ok(r.code === "ETIMEOUT" && r.ms < 11_000 && r.tries === 3, `an unanswered query is given up by the resolver after ${r.tries} tries in ${r.ms} ms, near the 10000 ms bound (${r.code})`);
+}
+
 const controlMs = await control;
 ok(controlMs > 1000, `(control) a getaddrinfo lookup waited ${Math.round(controlMs)} ms for the full pool`);
 await Promise.all(poolWork);

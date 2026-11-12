@@ -95,11 +95,16 @@ function withDeadline(promise, timeoutMs) {
   });
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
-// Per-try timeout and tries for the shared channel; the bound above caps the whole.
+// Per-try timeout and tries for the shared channel; the bound above caps the
+// caller's wait. c-ares grows the per-try timeout on each retry, so without a
+// ceiling three tries to one unanswering name server kept the query (its
+// socket and its in-flight entry below) alive about 16 s, past that bound;
+// RESOLVER_MAX_TIMEOUT_MS holds each try to 3 s, so a query ends near 9 s.
 const RESOLVER_TIMEOUT_MS = 2_500;
+const RESOLVER_MAX_TIMEOUT_MS = 3_000;
 const RESOLVER_TRIES = 3;
 let guardResolver = null;
-const resolverOf = () => (guardResolver ??= new Resolver({ timeout: RESOLVER_TIMEOUT_MS, tries: RESOLVER_TRIES }));
+const resolverOf = () => (guardResolver ??= new Resolver({ timeout: RESOLVER_TIMEOUT_MS, maxTimeout: RESOLVER_MAX_TIMEOUT_MS, tries: RESOLVER_TRIES }));
 // One query per name and family in flight: concurrent checks of one name share it.
 const inflight = new Map();
 function queryFamily(host, family) {
