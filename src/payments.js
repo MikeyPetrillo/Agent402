@@ -892,11 +892,23 @@ function withoutPropertyDescriptions(schema) {
 /** `keepListing`: the route's description and sample output are part of what it
  *  sells (its 402 names prices, its example is the product), so only the input
  *  side may give way. The size guard still checks the route's real total. */
-export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABLE_MAX_BYTES, { keepListing = false } = {}) {
+/** `descriptionFirst`: the listing description and the input's enums and
+ *  bounds outrank the sample output, so past the input descriptions the
+ *  output gives way to the pointer before either is cut (a model-backed route
+ *  whose example is a long typed answer; /openapi.json keeps it whole). */
+export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABLE_MAX_BYTES, { keepListing = false, descriptionFirst = false } = {}) {
   const size = (b, d) => JSON.stringify(b ? declare(b) : {}).length + String(d || "").length;
   let b = slim, d = description;
   const trimmed = [];
+  const toPointer = () => {
+    if (b?.output && b.output.example !== undefined && !isExamplePointer(b.output.example) && size(b, d) > max) {
+      const { schema: _schema, ...rest } = b.output;
+      b = { ...b, output: { ...rest, example: examplePointer() } };
+      trimmed.push("output-example");
+    }
+  };
   if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: withoutPropertyDescriptions(b.inputSchema) }; trimmed.push("input-descriptions"); }
+  if (descriptionFirst && !keepListing) toPointer();
   if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: typesOnly(b.inputSchema) }; trimmed.push("input-types-only"); }
   if (b?.input !== undefined && size(b, d) > max) {
     const input = shortExampleStrings(b.input);
@@ -904,11 +916,7 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
   }
   if (keepListing) return { slim: b, description: d, trimmed, bytes: size(b, d) };
   if (d && d.length > CHALLENGE_SHORT_DESCRIPTION_MAX && size(b, d) > max) { d = bazaarCapDescription(d, CHALLENGE_SHORT_DESCRIPTION_MAX); trimmed.push("description"); }
-  if (b?.output && b.output.example !== undefined && !isExamplePointer(b.output.example) && size(b, d) > max) {
-    const { schema: _schema, ...rest } = b.output;
-    b = { ...b, output: { ...rest, example: examplePointer() } };
-    trimmed.push("output-example");
-  }
+  toPointer();
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
 }
 
@@ -1202,6 +1210,11 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "v1-embeddings": "OpenAI-compatible text embeddings (text-embedding-3-small by default; 3-large and ada-002 supported), up to 64 inputs or 16k chars per call, returned in the standard OpenAI shape. A repeat of identical inputs within 10 minutes is free from cache to the payer that paid for it, paying again by its own EVM x402 signature, verified Tempo sender or credits key. Use it for semantic search, clustering and retrieval from any OpenAI SDK by changing base_url.",
   "image-ocr": "Extract text from a PNG or JPEG image - full text, overall confidence and per-line bounding boxes - from a URL or base64 payload, Tesseract on-device (no upstream API). Default English; other ISO 639-2 languages on request. Use it when an agent needs the words in a screenshot, scan or photo.",
   "memory-read": "Read persistent key-value memory scoped to the paying wallet: pass a key to get its stored JSON value, or omit it to list the namespace's keys with their update times and expiry. Reads the payer's own namespace by default, or one another wallet has granted it access to. Use it when an agent resumes a task and needs the state an earlier session wrote.",
+  // 2026-11-12: the typed-judgment routes. Each listing reads whole beside
+  // its input schema (the model enum on judge) and its sample-answer pointer
+  // inside the per-route 402 budget (scripts/test-bazaar-descriptions.js).
+  "judge": "Ask typed questions about any content and get answers your code can branch on, not prose. Send state (a string or object) and up to 8 questions keyed by your own ids: choice returns the pick with probabilities and confidence, score a fractional level index with probabilities, noul the probability of yes. Use it for routing, triage, classification and gating. Served by jev-latest with two fallbacks; name one first with model. Model-backed, not deterministic.",
+  "loop-gate": "Should an agent loop run another iteration? Send the goal, the last output and its iteration, plus optional maxIterations, budget, history and constraints; get back decision (continue, stop or escalate), reason, confidence (0 to 1), the checks behind it and a next step. Budget and iteration limits are checked in code first, with no model call; otherwise a judgment model answers. Use it between iterations.",
   "memory-write": "Persistent key-value memory scoped to the paying wallet: the x402 payment is the authentication, the wallet owns the namespace. Write any JSON value (up to 64KB) under a key, with an optional TTL, or delete it; read it back on any later session with the matching read route. Use it when an agent needs state that survives the session or crosses runs without an account or API key.",
   // 2026-08-22 additions: the new families' flagships. Bazaar is the one surface
   // where a buyer-side agent browses by DESCRIPTION rather than by name, so each
@@ -2587,8 +2600,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     Object.entries(catalog).map(([route, item]) => {
       const ext = {};
       const path = route.split(" ")[1];
-      const { keepListing, ...discovery } = item.discovery || {};
-      const fitted = fitChallenge(item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path) : null, capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description), declareDiscoveryExtension, undefined, { keepListing: keepListing === true });
+      const { keepListing, descriptionFirst, ...discovery } = item.discovery || {};
+      const fitted = fitChallenge(item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path) : null, capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description), declareDiscoveryExtension, undefined, { keepListing: keepListing === true, descriptionFirst: descriptionFirst === true });
       if (fitted.slim) Object.assign(ext, declareDiscoveryExtension(fitted.slim));
       const listingDescription = fitted.description;
       if (builderCode) Object.assign(ext, { [BUILDER_CODE]: declareBuilderCodeExtension(builderCode) });

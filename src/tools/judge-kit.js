@@ -464,6 +464,9 @@ export const JUDGE_TOOLS = [{
   tags: ["ai", "classify", "judgment", "routing", "extraction"],
   discovery: {
     bodyType: "json",
+    // The listing keeps its whole description and the model enum; the long
+    // typed sample answer is the part that points to /openapi.json.
+    descriptionFirst: true,
     inputSchema: {
       type: "object",
       required: ["state", "questions"],
@@ -512,6 +515,9 @@ export const JUDGE_TOOLS = [{
   tags: ["ai", "classify", "judgment", "routing", "openai", "decisions"],
   discovery: {
     bodyType: "json",
+    // The listing keeps its whole description and the model enum; the long
+    // typed sample answer is the part that points to /openapi.json.
+    descriptionFirst: true,
     inputSchema: {
       type: "object",
       required: ["input", "questions"],

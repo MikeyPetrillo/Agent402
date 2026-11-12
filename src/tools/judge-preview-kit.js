@@ -308,6 +308,9 @@ export const JUDGE_PREVIEW_TOOLS = [{
   aliases: ["image-question", "image-classify", "screenshot-check"],
   discovery: {
     bodyType: "json",
+    // The listing keeps its whole description; the sample answer points to
+    // /openapi.json when the image example leaves no room for it.
+    descriptionFirst: true,
     inputSchema: {
       type: "object",
       required: ["images", "questions"],

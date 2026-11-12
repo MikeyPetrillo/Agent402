@@ -271,6 +271,9 @@ export const LOOP_GATE_TOOLS = [{
   aliases: ["should-continue", "loop-check", "iteration-gate"],
   discovery: {
     bodyType: "json",
+    // The listing keeps its whole description; the sample answer points to
+    // /openapi.json when it does not fit beside it.
+    descriptionFirst: true,
     inputSchema: {
       type: "object",
       required: ["goal", "lastOutput", "iteration"],

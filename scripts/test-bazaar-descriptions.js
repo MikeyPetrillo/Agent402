@@ -6,6 +6,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFile } from "node:fs/promises";
 import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer, x402ServiceName, x402ServiceNames, SERVICE_NAME_MAX, catalogServiceNameFor } from "../src/payments.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
+import { JUDGE_TOOLS, judgeEnabled } from "../src/tools/judge-kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -15,7 +16,7 @@ const slugs = new Set((res?.endpoints || []).map((e) => e.slug));
 ok(slugs.size > 400, `live catalog readable (${slugs.size} slugs) - boot the server or set TARGET_URL`);
 for (const [slug, text] of Object.entries(BAZAAR_DESCRIPTIONS)) {
   // A tool switched off on this boot keeps its copy for when it is listed again.
-  const gatedOff = !rugcheckEnabled() && RUGCHECK_SLUGS.has(slug);
+  const gatedOff = (!rugcheckEnabled() && RUGCHECK_SLUGS.has(slug)) || (!judgeEnabled() && JUDGE_TOOLS.some((t) => t.slug === slug));
   ok(slugs.has(slug) || gatedOff, `curated description key "${slug}" is a real catalog slug`);
   ok(text.length <= BAZAAR_DESCRIPTION_MAX && text.length >= 120, `${slug}: ${text.length} chars (120..${BAZAAR_DESCRIPTION_MAX})`);
   ok(/Use it|use it|Use this/.test(text), `${slug}: says WHEN to use it`);
@@ -75,6 +76,20 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1 This product is not en
   ok(fitInline.trimmed.includes("input-example-strings") && fitInline.slim.input.prompt === "an apple" && fitInline.slim.input.image.length < 100 && /openapi/.test(fitInline.slim.input.image),
     "budget: a long input example string becomes a pointer to /openapi.json, and short fields stay");
   ok(fitChallenge(null, "short", declare, 10).slim === null, "budget: a route with no discovery block only shortens its description");
+  // descriptionFirst (the typed-judgment kits): past the input descriptions the
+  // sample output points to /openapi.json before the input's types-only cut or
+  // the description; a block that fits once the output is a pointer keeps both.
+  {
+    const enumBlock = { ...block, inputSchema: { properties: { model: { type: "string", enum: ["a", "b"], description: "z".repeat(300) } } } };
+    const noOut = JSON.stringify(declare({ ...enumBlock, inputSchema: { properties: { model: { type: "string", enum: ["a", "b"] } } }, output: { type: "json", example: { truncated: true, note: "full example in /openapi.json" } } })).length;
+    const df = fitChallenge(enumBlock, long, declare, noOut + long.length, { descriptionFirst: true });
+    ok(df.trimmed.join() === "input-descriptions,output-example" && df.description === long && JSON.stringify(df.slim.inputSchema.properties.model.enum) === '["a","b"]' && isExamplePointer(df.slim.output.example),
+      `budget: descriptionFirst gives the sample output up before the input enum and the description (got ${df.trimmed.join()})`);
+    const plain = fitChallenge(enumBlock, long, declare, noOut + long.length);
+    ok(plain.trimmed.includes("input-types-only") || plain.trimmed.includes("description"), "budget: without descriptionFirst the same block cuts the input or the description first");
+    const roomyDf = fitChallenge(enumBlock, long, declare, 1_000_000, { descriptionFirst: true });
+    ok(roomyDf.trimmed.length === 0 && roomyDf.slim.output.example === block.output.example, "budget: descriptionFirst under the budget keeps the real sample output");
+  }
 }
 const live = (res?.endpoints || []).map((e) => e.description || "");
 ok(live.length > 0, "catalog descriptions readable");

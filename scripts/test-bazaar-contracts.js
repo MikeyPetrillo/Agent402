@@ -17,6 +17,20 @@ import { gradeX402Response } from "../src/tools/x402-kit.js";
 import { CAIP2_PATTERN } from "../src/avm-network.js";
 import { hasShortenedExample, replayableInput, openapiOperation } from "./lib/replayable-example.js";
 import { listingInjectionFinding, addressesReader } from "../src/listing-screen.js";
+import { readFileSync } from "node:fs";
+import { BAZAAR_DESCRIPTIONS, bazaarCapDescription, isExamplePointer } from "../src/payments.js";
+
+// Routes whose 402 carried a real sample output on the baseline tree. A route
+// over its byte budget may carry the /openapi.json pointer instead (counted
+// apart below); one of these giving up its real example to it is a regression.
+const REAL_EXAMPLE_BASELINE = new Set(JSON.parse(readFileSync(new URL("./bazaar-example-baseline.json", import.meta.url), "utf8")).routes);
+// The typed-judgment listings (descriptionFirst in their kits): each keeps its
+// whole description beside the sample-answer pointer, and judge its model enum.
+const openapiOutputExample = (openapi, endpoint) => {
+  const ok = openapiOperation(openapi, endpoint.method || "GET", endpoint.path)?.responses?.["200"]?.content?.["application/json"];
+  return ok?.example ?? ok?.examples?.default?.value;
+};
+const WHOLE_LISTING_ROUTES = new Set(["POST /v1/judge", "POST /v1/decisions", "POST /v1/judge/vision", "POST /api/loop-gate"]);
 
 const MAX_CHALLENGE_BYTES = 12_000;
 // The JSON body mirrors the header's PaymentRequired object (see
@@ -157,6 +171,10 @@ try {
   // Fields the Bazaar ranks on (description, output schema, service metadata):
   // routes that carry each one, printed and required of every route.
   const has = { serviceName: 0, tags: 0, icon: 0, description: 0, input: 0, output: 0, outputSchema: 0, screened: 0 };
+  // A pointer stands in for a sample output too large for the 402: legitimate
+  // for an oversized route, counted apart so it never reads as a real example.
+  has.outputPointer = 0; has.outputSchemaPointer = 0;
+  let wholeListingSeen = 0;
   const LISTING_ICON = /\.(?:png|jpe?g|webp|gif)$/i;
   const iconPaths = new Set();
 
@@ -274,8 +292,28 @@ try {
       if (accepts.slice(1).some((a) => a.outputSchema !== undefined)) fail(route, "outputSchema duplicated onto a later accept");
     } else if (accepts[0]?.outputSchema !== undefined) fail(route, "accepts[0].outputSchema present with no extension schema to source it");
     if (extension.info?.input) has.input++; else fail(route, "bazaar extension has no input");
-    if (example !== undefined) has.output++; else fail(route, "bazaar extension has no output example");
-    if (outputSchema) has.outputSchema++; else fail(route, "bazaar extension has no output schema");
+    const pointer = isExamplePointer(example);
+    if (example === undefined) fail(route, "bazaar extension has no output example");
+    else if (pointer) {
+      has.outputPointer++;
+      if (REAL_EXAMPLE_BASELINE.has(route)) fail(route, "the 402 carried a real sample output on the baseline and now carries the /openapi.json pointer");
+    } else has.output++;
+    if (!outputSchema) fail(route, "bazaar extension has no output schema");
+    else if (pointer) has.outputSchemaPointer++;
+    else has.outputSchema++;
+    if (WHOLE_LISTING_ROUTES.has(route)) {
+      wholeListingSeen++;
+      const source = BAZAAR_DESCRIPTIONS[endpoint.slug] || endpoint.description;
+      if (!source) fail(route, "no catalog description to compare the listing with");
+      else if (desc !== bazaarCapDescription(source)) fail(route, `listing description was cut by the byte budget (${desc.length} of ${bazaarCapDescription(source).length} chars): ${desc.slice(-60)}`);
+      if (!(pointer || isDeepStrictEqual(example, openapiOutputExample(openapi, endpoint)))) fail(route, "sample output is neither the real example nor the /openapi.json pointer");
+      if (endpoint.path === "/v1/judge") {
+        const modelEnum = extension.schema?.properties?.input?.properties?.body?.properties?.model?.enum;
+        const published = openapiOperation(openapi, "POST", endpoint.path)?.requestBody?.content?.["application/json"]?.schema?.properties?.model?.enum;
+        if (!Array.isArray(published) || !published.length) fail(route, "/openapi.json publishes no model enum to compare the listing with");
+        else if (!isDeepStrictEqual(modelEnum, published)) fail(route, `listing input lost the model enum (${JSON.stringify(modelEnum)})`);
+      }
+    }
     if (example === undefined || !outputSchema) continue;
     if (JSON.stringify(outputSchema).length > 500) fail(route, "output schema exceeds the 500-byte budget");
 
@@ -317,6 +355,8 @@ try {
     if (!(icon.status === 200 && type.startsWith("image/png")) && icon.status !== 302) fail(`GET ${iconPath}`, `listing icon answers ${icon.status} ${type}`);
   }
   console.log(`listing fields on ${rows.length} routes: ${Object.entries(has).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+  console.log(`sample outputs: ${has.output} real, ${has.outputPointer} /openapi.json pointers (schemas: ${has.outputSchema} real, ${has.outputSchemaPointer} for a pointer)`);
+  if (wholeListingSeen !== WHOLE_LISTING_ROUTES.size) fail("catalog", `checked ${wholeListingSeen} of ${WHOLE_LISTING_ROUTES.size} typed-judgment listings`);
   if (!quotedPriced) fail("catalog", "no quoted route was checked against its published range (the metered tiers and decide are quoted)");
   if (!speechSeen) fail("POST /v1/audio/speech", "route was not validated as a raw output");
   if (!specificTagSeen) fail("POST /api/extract", "representative route-specific tag did not survive sanitization");
