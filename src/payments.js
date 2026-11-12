@@ -918,8 +918,10 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
 // was rejected as Invalid rather than as too long, which is why this
 // normalizes before it truncates. A cut name ends on a whole clause: the word
 // boundary first, then an aside the cut left open ("metered (pay") is dropped
-// whole, then a dangling separator, so "Chat completions - metered (pay what
-// the call costs)" reads "Chat completions - metered".
+// whole, then a dangling separator or connective, and a cut inside a clause
+// backs off to its last connective ("guard with signed" -> "guard"), so
+// "Chat completions - metered (pay what the call costs)" reads
+// "Chat completions - metered".
 export const SERVICE_NAME_MAX = 32;
 export function x402ServiceName(raw) {
   const clean = String(raw ?? "").replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
@@ -940,7 +942,15 @@ export function x402ServiceName(raw) {
       cut = cut.slice(0, lastOpen).trim();
     }
   }
-  cut = cut.replace(/[\s\-,:;/&+|.]+$/, "").replace(/\s+(and|or|of|for|to|the|a|an|with|by|in|on)$/i, "").trim();
+  const tidy = (t) => t.replace(/[\s\-,:;/&+|.]+$/, "").replace(/\s+(and|or|of|for|to|the|a|an|with|by|in|on)$/i, "").trim();
+  cut = tidy(cut);
+  // A cut that did not land on a clause end ("guard with signed") backs off
+  // to the last connective, when what is left still names the tool.
+  const next = clean.slice(cut.length).trimStart();
+  if (cut && !/^[(\-,:;/+[{]/.test(next)) {
+    const m = /^(.*\S)\s+(?:with|for|on|of|to|in|by)\s/i.exec(cut);
+    if (m && m[1].length >= 16 && !/[(\[{]/.test(cut.slice(m[1].length))) cut = tidy(m[1]);
+  }
   return cut || hard.trim();
 }
 

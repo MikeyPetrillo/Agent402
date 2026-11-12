@@ -77,6 +77,8 @@ ok(live.length > 0, "catalog descriptions readable");
   ok(x402ServiceName("Short name (with aside)") === "Short name (with aside)", "a name under the ceiling is kept whole");
   ok(x402ServiceName("Alpha beta gamma delta epsilon zeta") === "Alpha beta gamma delta epsilon", "a cut on a word boundary keeps whole words");
   ok(x402ServiceName("Weather forecast and air quality for any city") === "Weather forecast and air quality", "a cut that ends on a word end keeps the word");
+  ok(x402ServiceName("SQL statement guard with signed verdict") === "SQL statement guard", "a cut inside a clause backs off to its last connective");
+  ok(x402ServiceName("Rate a call you paid for") === "Rate a call you paid for", "a name under the ceiling ending on a connective is kept whole");
   ok(x402ServiceName("") === "Agent402.tools" && x402ServiceName("\u2603") === "Agent402.tools", "an empty or non-ASCII-only name falls back to the host name");
   const unbalanced = (s) => { let d = 0; for (const c of s) { if (c === "(") d++; else if (c === ")") d = Math.max(0, d - 1); } return d !== 0; };
   const names = (res?.endpoints || []).map((e) => e.name).filter((n) => typeof n === "string" && n.trim());
@@ -84,7 +86,9 @@ ok(live.length > 0, "catalog descriptions readable");
   let bad = [];
   for (const n of names) {
     const sn = x402ServiceName(n);
-    if (!ResourceInfoSchema.safeParse({ url: "https://x.test/a", serviceName: sn }).success || unbalanced(sn) || /[\s\-,:;/&+|]$/.test(sn) || /\s(and|or|of|for|to|the|a|an|with|by|in|on)$/i.test(sn)) bad.push(`${n} -> ${sn}`);
+    if (!ResourceInfoSchema.safeParse({ url: "https://x.test/a", serviceName: sn }).success) { bad.push(`${n} -> ${sn}`); continue; }
+    if (sn.length === n.trim().length) continue; // kept whole: the tool's own name
+    if (unbalanced(sn) || /[\s\-,:;/&+|]$/.test(sn) || /\s(and|or|of|for|to|the|a|an|with|by|in|on)$/i.test(sn)) bad.push(`${n} -> ${sn}`);
   }
   ok(bad.length === 0, `every catalog serviceName is valid and ends on a whole clause (${bad.length} not: ${bad.slice(0, 5).join(" | ")})`);
 }
