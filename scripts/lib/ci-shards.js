@@ -53,3 +53,13 @@ export function shardFromEnv(env = process.env) {
   }
   return { shard, total };
 }
+
+/** The items that belong to this shard (`{ shard, total }`), in their fixed order. */
+export function pickShard(items, { shard, total }) {
+  return items.filter((_, i) => inShard(i, shard, total));
+}
+
+/** Checks that run once per lane, not once per shard, run in the last shard. */
+export function runsSoloChecks({ shard, total }) {
+  return shard === total;
+}

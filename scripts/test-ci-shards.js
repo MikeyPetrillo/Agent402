@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { load } from "js-yaml";
-import { shardCount, shardJobName, laneJobNames, inShard, shardFromEnv } from "./lib/ci-shards.js";
+import { shardCount, shardJobName, laneJobNames, inShard, shardFromEnv, pickShard, runsSoloChecks } from "./lib/ci-shards.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -143,7 +143,7 @@ try {
     ok(threw, `shardFromEnv refuses ${JSON.stringify(env)}`);
   }
   const redos = readFileSync(new URL("./test-redos-free-tier.js", import.meta.url), "utf8");
-  ok(/inShard\(i, SHARD\.shard, SHARD\.total\)/.test(redos) && /const SHARD = shardFromEnv\(\)/.test(redos), "the event-loop guard splits its calls by the same rule");
+  ok(/pickShard\(jobs, SHARD\)/.test(redos) && /const SHARD = shardFromEnv\(\)/.test(redos), "the event-loop guard splits its calls by the same rule");
   const gate = readFileSync(new URL("./ci-tree-gate.js", import.meta.url), "utf8");
   ok(/laneJobNames\(/.test(gate), "the tree gate requires every shard's job name");
 
@@ -172,6 +172,19 @@ try {
   }
 } finally {
   if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
+}
+// The event-loop guard splits its calls with pickShard and runs its once-per-lane
+// timings with runsSoloChecks: every call in exactly one shard, the timings in one.
+{
+  const items = Array.from({ length: 23 }, (_, i) => `c${i}`);
+  for (const total of [1, 2, 3]) {
+    const parts = Array.from({ length: total }, (_, k) => pickShard(items, { shard: k + 1, total }));
+    const flat = parts.flat();
+    ok(flat.length === items.length && new Set(flat).size === items.length, `pickShard over ${total} shard(s) runs each of ${items.length} calls exactly once`);
+    ok(Array.from({ length: total }, (_, k) => runsSoloChecks({ shard: k + 1, total })).filter(Boolean).length === 1, `runsSoloChecks picks exactly one of ${total} shard(s)`);
+  }
+  const redos = readFileSync(new URL("./test-redos-free-tier.js", import.meta.url), "utf8");
+  ok((redos.match(/if \(runsSoloChecks\(SHARD\)\) \{/g) || []).length === 2 && /jobs\.splice\(0, jobs\.length, \.\.\.pickShard\(jobs, SHARD\)\)/.test(redos) && !/SHARD\.shard\s*[=!]==/.test(redos), "test-redos-free-tier splits through pickShard and runs its two timing sections through runsSoloChecks only");
 }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
