@@ -569,8 +569,13 @@ export function mppSubscriptionMethodAvailable() {
     typeof tempoServer?.renewSubscription === "function"
   );
 }
-/** Rollout switch. Call-time read, like every other knob in this repo. */
-export function mppSubscriptionsEnabled() {
+/**
+ * Configured: the env asks for the rail (MPP_SUBSCRIPTIONS not off, a secret,
+ * a Tempo recipient, a usable fee payer), whatever the installed mppx offers.
+ * Call-time read. A configured rail whose method is missing reads failed on
+ * /api/gateway-status (buildMppSubscriptionsEngine), never off.
+ */
+export function mppSubscriptionsConfigured() {
   if (String(process.env.MPP_SUBSCRIPTIONS || "").toLowerCase() === "off") return false;
   if (!(process.env.MPP_SECRET_KEY || "").trim()) return false;
   if (!/^0x[0-9a-fA-F]{40}$/.test(envRecipient())) return false;
@@ -579,7 +584,11 @@ export function mppSubscriptionsEnabled() {
   // would advertise a product we provably cannot deliver - the endpoint would
   // 402 forever and the offer would be a lie. See subscriptionFeePayer().
   if (!subscriptionFeePayer()) return false;
-  return mppSubscriptionMethodAvailable();
+  return true;
+}
+/** Rollout switch: configured, and the installed mppx has the method. Call-time read. */
+export function mppSubscriptionsEnabled() {
+  return mppSubscriptionsConfigured() && mppSubscriptionMethodAvailable();
 }
 
 /** The period length mppx itself computes from our period fields, in ms. Read
@@ -969,14 +978,17 @@ export function diagnoseError(err, max = 1200) {
 /**
  * Build the engine at boot and say how it went, for the mppSubscriptions word
  * on /api/gateway-status: { engine, state } with state on (built), off (not
- * configured: `enabled()` is false) or failed (configured, but `build()` threw
- * or refused). Never throws; a failure is logged once by `warn`.
+ * configured: `configured()` is false) or failed (configured, but the
+ * installed mppx has no subscription method, or `build()` threw or refused).
+ * Never throws; a failure is logged once by `warn`.
  */
-export function buildMppSubscriptionsEngine({ enabled = mppSubscriptionsEnabled, build, warn = console.warn } = {}) {
-  let configured = false;
+export function buildMppSubscriptionsEngine({ configured = mppSubscriptionsConfigured, available = mppSubscriptionMethodAvailable, build, warn = console.warn } = {}) {
   try {
-    configured = !!enabled();
-    if (!configured) return { engine: null, state: "off" };
+    if (!configured()) return { engine: null, state: "off" };
+    if (!available()) {
+      warn("[mpp-subs] init failed: the installed mppx has no tempo/subscription method");
+      return { engine: null, state: "failed" };
+    }
     const engine = build();
     if (engine) return { engine, state: "on" };
     warn("[mpp-subs] init failed: the engine refused to start");

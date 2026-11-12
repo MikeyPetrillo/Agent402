@@ -116,8 +116,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `firstCallAllowance` unavailable
   (on, spent: spent is the day's cap working as set; present only while the trial is on),
   `xSearchAuthors` alert (ok; see the X search author alarm below), `mppSubscriptions` failed (on,
-  off: the MPP subscription engine is configured but did not build at boot,
-  `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`). `loopLag`
+  off: the MPP subscription engine is configured but did not build at boot, including an installed
+  mppx with no subscription method; `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`;
+  `subscriptionRenewals` then reads unknown). `loopLag`
   and `mppEvmDomainFallback` publish a flag, not a word, and page nothing.
 - **Ended MPP subscriptions:** the private half of a subscription's access key is deleted when a
   cancel is stored or the subscription ends (`finishEnded` in `src/mpp-subscriptions.js`, reached from

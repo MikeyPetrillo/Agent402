@@ -3239,9 +3239,9 @@ try {
 // so a target is proven watchable BEFORE a recurring authorization is signed,
 // and every confirmed period lands in the same sales ledger.
 // The engine's state for /api/gateway-status (mppSubscriptions): on (built),
-// off (not configured) or failed (configured, but building it threw or
-// refused, so the recurring-monitor routes are not mounted). The pagers read
-// failed.
+// off (not configured) or failed (configured, but the installed mppx has no
+// subscription method, or building it threw or refused, so the
+// recurring-monitor routes are not mounted). The pagers read failed.
 const { engine: _mppSubs, state: _mppSubsState } = buildMppSubscriptionsEngine({
   build: () => createMppSubscriptions({
     secretKey: process.env.MPP_SECRET_KEY || "",
@@ -4321,13 +4321,16 @@ app.get("/api/gateway-status", async (req, res) => {
     // renewal has stayed unconfirmed (its send's landing undecided by the
     // chain read, so nothing is signed again) for longer than
     // MPP_SUB_UNCONFIRMED_ALERT_HOURS (default 3), ok otherwise, off with the
-    // alert disabled or no subscription engine. One word publicly; the
+    // alert disabled or no subscription engine configured, unknown while a
+    // configured engine failed at boot (mppSubscriptions pages on that, and
+    // renewals cannot be read). One word publicly; the
     // threshold, the count and the oldest attempt for the operator, each
     // record on /__operator/monitors.json.
     // The MPP subscription engine (src/mpp-subscriptions.js): on / off (not
-    // configured) / failed (configured, but it did not build at boot). One word.
+    // configured) / failed (configured, but the installed mppx has no
+    // subscription method, or it did not build at boot). One word.
     mppSubscriptions: { status: _mppSubsState },
-    subscriptionRenewals: (() => { try { return _mppSubs ? _mppSubs.renewalsStatus({ full }) : { status: "off" }; } catch { return { status: "unknown" }; } })(),
+    subscriptionRenewals: (() => { try { return _mppSubs ? _mppSubs.renewalsStatus({ full }) : { status: _mppSubsState === "failed" ? "unknown" : "off" }; } catch { return { status: "unknown" }; } })(),
     // The direct upstream (src/gateway-direct-pricebook.js): off, starting,
     // ok or degraded (a mapped model is kept on OpenRouter, or the direct
     // breaker is open). The word publicly; the operator read adds a reason

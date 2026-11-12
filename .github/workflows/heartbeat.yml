@@ -861,7 +861,7 @@ jobs:
           if [ "$STATUS" = "failed" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot, so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off." || true
+                --body "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot (the installed mppx has no subscription method, or the build threw or refused), so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off." || true
             fi
           elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "mppSubscriptions is ${STATUS}; closing." || true

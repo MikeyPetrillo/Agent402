@@ -1077,7 +1077,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     title: "MPP subscription engine FAILED to start",
     verdict: ({ gateway: b }) => wordVerdict(b.mppSubscriptions?.status, ["failed"], ["on", "off"]),
     body: () =>
-      "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot, so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off.",
+      "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot (the installed mppx has no subscription method, or the build threw or refused), so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off.",
   },
   {
     title: "State database DEGRADED (Postgres)",
