@@ -24,7 +24,9 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
 // --- a DNS server on loopback ----------------------------------------------------
-const ANSWERS = { "good.pool.test": "93.184.215.14", "priv.pool.test": "10.9.8.7" };
+// A answers; AAAA answers (16-byte addresses) only where listed.
+const ANSWERS = { "good.pool.test": "93.184.215.14", "priv.pool.test": "10.9.8.7", "mixed.pool.test": "93.184.215.14" };
+const AAAA = { "mixed.pool.test": Buffer.from("fd000000000000000000000000000001", "hex") };
 const queries = new Map(); // "name type" -> count
 const server = dgram.createSocket("udp4");
 function readName(buf, off) {
@@ -54,7 +56,13 @@ server.on("message", (msg, rinfo) => {
     ANSWERS[name].split(".").forEach((o, i) => { rr[12 + i] = Number(o); });
     answers.push(rr);
   }
-  header.writeUInt16BE(answers.length, 6); // AAAA: no data
+  if (qtype === 28 && AAAA[name]) {
+    const rr = Buffer.alloc(28);
+    rr.writeUInt16BE(0xc00c, 0); rr.writeUInt16BE(28, 2); rr.writeUInt16BE(1, 4); rr.writeUInt32BE(30, 6); rr.writeUInt16BE(16, 10);
+    AAAA[name].copy(rr, 12);
+    answers.push(rr);
+  }
+  header.writeUInt16BE(answers.length, 6); // otherwise no data
   server.send(Buffer.concat([header, question, ...answers]), rinfo.port, rinfo.address);
 });
 await new Promise((r) => server.bind(0, "127.0.0.1", r));
@@ -116,6 +124,9 @@ ok(isSsrfBlock(connectErr) && connectMs < 1000 && performance.now() < firstPoolD
 // A private answer at the upfront check is the same neutral 400.
 const priv = await assertPublicUrl("https://priv.pool.test/").catch((e) => e);
 ok(priv?.statusCode === 400, `a private answer at the upfront check is a 400 (${priv?.statusCode})`);
+// Every answer is checked: a public A beside a private AAAA is refused.
+const mixed = await assertPublicUrl("https://mixed.pool.test/").catch((e) => e);
+ok(mixed?.statusCode === 400 && (await hostIsPublic("mixed.pool.test")) === false, `a public A beside a private AAAA is refused (${mixed?.statusCode ?? "passed"})`);
 
 // The slow names end at their bound as the retryable 503, the pool still full.
 const ended = await Promise.all(slow);
