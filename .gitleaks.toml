@@ -60,6 +60,14 @@ commits = [
 ]
 # Matched against each finding's captured secret.
 regexes = [
+  # scripts/test-mcp-error-redaction.js: made-up values in secret-named
+  # variables (a database password and a hex signing key), set so the suite
+  # can prove /mcp error text scrubs them. Not credentials; pinned exactly.
+  '''^hunter2pgSecretPass$''',
+  '''^AbCdEf0123456789$''',
+  # src/svm-payer.js: an IDENTIFIER, not a value - the byte offset constant
+  # assigned to keysAt in the Solana v1 message parser.
+  '''^V1_FIXED_BYTES$''',
   # scripts/test-top-buyer-failures.js: a made-up value in a secret-named
   # variable, set so the suite can prove our error text scrubs it. Not a
   # credential; pinned exactly (also reported under the merges that carry it).
