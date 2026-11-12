@@ -26,10 +26,14 @@ const HOSTS = new Set(data.hosts), NAMES = new Set(data.names);
 const HOST_RE = /[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi;
 const WORD_RE = /[a-z0-9][a-z0-9-]{2,}/gi;
 
+const README_BADGE_LINE = /^\[!\[[^\]\n]*\]\(https:\/\/[^\s()]+\)\]\(https:\/\/[^\s()]+\)$/;
 const allowedLine = (file, line) =>
   file === "src/sor-seed-sellers.json" ||
   (file === "src/x402-index.js" && /^\s*"https:\/\/[^"]+",\s*\/\/ /.test(line)) ||
-  (file === "scripts/paid-canary.js" && /^\s*body: \{ origin: "/.test(line));
+  (file === "scripts/paid-canary.js" && /^\s*body: \{ origin: "/.test(line)) ||
+  // README "Independent records" (owner decision 2026-11-12): a line that is one badge image
+  // linking to the outside service that keeps the record, and nothing else.
+  (file === "README.md" && README_BADGE_LINE.test(line));
 
 export function findHits(file, text, hosts = HOSTS, names = NAMES) {
   const out = [];
@@ -53,6 +57,8 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
   ok(findHits("x.js", 'fetch("https://zzseller.invalid/api")', H, N).length === 1, "control: a denylisted host inside a URL is caught");
   ok(findHits("x.js", "// talked to Zzcounterparty about it", H, N).length === 1, "control: a denylisted name is caught case-insensitively");
   ok(findHits("x.js", 'origin: "https://seller.example"', H, N).length === 0, "control: a placeholder host passes");
+  ok(findHits("README.md", "[![zz](https://zzseller.invalid/b.svg)](https://zzseller.invalid/s)", H, N).length === 0, "a README line that is one badge linking to its record service passes");
+  ok(findHits("README.md", "Bought from Zzcounterparty: [![zz](https://zzseller.invalid/b.svg)](https://zzseller.invalid/s)", H, N).length === 1 && findHits("docs/x.md", "[![zz](https://zzseller.invalid/b.svg)](https://zzseller.invalid/s)", H, N).length === 1, "a badge line with prose, or outside README.md, is still caught");
   ok(data.hosts.length > 100 && data.names.length > 10, `the hash list is populated (${data.hosts.length} hosts, ${data.names.length} names)`);
 }
 
