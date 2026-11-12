@@ -136,6 +136,36 @@ async function signFor(paymentRequired) {
   ok((await preflightUptoPayment(other, accept, now))?.reason === "invalid_eip2612_extension", "a sponsoring permit for another owner is refused");
   ok((await preflightUptoPayment(withExt, accept, now + 100_000))?.reason === "permit2_deadline_expired", "an expired authorization is refused");
   ok(/^0x[0-9a-f]{64}$/.test(pendingNonceOf(withExt)) && BigInt(pendingNonceOf(withExt)) === BigInt(withExt.payload.permit2Authorization.nonce), "a pending upto settle is booked under its Permit2 nonce, in the book's 32-byte form");
+  // The settle claim names the same authorization: a pending Arc upto settle
+  // keeps it, so the identical signed payment resent is refused, not settled
+  // a second time while the first is unresolved.
+  {
+    const { registerSettlementClaimHooks, registerSettlementClaimRelease, __resetSettlementClaims, DUPLICATE_AUTHORIZATION } = await import("../src/settlement-claims.js");
+    __resetSettlementClaims();
+    const hooks = { beforeVerify: [], beforeSettle: [], afterSettle: [], settleFailure: [] };
+    const fake = {
+      onBeforeVerify: (h) => { hooks.beforeVerify.push(h); return fake; }, onBeforeSettle: (h) => { hooks.beforeSettle.push(h); return fake; },
+      onAfterSettle: (h) => { hooks.afterSettle.push(h); return fake; }, onSettleFailure: (h) => { hooks.settleFailure.push(h); return fake; },
+    };
+    registerSettlementClaimHooks(fake);
+    registerSettlementClaimRelease(fake);
+    const ctxFor = (payload) => ({ requirements: accept, paymentPayload: payload, transportContext: { request: { adapter: { req: {} } } } });
+    const first = ctxFor(withExt);
+    for (const h of hooks.beforeVerify) await h(first);
+    let firstR; for (const h of hooks.beforeSettle) firstR = await h(first);
+    ok(firstR === undefined, "the first upto settle claims its Permit2 authorization");
+    for (const h of hooks.settleFailure) await h({ ...first, error: Object.assign(new Error("settlement_pending"), { errorReason: "settlement_pending" }) });
+    const resend = ctxFor(structuredClone(withExt));
+    for (const h of hooks.beforeVerify) await h(resend);
+    const r = await hooks.beforeSettle[0](resend);
+    ok(r?.abort === true && r.reason === DUPLICATE_AUTHORIZATION, `a pending Arc upto settle's resend is refused as ${DUPLICATE_AUTHORIZATION} (got ${JSON.stringify(r)})`);
+    // Control: another signed upto payment (a new Permit2 nonce) is not refused.
+    const fresh = await signFor({ x402Version: 2, resource: { url: "http://x/v1" }, accepts: [accept] });
+    const c3 = ctxFor(fresh);
+    for (const h of hooks.beforeVerify) await h(c3);
+    ok(fresh.payload.permit2Authorization.nonce !== withExt.payload.permit2Authorization.nonce && await hooks.beforeSettle[0](c3) === undefined, "a different upto authorization from the same buyer settles normally");
+    __resetSettlementClaims();
+  }
 
   // The client: off, upto is refused before any fetch; on, it is forwarded.
   const seen = [];

@@ -39,6 +39,7 @@ import { GATEWAY_PENDING_BOOKED } from "./gateway-wire.js";
 import { randomUUID } from "node:crypto";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { settleTxOf, stellarAuthorizationsOf } from "./stellar-confirm.js";
+import { pendingNonceOf } from "./circle-facilitator.js";
 
 const PREFIX = "settle-claim:";
 // Past any handler plus settle; a holder that dies mid-request frees the
@@ -221,12 +222,25 @@ function stamp(req) {
   return s;
 }
 
+// An EVM payment's authorization: EIP-3009's (exact) as signed, or a Permit2
+// one (upto) under its nonce in the 32-byte form the pending book keys on
+// (src/circle-pending.js via pendingNonceOf), so a pending upto settle keeps
+// its claim and the same signed payment resent is refused like an exact one.
 function evmAuthorizationOf(ctx) {
   const network = String(ctx?.requirements?.network || "");
-  const auth = ctx?.paymentPayload?.payload?.authorization;
-  const nonce = auth?.nonce;
-  if (!network.startsWith("eip155:") || typeof nonce !== "string" || !nonce) return null;
-  return { network, nonce, from: typeof auth?.from === "string" ? auth.from : "" };
+  if (!network.startsWith("eip155:")) return null;
+  const payload = ctx?.paymentPayload?.payload;
+  const auth = payload?.authorization;
+  if (auth !== undefined) {
+    const nonce = auth?.nonce;
+    if (typeof nonce !== "string" || !nonce) return null;
+    return { network, nonce, from: typeof auth?.from === "string" ? auth.from : "" };
+  }
+  const p2 = payload?.permit2Authorization;
+  if (!p2 || typeof p2 !== "object") return null;
+  const nonce = pendingNonceOf(ctx.paymentPayload);
+  if (typeof nonce !== "string" || !nonce) return null;
+  return { network, nonce, from: typeof p2.from === "string" ? p2.from : "", permit2: true };
 }
 
 /** The claim keys of a Stellar payment's signed entries, or null. */
@@ -275,7 +289,8 @@ export function registerSettlementClaimHooks(server) {
       // (untagged) is honored, and this request's claim is written there
       // tagged, so neither build serves the other's payment twice. Another
       // signer's tagged claim on the same nonce is a different payment.
-      const legacy = a && !refuse ? legacyNonceClaimKey(a.network, a.nonce) : null;
+      // An earlier build never claimed a Permit2 authorization, so it has no such name.
+      const legacy = a && !a.permit2 && !refuse ? legacyNonceClaimKey(a.network, a.nonce) : null;
       if (legacy && legacy !== keys[0]) {
         const r = await claimSettlementKey(legacy, LEGACY_TAG + s.id, { ttlSeconds: INFLIGHT_TTL_SECONDS });
         if (r.claimed) { if (!s.nonceKeys.includes(legacy)) s.nonceKeys.push(legacy); }
