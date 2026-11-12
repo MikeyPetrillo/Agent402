@@ -180,7 +180,10 @@ echo "merged: ${MERGE:0:8}"
 # 2026-10-04 incident: old dev commits blocked a later merge on main's subject
 # check). Moves the branch only when merging it would change nothing on main;
 # otherwise it says why and leaves it. Never fails the merge.
-bash scripts/sync-dev-branch.sh "$BRANCH" || echo "dev sync: did not run cleanly; check $BRANCH by hand"
+# It runs when this script ends, after main's run is watched: the sync push starts a
+# full test run on the dev branch, and started first it took the runner slots main's
+# deploy job was waiting for (the account's concurrent-job cap).
+trap 'bash scripts/sync-dev-branch.sh "$BRANCH" || echo "dev sync: did not run cleanly; check $BRANCH by hand"' EXIT
 
 # Main deploys unconditionally. Report the run and, separately, what prod says:
 # the job can be red for a Railway race while prod is correct, and the reverse

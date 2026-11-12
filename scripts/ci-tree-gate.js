@@ -28,6 +28,17 @@
  * @param {string[]} o.passedTrees tree hashes of head commits of GREEN runs
  * @returns {{skip: boolean, reason: string}}
  */
+/**
+ * Every job name a green run must show before main may skip its re-run: each test
+ * lane of the workflow, and for a sharded lane every shard's job.
+ */
+export function requiredLaneJobs(wf, laneJobNames) {
+  return Object.entries(wf?.jobs || {})
+    .filter(([n, j]) => /^test(-|$)/.test(n) &&
+      (j.steps || []).some((st) => /node\s+scripts\/test-[\w.-]+\.js/.test(String(st.run || ""))))
+    .flatMap(([n, j]) => laneJobNames(n, j));
+}
+
 export function decideSkip({ eventName, ref, currentTree, passedTrees } = {}) {
   // Only a push to main is ever eligible. A pull_request run is the required
   // status check on the PR itself, and a dispatch is a human explicitly asking
@@ -88,14 +99,14 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop()
   // matching tree hash means the suite DEFINITION matched too - the same lanes,
   // the same steps, the same guards. A tree cannot claim a green run from a
   // workflow that tested less than this one does.
+  // A sharded lane (a matrix over `shard`) reports one job per shard, and
+  // every one of them must be green: laneJobNames() lists them.
   const { load } = await import("js-yaml");
+  const { laneJobNames } = await import("./lib/ci-shards.js");
   let LANES = [];
   try {
     const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
-    LANES = Object.entries(wf.jobs || {})
-      .filter(([n, j]) => /^test(-|$)/.test(n) &&
-        (j.steps || []).some((st) => /node\s+scripts\/test-[\w.-]+\.js/.test(String(st.run || ""))))
-      .map(([n]) => n);
+    LANES = requiredLaneJobs(wf, laneJobNames);
   } catch { LANES = []; }
   // No lanes discovered means the workflow could not be read, which is not a
   // state in which anything may be skipped.

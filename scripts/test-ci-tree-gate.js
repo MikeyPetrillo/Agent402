@@ -10,7 +10,8 @@
 // without tests" guarantee. Both directions are pinned.
 import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
-import { decideSkip } from "./ci-tree-gate.js";
+import { decideSkip, requiredLaneJobs } from "./ci-tree-gate.js";
+import { laneJobNames, shardCount } from "./lib/ci-shards.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.error("FAIL:", m); } };
@@ -99,6 +100,19 @@ for (const gate of ["deploy", "publish"]) {
 // value as a FLAG, so without this the safety of that call rests on an upstream
 // output format rather than on anything we verify. Raised as hardening in the
 // 2026-08-24 security review.
+// The gate requires every shard of a sharded lane, not only shard 1: a run whose
+// shard 2 was red must never let main skip its tests and deploy.
+{
+  const req = requiredLaneJobs(wf, laneJobNames);
+  const sharded = Object.entries(wf.jobs || {}).filter(([, j]) => shardCount(j) > 1);
+  ok(sharded.length > 0, `the workflow has sharded lanes (${sharded.length})`);
+  for (const [n, j] of sharded) {
+    const want = laneJobNames(n, j);
+    ok(want.length === shardCount(j) && want.every((x) => req.includes(x)), `the tree gate requires every shard of ${n} (${want.join(", ")})`);
+  }
+  const src = readFileSync(new URL("./ci-tree-gate.js", import.meta.url), "utf8");
+  ok(/LANES = requiredLaneJobs\(wf, laneJobNames\)/.test(src), "the gate's command line derives its lanes through requiredLaneJobs");
+}
 const gateSrc = readFileSync(new URL("./ci-tree-gate.js", import.meta.url), "utf8");
 const loop = gateSrc.slice(gateSrc.indexOf("const passedTrees = []"), gateSrc.indexOf("const verdict = decideSkip"));
 ok(/if \(!isSha\(sha\)\) continue;/.test(loop),
