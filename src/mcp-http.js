@@ -189,9 +189,6 @@ export function problemOf(j) {
   return out;
 }
 
-/** The tool-result text for a call this connector stopped waiting on.
- *  `paid` = a payment credential rode along on the call; only without one is
- *  "nothing was charged" certain. */
 /** The text of an error this connector answers with: a configured secret
  *  value or a credential-bearing URL it quotes (an upstream echo, a database
  *  driver's connection string) is scrubbed BEFORE the cut, so a cut never
@@ -203,6 +200,9 @@ export function mcpErrorText(err, max = undefined) {
   return redactSecrets(String(raw ?? "")).slice(0, max);
 }
 
+/** The tool-result text for a call this connector stopped waiting on.
+ *  `paid` = a payment credential rode along on the call; only without one is
+ *  "nothing was charged" certain. */
 export function connectorCutoffText({ label, seconds, paid, route = null, error = null }) {
   // The unpaid text's "nothing to charge" holds only because no credential
   // was presented; a paid cut-off never says it.
