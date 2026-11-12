@@ -6,7 +6,9 @@
 // so each one must construct under exactly that environment.
 //   control: a bare tempo.charge() with no store throws in this environment,
 //            so the cases below are not passing only because nothing checks;
-//   1. the one-shot charge method (src/mpp-tempo.js), relay and direct modes;
+//   1. the one-shot charge method (src/mpp-tempo.js), relay and direct modes,
+//      each handed our shared replay store itself (mppx would otherwise fall
+//      back to a per-process memory store in relay mode);
 //   2. the subscription engine (src/mpp-subscriptions.js), with and without
 //      the fee sponsor (the method is built when the engine is).
 // Offline: no RPC, no relay, no key that holds anything.
@@ -36,14 +38,31 @@ const { tempo } = await import("mppx/server");
   ok(r.error && /store/.test(String(r.error.message)), `control: tempo.charge() with no store refuses to construct here (${r.error ? "threw" : "built"})`);
 }
 
+// Constructing is not enough: in relay mode mppx falls back to its own
+// in-memory store when none is passed, so the method would build and still
+// lose the shared replay guard. The build is observed through tempo.charge
+// (the same object src/mpp-tempo.js calls) and the store it is handed must
+// be our shared store itself, in both modes.
 const tempoMod = await import("../src/mpp-tempo.js");
-for (const mode of ["relay", "direct"]) {
-  if (mode === "direct") process.env.TEMPO_RELAY = "off"; else delete process.env.TEMPO_RELAY;
-  tempoMod.__testResetMethodCache();
-  const r = tryBuild(() => tempoMod._tempoMethodUsesRelay());
-  ok(!r.error, `the one-shot charge method constructs in production (${mode} mode)${r.error ? `: ${r.error.message}` : ""}`);
+const { mppxReplayStore } = await import("../src/mppx-store.js");
+const realCharge = tempo.charge;
+const builds = [];
+tempo.charge = (opts, ...rest) => { builds.push(opts); return realCharge.call(tempo, opts, ...rest); };
+try {
+  for (const mode of ["relay", "direct"]) {
+    if (mode === "direct") process.env.TEMPO_RELAY = "off"; else delete process.env.TEMPO_RELAY;
+    tempoMod.__testResetMethodCache();
+    builds.length = 0;
+    const r = tryBuild(() => tempoMod._tempoMethodUsesRelay());
+    ok(!r.error, `the one-shot charge method constructs in production (${mode} mode)${r.error ? `: ${r.error.message}` : ""}`);
+    ok(r.value === (mode === "relay"), `the method is built in ${mode} mode (${r.value})`);
+    ok(builds.length === 1 && !!builds[0]?.relay === (mode === "relay"), `one tempo.charge build observed in ${mode} mode (${builds.length})`);
+    ok(builds.length === 1 && builds[0].store === mppxReplayStore(), `the ${mode}-mode method is handed our shared replay store itself, not a fallback`);
+  }
+} finally {
+  tempo.charge = realCharge;
+  delete process.env.TEMPO_RELAY;
 }
-delete process.env.TEMPO_RELAY;
 
 const { createMppSubscriptions } = await import("../src/mpp-subscriptions.js");
 const tmp = mkdtempSync(join(tmpdir(), "mppx-prod-store-"));
