@@ -74,7 +74,11 @@ function widen(a, b) {
 }
 
 /** JSON Schema for one example value. Types only: no enums, no formats, no
- *  constraints - anything we cannot guarantee at runtime is not declared. */
+ *  constraints - anything we cannot guarantee at runtime is not declared.
+ *  A number is always `number`, never `integer`: an example's 1 cannot tell
+ *  a count from a confidence or a price that happened to land whole, and
+ *  `number` accepts every integer. `integer` is declared only by hand (the
+ *  input schemas in the kits). */
 export function schemaFromExample(value, depth = 0) {
   if (value === null || value === undefined) return {}; // unconstrained: the example says nothing about the type
   if (Array.isArray(value)) {
@@ -89,7 +93,7 @@ export function schemaFromExample(value, depth = 0) {
   const t = typeof value;
   if (t === "string") return { type: "string" };
   if (t === "boolean") return { type: "boolean" };
-  if (t === "number") return Number.isInteger(value) ? { type: "integer" } : { type: "number" };
+  if (t === "number") return { type: "number" };
   if (t !== "object") return {};
   const schema = { type: "object" };
   if (depth >= MAX_DEPTH) return schema;
@@ -171,7 +175,7 @@ function schemaAtDepth(value, limit, depth = 0) {
   const t = typeof value;
   if (t === "string") return { type: "string" };
   if (t === "boolean") return { type: "boolean" };
-  if (t === "number") return Number.isInteger(value) ? { type: "integer" } : { type: "number" };
+  if (t === "number") return { type: "number" };
   if (t !== "object") return {};
   const schema = { type: "object" };
   if (depth >= limit) return schema;

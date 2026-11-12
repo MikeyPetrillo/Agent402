@@ -2,7 +2,7 @@
 // boundedSchema trims a JSON schema to a byte budget for the 402 challenge:
 // descriptions first, then nested detail, down to names and types. Offline.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { boundedSchema } from "../src/openapi-schema.js";
+import { boundedSchema, schemaFromExample, responseSchemaFor, boundedResponseSchemaFor } from "../src/openapi-schema.js";
 import { boundDiscoveryBlock } from "../src/payments.js";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -47,6 +47,18 @@ ok(bp && Object.hasOwn(bp.properties, "__proto__") && ({}).type === undefined &&
   ok(tight.output.schema === undefined && tight.output.example.truncated === true && /openapi\.json/.test(tight.output.example.note), "well over the budget: the example becomes the truncation note and no schema survives");
   ok(block.output.schema && block.output.example === example, "the caller's block is not mutated");
   ok(boundDiscoveryBlock(null, 100) === null, "no block, no change");
+}
+// An inferred number is `number`: an example's 1 (a confidence, a
+// probability, a price that landed whole) never declares `integer`, which a
+// fractional answer would break. Hand-declared input schemas keep `integer`.
+{
+  const ex = { confidence: 1, probabilities: [{ value: "a", probability: 1 }], mean: 3, nested: { temp: 20 }, list: [1, 2] };
+  const walk = (x, out = []) => { if (x && typeof x === "object") { if (x.type === "integer") out.push(x); for (const v of Object.values(x)) walk(v, out); } return out; };
+  ok(walk(schemaFromExample(ex)).length === 0 && schemaFromExample(ex).properties.confidence.type === "number", "inferred: a whole-number example is typed number, at every depth");
+  ok(walk(responseSchemaFor("/api/loop-gate", ex)).length === 0, "inferred: the /openapi.json 200 schema declares no integer");
+  ok(walk(boundedResponseSchemaFor("/api/loop-gate", ex, 500)).length === 0, "inferred: the 402's bounded output schema declares no integer");
+  ok(boundedResponseSchemaFor(null, 7, 500)?.type === "number", "inferred: a raw whole-number output is typed number");
+  ok(boundedSchema({ type: "object", properties: { n: { type: "integer", minimum: 1 } } }, 900).properties.n.type === "integer", "declared: a hand-written integer input stays integer");
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
