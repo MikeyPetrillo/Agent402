@@ -42,7 +42,7 @@ import { fileURLToPath } from "node:url";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { oursMs, bound, OURS_READING } from "./lib/ours-clock.js";
-import { shardFromEnv, inShard } from "./lib/ci-shards.js";
+import { shardFromEnv, pickShard, runsSoloChecks } from "./lib/ci-shards.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BOUND_MS = Number(process.env.REDOS_BOUND_MS) || 250;
@@ -130,7 +130,7 @@ const ok = (cond, msg) => {
 // on a host busy with other suites the wall clock read it near and past
 // 100 ms. The readings this guards against are the old ones, in seconds
 // (17 s for the digit reading below).
-if (SHARD.shard === SHARD.total) {
+if (runsSoloChecks(SHARD)) {
   const LISTING = bound(Number(process.env.LISTING_BOUND_MS) || 100, 6);
   const LISTING_BOUND_MS = LISTING.ms;
   console.log(`# screen functions timed as ${OURS_READING}; ${LISTING.note}`);
@@ -202,7 +202,7 @@ if (SHARD.shard === SHARD.total) {
 // The plan sketch reads the task text of /api/find, /api/route and the
 // connector's catalog.find before any limiter that counts work: its split
 // must stay linear in the 500 characters it reads.
-if (SHARD.shard === SHARD.total) {
+if (runsSoloChecks(SHARD)) {
   const { splitSteps } = await import("../src/plan-sketch.js");
   // The split takes microseconds; the pattern it replaced took over 100 ms on
   // a run of spaces. Least of five on the ours clock, so a busy runner does
@@ -331,7 +331,7 @@ try {
   // This shard's calls: the list above is built in a fixed order, so each
   // call lands in exactly one shard.
   const all = jobs.length;
-  jobs.splice(0, jobs.length, ...jobs.filter((_, i) => inShard(i, SHARD.shard, SHARD.total)));
+  jobs.splice(0, jobs.length, ...pickShard(jobs, SHARD));
   if (SHARD.total > 1) ok(jobs.length > 0, `shard ${SHARD.shard}/${SHARD.total} runs ${jobs.length} of the ${all} calls`);
 
   // Baseline: a trivial call must leave /health well under the bound, or the

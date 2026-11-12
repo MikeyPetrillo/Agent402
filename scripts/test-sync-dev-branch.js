@@ -3,7 +3,7 @@
 // clone in the OS temp dir and runs the real script against it.
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -136,6 +136,17 @@ function repo() {
   ok(cherryPlus > 0, `control: git cherry calls the old dev commit unique (${cherryPlus})`);
   ok(/change nothing/.test(out) && r.remote(DEV) === r.remote("main"), `merging dev would change nothing: moved (${out})`);
   rmSync(r.root, { recursive: true, force: true });
+}
+
+// merge-on-green.sh syncs the dev branch only when it ends (an EXIT trap set after the
+// merge), never before main's run is watched: the sync push starts a full dev test run
+// that would take the runner slots main's deploy job needs.
+{
+  const mog = readFileSync(fileURLToPath(new URL("./merge-on-green.sh", import.meta.url)), "utf8")
+    .split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  const merge = mog.indexOf("gh pr merge"), trapAt = mog.search(/trap '[^']*sync-dev-branch\.sh[^']*' EXIT/), watch = mog.indexOf("gh run watch \"$MAIN\"");
+  const direct = mog.split("\n").filter((l) => /sync-dev-branch\.sh/.test(l) && !/^\s*trap /.test(l));
+  ok(merge > -1 && trapAt > merge && watch > trapAt && direct.length === 0, "merge-on-green runs the dev sync from an EXIT trap set after the merge, with no direct call before main's run is watched");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
