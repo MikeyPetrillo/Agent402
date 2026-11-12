@@ -137,7 +137,7 @@ const MIN = 60_000;
 }
 
 // ---- the status Worker ----------------------------------------------------------
-const { judge, ALARMS, syncAlarms } = await import("../workers/status-probe/src/index.js");
+const { judge, ALARMS, syncAlarms, withClearingMark } = await import("../workers/status-probe/src/index.js");
 const GB = "Gateway balance READY to withdraw";
 const SLT = "Shared limits store DEGRADED (Redis)";
 const RS = "Replay store marks PENDING (Redis)";
@@ -277,8 +277,16 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
         mkGh();
         r = await run(good);
         assert.deepEqual([r.opened, created.length], [[], 0], "the healthy word opens nothing");
-        mkGh([{ number: 5, title: T }]);
+        // A closeAfterTwoOk alarm's first clear read marks the issue; the
+        // second in a row closes it.
+        const twoOk = !!ALARMS.find((a) => a.title === T)?.closeAfterTwoOk;
+        mkGh([{ number: 5, title: T, body: "issue" }]);
         r = await run(good);
+        if (twoOk) {
+          assert.deepEqual([r.closed, r.clearing], [[], [T]], "the first clear read marks, it does not close");
+          mkGh([{ number: 5, title: T, body: withClearingMark("issue", "t") }]);
+          r = await run(good);
+        }
         assert.deepEqual(r.closed, [T]);
         if (flicker) {
           mkGh();
@@ -290,6 +298,36 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
         }
       });
     }
+    // speechUpstream: a dead primary with sparse traffic reads probing between
+    // cool-downs, so one probing read is not a recovery: the issue closes only
+    // on two clear reads in a row, and a cooling read between them restarts
+    // the count, so the alarm does not reopen on every cool-down cycle.
+    const SP = NEW_WORDS[4][0];
+    await check(`Worker: "${SP}" closes only on the second clear read in a row`, async () => {
+      assert.equal(ALARMS.find((a) => a.title === SP)?.closeAfterTwoOk, true, "the speech alarm is a two-ok alarm");
+      let body = "issue";
+      const step = async (word) => {
+        mkGh([{ number: 5, title: SP, body }]);
+        const patches = [];
+        const inner = globalThis.fetch;
+        globalThis.fetch = async (url, init = {}) => { if ((init.method || "").toUpperCase() === "PATCH") patches.push(JSON.parse(init.body)); return inner(url, init); };
+        const r = await run({ speechUpstream: { status: word } });
+        globalThis.fetch = inner;
+        for (const p of patches) if (typeof p.body === "string") body = p.body;
+        return r;
+      };
+      let r = await step("probing");
+      assert.deepEqual([r.closed, r.clearing], [[], [SP]], "one probing read marks, it does not close");
+      r = await step("cooling");
+      assert.deepEqual([r.closed, r.opened, body], [[], [], "issue"], "a failed probe (cooling) removes the mark and opens nothing new");
+      r = await step("probing");
+      assert.deepEqual(r.closed, [], "probing, cooling, probing does not close");
+      for (const w of ["probing", "ok"]) {
+        body = withClearingMark("issue", "t");
+        r = await step(w);
+        assert.deepEqual(r.closed, [SP], `a second clear read in a row (${w}) closes`);
+      }
+    });
   } finally { globalThis.fetch = realFetch; }
 }
 
@@ -301,6 +339,7 @@ await writeFile(path.join(dir, "curl"), `#!/usr/bin/env bash
 printf '%s' "$GS_BODY"
 `);
 await writeFile(path.join(dir, "gh"), `#!/usr/bin/env bash
+if [ "$1 $2" = "issue view" ]; then printf '%s' "$ISSUE_BODY"; exit 0; fi
 if [ "$1 $2" = "issue list" ]; then
   jqx=""; prev=""; for a in "$@"; do [ "$prev" = "--jq" ] && jqx="$a"; prev="$a"; done
   printf '%s' "$ISSUES_JSON" | jq -r "$jqx"; exit 0
@@ -309,11 +348,11 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
 `);
 await chmod(path.join(dir, "curl"), 0o755);
 await chmod(path.join(dir, "gh"), 0o755);
-const runStep = async (step, gs, issues = []) => {
+const runStep = async (step, gs, issues = [], body = "") => {
   const log = path.join(dir, "gh.log");
   await writeFile(log, "");
   const r = spawnSync("bash", ["-c", step.run], {
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r", GS_BODY: gs === undefined ? "" : JSON.stringify(gs), ISSUES_JSON: JSON.stringify(issues), GH_LOG: log },
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r", GS_BODY: gs === undefined ? "" : JSON.stringify(gs), ISSUES_JSON: JSON.stringify(issues.map((x) => ({ author: { login: "github-actions[bot]" }, ...x }))), ISSUE_BODY: body, GH_LOG: log },
     encoding: "utf8",
   });
   assert.equal(r.status, 0, r.stderr);
@@ -355,7 +394,17 @@ for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
   });
   await check(`heartbeat: "${T}" closes on the healthy word only, and only its own issue`, async () => {
     for (const row of goodRows) {
-      const calls = await runStep(step, { [field]: row }, [{ number: 9, title: T }, { number: 4, title: `Other ${T}` }]);
+      const issues = [{ number: 9, title: T }, { number: 4, title: `Other ${T}` }];
+      // A closeAfterTwoOk alarm (the status Worker's) closes on the second
+      // clear read in a row: the first marks the body, a marked body closes.
+      if (ALARMS.find((a) => a.title === T)?.closeAfterTwoOk) {
+        const first = await runStep(step, { [field]: row }, issues, "issue");
+        assert.ok(first.length === 1 && first[0][1] === "edit" && first[0][2] === "9" && argOf(first[0], "--body").startsWith("issue\n\nFirst ok read at "), `${JSON.stringify(row)} first read marks: ${JSON.stringify(first)}`);
+        const calls = await runStep(step, { [field]: row }, issues, "issue\n\nFirst ok read at x");
+        assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "9", `${JSON.stringify(row)} second read closes: ${JSON.stringify(calls)}`);
+        continue;
+      }
+      const calls = await runStep(step, { [field]: row }, issues);
       assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "9", `${JSON.stringify(row)}: ${JSON.stringify(calls)}`);
     }
     for (const row of quietRows) assert.deepEqual(await runStep(step, { [field]: row }, [{ number: 9, title: T }]), [], JSON.stringify(row));

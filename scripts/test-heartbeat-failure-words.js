@@ -267,19 +267,24 @@ try {
   // it, an ok read that finds it closes.
   const CT_TITLE = "containedTurns: a scheduled turn is throwing every minute";
   const ctStep = steps.find((s) => String(s.name || "").startsWith("Contained turn check"));
+  // speechUpstream too: a dead primary with sparse traffic reads probing
+  // between cool-downs, so its clear words (ok and probing) close only on the
+  // second clear read in a row, run here on probing.
+  const SP_TITLE = "Speech upstream breaker COOLING (backup voices serving)";
+  const spStep = steps.find((s) => String(s.name || "").startsWith("Speech upstream check"));
   const edited = (calls) => calls.filter((c) => c[0] === "issue" && c[1] === "edit").map((c) => c[c.indexOf("--body") + 1]);
-  for (const [field, badWord, title, st] of [["containedTurns", "repeating", CT_TITLE, ctStep], ["brokenListings", "widespread", BL_TITLE, blStep]]) {
-    await check(`${field}: closes only on the second ok read in a row; a bad read between starts the count again`, async () => {
+  for (const [field, badWord, title, st, okWord = "ok"] of [["containedTurns", "repeating", CT_TITLE, ctStep], ["brokenListings", "widespread", BL_TITLE, blStep], ["speechUpstream", "cooling", SP_TITLE, spStep, "probing"]]) {
+    await check(`${field}: closes only on the second ${okWord} read in a row; a bad read between starts the count again`, async () => {
       assert.ok(st, `heartbeat.yml has the ${field} step`);
       const ISSUE = `/api/gateway-status reports ${field}.status=${badWord}: details.`;
       // First ok read: marked, not closed.
-      let r = await run({ gateway: { [field]: { status: "ok" } }, open: title, body: ISSUE, script: st.run });
+      let r = await run({ gateway: { [field]: { status: okWord } }, open: title, body: ISSUE, script: st.run });
       assert.equal(closed(r.calls).length, 0, "one ok read does not close");
       const marked = edited(r.calls);
       assert.equal(marked.length, 1, "the first ok read marks the issue body");
       assert.ok(marked[0].startsWith(ISSUE + "\n\nFirst ok read at "), JSON.stringify(marked[0]));
       // Second ok read: closes.
-      r = await run({ gateway: { [field]: { status: "ok" } }, open: title, body: marked[0], script: st.run });
+      r = await run({ gateway: { [field]: { status: okWord } }, open: title, body: marked[0], script: st.run });
       assert.equal(closed(r.calls).length, 1, "the second ok read in a row closes");
       assert.deepEqual(edited(r.calls), []);
       // ok, bad, ok: the bad read removes the mark, so the next ok only marks again.
@@ -302,7 +307,7 @@ try {
   // The lookup takes only an issue with exactly the alarm title opened by the
   // workflow bot or the repository owner (the status Worker's rule), and the
   // mark counts only after a blank line (where the Worker writes and reads it).
-  for (const [field, badWord, title, st] of [["containedTurns", "repeating", CT_TITLE, ctStep], ["brokenListings", "widespread", BL_TITLE, blStep]]) {
+  for (const [field, badWord, title, st] of [["containedTurns", "repeating", CT_TITLE, ctStep], ["brokenListings", "widespread", BL_TITLE, blStep], ["speechUpstream", "cooling", SP_TITLE, spStep]]) {
     await check(`${field}: the issue lookup is the alarm author's exact title only; the mark counts only after a blank line`, async () => {
       const ISSUE = `/api/gateway-status reports ${field}.status=${badWord}: details.`;
       const outsider = { number: 7, title, author: { login: "someone-else" } };

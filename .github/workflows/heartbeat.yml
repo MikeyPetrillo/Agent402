@@ -745,9 +745,10 @@ jobs:
       # (speechUpstream, src/tools/tts-kit.js): cooling pages (the breaker is
       # open and calls go to the backup voices); ok and probing clear (probing:
       # the cool-down ended and the next call tests the primary link, so the
-      # page's claim no longer holds; with no speech traffic the word stays
-      # probing until a call, and a failed probe reads cooling again and
-      # pages); unknown and absent do neither.
+      # page's claim no longer holds), but only on the second such read in a
+      # row: a dead primary with sparse traffic reads probing, then cooling
+      # again on its next failed probe, and one probing read between two
+      # cool-downs is not a recovery. Unknown and absent do neither.
       # The status Worker runs the same check under the same title.
       - name: Speech upstream check (alarm while the breaker cools)
         if: always()
@@ -758,15 +759,42 @@ jobs:
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.speechUpstream.status // "unknown"' 2>/dev/null || echo unknown)
           echo "speechUpstream: $STATUS"
           TITLE="Speech upstream breaker COOLING (backup voices serving)"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
-          if [ "$STATUS" = "cooling" ]; then
-            if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports speechUpstream.status=cooling: the primary speech link throttled or failed repeatedly, so its breaker is open and /api/tts and /api/tts-hd answer from the backup voices for the cool-down, which doubles on each trip up to its most. Buyers are still served. Check the [tts] lines in the server log and the upstream's status and credits. Auto-closes when the word reads ok (a call served by the primary link) or probing (the cool-down ended: the next call tries the primary link, so the backups are no longer serving by default)." || true
-            fi
-          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "probing" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "speechUpstream is ${STATUS}; closing." || true
-          fi
+          # The mark counts only on its own line after a blank line, where
+          # the status Worker writes and reads it.
+          MARK="First ok read at "
+          NLMARK=$'\n\n'"$MARK"
+          # Only an issue with exactly this title, opened by the workflow bot
+          # or the repository owner, is the alarm (the status Worker's rule).
+          EXISTING=$(ALARM_NAME="$TITLE" ALARM_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ALARM_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
+          case "$STATUS" in
+            cooling)
+              if [ -z "$EXISTING" ]; then
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                  --body "/api/gateway-status reports speechUpstream.status=cooling: the primary speech link throttled or failed repeatedly, so its breaker is open and /api/tts and /api/tts-hd answer from the backup voices for the cool-down, which doubles on each trip up to its most. Buyers are still served. Check the [tts] lines in the server log and the upstream's status and credits. Auto-closes after two reads in a row of ok (a call served by the primary link) or probing (the cool-down ended: the next call tries the primary link, so the backups are no longer serving by default)." || true
+              else
+                # A bad read after a first ok read starts the count again.
+                BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
+                case "$BODY_NOW" in
+                  *"$NLMARK"*) gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW%%$'\n\n'"$MARK"*}" >/dev/null 2>&1 || true ;;
+                esac
+              fi
+              ;;
+            ok|probing)
+              # Closes on the second such read in a row (this step's or the
+              # status Worker's); the first leaves a mark line in the body.
+              if [ -n "$EXISTING" ]; then
+                BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
+                case "$BODY_NOW" in
+                  *"$NLMARK"*)
+                    gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "speechUpstream is ${STATUS}, the second clear read in a row; closing." || true
+                    ;;
+                  *)
+                    gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW}"$'\n\n'"${MARK}$(date -u +%FT%TZ); closes on the next ok read." >/dev/null 2>&1 || true
+                    ;;
+                esac
+              fi
+              ;;
+          esac
 
       # The first-call allowance (firstCallAllowance, src/first-call-allowance.js),
       # present only while FIRST_CALL_ALLOWANCE=on: unavailable pages (its

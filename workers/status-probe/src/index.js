@@ -1035,14 +1035,16 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // (speechUpstream, src/tools/tts-kit.js): cooling pages (the breaker is
     // open and calls go to the backup voices); ok and probing clear (probing:
     // the cool-down ended and the next call tests the primary link, so the
-    // page's claim no longer holds; with no speech traffic the word stays
-    // probing until a call, and a failed probe reads cooling again and
-    // pages); unknown and absent do neither.
+    // page's claim no longer holds), but only on the second such read in a
+    // row: a dead primary with sparse traffic reads probing, then cooling
+    // again on its next failed probe, and one probing read between two
+    // cool-downs is not a recovery. Unknown and absent do neither.
     // Title and body match heartbeat.yml's.
     title: "Speech upstream breaker COOLING (backup voices serving)",
+    closeAfterTwoOk: true,
     verdict: ({ gateway: b }) => wordVerdict(b.speechUpstream?.status, ["cooling"], ["ok", "probing"]),
     body: () =>
-      "/api/gateway-status reports speechUpstream.status=cooling: the primary speech link throttled or failed repeatedly, so its breaker is open and /api/tts and /api/tts-hd answer from the backup voices for the cool-down, which doubles on each trip up to its most. Buyers are still served. Check the [tts] lines in the server log and the upstream's status and credits. Auto-closes when the word reads ok (a call served by the primary link) or probing (the cool-down ended: the next call tries the primary link, so the backups are no longer serving by default).",
+      "/api/gateway-status reports speechUpstream.status=cooling: the primary speech link throttled or failed repeatedly, so its breaker is open and /api/tts and /api/tts-hd answer from the backup voices for the cool-down, which doubles on each trip up to its most. Buyers are still served. Check the [tts] lines in the server log and the upstream's status and credits. Auto-closes after two reads in a row of ok (a call served by the primary link) or probing (the cool-down ended: the next call tries the primary link, so the backups are no longer serving by default).",
   },
   {
     // The first-call allowance (firstCallAllowance, src/first-call-allowance.js),

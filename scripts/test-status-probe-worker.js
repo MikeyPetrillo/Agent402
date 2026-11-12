@@ -601,8 +601,11 @@ for (const [name, over, detail] of failCases) {
   // reads ok at once, so one ok read across a deploy is not a recovery. They
   // close on the second ok read in a row; the first marks the issue body (the
   // same mark heartbeat.yml writes), a bad read removes the mark.
-  for (const [field, badWord, title] of [["containedTurns", "repeating", "containedTurns: a scheduled turn is throwing every minute"], ["brokenListings", "widespread", "brokenListings: seller listings are failing to read across many origins"]]) {
-    await acheck(`${field}: closes only on the second ok read in a row; a bad read between starts the count again`, async () => {
+  // speechUpstream too, on its probing word: a dead primary with sparse
+  // traffic reads probing between cool-downs, and one such read is not a
+  // recovery, so the issue does not reopen on every cool-down cycle.
+  for (const [field, badWord, title, okWord = "ok"] of [["containedTurns", "repeating", "containedTurns: a scheduled turn is throwing every minute"], ["brokenListings", "widespread", "brokenListings: seller listings are failing to read across many origins"], ["speechUpstream", "cooling", "Speech upstream breaker COOLING (backup voices serving)", "probing"]]) {
+    await acheck(`${field}: closes only on the second ${okWord} read in a row; a bad read between starts the count again`, async () => {
       const { CLEARING_MARK } = await import("../workers/status-probe/src/index.js");
       const ISSUE = `/api/gateway-status reports ${field}.status=${badWord}: details.`;
       let body = ISSUE;
@@ -616,13 +619,13 @@ for (const [name, over, detail] of failCases) {
         for (const p of patches) if (typeof p.body === "string") body = p.body;
         return { r, patches };
       };
-      let { r, patches } = await run("ok");
+      let { r, patches } = await run(okWord);
       assert.deepEqual(r.closed, [], "one ok read does not close");
       assert.deepEqual(r.clearing, [title]);
       assert.equal(patches.length, 1);
       assert.ok(body.startsWith(`${ISSUE}\n\n${CLEARING_MARK}`), body);
       const markedBody = body;
-      ({ r, patches } = await run("ok"));
+      ({ r, patches } = await run(okWord));
       assert.deepEqual(r.closed, [title], "the second ok read in a row closes");
       assert.deepEqual(patches, [{ state: "closed" }]);
       body = markedBody;
@@ -631,7 +634,7 @@ for (const [name, over, detail] of failCases) {
       assert.deepEqual(r.opened, []);
       ({ r, patches } = await run(badWord));
       assert.deepEqual(patches, [], "a bad read with no mark writes nothing");
-      ({ r, patches } = await run("ok"));
+      ({ r, patches } = await run(okWord));
       assert.deepEqual(r.closed, [], "after ok, bad, the next ok marks again rather than closing");
       for (const b of [ISSUE, markedBody]) {
         body = b;
