@@ -19,7 +19,7 @@ export function webhooksPage(baseUrl) {
 
   const crumbs = breadcrumbTrail(baseUrl, [["Home", "/"], ["Docs", "/docs"], ["Webhooks & Callbacks", "/docs/webhooks"]]);
   const body = `
-  <div class="ml-wh-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:200px 1fr;gap:44px;align-items:start;">
+  <div class="ml-wh-grid" style="max-width:1180px;margin:0 auto;padding:50px 30px 64px;display:grid;grid-template-columns:200px minmax(0,1fr);gap:44px;align-items:start;">
 
     <!-- TOC -->
     <aside class="ml-wh-toc" style="position:sticky;top:92px;font-family:var(--font-mono);font-size:var(--fs-sm);">
