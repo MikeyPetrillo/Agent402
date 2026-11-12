@@ -27,11 +27,6 @@ though the file does not mention it. Variables are unmanaged
 or deleted. `scripts/test-railway-iac.js` keeps this table in step with the
 IaC file and keeps the retired config files out of the repository.
 
-A service that still reads a Config as Code path has its own values underneath
-unset. That fixes the order below: apply first, so the service holds its own
-values, and only then stop it reading the file. Clearing the path first would
-leave the worker without a Dockerfile path.
-
 ## Owner steps before 2026-12-01
 
 Run from a clone of `main` linked to the production environment
