@@ -77,18 +77,59 @@ export function runWhole(steps) {
   return r.value;
 }
 
-/** Run a step generator across event-loop turns: a setImmediate before each
- *  slice, each slice about `sliceMs` of loop time (measured, not counted), so
- *  the work never shares the caller's turn. Resolves its return value, the
- *  same one runWhole gives. */
-export async function runSliced(steps, { sliceMs = SDN_PARSE_SLICE_MS } = {}) {
-  for (;;) {
-    await new Promise((resolve) => setImmediate(resolve));
-    const until = performance.now() + sliceMs;
-    let r;
-    do r = steps.next(); while (!r.done && performance.now() < until);
-    if (r.done) return r.value;
+/** Sort strings (default code-unit order, the same as Array#sort) as step
+ *  generator: sorted runs of SORT_RUN, then bottom-up merges, yielding every
+ *  SORT_STEP element moves. runSliced(sortSteps(a)) equals [...a].sort(). */
+const SORT_RUN = 4096, SORT_STEP = 4096;
+export function* sortSteps(items) {
+  let a = [];
+  for (const v of items) { a.push(v); if (a.length % SORT_STEP === 0) yield; }
+  for (let i = 0; i < a.length; i += SORT_RUN) {
+    const run = a.slice(i, i + SORT_RUN).sort();
+    for (let j = 0; j < run.length; j++) a[i + j] = run[j];
+    yield;
   }
+  let b = new Array(a.length);
+  for (let width = SORT_RUN; width < a.length; width *= 2) {
+    let moves = 0;
+    for (let lo = 0; lo < a.length; lo += 2 * width) {
+      const mid = Math.min(lo + width, a.length), hi = Math.min(lo + 2 * width, a.length);
+      let i = lo, j = mid, k = lo;
+      while (i < mid && j < hi) { b[k++] = a[j] < a[i] ? a[j++] : a[i++]; if (++moves % SORT_STEP === 0) yield; }
+      while (i < mid) { b[k++] = a[i++]; if (++moves % SORT_STEP === 0) yield; }
+      while (j < hi) { b[k++] = a[j++]; if (++moves % SORT_STEP === 0) yield; }
+    }
+    [a, b] = [b, a];
+  }
+  return a;
+}
+
+/** Run a step generator across event-loop turns: each slice about `sliceMs`
+ *  of loop time (measured, not counted) on a loop pass of its own, never the
+ *  caller's turn. Resolves its return value, the same one runWhole gives.
+ *
+ *  Every runner shares one queue and one setImmediate: Node runs every
+ *  immediate queued for a pass back to back, so two readers each scheduling
+ *  their own slices (the tools' maps and the screen's set, built from one
+ *  list at once) held one pass for two slices. Jobs take turns, one slice
+ *  per pass. */
+const sliceQueue = [];
+let sliceDriving = false;
+export function runSliced(steps, { sliceMs = SDN_PARSE_SLICE_MS } = {}) {
+  return new Promise((resolve, reject) => {
+    sliceQueue.push({ steps, sliceMs, resolve, reject });
+    if (!sliceDriving) { sliceDriving = true; setImmediate(driveSlices); }
+  });
+}
+function driveSlices() {
+  const job = sliceQueue.shift();
+  try {
+    const until = performance.now() + job.sliceMs;
+    let r;
+    do r = job.steps.next(); while (!r.done && performance.now() < until);
+    if (r.done) job.resolve(r.value); else sliceQueue.push(job);
+  } catch (e) { job.reject(e); }
+  if (sliceQueue.length) setImmediate(driveSlices); else sliceDriving = false;
 }
 
 // The export is about 30 MB and 19,000 entries: read in one turn it held the

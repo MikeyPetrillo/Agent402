@@ -38,7 +38,7 @@ import { existsSync } from "node:fs";
 import { createJsonDocument } from "./json-document.js";
 import { leased, trackStoreReady } from "./state-db.js";
 import { shared, noteSharedLimitsDegraded } from "./shared-limits.js";
-import { parseSdnXml, sdnEvmAddresses, sdnEvmAddressesAsync, loadSdnList } from "./ofac-sdn.js";
+import { parseSdnXml, sdnEvmAddresses, sdnEvmAddressesAsync, loadSdnList, runSliced, sortSteps } from "./ofac-sdn.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { envAtLeast as envMs } from "./env-num.js";
 
@@ -136,7 +136,7 @@ export async function refreshSanctionsScreen({ fetchImpl = globalThis.fetch, now
   state.source = "fetch";
   state.lastError = null;
   await new Promise((resolve) => setImmediate(resolve));
-  const body = { v: 1, loadedAt: list.fetchedAt, publishDate: parsed.publishDate, perAsset: parsed.perAsset, addresses: [...parsed.addresses].sort() };
+  const body = { v: 1, loadedAt: list.fetchedAt, publishDate: parsed.publishDate, perAsset: parsed.perAsset, addresses: await runSliced(sortSteps(parsed.addresses)) };
   const stored = await getDoc().save(body).catch(() => false);
   if (!stored) log(`[sanctions-screen] list loaded but not stored: ${String(getDoc().lastError || "save refused").slice(0, 120)}`);
   console.log(`[sanctions-screen] OFAC SDN loaded: ${parsed.addresses.size} EVM addresses (${Object.entries(parsed.perAsset).map(([k, v]) => `${k} ${v}`).join(", ")})${state.publishDate ? `, published ${state.publishDate}` : ""}`);
@@ -493,6 +493,9 @@ export async function screenFunding(payers, { fetchImpl = globalThis.fetch, now 
 export function __clearOneHopLocalForTests() { oneHopLocal = new Map(); }
 
 /** Test seam: forget everything (and the store handle, so env changes apply). */
+/** Tests only: hold the store (a stand-in with save()) so a run can leave
+ *  out the stored write, which is one turn sized by the address count. */
+export function __setSanctionsScreenStoreForTests(d) { doc = d; }
 export function __resetSanctionsScreenForTests() {
   if (timer) clearTimeout(timer);
   timer = null; ready = null; doc = null; running = false;

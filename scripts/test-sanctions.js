@@ -18,7 +18,7 @@ import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sdnCryptoAddresses, sdnNames, sdnCryptoAddressSteps, sdnNameSteps, lookupAddress, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
-import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, sdnEvmAddressesAsync, runSliced, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests, __holdSdnListForTests, __parseSdnResponseForTests, SDN_ENTRY_MAX_CHARS } from "../src/ofac-sdn.js";
+import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, sdnEvmAddressesAsync, runSliced, sortSteps, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests, __holdSdnListForTests, __parseSdnResponseForTests, SDN_ENTRY_MAX_CHARS } from "../src/ofac-sdn.js";
 import { bound, gapMeter, leastOurs, OURS_READING } from "./lib/ours-clock.js";
 // The payout map a load stores goes to a scratch file, never the shared default.
 process.env.SANCTIONS_PAYOUT_FILE = join(mkdtempSync(join(tmpdir(), "sanctions-")), "payout.json");
@@ -346,6 +346,24 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   eq(await runSliced(sdnCryptoAddressSteps(loaded)), sdnCryptoAddresses(loaded), "the sliced address map equals sdnCryptoAddresses");
   eq(await runSliced(sdnNameSteps(loaded)), sdnNames(loaded), "the sliced name list equals sdnNames");
   eq(await sdnEvmAddressesAsync(loaded), sdnEvmAddresses(loaded), "the sliced EVM set equals sdnEvmAddresses");
+  // The sliced sort orders exactly as Array#sort, at sizes off the run width.
+  for (const size of [0, 1, 4095, 4097, 40_000 + 3]) {
+    const xs = Array.from({ length: size }, (_, i) => ["0x", "0X", "ab", "\u00e9", "\ud83d\ude00", ""][i % 6] + ((i * 7919) % 104729).toString(36));
+    eq(await runSliced(sortSteps(new Set(xs))), [...new Set(xs)].sort(), `the sliced sort equals Array#sort on ${size} strings`);
+  }
+  // Two readers slicing at once never share a loop pass: Node runs every
+  // immediate queued for a pass back to back, so per-runner scheduling ran
+  // one slice of each in the same pass. A 1 ms timer marks the passes.
+  {
+    let pass = 0;
+    const tick = setInterval(() => { pass++; }, 1);
+    const seenIn = new Map();
+    const job = function* (id) { for (let k = 0; k < 60; k++) { const t = performance.now(); while (performance.now() - t < 0.5); (seenIn.get(pass) || seenIn.set(pass, new Set()).get(pass)).add(id); yield; } };
+    await Promise.all([runSliced(job("a")), runSliced(job("b"))]);
+    clearInterval(tick);
+    const shared = [...seenIn.values()].filter((ids) => ids.size > 1).length;
+    ok(shared === 0, `two slicing readers take turns, one slice per loop pass (${shared} of ${seenIn.size} passes ran both)`);
+  }
 
   // A whole refresh in production shape: the sanctions tools' listener
   // registered (it adopts every list fetched), the payment-party screen and
@@ -362,10 +380,12 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   const oneTurn = part(() => sdnCryptoAddresses(loaded)) + part(() => sdnNames(loaded)) + part(() => sdnEvmAddresses(loaded))
     + part(() => JSON.stringify([...sdnCryptoAddresses(loaded).values()].map((v) => ({ address: v.address, asset: v.asset, entity: v.entity, sdnId: v.sdnId }))))
     + part(() => JSON.stringify([...sdnEvmAddresses(loaded).addresses].sort()));
+  // (Its addresses are listed out of order, a bijection mod a prime, so the
+  // stored copy's sort does real work.)
   // Control: on a list with ten times the addresses per entry, the builders
   // in one turn hold the loop past the bound (both readers adopting it, below,
   // stay under it only because they run these builders sliced).
-  const wide = { entries: loaded.entries.map((e, i) => ({ ...e, addresses: Array.from({ length: 20 }, (_, k) => ({ asset: "ETH", address: "0x" + String(i * 100 + k).padStart(40, "0") })) })), digitalCurrencyIds: 400000, publishDate: "11/14/2026", bytes: 0 };
+  const wide = { entries: loaded.entries.map((e, i) => ({ ...e, addresses: Array.from({ length: 20 }, (_, k) => ({ asset: "ETH", address: "0x" + String(((i * 100 + k) * 7919) % 2_000_003).padStart(40, "0") })) })), digitalCurrencyIds: 400000, publishDate: "11/14/2026", bytes: 0 };
   const wideTurn = leastOurs(() => { sdnCryptoAddresses(wide); sdnNames(wide); sdnEvmAddresses(wide); }).ms;
   ok(wideTurn > turn.ms, `control: the builders in one turn on a ${wide.entries.length * 20} address list hold the loop ${Math.round(wideTurn)} ms (${turn.note})`);
   await settle();
@@ -402,11 +422,15 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   clearInterval(probe); look();
   ok(seen.size >= 2 && [...seen].every((v) => v === "40000/20000/40000" || v === "30000/15000/30000"), `a screen during adoption reads one whole list (seen: ${[...seen].join(", ")})`);
 
-  // Both readers adopt the wide list (held as fetched; a newer stored payout
-  // map is seeded so the tools write no payout body for it, which is one
-  // turn of its own sized by the list).
+  // Both readers adopt the wide list (held as fetched). The stored copies are
+  // left out of this run: each is one serialization sized by the address
+  // count (this list is about 400x production's), written on its own turn
+  // after the swap, and timed at production size below. The payout map is
+  // seeded newer so the tools write none; the screen gets a stand-in store.
   kit.__resetSanctionsForTests(); screen.__resetSanctionsScreenForTests();
   kit.__seedPayoutListForTests(undefined, { fetchedAt: Date.now() + 3600_000 });
+  let wideSaved = null;
+  screen.__setSanctionsScreenStoreForTests({ save: async (b) => { wideSaved = b.addresses.length; return true; }, read: async () => ({ ok: false }), lastError: null });
   __holdSdnListForTests({ ...wide, fetchedAt: Date.now() });
   await settle();
   const wideMeter = gapMeter(1);
@@ -417,8 +441,15 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   await settle();
   const wideGap = wideMeter.stop();
   console.log(`test-sanctions: control list, builders ${Math.round(wideTurn)} ms in one turn, worst turn ${Math.round(wideGap.worst)} ms with both readers adopting it sliced`);
-  ok(wideScreened.evmAddresses === 400000 && kit.sanctionsStatus().addresses === 400000 && wideGap.worst < turn.ms,
+  ok(wideScreened.evmAddresses === 400000 && kit.sanctionsStatus().addresses === 400000 && wideSaved === 400000 && wideGap.worst < turn.ms,
     `both readers adopt the wide list without holding the loop past ${turn.ms} ms (worst turn ${Math.round(wideGap.worst)} ms; ${turn.note})`);
+  // The stored copy's serialization at production size (about 1,000 EVM
+  // addresses; 20,000 here, so 20x) stays inside one bound.
+  {
+    const prodSized = Array.from({ length: 20_000 }, (_, i) => "0x" + String(i).padStart(40, "0"));
+    const w = leastOurs(() => JSON.stringify({ v: 1, addresses: prodSized }));
+    ok(w.ms < turn.ms, `the stored copy's write at 20x production's address count is one short turn (${Math.round(w.ms)} ms; ${turn.note})`);
+  }
   kit.__resetSanctionsForTests(); screen.__resetSanctionsScreenForTests();
   __resetSdnListForTests();
 }
