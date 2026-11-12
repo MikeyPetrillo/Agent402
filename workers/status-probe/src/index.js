@@ -1007,7 +1007,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     title: "External spend global ceiling REFUSING",
     verdict: ({ gateway: b }) => wordVerdict(b.externalSpendGlobal?.status, ["refusing"], ["ok", "off"]),
     body: () =>
-      "/api/gateway-status reports externalSpendGlobal.status=refusing: the unsettled spend our route-execute wallets have put out to outside sellers, across every payer, reached the global ceiling, or a purchase was refused on it within the last minute. A purchase past the ceiling is refused and not charged (external routing reads as paused for every buyer) until earlier spends settle. Check the settle path for buyers whose payments are not landing (the operator views of /api/gateway-status and /__operator/refunds.json) and the [spend-guard] lines in the server log. Auto-closes when the word reads ok or off.",
+      "/api/gateway-status reports externalSpendGlobal.status=refusing: the unsettled spend our route-execute wallets have put out to outside sellers, across every payer, reached the global ceiling, or a purchase was refused on it within the last minute. A route-execute purchase past the ceiling is refused before our wallet pays the seller (external routing reads as paused for every buyer) until earlier spends settle. Check the settle path for buyers whose payments are not landing (the operator views of /api/gateway-status and /__operator/refunds.json) and the [spend-guard] lines in the server log. Auto-closes when the word reads ok or off.",
   },
   {
     // Solana transaction-history reads (solanaHistory,

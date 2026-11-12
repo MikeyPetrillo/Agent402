@@ -688,7 +688,7 @@ jobs:
           if [ "$STATUS" = "refusing" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports externalSpendGlobal.status=refusing: the unsettled spend our route-execute wallets have put out to outside sellers, across every payer, reached the global ceiling, or a purchase was refused on it within the last minute. A purchase past the ceiling is refused and not charged (external routing reads as paused for every buyer) until earlier spends settle. Check the settle path for buyers whose payments are not landing (the operator views of /api/gateway-status and /__operator/refunds.json) and the [spend-guard] lines in the server log. Auto-closes when the word reads ok or off." || true
+                --body "/api/gateway-status reports externalSpendGlobal.status=refusing: the unsettled spend our route-execute wallets have put out to outside sellers, across every payer, reached the global ceiling, or a purchase was refused on it within the last minute. A route-execute purchase past the ceiling is refused before our wallet pays the seller (external routing reads as paused for every buyer) until earlier spends settle. Check the settle path for buyers whose payments are not landing (the operator views of /api/gateway-status and /__operator/refunds.json) and the [spend-guard] lines in the server log. Auto-closes when the word reads ok or off." || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "externalSpendGlobal is ${STATUS}; closing." || true
