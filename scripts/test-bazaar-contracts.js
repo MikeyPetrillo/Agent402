@@ -301,6 +301,7 @@ try {
     if (!outputSchema) fail(route, "bazaar extension has no output schema");
     else if (pointer) has.outputSchemaPointer++;
     else has.outputSchema++;
+    if (/Federal Reserve Bank of St\. Louis/.test(endpoint.description || "") && !/not endorsed or certified by the Federal Reserve Bank of St\. Louis\.$/.test(desc)) fail(route, "listing lost the FRED notice its catalog text carries");
     if (WHOLE_LISTING_ROUTES.has(route)) {
       wholeListingSeen++;
       const source = BAZAAR_DESCRIPTIONS[endpoint.slug] || endpoint.description;

@@ -43,6 +43,19 @@ ok(bazaarCapDescription("Read from a store. ?key=k returns the value; omit key t
   `cap: a sentence opening with a hint goes, later sentences stay, and a hint clause after a semicolon goes with its clause (got ${JSON.stringify(bazaarCapDescription("Read from a store. ?key=k returns the value; omit key to list keys. Keys expire on their TTL. Reads your own store by default; add ?owner=0x1 to read a granted one."))})`);
 ok(bazaarCapDescription("Look up a MIME type by file extension (?ext=png) or extensions by MIME type (?type=image/png). Covers ~50 common types.") === "Look up a MIME type by file extension or extensions by MIME type. Covers ~50 common types.", "cap: a hint in parentheses is removed in place");
 ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1 This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data.", "cap: an abbreviation (St.) does not end a sentence, so no fragment is left behind");
+ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data. This product is not endorsed by the Federal Reserve Bank of St. Louis.", "cap: a hint that ends its own sentence goes alone, and the notice after it stays");
+// The FRED terms require their notice on every surface that serves the data:
+// each route whose catalog text carries it keeps it in its listing copy.
+{
+  const NOTICE = /not endorsed or certified by the Federal Reserve Bank of St\. Louis\.$/;
+  const fred = (res?.endpoints || []).filter((e) => /Federal Reserve Bank of St\. Louis/.test(e.description || ""));
+  ok(fred.length >= 7, `FRED routes found in the catalog (${fred.length})`);
+  for (const e of fred) {
+    const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS[e.slug] || e.description);
+    ok(NOTICE.test(listed), `${e.slug}: the listing keeps the FRED notice (${listed.slice(-60)})`);
+    ok(listed.length <= CHALLENGE_SHORT_DESCRIPTION_MAX || e.slug !== "fred-release-observations", `${e.slug}: the listing sits under the 402 budget's description cut (${listed.length})`);
+  }
+}
 {
   const { bazaarTagsFor, BAZAAR_ICON_PATH } = await import("../src/payments.js");
   ok(JSON.stringify(bazaarTagsFor({ category: "time", tags: ["cron", "schedule"], slug: "cron-next" })) === JSON.stringify(["time", "cron", "schedule", "cron-next", "agents"]), "tags: category, own tags, then the slug, and a filler only when those run out");

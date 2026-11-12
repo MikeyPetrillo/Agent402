@@ -793,7 +793,7 @@ MACRO_TOOLS.push(
   {
     route: "GET /api/fred-series", name: "FRED time series", slug: "fred-series", category: "data", price: "$0.005",
     description:
-      "Fetch any of FRED's ~800,000 economic time series by series ID - GDP (GDPC1), CPI (CPIAUCSL), unemployment (UNRATE), fed funds (DFF), and so on. Supports date windowing and the standard FRED units transformations (lin, chg, ch1, pch, pc1, pca, cca, log). ?seriesId=GDPC1&startDate=2018-01-01&endDate=2023-12-31&units=pc1 This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Fetch any of FRED's ~800,000 economic time series by series ID - GDP (GDPC1), CPI (CPIAUCSL), unemployment (UNRATE), fed funds (DFF), and so on. Supports date windowing and the standard FRED units transformations (lin, chg, ch1, pch, pc1, pca, cca, log). ?seriesId=GDPC1&startDate=2018-01-01&endDate=2023-12-31&units=pc1. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed", "macro", "economic-data", "st-louis-fed"],
     discovery: {
       input: { seriesId: "GDPC1", startDate: "2018-01-01", endDate: "2022-12-31" },
@@ -829,7 +829,7 @@ MACRO_TOOLS.push(
   {
     route: "GET /api/fred-search", name: "FRED catalog search", slug: "fred-search", category: "data", price: "$0.005",
     description:
-      "Full-text search across FRED's ~800,000 economic time series. Returns series IDs (use with /api/fred-series), titles, frequency, units, and a popularity score. ?q=unemployment+rate&limit=10 This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Full-text search across FRED's ~800,000 economic time series. Returns series IDs (use with /api/fred-series), titles, frequency, units, and a popularity score. ?q=unemployment+rate&limit=10. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "search", "catalog", "economic-data", "st-louis-fed", "macro", "time-series"],
     discovery: {
       input: { q: "consumer price index", limit: 5 },
@@ -864,7 +864,7 @@ MACRO_TOOLS.push(
   {
     route: "GET /api/fred-series-info", name: "FRED series metadata", slug: "fred-series-info", category: "data", price: "$0.005",
     description:
-      "Metadata for a FRED series: title, frequency, units, seasonal adjustment, observation date range, and popularity. Use before /api/fred-series to confirm the series fits your needs. ?seriesId=UNRATE This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Metadata for a FRED series: title, frequency, units, seasonal adjustment, observation date range, and popularity. Use before /api/fred-series to confirm the series fits your needs. ?seriesId=UNRATE. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "series", "metadata", "economic-data", "st-louis-fed", "macro"],
     discovery: {
       input: { seriesId: "UNRATE" },
