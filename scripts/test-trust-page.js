@@ -216,6 +216,7 @@ ok(llmsFullTxt(BASE, {}).includes(`(${BASE}/trust)`), "llms-full.txt lists /trus
     // One email row names every role the operator mailbox answers, so the address is printed once in the table.
     const table = (html.match(/<table class="co-contacts"[\s\S]*?<\/table>/) || [""])[0];
     ok((table.match(/mailto:mike@agent402\.tools/g) || []).length === 1 && /Support, billing and refunds, legal and abuse/.test(table), "/company prints the operator mailbox once, with the roles it answers");
+    ok((pageText(html).match(/mike@agent402\.tools/g) || []).length === 1, "/company shows the operator mailbox as text once (the contact table); the form and the footer link to it without repeating it");
   }
   ok(!/<th scope="row">Mail<\/th>/.test(html), "with COMPANY_POSTAL_ADDRESS unset, no postal row is printed");
   // Every role reads one of the two existing mailboxes: no invented addresses.
