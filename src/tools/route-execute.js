@@ -827,6 +827,13 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // and with none left the buyer gets a 502 and is not charged.
             if (paid && !paid.quote && !paid.receipt) {
               const why = unpaidNonAnswerReason(paid.result, ext.guaranteedPaths);
+              // Observed like any delivery against what the seller guaranteed
+              // (a missed promise), so a seller that keeps answering this way
+              // is seen as not keeping its contract. Recording only; it moves
+              // no money and decides nothing here.
+              if (why && ext.guaranteedPaths?.length && ext.route) {
+                observeDelivery({ origin: ext.seller, method: ext.method || "POST", route: ext.route, guaranteedPaths: ext.guaranteedPaths, body: paid.result });
+              }
               if (why) throw Object.assign(bad(`Seller answered without taking payment and the answer is not usable (${why})`, 502), { attribution: "upstream", unpaidNonAnswer: why });
             }
           } catch (e) {

@@ -99,6 +99,52 @@ const OTHER_LISTED = "0x" + "77".repeat(20);
   ok(noList.next && x402PayerScreenView().servedUnscreened === 1, "no payout list loaded: served unscreened and counted, as the EVM path does");
   const none = await run({});
   ok(none.next && x402PayerScreenView().screened === 2, "no payment header: passes without a screen");
+  // AN SPL MULTISIG IN A LOOKUP TABLE. The listed wallet X is the multisig's
+  // signing member; the transfer's authority M is a lookup-table entry, so no
+  // single payer reads from it. Every required signer except the fee payer is
+  // screened, so X is refused; an unlisted X passes (never limit a buyer).
+  {
+    const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const u64 = (n) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(n), true); return b; };
+    const X = await kit.generateKeyPairSigner();
+    const M = (await kit.generateKeyPairSigner()).address, src = (await kit.generateKeyPairSigner()).address, payTo = (await kit.generateKeyPairSigner()).address, table = (await kit.generateKeyPairSigner()).address;
+    const transferIx = { programAddress: kit.address(TOKEN), accounts: [
+      { address: kit.address(src), role: kit.AccountRole.WRITABLE },
+      { address: kit.address(USDC), role: kit.AccountRole.READONLY },
+      { address: kit.address(payTo), role: kit.AccountRole.WRITABLE },
+      { address: kit.address(M), role: kit.AccountRole.READONLY },
+      { address: X.address, role: kit.AccountRole.READONLY_SIGNER, signer: X },
+    ], data: new Uint8Array([12, ...u64(1000), 6]) };
+    const build = async (version, ixs, lut) => {
+      let m = kit.pipe(kit.createTransactionMessage({ version }), (q) => kit.setTransactionMessageFeePayer(feePayer.address, q), (q) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, q), (q) => kit.appendTransactionMessageInstructions(ixs, q));
+      if (lut) m = kit.compressTransactionMessageUsingAddressLookupTables(m, { [table]: [kit.address(M), kit.address(payTo)] });
+      return kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction([X.keyPair], kit.compileTransaction(m)));
+    };
+    const hdr = (tx) => b64({ x402Version: 2, accepted: { scheme: "exact", network: SOLANA, extra: { feePayer: feePayer.address } }, payload: { transaction: tx } });
+    const lutTx = await build(0, [transferIx], true);
+    ok(Buffer.from(lutTx, "base64").includes(Buffer.from(kit.getAddressEncoder().encode(kit.address(M)))) === false, "control: the multisig authority is not a static key (it sits in the lookup table)");
+    // A v0 message with more instructions than the reader walks: only the
+    // signer list the installed kit decodes (what @x402/svm verified) names X.
+    const memo = (i) => ({ programAddress: kit.address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), accounts: [{ address: X.address, role: kit.AccountRole.READONLY_SIGNER, signer: X }], data: new TextEncoder().encode(String(i)) });
+    const wideTx = await build(0, [transferIx, ...Array.from({ length: 17 }, (_, i) => memo(i))], true);
+    const v1Tx = await build(1, [transferIx], false);
+    const unrelated = (await kit.generateKeyPairSigner()).address;
+    for (const [label, tx] of [["v0, multisig authority in a lookup table", lutTx], ["v0, more instructions than the reader walks", wideTx], ["v1 (message-first envelope)", v1Tx]]) {
+      K.__seedPayoutListForTests([{ address: X.address, asset: "SOL", entity: "TEST FIXTURE", sdnId: "9" }]);
+      __resetX402PayerScreenForTests();
+      const r = await run({ "payment-signature": hdr(tx) });
+      ok(!r.next && r.code === 403 && r.body?.charged === false, `${label}: a listed signing member is refused 403 before the handler (${r.code}, next ${r.next})`);
+      K.__seedPayoutListForTests([{ address: unrelated, asset: "SOL", entity: "TEST FIXTURE", sdnId: "10" }]);
+      const c = await run({ "payment-signature": hdr(tx) });
+      ok(c.next && c.code === null && x402PayerScreenView().screened === 2, `CONTROL ${label}: the same payment from an unlisted wallet is served and counted as screened`);
+    }
+    // An unreadable Solana transaction keeps the screen's behavior: it passes.
+    K.__seedPayoutListForTests([{ address: X.address, asset: "SOL", entity: "TEST FIXTURE", sdnId: "9" }]);
+    const junk = await run({ "payment-signature": hdr("bm90IGEgdHg=") });
+    ok(junk.next && junk.code === null, "an unreadable Solana transaction passes (nothing names a signer), as before");
+    K.__resetPayoutListForTests();
+    __resetX402PayerScreenForTests();
+  }
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/const x402PayerScreen = createX402PayerScreen\(\);/.test(server), "server.js mounts the screen with its real signer reader");
   __resetX402PayerScreenForTests();
