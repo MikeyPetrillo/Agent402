@@ -24,7 +24,13 @@ for (const [slug, text] of Object.entries(BAZAAR_DESCRIPTIONS)) {
   ok(!/untrustedContent|\/api\/|see also/i.test(text), `${slug}: no internal cross-references / schema jargon`);
 }
 // the flagships all have curated copy
-for (const must of ["search", "answer", "extract", "render", "vin-decode", "geo-lookup", "hash", "sql-guard", "route-execute", "v1-chat-auto", "v1-embeddings", "image-ocr", "memory-write"]) ok(!!BAZAAR_DESCRIPTIONS[must], `flagship ${must} has curated Bazaar copy`);
+for (const must of ["search", "answer", "extract", "render", "vin-decode", "geo-lookup", "hash", "sql-guard", "route-execute", "v1-chat-auto", "v1-embeddings", "image-ocr", "memory-write", "memory-read"]) ok(!!BAZAAR_DESCRIPTIONS[must], `flagship ${must} has curated Bazaar copy`);
+// memory-read's listing: the catalog text is mostly query hints, so the
+// curated copy says what a read returns and whose namespace it reads.
+{
+  const mr = BAZAAR_DESCRIPTIONS["memory-read"] || "";
+  ok(bazaarCapDescription(mr) === mr && /paying wallet/.test(mr) && /omit it to list/.test(mr) && /own namespace by default/.test(mr) && /granted/.test(mr) && !/\?[a-z]+=/.test(mr), "memory-read: curated copy reads whole and names the key read, the key list, the payer's own namespace and a granted one");
+}
 // generic cap behaviour
 const long = "A".repeat(298) + ". " + "B".repeat(600);
 ok(bazaarCapDescription(long) === "A".repeat(298) + ".", "cap: truncates at the last sentence end under 500 (when it sits past the halfway mark)");
@@ -58,7 +64,10 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
 }
 {
   const { bazaarTagsFor, BAZAAR_ICON_PATH } = await import("../src/payments.js");
-  ok(JSON.stringify(bazaarTagsFor({ category: "time", tags: ["cron", "schedule"], slug: "cron-next" })) === JSON.stringify(["time", "cron", "schedule", "cron-next", "agents"]), "tags: category, own tags, then the slug, and a filler only when those run out");
+  ok(JSON.stringify(bazaarTagsFor({ category: "time", tags: ["schedule"], slug: "cron-next" })) === JSON.stringify(["time", "schedule", "cron-next", "agents", "x402"]), "tags: category, own tags, then the slug, and a filler only when those run out");
+  ok(JSON.stringify(bazaarTagsFor({ category: "skill-pack", tags: ["workflow", "fixed-income-desk"], slug: "skill-fixed-income-desk" })) === JSON.stringify(["skill-pack", "workflow", "fixed-income-desk", "agents", "x402"]), "tags: a slug that holds an existing tag (skill-fixed-income-desk beside fixed-income-desk) is not repeated");
+  ok(!bazaarTagsFor({ category: "crypto", tags: ["price", "spot"], slug: "price-coingecko" }).includes("price-coingecko"), "tags: a slug that is a tag plus the data source's name is not repeated");
+  ok(bazaarTagsFor({ category: "math", tags: ["percent"], slug: "percentage" }).includes("percentage"), "tags: a tag inside a slug's word (percent in percentage) is not a repeat");
   ok(bazaarTagsFor({ category: "web", tags: ["a", "b", "c", "d", "e"], slug: "s" }).length === 5, "tags: at most five");
   ok(/\.(?:png|jpe?g|webp|gif)$/.test(BAZAAR_ICON_PATH), `icon: the listing icon path names a format the Bazaar lists (${BAZAAR_ICON_PATH})`);
 }

@@ -41,13 +41,14 @@ const DECLARE = {
 export const UPTO_EXPLICIT_ONLY = Object.freeze(["eip155:5042"]);
 
 /** The upto networks the operator asked for (X402_UPTO_NETWORKS: a CSV of
- *  CAIP-2 ids, or "all"), restricted to `evmCaip2`. Unset is []. */
+ *  CAIP-2 ids, or "all"), restricted to `evmCaip2`. Unset is []. A list keeps
+ *  its own order (the order the 402 offers upto in); "all" keeps evmCaip2's. */
 export function uptoNetworksWanted(env = process.env, evmCaip2 = []) {
   const raw = String(env.X402_UPTO_NETWORKS || "").trim();
   if (!raw) return [];
   if (raw.toLowerCase() === "all") return evmCaip2.filter((c) => !UPTO_EXPLICIT_ONLY.includes(c));
   const listed = raw.split(",").map((x) => x.trim()).filter(Boolean);
-  return evmCaip2.filter((c) => listed.includes(c));
+  return listed.filter((c, i) => evmCaip2.includes(c) && listed.indexOf(c) === i);
 }
 
 /** True when X402_UPTO_NETWORKS names `caip2` itself. */

@@ -18,7 +18,7 @@ import { CAIP2_PATTERN } from "../src/avm-network.js";
 import { hasShortenedExample, replayableInput, openapiOperation } from "./lib/replayable-example.js";
 import { listingInjectionFinding, addressesReader } from "../src/listing-screen.js";
 import { readFileSync } from "node:fs";
-import { BAZAAR_DESCRIPTIONS, bazaarCapDescription, isExamplePointer } from "../src/payments.js";
+import { BAZAAR_DESCRIPTIONS, bazaarCapDescription, isExamplePointer, TAG_FILLER, slugRepeatsTag } from "../src/payments.js";
 
 // Routes whose 402 carried a real sample output on the baseline tree. A route
 // over its byte budget may carry the /openapi.json pointer instead (counted
@@ -218,6 +218,17 @@ try {
     if (typeof listing.serviceName === "string" && listing.serviceName.trim()) has.serviceName++; else fail(route, "listing has no serviceName");
     if (Array.isArray(listing.tags) && listing.tags.length >= 1 && listing.tags.length <= 5 && (!endpoint.category || listing.tags[0] === endpoint.category)) has.tags++;
     else fail(route, `listing tags are not 1..5 led by the category: ${JSON.stringify(listing.tags)}`);
+    // The slug outranks the generic fillers: a listing that reaches a filler
+    // carries its slug first, unless the slug only repeats a tag it has.
+    if (Array.isArray(listing.tags) && endpoint.slug) {
+      // The trailing run of fillers (a tool may carry "x402" as its own tag).
+      let firstFiller = listing.tags.length;
+      while (firstFiller > 0 && TAG_FILLER.includes(listing.tags[firstFiller - 1])) firstFiller--;
+      if (firstFiller === listing.tags.length) firstFiller = -1;
+      const named = firstFiller < 0 ? listing.tags : listing.tags.slice(0, firstFiller);
+      if (firstFiller >= 0 && !named.includes(endpoint.slug) && !slugRepeatsTag(endpoint.slug, named)) fail(route, `listing reaches a filler tag before its slug: ${JSON.stringify(listing.tags)}`);
+      if (listing.tags.indexOf(endpoint.slug) > firstFiller && firstFiller >= 0) fail(route, `listing puts a filler before its slug: ${JSON.stringify(listing.tags)}`);
+    }
     let iconPath = "";
     try { iconPath = new URL(listing.iconUrl).pathname; } catch { /* checked below */ }
     if (LISTING_ICON.test(iconPath)) { has.icon++; iconPaths.add(iconPath); } else fail(route, `listing icon is not a PNG, JPG, WebP or GIF path: ${listing.iconUrl}`);

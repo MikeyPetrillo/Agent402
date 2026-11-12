@@ -338,3 +338,4 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   On `/v1/metered` the raise is earned per call: past the plain figure each settled `/v1/metered` call
   grants `METERED_QUOTE_CREDITS_PER_CALL` (2) quotes, held up to the raised per-minute figure for the
   window, on this process only (`src/paid-quote-trust.js` `creditMetered`).
+- **Listing icon:** every 402 names `${BASE_URL}/favicon.png` (`BAZAAR_ICON_PATH`); a build before it has no such route, so a rollback serves the icon as a 404 until a build that has it deploys again: an icon fault is fixed forward.

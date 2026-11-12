@@ -12,6 +12,10 @@
 //   node scripts/test-upto-gas-sponsoring.js
 //   BASELINE_TREE=/path/to/main/checkout node scripts/test-upto-gas-sponsoring.js
 //     (also boots that tree and compares its 402s byte for byte)
+//     The baseline is assumed to differ from this tree only in the upto and
+//     sponsoring code: any other change to a 402 (listing copy, tags, the
+//     catalog, the icon) fails the byte comparison without an upto cause. It
+//     is booted with its own scripts/lib/boot-server.js and node_modules.
 //
 // Every server runs against local stubs (Base facilitator, Circle through a
 // fetch preload, OpenRouter through scripts/lib/openrouter-stub-preload.js):
@@ -58,6 +62,7 @@ const buyer = privateKeyToAccount(`0x${"4b".repeat(32)}`);
   const evm = [BASE, "eip155:137", ARC];
   ok(JSON.stringify(uptoNetworksWanted({ X402_UPTO_NETWORKS: "all" }, evm)) === JSON.stringify([BASE, "eip155:137"]), "\"all\" never adds Arc");
   ok(JSON.stringify(uptoNetworksWanted({ X402_UPTO_NETWORKS: `${BASE},${ARC}` }, evm)) === JSON.stringify([BASE, ARC]), "Arc listed by name is wanted");
+  ok(JSON.stringify(uptoNetworksWanted({ X402_UPTO_NETWORKS: `${ARC}, ${BASE},${ARC},eip155:1` }, evm)) === JSON.stringify([ARC, BASE]), "a list keeps its own order, once each, and drops a network not offered here");
   ok(uptoNetworksWanted({}, evm).length === 0 && uptoNetworksWanted({ X402_UPTO_NETWORKS: ARC }, [BASE]).length === 0, "unset is nothing, and a network not offered is never wanted");
   ok(uptoListedByName(ARC, { X402_UPTO_NETWORKS: `${BASE}, ${ARC}` }) && !uptoListedByName(ARC, { X402_UPTO_NETWORKS: "all" }), "Circle's upto read follows Arc listed by name only");
   const ex = new Map([[BASE, [EIP, ERC]], [ARC, [EIP]]]);

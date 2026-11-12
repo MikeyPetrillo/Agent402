@@ -1141,12 +1141,23 @@ export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
 // The listing icon: the 512px PNG mark (server.js), on a path whose extension
 // names a format the Bazaar accepts (PNG, JPG, WebP, GIF; never SVG).
 export const BAZAAR_ICON_PATH = "/favicon.png";
-const TAG_FILLER = ["agents", "x402", "tools"];
+export const TAG_FILLER = Object.freeze(["agents", "x402", "tools"]);
+const tagWords = (t) => String(t ?? "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+/** True when `slug` holds one of `tags` as whole words ("skill-fixed-income-desk"
+ *  holds "fixed-income-desk", "price-coingecko" holds "price"): such a slug
+ *  repeats a tag the listing already carries. */
+export function slugRepeatsTag(slug, tags) {
+  const own = tagWords(slug).join("-");
+  if (!own) return false;
+  return (tags ?? []).some((t) => { const w = tagWords(t).join("-"); return w && w !== own && `-${own}-`.includes(`-${w}-`); });
+}
 /** A listing's tags (at most five, the protocol's own sanitizer): the
- *  category, the tool's own tags, then its slug, and the generic fillers only
- *  when those run out. */
+ *  category, the tool's own tags, then its slug unless it only repeats one
+ *  of those, and the generic fillers only when those run out. */
 export function bazaarTagsFor(item) {
-  return sanitizeTags([item?.category, ...(item?.tags ?? []), item?.slug, ...TAG_FILLER]);
+  const named = [item?.category, ...(item?.tags ?? [])].filter(Boolean);
+  const slug = item?.slug && !slugRepeatsTag(item.slug, named) ? [item.slug] : [];
+  return sanitizeTags([...named, ...slug, ...TAG_FILLER]);
 }
 
 /** Purpose-written Bazaar copy for the flagship routes: WHAT it returns and
