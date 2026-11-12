@@ -704,7 +704,7 @@ export function publicRevenueBody(snap, ledger = {}) {
  * `refuse(req, res)`, the 404 every other /__operator surface answers.
  */
 export function revenueApiHandlers({ snapshot, ledger, authed, refuse = (_req, res) => res.status(404).json({ ok: false, error: "not-found" }) }) {
-  const fail = (res, e) => res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
+  const fail = (res, e) => res.status(500).json({ error: "revenue snapshot failed", detail: pubErr(e, 120) });
   return {
     publicHandler: async (_req, res) => {
       try {

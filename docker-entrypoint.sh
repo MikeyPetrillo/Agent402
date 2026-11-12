@@ -6,12 +6,13 @@
 # the unprivileged `node` user so the server (and any renderer/media compromise)
 # never runs as root.
 #
-# Why root-then-drop instead of a Dockerfile `USER node`: Railway mounts the
-# persistent volume at /data owned by root:root at RUNTIME (it does not exist at
+# Why root-then-drop instead of a Dockerfile `USER node`: a persistent volume
+# mounted at /data arrives owned by root:root at RUNTIME (it does not exist at
 # build time, so a build-time chown can't touch it). A container that started as
 # `USER node` could not write /data, and the memory/stats SQLite would fail its
-# boot-fail-loud check. So we chown /data to node here, as root, then exec the
-# server as node via gosu.
+# boot-fail-loud check. So when /data exists we chown it to node here, as root,
+# then exec the server as node via gosu. The hosted service runs with no volume
+# (state in Postgres and Redis): there /data is absent and this only drops root.
 set -e
 
 TARGET_USER=node
