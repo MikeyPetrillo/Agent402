@@ -258,12 +258,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   container does not read `ok` on a day already past a ceiling, and a refusal on any replica
   holds `capped` for `REFUSAL_HOLD_MS` (an hour; a refused call books nothing, so the total can
   sit under the ceiling) (`src/daily-ceilings.js`, `scripts/test-spend-words-shared-redis.js`).
-- **X search author alarm:** x-search-recent keeps its author expansion at its price and absorbs
-  X's per-author billing (owner decision 2026-11-12; the permanent exception in
+- **X search author alarm:** x-search-recent's author expansion stays at the listed price; an
+  alarm watches the day's author reads (owner decision 2026-11-12; the permanent exception in
   `scripts/test-pricing-margin.js`). `src/x-search-stats.js` keeps each day's exact expanded-author
   reads per lane (`authorReads`), and `xSearchAuthors` on `/api/gateway-status` reads `alert` once
   the day's reads (both lanes, stored and unflushed) pass `X_SEARCH_AUTHOR_DAILY_ALERT` (default
-  500: at most 10 authors a page, so 50 full pages a day, many times a normal day), `ok` under it,
+  500: at most `X_MAX_POSTS_PER_CALL` authors a page, so 50 full pages a day at its default of 10), `ok` under it,
   `unknown` when the stored day cannot be read. One store read per status answer, reused 30 s.
   An alarm only: no call is refused or capped for it. Paged under "X search author reads OVER the
   daily alert", closed on `ok` (`scripts/test-x-search-stats.js`, `scripts/test-status-word-pagers.js`).

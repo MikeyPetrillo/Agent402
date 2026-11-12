@@ -152,7 +152,7 @@ const NEW_WORDS = [
   ["EVM log reads FAILING on every lane", "evmLogs", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
   ["Speech upstream breaker COOLING (backup voices serving)", "speechUpstream", ["cooling"], ["ok", "probing"], ["unknown"]],
   ["First-call allowance UNAVAILABLE (shared store)", "firstCallAllowance", ["unavailable"], ["on", "spent"], ["off", "unknown"]],
-  // Batch 2026-11-12c: x-search-recent's absorbed author reads, and the MPP
+  // Batch 2026-11-12c: x-search-recent's expanded-author reads, and the MPP
   // subscription engine that did not build at boot.
   ["X search author reads OVER the daily alert", "xSearchAuthors", ["alert"], ["ok"], ["unknown"]],
   ["MPP subscription engine FAILED to start", "mppSubscriptions", ["failed"], ["on", "off"], ["unknown"]],

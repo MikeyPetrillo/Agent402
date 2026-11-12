@@ -156,7 +156,8 @@ export async function xSearchStatsReport({ days = 30, now = Date.now() } = {}) {
 }
 
 // The day's author reads past which xSearchAuthors reads alert. A search page
-// holds at most 10 posts, so at most 10 distinct authors: 500 is 50 full
+// holds at most X_MAX_POSTS_PER_CALL posts (src/tools/x-data-kit.js, default
+// 10), so at most that many distinct authors: at the default, 500 is 50 full
 // pages of distinct authors in one UTC day, many times the route's normal
 // day, so a normal day reads ok and growth worth a look reads alert. Every
 // expanded author is also on the X spend meter, so the daily X ceiling

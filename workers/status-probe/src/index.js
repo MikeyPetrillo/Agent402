@@ -1061,13 +1061,13 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
   {
     // x-search-recent's expanded-author reads today (xSearchAuthors,
     // src/x-search-stats.js): alert pages (the day's author reads passed
-    // X_SEARCH_AUTHOR_DAILY_ALERT, a cost absorbed by owner decision), ok
+    // X_SEARCH_AUTHOR_DAILY_ALERT), ok
     // clears; unknown and absent do neither. An alarm only: nothing is
     // refused. Title and body match heartbeat.yml's.
     title: "X search author reads OVER the daily alert",
     verdict: ({ gateway: b }) => wordVerdict(b.xSearchAuthors?.status, ["alert"], ["ok"]),
     body: () =>
-      "/api/gateway-status reports xSearchAuthors.status=alert: x-search-recent returned more expanded authors today than X_SEARCH_AUTHOR_DAILY_ALERT, and each one is a user read on the X bill that the route absorbs. Every call is still served and nothing is refused. The day's count and the mark are on the operator view of /api/gateway-status (xSearchAuthors), the per-call histogram on /__operator/tool-failures.json; the daily X ceiling (X_DATA_DAILY_MAX_USD) still bounds the whole X spend. Auto-closes when the word reads ok (the next UTC day, or a raised mark).",
+      "/api/gateway-status reports xSearchAuthors.status=alert: x-search-recent returned more expanded authors today than X_SEARCH_AUTHOR_DAILY_ALERT; X bills each expanded author as a user read. Every call is still served and nothing is refused. The day's count and the mark are on the operator view of /api/gateway-status (xSearchAuthors), the per-call histogram on /__operator/tool-failures.json; the daily X ceiling (X_DATA_DAILY_MAX_USD) still bounds the whole X spend. Auto-closes when the word reads ok (the next UTC day, or a raised mark).",
   },
   {
     // The MPP subscription engine (mppSubscriptions, server.js): failed pages

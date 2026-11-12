@@ -30,8 +30,8 @@ IaC file and keeps the retired config files out of the repository.
 ## Owner steps before 2026-12-01
 
 Run from a clone of `main` linked to the production environment
-(`railway link`), with the Railway CLI at 5.71.0 or newer (`railway --version`;
-5.71.0 is the first with `railway config migrate status` and `cutover`). Every
+(`railway link`), with the Railway CLI 5.71.0 or newer (`railway --version`;
+it has `railway config migrate status` and `cutover`). Every
 command below up to step 5 only reads; steps 5 and 6 write. Do the writes right
 after a merge has deployed, never while a deploy.yml run is in progress.
 

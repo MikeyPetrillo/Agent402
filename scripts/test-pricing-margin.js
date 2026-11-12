@@ -388,20 +388,21 @@ const SQL_WORST_CASE_BOUND = 0.87;
 //
 //     OWNER-APPROVED EXCEPTION (2026-11-12), x-search-recent only. Its rows
 //     carry author usernames from the author expansion, and X bills each
-//     expanded user from 2026-11-22. The owner decided to keep the route as it
-//     is (authors expanded, same price) and absorb the author reads: the route
-//     sells at low volume, the daily X ceiling (X_DATA_DAILY_MAX_USD, whose
-//     meter counts expanded objects) bounds the day's whole X spend, and the
-//     xSearchAuthors word on /api/gateway-status (X_SEARCH_AUTHOR_DAILY_ALERT,
-//     src/x-search-stats.js) pages when the day's author reads grow. For it
-//     the worst case WITHOUT the author reads is still held to MARGIN, and the
-//     output says plainly (yes/no, never a figure) where the worst case with
-//     them billed falls. The exception is permanent and names one tool: every
-//     other X tool's worst case is held to MARGIN with expansion billing on,
-//     and a second entry fails this test until it is reviewed here.
+//     expanded user from 2026-11-22. The author expansion stays at the listed
+//     price; the daily X ceiling (X_DATA_DAILY_MAX_USD, whose meter counts
+//     expanded objects) bounds the day's whole X spend, and the xSearchAuthors
+//     word on /api/gateway-status (X_SEARCH_AUTHOR_DAILY_ALERT,
+//     src/x-search-stats.js) watches the day's author reads. For it the worst
+//     case without the author reads is held to MARGIN, and the output prints
+//     one fixed line naming the exception, never a verdict or a figure. The
+//     exception is permanent and names one tool: every other X tool's worst
+//     case is held to MARGIN with expansion billing on, and a second entry
+//     fails this test until it is reviewed here.
 const X_EXPANSION_OWNER_EXCEPTIONS = new Map([
-  ["x-search-recent", { decided: "2026-11-12", reason: "owner absorbs author billing: low volume, bounded by the daily X ceiling, alarmed by xSearchAuthors" }],
+  ["x-search-recent", { decided: "2026-11-12", reason: "the author expansion stays at the listed price; the daily X ceiling bounds X spend; xSearchAuthors watches the day's author reads" }],
 ]);
+/** The one line printed for an excepted tool: its slug and decision date only, so public CI logs carry no verdict or figure. */
+const xExceptionLine = (slug, decided) => `ok - ${slug}: owner exception applies (${decided})`;
 /** The margin verdict for one X worst case: an excepted tool is held to MARGIN on its reads without expansion billing; every other tool on its reads with expansion billing on. */
 function xMarginVerdict(slug, { usd, usdWithoutExpansions }, price) {
   const exception = X_EXPANSION_OWNER_EXCEPTIONS.get(slug);
@@ -417,6 +418,8 @@ function xMarginVerdict(slug, { usd, usdWithoutExpansions }, price) {
   for (const slug of ["x-user", "x-user-tweets", "x-tweet", "x-users-lookup", "x-search-recent-new"]) {
     ok(xMarginVerdict(slug, under, 1).within === false, `${slug}: a worst case under the margin with expansions billed fails, though it passes without them`);
   }
+  const line = xExceptionLine("x-search-recent", "2026-11-12");
+  ok(/^ok - [a-z0-9-]+: owner exception applies \(\d{4}-\d{2}-\d{2}\)$/.test(line), "the exception prints one neutral line: slug and decision date, no verdict");
   ok(xMarginVerdict("x-search-recent", under, 1).within === true && xMarginVerdict("x-search-recent", { usd: 2, usdWithoutExpansions: 2 }, 1).within === false, "x-search-recent: held to the margin on its reads without the author reads");
 }
 console.log("\n# X data tools: worst-case reads, expansions included, vs price");
@@ -436,10 +439,10 @@ console.log("\n# X data tools: worst-case reads, expansions included, vs price")
         const v = xMarginVerdict(t.slug, c, price);
         if (v.exception) {
           ok(Number.isFinite(c.usdWithoutExpansions) && c.usdWithoutExpansions < c.usd, `${label}: the worst case without expansion billing is computed`);
-          ok(v.within, `${label}: worst-case reads without the author reads within the margin bound of the list price: ${v.within ? "PASS" : "FAIL"}`);
+          ok(v.within, `${label}: worst-case reads without the author expansion within the margin bound of the list price: ${v.within ? "PASS" : "FAIL"}`);
           const decided = X_EXPANSION_OWNER_EXCEPTIONS.get(t.slug).decided;
-          console.log(`EXCEPTION - ${label}: owner-approved (${decided}), author reads absorbed: with expansions billed, the worst case is ${c.usd <= MARGIN * price + 1e-12 ? "within" : "outside"} the margin bound, and above the list price itself: ${c.usd > price ? "YES" : "no"}`);
-          table.push({ tier: t.slug, price, worst: c.usdWithoutExpansions, model: "X reads (author reads absorbed, owner exception)" });
+          console.log(xExceptionLine(t.slug, decided));
+          table.push({ tier: t.slug, price, worst: c.usdWithoutExpansions, model: "X reads, owner exception" });
         } else {
           ok(v.within, `${label}: worst-case reads, expansions included, within the margin bound of the list price: ${v.within ? "PASS" : "FAIL"}`);
           table.push({ tier: t.slug, price, worst: c.usd, model: `X reads ${JSON.stringify(c.body)}` });
