@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { load } from "js-yaml";
 import { workerDeployPaths, touchesWorker, lastDeployedBase } from "./worker-deploy-paths.js";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -50,7 +51,7 @@ ok(touchesWorker(changedSince(lastDeployedBase(RUNS, 300))), "a worker change in
 // secret shadowed (it needs only the workflow token to read runs and the
 // diff) and writes `run` to its outputs, and a CLI step, gated on that
 // output, that holds the Railway token and runs no repository code.
-const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
+const wf = load(expandedDeployWorkflow());
 const steps = wf.jobs.deploy.steps;
 const idx = steps.findIndex((s) => /railway" up --service agent402-worker --environment production --project "\$RAILWAY_PROJECT_ID" --ci/.test(String(s.run || "")));
 ok(idx >= 0, "the deploy job has the worker redeploy step");

@@ -4,11 +4,12 @@
 // against a local server, so the test exercises the shipped shell text.
 import { readFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const wf = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+const wf = expandedDeployWorkflow();
 const defs = wf.split("\n").filter((l) => /^\s*has\(\) \{/.test(l));
 ok(defs.length === 1, `deploy.yml defines has() once (found ${defs.length})`);
 const fn = (defs[0] || "").trim();

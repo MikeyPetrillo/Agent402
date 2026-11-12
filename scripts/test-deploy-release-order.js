@@ -6,8 +6,9 @@
 // Offline: reads the workflow text only.
 import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
-const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
+const wf = load(expandedDeployWorkflow());
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 

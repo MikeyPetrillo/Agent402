@@ -15,6 +15,7 @@
 //   node scripts/test-loop-gate.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 delete process.env.OPENROUTER_API_KEY; delete process.env.DECIDE_OPENROUTER_API_KEY; delete process.env.OPENAI_API_KEY;
 process.env.TYPESAFE_API_KEY = "ts_test";
@@ -239,7 +240,7 @@ ok(/same price/.test(tool.description), "the description says the code-only stop
   ok(/const ALL_KIT = \[[^\n]*\.\.\.LOOP_GATE_TOOLS/.test(s), "and in ALL_KIT, listed without a key (its code path answers; the model path is a 503 without one)");
   ok(/"loop-gate"/.test(readFileSync(new URL("../src/pow.js", import.meta.url), "utf8")), "wallet-only: it sells a model call, so it is never PoW-payable");
   ok(!/"loop-gate"/.test(readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8")), "not in METERED_SLUGS: the published example answers in code, so the keyless sweeps drive it");
-  ok(/scripts\/test-loop-gate\.js/.test(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8")), "this suite runs in CI");
+  ok(/scripts\/test-loop-gate\.js/.test(expandedDeployWorkflow()), "this suite runs in CI");
   const probes = readFileSync(new URL("./test-report-probes.js", import.meta.url), "utf8");
   ok(/loop-gate-kit\.js/.test(probes) && /prepareLoopGate/.test(probes), "the probe lane drives the model path's input stage");
 }

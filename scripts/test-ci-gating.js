@@ -9,8 +9,9 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { load } from "js-yaml";
 import { spawnSync } from "node:child_process";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
-const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
+const wf = load(expandedDeployWorkflow());
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.error("FAIL:", m); } };
 
@@ -22,6 +23,10 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.error("FAIL:", m); 
     const bytes = Buffer.byteLength(readFileSync(new URL(`../.github/workflows/${f}`, import.meta.url), "utf8"));
     ok(bytes <= 512_000 - 4_096, `${f} is ${bytes} bytes; GitHub runs no workflow over 512000 bytes, keep 4096 of headroom (move logic into scripts or trim comments)`);
   }
+  // Test lists live in scripts/ci/lanes and run through scripts/ci/run-step.sh,
+  // so a lane's growth never reaches the workflow file.
+  const raw = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  ok(!/^\s*t\(\) \{/m.test(raw), "deploy.yml defines no inline t helper: a multi-script step runs its list from scripts/ci/lanes through scripts/ci/run-step.sh");
 }
 
 const jobs = wf.jobs || {};
@@ -146,7 +151,7 @@ for (const [name, j] of Object.entries(jobs)) {
 // in the merge commit's BODY. The fix that reached prod never reached npm.
 // Pinned from source in both directions so the two cannot drift apart again.
 {
-  const wfText = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const wfText = expandedDeployWorkflow();
   const mog = readFileSync(new URL("./merge-on-green.sh", import.meta.url), "utf8");
   const subjectsOnly = /git log[^\n]*--format='%s'/.test(wfText);
   ok(subjectsOnly, "markers parses commit SUBJECT lines (the constraint the docs have to match)");
@@ -187,7 +192,7 @@ for (const [name, j] of Object.entries(jobs)) {
 // spend.yml, the one owner-dispatched spend workflow (no schedule, no push
 // trigger), and sits in the spending environment.
 {
-  const wfText = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const wfText = expandedDeployWorkflow();
   const m = wfText.match(/MARKERS="([^"]+)"/);
   ok(!!m, "the markers job declares its MARKERS list");
   const markers = m ? m[1].split(/\s+/).filter(Boolean) : [];
@@ -287,7 +292,7 @@ for (const [name, j] of Object.entries(jobs)) {
 // branch keeps cancel-in-progress. Every job is bounded, and no call to the
 // platform API can wait forever.
 {
-  const raw = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const raw = expandedDeployWorkflow();
   const conc = wf.concurrency || {};
   // The group is an expression: evaluated here for every event and every
   // dispatch mode a job reads, so a release never shares a group with a

@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 let passed = 0;
 const ok = (c, m) => { assert.ok(c, m); passed++; };
@@ -51,7 +52,7 @@ const esc = leavesDir(importClosure(join(tmp, "test.js")), tmp);
 ok(esc.some((f) => f.endsWith("src/server.js")), "control: an import reaching ../src is detected through a transitive hop");
 
 // (3) the workflow step carries the scope logic AND fails open
-const yml = readFileSync(join(ROOT, ".github/workflows/deploy.yml"), "utf8");
+const yml = expandedDeployWorkflow();
 const step = yml.slice(yml.indexOf("- name: Gate agent402-facilitator"), yml.indexOf("TEST_PAYER_STELLAR_SECRET: ${{ secrets.TEST_PAYER_STELLAR_SECRET }}"));
 ok(/compare\/\$DIFF_BASE\.\.\.\$GITHUB_SHA/.test(step), "gate diffs DIFF_BASE...GITHUB_SHA");
 ok(/\^\(facilitator\/\|Dockerfile\\\.facilitator\$\)/.test(step), "gate watches facilitator/** and its Dockerfile");

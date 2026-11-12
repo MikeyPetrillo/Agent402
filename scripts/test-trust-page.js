@@ -18,6 +18,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pageText } from "./lib/html-text.js";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -166,7 +167,7 @@ ok(/const staleMs = backupStaleHours\(\) \* 3600_000;/.test(src("src/backup.js")
   }
 }
 {
-  const deploy = src(".github/workflows/deploy.yml");
+  const deploy = expandedDeployWorkflow();
   ok(/^\s+t node scripts\/test-backup-restore\.js$/m.test(deploy), "the object restore test runs in a CI lane");
   ok(/^\s+t node scripts\/test-backup-state\.js$/m.test(deploy) && /state-restore/.test(src("scripts/test-backup-state.js")), "the state-table restore test runs in a CI lane and drives scripts/state-restore.js");
 }

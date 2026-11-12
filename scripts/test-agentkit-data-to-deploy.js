@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { encodeDeployData } from "viem";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 const dir = new URL("../examples/agentkit-data-to-deploy/", import.meta.url);
 const read = (p) => readFileSync(new URL(p, dir), "utf8");
@@ -55,7 +56,7 @@ const pinned = JSON.parse(readFileSync(new URL("./agentkit-live/package.json", i
 for (const [name, v] of Object.entries(pinned.dependencies)) ok(pkg.dependencies[name] === v, `example pins ${name}@${v} like the proof tree`);
 
 // CI recompiles the artifact from source with the pinned solc and diffs it.
-const ci = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+const ci = expandedDeployWorkflow();
 ok(ci.includes("node scripts/test-agentkit-data-to-deploy.js"), "this test runs in a CI lane");
 ok(ci.includes("solc@0.8.28 && node contracts/compile.js") && ci.includes("git diff --exit-code -- examples/agentkit-data-to-deploy/contracts/artifact.json"), "CI recompiles the artifact from the committed source and requires byte equality");
 

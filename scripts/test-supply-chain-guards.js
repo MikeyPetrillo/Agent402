@@ -19,6 +19,7 @@
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 let passed = 0, failed = 0;
 const ok = (cond, msg) => {
@@ -27,7 +28,7 @@ const ok = (cond, msg) => {
 };
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const wf = readFileSync(join(ROOT, ".github/workflows/deploy.yml"), "utf8");
+const wf = expandedDeployWorkflow();
 
 // --- 1. token isolation ----------------------------------------------------
 // We now publish over OIDC, so normally there are ZERO token-bearing steps and
