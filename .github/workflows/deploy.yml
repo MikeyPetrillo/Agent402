@@ -1209,6 +1209,8 @@ jobs:
           t node scripts/test-mcp-limits.js
           # Hosted connector bounds: a free answer past the size ceiling is cut to valid JSON with answerBound fields, catalog.search holds its row maximum for any limit, a refusing limiter names its wait (offline, bare express + mountMcp)
           t node scripts/test-mcp-answer-bound.js
+          # Hosted connector and revenue view error text: a configured key or a database URL's password an error quotes never reaches an answer, the reason stays (offline, bare express + mountMcp)
+          t node scripts/test-mcp-error-redaction.js
 
       - name: Code-run-kit tests (E2B sandbox — validation always runs; live calls opt-in via E2B_LIVE_TEST=1)
         run: node scripts/test-code-run-kit.js
