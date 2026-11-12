@@ -123,15 +123,17 @@ export function deliveryProjection(origin, method, route) {
 
 // The keys of an error envelope with no content: the {error, message, code}
 // shape, GraphQL's top-level `errors`, RFC 7807 problem details (type, title,
-// status, detail, instance), the ok/success flags, and the request or trace id
-// and timestamp an error page carries for support. A body with any other key
-// carries content, so it is the seller's answer even with an error beside it.
+// status, detail, instance), the ok/success flags and a reason, a framework's
+// default error page (timestamp, path, trace), a retry hint, and the request
+// or trace id an error page carries for support. Any other key holding a value
+// carries content, so the body is the seller's answer even with an error
+// beside it; a key holding null, "", {} or [] carries nothing.
 const ERROR_ENVELOPE_KEYS = new Set([
   "error", "errors", "message", "ok", "success", "status", "statusCode", "code",
-  "detail", "details", "type", "title", "instance",
-  "requestId", "request_id", "traceId", "trace_id", "timestamp",
+  "detail", "details", "type", "title", "instance", "reason",
+  "requestId", "request_id", "traceId", "trace_id", "trace", "timestamp", "path",
+  "retryAfter", "retry_after", "retryAfterSeconds", "retry_after_seconds", "retryAfterMs", "retry_after_ms",
 ]);
-const NOT_FOUND_STATUSES = new Set([404, 410]);
 
 /**
  * Is a 200 the seller sent WITHOUT taking payment an answer at all?
@@ -145,11 +147,13 @@ const NOT_FOUND_STATUSES = new Set([404, 410]);
  *                   with a 200, so nothing was delivered
  *   error-shaped    an error envelope and nothing else: `error` set,
  *                   `errors` non-empty or `ok: false`, and every key is one
- *                   of ERROR_ENVELOPE_KEYS, unless the seller's own contract
- *                   guarantees the signaling key. Any other key is content
- *                   (`{valid:false, errors}`, `{data, errors}`, a health
- *                   report with `ok:false`), and so is a not-found status
- *                   (404, 410): for a lookup, absence is the answer.
+ *                   of ERROR_ENVELOPE_KEYS or holds no value (null, "", {},
+ *                   []), unless the seller's own contract guarantees the
+ *                   signaling key. Any other key holding a value, false and 0
+ *                   included, is content (`{valid:false, errors}`,
+ *                   `{data, errors}`, a health report with `ok:false`). A
+ *                   404 or 410 envelope alone is not an answer either, so the
+ *                   next seller is tried.
  *   missing-fields  the seller guaranteed response paths and none is present
  * An empty array, a number or a string with text is the seller's answer.
  */
@@ -169,10 +173,14 @@ export function unpaidNonAnswerReason(body, guaranteedPaths = []) {
     || (!promised("errors") && nonEmpty(body.errors))
     || (!promised("ok") && body.ok === false);
   if (signaled) {
+    // A key counts as content only when it holds a value: false and 0 do.
+    const holdsValue = (v) => v !== null && v !== undefined && v !== ""
+      && !(Array.isArray(v) && v.length === 0) && !(isObj(v) && !hasKeys(v));
     let envelopeOnly = true;
-    for (const k in body) { if (Object.hasOwn(body, k) && !ERROR_ENVELOPE_KEYS.has(k)) { envelopeOnly = false; break; } }
-    const notFound = [body.status, body.statusCode].some((v) => (typeof v === "number" || typeof v === "string") && NOT_FOUND_STATUSES.has(Number(v)));
-    if (envelopeOnly && !notFound) return "error-shaped";
+    for (const k in body) {
+      if (Object.hasOwn(body, k) && !ERROR_ENVELOPE_KEYS.has(k) && holdsValue(body[k])) { envelopeOnly = false; break; }
+    }
+    if (envelopeOnly) return "error-shaped";
   }
   if (paths.length && !paths.some((p) => pathPresent(body, p))) return "missing-fields";
   return null;
