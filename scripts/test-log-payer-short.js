@@ -6,8 +6,8 @@
 // the case of a base58 or Stellar address exactly.
 //
 // The scan reads every console.log/warn/error/info/debug, log, warn and alarm
-// call in src/ whose argument is a template literal, and names each `${...}`
-// whose expression mentions a wallet-shaped name (payer, from, sender, buyer,
+// call in src/, and names each `${...}` of a template literal and each operand
+// of a string concatenation (`"paid by " + payer`) whose expression mentions a wallet-shaped name (payer, from, sender, buyer,
 // payTo, wallet, address, signer, authority, owner) without a shortening step
 // (shortPayer, maskAddress, mask, short, a fixed .slice(0, n)) or a count.
 // String literals inside the expression are not read. A shortening step
@@ -87,16 +87,26 @@ function walletHelpers(src) {
 // Quoted text inside an expression is not code: drop it before matching. A
 // nested template keeps its own ${...} parts (they are expressions) and drops
 // its text, so the words of `; buyer status: ${tx}` are not read as a wallet
-// while a ${payer} inside it still is.
-const withoutStrings = (expr) => withoutTemplateText(expr.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""'));
+// while a ${payer} inside it still is. One pass reads both: a quote inside
+// template text is text (an apostrophe in `payer's ${payer}` opens nothing),
+// and a backtick inside a quoted string is text.
+const withoutStrings = (expr) => withoutTemplateText(expr);
 function withoutTemplateText(code) {
   let out = "", i = 0;
+  // A quoted string in code: copied as "" (its text is not code).
+  const quoted = (q) => {
+    i++;
+    while (i < code.length && code[i] !== q) i += code[i] === "\\" ? 2 : 1;
+    i++;
+    out += '""';
+  };
   // Copies code up to the closing brace of a ${...} (or the end), reading nested templates.
   const expr = (stopAtBrace) => {
     let depth = 0;
     while (i < code.length) {
       const c = code[i];
       if (c === "`") { i++; out += "`"; template(); continue; }
+      if (c === '"' || c === "'") { quoted(c); continue; }
       if (stopAtBrace && c === "}" && depth === 0) return;
       if (c === "{") depth++; else if (c === "}") depth--;
       out += c; i++;
@@ -116,6 +126,63 @@ function withoutTemplateText(code) {
   return out;
 }
 
+// The operands of each top-level string concatenation in a call's argument
+// list (`"paid by " + payer`), as { code, text }: `code` with every quoted
+// string and template blanked to spaces between its delimiters (same length,
+// so it lines up with `text`, the operand as written). An argument with no
+// quoted or template operand is not a concatenation and gives nothing.
+function concatOperands(arg) {
+  let blank = "", i = 0;
+  const skipQuoted = (q) => {
+    blank += q; i++;
+    while (i < arg.length && arg[i] !== q) {
+      const step = arg[i] === "\\" ? 2 : 1;
+      if (q === "`" && arg[i] === "$" && arg[i + 1] === "{") {
+        // A template's ${...}: skip to its closing brace, through nested braces and strings.
+        let depth = 0, j = i + 2;
+        for (; j < arg.length; j++) {
+          const c = arg[j];
+          if (c === "{") depth++;
+          else if (c === "}") { if (depth === 0) break; depth--; }
+          else if (c === '"' || c === "'" || c === "`") { const qq = c; j++; while (j < arg.length && arg[j] !== qq) j += arg[j] === "\\" ? 2 : 1; }
+        }
+        blank += " ".repeat(Math.min(arg.length, j + 1) - i); i = j + 1; continue;
+      }
+      blank += " ".repeat(Math.min(step, arg.length - i)); i += step;
+    }
+    if (i < arg.length) { blank += q; i++; }
+  };
+  while (i < arg.length) {
+    const c = arg[i];
+    if (c === '"' || c === "'" || c === "`") { skipQuoted(c); continue; }
+    blank += c; i++;
+  }
+  const out = [];
+  let depth = 0, start = 0;
+  let operands = [];
+  const isLiteral = (s) => /^\s*(["'`])\s*\1\s*$/.test(s);
+  const flush = (end, last) => {
+    operands.push([start, end]);
+    if (last) {
+      if (operands.length > 1 && operands.some(([a, b]) => isLiteral(blank.slice(a, b)))) {
+        for (const [a, b] of operands) if (!isLiteral(blank.slice(a, b))) out.push({ code: blank.slice(a, b), text: arg.slice(a, b).trim() });
+      }
+      operands = [];
+    }
+    start = end + 1;
+  };
+  for (let k = 0; k < blank.length; k++) {
+    const c = blank[k];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (depth === 0 && c === ",") flush(k, true);
+    else if (depth === 0 && c === "+" && blank[k + 1] !== "+" && blank[k + 1] !== "=" && blank[k - 1] !== "+") flush(k, false);
+  }
+  flush(blank.length, true);
+  return out;
+}
+
+let concatSeen = 0; // concatenation operands read, so a clean tree is a result
 /** Every flagged interpolation in `src` as { line, expr }. */
 function scanLogCalls(src, payment = false) {
   const out = [];
@@ -126,13 +193,17 @@ function scanLogCalls(src, payment = false) {
     const end = Math.min(src.length, i + 4000);
     for (; i < end && depth; i++) { const c = src[i]; if (c === "(") depth++; else if (c === ")") depth--; }
     const arg = src.slice(m.index + m[0].length, i - 1);
+    const line = src.slice(0, m.index).split("\n").length;
+    const flagged = (code) => {
+      if (SHORTENED.test(code)) return false;
+      const bare = withoutShortened(code);
+      return WALLETISH.test(bare) || (payment && (KEYISH.test(bare) || (helperCall && helperCall.test(bare))));
+    };
+    // A wallet joined to text with `+` prints as surely as one interpolated.
+    for (const o of concatOperands(arg)) { concatSeen++; if (flagged(withoutStrings(o.text))) out.push({ line, expr: o.text }); }
     if (!arg.includes("`")) continue;
     for (const e of arg.matchAll(/\$\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}/g)) {
-      const code = withoutStrings(e[1]);
-      if (SHORTENED.test(code)) continue;
-      const bare = withoutShortened(code);
-      if (!WALLETISH.test(bare) && !(payment && (KEYISH.test(bare) || (helperCall && helperCall.test(bare))))) continue;
-      out.push({ line: src.slice(0, m.index).split("\n").length, expr: e[1].trim() });
+      if (flagged(withoutStrings(e[1]))) out.push({ line, expr: e[1].trim() });
     }
   }
   return out;
@@ -148,9 +219,15 @@ function scanLogCalls(src, payment = false) {
     "Math.log(payer);",
     "log(`[x] ${ok ? `; buyer status: GET /x?tx=${row.tx}` : \"\"}`);",
     "log(`[x] ${ok ? `; status for ${entry.payer}` : \"\"}`);",
+    "log(`[x] ${ok ? `the payer's wallet ${row.payer}` : \"\"}`);",
+    'console.warn("[x] paid by " + payer + " on " + network);',
+    "log('[x] refused ' + auth.from);",
+    'log("[x] ok " + shortPayer(payer) + " of " + list.length + " wallets", payer);',
+    'log("[x] " + (ok ? "the buyer\'s wallet" : "none") + ` n=${n}`);',
   ].join("\n");
   const hits = scanLogCalls(sample).map((h) => h.expr);
-  ok(hits.join("|") === "payer|auth.from|ok ? `; status for ${entry.payer}` : \"\"", `control: the scanner flags a bare payer and a from, and passes shortened values, counts and quoted words, and reads a wallet (not the words) inside a nested template (${hits.join(", ")})`);
+  const want = ["payer", "auth.from", "ok ? `; status for ${entry.payer}` : \"\"", "ok ? `the payer's wallet ${row.payer}` : \"\"", "payer", "auth.from"];
+  ok(hits.join("|") === want.join("|"), `control: the scanner flags a bare payer and a from, interpolated or joined with +, passes shortened values, counts and quoted words, and reads a wallet (not the words) inside a nested template, an apostrophe in its text included (${hits.join(", ")})`);
   const pay = [
     "const labelOf = (e) => `auth ${e.payer}/${e.nonce}`;",
     "const okLabel = (e) => `auth ${shortPayer(e.payer)}`;",
@@ -187,6 +264,7 @@ for (const f of files) {
   }
 }
 ok(calls > 500, `the scan read ${calls} log calls`);
+ok(concatSeen > 8, `the scan read ${concatSeen} operands of string concatenations`);
 ok(bad.length === 0, `no log line in src/ prints a wallet in full outside the allowlist${bad.length ? `: ${bad.join("; ")}` : ""}`);
 const stale = Object.entries(ALLOW).flatMap(([file, m]) => Object.keys(m).filter((expr) => !used.has(`${file}\u0000${expr}`)).map((expr) => `${file} \${${expr}}`));
 ok(stale.length === 0, `every allowlist entry still names a line${stale.length ? ` (stale: ${stale.join("; ")})` : ""}`);

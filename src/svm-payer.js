@@ -98,12 +98,11 @@ const TOKEN_PROGRAMS = new Set([
 ]);
 const IX_TRANSFER_CHECKED = 12;
 
-// The transfer instruction of a wire transaction, with what checking its
-// signature needs: the account-key indices, the amount (TransferChecked's u64
-// after its tag), the signatures and the serialized message they sign (every
-// byte after the signatures section, version prefix included). Null on any
-// shape mismatch.
-function readTransfer(txBase64, index) {
+// The walk of a wire message: its signatures, header, static account keys and
+// every instruction (program index, account indices, data span). An account
+// index at or past the static key count names an address-lookup-table entry,
+// which only an RPC can resolve. Null on any shape mismatch.
+function readMessage(txBase64) {
   const bytes = wireBytesOf(txBase64);
   if (!bytes) return null;
   const sigs = readCompactU16(bytes, 0);
@@ -126,8 +125,9 @@ function readTransfer(txBase64, index) {
   const keyBytes = (i) => bytes.subarray(keysAt + 32 * i, keysAt + 32 * (i + 1));
   let p = at + 32 * keys.value + 32; // past the keys and the recent blockhash
   const count = readCompactU16(bytes, p);
-  if (!count || count.value <= index || count.value > 16) return null;
+  if (!count || count.value > 16) return null;
   p = count.next;
+  const instructions = [];
   for (let i = 0; i < count.value; i++) {
     if (p >= bytes.length) return null;
     const program = bytes[p++];
@@ -138,15 +138,91 @@ function readTransfer(txBase64, index) {
     const data = readCompactU16(bytes, p);
     if (!data || data.next + data.value > bytes.length) return null;
     const tag = data.value > 0 ? bytes[data.next] : -1;
-    const dataAt = data.next, dataLen = data.value;
+    instructions.push({ program, accountIdx, tag, dataAt: data.next, dataLen: data.value });
     p = data.next + data.value;
-    if (i !== index) continue;
-    if (program >= keys.value || !TOKEN_PROGRAMS.has(base58Encode(keyBytes(program)))) return null;
-    if (tag !== IX_TRANSFER_CHECKED || accountIdx.length < 4 || accountIdx.slice(0, 4).some((k) => k >= keys.value)) return null;
-    const amount = dataLen >= 9 ? bytes.readBigUInt64LE(dataAt + 1) : null;
-    return { bytes, sigCount: sigs.value, sigsAt: sigs.next, messageStart, numRequiredSignatures, keyBytes, accountIdx: accountIdx.slice(0, 4), amount };
   }
-  return null;
+  return { bytes, sigCount: sigs.value, sigsAt: sigs.next, messageStart, numRequiredSignatures, keyCount: keys.value, keyBytes, instructions };
+}
+
+/** A TransferChecked of a token program (its program id is always a static key). */
+function isTransferChecked(m, ix) {
+  return ix.tag === IX_TRANSFER_CHECKED && ix.accountIdx.length >= 4
+    && ix.program < m.keyCount && TOKEN_PROGRAMS.has(base58Encode(m.keyBytes(ix.program)));
+}
+
+// The transfer instruction of a wire transaction, with what checking its
+// signature needs: the account-key indices, the amount (TransferChecked's u64
+// after its tag), the signatures and the serialized message they sign (every
+// byte after the signatures section, version prefix included). Null on any
+// shape mismatch, or when any of its four accounts sits in a lookup table.
+function readTransfer(txBase64, index) {
+  const m = readMessage(txBase64);
+  if (!m || m.instructions.length <= index) return null;
+  const ix = m.instructions[index];
+  if (!isTransferChecked(m, ix) || ix.accountIdx.slice(0, 4).some((k) => k >= m.keyCount)) return null;
+  const amount = ix.dataLen >= 9 ? m.bytes.readBigUInt64LE(ix.dataAt + 1) : null;
+  return { bytes: m.bytes, sigCount: m.sigCount, sigsAt: m.sigsAt, messageStart: m.messageStart, numRequiredSignatures: m.numRequiredSignatures, keyBytes: m.keyBytes, accountIdx: ix.accountIdx.slice(0, 4), amount };
+}
+
+/**
+ * The transfer authority of a Solana payment: account 3 of its TransferChecked
+ * instruction(s), read only when that index is one of the message's required
+ * signers. Signers always sit in the static account keys (a v0 lookup table
+ * holds no signer), so the authority reads with no RPC even when the source,
+ * mint or destination is a lookup-table entry.
+ *   - `{ found: false }`: the transaction parses and holds no TransferChecked of
+ *     a token program, so the caller may fall back to the signer order;
+ *   - `{ found: true, authority }`: every TransferChecked names this one signer;
+ *   - `{ found: true, authority: null }`: a transfer exists but its authority
+ *     is not a signer or the transfers disagree, so no signer stands in for it;
+ *   - null: the bytes do not parse.
+ * @param {string} txBase64
+ */
+export function svmTransferAuthority(txBase64) {
+  try {
+    const m = readMessage(txBase64);
+    if (!m) return null;
+    if (m.numRequiredSignatures < 1 || m.numRequiredSignatures !== m.sigCount) return null;
+    const transfers = m.instructions.filter((ix) => isTransferChecked(m, ix));
+    if (transfers.length === 0) return { found: false, authority: null };
+    const names = new Set();
+    for (const ix of transfers) {
+      const a = ix.accountIdx[3];
+      if (a >= m.numRequiredSignatures) return { found: true, authority: null };
+      names.add(base58Encode(m.keyBytes(a)));
+    }
+    return { found: true, authority: names.size === 1 ? [...names][0] : null };
+  } catch { return null; }
+}
+
+/**
+ * The paying wallet of a Solana x402 payment (v1 or v2 payload): the transfer
+ * authority (svmTransferAuthority). Only a transaction that holds no
+ * TransferChecked at all falls back to the signer order (svmPayerFromPayload);
+ * one whose transfer authority cannot be read gives null, never a co-signer
+ * that the transfer does not debit.
+ * @param {object} paymentPayload
+ * @param {{feePayer?: string}} [opts]
+ * @returns {string|null}
+ */
+export function svmPaymentAuthority(paymentPayload, { feePayer } = {}) {
+  try {
+    const tx = paymentPayload?.payload?.transaction ?? paymentPayload?.transaction;
+    const t = svmTransferAuthority(tx);
+    if (!t) return null;
+    if (t.found) return t.authority;
+    return svmPayerFromPayload(paymentPayload, { feePayer: typeof feePayer === "string" && feePayer ? feePayer : undefined });
+  } catch { return null; }
+}
+
+// The x402 v1 network names of Solana (@x402/svm V1_TO_V2_NETWORK_MAP); v2
+// payloads carry the CAIP-2 `solana:<genesis>` id.
+const SVM_V1_NETWORKS = new Set(["solana", "solana-devnet", "solana-testnet"]);
+
+/** Whether an x402 network string (v2 CAIP-2 or a v1 name) is Solana. */
+export function isSvmNetwork(network) {
+  const n = typeof network === "string" ? network : "";
+  return n.startsWith("solana:") || SVM_V1_NETWORKS.has(n);
 }
 
 /**

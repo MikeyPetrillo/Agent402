@@ -5,8 +5,9 @@
 // signed `authorization.from`. A spend ceiling still needs a stable key for the
 // other rails, and each of them names its signer inside what was signed:
 //   - Solana: the authority of the TransferChecked instruction, the wallet
-//     whose tokens move (src/svm-payer.js); only when that instruction cannot
-//     be read, the first required signer that is not the accept's fee payer;
+//     whose tokens move (src/svm-payer.js svmPaymentAuthority); only when the
+//     transaction holds no such instruction, the first required signer that is
+//     not the accept's fee payer;
 //   - Algorand: the sender of the payment transaction at `paymentIndex` in the
 //     signed group;
 //   - Stellar: the `from` argument of the token `transfer` the transaction
@@ -17,7 +18,7 @@
 // base32 and Stellar strkeys are case-sensitive. Null on any shape mismatch;
 // the caller falls back to its next key.
 import { paymentHeaderOf } from "./payer.js";
-import { svmPayerFromPayload, svmTransferAccounts } from "./svm-payer.js";
+import { svmPaymentAuthority, isSvmNetwork } from "./svm-payer.js";
 import { decodePaymentHeader } from "./payment-header.js";
 
 function decodePayload(req) {
@@ -78,12 +79,13 @@ export async function nonEvmPayerFromRequest(req) {
   const payload = decodePayload(req);
   if (!payload || typeof payload !== "object") return null;
   const network = networkOf(payload);
-  if (/^solana:/.test(network)) {
+  // v2 names Solana by CAIP-2 (`solana:<genesis>`), v1 by name (`solana`).
+  if (isSvmNetwork(network)) {
     const feePayer = payload?.accepted?.extra?.feePayer;
     // A transaction may carry more signers than the fee payer and the buyer, so
-    // the signer order does not name the buyer; the transfer's authority does.
-    const tx = payload?.payload?.transaction ?? payload?.transaction;
-    const svm = svmTransferAccounts(tx)?.authority || svmPayerFromPayload(payload, { feePayer: typeof feePayer === "string" ? feePayer : undefined });
+    // the signer order does not name the buyer; the transfer's authority does,
+    // also when the transfer's other accounts sit in a lookup table.
+    const svm = svmPaymentAuthority(payload, { feePayer });
     return svm ? `svm:${svm}` : null;
   }
   if (/^algorand:/.test(network)) {

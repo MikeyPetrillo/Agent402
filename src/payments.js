@@ -60,7 +60,7 @@ import { refusingHook, passingHook, HOOK_NAMES, ARC_CONTRACT_WALLET_CHECK_FAILED
 import { verifyFailureLine, payerNamedBy } from "./verify-failure-log.js";
 import { createRailRecheck, railRecheckSettings } from "./rail-recheck.js";
 import { bootReadSettings, readSupportedAtBoot } from "./boot-supported-read.js";
-import { svmTransferAccounts, svmPayerFromPayload } from "./svm-payer.js";
+import { svmPaymentAuthority, isSvmNetwork } from "./svm-payer.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -3188,14 +3188,13 @@ async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
     const from = ctx?.paymentPayload?.payload?.authorization?.from;
     let basis = from ? `payer:${String(from).toLowerCase()}` : null;
     // An SVM payload carries no `authorization.from`, but its signed
-    // transaction names the buyer (svm-payer.js): the first required signer
-    // that is not the accept's fee payer. Before this the fallback below
+    // transaction names the buyer (svm-payer.js svmPaymentAuthority): the
+    // TransferChecked authority, the wallet whose tokens move. Before this the fallback below
     // keyed on the credential, and a Solana credential is a fresh transaction
     // per attempt, so one looping wallet read as a new payer every time
     // (197 ids for 197 events, 2026-09-04). Never lowercased: base58.
-    if (!basis && /^solana:/.test(String(ctx?.requirements?.network || ""))) {
-      const { svmPayerFromPayload } = await import("./svm-payer.js");
-      const svm = svmPayerFromPayload(ctx?.paymentPayload, { feePayer: ctx?.requirements?.extra?.feePayer });
+    if (!basis && isSvmNetwork(String(ctx?.requirements?.network || ""))) {
+      const svm = svmPaymentAuthority(ctx?.paymentPayload, { feePayer: ctx?.requirements?.extra?.feePayer });
       if (svm) basis = `svm-payer:${svm}`;
     }
     if (!basis) {
@@ -3326,13 +3325,9 @@ function logVerifyFailure(verb, ctx, reason) {
       const req = ctx?.transportContext?.request?.adapter?.req;
       if (req && typeof req.method === "string" && typeof req.path === "string") slug = routeSlugOf(`${req.method} ${req.path}`);
     } catch { /* no slug */ }
-    const payer = payerNamedBy(ctx, { svm: (payload) => (/^solana:/.test(typeof ctx?.requirements?.network === "string" ? ctx.requirements.network : "") ? svmPayerNamedBy(payload, ctx?.requirements?.extra?.feePayer) : null) });
+    const payer = payerNamedBy(ctx, { svm: (payload) => (isSvmNetwork(ctx?.requirements?.network) ? svmPaymentAuthority(payload, { feePayer: ctx?.requirements?.extra?.feePayer }) : null) });
     console.warn(verifyFailureLine({ verb, network: ctx?.requirements?.network, scheme: ctx?.requirements?.scheme, reason, slug, payer }));
   } catch { /* a log line never decides a payment */ }
-}
-function svmPayerNamedBy(payload, feePayer) {
-  const tx = payload?.payload?.transaction ?? payload?.transaction;
-  return svmTransferAccounts(tx)?.authority || svmPayerFromPayload(payload, { feePayer: typeof feePayer === "string" ? feePayer : undefined }) || null;
 }
 
 export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null, { outageFor = () => null } = {}) {

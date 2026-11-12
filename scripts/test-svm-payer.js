@@ -13,7 +13,7 @@
 //   node scripts/test-svm-payer.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFile } from "node:fs/promises";
-import { svmRequiredSigners, svmPayerFromPayload, base58Encode, svmSignedTransfer, svmTransferAccounts } from "../src/svm-payer.js";
+import { svmRequiredSigners, svmPayerFromPayload, base58Encode, svmSignedTransfer, svmTransferAccounts, svmTransferAuthority, svmPaymentAuthority, isSvmNetwork } from "../src/svm-payer.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -125,11 +125,82 @@ for (const junk of [null, undefined, "", "!!!", "AAAA", "gA==", Buffer.alloc(300
   }
 }
 
+// --- the transfer authority with lookup-table accounts and a decoy co-signer ----
+// A v0 message may name the transfer's source, mint and destination through an
+// address lookup table; the authority is a signer, and signers are always
+// static keys, so it still reads with no RPC. A co-signer ahead of it in the
+// signer order is never the key.
+{
+  const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", CB = "ComputeBudget111111111111111111111111111111";
+  const u64 = (n) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(n), true); return b; };
+  const payTo = (await kit.generateKeyPairSigner()).address, src = (await kit.generateKeyPairSigner()).address;
+  const decoy = await kit.generateKeyPairSigner();
+  const table = (await kit.generateKeyPairSigner()).address;
+  const fp = await kit.generateKeyPairSigner();
+  // authority: "signs" (signer), "named" (no signer slot), "none" (no transfer at all)
+  async function altTx({ inTable, authority = "signs", second = null }) {
+    const transferIx = (who) => ({ programAddress: kit.address(TOKEN), accounts: [
+      { address: kit.address(src), role: kit.AccountRole.WRITABLE },
+      { address: kit.address(USDC), role: kit.AccountRole.READONLY },
+      { address: kit.address(payTo), role: kit.AccountRole.WRITABLE },
+      authority === "named" ? { address: who.address, role: kit.AccountRole.READONLY } : { address: who.address, role: kit.AccountRole.READONLY_SIGNER, signer: who },
+      { address: decoy.address, role: kit.AccountRole.WRITABLE_SIGNER, signer: decoy },
+    ], data: new Uint8Array([12, ...u64(1000), 6]) });
+    const memo = { programAddress: kit.address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"), accounts: [{ address: decoy.address, role: kit.AccountRole.WRITABLE_SIGNER, signer: decoy }, { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer }], data: new TextEncoder().encode("x") };
+    const ixs = [
+      { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([2, 0x20, 0x4e, 0, 0]) },
+      { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([3, ...u64(1)]) },
+      authority === "none" ? memo : transferIx(buyer),
+      ...(second ? [transferIx(second)] : []),
+    ];
+    let msg = kit.pipe(kit.createTransactionMessage({ version: 0 }),
+      (m) => kit.setTransactionMessageFeePayer(fp.address, m),
+      (m) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
+      (m) => kit.appendTransactionMessageInstructions(ixs, m));
+    if (inTable.length) msg = kit.compressTransactionMessageUsingAddressLookupTables(msg, { [table]: inTable.map((a) => kit.address(a)) });
+    const signers = [decoy.keyPair, ...(authority === "named" ? [] : [buyer.keyPair]), ...(second ? [second.keyPair] : [])];
+    return kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction(signers, kit.compileTransaction(msg)));
+  }
+  const asPayload = (tx) => ({ x402Version: 2, accepted: { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", extra: { feePayer: fp.address } }, payload: { transaction: tx } });
+  const destInTable = await altTx({ inTable: [payTo] });
+  const signers = svmRequiredSigners(destInTable) || [];
+  ok(signers[1] === decoy.address && signers.includes(buyer.address), "control: the decoy is the first signer after the fee payer");
+  ok(svmTransferAccounts(destInTable) === null, "control: the destination sits in the lookup table, so the four-account read is null");
+  ok(svmTransferAuthority(destInTable)?.authority === buyer.address, "destination in a lookup table: the authority still reads from the static keys");
+  ok(svmPaymentAuthority(asPayload(destInTable), { feePayer: fp.address }) === buyer.address, `destination in a lookup table plus a decoy co-signer: the payer is the authority (${svmPaymentAuthority(asPayload(destInTable), { feePayer: fp.address }) === decoy.address ? "got the decoy" : "ok"})`);
+  const threeInTable = await altTx({ inTable: [payTo, src, USDC] });
+  ok(svmPaymentAuthority(asPayload(threeInTable), { feePayer: fp.address }) === buyer.address, "source, mint and destination all in a lookup table: the payer is the authority");
+  const staticTx = await altTx({ inTable: [] });
+  ok(svmPaymentAuthority(asPayload(staticTx), { feePayer: fp.address }) === buyer.address && svmTransferAccounts(staticTx)?.authority === buyer.address, "all static: the authority, and the four-account read agrees");
+  const named = await altTx({ inTable: [payTo], authority: "named" });
+  ok(svmPaymentAuthority(asPayload(named), { feePayer: fp.address }) === null, "an authority that is not a signer gives no payer, never the co-signer");
+  const other = await kit.generateKeyPairSigner();
+  const twoAuth = await altTx({ inTable: [payTo], second: other });
+  ok(svmPaymentAuthority(asPayload(twoAuth), { feePayer: fp.address }) === null, "two transfers with different authorities give no payer");
+  const sameTwice = await altTx({ inTable: [payTo], second: buyer });
+  ok(svmPaymentAuthority(asPayload(sameTwice), { feePayer: fp.address }) === buyer.address, "two transfers with the same authority give that authority");
+  const noTransfer = await altTx({ inTable: [], authority: "none" });
+  ok(svmTransferAuthority(noTransfer)?.found === false && svmPaymentAuthority(asPayload(noTransfer), { feePayer: fp.address }) === decoy.address, "no transfer at all: the signer order still names a payer");
+  for (const junk of [null, "", "AAAA", Buffer.alloc(300).toString("base64"), "A".repeat(5000), { toString: 1 }]) {
+    let out; try { out = svmPaymentAuthority({ payload: { transaction: junk } }); } catch (e) { out = `threw ${e.message}`; }
+    ok(out === null, `svmPaymentAuthority junk ${typeof junk === "string" ? junk.slice(0, 12) : typeof junk} -> null`);
+  }
+}
+
+// --- network names: v2 CAIP-2 and the x402 v1 names ------------------------------
+{
+  const pkg = await import("@x402/svm");
+  const v1Names = Object.keys(pkg.V1_TO_V2_NETWORK_MAP || {});
+  ok(v1Names.length >= 2 && v1Names.every((n) => isSvmNetwork(n)), `every v1 Solana network name of the installed @x402/svm reads as Solana (${v1Names.join(", ")})`);
+  ok(Object.values(pkg.V1_TO_V2_NETWORK_MAP).every((n) => isSvmNetwork(n)), "and so does every CAIP-2 id it maps to");
+  ok(!isSvmNetwork("eip155:8453") && !isSvmNetwork("solanax") && !isSvmNetwork("") && !isSvmNetwork(null) && !isSvmNetwork({ toString: () => "solana" }), "other networks and non-strings do not");
+}
+
 // --- the wiring in payments.js is pinned from source ---------------------------
 const payments = await readFile("src/payments.js", "utf8");
 const derive = payments.slice(payments.indexOf("let payerKey = null;"), payments.indexOf("capturePostHogVerifyFailed({"));
-ok(/svmPayerFromPayload\(ctx\?\.paymentPayload, \{ feePayer: ctx\?\.requirements\?\.extra\?\.feePayer \}\)/.test(derive),
-  "recordVerifyFailure asks svm-payer.js with the accept's fee payer");
+ok(/svmPaymentAuthority\(ctx\?\.paymentPayload, \{ feePayer: ctx\?\.requirements\?\.extra\?\.feePayer \}\)/.test(derive),
+  "recordVerifyFailure asks svm-payer.js for the transfer authority, with the accept's fee payer");
 ok(/basis = `svm-payer:\$\{svm\}`/.test(derive), "the SVM buyer becomes the HMAC basis");
 ok(derive.indexOf("svm-payer:") < derive.indexOf("credentialKeyOf"), "and it is tried BEFORE the per-credential fallback, else every retry is a new id");
 ok(!/svm\)\.toLowerCase|svm\.toLowerCase/.test(derive), "base58 is never case-folded");
