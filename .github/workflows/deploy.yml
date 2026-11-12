@@ -3443,7 +3443,7 @@ jobs:
           # a main push with no before): empty, so the gate runs (fail-open).
           DIFF_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && (github.ref == 'refs/heads/main' && github.event.before || github.ref != 'refs/heads/main' && 'main')) || '' }}
 
-      - name: Offline suites (1 script, one process each)
+      - name: Offline suites (2 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-c 1
       - name: Runner kills and memory (on failure)
         if: failure()
