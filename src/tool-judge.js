@@ -10,6 +10,7 @@ import { priceUsdOf } from "./price-usd.js";
 import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "./decision-one.js";
 import { raceDeadline } from "./inflight-gauge.js";
 import { createSharedDailySpend } from "./shared-limits.js";
+import { createSharedCeilingView } from "./daily-ceilings.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 // Pinned to the tested Jev version (see JEV_PINNED in src/tools/judge-kit.js).
@@ -58,16 +59,40 @@ const freeShare = () => {
 const spend = { day: "", tokens: 0, freeTokens: 0, calls: 0, refused: 0, capRefused: 0, cacheHits: 0 };
 const today = () => new Date().toISOString().slice(0, 10);
 function rollDay() { const d = today(); if (spend.day !== d) { spend.day = d; spend.tokens = 0; spend.freeTokens = 0; spend.calls = 0; spend.refused = 0; spend.capRefused = 0; spend.cacheHits = 0; } }
+// The shared day as this process last read it, for the status word: a new
+// process's own counters start empty, so on a day another replica (or this
+// service before a deploy) was refused at the ceiling, the word reads the
+// shared total and the shared refusal mark, not only its own memory.
+const jevView = createSharedCeilingView(jevShared);
+let jevViewDay = ""; // the UTC day of the last shared read that answered
+/** One bounded read of the shared day for the status word; never rejects. */
+export function refreshJevSpendShared(now = Date.now()) {
+  return jevView.refresh(now).then((read) => { if (read) jevViewDay = new Date(now).toISOString().slice(0, 10); return read; });
+}
+const msLeftToday = (now = Date.now()) => Math.max(60_000, Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate() + 1) - now);
 /** Counts only. `capped` once a call was refused against the total ceiling
  *  (this process's or the shared day's) today: a call that would cross the
  *  ceiling is never booked, so the booked total alone stays under it. A
- *  refusal by the free share alone leaves the paid path open and reads ok. */
-export function jevSpendStatus() {
+ *  refusal by the free share alone leaves the paid path open and reads ok.
+ *  With a shared store the word also reads the shared day (its total at the
+ *  ceiling, or a refusal any replica marked today), so a fresh process on a
+ *  capped day reads capped; until that day has been read once it reads
+ *  unknown rather than ok. Each call starts a bounded background read. */
+export function jevSpendStatus(now = Date.now()) {
   rollDay();
   const cap = jevDailyMaxTokens();
-  return { day: spend.day, tokens: spend.tokens, capTokens: cap, freeTokens: spend.freeTokens, freeCapTokens: Math.floor(cap * freeShare()), calls: spend.calls, cacheHits: spend.cacheHits, refusedToday: spend.refused, status: cap > 0 && (spend.tokens >= cap || spend.capRefused > 0) ? "capped" : "ok" };
+  const viewed = jevShared.enabled && jevViewDay === spend.day;
+  const sharedTokens = viewed ? jevView.micro(now) : 0;
+  const localCapped = spend.tokens >= cap || spend.capRefused > 0;
+  const sharedCapped = viewed && (sharedTokens >= cap || jevView.refusing(now));
+  let status = "ok";
+  if (cap > 0) {
+    if (jevShared.enabled) void refreshJevSpendShared(now);
+    status = localCapped || sharedCapped ? "capped" : jevShared.enabled && !viewed ? "unknown" : "ok";
+  }
+  return { day: spend.day, tokens: spend.tokens, ...(viewed ? { sharedTokens } : {}), capTokens: cap, freeTokens: spend.freeTokens, freeCapTokens: Math.floor(cap * freeShare()), calls: spend.calls, cacheHits: spend.cacheHits, refusedToday: spend.refused, status };
 }
-export function _jevReset() { spend.day = ""; rollDay(); cache.clear(); jevShared.reset(); jevSharedFree.reset(); }
+export function _jevReset() { spend.day = ""; rollDay(); cache.clear(); jevShared.reset(); jevSharedFree.reset(); jevView.reset(); jevViewDay = ""; }
 /** Test seam: the day's shared token totals (null without a shared store). */
 export async function _jevSharedToday() { return { tokens: await jevShared.today(), freeTokens: await jevSharedFree.today() }; }
 
@@ -90,7 +115,9 @@ function remember(key, value) {
 // given back on a refusal, by either counter); this process's counters then
 // decide as before, so a refusal here is never looser than one replica's.
 async function book(est, cap, free, outcome) {
-  const refuse = (total) => { spend.refused++; if (total) spend.capRefused++; if (outcome) outcome.skipped = "budget"; return false; };
+  // A refusal at the total ceiling is also marked on the shared day, held to
+  // the day's end, so every replica's word (a fresh one included) reads capped.
+  const refuse = (total) => { spend.refused++; if (total) { spend.capRefused++; jevShared.noteRefused(msLeftToday()); } if (outcome) outcome.skipped = "budget"; return false; };
   if (jevShared.enabled) {
     if (!(await jevShared.reserve(est, cap))) { rollDay(); return refuse(true); }
     if (free && !(await jevSharedFree.reserve(est, Math.floor(cap * freeShare())))) { jevShared.book(-est); rollDay(); return refuse(); }

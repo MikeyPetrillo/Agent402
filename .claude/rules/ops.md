@@ -104,8 +104,10 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
 - **Every status word has a pager:** each word on `/api/gateway-status` is read by a status Worker
   alarm (`scripts/test-status-word-pagers.js` boots the server and fails on a word no verdict reads;
   none is excused). Paged on their alarm values only, by the Worker and `heartbeat.yml` under one
-  title each: `jevSpend` capped (a refusal against the total ceiling today, local or shared; the
-  free share alone reads ok; closes on ok), `externalSpendGlobal` refusing (ok, off; near is a
+  title each: `jevSpend` capped (a refusal against the total ceiling today, local or shared; with a
+  shared store the word reads the shared day total and a refusal mark held to 00:00 UTC, so a
+  fresh process on a capped day reads capped, and unknown, which does neither, until its first
+  shared read; the free share alone reads ok; closes on ok), `externalSpendGlobal` refusing (ok, off; near is a
   forecast and does neither), `solanaHistory` and `evmLogs` failing (publics, fallback; idle does
   neither, and reads idle until five recent reads are in, so one failure after a deploy never
   pages), `speechUpstream` cooling (ok, probing: the cool-down ended and the next call tries the

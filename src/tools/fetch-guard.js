@@ -1,4 +1,4 @@
-import { Resolver } from "node:dns/promises";
+import dnsPromises, { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import { Agent, buildConnector } from "undici";
 import { checkServerIdentity } from "../tls-distrust.js";
@@ -120,19 +120,40 @@ function queryFamily(host, family) {
   return p;
 }
 
+// A name server that turned the query away at once: it refused it (REFUSED),
+// or nothing listens on its port, or it reset the connection. The c-ares
+// channel has no other path, while getaddrinfo reads the OS resolver's own
+// configuration (a local stub, a split-horizon setup, the hosts file), so a
+// refusal falls back once to dns.lookup. Only a fast refusal does: a timeout
+// or a SERVFAIL stays on c-ares, so an unanswered name still holds no pool
+// thread, and "no such name" is an answer, not a refusal.
+const FAST_REFUSAL_CODES = new Set(["ECONNREFUSED", "EREFUSED", "ECONNRESET"]);
+const isFastRefusal = (err) => FAST_REFUSAL_CODES.has(String(err?.code || ""));
+async function lookupFallback(name, families, ms) {
+  const family = families.length === 1 ? families[0] : 0;
+  const list = await withDeadline(dnsPromises.lookup(name, { all: true, family, verbatim: true }), ms);
+  return (Array.isArray(list) ? list : [])
+    .filter((a) => a && isIP(String(a.address)) && families.includes(isIP(String(a.address))))
+    .map((a) => ({ address: String(a.address), family: isIP(String(a.address)) }));
+}
+
 /**
  * Every address DNS publishes for a name: its A answers and, unless
  * `families` says otherwise, its AAAA answers, as [{ address, family }].
  * A literal IP is returned as itself. Rejects only when no family answered:
  * with a transient code (isTransientLookupError) when any family could not
  * be answered, otherwise with the resolver's own code (ENOTFOUND, ENODATA).
- * A family that failed beside one that answered contributes nothing.
+ * A family that failed beside one that answered contributes nothing. When
+ * every family was refused at once by the name server (FAST_REFUSAL_CODES),
+ * the OS resolver (dns.lookup, every address) answers instead, once, within
+ * what is left of the same bound; the caller checks every address either way.
  */
 export async function resolveHostAddresses(host, { families = [4, 6] } = {}) {
   const name = String(host);
   const literal = isIP(name);
   if (literal) return [{ address: name, family: literal }];
   const ms = lookupBudgetMs();
+  const started = Date.now();
   const settled = await Promise.allSettled(
     families.map((f) => withDeadline(queryFamily(name, f), ms).then((list) => (Array.isArray(list) ? list : []).map((address) => ({ address: String(address), family: f }))))
   );
@@ -144,6 +165,12 @@ export async function resolveHostAddresses(host, { families = [4, 6] } = {}) {
     else other ??= s.reason;
   }
   if (out.length) return out;
+  if (settled.length && settled.every((s) => s.status === "rejected" && isFastRefusal(s.reason))) {
+    const left = Math.max(1, ms - (Date.now() - started));
+    const viaOs = await lookupFallback(name, families, left);
+    if (viaOs.length) return viaOs;
+    throw Object.assign(new Error("no address"), { code: "ENODATA" });
+  }
   throw transient || other || Object.assign(new Error("no address"), { code: "ENODATA" });
 }
 
@@ -167,6 +194,7 @@ function isPrivateV4(ip) {
     // 192.0.0.0/16 is ordinary public space (192.0.64.0/18 is Automattic:
     // gravatar.com, wordpress.com; blocking b===0 alone broke those).
     (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+    (a === 192 && b === 88 && c === 99) || // 6to4 relay anycast (deprecated, RFC 7526)
     (a === 198 && (b === 18 || b === 19)) || // benchmarking
     (a === 198 && b === 51) || (a === 203 && b === 113) || // doc ranges
     a >= 224 // multicast, reserved, broadcast
@@ -319,26 +347,48 @@ export function upstreamFailure(upstreamStatus, { retryAfter = null, host = null
 function isSingleLabel(host) {
   return !isIP(host) && !String(host).replace(/\.$/, "").includes(".");
 }
+/**
+ * Every address for a host, each one checked, through the guard's resolver
+ * (resolveHostAddresses: c-ares, with the OS fallback on a fast refusal). A
+ * private literal, a single-label name, a name that does not resolve and a
+ * name with any private answer all throw the one blocked error; a resolver
+ * that could not answer throws the retryable lookupUnavailable. Shared by the
+ * connect-time pin below and the browser's egress proxy (worker/egress-proxy.js).
+ */
+export async function resolvePublicAddresses(host, { families = [4, 6] } = {}) {
+  const name = String(host).replace(/^\[|\]$/g, "");
+  const literal = isIP(name);
+  if (literal) {
+    if (isPrivateIp(name)) throw blockedError();
+    return [{ address: name, family: literal }];
+  }
+  if (isSingleLabel(name)) throw blockedError();
+  let entries;
+  try {
+    entries = await resolveHostAddresses(name, { families });
+  } catch (err) {
+    // A name that does not resolve is refused exactly like a name with a
+    // private answer: on a redirect hop the two must read the same. A
+    // resolver that could not answer at all is neither, and is retryable.
+    throw isTransientLookupError(err) ? lookupUnavailable(err) : blockedError(err);
+  }
+  if (!entries.length || entries.some((e) => isPrivateIp(e.address))) throw blockedError();
+  return entries;
+}
+
 function guardedLookup(hostname, options, callback) {
-  if (isSingleLabel(hostname)) return callback(blockedError());
   // Force IPv4. Railway's egress has NO working IPv6 — every AAAA address is
   // ENETUNREACH — and Node's happy-eyeballs races the IPv6 address on a dual-stack
   // host ~15% of the time, surfacing as UND_ERR_SOCKET / "could not connect"
   // (the repeatable ~4-7% 504s on treasury-debt/avg-rates, gov-data, fx, edgar).
   // Resolving IPv4-only never attempts v6; an IPv6-only host is unreachable here
   // anyway, so nothing is lost.
-  resolveHostAddresses(hostname, { families: [4] }).then(
+  resolvePublicAddresses(hostname, { families: [4] }).then(
     (entries) => {
-      for (const e of entries) {
-        if (isPrivateIp(e.address)) return process.nextTick(callback, blockedError());
-      }
       if (options?.all) return process.nextTick(callback, null, entries);
-      process.nextTick(callback, null, entries[0].address, 4);
+      process.nextTick(callback, null, entries[0].address, entries[0].family);
     },
-    // A name that does not resolve is refused exactly like a name with a
-    // private answer: on a redirect hop the two must read the same. A
-    // resolver that could not answer at all is neither, and is retryable.
-    (err) => process.nextTick(callback, isTransientLookupError(err) ? lookupUnavailable(err) : blockedError(err))
+    (err) => process.nextTick(callback, err)
   );
 }
 

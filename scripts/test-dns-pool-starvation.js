@@ -43,12 +43,14 @@ server.on("message", (msg, rinfo) => {
   const qtype = msg.readUInt16BE(end);
   const key = `${name} ${qtype === 1 ? "A" : qtype === 28 ? "AAAA" : qtype}`;
   queries.set(key, (queries.get(key) || 0) + 1);
+  // The name server turns these away at once: REFUSED (rcode 5) and SERVFAIL (rcode 2).
+  const rcode = name.startsWith("refused-") ? 5 : name === "servfail.pool.test" ? 2 : 0;
   if (name === "half.pool.test" && qtype === 28) return; // A answered with no data, AAAA never
-  if (!(name in ANSWERS) && name !== "half.pool.test") return; // the slow names: never answered
+  if (!(name in ANSWERS) && name !== "half.pool.test" && !rcode) return; // the slow names: never answered
   const question = msg.subarray(12, end + 4);
   const header = Buffer.alloc(12);
   msg.copy(header, 0, 0, 2); // id
-  header.writeUInt16BE(0x8180, 2); // response, recursion desired and available, NOERROR
+  header.writeUInt16BE(0x8180 | rcode, 2); // response, recursion desired and available, NOERROR unless refused
   header.writeUInt16BE(1, 4); // one question
   const answers = [];
   if (qtype === 1 && ANSWERS[name]) {
@@ -78,6 +80,20 @@ for (const fn of ["resolve4", "resolve6"]) {
     return real.apply(this, a);
   };
 }
+// The OS-resolver fallback (dns.lookup, taken only when the name server
+// refuses a query at once) is answered here, counted per name.
+const osLookups = new Map();
+const OS_ANSWERS = {
+  "refused-pub.pool.test": [{ address: "93.184.215.14", family: 4 }],
+  "refused-mixed.pool.test": [{ address: "93.184.215.14", family: 4 }, { address: "fd00::7", family: 6 }],
+};
+const realLookup = dnsPromises.lookup;
+dnsPromises.lookup = async (host, opts) => {
+  osLookups.set(host, (osLookups.get(host) || 0) + 1);
+  if (!opts?.all) throw new Error("the fallback must ask for every address");
+  if (OS_ANSWERS[host]) return OS_ANSWERS[host].filter((a) => !opts.family || a.family === opts.family);
+  throw Object.assign(new Error(`stub ENOTFOUND ${host}`), { code: "ENOTFOUND" });
+};
 process.env.DNS_LOOKUP_TIMEOUT_MS = "1500";
 const { assertPublicUrl, hostIsPublic, ssrfDispatcher, isSsrfBlock, LOOKUP_UNAVAILABLE } = await import("../src/tools/fetch-guard.js");
 
@@ -134,11 +150,27 @@ ok(mixed?.statusCode === 400 && (await hostIsPublic("mixed.pool.test")) === fals
 const half = await assertPublicUrl("https://half.pool.test/").catch((e) => e);
 ok(half?.statusCode === 503 && half.message === LOOKUP_UNAVAILABLE, `no A and an unanswered AAAA is the retryable 503 (${half?.statusCode})`);
 
+// A name server that answers REFUSED: the OS resolver answers once instead,
+// and every address it gives is checked like a c-ares answer.
+const rPub = await assertPublicUrl("https://refused-pub.pool.test/").catch((e) => e);
+ok(rPub instanceof URL && osLookups.get("refused-pub.pool.test") >= 1, `a REFUSED query falls back to the OS resolver and a public answer passes (${rPub instanceof URL ? "public" : `${rPub?.statusCode} ${rPub?.message}`})`);
+const rMixed = await assertPublicUrl("https://refused-mixed.pool.test/").catch((e) => e);
+ok(rMixed?.statusCode === 400 && (await hostIsPublic("refused-mixed.pool.test")) === false, `the fallback's every address is checked: a private AAAA beside a public A is refused (${rMixed?.statusCode ?? "passed"})`);
+const rNone = await assertPublicUrl("https://refused-none.pool.test/").catch((e) => e);
+ok(rNone?.statusCode === 400, `a REFUSED query whose fallback finds no such name is the neutral 400 (${rNone?.statusCode})`);
+let rConnect = null;
+try { await fetch("http://refused-none.pool.test:8081/", { dispatcher: ssrfDispatcher, signal: AbortSignal.timeout(5000) }); } catch (e) { rConnect = e; }
+ok(isSsrfBlock(rConnect), "the connect-time pin takes the same fallback and refuses a name it cannot resolve");
+// SERVFAIL stays on c-ares: the retryable 503, no OS lookup.
+const sf = await assertPublicUrl("https://servfail.pool.test/").catch((e) => e);
+ok(sf?.statusCode === 503 && !osLookups.has("servfail.pool.test"), `a SERVFAIL is the retryable 503 with no OS lookup (${sf?.statusCode}, ${osLookups.get("servfail.pool.test") || 0} lookups)`);
+
 // The slow names end at their bound as the retryable 503, the pool still full.
 const ended = await Promise.all(slow);
 ok(ended.every((r) => r.e?.statusCode === 503 && r.e.message === LOOKUP_UNAVAILABLE && r.ms < 3000), `eight unanswered names are each a 503 at the bound (${ended.map((r) => r.e?.statusCode ?? "ok").join(",")}; slowest ${Math.round(Math.max(...ended.map((r) => r.ms || 0)))} ms)`);
 const dupEnded = await Promise.all(dup);
 ok(dupEnded.every((e) => e?.statusCode === 503), "fifty checks of one unanswered name all end as the 503");
+ok(![...osLookups.keys()].some((h) => h.startsWith("slow")), `a timed-out query never falls back to the OS resolver (${[...osLookups.keys()].join(",")})`);
 ok((queries.get("slow-dup.pool.test A") || 0) === 1, `concurrent checks of one name share one query (${queries.get("slow-dup.pool.test A") || 0} A queries)`);
 
 // The query itself, not only the caller's wait, ends near the bound: c-ares
@@ -169,9 +201,37 @@ ok((queries.get("slow-dup.pool.test A") || 0) === 1, `concurrent checks of one n
   ok(r.code === "ETIMEOUT" && r.ms < 11_000 && r.tries === 3, `an unanswered query is given up by the resolver after ${r.tries} tries in ${r.ms} ms, near the 10000 ms bound (${r.code})`);
 }
 
+// A name server with nothing on its port (ECONNREFUSED): the same single
+// fallback, in a fresh process whose resolver points at a closed port.
+{
+  const child = `
+    import ${JSON.stringify(new URL("./lib/offline-stores.js", import.meta.url).href)};
+    import dgram from "node:dgram";
+    import dnsPromises from "node:dns/promises";
+    const s = dgram.createSocket("udp4");
+    await new Promise((r) => s.bind(0, "127.0.0.1", r));
+    const closed = s.address().port; s.close();
+    const P = dnsPromises.Resolver.prototype, r4 = P.resolve4, r6 = P.resolve6;
+    const point = function (real) { return function (...a) { if (!this.__t) { this.setServers(["127.0.0.1:" + closed]); this.__t = true; } return real.apply(this, a); }; };
+    P.resolve4 = point(r4); P.resolve6 = point(r6);
+    let lookups = 0;
+    dnsPromises.lookup = async (h, o) => { lookups++; return h === "closed-pub.pool.test" ? [{ address: "93.184.215.14", family: 4 }] : [{ address: "127.0.0.1", family: 4 }]; };
+    const { resolveHostAddresses, assertPublicUrl } = await import(${JSON.stringify(new URL("../src/tools/fetch-guard.js", import.meta.url).href)});
+    const t = performance.now();
+    const pub = await resolveHostAddresses("closed-pub.pool.test").then((a) => a.map((x) => x.address).join(","), (e) => "ERR " + e.code);
+    const loop = await assertPublicUrl("https://closed-loop.pool.test/").then(() => 200, (e) => e.statusCode);
+    console.log(JSON.stringify({ pub, loop, lookups, ms: Math.round(performance.now() - t) }));
+  `;
+  const { execFileSync } = await import("node:child_process");
+  const { childJson } = await import("./lib/child-json.js");
+  const r = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", child], { encoding: "utf8", timeout: 30_000 }));
+  ok(r.pub === "93.184.215.14" && r.loop === 400 && r.lookups === 2 && r.ms < 2000, `a closed name server port falls back to the OS resolver once per name, and its answer is checked (${JSON.stringify(r)})`);
+}
+
 const controlMs = await control;
 ok(controlMs > 1000, `(control) a getaddrinfo lookup waited ${Math.round(controlMs)} ms for the full pool`);
 await Promise.all(poolWork);
 server.close();
+dnsPromises.lookup = realLookup;
 console.log(`\ntest-dns-pool-starvation: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -15,14 +15,23 @@
 //   7. end to end: the recall kit with fetch stubbed (openFDA + the synthesis
 //      call), the report text unchanged and the field on the JSON
 //   8. the report viewer (jsdom) shows the note under the title
-// No network and no paid upstream: every fetch is stubbed.
+// No network and no paid upstream: every fetch and every name lookup is stubbed.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
+import { stubGuardResolver, stubGuardLookup, oneV4 } from "./lib/guard-resolver-stub.js";
 import { JSDOM, VirtualConsole } from "jsdom";
 import {
   checkReportGrounding, extractClaims, groundingValues, combineGrounding, groundingNote, shownGroundingNote,
   GROUNDING_CLAIM_CAP, GROUNDING_LIST_CAP,
 } from "../src/report-grounding.js";
+
+// The kits check every source URL with the address guard before the stubbed
+// fetch (assertPublicUrl: a real name lookup of www.sec.gov or api.fda.gov).
+// Answered here, every name one public address, so no assertion waits on this
+// machine's name server: a slow or refusing one turned those checks into the
+// retryable 503, and the filing excerpts and the recall feeds came back empty.
+stubGuardResolver(oneV4("93.184.215.14"));
+stubGuardLookup(() => [{ address: "93.184.215.14", family: 4 }]);
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };

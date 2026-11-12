@@ -16,7 +16,13 @@ TARGET_USER=node
 if [ "$(id -u)" = "0" ]; then
   if [ -n "$TOLLBOOTH_REPLAY_SQLITE" ]; then
     dir=$(dirname -- "$TOLLBOOTH_REPLAY_SQLITE")
-    mkdir -p -- "$dir" || echo "[entrypoint] WARN: could not create $dir"
+    # Created as node wherever node may write (the image's /var/lib/tollbooth
+    # is node's, so a subdirectory of it comes out node's, with nothing to
+    # hand over). Only where node cannot create it does root create it, and
+    # then the own-place rule below decides whether it is handed over.
+    if [ ! -e "$dir" ]; then
+      su-exec "$TARGET_USER" mkdir -p -- "$dir" 2>/dev/null || mkdir -p -- "$dir" || echo "[entrypoint] WARN: could not create $dir"
+    fi
     # The directory too (SQLite writes its -wal and -shm files beside the
     # database), but only where it is the record's own place: the image's
     # /var/lib/tollbooth, or a directory on a mounted volume or bind mount.
