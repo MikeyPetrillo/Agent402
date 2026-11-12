@@ -90,7 +90,7 @@ export function jevSpendStatus(now = Date.now()) {
     if (jevShared.enabled) void refreshJevSpendShared(now);
     status = localCapped || sharedCapped ? "capped" : jevShared.enabled && !viewed ? "unknown" : "ok";
   }
-  return { day: spend.day, tokens: Math.max(spend.tokens, sharedTokens), capTokens: cap, freeTokens: spend.freeTokens, freeCapTokens: Math.floor(cap * freeShare()), calls: spend.calls, cacheHits: spend.cacheHits, refusedToday: spend.refused, status };
+  return { day: spend.day, tokens: spend.tokens, ...(viewed ? { sharedTokens } : {}), capTokens: cap, freeTokens: spend.freeTokens, freeCapTokens: Math.floor(cap * freeShare()), calls: spend.calls, cacheHits: spend.cacheHits, refusedToday: spend.refused, status };
 }
 export function _jevReset() { spend.day = ""; rollDay(); cache.clear(); jevShared.reset(); jevSharedFree.reset(); jevView.reset(); jevViewDay = ""; }
 /** Test seam: the day's shared token totals (null without a shared store). */
