@@ -224,6 +224,28 @@ console.log(`test-tool-judge (with content-keyed cache): ${n} assertions ok`);
 }
 console.log(`test-tool-judge (with free share + admission): ${n} assertions ok`);
 
+// A new process's status word on today's shared day: its first read, and its
+// read once the shared day has been read (`refreshJevSpendShared`).
+async function freshStatus(env) {
+  const { execFileSync } = await import("node:child_process");
+  const { childJson } = await import("./lib/child-json.js");
+  const child = `
+    const J = await import(${JSON.stringify(new URL("../src/tool-judge.js", import.meta.url).href)});
+    const first = J.jevSpendStatus().status;
+    await J.refreshJevSpendShared();
+    const s = J.jevSpendStatus();
+    console.log(JSON.stringify({ first, after: s.status, ownCalls: s.calls }));
+    process.exit(0);
+  `;
+  return childJson(execFileSync(process.execPath, ["--input-type=module", "-e", child], { encoding: "utf8", timeout: 30_000, env: { ...process.env, ...env } }));
+}
+
+// A process with no shared store reads its own day alone: a fresh one reads ok.
+if (!_jevShared) {
+  const fresh = await freshStatus({});
+  ok(fresh.first === "ok" && fresh.after === "ok", `memory backend: a fresh process reads ok from its own counters (${JSON.stringify(fresh)})`);
+}
+
 // --- the daily ceiling is one figure for the service: with a shared store
 //     (REDIS_URL) the tokens are reserved in a day counter every replica adds
 //     to; without one the process's own counter decides alone. Runs on
@@ -253,6 +275,22 @@ console.log(`test-tool-judge (with free share + admission): ${n} assertions ok`)
     ok((await judgeTool("a different task past the shared ceiling", [A, B])) === null && hits === 0 && jevSpendStatus().refusedToday === before + 1, "the judge refuses on the shared total with no model call, though this process's own counter would have allowed it");
     ok(jevSpendStatus().status === "capped", `a refusal by the shared total reads capped on this replica (${jevSpendStatus().status})`);
     ok((await _jevSharedToday()).tokens === local * 2 + 100, `a refused reservation is given back to the shared day (${(await _jevSharedToday()).tokens})`);
+    // A fresh process (a deploy) on the same capped day: its own counters are
+    // empty, and its word still reads capped from the shared day, never ok.
+    // Before the shared day is read it reads unknown, a word that neither
+    // opens nor closes the pager.
+    await new Promise((r) => setTimeout(r, 200)); // the refusal mark is a fire-and-forget write
+    const fresh = await freshStatus({ JEV_DAILY_MAX_TOKENS: String(local * 2 + 100) });
+    ok(fresh.first !== "ok" && fresh.after === "capped" && fresh.ownCalls === 0, `a fresh process on a capped day reads ${fresh.first} then ${fresh.after}, never ok (${JSON.stringify(fresh)})`);
+    // A day under the ceiling with no refusal reads ok.
+    _jevReset();
+    await new Promise((r) => setTimeout(r, 200)); // the reset is a fire-and-forget write
+    const open = await freshStatus({ JEV_DAILY_MAX_TOKENS: String(local * 2 + 100) });
+    ok(open.after === "ok", `a fresh process on an open day reads ok (${open.after})`);
+    // The shared total at the ceiling, with no refusal marked, reads capped too.
+    ok((await other.reserve(local * 2 + 100, local * 2 + 100)) === true, "another replica books the day up to the ceiling");
+    const atCap = await freshStatus({ JEV_DAILY_MAX_TOKENS: String(local * 2 + 100) });
+    ok(atCap.after === "capped", `a fresh process reads capped when the shared total has reached the ceiling (${atCap.after})`);
     delete process.env.JEV_DAILY_MAX_TOKENS;
     _jevReset();
   }
