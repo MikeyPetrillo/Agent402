@@ -77,7 +77,7 @@ ok(/same price/.test(tool.description), "the description says the code-only stop
 {
   calls.length = 0;
   const out = await tool.handler(tool.discovery.input);
-  const ex = tool.discovery.example;
+  const ex = tool.discovery.output.example;
   ok(JSON.stringify(out) === JSON.stringify(ex), `the documented example is the real answer, byte for byte (${JSON.stringify(out)})`);
   ok(calls.length === 0, "and it is answered with no model call, so a keyless CI satisfies it");
   ok(Object.keys(ex).join() === "decision,reason,confidence,checks,model", "the example carries the fixed top-level schema");

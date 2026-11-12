@@ -1085,26 +1085,59 @@ export function catalogServiceNameFor(catalog) {
       : "Agent402.tools";
 }
 
+// A query-parameter hint ("?bytes=1..1024", " (?ext=png)") in catalog text.
+const QUERY_HINT = /\s\??\(?\?[a-zA-Z_][a-zA-Z0-9_]*=/;
+const PAREN_QUERY_HINT = /\s*\(\?[a-zA-Z_][a-zA-Z0-9_]*=[^()]*\)/g;
+const SENTENCE_BREAK = /(?<=[.!?])(?<!\b(?:e\.g|i\.e|St|Mt|Dr|Mr|Ms|vs)\.)\s+/;
+const trimHintHead = (head) => {
+  let h = head.replace(/[,;:\-(]+$/, "").trim().replace(/\s+(via|with|using|by|pass|passing|set|use|e\.g\.)$/i, "").replace(/[,;:\-(]+$/, "").trim();
+  // "..., default on; add" keeps the clause before the one that held the hint.
+  const semi = h.lastIndexOf(";");
+  if (semi >= 12) h = h.slice(0, semi).trim();
+  return /[.!?)]$/.test(h) ? h : `${h}.`;
+};
+/** Catalog text without its query-parameter hints, sentence by sentence: a
+ *  hint in parentheses goes on its own, a sentence that opens with a hint (or
+ *  introduces one with a colon) goes whole, a hint later in a sentence ends
+ *  that sentence, and every sentence without a hint is kept. */
+function dropQueryHints(s) {
+  const text = s.replace(PAREN_QUERY_HINT, "");
+  if (!QUERY_HINT.test(` ${text}`)) return text;
+  const kept = [];
+  for (const sentence of text.split(SENTENCE_BREAK)) {
+    const at = ` ${sentence}`.search(QUERY_HINT);
+    if (at < 0) { kept.push(sentence); continue; }
+    const head = sentence.slice(0, at).trim();
+    if (at < 12 || /:$/.test(head)) continue;
+    kept.push(trimHintHead(head));
+  }
+  return kept.join(" ").trim();
+}
+
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (!s) return s;
-  // A catalog description often ends in a query-parameter hint ("?bytes=1..1024
-  // returns hex; or ?min=&max= ..."), which is right for /api/find and reads as
-  // a fragment on a Bazaar card (measured 2026-09-22). Drop the
-  // hint tail here only; the catalog text is untouched.
-  const hint = s.search(/\s\??\(?\?[a-zA-Z_][a-zA-Z0-9_]*=/);
-  if (hint >= 12) {
-    let head = s.slice(0, hint).trim();
-    // "... Query params:" introduces the hint; drop that sentence with it.
-    if (/:$/.test(head)) { const cut = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? ")); if (cut >= 12) head = head.slice(0, cut + 1); }
-    s = head.replace(/[,;:\-(]+$/, "").trim().replace(/\s+(via|with|using|by|pass|passing|set|use|e\.g\.)$/i, "").replace(/[,;:\-(]+$/, "").trim();
-    if (!/[.!?)]$/.test(s)) s += ".";
-  }
+  // A catalog description often carries query-parameter hints ("?bytes=1..1024
+  // returns hex; or ?min=&max= ..."), which are right for /api/find and read as
+  // a fragment on a Bazaar card (measured 2026-09-22). Drop the hints here
+  // only and keep the sentences around them; the catalog text is untouched.
+  s = dropQueryHints(s) || s;
   if (s.length <= max) return s;
   const head = s.slice(0, max);
   const sentenceEnd = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), head.endsWith(".") ? head.length - 1 : -1);
   if (sentenceEnd >= Math.floor(max * 0.5)) return head.slice(0, sentenceEnd + 1).trim();
   const wordEnd = head.lastIndexOf(" ");
   return (wordEnd > 0 ? head.slice(0, wordEnd) : head).trim().replace(/[,;:\-]+$/, "") + ".";
+}
+
+// The listing icon: the 512px PNG mark (server.js), on a path whose extension
+// names a format the Bazaar accepts (PNG, JPG, WebP, GIF; never SVG).
+export const BAZAAR_ICON_PATH = "/favicon.png";
+const TAG_FILLER = ["agents", "x402", "tools"];
+/** A listing's tags (at most five, the protocol's own sanitizer): the
+ *  category, the tool's own tags, then its slug, and the generic fillers only
+ *  when those run out. */
+export function bazaarTagsFor(item) {
+  return sanitizeTags([item?.category, ...(item?.tags ?? []), item?.slug, ...TAG_FILLER]);
 }
 
 /** Purpose-written Bazaar copy for the flagship routes: WHAT it returns and
@@ -1167,6 +1200,7 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "v1-chat-auto": "OpenAI-compatible chat completions with the model chosen server-side: omit model and the gateway routes the prompt to the top-ranked model for its task (code, reasoning, long-context, general) from a fixed eval-derived ranking, failing over automatically on provider errors. Flat price per call, 16k chars in, 1024 tokens out, streaming supported. Use it as a drop-in OpenAI base_url when you want good answers without picking a model.",
   "v1-embeddings": "OpenAI-compatible text embeddings (text-embedding-3-small by default; 3-large and ada-002 supported), up to 64 inputs or 16k chars per call, returned in the standard OpenAI shape. A repeat of identical inputs within 10 minutes is free from cache to the payer that paid for it, paying again by its own EVM x402 signature, verified Tempo sender or credits key. Use it for semantic search, clustering and retrieval from any OpenAI SDK by changing base_url.",
   "image-ocr": "Extract text from a PNG or JPEG image - full text, overall confidence and per-line bounding boxes - from a URL or base64 payload, Tesseract on-device (no upstream API). Default English; other ISO 639-2 languages on request. Use it when an agent needs the words in a screenshot, scan or photo.",
+  "memory-read": "Read persistent key-value memory scoped to the paying wallet: pass a key to get its stored JSON value, or omit it to list the namespace's keys with their update times and expiry. Reads the payer's own namespace by default, or one another wallet has granted it access to. Use it when an agent resumes a task and needs the state an earlier session wrote.",
   "memory-write": "Persistent key-value memory scoped to the paying wallet: the x402 payment is the authentication, the wallet owns the namespace. Write any JSON value (up to 64KB) under a key, with an optional TTL, or delete it; read it back on any later session with the matching read route. Use it when an agent needs state that survives the session or crosses runs without an account or API key.",
   // 2026-08-22 additions: the new families' flagships. Bazaar is the one surface
   // where a buyer-side agent browses by DESCRIPTION rather than by name, so each
@@ -2572,15 +2606,16 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           // crypto, llm, ...) - every entry is honestly tagged with what it is.
           // Use the protocol's own sanitizer: printable ASCII, ≤32 chars,
           // case-insensitive dedupe, and the official maximum of five tags.
-          tags: sanitizeTags([item.category, ...(item.tags ?? []), "agents", "x402", "tools"]),
+          tags: bazaarTagsFor(item),
           mimeType: "application/json",
           resource: `${baseUrl}${route.split(" ")[1]}`,
           // Canonical brand icon on every Bazaar/discovery record. Without it,
           // downstream directories (OpenSea's x402 tools surface, etc.) scrape
           // the site favicon at index time and cache it forever — which is how
           // the pre-rebrand logo got frozen on OpenSea. The URL serves the
-          // current 512px PNG mark (image/png despite the .ico name).
-          iconUrl: `${baseUrl}/favicon.ico`,
+          // current 512px PNG mark; the path ends in .png because the Bazaar
+          // lists PNG, JPG, WebP and GIF icons only.
+          iconUrl: `${baseUrl}${BAZAAR_ICON_PATH}`,
           extensions: Object.keys(ext).length ? ext : undefined,
         },
       ];
@@ -2604,7 +2639,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       tags: sanitizeTags([cfg.category, "agents", "x402", "tools"]),
       mimeType: "application/json",
       resource: `${baseUrl}${route.split(" ")[1]}`,
-      iconUrl: `${baseUrl}/favicon.ico`,
+      iconUrl: `${baseUrl}${BAZAAR_ICON_PATH}`,
     };
   }
 

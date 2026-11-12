@@ -795,7 +795,7 @@ const dataTools = [
     slug: "json-to-yaml",
     category: "conversion",
     price: "$0.001",
-    description: "Convert JSON to YAML.",
+    description: "Convert any JSON value, or a JSON string of one, to YAML text: objects become mappings, arrays become block lists, lines wrap at 120 columns.",
     tags: ["json", "yaml", "convert", "config"],
     discovery: {
       bodyType: "json",
@@ -1246,7 +1246,7 @@ const textTools = [
     slug: "lorem",
     category: "text",
     price: "$0.001",
-    description: "Placeholder text. ?paragraphs=1..20 or ?words=1..2000.",
+    description: "Lorem ipsum filler text for mockups, layouts and test fixtures: 1 to 20 paragraphs, or an exact count of 1 to 2,000 words. ?paragraphs=1..20 or ?words=1..2000.",
     tags: ["lorem", "placeholder", "generator", "text"],
     discovery: {
       input: { paragraphs: "2" },
