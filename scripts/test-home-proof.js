@@ -78,6 +78,12 @@ const full = homeProofFigures({
   ok(/>1,234</.test(fig("paid")) && /external payments/.test(fig("paid")) && fig("paid").includes(`data-as-of="${new Date(AT.e).toISOString()}"`), "external payments are served with their value and as-of");
   ok(new RegExp(`>${RAILS.length}<`).test(fig("chains")) && fig("chains").includes(`data-as-of="${new Date(AT.c).toISOString()}"`), "chains live are served from the count given, with an as-of");
   ok(/>212 ms</.test(fig("latency")) && fig("latency").includes(`data-as-of="${new Date(AT.l).toISOString()}"`), "median latency is served with its as-of");
+  {
+    // The figures sit in the pitch column, before the live panel, so the panel keeps the live
+    // view's height and the headline is not centered beside a taller column.
+    const own = html.indexOf('class="hm-own"'), panel = html.indexOf('class="hm-obsidian receipt"'), stagger = html.indexOf('class="ml-stagger"');
+    ok(stagger > -1 && own > stagger && panel > -1 && own < panel, "the hero's own figures are in the pitch column, before the live panel");
+  }
   ok(placeholders(h).length === 0, `the served hero holds no dash or loading placeholder (found: ${placeholders(h).join(" ") || "none"})`);
   ok(/66 of our own test purchases are not counted above/.test(h) && /\$56\.78 external revenue/.test(h), "our own test purchases are footnoted under the external figure");
   ok(/id="hm-live-stats" hidden/.test(h), "the ecosystem row is served hidden until the live view answers");

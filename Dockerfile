@@ -8,8 +8,8 @@
 #
 # Base image pinned by DIGEST for reproducible builds and CVE traceability
 # (audit: "mutable deployment artifacts"). node:22-slim = 22.23.5-slim, the
-# October 2026 security release (re-pinned 2026-10-21); the previous pin was
-# 22.23.3-slim from 2026-09-24. All four Dockerfiles share this digest.
+# November 2026 security release (re-pinned 2026-11-11); the previous pin was
+# 22.23.4-slim from 2026-10-21. All five slim Dockerfiles share this digest.
 # Re-pin after a deliberate base bump with:
 #   docker pull node:22-slim
 #   docker inspect --format='{{index .RepoDigests 0}}' node:22-slim

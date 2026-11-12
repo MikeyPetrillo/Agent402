@@ -47,10 +47,8 @@ export function companyPage(baseUrl) {
   const mail = (a) => `<a href="mailto:${esc(a)}" style="color:var(--ink);">${esc(a)}</a>`;
   const postal = companyPostalLine();
   const contacts = [
-    ["Support", mail(op)],
-    ["Security", `${mail(op)}, or a <a href="${repoUrl("security/advisories/new")}" rel="noopener" style="color:var(--ink);">private advisory</a> (preferred, see /security)`],
-    ["Billing and refunds", mail(op)],
-    ["Legal and abuse", mail(op)],
+    ["Email", `${mail(op)}<br><span style="font-size:var(--fs-base);">Support, billing and refunds, legal and abuse.</span>`],
+    ["Security", `A <a href="${repoUrl("security/advisories/new")}" rel="noopener" style="color:var(--ink);">private advisory</a> (preferred, see /security), or email`],
     ["Partnerships and investors", mail(co)],
     ["Phone", `<a href="tel:${COMPANY_PHONE.tel}" style="color:var(--ink);">${esc(COMPANY_PHONE.display)}</a>`],
     ...(postal ? [["Mail", esc(postal)]] : []),

@@ -211,7 +211,12 @@ ok(llmsFullTxt(BASE, {}).includes(`(${BASE}/trust)`), "llms-full.txt lists /trus
   ok(COMPANY_PHONE.tel.replace(/\D/g, "").endsWith(COMPANY_PHONE.display.replace(/\D/g, "")), "the tel link dials the printed number");
   ok(LEGAL_ENTITY_SENTENCE === "Cardhavok LLC (doing business as Havok Holdings LLC)" && text.includes(LEGAL_ENTITY_SENTENCE), "/company states the legal entity sentence");
   ok(/© 2026 /.test(pageText(ledgerFooterCompact())) && pageText(ledgerFooterCompact()).includes("Havok Holdings LLC"), "the brand credit stays Havok Holdings LLC");
-  for (const role of ["Support", "Security", "Billing and refunds", "Partnerships and investors", "Phone"]) ok(new RegExp(`<th scope="row">${role}</th>`).test(html), `/company lists the ${role} contact`);
+  for (const role of ["Email", "Security", "Partnerships and investors", "Phone"]) ok(new RegExp(`<th scope="row">${role}</th>`).test(html), `/company lists the ${role} contact`);
+  {
+    // One email row names every role the operator mailbox answers, so the address is printed once in the table.
+    const table = (html.match(/<table class="co-contacts"[\s\S]*?<\/table>/) || [""])[0];
+    ok((table.match(/mailto:mike@agent402\.tools/g) || []).length === 1 && /Support, billing and refunds, legal and abuse/.test(table), "/company prints the operator mailbox once, with the roles it answers");
+  }
   ok(!/<th scope="row">Mail<\/th>/.test(html), "with COMPANY_POSTAL_ADDRESS unset, no postal row is printed");
   // Every role reads one of the two existing mailboxes: no invented addresses.
   const boxes = [...new Set([...html.matchAll(/mailto:([^"?]+)/g)].map((m) => m[1]))].sort();

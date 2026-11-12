@@ -117,12 +117,12 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   const figures = (Array.isArray(proof) ? proof : []).filter((f) => f && f.value);
   // The revenue tag and the footnote speak to the paid figure, so they show only beside it.
   const paidShown = hasExternal && figures.some((f) => f.key === "paid");
-  const heroFootnote = paidShown && ownTestPurchases > 0 ? `<div class="ml-meta" style="font-size:var(--fs-2xs);color:var(--on-panel-faint);margin:0;">${fmtNum(ownTestPurchases)} of our own test purchases are not counted above.</div>` : "";
+  const heroFootnote = paidShown && ownTestPurchases > 0 ? `<div class="ml-meta" style="font-size:var(--fs-2xs);color:var(--faint);margin:0;">${fmtNum(ownTestPurchases)} of our own test purchases are not counted above.</div>` : "";
   const proofMeta = ["Agent402", ...(paidShown ? [`$${Number(external.usd || 0).toFixed(2)} external revenue`] : [])];
   const proofHtml = figures.length
-    ? `<div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-dim);margin:0;">${proofMeta.map((t) => `<span>${esc(t)}</span>`).join("")}</div>
+    ? `<div class="hm-own-wrap" style="display:flex;flex-direction:column;gap:12px;padding-top:22px;border-top:1px solid var(--hairline);"><div class="ml-meta" style="font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:0;">${proofMeta.map((t) => `<span>${esc(t)}</span>`).join("")}</div>
           <div class="hm-own" style="--hm-own-n:${figures.length};">${figures.map((f) => `<a class="hm-own-fig" id="hm-own-${esc(f.key)}" href="${esc(f.href)}" data-as-of="${esc(f.asOf)}" title="as of ${esc(f.asOf)}"><span class="hm-own-v">${esc(f.value)}</span><span class="hm-own-l">${esc(f.label)}</span></a>`).join("")}</div>
-          ${heroFootnote}`
+          ${heroFootnote}</div>`
     : "";
   // The lead sentence (src/positioning.js) with the wires this server offers
   // (the "/" route passes the MPP switch), each wire name linked.
@@ -174,12 +174,12 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
 .hm-hero { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
 .hm-live-stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px 10px; padding: 16px 22px 14px; border-top: 1px solid rgba(255,255,255,.07); }
 .hm-live-stats[hidden] { display: none; }
-.hm-own { display: grid; grid-template-columns: repeat(2, auto); justify-content: start; gap: 14px 48px; }
+.hm-own { display: grid; grid-template-columns: repeat(3, auto); justify-content: start; gap: 16px 40px; }
 @media (min-width: 601px) and (max-width: 900px) { .hm-own { grid-template-columns: repeat(var(--hm-own-n), auto); justify-content: space-between; column-gap: 18px; } }
 .hm-own-fig { display: flex; flex-direction: column; gap: 6px; text-decoration: none; min-width: 0; }
-.hm-own-v { font-weight: 500; font-size: var(--fs-2xl); line-height: 1; letter-spacing: -.03em; color: var(--on-panel); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.hm-own-l { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .12em; text-transform: uppercase; color: var(--on-panel-faint); white-space: nowrap; }
-.hm-own-fig:hover .hm-own-l { color: var(--accent-lit); }
+.hm-own-v { font-weight: 500; font-size: var(--fs-2xl); line-height: 1; letter-spacing: -.03em; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hm-own-l { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); white-space: nowrap; }
+.hm-own-fig:hover .hm-own-l { color: var(--accent); }
 .hm-doors { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .hm-claims { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 20px; }
 .hm-card { border-radius: var(--radius); background: var(--card); border: 1px solid var(--hairline); box-shadow: inset 0 1px 0 var(--card-inset), 0 1px 2px rgba(0,0,0,.08); }
@@ -248,6 +248,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
           ${railCountLabel ? `<span style="display:inline-flex;align-items:center;gap:10px;white-space:nowrap;"><span class="ml-dot"></span>${railCountLabel}</span>` : ""}
           <a href="${REPO_URL}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--dash);white-space:nowrap;">open source</a>
         </div>
+        ${proofHtml}
       </div>
 
       <div class="hm-obsidian receipt" style="overflow:hidden;padding-bottom:22px;">
@@ -263,7 +264,6 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
           ${[["hm-live-n", "payments · 1h"], ["hm-live-usd", "settled"], ["hm-live-buyers", "paying agents"], ["hm-live-pm", "per minute"]].map(([id, label]) => `<div><div id="${id}" style="font-weight:500;font-size:var(--fs-2xl);letter-spacing:-.03em;color:var(--on-panel);font-variant-numeric:tabular-nums;"></div><div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--on-panel-faint);margin-top:6px;white-space:nowrap;">${label}</div></div>`).join("")}
         </div>
         <div style="padding:14px 22px 16px;border-top:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:12px;">
-          ${proofHtml}
           <div class="ml-items" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel-faint);gap:4px 16px;"><a href="https://basescan.org/address/0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0#tokentxns" style="color:var(--accent-lit);text-decoration:none;">verify settlements on Basescan ↗</a><span>+ <strong id="hm-freepow" style="color:var(--on-panel-soft);font-weight:500;">${fmtNum(viaPow)}</strong> free calls via proof-of-work</span></div>
         </div>
       </div>
