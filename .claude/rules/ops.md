@@ -109,7 +109,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   forecast and does neither), `solanaHistory` and `evmLogs` failing (publics, fallback; idle does
   neither, and reads idle until five recent reads are in, so one failure after a deploy never
   pages), `speechUpstream` cooling (ok, probing: the cool-down ended and the next call tries the
-  primary link, so a quiet service does not hold the page open), `firstCallAllowance` unavailable
+  primary link, so a quiet service does not hold the page open; closes on the second clear read in
+  a row, `closeAfterTwoOk`, so a failed probe between cool-downs does not reopen it each cycle),
+  `firstCallAllowance` unavailable
   (on, spent: spent is the day's cap working as set; present only while the trial is on). `loopLag`
   and `mppEvmDomainFallback` publish a flag, not a word, and page nothing.
 - **Ended MPP subscriptions:** the private half of a subscription's access key is deleted when a
