@@ -120,7 +120,8 @@ LLC: credit the entity, never a personal name.
 - Copy that offers something reads the switch that sells it (`creditsSalesEnabled()`), and is
   guarded by test-static-pages, test-legal-dates, test-wire-count-copy, test-pack-copy-retired
   and copy-absolutes. No third-party seller or counterparty name in any tracked file
-  (`scripts/test-no-third-party-names.js`, also run by `.githooks/pre-push`). No hidden
+  (`scripts/test-no-third-party-names.js`, also run by `.githooks/pre-push`); the one exception
+  is a bare badge line in README.md's "Independent records" section. No hidden
   character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an
   instruction file: `scripts/test-hidden-chars.js` scans CLAUDE.md, `.claude/`, `wiki/`, `docs/`,
   the package READMEs, the adapter READMEs, `src/mcp-http.js`, `src/mcp-flagship.js`,

@@ -11,7 +11,8 @@ Site:
 - The home page shows Agent402's own figures (uptime, external payments,
   chains, latency) under the pitch, beside the live view, so the hero no longer
   leaves open space above the headline.
-- /company lists the operator mailbox once, with the roles it answers.
+- /company lists the operator mailbox once, with the roles it answers, and the
+  page footer links to contact instead of printing the address.
 
 ### 2026-11-11 (Node security release)
 Server:
