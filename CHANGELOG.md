@@ -6,6 +6,16 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-12 (Bazaar listings)
+Payments:
+- Every route's Bazaar listing carries a service name, five tags led by its
+  category, a PNG icon, a description, and input and output schemas; the
+  judge, decisions and loop-gate routes now publish their output example.
+- Descriptions keep their full text when they mention a query parameter.
+Server:
+- The HTTP adapter used by the MCP connector takes its November security
+  release.
+
 ### 2026-11-12 (vendor updates: security releases)
 Server:
 - The HTTP client takes the November undici security release; Stripe calls

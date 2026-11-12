@@ -3,6 +3,15 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-12",
+    title: "Bazaar listings",
+    items: [
+      "Payments: every route's Bazaar listing carries a service name, five tags led by its category, a PNG icon, a description, and input and output schemas; the judge, decisions and loop-gate routes now publish their output example.",
+      "Payments: descriptions keep their full text when they mention a query parameter.",
+      "Server: the HTTP adapter used by the MCP connector takes its November security release.",
+    ],
+  },
+  {
+    date: "2026-11-12",
     title: "Vendor updates: security releases",
     items: [
       "Server: the HTTP client takes the November undici security release; Stripe calls pin their API version; the MPP and Solana libraries take their current releases.",
