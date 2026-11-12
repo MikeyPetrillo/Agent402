@@ -33,6 +33,22 @@
 // hex forms (either case) and its JSON-escaped-slash form are redacted too,
 // and a `Basic <credentials>` token in the text loses its credentials whatever
 // variable they came from. *_SALT values count as secrets.
+//
+// Three shapes reach the text without matching a configured value byte for
+// byte, and are redacted too:
+//  - a value broken across lines (a newline, with any indentation after it,
+//    anywhere in it, its known prefix included);
+//  - a value an upstream cut short: a run of 16 or more of its leading
+//    characters that looks like a credential (looksLikeCredential), whatever
+//    follows it ("...", an ellipsis, a quote, the end of the text);
+//  - a 64-hex-digit run, the shape of an EVM private key, in any case: a
+//    configured hex value in every case and with or without 0x, and any such
+//    run in the text when it carries no 0x (a key exported bare) or when a key
+//    word (key, private, secret, mnemonic, seed) comes just before it. A 0x
+//    run with no key word stays readable: that is the shape of a transaction
+//    hash, which is public on chain and is what a buyer needs to trace a
+//    failed settle. A bare run named as a hash just before it (hash, digest,
+//    sha256, txid, tx, checksum) stays readable for the same reason.
 import { stripHiddenCharacters } from "../hidden-chars.js";
 
 const SECRET_NAME_RE = /(KEY|TOKEN|SECRET|PASSWORD|MNEMONIC|PRIVATE|SALT)/i;
@@ -113,6 +129,9 @@ function encodedForms(value) {
   const hex = Buffer.from(value, "utf8").toString("hex");
   forms.push(hex, hex.toUpperCase());
   if (value.includes("/")) forms.push(value.replaceAll("/", "\\/"));
+  // A hex value (a private key) is printed in either case, with or without 0x.
+  const bare = /^(?:0x)?([0-9a-f]{32,})$/i.exec(value)?.[1];
+  if (bare) forms.push(bare.toLowerCase(), bare.toUpperCase(), `0x${bare.toLowerCase()}`, `0x${bare.toUpperCase()}`);
   return forms;
 }
 
@@ -132,7 +151,7 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  *  password inside it. Built once per distinct set of secret-bearing
  *  variables: the encoded forms of a large secret cost far more than a scan,
  *  and a page can redact hundreds of lines in one turn. */
-let secretCache = { sig: null, values: [] };
+let secretCache = { sig: null, values: [], prefixes: [] };
 function secretSignature() {
   let sig = "";
   for (const [name, raw] of Object.entries(process.env)) {
@@ -140,25 +159,27 @@ function secretSignature() {
   }
   return sig;
 }
-function secretValues() {
+function secretState() {
   const sig = secretSignature();
-  if (sig === secretCache.sig) return secretCache.values;
-  const values = buildSecretValues();
+  if (sig === secretCache.sig) return secretCache;
+  const { values, prefixes } = buildSecretValues();
   secretBuilds++;
-  secretCache = { sig, values };
-  return values;
+  secretCache = { sig, values, prefixes };
+  return secretCache;
 }
 let secretBuilds = 0;
 /** Test hook: how many times the secret list was built. */
 export function _secretBuildsForTests() { return secretBuilds; }
 function buildSecretValues() {
   const plain = [];
+  const named = [];
   const encoded = new Set();
   for (const [name, raw] of Object.entries(process.env)) {
     const value = typeof raw === "string" ? raw.trim() : "";
     if (value.length < MIN_SECRET_LEN) continue;
     if (SECRET_NAME_RE.test(name)) {
       plain.push(value);
+      named.push(value);
       for (const form of base64Forms(value)) encoded.add(form);
     }
     if (RPC_NAME_RE.test(name) || URL_NAME_RE.test(name)) plain.push(...urlSecrets(name, value));
@@ -167,19 +188,107 @@ function buildSecretValues() {
   for (const v of [...kept]) kept.push(...encodedForms(v));
   const all = [...new Set(kept).values()].map((v) => [v, false]);
   for (const form of encoded) if (form.length >= MIN_SECRET_LEN) all.push([form, true]);
-  return all.sort((a, b) => b[0].length - a[0].length);
+  // A secret-named value long enough to be cut short and still identify it.
+  const prefixes = [...new Set(named)].filter((v) => v.length > TRUNCATED_MIN && looksLikeCredential(v.slice(0, TRUNCATED_MIN)));
+  return { values: all.sort((a, b) => b[0].length - a[0].length), prefixes };
+}
+
+const TRUNCATED_MIN = 16;
+/** A configured secret cut short: from each place its first TRUNCATED_MIN
+ *  characters appear, the longest run that still matches it. */
+function redactTruncated(out, prefixes) {
+  for (const v of prefixes) {
+    const head = v.slice(0, TRUNCATED_MIN);
+    let i = out.indexOf(head);
+    while (i !== -1) {
+      let k = TRUNCATED_MIN;
+      while (k < v.length && i + k < out.length && out[i + k] === v[k]) k++;
+      out = `${out.slice(0, i)}[redacted]${out.slice(i + k)}`;
+      i = out.indexOf(head, i + 10);
+    }
+  }
+  return out;
+}
+
+// A 64-hex-digit run standing alone (no letter or digit on either side).
+const HEX64_RE = /(?<![0-9A-Za-z])(0[xX])?[0-9a-fA-F]{64}(?![0-9A-Za-z])/g;
+// A key word in the few characters before a run: PRIVATE_KEY=, "secret":, seed.
+const KEY_LABEL_RE = /(?:^|[^a-z])(?:key|keys|privkey|private|secret|mnemonic|seed)(?:[^a-z]|$)/i;
+// A hash named just before a bare run: "sha256 ", "txid: ", "digest=".
+const HASH_LABEL_RE = /(?:^|[^a-z])(?:hash|digest|sha-?256|sha3|keccak(?:256)?|txid|tx|transaction|checksum)[\s:="'`]*$/i;
+const LABEL_WINDOW = 32;
+/** [start, end) spans of the 64-hex runs in `s` that are redacted. */
+function hexKeySpans(s) {
+  const spans = [];
+  if (s.length < 64) return spans;
+  for (const m of s.matchAll(HEX64_RE)) {
+    const before = s.slice(Math.max(0, m.index - LABEL_WINDOW), m.index);
+    const keyed = KEY_LABEL_RE.test(before);
+    if (keyed || (!m[1] && !HASH_LABEL_RE.test(before))) spans.push([m.index, m.index + m[0].length]);
+  }
+  return spans;
+}
+/** [start, end) spans of every configured value in `s`. */
+function knownSpans(s, values) {
+  const spans = [];
+  for (const [value] of values) {
+    for (let i = s.indexOf(value); i !== -1; i = s.indexOf(value, i + value.length)) spans.push([i, i + value.length]);
+  }
+  return spans;
+}
+/** Replace each span (merged where they overlap) with [redacted]. */
+function replaceSpans(s, spans) {
+  if (!spans.length) return s;
+  spans.sort((a, b) => a[0] - b[0]);
+  let out = "", at = 0;
+  for (const [a0, b] of spans) {
+    const a = Math.max(a0, at);
+    if (b <= a) continue;
+    out += `${s.slice(at, a)}${a0 < at ? "" : "[redacted]"}`;
+    at = b;
+  }
+  return out + s.slice(at);
+}
+// A line break inside a value, with the indentation a wrapped line carries.
+const BREAK_RE = /\r?\n[ \t]*/g;
+/** Spans found in the text with its line breaks removed, mapped back onto
+ *  the text: only a span that crosses a break is kept (the others were
+ *  already judged on the text as it is). */
+function spansAcrossBreaks(s, find) {
+  const keep = [];
+  let joined = "";
+  const map = []; // joined index -> s index
+  let at = 0;
+  for (const m of s.matchAll(BREAK_RE)) {
+    for (let i = at; i < m.index; i++) map.push(i);
+    joined += s.slice(at, m.index);
+    at = m.index + m[0].length;
+  }
+  for (let i = at; i < s.length; i++) map.push(i);
+  joined += s.slice(at);
+  for (const [a, b] of find(joined)) {
+    const start = map[a], end = map[b - 1] + 1;
+    if (end - start !== b - a) keep.push([start, end]);
+  }
+  return keep;
 }
 
 export function redactSecrets(text) {
   let out = String(text ?? "");
   if (!out) return out;
   if (/basic/i.test(out)) out = out.replace(BASIC_IN_TEXT_RE, (m, head, token) => (looksLikeBase64Token(token) ? `${head}[redacted]` : m));
-  for (const [value, isBase64] of secretValues()) {
+  const { values, prefixes } = secretState();
+  for (const [value, isBase64] of values) {
     if (!out.includes(value)) continue;
     // An encoded form takes the rest of its base64 run with it (the password
     // half of `user:password`, the padding).
     out = isBase64 ? out.replace(new RegExp(escapeRe(value) + BASE64_TAIL, "g"), "[redacted]") : out.split(value).join("[redacted]");
   }
+  // A value broken across lines first, so a cut-short match never takes
+  // only the first line of it.
+  if (out.includes("\n")) out = replaceSpans(out, spansAcrossBreaks(out, (j) => [...knownSpans(j, values), ...hexKeySpans(j)]));
+  if (prefixes.length) out = redactTruncated(out, prefixes);
+  out = replaceSpans(out, hexKeySpans(out));
   if (!out.includes("://") || !out.includes("@")) return out;
   return out.replace(USERINFO_IN_TEXT_RE, "$1[redacted]@");
 }

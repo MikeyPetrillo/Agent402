@@ -64,6 +64,11 @@ ok(privacy.includes(`up to ${mins} minutes`) && /payment-identifier/.test(privac
   const { serviceManifest } = await import("../src/discovery.js");
   const dh = serviceManifest({ baseUrl: "https://agent402.tools", network: "base", networks: ["base"], wallet: "0x0000000000000000000000000000000000000001", catalog: {}, toolCount: 0, powSlugs: new Set(), powDifficulty: 20, prices: {} })?.payment?.dataHandling || {};
   ok(dh.readsAnnotationFields === false && Array.isArray(dh.readsOnly) && /readsAnnotationFields: false/.test(privacy) && /readsOnly/.test(privacy), "/privacy names the manifest's readsOnly list and readsAnnotationFields flag");
+  // The Solana payer kept is the transfer's authority (which can be a
+  // multisig that does not sign), or the transaction's signers: both surfaces say so.
+  const solana = /the paying wallet of a Solana payment \(the transfer's authority\) or its signers/;
+  ok(solana.test(privacy) && solana.test((dh.readsOnly || []).join(" | ")), "/privacy and readsOnly name the Solana paying wallet as the transfer's authority or its signers");
+  ok(!/the signers of a Solana payment/.test(privacy) && !/the signers of a Solana payment/.test((dh.readsOnly || []).join(" | ")), "neither surface says only the signers of a Solana payment");
 }
 ok(!/reads only the cryptographically-signed payer/i.test(privacy) && !/never parsed, logged, or retained/.test(privacy), "/privacy does not claim only the payer address is read");
 ok(/payload\?\.extensions\?\.\["payment-identifier"\]/.test(src("src/payer.js")), "control: payer.js still reads the payment-identifier the page discloses");

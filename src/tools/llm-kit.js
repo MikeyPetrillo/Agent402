@@ -103,11 +103,18 @@ export function retiredSuccessor(model, now = Date.now()) {
 const REASONING_FAMILY_RE = /^gpt-(5|6)/;
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-function isAllowed(model, tierSlug) {
-  const tier = TIERS[tierSlug];
-  if (!tier) return false;
-  const admits = (p) => model === p || model.startsWith(p + "-");
-  return tier.prefixes.some(admits) || Object.entries(RETIRING).some(([key, r]) => r.keepOn === tierSlug && admits(key));
+/** Every model family a tier admits: its own prefixes, then each RETIRING id kept on it. */
+export function admittedFamilies(tierSlug) {
+  const tier = Object.hasOwn(TIERS, tierSlug) ? TIERS[tierSlug] : null;
+  if (!tier) return [];
+  const kept = Object.entries(RETIRING).filter(([, r]) => r.keepOn === tierSlug).map(([key]) => key);
+  return [...tier.prefixes, ...kept.filter((k) => !tier.prefixes.includes(k))];
+}
+
+/** True when `model` is a family the tier admits, or a dated or suffixed id of one. */
+export function tierAdmits(model, tierSlug) {
+  const m = String(model || "");
+  return admittedFamilies(tierSlug).some((p) => m === p || m.startsWith(p + "-"));
 }
 
 const MAX_MESSAGES = 50;
@@ -181,8 +188,8 @@ function validateInput(input, tierSlug) {
   const requested = (typeof input.model === "string" && input.model.trim()) || TIERS[tierSlug]?.defaultModel || "gpt-4o-mini";
   const successor = retiredSuccessor(requested);
   const model = successor || requested;
-  if (!isAllowed(model, tierSlug)) {
-    throw bad(`Model "${model}" is not allowed in the ${tierSlug} tier. Allowed prefixes: ${TIERS[tierSlug].prefixes.join(", ")}`);
+  if (!tierAdmits(model, tierSlug)) {
+    throw bad(`Model "${model}" is not allowed in the ${tierSlug} tier. Allowed prefixes: ${admittedFamilies(tierSlug).join(", ")}`);
   }
 
   const messages = input.messages;

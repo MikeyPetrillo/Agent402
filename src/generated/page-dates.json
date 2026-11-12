@@ -170,7 +170,7 @@
     "src/tools/price-feed-kit.js": "2026-11-10",
     "src/tools/provenance.js": "2026-07-18",
     "src/tools/recall-report-kit.js": "2026-11-08",
-    "src/tools/redact.js": "2026-11-04",
+    "src/tools/redact.js": "2026-11-12",
     "src/tools/regex-worker.js": "2026-06-11",
     "src/tools/render.js": "2026-11-04",
     "src/tools/research-deep-kit.js": "2026-11-10",
