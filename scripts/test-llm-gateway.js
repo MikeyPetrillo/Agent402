@@ -2201,5 +2201,54 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   } finally { if (savedKey !== undefined) process.env.OPENAI_API_KEY = savedKey; }
 }
 
+// Metered quote, dense scripts: on a model outside o200k the input estimate
+// is never below another tokenizer's true count for dense text (cl100k and
+// the GPT-2 byte BPE, the least multilingual byte-level BPE), while Latin text,
+// OpenAI models and the flat tiers' clamp keep the plain o200k path.
+{
+  const K = await import("../src/tools/llm-gateway-kit.js");
+  const { countTokens: o200k } = await import("gpt-tokenizer/model/gpt-4o");
+  const { countTokens: cl100k } = await import("gpt-tokenizer/encoding/cl100k_base");
+  const { countTokens: r50k } = await import("gpt-tokenizer/encoding/r50k_base");
+  const M = TIERS["v1-chat-metered"];
+  const bodyOf = (model, content) => ({ model, messages: [{ role: "user", content }], max_tokens: 64 });
+  // The plain path: o200k in 1,024-char pieces, one token per cut, x1.15.
+  const pieces = (t) => { let n = 0, k = 0; for (let i = 0; i < t.length;) { let j = Math.min(t.length, i + 1024); const c = t.charCodeAt(j - 1); if (c >= 0xd800 && c <= 0xdbff && j < t.length) j++; n += o200k(t.slice(i, j)); k++; i = j; } return n + Math.max(0, k - 1); };
+  const plain = (body) => Math.ceil(pieces(JSON.stringify({ ...body, max_tokens: undefined })) * 1.15);
+  const latin = {
+    english: "The quick brown fox jumps over the lazy dog while the committee reviews the quarterly budget. ".repeat(40),
+    european: "Größere Übersetzungen für “Café” – naïve façade, señor; élève à l’école… Việt Nam đẹp lắm. ".repeat(40),
+    code: "function add(a, b) {\n  return a + b; // sum\n}\nconst id = \"user_profile_settings\";\n".repeat(60),
+  };
+  for (const [k, text] of Object.entries(latin)) {
+    const b = bodyOf("deepseek/deepseek-chat", text);
+    ok(K.denseTextFloor(JSON.stringify(b)) === null && K.promptTokensFor(b, M) === plain(b), `metered quote, ${k} Latin text: the plain o200k estimate, unchanged (${K.promptTokensFor(b, M)})`);
+  }
+  const b64 = Buffer.from(Array.from({ length: 3000 }, (_, i) => (i * 7919 + 13) % 256)).toString("base64");
+  const dense = {
+    chinese: "人工智能正在改变我们的生活方式，从医疗保健到金融服务，各行各业都在探索新的应用场景。".repeat(20),
+    japanese: "今日はとても良い天気ですね。私たちは公園で散歩をしてから、近くのカフェでコーヒーを飲みました。".repeat(10),
+    korean: "안녕하세요. 오늘 날씨가 정말 좋네요. 우리는 공원에서 산책을 하고 근처 카페에서 커피를 마셨습니다.".repeat(10),
+    thai: "สวัสดีครับ วันนี้อากาศดีมาก เราไปเดินเล่นที่สวนสาธารณะแล้วไปดื่มกาแฟที่ร้านใกล้ๆ".repeat(10),
+    hindi: "नमस्ते, आज मौसम बहुत अच्छा है। हम पार्क में टहलने गए और फिर पास के कैफे में कॉफी पी।".repeat(10),
+    arabic: "مرحبا، الطقس جميل جدا اليوم. ذهبنا للتنزه في الحديقة ثم شربنا القهوة في المقهى القريب.".repeat(10),
+    russian: "Привет, сегодня очень хорошая погода. Мы гуляли в парке, а потом пили кофе в ближайшем кафе.".repeat(10),
+    emoji: "😀🎉🚀👍🏽👨‍👩‍👧‍👦🇺🇸❤️🔥✨🤖".repeat(20),
+    base64: b64,
+    mixed: "Summary of the meeting: 会议决定推迟发布，因为测试尚未完成。 Next steps follow. ".repeat(30),
+  };
+  for (const [k, text] of Object.entries(dense)) {
+    const truth = Math.max(cl100k(text), r50k(text));
+    for (const model of ["deepseek/deepseek-chat", "google/gemini-3.1-flash-lite", "meta-llama/llama-3.2-3b-instruct"]) {
+      const est = K.promptTokensFor(bodyOf(model, text), M);
+      ok(est >= truth, `metered quote, ${k} on ${model}: estimate ${est} >= the true count ${truth}`);
+    }
+    const oa = bodyOf("openai/gpt-4o-mini", text), flat = bodyOf("deepseek/deepseek-chat", text);
+    ok(K.promptTokensFor(oa, M) === plain(oa), `${k} on an OpenAI model (o200k itself): the plain estimate`);
+    ok(K.promptTokensFor(flat, TIERS["v1-chat"]) === plain(flat) + (TIERS["v1-chat"].extraInputTokens || 0), `${k} on a flat tier: the clamp's estimate is unchanged`);
+  }
+  ok(K.denseTextFloor("x".repeat(40)) === null && K.denseTextFloor("a1".repeat(20))?.weight === 40, "a 32+ char run counts as encoded data only with a letter and a digit");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

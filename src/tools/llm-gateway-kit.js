@@ -1691,17 +1691,105 @@ export function _clearQuoteWarm() { warmCounts.clear(); warmChars = 0; warmHits 
 // was a single quadratic chunk, 353 ms measured, on a default-on cache path.
 const countEmbeddingTokensBounded = (text) => countInPieces(countEmbeddingTokens, text);
 
-function estimateInputTokens(body, imageCount) {
+// Dense-text floor for the metered quote on models that do not use o200k.
+// o200k packs dense scripts far tighter than other tokenizers: measured on
+// sample text against cl100k and the GPT-2 byte BPE, Chinese ran 3.5x, Thai
+// 4.5x, Hindi 4.1x, Korean 4x and Cyrillic 3.8x the o200k count. Each code
+// point outside Latin prose carries a per-script token weight (tokens per code
+// point, above those measurements and never above its UTF-8 byte length, the
+// most a byte-level tokenizer can emit), and an unbroken run that reads like
+// encoded data (base64, hex: 32+ chars of that alphabet with a letter and a
+// digit) carries one token per char, the ASCII byte bound. Latin, Latin-1,
+// Latin Extended, combining marks, Vietnamese and general punctuation weigh
+// nothing, so Latin prose takes the plain path unchanged.
+const DENSE_DATA_RUN_MIN = 32;
+// base64 and base64url alphabet (hex is inside it)
+const isDataChar = (c) => (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c === 0x2b || c === 0x2f || c === 0x3d || c === 0x5f || c === 0x2d;
+// Latin prose: weighs nothing
+const isLightChar = (c) => c < 0x370 || (c >= 0x1e00 && c <= 0x1eff) || (c >= 0x2000 && c <= 0x20cf);
+function denseWeightOf(cp) {
+  if (cp <= 0x52f) return 1.25;                                     // Greek, Cyrillic
+  if (cp >= 0x1f00 && cp <= 0x1fff) return 1.25;                    // Greek Extended
+  if ((cp >= 0x1100 && cp <= 0x11ff) || (cp >= 0xa960 && cp <= 0xa97f) || (cp >= 0xac00 && cp <= 0xd7ff)) return 3; // Hangul: its UTF-8 bound
+  if ((cp >= 0x2e80 && cp <= 0x9fff) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f)
+    || (cp >= 0xff00 && cp <= 0xffef) || (cp >= 0x20000 && cp <= 0x3ffff)) return 2.5; // Han, kana, fullwidth
+  if (cp > 0xffff) return 3;                                        // emoji and other supplementary-plane text
+  return 2;                                                         // other scripts (Arabic, Indic, Thai...), symbols, joiners
+}
+/** `{ weight, rest }` for text carrying dense content (rest: the text with
+ *  each dense run replaced by one space), or null when it carries none. One
+ *  linear pass. Exported for the tests. */
+export function denseTextFloor(text) {
+  const t = String(text ?? "");
+  const n = t.length;
+  let weight = 0, last = 0, parts = null;
+  for (let i = 0; i < n;) {
+    const c = t.charCodeAt(i);
+    if (isDataChar(c)) {
+      let j = i + 1, digit = c <= 0x39 && c >= 0x30, letter = (c | 0x20) >= 0x61 && (c | 0x20) <= 0x7a;
+      for (; j < n; j++) {
+        const d = t.charCodeAt(j);
+        if (!isDataChar(d)) break;
+        if (d >= 0x30 && d <= 0x39) digit = true;
+        else if ((d | 0x20) >= 0x61 && (d | 0x20) <= 0x7a) letter = true;
+      }
+      if (j - i >= DENSE_DATA_RUN_MIN && digit && letter) {
+        weight += j - i;
+        (parts ??= []).push(t.slice(last, i), " ");
+        last = j;
+      }
+      i = j;
+      continue;
+    }
+    if (isLightChar(c)) { i++; continue; }
+    let j = i;
+    while (j < n) {
+      const cp = t.codePointAt(j);
+      if (isLightChar(cp)) break;
+      weight += denseWeightOf(cp);
+      j += cp > 0xffff ? 2 : 1;
+    }
+    (parts ??= []).push(t.slice(last, i), " ");
+    last = j;
+    i = j;
+  }
+  if (!parts) return null;
+  parts.push(t.slice(last));
+  return { weight: Math.ceil(weight), rest: parts.join("") };
+}
+// One quote prices the same body text several times; a large text's floor is
+// kept for the next read (a few entries, newest last).
+const denseKept = new Map();
+function denseFloorKept(text) {
+  if (text.length < QUOTE_WARM_MIN_CHARS) return denseTextFloor(text);
+  if (denseKept.has(text)) return denseKept.get(text);
+  const r = denseTextFloor(text);
+  if (denseKept.size >= 4) denseKept.delete(denseKept.keys().next().value);
+  denseKept.set(text, r);
+  return r;
+}
+/** Whether a model's quote takes the dense-text floor: every model outside
+ *  OpenAI's own (which tokenize with o200k, the count itself). */
+function denseFloorFor(model) {
+  return !canonicalModel(model).toLowerCase().startsWith("openai/");
+}
+
+function estimateInputTokens(body, imageCount, { denseFloor = false } = {}) {
   // Price the ENTIRE outbound body - messages, tools, response_format, stop
   // sequences - so a giant tool schema is input like any other input. Image
   // URLs are excluded from the text count (a data: URL is not prompt text)
   // and billed flat per image instead. Exact-BPE via gpt-tokenizer (o200k),
   // counted in bounded pieces (see countTokensBounded); deterministic, so the
-  // prompt-cache key stays stable.
+  // prompt-cache key stays stable. With `denseFloor` (the metered quote on a
+  // model outside o200k) the count is never below the o200k count of the
+  // body's Latin part plus the dense-text weight (denseTextFloor).
   const probe = { ...body };
   delete probe.max_tokens;
   const text = JSON.stringify(probe, (k, v) => (k === "image_url" ? undefined : v));
-  return Math.ceil(countQuoteTokens(text) * TOKEN_SAFETY) + imageCount * imageTokensFor(body.model);
+  let tokens = countQuoteTokens(text);
+  const dense = denseFloor ? denseFloorKept(text) : null;
+  if (dense) tokens = Math.max(tokens, countQuoteTokens(dense.rest) + dense.weight);
+  return Math.ceil(tokens * TOKEN_SAFETY) + imageCount * imageTokensFor(body.model);
 }
 
 /** The prompt size, in the upstream's own tokens, that picks a long-context
@@ -1712,7 +1800,7 @@ function estimateInputTokens(body, imageCount) {
  *  largest turn reaches, so the selection can only err dear. */
 export function promptTokensFor(body, tier, imageCount = 0) {
   const st = serverToolWorstCase(body, tier);
-  return promptTokensOf(estimateInputTokens(body, imageCount), body, tier, st);
+  return promptTokensOf(estimateInputTokens(body, imageCount, { denseFloor: !!tier?.metered && denseFloorFor(body.model) }), body, tier, st);
 }
 function promptTokensOf(estimated, body, tier, st) {
   return Math.ceil((estimated + (tier.extraInputTokens || 0) + st.injectedTokens) * tokenizerFactor(body.model));
@@ -1733,7 +1821,7 @@ export function meteredBoundFor(body, tier, imageCount = 0) {
  *  runtime can never disagree on the math. */
 export function worstCaseUpstreamCost(body, tier, imageCount = 0) {
   const st = serverToolWorstCase(body, tier);
-  const estimated = estimateInputTokens(body, imageCount);
+  const estimated = estimateInputTokens(body, imageCount, { denseFloor: !!tier?.metered && denseFloorFor(body.model) });
   const promptTokens = promptTokensOf(estimated, body, tier, st);
   // A long-context tier (a row's `tiers`) prices the whole call once the
   // prompt reaches it: upstream bills every token of such a prompt, prompt
