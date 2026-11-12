@@ -728,7 +728,7 @@ export function llmsTxt(baseUrl, catalog) {
   const brief = [
     [`- [/api/scorecard](`, `- [/api/scorecard](${baseUrl}/api/scorecard): monthly buyer scorecard`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status for one payment`],
-    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled inside \`windowServed\` (\`eth_getLogs\` on Base USDC, by payTo). The TOP N only: 25 rows by default, 50 the ceiling, \`totalSellers\` for how many rank in all. \`?sort=usd|calls\`, \`?top=N\`, \`?include=external|all\`; the same data as MCP \`sellers.list\` and the SDK's \`topSellers()\``],
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled inside \`windowServed\` (\`eth_getLogs\` on Base USDC, a transfer matching no published price counted only up to the per-call ceiling \`maxCallUsd\`, by payTo). The TOP N only: 25 rows by default, 50 the ceiling, \`totalSellers\` for how many rank in all. \`?sort=usd|calls\`, \`?top=N\`, \`?include=external|all\`; the same data as the SDK's \`topSellers()\` and MCP \`sellers.list\` (listed on hosted /mcp with \`AGENT402_SHOW_ROUTER=1\`, in the npm package with a wallet or that switch)`],
   ];
   const briefOf = (line) => (brief.find(([prefix]) => line.startsWith(prefix)) || [])[1] || line;
   const sections = keep.map((name) => {

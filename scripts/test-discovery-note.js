@@ -445,6 +445,15 @@ ok(/include=external/.test(n.excludeHost || ""), "and the switch that removes us
   const said = ["health", "unique payers", "cheapest known price", "curated flag", "shorter slug"].map((w) => (n.ranking || "").indexOf(w));
   const rising = (xs) => xs.every((x, i) => x >= 0 && (i === 0 || x > xs[i - 1]));
   ok(rising(codeOrder) && rising(said), `the ranking sentence names every tiebreak in the comparator's order (code ${codeOrder.join(",")}; text ${said.join(",")})`);
+  // The payers clause states what an unmeasured row does on each comparator
+  // branch: zero between outside sellers, a skipped comparison beside ours.
+  const payersClause = (n.ranking || "").slice(said[1], said[2]);
+  const zeroBranch = /const qa = a\[5\] \|\| 0, qb = b\[5\] \|\| 0;/.test(tb);
+  const skipBranch = /if \(a\[4\] \|\| b\[4\]\) \{[\s\S]*?qa != null && qb != null/.test(tb);
+  ok(zeroBranch && skipBranch, "the comparator still has both payers branches (zero between outside rows, skip beside a local row)");
+  ok(/counts as zero/.test(payersClause) && /our own row[^)]*skipped/.test(payersClause),
+    `the payers clause says unmeasured counts as zero and the comparison is skipped only beside our own row (got "${payersClause}")`);
+  ok(!/skipped when a row has none measured/.test(payersClause), "the payers clause does not claim every unmeasured row is skipped");
 }
 
 // The two we REMOVED rather than disclosed. Fixing an asymmetry beats

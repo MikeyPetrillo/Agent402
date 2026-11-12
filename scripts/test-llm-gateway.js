@@ -2154,6 +2154,38 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(unserved(words("small qwen")).length === 1, "control: a family the tier does not serve is caught");
 }
 
+// Model-successor copy: no chat tier's description, no chat row of the wiki or
+// README tier table, and no LLM-Proxy row of the wiki home names an id that
+// RETIRING_MODELS retires and no tier list still names (gpt-5, o3, ...); the
+// successors are what is advertised. Derived from the tables, not typed ids.
+// The flex sentence names each id whose asItself row still asks for flex,
+// with the date that row ends, so it stays true after that day.
+{
+  const { readFileSync } = await import("node:fs");
+  const { RETIRING_MODELS } = await import("../src/tools/llm-gateway-kit.js");
+  const allPrefixes = Object.values(TIERS).flatMap((t) => t.prefixes || []).map((p) => p.toLowerCase());
+  const listed = (id) => allPrefixes.some((p) => id === p || id.startsWith(p + "-") || id.startsWith(p + ":"));
+  const short = (id) => id.split("/").pop();
+  const retired = new Set(Object.keys(RETIRING_MODELS).filter((k) => !listed(k)).map(short));
+  ok(["gpt-5", "o3", "gpt-5-nano"].every((id) => retired.has(id)), `the retired set derives from RETIRING_MODELS and the tier lists (${[...retired].join(", ")})`);
+  const named = (text) => text.toLowerCase().split(/[\s,;()|`/]+/).map((w) => w.replace(/[.:]+$/, "")).filter((w) => retired.has(w));
+  const rd = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  const chatRows = (f) => rd(f).split("\n").filter((l) => /^\| `POST \/v1\/[a-z/]*chat\/completions`/.test(l));
+  const texts = [
+    ...LLM_GATEWAY_TOOLS.filter((t) => /^v1-chat-/.test(t.slug)).map((t) => [`${t.slug} description`, t.description]),
+    ...chatRows("wiki/LLM-Gateway.md").map((l) => ["wiki/LLM-Gateway.md " + l.split("|")[1].trim(), l]),
+    ...chatRows("README.md").map((l) => ["README.md " + l.split("|")[1].trim(), l]),
+    ...rd("wiki/Home.md").split("\n").filter((l) => l.includes("|LLM-Proxy]]")).map((l) => ["wiki/Home.md LLM-Proxy row", l]),
+  ];
+  ok(texts.filter(([w]) => /premium/.test(w)).length >= 3 && texts.some(([w]) => /Home/.test(w)), `the check reads the premium description, both premium rows and the wiki home row (${texts.length} texts)`);
+  for (const [where, text] of texts) ok(named(text).length === 0, `${where} names no retired id (${named(text).join(", ") || "none"})`);
+  ok(named("frontier (gpt-5 and gpt-6 astra, o3)").length === 2 && named("GPT-4o/4.1, o3/o3-mini").length === 1, "control: the old premium and proxy wording is caught");
+  const flex = rd("wiki/LLM-Gateway.md").split("\n").find((l) => l.startsWith("Where the upstream offers it")) || "";
+  for (const [id, e] of Object.entries(RETIRING_MODELS).filter(([, e]) => e.asItself?.flex)) {
+    ok(flex.includes(short(id)) && flex.includes(e.until), `the wiki's flex sentence names ${short(id)} with the date its flex row ends (${e.until})`);
+  }
+}
+
 // OpenAI removes gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-pro, o3 and o3-pro on
 // 2026-12-11. No tier list, flex entry, reasoning row or /v1/models id names
 // one (the successors are what is advertised), yet every tier that admitted

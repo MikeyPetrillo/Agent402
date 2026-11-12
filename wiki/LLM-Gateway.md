@@ -196,7 +196,7 @@ The paid canary buys from the gateway every day with real USDC: a nano completio
 
 ## Upstream service tiers
 
-Where the upstream offers it (the Gemini 3.x flash families, gpt-5.6-* and gpt-6 luna/sol), the gateway asks for the upstream's **flex** service tier first (higher latency, lower availability) and retries the same model on the default tier if flex has no capacity, before moving to the next failover link. Buyers see the same price either way; the response's `service_tier` field says which tier served.
+Where the upstream offers it (the Gemini 3.x flash families, gpt-5.6-* and gpt-6 luna/sol, and gpt-5-nano while it is served as itself, which ends on 2026-12-11), the gateway asks for the upstream's **flex** service tier first (higher latency, lower availability) and retries the same model on the default tier if flex has no capacity, before moving to the next failover link. Buyers see the same price either way; the response's `service_tier` field says which tier served.
 
 ## Prompt caching
 

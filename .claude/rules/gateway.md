@@ -49,6 +49,13 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   verified payment never spends it.
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
+- **Model retirements** (`RETIRING_MODELS` in `llm-gateway-kit.js`): each id maps to the successor
+  `canonicalModel` serves from `until` (`asItselfUntil` serves the id as itself before that day).
+  `keepOn: [tierSlug]` keeps an id, and every id of its family, admitted on a tier whose list no
+  longer names it (`retiredKeepAdmits`); `asItself: { flex, efforts }` holds the flex attempt and
+  reasoning-effort row that apply only while the id is still served as itself (`pendingAsItself`).
+  Tests move the clock with `setRetiringClockForTest`; `MODEL_RETIREMENTS_NOW=<ISO date>` runs
+  `scripts/test-model-retirements.js` as of that day, to prove a change passes after a date.
 - **Reasoning fitted to the output cap** (chat, Messages, Responses; `reasoningForLink`,
   `fitEffortToBudget`, `fitBudgetForAnswer` in `llm-gateway-kit.js`): on each outbound link a
   buyer effort above "low" is sent as "low" when the link's cap is under `smallBudgetThreshold`
