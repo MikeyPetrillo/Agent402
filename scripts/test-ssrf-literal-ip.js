@@ -4,7 +4,7 @@
 // one was followed). A real local server stands in for an internal service.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
-import { createRequire, syncBuiltinESMExports } from "node:module";
+import { stubGuardResolver, resolverError } from "./lib/guard-resolver-stub.js";
 import { ssrfDispatcher, freshSsrfDispatcher, isSsrfBlock, isPrivateIp, assertPublicUrl, safeFetch, UNRESOLVED_OR_PRIVATE, LOOKUP_UNAVAILABLE, LOOKUP_RETRY_AFTER_S, isTransientLookupError } from "../src/tools/fetch-guard.js";
 
 let pass = 0, fail = 0;
@@ -78,25 +78,16 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
 // finish is a retryable 503 that names no address class, at the upfront check
 // and at connect (a redirect hop) alike.
 {
-  const require = createRequire(import.meta.url);
-  const dns = require("node:dns");
-  const dnsp = require("node:dns/promises");
-  const realP = dnsp.lookup, realCb = dns.lookup;
+  // The guard resolves with dns.Resolver (resolve4/resolve6), at the upfront
+  // check and at connect alike; the stub answers both families.
   let mode = null;
-  dnsp.lookup = (h, o) => {
-    if (mode === null) return realP(h, o);
-    if (mode === "PRIVATE") return Promise.resolve({ address: "10.1.2.3", family: 4 });
-    if (mode === "PUBLIC") return Promise.resolve({ address: "93.184.215.14", family: 4 });
+  const restoreResolver = stubGuardResolver((h, family) => {
+    if (mode === null) return undefined;
+    if (mode === "PRIVATE") return family === 4 ? ["10.1.2.3"] : Promise.reject(resolverError("ENODATA"));
+    if (mode === "PUBLIC") return family === 4 ? ["93.184.215.14"] : Promise.reject(resolverError("ENODATA"));
     if (mode === "HANG") return new Promise(() => {});
-    return Promise.reject(Object.assign(new Error(`stub ${mode}`), { code: mode }));
-  };
-  dns.lookup = (h, o, cb) => {
-    if (typeof o === "function") { cb = o; o = {}; }
-    if (mode === null) return realCb(h, o, cb);
-    if (mode === "PRIVATE") return process.nextTick(cb, null, "10.1.2.3", 4);
-    return process.nextTick(cb, Object.assign(new Error(`stub ${mode}`), { code: mode }));
-  };
-  syncBuiltinESMExports();
+    return Promise.reject(resolverError(mode));
+  });
   process.env.DNS_LOOKUP_TIMEOUT_MS = "100";
   const upfront = async (m) => { mode = m; try { await assertPublicUrl("https://some-host.example/x"); return null; } catch (e) { return e; } };
   const real = globalThis.fetch;
@@ -128,7 +119,7 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
   ok(toolClassOf(503) === "fail" && toolClassOf(400) === "buyer", `failure monitor: 503 is ${toolClassOf(503)}, 400 is ${toolClassOf(400)}`);
   mode = null;
   delete process.env.DNS_LOOKUP_TIMEOUT_MS;
-  dnsp.lookup = realP; dns.lookup = realCb; syncBuiltinESMExports();
+  restoreResolver();
 }
 ok(hits === 0, `the internal server was never reached (${hits} hits)`);
 srv.close(); if (v6ok) v6.close();

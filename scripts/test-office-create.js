@@ -116,7 +116,7 @@ function readXlsx(buf) {
 
 // ---- egress stubs ------------------------------------------------------------
 const egress = [];
-const real = { fetch: globalThis.fetch, hr: http.request, hg: http.get, sr: https.request, sg: https.get, nc: net.connect, ncc: net.createConnection, tc: tls.connect, dl: dns.lookup, dpl: dns.promises.lookup };
+const real = { fetch: globalThis.fetch, hr: http.request, hg: http.get, sr: https.request, sg: https.get, nc: net.connect, ncc: net.createConnection, tc: tls.connect, dl: dns.lookup, dpl: dns.promises.lookup, r4: dns.promises.Resolver.prototype.resolve4, r6: dns.promises.Resolver.prototype.resolve6 };
 function stubEgress() {
   const rec = (what) => (...args) => { egress.push({ what, target: String(args[0]?.href ?? args[0]?.host ?? args[0]) }); throw new Error(`egress refused in test: ${what}`); };
   globalThis.fetch = async (...a) => rec("fetch")(...a);
@@ -124,11 +124,13 @@ function stubEgress() {
   https.request = rec("https.request"); https.get = rec("https.get");
   net.connect = rec("net.connect"); net.createConnection = rec("net.createConnection");
   tls.connect = rec("tls.connect"); dns.lookup = rec("dns.lookup"); dns.promises.lookup = async (...a) => rec("dns.promises.lookup")(...a);
+  dns.promises.Resolver.prototype.resolve4 = async (...a) => rec("resolve4")(...a); dns.promises.Resolver.prototype.resolve6 = async (...a) => rec("resolve6")(...a);
   syncBuiltinESMExports();
 }
 function restoreEgress() {
   globalThis.fetch = real.fetch; http.request = real.hr; http.get = real.hg; https.request = real.sr; https.get = real.sg;
   net.connect = real.nc; net.createConnection = real.ncc; tls.connect = real.tc; dns.lookup = real.dl; dns.promises.lookup = real.dpl;
+  dns.promises.Resolver.prototype.resolve4 = real.r4; dns.promises.Resolver.prototype.resolve6 = real.r6;
   syncBuiltinESMExports();
 }
 /** Validate and build in THIS thread (where the stubs apply). */
