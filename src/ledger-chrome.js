@@ -1186,7 +1186,11 @@ export function breadcrumbNav(crumbs, { style = "" } = {}) {
   const list = Array.isArray(crumbs) ? crumbs : [];
   const links = list.slice(0, -1).map(([name, path]) => `<a href="${esc(path)}">${esc(name)}</a>`).join(" / ");
   const last = list[list.length - 1];
-  const cur = last ? `<span class="ml-crumb-cur" aria-current="page">${links ? " / " : ""}${esc(last[0])}</span>` : "";
+  // The separator rides inside the current crumb so it drops out with it on a
+  // phone. Its leading space is a no-break space: an inline-block strips plain
+  // white space at the start of its line, which set the slash flush against
+  // the link before it ("crypto/ Hash").
+  const cur = last ? `<span class="ml-crumb-cur" aria-current="page">${links ? "&#160;/ " : ""}${esc(last[0])}</span>` : "";
   return `<nav class="ml-crumb ml-crumb-nav" aria-label="Breadcrumb"${style ? ` style="${esc(style)}"` : ""}>${links}${cur}</nav>`;
 }
 /** The visible trail for a page whose JSON-LD already carries a

@@ -4,6 +4,7 @@
 // page links to an immutable on-chain record so readers verify, not trust.
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { MAX_CALL_USD } from "./revenue-live.js";
+import { pageLastmod } from "./page-dates.js";
 
 import { REPO_URL, REPO_SLUG, repoUrl } from "./repo-link.js";
 const TOKEN_CA = "0x380344a48378df060EB24fF6B8Acb511E14B8BA3";
@@ -46,6 +47,8 @@ export async function repoTraffic() {
 }
 
 export function transparencyPage(baseUrl, traffic = null) {
+  // The page's own last change, the same date its sitemap entry carries.
+  const updated = pageLastmod("/transparency");
   const title = "Transparency - Agent402";
   const description =
     "Public disclosures with on-chain receipts: the community-launched $AGENT402 token on Robinhood Chain, the contract address, the claiming wallet, and our commitments.";
@@ -87,7 +90,7 @@ export function transparencyPage(baseUrl, traffic = null) {
 <div class="tp-eyebrow">$ GET /transparency</div>
 <h1 class="tp-h1">Disclosures</h1>
 <p style="font-size:var(--fs-base);color:var(--muted);">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
-<p class="tp-updated">Agent402 (agent402.tools) · last updated 2026-10-11.</p>
+<p class="tp-updated">Agent402 (agent402.tools)${updated ? ` · last updated ${updated}.` : ""}</p>
 </section>
 
 <section>

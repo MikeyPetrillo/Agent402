@@ -437,6 +437,15 @@ ok(Array.isArray(n.hostAdvantages) && n.hostAdvantages.length === 1,
   `only the advantages we could not remove are disclosed (got ${n.hostAdvantages?.length})`);
 ok(n.hostAdvantages.some((x) => /self-asserted/i.test(x)), "the self-asserted health is disclosed");
 ok(/include=external/.test(n.excludeHost || ""), "and the switch that removes us is named");
+// The stated tie order is the order the comparator applies: health, payers,
+// price, curated flag, slug length.
+{
+  const tb = src.slice(src.indexOf("const tiebreak = (a, b) => {"), src.indexOf("// ONE global sort over the whole scored array"));
+  const codeOrder = [/b\[1\]\.health - a\[1\]\.health/, /a\[5\]/, /a\[3\] - b\[3\]/, /a\[6\] \? -1 : 1/, /slug \|\| ""\)\.length/].map((re) => tb.search(re));
+  const said = ["health", "unique payers", "cheapest known price", "curated flag", "shorter slug"].map((w) => (n.ranking || "").indexOf(w));
+  const rising = (xs) => xs.every((x, i) => x >= 0 && (i === 0 || x > xs[i - 1]));
+  ok(rising(codeOrder) && rising(said), `the ranking sentence names every tiebreak in the comparator's order (code ${codeOrder.join(",")}; text ${said.join(",")})`);
+}
 
 // The two we REMOVED rather than disclosed. Fixing an asymmetry beats
 // publishing it, and these assertions stop either one creeping back.

@@ -11,7 +11,7 @@
 // floors, javascript: href neutralization, testnet exclusion, >12-seller
 // compact roster, per-seller activity switching via ?seller=.
 import { fitTitle, META_TITLE_MAX } from "./seo-meta.js";
-import { ledgerShell, ledgerFooterCompact, decideLive, esc, safeHref, breadcrumbNavFromLd } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, decideLive, esc, safeHref, breadcrumbNavFromLd, codeBlock } from "./ledger-chrome.js";
 import { x402RailsFor, RAILS } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { CATEGORIES } from "./pages.js";
@@ -1068,13 +1068,13 @@ function* marketPageChainSteps(chainKey, baseUrl, opts = {}) {
     </div>
     <div style="background:var(--panel);border:1px solid var(--hairline);">
       <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 10px;padding:10px 15px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);color:var(--on-panel-dim);letter-spacing:.06em;"><span>402 challenge · accepts[]</span><span>JSON</span></div>
-      <pre style="margin:0;padding:16px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;">{
+      ${codeBlock(`{
   <span style="color:var(--on-panel-faint);">"scheme"</span>: "exact",
   <span style="color:var(--on-panel-faint);">"network"</span>: <span style="color:var(--accent-lit);">"${esc(C.acceptNetwork)}"</span>,
   <span style="color:var(--on-panel-faint);">"amount"</span>: "1000",
   <span style="color:var(--on-panel-faint);">"asset"</span>: "&lt;${esc(C.asset)} token ${C.caip2.startsWith("algorand:") ? "ASA id" : C.caip2.startsWith("solana:") ? "mint" : "contract address"}&gt;",
   <span style="color:var(--on-panel-faint);">"payTo"</span>: "&lt;your wallet&gt;"
-}</pre>
+}`, { name: "the accept", html: true, wrap: true, size: "xs", style: "margin:0;border:0" })}
       <p style="margin:0;padding:0 18px 14px;font-family:var(--font-mono);font-size:var(--fs-2xs);line-height:1.6;color:var(--on-panel-faint);">For a live accept on this chain: <code style="display:block;margin-top:4px;font:inherit;color:var(--on-panel);background:none;padding:0;">curl -i ${esc(baseUrl)}/api/hash?text=hi</code></p>
     </div>
   </div>`;
@@ -1458,8 +1458,8 @@ function* marketPageAllSteps(baseUrl, { snapshot, leaderboardSnap, economySnap, 
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">$ GET /api/route</div>
       <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">Route a task instead</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Describe the task and the Smart Order Router resolves it to a tool - from this index, ours or anyone else's - then runs it. Candidates are ranked by how well they match, then crawl health, buyers and price; a model can make the final pick (<a href="/guides/smart-order-router" style="color:var(--muted);">the full rule</a>). It buys from external sellers and resells the result to you.</p>
-      <pre style="margin:0 0 14px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># free to resolve; running a result costs the router price in its executeVia
-</span>curl 'https://agent402.tools/api/route?q=ocr+an+image'</pre>
+      ${codeBlock(`<span style="color:var(--on-panel-faint);"># free to resolve; running a result costs the router price in its executeVia
+</span>curl 'https://agent402.tools/api/route?q=ocr+an+image'`, { name: "the route call", html: true, wrap: true, size: "xs", style: "margin:0 0 14px" })}
       <a href="/guides/smart-order-router" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">how the router ranks →</a>
     </div>
     <div style="padding:26px;background:var(--card);">

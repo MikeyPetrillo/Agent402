@@ -4,7 +4,7 @@
 // pays-with column, free-tier + paid-tools explainer, closing CTA.
 
 import { siteOrgLd } from "./site-org.js";
-import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, fmtNum, codeBlock } from "./ledger-chrome.js";
 import { toolList, CATEGORIES } from "./pages.js";
 import { isComputePayable, powCostPhrase } from "./pow.js";
 
@@ -145,7 +145,7 @@ table{border-collapse:collapse;width:100%}
     </table>
   </div>
   <p id="cat-empty" style="display:none;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);padding:20px 0;text-align:center;">No categories match "<span id="cat-empty-q"></span>" - try <a href="/api/find" style="color:var(--accent);">GET /api/find</a> for a task-level search across every tool.</p>
-  <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;">A tool can appear under more than one category, so the column does not sum to ${fmtNum(count)}. <span style="color:var(--ok);">cpu</span> means every tool in it is payable in compute via proof-of-work; <span style="color:var(--accent);">usdc</span> means all of them cost real money; <span style="color:var(--muted);">cpu + usdc</span> means the category mixes both.</p>
+  <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:14px 0 0;">A tool can appear under more than one category, so the column does not sum to ${fmtNum(count)}. <span style="color:var(--ok);">cpu</span> means every tool in it is payable in compute via proof-of-work; <span style="color:var(--accent);">usdc</span> means all of them cost real money; <span style="color:var(--muted);white-space:nowrap;">cpu + usdc</span> means the category mixes both.</p>
 </section>
 
 <section style="max-width:1180px;margin:0 auto;padding:52px 30px 0;">
@@ -154,17 +154,17 @@ table{border-collapse:collapse;width:100%}
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ok);margin-bottom:14px;">FREE TIER</div>
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">The proof-of-work free tier</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Every pure-CPU tool is payable in compute. Your machine solves a single-use sha256 puzzle - ${esc(powCostPhrase())} - and the call goes through. No wallet, no funding.</p>
-      <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># the MCP connector solves it for you
+      ${codeBlock(`<span style="color:var(--on-panel-faint);"># the MCP connector solves it for you
 </span>claude mcp add --transport http \
-  agent402 https://agent402.tools/mcp</pre>
+  agent402 https://agent402.tools/mcp`, { name: "the install command", html: true, wrap: true, size: "xs", style: "margin:0 0 16px" })}
       <a href="/playground" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--ok);padding-bottom:1px;">watch it run in the playground →</a>
     </div>
     <div style="padding:28px;background:var(--footer-bg);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">PAID TOOLS</div>
       <h2 style="font-weight:700;font-size:var(--fs-2xl);margin:0 0 14px;color:var(--ink);">Prices</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Anything that costs us money to run - live search, browser rendering, inference, stored memory - is priced per call and states its price in the 402 challenge. A failed x402 call is not charged, and there is no key to leak.</p>
-      <pre style="margin:0 0 16px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># price, asset and rail, before paying
-</span>curl -i "https://agent402.tools/api/search?q=x402+adoption"</pre>
+      ${codeBlock(`<span style="color:var(--on-panel-faint);"># price, asset and rail, before paying
+</span>curl -i "https://agent402.tools/api/search?q=x402+adoption"`, { name: "the price check", html: true, wrap: true, size: "xs", style: "margin:0 0 16px" })}
       <a href="/pricing" style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);text-decoration:none;border-bottom:1.5px solid var(--accent);padding-bottom:1px;">the full price list →</a>
     </div>
   </div>

@@ -10,7 +10,7 @@
 // claims only: no comparisons, no third-party names, evergreen "500+" counts.
 import { esc } from "./ledger-chrome.js";
 import { routingProofSentence } from "./routing-proof.js";
-import { RAILS } from "./rails.js";
+import { RAILS, countWord } from "./rails.js";
 import { STRIPE_MIN_USD } from "./mpp-stripe.js";
 import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 
@@ -100,7 +100,7 @@ export const WHY_COMPARE = {
     ["Paying", "Per call over x402 or MPP; proof-of-work for the pure-CPU tools", "Billing is yours to build", "A plan or a prepaid balance per provider"],
     ["Finding a tool", "A searchable catalog and /api/find", "Only what you have built", "Each provider's own docs"],
     ["Errors and retries", "One JSON error shape; a keyed retry replays the paid answer", "Yours to design", "A format per provider"],
-    ["Running it", "Hosted, or self-host the open-source server", "Yours to run", "Each provider's own uptime"],
+    ["Running it", "Hosted, or self-host it: the server is open source", "Yours to run", "Each provider's own uptime"],
   ],
 };
 
@@ -109,7 +109,7 @@ export function whyPointsPlain() {
   return WHY_POINTS.map((w) => `${w.h} ${w.p}`);
 }
 
-/** JSON-LD for the #why section: the seven points as an ItemList anchored
+/** JSON-LD for the #why section: the points as an ItemList anchored
  * on /docs, where the full rows render. */
 export function whyJsonLd(baseUrl) {
   const at = `${baseUrl}/docs`;
@@ -117,7 +117,7 @@ export function whyJsonLd(baseUrl) {
     "@context": "https://schema.org",
     "@type": "ItemList",
     "@id": `${at}#why`,
-    name: "Why pay here: seven things that are different about Agent402",
+    name: `Why pay here: ${countWord(WHY_POINTS.length)} things that are different about Agent402`,
     itemListElement: WHY_POINTS.map((w, i) => ({ "@type": "ListItem", position: i + 1, name: w.h, description: w.p, url: `${at}#why-${w.id}` })),
   };
 }
