@@ -113,7 +113,10 @@ async function runInSandbox(code, language, tierSlug) {
   let sbx;
   try {
     try {
-      sbx = await Sandbox.create({ apiKey: key, timeoutMs: tier.timeoutMs + 10_000 });
+      // No outbound network from the buyer's code: allowInternetAccess false
+      // denies every egress destination (the SDK maps it to denyOut 0.0.0.0/0);
+      // running the code and reading its output use the sandbox's inbound side.
+      sbx = await Sandbox.create({ apiKey: key, timeoutMs: tier.timeoutMs + 10_000, allowInternetAccess: false });
     } catch (e) {
       // A create that never reached the sandbox service started nothing: its
       // unit goes back. Any other failure keeps it (a sandbox may have started).
@@ -225,7 +228,7 @@ export const CODE_RUN_TOOLS = [
     category: "ai",
     price: "$0.020",
     description:
-      "Execute Python or JavaScript code in a secure, isolated cloud sandbox. Returns stdout, stderr, and the expression result. No setup needed; pay per call via x402. 30s timeout, 10k char code limit. A run that hits the time limit is returned with timedOut: true and the output it printed, and is charged.",
+      "Execute Python or JavaScript code in a secure, isolated cloud sandbox. Returns stdout, stderr, and the expression result. No setup needed; pay per call via x402. 30s timeout, 10k char code limit. The sandbox has no internet access. A run that hits the time limit is returned with timedOut: true and the output it printed, and is charged.",
     tags: [...SHARED_TAGS],
     discovery: {
       bodyType: "json",
@@ -256,7 +259,7 @@ export const CODE_RUN_TOOLS = [
     category: "ai",
     price: "$0.050",
     description:
-      "Execute Python or JavaScript code in a secure, isolated cloud sandbox (Pro tier). Same as /api/code-run but with 60s timeout and 50k char code limit for longer computations. Returns stdout, stderr, and the expression result. A run that hits the time limit is returned with timedOut: true and the output it printed, and is charged.",
+      "Execute Python or JavaScript code in a secure, isolated cloud sandbox (Pro tier). Same as /api/code-run but with 60s timeout and 50k char code limit for longer computations. The sandbox has no internet access. Returns stdout, stderr, and the expression result. A run that hits the time limit is returned with timedOut: true and the output it printed, and is charged.",
     tags: [...SHARED_TAGS, "pro"],
     discovery: {
       bodyType: "json",
