@@ -19,6 +19,11 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { strict as assert } from "node:assert";
 import { readFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
+// The recorder's own event, read from posthog.js's in-memory test sink (no
+// network), under the telemetry secret the recorder reads from the env. Set
+// before any src/ module loads: posthog.js reads both once at import.
+process.env.POSTHOG_TEST_CAPTURE = "1";
+process.env.TELEMETRY_ID_SECRET = "test-telemetry-secret";
 let pass=0, fail=0; const ok=(c,m)=>{c?(pass++,console.log("ok - "+m)):(fail++,console.error("FAIL - "+m));};
 
 const posthog = await readFile("src/posthog.js","utf8");
@@ -88,6 +93,13 @@ ok(!/0x/.test(a.slice(5)) && a.length === 5 + 32, "the id carries no address mat
     const lines = [];
     const warn = console.warn; console.warn = (...a) => lines.push(a.join(" "));
     try { await hooks.after({ ...ctx, result: { isValid: false, invalidReason: "transaction_simulation_failed" } }); } finally { console.warn = warn; }
+    // The event recordVerifyFailure sends carries the same id: the caller
+    // path, not only the helper (posthog.js loads behind a dynamic import).
+    const { _testEventsForTest } = await import("../src/posthog.js");
+    await new Promise((r) => setImmediate(r));
+    const sent = _testEventsForTest().filter((e) => e.event === "verify_failed").at(-1);
+    ok(sent?.properties?.payerKey === keyOf(`svm-payer:${buyer.address}`), `${label} Solana network: the recorded verify_failed event carries the transfer authority's id (${sent ? sent.properties.payerKey ?? "no payerKey" : "no event"})`);
+    _testEventsForTest().length = 0;
     const line = lines.find((l) => /facilitator VERIFY rejected/.test(l)) || "";
     ok(line.includes(`payer=${shortPayer(buyer.address)}:`) && shortPayer(buyer.address) !== shortPayer(decoy.address), `${label} Solana network: the verify-failure log line names the transfer authority (${line.replace(/^.*payer=/, "payer=").slice(0, 40)})`);
   }
