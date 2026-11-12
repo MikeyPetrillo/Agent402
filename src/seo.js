@@ -728,6 +728,7 @@ export function llmsTxt(baseUrl, catalog) {
   const brief = [
     [`- [/api/scorecard](`, `- [/api/scorecard](${baseUrl}/api/scorecard): monthly buyer scorecard`],
     [`- [/api/refunds](`, `- [/api/refunds](${baseUrl}/api/refunds?tx=): free refund status for one payment`],
+    [`- [/api/leaderboard](`, `- [/api/leaderboard](${baseUrl}/api/leaderboard): x402 sellers ranked by Base USDC settled inside \`windowServed\` (\`eth_getLogs\` on Base USDC, by payTo). The TOP N only: 25 rows by default, 50 the ceiling, \`totalSellers\` for how many rank in all. \`?sort=usd|calls\`, \`?top=N\`, \`?include=external|all\`; the same data as MCP \`sellers.list\` and the SDK's \`topSellers()\``],
   ];
   const briefOf = (line) => (brief.find(([prefix]) => line.startsWith(prefix)) || [])[1] || line;
   const sections = keep.map((name) => {
@@ -753,13 +754,13 @@ ${summary}
 
 Base URL: ${baseUrl}
 
-The full text, with every skill pack and every tool by category, is at ${baseUrl}/llms-full.txt. Terms are defined once at ${baseUrl}/glossary, and the category is explained at ${baseUrl}/agentic-finance. The complete machine-readable catalog with prices is ${baseUrl}/api/pricing.
+The full text, with every skill pack and every tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing.
 
 ${frontDoorMarkdown(catalog, baseUrl)}
 
 ${mppMethodsProse()}
 
-${mppFlagshipLlmsBlock(catalog)}
+${mppFlagshipLlmsBlock(catalog, { compact: true })}
 
 ${gatewayNanopaymentsLine()}
 

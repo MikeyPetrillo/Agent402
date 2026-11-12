@@ -9,7 +9,7 @@
 // both protocols; this page is the dedicated landing page for MPP-specific
 // search intent, and the two cross-link rather than duplicate scope.
 import { siteOrgLd } from "./site-org.js";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, codeBlock, esc } from "./ledger-chrome.js";
 
 import { mppFlagshipRows, mppFlagshipSnippet, mppFlagshipOffersPhrase, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
 const STEPS = [
@@ -57,10 +57,7 @@ function startHereSection(baseUrl, catalog) {
       <tbody>${rowHtml}</tbody>
     </table>
   </div>
-  <div style="margin-top:22px;border:1px solid var(--hairline);background:var(--panel);">
-    <div style="padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.06em;color:var(--on-panel-dim);">pay ${esc(snipRow.method)} ${esc(snipRow.path)} with mppx</div>
-    <pre style="margin:0;padding:18px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.7;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;">${esc(mppFlagshipSnippet(snipRow, baseUrl, snipQuery))}</pre>
-  </div>
+  ${codeBlock(mppFlagshipSnippet(snipRow, baseUrl, snipQuery), { label: `pay ${snipRow.method} ${snipRow.path} with mppx`, wrap: true, style: "margin:22px 0 0" })}
 </section>`;
 }
 
@@ -124,9 +121,7 @@ table{border-collapse:collapse;width:100%}
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 32px;">Two HTTP round trips, typically a couple of seconds. Because it rides the standard <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">WWW-Authenticate</span> / <span style="font-family:var(--font-mono);font-size:var(--fs-base);color:var(--ink);">Authorization</span> machinery defined in RFC 9110 - the same one behind every login prompt on the web - payment becomes just another HTTP auth scheme.</p>
   <div class="wm-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="background:var(--card);border-right:1px solid var(--hairline);">${stepsHtml}</div>
-    <div style="background:var(--panel);">
-      <div style="display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.06em;color:var(--on-panel-dim);"><span style="color:var(--accent-lit);">●</span><span>on the wire</span></div>
-      <pre style="margin:0;padding:20px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.85;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># 1. the client asks, without paying
+    ${codeBlock(`<span style="color:var(--on-panel-faint);"># 1. the client asks, without paying
 </span>POST /api/hash
 
 <span style="color:var(--on-panel-faint);"># 2. the server quotes a price (one challenge per method and chain)
@@ -142,8 +137,7 @@ Authorization: Payment eyJjaGFsbGVuZ2UiOn&hellip;
 <span style="color:var(--on-panel-faint);"># 4. verified, the handler runs, then the payment settles
 </span><span style="color:var(--accent-lit);">HTTP/1.1 200 OK</span>
 Payment-Receipt: eyJtZXRob2QiOiJldm0i&hellip;
-<span style="color:var(--on-panel-faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
-    </div>
+<span style="color:var(--on-panel-faint);">{ "algo": "sha256", "hex": "&hellip;" }</span>`, { label: "on the wire", html: true, wrap: true, size: "xs", style: "margin:0;border:0" })}
   </div>
   <p id="compare" class="ml-measure" style="font-size:var(--fs-base);line-height:1.65;color:var(--muted);margin:22px 0 0;">Header by header against x402, with each method's settlement: <a href="/what-is-x402#compare" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">the comparison table</a>. <a href="/glossary#facilitator" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">Facilitator</a> and <a href="/glossary#settlement" style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);">settlement</a> are defined in the glossary.</p>
 </section>

@@ -10,7 +10,7 @@ import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
-import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, breadcrumbNavFromLd, codeBlock } from "./ledger-chrome.js";
 
 const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
@@ -325,14 +325,12 @@ const LEARN_CSS = `
 .lp-body h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:38px 0 14px;color:var(--ink)}
 .lp-body code{font-family:var(--font-mono);font-size:var(--fs-code-inline);color:var(--ink)}
 .lp-body strong{color:var(--ink)}
-.lp-body pre{background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 18px;overflow-x:auto;white-space:pre}
-.lp-body pre code{color:inherit;font-size:inherit}
 .lp-links a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent)}
 `;
 
 function renderBlock(b) {
   if (typeof b === "string") return b;
-  if (b && b.code) return `<pre><code>${esc(b.code)}</code></pre>`;
+  if (b && b.code) return codeBlock(`<code>${esc(b.code)}</code>`, { html: true, style: "margin:0 0 18px" });
   return "";
 }
 

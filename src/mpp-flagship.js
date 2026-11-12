@@ -79,10 +79,14 @@ const res = await mppx.fetch("${url}");
 console.log(res.status, res.headers.get("payment-receipt"), await res.json());`;
 }
 
-/** The /llms.txt "MPP: start here" block (full paths only). */
-export function mppFlagshipLlmsBlock(catalog) {
+/** The "MPP: start here" block (full paths only). /llms-full.txt carries a
+ *  line per route with what it answers; the short /llms.txt index (`compact`)
+ *  keeps every route and price on one line and points to the full text. */
+export function mppFlagshipLlmsBlock(catalog, { compact = false } = {}) {
   const rows = mppFlagshipRows(catalog);
   if (!rows.length) return "";
+  const lead = `**MPP: start here.** ${rows.length} fast, low-priced routes that ${mppFlagshipOffersPhrase()}: a good first call for a new MPP client. Prices are the catalog's;`;
+  if (compact) return `${lead} what each answers is in /llms-full.txt, and the list is marked \`x-mpp-flagship\` in /openapi.json.\n${rows.map((r) => `\`${r.method} ${r.path}\` (${r.price})`).join(", ")}`;
   const lines = rows.map((r) => `- \`${r.method} ${r.path}\` (${r.price}): ${r.why}`);
-  return `**MPP: start here.** ${rows.length} fast, low-priced routes that ${mppFlagshipOffersPhrase()}: a good first call for a new MPP client. Prices are the catalog's; the full list is marked \`x-mpp-flagship\` in /openapi.json.\n${lines.join("\n")}`;
+  return `${lead} the full list is marked \`x-mpp-flagship\` in /openapi.json.\n${lines.join("\n")}`;
 }

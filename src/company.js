@@ -93,7 +93,7 @@ ${ledgerFooterCompact()}`;
   const extraCss = `@media (max-width:900px){.co-2col{grid-template-columns:minmax(0,1fr)!important}}@media (max-width:600px){.co-links{display:grid!important;grid-template-columns:repeat(2,max-content);gap:8px 28px!important}}
 .co-field{display:block;margin-bottom:16px}
 .co-field label{display:block;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--ink);margin-bottom:6px;font-weight:700}
-.co-field input,.co-field textarea{width:100%;padding:11px 14px;background:var(--paper);border:1px solid var(--hairline);color:var(--ink);font-family:var(--font-body);font-size:var(--fs-md);outline:none}
+.co-field input,.co-field textarea{width:100%;padding:11px 14px;background:var(--paper);border:1px solid var(--control);color:var(--ink);font-family:var(--font-body);font-size:var(--fs-md);outline:none}
 .co-field input:focus,.co-field textarea:focus{border-color:var(--accent)}
 .co-field textarea{min-height:120px;resize:vertical}
 .co-submit{align-self:flex-start}

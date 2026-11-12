@@ -11,7 +11,7 @@
 // counter keys — a local copy here would be a second list that could drift),
 // and the adoption table is the live leaderboard snapshot's top rows.
 import { siteOrgLd } from "./site-org.js";
-import { ledgerShell, ledgerFooterCompact, esc, fmtNum } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, fmtNum, codeBlock } from "./ledger-chrome.js";
 import { RAILS } from "./rails.js";
 import { CAIP2_NAMES } from "./stats.js";
 import { powCostPhrase } from "./pow.js";
@@ -194,9 +194,7 @@ table{border-collapse:collapse;width:100%}
   <p style="font-size:var(--fs-lg);line-height:1.65;color:var(--muted);max-width:820px;margin:0 0 32px;">Four steps, two requests from the caller's point of view: the quote and the paid retry. Nothing here requires a browser, a human, or an account.</p>
   <div class="wx-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--hairline);">
     <div style="background:var(--card);border-right:1px solid var(--hairline);">${stepsHtml}</div>
-    <div style="background:var(--panel);">
-      <div style="display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--panel-rule-2);font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.06em;color:var(--on-panel-dim);"><span style="color:var(--accent-lit);">●</span><span>on the wire</span></div>
-      <pre style="margin:0;padding:20px 18px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.85;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># 1. the agent asks, without paying
+    ${codeBlock(`<span style="color:var(--on-panel-faint);"># 1. the agent asks, without paying
 </span>POST /api/hash
 
 <span style="color:var(--on-panel-faint);"># 2. the server quotes a price (base64 JSON: scheme, network, amount, asset, payTo)
@@ -210,8 +208,7 @@ PAYMENT-SIGNATURE: eyJ4NDAyVmVyc2lvbiI6MiwicGF5bG9hZCI6&hellip;
 <span style="color:var(--on-panel-faint);"># 4. verified, the handler runs, then the payment settles
 </span><span style="color:var(--accent-lit);">HTTP/1.1 200 OK</span>
 PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
-<span style="color:var(--on-panel-faint);">{ "algo": "sha256", "hex": "&hellip;" }</span></pre>
-    </div>
+<span style="color:var(--on-panel-faint);">{ "algo": "sha256", "hex": "&hellip;" }</span>`, { label: "on the wire", html: true, wrap: true, size: "xs", style: "margin:0;border:0" })}
   </div>
   <p style="font-size:var(--fs-base);line-height:1.65;color:var(--faint);max-width:820px;margin:22px 0 0;">The payment settles only alongside a successful response, so a failed x402 call is not charged. Because settlement lands on a public chain, both sides can check afterwards what was actually paid instead of trusting an invoice.</p>
 </section>
@@ -279,19 +276,19 @@ PAYMENT-RESPONSE: eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6&hellip;
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">SELL</div>
       <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Charge agents for your API</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Put an x402 paywall in front of your endpoint, then register the origin so buyers and routers can find you. Free to list, no signup, and nothing deducted from your price: buyers pay straight into your wallet.</p>
-      <pre style="margin:0 0 18px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># we probe, you appear
+      ${codeBlock(`<span style="color:var(--on-panel-faint);"># we probe, you appear
 </span>curl -X POST https://agent402.tools/api/index/register \
   -H 'content-type: application/json' \
-  -d '{"origin":"https://seller.example"}'</pre>
+  -d '{"origin":"https://seller.example"}'`, { name: "the register call", html: true, wrap: true, size: "xs", style: "margin:0 0 18px" })}
       <a class="btn btn-secondary btn-sm" href="/sell" style="align-self:flex-start;">List your API →</a>
     </div>
     <div style="padding:26px;background:var(--card);display:flex;flex-direction:column;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:16px;">BUY</div>
       <h3 style="font-weight:600;font-size:var(--fs-xl);margin:0 0 12px;color:var(--ink);">Let your agent pay for tools</h3>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 18px;flex:1;">Paste one MCP URL into Claude, Cursor, or any streamable-HTTP client and your agent can buy from 500+ tools. Pure-CPU tools run free over proof-of-work, so you can try it without a wallet.</p>
-      <pre style="margin:0 0 18px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:14px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.75;white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># zero install
+      ${codeBlock(`<span style="color:var(--on-panel-faint);"># zero install
 </span>claude mcp add --transport http \
-  agent402 https://agent402.tools/mcp</pre>
+  agent402 https://agent402.tools/mcp`, { name: "the install command", html: true, wrap: true, size: "xs", style: "margin:0 0 18px" })}
       <a class="btn btn-secondary btn-sm" href="/docs#add" style="align-self:flex-start;">Add to your agent →</a>
     </div>
   </div>

@@ -444,7 +444,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     const desc = cutAtWord(firstSentence(t.description), 120);
     return `<div class="tp-card">
   <h3 style="font-size:var(--fs-base);margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
-  <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:var(--fs-xs);">${e(t.method)} ${e(t.path)}</code></div>
+  ${ledgerPriceLine(t)}
   <p style="color:var(--muted);font-size:var(--fs-sm);margin:0;line-height:1.5;flex:1;">${e(desc)}</p>
 </div>`;
   }).join("\n");
@@ -576,12 +576,16 @@ ${ledgerFooterCompact()}`;
   });
 }
 
-// Price line for the new ledger card style
+// Price line for the new ledger card style: a run of tags (.ml-meta), so a
+// narrow card wraps between "FREE w/ compute", the price and the route, never
+// inside one of them.
 function ledgerPriceLine(tool) {
   const p = ledgerEsc(priceWords(tool).short);
-  return isComputePayable(tool)
-    ? `<span style="background:var(--ok);color:var(--paper);font-weight:700;font-size:var(--fs-2xs);padding:1px 6px;font-family:var(--font-mono);">FREE</span> w/ compute · or ${p}`
-    : p;
+  const route = `<span style="white-space:normal;"><code style="background:transparent;color:var(--faint);font-size:var(--fs-xs);">${ledgerEsc(tool.method)} ${ledgerEsc(tool.path)}</code></span>`;
+  const price = isComputePayable(tool)
+    ? `<span><span style="background:var(--ok);color:var(--paper);font-weight:700;font-size:var(--fs-2xs);padding:1px 6px;font-family:var(--font-mono);">FREE</span> w/ compute</span><span>or ${p}</span>`
+    : `<span>${p}</span>`;
+  return `<div class="ml-meta" style="margin:0;font-size:var(--fs-xs);color:var(--accent);">${price}${route}</div>`;
 }
 
 /** Category landing page — /tools/:category shows all tools in one category. */
@@ -609,7 +613,7 @@ export function categoryPage(baseUrl, catalog, catKey) {
     const desc = cutAtWord(firstSentence(t.description), 120);
     return `<div style="background:var(--card);border:1px solid var(--hairline);padding:18px 20px;display:flex;flex-direction:column;gap:8px;min-width:0;overflow-wrap:break-word;">
   <h3 style="font-size:var(--fs-base);margin:0;"><a href="/tools/${e(t.slug)}" style="text-decoration:none;color:var(--ink);">${e(t.name)}</a></h3>
-  <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);">${ledgerPriceLine(t)} · <code style="background:transparent;color:var(--faint);font-size:var(--fs-xs);">${t.method} ${e(t.path)}</code></div>
+  ${ledgerPriceLine(t)}
   <p style="color:var(--muted);font-size:var(--fs-sm);margin:0;line-height:1.5;flex:1;">${e(desc)}</p>
   <a href="/playground?slug=${e(t.slug)}" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);text-decoration:none;font-weight:700;">try in playground →</a>
 </div>`;

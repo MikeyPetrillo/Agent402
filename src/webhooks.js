@@ -2,7 +2,7 @@
 // (async jobs, idempotent retries, chaining, wallet-keyed state) and the one
 // piece still planned (a callback POST to the buyer's own URL).
 
-import { ledgerShell, ledgerFooterCompact, breadcrumbTrail } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
 
 import { REPO_URL } from "./repo-link.js";
 export function webhooksPage(baseUrl) {
@@ -64,20 +64,20 @@ export function webhooksPage(baseUrl) {
 
       <h2 id="async-jobs" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Async jobs</h2>
       <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">A report runs for minutes, longer than many HTTP clients wait. Add <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">Prefer: respond-async</code> to the paid call. The server answers <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">202 Accepted</code> with a <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">Location</code> header and a <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">statusUrl</code>, runs the call with your payment, and settles only on a successful result. A run that fails is not charged on x402, and the job says so.</p>
-      <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 14px;overflow-x:auto;"># the paid call, with your x402 payment header, asking for a job
+      ${codeBlock(`# the paid call, with your x402 payment header, asking for a job
 POST /v1/research
 Prefer: respond-async
 PAYMENT-SIGNATURE: &lt;signed payment&gt;
 
 # 202 Accepted, Location: /api/jobs/&lt;id&gt;; poll it (free), waiting Retry-After seconds, until status is completed or failed
 curl -s https://agent402.tools/api/jobs/&lt;id&gt;
-# {"status":"working","state":"running","stage":"searching","steps":{"done":1,"total":5},"progress":0.2,"etaSeconds":64}</pre>
+# {"status":"working","state":"running","stage":"searching","steps":{"done":1,"total":5},"progress":0.2,"etaSeconds":64}`, { html: true, style: "margin:0 0 14px" })}
       <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;"><code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">status</code> stays working, then completed or failed. Its <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">state</code> is queued until the paid handler starts, then running with a stage, a progress from 0 to 1 and an ETA, then succeeded or failed. A slow route's 402 carries <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">X-Async-Recommended</code>, and agent402-client and agent402-mcp switch to a job on their own. The job id is the only key to the result: keep it private. On the hosted MCP connector the same long calls run as MCP tasks, with the same progress in <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">tasks/get</code>.</p>
 
       <h2 id="idempotent" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Idempotent retries in practice</h2>
       <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">Pass an <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">Idempotency-Key</code> header with any unique string. The server stores a successful answer keyed to the route, the key, the credential that paid and the body, so the replay must carry the same payment header (an x402 <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">PAYMENT-SIGNATURE</code>, a proof-of-work solution or a credits key). A fresh payment with the same key is a new call. This example uses a proof-of-work solution from <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">GET /api/pow/challenge?slug=hash</code>:</p>
 
-      <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 14px;overflow-x:auto;">curl -X POST https://agent402.tools/api/hash \\
+      ${codeBlock(`curl -X POST https://agent402.tools/api/hash \\
   -H "Content-Type: application/json" \\
   -H "Idempotency-Key: my-unique-key-123" \\
   -H "X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;" \\
@@ -89,12 +89,12 @@ curl -i -X POST https://agent402.tools/api/hash \\
   -H "Content-Type: application/json" \\
   -H "Idempotency-Key: my-unique-key-123" \\
   -H "X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;" \\
-  -d '{"text":"hello","algo":"sha256"}'</pre>
+  -d '{"text":"hello","algo":"sha256"}'`, { html: true, style: "margin:0 0 14px" })}
 
       <p style="color:var(--muted);line-height:1.7;margin:0 0 36px;">The cache key is <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">sha256(METHOD /path + key + credential + body hash)</code>, so different callers with the same idempotency key don't collide, and the same key with a different body is a different entry. <a href="https://www.npmjs.com/package/agent402-client" rel="noopener" style="color:var(--accent);">agent402-client</a> resends the same payment for you on a retry.</p>
 
       <h2 id="chaining" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Chaining with agent402-client</h2>
-      <pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0 0 36px;overflow-x:auto;">import { Agent402 } from "agent402-client";
+      ${codeBlock(`import { Agent402 } from "agent402-client";
 
 // Free tier: each call settles its own proof-of-work, no wallet needed
 const a = new Agent402();
@@ -106,7 +106,7 @@ const stats = await a.call("text-stats", { text: md.markdown });
 // payFetch: an @x402/fetch-wrapped fetch (see the USDC tab on /quickstart).
 const paid = new Agent402({ fetch: payFetch });
 const page = await paid.call("extract", { url: "https://example.com" });
-await paid.call("memory-write", { key: "example-title", value: page.title });</pre>
+await paid.call("memory-write", { key: "example-title", value: page.title });`, { html: true, style: "margin:0 0 36px" })}
 
       <h2 id="planned" style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;">Planned: callback delivery <span style="display:inline-block;background:var(--card);border:1px solid var(--hairline);color:var(--accent);font-size:var(--fs-xs);font-weight:700;padding:2px 8px;margin-left:8px;vertical-align:middle;font-family:var(--font-mono);">Planned</span></h2>
       <p style="color:var(--muted);line-height:1.7;margin:0 0 14px;">Async jobs are polled today. The planned addition is delivery to your own endpoint: name a callback URL on the call, and when the job finishes the server POSTs the result there with a signature you can verify. Polling <code style="font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);padding:1px 5px;font-size:var(--fs-code-inline);">/api/jobs/{id}</code> stays the fallback.</p>

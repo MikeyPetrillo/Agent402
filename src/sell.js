@@ -12,7 +12,7 @@
 // innerHTML) — real, tested, working functionality kept intact under the
 // new visual treatment rather than dropped for a static curl example alone.
 import { siteOrgLd } from "./site-org.js";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { RAILS, RAILS_AMP, chainDisplayName } from "./rails.js";
 import { crawlIntervalLabel } from "./crawl-cadence.js";
 import { routingProofSentence } from "./routing-proof.js";
@@ -214,10 +214,10 @@ table{border-collapse:collapse;width:100%}
     <ol style="margin:0;padding:0;list-style:none;background:var(--card);">${registerStepsHtml}</ol>
     <div style="background:var(--footer-bg);padding:22px;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:12px;">One-liner, from a shell</div>
-      <pre style="margin:0 0 18px;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">curl -X POST \\
+      ${codeBlock(`curl -X POST \\
   https://agent402.tools/api/index/register \\
   -H 'content-type: application/json' \\
-  -d '{"origin":"https://seller.example"}'</pre>
+  -d '{"origin":"https://seller.example"}'`, { name: "the register call", html: true, wrap: true, size: "xs", style: "margin:0 0 18px" })}
       ${formHtml}
       <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin:18px 0 12px;">What we read from you</div>
       <table class="ml-kv" style="font-family:var(--font-mono);font-size:var(--fs-xs);border:1px solid var(--hairline);"><tbody>${whatWeReadHtml}</tbody></table>
