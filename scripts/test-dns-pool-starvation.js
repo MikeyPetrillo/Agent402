@@ -43,14 +43,15 @@ server.on("message", (msg, rinfo) => {
   const qtype = msg.readUInt16BE(end);
   const key = `${name} ${qtype === 1 ? "A" : qtype === 28 ? "AAAA" : qtype}`;
   queries.set(key, (queries.get(key) || 0) + 1);
-  if (!(name in ANSWERS)) return; // the slow names: never answered
+  if (name === "half.pool.test" && qtype === 28) return; // A answered with no data, AAAA never
+  if (!(name in ANSWERS) && name !== "half.pool.test") return; // the slow names: never answered
   const question = msg.subarray(12, end + 4);
   const header = Buffer.alloc(12);
   msg.copy(header, 0, 0, 2); // id
   header.writeUInt16BE(0x8180, 2); // response, recursion desired and available, NOERROR
   header.writeUInt16BE(1, 4); // one question
   const answers = [];
-  if (qtype === 1) {
+  if (qtype === 1 && ANSWERS[name]) {
     const rr = Buffer.alloc(16);
     rr.writeUInt16BE(0xc00c, 0); rr.writeUInt16BE(1, 2); rr.writeUInt16BE(1, 4); rr.writeUInt32BE(30, 6); rr.writeUInt16BE(4, 10);
     ANSWERS[name].split(".").forEach((o, i) => { rr[12 + i] = Number(o); });
@@ -127,6 +128,11 @@ ok(priv?.statusCode === 400, `a private answer at the upfront check is a 400 (${
 // Every answer is checked: a public A beside a private AAAA is refused.
 const mixed = await assertPublicUrl("https://mixed.pool.test/").catch((e) => e);
 ok(mixed?.statusCode === 400 && (await hostIsPublic("mixed.pool.test")) === false, `a public A beside a private AAAA is refused (${mixed?.statusCode ?? "passed"})`);
+
+// A name with no A record whose AAAA query is never answered may still have a
+// public AAAA: the retryable 503, not the 400 for a name with no address.
+const half = await assertPublicUrl("https://half.pool.test/").catch((e) => e);
+ok(half?.statusCode === 503 && half.message === LOOKUP_UNAVAILABLE, `no A and an unanswered AAAA is the retryable 503 (${half?.statusCode})`);
 
 // The slow names end at their bound as the retryable 503, the pool still full.
 const ended = await Promise.all(slow);
