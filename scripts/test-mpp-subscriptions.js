@@ -31,6 +31,7 @@ import {
   ACTIVATION_VALID_FOR_S, TEMPO_RPC_TIMEOUT_MS,
   guardDestroyedKeys, KEY_GONE_PREFIX, createFileStore, diagnoseError,
   renewalUnconfirmedAlertHours, renewalsWord, RENEWAL_UNCONFIRMED_ALERT_HOURS_DEFAULT,
+  buildMppSubscriptionsEngine,
 } from "../src/mpp-subscriptions.js";
 import { MONITOR_PRODUCTS } from "../src/stripe-subscriptions.js";
 import { HttpRequestError } from "viem";
@@ -88,6 +89,29 @@ ok(mppSubscriptionsEnabled() === false, "rollout switch: no Tempo recipient mean
 process.env.TEMPO_RECIPIENT_ADDRESS = RECIPIENT;
 if (savedWallet === undefined) delete process.env.WALLET_ADDRESS; else process.env.WALLET_ADDRESS = savedWallet;
 ok(createMppSubscriptions({ secretKey: "", realm: REALM }) === null, "fail closed: an engine with no secret refuses to start");
+// The boot build and its gateway-status word (mppSubscriptions): on / off /
+// failed, where failed is configured but the build threw or refused.
+{
+  const warned = [];
+  const warn = (...a) => warned.push(a.join(" "));
+  const engine = { marker: true };
+  const on = buildMppSubscriptionsEngine({ enabled: () => true, build: () => engine, warn });
+  ok(on.state === "on" && on.engine === engine && warned.length === 0, "boot build: a configured engine that builds reads on");
+  let built = false;
+  const off = buildMppSubscriptionsEngine({ enabled: () => false, build: () => { built = true; return engine; }, warn });
+  ok(off.state === "off" && off.engine === null && !built && warned.length === 0, "boot build: not configured reads off and never builds");
+  const threw = buildMppSubscriptionsEngine({ enabled: () => true, build: () => { throw new Error("store unreadable"); }, warn });
+  ok(threw.state === "failed" && threw.engine === null && /init failed: store unreadable/.test(warned.at(-1) || ""), "boot build: a configured engine whose build throws reads failed and logs it");
+  const refused = buildMppSubscriptionsEngine({ enabled: () => true, build: () => null, warn });
+  ok(refused.state === "failed" && refused.engine === null, "boot build: a configured engine that refuses to start reads failed");
+  const enabledThrew = buildMppSubscriptionsEngine({ enabled: () => { throw new Error("bad env"); }, build: () => engine, warn });
+  ok(enabledThrew.state === "failed" && enabledThrew.engine === null, "boot build: a rollout switch that throws reads failed, never on");
+  // The default switch is the real one: configured here, so a throwing build reads failed.
+  ok(buildMppSubscriptionsEngine({ build: () => { throw new Error("x"); }, warn }).state === "failed", "boot build: the default switch is mppSubscriptionsEnabled (configured in this suite)");
+  // server.js builds through it and publishes the state as the word.
+  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  ok(/const \{ engine: _mppSubs, state: _mppSubsState \} = buildMppSubscriptionsEngine\(/.test(server) && /mppSubscriptions: \{ status: _mppSubsState \}/.test(server), "server.js builds the engine through buildMppSubscriptionsEngine and publishes its state on /api/gateway-status");
+}
 
 // ---------------------------------------------------------------------------
 // Harness. Injected settlement: `activate` writes the mppx-shaped record the

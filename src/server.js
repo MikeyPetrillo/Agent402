@@ -91,7 +91,7 @@ import { humanReportsPage, reportDeliveryPage } from "./human-reports-page.js";
 import { kitDisclaimer } from "./report-disclosure.js";
 import { shownGroundingNote } from "./report-grounding.js";
 import { createStripeSubscriptions, subscriptionsEnabled, MONITOR_PRODUCTS, MONITOR_PRODUCTS_ALL } from "./stripe-subscriptions.js";
-import { createMppSubscriptions, mppSubscriptionsEnabled, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
+import { createMppSubscriptions, buildMppSubscriptionsEngine, subscriptionFeePayerStatus } from "./mpp-subscriptions.js";
 import { stellarFacilitatorStatus } from "./stellar-facilitator-status.js";
 import { backfillBrokenPackRefunds, backfillNamedSales } from "./refund-backfill.js";
 import { mppFallbackStatus } from "./mpp-fallback.js";
@@ -724,7 +724,7 @@ import { sharedLimitsStatus, startSharedLimitsProbe, shared as sharedLimits, sha
 import { createRegistrationLimiter } from "./registration-limits.js";
 import { flushJsonDocuments } from "./json-document.js";
 import { flushSqlQueryStats, sqlQueryStatsReport, noteSqlBusy } from "./sql-query-stats.js";
-import { flushXSearchStats, xSearchStatsReport } from "./x-search-stats.js";
+import { flushXSearchStats, xSearchStatsReport, xSearchAuthorsStatus } from "./x-search-stats.js";
 import { noteDiscoveryRefusal, noteDiscoveryServed, noteDiscoveryClientCall, flushDiscoveryRefusals, loadDiscoveryRefusals, discoveryRefusalsReport } from "./discovery-refusals.js";
 import { loadRemovedOrigins } from "./x402-index.js";
 import { unloadedStores } from "./store-retry.js";
@@ -3238,18 +3238,21 @@ try {
 // recurring monitors to agents. validateTarget/onCharge mirror the card path
 // so a target is proven watchable BEFORE a recurring authorization is signed,
 // and every confirmed period lands in the same sales ledger.
-let _mppSubs = null;
-try {
-  _mppSubs = mppSubscriptionsEnabled() ? createMppSubscriptions({
+// The engine's state for /api/gateway-status (mppSubscriptions): on (built),
+// off (not configured) or failed (configured, but building it threw or
+// refused, so the recurring-monitor routes are not mounted). The pagers read
+// failed.
+const { engine: _mppSubs, state: _mppSubsState } = buildMppSubscriptionsEngine({
+  build: () => createMppSubscriptions({
     secretKey: process.env.MPP_SECRET_KEY || "",
     realm: new URL(BASE_URL).host,
     validateTarget: _monitorTargetValidators,
     // Rail "usdc" / network "tempo" is what a settled tempo/charge records, so
     // a subscription period reconciles against the same rows on /revenue.
     onCharge: ({ product, priceUsd, payer, tx }) => recordSale({ slug: product || "monitor", priceUsd, rail: "usdc", network: "tempo", payer, tx, wire: "mpp-tempo-subscription" }),
-  }) : null;
-  if (_mppSubs) console.log("MPP recurring subscriptions enabled (native tempo/subscription, pull billing)");
-} catch (e) { console.warn("[mpp-subs] init failed:", String(e?.message || e).slice(0, 200)); _mppSubs = null; }
+  }),
+});
+if (_mppSubs) console.log("MPP recurring subscriptions enabled (native tempo/subscription, pull billing)");
 // Boot sweep: close rail-canary subscriptions a canary run left open (the
 // canary's own product only, never a real subscriber; see sweepStaleCanaries).
 // Deferred and unref'd so it never sits in the boot path.
@@ -4079,6 +4082,10 @@ app.get("/api/gateway-status", async (req, res) => {
     exaSpend: full ? spend.exaSpend : publicBucket(spend.exaSpend),
     exaAllowance: full ? spend.exaAllowance : publicBucket(spend.exaAllowance),
     jevSpend: full ? spend.jevSpend : publicBucket(spend.jevSpend),
+    // x-search-recent's expanded-author reads today (src/x-search-stats.js):
+    // ok / alert past X_SEARCH_AUTHOR_DAILY_ALERT / unknown. An alarm only,
+    // nothing is refused. One word publicly; the figures for the operator.
+    xSearchAuthors: await xSearchAuthorsStatus({ full }).catch(() => ({ status: "unknown" })),
     // The router's per-minute holds for outside sellers
     // (src/router-spend-window.js): ok / over (past the alarm, still serving)
     // / capped (a purchase was refused at the stop inside the last hour) /
@@ -4317,6 +4324,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // alert disabled or no subscription engine. One word publicly; the
     // threshold, the count and the oldest attempt for the operator, each
     // record on /__operator/monitors.json.
+    // The MPP subscription engine (src/mpp-subscriptions.js): on / off (not
+    // configured) / failed (configured, but it did not build at boot). One word.
+    mppSubscriptions: { status: _mppSubsState },
     subscriptionRenewals: (() => { try { return _mppSubs ? _mppSubs.renewalsStatus({ full }) : { status: "off" }; } catch { return { status: "unknown" }; } })(),
     // The direct upstream (src/gateway-direct-pricebook.js): off, starting,
     // ok or degraded (a mapped model is kept on OpenRouter, or the direct

@@ -144,7 +144,7 @@ const RS = "Replay store marks PENDING (Redis)";
 const RSW = "Router spend per minute OVER its ceiling";
 const TBF = "topBuyerFailures: a top paying buyer is getting failed answers";
 const OSB = "onchainSqlBusy: a top paying buyer was told the query service is busy";
-// The six words wired in batch 2026-11-12b: [title, field, alert words, healthy words, words that do neither].
+// The six words wired in batch 2026-11-12b and the two of 2026-11-12c: [title, field, alert words, healthy words, words that do neither].
 const NEW_WORDS = [
   ["Route judgment token ceiling CAPPED for the day", "jevSpend", ["capped"], ["ok"], ["unknown"]],
   ["External spend global ceiling REFUSING", "externalSpendGlobal", ["refusing"], ["ok", "off"], ["near", "unknown"]],
@@ -152,6 +152,10 @@ const NEW_WORDS = [
   ["EVM log reads FAILING on every lane", "evmLogs", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
   ["Speech upstream breaker COOLING (backup voices serving)", "speechUpstream", ["cooling"], ["ok", "probing"], ["unknown"]],
   ["First-call allowance UNAVAILABLE (shared store)", "firstCallAllowance", ["unavailable"], ["on", "spent"], ["off", "unknown"]],
+  // Batch 2026-11-12c: x-search-recent's absorbed author reads, and the MPP
+  // subscription engine that did not build at boot.
+  ["X search author reads OVER the daily alert", "xSearchAuthors", ["alert"], ["ok"], ["unknown"]],
+  ["MPP subscription engine FAILED to start", "mppSubscriptions", ["failed"], ["on", "off"], ["unknown"]],
 ];
 const j = (gateway) => judge({ gateway });
 
@@ -372,6 +376,8 @@ const HB = [
   ["EVM log reads check", NEW_WORDS[3][0], "evmLogs", { status: "failing" }, [{ status: "idle" }, { status: "unknown" }], [{ status: "publics" }, { status: "fallback" }]],
   ["Speech upstream check", NEW_WORDS[4][0], "speechUpstream", { status: "cooling" }, [{ status: "unknown" }], [{ status: "ok" }, { status: "probing" }]],
   ["First-call allowance check", NEW_WORDS[5][0], "firstCallAllowance", { status: "unavailable" }, [{ status: "off" }, { status: "unknown" }], [{ status: "on" }, { status: "spent" }]],
+  ["X search author reads check", NEW_WORDS[6][0], "xSearchAuthors", { status: "alert" }, [{ status: "unknown" }], [{ status: "ok" }]],
+  ["MPP subscription engine check", NEW_WORDS[7][0], "mppSubscriptions", { status: "failed" }, [{ status: "unknown" }], [{ status: "on" }, { status: "off" }]],
 ];
 for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
   const step = steps.find((s) => String(s.name || "").startsWith(prefix));

@@ -9,6 +9,10 @@
 // that fails turns the answer into a 402, so the handler's own outcome is not
 // the sale). Each count is split by lane: outside (a buyer) or synthetic (our
 // own probes and wallets). Same shape and store as src/sql-query-stats.js.
+// Each lane also keeps `authorReads`, the exact sum of distinct authors, which
+// is the day's expanded-user reads: xSearchAuthorsStatus() reads it into the
+// xSearchAuthors word on /api/gateway-status (ok / alert past
+// X_SEARCH_AUTHOR_DAILY_ALERT). The word is an alarm only: nothing is refused.
 //
 // Counts only: never a username, a user or post id, or the query text.
 //
@@ -30,7 +34,7 @@ export const MEASURES = ["authors", "posts"];
 
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const emptyHist = () => Object.fromEntries(BUCKETS.map((b) => [b, 0]));
-const emptyLane = () => ({ calls: 0, authors: emptyHist(), posts: emptyHist() });
+const emptyLane = () => ({ calls: 0, authorReads: 0, authors: emptyHist(), posts: emptyHist() });
 const emptyDay = () => Object.fromEntries(LANES.map((l) => [l, emptyLane()]));
 
 let doc = null;
@@ -74,6 +78,7 @@ export function noteXSearchCall({ status, authors = 0, posts = 0, synthetic = fa
   const lane = synthetic ? "synthetic" : "outside";
   const day = (pending[d] ||= emptyDay());
   day[lane].calls++;
+  day[lane].authorReads += Math.max(0, Math.floor(Number(authors) || 0));
   day[lane].authors[bucketOf(authors)]++;
   day[lane].posts[bucketOf(posts)]++;
   startTimer();
@@ -87,6 +92,7 @@ function mergeInto(days, add) {
       const into = (day[l] ||= emptyLane());
       const from = lanes?.[l];
       into.calls = (Number(into.calls) || 0) + (Number(from?.calls) || 0);
+      into.authorReads = (Number(into.authorReads) || 0) + (Number(from?.authorReads) || 0);
       for (const m of MEASURES) {
         into[m] ||= emptyHist();
         for (const b of BUCKETS) into[m][b] = (Number(into[m][b]) || 0) + (Number(from?.[m]?.[b]) || 0);
@@ -149,5 +155,41 @@ export async function xSearchStatsReport({ days = 30, now = Date.now() } = {}) {
   return { buckets: BUCKETS, days: rows, totals, windowDays: Math.max(1, days), scope };
 }
 
+// The day's author reads past which xSearchAuthors reads alert. A search page
+// holds at most 10 posts, so at most 10 distinct authors: 500 is 50 full
+// pages of distinct authors in one UTC day, many times the route's normal
+// day, so a normal day reads ok and growth worth a look reads alert. Every
+// expanded author is also on the X spend meter, so the daily X ceiling
+// (X_DATA_DAILY_MAX_USD) still bounds the day's whole X spend.
+export const X_SEARCH_AUTHOR_DAILY_ALERT_DEFAULT = 500;
+export const xSearchAuthorDailyAlert = () => {
+  const n = Number(process.env.X_SEARCH_AUTHOR_DAILY_ALERT);
+  return Number.isFinite(n) && n > 0 ? n : X_SEARCH_AUTHOR_DAILY_ALERT_DEFAULT;
+};
+const STATUS_READ_TTL_MS = 30_000;
+let storedToday = { day: null, reads: 0, at: 0, ok: false };
+const readsOf = (day) => LANES.reduce((a, l) => a + (Number(day?.[l]?.authorReads) || 0), 0);
+
+/**
+ * The xSearchAuthors word: today's expanded-author reads (both lanes: our own
+ * probes cost the same) against X_SEARCH_AUTHOR_DAILY_ALERT. ok / alert, or
+ * unknown when the stored day cannot be read and this process has counted
+ * nothing over the mark. One bounded store read, reused for 30 s; never
+ * rejects. `full` adds the figures for the operator view.
+ */
+export async function xSearchAuthorsStatus({ now = Date.now(), full = false } = {}) {
+  const d = utcDay(now);
+  if (storedToday.day !== d || now - storedToday.at >= STATUS_READ_TTL_MS) {
+    try {
+      const r = await docOf().read({ quiet: true });
+      storedToday = r?.ok ? { day: d, reads: readsOf(bodyOf(r.body).days[d]), at: now, ok: true } : { day: d, reads: 0, at: now, ok: false };
+    } catch { storedToday = { day: d, reads: 0, at: now, ok: false }; }
+  }
+  const reads = storedToday.reads + readsOf(pending[d]);
+  const mark = xSearchAuthorDailyAlert();
+  const status = reads > mark ? "alert" : storedToday.ok ? "ok" : "unknown";
+  return full ? { status, authorReadsToday: reads, alertAbove: mark, scope: storedToday.ok ? "stored" : "unread" } : { status };
+}
+
 /** Test seam. */
-export function _resetXSearchStats() { pending = {}; if (timer) { clearInterval(timer); timer = null; } doc = null; }
+export function _resetXSearchStats() { pending = {}; if (timer) { clearInterval(timer); timer = null; } doc = null; storedToday = { day: null, reads: 0, at: 0, ok: false }; }

@@ -133,6 +133,32 @@ try {
   ok(rep.totals.outside.calls === 6 && rep.totals.outside.authors["11+"] === 1 && rep.totals.outside.authors["4-6"] === 1, `stored and unflushed counts merge on read (${rep.totals.outside.calls})`);
   await stats.flushXSearchStats();
 
+  // The xSearchAuthors word: today's exact author reads (both lanes, stored
+  // and unflushed) against X_SEARCH_AUTHOR_DAILY_ALERT; an alarm only.
+  ok(stats.X_SEARCH_AUTHOR_DAILY_ALERT_DEFAULT === 500 && stats.xSearchAuthorDailyAlert() === 500, "the alert mark defaults to 500 author reads a day");
+  // Stored so far: outside 3+10+1+0+12+5 = 31, synthetic 7.
+  rep = await stats.xSearchStatsReport();
+  ok(rep.totals.outside.authorReads === 31 && rep.totals.synthetic.authorReads === 7, `each lane keeps the exact author reads beside the histogram (${rep.totals.outside.authorReads}, ${rep.totals.synthetic.authorReads})`);
+  let w = await stats.xSearchAuthorsStatus();
+  ok(JSON.stringify(w) === JSON.stringify({ status: "ok" }), `under the mark the public word is ok, with no figure (${JSON.stringify(w)})`);
+  w = await stats.xSearchAuthorsStatus({ full: true });
+  ok(w.status === "ok" && w.authorReadsToday === 38 && w.alertAbove === 500 && w.scope === "stored", `the operator view counts both lanes, stored and unflushed (${JSON.stringify(w)})`);
+  process.env.X_SEARCH_AUTHOR_DAILY_ALERT = "38";
+  ok((await stats.xSearchAuthorsStatus()).status === "ok", "at the mark the word stays ok");
+  stats.noteXSearchCall({ status: 200, authors: 1, posts: 1 });
+  ok((await stats.xSearchAuthorsStatus()).status === "alert", "one author read past the mark reads alert (unflushed counts included)");
+  await stats.flushXSearchStats();
+  stats._resetXSearchStats();
+  ok((await stats.xSearchAuthorsStatus()).status === "alert", "a fresh process reads alert from the stored day");
+  ok((await stats.xSearchAuthorsStatus({ now: Date.now() + 86_400_000 })).status === "ok", "the next UTC day reads ok");
+  // The answer path is never refused for it: a call past the mark still answers 200 and is counted.
+  const past = await call(() => J(200, page(10, 10)));
+  ok(past.status === 200 && past.body.count === 10, `a call past the mark is served as usual (${past.status})`);
+  process.env.X_SEARCH_AUTHOR_DAILY_ALERT = "0";
+  ok(stats.xSearchAuthorDailyAlert() === 500, "a zero or malformed mark falls back to the default");
+  delete process.env.X_SEARCH_AUTHOR_DAILY_ALERT;
+  await stats.flushXSearchStats();
+
   // Days past the keep window are pruned on the next write.
   const old = Date.now() - (stats.X_SEARCH_STATS_KEEP_DAYS + 5) * 86_400_000;
   stats.noteXSearchCall({ status: 200, authors: 1, posts: 1, now: old });

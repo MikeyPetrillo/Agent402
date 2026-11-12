@@ -966,6 +966,27 @@ export function diagnoseError(err, max = 1200) {
   return out.length > max ? `${out.slice(0, max)}...` : out;
 }
 
+/**
+ * Build the engine at boot and say how it went, for the mppSubscriptions word
+ * on /api/gateway-status: { engine, state } with state on (built), off (not
+ * configured: `enabled()` is false) or failed (configured, but `build()` threw
+ * or refused). Never throws; a failure is logged once by `warn`.
+ */
+export function buildMppSubscriptionsEngine({ enabled = mppSubscriptionsEnabled, build, warn = console.warn } = {}) {
+  let configured = false;
+  try {
+    configured = !!enabled();
+    if (!configured) return { engine: null, state: "off" };
+    const engine = build();
+    if (engine) return { engine, state: "on" };
+    warn("[mpp-subs] init failed: the engine refused to start");
+    return { engine: null, state: "failed" };
+  } catch (e) {
+    warn("[mpp-subs] init failed:", String(e?.message || e).slice(0, 200));
+    return { engine: null, state: "failed" };
+  }
+}
+
 export function createMppSubscriptions({
   secretKey, realm, storePath, validateTarget = {}, onCharge,
   activate: injectedActivate = null, chargePeriod: injectedChargePeriod = null,
