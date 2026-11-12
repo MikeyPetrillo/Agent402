@@ -106,6 +106,15 @@ ok(files.length > 10, `documentation files under test (${files.length})`);
 
 // Routes that are real but deliberately absent from the paid catalog (free
 // surfaces, operator-only, or protocol paths served outside CATALOG).
+// True when the path match at `index` is the path of an absolute URL whose host is
+// not this site (agent402.tools or a subdomain of it).
+function onOtherHost(line, index) {
+  const host = (line.slice(0, index).match(/https?:\/\/([a-z0-9.-]+)$/i) || [])[1];
+  return Boolean(host) && !/(^|\.)agent402\.tools$/i.test(host);
+}
+ok(onOtherHost("[![x](https://vet402.com/api/badge/host/agent402.tools.svg)]", "[![x](https://vet402.com".length), "control: a path on another host is not one of our routes");
+ok(!onOtherHost("see https://agent402.tools/api/nope", "see https://agent402.tools".length) && !onOtherHost("call `/api/nope`", "call `".length), "control: a path on our host, or a bare path, is still checked");
+
 const KNOWN_NON_CATALOG = new Set([
   // --- /v1, added when the route scan was widened past /api on 2026-08-24 ---
   // Free and informational, not priced catalog entries (same class as the /api
@@ -163,6 +172,8 @@ for (const file of files) {
     // left behind. They went a day stale through a repricing with this green.
     for (const m of line.matchAll(/`?(\/(?:api|v1)\/[a-zA-Z0-9/_.-]+?)`?(?=[\s,)|`"'\]]|$)/g)) {
       let path = m[1].replace(/[.,;:]+$/, "");
+      // A path on another site (a badge or record service's own /api/ URL) is not ours.
+      if (onOtherHost(line, m.index)) continue;
       if (path.startsWith("/api/skill/")) continue;
       if (path.includes("{") || path.includes("<") || path.includes(":")) continue;
       if (KNOWN_NON_CATALOG.has(path) || path.startsWith("/api/memory")) continue;
