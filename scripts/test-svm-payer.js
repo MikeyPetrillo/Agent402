@@ -14,6 +14,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFile } from "node:fs/promises";
 import { svmRequiredSigners, svmPayerFromPayload, base58Encode, svmSignedTransfer, svmTransferAccounts, svmTransferAuthority, svmPaymentAuthority, isSvmNetwork } from "../src/svm-payer.js";
+import * as svmPayer from "../src/svm-payer.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -47,12 +48,14 @@ async function build(version) {
   const signed = await kit.partiallySignTransactionMessageWithSigners(msg);
   return kit.getBase64EncodedWireTransaction(signed);
 }
-for (const version of [0, "legacy"]) {
+// Version 1 is the message-first envelope (@solana/transactions): the message,
+// then one 64-byte signature per required signer, with no count prefix.
+for (const version of [0, "legacy", 1]) {
   const tx = await build(version);
   const signers = svmRequiredSigners(tx);
   ok(Array.isArray(signers) && signers.length === 2 && signers[0] === feePayer.address && signers[1] === buyer.address,
     `${version} message: required signers are [feePayer, buyer] in account order (${JSON.stringify(signers)})`);
-  ok(!signers.includes(bystander.address), `${version} message: a non-signer account is never reported as a signer`);
+  ok(Array.isArray(signers) && !signers.includes(bystander.address), `${version} message: a non-signer account is never reported as a signer`);
   const payload = { x402Version: 2, payload: { transaction: tx }, accepted: { extra: { feePayer: feePayer.address } } };
   ok(svmPayerFromPayload(payload, { feePayer: feePayer.address }) === buyer.address, `${version} message: the buyer is the signer that is not the fee payer`);
   ok(svmPayerFromPayload(payload) === buyer.address, `${version} message: with no fee payer named, the second signer is the buyer`);
@@ -101,7 +104,11 @@ for (const junk of [null, undefined, "", "!!!", "AAAA", "gA==", Buffer.alloc(300
     const signed = authority === "signs" ? await kit.partiallySignTransaction([buyer.keyPair], compiled) : compiled;
     return kit.getBase64EncodedWireTransaction(signed);
   }
-  for (const version of [0, "legacy"]) {
+  // Where signature slot `i` sits: after the compact-u16 count (legacy, v0),
+  // or after the message (v1, whose second byte is the signer count).
+  const sigAt = (b, i) => (b[0] === 0x81 ? b.length - 64 * b[1] + 64 * i : 1 + 64 * i);
+  const msgEnd = (b) => (b[0] === 0x81 ? b.length - 64 * b[1] : b.length);
+  for (const version of [0, "legacy", 1]) {
     const tx = await transfer(version, "signs");
     const t = svmSignedTransfer(tx);
     ok(t && t.authority === buyer.address && t.source === src && t.amount === 4321n, `${version} message: a signed transfer reads with its amount (${t && t.amount})`);
@@ -110,13 +117,13 @@ for (const junk of [null, undefined, "", "!!!", "AAAA", "gA==", Buffer.alloc(300
     const named = await transfer(version, "named");
     ok(svmTransferAccounts(named)?.authority === buyer.address && svmSignedTransfer(named) === null, `${version} message: an authority that is not a required signer reads as null`);
     const sigFlip = Buffer.from(tx, "base64");
-    sigFlip[1 + 64 + 10] ^= 0x01; // the buyer's signature (slot 1; slot 0 is the fee payer's)
+    sigFlip[sigAt(sigFlip, 1) + 10] ^= 0x01; // the buyer's signature (slot 1; slot 0 is the fee payer's)
     ok(svmSignedTransfer(sigFlip.toString("base64")) === null, `${version} message: a forged signature reads as null`);
     const msgFlip = Buffer.from(tx, "base64");
-    msgFlip[msgFlip.length - 3] ^= 0x01; // a byte of the transfer amount, after signing
+    msgFlip[msgEnd(msgFlip) - 3] ^= 0x01; // a byte of the transfer amount, after signing
     ok(svmSignedTransfer(msgFlip.toString("base64")) === null, `${version} message: a message changed after signing reads as null`);
     const otherKey = Buffer.from(tx, "base64");
-    otherKey.fill(0, 1, 65); // the fee payer's slot (it signs later, at settle)
+    otherKey.fill(0, sigAt(otherKey, 0), sigAt(otherKey, 0) + 64); // the fee payer's slot (it signs later, at settle)
     ok(svmSignedTransfer(otherKey.toString("base64"))?.authority === buyer.address, `${version} message: the fee payer's empty slot does not matter, only the authority's`);
   }
   for (const junk of [null, "", "AAAA", Buffer.alloc(300).toString("base64"), "A".repeat(5000)]) {
@@ -172,11 +179,33 @@ for (const junk of [null, undefined, "", "!!!", "AAAA", "gA==", Buffer.alloc(300
   ok(svmPaymentAuthority(asPayload(threeInTable), { feePayer: fp.address }) === buyer.address, "source, mint and destination all in a lookup table: the payer is the authority");
   const staticTx = await altTx({ inTable: [] });
   ok(svmPaymentAuthority(asPayload(staticTx), { feePayer: fp.address }) === buyer.address && svmTransferAccounts(staticTx)?.authority === buyer.address, "all static: the authority, and the four-account read agrees");
+  const otherAuth = await kit.generateKeyPairSigner();
+  const twoAuthTx = await altTx({ inTable: [payTo], second: otherAuth });
   const named = await altTx({ inTable: [payTo], authority: "named" });
   const namedGot = svmPaymentAuthority(asPayload(named), { feePayer: fp.address });
   ok(namedGot === buyer.address, `an authority that is a static key but not a signer (an SPL multisig account) is the payer, never the co-signer (${namedGot === decoy.address ? "got the decoy" : namedGot})`);
   const namedInTable = await altTx({ inTable: [payTo, buyer.address], authority: "named" });
   ok(svmPaymentAuthority(asPayload(namedInTable), { feePayer: fp.address }) === null, "an authority that is a lookup-table entry gives no payer, never the co-signer");
+  // THE SANCTIONS SCREEN reads every address it must screen, not one payer:
+  // the static authority of every transfer, plus every required signer except
+  // the fee payer. An SPL multisig in a lookup table, signed by its member,
+  // still names that member (it is a required signer).
+  {
+    const screen = (tx, opts = { feePayer: fp.address }) => (typeof svmPayer.svmScreenAddresses === "function" ? svmPayer.svmScreenAddresses(asPayload(tx), opts) : undefined);
+    const lut = screen(namedInTable);
+    ok(Array.isArray(lut) && lut.includes(decoy.address) && !lut.includes(fp.address), `multisig authority in a lookup table: the signing member is screened, the fee payer is not (${JSON.stringify(lut)})`);
+    const two = screen(twoAuthTx);
+    ok(Array.isArray(two) && [buyer.address, otherAuth.address, decoy.address].every((a) => two.includes(a)) && !two.includes(fp.address), "two transfers with different authorities: both authorities and the co-signer are screened");
+    const multisigStatic = screen(named);
+    ok(Array.isArray(multisigStatic) && multisigStatic.includes(buyer.address) && multisigStatic.includes(decoy.address), "a static multisig authority and its signing member are both screened");
+    const plain = screen(staticTx);
+    ok(Array.isArray(plain) && plain.length === 2 && plain.includes(buyer.address) && plain.includes(decoy.address), `CONTROL: an all-static transfer screens its authority and co-signer only (${JSON.stringify(plain)})`);
+    const noFp = screen(staticTx, {});
+    ok(Array.isArray(noFp) && !noFp.includes(fp.address), "with no fee payer named, the first signer (the Solana fee payer) is not screened");
+    const fpNamedOther = screen(staticTx, { feePayer: decoy.address });
+    ok(Array.isArray(fpNamedOther) && fpNamedOther.includes(fp.address) && !fpNamedOther.includes(decoy.address), "the exclusion is the accept's fee payer, by address");
+    ok(screen("bm90IGEgdHg=") === null && screen(null) === null, "an unreadable transaction gives null (the caller decides), never a throw");
+  }
   // A header that claims more signers than there are static keys: account 3
   // at index 2 of a two-key message would read the recent blockhash's bytes.
   {
@@ -203,6 +232,55 @@ for (const junk of [null, undefined, "", "!!!", "AAAA", "gA==", Buffer.alloc(300
   for (const junk of [null, "", "AAAA", Buffer.alloc(300).toString("base64"), "A".repeat(5000), { toString: 1 }]) {
     let out; try { out = svmPaymentAuthority({ payload: { transaction: junk } }); } catch (e) { out = `threw ${e.message}`; }
     ok(out === null, `svmPaymentAuthority junk ${typeof junk === "string" ? junk.slice(0, 12) : typeof junk} -> null`);
+  }
+}
+
+// --- a version-1 message with config values (priority fee, compute limit) ---------
+// Built by the installed kit: the config words sit between the static keys and
+// the instruction headers, so a reader that skips them reads the wrong bytes.
+{
+  const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const u64 = (n) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(n), true); return b; };
+  const src = (await kit.generateKeyPairSigner()).address, payTo = (await kit.generateKeyPairSigner()).address;
+  const fp = await kit.generateKeyPairSigner(), cosigner = await kit.generateKeyPairSigner();
+  const transferIx = { programAddress: kit.address(TOKEN), accounts: [
+    { address: kit.address(src), role: kit.AccountRole.WRITABLE },
+    { address: kit.address(USDC), role: kit.AccountRole.READONLY },
+    { address: kit.address(payTo), role: kit.AccountRole.WRITABLE },
+    { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer },
+    { address: cosigner.address, role: kit.AccountRole.READONLY_SIGNER, signer: cosigner },
+  ], data: new Uint8Array([12, ...u64(777), 6]) };
+  for (const [label, cfg] of [["no config", (m) => m], ["priority fee and compute limit", (m) => kit.setTransactionMessagePriorityFeeLamports(5000n, kit.setTransactionMessageComputeUnitLimit(200000, m))], ["every config word", (m) => kit.setTransactionMessageConfig({ priorityFeeLamports: 1n, computeUnitLimit: 9000, loadedAccountsDataSizeLimit: 65536, heapSize: 65536 }, m)]]) {
+    const msg = cfg(kit.pipe(kit.createTransactionMessage({ version: 1 }),
+      (m) => kit.setTransactionMessageFeePayer(fp.address, m),
+      (m) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
+      (m) => kit.appendTransactionMessageInstruction(transferIx, m)));
+    const tx = kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction([buyer.keyPair, cosigner.keyPair], kit.compileTransaction(msg)));
+    const wire = Buffer.from(tx, "base64");
+    ok(wire[0] === 0x81, `v1 ${label}: the installed kit writes a message-first envelope (first byte ${wire[0]})`);
+    const kitSigners = Object.keys(kit.getTransactionDecoder().decode(wire).signatures);
+    ok(JSON.stringify(svmRequiredSigners(tx)) === JSON.stringify(kitSigners), `v1 ${label}: required signers match the kit's own decode (${JSON.stringify(svmRequiredSigners(tx))})`);
+    const t = svmSignedTransfer(tx, { index: 0 });
+    ok(t && t.authority === buyer.address && t.amount === 777n && t.destination === payTo, `v1 ${label}: the signed transfer reads, its signature checked (${t && t.amount})`);
+    const payload = { x402Version: 2, accepted: { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", extra: { feePayer: fp.address } }, payload: { transaction: tx } };
+    ok(svmPaymentAuthority(payload, { feePayer: fp.address }) === buyer.address, `v1 ${label}: the payer is the transfer authority, not the co-signer`);
+    const sc = typeof svmPayer.svmScreenAddresses === "function" ? svmPayer.svmScreenAddresses(payload, { feePayer: fp.address }) : undefined;
+    ok(Array.isArray(sc) && sc.includes(buyer.address) && sc.includes(cosigner.address) && !sc.includes(fp.address), `v1 ${label}: the screen reads the authority and the co-signer`);
+    const cut = wire.subarray(0, wire.length - 1).toString("base64");
+    ok(svmRequiredSigners(cut) === null && svmPaymentAuthority({ payload: { transaction: cut } }) === null, `v1 ${label}: a truncated envelope reads as null`);
+  }
+  // A config mask bit no version-1 reader defines, or one priority-fee bit
+  // alone (the kit refuses that), is not a message read here.
+  {
+    const msg = kit.pipe(kit.createTransactionMessage({ version: 1 }), (m) => kit.setTransactionMessageFeePayer(fp.address, m), (m) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, m), (m) => kit.appendTransactionMessageInstruction(transferIx, m));
+    const wire = Buffer.from(kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction([buyer.keyPair, cosigner.keyPair], kit.compileTransaction(msg))), "base64");
+    ok(svmRequiredSigners(wire.toString("base64")) !== null, "control: the unmodified v1 envelope reads");
+    for (const mask of [1, 2, 32]) {
+      const bad = Buffer.from(wire); bad.writeUInt32LE(mask, 4);
+      ok(svmRequiredSigners(bad.toString("base64")) === null && svmPaymentAuthority({ payload: { transaction: bad.toString("base64") } }) === null, `v1 config mask ${mask}: not read`);
+    }
+    const v2 = Buffer.from(wire); v2[0] = 0x82;
+    ok(svmRequiredSigners(v2.toString("base64")) === null, "a version-2 prefix is not read");
   }
 }
 

@@ -7,7 +7,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import algosdk from "algosdk";
 import * as sdk from "@stellar/stellar-sdk";
-import { nonEvmPayerFromRequest } from "../src/non-evm-payer.js";
+import { nonEvmPayerFromRequest, nonEvmScreenAddressesFromRequest } from "../src/non-evm-payer.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -36,6 +36,8 @@ const reqWith = (payload) => {
   const tx = kit.getBase64EncodedWireTransaction(await kit.partiallySignTransactionMessageWithSigners(msg));
   const payload = { x402Version: 2, accepted: { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", extra: { feePayer: feePayer.address } }, payload: { transaction: tx } };
   ok(await nonEvmPayerFromRequest(reqWith(payload)) === `svm:${buyer.address}`, "Solana: the key is the buyer signer, not the fee payer, case kept");
+  const sc = await nonEvmScreenAddressesFromRequest(reqWith(payload));
+  ok(JSON.stringify(sc) === JSON.stringify([buyer.address]), `Solana screen list: the buyer signer only, never the fee payer (${JSON.stringify(sc)})`);
 }
 {
   // A transaction with a third signer ahead of the transfer authority: the key
@@ -144,6 +146,7 @@ const reqWith = (payload) => {
   const addr = buyer.addr.toString();
   const payload = { x402Version: 2, accepted: { network: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=" }, payload: { paymentGroup: [Buffer.from(signed).toString("base64")], paymentIndex: 0 } };
   ok(await nonEvmPayerFromRequest(reqWith(payload)) === `avm:${addr}`, "Algorand: the key is the sender of the signed payment transaction");
+  ok(JSON.stringify(await nonEvmScreenAddressesFromRequest(reqWith(payload))) === JSON.stringify([addr]), "Algorand screen list: the signed sender, unprefixed");
   const unsigned = Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString("base64");
   ok(await nonEvmPayerFromRequest(reqWith({ ...payload, payload: { paymentGroup: [unsigned], paymentIndex: 0 } })) === null, "Algorand: an unsigned transaction names no signer");
 }
@@ -163,12 +166,14 @@ const reqWith = (payload) => {
   const payload = { x402Version: 2, accepted: { network: "stellar:pubnet" }, payload: { transaction: tx.toXDR() } };
   const got = await nonEvmPayerFromRequest(reqWith(payload));
   ok(got === `stellar:${buyer.publicKey()}`, `Stellar: the key is the transfer's from, not the transaction source (${got})`);
+  ok(JSON.stringify(await nonEvmScreenAddressesFromRequest(reqWith(payload))) === JSON.stringify([buyer.publicKey()]), "Stellar screen list: the transfer's from, unprefixed");
 }
 
 // --- not a non-EVM payment ---------------------------------------------------------
 ok(await nonEvmPayerFromRequest(reqWith({ x402Version: 2, accepted: { network: "eip155:8453" }, payload: { authorization: { from: "0x" + "a".repeat(40) } } })) === null, "EVM: no key here (payerFromRequest owns that rail)");
 ok(await nonEvmPayerFromRequest(reqWith({ x402Version: 2, accepted: { network: "solana:x" }, payload: { transaction: "bm90IGEgdHg=" } })) === null, "an unreadable Solana transaction gives no key");
 ok(await nonEvmPayerFromRequest({ header: () => undefined, headers: {} }) === null, "no payment header gives no key");
+ok(await nonEvmScreenAddressesFromRequest(reqWith({ x402Version: 2, accepted: { network: "solana:x" }, payload: { transaction: "bm90IGEgdHg=" } })) === null && await nonEvmScreenAddressesFromRequest(reqWith({ x402Version: 2, accepted: { network: "eip155:8453" }, payload: {} })) === null, "screen list: an unreadable Solana transaction or an EVM payload gives null");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

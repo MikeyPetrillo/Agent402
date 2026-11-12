@@ -624,6 +624,28 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
       const c = await run({ list: [cand("ans.example")], pay: async () => ({ result: body, quote: null, receipt: null }) });
       ok(c.r?.receipt?.sellerPaid === false, `CONTROL: an unpaid ${JSON.stringify(body)} is the seller's answer and is sold`);
     }
+    // The refused non-answer is still the seller's delivery: observed against
+    // the paths it guaranteed (a missed promise), exactly as a paid delivery
+    // is, so a seller that keeps answering empty 200s is seen as not keeping
+    // its contract. Nothing is booked and the next seller is still tried.
+    {
+      const obs = await import("../src/response-observation.js");
+      obs.__resetObservationsForTest();
+      const routed = { ...cand("hollow2.example"), route: "/x", guaranteedPaths: ["data.price"] };
+      for (const body of [{}, { error: "down" }, { note: "see docs" }]) {
+        const c = await run({ list: [routed, cand("b.example")], pay: async (url) => (url.includes("hollow2") ? { result: body, quote: null, receipt: null } : good()) });
+        ok(c.r?.receipt?.seller === "https://b.example" && c.calls.length === 2, `unpaid ${JSON.stringify(body)} with a contract: refused, next seller served (${c.r?.receipt?.seller})`);
+      }
+      const o = obs.deliveryObservation("https://hollow2.example", "POST", "/x");
+      ok(o && o.calls === 3 && o.kept === 0 && o.lastMissing.join() === "data.price", `each refused unpaid non-answer is observed as a missed promise (${JSON.stringify(o)})`);
+      obs.__resetObservationsForTest();
+      const kept = await run({ list: [routed], pay: async () => ({ result: { data: { price: 1 } }, quote: null, receipt: null }) });
+      const k = obs.deliveryObservation("https://hollow2.example", "POST", "/x");
+      ok(kept.r?.receipt?.sellerPaid === false && k && k.calls === 1 && k.kept === 1, `CONTROL: an unpaid answer that keeps the promise is observed as kept (${JSON.stringify(k)})`);
+      obs.__resetObservationsForTest();
+      const noRoute = await run({ list: [{ ...cand("hollow3.example"), guaranteedPaths: ["data.price"] }], pay: async () => ({ result: {}, quote: null, receipt: null }) });
+      ok(noRoute.e?.statusCode === 502 && obs.__observationCountForTest() === 0, "a candidate with no route records nothing (the index reads observations by route)");
+    }
     // A PAID 200 is never refused this way: we paid, so the buyer is charged.
     const paidEmpty = await run({ list: [cand("p.example")], pay: async () => ({ result: {}, quote: { usd: 0.001 }, receipt: { transaction: "0xab" } }) });
     ok(paidEmpty.r?.receipt?.settleTx === "0xab", "CONTROL: a paid 200 with an empty body is still delivered (we paid)");

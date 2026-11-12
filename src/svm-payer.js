@@ -16,8 +16,18 @@
 // in exactly that order; @x402/svm's scheme client does the same). So the
 // buyer is the first required signer that is not the accept's `extra.feePayer`.
 //
-// Dependency-free: a compact-u16 reader, a legacy/v0 message header walk and a
-// base58 encoder for the comparison, no RPC, no @solana/kit. Pure, bounded,
+// Dependency-free: a compact-u16 reader, a legacy/v0/v1 message walk and a
+// base58 encoder for the comparison, no RPC, no @solana/kit. Version 1 is the
+// message-first envelope the installed @solana/kit writes and @x402/svm
+// accepts (@solana/transactions, @solana/transaction-messages codecs/v1):
+//   0x81, header (3 bytes), config mask (u32 LE), lifetime token (32 bytes),
+//   instruction count (u8), static key count (u8), static keys, the config
+//   values the mask selects (priority fee u64 when bits 0-1 are both set,
+//   compute limit, loaded-accounts limit and heap size u32 each, bits 2-4),
+//   one 4-byte header per instruction (program u8, account count u8, data
+//   length u16 LE), each instruction's account indices and data, and then
+//   one 64-byte signature per required signer with no count prefix. It holds
+//   no lookup tables. Pure, bounded,
 // never throws: null whenever the bytes are not the shape described, because a
 // wrong payer id is worse than none. svmSignedTransfer also checks the
 // transfer authority's ed25519 signature with node:crypto.
@@ -26,7 +36,9 @@ import { base64BytesOf } from "./base64-bytes.js";
 
 // The largest wire transaction read, on its decoded bytes (src/base64-bytes.js),
 // so characters the decoder skips cannot push one transaction past it.
-const MAX_WIRE_BYTES = 3072;
+// A version-1 transaction may be up to 4096 bytes (@solana/transactions
+// V1_TRANSACTION_SIZE_LIMIT); legacy and v0 stop at 1232.
+const MAX_WIRE_BYTES = 4096;
 function wireBytesOf(txBase64) {
   const bytes = base64BytesOf(txBase64);
   return bytes && bytes.length <= MAX_WIRE_BYTES ? bytes : null;
@@ -57,6 +69,45 @@ function readCompactU16(bytes, at) {
   return null;
 }
 
+// The config words a version-1 mask selects, and the bits it may carry.
+const V1_CONFIG_BITS = 0x1f;
+const V1_FIXED_BYTES = 1 + 3 + 4 + 32 + 1 + 1;
+
+// A version-1 (message-first) envelope, in readMessage's shape. Null unless
+// every byte is accounted for: the message's instructions end exactly where
+// the header's count of signatures begins.
+function readV1Message(bytes) {
+  if (bytes.length < V1_FIXED_BYTES || bytes[0] !== 0x81) return null;
+  const numRequiredSignatures = bytes[1];
+  if (numRequiredSignatures < 1 || numRequiredSignatures > 8) return null;
+  const mask = bytes.readUInt32LE(4);
+  if ((mask & ~V1_CONFIG_BITS) !== 0) return null;
+  const priority = mask & 3;
+  if (priority === 1 || priority === 2) return null; // the kit refuses one bit alone
+  const numInstructions = bytes[40];
+  const keyCount = bytes[41];
+  if (keyCount < 1 || keyCount > 64 || numInstructions > 16) return null;
+  const keysAt = V1_FIXED_BYTES;
+  let p = keysAt + 32 * keyCount;
+  p += (priority === 3 ? 8 : 0) + (mask & 4 ? 4 : 0) + (mask & 8 ? 4 : 0) + (mask & 16 ? 4 : 0);
+  const headersAt = p;
+  p += 4 * numInstructions;
+  if (p > bytes.length) return null;
+  const instructions = [];
+  for (let i = 0; i < numInstructions; i++) {
+    const h = headersAt + 4 * i;
+    const program = bytes[h], accountCount = bytes[h + 1], dataLen = bytes.readUInt16LE(h + 2);
+    if (p + accountCount + dataLen > bytes.length) return null;
+    const accountIdx = [...bytes.subarray(p, p + accountCount)];
+    p += accountCount;
+    instructions.push({ program, accountIdx, tag: dataLen > 0 ? bytes[p] : -1, dataAt: p, dataLen });
+    p += dataLen;
+  }
+  if (bytes.length - p !== 64 * numRequiredSignatures) return null;
+  const keyBytes = (i) => bytes.subarray(keysAt + 32 * i, keysAt + 32 * (i + 1));
+  return { bytes, sigCount: numRequiredSignatures, sigsAt: p, messageStart: 0, messageEnd: p, numRequiredSignatures, keyCount, keyBytes, instructions };
+}
+
 /**
  * The required signers of a wire transaction, as base58 addresses, in
  * account-key order (fee payer first). Null on any shape mismatch.
@@ -66,6 +117,13 @@ export function svmRequiredSigners(txBase64) {
   try {
     const bytes = wireBytesOf(txBase64);
     if (!bytes) return null;
+    if (bytes[0] === 0x81) {
+      const m = readV1Message(bytes);
+      if (!m || m.numRequiredSignatures > m.keyCount) return null;
+      const out = [];
+      for (let i = 0; i < m.numRequiredSignatures; i++) out.push(base58Encode(m.keyBytes(i)));
+      return out;
+    }
     const sigs = readCompactU16(bytes, 0);
     if (!sigs || sigs.value < 1 || sigs.value > 8) return null;
     let at = sigs.next + 64 * sigs.value; // skip the signatures
@@ -74,7 +132,7 @@ export function svmRequiredSigners(txBase64) {
     // a legacy message begins directly with the 3-byte header.
     if ((bytes[at] & 0x80) !== 0) {
       const version = bytes[at] & 0x7f;
-      if (version !== 0) return null; // only v0 exists today
+      if (version !== 0) return null; // v1 is message-first, read above
       at += 1;
     }
     if (at + 3 > bytes.length) return null;
@@ -100,11 +158,13 @@ const IX_TRANSFER_CHECKED = 12;
 
 // The walk of a wire message: its signatures, header, static account keys and
 // every instruction (program index, account indices, data span). An account
-// index at or past the static key count names an address-lookup-table entry,
-// which only an RPC can resolve. Null on any shape mismatch.
+// index at or past the static key count names an address-lookup-table entry
+// (v0), which only an RPC can resolve, or nothing at all (v1). The signed
+// message is bytes[messageStart, messageEnd). Null on any shape mismatch.
 function readMessage(txBase64) {
   const bytes = wireBytesOf(txBase64);
   if (!bytes) return null;
+  if (bytes[0] === 0x81) return readV1Message(bytes);
   const sigs = readCompactU16(bytes, 0);
   if (!sigs || sigs.value < 1 || sigs.value > 8) return null;
   const messageStart = sigs.next + 64 * sigs.value;
@@ -141,7 +201,7 @@ function readMessage(txBase64) {
     instructions.push({ program, accountIdx, tag, dataAt: data.next, dataLen: data.value });
     p = data.next + data.value;
   }
-  return { bytes, sigCount: sigs.value, sigsAt: sigs.next, messageStart, numRequiredSignatures, keyCount: keys.value, keyBytes, instructions };
+  return { bytes, sigCount: sigs.value, sigsAt: sigs.next, messageStart, messageEnd: bytes.length, numRequiredSignatures, keyCount: keys.value, keyBytes, instructions };
 }
 
 /** A TransferChecked of a token program (its program id is always a static key). */
@@ -161,7 +221,7 @@ function readTransfer(txBase64, index) {
   const ix = m.instructions[index];
   if (!isTransferChecked(m, ix) || ix.accountIdx.slice(0, 4).some((k) => k >= m.keyCount)) return null;
   const amount = ix.dataLen >= 9 ? m.bytes.readBigUInt64LE(ix.dataAt + 1) : null;
-  return { bytes: m.bytes, sigCount: m.sigCount, sigsAt: m.sigsAt, messageStart: m.messageStart, numRequiredSignatures: m.numRequiredSignatures, keyBytes: m.keyBytes, accountIdx: ix.accountIdx.slice(0, 4), amount };
+  return { bytes: m.bytes, sigCount: m.sigCount, sigsAt: m.sigsAt, messageStart: m.messageStart, messageEnd: m.messageEnd, numRequiredSignatures: m.numRequiredSignatures, keyBytes: m.keyBytes, accountIdx: ix.accountIdx.slice(0, 4), amount };
 }
 
 /**
@@ -226,6 +286,39 @@ export function svmPaymentAuthority(paymentPayload, { feePayer } = {}) {
   } catch { return null; }
 }
 
+/**
+ * Every address the sanctions screen must check for a Solana payment: the
+ * authority of each TransferChecked whose authority is a static key, plus
+ * every required signer except the fee payer (the accept's `extra.feePayer`,
+ * or, when none is named, the first signer, which Solana makes the fee
+ * payer). Unlike svmPaymentAuthority this never narrows to one payer: an
+ * authority in a lookup table (an SPL multisig) or two transfers that name
+ * different authorities still leave every signing wallet on the list, and a
+ * signer is a wallet that authorized the transaction. Null when the bytes do
+ * not parse (the caller decides what an unreadable payment means).
+ * @param {object} paymentPayload
+ * @param {{feePayer?: string}} [opts]
+ * @returns {string[]|null}
+ */
+export function svmScreenAddresses(paymentPayload, { feePayer } = {}) {
+  try {
+    const tx = paymentPayload?.payload?.transaction ?? paymentPayload?.transaction;
+    const m = readMessage(tx);
+    if (!m) return null;
+    if (m.numRequiredSignatures < 1 || m.numRequiredSignatures !== m.sigCount || m.numRequiredSignatures > m.keyCount) return null;
+    const fp = typeof feePayer === "string" && feePayer ? feePayer : null;
+    const out = new Set();
+    for (const ix of m.instructions) {
+      if (isTransferChecked(m, ix) && ix.accountIdx[3] < m.keyCount) out.add(base58Encode(m.keyBytes(ix.accountIdx[3])));
+    }
+    for (let i = 0; i < m.numRequiredSignatures; i++) {
+      const signer = base58Encode(m.keyBytes(i));
+      if (fp ? signer !== fp : i !== 0) out.add(signer);
+    }
+    return [...out];
+  } catch { return null; }
+}
+
 // The x402 v1 network names of Solana (@x402/svm V1_TO_V2_NETWORK_MAP); v2
 // payloads carry the CAIP-2 `solana:<genesis>` id.
 const SVM_V1_NETWORKS = new Set(["solana", "solana-devnet", "solana-testnet"]);
@@ -278,7 +371,7 @@ export function svmSignedTransfer(txBase64, { index = 2 } = {}) {
     if (authIdx >= t.numRequiredSignatures) return null; // not a signer of this message
     const sig = t.bytes.subarray(t.sigsAt + 64 * authIdx, t.sigsAt + 64 * (authIdx + 1));
     const key = createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, t.keyBytes(authIdx)]), format: "der", type: "spki" });
-    if (!cryptoVerify(null, t.bytes.subarray(t.messageStart), key, sig)) return null;
+    if (!cryptoVerify(null, t.bytes.subarray(t.messageStart, t.messageEnd), key, sig)) return null;
     const [source, mint, destination, authority] = t.accountIdx.map((k) => base58Encode(t.keyBytes(k)));
     return { source, mint, destination, authority, amount: t.amount };
   } catch { return null; }
