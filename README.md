@@ -11,9 +11,6 @@ Operated by [Havok Holdings LLC](https://havok.holdings) · [Live](https://agent
 **Who pays:** agents pay per call (from $0.001; models metered under a quoted ceiling and settled at actual usage); people buy finished reports ($2 to $5) and monitors ($5 a month) by card; sites charge crawlers with the tollbooth.
 
 [![Live](https://img.shields.io/website?url=https%3A%2F%2Fagent402.tools%2Fhealth&label=agent402.tools&up_message=live)](https://agent402.tools)
-[![Wellknown](https://wellknown.network/agents/agent402-mcp/badge.svg)](https://wellknown.network/agents/agent402-mcp)
-[![MCP Queen operational grade](https://mcpqueen.com/badge/io.github.MikeyPetrillo/agent402.svg)](https://mcpqueen.com/s/io.github.MikeyPetrillo/agent402)
-[![agent402-mcp on Glama](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402/badges/score.svg)](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402)
 [![MCP Registry](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0%2Fservers%2Fio.github.MikeyPetrillo%252Fagent402%2Fversions%2Flatest&query=%24.server.version&label=MCP%20Registry)](https://registry.modelcontextprotocol.io/v0/servers/io.github.MikeyPetrillo%2Fagent402/versions/latest)
 [![HOL Registry](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dhavok-holdings-llc%252Fagent402%26metric%3Dstatus%26style%3Dflat)](https://hol.org/registry/plugins/havok-holdings-llc%2Fagent402)
 [![CodeQL](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml/badge.svg)](https://github.com/MikeyPetrillo/Agent402/actions/workflows/codeql.yml)
@@ -631,6 +628,16 @@ Every claim links to the surface that proves it (the live version, a section of 
   so anyone can verify on chain; live counts at [`/api/stats`](https://agent402.tools/api/stats).
 - **AGPL-3.0 licensed, self-host-friendly** - clone it, strip what you don't need, add
   what you do.
+
+## Independent records
+
+Grades and purchase records kept by other services. Each runs its own checks, and we do not control what they show.
+
+[![vet402 record for agent402.tools](https://vet402.com/api/badge/host/agent402.tools.svg)](https://vet402.com/sellers/agent402.tools)
+[![mcp.market](https://mcp.market/badge/mikeypetrillo-agent402.svg)](https://mcp.market/server/mikeypetrillo-agent402)
+[![Wellknown](https://wellknown.network/agents/agent402-mcp/badge.svg)](https://wellknown.network/agents/agent402-mcp)
+[![MCP Queen operational grade](https://mcpqueen.com/badge/io.github.MikeyPetrillo/agent402.svg)](https://mcpqueen.com/s/io.github.MikeyPetrillo/agent402)
+[![agent402-mcp on Glama](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402/badges/score.svg)](https://glama.ai/mcp/servers/MikeyPetrillo/Agent402)
 
 ## Agent402 in the x402 ecosystem
 

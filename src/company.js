@@ -87,7 +87,6 @@ ${contactRow}
       <div class="co-field"><label for="ct-msg">Message</label><textarea id="ct-msg" name="message" required placeholder="What's on your mind?"></textarea></div>
       <button type="submit" class="btn btn-secondary co-submit">Send message &rarr;</button>
     </form>
-    <p style="color:var(--faint);font-size:var(--fs-sm);margin:14px 0 0;line-height:1.5;">No email app on this device? Copy the address instead: <a href="mailto:mike@agent402.tools" style="color:var(--muted);">mike@agent402.tools</a></p>
   </div>
 </section>
 ${ledgerFooterCompact()}`;
