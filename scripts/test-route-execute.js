@@ -602,6 +602,12 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
       ok(e?.statusCode === 502 && new RegExp(`\\(${why}\\)`).test(e.message) && e.committed !== true && e.paidUnanswered !== true, `an unpaid ${label} is a failed upstream: 502 (${why}), uncommitted (got ${e?.statusCode} ${e?.message?.slice(0, 120)})`);
       ok(guard.walletDailySpentUsd("base") === 0, `unpaid ${label}: nothing booked on the chain's day`);
     }
+    // Content beside an error is the seller's answer, and so is a lookup's
+    // not-found: sold, not refused, and no second seller is bought.
+    for (const [label, body] of [["{valid:false, errors}", { valid: false, errors: ["bad checksum"] }], ["{ok:false, status:503, health}", { ok: false, status: 503, db: "down" }], ["{status:404, error}", { status: 404, error: "Not Found" }], ["{data, errors}", { data: { price: 1 }, errors: ["one field"] }]]) {
+      const c = await run({ list: [cand("answers.example"), cand("b.example")], pay: async (url) => (url.includes("answers") ? { result: body, quote: null, receipt: null } : good()) });
+      ok(c.r?.receipt?.sellerPaid === false && c.r?.receipt?.seller === "https://answers.example" && c.calls.length === 1, `an unpaid ${label} is the seller's answer and is sold, with no next seller bought (got ${c.e?.statusCode || c.r?.receipt?.seller}, ${c.calls?.length} calls)`);
+    }
     // Falls through to the next candidate, which serves (and is paid).
     const { r, calls } = await run({ list: [cand("hollow.example"), cand("b.example")], pay: async (url) => (url.includes("hollow") ? { result: {}, quote: null, receipt: null } : good()) });
     ok(r?.receipt?.seller === "https://b.example" && calls.length === 2, `an unpaid non-answer falls through to the next seller (got ${r?.receipt?.seller}, ${calls.length} calls)`);

@@ -180,5 +180,36 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(/two different requests/.test(JSON.stringify(dispatchLegend())), "and so does the legend");
 }
 
+// --- an unpaid 200: an answer, or an error envelope with no content ---------
+{
+  const { unpaidNonAnswerReason } = await import("../src/response-observation.js");
+  for (const [label, body] of [
+    ["a validator's verdict {valid:false, errors}", { valid: false, errors: ["bad checksum"] }],
+    ["a health report {ok:false, status:503, ...}", { ok: false, status: 503, db: "down", uptime: 12 }],
+    ["a lookup's not-found {status:404, error}", { status: 404, error: "Not Found" }],
+    ["a lookup's not-found {statusCode:\"410\", error}", { statusCode: "410", error: "Gone" }],
+    ["a partial answer {data, errors}", { data: { price: 1 }, errors: [{ message: "one field failed" }] }],
+    ["an envelope with no error signal {message}", { message: "hello" }],
+  ]) {
+    const got = unpaidNonAnswerReason(body, []);
+    ok(got === null, `${label} is the seller's answer (got ${got})`);
+  }
+  const challenge = { x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000" }] };
+  for (const [label, body, why, paths = []] of [
+    ["null", null, "empty"], ["{}", {}, "empty"], ["a challenge sent as a 200", challenge, "challenge"],
+    ["{error}", { error: "upstream down" }, "error-shaped"],
+    ["{ok:false}", { ok: false }, "error-shaped"],
+    ["{ok:false, status:503}", { ok: false, status: 503 }, "error-shaped"],
+    ["{error, message, code, requestId}", { error: "x", message: "y", code: "E1", requestId: "r1" }, "error-shaped"],
+    ["problem details {type, title, status:500, detail}", { type: "about:blank", title: "Internal", status: 500, detail: "boom", errors: ["boom"] }, "error-shaped"],
+    ["{errors:[..]} (GraphQL, nothing else)", { errors: [{ message: "x" }] }, "error-shaped"],
+    ["none of the guaranteed paths", { note: "see docs" }, "missing-fields", ["data.price"]],
+  ]) {
+    const got = unpaidNonAnswerReason(body, paths);
+    ok(got === why, `${label} is not an answer: ${why} (got ${got})`);
+  }
+  ok(unpaidNonAnswerReason({ ok: false, errors: ["bad checksum"] }, ["ok", "errors"]) === null, "keys the seller's contract guarantees are its answer");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

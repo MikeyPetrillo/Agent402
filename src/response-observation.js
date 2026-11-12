@@ -121,6 +121,18 @@ export function deliveryProjection(origin, method, route) {
   return o ? { responseDelivery: { ...o, source: "agent402_paid_call" } } : {};
 }
 
+// The keys of an error envelope with no content: the {error, message, code}
+// shape, GraphQL's top-level `errors`, RFC 7807 problem details (type, title,
+// status, detail, instance), the ok/success flags, and the request or trace id
+// and timestamp an error page carries for support. A body with any other key
+// carries content, so it is the seller's answer even with an error beside it.
+const ERROR_ENVELOPE_KEYS = new Set([
+  "error", "errors", "message", "ok", "success", "status", "statusCode", "code",
+  "detail", "details", "type", "title", "instance",
+  "requestId", "request_id", "traceId", "trace_id", "timestamp",
+]);
+const NOT_FOUND_STATUSES = new Set([404, 410]);
+
 /**
  * Is a 200 the seller sent WITHOUT taking payment an answer at all?
  *
@@ -131,8 +143,13 @@ export function deliveryProjection(origin, method, route) {
  *   empty           no body: null, "", {}
  *   challenge       an x402 payment challenge (x402Version + accepts) sent
  *                   with a 200, so nothing was delivered
- *   error-shaped    `error` set, `errors` non-empty or `ok: false`, unless
- *                   the seller's own contract guarantees that key
+ *   error-shaped    an error envelope and nothing else: `error` set,
+ *                   `errors` non-empty or `ok: false`, and every key is one
+ *                   of ERROR_ENVELOPE_KEYS, unless the seller's own contract
+ *                   guarantees the signaling key. Any other key is content
+ *                   (`{valid:false, errors}`, `{data, errors}`, a health
+ *                   report with `ok:false`), and so is a not-found status
+ *                   (404, 410): for a lookup, absence is the answer.
  *   missing-fields  the seller guaranteed response paths and none is present
  * An empty array, a number or a string with text is the seller's answer.
  */
@@ -148,9 +165,15 @@ export function unpaidNonAnswerReason(body, guaranteedPaths = []) {
   const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
   const set = (v) => v !== null && v !== undefined && v !== false && v !== "" && !(isObj(v) && !hasKeys(v));
   const nonEmpty = (v) => (Array.isArray(v) ? v.length > 0 : isObj(v) ? hasKeys(v) : set(v));
-  if ((!promised("error") && set(body.error))
+  const signaled = (!promised("error") && set(body.error))
     || (!promised("errors") && nonEmpty(body.errors))
-    || (!promised("ok") && body.ok === false)) return "error-shaped";
+    || (!promised("ok") && body.ok === false);
+  if (signaled) {
+    let envelopeOnly = true;
+    for (const k in body) { if (Object.hasOwn(body, k) && !ERROR_ENVELOPE_KEYS.has(k)) { envelopeOnly = false; break; } }
+    const notFound = [body.status, body.statusCode].some((v) => (typeof v === "number" || typeof v === "string") && NOT_FOUND_STATUSES.has(Number(v)));
+    if (envelopeOnly && !notFound) return "error-shaped";
+  }
   if (paths.length && !paths.some((p) => pathPresent(body, p))) return "missing-fields";
   return null;
 }
