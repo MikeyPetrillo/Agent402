@@ -6,15 +6,11 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-12 (vendor updates: X search authors, security releases)
-Tools:
-- x-search-recent stays at its price and returns each post's author id; the new
-  x-search-recent-authors route runs the same search with author usernames,
-  names and verified marks.
+### 2026-11-12 (vendor updates: security releases)
 Server:
 - The HTTP client takes the November undici security release; Stripe calls
   pin their API version; the MPP, viem and Solana libraries take their current
-  minor releases.
+  releases.
 - The Railway configuration runbook covers the December 2026 cutover.
 
 ### 2026-11-12 (leftovers: payer keys, lookups, retirements, site polish)
