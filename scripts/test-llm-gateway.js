@@ -2227,7 +2227,9 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     const premium = LLM_TOOLS.find((t) => t.slug === "llm-premium");
     const status = async (model) => { try { await premium.handler({ model, messages: [{ role: "user", content: "hi" }] }); return 200; } catch (e) { return { code: e.statusCode, message: e.message }; } };
     const refused = await status("gpt-4o");
-    ok(refused.code === 400 && !/\bo3,|\bo3$/.test(refused.message.split("Allowed prefixes:")[1] || ""), `the llm-premium allowlist no longer lists o3 (${refused.message})`);
+    // o3 is no longer advertised but is still accepted on llm-premium until its
+    // retirement (keepOn), so the refusal's accepted-family list names it.
+    ok(refused.code === 400 && /\bo3\b/.test(refused.message.split("Allowed prefixes:")[1] || ""), `the llm-premium refusal names every accepted family, o3 included (${refused.message})`);
     for (const m of ["o3", "o3-pro", "o3-mini", "o4-mini"]) { const r = await status(m); ok(r.code !== 400, `llm-premium still accepts ${m} (answered ${r.code}: past validation)`); }
     ok(!premium.tags.includes("o3"), "llm-premium's tags advertise the successor, not o3");
   } finally { if (savedKey !== undefined) process.env.OPENAI_API_KEY = savedKey; }

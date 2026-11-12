@@ -50,3 +50,20 @@ export const resolverError = (code, host = "") => Object.assign(new Error(`stub 
 
 /** Every name answers one IPv4 address and no AAAA (the common stub). */
 export const oneV4 = (address) => (_host, family) => (family === 4 ? [address] : Promise.reject(resolverError("ENODATA")));
+
+/** The public stand-in address offlineGuardAnswer gives every ordinary name. */
+export const GUARD_PUBLIC_STAND_IN = "93.184.215.14";
+
+/**
+ * An answer for every name with nothing leaving the process: the reserved
+ * names as a real resolver answers them (RFC 6761: *.invalid is ENOTFOUND,
+ * localhost and *.localhost are loopback), every other name one public
+ * stand-in A record and no AAAA. scripts/lib/guard-dns-offline.js installs it
+ * for a whole suite.
+ */
+export function offlineGuardAnswer(host, family) {
+  const h = String(host).toLowerCase().replace(/\.$/, "");
+  if (h === "invalid" || h.endsWith(".invalid")) throw resolverError("ENOTFOUND", h);
+  if (h === "localhost" || h.endsWith(".localhost")) return family === 4 ? ["127.0.0.1"] : ["::1"];
+  return family === 4 ? [GUARD_PUBLIC_STAND_IN] : Promise.reject(resolverError("ENODATA", h));
+}

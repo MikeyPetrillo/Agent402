@@ -57,6 +57,10 @@ process.env.POSTHOG_TEST_CAPTURE = "1";
 const CANARIES = ["LEAKCANARY"];
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+// Every upstream here is the mock below, but the address guard resolves a
+// URL's host before its fetch: answer every name with one public stand-in, so
+// no handler waits on (or fails with) the machine's own resolver.
+import "./lib/guard-dns-offline.js";
 import {
   LLM_GATEWAY_TOOLS,
   promptCacheKey,

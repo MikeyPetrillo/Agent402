@@ -3989,7 +3989,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (15 scripts, one process each)
+      - name: Offline suites (16 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -4024,6 +4024,8 @@ jobs:
           t node scripts/test-token-brief-kit.js
           # crypto-markets kit (offline)
           t node scripts/test-crypto-markets-kit.js
+          # Offline suites that stub an upstream pass with every real name lookup refused (the address guard's resolver; booted servers inherit the preload)
+          t node scripts/test-offline-suites-no-dns.js
 
       - name: Previously-orphaned kit suites (offline, no upstream spend)
         # These 30 suites existed but no workflow ran them. All verified offline

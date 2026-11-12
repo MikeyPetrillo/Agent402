@@ -11,6 +11,7 @@
 //   3. the retirement is carried across the next crawl over a Bazaar-priced
 //      rebuild, inside the quote window and for the exact verb only.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import assert from "node:assert/strict";
 process.env.X402_INDEX_CRAWL = "off";
 const { enrichLiveQuotes, carryForwardLearnedQuotes } = await import("../src/x402-index.js");

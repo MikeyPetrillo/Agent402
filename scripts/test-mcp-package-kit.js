@@ -11,6 +11,7 @@
 // saying so; a rate-limited GitHub read skipped and marked partial; a renamed
 // repository; a missing package and a missing version as 404; caching.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { MCP_PACKAGE_TOOLS, parsePackageInput, packageFromCommand, githubRepoOf, describePackage, __test } from "../src/tools/mcp-package-kit.js";

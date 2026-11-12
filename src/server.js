@@ -655,7 +655,7 @@ import { CRYPTO_SIGNALS_TOOLS } from "./tools/crypto-signals-kit.js";
 import { CRAWL_TOOLS } from "./tools/crawl-kit.js";
 import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-window.js";
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
-import { jevSpendStatus, orderByJudgment } from "./tool-judge.js";
+import { jevSpendStatus, refreshJevSpendShared, orderByJudgment } from "./tool-judge.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
 import { EXA_TOOLS, exaEnabled, exaSpendStatus, refreshExaSpendShared, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
 import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
@@ -4061,10 +4061,11 @@ app.get("/api/gateway-status", async (req, res) => {
   const full = operatorView(req, res);
   // The wrong-credential and unauthenticated-CDN-peer counts every replica
   // contributed to, when shared.
-  // Also the shared day behind xDataSpend and exaSpend: a new process's own
-  // counters start empty, so each word is built from the larger of the two
-  // (one bounded read each, reused for a few seconds; never rejects).
-  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshSpendWindowShared()]);
+  // Also the shared day behind xDataSpend, exaSpend and jevSpend: a new
+  // process's own counters start empty, so each word is built from the larger
+  // of the two (one bounded read each, reused for a few seconds; never
+  // rejects). jevSpend reads unknown until its shared day has been read once.
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.

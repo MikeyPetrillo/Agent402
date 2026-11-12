@@ -824,7 +824,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             // seller guaranteed) is a failed upstream, not a sale. Thrown here
             // so the catch below books it like any pre-payment failure:
             // nothing committed, nothing spent, the next candidate is tried,
-            // and with none left the buyer gets a 502 and is not charged.
+            // and with none left the buyer gets a 502: not charged on x402,
+            // credits or card, while a Tempo push payment (finalized before
+            // the handler) is recorded as owed and refunded.
             if (paid && !paid.quote && !paid.receipt) {
               const why = unpaidNonAnswerReason(paid.result, ext.guaranteedPaths);
               // Observed like any delivery against what the seller guaranteed

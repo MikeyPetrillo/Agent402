@@ -19,6 +19,7 @@
 //
 //   node scripts/test-price-label-readers.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 process.env.X402_INDEX_CRAWL = "off";
 const x = await import("../src/x402-index.js");
 const { priceUsdOf, isPricedAboveZero, priceToMicroUsd } = await import("../src/price-usd.js");
