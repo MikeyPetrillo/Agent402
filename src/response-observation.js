@@ -121,5 +121,39 @@ export function deliveryProjection(origin, method, route) {
   return o ? { responseDelivery: { ...o, source: "agent402_paid_call" } } : {};
 }
 
+/**
+ * Is a 200 the seller sent WITHOUT taking payment an answer at all?
+ *
+ * The router resells such a 200 at its own tier price, so a body that answers
+ * nothing must not be sold. Returns the reason (a fixed word, never seller
+ * text) or null when the body reads as an answer. The rules are the ones the
+ * answer classes use (src/answer-shape.js) plus the paid side's own signals:
+ *   empty           no body: null, "", {}
+ *   challenge       an x402 payment challenge (x402Version + accepts) sent
+ *                   with a 200, so nothing was delivered
+ *   error-shaped    `error` set, `errors` non-empty or `ok: false`, unless
+ *                   the seller's own contract guarantees that key
+ *   missing-fields  the seller guaranteed response paths and none is present
+ * An empty array, a number or a string with text is the seller's answer.
+ */
+export function unpaidNonAnswerReason(body, guaranteedPaths = []) {
+  if (body === null || body === undefined || body === "") return "empty";
+  if (typeof body !== "object" || Array.isArray(body)) return null;
+  const hasKeys = (o) => { for (const k in o) { if (Object.hasOwn(o, k)) return true; } return false; };
+  if (!hasKeys(body)) return "empty";
+  if (typeof body.x402Version === "number" && Array.isArray(body.accepts) && body.accepts.length > 0) return "challenge";
+  const paths = (Array.isArray(guaranteedPaths) ? guaranteedPaths : []).slice(0, MAX_PATHS_PER_ROUTE).map(String);
+  const promised = (k) => paths.some((p) => p === k || p.startsWith(`${k}.`));
+  // answer-shape.js isSet / nonEmpty: an empty object is not set.
+  const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const set = (v) => v !== null && v !== undefined && v !== false && v !== "" && !(isObj(v) && !hasKeys(v));
+  const nonEmpty = (v) => (Array.isArray(v) ? v.length > 0 : isObj(v) ? hasKeys(v) : set(v));
+  if ((!promised("error") && set(body.error))
+    || (!promised("errors") && nonEmpty(body.errors))
+    || (!promised("ok") && body.ok === false)) return "error-shaped";
+  if (paths.length && !paths.some((p) => pathPresent(body, p))) return "missing-fields";
+  return null;
+}
+
 export function __resetObservationsForTest() { store.clear(); version++; }
 export function __observationCountForTest() { return store.size; }

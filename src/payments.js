@@ -911,6 +911,99 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
 }
 
+// The x402 serviceName of a tool. Printable ASCII only, then
+// SERVICE_NAME_MAX characters - both are ResourceInfoSchema's rules
+// (@x402/core), and the contract sweep fails the build on either. A tool named
+// "EDGAR company lookup (ticker -> CIK)" carried a real arrow character and
+// was rejected as Invalid rather than as too long, which is why this
+// normalizes before it truncates. A cut name ends on a whole clause: the word
+// boundary first, then an aside the cut left open ("metered (pay") is dropped
+// whole, then a dangling separator or connective, and a cut inside a clause
+// backs off to its last connective ("guard with signed" -> "guard"), so
+// "Chat completions - metered (pay what the call costs)" reads
+// "Chat completions - metered".
+export const SERVICE_NAME_MAX = 32;
+const cleanServiceName = (raw) => String(raw ?? "").replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
+export function x402ServiceName(raw) {
+  const clean = cleanServiceName(raw);
+  if (!clean) return "Agent402.tools";
+  if (clean.length <= SERVICE_NAME_MAX) return clean;
+  const hard = clean.slice(0, SERVICE_NAME_MAX);
+  // A cut that lands on a word end keeps that word; otherwise the partial word goes.
+  let cut = /\s/.test(clean[SERVICE_NAME_MAX]) ? hard.trim() : hard.replace(/\s+\S*$/, "").trim();
+  // Drop each bracket the cut left open, with what follows it.
+  for (const [open, close] of [["(", ")"], ["[", "]"], ["{", "}"]]) {
+    for (;;) {
+      let depth = 0, lastOpen = -1;
+      for (let k = 0; k < cut.length; k++) {
+        if (cut[k] === open) { if (depth === 0) lastOpen = k; depth++; }
+        else if (cut[k] === close && depth > 0) depth--;
+      }
+      if (depth === 0) break;
+      cut = cut.slice(0, lastOpen).trim();
+    }
+  }
+  const tidy = (t) => t.replace(/[\s\-,:;/&+|.]+$/, "").replace(/\s+(and|or|of|for|to|the|a|an|with|by|in|on)$/i, "").trim();
+  cut = tidy(cut);
+  // A cut that did not land on a clause end ("guard with signed") backs off
+  // to the last connective, when what is left still names the tool.
+  const next = clean.slice(cut.length).trimStart();
+  if (cut && !/^[(\-,:;/+[{]/.test(next)) {
+    const m = /^(.*\S)\s+(?:with|for|on|of|to|in|by)\s/i.exec(cut);
+    if (m && m[1].length >= 16 && !/[(\[{]/.test(cut.slice(m[1].length))) cut = tidy(m[1]);
+  }
+  return cut || hard.trim();
+}
+
+/**
+ * serviceNames for a whole catalog: raw name -> serviceName. Each name is cut
+ * by x402ServiceName; names that differ but cut to the same serviceName (a
+ * tier family such as "Gemini generateContent (nano tier)" and "(pro tier)")
+ * each get back the first word only that name carries, before an aside by
+ * preference, with words dropped from the end of the cut until it fits:
+ * "Gemini generateContent nano". So a cut never makes two listings read alike
+ * that their own names told apart.
+ */
+export function x402ServiceNames(rawNames) {
+  const out = new Map();
+  const raws = [...new Set((rawNames || []).filter((n) => typeof n === "string" && n.trim()))];
+  const groups = new Map();
+  for (const raw of raws) {
+    const sn = x402ServiceName(raw);
+    out.set(raw, sn);
+    if (!groups.has(sn)) groups.set(sn, []);
+    groups.get(sn).push(raw);
+  }
+  const wordsOf = (t) => cleanServiceName(t).replace(/[()[\]{},;:]/g, " ").split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w) && w !== "-");
+  for (const [base, members] of groups) {
+    const distinct = new Set(members.map((r) => cleanServiceName(r)));
+    if (distinct.size < 2) continue;
+    for (const raw of members) {
+      const clean = cleanServiceName(raw);
+      const others = members.filter((r) => cleanServiceName(r) !== clean).map((r) => new Set(wordsOf(r).map((w) => w.toLowerCase())));
+      const paren = clean.search(/[([{]/);
+      const lead = paren > 0 ? clean.slice(0, paren) : clean;
+      const unique = (w) => others.every((o) => !o.has(w.toLowerCase()));
+      const found = wordsOf(lead).find(unique) || wordsOf(clean).find(unique);
+      if (!found || base.split(" ").includes(found)) continue;
+      // The tag, then (if it does not fit) its first hyphenated part; the cut
+      // gives up words from its end, but keeps at least two.
+      const fit = (tag) => {
+        let words = base.split(" ");
+        let name = `${base} ${tag}`;
+        while (name.length > SERVICE_NAME_MAX && words.length > 2) {
+          words = words.slice(0, -1);
+          name = `${words.join(" ").replace(/[\s\-,:;/&+|.]+$/, "")} ${tag}`;
+        }
+        return name.length <= SERVICE_NAME_MAX ? name : null;
+      };
+      const name = fit(found) || (found.includes("-") ? fit(found.split("-")[0]) : null);
+      if (name) out.set(raw, name);
+    }
+  }
+  return out;
+}
+
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (!s) return s;
   // A catalog description often ends in a query-parameter hint ("?bytes=1..1024
@@ -2278,25 +2371,15 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // "Extract article" beats "Agent402.tools" as the name of a row in an index
   // of 14,000 resources. Falls back to the host name when a tool has no name,
   // so a listing is never anonymous.
+  // 32 characters is the protocol's own ceiling on serviceName
+  // (ResourceInfoSchema); the contract sweep fails the build on 33. Names are
+  // cut once for the whole catalog, so two tools whose names differ (a tier
+  // family) keep listings that differ (x402ServiceNames).
+  const catalogServiceNames = x402ServiceNames(Object.values(catalog || {}).map((i) => i?.name));
   const serviceNameFor = (item) =>
     (typeof item?.name === "string" && item.name.trim())
-      // 32 characters is the protocol's own ceiling on serviceName
-      // (ResourceInfoSchema); the contract sweep fails the build on 33. Trim at
-      // a word boundary so a cut name still reads as a name.
-      ? asciiName(item.name)
+      ? (catalogServiceNames.get(item.name) ?? x402ServiceName(item.name))
       : "Agent402.tools";
-  // Printable ASCII only, then 32 characters - both are ResourceInfoSchema's
-  // rules, and the contract sweep fails the build on either. A tool named
-  // "EDGAR company lookup (ticker -> CIK)" carried a real arrow character and
-  // was rejected as Invalid rather than as too long, which is why this
-  // normalises before it truncates. Trim on a word boundary so a cut name
-  // still reads as a name.
-  const asciiName = (raw) => {
-    const clean = String(raw).replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
-    if (!clean) return "Agent402.tools";
-    if (clean.length <= 32) return clean;
-    return clean.slice(0, 32).replace(/\s+\S*$/, "").trim() || clean.slice(0, 32);
-  };
   const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds });
   const acceptsFor = (item) => acceptsForItem(item, railsNow());
   // Read at call time, like acceptsFor: a rail dropped or joined after boot

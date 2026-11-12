@@ -3,7 +3,7 @@
 // cross-references the Bazaar reader cannot follow), no em dashes; the
 // generic cap truncates at a sentence/word boundary, never mid-word "...".
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer } from "../src/payments.js";
+import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer, x402ServiceName, x402ServiceNames, SERVICE_NAME_MAX } from "../src/payments.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 
 let pass = 0, fail = 0;
@@ -66,5 +66,56 @@ ok(bazaarCapDescription("short") === "short" && bazaarCapDescription("") === "",
 }
 const live = (res?.endpoints || []).map((e) => e.description || "");
 ok(live.length > 0, "catalog descriptions readable");
+// The x402 serviceName: printable ASCII, at most SERVICE_NAME_MAX (the
+// protocol's ResourceInfoSchema ceiling), and a cut name ends on a whole
+// clause: no bracket left open, no dangling separator or connective.
+{
+  const { ResourceInfoSchema } = await import("@x402/core/schemas");
+  ok(SERVICE_NAME_MAX === 32, `serviceName ceiling matches ResourceInfoSchema (got ${SERVICE_NAME_MAX})`);
+  ok(x402ServiceName("Chat completions - metered (pay what the call costs)") === "Chat completions - metered", `the metered chat name ends on a whole clause (got ${JSON.stringify(x402ServiceName("Chat completions - metered (pay what the call costs)"))})`);
+  ok(x402ServiceName("EDGAR company lookup (ticker \u2192 CIK)") === "EDGAR company lookup", "an arrow is normalized and the open aside dropped");
+  ok(x402ServiceName("Short name (with aside)") === "Short name (with aside)", "a name under the ceiling is kept whole");
+  ok(x402ServiceName("Alpha beta gamma delta epsilon zeta") === "Alpha beta gamma delta epsilon", "a cut on a word boundary keeps whole words");
+  ok(x402ServiceName("Weather forecast and air quality for any city") === "Weather forecast and air quality", "a cut that ends on a word end keeps the word");
+  ok(x402ServiceName("SQL statement guard with signed verdict") === "SQL statement guard", "a cut inside a clause backs off to its last connective");
+  ok(x402ServiceName("Rate a call you paid for") === "Rate a call you paid for", "a name under the ceiling ending on a connective is kept whole");
+  ok(x402ServiceName("") === "Agent402.tools" && x402ServiceName("\u2603") === "Agent402.tools", "an empty or non-ASCII-only name falls back to the host name");
+  const unbalanced = (s) => { let d = 0; for (const c of s) { if (c === "(") d++; else if (c === ")") d = Math.max(0, d - 1); } return d !== 0; };
+  const names = (res?.endpoints || []).map((e) => e.name).filter((n) => typeof n === "string" && n.trim());
+  ok(names.length > 400, `catalog names readable (${names.length})`);
+  const catalogNames = x402ServiceNames(names);
+  let bad = [];
+  for (const n of names) {
+    const sn = catalogNames.get(n);
+    if (!ResourceInfoSchema.safeParse({ url: "https://x.test/a", serviceName: sn }).success) { bad.push(`${n} -> ${sn}`); continue; }
+    if (sn.length === n.trim().length) continue; // kept whole: the tool's own name
+    if (unbalanced(sn) || /[\s\-,:;/&+|]$/.test(sn) || /\s(and|or|of|for|to|the|a|an|with|by|in|on)$/i.test(sn)) bad.push(`${n} -> ${sn}`);
+  }
+  ok(bad.length === 0, `every catalog serviceName is valid and ends on a whole clause (${bad.length} not: ${bad.slice(0, 5).join(" | ")})`);
+  // NO NEW COLLISIONS. The cut before the whole-clause rule (frozen here):
+  // two catalog names it told apart must still read apart, so a tier family
+  // keeps its tier word ("Gemini generateContent nano").
+  const oldCut = (raw) => {
+    const clean = String(raw).replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
+    if (!clean) return "Agent402.tools";
+    if (clean.length <= 32) return clean;
+    return clean.slice(0, 32).replace(/\s+\S*$/, "").trim() || clean.slice(0, 32);
+  };
+  const uniq = [...new Set(names)];
+  const merged = [];
+  const byNew = new Map();
+  for (const n of uniq) { const k = catalogNames.get(n); byNew.set(k, [...(byNew.get(k) || []), n]); }
+  for (const [k, group] of byNew) {
+    const olds = new Set(group.map(oldCut));
+    if (olds.size > 1) merged.push(`${k} <- ${group.join(" / ")}`);
+  }
+  ok(merged.length === 0, `no two catalog entries the old serviceNames kept apart share a new one (${merged.length}: ${merged.slice(0, 3).join(" | ")})`);
+  const gem = ["nano", "auto", "base", "pro", "premium", "metered"].map((t) => `Gemini generateContent (${t} tier)`);
+  const gemMap = x402ServiceNames(gem);
+  ok(gemMap.get(gem[0]) === "Gemini generateContent nano" && new Set(gem.map((g) => gemMap.get(g))).size === gem.length, `a tier family keeps its tier word (got ${JSON.stringify(gem.map((g) => gemMap.get(g)))})`);
+  const pair = x402ServiceNames(["Image generation", "Image generation (OpenAI-compatible)"]);
+  ok(pair.get("Image generation") === "Image generation" && pair.get("Image generation (OpenAI-compatible)") === "Image generation OpenAI", `a tag too long to fit gives its first hyphenated part (got ${JSON.stringify([...pair.values()])})`);
+  ok(x402ServiceNames(["Chat completions - metered (pay what the call costs)"]).get("Chat completions - metered (pay what the call costs)") === "Chat completions - metered", "a name with no sibling keeps its whole-clause cut");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

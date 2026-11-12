@@ -591,6 +591,36 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     ok(r && r.receipt.underlyingPriceUsd === 0 && r.receipt.sellerPaid === false && r.receipt.settleTx === null, `a free 200 is booked as unpaid (got ${JSON.stringify(r && r.receipt && { u: r.receipt.underlyingPriceUsd, p: r.receipt.sellerPaid })})`);
     ok(guard.walletDailySpentUsd("base") === 0, `nothing is booked against the Base wallet's day (got ${guard.walletDailySpentUsd("base")})`);
   }
+  // An unpaid 200 that answers nothing is not sold: the same outcome as a
+  // failed upstream before payment (502, nothing committed or booked, the
+  // next candidate tried). A real answer stays a sale, and a key the seller's
+  // own contract guarantees is not read as an error.
+  {
+    const challenge = { x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000" }] };
+    for (const [label, body, why] of [["null", null, "empty"], ["{}", {}, "empty"], ["a payment challenge", challenge, "challenge"], ["{error}", { error: "upstream down" }, "error-shaped"], ["{ok:false}", { ok: false }, "error-shaped"], ["{errors:[..]}", { errors: ["x"] }, "error-shaped"]]) {
+      const { e } = await run({ list: [cand("hollow.example")], pay: async () => ({ result: body, quote: null, receipt: null }) });
+      ok(e?.statusCode === 502 && new RegExp(`\\(${why}\\)`).test(e.message) && e.committed !== true && e.paidUnanswered !== true, `an unpaid ${label} is a failed upstream: 502 (${why}), uncommitted (got ${e?.statusCode} ${e?.message?.slice(0, 120)})`);
+      ok(guard.walletDailySpentUsd("base") === 0, `unpaid ${label}: nothing booked on the chain's day`);
+    }
+    // Falls through to the next candidate, which serves (and is paid).
+    const { r, calls } = await run({ list: [cand("hollow.example"), cand("b.example")], pay: async (url) => (url.includes("hollow") ? { result: {}, quote: null, receipt: null } : good()) });
+    ok(r?.receipt?.seller === "https://b.example" && calls.length === 2, `an unpaid non-answer falls through to the next seller (got ${r?.receipt?.seller}, ${calls.length} calls)`);
+    // Guaranteed paths: none present is a non-answer; one present is an answer.
+    const withPaths = { ...cand("g.example"), guaranteedPaths: ["data.price"] };
+    const miss = await run({ list: [withPaths], pay: async () => ({ result: { note: "see docs" }, quote: null, receipt: null }) });
+    ok(miss.e?.statusCode === 502 && /missing-fields/.test(miss.e.message), `an unpaid 200 with none of the guaranteed paths is refused (got ${miss.e?.statusCode})`);
+    const hit = await run({ list: [withPaths], pay: async () => ({ result: { data: { price: 1 } }, quote: null, receipt: null }) });
+    ok(hit.r?.receipt?.sellerPaid === false, "CONTROL: an unpaid 200 carrying a guaranteed path is sold");
+    const errPromised = await run({ list: [{ ...cand("v.example"), guaranteedPaths: ["ok", "errors"] }], pay: async () => ({ result: { ok: false, errors: ["bad checksum"] }, quote: null, receipt: null }) });
+    ok(errPromised.r?.receipt?.sellerPaid === false, "CONTROL: ok/errors the seller guarantees (a validator) are its answer");
+    for (const body of [[], 0, "text", { results: [] }]) {
+      const c = await run({ list: [cand("ans.example")], pay: async () => ({ result: body, quote: null, receipt: null }) });
+      ok(c.r?.receipt?.sellerPaid === false, `CONTROL: an unpaid ${JSON.stringify(body)} is the seller's answer and is sold`);
+    }
+    // A PAID 200 is never refused this way: we paid, so the buyer is charged.
+    const paidEmpty = await run({ list: [cand("p.example")], pay: async () => ({ result: {}, quote: { usd: 0.001 }, receipt: { transaction: "0xab" } }) });
+    ok(paidEmpty.r?.receipt?.settleTx === "0xab", "CONTROL: a paid 200 with an empty body is still delivered (we paid)");
+  }
   // A Base spending wallet that reads low: refused before anything is signed.
   {
     const { e, calls } = await run({ list: [cand("a.example")], pay: good, wallet: async () => ({ status: "low" }) });
