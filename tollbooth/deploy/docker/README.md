@@ -28,5 +28,8 @@ curl -A "ClaudeBot/1.0" localhost:4021/      # crawler -> 402 Payment Required
 - **Live stats dashboard:** open `http://localhost:4021/__tollbooth`: requests, how
   many were charged, proof-of-work solves, USDC collected, and what share of your
   traffic is bots. Raw JSON at `/__tollbooth/stats`.
+- **Runs as the unprivileged `node` user.** To share one proof-of-work replay
+  record across processes, set `TOLLBOOTH_REPLAY_SQLITE=/var/lib/tollbooth/replay.db`
+  (that directory belongs to `node`; mount a volume there to keep it across restarts).
 - **Production notes** (stable secret, durable replay store, charge modes, adaptive
   proof-of-work): see the [tollbooth README](../../README.md).
