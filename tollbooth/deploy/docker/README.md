@@ -40,10 +40,11 @@ Earlier images ran the proxy as root, so a replay record they wrote on a volume
 is owned by root. Rebuild with all three files above: on its first boot the
 entrypoint hands the record, its `-wal` and `-shm` files and its directory to
 `node` (the log says so with `[entrypoint] handing ...` lines), and claims write
-as before. The directory is handed over only when it is `/var/lib/tollbooth` or
-sits on a mounted volume; anywhere else (for example `/app`) the log warns and
-the proxy cannot write the record, so keep it in `/var/lib/tollbooth` or on a
-volume. Starting the container with `--user` skips the hand-over: give that
+as before. The record and its directory are handed over only when the
+directory is `/var/lib/tollbooth` or sits on a mounted volume (judged on its
+resolved path, and never through a directory that is itself a link); anywhere
+else (for example `/app`) the log warns and the proxy cannot write the record,
+so keep it in `/var/lib/tollbooth` or on a volume. Starting the container with `--user` skips the hand-over: give that
 user the record's files yourself (`chown -R 1000:1000` on the volume for `node`).
 - **Production notes** (stable secret, durable replay store, charge modes, adaptive
   proof-of-work): see the [tollbooth README](../../README.md).

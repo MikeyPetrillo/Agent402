@@ -75,7 +75,19 @@ ok(patches.size === 1, `every node base runs one Node patch (${[...patches].map(
   const execs = epCode.split("\n").filter((l) => /^\s*exec\b/.test(l)).map((l) => l.trim());
   ok(execs.length === 2 && execs[0] === 'exec su-exec "$TARGET_USER" "$@"' && execs[1] === 'exec "$@"' && /TARGET_USER=node/.test(epCode), `entrypoint: as root it execs the proxy as node; started as another user it runs as that user (${execs.join(" | ")})`);
   ok(/\$TOLLBOOTH_REPLAY_SQLITE-wal/.test(epCode) && /\$TOLLBOOTH_REPLAY_SQLITE-shm/.test(epCode) && /chown -h "\$TARGET_USER:\$TARGET_USER" -- "\$f"/.test(epCode), "entrypoint: hands the record and its -wal/-shm files to node, never following a link");
-  ok(!/chown\s+-[a-zA-Z]*R/.test(epCode) && /"\$dir" = "\/var\/lib\/tollbooth" \] \|\| on_volume "\$dir"/.test(epCode), "entrypoint: hands over the directory only where it is the record's own place (never recursive, never part of the image)");
+  ok(!/chown\s+-[a-zA-Z]*R/.test(epCode) && /"\$real" = "\/var\/lib\/tollbooth" \] \|\| on_volume "\$real"/.test(epCode), "entrypoint: the record's own place is judged on the resolved path (never recursive, never part of the image)");
+  // Every chown, the directory's and each file's, sits under the one
+  // own-place verdict, so a file in /app is never handed over either; and that
+  // verdict is never given to a directory that is itself a link
+  // (/vol/sub -> /usr/local/bin), nor is a chown ever made through one.
+  const epLines = epCode.split("\n");
+  const chowns = epLines.map((l, i) => [l, i]).filter(([l]) => /\bchown\b/.test(l));
+  const guardOf = (i) => { for (let k = i - 1; k >= 0; k--) { const t = epLines[k].trim(); if (/^(if|elif)\b/.test(t)) return t; } return ""; };
+  ok(chowns.length >= 2 && chowns.every(([, i]) => guardOf(i) === 'if [ "$own_place" = yes ]; then'), `entrypoint: every chown is under the own-place verdict (${chowns.map(([, i]) => guardOf(i)).join(" | ")})`);
+  ok(chowns.every(([l]) => /chown -h /.test(l)), "entrypoint: every chown leaves a link itself unfollowed");
+  const verdict = epLines.findIndex((l) => /own_place=yes/.test(l));
+  const verdictGate = epLines.slice(0, verdict).reverse().find((l) => /^\s*if \[ -d "\$dir" \]/.test(l)) || "";
+  ok(verdict > 0 && /\[ ! -L "\$dir" \]/.test(verdictGate) && epLines.filter((l) => /own_place=yes/.test(l)).length === 1, `entrypoint: a directory that is a link never earns the own-place verdict (${verdictGate.trim()})`);
 }
 
 console.log(`\ntest-dockerfile-node-patch: ${pass} passed, ${fail} failed`);

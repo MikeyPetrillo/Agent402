@@ -21,9 +21,12 @@ if [ "$(id -u)" = "0" ]; then
     # database), but only where it is the record's own place: the image's
     # /var/lib/tollbooth, or a directory on a mounted volume or bind mount.
     # A directory that is part of the image (/app, /tmp, /) is never handed
-    # over, so the packages stay out of node's reach. Only the directory itself
-    # and only when it is not already node's: no recursive walk of a volume on
-    # every boot.
+    # over, so the packages stay out of node's reach. The place is judged on
+    # the directory's resolved path, and a directory that is itself a link is
+    # never handed over, so a link on a volume (/vol/sub -> /usr/local/bin)
+    # cannot point the chown into the image. The record's files follow the
+    # same rule. Only the directory itself and only when it is not already
+    # node's: no recursive walk of a volume on every boot.
     is_mount() { awk -v d="$1" '$5 == d { found = 1 } END { exit !found }' /proc/self/mountinfo 2>/dev/null; }
     on_volume() {
       d=$1
@@ -33,18 +36,30 @@ if [ "$(id -u)" = "0" ]; then
       done
       return 1
     }
+    own_place=no
+    real=$(readlink -f -- "$dir" 2>/dev/null || true)
+    if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -n "$real" ]; then
+      case "$real" in
+        /proc|/proc/*|/sys|/sys/*|/dev|/dev/*) ;;
+        *) if [ "$real" = "/var/lib/tollbooth" ] || on_volume "$real"; then own_place=yes; fi ;;
+      esac
+    fi
     if [ -d "$dir" ] && [ "$(stat -c '%U' -- "$dir")" != "$TARGET_USER" ]; then
-      if [ "$dir" = "/var/lib/tollbooth" ] || on_volume "$dir"; then
+      if [ "$own_place" = yes ]; then
         echo "[entrypoint] handing $dir to $TARGET_USER (the replay record's directory)"
-        chown "$TARGET_USER:$TARGET_USER" -- "$dir" || echo "[entrypoint] WARN: chown $dir failed"
+        chown -h "$TARGET_USER:$TARGET_USER" -- "$real" || echo "[entrypoint] WARN: chown $dir failed"
       elif ! su-exec "$TARGET_USER" test -w "$dir"; then
         echo "[entrypoint] WARN: the proxy runs as $TARGET_USER and cannot write $dir; put TOLLBOOTH_REPLAY_SQLITE in /var/lib/tollbooth or on a mounted volume"
       fi
     fi
     for f in "$TOLLBOOTH_REPLAY_SQLITE" "$TOLLBOOTH_REPLAY_SQLITE-wal" "$TOLLBOOTH_REPLAY_SQLITE-shm" "$TOLLBOOTH_REPLAY_SQLITE-journal"; do
       if [ -e "$f" ] && [ "$(stat -c '%U' -- "$f")" != "$TARGET_USER" ]; then
-        echo "[entrypoint] handing $f to $TARGET_USER"
-        chown -h "$TARGET_USER:$TARGET_USER" -- "$f" || echo "[entrypoint] WARN: chown $f failed"
+        if [ "$own_place" = yes ]; then
+          echo "[entrypoint] handing $f to $TARGET_USER"
+          chown -h "$TARGET_USER:$TARGET_USER" -- "$f" || echo "[entrypoint] WARN: chown $f failed"
+        elif ! su-exec "$TARGET_USER" test -w "$f"; then
+          echo "[entrypoint] WARN: the proxy runs as $TARGET_USER and cannot write $f; put TOLLBOOTH_REPLAY_SQLITE in /var/lib/tollbooth or on a mounted volume"
+        fi
       fi
     done
   fi
