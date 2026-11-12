@@ -911,6 +911,39 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
 }
 
+// The x402 serviceName of a tool. Printable ASCII only, then
+// SERVICE_NAME_MAX characters - both are ResourceInfoSchema's rules
+// (@x402/core), and the contract sweep fails the build on either. A tool named
+// "EDGAR company lookup (ticker -> CIK)" carried a real arrow character and
+// was rejected as Invalid rather than as too long, which is why this
+// normalizes before it truncates. A cut name ends on a whole clause: the word
+// boundary first, then an aside the cut left open ("metered (pay") is dropped
+// whole, then a dangling separator, so "Chat completions - metered (pay what
+// the call costs)" reads "Chat completions - metered".
+export const SERVICE_NAME_MAX = 32;
+export function x402ServiceName(raw) {
+  const clean = String(raw ?? "").replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
+  if (!clean) return "Agent402.tools";
+  if (clean.length <= SERVICE_NAME_MAX) return clean;
+  const hard = clean.slice(0, SERVICE_NAME_MAX);
+  // A cut that lands on a word end keeps that word; otherwise the partial word goes.
+  let cut = /\s/.test(clean[SERVICE_NAME_MAX]) ? hard.trim() : hard.replace(/\s+\S*$/, "").trim();
+  // Drop each bracket the cut left open, with what follows it.
+  for (const [open, close] of [["(", ")"], ["[", "]"], ["{", "}"]]) {
+    for (;;) {
+      let depth = 0, lastOpen = -1;
+      for (let k = 0; k < cut.length; k++) {
+        if (cut[k] === open) { if (depth === 0) lastOpen = k; depth++; }
+        else if (cut[k] === close && depth > 0) depth--;
+      }
+      if (depth === 0) break;
+      cut = cut.slice(0, lastOpen).trim();
+    }
+  }
+  cut = cut.replace(/[\s\-,:;/&+|.]+$/, "").replace(/\s+(and|or|of|for|to|the|a|an|with|by|in|on)$/i, "").trim();
+  return cut || hard.trim();
+}
+
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (!s) return s;
   // A catalog description often ends in a query-parameter hint ("?bytes=1..1024
@@ -2285,18 +2318,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // a word boundary so a cut name still reads as a name.
       ? asciiName(item.name)
       : "Agent402.tools";
-  // Printable ASCII only, then 32 characters - both are ResourceInfoSchema's
-  // rules, and the contract sweep fails the build on either. A tool named
-  // "EDGAR company lookup (ticker -> CIK)" carried a real arrow character and
-  // was rejected as Invalid rather than as too long, which is why this
-  // normalises before it truncates. Trim on a word boundary so a cut name
-  // still reads as a name.
-  const asciiName = (raw) => {
-    const clean = String(raw).replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
-    if (!clean) return "Agent402.tools";
-    if (clean.length <= 32) return clean;
-    return clean.slice(0, 32).replace(/\s+\S*$/, "").trim() || clean.slice(0, 32);
-  };
+  const asciiName = x402ServiceName;
   const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds });
   const acceptsFor = (item) => acceptsForItem(item, railsNow());
   // Read at call time, like acceptsFor: a rail dropped or joined after boot

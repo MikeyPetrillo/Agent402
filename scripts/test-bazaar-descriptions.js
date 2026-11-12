@@ -3,7 +3,7 @@
 // cross-references the Bazaar reader cannot follow), no em dashes; the
 // generic cap truncates at a sentence/word boundary, never mid-word "...".
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer } from "../src/payments.js";
+import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer, x402ServiceName, SERVICE_NAME_MAX } from "../src/payments.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 
 let pass = 0, fail = 0;
@@ -66,5 +66,27 @@ ok(bazaarCapDescription("short") === "short" && bazaarCapDescription("") === "",
 }
 const live = (res?.endpoints || []).map((e) => e.description || "");
 ok(live.length > 0, "catalog descriptions readable");
+// The x402 serviceName: printable ASCII, at most SERVICE_NAME_MAX (the
+// protocol's ResourceInfoSchema ceiling), and a cut name ends on a whole
+// clause: no bracket left open, no dangling separator or connective.
+{
+  const { ResourceInfoSchema } = await import("@x402/core/schemas");
+  ok(SERVICE_NAME_MAX === 32, `serviceName ceiling matches ResourceInfoSchema (got ${SERVICE_NAME_MAX})`);
+  ok(x402ServiceName("Chat completions - metered (pay what the call costs)") === "Chat completions - metered", `the metered chat name ends on a whole clause (got ${JSON.stringify(x402ServiceName("Chat completions - metered (pay what the call costs)"))})`);
+  ok(x402ServiceName("EDGAR company lookup (ticker \u2192 CIK)") === "EDGAR company lookup", "an arrow is normalized and the open aside dropped");
+  ok(x402ServiceName("Short name (with aside)") === "Short name (with aside)", "a name under the ceiling is kept whole");
+  ok(x402ServiceName("Alpha beta gamma delta epsilon zeta") === "Alpha beta gamma delta epsilon", "a cut on a word boundary keeps whole words");
+  ok(x402ServiceName("Weather forecast and air quality for any city") === "Weather forecast and air quality", "a cut that ends on a word end keeps the word");
+  ok(x402ServiceName("") === "Agent402.tools" && x402ServiceName("\u2603") === "Agent402.tools", "an empty or non-ASCII-only name falls back to the host name");
+  const unbalanced = (s) => { let d = 0; for (const c of s) { if (c === "(") d++; else if (c === ")") d = Math.max(0, d - 1); } return d !== 0; };
+  const names = (res?.endpoints || []).map((e) => e.name).filter((n) => typeof n === "string" && n.trim());
+  ok(names.length > 400, `catalog names readable (${names.length})`);
+  let bad = [];
+  for (const n of names) {
+    const sn = x402ServiceName(n);
+    if (!ResourceInfoSchema.safeParse({ url: "https://x.test/a", serviceName: sn }).success || unbalanced(sn) || /[\s\-,:;/&+|]$/.test(sn) || /\s(and|or|of|for|to|the|a|an|with|by|in|on)$/i.test(sn)) bad.push(`${n} -> ${sn}`);
+  }
+  ok(bad.length === 0, `every catalog serviceName is valid and ends on a whole clause (${bad.length} not: ${bad.slice(0, 5).join(" | ")})`);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
