@@ -58,7 +58,17 @@ export function authorizationStateCalldata(authorizer, nonce) {
  * poll runs and `expired` is null: a reading with no expiry attached is never
  * final, and the caller must keep the hold.
  *
- * THROWS on an RPC failure or a non-boolean result.
+ * THE EXPIRY IS READ ON THE CHAIN'S CLOCK. The token refuses a credential
+ * once block.timestamp >= validBefore, so that is the only clock that retires
+ * it: a host clock running ahead would end the wait while the credential can
+ * still settle. When the host clock says the expiry has passed, the latest
+ * block is read (same RPC); only a block whose timestamp is at or past
+ * `untilUnix`, with authorizationState still false AT THAT BLOCK, makes
+ * `expired: true`. A chain still short of the expiry keeps the poll going
+ * (inside `maxWaitMs`); a block that cannot be read is not proven
+ * (`expired: false`), never a throw that hides a debit and never a release.
+ *
+ * THROWS on an RPC failure or a non-boolean authorizationState result.
  */
 export async function confirmEvmAuthorizationUnused({ token, authorizer, nonce, chain = "base", rpcUrl = evmRpcUrlFor(chain), graceMs = 8000, untilUnix = null, maxWaitMs = 90_000, pollMs = 2000, fetchImpl = fetch, now = Date.now, timeoutMs = 5000 } = {}) {
   if (!rpcUrl) throw new Error(`confirmEvmAuthorizationUnused: no RPC for chain ${chain}`);
@@ -67,21 +77,53 @@ export async function confirmEvmAuthorizationUnused({ token, authorizer, nonce, 
   const data = authorizationStateCalldata(authorizer, nonce);
   const started = now();
   const expiryMs = untilUnix != null && Number.isFinite(Number(untilUnix)) ? Number(untilUnix) * 1000 : null;
-  const deadline = expiryMs != null ? Math.min(expiryMs, started + Math.max(0, Number(maxWaitMs) || 0)) : started + graceMs;
-  let observed = 0;
-  for (;;) {
+  const hardStop = started + Math.max(0, Number(maxWaitMs) || 0);
+  const deadline = started + graceMs; // the legacy grace (no expiry attached)
+  const rpc = async (method, params) => {
     const res = await fetchImpl(rpcUrl, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    const j = await res.json();
+    return res.json();
+  };
+  // authorizationState at a block tag: true / false, or THROWS (fail closed).
+  const readUsed = async (tag) => {
+    const j = await rpc("eth_call", [{ to, data }, tag]);
     const r = j?.result;
     if (typeof r !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(r)) throw new Error(`authorizationState unreadable: ${JSON.stringify(j?.error || r).slice(0, 120)}`);
+    return BigInt(r) !== 0n;
+  };
+  // The latest block's number and timestamp, or null when it cannot be read.
+  const latestBlock = async () => {
+    try {
+      const b = (await rpc("eth_getBlockByNumber", ["latest", false]))?.result;
+      const num = typeof b?.number === "string" && /^0x[0-9a-fA-F]{1,16}$/.test(b.number) ? b.number : null;
+      const ts = typeof b?.timestamp === "string" && /^0x[0-9a-fA-F]{1,16}$/.test(b.timestamp) ? Number(BigInt(b.timestamp)) : null;
+      return num && ts != null ? { number: num, timestamp: ts } : null;
+    } catch { return null; }
+  };
+  let observed = 0;
+  for (;;) {
+    const used = await readUsed("latest");
     observed++;
-    const used = BigInt(r) !== 0n;
     if (used) return { debited: true, observed };
-    if (now() >= deadline) return { debited: false, observed, expired: expiryMs != null ? now() >= expiryMs : null };
+    const at = now();
+    if (expiryMs != null && at >= Math.min(expiryMs, hardStop)) {
+      // The host clock says the credential has expired (or the wait is
+      // over): ask the chain, whose clock is the one the token reads.
+      const block = await latestBlock();
+      if (block && block.timestamp >= Number(untilUnix)) {
+        // Unused at a block past the expiry means unused for good.
+        const usedThen = await readUsed(block.number);
+        observed++;
+        if (usedThen) return { debited: true, observed };
+        return { debited: false, observed, expired: true, chainTime: block.timestamp };
+      }
+      if (now() >= hardStop) return { debited: false, observed, expired: false, chainTime: block ? block.timestamp : null };
+    } else if (expiryMs == null && at >= deadline) {
+      return { debited: false, observed, expired: null };
+    }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
 }

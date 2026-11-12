@@ -327,7 +327,20 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
   // own expiry, and only an expiry the clock actually reached makes "unused"
   // final. Fake clock: 1 s per read, expiry at t=10 s.
   {
-    const neverUsed = async () => ({ json: async () => ({ result: "0x" + "0".repeat(64) }) });
+    // The fake RPC answers eth_call with authorizationState and
+    // eth_getBlockByNumber with a block whose timestamp is `chainNow()`
+    // (seconds; default: the host clock, so the two clocks agree).
+    const ZERO = "0x" + "0".repeat(64), ONE = "0x" + "0".repeat(63) + "1";
+    const rpcOf = (state, chainNow = () => Math.floor(t / 1000), calls = []) => async (_u, init) => {
+      const { method, params } = JSON.parse(init.body);
+      calls.push({ method, tag: method === "eth_call" ? params[1] : params[0] });
+      if (method === "eth_getBlockByNumber") {
+        const ts = chainNow();
+        return { json: async () => (ts == null ? { error: { code: -32000, message: "down" } } : { result: { number: "0x1234", timestamp: "0x" + ts.toString(16) } }) };
+      }
+      return { json: async () => ({ result: state() }) };
+    };
+    const neverUsed = rpcOf(() => ZERO);
     let t = 0; const clock = () => (t += 1000);
     const reached = await confirmEvmAuthorizationUnused({ ...args, untilUnix: 10, maxWaitMs: 60_000, pollMs: 0, fetchImpl: neverUsed, now: clock });
     ok(reached.debited === false && reached.expired === true && reached.observed >= 9, "unused through the credential's expiry -> expired:true (provably unpaid)");
@@ -338,6 +351,32 @@ ok(t3 && /no \w+\/exact\/USDC accept/i.test(t3.message), "F2: non-mainnet-USDC a
     const lateSettle = async () => ({ json: async () => ({ result: ++reads >= 4 ? "0x" + "0".repeat(63) + "1" : "0x" + "0".repeat(64) }) });
     const consumed = await confirmEvmAuthorizationUnused({ ...args, untilUnix: 10, maxWaitMs: 60_000, pollMs: 0, fetchImpl: lateSettle, now: clock });
     ok(consumed.debited === true && consumed.observed === 4, "a settle that lands INSIDE the window (after the old 8 s grace would have given up) is seen as a debit");
+
+    // THE CHAIN'S CLOCK DECIDES THE EXPIRY. A host clock 60 s ahead of the
+    // chain says the credential expired at once; the chain (block timestamp
+    // 0..) has not reached it, so "unused" is not final.
+    t = 0;
+    const skewCalls = [];
+    const skewed = await confirmEvmAuthorizationUnused({ ...args, untilUnix: 10, maxWaitMs: 5_000, pollMs: 0, fetchImpl: rpcOf(() => ZERO, () => 0, skewCalls), now: () => (t += 1000) + 60_000 });
+    ok(skewed.debited === false && skewed.expired === false, `a host clock past the expiry with the chain short of it is NOT proven unpaid (got ${JSON.stringify(skewed)})`);
+    ok(skewCalls.some((c) => c.method === "eth_getBlockByNumber" && c.tag === "latest"), "the chain's latest block is read for the expiry");
+    // The chain passes the expiry while we poll: proven, with the state read pinned at that block.
+    t = 0; let chainSec = 0; const pinCalls = [];
+    const later = await confirmEvmAuthorizationUnused({ ...args, untilUnix: 10, maxWaitMs: 60_000, pollMs: 0, fetchImpl: rpcOf(() => ZERO, () => (chainSec += 3), pinCalls), now: () => (t += 1000) + 60_000 });
+    ok(later.debited === false && later.expired === true && later.chainTime >= 10, `the poll keeps going until the chain's clock passes the expiry (got ${JSON.stringify(later)})`);
+    ok(pinCalls.some((c) => c.method === "eth_call" && c.tag === "0x1234"), "the final unused reading is taken AT the block past the expiry");
+    // A consumed state at that pinned block is a debit.
+    t = 0;
+    const pinned = await confirmEvmAuthorizationUnused({ ...args, untilUnix: 10, maxWaitMs: 60_000, pollMs: 0, fetchImpl: async (u, init) => (JSON.parse(init.body).params?.[1] === "0x1234" ? { json: async () => ({ result: ONE }) } : rpcOf(() => ZERO)(u, init)), now: clock });
+    ok(pinned.debited === true, "a credential consumed by the block past the expiry reads as a debit");
+    // Chain time unreadable: never proven, never a throw.
+    t = 0;
+    const blind = await confirmEvmAuthorizationUnused({ ...args, untilUnix: 10, maxWaitMs: 15_000, pollMs: 0, fetchImpl: rpcOf(() => ZERO, () => null), now: clock });
+    ok(blind.debited === false && blind.expired === false, `an unreadable block is not proven unpaid (got ${JSON.stringify(blind)})`);
+    // A host clock BEHIND the chain: the chain already shows the expiry when the wait's bound is reached.
+    t = 0;
+    const behind = await confirmEvmAuthorizationUnused({ ...args, untilUnix: 10, maxWaitMs: 3_000, pollMs: 0, fetchImpl: rpcOf(() => ZERO, () => 100), now: clock });
+    ok(behind.debited === false && behind.expired === true, `a chain already past the expiry proves it when the host clock lags (got ${JSON.stringify(behind)})`);
   }
 
   // Through payX402 on Base: v2 challenge, paid retry refused with 402. The
