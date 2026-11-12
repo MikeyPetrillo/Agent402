@@ -6,6 +6,39 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-12 (leftovers: payer keys, lookups, retirements, site polish)
+Payments:
+- A Solana payment is keyed on its transfer authority when other transfer
+  accounts sit in a lookup table, and x402 v1 Solana payments carry a payer key.
+- A router seller that answers 200 without taking payment and returns no answer
+  is treated as a failed upstream: the buyer is not charged and the next seller
+  is tried.
+- The proof that an EVM authorization went unused reads chain time, not the
+  host clock.
+- Bazaar service names end on a whole phrase and stay distinct per tier.
+Server:
+- Outbound tools resolve hostnames without the shared thread pool, so a name
+  that never answers no longer delays other lookups; every resolved address is
+  checked before a fetch.
+- code-run sandboxes have no internet access.
+- The LLM tiers advertise the successors of the OpenAI models retiring
+  2026-12-11; the retiring ids are still accepted.
+- Metered quotes for text in dense scripts (CJK, Thai, emoji, base64) on models
+  outside OpenAI estimate tokens at a realistic floor.
+- The insider, LinkedIn article and IPO reports fence the filer-written text
+  they read.
+- Daily upstream ceilings no longer count a call the upstream refused.
+- /mcp and the revenue view redact secrets from error text.
+- Six more status words page on their alarm values.
+- The tollbooth Docker image runs on Node 22.23.5 as a non-root user.
+Site:
+- Every code block on the site has the shared copy button.
+- /company form fields use the control border; tool page breadcrumbs keep their
+  spacing; wrap fixes on /docs, /tools and tool pages.
+- /llms.txt is shorter; route descriptions for the MPP start routes moved to
+  /llms-full.txt.
+- /transparency prints its own last-updated date.
+
 ### 2026-11-12 (home page and company contacts)
 Site:
 - The home page shows Agent402's own figures (uptime, external payments,
