@@ -24,7 +24,7 @@ import { meterUpstreamSpend } from "../posthog.js";
 import { createSharedDailySpend } from "../shared-limits.js";
 import { dailyCeilings, ceilingWord, noteOverAlarm, createSharedCeilingView, REFUSAL_HOLD_MS } from "../daily-ceilings.js";
 import { onFinalResponse } from "../request-timing.js";
-import { noteXSearchCall, countsOf as xSearchCountsOf } from "../x-search-stats.js";
+import { noteXSearchCall, noteXSearchAuthorReads, countsOf as xSearchCountsOf } from "../x-search-stats.js";
 // The upstream bills per POST RETURNED, not per request, so the page size is
 // the real cost lever: a 100-post page at our per-call price would be sold far
 // below cost. Priced 2026-08-27 against X's published pay-per-use rate card
@@ -473,12 +473,19 @@ export const X_DATA_TOOLS = [
         "tweet.fields": TWEET_FIELDS,
         ...AUTHOR_EXPANSION,
       });
-      // Counted on the request's FINAL response (src/x-search-stats.js):
-      // distinct authors and posts X returned, for a final 200 only. Counts
-      // only; a call outside a request is not counted.
+      // Counted in src/x-search-stats.js (counts only). The distinct authors
+      // X returned are author reads on X's bill, as the spend meter in xGet
+      // books them, whatever the final response: inside a request they count
+      // on the final response of ANY status (a settle that failed, a hang-up),
+      // in the lane the call's histograms use; outside a request, at once.
+      // The call and its histograms count on a final 200 only.
       try {
         const seen = xSearchCountsOf(data);
-        onFinalResponse((status, scope) => noteXSearchCall({ status, ...seen, synthetic: !!scope?.synthetic }));
+        const hooked = onFinalResponse((status, scope) => {
+          noteXSearchAuthorReads({ authors: seen.authors, synthetic: !!scope?.synthetic });
+          noteXSearchCall({ status, ...seen, synthetic: !!scope?.synthetic });
+        });
+        if (!hooked) noteXSearchAuthorReads({ authors: seen.authors });
       } catch { /* bookkeeping only */ }
       const authors = authorIndex(data.includes);
       const tweets = (Array.isArray(data.data) ? data.data : []).map((t) => shapeTweet(t, authors)).filter(Boolean);

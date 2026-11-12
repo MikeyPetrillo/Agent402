@@ -4,15 +4,22 @@
 // page comes back once under `includes.users`, and each one is a user read on
 // X's card. This keeps a per-UTC-day histogram of two counts per call: the
 // distinct authors in `includes.users` and the posts in `data`, each in the
-// buckets below. A call is counted only once its response has finished with
-// a final 200 (the x402 middleware settles after the handler, and a settle
-// that fails turns the answer into a 402, so the handler's own outcome is not
-// the sale). Each count is split by lane: outside (a buyer) or synthetic (our
-// own probes and wallets). Same shape and store as src/sql-query-stats.js.
-// Each lane also keeps `authorReads`, the exact sum of distinct authors, which
-// is the day's expanded-user reads: xSearchAuthorsStatus() reads it into the
-// xSearchAuthors word on /api/gateway-status (ok / alert past
-// X_SEARCH_AUTHOR_DAILY_ALERT). The word is an alarm only: nothing is refused.
+// buckets below. A call is counted in `calls` and the histograms only once its
+// response has finished with a final 200 (the x402 middleware settles after
+// the handler, and a settle that fails turns the answer into a 402, so the
+// handler's own outcome is not the sale). Each count is split by lane:
+// outside (a buyer) or synthetic (our own probes and wallets). Same shape and
+// store as src/sql-query-stats.js.
+// Each lane also keeps `authorReads`, the exact sum of distinct authors X
+// returned, counted for every call X answered (noteXSearchAuthorReads), not
+// only a final 200: X bills those reads, as the X spend meter books them,
+// whether or not the sale then settles. Inside a request they count on the
+// final response of any status (a failed settle, a hang-up), so the lane is
+// the one the histograms use; outside a request, at once. A settle that fails
+// adds its authors here and nothing to `calls` or the histograms. That is the day's expanded-user reads:
+// xSearchAuthorsStatus() reads it into the xSearchAuthors word on
+// /api/gateway-status (ok / alert past X_SEARCH_AUTHOR_DAILY_ALERT). The word
+// is an alarm only: nothing is refused.
 //
 // Counts only: never a username, a user or post id, or the query text.
 //
@@ -23,6 +30,7 @@
 // drops another replica's increments) on a timer and at shutdown, so the
 // answer path never waits on the store.
 import { createJsonDocument } from "./json-document.js";
+import { withLoopDeadline } from "./loop-deadline.js";
 
 export const X_SEARCH_STATS_DOC = "x-search-author-stats";
 export const X_SEARCH_STATS_KEEP_DAYS = 120;
@@ -48,6 +56,11 @@ const bodyOf = (b) => (b && typeof b === "object" && b.days && typeof b.days ===
 let pending = {};
 let timer = null;
 let flushing = null;
+// The batch a flush is writing: out of `pending`, maybe not yet in the row.
+let inflightBatch = null;
+// Bumped by every flush that lands, so a status read that overlapped one knows
+// it may predate the write.
+let flushEpoch = 0;
 
 /** The bucket a count falls in. */
 export function bucketOf(n) {
@@ -71,14 +84,27 @@ export function countsOf(data) {
   return { authors: ids.size, posts };
 }
 
-/** Count one finished x-search-recent call. Synchronous; the store write is deferred. */
+/**
+ * Count the authors of one X search answer, whatever the call's final
+ * response: X bills them either way. Synchronous; the store write
+ * is deferred. Feeds `authorReads` only.
+ */
+export function noteXSearchAuthorReads({ authors = 0, synthetic = false, now = Date.now() } = {}) {
+  const n = Math.max(0, Math.floor(Number(authors) || 0));
+  if (!n) return false;
+  const lane = synthetic ? "synthetic" : "outside";
+  (pending[utcDay(now)] ||= emptyDay())[lane].authorReads += n;
+  startTimer();
+  return true;
+}
+
+/** Count one finished x-search-recent call (calls and the histograms; a final 200 only). Synchronous; the store write is deferred. */
 export function noteXSearchCall({ status, authors = 0, posts = 0, synthetic = false, now = Date.now() } = {}) {
   if (status !== 200) return false;
   const d = utcDay(now);
   const lane = synthetic ? "synthetic" : "outside";
   const day = (pending[d] ||= emptyDay());
   day[lane].calls++;
-  day[lane].authorReads += Math.max(0, Math.floor(Number(authors) || 0));
   day[lane].authors[bucketOf(authors)]++;
   day[lane].posts[bucketOf(posts)]++;
   startTimer();
@@ -113,6 +139,7 @@ export async function flushXSearchStats({ now = Date.now() } = {}) {
   const batch = pending;
   if (!Object.keys(batch).length) return { ok: true, flushed: false };
   pending = {};
+  inflightBatch = batch;
   flushing = (async () => {
     try {
       const r = await docOf().update((b) => {
@@ -122,11 +149,15 @@ export async function flushXSearchStats({ now = Date.now() } = {}) {
         return x;
       }, { fallback: null });
       if (!r?.ok) { pending = mergeInto(pending, batch); return { ok: false }; }
+      // The cached stored day now holds this batch too, so the word does not
+      // drop the flushed reads until its next store read.
+      flushEpoch++;
+      if (storedToday.ok && batch[storedToday.day]) storedToday = { ...storedToday, reads: storedToday.reads + readsOf(batch[storedToday.day]) };
       return { ok: true, flushed: true };
     } catch {
       pending = mergeInto(pending, batch);
       return { ok: false };
-    } finally { flushing = null; }
+    } finally { inflightBatch = null; flushing = null; }
   })();
   return flushing;
 }
@@ -168,8 +199,31 @@ export const xSearchAuthorDailyAlert = () => {
   return Number.isFinite(n) && n > 0 ? n : X_SEARCH_AUTHOR_DAILY_ALERT_DEFAULT;
 };
 const STATUS_READ_TTL_MS = 30_000;
+// The longest a status read waits on the store (loop time); past it the word
+// reads as a failed read would.
+export const X_SEARCH_STATUS_READ_MS = 400;
 let storedToday = { day: null, reads: 0, at: 0, ok: false };
+let statusRead = null;
 const readsOf = (day) => LANES.reduce((a, l) => a + (Number(day?.[l]?.authorReads) || 0), 0);
+
+// One store read shared by every concurrent status request, bounded by
+// X_SEARCH_STATUS_READ_MS. A read that overlapped a landed flush may predate
+// its write, so it keeps the larger of the two same-day figures (a stored day
+// only grows); otherwise the fresh read replaces the cached one.
+function refreshStoredToday(d, now) {
+  if (statusRead) return statusRead;
+  const epoch = flushEpoch;
+  statusRead = withLoopDeadline(Promise.resolve().then(() => docOf().read({ quiet: true })), X_SEARCH_STATUS_READ_MS, null)
+    .catch(() => null)
+    .then((r) => {
+      statusRead = null;
+      if (!r?.ok) { storedToday = { day: d, reads: 0, at: now, ok: false }; return; }
+      const fresh = readsOf(bodyOf(r.body).days[d]);
+      const overlapped = epoch !== flushEpoch && storedToday.ok && storedToday.day === d;
+      storedToday = { day: d, reads: overlapped ? Math.max(fresh, storedToday.reads) : fresh, at: now, ok: true };
+    });
+  return statusRead;
+}
 
 /**
  * The xSearchAuthors word: today's expanded-author reads (both lanes: our own
@@ -180,17 +234,16 @@ const readsOf = (day) => LANES.reduce((a, l) => a + (Number(day?.[l]?.authorRead
  */
 export async function xSearchAuthorsStatus({ now = Date.now(), full = false } = {}) {
   const d = utcDay(now);
-  if (storedToday.day !== d || now - storedToday.at >= STATUS_READ_TTL_MS) {
-    try {
-      const r = await docOf().read({ quiet: true });
-      storedToday = r?.ok ? { day: d, reads: readsOf(bodyOf(r.body).days[d]), at: now, ok: true } : { day: d, reads: 0, at: now, ok: false };
-    } catch { storedToday = { day: d, reads: 0, at: now, ok: false }; }
-  }
-  const reads = storedToday.reads + readsOf(pending[d]);
+  if (storedToday.day !== d || now - storedToday.at >= STATUS_READ_TTL_MS) await refreshStoredToday(d, now);
+  // A batch being written counts too (the alarm errs toward alert while a
+  // write is in flight), so a flush never dips the figure.
+  const reads = (storedToday.day === d ? storedToday.reads : 0) + readsOf(pending[d]) + readsOf(inflightBatch?.[d]);
   const mark = xSearchAuthorDailyAlert();
   const status = reads > mark ? "alert" : storedToday.ok ? "ok" : "unknown";
   return full ? { status, authorReadsToday: reads, alertAbove: mark, scope: storedToday.ok ? "stored" : "unread" } : { status };
 }
 
 /** Test seam. */
-export function _resetXSearchStats() { pending = {}; if (timer) { clearInterval(timer); timer = null; } doc = null; storedToday = { day: null, reads: 0, at: 0, ok: false }; }
+export function _resetXSearchStats() { pending = {}; inflightBatch = null; statusRead = null; if (timer) { clearInterval(timer); timer = null; } doc = null; storedToday = { day: null, reads: 0, at: 0, ok: false }; }
+/** Test seam: the document the module reads and writes. */
+export function _xSearchStatsDoc() { return docOf(); }
