@@ -285,7 +285,8 @@ const BREAK_RE = /\r?\n[ \t]*/g;
 /** Spans found in the text with its line breaks removed, mapped back onto
  *  the text: only a span that crosses a break is kept (the others were
  *  already judged on the text as it is). */
-function spansAcrossBreaks(s, find) {
+function spansAcrossBreaks(text, find) {
+  const s = String(text);
   const keep = [];
   let joined = "";
   const map = []; // joined index -> s index
