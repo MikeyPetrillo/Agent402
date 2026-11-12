@@ -236,6 +236,12 @@ for (const [slug, args, label] of [
   try { await h(slug)(args); ok(false, label); }
   catch (e) { ok(e.statusCode === 400, label + ` (got ${e.statusCode})`); }
 }
+// The concept check runs before the company lookup, but a call with no company
+// still reads the company message first, as it did before.
+try { await h("edgar-company-concept")({ tag: "Revenues" }); ok(false, "edgar-company-concept with no company"); }
+catch (e) { ok(e.statusCode === 400 && /Provide either ticker or cik/.test(e.message), `edgar-company-concept with no company names the company first (${e.message})`); }
+try { await h("edgar-company-concept")({}); ok(false, "edgar-company-concept with nothing"); }
+catch (e) { ok(e.statusCode === 400 && /Provide either ticker or cik/.test(e.message), `edgar-company-concept with nothing names the company first (${e.message})`); }
 
 // --- live calls (tolerant of SEC rate-limiting / outages) ---
 // confirmUpstream(r): when the tool's answer fails the check, ask the outside
