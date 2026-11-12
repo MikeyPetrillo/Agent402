@@ -18,7 +18,8 @@ import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sdnCryptoAddresses, sdnNames, lookupAddress, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
-import { parseSdnXml, sdnEvmAddresses, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests } from "../src/ofac-sdn.js";
+import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests } from "../src/ofac-sdn.js";
+import { bound, gapMeter, leastOurs, OURS_READING } from "./lib/ours-clock.js";
 // The payout map a load stores goes to a scratch file, never the shared default.
 process.env.SANCTIONS_PAYOUT_FILE = join(mkdtempSync(join(tmpdir(), "sanctions-")), "payout.json");
 
@@ -271,6 +272,38 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   const held = process.memoryUsage().heapUsed - before;
   ok(parsed.entries.length === 10000, "the large export parses every entry");
   ok(held < xmlBytes / 4, `parsed entries do not keep the export text alive (held ${Math.round(held / 1e6)} MB of a ${Math.round(xmlBytes / 1e6)} MB export)`);
+}
+
+// A production-sized export (the real one: about 30 MB, 19,000 entries) is
+// parsed across event-loop turns: read in one turn it held the loop 140 ms on
+// a laptop and over 800 ms on a shared runner, every time a refresh landed
+// (seen as an 827 ms hold on whichever request was in flight). The control:
+// the same export parsed in one turn holds the loop past the bound, so the
+// fixture is large enough for the sliced read to be what passes it.
+{
+  const entry = (i) => `<sdnEntry><uid>${i}</uid><firstName>First ${i}</firstName><lastName>NAME ${i} &amp; CO</lastName><sdnType>Individual</sdnType><programList><program>CYBER2</program><program>SDGT</program></programList><idList>${Array.from({ length: 4 }, (_, k) => `<id><uid>${i * 10 + k}</uid><idType>${k % 2 ? "Passport" : "Digital Currency Address - ETH"}</idType><idNumber>0x${String(i * 10 + k).padStart(40, "0")}</idNumber></id>`).join("")}</idList><akaList><aka><uid>${i}1</uid><type>a.k.a.</type><category>strong</category><lastName>ALIAS ${i}</lastName></aka></akaList><addressList><address><uid>${i}2</uid><city>City ${i}</city><country>Country</country></address></addressList><remarks>${"r".repeat(900)}</remarks></sdnEntry>`;
+  const xml = `<sdnList><publshInformation><Publish_Date>11/12/2026</Publish_Date></publshInformation>${Array.from({ length: 20000 }, (_, i) => entry(i + 1)).join("")}</sdnList>`;
+  // The loader's turn also carries the body's one-turn UTF-8 decode (about
+  // 25 ms on a laptop for this size), which the parse does not own.
+  const turn = bound(60, 3);
+  // A gap is read when the meter's next tick lands, so each read lets one land.
+  const settle = () => new Promise((r) => setTimeout(r, 10));
+  const whole = leastOurs(() => parseSdnXml(xml));
+  ok(whole.ms > turn.ms, `control: the ${Math.round(xml.length / 1e6)} MB export parsed in one turn holds the loop ${Math.round(whole.ms)} ms (${turn.note})`);
+  const meter = gapMeter(1);
+  const sliced = await parseSdnXmlAsync(xml);
+  await settle();
+  const gap = meter.stop();
+  eq(sliced, whole.value, "parseSdnXmlAsync reads the export exactly as parseSdnXml does");
+  ok(gap.worst < turn.ms, `parseSdnXmlAsync never holds the loop past ${turn.ms} ms (worst turn ${Math.round(gap.worst)} ms, ${OURS_READING}; ${turn.note})`);
+  // The shared loader (every reader's path) takes the sliced parse.
+  __resetSdnListForTests();
+  const loadMeter = gapMeter(1);
+  const loaded = await loadSdnList({ fetchImpl: async () => new Response(xml, { status: 200 }) });
+  await settle();
+  const loadGap = loadMeter.stop();
+  ok(loaded.entries.length === 20000 && loadGap.worst < turn.ms, `loadSdnList parses a production-sized export across turns (worst turn ${Math.round(loadGap.worst)} ms; ${turn.note})`);
+  __resetSdnListForTests();
 }
 
 console.log(`test-sanctions: ${n} assertions OK`);

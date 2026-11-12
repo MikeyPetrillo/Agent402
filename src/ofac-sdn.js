@@ -66,6 +66,21 @@ const CURRENCY_RE = /^Digital Currency Address\s*-\s*([A-Za-z0-9.]+)\s*$/i;
  *  `addresses` keeps every Digital Currency Address id of the entry, in list
  *  order, with its asset ticker uppercased and its value exactly as listed. */
 export function parseSdnXml(xml) {
+  const steps = sdnParseSteps(xml);
+  let r;
+  do r = steps.next(); while (!r.done);
+  return r.value;
+}
+
+// The export is about 30 MB and 19,000 entries: read in one turn it held the
+// event loop 140 ms on a laptop and over 800 ms on a shared runner, every time
+// a refresh landed. The steps below yield after each entry; parseSdnXmlAsync
+// runs them in slices of SDN_PARSE_SLICE_MS of loop time with a setImmediate
+// between slices (yielding on elapsed time, not on a count of entries), and
+// parseSdnXml runs them in one go, so the two can never read the list
+// differently.
+export const SDN_PARSE_SLICE_MS = 8;
+function* sdnParseSteps(xml) {
   const text = String(xml || "");
   const entries = [];
   let digitalCurrencyIds = 0;
@@ -91,12 +106,27 @@ export function parseSdnXml(xml) {
     const own = block.replace(/<(\w+List)>[\s\S]*?<\/\1>/g, "").replace(/<vesselInfo>[\s\S]*?<\/vesselInfo>/g, "");
     const uid = tag(own, "uid");
     const lastName = tag(own, "lastName");
-    if (!uid || !lastName) continue;
-    const firstName = tag(own, "firstName") || null;
-    entries.push({ uid, lastName, firstName, name: firstName ? `${lastName}, ${firstName}` : lastName, sdnType: tag(own, "sdnType") || null, programs, addresses });
+    if (uid && lastName) {
+      const firstName = tag(own, "firstName") || null;
+      entries.push({ uid, lastName, firstName, name: firstName ? `${lastName}, ${firstName}` : lastName, sdnType: tag(own, "sdnType") || null, programs, addresses });
+    }
+    yield;
   }
   const pd = /<Publish_Date>([^<]*)<\/Publish_Date>/.exec(text);
   return { entries, digitalCurrencyIds, publishDate: pd ? detach(pd[1].trim()) : null };
+}
+
+/** parseSdnXml across event-loop turns: the same result, never more than
+ *  about `sliceMs` of loop time per turn. */
+export async function parseSdnXmlAsync(xml, { sliceMs = SDN_PARSE_SLICE_MS } = {}) {
+  const steps = sdnParseSteps(xml);
+  for (;;) {
+    const until = performance.now() + sliceMs;
+    let r;
+    do r = steps.next(); while (!r.done && performance.now() < until);
+    if (r.done) return r.value;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 /** The EVM-format addresses of a parse (0x + 40 hex, under any asset ticker),
@@ -138,7 +168,7 @@ export async function loadSdnList({ maxAgeMs = 0, fetchImpl = globalThis.fetch, 
     if (!res.ok) throw new Error(`fetch answered HTTP ${res.status}`);
     const xml = await res.text();
     if (xml.length > SDN_MAX_BYTES) throw new Error(`export is ${xml.length} bytes, over the ${SDN_MAX_BYTES} cap`);
-    const parsed = parseSdnXml(xml);
+    const parsed = await parseSdnXmlAsync(xml);
     // A parse that yields nothing is a FORMAT CHANGE, not an empty list:
     // serving "no match" off it would make every screen read as clean.
     if (!parsed.entries.length) throw new Error("parsed to zero entries; treated as a format change, not an empty list");
