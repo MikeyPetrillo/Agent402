@@ -3731,7 +3731,7 @@ jobs:
           t node scripts/test-sweep-burner.js
           # x-data kit (offline)
           t node scripts/test-x-data-kit.js
-          # x-search-recent author and post histogram: counted on the final response, counts only (offline)
+          # x-search-recent-authors author and post histogram: counted on the final response, counts only (offline)
           t node scripts/test-x-search-stats.js
           # x-data daily ceilings: served past the alarm ceiling, refused at the hard one, 0 refuses all, both observers page (offline)
           t node scripts/test-x-data-ceilings.js

@@ -199,7 +199,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   preload `scripts/lib/cdp-sql-stub-preload.js` holds a `hold_<id>` query open until the file
   `<id>` exists in `CDP_SQL_STUB_HOLD_DIR` (test only).
 - **Per-call count documents:** `src/sql-query-stats.js` (onchain-sql queries per call) and
-  `src/x-search-stats.js` (x-search-recent authors and posts per call) keep per-UTC-day
+  `src/x-search-stats.js` (x-search-recent-authors authors and posts per call) keep per-UTC-day
   histograms as state documents (`src/json-document.js`), folded into the document on a timer
   and at shutdown. x-search is counted on a final 200. Every onchain-sql run inside a request
   is counted once its response has ended (`onFinalResponse`, `src/request-timing.js`; a handler

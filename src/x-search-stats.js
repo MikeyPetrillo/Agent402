@@ -1,6 +1,7 @@
-// How many distinct authors and posts x-search-recent calls return.
+// How many distinct authors and posts x-search-recent-authors calls return.
 //
-// The search sends `expansions=author_id`, so every distinct author of the
+// That search sends `expansions=author_id` (x-search-recent sends none and is
+// not counted), so every distinct author of the
 // page comes back once under `includes.users`, and each one is a user read on
 // X's card. This keeps a per-UTC-day histogram of two counts per call: the
 // distinct authors in `includes.users` and the posts in `data`, each in the
