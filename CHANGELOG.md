@@ -6,6 +6,13 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-12 (home page and company contacts)
+Site:
+- The home page shows Agent402's own figures (uptime, external payments,
+  chains, latency) under the pitch, beside the live view, so the hero no longer
+  leaves open space above the headline.
+- /company lists the operator mailbox once, with the roles it answers.
+
 ### 2026-11-11 (Node security release)
 Server:
 - The server, facilitator, worker and MCP images run on Node 22.23.5, the

@@ -2,6 +2,14 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-12",
+    title: "Home page and company contacts",
+    items: [
+      "Site: the home page shows Agent402's own figures (uptime, external payments, chains, latency) under the pitch, beside the live view, so the hero no longer leaves open space above the headline.",
+      "Site: /company lists the operator mailbox once, with the roles it answers.",
+    ],
+  },
+  {
     date: "2026-11-11",
     title: "Node security release",
     items: [
