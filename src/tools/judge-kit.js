@@ -483,7 +483,7 @@ export const JUDGE_TOOLS = [{
     // The live answer shape (read from a real call 2026-09-24): score
     // probabilities are keyed by level INDEX with a legend beside them, not an
     // array, and the model echoes its concrete version.
-    example: {
+    output: { example: {
       model: "jev-1.14.0",
       answers: {
         severity: {
@@ -495,7 +495,7 @@ export const JUDGE_TOOLS = [{
       },
       usage: { input_tokens: 363, output_tokens: 37 },
       note: "Typed judgment. choice/score answers carry `probabilities` and `confidence`; a noul carries `noul`, a probability from 0 to 1, and no confidence. Gate on confidence for choice/score and on distance from 0.5 for a noul.",
-    },
+    } },
   },
   // Pure, synchronous input check the paid gates can run BEFORE a payment
   // round trip (the Tempo gate's pre-validation): a body the handler would
@@ -533,11 +533,11 @@ export const JUDGE_TOOLS = [{
         ],
       }],
     },
-    example: {
+    output: { example: {
       model: LUNA,
       answers: [{ type: "choice", name: "department", choice: "billing", probabilities: [{ value: "billing", probability: 1 }, { value: "technical", probability: 0 }, { value: "shipping", probability: 0 }, { value: "other", probability: 0 }], confidence: 1 }],
       usage: { input_tokens: 145, output_tokens: 0, total_tokens: 145 },
-    },
+    } },
   },
   validateInput: (input) => { validateDecisionsRequest(input); },
   handler: (input) => decisions(input),

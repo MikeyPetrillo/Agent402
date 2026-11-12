@@ -37,6 +37,17 @@ const words = "word ".repeat(200).trim();
 const capped = bazaarCapDescription(words);
 ok(capped.length <= BAZAAR_DESCRIPTION_MAX && capped.endsWith("word.") && !capped.includes("..."), `cap: word boundary + period, never mid-word '...' (${capped.length} chars)`);
 ok(bazaarCapDescription("short") === "short" && bazaarCapDescription("") === "", "cap: short/empty untouched");
+// A hint drops itself, not the sentences after it (the listing keeps what it says).
+ok(bazaarCapDescription("Read from a store. ?key=k returns the value; omit key to list keys. Keys expire on their TTL. Reads your own store by default; add ?owner=0x1 to read a granted one.") === "Read from a store. Keys expire on their TTL. Reads your own store by default.",
+  `cap: a sentence opening with a hint goes, later sentences stay, and a hint clause after a semicolon goes with its clause (got ${JSON.stringify(bazaarCapDescription("Read from a store. ?key=k returns the value; omit key to list keys. Keys expire on their TTL. Reads your own store by default; add ?owner=0x1 to read a granted one."))})`);
+ok(bazaarCapDescription("Look up a MIME type by file extension (?ext=png) or extensions by MIME type (?type=image/png). Covers ~50 common types.") === "Look up a MIME type by file extension or extensions by MIME type. Covers ~50 common types.", "cap: a hint in parentheses is removed in place");
+ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1 This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data.", "cap: an abbreviation (St.) does not end a sentence, so no fragment is left behind");
+{
+  const { bazaarTagsFor, BAZAAR_ICON_PATH } = await import("../src/payments.js");
+  ok(JSON.stringify(bazaarTagsFor({ category: "time", tags: ["cron", "schedule"], slug: "cron-next" })) === JSON.stringify(["time", "cron", "schedule", "cron-next", "agents"]), "tags: category, own tags, then the slug, and a filler only when those run out");
+  ok(bazaarTagsFor({ category: "web", tags: ["a", "b", "c", "d", "e"], slug: "s" }).length === 5, "tags: at most five");
+  ok(/\.(?:png|jpe?g|webp|gif)$/.test(BAZAAR_ICON_PATH), `icon: the listing icon path names a format the Bazaar lists (${BAZAAR_ICON_PATH})`);
+}
 // The per-route 402 budget: under it nothing changes; over it the route gives
 // up input descriptions first, then description length, then its sample output.
 {
