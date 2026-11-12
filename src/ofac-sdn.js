@@ -188,6 +188,9 @@ export function onSdnList(fn) { listeners.add(fn); return () => listeners.delete
 // of work has run. Returns { parsed, chars } or throws past maxChars.
 const DECODE_SLICE_BYTES = 1 << 20;
 const OPEN = "<sdnEntry>", CLOSE = "</sdnEntry>";
+// The longest real entry is a few KB; the header element is under 64 chars.
+export const SDN_ENTRY_MAX_CHARS = 1 << 20;
+const HEAD_KEEP = 256;
 async function parseSdnResponse(res, maxChars) {
   if (!res.body || typeof res.body.getReader !== "function") {
     const xml = await res.text();
@@ -209,9 +212,16 @@ async function parseSdnResponse(res, maxChars) {
     let from = 0;
     for (;;) {
       const a = buf.indexOf(OPEN, from);
-      if (a < 0) { from = Math.max(from, buf.length - OPEN.length); break; }
+      // Keep a tail long enough for a split <sdnEntry> tag, and, until the
+      // header is read, for a split <Publish_Date> element.
+      if (a < 0) { from = Math.max(from, buf.length - (publishDate === null ? HEAD_KEEP : OPEN.length)); break; }
       const b = buf.indexOf(CLOSE, a + OPEN.length);
-      if (b < 0) { from = a; break; }
+      if (b < 0) {
+        // An entry this long is not an SDN entry: a malformed export would
+        // otherwise make every chunk rescan a growing buffer.
+        if (buf.length - a > SDN_ENTRY_MAX_CHARS) throw new Error(`an entry runs past ${SDN_ENTRY_MAX_CHARS} characters; treated as a malformed export`);
+        from = a; break;
+      }
       readSdnEntry(buf.slice(a + OPEN.length, b), acc);
       from = b + CLOSE.length;
       await due();
@@ -266,3 +276,4 @@ export function __holdSdnListForTests(list) { held = list; inFlight = null; }
 
 // Operator heap read (/__operator/heap.json `stores`).
 registerMemoryStore("ofac-sdn.held", () => held, { note: "last good list" });
+export { parseSdnResponse as __parseSdnResponseForTests };

@@ -18,7 +18,7 @@ import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sdnCryptoAddresses, sdnNames, sdnCryptoAddressSteps, sdnNameSteps, lookupAddress, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
-import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, sdnEvmAddressesAsync, runSliced, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests, __holdSdnListForTests } from "../src/ofac-sdn.js";
+import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, sdnEvmAddressesAsync, runSliced, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests, __holdSdnListForTests, __parseSdnResponseForTests, SDN_ENTRY_MAX_CHARS } from "../src/ofac-sdn.js";
 import { bound, gapMeter, leastOurs, OURS_READING } from "./lib/ours-clock.js";
 // The payout map a load stores goes to a scratch file, never the shared default.
 process.env.SANCTIONS_PAYOUT_FILE = join(mkdtempSync(join(tmpdir(), "sanctions-")), "payout.json");
@@ -272,6 +272,33 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   const held = process.memoryUsage().heapUsed - before;
   ok(parsed.entries.length === 10000, "the large export parses every entry");
   ok(held < xmlBytes / 4, `parsed entries do not keep the export text alive (held ${Math.round(held / 1e6)} MB of a ${Math.round(xmlBytes / 1e6)} MB export)`);
+}
+
+// The streamed reader against the string parser, at every kind of chunk
+// boundary: inside a tag, inside the header's Publish_Date, inside a multibyte
+// character. Same entries, same counts, same publish date.
+{
+  const small = `<?xml version="1.0"?><sdnList><publshInformation><Publish_Date>11/12/2026</Publish_Date><Record_Count>3</Record_Count></publshInformation>` +
+    [1, 2, 3].map((i) => `<sdnEntry><uid>${i}</uid><firstName>Zo\u00eb ${i}</firstName><lastName>N\u00c4ME ${i}</lastName><sdnType>Individual</sdnType><idList><id><idType>Digital Currency Address - ETH</idType><idNumber>0x${String(i).padStart(40, "0")}</idNumber></id></idList></sdnEntry>`).join("") + "</sdnList>";
+  const want = parseSdnXml(small);
+  const enc = new TextEncoder().encode(small);
+  const streamOf = (size) => new Response(new ReadableStream({ start(c) { for (let o = 0; o < enc.length; o += size) c.enqueue(enc.subarray(o, o + size)); c.close(); } }));
+  let mismatches = 0;
+  for (let size = 1; size <= 97; size += 3) {
+    const { parsed } = await __parseSdnResponseForTests(streamOf(size), SDN_MAX_BYTES);
+    if (JSON.stringify(parsed) !== JSON.stringify(want)) mismatches++;
+  }
+  ok(mismatches === 0 && want.publishDate === "11/12/2026", `the streamed reader matches the string parser at every chunk size from 1 to 97 bytes, publish date included (${mismatches} mismatches)`);
+  let canceled = false;
+  let sent = 0;
+  const big = new Response(new ReadableStream({ pull(c) { if (++sent > 20) c.close(); else c.enqueue(enc.slice()); }, cancel() { canceled = true; } }));
+  let threw = null;
+  try { await __parseSdnResponseForTests(big, enc.length * 3); } catch (e) { threw = e; }
+  ok(threw && /over the .* cap/.test(threw.message) && canceled, `a streamed export over the cap is refused and its download canceled (${threw?.message})`);
+  const open = new TextEncoder().encode("<sdnList><sdnEntry><uid>1</uid><lastName>" + "x".repeat(SDN_ENTRY_MAX_CHARS + 10));
+  let t2 = null;
+  try { await __parseSdnResponseForTests(new Response(open), SDN_MAX_BYTES); } catch (e) { t2 = e; }
+  ok(t2 && /malformed export/.test(t2.message), `an entry that never closes is refused past the entry cap (${t2?.message})`);
 }
 
 // A production-sized export (the real one: about 30 MB, 19,000 entries) is
