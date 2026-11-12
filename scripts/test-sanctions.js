@@ -17,8 +17,8 @@ import { strict as assert } from "node:assert";
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sdnCryptoAddresses, sdnNames, lookupAddress, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
-import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests } from "../src/ofac-sdn.js";
+import { sdnCryptoAddresses, sdnNames, sdnCryptoAddressSteps, sdnNameSteps, lookupAddress, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
+import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, sdnEvmAddressesAsync, runSliced, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests, __holdSdnListForTests } from "../src/ofac-sdn.js";
 import { bound, gapMeter, leastOurs, OURS_READING } from "./lib/ours-clock.js";
 // The payout map a load stores goes to a scratch file, never the shared default.
 process.env.SANCTIONS_PAYOUT_FILE = join(mkdtempSync(join(tmpdir(), "sanctions-")), "payout.json");
@@ -298,11 +298,101 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   ok(gap.worst < turn.ms, `parseSdnXmlAsync never holds the loop past ${turn.ms} ms (worst turn ${Math.round(gap.worst)} ms, ${OURS_READING}; ${turn.note})`);
   // The shared loader (every reader's path) takes the sliced parse.
   __resetSdnListForTests();
+  // The body arrives as a network delivers it: 64 KB chunks (encoded before the
+  // meter starts, so the stub's own encoding is not counted as the loader's).
+  const bytes = new TextEncoder().encode(xml);
+  const chunked = () => new Response(new ReadableStream({
+    start(c) { for (let o = 0; o < bytes.length; o += 65_536) c.enqueue(bytes.subarray(o, Math.min(bytes.length, o + 65_536))); c.close(); },
+  }), { status: 200 });
+  // A server 15 s past boot has long since loaded the fetch and stream
+  // machinery; its first use in this process is not the loader's cost.
+  await new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([60])); c.close(); } })).text();
+  await settle();
   const loadMeter = gapMeter(1);
-  const loaded = await loadSdnList({ fetchImpl: async () => new Response(xml, { status: 200 }) });
+  const loaded = await loadSdnList({ fetchImpl: async () => chunked() });
   await settle();
   const loadGap = loadMeter.stop();
   ok(loaded.entries.length === 20000 && loadGap.worst < turn.ms, `loadSdnList parses a production-sized export across turns (worst turn ${Math.round(loadGap.worst)} ms; ${turn.note})`);
+  eq({ entries: loaded.entries, digitalCurrencyIds: loaded.digitalCurrencyIds, publishDate: loaded.publishDate }, whole.value, "loadSdnList reads the streamed export exactly as parseSdnXml reads the whole string");
+
+  // The sliced builders give the one-turn builders' sets exactly.
+  eq(await runSliced(sdnCryptoAddressSteps(loaded)), sdnCryptoAddresses(loaded), "the sliced address map equals sdnCryptoAddresses");
+  eq(await runSliced(sdnNameSteps(loaded)), sdnNames(loaded), "the sliced name list equals sdnNames");
+  eq(await sdnEvmAddressesAsync(loaded), sdnEvmAddresses(loaded), "the sliced EVM set equals sdnEvmAddresses");
+
+  // A whole refresh in production shape: the sanctions tools' listener
+  // registered (it adopts every list fetched), the payment-party screen and
+  // the tools asking together, one download feeding both, each adopting it
+  // and writing its stored copy. Every turn of that stays under the bound.
+  process.env.SANCTIONS_SCREEN_FILE = join(mkdtempSync(join(tmpdir(), "sanctions-screen-")), "screen.json");
+  const kit = await import("../src/tools/sanctions-kit.js");
+  const screen = await import("../src/sanctions-screen.js");
+  kit.__resetSanctionsForTests(); screen.__resetSanctionsScreenForTests(); __resetSdnListForTests();
+  // The old adoption ran every builder and both store bodies on the parse's
+  // last turn (each part timed apart, least of three, so one collector pause
+  // does not decide it).
+  const part = (fn) => leastOurs(fn).ms;
+  const oneTurn = part(() => sdnCryptoAddresses(loaded)) + part(() => sdnNames(loaded)) + part(() => sdnEvmAddresses(loaded))
+    + part(() => JSON.stringify([...sdnCryptoAddresses(loaded).values()].map((v) => ({ address: v.address, asset: v.asset, entity: v.entity, sdnId: v.sdnId }))))
+    + part(() => JSON.stringify([...sdnEvmAddresses(loaded).addresses].sort()));
+  // Control: on a list with ten times the addresses per entry, the builders
+  // in one turn hold the loop past the bound (both readers adopting it, below,
+  // stay under it only because they run these builders sliced).
+  const wide = { entries: loaded.entries.map((e, i) => ({ ...e, addresses: Array.from({ length: 20 }, (_, k) => ({ asset: "ETH", address: "0x" + String(i * 100 + k).padStart(40, "0") })) })), digitalCurrencyIds: 400000, publishDate: "11/14/2026", bytes: 0 };
+  const wideTurn = leastOurs(() => { sdnCryptoAddresses(wide); sdnNames(wide); sdnEvmAddresses(wide); }).ms;
+  ok(wideTurn > turn.ms, `control: the builders in one turn on a ${wide.entries.length * 20} address list hold the loop ${Math.round(wideTurn)} ms (${turn.note})`);
+  await settle();
+  const refreshMeter = gapMeter(1);
+  const [screened] = await Promise.all([
+    screen.refreshSanctionsScreen({ fetchImpl: async () => chunked(), log: () => {} }),
+    kit.loadSanctions({ fetchImpl: async () => chunked(), force: true }),
+  ]);
+  await settle();
+  const refreshGap = refreshMeter.stop();
+  const st = kit.sanctionsStatus();
+  ok(screened.ok && screened.evmAddresses === 40000 && st.addresses === 40000 && st.entries === 20000 && st.payoutScreen.addresses === 40000,
+    `one refresh feeds the screen (${screened.evmAddresses} EVM addresses), the tools (${st.addresses} addresses, ${st.entries} names) and the payout map (${st.payoutScreen.addresses})`);
+  ok(refreshGap.worst < turn.ms, `a whole refresh (download, parse, both adoptions, both stored copies) never holds the loop past ${turn.ms} ms (worst turn ${Math.round(refreshGap.worst)} ms, against ${Math.round(oneTurn)} ms of adoption work that one turn held before; ${turn.note})`);
+  console.log(`test-sanctions: worst turn ${Math.round(loadGap.worst)} ms for the load, ${Math.round(refreshGap.worst)} ms for a whole refresh (${turn.note}); adoption work in one turn ${Math.round(oneTurn)} ms`);
+  // What the readers hold is what the one-turn builders give.
+  const listed = "0x" + String(12345 * 10 + 2).padStart(40, "0");
+  eq(await kit.screenAddressForPayment(listed), sdnCryptoAddresses(loaded).get(listed), "the payout screen holds the one-turn map's entry");
+  ok(screen.screenAddresses([listed]).ok === false && screen.screenAddresses(["0x" + "9".repeat(40)]).ok === true, "the payment-party screen holds the sliced EVM set");
+  const wallet = await kit.SANCTIONS_TOOLS[0].handler({ address: listed });
+  ok(wallet.verdict === "match" && wallet.sdnId === "12345" && wallet.addressesOnList === 40000, "the wallet tool answers from the adopted map");
+  const stored = JSON.parse(readFileSync(process.env.SANCTIONS_PAYOUT_FILE, "utf8"));
+  ok(stored.addresses.length === 40000, "the payout map's stored copy is written after the swap");
+
+  // A reader during adoption sees the old complete list or the new one: a
+  // smaller list (still over half) adopted over the held one never shows a
+  // partial map, nor addresses from one list beside names from the other.
+  const smaller = new TextEncoder().encode(`<sdnList><publshInformation><Publish_Date>11/13/2026</Publish_Date></publshInformation>${Array.from({ length: 15000 }, (_, i) => entry(i + 1)).join("")}</sdnList>`);
+  __resetSdnListForTests();
+  const seen = new Set();
+  const look = () => { const s = kit.sanctionsStatus(); seen.add(`${s.addresses}/${s.entries}/${s.payoutScreen.addresses}`); };
+  const probe = setInterval(look, 1);
+  await kit.loadSanctions({ fetchImpl: async () => new Response(smaller, { status: 200 }), force: true, now: () => Date.now() + 1000 });
+  clearInterval(probe); look();
+  ok(seen.size >= 2 && [...seen].every((v) => v === "40000/20000/40000" || v === "30000/15000/30000"), `a screen during adoption reads one whole list (seen: ${[...seen].join(", ")})`);
+
+  // Both readers adopt the wide list (held as fetched; a newer stored payout
+  // map is seeded so the tools write no payout body for it, which is one
+  // turn of its own sized by the list).
+  kit.__resetSanctionsForTests(); screen.__resetSanctionsScreenForTests();
+  kit.__seedPayoutListForTests(undefined, { fetchedAt: Date.now() + 3600_000 });
+  __holdSdnListForTests({ ...wide, fetchedAt: Date.now() });
+  await settle();
+  const wideMeter = gapMeter(1);
+  const [wideScreened] = await Promise.all([
+    screen.refreshSanctionsScreen({ maxAgeMs: 3600_000, log: () => {} }),
+    kit.loadSanctions({ force: true }),
+  ]);
+  await settle();
+  const wideGap = wideMeter.stop();
+  console.log(`test-sanctions: control list, builders ${Math.round(wideTurn)} ms in one turn, worst turn ${Math.round(wideGap.worst)} ms with both readers adopting it sliced`);
+  ok(wideScreened.evmAddresses === 400000 && kit.sanctionsStatus().addresses === 400000 && wideGap.worst < turn.ms,
+    `both readers adopt the wide list without holding the loop past ${turn.ms} ms (worst turn ${Math.round(wideGap.worst)} ms; ${turn.note})`);
+  kit.__resetSanctionsForTests(); screen.__resetSanctionsScreenForTests();
   __resetSdnListForTests();
 }
 

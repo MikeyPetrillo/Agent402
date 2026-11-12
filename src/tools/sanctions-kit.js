@@ -20,8 +20,8 @@
 //
 // A MISS IS NEVER A CLEARANCE - see src/tools/sanctions-core.js for why the
 // verdict vocabulary has no word in it that reads as permission.
-import { sdnCryptoAddresses, sdnNames, screenName, normalizeAddress, lookupAddress, SANCTIONS_VERDICTS } from "./sanctions-core.js";
-import { loadSdnList, onSdnList } from "../ofac-sdn.js";
+import { sdnCryptoAddressSteps, sdnNameSteps, screenName, normalizeAddress, lookupAddress, SANCTIONS_VERDICTS } from "./sanctions-core.js";
+import { loadSdnList, onSdnList, runSliced } from "../ofac-sdn.js";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { createJsonDocument } from "../json-document.js";
@@ -109,7 +109,8 @@ export function startSanctionsPayoutStore() {
 }
 
 function storePayout() {
-  const rows = [...payout.addresses.values()].map((v) => ({ address: v.address, asset: v.asset, entity: v.entity, sdnId: v.sdnId }));
+  const rows = [];
+  for (const v of payout.addresses.values()) rows.push({ address: v.address, asset: v.asset, entity: v.entity, sdnId: v.sdnId });
   const body = { v: 1, fetchedAt: payout.fetchedAt, publishDate: payout.publishDate, addresses: rows };
   return getPayoutDoc().save(body).then((ok) => {
     if (!ok) console.warn(`[sanctions] payout list loaded but not stored: ${String(getPayoutDoc().lastError || "save refused").slice(0, 120)}`);
@@ -117,11 +118,19 @@ function storePayout() {
   }, () => false);
 }
 
-/** Build this kit's maps from a parsed list (src/ofac-sdn.js). Throws on a
- *  parse that is a format change, leaving the previous good load in place. */
-function adoptList(list) {
-  const addresses = sdnCryptoAddresses(list);
-  const names = sdnNames(list);
+/** Build this kit's maps from a parsed list (src/ofac-sdn.js). Rejects on a
+ *  parse that is a format change, leaving the previous good load in place.
+ *
+ *  The maps are built across event-loop turns (runSliced: the same steps the
+ *  one-turn sdnCryptoAddresses and sdnNames run), then checked and swapped in
+ *  on one turn, so a screen reading meanwhile sees the old complete list or
+ *  the new complete one, never a half-built map. The payout store write runs
+ *  on a turn of its own after the swap. */
+async function adoptList(list) {
+  const addresses = await runSliced(sdnCryptoAddressSteps(list));
+  const names = await runSliced(sdnNameSteps(list));
+  // A newer list was adopted while this one was built: it stands.
+  if (state.fetchedAt && list.fetchedAt <= state.fetchedAt) return;
   // A parse that yields nothing is a FORMAT CHANGE, not an empty list, and
   // serving "no match" off it would be the worst possible failure here:
   // every query would read as clean. Keep the previous good load instead.
@@ -137,15 +146,28 @@ function adoptList(list) {
   state = { addresses, names, fetchedAt: list.fetchedAt, error: null, loading: state.loading, bytes: list.bytes, publishDate: list.publishDate };
   if (!payout.fetchedAt || list.fetchedAt > payout.fetchedAt) {
     payout = { addresses, fetchedAt: list.fetchedAt, publishDate: list.publishDate || null, source: "fetch" };
+    await new Promise((resolve) => setImmediate(resolve));
     void storePayout();
   }
+}
+
+// One adoption at a time, in arrival order; the listener and loadSanctions
+// asking for the same list share one adoption.
+let adoptChain = Promise.resolve();
+let adopting = null; // { list, promise }
+function adoptOnce(list) {
+  if (adopting?.list === list) return adopting.promise;
+  const promise = adoptChain.then(() => adoptList(list));
+  adoptChain = promise.catch(() => {});
+  adopting = { list, promise };
+  return promise;
 }
 
 // Every list the payment-party screen (src/sanctions-screen.js) fetches is
 // adopted here too, so the timer below downloads only when nobody has.
 onSdnList((list) => {
   if (state.fetchedAt && list.fetchedAt <= state.fetchedAt) return;
-  try { adoptList(list); } catch (e) { state.error = String(e?.message || e).slice(0, 200); console.warn(`[sanctions] kept the held list: ${state.error}`); }
+  return adoptOnce(list).catch((e) => { state.error = String(e?.message || e).slice(0, 200); console.warn(`[sanctions] kept the held list: ${state.error}`); });
 });
 
 /** Load the SDN list. Injectable fetch so the tests never touch a government
@@ -158,7 +180,7 @@ export async function loadSanctions({ fetchImpl = fetch, now = () => Date.now(),
   state.loading = (async () => {
     try {
       const list = await loadSdnList({ maxAgeMs: SHARED_REUSE_MS, fetchImpl, now });
-      if (list.fetchedAt !== state.fetchedAt) adoptList(list);
+      if (list.fetchedAt !== state.fetchedAt) await adoptOnce(list);
     } catch (e) {
       state.error = String(e?.message || e).slice(0, 200);
       state.loading = null;
@@ -371,7 +393,7 @@ export function __seedPayoutListForTests(rows = [{ address: "0x5a5a5a5a5a5a5a5a5
   payout = { addresses, fetchedAt, publishDate, source: "test" };
 }
 /** Test seam: forget the downloaded list too. */
-export function __resetSanctionsForTests() { state = { addresses: new Map(), names: [], fetchedAt: null, error: null, loading: null, bytes: 0, publishDate: null }; lastAttemptAt = 0; __resetPayoutListForTests(); }
+export function __resetSanctionsForTests() { state = { addresses: new Map(), names: [], fetchedAt: null, error: null, loading: null, bytes: 0, publishDate: null }; lastAttemptAt = 0; adoptChain = Promise.resolve(); adopting = null; __resetPayoutListForTests(); }
 
 let refreshTimer = null;
 
