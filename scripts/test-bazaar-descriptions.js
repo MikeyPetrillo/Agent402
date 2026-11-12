@@ -113,6 +113,8 @@ ok(live.length > 0, "catalog descriptions readable");
   const gem = ["nano", "auto", "base", "pro", "premium", "metered"].map((t) => `Gemini generateContent (${t} tier)`);
   const gemMap = x402ServiceNames(gem);
   ok(gemMap.get(gem[0]) === "Gemini generateContent nano" && new Set(gem.map((g) => gemMap.get(g))).size === gem.length, `a tier family keeps its tier word (got ${JSON.stringify(gem.map((g) => gemMap.get(g)))})`);
+  const pair = x402ServiceNames(["Image generation", "Image generation (OpenAI-compatible)"]);
+  ok(pair.get("Image generation") === "Image generation" && pair.get("Image generation (OpenAI-compatible)") === "Image generation OpenAI", `a tag too long to fit gives its first hyphenated part (got ${JSON.stringify([...pair.values()])})`);
   ok(x402ServiceNames(["Chat completions - metered (pay what the call costs)"]).get("Chat completions - metered (pay what the call costs)") === "Chat completions - metered", "a name with no sibling keeps its whole-clause cut");
 }
 console.log(`\n${pass} passed, ${fail} failed`);
