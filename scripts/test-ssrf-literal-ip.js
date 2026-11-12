@@ -4,8 +4,14 @@
 // one was followed). A real local server stands in for an internal service.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import http from "node:http";
-import { stubGuardResolver, resolverError } from "./lib/guard-resolver-stub.js";
+import { stubGuardResolver, stubGuardLookup, resolverError } from "./lib/guard-resolver-stub.js";
 import { ssrfDispatcher, freshSsrfDispatcher, isSsrfBlock, isPrivateIp, assertPublicUrl, safeFetch, UNRESOLVED_OR_PRIVATE, LOOKUP_UNAVAILABLE, LOOKUP_RETRY_AFTER_S, isTransientLookupError } from "../src/tools/fetch-guard.js";
+
+// Nothing here leaves the process: every name the guard looks up is answered
+// by the stubs (example.com one public address, everything else no such name),
+// so no assertion depends on this machine's name server.
+const restoreOuterResolver = stubGuardResolver((h, family) => (h === "example.com" && family === 4 ? ["93.184.215.14"] : Promise.reject(resolverError("ENOTFOUND", h))));
+const restoreOuterLookup = stubGuardLookup((h) => { throw resolverError("ENOTFOUND", h); });
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -106,7 +112,39 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
     const h = await hop(m);
     ok(h?.statusCode === 400 && h.message === UNRESOLVED_OR_PRIVATE, `hop ${m}: one 400, one sentence (${h?.statusCode} ${h?.message})`);
   }
-  for (const m of ["EAI_AGAIN", "ESERVFAIL", "ETIMEOUT", "ECONNREFUSED", "EREFUSED", "HANG"]) {
+  let lookupMode = "ENOTFOUND", lookups = 0;
+  const restoreLookup = stubGuardLookup((h, o) => {
+    lookups++;
+    if (!o?.all) throw new Error("the fallback must ask for every address");
+    if (lookupMode === "PUBLIC") return [{ address: "93.184.215.14", family: 4 }];
+    if (lookupMode === "MIXED") return [{ address: "93.184.215.14", family: 4 }, { address: "10.1.2.3", family: 4 }];
+    if (lookupMode === "PRIVATE_V6") return [{ address: "93.184.215.14", family: 4 }, { address: "fd00::1", family: 6 }];
+    if (lookupMode === "HANG") return new Promise(() => {});
+    throw resolverError(lookupMode);
+  });
+  // A name server that turns the query away at once (REFUSED, nothing on its
+  // port, a reset) is not the last word: the OS resolver answers once, and its
+  // every address is checked like a c-ares answer.
+  for (const m of ["ECONNREFUSED", "EREFUSED", "ECONNRESET"]) {
+    lookupMode = "PUBLIC"; lookups = 0;
+    const pub = await upfront(m);
+    ok(pub === null && lookups >= 1, `lookup ${m}: the OS resolver answers a public address and the URL passes (${pub?.statusCode ?? "passed"}, ${lookups} lookups)`);
+    for (const lm of ["MIXED", "PRIVATE_V6", "ENOTFOUND"]) {
+      lookupMode = lm;
+      const e = await upfront(m);
+      ok(e?.statusCode === 400 && e.message === UNRESOLVED_OR_PRIVATE, `lookup ${m}, OS resolver ${lm}: one 400, one sentence (${e?.statusCode} ${e?.message})`);
+    }
+    lookupMode = "MIXED";
+    const h = await hop(m);
+    ok(h?.statusCode === 400 && h.message === UNRESOLVED_OR_PRIVATE, `hop ${m}, OS resolver with a private answer beside a public one: refused at connect (${h?.statusCode})`);
+    for (const lm of ["EAI_AGAIN", "HANG"]) {
+      lookupMode = lm;
+      const e = await upfront(m);
+      ok(e?.statusCode === 503 && e.message === LOOKUP_UNAVAILABLE, `lookup ${m}, OS resolver ${lm}: retryable 503 within the bound (${e?.statusCode})`);
+    }
+  }
+  lookupMode = "PUBLIC"; lookups = 0;
+  for (const m of ["EAI_AGAIN", "ESERVFAIL", "ETIMEOUT", "HANG"]) {
     const e = await upfront(m);
     ok(e?.statusCode === 503 && e.message === LOOKUP_UNAVAILABLE && e.retryAfter === LOOKUP_RETRY_AFTER_S && e.attribution === "ours" && e.hint === "our-egress" && !/private/i.test(e.message),
       `lookup ${m}: retryable 503 with Retry-After, no address class (${e?.statusCode} ${e?.retryAfter} ${e?.message})`);
@@ -115,6 +153,8 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
     ok(h?.statusCode === 503 && h.message === LOOKUP_UNAVAILABLE && h.retryAfter === LOOKUP_RETRY_AFTER_S && !isSsrfBlock(h),
       `hop ${m}: retryable 503 (${h?.statusCode} ${h?.message})`);
   }
+  ok(lookups === 0, `a timeout or SERVFAIL never falls back to the OS resolver (${lookups} lookups)`);
+  restoreLookup();
   ok(isTransientLookupError({ code: "EAI_AGAIN" }) && !isTransientLookupError({ code: "ENOTFOUND" }), "isTransientLookupError reads the code");
   // The failure monitor and the sweeps count a 503 as a server-side failure, not a buyer error.
   const { toolClassOf } = await import("../src/tool-failure-monitor.js");
@@ -123,6 +163,16 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
   delete process.env.DNS_LOOKUP_TIMEOUT_MS;
   restoreResolver();
 }
+// 192.88.99.0/24, the deprecated 6to4 relay anycast block (RFC 7526), is
+// special-purpose space like the other reserved ranges, as itself and inside 6to4.
+for (const ip of ["192.88.99.1", "192.88.99.254", "2002:c058:6301::1", "::ffff:192.88.99.1"]) ok(isPrivateIp(ip), `isPrivateIp(${ip}) is true`);
+for (const ip of ["192.88.98.1", "192.88.100.1", "192.89.99.1"]) ok(!isPrivateIp(ip), `isPrivateIp(${ip}) is false (beside the relay block)`);
+{
+  let refused = null;
+  try { await assertPublicUrl(`http://192.88.99.1:${port}/`); } catch (e) { refused = e; }
+  ok(refused?.statusCode === 400, `assertPublicUrl refuses 192.88.99.1 (${refused?.statusCode ?? "allowed"})`);
+}
+restoreOuterResolver(); restoreOuterLookup();
 ok(hits === 0, `the internal server was never reached (${hits} hits)`);
 srv.close(); if (v6ok) v6.close();
 console.log(`\ntest-ssrf-literal-ip: ${pass} passed, ${fail} failed`);
