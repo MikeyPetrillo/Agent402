@@ -5,6 +5,11 @@
 //
 //   node scripts/test-redos-free-tier.js            (boots its own server, port 0)
 //   REDOS_BOUND_MS=250 REDOS_ONLY=duration,base58 node scripts/test-redos-free-tier.js
+//   CI_SHARD=2 CI_SHARDS=2 node scripts/test-redos-free-tier.js   (one CI shard)
+//
+// In CI the calls are split across the lane's shards by the round-robin rule
+// in scripts/lib/ci-shards.js (call i runs in shard i % N + 1); the screen and
+// plan-sketch timings below run in the last shard only. Unset, it runs all.
 //
 // HOW: the server boots in FREE_MODE under scripts/offline-egress-preload.js,
 // so every outbound call fails at once and a tool's remaining time is its own
@@ -37,6 +42,7 @@ import { fileURLToPath } from "node:url";
 import { FREE_TIER_SLUGS } from "../src/free-tier.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { oursMs, bound, OURS_READING } from "./lib/ours-clock.js";
+import { shardFromEnv, inShard } from "./lib/ci-shards.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BOUND_MS = Number(process.env.REDOS_BOUND_MS) || 250;
@@ -44,6 +50,7 @@ const BOUND_MS = Number(process.env.REDOS_BOUND_MS) || 250;
 const REPROBES = 3;
 const ONLY = process.env.REDOS_ONLY ? new Set(process.env.REDOS_ONLY.split(",").map((s) => s.trim())) : null;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const SHARD = shardFromEnv();
 
 // The corpus: long runs of the shapes that make a backtracking regex or a
 // per-character rescan go quadratic. Bodies carry 20,000 characters; query
@@ -123,7 +130,7 @@ const ok = (cond, msg) => {
 // on a host busy with other suites the wall clock read it near and past
 // 100 ms. The readings this guards against are the old ones, in seconds
 // (17 s for the digit reading below).
-{
+if (SHARD.shard === SHARD.total) {
   const LISTING = bound(Number(process.env.LISTING_BOUND_MS) || 100, 6);
   const LISTING_BOUND_MS = LISTING.ms;
   console.log(`# screen functions timed as ${OURS_READING}; ${LISTING.note}`);
@@ -195,7 +202,7 @@ const ok = (cond, msg) => {
 // The plan sketch reads the task text of /api/find, /api/route and the
 // connector's catalog.find before any limiter that counts work: its split
 // must stay linear in the 500 characters it reads.
-{
+if (SHARD.shard === SHARD.total) {
   const { splitSteps } = await import("../src/plan-sketch.js");
   // The split takes microseconds; the pattern it replaced took over 100 ms on
   // a run of spaces. Least of five on the ours clock, so a busy runner does
@@ -321,6 +328,11 @@ try {
   }
   const slugs = new Set(jobs.map((j) => j.slug));
   ok(slugs.size >= (ONLY ? 1 : 100), `${jobs.length} adversarial calls across ${slugs.size} tools and skills`);
+  // This shard's calls: the list above is built in a fixed order, so each
+  // call lands in exactly one shard.
+  const all = jobs.length;
+  jobs.splice(0, jobs.length, ...jobs.filter((_, i) => inShard(i, SHARD.shard, SHARD.total)));
+  if (SHARD.total > 1) ok(jobs.length > 0, `shard ${SHARD.shard}/${SHARD.total} runs ${jobs.length} of the ${all} calls`);
 
   // Baseline: a trivial call must leave /health well under the bound, or the
   // bound is measuring the runner rather than the tools.
