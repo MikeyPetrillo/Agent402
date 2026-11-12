@@ -7,14 +7,14 @@
 # Dockerfile USER. See the Security-Model wiki page for the full checklist.
 #
 # Base image pinned by DIGEST for reproducible builds and CVE traceability
-# (audit: "mutable deployment artifacts"). node:22-slim = 22.23.4-slim, the
+# (audit: "mutable deployment artifacts"). node:22-slim = 22.23.5-slim, the
 # October 2026 security release (re-pinned 2026-10-21); the previous pin was
 # 22.23.3-slim from 2026-09-24. All four Dockerfiles share this digest.
 # Re-pin after a deliberate base bump with:
 #   docker pull node:22-slim
 #   docker inspect --format='{{index .RepoDigests 0}}' node:22-slim
 # (or, without docker: registry.hub.docker.com/v2/repositories/library/node/tags/22-slim -> .digest)
-FROM node:22.23.4-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+FROM node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 
 WORKDIR /app
 ENV NODE_ENV=production

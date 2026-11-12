@@ -6,6 +6,11 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-11 (Node security release)
+Server:
+- The server, facilitator, worker and MCP images run on Node 22.23.5, the
+  November 2026 Node.js security release.
+
 ### 2026-11-11 (buyer scorecard, trust page and one story)
 Site:
 - /scorecard and GET /api/scorecard publish monthly buyer counts: outside
