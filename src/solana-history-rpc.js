@@ -300,13 +300,18 @@ export function historyAwareRpc(other, opts = {}) {
   return (method, params) => (method === "getTransaction" ? solanaHistoryRead(method, params, opts) : other(method, params));
 }
 
+// The window must hold this many outcomes before the word reads failing.
+const FAILING_MIN_READS = 5;
+
 /**
  * Counters for /api/gateway-status. Public: one word. Operator: per-lane
  * counts, reads per caller and why the keyed lane got each one, the cache.
- *   idle      no history read since restart
+ *   idle      no history read since restart, or fewer than FAILING_MIN_READS recent
+ *             reads where most failed (too few to call failing)
  *   publics   public lanes served at least half of the recent reads
  *   fallback  the keyed lane served most recent reads (a keyed-first caller counts here)
- *   failing   most recent reads failed on every lane
+ *   failing   most recent reads failed on every lane, over at least
+ *             FAILING_MIN_READS reads (one failure after a restart never pages)
  */
 export function solanaHistoryStatus({ full = false } = {}) {
   const n = recent.length;
@@ -314,7 +319,7 @@ export function solanaHistoryStatus({ full = false } = {}) {
   if (n) {
     const pub = recent.filter((o) => o === "public").length;
     const none = recent.filter((o) => o === "none").length;
-    status = none * 2 > n ? "failing" : pub * 2 >= n ? "publics" : "fallback";
+    status = none * 2 > n ? (n >= FAILING_MIN_READS ? "failing" : "idle") : pub * 2 >= n ? "publics" : "fallback";
   }
   if (!full) return { status };
   const lanes = {};

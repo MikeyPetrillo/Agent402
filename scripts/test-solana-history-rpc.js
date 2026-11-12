@@ -310,6 +310,17 @@ await new Promise((r) => setTimeout(r, 1500));
   ok(Object.keys(p).join(",") === "status", `the public view is the status word only (${JSON.stringify(p)})`);
   reset();
   ok(H.solanaHistoryStatus().status === "idle", "idle before any read");
+  // One failed read right after a restart is too few to page on: the word
+  // stays idle until the window holds the minimum number of outcomes.
+  pub.mode = "error"; keyed.mode = "error";
+  const failOnce = async (i) => { try { await H.solanaHistoryRead("getTransaction", [`sig${20 + i}`, TXARGS], opts); } catch { /* counted */ } };
+  await failOnce(0);
+  ok(H.solanaHistoryStatus().status === "idle", `one failed read alone reads idle, not failing (${H.solanaHistoryStatus().status})`);
+  for (let i = 1; i < 4; i++) await failOnce(i);
+  ok(H.solanaHistoryStatus().status === "idle", `four failed reads still read idle (${H.solanaHistoryStatus().status})`);
+  await failOnce(4);
+  ok(H.solanaHistoryStatus().status === "failing", `five failed reads read failing (${H.solanaHistoryStatus().status})`);
+  reset();
 }
 
 // ---- 10. a transaction newer than the version asked for ----------------------
