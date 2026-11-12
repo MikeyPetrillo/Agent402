@@ -15,7 +15,9 @@ Payments:
   is tried.
 - The proof that an EVM authorization went unused reads chain time, not the
   host clock.
-- Bazaar service names end on a whole phrase and stay distinct per tier.
+- Bazaar service names end on a whole phrase and stay distinct per tier; the
+  OpenAI-compatible image and transcription routes are named "Image gen" and
+  "Transcribe".
 Server:
 - Outbound tools resolve hostnames without the shared thread pool, so a name
   that never answers no longer delays other lookups; every resolved address is

@@ -4842,7 +4842,7 @@ export const LLM_GATEWAY_TOOLS = [
   },
   {
     route: "POST /v1/images/generations",
-    name: "Image generation (OpenAI-compatible)",
+    name: "Image gen (OpenAI-compatible)",
     slug: "v1-images", aliases: ["image-generation-openai-compatible", "image-generation"],
     category: "llm",
     price: "$0.080",

@@ -8,7 +8,7 @@ const ENTRIES = [
       "Payments: a Solana payment is keyed on its transfer authority when other transfer accounts sit in a lookup table, and x402 v1 Solana payments carry a payer key.",
       "Payments: a router seller that answers 200 without taking payment and returns no answer is treated as a failed upstream: the buyer is not charged and the next seller is tried.",
       "Payments: the proof that an EVM authorization went unused reads chain time, not the host clock.",
-      "Payments: Bazaar service names end on a whole phrase and stay distinct per tier.",
+      "Payments: Bazaar service names end on a whole phrase and stay distinct per tier; the OpenAI-compatible image and transcription routes are named \"Image gen\" and \"Transcribe\".",
       "Server: outbound tools resolve hostnames without the shared thread pool, so a name that never answers no longer delays other lookups; every resolved address is checked before a fetch.",
       "Server: the LLM tiers advertise the successors of the OpenAI models retiring 2026-12-11; the retiring ids are still accepted.",
       "Server: the insider, LinkedIn article and IPO reports fence the filer-written text they read.",
