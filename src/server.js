@@ -3106,7 +3106,8 @@ if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerRea
 // sent, by how each call ended, and the budget refusals (counts only;
 // src/sql-query-stats.js; also at /__operator/onchain-sql-queries.json). xSearchAuthors: per UTC day, how many distinct
 // authors and posts x-search-recent calls that answered a final 200 returned,
-// bucketed (counts only; src/x-search-stats.js). transcriptionUnmeasured:
+// bucketed, plus the day's author reads on every billed page whatever the
+// answer (counts only; src/x-search-stats.js). transcriptionUnmeasured:
 // transcription files this process could not measure by decoding since boot
 // (a busy or slow decode, no ffmpeg), which the cap then read from the
 // declared length or the byte floor (src/tools/stt-kit.js; a count only).

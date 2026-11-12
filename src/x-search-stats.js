@@ -31,6 +31,7 @@
 // answer path never waits on the store.
 import { createJsonDocument } from "./json-document.js";
 import { withLoopDeadline } from "./loop-deadline.js";
+import { randomUUID } from "node:crypto";
 
 export const X_SEARCH_STATS_DOC = "x-search-author-stats";
 export const X_SEARCH_STATS_KEEP_DAYS = 120;
@@ -58,9 +59,13 @@ let timer = null;
 let flushing = null;
 // The batch a flush is writing: out of `pending`, maybe not yet in the row.
 let inflightBatch = null;
-// Bumped by every flush that lands, so a status read that overlapped one knows
-// it may predate the write.
-let flushEpoch = 0;
+let inflightId = null;
+// Every flush tags the row with its batch id (the row keeps the last
+// LANDED_KEEP ids), so a status read knows exactly which of this process's
+// batches it already holds: none is counted twice, and none is dropped by a
+// read that predates its write.
+const LANDED_KEEP = 64;
+const landedLocal = new Map(); // batch id -> the batch, for batches this process landed recently
 
 /** The bucket a count falls in. */
 export function bucketOf(n) {
@@ -139,25 +144,31 @@ export async function flushXSearchStats({ now = Date.now() } = {}) {
   const batch = pending;
   if (!Object.keys(batch).length) return { ok: true, flushed: false };
   pending = {};
+  const id = randomUUID();
   inflightBatch = batch;
+  inflightId = id;
   flushing = (async () => {
     try {
       const r = await docOf().update((b) => {
         const x = bodyOf(b);
         mergeInto(x.days, batch);
         prune(x.days, now);
+        x.landed = [...(Array.isArray(x.landed) ? x.landed : []), id].slice(-LANDED_KEEP);
         return x;
       }, { fallback: null });
       if (!r?.ok) { pending = mergeInto(pending, batch); return { ok: false }; }
-      // The cached stored day now holds this batch too, so the word does not
-      // drop the flushed reads until its next store read.
-      flushEpoch++;
-      if (storedToday.ok && batch[storedToday.day]) storedToday = { ...storedToday, reads: storedToday.reads + readsOf(batch[storedToday.day]) };
+      landedLocal.set(id, batch);
+      while (landedLocal.size > LANDED_KEEP) landedLocal.delete(landedLocal.keys().next().value);
+      // The cached stored day now holds this batch too, unless the read it came
+      // from already did.
+      if (storedToday.ok && !storedToday.landed.has(id)) {
+        storedToday = { ...storedToday, reads: storedToday.reads + readsOf(batch[storedToday.day]), landed: new Set([...storedToday.landed, id]) };
+      }
       return { ok: true, flushed: true };
     } catch {
       pending = mergeInto(pending, batch);
       return { ok: false };
-    } finally { inflightBatch = null; flushing = null; }
+    } finally { inflightBatch = null; inflightId = null; flushing = null; }
   })();
   return flushing;
 }
@@ -202,25 +213,27 @@ const STATUS_READ_TTL_MS = 30_000;
 // The longest a status read waits on the store (loop time); past it the word
 // reads as a failed read would.
 export const X_SEARCH_STATUS_READ_MS = 400;
-let storedToday = { day: null, reads: 0, at: 0, ok: false };
+let storedToday = { day: null, reads: 0, at: 0, ok: false, landed: new Set() };
 let statusRead = null;
 const readsOf = (day) => LANES.reduce((a, l) => a + (Number(day?.[l]?.authorReads) || 0), 0);
 
 // One store read shared by every concurrent status request, bounded by
-// X_SEARCH_STATUS_READ_MS. A read that overlapped a landed flush may predate
-// its write, so it keeps the larger of the two same-day figures (a stored day
-// only grows); otherwise the fresh read replaces the cached one.
+// X_SEARCH_STATUS_READ_MS. A batch this process landed that the row does not
+// list yet (the read predates its write) is added back from memory.
 function refreshStoredToday(d, now) {
   if (statusRead) return statusRead;
-  const epoch = flushEpoch;
   statusRead = withLoopDeadline(Promise.resolve().then(() => docOf().read({ quiet: true })), X_SEARCH_STATUS_READ_MS, null)
     .catch(() => null)
     .then((r) => {
       statusRead = null;
-      if (!r?.ok) { storedToday = { day: d, reads: 0, at: now, ok: false }; return; }
-      const fresh = readsOf(bodyOf(r.body).days[d]);
-      const overlapped = epoch !== flushEpoch && storedToday.ok && storedToday.day === d;
-      storedToday = { day: d, reads: overlapped ? Math.max(fresh, storedToday.reads) : fresh, at: now, ok: true };
+      if (!r?.ok) { storedToday = { day: d, reads: 0, at: now, ok: false, landed: new Set() }; return; }
+      const body = bodyOf(r.body);
+      const landed = new Set(Array.isArray(body.landed) ? body.landed : []);
+      let reads = readsOf(body.days[d]);
+      for (const [id, batch] of landedLocal) {
+        if (!landed.has(id)) { reads += readsOf(batch[d]); landed.add(id); }
+      }
+      storedToday = { day: d, reads, at: now, ok: true, landed };
     });
   return statusRead;
 }
@@ -237,13 +250,14 @@ export async function xSearchAuthorsStatus({ now = Date.now(), full = false } = 
   if (storedToday.day !== d || now - storedToday.at >= STATUS_READ_TTL_MS) await refreshStoredToday(d, now);
   // A batch being written counts too (the alarm errs toward alert while a
   // write is in flight), so a flush never dips the figure.
-  const reads = (storedToday.day === d ? storedToday.reads : 0) + readsOf(pending[d]) + readsOf(inflightBatch?.[d]);
+  const inflight = inflightId && !(storedToday.ok && storedToday.landed.has(inflightId)) ? readsOf(inflightBatch?.[d]) : 0;
+  const reads = (storedToday.day === d ? storedToday.reads : 0) + readsOf(pending[d]) + inflight;
   const mark = xSearchAuthorDailyAlert();
   const status = reads > mark ? "alert" : storedToday.ok ? "ok" : "unknown";
   return full ? { status, authorReadsToday: reads, alertAbove: mark, scope: storedToday.ok ? "stored" : "unread" } : { status };
 }
 
 /** Test seam. */
-export function _resetXSearchStats() { pending = {}; inflightBatch = null; statusRead = null; if (timer) { clearInterval(timer); timer = null; } doc = null; storedToday = { day: null, reads: 0, at: 0, ok: false }; }
+export function _resetXSearchStats() { pending = {}; inflightBatch = null; inflightId = null; landedLocal.clear(); statusRead = null; if (timer) { clearInterval(timer); timer = null; } doc = null; storedToday = { day: null, reads: 0, at: 0, ok: false, landed: new Set() }; }
 /** Test seam: the document the module reads and writes. */
 export function _xSearchStatsDoc() { return docOf(); }

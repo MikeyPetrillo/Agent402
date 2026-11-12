@@ -238,6 +238,47 @@ try {
     f = await overlapping;
     d2.read = realRead2;
     ok(f.status === "alert" && f.authorReadsToday === 510, `a status read from before a flush landed keeps the flushed reads (${JSON.stringify(f)})`);
+    // A status read that lands after the flush's write committed but before the
+    // flush returns already holds the batch: it is counted once, not twice.
+    const day3 = day2 + 86_400_000;
+    stats._resetXSearchStats();
+    stats.noteXSearchAuthorReads({ authors: 470, now: day3 });
+    await stats.flushXSearchStats({ now: day3 });
+    stats._resetXSearchStats();
+    ok((await stats.xSearchAuthorsStatus({ now: day3, full: true })).authorReadsToday === 470, "the third day starts at 470 stored");
+    stats.noteXSearchAuthorReads({ authors: 20, now: day3 });
+    const d3 = stats._xSearchStatsDoc();
+    const realUpdate3 = d3.update.bind(d3);
+    let midRead;
+    d3.update = async (...a) => { const r = await realUpdate3(...a); midRead = await stats.xSearchAuthorsStatus({ now: day3 + 40_000, full: true }); return r; };
+    await stats.flushXSearchStats({ now: day3 });
+    d3.update = realUpdate3;
+    ok(midRead && midRead.authorReadsToday === 490 && midRead.status === "ok", `a read between the write and the flush's return counts the batch once (${JSON.stringify(midRead)})`);
+    f = await stats.xSearchAuthorsStatus({ now: day3 + 41_000, full: true });
+    ok(f.authorReadsToday === 490 && f.status === "ok", `after that flush returns the day is not counted twice (${JSON.stringify(f)})`);
+    // A cold cache (first read after boot) whose read predates this process's
+    // landed write still counts the landed batch.
+    const day4 = day3 + 86_400_000;
+    stats._resetXSearchStats();
+    stats.noteXSearchAuthorReads({ authors: 470, now: day4 });
+    await stats.flushXSearchStats({ now: day4 });
+    stats._resetXSearchStats();
+    stats.noteXSearchAuthorReads({ authors: 20, now: day4 });
+    const d4 = stats._xSearchStatsDoc();
+    const realRead4 = d4.read.bind(d4);
+    let releaseRead4, snap4;
+    const gate4 = new Promise((r) => { releaseRead4 = r; });
+    const taken4 = new Promise((r) => { snap4 = r; });
+    d4.read = async (...a) => { const before = await realRead4(...a); snap4(); await gate4; return before; };
+    process.env.X_SEARCH_AUTHOR_DAILY_ALERT = "480";
+    const cold = stats.xSearchAuthorsStatus({ now: day4 + 1_000, full: true });
+    await taken4;
+    await stats.flushXSearchStats({ now: day4 });
+    releaseRead4();
+    f = await cold;
+    d4.read = realRead4;
+    ok(f.authorReadsToday === 490 && f.status === "alert", `a cold read that predates a landed write still counts it (${JSON.stringify(f)})`);
+    process.env.X_SEARCH_AUTHOR_DAILY_ALERT = "500";
     delete process.env.X_SEARCH_AUTHOR_DAILY_ALERT;
   }
 
@@ -247,7 +288,7 @@ try {
   await stats.flushXSearchStats();
   const body = JSON.parse(readFileSync(STATS_FILE, "utf8"));
   const days = Object.keys((body.body ?? body).days || {});
-  ok(days.length === 3 && !days.includes(new Date(old).toISOString().slice(0, 10)), `a day past the keep window is pruned (${days.join(", ")})`);
+  ok(days.length === 5 && !days.includes(new Date(old).toISOString().slice(0, 10)), `a day past the keep window is pruned (${days.join(", ")})`);
 } finally {
   server.close();
   globalThis.fetch = realFetch;

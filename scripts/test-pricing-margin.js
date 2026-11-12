@@ -420,6 +420,14 @@ function xMarginVerdict(slug, { usd, usdWithoutExpansions }, price) {
   }
   const line = xExceptionLine("x-search-recent", "2026-11-12");
   ok(/^ok - [a-z0-9-]+: owner exception applies \(\d{4}-\d{2}-\d{2}\)$/.test(line), "the exception prints one neutral line: slug and decision date, no verdict");
+  // This file is run in public CI logs: no print in it may carry a cost
+  // verdict (outside, above or below a price, a margin figure).
+  {
+    const own = (await import("node:fs")).readFileSync(new URL(import.meta.url), "utf8");
+    const prints = own.split("\n").filter((l) => /console\.(log|info|warn|error)\(/.test(l));
+    const leaky = prints.filter((l) => /outside the margin|above the list|below (the )?(list|cost)|absorb|\bloses?\b/i.test(l));
+    ok(leaky.length === 0, `no print in this file states a cost verdict${leaky.length ? ": " + leaky.map((l) => l.trim().slice(0, 80)).join(" | ") : ""}`);
+  }
   ok(xMarginVerdict("x-search-recent", under, 1).within === true && xMarginVerdict("x-search-recent", { usd: 2, usdWithoutExpansions: 2 }, 1).within === false, "x-search-recent: held to the margin on its reads without the author reads");
 }
 console.log("\n# X data tools: worst-case reads, expansions included, vs price");
