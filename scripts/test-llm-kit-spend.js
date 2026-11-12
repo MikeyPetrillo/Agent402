@@ -104,6 +104,32 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
   // o3 and o3-pro shut down 2026-12-11: served as themselves until then, then by the tier default.
   const o3Before = Date.parse("2026-12-10T23:59:59Z"), o3On = Date.parse("2026-12-11T00:00:00Z");
   ok(["o3", "o3-pro", "o3-2025-04-16"].every((k) => retiredSuccessor(k, o3Before) === null && retiredSuccessor(k, o3On) === "gpt-5.6-terra"), "o3, o3-pro and a dated o3 snapshot are served as themselves until 2026-12-11, then by gpt-5.6-terra");
+
+  // llm-premium still admits the o3 family by name (the description, schema and
+  // wiki say so): the admission is date-independent, and a call today reaches
+  // upstream instead of answering 400.
+  const { tierAdmits, admittedFamilies } = await import("../src/tools/llm-kit.js");
+  const premium = LLM_TOOLS.find((t) => t.slug === "llm-premium");
+  const o3Ids = ["o3", "o3-pro", "o3-2025-04-16", "o3-pro-2025-06-10"];
+  ok(o3Ids.every((k) => tierAdmits(k, "llm-premium")), "llm-premium admits o3, o3-pro and dated o3 snapshots by name");
+  ok(!tierAdmits("o3", "llm") && !tierAdmits("o3", "llm-pro"), "the o3 family is kept on llm-premium only");
+  for (const k of o3Ids) {
+    const r = await premium.handler({ model: k, messages: m });
+    ok(r.choices[0].message.content === "hi" && sent.at(-1).model === (retiredSuccessor(k) || k), `llm-premium serves ${k} (no 400)`);
+  }
+  for (const k of ["o3x", "o33", "gpt-9-nonsense", "o3pro"]) {
+    ok(!tierAdmits(k, "llm-premium"), `control: ${k} is not admitted`);
+    await assert.rejects(premium.handler({ model: k, messages: m }), (e) => e.statusCode === 400 && /not allowed/.test(e.message));
+    n++;
+  }
+  // The refusal names every family the validator admits, kept families included.
+  const fams = admittedFamilies("llm-premium");
+  ok(fams.includes("o3") && fams.includes("gpt-5.6-terra") && fams.includes("o3-mini"), "admittedFamilies lists the tier's prefixes and its kept o3 family");
+  await assert.rejects(premium.handler({ model: "gpt-9-nonsense", messages: m }), (e) => {
+    const listed = (e.message.match(/Allowed prefixes: (.*)$/) || [])[1]?.split(", ") || [];
+    return fams.every((f) => listed.includes(f)) && listed.length === fams.length && fams.every((f) => tierAdmits(f, "llm-premium"));
+  });
+  n++;
 }
 
 console.log(`test-llm-kit-spend: ${n} assertions OK`);

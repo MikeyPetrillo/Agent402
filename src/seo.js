@@ -756,17 +756,14 @@ Base URL: ${baseUrl}
 
 The full text, with every skill pack and every tool by category: ${baseUrl}/llms-full.txt. Glossary: ${baseUrl}/glossary. The category explained: ${baseUrl}/agentic-finance. The catalog with prices, as JSON: ${baseUrl}/api/pricing.
 
-${frontDoorMarkdown(catalog, baseUrl)}
-
-${mppMethodsProse()}
-
-${mppFlagshipLlmsBlock(catalog, { compact: true })}
-
-${gatewayNanopaymentsLine()}
-
-${sections.join("\n\n")}
-
-${identity}
+${[
+    frontDoorMarkdown(catalog, baseUrl),
+    mppMethodsProse(),
+    mppFlagshipLlmsBlock(catalog, { compact: true }),
+    gatewayNanopaymentsLine(),
+    ...sections,
+    identity,
+  ].map((b) => String(b || "").replace(/^\n+|\n+$/g, "")).filter(Boolean).join("\n\n")}
 `;
 }
 

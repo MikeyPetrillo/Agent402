@@ -251,7 +251,7 @@ so every claim below is verifiable in code.</p>
   authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later, at most ${settledValidityHoldText()} after the call; for a grant
   that was not settled, a forgiven hang-up${allowanceOn ? " or a served first-call allowance" : ""}, whose authorization is still live
   on chain, until the authorization's own validBefore plus ${Math.round(CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes, which can be long when the client
-  signs a long validity window), the signers of a Solana payment (stored only
+  signs a long validity window), the paying wallet of a Solana payment (the transfer's authority) or its signers (stored only
   as a keyed hash), the source address of a Tempo credential, a Tempo pull credential answered 402 after its
   broadcast failed (kept with its route, amount and payer until the check for a late landing ends: minutes,
   at most 24 hours while the chain cannot be read, so a transfer that lands after the 402 is booked as owed),

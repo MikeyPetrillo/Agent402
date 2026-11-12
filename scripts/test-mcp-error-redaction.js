@@ -10,6 +10,11 @@
 //  - a transport failure on tools/call (the tool-result text) and on another
 //    method (the JSON-RPC error message) is scrubbed the same way;
 //  - the revenue snapshot's failure body is scrubbed;
+//  - the shapes a secret reaches text in without matching it byte for byte:
+//    broken across lines (inside its known prefix too), cut short by the
+//    upstream, a hex key in the other case or without 0x, an unconfigured
+//    64-hex run that is bare or named as a key; a 0x transaction hash, a named
+//    digest and ordinary text stay readable;
 //  - every read of an error's message in src/mcp-http.js that can reach an
 //    answer goes through mcpErrorText (a source scan, so a new answer site
 //    that quotes err.message raw fails here).
@@ -27,6 +32,9 @@ process.env.FAKE_UPSTREAM_API_KEY = FAKE_KEY;
 const PG_PASSWORD = "hunter2pgSecretPass";
 const PG_URL = `postgres://agent:${PG_PASSWORD}@db.internal.example:5432/state`;
 const LEAKY = `upstream refused the call (key ${FAKE_KEY}) while reading ${PG_URL}`;
+// A configured hex signing key (mixed case, with 0x).
+const HEX_KEY = "AbCdEf0123456789".repeat(4);
+process.env.FAKE_SIGNER_PRIVATE_KEY = `0x${HEX_KEY}`;
 
 import express from "express";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
@@ -128,6 +136,52 @@ try {
   await api.operatorHandler({ headers: {} }, res2);
   ok(sent2.status === 500, "the operator revenue view answers 500 on a failed snapshot");
   clean(sent2.body?.detail, "revenue operator failure");
+}
+
+// ------------------------------------------- shapes that are not byte-equal
+{
+  const { mcpErrorText } = await import("../src/mcp-http.js");
+  const hexOf = (pair) => pair.repeat(32);
+  const OTHER = hexOf("9e"); // an unconfigured 64-hex run
+  const gone = (text, secretBits, where) => {
+    const t = mcpErrorText(new Error(text));
+    ok(t.includes("[redacted]") && secretBits.every((b) => !t.includes(b)), `${where}: redacted (got ${JSON.stringify(t.slice(0, 160))})`);
+    return t;
+  };
+  const kept = (text, where) => {
+    const t = mcpErrorText(new Error(text));
+    ok(t === text, `${where}: kept as is (got ${JSON.stringify(t.slice(0, 160))})`);
+  };
+  // Broken across lines: mid-value with indentation, CRLF, and inside the sk- prefix.
+  gone(`upstream said: ${FAKE_KEY.slice(0, 19)}\n    ${FAKE_KEY.slice(19)} is invalid`, [FAKE_KEY.slice(0, 19), FAKE_KEY.slice(19)], "a key split across lines");
+  gone(`bad key ${FAKE_KEY.slice(0, 25)}\r\n${FAKE_KEY.slice(25)}`, [FAKE_KEY.slice(0, 25), FAKE_KEY.slice(25)], "a key split by CRLF");
+  gone(`bad key s\nk${FAKE_KEY.slice(2)}`, [FAKE_KEY.slice(2)], "a key split inside its known prefix");
+  // Cut short by the upstream.
+  gone(`Incorrect API key provided: ${FAKE_KEY.slice(0, 22)}... You can find your key in the dashboard`, [FAKE_KEY.slice(0, 22)], "a key the upstream truncated with ...");
+  gone(`key "${FAKE_KEY.slice(0, 18)}"`, [FAKE_KEY.slice(0, 18)], "a key truncated before a quote");
+  gone(`key ${FAKE_KEY.slice(0, 30)}`, [FAKE_KEY.slice(0, 30)], "a key truncated at the end of the text");
+  // The configured hex key in the other case and without 0x.
+  gone(`signer 0x${HEX_KEY.toLowerCase()} rejected`, [HEX_KEY.toLowerCase()], "the configured hex key lowercased");
+  gone(`signer 0x${HEX_KEY.toUpperCase()} rejected`, [HEX_KEY.toUpperCase()], "the configured hex key uppercased");
+  gone(`signer ${HEX_KEY.toLowerCase()} rejected`, [HEX_KEY.toLowerCase()], "the configured hex key with 0x stripped");
+  gone(`signer 0x${HEX_KEY.toLowerCase().slice(0, 30)}\n${HEX_KEY.toLowerCase().slice(30)} rejected`, [HEX_KEY.toLowerCase().slice(0, 30), HEX_KEY.toLowerCase().slice(30)], "the configured hex key lowercased and split across lines");
+  // Unconfigured 64-hex runs: bare, or named as a key, in any case.
+  gone(`could not sign with ${OTHER}`, [OTHER], "a bare 64-hex run");
+  gone(`could not sign with ${OTHER.toUpperCase()}`, [OTHER.toUpperCase()], "a bare uppercase 64-hex run");
+  gone(`PRIVATE_KEY=0x${OTHER} is malformed`, [OTHER], "a 0x run named as a private key");
+  gone(`{"secret":"0x${OTHER.toUpperCase()}"}`, [OTHER.toUpperCase()], "a 0x run named as a secret");
+  gone(`mnemonic seed 0x${OTHER}`, [OTHER], "a 0x run named as a seed");
+  gone(`private key: 0x${OTHER.slice(0, 40)}\n  ${OTHER.slice(40)}`, [OTHER.slice(0, 40), OTHER.slice(40)], "a named 0x key split across lines");
+  // Controls: a transaction hash, a named digest, longer hex and plain text stay.
+  kept(`settle failed for 0x${OTHER}`, "a 0x transaction hash");
+  kept(`settle failed for 0x${OTHER.toUpperCase()}: execution reverted`, "an uppercase 0x transaction hash");
+  kept(`sha256 ${OTHER} does not match`, "a bare digest named sha256");
+  kept(`txid: ${OTHER} not found`, "a bare txid");
+  kept(`signature 0x${hexOf("ab")}${hexOf("cd")}1b is invalid`, "a 65-byte signature");
+  kept(`address 0x${"ab".repeat(20)} has no funds`, "an address");
+  kept("upstream refused the call: model not found\nRetry with another model", "ordinary text across lines");
+  kept(`the key ${FAKE_KEY.slice(0, 10)} prefix is fine`, "a run shorter than a cut-short key");
+  kept("Invalid input: sk-test-somethingelse is not a model", "text sharing only the key's public prefix");
 }
 
 // --------------------------------------------------------------- source scan
