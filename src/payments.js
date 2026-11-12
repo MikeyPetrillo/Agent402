@@ -949,12 +949,31 @@ export function x402ServiceName(raw) {
   // to the last connective, when what is left still names the tool.
   const next = clean.slice(cut.length).trimStart();
   if (cut && !/^[(\-,:;/+[{]/.test(next)) {
-    // A clause the cut entered after a comma ("LinkedIn article, ready" of
-    // "..., ready to publish") is dropped back to the comma; otherwise the
-    // cut backs off to its last connective.
+    // A qualifier the cut entered after a comma ("LinkedIn article, ready" of
+    // "..., ready to publish") is dropped back to the comma. A list the cut
+    // entered ("dossier, insider flow and institutional holders") is never
+    // cut to its first item, which would read as the whole product: it keeps
+    // the whole items that fit when that is two or more, else the label
+    // before a colon ("Ticker pack"), else the word cut stands. Otherwise
+    // the cut backs off to its last connective.
     const comma = cut.lastIndexOf(",");
     const m = /^(.*\S)\s+(?:with|for|on|of|to|in|by)\s/i.exec(cut);
-    if (comma > 0 && !/[(\[{]/.test(cut.slice(comma))) cut = tidy(cut.slice(0, comma));
+    if (comma > 0 && !/[(\[{]/.test(cut.slice(comma))) {
+      const bracket = clean.search(/[([{]/);
+      const lead = bracket > 0 ? clean.slice(0, bracket).trim() : clean;
+      const colon = lead.lastIndexOf(":", comma);
+      const listStart = colon >= 0 ? colon + 1 : 0;
+      const isList = comma < lead.length && /,|\s(?:and|or|&)\s/i.test(lead.slice(comma + 1));
+      if (!isList) cut = tidy(cut.slice(0, comma));
+      else {
+        const items = lead.slice(listStart).split(/,\s*|\s+(?:and|or|&)\s+/i).map((s) => s.trim()).filter(Boolean);
+        const head = lead.slice(0, listStart);
+        let kept = 0;
+        while (kept < items.length && `${head}${head ? " " : ""}${items.slice(0, kept + 1).join(", ")}`.trim().length <= SERVICE_NAME_MAX) kept++;
+        if (kept >= 2) cut = `${head}${head ? " " : ""}${items.slice(0, kept).join(", ")}`.trim();
+        else if (colon > 0) cut = tidy(lead.slice(0, colon));
+      }
+    }
     else if (m && m[1].length >= 16 && !/[(\[{]/.test(cut.slice(m[1].length))) cut = tidy(m[1]);
   }
   return cut || hard.trim();

@@ -132,6 +132,15 @@ ok(live.length > 0, "catalog descriptions readable");
   // A cut that enters a clause after a comma drops back to the comma.
   const li = "LinkedIn article, ready to publish (research + copy + sized images)";
   ok(x402ServiceName(li) === "LinkedIn article", `a cut inside a comma clause ends on the phrase before it (got ${JSON.stringify(x402ServiceName(li))})`);
+  // A list is never cut to its first item, which would read as the whole
+  // product: two or more whole items, else the label before a colon.
+  for (const [raw, want] of [
+    ["Ticker pack: dossier, insider flow and institutional holders", "Ticker pack"],
+    ["Bundle: quotes, bars, trades and corporate actions", "Bundle: quotes, bars, trades"],
+  ]) {
+    const got = x402ServiceName(raw);
+    ok(got === want && got.length <= SERVICE_NAME_MAX, `a list keeps whole items or its label: ${JSON.stringify(raw)} -> ${JSON.stringify(want)} (got ${JSON.stringify(got)})`);
+  }
   // Across the catalog: a name that fits whole is kept whole, every word of a
   // serviceName is a whole word of its own name, and no two names share one.
   const wordSet = (t) => new Set(String(t).replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/[()[\]{},;:+]/g, " ").split(/\s+/).filter(Boolean));
