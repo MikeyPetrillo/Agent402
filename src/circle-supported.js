@@ -74,7 +74,7 @@ export function usdcKindsFromSupported(data, profiles, { uptoNetworks = [] } = {
   }
   const kinds = profiles.map((p) => found.get(p.caip2)).filter(Boolean);
   const upto = new Map();
-  for (const k of uptoNetworks.length ? data.kinds : []) {
+  for (const k of data.kinds) {
     if (k.scheme !== "upto") continue;
     const p = profiles.find((x) => x.caip2 === k.network);
     if (!p || !uptoNetworks.includes(p.caip2) || upto.has(p.caip2) || !found.has(p.caip2)) continue;
