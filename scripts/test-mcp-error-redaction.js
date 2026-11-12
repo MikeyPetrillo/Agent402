@@ -182,6 +182,36 @@ try {
   kept("upstream refused the call: model not found\nRetry with another model", "ordinary text across lines");
   kept(`the key ${FAKE_KEY.slice(0, 10)} prefix is fine`, "a run shorter than a cut-short key");
   kept("Invalid input: sk-test-somethingelse is not a model", "text sharing only the key's public prefix");
+  // A run named as a hash by the word just before it stays; a key word only
+  // counts when it names the run itself, and a nearer hash name wins.
+  kept(`{"txHash":"${OTHER}"}`, "a bare run named by a camelCase hash field");
+  kept(`{"tx_hash":"${OTHER}"}`, "a bare run named by a snake_case hash field");
+  kept(`blockHash ${OTHER} unknown`, "a bare run named as a block hash");
+  kept(`block ${OTHER} not found`, "a bare run named as a block");
+  kept(`idempotency key reused; settled 0x${OTHER}`, "a 0x hash after a sentence that mentions a key");
+  kept(`{"privateKeyHash":"${OTHER}"}`, "a run whose name ends in hash after a key word");
+  // Controls: a run the name before it calls a key is still redacted.
+  gone(`private key: ${OTHER}`, [OTHER], "a bare run named as a private key");
+  gone(`{"privateKey":"${OTHER}"}`, [OTHER], "a bare run in a camelCase privateKey field");
+  gone(`{"privateKey":"0x${OTHER}"}`, [OTHER], "a 0x run in a camelCase privateKey field");
+  gone(`PRIVATE_KEY_HEX=0x${OTHER}`, [OTHER], "a 0x run named by a key name with a suffix");
+}
+
+// ------------------------------------------- a cut-short key, many times over
+{
+  const { redactSecrets } = await import("../src/tools/redact.js");
+  // A megabyte holding the configured key's first characters some 55k times:
+  // one pass over the text, not one rebuild of it per match.
+  const head = FAKE_KEY.slice(0, 19);
+  const big = `${head} `.repeat(Math.ceil((1 << 20) / (head.length + 1)));
+  redactSecrets("warm up"); // the secret list is built once, outside the timing
+  const t0 = performance.now();
+  const out = redactSecrets(big);
+  const ms = performance.now() - t0;
+  ok(!out.includes(head) && out.startsWith("[redacted] [redacted]"), "every cut-short copy of the key in a megabyte is redacted");
+  // Runs in about 20 ms here; the bound leaves room for a loaded CI host and
+  // still fails a per-match rebuild (seconds on this input).
+  ok(ms < 1000, `a megabyte of cut-short keys is redacted in under a second (took ${ms.toFixed(0)} ms)`);
 }
 
 // --------------------------------------------------------------- source scan

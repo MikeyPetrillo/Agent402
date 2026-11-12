@@ -242,6 +242,25 @@ try { await h("edgar-company-concept")({ tag: "Revenues" }); ok(false, "edgar-co
 catch (e) { ok(e.statusCode === 400 && /Provide either ticker or cik/.test(e.message), `edgar-company-concept with no company names the company first (${e.message})`); }
 try { await h("edgar-company-concept")({}); ok(false, "edgar-company-concept with nothing"); }
 catch (e) { ok(e.statusCode === 400 && /Provide either ticker or cik/.test(e.message), `edgar-company-concept with nothing names the company first (${e.message})`); }
+// A company and a bad tag or taxonomy answer 400 before any SEC read: the
+// guard's resolver (every SEC read resolves its host first) is stubbed to count
+// and refuse, so nothing leaves the process and a lookup shows as a count.
+{
+  const { stubGuardResolver, resolverError } = await import("./lib/guard-resolver-stub.js");
+  let lookups = 0;
+  const restore = stubGuardResolver((host) => { lookups++; return Promise.reject(resolverError("ENOTFOUND", host)); });
+  try {
+    for (const [args, re, label] of [
+      [{ ticker: "AAPL", tag: "Has Spaces" }, /tag looks malformed/, "a malformed tag"],
+      [{ ticker: "MSFT", taxonomy: "us gaap", tag: "Revenues" }, /taxonomy looks malformed/, "a malformed taxonomy"],
+    ]) {
+      lookups = 0;
+      let err = null;
+      try { await h("edgar-company-concept")(args); } catch (e) { err = e; }
+      ok(err?.statusCode === 400 && re.test(err?.message || "") && lookups === 0, `edgar-company-concept with a ticker and ${label} answers 400 with no SEC read (${err?.statusCode} ${err?.message}, ${lookups} lookups)`);
+    }
+  } finally { restore(); }
+}
 
 // --- live calls (tolerant of SEC rate-limiting / outages) ---
 // confirmUpstream(r): when the tool's answer fails the check, ask the outside

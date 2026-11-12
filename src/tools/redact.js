@@ -200,31 +200,59 @@ function redactTruncated(out, prefixes) {
   for (const v of prefixes) {
     const head = v.slice(0, TRUNCATED_MIN);
     let i = out.indexOf(head);
+    if (i === -1) continue;
+    // One pass, built from pieces: re-slicing the whole text at every match
+    // costs time in the square of the match count.
+    const pieces = [];
+    let at = 0;
     while (i !== -1) {
       let k = TRUNCATED_MIN;
       while (k < v.length && i + k < out.length && out[i + k] === v[k]) k++;
-      out = `${out.slice(0, i)}[redacted]${out.slice(i + k)}`;
-      i = out.indexOf(head, i + 10);
+      pieces.push(out.slice(at, i), "[redacted]");
+      at = i + k;
+      i = out.indexOf(head, at);
     }
+    pieces.push(out.slice(at));
+    out = pieces.join("");
   }
   return out;
 }
 
 // A 64-hex-digit run standing alone (no letter or digit on either side).
 const HEX64_RE = /(?<![0-9A-Za-z])(0[xX])?[0-9a-fA-F]{64}(?![0-9A-Za-z])/g;
-// A key word in the few characters before a run: PRIVATE_KEY=, "secret":, seed.
-const KEY_LABEL_RE = /(?:^|[^a-z])(?:key|keys|privkey|private|secret|mnemonic|seed)(?:[^a-z]|$)/i;
-// A hash named just before a bare run: "sha256 ", "txid: ", "digest=".
-const HASH_LABEL_RE = /(?:^|[^a-z])(?:hash|digest|sha-?256|sha3|keccak(?:256)?|txid|tx|transaction|checksum)[\s:="'`]*$/i;
+// The name sitting immediately before a run: one identifier, then only
+// separators and quotes ("PRIVATE_KEY=", "\"txHash\":\"", "block ").
+const NAME_BEFORE_RE = /([A-Za-z0-9_-]+)[\s:="'`]*$/;
+// The words of a name: snake_case, kebab-case and camelCase pieces.
+const NAME_WORD_RE = /[A-Z]+[0-9]*(?![a-z])|[A-Z]?[a-z0-9]+/g;
+const KEY_WORDS = new Set(["key", "keys", "privkey", "private", "secret", "mnemonic", "seed"]);
+const HASH_WORDS = new Set(["digest", "sha256", "sha3", "keccak", "keccak256", "txid", "tx", "transaction", "checksum", "block"]);
+const isHashWord = (w) => HASH_WORDS.has(w) || w.endsWith("hash");
 const LABEL_WINDOW = 32;
-/** [start, end) spans of the 64-hex runs in `s` that are redacted. */
+/** How the name just before a run labels it: "key", "hash" or null. Of a
+ *  name holding both, the word nearer the run wins (privateKeyHash is a hash,
+ *  KEY_HEX a key). */
+function runLabel(before) {
+  const name = NAME_BEFORE_RE.exec(before)?.[1];
+  if (!name) return null;
+  const words = name.match(NAME_WORD_RE) || [];
+  // "sha-256", "sha_256": a hash name split by its own separator.
+  if (/sha[-_]?256$/i.test(name)) return "hash";
+  for (let i = words.length - 1; i >= 0; i--) {
+    const w = words[i].toLowerCase();
+    if (KEY_WORDS.has(w)) return "key";
+    if (isHashWord(w)) return "hash";
+  }
+  return null;
+}
+/** [start, end) spans of the 64-hex runs in `s` that are redacted: one named
+ *  as a key, and a bare one (no 0x) that no hash name precedes. */
 function hexKeySpans(s) {
   const spans = [];
   if (s.length < 64) return spans;
   for (const m of s.matchAll(HEX64_RE)) {
-    const before = s.slice(Math.max(0, m.index - LABEL_WINDOW), m.index);
-    const keyed = KEY_LABEL_RE.test(before);
-    if (keyed || (!m[1] && !HASH_LABEL_RE.test(before))) spans.push([m.index, m.index + m[0].length]);
+    const label = runLabel(s.slice(Math.max(0, m.index - LABEL_WINDOW), m.index));
+    if (label === "key" || (!m[1] && label !== "hash")) spans.push([m.index, m.index + m[0].length]);
   }
   return spans;
 }

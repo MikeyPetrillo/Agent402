@@ -6,7 +6,8 @@
 // them costs a buyer money.
 //
 // The router already buys from external sellers to resell and already sees
-// what comes back. So the verification is free: on a settled 200, check whether
+// what comes back. So the verification is free: on a settled 200 (and on a 200
+// the seller sent without taking payment that answers nothing), check whether
 // the paths the seller guaranteed were actually present, and remember only the
 // verdict.
 //
@@ -21,7 +22,7 @@
 
 const MAX_ROUTES = 5000;          // bounded like every other crawl-side map
 const MAX_PATHS_PER_ROUTE = 64;   // matches the contract's own path cap
-const WINDOW = 20;                // last N paid calls per route
+const WINDOW = 20;                // last N observed calls per route
 
 const store = new Map();          // "METHOD origin+route" -> record
 const key = (origin, method, route) => `${String(method || "POST").toUpperCase()} ${origin}${route}`;
@@ -54,11 +55,14 @@ export function pathPresent(body, path) {
 }
 
 /**
- * Record one settled paid call against what the seller guaranteed.
+ * Record one call to a seller's paid route against what the seller guaranteed.
  *
- * Only called for an external seller, only on a settled 200, and only when the
- * seller declared something to check. Never throws: a defect in observation
- * must not fail a call the buyer has already paid for.
+ * Only called for an external seller, only when the seller declared something
+ * to check, and only on a 200: one the router paid for and settled, or one the
+ * seller sent without taking payment that the router refused to resell
+ * (unpaidNonAnswerReason), which counts as a promise not kept. Both land in the
+ * same per-route record. Never throws: a defect in observation must not fail a
+ * call the buyer has already paid for.
  *
  * @param {object} p
  * @param {string[]} p.guaranteedPaths  what the seller's own document promised
@@ -114,8 +118,10 @@ export function deliveryObservation(origin, method, route) {
   };
 }
 
-/** Spread into a public tool row. Absent when we have never paid for it, so a
- *  consumer can tell "we checked and it delivered" from "we never looked". */
+/** Spread into a public tool row. Absent when we have never called it, so a
+ *  consumer can tell "we checked and it delivered" from "we never looked".
+ *  `source` names the route's record as a whole (calls the router made to the
+ *  seller's paid route, the unpaid non-answers included), not one call. */
 export function deliveryProjection(origin, method, route) {
   const o = deliveryObservation(origin, method, route);
   return o ? { responseDelivery: { ...o, source: "agent402_paid_call" } } : {};

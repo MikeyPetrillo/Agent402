@@ -94,6 +94,8 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
     // A public A listed first beside a private A: every answer is checked at connect, not the first.
     if (mode === "MIXED") return family === 4 ? ["93.184.215.14", "10.1.2.3"] : Promise.reject(resolverError("ENODATA"));
     if (mode === "HANG") return new Promise(() => {});
+    // A refusal that arrives late in the bound.
+    if (mode === "LATE_REFUSED") return new Promise((_, reject) => setTimeout(() => reject(resolverError("ECONNREFUSED")), 600));
     return Promise.reject(resolverError(mode));
   });
   process.env.DNS_LOOKUP_TIMEOUT_MS = "100";
@@ -142,6 +144,20 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
       const e = await upfront(m);
       ok(e?.statusCode === 503 && e.message === LOOKUP_UNAVAILABLE, `lookup ${m}, OS resolver ${lm}: retryable 503 within the bound (${e?.statusCode})`);
     }
+  }
+  // The fallback gets what is left of the bound, not a bound of its own: a
+  // refusal at 600 ms of 800 leaves the OS resolver about 200 ms, so a lookup
+  // that never answers ends the call near 800 ms (a fresh bound would end it
+  // near 1400 ms; the margin covers a loaded host).
+  {
+    process.env.DNS_LOOKUP_TIMEOUT_MS = "800";
+    lookupMode = "HANG";
+    const t0 = Date.now();
+    const e = await upfront("LATE_REFUSED");
+    const took = Date.now() - t0;
+    ok(e?.statusCode === 503 && e.message === LOOKUP_UNAVAILABLE && took >= 550 && took < 1200,
+      `a late refusal leaves the OS resolver only the rest of the bound (${e?.statusCode}, ${took} ms of 800)`);
+    process.env.DNS_LOOKUP_TIMEOUT_MS = "100";
   }
   lookupMode = "PUBLIC"; lookups = 0;
   for (const m of ["EAI_AGAIN", "ESERVFAIL", "ETIMEOUT", "HANG"]) {

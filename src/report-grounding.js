@@ -392,10 +392,11 @@ export function webSourcesFrom(d) {
  *  which are ordinary quotation marks: alone they keep their place, in a run
  *  they go like any other bracket. */
 // One bracket each: ASCII, fullwidth, small form, single guillemet, angle
-// brackets (CJK, math, technical, ornamental), modifier letters, Canadian
-// syllabics, less-than with dot.
-const OPEN_SINGLE = "<\uFF1C\uFE64\u2039\u3008\u27E8\u2329\u276C\u276E\u2770\u29FC\u02C2\u1438\u140A\u22D6\u2989";
-const CLOSE_SINGLE = ">\uFF1E\uFE65\u203A\u3009\u27E9\u232A\u276D\u276F\u2771\u29FD\u02C3\u1433\u1405\u22D7\u298A";
+// brackets (CJK, math, technical, ornamental), modifier letters, less-than
+// with dot. The Canadian syllabics that look like brackets are letters of
+// Inuktitut and Cree text, so they are not read as brackets.
+const OPEN_SINGLE = "<\uFF1C\uFE64\u2039\u3008\u27E8\u2329\u276C\u276E\u2770\u29FC\u02C2\u22D6\u2989";
+const CLOSE_SINGLE = ">\uFF1E\uFE65\u203A\u3009\u27E9\u232A\u276D\u276F\u2771\u29FD\u02C3\u22D7\u298A";
 // Quotation marks that read as two brackets: double guillemets, CJK double brackets.
 const OPEN_QUOTE = "\u00AB\u300A";
 const CLOSE_QUOTE = "\u00BB\u300B";
