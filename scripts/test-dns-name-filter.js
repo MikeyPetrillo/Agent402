@@ -19,6 +19,7 @@ const answer = async (name) => { queried.push(String(name)); const e = new Error
 dns.promises.resolve = answer; dns.promises.lookup = answer; dns.promises.resolveTxt = answer;
 dns.promises.resolveMx = answer; dns.promises.resolveNs = answer; dns.promises.resolveCaa = answer;
 dnsP.Resolver.prototype.resolve = answer;
+dnsP.Resolver.prototype.resolve4 = answer; dnsP.Resolver.prototype.resolve6 = answer; // the address guard
 dnsP.lookup = answer; dnsP.resolveMx = answer;
 syncBuiltinESMExports();
 

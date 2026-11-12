@@ -44,7 +44,7 @@
 // guard sees it.
 import { createHash } from "node:crypto";
 import { shared, createMemoryLimits, sharedLimitsWord, DEGRADED_HOLD_MS } from "./shared-limits.js";
-import { svmTransferAccounts, svmSignedTransfer, svmPayerFromPayload } from "./svm-payer.js";
+import { svmSignedTransfer, svmPaymentAuthority } from "./svm-payer.js";
 import { envPositive } from "./env-num.js";
 
 /** Seconds a funding refusal asks the buyer to wait, and the hold's length (SVM_FUNDING_RETRY_AFTER_S). */
@@ -139,10 +139,9 @@ export function fundingKeyOf(paymentPayload, network) {
   return { id, amount: Number(t.amount) };
 }
 
-/** The paying wallet named by the payment (the transfer's authority, else the non-fee-payer signer). */
+/** The paying wallet named by the payment (src/svm-payer.js svmPaymentAuthority). */
 export function fundingPayerOf(paymentPayload, { feePayer } = {}) {
-  const tx = paymentPayload?.payload?.transaction ?? paymentPayload?.transaction;
-  return svmTransferAccounts(tx)?.authority || svmPayerFromPayload(paymentPayload, { feePayer }) || null;
+  return svmPaymentAuthority(paymentPayload, { feePayer }) || null;
 }
 
 // Shared store first, this process's memory when it does not answer. After a

@@ -103,9 +103,12 @@ try {
   const gwBody = gw.status === 503 ? await gw.text() : "";
   ok(gw.status !== 503 || /metered tier is temporarily unavailable/.test(gwBody), `a payment-bearing /v1 gateway call (SDK path alias) is not shed (${gw.status})`);
   const forgedFree = await fetch(`${base}/api/find?q=hash`, from("203.0.113.5", { "payment-signature": PAID_HEADER }));
-  ok(forgedFree.status === 503, "a payment header on a FREE route buys nothing: still shed");
+  ok(forgedFree.status === 503 && /server is busy/.test(await forgedFree.text()), "a payment header on a FREE route buys nothing: still shed (the shed body, the control for the alias check below)");
   const chainAlias = await fetch(`${base}/api/chain/eth_blocknumber`, from("203.0.113.5"));
-  ok(chainAlias.status !== 503, `an /api/chain/<verb> alias of a priced tool is not shed (${chainAlias.status})`);
+  // The tool itself may answer 503 (its RPC unreachable from here); a shed is
+  // the gate's own answer, named by its body.
+  const chainBody = chainAlias.status === 503 ? await chainAlias.text() : "";
+  ok(chainAlias.status !== 503 || !/server is busy/.test(chainBody), `an /api/chain/<verb> alias of a priced tool is not shed (${chainAlias.status})`);
   const mcp = await fetch(`${base}/mcp`, { method: "POST", ...from("203.0.113.5", { "content-type": "application/json", accept: "application/json, text/event-stream" }), body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
   ok(mcp.status !== 503, `/mcp (which carries paid tool calls in its body) is not shed (${mcp.status})`);
   await fetch(`${base}/r/cs_live_supersecretsessionid`, from("203.0.113.5"));
@@ -124,7 +127,7 @@ try {
   const perf = await op.json();
   ok(op.status === 200 && perf.shed.shed >= 2, `operator reads are never shed, and the shed count is visible (${JSON.stringify(perf.shed)})`);
   const sh = await (await fetch(`${base}/__operator/serving-health.json`, from("203.0.113.5", { authorization: "Bearer shed-test-operator-token-0123456789" }))).json();
-  ok(["ok", "degraded"].includes(sh.status) && typeof sh.responses1h.total === "number" && sh.responses1h.s5xx === (gw.status === 503 ? 1 : 0) && sh.responses1h.paid >= 1, `serving health counts responses; shed 503s are not counted as 5xx (a metered refusal without the cost table is); paid calls are counted (${JSON.stringify(sh.responses1h)})`);
+  ok(["ok", "degraded"].includes(sh.status) && typeof sh.responses1h.total === "number" && sh.responses1h.s5xx === (gw.status === 503 ? 1 : 0) + (chainAlias.status >= 500 ? 1 : 0) && sh.responses1h.paid >= 1, `serving health counts responses; shed 503s are not counted as 5xx (a metered refusal without the cost table is, as is the chain tool's own 5xx when its RPC cannot be reached); paid calls are counted (${JSON.stringify(sh.responses1h)})`);
   ok(Array.isArray(sh.reasons) && sh.thresholds && sh.loop && "stalls1h" in sh.loop, "the verdict carries its reasons, thresholds and loop counts");
   ok(Array.isArray(sh.info) && !sh.reasons.includes("free-shedding") && typeof sh.shed.free === "number" && typeof sh.shed.serving === "number", `informational words are apart from the reasons, and the shed counts carry the split (${JSON.stringify({ reasons: sh.reasons, info: sh.info, free: sh.shed.free, serving: sh.shed.serving })})`);
   ok(sh.thresholds.stallMs === 5000 && Array.isArray(sh.recentStalls) && sh.stallCulprits && Array.isArray(sh.stallCulprits.routes) && Array.isArray(sh.stallCulprits.jobs), `serving health carries the single-stall threshold, the stall ring and the culprit names (${JSON.stringify({ stallMs: sh.thresholds.stallMs, culprits: sh.stallCulprits })})`);

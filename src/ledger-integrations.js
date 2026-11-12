@@ -1,7 +1,7 @@
 // Machine Ledger — Integrations page
 // Every published package (one row per /integrations/<slug> page), shared code example, CTA, compact footer.
 
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { INTEGRATIONS, NO_WALLET_NOTE, CREDITS_HELD } from "./integration-pages.js";
 
 // Rows are derived from the per-package pages, so the hub lists exactly the
@@ -59,17 +59,17 @@ export function ledgerIntegrationsPage(baseUrl) {
   <section style="max-width:1180px;margin:0 auto;padding:56px 30px 0;">
     <div style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);margin-bottom:12px;">// same shape everywhere</div>
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 22px;">Install, get tools, pass them in.</h2>
-    <div style="border:1px solid var(--hairline);background:var(--panel);"><pre style="margin:0;padding:18px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.85;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># pick your stack
+    ${codeBlock(`<span style="color:var(--on-panel-faint);"># pick your stack
 </span>npm install agent402-openai-tools @x402/fetch @x402/core @x402/evm viem
 
 import { agent402Tools } from "agent402-openai-tools";
 <span style="color:var(--on-panel-faint);">// web search, then a cited answer, paid per call from a wallet (payFetch: an @x402/fetch fetch)
 </span>const { tools, execute } = await agent402Tools({ slugs: ["search","answer"], freeOnly: false, fetch: payFetch });
 <span style="color:var(--on-panel-faint);">// pass tools to openai.chat.completions.create({ tools })
-// call execute(name, args) on each tool_call; the wallet pays underneath.</span></pre></div>
+// call execute(name, args) on each tool_call; the wallet pays underneath.</span>`, { html: true, wrap: true, style: "margin:0" })}
     <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:14px 0 10px;"><strong style="color:var(--ink);">No wallet yet?</strong> ${NO_WALLET_NOTE}</p>
-    <div style="border:1px solid var(--hairline);background:var(--panel);"><pre style="margin:0;padding:18px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.85;color:var(--on-panel);white-space:pre-wrap;word-break:break-word;">const { tools, execute } = await agent402Tools({ slugs: ["hash","markdown-to-html","text-stats"] });
-<span style="color:var(--on-panel-faint);">// no fetch: proof-of-work pays these underneath</span></pre></div>
+    ${codeBlock(`const { tools, execute } = await agent402Tools({ slugs: ["hash","markdown-to-html","text-stats"] });
+<span style="color:var(--on-panel-faint);">// no fetch: proof-of-work pays these underneath</span>`, { html: true, wrap: true, style: "margin:0" })}
     <p style="font-size:var(--fs-sm);line-height:1.6;color:var(--faint);margin:12px 0 0;max-width:76ch;">${esc(SHAPE_NOTE)}</p>
   </section>
 

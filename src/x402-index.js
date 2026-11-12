@@ -11277,7 +11277,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     neutrality: {
       paidPlacement: false,
       sellerKeyedScoring: false,
-      ranking: "deterministic lexical match on slug, name and description; ties broken by health, then cheapest known price, then shorter slug",
+      ranking: "deterministic lexical match on slug, name and description; ties broken by health, then 30-day unique payers from the public discovery feed (self-funded counts excluded; a seller with none measured counts as zero, except beside our own row, where the comparison is skipped), then cheapest known price, then the feed's curated flag, then shorter slug",
       // Was three entries. Two were removed rather than disclosed: the
       // per-seller diversity cap now applies to our catalog on the same terms
       // as everyone else's (measured cost of giving it up: it bound on 1 of 30

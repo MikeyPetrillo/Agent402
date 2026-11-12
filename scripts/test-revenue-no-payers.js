@@ -116,7 +116,8 @@ ok(/const seen = newestOwnSettle\(r\.recent\);/.test(live), "the snapshot's last
   ok(/at most \$0\.75|at most \$\d/.test(tp), "the per-call ceiling carries its currency sign");
   ok(/cached for an hour/.test(tp) && !/60-second cache/.test(tp) && !/not shown/.test(tp), "the cache and balance wording match what /api/revenue does");
   ok(!/about 200 Tempo/.test(tp) && !/x402scan/i.test(tp.replace(/href="[^"]*"/g, "")), "no typed daily rate and no third-party index named");
-  ok(/last updated 2026-10-11/.test(tp) && /Every claim in the token disclosure below links to an/.test(tp), "the page date and the on-chain-record claim are scoped to what they cover");
+  const { pageLastmod } = await import("../src/page-dates.js");
+  ok(tp.includes(`last updated ${pageLastmod("/transparency")}`) && /Every claim in the token disclosure below links to an/.test(tp), "the page date and the on-chain-record claim are scoped to what they cover");
 }
 {
   const { statusPage, statusSnapshot } = await import("../src/status.js").catch(() => ({}));

@@ -125,8 +125,8 @@ must pay, or `null` to let it through.
   `wrangler.toml` + a 3-step deploy guide.
 - **Next.js / Vercel** → [`deploy/nextjs/`](deploy/nextjs/) - a drop-in
   `middleware.js` + a 3-step deploy guide.
-- **Docker** → [`deploy/docker/`](deploy/docker/) - a `Dockerfile` +
-  `docker-compose.yml` to run the reverse proxy in front of any site with
+- **Docker** → [`deploy/docker/`](deploy/docker/) - a `Dockerfile`, its
+  entrypoint and a `docker-compose.yml` to run the reverse proxy in front of any site with
   `docker compose up -d` (includes the live `/__tollbooth` dashboard).
 
 The short version of each:

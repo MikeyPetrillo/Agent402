@@ -6,7 +6,8 @@
 // them costs a buyer money.
 //
 // The router already buys from external sellers to resell and already sees
-// what comes back. So the verification is free: on a settled 200, check whether
+// what comes back. So the verification is free: on a settled 200 (and on a 200
+// the seller sent without taking payment that answers nothing), check whether
 // the paths the seller guaranteed were actually present, and remember only the
 // verdict.
 //
@@ -21,7 +22,7 @@
 
 const MAX_ROUTES = 5000;          // bounded like every other crawl-side map
 const MAX_PATHS_PER_ROUTE = 64;   // matches the contract's own path cap
-const WINDOW = 20;                // last N paid calls per route
+const WINDOW = 20;                // last N observed calls per route
 
 const store = new Map();          // "METHOD origin+route" -> record
 const key = (origin, method, route) => `${String(method || "POST").toUpperCase()} ${origin}${route}`;
@@ -54,11 +55,14 @@ export function pathPresent(body, path) {
 }
 
 /**
- * Record one settled paid call against what the seller guaranteed.
+ * Record one call to a seller's paid route against what the seller guaranteed.
  *
- * Only called for an external seller, only on a settled 200, and only when the
- * seller declared something to check. Never throws: a defect in observation
- * must not fail a call the buyer has already paid for.
+ * Only called for an external seller, only when the seller declared something
+ * to check, and only on a 200: one the router paid for and settled, or one the
+ * seller sent without taking payment that the router refused to resell
+ * (unpaidNonAnswerReason), which counts as a promise not kept. Both land in the
+ * same per-route record. Never throws: a defect in observation must not fail a
+ * call the buyer has already paid for.
  *
  * @param {object} p
  * @param {string[]} p.guaranteedPaths  what the seller's own document promised
@@ -114,11 +118,80 @@ export function deliveryObservation(origin, method, route) {
   };
 }
 
-/** Spread into a public tool row. Absent when we have never paid for it, so a
- *  consumer can tell "we checked and it delivered" from "we never looked". */
+/** Spread into a public tool row. Absent when we have never called it, so a
+ *  consumer can tell "we checked and it delivered" from "we never looked".
+ *  `source` names the route's record as a whole (calls the router made to the
+ *  seller's paid route, the unpaid non-answers included), not one call. */
 export function deliveryProjection(origin, method, route) {
   const o = deliveryObservation(origin, method, route);
   return o ? { responseDelivery: { ...o, source: "agent402_paid_call" } } : {};
+}
+
+// The keys of an error envelope with no content: the {error, message, code}
+// shape, GraphQL's top-level `errors`, RFC 7807 problem details (type, title,
+// status, detail, instance), the ok/success flags and a reason, a framework's
+// default error page (timestamp, path, trace), a retry hint, and the request
+// or trace id an error page carries for support, the JSON-RPC frame (jsonrpc,
+// id) and a payment challenge's frame (x402Version, accepts). Any other key holding a value
+// carries content, so the body is the seller's answer even with an error
+// beside it; a key holding null, "", {} or [] carries nothing.
+const ERROR_ENVELOPE_KEYS = new Set([
+  "error", "errors", "message", "ok", "success", "status", "statusCode", "code",
+  "detail", "details", "type", "title", "instance", "reason",
+  "requestId", "request_id", "traceId", "trace_id", "trace", "timestamp", "path",
+  "jsonrpc", "id", "x402Version", "accepts",
+  "retryAfter", "retry_after", "retryAfterSeconds", "retry_after_seconds", "retryAfterMs", "retry_after_ms",
+]);
+
+/**
+ * Is a 200 the seller sent WITHOUT taking payment an answer at all?
+ *
+ * The router resells such a 200 at its own tier price, so a body that answers
+ * nothing must not be sold. Returns the reason (a fixed word, never seller
+ * text) or null when the body reads as an answer. The rules are the ones the
+ * answer classes use (src/answer-shape.js) plus the paid side's own signals:
+ *   empty           no body: null, "", {}
+ *   challenge       an x402 payment challenge (x402Version + accepts) sent
+ *                   with a 200, so nothing was delivered
+ *   error-shaped    an error envelope and nothing else: `error` set,
+ *                   `errors` non-empty or `ok: false`, and every key is one
+ *                   of ERROR_ENVELOPE_KEYS or holds no value (null, "", {},
+ *                   []), unless the seller's own contract guarantees the
+ *                   signaling key. Any other key holding a value, false and 0
+ *                   included, is content (`{valid:false, errors}`,
+ *                   `{data, errors}`, a health report with `ok:false`). A
+ *                   404 or 410 envelope alone is not an answer either, so the
+ *                   next seller is tried.
+ *   missing-fields  the seller guaranteed response paths and none is present
+ * An empty array, a number or a string with text is the seller's answer.
+ */
+export function unpaidNonAnswerReason(body, guaranteedPaths = []) {
+  if (body === null || body === undefined || body === "") return "empty";
+  if (typeof body !== "object" || Array.isArray(body)) return null;
+  const hasKeys = (o) => { for (const k in o) { if (Object.hasOwn(o, k)) return true; } return false; };
+  if (!hasKeys(body)) return "empty";
+  if (typeof body.x402Version === "number" && Array.isArray(body.accepts) && body.accepts.length > 0) return "challenge";
+  const paths = (Array.isArray(guaranteedPaths) ? guaranteedPaths : []).slice(0, MAX_PATHS_PER_ROUTE).map(String);
+  const promised = (k) => paths.some((p) => p === k || p.startsWith(`${k}.`));
+  // answer-shape.js isSet / nonEmpty: an empty object is not set.
+  const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const set = (v) => v !== null && v !== undefined && v !== false && v !== "" && !(isObj(v) && !hasKeys(v));
+  const nonEmpty = (v) => (Array.isArray(v) ? v.length > 0 : isObj(v) ? hasKeys(v) : set(v));
+  const signaled = (!promised("error") && set(body.error))
+    || (!promised("errors") && nonEmpty(body.errors))
+    || (!promised("ok") && body.ok === false);
+  if (signaled) {
+    // A key counts as content only when it holds a value: false and 0 do.
+    const holdsValue = (v) => v !== null && v !== undefined && v !== ""
+      && !(Array.isArray(v) && v.length === 0) && !(isObj(v) && !hasKeys(v));
+    let envelopeOnly = true;
+    for (const k in body) {
+      if (Object.hasOwn(body, k) && !ERROR_ENVELOPE_KEYS.has(k) && holdsValue(body[k])) { envelopeOnly = false; break; }
+    }
+    if (envelopeOnly) return "error-shaped";
+  }
+  if (paths.length && !paths.some((p) => pathPresent(body, p))) return "missing-fields";
+  return null;
 }
 
 export function __resetObservationsForTest() { store.clear(); version++; }

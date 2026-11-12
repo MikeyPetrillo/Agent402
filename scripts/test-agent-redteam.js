@@ -33,6 +33,7 @@ import { spawn } from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { isIP } from "node:net";
 import { getFreePorts } from "./lib/free-port.js";
+import { stubGuardResolver } from "./lib/guard-resolver-stub.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 
 const t0 = Date.now();
@@ -126,6 +127,17 @@ const answerOf = (h) => (isIP(String(h)) ? String(h) : null) || CORPUS.ssrf.dns[
 dns.promises.lookup = async (h, opts) => { const a = answerOf(h); if (!a) throw notFound(h); const fam = a.includes(":") ? 6 : 4; return opts?.all ? [{ address: a, family: fam }] : { address: a, family: fam }; };
 dns.lookup = (h, opts, cb) => { if (typeof opts === "function") { cb = opts; opts = {}; } const a = answerOf(h); if (!a) return process.nextTick(cb, notFound(h)); const fam = a.includes(":") ? 6 : 4; return opts?.all ? process.nextTick(cb, null, [{ address: a, family: fam }]) : process.nextTick(cb, null, a, fam); };
 syncBuiltinESMExports();
+// The address guard resolves with dns.Resolver: the same answers there, by family.
+// `rebind` names answer their first query and then the address it holds.
+const rebind = new Map();
+stubGuardResolver((h, family) => {
+  const name = String(h).replace(/\.$/, "").toLowerCase();
+  const r = rebind.get(name);
+  if (r && family === 4) { if (r.seen++ > 0) { r.n++; return [r.then]; } }
+  const a = answerOf(h);
+  if (!a) throw notFound(h);
+  return (a.includes(":") ? 6 : 4) === family ? [a] : Promise.reject(Object.assign(new Error(`stub ENODATA ${h}`), { code: "ENODATA" }));
+});
 
 const screen = await import("../src/listing-screen.js");
 
@@ -184,14 +196,15 @@ section("4. fetch guard: SSRF spellings");
     ok(err && isSsrfBlock(err), `the pinned dispatcher refuses a hop to ${lit} at connect`);
   }
   // DNS rebinding: the upfront check sees a public answer, the connection a private one.
-  const flip = { n: 0 };
+  const flip = { n: 0, seen: 0, then: "127.0.0.1" };
   const realLookup = dns.lookup;
   CORPUS.ssrf.dns["flip.redteam.example"] = "93.184.215.14";
+  rebind.set("flip.redteam.example", flip);
   dns.lookup = (h, opts, cb) => { if (typeof opts === "function") { cb = opts; opts = {}; } if (h === "flip.redteam.example") { flip.n++; return process.nextTick(cb, null, "127.0.0.1", 4); } return realLookup(h, opts, cb); };
   syncBuiltinESMExports();
   const rb = await refused(() => safeFetch(`http://flip.redteam.example:${lport}/`, { timeoutMs: 3000 }));
   ok(rb?.statusCode === 400 && flip.n > 0, `a name that passes the upfront check and rebinds to 127.0.0.1 at connect is refused (${rb?.statusCode})`);
-  dns.lookup = realLookup; delete CORPUS.ssrf.dns["flip.redteam.example"]; syncBuiltinESMExports();
+  dns.lookup = realLookup; delete CORPUS.ssrf.dns["flip.redteam.example"]; rebind.delete("flip.redteam.example"); syncBuiltinESMExports();
   ok(hits === 0, `the local stand-in for an internal service was never reached (${hits} hits)`);
   local.close();
 }

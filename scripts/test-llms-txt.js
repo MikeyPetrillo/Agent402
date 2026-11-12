@@ -54,6 +54,16 @@ try {
   const txt = await res.text();
   // The trust and settlement copy lives in the full text; llms.txt links to it.
   const fullTxt = await fetch(`${BASE}/llms-full.txt`).then((r) => r.text());
+  // Blocks are one blank line apart: an empty optional block (MPP methods
+  // off, no nanopayments line) leaves no extra blank lines behind.
+  {
+    const runs = [...txt.matchAll(/\n{3,}/g)].map((m) => JSON.stringify(txt.slice(Math.max(0, m.index - 40), m.index).split("\n").at(-1)));
+    ok(runs.length === 0, `llms.txt has no run of two or more blank lines${runs.length ? ` (after ${runs.join(", ")})` : ""}`);
+    const mpp = txt.indexOf("**MPP: start here.**");
+    ok(mpp > 0 && txt.slice(mpp - 3, mpp) !== "\n\n\n" && txt.slice(mpp - 2, mpp) === "\n\n", "the compact MPP block follows exactly one blank line");
+    const after = txt.indexOf("\n", txt.indexOf("\n", mpp) + 1);
+    ok(txt.slice(after, after + 2) === "\n\n" && txt[after + 2] !== "\n", "the compact MPP block is followed by exactly one blank line");
+  }
   ok(txt.startsWith("# Agent402"), `body opens with '# Agent402' (got '${txt.slice(0, 30)}…')`);
 
   // Tool count claim must match the live catalog. We get the live count from

@@ -15,6 +15,7 @@
 //     stub raises the same ESSRFBLOCKED cause so the handler's answer is the
 //     one a buyer sees.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import { PAGE_CHANGE_TOOLS } from "../src/tools/page-change-kit.js";

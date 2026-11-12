@@ -18,6 +18,7 @@
 //      carry-forward preserves across crawls;
 //   7. marks lapse after GONE_ROUTE_TTL_MS.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import assert from "node:assert/strict";
 process.env.X402_INDEX_CRAWL = "off";
 const {

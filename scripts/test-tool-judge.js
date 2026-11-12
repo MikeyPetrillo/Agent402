@@ -129,6 +129,9 @@ console.log(`test-tool-judge (with pricier fallback): ${n} assertions ok`);
   ok(jevSpendStatus().tokens > 0 && jevSpendStatus().tokens < 5000, `a call is booked against the token ceiling (${jevSpendStatus().tokens})`);
   _jevReset(); process.env.JEV_DAILY_MAX_TOKENS = "10"; hits = 0;
   ok((await judgeTool("task over the ceiling", [A, B])) === null && hits === 0 && jevSpendStatus().refusedToday === 1, "past the daily ceiling no call is made and the router keeps find's order");
+  // The booked total stops below the ceiling (a call that would cross it is
+  // refused, never booked), so the status word reads the refusal itself.
+  ok(jevSpendStatus().tokens < 10 && jevSpendStatus().status === "capped", `a refusal against the ceiling reads capped though the booked tokens stay under it (${JSON.stringify(jevSpendStatus())})`);
   process.env.JEV_DAILY_MAX_TOKENS = "off"; _jevReset();
   ok((await judgeTool("another", [A, B])) === null && hits === 0, "JEV_DAILY_MAX_TOKENS=off disables every judgment");
   delete process.env.JEV_DAILY_MAX_TOKENS;
@@ -203,6 +206,7 @@ console.log(`test-tool-judge (with content-keyed cache): ${n} assertions ok`);
   ok(r.skipped === "budget" && calls === 1 && r.items.length === 2, `past the free share the free path is skipped with rows intact (${r.skipped}, ${calls} calls)`);
   const st = jevSpendStatus();
   ok(st.freeTokens > 0 && st.freeTokens <= st.freeCapTokens && st.tokens < st.capTokens, `the free path never books past its share (${st.freeTokens}/${st.freeCapTokens} of ${st.capTokens})`);
+  ok(st.refusedToday === 1 && st.status === "ok", `a refusal by the free share alone leaves the paid path open and the word ok (${st.status})`);
   r = await orderByJudgment("paid task", [{ slug: "a3" }, { slug: "b3" }], text);
   ok(r.selection?.method === "judged" && calls === 2, "the paid path still has the rest of the ceiling");
   delete process.env.JEV_DAILY_MAX_TOKENS; delete process.env.ROUTE_JUDGE_FREE_SHARE;
@@ -219,6 +223,28 @@ console.log(`test-tool-judge (with content-keyed cache): ${n} assertions ok`);
   globalThis.fetch = o;
 }
 console.log(`test-tool-judge (with free share + admission): ${n} assertions ok`);
+
+// A new process's status word on today's shared day: its first read, and its
+// read once the shared day has been read (`refreshJevSpendShared`).
+async function freshStatus(env) {
+  const { execFileSync } = await import("node:child_process");
+  const { childJson } = await import("./lib/child-json.js");
+  const child = `
+    const J = await import(${JSON.stringify(new URL("../src/tool-judge.js", import.meta.url).href)});
+    const first = J.jevSpendStatus().status;
+    await J.refreshJevSpendShared();
+    const s = J.jevSpendStatus();
+    console.log(JSON.stringify({ first, after: s.status, ownCalls: s.calls }));
+    process.exit(0);
+  `;
+  return childJson(execFileSync(process.execPath, ["--input-type=module", "-e", child], { encoding: "utf8", timeout: 30_000, env: { ...process.env, ...env } }));
+}
+
+// A process with no shared store reads its own day alone: a fresh one reads ok.
+if (!_jevShared) {
+  const fresh = await freshStatus({});
+  ok(fresh.first === "ok" && fresh.after === "ok", `memory backend: a fresh process reads ok from its own counters (${JSON.stringify(fresh)})`);
+}
 
 // --- the daily ceiling is one figure for the service: with a shared store
 //     (REDIS_URL) the tokens are reserved in a day counter every replica adds
@@ -247,7 +273,28 @@ console.log(`test-tool-judge (with free share + admission): ${n} assertions ok`)
     hits = 0;
     const before = jevSpendStatus().refusedToday;
     ok((await judgeTool("a different task past the shared ceiling", [A, B])) === null && hits === 0 && jevSpendStatus().refusedToday === before + 1, "the judge refuses on the shared total with no model call, though this process's own counter would have allowed it");
+    ok(jevSpendStatus().status === "capped", `a refusal by the shared total reads capped on this replica (${jevSpendStatus().status})`);
     ok((await _jevSharedToday()).tokens === local * 2 + 100, `a refused reservation is given back to the shared day (${(await _jevSharedToday()).tokens})`);
+    // A fresh process (a deploy) on the same capped day: its own counters are
+    // empty, and its word still reads capped from the shared day, never ok.
+    // Before the shared day is read it reads unknown, a word that neither
+    // opens nor closes the pager.
+    await new Promise((r) => setTimeout(r, 200)); // the refusal mark is a fire-and-forget write
+    const fresh = await freshStatus({ JEV_DAILY_MAX_TOKENS: String(local * 2 + 100) });
+    ok(fresh.first !== "ok" && fresh.after === "capped" && fresh.ownCalls === 0, `a fresh process on a capped day reads ${fresh.first} then ${fresh.after}, never ok (${JSON.stringify(fresh)})`);
+    // The refusal is marked on the shared day: read with a ceiling above the
+    // shared total, the mark alone still says a call was refused today.
+    const marked = await freshStatus({ JEV_DAILY_MAX_TOKENS: String(local * 2 + 150) });
+    ok(marked.after === "capped", `the shared refusal mark alone reads capped in a fresh process (${marked.after})`);
+    // A day under the ceiling with no refusal reads ok.
+    _jevReset();
+    await new Promise((r) => setTimeout(r, 200)); // the reset is a fire-and-forget write
+    const open = await freshStatus({ JEV_DAILY_MAX_TOKENS: String(local * 2 + 100) });
+    ok(open.after === "ok", `a fresh process on an open day reads ok (${open.after})`);
+    // The shared total at the ceiling, with no refusal marked, reads capped too.
+    ok((await other.reserve(local * 2 + 100, local * 2 + 100)) === true, "another replica books the day up to the ceiling");
+    const atCap = await freshStatus({ JEV_DAILY_MAX_TOKENS: String(local * 2 + 100) });
+    ok(atCap.after === "capped", `a fresh process reads capped when the shared total has reached the ceiling (${atCap.after})`);
     delete process.env.JEV_DAILY_MAX_TOKENS;
     _jevReset();
   }

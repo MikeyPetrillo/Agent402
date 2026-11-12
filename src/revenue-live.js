@@ -16,7 +16,7 @@ import { blocksForSeconds, blockTimeChanges, refreshBlockMs } from "./chain-bloc
 import { rpcHeaderReader } from "./block-clock.js";
 import { standingBand } from "./standing.js";
 import { join } from "node:path";
-import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, codeBlock } from "./ledger-chrome.js";
 import { RAILS, RAILS_AMP, GATED_RAILS } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
 import { REVENUE_RANGE_PRESETS, REVENUE_RANGE_PRESET_LABELS, windowLabel } from "./revenue-range.js";
@@ -704,7 +704,7 @@ export function publicRevenueBody(snap, ledger = {}) {
  * `refuse(req, res)`, the 404 every other /__operator surface answers.
  */
 export function revenueApiHandlers({ snapshot, ledger, authed, refuse = (_req, res) => res.status(404).json({ ok: false, error: "not-found" }) }) {
-  const fail = (res, e) => res.status(500).json({ error: "revenue snapshot failed", detail: String(e?.message || e).slice(0, 120) });
+  const fail = (res, e) => res.status(500).json({ error: "revenue snapshot failed", detail: pubErr(e, 120) });
   return {
     publicHandler: async (_req, res) => {
       try {
@@ -2143,7 +2143,7 @@ export function revenueNextStep(hashPriceUsd = null) {
   return `<div style="margin:36px 0 0;border:1px solid var(--hairline);background:var(--card);padding:22px 20px;">
     <h2 style="font-family:var(--font-body);font-weight:700;font-size:var(--fs-xl);letter-spacing:-.01em;margin:0 0 6px;">Put a line on this table.</h2>
     <p style="font-size:var(--fs-md);line-height:1.6;color:var(--muted);margin:0 0 14px;">Every number above is a settlement through the same gate this command hits. ${cost} and needs no account: the 402 comes back with the price and the rails, your client signs, the call is served.</p>
-    <pre style="margin:0 0 16px;padding:12px 14px;overflow-x:auto;background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.5;"><code>curl -i https://agent402.tools/api/hash?text=hello</code></pre>
+    ${codeBlock(`<code>curl -i https://agent402.tools/api/hash?text=hello</code>`, { html: true, style: "margin:0 0 16px" })}
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
       <a href="/markets" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--ink);padding:8px 12px;text-decoration:none;color:var(--btn-fg);background:var(--btn-bg);">Tools an agent can call &rarr;</a>
       <a href="/sell" style="font-family:var(--font-mono);font-size:var(--fs-sm);border:1px solid var(--hairline);padding:8px 12px;text-decoration:none;color:var(--ink);">Get paid on these rails &rarr;</a>

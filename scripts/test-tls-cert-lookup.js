@@ -4,13 +4,12 @@
 // exist is the one neutral 400 a private address also gets. The built-in
 // resolver is stubbed before the kit loads, so nothing leaves this process.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { createRequire, syncBuiltinESMExports } from "node:module";
+import { stubGuardResolver, resolverError } from "./lib/guard-resolver-stub.js";
 
-const require = createRequire(import.meta.url);
-const dnsp = require("node:dns/promises");
+// The guard (and tls-cert through it) resolves with dns.Resolver: stub that.
 let code = null;
-dnsp.lookup = async () => { throw Object.assign(new Error(`stub ${code}`), { code }); };
-syncBuiltinESMExports();
+let hang = false;
+stubGuardResolver(() => (hang ? new Promise(() => {}) : Promise.reject(resolverError(code))));
 const { KIT } = await import("../src/tools/kit.js");
 const { UNRESOLVED_OR_PRIVATE, LOOKUP_UNAVAILABLE } = await import("../src/tools/fetch-guard.js");
 
@@ -45,8 +44,7 @@ for (const c of ["ENOTFOUND", "ENODATA"]) {
 }
 // The lookup itself is bounded: a resolver that never answers is the retryable 503 after DNS_LOOKUP_TIMEOUT_MS.
 {
-  dnsp.lookup = () => new Promise(() => {});
-  syncBuiltinESMExports();
+  hang = true;
   process.env.DNS_LOOKUP_TIMEOUT_MS = "200";
   const { KIT: KIT2 } = await import("../src/tools/kit.js?hang");
   const t2 = KIT2.find((x) => x.slug === "tls-cert");

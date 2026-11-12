@@ -7,7 +7,6 @@ import { createHash, createHmac, randomBytes, randomUUID, randomInt } from "node
 import { resolveMx, reverse } from "node:dns/promises";
 import { isIP } from "node:net";
 import tls from "node:tls";
-import { lookup } from "node:dns/promises";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
 import { threadEnv } from "./child-env.js";
@@ -24,7 +23,7 @@ import { load as yamlLoad, dump as yamlDump, JSON_SCHEMA as YAML_JSON_SCHEMA } f
 import { renderMarkdown, MARKDOWN_INLINE_MAX_CHARS } from "./markdown-render.js";
 import { runMarkdown } from "./markdown-pool.js";
 import QRCode from "qrcode";
-import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE, isTransientLookupError, lookupUnavailable } from "./fetch-guard.js";
+import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE, isTransientLookupError, lookupUnavailable, resolveHostAddress } from "./fetch-guard.js";
 
 const REGEX_WORKER = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
 const REGEX_TIMEOUT_MS = 750;
@@ -2216,10 +2215,8 @@ const networkTools = [
       let ip = host;
       if (!isIP(host)) {
         assertQueryableName(host);
-        const lookupMs = Number(process.env.DNS_LOOKUP_TIMEOUT_MS) > 0 ? Number(process.env.DNS_LOOKUP_TIMEOUT_MS) : 10_000;
-        let lookupTimer;
-        const timedOut = new Promise((_, reject) => { lookupTimer = setTimeout(() => reject(Object.assign(new Error("lookup timed out"), { code: "ETIMEOUT" })), lookupMs); });
-        const resolved = await Promise.race([lookup(host), timedOut]).finally(() => clearTimeout(lookupTimer)).catch((e) => {
+        // The address guard's own bounded resolver (c-ares, off the thread pool).
+        const resolved = await resolveHostAddress(host).catch((e) => {
           // A resolver that cannot answer is ours to retry, not the caller's input.
           if (isTransientLookupError(e)) throw lookupUnavailable(e);
           throw bad(UNRESOLVED_OR_PRIVATE);

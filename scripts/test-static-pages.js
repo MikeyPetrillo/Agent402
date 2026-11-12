@@ -20,7 +20,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { WHY_POINTS, WHY_COMPARE, whyHomeClaims } from "../src/why.js";
+import { WHY_POINTS, WHY_COMPARE, whyHomeClaims, whyJsonLd } from "../src/why.js";
 import { USE_CASES, useCaseCost } from "../src/use-cases.js";
 import { BADGE_STYLES } from "../src/badges.js";
 import { esc } from "../src/ledger-chrome.js";
@@ -317,6 +317,15 @@ try {
   ok(m != null, "/docs renders the full #why section");
   const why = m?.[0] || "";
   ok(WHY_POINTS.length === 7, `seven why points (got ${WHY_POINTS.length})`);
+  {
+    // The ItemList's name counts the points it lists; a typed number word drifts when a point is added.
+    const named = () => whyJsonLd("https://agent402.tools").name;
+    ok(/^Why pay here: seven things /.test(named()), `the #why ItemList names the seven points ("${named()}")`);
+    WHY_POINTS.push({ id: "x", h: "x", p: "x" });
+    const eight = named();
+    WHY_POINTS.pop();
+    ok(/^Why pay here: eight things /.test(eight), `the ItemList's count follows the points it lists ("${eight}")`);
+  }
   for (const w of WHY_POINTS) {
     ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.t)}</h3>`), `/docs#why carries the ${w.id} row heading`);
     ok(typeof w.t === "string" && w.t.length <= 40, `/docs#why ${w.id} heading is short enough for one line (${w.t.length} chars)`);
@@ -471,6 +480,55 @@ const MOVED = { "/compare": "/docs#why-compare", "/use-cases": "/docs#examples",
     ok(img.status === 200 && (img.headers.get("content-type") || "").includes("image/svg+xml") && (await img.text()).startsWith("<svg"), `/badges/${b.style}.svg still serves an SVG (got ${img.status})`);
   }
   ok((bd.match(/<div class="ml-code[^"]*"[^>]*><pre>/g) || []).length === BADGE_STYLES.length * 2 && !/bdg-copy/.test(bd), "/docs#badges: each snippet is a shared code block (its copy button comes from site-chrome.js)");
+}
+
+// --- every code block is the shared component ---------------------------------
+// DESIGN.md "Code blocks": a <pre> sits in a .ml-code block, whose copy button
+// /js/site-chrome.js adds. A hand-made <pre> has no button, so a reader copies
+// a multi-line snippet by dragging. Walks every hand-written page and guide in
+// the sitemaps, every /learn, /integrations and skill pack page, and /decide
+// (key-gated, rendered from its module).
+{
+  const { decidePage } = await import("../src/decide-page.js");
+  const { learnSlugs } = await import("../src/learn.js");
+  // Its own landing design: each one-line install command carries its own copy button.
+  const EXEMPT = new Set(["/tollbooth"]);
+  const paths = new Set(["/skills", "/learn", "/integrations", ...learnSlugs().map((s) => `/learn/${s}`)]);
+  for (const sm of ["/sitemap-pages.xml", "/sitemap-guides.xml", "/sitemap.xml"]) {
+    const xml = await (await fetch(`${BASE}${sm}`)).text().catch(() => "");
+    for (const m of xml.matchAll(/<loc>https?:\/\/[^/<]+(\/[^<]*)<\/loc>/g)) if (sm !== "/sitemap.xml" || /^\/(skills|integrations|learn)\//.test(m[1])) paths.add(m[1]);
+  }
+  const bareBlocks = (html) => {
+    const h = stripScripts(html), out = [];
+    for (const m of h.matchAll(/<pre\b[^>]*>([\s\S]*?)<\/pre>/g)) {
+      const inBlock = /<div class="ml-code[^"<>]*"[^<>]*>(?:<div class="ml-code-head"><span>[^<>]*<\/span><\/div>)?$/.test(h.slice(Math.max(0, m.index - 600), m.index));
+      if (!inBlock && stripTags(m[1]).trim()) out.push({ multi: /\n/.test(stripTags(m[1]).trim()), head: stripTags(m[1]).trim().slice(0, 40) });
+    }
+    return out;
+  };
+  const bad = [], multi = [], crumbs = [];
+  let walked = 0, blocks = 0, crumbPages = 0;
+  const pages = [...[...paths].filter((p) => !EXEMPT.has(p)).map((p) => [p, null]), ["/decide", decidePage(BASE, {})]];
+  for (const [p, rendered] of pages) {
+    let html = rendered;
+    if (html == null) {
+      const res = await fetch(`${BASE}${p}`).catch(() => null);
+      if (!res || res.status !== 200 || !(res.headers.get("content-type") || "").includes("text/html")) continue;
+      html = await res.text();
+    }
+    walked++;
+    blocks += (stripScripts(html).match(/<pre\b/g) || []).length;
+    if (/<pre\b/.test(stripScripts(html)) && !/<script[^>]+src="\/js\/site-chrome\.js/.test(html)) bad.push(`${p}: no site-chrome.js to add the copy button`);
+    for (const b of bareBlocks(html)) (b.multi ? multi : bad).push(`${p}: "${b.head}"`);
+    // Breadcrumbs: the current crumb is an inline-block, which strips a plain
+    // leading space, so its separator opens on a no-break space.
+    if (/class="ml-crumb-cur"[^>]*>[ \t\n]/.test(html)) crumbs.push(p);
+    if (/class="ml-crumb-cur"/.test(html)) crumbPages++;
+  }
+  ok(crumbPages > 50 && crumbs.length === 0, `the breadcrumb separator before the current page keeps its space on ${crumbPages} pages${crumbs.length ? ` (flush on: ${crumbs.slice(0, 6).join(", ")})` : ""}`);
+  ok(walked > 150 && blocks > 200, `the code-block walk read ${walked} pages holding ${blocks} code blocks`);
+  ok(multi.length === 0, `every multi-line code block carries the shared copy button${multi.length ? ` (${multi.length} do not: ${multi.slice(0, 8).join(" | ")})` : ""}`);
+  ok(bad.length === 0, `every one-line code block is the shared component too${bad.length ? ` (${bad.length} are not: ${bad.slice(0, 8).join(" | ")})` : ""}`);
 }
 
 // --- the weekly digest is retired ----------------------------------------------

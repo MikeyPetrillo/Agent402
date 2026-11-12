@@ -60,7 +60,7 @@ import { refusingHook, passingHook, HOOK_NAMES, ARC_CONTRACT_WALLET_CHECK_FAILED
 import { verifyFailureLine, payerNamedBy } from "./verify-failure-log.js";
 import { createRailRecheck, railRecheckSettings } from "./rail-recheck.js";
 import { bootReadSettings, readSupportedAtBoot } from "./boot-supported-read.js";
-import { svmTransferAccounts, svmPayerFromPayload } from "./svm-payer.js";
+import { svmPaymentAuthority, isSvmNetwork } from "./svm-payer.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -909,6 +909,180 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
     trimmed.push("output-example");
   }
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
+}
+
+// The x402 serviceName of a tool. Printable ASCII only, then
+// SERVICE_NAME_MAX characters - both are ResourceInfoSchema's rules
+// (@x402/core), and the contract sweep fails the build on either. A tool named
+// "EDGAR company lookup (ticker -> CIK)" carried a real arrow character and
+// was rejected as Invalid rather than as too long, which is why this
+// normalizes before it truncates. A cut name ends on a whole clause: the word
+// boundary first, then an aside the cut left open ("metered (pay") is dropped
+// whole, then a dangling separator or connective, and a cut inside a clause
+// backs off to its last connective ("guard with signed" -> "guard"), so
+// "Chat completions - metered (pay what the call costs)" reads
+// "Chat completions - metered".
+export const SERVICE_NAME_MAX = 32;
+const cleanServiceName = (raw) => String(raw ?? "").replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
+export function x402ServiceName(raw) {
+  const clean = cleanServiceName(raw);
+  if (!clean) return "Agent402.tools";
+  if (clean.length <= SERVICE_NAME_MAX) return clean;
+  const hard = clean.slice(0, SERVICE_NAME_MAX);
+  // A cut that lands on a word end keeps that word; otherwise the partial word goes.
+  let cut = /\s/.test(clean[SERVICE_NAME_MAX]) ? hard.trim() : hard.replace(/\s+\S*$/, "").trim();
+  // Drop each bracket the cut left open, with what follows it.
+  for (const [open, close] of [["(", ")"], ["[", "]"], ["{", "}"]]) {
+    for (;;) {
+      let depth = 0, lastOpen = -1;
+      for (let k = 0; k < cut.length; k++) {
+        if (cut[k] === open) { if (depth === 0) lastOpen = k; depth++; }
+        else if (cut[k] === close && depth > 0) depth--;
+      }
+      if (depth === 0) break;
+      cut = cut.slice(0, lastOpen).trim();
+    }
+  }
+  const tidy = (t) => t.replace(/[\s\-,:;/&+|.]+$/, "").replace(/\s+(and|or|of|for|to|the|a|an|with|by|in|on)$/i, "").trim();
+  cut = tidy(cut);
+  // A cut that did not land on a clause end ("guard with signed") backs off
+  // to the last connective, when what is left still names the tool.
+  const next = clean.slice(cut.length).trimStart();
+  if (cut && !/^[(\-,:;/+[{]/.test(next)) {
+    // A qualifier the cut entered after a comma ("LinkedIn article, ready" of
+    // "..., ready to publish") is dropped back to the comma. A list the cut
+    // entered ("dossier, insider flow and institutional holders") is never
+    // cut to its first item, which would read as the whole product: it keeps
+    // the whole items that fit when that is two or more, else the label
+    // before a colon ("Ticker pack"), else the word cut stands. Otherwise
+    // the cut backs off to its last connective.
+    const comma = cut.lastIndexOf(",");
+    const m = /^(.*\S)\s+(?:with|for|on|of|to|in|by)\s/i.exec(cut);
+    if (comma > 0 && !/[(\[{]/.test(cut.slice(comma))) {
+      const bracket = clean.search(/[([{]/);
+      const lead = bracket > 0 ? clean.slice(0, bracket).trim() : clean;
+      const colon = lead.lastIndexOf(":", comma);
+      const listStart = colon >= 0 ? colon + 1 : 0;
+      const isList = comma < lead.length && /,|\s(?:and|or|&)\s/i.test(lead.slice(comma + 1));
+      if (!isList) cut = tidy(cut.slice(0, comma));
+      else {
+        const items = lead.slice(listStart).split(/,\s*|\s+(?:and|or|&)\s+/i).map((s) => s.trim()).filter(Boolean);
+        const head = lead.slice(0, listStart);
+        let kept = 0;
+        while (kept < items.length && `${head}${head ? " " : ""}${items.slice(0, kept + 1).join(", ")}`.trim().length <= SERVICE_NAME_MAX) kept++;
+        if (kept >= 2) cut = `${head}${head ? " " : ""}${items.slice(0, kept).join(", ")}`.trim();
+        else if (colon > 0) cut = tidy(lead.slice(0, colon));
+      }
+    }
+    else if (m && m[1].length >= 16 && !/[(\[{]/.test(cut.slice(m[1].length))) cut = tidy(m[1]);
+  }
+  return cut || hard.trim();
+}
+
+/**
+ * serviceNames for a whole catalog: raw name -> serviceName. Each name is cut
+ * by x402ServiceName. When names that differ cut to one serviceName, the
+ * group is settled in this order, so only a name that still collides is tagged:
+ *   1. a name that fits whole keeps it (it is the tool's own name);
+ *   2. a name whose own words beyond the shared cut carry a word no sibling
+ *      has ("Company due-diligence dossier - MAX") is tagged with that word;
+ *   3. if then one name is left on the shared cut and no whole name holds it,
+ *      it keeps the cut untagged; two or more left are each tagged from the
+ *      aside that tells them apart ("Gemini generateContent (nano tier)").
+ * A tag is words of the tool's own name: a word no sibling carries, alone
+ * only when it ends its phrase or is a lowercase word followed only by words
+ * every sibling shares ("nano" of "nano tier"); otherwise the run from it to
+ * the phrase's end, so a capitalized modifier (a vendor) never leaves the
+ * noun it modifies ("OpenAI transcription wire" never tags as "OpenAI"). A
+ * hyphenated word is never split. The cut gives up words from its end until
+ * the tag fits, keeping two when it can and never fewer than one, and a
+ * candidate that equals another listing's serviceName is passed over.
+ */
+export function x402ServiceNames(rawNames) {
+  const out = new Map();
+  const raws = [...new Set((rawNames || []).filter((n) => typeof n === "string" && n.trim()))];
+  const groups = new Map();
+  for (const raw of raws) {
+    const sn = x402ServiceName(raw);
+    out.set(raw, sn);
+    if (!groups.has(sn)) groups.set(sn, []);
+    groups.get(sn).push(raw);
+  }
+  const wordsOf = (t) => t.replace(/[()[\]{},;:+]/g, " ").split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w));
+  // Phrases of a name beyond the shared cut: the lead's remaining words, then
+  // each comma-, semicolon- or plus-separated part of every aside.
+  const phrasesOf = (clean, baseWords) => {
+    const paren = clean.search(/[([{]/);
+    const lead = paren > 0 ? clean.slice(0, paren) : clean;
+    const leadWords = wordsOf(lead);
+    let i = 0;
+    while (i < baseWords.length && i < leadWords.length && leadWords[i].toLowerCase() === baseWords[i].toLowerCase().replace(/[^A-Za-z0-9]+$/, "")) i++;
+    const leadRest = leadWords.slice(i);
+    const asides = paren > 0 ? clean.slice(paren).split(/[()[\]{},;+]/).map(wordsOf).filter((p) => p.length) : [];
+    return { lead: leadRest.length ? [leadRest] : [], asides };
+  };
+  const taken = new Set(out.values());
+  const fit = (base, tag, avoid) => {
+    let words = base.split(" ");
+    for (const min of [2, 1]) {
+      let w = words;
+      for (;;) {
+        const name = `${w.join(" ").replace(/[\s\-,:;/&+|.]+$/, "")} ${tag}`;
+        if (name.length <= SERVICE_NAME_MAX && !avoid.has(name)) return name;
+        if (w.length <= min) break;
+        w = w.slice(0, -1);
+      }
+    }
+    return null;
+  };
+  for (const [base, members] of groups) {
+    const cleans = new Map(members.map((r) => [r, cleanServiceName(r)]));
+    if (new Set(cleans.values()).size < 2) continue;
+    const baseWords = base.split(" ");
+    const lower = (r) => new Set(wordsOf(cleans.get(r)).map((w) => w.toLowerCase()));
+    const tagsFor = (raw, which) => {
+      const others = members.filter((r) => cleans.get(r) !== cleans.get(raw)).map(lower);
+      const unique = (w) => others.every((o) => !o.has(w.toLowerCase()));
+      const shared = (w) => others.every((o) => o.has(w.toLowerCase()));
+      const ph = phrasesOf(cleans.get(raw), baseWords);
+      const tags = [];
+      for (const p of ph[which]) {
+        p.forEach((w, i) => {
+          if (!unique(w)) return;
+          const rest = p.slice(i + 1);
+          if (rest.length === 0 || (!/[A-Z]/.test(w) && rest.every(shared))) tags.push(w);
+          if (rest.length) tags.push(p.slice(i).join(" "));
+        });
+      }
+      return tags;
+    };
+    const tagWith = (raw, tags) => {
+      for (const t of tags) {
+        const name = fit(base, t, taken);
+        if (name) { out.set(raw, name); taken.add(name); return true; }
+      }
+      return false;
+    };
+    const whole = members.filter((r) => cleans.get(r) === base);
+    let left = members.filter((r) => cleans.get(r) !== base);
+    left = left.filter((r) => !tagWith(r, tagsFor(r, "lead")));
+    if (left.length === 1 && whole.length === 0) continue;
+    for (const r of left) tagWith(r, [...tagsFor(r, "asides"), ...tagsFor(r, "lead")]);
+  }
+  return out;
+}
+
+/**
+ * The serviceName of each catalog item, as the payment middleware lists it:
+ * the whole catalog's names settled once (x402ServiceNames), the host name
+ * for an item with no name.
+ */
+export function catalogServiceNameFor(catalog) {
+  const catalogServiceNames = x402ServiceNames(Object.values(catalog || {}).map((i) => i?.name));
+  return (item) =>
+    (typeof item?.name === "string" && item.name.trim())
+      ? (catalogServiceNames.get(item.name) ?? x402ServiceName(item.name))
+      : "Agent402.tools";
 }
 
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
@@ -2278,25 +2452,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // "Extract article" beats "Agent402.tools" as the name of a row in an index
   // of 14,000 resources. Falls back to the host name when a tool has no name,
   // so a listing is never anonymous.
-  const serviceNameFor = (item) =>
-    (typeof item?.name === "string" && item.name.trim())
-      // 32 characters is the protocol's own ceiling on serviceName
-      // (ResourceInfoSchema); the contract sweep fails the build on 33. Trim at
-      // a word boundary so a cut name still reads as a name.
-      ? asciiName(item.name)
-      : "Agent402.tools";
-  // Printable ASCII only, then 32 characters - both are ResourceInfoSchema's
-  // rules, and the contract sweep fails the build on either. A tool named
-  // "EDGAR company lookup (ticker -> CIK)" carried a real arrow character and
-  // was rejected as Invalid rather than as too long, which is why this
-  // normalises before it truncates. Trim on a word boundary so a cut name
-  // still reads as a name.
-  const asciiName = (raw) => {
-    const clean = String(raw).replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
-    if (!clean) return "Agent402.tools";
-    if (clean.length <= 32) return clean;
-    return clean.slice(0, 32).replace(/\s+\S*$/, "").trim() || clean.slice(0, 32);
-  };
+  // 32 characters is the protocol's own ceiling on serviceName
+  // (ResourceInfoSchema); the contract sweep fails the build on 33. Names are
+  // cut once for the whole catalog, so two tools whose names differ (a tier
+  // family) keep listings that differ (x402ServiceNames).
+  const serviceNameFor = catalogServiceNameFor(catalog);
   const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds });
   const acceptsFor = (item) => acceptsForItem(item, railsNow());
   // Read at call time, like acceptsFor: a rail dropped or joined after boot
@@ -3144,6 +3304,51 @@ export function gatewayBatchedRailStatus() {
   return { status: !dropped.length ? "offered" : offered.length ? "partial" : "dropped", configured: [...gatewayBatchedStatus.configured], offered, dropped };
 }
 
+/**
+ * The one-way payer id a verify failure carries (recordVerifyFailure): an HMAC
+ * of the signed payer, the Solana transfer authority, or the credential, under
+ * the telemetry secret. Null without a secret. Never throws.
+ */
+export async function verifyFailurePayerKey(ctx, { idSecret: secret } = {}) {
+  // Who failed, as a one-way id. Prefer the signed EIP-3009 `from`; fall back to
+  // the credential itself (SVM/Stellar payloads carry no readable payer), which
+  // is what credentialKeyOf already derives for the 402 hint. Never an address.
+  let payerKey = null;
+  try {
+    // KEYED, not a bare hash. sha256 of an EVM address is one-way only against
+    // blind inversion: the input comes from a public, enumerable set - every
+    // address that has settled USDC on Base - so anyone holding the analytics
+    // dataset recovers the payer by hashing candidates until one matches. That is
+    // pseudonymisation, not anonymisation, and the comment here claimed the
+    // stronger thing. An HMAC under a secret we hold is neither forgeable nor
+    // enumerable and still groups (same payer, same id) - the construction the
+    // wish board already uses for caller fingerprints.
+    const { createHmac } = await import("node:crypto");
+    const idSecret = typeof secret === "string" ? secret : process.env.TELEMETRY_ID_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "";
+    const from = ctx?.paymentPayload?.payload?.authorization?.from;
+    let basis = from ? `payer:${String(from).toLowerCase()}` : null;
+    // An SVM payload carries no `authorization.from`, but its signed
+    // transaction names the buyer (svm-payer.js svmPaymentAuthority): the
+    // TransferChecked authority, the wallet whose tokens move. Before this the fallback below
+    // keyed on the credential, and a Solana credential is a fresh transaction
+    // per attempt, so one looping wallet read as a new payer every time
+    // (197 ids for 197 events, 2026-09-04). Never lowercased: base58.
+    if (!basis && isSvmNetwork(String(ctx?.requirements?.network || ""))) {
+      const svm = svmPaymentAuthority(ctx?.paymentPayload, { feePayer: ctx?.requirements?.extra?.feePayer });
+      if (svm) basis = `svm-payer:${svm}`;
+    }
+    if (!basis) {
+      const { credentialKeyOf } = await import("./verify-hint.js");
+      const cred = credentialKeyOf(ctx?.paymentPayload);
+      if (cred) basis = `credential:${cred}`;
+    }
+    // No secret configured: emit NO id rather than a reversible one. A missing
+    // dimension is a gap in telemetry; a guessable one is a claim we cannot back.
+    if (basis && idSecret) payerKey = `a402:${createHmac("sha256", idSecret).update(basis).digest("hex").slice(0, 32)}`;
+  } catch { /* telemetry is best-effort */ }
+  return payerKey;
+}
+
 // One recorder for BOTH verify-failure shapes @x402/core produces: a
 // facilitator that THROWS (non-2xx verify: CDP's shape) reaches
 // onVerifyFailure; one that answers 200 `{isValid:false}` (PayAI, Solvador,
@@ -3170,43 +3375,7 @@ async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
     }
   } catch { /* a hint is best-effort */ }
   // Telemetry (reason, chain, route, balance BUCKET - never the payer): see posthog.js.
-  // Who failed, as a one-way id. Prefer the signed EIP-3009 `from`; fall back to
-  // the credential itself (SVM/Stellar payloads carry no readable payer), which
-  // is what credentialKeyOf already derives for the 402 hint. Never an address.
-  let payerKey = null;
-  try {
-    // KEYED, not a bare hash. sha256 of an EVM address is one-way only against
-    // blind inversion: the input comes from a public, enumerable set - every
-    // address that has settled USDC on Base - so anyone holding the analytics
-    // dataset recovers the payer by hashing candidates until one matches. That is
-    // pseudonymisation, not anonymisation, and the comment here claimed the
-    // stronger thing. An HMAC under a secret we hold is neither forgeable nor
-    // enumerable and still groups (same payer, same id) - the construction the
-    // wish board already uses for caller fingerprints.
-    const { createHmac } = await import("node:crypto");
-    const idSecret = process.env.TELEMETRY_ID_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "";
-    const from = ctx?.paymentPayload?.payload?.authorization?.from;
-    let basis = from ? `payer:${String(from).toLowerCase()}` : null;
-    // An SVM payload carries no `authorization.from`, but its signed
-    // transaction names the buyer (svm-payer.js): the first required signer
-    // that is not the accept's fee payer. Before this the fallback below
-    // keyed on the credential, and a Solana credential is a fresh transaction
-    // per attempt, so one looping wallet read as a new payer every time
-    // (197 ids for 197 events, 2026-09-04). Never lowercased: base58.
-    if (!basis && /^solana:/.test(String(ctx?.requirements?.network || ""))) {
-      const { svmPayerFromPayload } = await import("./svm-payer.js");
-      const svm = svmPayerFromPayload(ctx?.paymentPayload, { feePayer: ctx?.requirements?.extra?.feePayer });
-      if (svm) basis = `svm-payer:${svm}`;
-    }
-    if (!basis) {
-      const { credentialKeyOf } = await import("./verify-hint.js");
-      const cred = credentialKeyOf(ctx?.paymentPayload);
-      if (cred) basis = `credential:${cred}`;
-    }
-    // No secret configured: emit NO id rather than a reversible one. A missing
-    // dimension is a gap in telemetry; a guessable one is a claim we cannot back.
-    if (basis && idSecret) payerKey = `a402:${createHmac("sha256", idSecret).update(basis).digest("hex").slice(0, 32)}`;
-  } catch { /* telemetry is best-effort */ }
+  const payerKey = await verifyFailurePayerKey(ctx);
   import("./posthog.js").then(({ capturePostHogVerifyFailed }) => capturePostHogVerifyFailed({
     network: ctx?.requirements?.network, scheme: ctx?.requirements?.scheme, // v2 requirements carry no resource; the buyer's payload names it (2 of
     // 7,103 verify_failed events had a path before this, 2026-10-02 audit).
@@ -3326,13 +3495,9 @@ function logVerifyFailure(verb, ctx, reason) {
       const req = ctx?.transportContext?.request?.adapter?.req;
       if (req && typeof req.method === "string" && typeof req.path === "string") slug = routeSlugOf(`${req.method} ${req.path}`);
     } catch { /* no slug */ }
-    const payer = payerNamedBy(ctx, { svm: (payload) => (/^solana:/.test(typeof ctx?.requirements?.network === "string" ? ctx.requirements.network : "") ? svmPayerNamedBy(payload, ctx?.requirements?.extra?.feePayer) : null) });
+    const payer = payerNamedBy(ctx, { svm: (payload) => (isSvmNetwork(ctx?.requirements?.network) ? svmPaymentAuthority(payload, { feePayer: ctx?.requirements?.extra?.feePayer }) : null) });
     console.warn(verifyFailureLine({ verb, network: ctx?.requirements?.network, scheme: ctx?.requirements?.scheme, reason, slug, payer }));
   } catch { /* a log line never decides a payment */ }
-}
-function svmPayerNamedBy(payload, feePayer) {
-  const tx = payload?.payload?.transaction ?? payload?.transaction;
-  return svmTransferAccounts(tx)?.authority || svmPayerFromPayload(payload, { feePayer: typeof feePayer === "string" ? feePayer : undefined }) || null;
 }
 
 export function registerFacilitatorFailureHooks(server, payAiClient, solvadorClient = null, fallbackOverrides = null, { outageFor = () => null } = {}) {

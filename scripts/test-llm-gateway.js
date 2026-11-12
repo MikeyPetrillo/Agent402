@@ -2154,5 +2154,86 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(unserved(words("small qwen")).length === 1, "control: a family the tier does not serve is caught");
 }
 
+// Model-successor copy: no chat tier's description, no chat row of the wiki or
+// README tier table, and no LLM-Proxy row of the wiki home names an id that
+// RETIRING_MODELS retires and no tier list still names (gpt-5, o3, ...); the
+// successors are what is advertised. Derived from the tables, not typed ids.
+// The flex sentence names each id whose asItself row still asks for flex,
+// with the date that row ends, so it stays true after that day.
+{
+  const { readFileSync } = await import("node:fs");
+  const { RETIRING_MODELS } = await import("../src/tools/llm-gateway-kit.js");
+  const allPrefixes = Object.values(TIERS).flatMap((t) => t.prefixes || []).map((p) => p.toLowerCase());
+  const listed = (id) => allPrefixes.some((p) => id === p || id.startsWith(p + "-") || id.startsWith(p + ":"));
+  const short = (id) => id.split("/").pop();
+  const retired = new Set(Object.keys(RETIRING_MODELS).filter((k) => !listed(k)).map(short));
+  ok(["gpt-5", "o3", "gpt-5-nano"].every((id) => retired.has(id)), `the retired set derives from RETIRING_MODELS and the tier lists (${[...retired].join(", ")})`);
+  const named = (text) => text.toLowerCase().split(/[\s,;()|`/]+/).map((w) => w.replace(/[.:]+$/, "")).filter((w) => retired.has(w));
+  const rd = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  const chatRows = (f) => rd(f).split("\n").filter((l) => /^\| `POST \/v1\/[a-z/]*chat\/completions`/.test(l));
+  const texts = [
+    ...LLM_GATEWAY_TOOLS.filter((t) => /^v1-chat-/.test(t.slug)).map((t) => [`${t.slug} description`, t.description]),
+    ...chatRows("wiki/LLM-Gateway.md").map((l) => ["wiki/LLM-Gateway.md " + l.split("|")[1].trim(), l]),
+    ...chatRows("README.md").map((l) => ["README.md " + l.split("|")[1].trim(), l]),
+    ...rd("wiki/Home.md").split("\n").filter((l) => l.includes("|LLM-Proxy]]")).map((l) => ["wiki/Home.md LLM-Proxy row", l]),
+  ];
+  ok(texts.filter(([w]) => /premium/.test(w)).length >= 3 && texts.some(([w]) => /Home/.test(w)), `the check reads the premium description, both premium rows and the wiki home row (${texts.length} texts)`);
+  for (const [where, text] of texts) ok(named(text).length === 0, `${where} names no retired id (${named(text).join(", ") || "none"})`);
+  ok(named("frontier (gpt-5 and gpt-6 astra, o3)").length === 2 && named("GPT-4o/4.1, o3/o3-mini").length === 1, "control: the old premium and proxy wording is caught");
+  const flex = rd("wiki/LLM-Gateway.md").split("\n").find((l) => l.startsWith("Where the upstream offers it")) || "";
+  for (const [id, e] of Object.entries(RETIRING_MODELS).filter(([, e]) => e.asItself?.flex)) {
+    ok(flex.includes(short(id)) && flex.includes(e.until), `the wiki's flex sentence names ${short(id)} with the date its flex row ends (${e.until})`);
+  }
+}
+
+// OpenAI removes gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-pro, o3 and o3-pro on
+// 2026-12-11. No tier list, flex entry, reasoning row or /v1/models id names
+// one (the successors are what is advertised), yet every tier that admitted
+// one still does, before and after that day: RETIRING_MODELS' keepOn holds the
+// admission, and its asItself rows keep flex and the effort table until then.
+{
+  const K = await import("../src/tools/llm-gateway-kit.js");
+  const { LLM_TOOLS } = await import("../src/tools/llm-kit.js");
+  const DEC11 = ["openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano", "openai/gpt-5-pro", "openai/o3", "openai/o3-pro"];
+  const family = (s) => /^openai\/(gpt-5|o3)(?:$|[-:*])/.test(String(s).toLowerCase());
+  const listed = Object.entries(TIERS).flatMap(([slug, t]) => (t.prefixes || []).filter(family).map((p) => `${slug}:${p}`));
+  ok(listed.length === 0, `no tier list names a gpt-5 or o3 family id (${listed.join(", ") || "none"})`);
+  ok(!K.FLEX_MODELS.some(family) && !K.REASONING_MODELS.some((r) => family(r.id || r.prefix)), "no flex entry or reasoning row names one");
+  const homes = (id) => Object.keys(TIERS).filter((t) => tierAllows(t, id, id)).join(",");
+  const want = {
+    "openai/gpt-5-nano": "v1-chat-nano,v1-chat,v1-chat-premium,v1-chat-metered",
+    "openai/gpt-5": "v1-chat-premium,v1-chat-metered", "openai/gpt-5-mini": "v1-chat-premium,v1-chat-metered",
+    "openai/gpt-5-pro": "v1-chat-premium,v1-chat-metered", "openai/o3": "v1-chat-premium,v1-chat-metered",
+    "openai/o3-pro": "v1-chat-premium,v1-chat-metered", "openai/gpt-5-codex": "v1-chat-premium,v1-chat-metered",
+  };
+  try {
+    K.setRetiringClockForTest(() => Date.parse("2026-12-10T23:59:59Z"));
+    for (const [id, tiers] of Object.entries(want)) ok(homes(id) === tiers, `before 2026-12-11 ${id} is admitted on ${tiers} (got ${homes(id)})`);
+    ok(K.flexEligible("openai/gpt-5-nano") && K.reasoningProfile("openai/gpt-5-nano")?.id === "openai/gpt-5-nano" && JSON.stringify(K.defaultReasoningFor("openai/gpt-5-nano", "v1-chat-nano")) === '{"effort":"minimal"}', "before 2026-12-11 gpt-5-nano keeps its flex attempt and its effort row");
+    ok(!modelsList().data.some((m) => family(m.id)), "/v1/models advertises no gpt-5 or o3 family id");
+    K.setRetiringClockForTest(() => Date.parse("2026-12-11T00:00:00Z"));
+    for (const [id, tiers] of Object.entries(want)) {
+      const got = homes(id).split(",").filter((t) => !["v1-chat-auto", "v1-chat-grounded"].includes(t)).join(",");
+      ok(got === tiers, `from 2026-12-11 ${id} is still admitted on ${tiers}, served by ${canonicalModel(id)} (got ${got})`);
+    }
+    ok(DEC11.every((id) => !family(canonicalModel(id))), "from 2026-12-11 every one is served by its gpt-5.6 successor");
+    ok(!K.flexModelIds().some(family) && !K.reasoningRows().some((r) => family(r.id || r.prefix)), "from 2026-12-11 the asItself flex and effort rows are gone (nothing names the retired id)");
+  } finally { K.setRetiringClockForTest(null); }
+  // /api/llm-premium (llm-kit.js): the o3 family left the tier list and is
+  // still served there (as itself until 2026-12-11; gpt-5.6-terra after).
+  const savedKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  try {
+    const premium = LLM_TOOLS.find((t) => t.slug === "llm-premium");
+    const status = async (model) => { try { await premium.handler({ model, messages: [{ role: "user", content: "hi" }] }); return 200; } catch (e) { return { code: e.statusCode, message: e.message }; } };
+    const refused = await status("gpt-4o");
+    // o3 is no longer advertised but is still accepted on llm-premium until its
+    // retirement (keepOn), so the refusal's accepted-family list names it.
+    ok(refused.code === 400 && /\bo3\b/.test(refused.message.split("Allowed prefixes:")[1] || ""), `the llm-premium refusal names every accepted family, o3 included (${refused.message})`);
+    for (const m of ["o3", "o3-pro", "o3-mini", "o4-mini"]) { const r = await status(m); ok(r.code !== 400, `llm-premium still accepts ${m} (answered ${r.code}: past validation)`); }
+    ok(!premium.tags.includes("o3"), "llm-premium's tags advertise the successor, not o3");
+  } finally { if (savedKey !== undefined) process.env.OPENAI_API_KEY = savedKey; }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

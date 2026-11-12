@@ -5,7 +5,7 @@
 // read from the decide config (src/decide/config.js), never typed here, so
 // the page cannot drift from what the 402 charges. Rendered only when the
 // decide tools are in the catalog (the route 404s otherwise).
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { decideConfig } from "./decide/config.js";
 import { x402RailsFor } from "./rails.js";
 
@@ -80,7 +80,6 @@ export function decidePage(baseUrl, catalog) {
 .dc-card p{font-size:var(--fs-md);line-height:1.55;color:var(--muted);margin:0}
 .dc-num{font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
 .dc-price{font-family:var(--font-mono);font-size:var(--fs-xl);letter-spacing:-.02em;color:var(--ink);margin:6px 0 10px}
-.dc-pre{background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);padding:18px 20px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.6;overflow-x:auto;margin:0;white-space:pre}
 .dc-h2{font-weight:700;font-size:var(--fs-2xl);line-height:1.05;letter-spacing:-.025em;margin:0 0 12px;color:var(--ink)}
 .dc-lede{font-size:var(--fs-lg);line-height:1.6;color:var(--muted);margin:0 0 22px;max-width:720px}
 @media (max-width:900px){.dc-hero,.dc-steps,.dc-depths{grid-template-columns:minmax(0,1fr)}}
@@ -118,9 +117,9 @@ export function decidePage(baseUrl, catalog) {
       </div>
       <div>
         <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">the call</div>
-        <pre class="dc-pre">${esc(curl)}</pre>
+        ${codeBlock(curl, { name: "the call", style: "margin:0" })}
         <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:16px 0 8px;">the plan (abridged)</div>
-        <pre class="dc-pre">${esc(example)}</pre>
+        ${codeBlock(example, { name: "the plan", style: "margin:0" })}
       </div>
     </div>
   </div>
@@ -140,7 +139,7 @@ ${sec(`<div id="connect"><h2 class="dc-h2">Connect.</h2><p class="dc-lede">Three
     <div style="display:grid;grid-template-columns:70px 1fr auto;gap:14px;padding:12px 18px;border-bottom:1px solid var(--hairline);"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/execute</span><span style="color:var(--faint);">MCP: decide.execute · plan budget less credit</span></div>
     <div style="display:grid;grid-template-columns:70px 1fr auto;gap:14px;padding:12px 18px;"><span style="color:var(--accent);font-weight:700;">POST</span><span>/api/decide/feedback</span><span style="color:var(--faint);">MCP: decide.feedback · free</span></div>
   </div>
-  <pre class="dc-pre" style="margin-top:14px;">claude mcp add --transport http agent402 ${esc(baseUrl)}/mcp</pre></div>`)}
+  ${codeBlock(`claude mcp add --transport http agent402 ${baseUrl}/mcp`, { name: "the install command", style: "margin:14px 0 0" })}</div>`)}
 ${sec(`<h2 class="dc-h2">Questions.</h2>${faqs.map((f) => `<details style="border-top:1px solid var(--hairline);padding:16px 0;"><summary style="font-weight:600;font-size:var(--fs-lg);cursor:pointer;color:var(--ink);">${esc(f.q)}</summary><p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:10px 0 0;max-width:760px;">${esc(f.a)}</p></details>`).join("")}`, "56px 30px 64px")}
 ${ledgerFooterCompact()}`;
 

@@ -73,6 +73,7 @@ import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
+import { redactSecrets } from "./tools/redact.js";
 import {
   FLAGSHIP_SLUGS,
   FLAGSHIP_MCP_NAMES,
@@ -188,6 +189,17 @@ export function problemOf(j) {
   return out;
 }
 
+/** The text of an error this connector answers with: a configured secret
+ *  value or a credential-bearing URL it quotes (an upstream echo, a database
+ *  driver's connection string) is scrubbed BEFORE the cut, so a cut never
+ *  splits a secret past the scrubber; the rest of the reason stays readable.
+ *  With no `max` the whole scrubbed text is kept.
+ *  The HTTP route binder answers the same scrubbed text. */
+export function mcpErrorText(err, max = undefined) {
+  const raw = err && typeof err === "object" && "message" in err ? err.message : err;
+  return redactSecrets(String(raw ?? "")).slice(0, max);
+}
+
 /** The tool-result text for a call this connector stopped waiting on.
  *  `paid` = a payment credential rode along on the call; only without one is
  *  "nothing was charged" certain. */
@@ -196,7 +208,7 @@ export function connectorCutoffText({ label, seconds, paid, route = null, error 
   // was presented; a paid cut-off never says it.
   const money = paid ? PAID_CUTOFF_TEXT : UNPAID_CUTOFF_TEXT;
   const where = route ? `${route} over HTTP` : "the tool's HTTP route directly";
-  if (error != null) return `${label}: the call could not be completed (${String(error).slice(0, 120)}). ${money}${paid ? "" : " Retry shortly."}`;
+  if (error != null) return `${label}: the call could not be completed (${mcpErrorText(error, 120)}). ${money}${paid ? "" : " Retry shortly."}`;
   return `${label}: the call did not finish within ${seconds}s on this connector and the connector stopped waiting. ${money} ${paid ? "For long calls, use" : "Retry, or call"} ${where}, which has no connector deadline.`;
 }
 // How long a task-eligible composite may run before we answer with a task
@@ -967,7 +979,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // JSON-RPC error on the underlying request, so the task FAILED - and
           // the challenges ride along so the client can pay and call again.
           const code = err instanceof McpError ? err.code : TASK_INTERNAL_ERROR;
-          await tasks.fail(rec.taskId, { code, message: err?.message || "Payment required.", ...(err?.data ? { data: err.data } : {}) }, "Payment was required for this call; no payment was claimed.");
+          await tasks.fail(rec.taskId, { code, message: mcpErrorText(err) || "Payment required.", ...(err?.data ? { data: err.data } : {}) }, "Payment was required for this call; no payment was claimed.");
           return;
         }
         // Spec: `failed` is for JSON-RPC errors only. A tool result that
@@ -990,7 +1002,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // Left alone it would leave the task "working" until its TTL; it ends
         // failed, with the fault logged here and kept out of the buyer's text.
         endProgress();
-        console.error(`[mcp-tasks] completion path threw for ${rec.taskId} (${entry.def.slug}): ${String(err?.message || err).slice(0, 200)}`);
+        console.error(`[mcp-tasks] completion path threw for ${rec.taskId} (${entry.def.slug}): ${mcpErrorText(err, 200)}`);
         try {
           await tasks.fail(rec.taskId, { code: TASK_INTERNAL_ERROR, message: "The connector could not record the run's result." }, `The run's result could not be recorded by this connector. ${PAID_CUTOFF_TEXT}`);
         } catch { /* a terminal record is never rewritten */ }
@@ -1154,7 +1166,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             const result = recordWish({ need: args.need, context: args.context, source: "mcp", ip });
             return mcpJsonResult(result);
           } catch (err) {
-            return { content: [{ type: "text", text: err.message }], isError: true };
+            return { content: [{ type: "text", text: mcpErrorText(err) }], isError: true };
           }
         }
         if (name === "server.describe") {
@@ -1209,7 +1221,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         if (name === "decide.feedback" && decideFeedback) {
           try { return mcpJsonResult(decideFeedback(args, { ip })); }
-          catch (err) { return { content: [{ type: "text", text: err.statusCode && err.statusCode < 500 ? err.message : "feedback failed" }], isError: true }; }
+          catch (err) { return { content: [{ type: "text", text: err.statusCode && err.statusCode < 500 ? mcpErrorText(err) : "feedback failed" }], isError: true }; }
         }
         if (name === "sellers.list" && sellersListed && args.wire === "mpp") {
           // The MPP leaderboard (src/mpp-leaderboard.js) - same row discipline
@@ -1475,7 +1487,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           const attribution = attributionOf(handlerErr);
           const status = handlerErr.statusCode || 500;
           const hint = {
-            error: handlerErr.message,
+            error: mcpErrorText(handlerErr),
             tool: entry.def.slug,
             ...(upstreamStatus ? { upstreamStatus } : {}),
             ...(attribution ? { attribution } : {}),
@@ -1530,7 +1542,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // A payment ask is a JSON-RPC ERROR (-32042) by mppx's wire, not an
         // isError text the client would show verbatim - let the SDK send it.
         if (err instanceof McpError) throw err;
-        return { content: [{ type: "text", text: `Agent402: ${err.message}` }], isError: true };
+        return { content: [{ type: "text", text: `Agent402: ${mcpErrorText(err)}` }], isError: true };
       }
     });
 
@@ -1710,10 +1722,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           const label = `Agent402${tool ? ` (${tool})` : ""}`;
           const text = err.__deadline
             ? connectorCutoffText({ label, seconds: Math.round(MCP_REQ_DEADLINE_MS / 1000), paid })
-            : `${label}: the connector hit an internal error handling this call (${String(err?.message || err).slice(0, 120)}). ${paid ? PAID_CUTOFF_TEXT : `${UNPAID_CUTOFF_TEXT} Retry shortly.`}`;
+            : `${label}: the connector hit an internal error handling this call (${mcpErrorText(err, 120)}). ${paid ? PAID_CUTOFF_TEXT : `${UNPAID_CUTOFF_TEXT} Retry shortly.`}`;
           res.status(200).json({ jsonrpc: "2.0", id: req.body.id, result: { content: [{ type: "text", text }], isError: true } });
         } else {
-          res.status(err.__deadline ? 504 : 500).json({ jsonrpc: "2.0", error: { code: -32603, message: err.message }, id: req.body?.id ?? null });
+          res.status(err.__deadline ? 504 : 500).json({ jsonrpc: "2.0", error: { code: -32603, message: mcpErrorText(err) }, id: req.body?.id ?? null });
         }
       }
     } finally {

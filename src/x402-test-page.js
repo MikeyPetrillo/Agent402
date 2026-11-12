@@ -10,7 +10,7 @@
 // test scans that module for `reason:` literals, so this page cannot end up
 // teaching a vocabulary the server no longer speaks.
 import { siteOrgRef } from "./site-org.js";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { REJECTION_REASONS } from "./payment-reject.js";
 
 import { repoUrl } from "./repo-link.js";
@@ -27,7 +27,7 @@ export function x402TestPage(baseUrl) {
     "Point any x402 or MPP client at a real paid endpoint and get told exactly why it was refused: which field differs, which scheme and network are offered, whether the signature recovered. Free, because a refused payment is never settled on x402.";
 
   const mono = "font-family:var(--font-mono);font-size:var(--fs-sm);";
-  const pre = (s) => `<pre style="background:var(--panel);color:var(--on-panel);padding:18px 20px;overflow-x:auto;${mono}line-height:1.6;margin:0 0 18px;">${esc(s)}</pre>`;
+  const pre = (s) => codeBlock(s, { style: "margin:0 0 18px" });
 
   const rows = REJECTION_REASONS.map((r) => `
     <tr>

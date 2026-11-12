@@ -21,11 +21,6 @@ export function contributePage(baseUrl) {
 .ct-section li{margin-bottom:6px}
 .ct-section li code{font-family:var(--font-mono);background:var(--panel);color:var(--on-panel);padding:2px 7px;font-size:var(--fs-sm);border:1px solid var(--hairline)}
 
-.ct-code-wrap{position:relative;margin-bottom:24px}
-.ct-code-wrap pre{background:var(--panel);border:1px solid var(--hairline);padding:20px;overflow-x:auto;margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;color:var(--on-panel)}
-.ct-code-wrap .ct-copy{position:absolute;top:8px;right:8px;background:var(--panel);border:1.5px solid var(--paper);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-2xs);padding:4px 10px;cursor:pointer;transition:all .15s}
-.ct-code-wrap .ct-copy:hover{background:var(--paper);color:var(--ink)}
-.ct-code-wrap .ct-copy.copied{color:var(--accent);border-color:var(--accent)}
 
 .ct-label{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:8px}
 
@@ -61,8 +56,7 @@ export function contributePage(baseUrl) {
 <p>Add a new file in <code>src/tools/</code>, for example <code>my-kit.js</code>. Export a named array of tool objects:</p>
 
 <span class="ct-label">src/tools/my-kit.js</span>
-<div class="ct-code-wrap">
-<pre><code>// my-kit.js - example tool kit
+<div class="ml-code" style="margin:0 0 24px"><pre><code>// my-kit.js - example tool kit
 export const MY_TOOLS = [
   {
     route: "POST /api/reverse-string",
@@ -98,42 +92,31 @@ export const MY_TOOLS = [
       return { reversed: [...input.text].reverse().join("") };
     },
   },
-];</code></pre>
-<button class="ct-copy" aria-label="Copy">Copy</button>
-</div>
+];</code></pre></div>
 
 <h3>Step 2 - Wire it into the server</h3>
 <p>Open <code>src/server.js</code>, add the import, and spread the array into <code>ALL_KIT</code>:</p>
 
 <span class="ct-label">src/server.js</span>
-<div class="ct-code-wrap">
-<pre><code>import { MY_TOOLS } from "./tools/my-kit.js";
+<div class="ml-code" style="margin:0 0 24px"><pre><code>import { MY_TOOLS } from "./tools/my-kit.js";
 
-const ALL_KIT = [...KIT, ...KIT2, /* ... existing kits ... */ ...MY_TOOLS];</code></pre>
-<button class="ct-copy" aria-label="Copy">Copy</button>
-</div>
+const ALL_KIT = [...KIT, ...KIT2, /* ... existing kits ... */ ...MY_TOOLS];</code></pre></div>
 
 <h3>Step 3 - Test</h3>
 <p>Every tool must pass the "answers its own example" CI check. Run the test suite locally:</p>
 
-<div class="ct-code-wrap">
-<pre><code># Boot the server in free mode
+<div class="ml-code" style="margin:0 0 24px"><pre><code># Boot the server in free mode
 FREE_MODE=true PORT=3000 node src/server.js
 
 # In another terminal, run all tool tests
-TARGET_URL=http://localhost:3000 node scripts/test-all.js</code></pre>
-<button class="ct-copy" aria-label="Copy">Copy</button>
-</div>
+TARGET_URL=http://localhost:3000 node scripts/test-all.js</code></pre></div>
 
 <h3>Step 4 - Record the route</h3>
 <p>Every route ever published is recorded so a retired one can answer 410 with its replacement. Record the new route (the script boots its own free server), then run the two guards CI runs on it.</p>
 
-<div class="ct-code-wrap">
-<pre><code>node scripts/published-slugs.js --write
+<div class="ml-code" style="margin:0 0 24px"><pre><code>node scripts/published-slugs.js --write
 node scripts/sync-count.js --check
-node scripts/test-retired-routes.js</code></pre>
-<button class="ct-copy" aria-label="Copy">Copy</button>
-</div>
+node scripts/test-retired-routes.js</code></pre></div>
 
 <div class="ct-note">
 <strong>Key rules:</strong> Utility tools must be deterministic - same input, same output, every time. No LLM calls, no non-deterministic dependencies. New tools are wallet-only by default. To offer a pure-CPU tool free (no network, no API key, no model), add its slug to <code>FREE_TIER_SLUGS</code> in <code>src/free-tier.js</code>; <code>scripts/test-free-tier-egress.js</code> proves it makes no outbound calls. <code>WALLET_ONLY_SLUGS</code> in <code>src/pow.js</code> is a reviewed override that keeps a listed slug wallet-only.
@@ -174,8 +157,7 @@ node scripts/test-retired-routes.js</code></pre>
 </ol>
 
 <span class="ct-label">Guide format in src/guides.js</span>
-<div class="ct-code-wrap">
-<pre><code>{
+<div class="ml-code" style="margin:0 0 24px"><pre><code>{
   slug: "my-guide",
   title: "How to do X with Agent402",
   description: "A practical walkthrough of doing X.",
@@ -190,13 +172,10 @@ curl -X POST https://agent402.tools/api/my-tool \\\\
   -d '{"text":"hello"}'
 \\\`\\\`\\\`
   \`,
-}</code></pre>
-<button class="ct-copy" aria-label="Copy">Copy</button>
-</div>
+}</code></pre></div>
 
 <span class="ct-label">wiki/ file format</span>
-<div class="ct-code-wrap">
-<pre><code># Your Guide Title
+<div class="ml-code" style="margin:0 0 24px"><pre><code># Your Guide Title
 
 Standard Markdown. CI syncs this to the GitHub wiki automatically.
 
@@ -207,9 +186,7 @@ Use ## for top-level sections within the guide.
 ## See also
 
 - [[Getting Started]]
-- [[Tool Catalog]]</code></pre>
-<button class="ct-copy" aria-label="Copy">Copy</button>
-</div>
+- [[Tool Catalog]]</code></pre></div>
 </div>
 
 <hr class="ct-divider">
@@ -236,8 +213,7 @@ Use ## for top-level sections within the guide.
 </ul>
 
 <span class="ct-label">Example skill pack in src/skills.js</span>
-<div class="ct-code-wrap">
-<pre><code>{
+<div class="ml-code" style="margin:0 0 24px"><pre><code>{
   slug: "domain-health",
   title: "Domain health check",
   tagline:
@@ -262,23 +238,18 @@ Use ## for top-level sections within the guide.
     "Check the health of example.com. Use Agent402 to: (1) resolve DNS, "
     + "(2) inspect the TLS cert, (3) check HTTP security headers. "
     + "Summarize any issues found.",
-}</code></pre>
-<button class="ct-copy" aria-label="Copy">Copy</button>
-</div>
+}</code></pre></div>
 
 <h3>Testing skill packs</h3>
 <p>Skill packs are validated by <code>scripts/test-mcp-all.js</code>, which checks that <code>prompts/list</code> returns all packs and <code>prompts/get</code> renders each one without errors. The underlying tools are covered by the standard <code>test-all.js</code> suite.</p>
 
-<div class="ct-code-wrap">
-<pre><code># Boot the server and run the MCP test suite
+<div class="ml-code" style="margin:0 0 24px"><pre><code># Boot the server and run the MCP test suite
 FREE_MODE=true PORT=3000 node src/server.js
 TARGET_URL=http://localhost:3000 node scripts/test-mcp-all.js
 
 # Generate the pack's price from its tools, and record its route
 TARGET_URL=http://localhost:3000 node scripts/pack-prices.js --write
-node scripts/published-slugs.js --write</code></pre>
-<button class="ct-copy" aria-label="Copy">Copy</button>
-</div>
+node scripts/published-slugs.js --write</code></pre></div>
 
 <div class="ct-note">
 <strong>Tip:</strong> Every tool slug in <code>toolSlugs</code> must exist in the catalog. The page renderer shows a "missing" placeholder for dead references, and CI will catch it. Use <code>/api/find?q=&lt;task&gt;</code> to discover existing tool slugs.
@@ -296,8 +267,7 @@ node scripts/published-slugs.js --write</code></pre>
 
 </div>
 ${ledgerFooterCompact()}
-
-<script src="/js/copy-buttons.js"></script>`;
+`;
 
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "/contribute", extraCss, body });
 }

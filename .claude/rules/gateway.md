@@ -49,6 +49,13 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   verified payment never spends it.
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
+- **Model retirements** (`RETIRING_MODELS` in `llm-gateway-kit.js`): each id maps to the successor
+  `canonicalModel` serves from `until` (`asItselfUntil` serves the id as itself before that day).
+  `keepOn: [tierSlug]` keeps an id, and every id of its family, admitted on a tier whose list no
+  longer names it (`retiredKeepAdmits`); `asItself: { flex, efforts }` holds the flex attempt and
+  reasoning-effort row that apply only while the id is still served as itself (`pendingAsItself`).
+  Tests move the clock with `setRetiringClockForTest`; `MODEL_RETIREMENTS_NOW=<ISO date>` runs
+  `scripts/test-model-retirements.js` as of that day, to prove a change passes after a date.
 - **Reasoning fitted to the output cap** (chat, Messages, Responses; `reasoningForLink`,
   `fitEffortToBudget`, `fitBudgetForAnswer` in `llm-gateway-kit.js`): on each outbound link a
   buyer effort above "low" is sent as "low" when the link's cap is under `smallBudgetThreshold`
@@ -162,12 +169,17 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `DIRECT_UPSTREAM_MODELS` Actions secrets are set (unset: skipped with a note); since the ids are a
   secret its lines carry counts and reason codes only, never an id or a price
   (`scripts/test-model-drift-redaction.js`). Suite: `scripts/test-direct-upstream-cost-guard.js`.
-- **Hard daily ceilings** (`src/upstream-hard-caps.js`, `HARDCAP_*`): a unit is a call that may have reached the
-  upstream. It is taken before the call and given back only when the call provably never left this process
+- **Hard daily ceilings** (`src/upstream-hard-caps.js`, `HARDCAP_*`): a unit is a call the upstream may have
+  served. It is taken before the call and given back when the call provably never left this process
   (`neverReachedUpstream`: the name did not resolve, the connection was refused or never opened, or the signal was
-  already aborted at the call). An upstream error answer, a timeout and a reset keep their unit. The operator view
-  counts the units given back as `releasedToday`. Suite: `scripts/test-upstream-hard-caps.js`.
+  already aborted at the call) or the upstream refused it before any work (`upstreamRefusedBeforeWork`: a 4xx answer;
+  for E2B's create also the SDK's AuthenticationError, RateLimitError and ServiceBusyError). A 2xx, 3xx or 5xx
+  answer, a timeout and a reset keep their unit. The operator view counts the units given back as `releasedToday`.
+  Suite: `scripts/test-upstream-hard-caps.js`.
 - **Quoted material:** every report kit hands the model third-party text inside `quotedMaterial` blocks
   (`src/report-grounding.js`) and carries `QUOTED_MATERIAL_RULE`, or `QUOTED_DATA_RULE` (the same rule without its
   citation sentence) where the report lists no numbered sources: the domain audit's probe blocks and the token risk
-  report's token, holder, liquidity and web blocks. `scripts/test-report-grounding.js` runs each with a planted directive.
+  report's token, holder, liquidity and web blocks. The insider report quotes its issuer line and every table (filer-written
+  names, roles, security titles); the LinkedIn article quotes the research report and its source list. The IPO digest
+  calls no model: each filer-written field reaches its markdown through `filerText` (one line, no link, tag or quote
+  marker). `scripts/test-report-grounding.js` runs each with a planted directive.

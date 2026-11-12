@@ -21,6 +21,7 @@
 // data miss on the caller path is scripts/test-databento-shared-cache.js c).
 //   node scripts/test-loop-deadline-sites.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { stubGuardResolver, resolverError } from "./lib/guard-resolver-stub.js";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { open } from "node:fs/promises";
 import dnsPromises from "node:dns/promises";
@@ -223,6 +224,7 @@ if (firstCallAllowanceConfig().enabled) {
     return realLookup.call(this, hostname, options);
   };
   syncBuiltinESMExports();
+  const restoreResolver = stubGuardResolver((h, family) => (h === HOST ? (family === 4 ? ["1.1.1.1"] : Promise.reject(resolverError("ENODATA"))) : undefined));
   const realFetch = globalThis.fetch;
   let upstreamCalls = 0;
   globalThis.fetch = (input, init) => {
@@ -242,6 +244,7 @@ if (firstCallAllowanceConfig().enabled) {
   __setTestClient(null);
   globalThis.fetch = realFetch;
   dnsPromises.lookup = realLookup;
+  restoreResolver();
   syncBuiltinESMExports();
 }
 // 11. The lease release at shutdown, on the stubbed pool. Two leases: one

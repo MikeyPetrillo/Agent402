@@ -324,12 +324,18 @@ export const EDGAR_TOOLS = [
       },
     },
     handler: async (i) => {
-      const { cik } = await resolveCompany({ ticker: i.ticker, cik: i.cik });
+      // The concept is checked before the company is looked up, so a bad
+      // tag answers 400 without a round trip to SEC; a missing company still
+      // reads first, as it did before.
+      const hasTicker = typeof i.ticker === "string" && i.ticker.trim() !== "";
+      if (!hasTicker && i.cik == null) throw bad("Provide either ticker or cik");
+      if (i.cik != null && !padCik(i.cik)) throw bad("cik must be a numeric CIK (e.g. 320193 or 0000320193)");
       const taxonomy = String(i.taxonomy ?? "us-gaap").trim();
       const tag = String(i.tag ?? "").trim();
       if (!tag) throw bad('"tag" is required (e.g. "Revenues", "Assets", "NetIncomeLoss")');
       if (!/^[A-Za-z][A-Za-z0-9_-]{0,80}$/.test(taxonomy)) throw bad("taxonomy looks malformed");
       if (!/^[A-Za-z][A-Za-z0-9_-]{0,120}$/.test(tag)) throw bad("tag looks malformed");
+      const { cik } = await resolveCompany({ ticker: i.ticker, cik: i.cik });
       const j = await edgarGetJson(`https://data.sec.gov/api/xbrl/companyconcept/CIK${cik}/${taxonomy}/${tag}.json`);
       return {
         cik,

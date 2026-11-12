@@ -23,7 +23,7 @@
 //     would capture buyer-supplied inputs (a render target, a search query),
 //     which is customer data we have no reason to hold
 //   * bounded memory: hosts are capped, and the counter resets daily
-import { hardCapRefusalForHost, hardCapNameForHost, releaseHardCap, neverReachedUpstream } from "./upstream-hard-caps.js";
+import { hardCapRefusalForHost, hardCapNameForHost, releaseHardCap, neverReachedUpstream, upstreamRefusedBeforeWork } from "./upstream-hard-caps.js";
 
 const MAX_HOSTS = 2000;          // far above the ~1,300 seen in a census run
 const counts = new Map();        // host -> { n, callers:Set, firstAt, lastAt }
@@ -183,11 +183,14 @@ export function installEgressMeter() {
         }
       } catch { /* an unparseable input is the caller's problem, not ours */ }
       const p = origFetch.apply(this, arguments);
-      // The ceiling counts calls that may have reached the upstream: one that
-      // provably never left this process gives its unit back. The caller's
-      // promise is untouched (this branch handles its own rejection).
+      // The ceiling counts calls the upstream may have served: one that
+      // provably never left this process, or that the upstream answered with a
+      // 4xx refusal, gives its unit back. The caller's promise is untouched
+      // (this branch handles its own rejection).
       if (capName) {
-        p.then(undefined, (err) => {
+        p.then((res) => {
+          try { if (upstreamRefusedBeforeWork(res)) releaseHardCap(capName, takenAt); } catch { /* the guard never breaks a call */ }
+        }, (err) => {
           try { if (neverReachedUpstream(err, { abortedAtCall })) releaseHardCap(capName, takenAt); } catch { /* the guard never breaks a call */ }
         });
       }

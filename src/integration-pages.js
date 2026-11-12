@@ -8,7 +8,7 @@
 // the live catalog at render time, so a retired slug drops off the page
 // instead of linking to a 404.
 import { siteOrgRef } from "./site-org.js";
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { repoUrl } from "./repo-link.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
@@ -701,7 +701,7 @@ function toolsFor(i, catalog) {
 }
 
 const H2 = 'style="font-family:var(--font-body);font-weight:800;font-size:var(--fs-xl);letter-spacing:-.02em;margin:0 0 12px;"';
-const PRE = 'style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;padding:16px;margin:0;overflow-x:auto;white-space:pre;"';
+const pre = (code) => codeBlock(`<code>${code}</code>`, { html: true, style: "margin:0" });
 const LI = 'style="color:var(--muted);font-size:var(--fs-base);line-height:1.65;margin:0 0 8px;"';
 const A = 'style="color:var(--ink);text-decoration:none;border-bottom:1px solid var(--accent);"';
 
@@ -747,21 +747,21 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
 
   const body = `
   <div style="max-width:980px;margin:0 auto;padding:50px 30px 64px;">
-    <nav class="ml-crumb" aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><span class="ml-crumb-cur"> / <span style="color:var(--ink);">${esc(i.name)}</span></span></nav>
+    <nav class="ml-crumb" aria-label="Breadcrumb" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:0 0 20px;"><a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <a href="/integrations" style="color:var(--muted);text-decoration:none;">integrations</a><span class="ml-crumb-cur">&#160;/ <span style="color:var(--ink);">${esc(i.name)}</span></span></nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-4xl);line-height:1.02;margin:0 0 10px;">${esc(i.name)}</h1>
     <div style="font-family:var(--font-mono);font-size:var(--fs-md);color:var(--accent);margin-bottom:18px;">${esc(i.pkg)} &middot; ${esc(registryLabel(i))} &middot; MIT</div>
     <p style="color:var(--muted);font-size:var(--fs-lg);line-height:1.7;margin:0 0 34px;max-width:760px;">${inline(i.what)}</p>
 
     <section style="margin-bottom:34px;">
       <h2 ${H2}>Install</h2>
-      <pre ${PRE}><code>${esc(i.install)}</code></pre>
+      ${pre(esc(i.install))}
     </section>
 
     <section style="margin-bottom:34px;">
       <h2 ${H2}>Example</h2>
-      <pre ${PRE}><code>${esc(i.example)}</code></pre>
+      ${pre(esc(i.example))}
       ${i.noWalletExample ? `<p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:16px 0 10px;"><strong style="color:var(--ink);">No wallet yet?</strong> ${inline(NO_WALLET_NOTE)}</p>
-      <pre ${PRE}><code>${esc(i.noWalletExample)}</code></pre>` : ""}
+      ${pre(esc(i.noWalletExample))}` : ""}
     </section>
 
     <section style="margin-bottom:34px;">
@@ -772,7 +772,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
     <section style="margin-bottom:34px;">
       <h2 ${H2}>How payment works</h2>
       <ul style="padding-left:20px;margin:0 0 16px;">${i.payment.map((e) => `<li ${LI}>${inline(e)}</li>`).join("")}</ul>
-      ${i.walletExample ? `<pre ${PRE}><code>${esc(i.walletExample)}</code></pre>` : ""}
+      ${i.walletExample ? `${pre(esc(i.walletExample))}` : ""}
       <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.6;margin:14px 0 0;">${esc(i.settleNote || failedCallFootnote())} Background: ${learnLinks}.</p>
     </section>
 
@@ -782,7 +782,7 @@ export function integrationPage(baseUrl, slug, catalog, guideTitles = {}) {
         <thead><tr>${["Option", "Type", "Description"].map((h) => `<th style="text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--hairline);font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:.08em;font-family:var(--font-mono);">${h}</th>`).join("")}</tr></thead>
         <tbody>${config.map((c) => `<tr><td style="padding:8px 10px;border-bottom:1px solid var(--hairline);"><code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--accent);">${esc(c.option)}</code></td><td style="padding:8px 10px;border-bottom:1px solid var(--hairline);"><code style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);">${esc(c.type)}</code></td><td style="padding:8px 10px;border-bottom:1px solid var(--hairline);color:var(--ink);">${esc(c.desc)}</td></tr>`).join("")}</tbody>
       </table></div>
-      <pre ${PRE}><code>${config.map((c) => `// ${esc(c.desc)}\n${esc(c.example)}`).join("\n\n")}</code></pre>
+      ${pre(config.map((c) => `// ${esc(c.desc)}\n${esc(c.example)}`).join("\n\n"))}
       ${(i.worksWith || []).length ? `<p class="ml-meta" style="margin:14px 0 0;"><span>works with</span>${i.worksWith.map((w) => `<span>${esc(w)}</span>`).join("")}</p>` : ""}
     </section>` : ""}
 

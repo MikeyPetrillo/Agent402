@@ -139,7 +139,13 @@ for (const mode of ["error", "range", "behind", "nobatch", "foreign", "slow", "r
   try { await L.evmLogsRead(filter(1_000, 1_500), { caller: "test", chain: "base", rpcs: [], head: 5_000, maxDepthBlocks: 4_500, lanes, fallback: async () => { throw new Error("all 1 RPCs failed - keyed: query exceeds range, retry smaller (max block range 500, got 501)"); } }); } catch (e) { err = e; }
   ok(err && /public: .*ranges over/.test(err.message), "a failure on every lane names the public lane's reason too");
   ok(LEDGER.nextChunkSpan(err?.message, 501) === 500, "and the keyed lane's stated range limit still narrows the ledger's chunk");
-  ok(L.evmLogsStatus({ full: false }).status === "failing" && Object.keys(L.evmLogsStatus()).join() === "status", "the public view is one word");
+  // One failed read right after a restart is too few to page on.
+  ok(L.evmLogsStatus({ full: false }).status === "idle" && Object.keys(L.evmLogsStatus()).join() === "status", `the public view is one word, and one failed read alone reads idle (${L.evmLogsStatus().status})`);
+  const failOnce = async () => { try { await L.evmLogsRead(filter(1_000, 1_500), { caller: "test", chain: "base", rpcs: [], head: 5_000, maxDepthBlocks: 4_500, lanes, fallback: async () => { throw new Error("down"); } }); } catch { /* counted */ } };
+  for (let i = 0; i < 3; i++) await failOnce();
+  ok(L.evmLogsStatus().status === "idle", `four failed reads still read idle (${L.evmLogsStatus().status})`);
+  await failOnce();
+  ok(L.evmLogsStatus().status === "failing", `five failed reads read failing (${L.evmLogsStatus().status})`);
 }
 
 // The ledger's tail through the lanes: the same rows from either lane.

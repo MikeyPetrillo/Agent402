@@ -17,6 +17,7 @@ import "../offline-egress-preload.js";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { writeFileSync } from "node:fs";
+import { stubGuardResolver, resolverError } from "./guard-resolver-stub.js";
 
 const SUFFIX = ".golden.test";
 const PUBLIC_STAND_IN = "93.184.215.14";
@@ -36,6 +37,8 @@ dns.lookup = (h, o, cb) => {
   return offCb(h, o, cb);
 };
 syncBuiltinESMExports();
+// The address guard resolves with dns.Resolver; any other name stays offline.
+stubGuardResolver((h, family) => (isGolden(h) ? (family === 4 ? [PUBLIC_STAND_IN] : Promise.reject(resolverError("ENODATA"))) : undefined));
 
 const offlineFetch = globalThis.fetch;
 globalThis.fetch = function goldenFetch(input, init = {}) {

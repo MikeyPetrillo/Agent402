@@ -13,8 +13,7 @@
 // PINNED IP. Redirects are re-validated because Chromium re-issues them here.
 import http from "node:http";
 import net from "node:net";
-import dns from "node:dns/promises";
-import { isPrivateIp } from "../src/tools/fetch-guard.js";
+import { resolvePublicAddresses } from "../src/tools/fetch-guard.js";
 
 const CONNECT_TIMEOUT_MS = Number(process.env.EGRESS_PROXY_TIMEOUT_MS) || 15_000;
 
@@ -34,17 +33,14 @@ const refuse = (res) => {
 // Resolve a host to a SINGLE validated, pinned address. Throws (blocks) if an IP
 // literal is private, resolution fails, or ANY resolved address is private —
 // so a public-A-record + private-AAAA split can never slip a connection through.
+// The resolving and the checks are the fetch guard's own (resolvePublicAddresses:
+// c-ares, so an unanswered name holds no libuv pool thread, every A and AAAA
+// answer checked, a single-label name refused), so the browser's egress and the
+// fetch path refuse the same hosts.
 export async function resolvePinned(host) {
-  const lit = net.isIP(host);
-  if (lit) {
-    if (isPrivateIp(host)) throw new Error(EGRESS_REFUSAL);
-    return { address: host, family: lit };
-  }
   let addrs;
-  try { addrs = await dns.lookup(host, { all: true, verbatim: true }); }
+  try { addrs = await resolvePublicAddresses(host); }
   catch { throw new Error(EGRESS_REFUSAL); }
-  if (!addrs.length) throw new Error(EGRESS_REFUSAL);
-  if (addrs.some((a) => isPrivateIp(a.address))) throw new Error(EGRESS_REFUSAL);
   return addrs[0]; // pinned: connect to this exact validated IP, no re-resolution
 }
 

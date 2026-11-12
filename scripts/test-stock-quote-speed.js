@@ -27,6 +27,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
+import { stubGuardResolver, oneV4 } from "./lib/guard-resolver-stub.js";
 
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 process.env.DATABENTO_WARM_TOP_N = "2";
@@ -36,6 +37,7 @@ delete process.env.DATABENTO_RANGE_MAX_AGE_MS;
 delete process.env.DATABENTO_WARM_IDLE_MS;
 // The SSRF host check resolves DNS; answer it locally so nothing leaves.
 dnsPromises.lookup = async () => ({ address: "1.1.1.1", family: 4 });
+stubGuardResolver(oneV4("1.1.1.1")); // the address guard resolves with dns.Resolver
 syncBuiltinESMExports();
 
 const db = await import("../src/tools/databento.js");

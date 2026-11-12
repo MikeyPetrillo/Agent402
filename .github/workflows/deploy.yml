@@ -58,12 +58,10 @@ on:
   # contributor found LIVE IN PRODUCTION after their own fix had already
   # merged - they were right, and CI could not have told them otherwise.
   #
-  # Trade-off accepted knowingly: the normal flow (commit to the dev branch
-  # with a trigger bump, THEN merge to main) now deploys twice in a row for
-  # the same content - once from the dev-branch push, once from the merge.
-  # Wasteful (a redundant quiet-gate wait and Railway build), never wrong
-  # (deploying identical content twice is a no-op in effect), and correctness
-  # for the class of merge that has no dev-branch push at all is worth it.
+  # The normal flow deploys once: a dev-branch push runs the tests (its
+  # commits carry [test], never [deploy], and the production environment's
+  # branch policy admits only main), and the merge to main deploys. A merge
+  # that had no dev-branch push at all deploys the same way.
   push:
     branches:
       - "claude/sweet-brown-i99jl3"
@@ -1209,6 +1207,8 @@ jobs:
           t node scripts/test-mcp-limits.js
           # Hosted connector bounds: a free answer past the size ceiling is cut to valid JSON with answerBound fields, catalog.search holds its row maximum for any limit, a refusing limiter names its wait (offline, bare express + mountMcp)
           t node scripts/test-mcp-answer-bound.js
+          # Hosted connector and revenue view error text: a configured key or a database URL's password an error quotes never reaches an answer, the reason stays (offline, bare express + mountMcp)
+          t node scripts/test-mcp-error-redaction.js
 
       - name: Code-run-kit tests (E2B sandbox — validation always runs; live calls opt-in via E2B_LIVE_TEST=1)
         run: node scripts/test-code-run-kit.js
@@ -2207,6 +2207,8 @@ jobs:
           # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
           t node scripts/test-resale-copy.js
           t node scripts/test-mcp-dockerfiles.js
+          # Every tracked Dockerfile's node base runs one Node patch, pinned by digest; the tollbooth image runs as node (offline)
+          t node scripts/test-dockerfile-node-patch.js
           # Buyer packages price quotes from one known-asset table: copies identical, table matches the rails (offline)
           t node scripts/test-known-assets.js
           # Distrusted intermediate CA refusal: published hashes, every copy, live TLS legs (offline, port 0)
@@ -3437,6 +3439,8 @@ jobs:
           # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
           t node scripts/test-fetch-guard.js
           t node scripts/test-ssrf-literal-ip.js
+          # Guard lookups run on c-ares, not the thread pool: a full pool and unanswered names never delay a healthy one
+          t node scripts/test-dns-pool-starvation.js
           t node scripts/test-dns-name-filter.js
           t node scripts/test-undici-dispatcher.js
           # Discovery & trust surfaces (/.well-known/x402, /api/reliability)
@@ -3985,7 +3989,7 @@ jobs:
       # runs in its own process, in the same order; `t` groups its log and names it
       # with its elapsed time, and a failure prints the failing script as an error.
       # The original step names ride above each script so the WHY stays here.
-      - name: Offline suites (15 scripts, one process each)
+      - name: Offline suites (16 scripts, one process each)
         run: |
           set -euo pipefail
           t() { local s=$SECONDS; echo "::group::$*"; "$@" || { echo "::endgroup::"; echo "::error::failed: $*"; exit 1; }; echo "::endgroup::"; echo "ok  $* ($((SECONDS - s))s)"; }
@@ -4020,6 +4024,8 @@ jobs:
           t node scripts/test-token-brief-kit.js
           # crypto-markets kit (offline)
           t node scripts/test-crypto-markets-kit.js
+          # Offline suites that stub an upstream pass with every real name lookup refused (the address guard's resolver; booted servers inherit the preload)
+          t node scripts/test-offline-suites-no-dns.js
 
       - name: Previously-orphaned kit suites (offline, no upstream spend)
         # These 30 suites existed but no workflow ran them. All verified offline

@@ -1,4 +1,6 @@
-// Reachability of the two Postgres databases, bucketed for a PUBLIC surface.
+// Reachability of the two Postgres pools, `leads` (DATABASE_URL) and
+// `analytics` (ANALYTICS_DATABASE_URL, else DATABASE_URL), bucketed for a
+// PUBLIC surface. The two can name one database or two.
 //
 // Why this exists: both Postgres containers on the platform were down from
 // 2026-07-02 until a platform-side image redeploy restarted them on

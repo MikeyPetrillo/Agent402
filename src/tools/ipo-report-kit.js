@@ -11,6 +11,7 @@
 // fingerprint of the accession numbers seen.
 import { bad } from "./llm-gateway-kit.js";
 import { EDGAR_TOOLS, edgarGetJson } from "./edgar-kit.js";
+import { neutralizeQuoteMarkers } from "../report-grounding.js";
 
 export const IPO_TIERS = { "ipo-report": { price: "$0.05", maxDays: 90, limit: 200 } };
 const MAX_KEYWORD = 60;
@@ -20,6 +21,17 @@ function H(slug) {
   const t = (_edgar ||= EDGAR_TOOLS).find((x) => x.slug === slug);
   if (!t) throw bad(`ipo-report: missing dependency '${slug}'`, 500);
   return t.handler;
+}
+// A filer-written field (name, tickers, exchanges, SIC description) as one
+// markdown-inert line in the digest: no quote markers or hidden characters, no
+// line break that could open a heading, no link, image or tag syntax (a tag's
+// brackets are dropped, a link's escaped, a URL reduced to its host, as a
+// source title is). The filings table keeps the values as EDGAR returned them.
+const urlHost = (u) => { try { return new URL(u).hostname; } catch { return " "; } };
+export function filerText(v) {
+  return neutralizeQuoteMarkers(v).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
+    .replace(/\b(?:https?|ftp):\/\/[^\s<>()[\]"']+/gi, (u) => urlHost(u.replace(/[.,;:!?]+$/, "")))
+    .replace(/[<>]/g, " ").replace(/[[\]`*_\\]/g, (c) => `\\${c}`).replace(/\s{2,}/g, " ").trim();
 }
 const clampInt = (v, d, lo, hi) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(Math.max(n, lo), hi) : d; };
 
@@ -104,18 +116,19 @@ export async function probeIpos({ days = 7, keyword = "", limit = 200, classify 
   return { days, keyword, startDate: s1?.startDate || null, endDate: s1?.endDate || null, totalS1: s1?.total ?? null, totalF1: f1?.total ?? null, totalPriced: priced?.total ?? null, returnedS1: s1?.returned ?? null, returnedF1: f1?.returned ?? null, returnedPriced: priced?.returned ?? null, rows, ids, fingerprint: JSON.stringify(ids) };
 }
 
+// `deps` is the test seam for the EDGAR reads (probeIpos).
 function makeIpoHandler(tierSlug) {
   const t = IPO_TIERS[tierSlug];
-  return async (input) => {
+  return async (input, req, deps = {}) => {
     if (!input || typeof input !== "object") throw bad('Body must be a JSON object: {"days": 7, "keyword": ""}');
     const days = clampInt(input.days, 7, 1, t.maxDays);
     const keyword = normIpoKeyword(input);
-    const pr = await probeIpos({ days, keyword, limit: t.limit });
+    const pr = await (deps?.probeIpos || probeIpos)({ days, keyword, limit: t.limit });
     const reg = pr.rows.filter((r) => r.stage === "registration");
     const priced = pr.rows.filter((r) => r.stage === "priced");
     const by = (xs, k) => xs.filter((r) => r.klass === k);
-    const tag = (r) => `${r.tickers?.length ? ` · ${r.tickers.join("/")}` : ""}${r.exchanges?.length ? ` (${r.exchanges.join(", ")})` : ""}${r.sicDescription ? ` · ${r.sicDescription}` : ""}`;
-    const line = (r) => `- **${r.name || "(unnamed filer)"}**${tag(r)} · ${r.form} filed ${r.filedDate} · CIK ${r.cik} · [filing](${r.url})`;
+    const tag = (r) => `${r.tickers?.length ? ` · ${filerText(r.tickers.join("/"))}` : ""}${r.exchanges?.length ? ` (${filerText(r.exchanges.join(", "))})` : ""}${r.sicDescription ? ` · ${filerText(r.sicDescription)}` : ""}`;
+    const line = (r) => `- **${filerText(r.name) || "(unnamed filer)"}**${tag(r)} · ${r.form} filed ${r.filedDate} · CIK ${r.cik} · [filing](${r.url})`;
     const scope = keyword ? ` matching "${keyword}"` : "";
     const cov = (ret, tot) => (tot != null && ret != null && ret < tot ? `${ret} of ${tot}` : String(tot ?? ret ?? "?"));
     const section = (title, xs, empty) => [`## ${title}`, xs.length ? xs.map(line).join("\n") : `_${empty}_`, ``];

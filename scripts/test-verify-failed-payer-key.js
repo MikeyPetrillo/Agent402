@@ -19,6 +19,11 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { strict as assert } from "node:assert";
 import { readFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
+// The recorder's own event, read from posthog.js's in-memory test sink (no
+// network), under the telemetry secret the recorder reads from the env. Set
+// before any src/ module loads: posthog.js reads both once at import.
+process.env.POSTHOG_TEST_CAPTURE = "1";
+process.env.TELEMETRY_ID_SECRET = "test-telemetry-secret";
 let pass=0, fail=0; const ok=(c,m)=>{c?(pass++,console.log("ok - "+m)):(fail++,console.error("FAIL - "+m));};
 
 const posthog = await readFile("src/posthog.js","utf8");
@@ -51,6 +56,55 @@ const a = idOf("0xAbC0000000000000000000000000000000000001");
 ok(a === idOf("0xabc0000000000000000000000000000000000001"), "same payer, same id (case-insensitive) - retries are groupable");
 ok(a !== idOf("0xAbC0000000000000000000000000000000000002"), "different payers get different ids");
 ok(!/0x/.test(a.slice(5)) && a.length === 5 + 32, "the id carries no address material");
+
+// The caller path for Solana: the id and the log line name the TransferChecked
+// authority, on a v2 CAIP-2 network and on an x402 v1 network name alike, and
+// never the co-signer that sits first after the fee payer.
+{
+  const kit = await import("@solana/kit");
+  const { verifyFailurePayerKey, registerFacilitatorFailureHooks } = await import("../src/payments.js");
+  const { shortPayer } = await import("../src/verify-failure-log.js");
+  const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const u64 = (n) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(n), true); return b; };
+  const fp = await kit.generateKeyPairSigner(), decoy = await kit.generateKeyPairSigner(), buyer = await kit.generateKeyPairSigner();
+  const src = (await kit.generateKeyPairSigner()).address, payTo = (await kit.generateKeyPairSigner()).address;
+  const blockhash = { blockhash: kit.blockhash("11111111111111111111111111111111"), lastValidBlockHeight: 0n };
+  const msg = kit.pipe(kit.createTransactionMessage({ version: 0 }),
+    (m) => kit.setTransactionMessageFeePayer(fp.address, m),
+    (m) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
+    (m) => kit.appendTransactionMessageInstructions([{ programAddress: kit.address(TOKEN), accounts: [
+      { address: kit.address(src), role: kit.AccountRole.WRITABLE },
+      { address: kit.address(USDC), role: kit.AccountRole.READONLY },
+      { address: kit.address(payTo), role: kit.AccountRole.WRITABLE },
+      { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer },
+      { address: decoy.address, role: kit.AccountRole.WRITABLE_SIGNER, signer: decoy },
+    ], data: new Uint8Array([12, ...u64(1000), 6]) }], m));
+  const tx = kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction([decoy.keyPair, buyer.keyPair], kit.compileTransaction(msg)));
+  const keyOf = (basis) => "a402:" + createHmac("sha256", SECRET).update(basis).digest("hex").slice(0, 32);
+  const hooks = {};
+  registerFacilitatorFailureHooks({ onVerifyFailure() { return this; }, onAfterVerify(fn) { hooks.after = fn; return this; }, onAfterSettle() { return this; }, onSettleFailure() { return this; } }, null, null, {});
+  for (const [label, network, paymentPayload] of [
+    ["v2", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", { x402Version: 2, payload: { transaction: tx } }],
+    ["v1", "solana", { x402Version: 1, scheme: "exact", network: "solana", payload: { transaction: tx } }],
+  ]) {
+    const ctx = { paymentPayload, requirements: { scheme: "exact", network, amount: "1000", extra: { feePayer: fp.address } } };
+    const key = await verifyFailurePayerKey(ctx, { idSecret: SECRET });
+    ok(key === keyOf(`svm-payer:${buyer.address}`), `${label} Solana network: the verify-failure id is keyed on the transfer authority (${key === keyOf(`svm-payer:${decoy.address}`) ? "got the decoy" : key})`);
+    const lines = [];
+    const warn = console.warn; console.warn = (...a) => lines.push(a.join(" "));
+    try { await hooks.after({ ...ctx, result: { isValid: false, invalidReason: "transaction_simulation_failed" } }); } finally { console.warn = warn; }
+    // The event recordVerifyFailure sends carries the same id: the caller
+    // path, not only the helper (posthog.js loads behind a dynamic import).
+    const { _testEventsForTest } = await import("../src/posthog.js");
+    await new Promise((r) => setImmediate(r));
+    const sent = _testEventsForTest().filter((e) => e.event === "verify_failed").at(-1);
+    ok(sent?.properties?.payerKey === keyOf(`svm-payer:${buyer.address}`), `${label} Solana network: the recorded verify_failed event carries the transfer authority's id (${sent ? sent.properties.payerKey ?? "no payerKey" : "no event"})`);
+    _testEventsForTest().length = 0;
+    const line = lines.find((l) => /facilitator VERIFY rejected/.test(l)) || "";
+    ok(line.includes(`payer=${shortPayer(buyer.address)}:`) && shortPayer(buyer.address) !== shortPayer(decoy.address), `${label} Solana network: the verify-failure log line names the transfer authority (${line.replace(/^.*payer=/, "payer=").slice(0, 40)})`);
+  }
+  ok(await verifyFailurePayerKey({ paymentPayload: { x402Version: 2, payload: { transaction: tx } }, requirements: { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" } }, { idSecret: "" }) === null, "no secret, no id");
+}
 
 console.log(`\n${fail?"FAILED":"OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

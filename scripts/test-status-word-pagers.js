@@ -137,13 +137,22 @@ const MIN = 60_000;
 }
 
 // ---- the status Worker ----------------------------------------------------------
-const { judge, ALARMS, syncAlarms } = await import("../workers/status-probe/src/index.js");
+const { judge, ALARMS, syncAlarms, withClearingMark } = await import("../workers/status-probe/src/index.js");
 const GB = "Gateway balance READY to withdraw";
 const SLT = "Shared limits store DEGRADED (Redis)";
 const RS = "Replay store marks PENDING (Redis)";
 const RSW = "Router spend per minute OVER its ceiling";
 const TBF = "topBuyerFailures: a top paying buyer is getting failed answers";
 const OSB = "onchainSqlBusy: a top paying buyer was told the query service is busy";
+// The six words wired in batch 2026-11-12b: [title, field, alert words, healthy words, words that do neither].
+const NEW_WORDS = [
+  ["Route judgment token ceiling CAPPED for the day", "jevSpend", ["capped"], ["ok"], ["unknown"]],
+  ["External spend global ceiling REFUSING", "externalSpendGlobal", ["refusing"], ["ok", "off"], ["near", "unknown"]],
+  ["Solana history reads FAILING on every lane", "solanaHistory", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
+  ["EVM log reads FAILING on every lane", "evmLogs", ["failing"], ["publics", "fallback"], ["idle", "unknown"]],
+  ["Speech upstream breaker COOLING (backup voices serving)", "speechUpstream", ["cooling"], ["ok", "probing"], ["unknown"]],
+  ["First-call allowance UNAVAILABLE (shared store)", "firstCallAllowance", ["unavailable"], ["on", "spent"], ["off", "unknown"]],
+];
 const j = (gateway) => judge({ gateway });
 
 await check("Worker: routerSpendWindow pages on over and capped, clears on ok and off", () => {
@@ -204,6 +213,21 @@ await check("Worker: replayStore pages only on alert=sustained, clears on ok", (
   assert.equal(j({ replayStore: { status: "unknown" } })[RS], "quiet");
   assert.equal(j({})[RS], "quiet");
 });
+for (const [T, field, bad, good, neither] of NEW_WORDS) {
+  await check(`Worker: ${field} pages on ${bad.join(" and ")}, clears on ${good.join(" and ")}; ${neither.join(", ")} and absent do neither`, () => {
+    for (const w of bad) assert.equal(j({ [field]: { status: w } })[T], "bad", w);
+    for (const w of good) assert.equal(j({ [field]: { status: w } })[T], "good", w);
+    for (const w of [...neither, "something-new"]) assert.equal(j({ [field]: { status: w } })[T], "quiet", w);
+    assert.equal(j({})[T], "quiet", "a build without the word changes nothing");
+    const others = NEW_WORDS.filter((x) => x[1] !== field);
+    for (const [, f, ob] of others) assert.equal(j({ [f]: { status: ob[0] } })[T], "quiet", `${f}=${ob[0]} is another alarm's`);
+    const a = ALARMS.find((x) => x.title === T);
+    const b = a.body({ gateway: { [field]: { status: "<x>", tokens: 77, capTokens: 77 } } });
+    assert.equal(b, a.body({ gateway: {} }), "the body does not read the response");
+    assert.doesNotMatch(b, /[0-9]|<x>|`|"|\$/, "no figure, and nothing a shell would expand");
+  });
+}
+
 await check("Worker: the three bodies are fixed text with no figure", () => {
   for (const T of [GB, SLT, RS, TBF]) {
     const a = ALARMS.find((x) => x.title === T);
@@ -238,6 +262,7 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
     [RSW, { routerSpendWindow: { status: "capped" } }, { routerSpendWindow: { status: "off" } }, null],
     [SLT, { sharedLimits: { status: "degraded", alert: "sustained" } }, { sharedLimits: { status: "on", alert: "ok" } }, { sharedLimits: { status: "degraded", alert: "ok" } }],
     [RS, { replayStore: { status: "pending", alert: "sustained" } }, { replayStore: { status: "ok", alert: "ok" } }, { replayStore: { status: "pending", alert: "ok" } }],
+    ...NEW_WORDS.map(([T, field, bad, good, neither]) => [T, { [field]: { status: bad[0] } }, { [field]: { status: good[0] } }, { [field]: { status: neither[0] } }]),
   ];
   try {
     for (const [T, bad, good, flicker] of CASES) {
@@ -252,8 +277,16 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
         mkGh();
         r = await run(good);
         assert.deepEqual([r.opened, created.length], [[], 0], "the healthy word opens nothing");
-        mkGh([{ number: 5, title: T }]);
+        // A closeAfterTwoOk alarm's first clear read marks the issue; the
+        // second in a row closes it.
+        const twoOk = !!ALARMS.find((a) => a.title === T)?.closeAfterTwoOk;
+        mkGh([{ number: 5, title: T, body: "issue" }]);
         r = await run(good);
+        if (twoOk) {
+          assert.deepEqual([r.closed, r.clearing], [[], [T]], "the first clear read marks, it does not close");
+          mkGh([{ number: 5, title: T, body: withClearingMark("issue", "t") }]);
+          r = await run(good);
+        }
         assert.deepEqual(r.closed, [T]);
         if (flicker) {
           mkGh();
@@ -265,6 +298,36 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
         }
       });
     }
+    // speechUpstream: a dead primary with sparse traffic reads probing between
+    // cool-downs, so one probing read is not a recovery: the issue closes only
+    // on two clear reads in a row, and a cooling read between them restarts
+    // the count, so the alarm does not reopen on every cool-down cycle.
+    const SP = NEW_WORDS[4][0];
+    await check(`Worker: "${SP}" closes only on the second clear read in a row`, async () => {
+      assert.equal(ALARMS.find((a) => a.title === SP)?.closeAfterTwoOk, true, "the speech alarm is a two-ok alarm");
+      let body = "issue";
+      const step = async (word) => {
+        mkGh([{ number: 5, title: SP, body }]);
+        const patches = [];
+        const inner = globalThis.fetch;
+        globalThis.fetch = async (url, init = {}) => { if ((init.method || "").toUpperCase() === "PATCH") patches.push(JSON.parse(init.body)); return inner(url, init); };
+        const r = await run({ speechUpstream: { status: word } });
+        globalThis.fetch = inner;
+        for (const p of patches) if (typeof p.body === "string") body = p.body;
+        return r;
+      };
+      let r = await step("probing");
+      assert.deepEqual([r.closed, r.clearing], [[], [SP]], "one probing read marks, it does not close");
+      r = await step("cooling");
+      assert.deepEqual([r.closed, r.opened, body], [[], [], "issue"], "a failed probe (cooling) removes the mark and opens nothing new");
+      r = await step("probing");
+      assert.deepEqual(r.closed, [], "probing, cooling, probing does not close");
+      for (const w of ["probing", "ok"]) {
+        body = withClearingMark("issue", "t");
+        r = await step(w);
+        assert.deepEqual(r.closed, [SP], `a second clear read in a row (${w}) closes`);
+      }
+    });
   } finally { globalThis.fetch = realFetch; }
 }
 
@@ -276,6 +339,7 @@ await writeFile(path.join(dir, "curl"), `#!/usr/bin/env bash
 printf '%s' "$GS_BODY"
 `);
 await writeFile(path.join(dir, "gh"), `#!/usr/bin/env bash
+if [ "$1 $2" = "issue view" ]; then printf '%s' "$ISSUE_BODY"; exit 0; fi
 if [ "$1 $2" = "issue list" ]; then
   jqx=""; prev=""; for a in "$@"; do [ "$prev" = "--jq" ] && jqx="$a"; prev="$a"; done
   printf '%s' "$ISSUES_JSON" | jq -r "$jqx"; exit 0
@@ -284,11 +348,11 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
 `);
 await chmod(path.join(dir, "curl"), 0o755);
 await chmod(path.join(dir, "gh"), 0o755);
-const runStep = async (step, gs, issues = []) => {
+const runStep = async (step, gs, issues = [], body = "") => {
   const log = path.join(dir, "gh.log");
   await writeFile(log, "");
   const r = spawnSync("bash", ["-c", step.run], {
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r", GS_BODY: gs === undefined ? "" : JSON.stringify(gs), ISSUES_JSON: JSON.stringify(issues), GH_LOG: log },
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PROD: "https://example.invalid", GITHUB_REPOSITORY: "o/r", GS_BODY: gs === undefined ? "" : JSON.stringify(gs), ISSUES_JSON: JSON.stringify(issues.map((x) => ({ author: { login: "github-actions[bot]" }, ...x }))), ISSUE_BODY: body, GH_LOG: log },
     encoding: "utf8",
   });
   assert.equal(r.status, 0, r.stderr);
@@ -302,6 +366,12 @@ const HB = [
   ["Onchain SQL busy check", OSB, "onchainSqlBusy", { status: "alert" }, [{ status: "unknown" }, { status: "off" }], [{ status: "ok" }]],
   ["Shared limits store check", SLT, "sharedLimits", { status: "degraded", alert: "sustained" }, [{ status: "degraded", alert: "ok" }, { status: "degraded" }, { status: "unknown" }], [{ status: "on", alert: "ok" }, { status: "memory", alert: "ok" }]],
   ["Replay store check", RS, "replayStore", { status: "pending", alert: "sustained" }, [{ status: "pending", alert: "ok" }, { status: "pending" }, { status: "unknown" }], [{ status: "ok", alert: "ok" }]],
+  ["Route judgment ceiling check", NEW_WORDS[0][0], "jevSpend", { status: "capped" }, [{ status: "unknown" }], [{ status: "ok" }]],
+  ["External spend global ceiling check", NEW_WORDS[1][0], "externalSpendGlobal", { status: "refusing" }, [{ status: "near" }, { status: "unknown" }], [{ status: "ok" }, { status: "off" }]],
+  ["Solana history reads check", NEW_WORDS[2][0], "solanaHistory", { status: "failing" }, [{ status: "idle" }, { status: "unknown" }], [{ status: "publics" }, { status: "fallback" }]],
+  ["EVM log reads check", NEW_WORDS[3][0], "evmLogs", { status: "failing" }, [{ status: "idle" }, { status: "unknown" }], [{ status: "publics" }, { status: "fallback" }]],
+  ["Speech upstream check", NEW_WORDS[4][0], "speechUpstream", { status: "cooling" }, [{ status: "unknown" }], [{ status: "ok" }, { status: "probing" }]],
+  ["First-call allowance check", NEW_WORDS[5][0], "firstCallAllowance", { status: "unavailable" }, [{ status: "off" }, { status: "unknown" }], [{ status: "on" }, { status: "spent" }]],
 ];
 for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
   const step = steps.find((s) => String(s.name || "").startsWith(prefix));
@@ -324,7 +394,17 @@ for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
   });
   await check(`heartbeat: "${T}" closes on the healthy word only, and only its own issue`, async () => {
     for (const row of goodRows) {
-      const calls = await runStep(step, { [field]: row }, [{ number: 9, title: T }, { number: 4, title: `Other ${T}` }]);
+      const issues = [{ number: 9, title: T }, { number: 4, title: `Other ${T}` }];
+      // A closeAfterTwoOk alarm (the status Worker's) closes on the second
+      // clear read in a row: the first marks the body, a marked body closes.
+      if (ALARMS.find((a) => a.title === T)?.closeAfterTwoOk) {
+        const first = await runStep(step, { [field]: row }, issues, "issue");
+        assert.ok(first.length === 1 && first[0][1] === "edit" && first[0][2] === "9" && argOf(first[0], "--body").startsWith("issue\n\nFirst ok read at "), `${JSON.stringify(row)} first read marks: ${JSON.stringify(first)}`);
+        const calls = await runStep(step, { [field]: row }, issues, "issue\n\nFirst ok read at x");
+        assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "9", `${JSON.stringify(row)} second read closes: ${JSON.stringify(calls)}`);
+        continue;
+      }
+      const calls = await runStep(step, { [field]: row }, issues);
       assert.ok(calls.length === 1 && calls[0][1] === "close" && calls[0][2] === "9", `${JSON.stringify(row)}: ${JSON.stringify(calls)}`);
     }
     for (const row of quietRows) assert.deepEqual(await runStep(step, { [field]: row }, [{ number: 9, title: T }]), [], JSON.stringify(row));
@@ -661,6 +741,37 @@ for (const [name, T, field, sameBody] of SPEND) {
   });
 }
 await rm(dir, { recursive: true, force: true });
+
+// ---- every status word has a pager ---------------------------------------------
+// A word on /api/gateway-status that no alarm reads pages nobody however it
+// reads. The words are read from a real boot (FREE_MODE, the first-call
+// allowance switched on so its conditional word is there), and each must be
+// read by a status Worker alarm's verdict. No word is excused. sanctionsScreen
+// appears only while Tempo direct mode is mounted, so it is named here.
+// loopLag ({watching}) and mppEvmDomainFallback ({enabled}) publish a flag,
+// not a status word: their figures stay on the operator view on purpose
+// (scripts/test-gateway-status-privacy.js), so there is nothing to page on.
+{
+  const { bootServer } = await import("./lib/boot-server.js");
+  let srv = null;
+  try {
+    srv = await bootServer({ stores: "status-word-pagers", env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", FIRST_CALL_ALLOWANCE: "on", REDIS_URL: "", SOR_EVM_CHAINS: "" } });
+    const body = await (await fetch(`${srv.url}/api/gateway-status`)).json();
+    const hasWord = (v) => v && typeof v === "object" && (typeof v.status === "string" || Object.values(v).some((x) => x && typeof x === "object" && typeof x.status === "string"));
+    const words = [...new Set([...Object.keys(body).filter((k) => hasWord(body[k])), "sanctionsScreen"])];
+    const readers = ALARMS.map((a) => String(a.verdict));
+    const unread = words.filter((k) => !readers.some((src) => new RegExp(`\\bb\\??\\.${k}\\b`).test(src)));
+    await check(`every status word on /api/gateway-status is read by a status Worker alarm (${words.length} words)`, () => {
+      assert.ok(words.length >= 50, `the boot published its words (${words.length})`);
+      for (const k of ["firstCallAllowance", "jevSpend", "externalSpendGlobal", "solanaHistory", "evmLogs", "speechUpstream"]) assert.ok(words.includes(k), `${k} is among them`);
+      assert.deepEqual(unread, [], `words no alarm reads: ${unread.join(", ")}`);
+    });
+    await check("loopLag and mppEvmDomainFallback publish a flag, not a status word", () => {
+      assert.deepEqual(Object.keys(body.loopLag || {}), ["watching"]);
+      assert.deepEqual(Object.keys(body.mppEvmDomainFallback || {}), ["enabled"]);
+    });
+  } finally { await srv?.stop(); }
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -3,7 +3,8 @@
 // cross-references the Bazaar reader cannot follow), no em dashes; the
 // generic cap truncates at a sentence/word boundary, never mid-word "...".
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer } from "../src/payments.js";
+import { readFile } from "node:fs/promises";
+import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer, x402ServiceName, x402ServiceNames, SERVICE_NAME_MAX, catalogServiceNameFor } from "../src/payments.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
 
 let pass = 0, fail = 0;
@@ -66,5 +67,119 @@ ok(bazaarCapDescription("short") === "short" && bazaarCapDescription("") === "",
 }
 const live = (res?.endpoints || []).map((e) => e.description || "");
 ok(live.length > 0, "catalog descriptions readable");
+// The x402 serviceName: printable ASCII, at most SERVICE_NAME_MAX (the
+// protocol's ResourceInfoSchema ceiling), and a cut name ends on a whole
+// clause: no bracket left open, no dangling separator or connective.
+{
+  const { ResourceInfoSchema } = await import("@x402/core/schemas");
+  ok(SERVICE_NAME_MAX === 32, `serviceName ceiling matches ResourceInfoSchema (got ${SERVICE_NAME_MAX})`);
+  ok(x402ServiceName("Chat completions - metered (pay what the call costs)") === "Chat completions - metered", `the metered chat name ends on a whole clause (got ${JSON.stringify(x402ServiceName("Chat completions - metered (pay what the call costs)"))})`);
+  ok(x402ServiceName("EDGAR company lookup (ticker \u2192 CIK)") === "EDGAR company lookup", "an arrow is normalized and the open aside dropped");
+  ok(x402ServiceName("Short name (with aside)") === "Short name (with aside)", "a name under the ceiling is kept whole");
+  ok(x402ServiceName("Alpha beta gamma delta epsilon zeta") === "Alpha beta gamma delta epsilon", "a cut on a word boundary keeps whole words");
+  ok(x402ServiceName("Weather forecast and air quality for any city") === "Weather forecast and air quality", "a cut that ends on a word end keeps the word");
+  ok(x402ServiceName("SQL statement guard with signed verdict") === "SQL statement guard", "a cut inside a clause backs off to its last connective");
+  ok(x402ServiceName("Rate a call you paid for") === "Rate a call you paid for", "a name under the ceiling ending on a connective is kept whole");
+  ok(x402ServiceName("") === "Agent402.tools" && x402ServiceName("\u2603") === "Agent402.tools", "an empty or non-ASCII-only name falls back to the host name");
+  const unbalanced = (s) => { let d = 0; for (const c of s) { if (c === "(") d++; else if (c === ")") d = Math.max(0, d - 1); } return d !== 0; };
+  const names = (res?.endpoints || []).map((e) => e.name).filter((n) => typeof n === "string" && n.trim());
+  ok(names.length > 400, `catalog names readable (${names.length})`);
+  const catalogNames = x402ServiceNames(names);
+  let bad = [];
+  for (const n of names) {
+    const sn = catalogNames.get(n);
+    if (!ResourceInfoSchema.safeParse({ url: "https://x.test/a", serviceName: sn }).success) { bad.push(`${n} -> ${sn}`); continue; }
+    if (sn.length === n.trim().length) continue; // kept whole: the tool's own name
+    if (unbalanced(sn) || /[\s\-,:;/&+|]$/.test(sn) || /\s(and|or|of|for|to|the|a|an|with|by|in|on)$/i.test(sn)) bad.push(`${n} -> ${sn}`);
+  }
+  ok(bad.length === 0, `every catalog serviceName is valid and ends on a whole clause (${bad.length} not: ${bad.slice(0, 5).join(" | ")})`);
+  // NO NEW COLLISIONS. The cut before the whole-clause rule (frozen here):
+  // two catalog names it told apart must still read apart, so a tier family
+  // keeps its tier word ("Gemini generateContent nano").
+  const oldCut = (raw) => {
+    const clean = String(raw).replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
+    if (!clean) return "Agent402.tools";
+    if (clean.length <= 32) return clean;
+    return clean.slice(0, 32).replace(/\s+\S*$/, "").trim() || clean.slice(0, 32);
+  };
+  const uniq = [...new Set(names)];
+  const merged = [];
+  const byNew = new Map();
+  for (const n of uniq) { const k = catalogNames.get(n); byNew.set(k, [...(byNew.get(k) || []), n]); }
+  for (const [k, group] of byNew) {
+    const olds = new Set(group.map(oldCut));
+    if (olds.size > 1) merged.push(`${k} <- ${group.join(" / ")}`);
+  }
+  ok(merged.length === 0, `no two catalog entries the old serviceNames kept apart share a new one (${merged.length}: ${merged.slice(0, 3).join(" | ")})`);
+  const gem = ["nano", "auto", "base", "pro", "premium", "metered"].map((t) => `Gemini generateContent (${t} tier)`);
+  const gemMap = x402ServiceNames(gem);
+  ok(gemMap.get(gem[0]) === "Gemini generateContent nano" && new Set(gem.map((g) => gemMap.get(g))).size === gem.length, `a tier family keeps its tier word (got ${JSON.stringify(gem.map((g) => gemMap.get(g)))})`);
+  // A tag is the tool's own words: a hyphenated word is never split, and a
+  // capitalized modifier never leaves the noun it modifies, so no listing
+  // carries a vendor word its own name does not attach to it.
+  const pair = x402ServiceNames(["Image generation", "Image generation (OpenAI-compatible)"]);
+  ok(pair.get("Image generation") === "Image generation" && pair.get("Image generation (OpenAI-compatible)") === "Image OpenAI-compatible", `a hyphenated tag stays whole and the cut gives way (got ${JSON.stringify([...pair.values()])})`);
+  const stt = x402ServiceNames(["Speech-to-text", "Speech-to-text (OpenAI transcription wire)"]);
+  ok(stt.get("Speech-to-text") === "Speech-to-text" && !/OpenAI$/.test(stt.get("Speech-to-text (OpenAI transcription wire)")) && stt.get("Speech-to-text (OpenAI transcription wire)") !== "Speech-to-text", `a capitalized modifier is not a tag on its own (got ${JSON.stringify([...stt.values()])})`);
+  // Only a name that still collides is tagged: a sibling told apart by its own
+  // lead word is tagged, and the other keeps the shared cut.
+  const dd = ["Company due-diligence dossier (grounded, cited)", "Company due-diligence dossier - MAX (exhaustive)"];
+  const ddMap = x402ServiceNames(dd);
+  ok(ddMap.get(dd[0]) === "Company due-diligence dossier" && /MAX$/.test(ddMap.get(dd[1])), `a name whose sibling is told apart keeps its cut untagged (got ${JSON.stringify(dd.map((d) => ddMap.get(d)))})`);
+  const tr = ["Token & contract risk report (on-chain evidence)", "Token & contract risk report - PRO (static scan + reputation)"];
+  const trMap = x402ServiceNames(tr);
+  ok(trMap.get(tr[0]) === "Token & contract risk report" && trMap.get(tr[1]) === "Token & contract risk report PRO", `and so does the token risk report (got ${JSON.stringify(tr.map((d) => trMap.get(d)))})`);
+  // A cut that enters a clause after a comma drops back to the comma.
+  const li = "LinkedIn article, ready to publish (research + copy + sized images)";
+  ok(x402ServiceName(li) === "LinkedIn article", `a cut inside a comma clause ends on the phrase before it (got ${JSON.stringify(x402ServiceName(li))})`);
+  // A list is never cut to its first item, which would read as the whole
+  // product: two or more whole items, else the label before a colon.
+  for (const [raw, want] of [
+    ["Ticker pack: dossier, insider flow and institutional holders", "Ticker pack"],
+    ["Bundle: quotes, bars, trades and corporate actions", "Bundle: quotes, bars, trades"],
+  ]) {
+    const got = x402ServiceName(raw);
+    ok(got === want && got.length <= SERVICE_NAME_MAX, `a list keeps whole items or its label: ${JSON.stringify(raw)} -> ${JSON.stringify(want)} (got ${JSON.stringify(got)})`);
+  }
+  // Across the catalog: a name that fits whole is kept whole, every word of a
+  // serviceName is a whole word of its own name, and no two names share one.
+  const wordSet = (t) => new Set(String(t).replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/[()[\]{},;:+]/g, " ").split(/\s+/).filter(Boolean));
+  const notWhole = [], foreign = [], seen = new Map(), dup = [];
+  for (const n of uniq) {
+    const clean = n.replace(/[\u2192\u2794\u27a1]/g, "->").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").trim();
+    const sn = catalogNames.get(n);
+    if (clean.length <= SERVICE_NAME_MAX && sn !== clean) notWhole.push(`${n} -> ${sn}`);
+    const own = wordSet(clean);
+    if ([...wordSet(sn)].some((w) => !own.has(w) && !own.has(w.replace(/[,:;.\-]+$/, "")))) foreign.push(`${n} -> ${sn}`);
+    if (seen.has(sn) && seen.get(sn) !== n) dup.push(`${sn} <- ${seen.get(sn)} / ${n}`); else seen.set(sn, n);
+  }
+  ok(notWhole.length === 0, `every name that fits is kept whole (${notWhole.length}: ${notWhole.slice(0, 3).join(" | ")})`);
+  ok(foreign.length === 0, `every serviceName word is a whole word of its own name (${foreign.length}: ${foreign.slice(0, 3).join(" | ")})`);
+  ok(dup.length === 0, `no two catalog names share a serviceName (${dup.length}: ${dup.slice(0, 3).join(" | ")})`);
+  // The middleware lists each route under the catalog-settled name
+  // (catalogServiceNameFor), so a tier family's routes read apart.
+  {
+    const cat = Object.fromEntries([...gem, "Image generation", "Image generation (OpenAI-compatible)"].map((n, i) => [`POST /r${i}`, { name: n }]));
+    const nameFor = catalogServiceNameFor(cat);
+    const listed = Object.values(cat).map(nameFor);
+    ok(new Set(listed).size === listed.length, `the middleware's serviceNames are distinct across a catalog (got ${JSON.stringify(listed)})`);
+    ok(nameFor({ name: "" }) === "Agent402.tools" && nameFor({}) === "Agent402.tools", "an item with no name lists under the host name");
+    const src = await readFile(new URL("../src/payments.js", import.meta.url), "utf8");
+    const mw = src.slice(src.indexOf("export async function buildPaymentMiddleware("));
+    ok(/const serviceNameFor = catalogServiceNameFor\(catalog\);/.test(mw) && /serviceName: serviceNameFor\(item\)/.test(mw), "buildPaymentMiddleware lists routes through catalogServiceNameFor(catalog)");
+  }
+  // The Bazaar refresh compares each listing with that derived name, not the
+  // raw catalog name (which reads stale for every name over 32 characters).
+  {
+    const { expectedServiceNamesByPath } = await import("./refresh-bazaar.js");
+    const eps = (res?.endpoints || []).filter((e) => e?.path);
+    const want = await expectedServiceNamesByPath(eps);
+    const long = eps.find((e) => typeof e.name === "string" && e.name.length > SERVICE_NAME_MAX);
+    ok(long && want.get(long.path) === catalogNames.get(long.name) && want.get(long.path).length <= SERVICE_NAME_MAX, `a long name's expected Bazaar name is its serviceName (${long?.name} -> ${long && want.get(long.path)})`);
+    const src = await readFile(new URL("./refresh-bazaar.js", import.meta.url), "utf8");
+    ok(/expected = await expectedServiceNamesByPath\(/.test(src.slice(src.indexOf("async function loadStaleRoutes"))), "the stale scan reads expectedServiceNamesByPath");
+  }
+  ok(x402ServiceNames(["Chat completions - metered (pay what the call costs)"]).get("Chat completions - metered (pay what the call costs)") === "Chat completions - metered", "a name with no sibling keeps its whole-clause cut");
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

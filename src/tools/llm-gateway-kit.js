@@ -325,8 +325,8 @@ export const TIERS = {
     fallbacks: ["deepseek/deepseek-chat", "openai/gpt-4o-mini"],
     prefixes: [
       // gpt-4.1-nano retired here 2026-09-02 ahead of OpenAI's 2026-10-23 removal; gpt-5.6-luna is its named successor and the tier default.
-      // gpt-5-nano shuts down 2026-12-11 (RETIRING_MODELS serves gpt-5.6-luna from then); this prefix goes before that day.
-      "openai/gpt-5-nano",
+      // gpt-5-nano shuts down 2026-12-11: no longer listed here; RETIRING_MODELS keeps
+      // it admitted on this tier (keepOn) and serves gpt-5.6-luna from that day.
       // gpt-5.6-luna: frontier-lab model in the nano class (live-verified 2026-08-04).
       "openai/gpt-5.6-luna",
       // gpt-6-luna (live 2026-09-24, 1M context): the nano default. The prefix
@@ -365,9 +365,9 @@ export const TIERS = {
     // output budget or is skipped, never served at a loss.
     fallbacks: ["openai/gpt-6-luna", "deepseek/deepseek-chat"],
     prefixes: [
-      // gpt-5-nano is admitted on base as well (a nano model on a pricier tier is
-      // harmless), the way gpt-4.1-nano was until its 2026-10-23 retirement.
-      "openai/gpt-4o-mini", "openai/gpt-4.1-mini", "openai/gpt-5-nano",
+      // gpt-5-nano stays admitted on base through RETIRING_MODELS' keepOn (a
+      // nano model on a pricier tier is harmless), no longer listed here.
+      "openai/gpt-4o-mini", "openai/gpt-4.1-mini",
       // gpt-5.6-terra was admitted here until a repricing put it OVER this
       // tier's completion bound, so
       // `provider.max_price` refused every non-flex attempt and each call burnt
@@ -498,14 +498,16 @@ export const TIERS = {
     },
     prefixes: [
       // gpt-5.6-sol needs its own entry: prefix matching is boundary-aware
-      // ("openai/gpt-5" matches gpt-5-*, not gpt-5.6-*). claude-opus covers
+      // (a gpt-5 family prefix matches gpt-5-*, not gpt-5.6-*). claude-opus covers
       // claude-opus-5; the -fast ids left the catalog 2026-07-24.
       // openai/o4 (the never-released flagship prefix) retired 2026-09-02 ahead of its
       // 2026-10-23 removal; o4-mini left the upstream catalog 2026-10-27 and a
       // request naming it is served by gpt-5.6-terra (RETIRING_MODELS).
       // gpt-5 (and -mini, -nano, -pro), o3 and o3-pro shut down 2026-12-11:
-      // RETIRING_MODELS serves the gpt-5.6 successors from then.
-      "openai/gpt-5", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/o3",
+      // their family prefixes left this list, and RETIRING_MODELS' keepOn keeps
+      // both families admitted here (as themselves until that day, then served
+      // by the gpt-5.6 successors listed below).
+      "openai/gpt-5.6-sol", "openai/gpt-5.6-terra",
       "anthropic/claude-opus",
       // Admitted 2026-09-18, both 1M context, both reasoning-mandatory
       // (REASONING_MODELS). gpt-6-astra also admits gpt-6-astra-pro under the
@@ -859,13 +861,16 @@ export const RETIRING_MODELS = Object.freeze({
   // names (pro mode for the -pro ids is the -pro listing). A call naming one
   // stays on every tier that admitted it (tierAllows' `requested`), served by
   // the successor there, so gpt-5-nano on base or premium is not moved to
-  // nano; pinned in test-llm-gateway. Dropping one of those prefixes moves
-  // that tier's callers to the successor's own home tier instead.
-  "openai/gpt-5": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true },
+  // nano; pinned in test-llm-gateway. The tier lists no longer name these
+  // ids (/v1/models advertises the successors); `keepOn` is what keeps each
+  // id, and every id of its family, admitted on the tiers that listed it.
+  // `asItself` holds the flex and reasoning-effort rows that apply while an
+  // id is still served as itself (flexEligible, reasoningProfile).
+  "openai/gpt-5": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true, keepOn: ["v1-chat-premium", "v1-chat-metered"] },
   "openai/gpt-5-mini": { until: "2026-12-11", use: "openai/gpt-5.6-terra", asItselfUntil: true },
-  "openai/gpt-5-nano": { until: "2026-12-11", use: "openai/gpt-5.6-luna", asItselfUntil: true },
+  "openai/gpt-5-nano": { until: "2026-12-11", use: "openai/gpt-5.6-luna", asItselfUntil: true, keepOn: ["v1-chat-nano", "v1-chat", "v1-chat-premium", "v1-chat-metered"], asItself: { flex: true, efforts: ["minimal", "low", "medium", "high"] } },
   "openai/gpt-5-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
-  "openai/o3": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true },
+  "openai/o3": { until: "2026-12-11", use: "openai/gpt-5.6-sol", asItselfUntil: true, keepOn: ["v1-chat-premium", "v1-chat-metered"] },
   "openai/o3-pro": { until: "2026-12-11", use: "openai/gpt-5.6-sol-pro", asItselfUntil: true },
   // Shut down 2026-07-23 (OpenAI's deprecations page, notice of 2026-04-22,
   // replacement gpt-5.6-sol) and gone from the upstream catalog; the premium
@@ -898,6 +903,19 @@ export function setRetiringClockForTest(fn) { retiringClock = typeof fn === "fun
 /** True when a scheduled (asItselfUntil) entry's date has not come yet. */
 export function retirementPending(entry, now = retiringClock()) {
   return !!entry?.asItselfUntil && now < Date.parse(`${entry.until}T00:00:00Z`);
+}
+/** True when a RETIRING_MODELS entry's keepOn names `tierSlug` and its key
+ *  admits `id` the way a tier prefix does (the id itself, "-" or ":" after it).
+ *  This is how a tier keeps serving an id it no longer lists. */
+function retiredKeepAdmits(tierSlug, id) {
+  for (const [key, e] of Object.entries(RETIRING_MODELS)) {
+    if (e.keepOn?.includes(tierSlug) && (id === key || id.startsWith(key + "-") || id.startsWith(key + ":"))) return true;
+  }
+  return false;
+}
+/** The `asItself` rows of entries still served as themselves, keyed by id. */
+function pendingAsItself() {
+  return Object.entries(RETIRING_MODELS).filter(([, e]) => e.asItself && retirementPending(e));
 }
 export function retiringModel(model) {
   const raw = canonicalModelRaw(model).toLowerCase().split(":")[0];
@@ -1104,9 +1122,9 @@ export function tierAllows(tierSlug, model, requested) {
   // Belt for refuseCostVariants: a "-contributor" listing is never admitted
   // by a family prefix (meta/muse-spark admits meta/muse-spark-1.3-...).
   if (/-contributor(?:$|:)/.test(id)) return false;
-  if (prefixesAdmit(tier, id)) return true;
+  if (prefixesAdmit(tier, id) || retiredKeepAdmits(tierSlug, id)) return true;
   const from = requested == null ? null : substitutedFrom(requested);
-  return !!from && canonicalModel(requested).toLowerCase() === id && prefixesAdmit(tier, from);
+  return !!from && canonicalModel(requested).toLowerCase() === id && (prefixesAdmit(tier, from) || retiredKeepAdmits(tierSlug, from));
 }
 
 /** Which gateway tier serves this model - for self-correcting 400s. */
@@ -2333,7 +2351,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
 // 2026-09-24 with its Gemini model.) OPENROUTER_FLEX=off is the escape hatch.
 export const FLEX_MODELS = [
   "google/gemini-3.1-flash-lite", "google/gemini-3.5-flash-lite", "google/gemini-3.5-flash", "google/gemini-3.6-flash",
-  "openai/gpt-5-nano", "openai/gpt-5.6-luna", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra",
+  "openai/gpt-5.6-luna", "openai/gpt-5.6-sol", "openai/gpt-5.6-terra",
   // Both carry an "openai/flex" endpoint tag (live endpoints 2026-09-24).
   "openai/gpt-6-luna", "openai/gpt-6-sol",
   // openai/flex endpoint tag on gpt-6.1-sol (live endpoints 2026-10-06).
@@ -2343,10 +2361,15 @@ export const FLEX_MODELS = [
 ];
 const FLEX_ENABLED = () => String(process.env.OPENROUTER_FLEX || "on").toLowerCase() !== "off";
 export const PROVIDER_SORT_ENABLED = () => String(process.env.OPENROUTER_PROVIDER_SORT || "on").toLowerCase() !== "off";
+/** FLEX_MODELS plus each retiring id still served as itself whose
+ *  RETIRING_MODELS `asItself.flex` is set; that id leaves on its date. */
+export function flexModelIds() {
+  return [...FLEX_MODELS, ...pendingAsItself().filter(([, e]) => e.asItself.flex).map(([id]) => id)];
+}
 export function flexEligible(model) {
   if (!FLEX_ENABLED()) return false;
   const m = String(model || "");
-  return FLEX_MODELS.some((p) => m === p || m.startsWith(p + "-"));
+  return flexModelIds().some((p) => m === p || m.startsWith(p + "-"));
 }
 /** Expand a model chain into attempts: [flex, default] for eligible links,
  *  [default] otherwise. Exported for the gateway test. */
@@ -2475,7 +2498,7 @@ export const REASONING_MODELS = [
   // `prefix` rows match a whole family. Exact by default: a loose prefix
   // silently pulled in google/gemini-3.1-flash-lite-IMAGE, a different model
   // with a different effort set (caught by the live guard on first run).
-  { id: "openai/gpt-5-nano", efforts: ["minimal", "low", "medium", "high"] },
+  // gpt-5-nano's row is its RETIRING_MODELS asItself entry until 2026-12-11.
   { prefix: "openai/gpt-5.6-", efforts: ["none", "low", "medium", "high", "xhigh", "max"] },
   { id: "google/gemini-3.1-flash-lite", efforts: ["minimal", "low", "medium", "high"] },
   { id: "google/gemini-3.5-flash-lite", efforts: ["minimal", "low", "medium", "high"] },
@@ -2559,10 +2582,16 @@ export function reasoningRowMatches(row, id) {
   if (row.id) return m === row.id || m.startsWith(row.id + ":");
   return !!row.prefix && m.startsWith(row.prefix);
 }
+/** REASONING_MODELS plus an exact row for each retiring id still served as
+ *  itself whose RETIRING_MODELS `asItself.efforts` is set. */
+export function reasoningRows() {
+  const pending = pendingAsItself().filter(([, e]) => Array.isArray(e.asItself.efforts)).map(([id, e]) => ({ id, efforts: e.asItself.efforts }));
+  return pending.length ? [...REASONING_MODELS, ...pending] : REASONING_MODELS;
+}
 export function reasoningProfile(model) {
   const id = canonicalModel(model).toLowerCase();
   let best = null;
-  for (const row of REASONING_MODELS) {
+  for (const row of reasoningRows()) {
     if (!reasoningRowMatches(row, id)) continue;
     const len = (row.id || row.prefix).length;
     if (!best || len > best.len) best = { ...row, len };
@@ -4649,7 +4678,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.003",
     description:
-      "OpenAI-compatible chat completions, nano tier: gpt-6-luna (the default), gpt-5.6-luna, gpt-5-nano, gemini flash-lite, small llama/ministral, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
+      "OpenAI-compatible chat completions, nano tier: gpt-6-luna (the default), gpt-5.6-luna, gemini flash-lite, small llama/ministral, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-5.6-luna" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-5.6-luna" } } },
     handler: makeHandler("v1-chat-nano"),
@@ -4757,7 +4786,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.50",
     description:
-      "OpenAI-compatible chat completions, premium tier: gpt-5, gpt-6 astra, o3, claude opus, claude fable 5.1 - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
+      "OpenAI-compatible chat completions, premium tier: gpt-5.6 sol and terra, gpt-6 astra, claude opus, claude fable 5.1 - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "anthropic/claude-opus-5" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "anthropic/claude-opus-5" } } },
     handler: makeHandler("v1-chat-premium"),
@@ -4813,7 +4842,7 @@ export const LLM_GATEWAY_TOOLS = [
   },
   {
     route: "POST /v1/images/generations",
-    name: "Image generation (OpenAI-compatible)",
+    name: "Image gen (OpenAI-compatible)",
     slug: "v1-images", aliases: ["image-generation-openai-compatible", "image-generation"],
     category: "llm",
     price: "$0.080",

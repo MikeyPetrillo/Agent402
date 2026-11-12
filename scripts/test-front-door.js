@@ -329,6 +329,10 @@ async function readSurfaces(B, tag, { mpp = false, door402 = true } = {}) {
   ok(!RECOVERY_WORDS.test(llms.slice(0, L.at + L.block.length)) && !llms.includes(`## ${RECOVERY_HEADING}`), `${tag} /llms.txt: no recovery line at the top (they live on ${AGENTS_MD_PATH})`);
   ok(!EM_DASH.test(L.block), `${tag} /llms.txt: no em or en dash in the block`);
   ok(Buffer.byteLength(llms) < 16_384, `${tag} /llms.txt stays a short index (${Buffer.byteLength(llms)} bytes)`);
+  // Headroom: with MPP on (the longest render, the MPP blocks included) the
+  // index keeps 1.5 KB under the ceiling, so the next added line does not
+  // push it over; the compact MPP start-here block is what holds it there.
+  if (mpp) ok(Buffer.byteLength(llms) <= 16_384 - 1_536, `${tag} /llms.txt keeps 1.5 KB of headroom under 16,384 with MPP on (${Buffer.byteLength(llms)} bytes)`);
 
   // /agents.md: the same three lines first, then the recovery heading, then Connect and Pay.
   const agentsRes = await fetch(`${B}${AGENTS_MD_PATH}`);

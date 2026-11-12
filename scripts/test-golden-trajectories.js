@@ -163,6 +163,8 @@ const facilitator = createServer((req, res) => {
       if (call.startsWith("0x70a08231")) return reply({ jsonrpc: "2.0", id: parsed.id ?? 1, result: "0x" + (10n ** 12n).toString(16).padStart(64, "0") });
       if (parsed.method === "eth_chainId") return reply({ jsonrpc: "2.0", id: parsed.id ?? 1, result: "0x2105" });
       if (parsed.method === "eth_blockNumber") return reply({ jsonrpc: "2.0", id: parsed.id ?? 1, result: "0x100" });
+      // The chain's clock: the expiry proof reads the latest block's timestamp.
+      if (parsed.method === "eth_getBlockByNumber") return reply({ jsonrpc: "2.0", id: parsed.id ?? 1, result: { number: "0x100", timestamp: "0x" + Math.floor(Date.now() / 1000).toString(16) } });
       return reply({ jsonrpc: "2.0", id: parsed.id ?? 1, result: "0x" + "0".repeat(64) });
     }
     const payer = parsed.paymentPayload?.payload?.authorization?.from;

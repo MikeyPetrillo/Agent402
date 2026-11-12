@@ -9,6 +9,7 @@
 // model and serves a report), so a new report kit with no case here fails.
 // No network: fetch answers only the stubbed synthesis call.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import { readFileSync, readdirSync } from "node:fs";
 import { Jimp } from "jimp";
 

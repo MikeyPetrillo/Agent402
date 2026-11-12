@@ -31,7 +31,7 @@ const list = (xs, n = 6) => xs.slice(0, n).join(" | ") + (xs.length > n ? ` | ..
 const TOOL = "/tools/json-validate";
 const GUIDE = "/guides/x402-in-5-minutes";
 const PAGES = ["/", TOOL, "/docs", "/docs/Architecture", GUIDE, "/how-to-pay", "/reports", "/monitors", "/pricing"];
-const CODE_PAGES = [TOOL, "/docs", "/docs/Architecture", GUIDE, "/how-to-pay", "/"];
+const CODE_PAGES = [TOOL, "/docs", "/docs/Architecture", GUIDE, "/how-to-pay", "/", "/what-is-x402", "/quickstart", "/integrations/openai", "/learn/mpp"];
 const PROSE_PAGES = [[GUIDE, ".gp-body p"], ["/docs/Architecture", ".ml-docs-main p"]];
 const FORM_PAGES = ["/reports", "/monitors"];
 

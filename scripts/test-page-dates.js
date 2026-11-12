@@ -57,6 +57,13 @@ ok(pageLastmod("/api/find?q=search+the+web") === null, "a query string does not 
   ok(terms && pageLastmod("/terms") === terms && legalLastmod("/terms") === terms, `/terms is dated by the date the page prints (${terms})`);
   ok(privacy && pageLastmod("/privacy") === privacy, `/privacy is dated by the date the page prints (${privacy})`);
 }
+{
+  // /transparency prints the date its sitemap entry carries, never a typed one.
+  const { transparencyPage } = await import("../src/transparency.js");
+  const printed = (String(transparencyPage("https://agent402.tools")).match(/last updated (\d{4}-\d{2}-\d{2})\./) || [])[1];
+  ok(printed && printed === pageLastmod("/transparency"), `/transparency prints the module's date (${printed}, sitemap ${pageLastmod("/transparency")})`);
+  ok(!/last updated \d{4}-/.test(readFileSync(new URL("../src/transparency.js", import.meta.url), "utf8")), "src/transparency.js types no date of its own");
+}
 ok(dayOf("2026-10-02T14:03:00.000Z") === "2026-10-02" && dayOf(null) === null && dayOf("not a date") === null, "dayOf reduces a timestamp to a day and rejects junk");
 
 // --- a partly dated source is undated, and a missing table dates nothing --------

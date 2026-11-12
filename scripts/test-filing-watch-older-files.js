@@ -8,7 +8,9 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import dnsPromises from "node:dns/promises";
 import { syncBuiltinESMExports } from "node:module";
+import { stubGuardResolver, oneV4 } from "./lib/guard-resolver-stub.js";
 dnsPromises.lookup = async () => ({ address: "1.1.1.1", family: 4 });
+stubGuardResolver(oneV4("1.1.1.1")); // the address guard resolves with dns.Resolver
 syncBuiltinESMExports();
 const { probeCompanyFilings, FORM_FILTER_SCAN_ROWS, MAX_OLDER_FILES } = await import("../src/tools/filing-watch-kit.js");
 const { probeCompanyFilings: readIndex } = await import("../src/tools/ticker-pack-kit.js");

@@ -8,7 +8,7 @@
 // When analytics is disabled (no ANALYTICS_DATABASE_URL / DATABASE_URL) the
 // page renders a clean empty state explaining how to enable it on a self-hosted
 // instance — same fail-soft behavior as /api/analytics.
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 
 import { REPO_URL } from "./repo-link.js";
 const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
@@ -75,7 +75,6 @@ td.an-danger{color:var(--on-panel-bad)}
 td a{color:var(--on-panel);text-decoration:none;border-bottom:1px solid transparent}
 td a:hover{border-color:var(--accent)}
 code{font-family:var(--font-mono);font-size:var(--fs-xs);background:var(--panel);color:var(--on-panel);padding:2px 7px;border:1.5px solid var(--panel-rule)}
-pre{background:var(--ink-panel);border:1px solid var(--panel-rule);padding:14px 16px;overflow:auto;font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--on-panel)}
 .an-foot{color:var(--faint);font-size:var(--fs-sm)}
 .an-foot a{color:var(--accent);text-decoration:none}
 .an-foot a:hover{text-decoration:underline}
@@ -235,7 +234,7 @@ export function analyticsPage(data, { baseUrl, toolHrefFor = null } = {}) {
   <div class="an-ph"><h2>What's recorded</h2><div class="an-pn">Privacy-by-default: aggregate counters only.</div></div>
   <div style="padding:14px 18px;">
     <p class="an-foot" style="margin:0 0 8px;">Each tool call records five fields after responding: <code>slug</code>, <code>latency_ms</code>, <code>cached</code> (Redis hit), <code>errored</code>, and the HTTP <code>status</code> (so 4xx caller errors and 5xx handler/upstream failures can be told apart). No caller identity, wallet, payment, input, output, or IP is logged. The dashboard reflects exactly what's in the table.</p>
-    <pre>curl -s ${esc(baseUrl)}/api/analytics?hours=24&amp;top=25</pre>
+    ${codeBlock(`curl -s ${baseUrl}/api/analytics?hours=24&top=25`, { size: "xs", style: "margin:0" })}
   </div>
 </div>`;
 

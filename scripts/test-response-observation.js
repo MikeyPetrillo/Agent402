@@ -180,5 +180,48 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(/two different requests/.test(JSON.stringify(dispatchLegend())), "and so does the legend");
 }
 
+// --- an unpaid 200: an answer, or an error envelope with no content ---------
+{
+  const { unpaidNonAnswerReason } = await import("../src/response-observation.js");
+  for (const [label, body] of [
+    ["a validator's verdict {valid:false, errors}", { valid: false, errors: ["bad checksum"] }],
+    ["a health report {ok:false, status:503, ...}", { ok: false, status: 503, db: "down", uptime: 12 }],
+    ["a not-found beside content {status:404, error, found:false}", { status: 404, error: "Not Found", found: false }],
+    ["a count of zero beside an error {error, count:0}", { error: "none matched", count: 0 }],
+    ["a partial answer {data, errors}", { data: { price: 1 }, errors: [{ message: "one field failed" }] }],
+    ["an envelope with no error signal {message}", { message: "hello" }],
+  ]) {
+    const got = unpaidNonAnswerReason(body, []);
+    ok(got === null, `${label} is the seller's answer (got ${got})`);
+  }
+  const challenge = { x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000" }] };
+  for (const [label, body, why, paths = []] of [
+    ["null", null, "empty"], ["{}", {}, "empty"], ["a challenge sent as a 200", challenge, "challenge"],
+    ["{error}", { error: "upstream down" }, "error-shaped"],
+    ["a JSON-RPC error", { jsonrpc: "2.0", id: 1, error: { code: -32000, message: "x" } }, "error-shaped"],
+    ["a challenge with no payment options", { x402Version: 1, error: "x", accepts: [] }, "error-shaped"],
+    ["{ok:false}", { ok: false }, "error-shaped"],
+    ["{ok:false, status:503}", { ok: false, status: 503 }, "error-shaped"],
+    ["{error, message, code, requestId}", { error: "x", message: "y", code: "E1", requestId: "r1" }, "error-shaped"],
+    ["problem details {type, title, status:500, detail}", { type: "about:blank", title: "Internal", status: 500, detail: "boom", errors: ["boom"] }, "error-shaped"],
+    ["{errors:[..]} (GraphQL, nothing else)", { errors: [{ message: "x" }] }, "error-shaped"],
+    ["{errors:[..], data:null} (GraphQL with a null data)", { errors: [{ message: "x" }], data: null }, "error-shaped"],
+    ["{success:false, data:null, error}", { success: false, data: null, error: "Invalid token" }, "error-shaped"],
+    ["an error beside empty values {error, data:{}, items:[], note:\"\"}", { error: "x", data: {}, items: [], note: "" }, "error-shaped"],
+    ["a framework default error page {timestamp, status:500, error, path}", { timestamp: "2026-11-12T00:00:00Z", status: 500, error: "Internal Server Error", path: "/api/x" }, "error-shaped"],
+    ["{error, retryAfter}", { error: "rate limited", retryAfter: 30 }, "error-shaped"],
+    ["{error, retry_after}", { error: "rate limited", retry_after: 30 }, "error-shaped"],
+    ["{ok:false, reason}", { ok: false, reason: "upstream down" }, "error-shaped"],
+    ["a not-found envelope {status:404, error}", { status: 404, error: "Not Found" }, "error-shaped"],
+    ["a not-found envelope {statusCode:\"410\", error}", { statusCode: "410", error: "Gone" }, "error-shaped"],
+    ["a router's not-found {statusCode:404, message, error}", { statusCode: 404, message: "Cannot GET /api/x", error: "Not Found" }, "error-shaped"],
+    ["none of the guaranteed paths", { note: "see docs" }, "missing-fields", ["data.price"]],
+  ]) {
+    const got = unpaidNonAnswerReason(body, paths);
+    ok(got === why, `${label} is not an answer: ${why} (got ${got})`);
+  }
+  ok(unpaidNonAnswerReason({ ok: false, errors: ["bad checksum"] }, ["ok", "errors"]) === null, "keys the seller's contract guarantees are its answer");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

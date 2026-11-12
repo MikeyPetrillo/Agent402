@@ -291,5 +291,18 @@ if (ran === 2) {
   ok(quiet.exa?.status === "ok" && quiet.x?.status === "ok", `control: the same server on counters nobody spent reads ok (exaSpend ${quiet.exa?.status}, xDataSpend ${quiet.x?.status})`);
 }
 
+// ---- jevSpend: the first /api/gateway-status read after a boot --------------
+// The judge's shared day is read in the same Promise.all as the others, so a
+// server that just booted answers a word, not "unknown", on its first read.
+// No cost table needed: the ceiling is in tokens.
+{
+  const srv = await bootServer({ stores: "spend-words-jev", env: { FREE_MODE: "true", SHARED_LIMITS_PREFIX: `${prefix}-jev`, SHARED_LIMITS: "" } });
+  try {
+    const r = await fetch(`${srv.url}/api/gateway-status`, { signal: AbortSignal.timeout(20_000) });
+    const j = await r.json();
+    ok(r.status === 200 && j.jevSpend?.status === "ok", `a new server's first /api/gateway-status read answers jevSpend ok, not unknown (${JSON.stringify(j.jevSpend)})`);
+  } finally { await srv.stop(); }
+}
+
 console.log(`\ntest-spend-words-shared-redis: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

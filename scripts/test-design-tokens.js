@@ -201,7 +201,6 @@ const PANELS = ["panel"];
 // A rule that styles a form field and bounds it with --hairline or --dash (1.2 to 1.7:1).
 const CONTROL_SEL = /(^|[\s,>.#-])(input|select|textarea|field)\b|search|-sel\b/;
 const CONTROL_BORDER_PENDING = {
-  "src/company.js": "the /company page moves to --control in its own change",
   "src/operator.js": "the operator sign-in field sits on an obsidian panel and takes panel rules",
 };
 export function controlRuleProblems(rel, src) {
@@ -250,6 +249,15 @@ function checkControlsAndFocus() {
   for (const rel of ["src/pages.js", "src/ledger-docs.js", "src/badges.js", "src/page-html.js"]) {
     const src = stripComments(readFileSync(new URL(rel, ROOT), "utf8"));
     ok(!/<pre[\s>]/.test(src) && /codeBlock\(/.test(src), `${rel}: every code block is codeBlock() (no hand-made <pre>)`);
+  }
+  // Modules that write a block literally (no codeBlock() call) open it with the
+  // component's own wrapper; none styles its own <pre>.
+  const CODE_MODULES = ["decide-page", "ledger-catalog", "what-is-x402", "what-is-mpp", "learn", "skills", "integration-pages", "ledger-integrations",
+    "webhooks", "sell", "x402-test-page", "market-page", "credits-page", "markets", "revenue-live", "analytics-page", "quickstart", "contribute"];
+  for (const name of CODE_MODULES) {
+    const src = stripComments(readFileSync(new URL(`src/${name}.js`, ROOT), "utf8"));
+    const bare = [...src.matchAll(/<pre[\s>]/g)].filter((m) => !/<div class="ml-code[^"<>]*"[^<>]*>$/.test(src.slice(Math.max(0, m.index - 200), m.index)));
+    ok(bare.length === 0 && !/(^|[\s.}#])[\w.-]*\s+pre\s*\{|(^|\n)pre\s*\{|class="[^"]*-pre\b/.test(src), `src/${name}.js: every code block is the shared component (${bare.length} hand-made <pre>)`);
   }
   for (const rel of ["src/guides.js", "src/docs.js", "src/blog.js"]) {
     const src = readFileSync(new URL(rel, ROOT), "utf8");

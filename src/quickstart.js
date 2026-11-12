@@ -24,11 +24,6 @@ export function quickstartPage(baseUrl) {
 .qs-panel h2{font-family:var(--font-body);font-weight:700;font-size:var(--fs-3xl);line-height:1;letter-spacing:-.02em;margin:0 0 8px;color:var(--ink)}
 .qs-panel .qs-oneliner{color:var(--muted);margin:0 0 20px;font-size:var(--fs-base);line-height:1.55}
 
-.qs-code-wrap{position:relative;margin-bottom:20px}
-.qs-code-wrap pre{background:var(--panel);border:1px solid var(--hairline);padding:20px;overflow-x:auto;margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.55;color:var(--on-panel)}
-.qs-code-wrap .qs-copy{position:absolute;top:8px;right:8px;background:var(--panel);border:1.5px solid var(--paper);color:var(--on-panel);font-family:var(--font-mono);font-size:var(--fs-2xs);padding:4px 10px;cursor:pointer;transition:all .15s}
-.qs-code-wrap .qs-copy:hover{background:var(--paper);color:var(--ink)}
-.qs-code-wrap .qs-copy.copied{color:var(--accent);border-color:var(--accent)}
 
 .qs-label{display:flex;flex-wrap:wrap;column-gap:.6em;font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--faint);margin-bottom:8px}
 .qs-label>span{white-space:nowrap}
@@ -76,31 +71,19 @@ export function quickstartPage(baseUrl) {
 <p class="qs-oneliner">Start with the hosted connector: no install, no wallet. Free tools run with proof-of-work; paid tools answer with their price and a pointer to payment.info.</p>
 
 <span class="qs-label">1. Hosted connector (no install)</span>
-<div class="qs-code-wrap">
-<pre><code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code></pre></div>
 
 <span class="qs-label">2. Free npm install</span>
-<div class="qs-code-wrap">
-<pre><code>claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre></div>
 
 <span class="qs-label">3. Wallet (optional)</span>
 <p class="qs-oneliner"><strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong></p>
-<div class="qs-code-wrap">
-<pre><code>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_NEW_FUNDED_KEY -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_NEW_FUNDED_KEY -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}</code></pre></div>
 
 <span class="qs-label">Then ask Claude</span>
-<div class="qs-code-wrap">
-<pre><code># free:        "sha256 this string: hello world"
+<div class="ml-code" style="margin:0 0 20px"><pre><code># free:        "sha256 this string: hello world"
 # with a key:  "extract the text from this PDF"
-# with a key:  "fetch Apple's latest 10-K"</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+# with a key:  "fetch Apple's latest 10-K"</code></pre></div>
 </div>
 
 <div class="qs-next">
@@ -119,17 +102,13 @@ export function quickstartPage(baseUrl) {
 <p class="qs-oneliner">Standard HTTP - send JSON, get JSON back. No SDK required.</p>
 
 <span class="qs-label">Web search, then a cited answer: see each 402 quote (free)</span>
-<div class="qs-code-wrap">
-<pre><code>curl -i "https://agent402.tools/api/search?q=x402+payment+protocol+adoption&amp;count=5"
-curl -i "https://agent402.tools/api/answer?q=what+is+the+x402+payment+protocol"</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>curl -i "https://agent402.tools/api/search?q=x402+payment+protocol+adoption&amp;count=5"
+curl -i "https://agent402.tools/api/answer?q=what+is+the+x402+payment+protocol"</code></pre></div>
 <p class="qs-alt">Each 402 carries the price and every way to pay it. A wallet client signs the payment and retries the same request: the Pay with USDC tab shows the same two calls paid from a wallet.</p>
 
 <p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown-to-html, json-to-csv and more) run free with proof-of-work and no wallet:</p>
 <span class="qs-label">Pay with proof-of-work (free, no wallet)</span>
-<div class="qs-code-wrap">
-<pre><code># Grab a challenge: { "challenge", "difficulty", "token", ... }
+<div class="ml-code" style="margin:0 0 20px"><pre><code># Grab a challenge: { "challenge", "difficulty", "token", ... }
 curl -s "https://agent402.tools/api/pow/challenge?slug=hash"
 
 # Find an integer nonce so sha256("&lt;challenge&gt;:&lt;nonce&gt;") has at least
@@ -137,9 +116,7 @@ curl -s "https://agent402.tools/api/pow/challenge?slug=hash"
 curl -X POST https://agent402.tools/api/hash \\
   -H "Content-Type: application/json" \\
   -H "X-Pow-Solution: &lt;token&gt;:&lt;nonce&gt;" \\
-  -d '{"text":"hello world","algo":"sha256"}'</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+  -d '{"text":"hello world","algo":"sha256"}'</code></pre></div>
 
 <div class="qs-next">
 <div class="qs-next-title">What to try next</div>
@@ -157,15 +134,11 @@ curl -X POST https://agent402.tools/api/hash \\
 <p class="qs-oneliner">Install agent402-client: it pays each call from your wallet, and pays the pure-CPU tools with proof-of-work.</p>
 
 <span class="qs-label">Install</span>
-<div class="qs-code-wrap">
-<pre><code>npm install agent402-client @x402/fetch @x402/core @x402/evm viem</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>npm install agent402-client @x402/fetch @x402/core @x402/evm viem</code></pre></div>
 
 <span class="qs-label">Web search, then a cited answer</span>
 <p class="qs-oneliner"><strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong></p>
-<div class="qs-code-wrap">
-<pre><code>import { Agent402 } from "agent402-client";
+<div class="ml-code" style="margin:0 0 20px"><pre><code>import { Agent402 } from "agent402-client";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
@@ -180,18 +153,13 @@ const a = new Agent402({ fetch: payFetch });  // pays each call from the wallet
 const found = await a.call("search", { q: "x402 payment protocol adoption", count: 5 });
 const answer = await a.call("answer", { q: "what is the x402 payment protocol?" });
 
-console.log(found.results, answer.answer, answer.citations);</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+console.log(found.results, answer.answer, answer.citations);</code></pre></div>
 
 <p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown-to-html, json-to-csv and more) run free with proof-of-work and no wallet:</p>
-<div class="qs-code-wrap">
-<pre><code>const free = new Agent402();  // no fetch: proof-of-work
+<div class="ml-code" style="margin:0 0 20px"><pre><code>const free = new Agent402();  // no fetch: proof-of-work
 
 const result = await free.call("hash", { text: "hello world", algo: "sha256" });
-console.log(result);</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+console.log(result);</code></pre></div>
 
 <div class="qs-next">
 <div class="qs-next-title">What to try next</div>
@@ -209,21 +177,15 @@ console.log(result);</code></pre>
 <p class="qs-oneliner">Chat, the Anthropic Messages wire and embeddings, paid per request. The metered tier quotes each call from its own body.</p>
 
 <span class="qs-label">Run the local wallet proxy (pays each call from your wallet over x402)</span>
-<div class="qs-code-wrap">
-<pre><code>npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
+<div class="ml-code" style="margin:0 0 20px"><pre><code>npm i agent402-openclaw @x402/fetch @x402/evm viem   # in one folder
 export AGENT402_WALLET_KEY=0x...      # an EVM key holding USDC on Base
 export AGENT402_MAX_PER_CALL_USD=2    # per-call ceiling checked before signing
-npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+npx agent402-openclaw proxy           # run from that folder; serves http://127.0.0.1:8412/v1</code></pre></div>
 
 <span class="qs-label">Point any OpenAI SDK at it</span>
-<div class="qs-code-wrap">
-<pre><code>from openai import OpenAI
+<div class="ml-code" style="margin:0 0 20px"><pre><code>from openai import OpenAI
 client = OpenAI(base_url="http://127.0.0.1:8412/v1", api_key="unused")
-r = client.chat.completions.create(model="auto", messages=[{"role": "user", "content": "hi"}])</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+r = client.chat.completions.create(model="auto", messages=[{"role": "user", "content": "hi"}])</code></pre></div>
 <p class="qs-alt">Every model id and its price: <code>GET https://agent402.tools/v1/models</code>. The proxy also answers the Anthropic wire: for Claude Code, set <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8412</code>. Every host's settings: <a href="/guides/agent-hosts">the agent-hosts guide</a>.</p>
 </div>
 
@@ -232,15 +194,11 @@ r = client.chat.completions.create(model="auto", messages=[{"role": "user", "con
 <p class="qs-oneliner">Drop-in tool definitions for OpenAI, Anthropic, and Vercel AI SDK.</p>
 
 <span class="qs-label">Install</span>
-<div class="qs-code-wrap">
-<pre><code>npm install agent402-openai-tools
-# also: agent402-anthropic-tools, agent402-ai-sdk</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>npm install agent402-openai-tools
+# also: agent402-anthropic-tools, agent402-ai-sdk</code></pre></div>
 
 <span class="qs-label">Wire into your LLM call</span>
-<div class="qs-code-wrap">
-<pre><code>import { agent402Tools } from "agent402-openai-tools";
+<div class="ml-code" style="margin:0 0 20px"><pre><code>import { agent402Tools } from "agent402-openai-tools";
 // same shape: agent402-anthropic-tools
 // payFetch: the wallet-paying fetch from the Pay with USDC tab
 
@@ -252,16 +210,11 @@ const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], fr
 const result = await execute(call.function.name, JSON.parse(call.function.arguments));
 
 // agent402-ai-sdk returns four meta tools instead, keyed by name:
-// const tools = await agent402Tools({ fetch: payFetch }); await generateText({ model, tools, prompt });</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+// const tools = await agent402Tools({ fetch: payFetch }); await generateText({ model, tools, prompt });</code></pre></div>
 
 <p class="qs-alt"><strong>No wallet yet?</strong> The pure-CPU tools (hash, uuid, base64, markdown-to-html, json-to-csv and more) run free with proof-of-work and no wallet:</p>
-<div class="qs-code-wrap">
-<pre><code>// free tier: every compute-payable tool, paid with proof-of-work
-const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html"] });</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>// free tier: every compute-payable tool, paid with proof-of-work
+const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-html"] });</code></pre></div>
 
 <div class="qs-next">
 <div class="qs-next-title">What to try next</div>
@@ -279,15 +232,11 @@ const { tools, execute } = await agent402Tools({ slugs: ["hash", "markdown-to-ht
 <p class="qs-oneliner">Use the x402 protocol for on-chain payment - no API keys, no accounts. This snippet pays on Base or any EVM rail the 402 offers; Solana, Stellar and Algorand need their own scheme (see <a href="/docs/Paying-with-x402">Paying with x402</a>).</p>
 
 <span class="qs-label">Install</span>
-<div class="qs-code-wrap">
-<pre><code>npm install @x402/fetch @x402/core @x402/evm viem</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+<div class="ml-code" style="margin:0 0 20px"><pre><code>npm install @x402/fetch @x402/core @x402/evm viem</code></pre></div>
 
 <span class="qs-label">Make a paid call</span>
 <p class="qs-oneliner"><strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong></p>
-<div class="qs-code-wrap">
-<pre><code>import { wrapFetchWithPayment } from "@x402/fetch";
+<div class="ml-code" style="margin:0 0 20px"><pre><code>import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
@@ -304,9 +253,7 @@ const q = (s) => encodeURIComponent(s);
 const found = await (await payFetch("https://agent402.tools/api/search?q=" + q("x402 payment protocol adoption") + "&amp;count=5")).json();
 const answer = await (await payFetch("https://agent402.tools/api/answer?q=" + q("what is the x402 payment protocol?"))).json();
 
-console.log(found.results, answer.answer, answer.citations);</code></pre>
-<button class="qs-copy" aria-label="Copy">Copy</button>
-</div>
+console.log(found.results, answer.answer, answer.citations);</code></pre></div>
 
 <div class="qs-next">
 <div class="qs-next-title">What to try next</div>
@@ -326,8 +273,7 @@ console.log(found.results, answer.answer, answer.citations);</code></pre>
 </div>
 ${ledgerFooterCompact()}
 
-<script src="/js/quickstart-tabs.js"></script>
-<script src="/js/copy-buttons.js"></script>`;
+<script src="/js/quickstart-tabs.js"></script>`;
 
   return ledgerShell({ title, description, canonical, baseUrl, activePath: "/quickstart", extraCss, body });
 }

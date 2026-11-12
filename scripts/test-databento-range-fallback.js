@@ -3,6 +3,7 @@
 // answered on the last confirmed end inside a hard age limit instead of a 503.
 // Offline: global fetch is stubbed; no Redis, no state database.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
 import "./lib/file-mode.js";
 process.env.DATABENTO_API_KEY = "db-test-key-not-real";
 const db = await import("../src/tools/databento.js");

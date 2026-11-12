@@ -14,7 +14,7 @@
 // rather than crashing, useful for catching dead references in the test suite.
 import { siteOrgLd, mppOffered } from "./site-org.js";
 import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
-import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc as ledgerEsc, breadcrumbTrail, codeBlock } from "./ledger-chrome.js";
 import { RAILS_SHORT } from "./rails.js";
 import { isComputePayable } from "./pow.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -2671,8 +2671,6 @@ const SKILLS_CSS = `
 .sk-wf { counter-reset:step; margin:18px 0; padding:0; list-style:none; }
 .sk-wf li { position:relative; padding:16px 18px 16px 56px; border-left:2px solid var(--hairline); margin-bottom:8px; color:var(--muted); font-size:var(--fs-base); line-height:1.65; counter-increment:step; }
 .sk-wf li::before { content:counter(step); position:absolute; left:14px; top:16px; width:26px; height:26px; background:var(--panel); color:var(--accent); font-family:var(--font-mono); font-weight:700; font-size:var(--fs-sm); display:flex; align-items:center; justify-content:center; }
-.sk-prompt { position:relative; margin:14px 0; }
-.sk-prompt pre { background:var(--panel); color:var(--on-panel); font-family:var(--font-mono); padding:18px 20px; overflow-x:auto; font-size:var(--fs-sm); line-height:1.6; white-space:pre-wrap; border:none; }
 `;
 
 const SKILLS_TABS = [
@@ -2825,18 +2823,18 @@ export function skillsIndex(baseUrl) {
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CODE</div>
       <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One POST, over x402 or MPP</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">The pack quotes its price in the 402 challenge, your client signs once, and the response carries every step. Nothing to install and no key to rotate.</p>
-      <pre style="margin:0;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">curl -X POST \\
+      ${codeBlock(`curl -X POST \\
   https://agent402.tools/api/skill/security-audit \\
   -H 'content-type: application/json' \\
-  -d '{"domain":"example.com"}'</pre>
+  -d '{"domain":"example.com"}'`, { name: "the request", html: true, wrap: true, size: "xs", style: "margin:0" })}
     </div>
     <div style="padding:28px;background:var(--card);">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CLAUDE</div>
       <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One tool call, payment handled</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Through MCP a pack is a single tool the model can pick. Ask for the job in words - the connector chooses the pack, settles the payment, and returns the ledger.</p>
-      <pre style="margin:0;background:var(--panel);border:1px solid var(--panel-rule);color:var(--on-panel);padding:15px;font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.8;white-space:pre-wrap;word-break:break-word;">claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.31
+      ${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.31
 
-<span style="color:var(--on-panel-faint);">"run a security audit on example.com"</span></pre>
+<span style="color:var(--on-panel-faint);">"run a security audit on example.com"</span>`, { name: "the install command", html: true, wrap: true, size: "xs", style: "margin:0" })}
     </div>
   </div>
 </section>
@@ -3017,12 +3015,12 @@ ${returnsHtml}
 ${packTool ? `
 <h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Call it directly</h2>
 <p style="color:var(--muted);font-size:var(--fs-base);line-height:1.7;">Any x402 client pays the 402 and gets the whole workflow back in one response. With the <code>agent402-client</code> SDK (<code>npm i agent402-client</code>, an ES module):</p>
-<pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:18px 20px;font-size:var(--fs-sm);line-height:1.6;border:none;margin-top:12px;overflow-x:auto;">${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}</pre>` : ""}
+${codeBlock(`${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}`, { name: "the client code", html: true, style: "margin-top:12px" })}` : ""}
 
 <h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
-<pre style="background:var(--panel);color:var(--on-panel);font-family:var(--font-mono);padding:18px 20px;font-size:var(--fs-sm);line-height:1.6;border:none;margin-top:12px;">claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.31</pre>
+${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.31`, { name: "the install command", html: true, style: "margin-top:12px" })}
 <p style="color:var(--muted);font-size:var(--fs-base);margin-top:12px;">Then paste this prompt into Claude:</p>
-<div class="sk-prompt"><pre>${e(pack.claudePrompt)}</pre></div>
+${codeBlock(pack.claudePrompt, { name: "the prompt", wrap: true, style: "margin:14px 0" })}
 
 <p style="color:var(--faint);font-size:var(--fs-md);margin-top:36px;"><a href="/skills" style="color:var(--accent);text-decoration:none;">\u2190 All skill packs</a></p>
 </div>

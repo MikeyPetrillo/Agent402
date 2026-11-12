@@ -436,7 +436,7 @@ for (const [name, over, detail] of failCases) {
   // refused by the unpaid-quote budget once per attempt (one re-read each).
   let calls = 0;
   const HEALTHY_GW = { status: "ok", revenueLive: { status: "fresh" }, upstreamBuyer: { status: "low", trend: "ok" }, upstreamBuyerAvm: { status: "ok" }, upstreamBuyerEvm: { status: "ok" }, upstreamBuyerTempo: { status: "ok" }, subscriptionFeePayer: { status: "ok", ceiling: "ok" }, databases: { leads: { status: "ok" }, analytics: { status: "ok" } }, operatorAuth: { status: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, lateSettlements: { status: "ok" }, chargedFailures: { status: "ok", windowHours: 6 }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "ok" },
-    upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, xDataSpend: { status: "ok" }, exaSpend: { status: "ok" }, routerSpendWindow: { status: "ok" }, gatewayBalance: { status: "ok" }, sharedLimits: { status: "on", alert: "ok" }, replayStore: { status: "ok", alert: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
+    upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, xDataSpend: { status: "ok" }, exaSpend: { status: "ok" }, routerSpendWindow: { status: "ok" }, gatewayBalance: { status: "ok" }, sharedLimits: { status: "on", alert: "ok" }, replayStore: { status: "ok", alert: "ok" }, jevSpend: { status: "ok" }, externalSpendGlobal: { status: "ok" }, solanaHistory: { status: "publics" }, evmLogs: { status: "publics" }, speechUpstream: { status: "ok" }, firstCallAllowance: { status: "on" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" },
     mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" },
     toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, topBuyerFailures: { status: "ok" }, onchainSqlBusy: { status: "ok" }, buyerRefusals: { status: "ok" }, settleFailures: { status: "ok" }, unsettledReports: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } };
   const { ALARMS, MAX_ISSUE_WRITES } = await import("../workers/status-probe/src/index.js");
@@ -601,8 +601,11 @@ for (const [name, over, detail] of failCases) {
   // reads ok at once, so one ok read across a deploy is not a recovery. They
   // close on the second ok read in a row; the first marks the issue body (the
   // same mark heartbeat.yml writes), a bad read removes the mark.
-  for (const [field, badWord, title] of [["containedTurns", "repeating", "containedTurns: a scheduled turn is throwing every minute"], ["brokenListings", "widespread", "brokenListings: seller listings are failing to read across many origins"]]) {
-    await acheck(`${field}: closes only on the second ok read in a row; a bad read between starts the count again`, async () => {
+  // speechUpstream too, on its probing word: a dead primary with sparse
+  // traffic reads probing between cool-downs, and one such read is not a
+  // recovery, so the issue does not reopen on every cool-down cycle.
+  for (const [field, badWord, title, okWord = "ok"] of [["containedTurns", "repeating", "containedTurns: a scheduled turn is throwing every minute"], ["brokenListings", "widespread", "brokenListings: seller listings are failing to read across many origins"], ["speechUpstream", "cooling", "Speech upstream breaker COOLING (backup voices serving)", "probing"]]) {
+    await acheck(`${field}: closes only on the second ${okWord} read in a row; a bad read between starts the count again`, async () => {
       const { CLEARING_MARK } = await import("../workers/status-probe/src/index.js");
       const ISSUE = `/api/gateway-status reports ${field}.status=${badWord}: details.`;
       let body = ISSUE;
@@ -616,13 +619,13 @@ for (const [name, over, detail] of failCases) {
         for (const p of patches) if (typeof p.body === "string") body = p.body;
         return { r, patches };
       };
-      let { r, patches } = await run("ok");
+      let { r, patches } = await run(okWord);
       assert.deepEqual(r.closed, [], "one ok read does not close");
       assert.deepEqual(r.clearing, [title]);
       assert.equal(patches.length, 1);
       assert.ok(body.startsWith(`${ISSUE}\n\n${CLEARING_MARK}`), body);
       const markedBody = body;
-      ({ r, patches } = await run("ok"));
+      ({ r, patches } = await run(okWord));
       assert.deepEqual(r.closed, [title], "the second ok read in a row closes");
       assert.deepEqual(patches, [{ state: "closed" }]);
       body = markedBody;
@@ -631,7 +634,7 @@ for (const [name, over, detail] of failCases) {
       assert.deepEqual(r.opened, []);
       ({ r, patches } = await run(badWord));
       assert.deepEqual(patches, [], "a bad read with no mark writes nothing");
-      ({ r, patches } = await run("ok"));
+      ({ r, patches } = await run(okWord));
       assert.deepEqual(r.closed, [], "after ok, bad, the next ok marks again rather than closing");
       for (const b of [ISSUE, markedBody]) {
         body = b;
@@ -845,7 +848,7 @@ for (const [name, over, detail] of failCases) {
   await acheck("issue writes are capped per run: opens first, the rest wait for the next run", async () => {
     const titles = ALARMS.map((a) => a.title);
     const allOpen = titles.filter((t) => t !== "Upstream buyer wallet LOW (x402)").map((title, i) => ({ number: i + 1, title }));
-    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, lateSettlements: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, xDataSpend: { status: "ok" }, exaSpend: { status: "ok" }, routerSpendWindow: { status: "ok" }, gatewayBalance: { status: "ok" }, sharedLimits: { status: "on", alert: "ok" }, replayStore: { status: "ok", alert: "ok" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, topBuyerFailures: { status: "ok" }, onchainSqlBusy: { status: "ok" }, buyerRefusals: { status: "ok" }, settleFailures: { status: "ok" }, unsettledReports: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } }, status: HEALTHY_STATUS };
+    const everythingHealthy = { gateway: { ...HEALTHY_GATEWAY, upstreamBuyer: { status: "low", trend: "ok" }, tweetQueue: { status: "ok" }, circlePending: { status: "ok" }, gatewayPending: { status: "ok" }, lateSettlements: { status: "ok" }, chargedFailures: { status: "ok" }, refundsOwed: { status: "ok" }, ledgerDeadLetter: { status: "none" }, redisPersistence: { status: "on" }, backup: { status: "ok" }, outboundDestinations: { status: "new" }, upstreamBuyerSvm: { status: "ok" }, stellarFacilitator: { status: "ok" }, upstreamBudgets: { status: "ok" }, upstreamHardCaps: { status: "ok" }, exaAllowance: { status: "ok" }, xDataSpend: { status: "ok" }, exaSpend: { status: "ok" }, routerSpendWindow: { status: "ok" }, gatewayBalance: { status: "ok" }, sharedLimits: { status: "on", alert: "ok" }, replayStore: { status: "ok", alert: "ok" }, jevSpend: { status: "ok" }, externalSpendGlobal: { status: "ok" }, solanaHistory: { status: "publics" }, evmLogs: { status: "publics" }, speechUpstream: { status: "ok" }, firstCallAllowance: { status: "on" }, stateDb: { status: "on" }, sanctions: { status: "ok" }, sanctionsScreen: { status: "fresh" }, email: { status: "ok" }, upstreamCosts: { status: "ok" }, mppReconcile: { status: "ok", window7d: "ok", chargedFailedStatus: "ok" }, toolFailures: { status: "ok" }, upstreamHealth: { status: "ok" }, facilitatorFunds: { status: "ok" }, toolAnswers: { status: "ok" }, containedTurns: { status: "ok" }, brokenListings: { status: "ok" }, topBuyerFailures: { status: "ok" }, onchainSqlBusy: { status: "ok" }, buyerRefusals: { status: "ok" }, settleFailures: { status: "ok" }, unsettledReports: { status: "ok" }, robinhoodSettler: { status: "ok" }, subscriptionRenewals: { status: "ok" }, directUpstream: { status: "ok" }, creditsRefunds: { status: "ok" }, cdnOrigin: { status: "ok" } }, status: HEALTHY_STATUS };
     mkGh(allOpen);
     const r1 = await syncAlarms(ENV, { ...nosleep, maxWrites: 4, probe: { paywallObserved: true }, fetchStatus: feed(everythingHealthy, everythingHealthy) });
     assert.deepEqual(r1.opened, ["Upstream buyer wallet LOW (x402)"]);

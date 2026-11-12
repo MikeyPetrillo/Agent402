@@ -65,7 +65,7 @@ export function creditsPage(baseUrl, salesEnabled = false, catalog = {}) {
   <section>
     <div class="hm-obsidian" style="border-radius:var(--radius);background:var(--obsidian-bg);border:1px solid var(--obsidian-border);color:var(--on-panel);padding:26px 28px;">
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);letter-spacing:.18em;text-transform:uppercase;color:var(--on-panel-dim);margin-bottom:12px;">How it works</div>
-      <pre style="margin:0;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.8;color:var(--on-panel-soft);white-space:pre-wrap;word-break:break-word;"><span style="color:var(--on-panel-faint);"># a paid tool, any language - just the header</span>
+      <div class="ml-code ml-code-wrap" data-name="the calls" style="margin:0"><pre><span style="color:var(--on-panel-faint);"># a paid tool, any language - just the header</span>
 ${ex ? `${esc(exCall)}
 <span style="color:var(--accent-lit);">HTTP/2 200</span>  X-Credits-Balance: ${esc(ex.after)}   <span style="color:var(--on-panel-faint);"># 20.000 before, less one $${esc(String(ex.price))} call</span>
 ` : ""}
@@ -74,7 +74,7 @@ curl -X POST -H "Authorization: Bearer a402_…" -H "content-type: application/j
   -d '{"ticker":"AAPL"}' ${esc(baseUrl)}/v1/dossier
 
 <span style="color:var(--on-panel-faint);"># balance</span>
-curl -H "Authorization: Bearer a402_…" ${esc(baseUrl)}/api/credits/balance</pre>
+curl -H "Authorization: Bearer a402_…" ${esc(baseUrl)}/api/credits/balance</pre></div>
     </div>
   </section>
 </div>

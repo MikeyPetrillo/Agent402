@@ -636,7 +636,7 @@ export const STT_TOOLS = [
   },
   {
     route: "POST /v1/audio/transcriptions",
-    name: "Speech-to-text (OpenAI transcription wire)",
+    name: "Transcribe (OpenAI-compatible)",
     slug: "v1-audio-transcriptions",
     category: "ai",
     price: "$0.030",

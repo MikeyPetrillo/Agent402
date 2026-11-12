@@ -7,7 +7,7 @@
 // the page cannot drift from /api/pricing (the rule test-price-prose enforces
 // on the product pages). Deliberately narrow: an agent that lands here should
 // leave with one curl, not a catalog.
-import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrome.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { FEED_TTL_MS, META_TTL_MS as SIGNALS_META_TTL_MS } from "./tools/crypto-signals-kit.js";
 import { META_TTL_MS as DERIV_META_TTL_MS } from "./tools/derivatives-kit.js";
@@ -79,7 +79,6 @@ export function marketsPage(baseUrl, catalog) {
 .mk-card p{font-size:var(--fs-md);line-height:1.5;color:var(--muted);margin:0}
 .mk-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:34px;align-items:start}
 @media (max-width:900px){.mk-hero{grid-template-columns:minmax(0,1fr)}}
-.mk-pre{background:var(--panel);color:var(--on-panel);border:1px solid var(--hairline);padding:18px 20px;font-family:var(--font-mono);font-size:var(--fs-sm);line-height:1.6;overflow-x:auto;margin:0;white-space:pre}
 `;
 
   // A card shows the description's first sentence; a long one is cut at a
@@ -121,7 +120,7 @@ export function marketsPage(baseUrl, catalog) {
       </div>
       <div>
         <div style="font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;">the call</div>
-        <pre class="mk-pre">${esc(curl)}</pre>
+        ${codeBlock(curl, { name: "the call", style: "margin:0" })}
         <p style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin:10px 0 0;line-height:1.6;">Sources are public venue and aggregator feeds; a reading can come from a shared cache up to ${MAX_CACHE_MIN} minutes old. Every tool on this page answers its own documented example in CI before it can ship.</p>
       </div>
     </div>
