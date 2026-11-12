@@ -33,7 +33,22 @@ const SETUP = new Set(["fetch-tessdata.js"]);
 const SELF_SHARDED = new Set(["test-redos-free-tier.js"]);
 
 const live = (run) => String(run || "").split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
-const scriptRefs = (run) => [...live(run).matchAll(/\bnode\s+(?:--?[\w-]+(?:[ =]\S+)?\s+)*scripts\/([\w.-]+\.m?js)\b/g)].map((m) => m[1]);
+// Token scan, not one regex: after each `node` word, skip its flag tokens (and a
+// flag's value) and take the first scripts/<name>.js.
+const scriptRefs = (run) => {
+  const out = [];
+  for (const line of live(run).split("\n")) {
+    const tok = line.split(/\s+/).filter(Boolean).map((t) => t.slice(t.lastIndexOf("(") + 1).replace(/^["'`]+/, ""));
+    for (let i = 0; i < tok.length; i++) {
+      if (tok[i] !== "node") continue;
+      let k = i + 1;
+      while (k < tok.length && tok[k].startsWith("-")) k += tok[k].includes("=") || !tok[k + 1] || tok[k + 1].startsWith("scripts/") || tok[k + 1].startsWith("-") ? 1 : 2;
+      const m = k < tok.length ? /^scripts\/([\w.-]+\.m?js)$/.exec(tok[k].replace(/[;&|)]+$/, "")) : null;
+      if (m) out.push(m[1]);
+    }
+  }
+  return out;
+};
 const definesT = (run) => /^\s*t\(\)\s*\{/m.test(String(run || ""));
 
 const tmp = mkdtempSync(join(tmpdir(), "a402-shards-"));
