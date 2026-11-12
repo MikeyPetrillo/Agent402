@@ -219,14 +219,14 @@ function scanLogCalls(src, payment = false) {
     "Math.log(payer);",
     "log(`[x] ${ok ? `; buyer status: GET /x?tx=${row.tx}` : \"\"}`);",
     "log(`[x] ${ok ? `; status for ${entry.payer}` : \"\"}`);",
-    "log(`[x] ${ok ? `the payer's wallet ${row.payer}` : \"\"}`);",
+    "log(`[x] ${ok ? `the payer's wallet ${row.payer} isn't settled` : \"\"}`);",
     'console.warn("[x] paid by " + payer + " on " + network);',
     "log('[x] refused ' + auth.from);",
     'log("[x] ok " + shortPayer(payer) + " of " + list.length + " wallets", payer);',
     'log("[x] " + (ok ? "the buyer\'s wallet" : "none") + ` n=${n}`);',
   ].join("\n");
   const hits = scanLogCalls(sample).map((h) => h.expr);
-  const want = ["payer", "auth.from", "ok ? `; status for ${entry.payer}` : \"\"", "ok ? `the payer's wallet ${row.payer}` : \"\"", "payer", "auth.from"];
+  const want = ["payer", "auth.from", "ok ? `; status for ${entry.payer}` : \"\"", "ok ? `the payer's wallet ${row.payer} isn't settled` : \"\"", "payer", "auth.from"];
   ok(hits.join("|") === want.join("|"), `control: the scanner flags a bare payer and a from, interpolated or joined with +, passes shortened values, counts and quoted words, and reads a wallet (not the words) inside a nested template, an apostrophe in its text included (${hits.join(", ")})`);
   const pay = [
     "const labelOf = (e) => `auth ${e.payer}/${e.nonce}`;",
