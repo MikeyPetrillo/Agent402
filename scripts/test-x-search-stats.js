@@ -180,7 +180,7 @@ try {
     ok(reads === 2 && lapsed.every((x) => x.status === "ok"), `after the 30 s reuse, 200 concurrent requests make one more read (${reads})`);
     d.read = () => new Promise(() => {});
     const t0 = Date.now();
-    const hung = await stats.xSearchAuthorsStatus({ now: noon + 62_000 });
+    const hung = await Promise.race([stats.xSearchAuthorsStatus({ now: noon + 62_000 }), new Promise((r) => setTimeout(() => r({ status: "still waiting" }), 3_000).unref())]);
     ok(hung.status === "unknown" && Date.now() - t0 < 2_000, `a store read that never answers is cut at its deadline and reads unknown (${hung.status}, ${Date.now() - t0} ms)`);
     d.read = realRead;
   }
@@ -215,6 +215,29 @@ try {
     ok(f.status === "alert" && f.authorReadsToday === 510, `after the flush, inside the 30 s reuse, it still reads alert (${JSON.stringify(f)})`);
     f = await stats.xSearchAuthorsStatus({ now: day + 40_000, full: true });
     ok(f.status === "alert" && f.authorReadsToday === 510, `the next store read agrees, with no double count (${JSON.stringify(f)})`);
+    // A status read that started before a flush landed and answers after it
+    // may hold the row from before the write: the larger figure stands.
+    const day2 = day + 86_400_000;
+    stats._resetXSearchStats();
+    stats.noteXSearchAuthorReads({ authors: 490, now: day2 });
+    await stats.flushXSearchStats({ now: day2 });
+    stats._resetXSearchStats();
+    ok((await stats.xSearchAuthorsStatus({ now: day2 })).status === "ok", "the second day starts at 490 stored, ok");
+    stats.noteXSearchAuthorReads({ authors: 20, now: day2 });
+    const d2 = stats._xSearchStatsDoc();
+    const realRead2 = d2.read.bind(d2);
+    let releaseRead;
+    const readGate = new Promise((r) => { releaseRead = r; });
+    let snapshotTaken;
+    const taken = new Promise((r) => { snapshotTaken = r; });
+    d2.read = async (...a) => { const before = await realRead2(...a); snapshotTaken(); await readGate; return before; };
+    const overlapping = stats.xSearchAuthorsStatus({ now: day2 + 40_000, full: true });
+    await taken;
+    await stats.flushXSearchStats({ now: day2 });
+    releaseRead();
+    f = await overlapping;
+    d2.read = realRead2;
+    ok(f.status === "alert" && f.authorReadsToday === 510, `a status read from before a flush landed keeps the flushed reads (${JSON.stringify(f)})`);
     delete process.env.X_SEARCH_AUTHOR_DAILY_ALERT;
   }
 
@@ -224,7 +247,7 @@ try {
   await stats.flushXSearchStats();
   const body = JSON.parse(readFileSync(STATS_FILE, "utf8"));
   const days = Object.keys((body.body ?? body).days || {});
-  ok(days.length === 2 && !days.includes(new Date(old).toISOString().slice(0, 10)), `a day past the keep window is pruned (${days.join(", ")})`);
+  ok(days.length === 3 && !days.includes(new Date(old).toISOString().slice(0, 10)), `a day past the keep window is pruned (${days.join(", ")})`);
 } finally {
   server.close();
   globalThis.fetch = realFetch;
