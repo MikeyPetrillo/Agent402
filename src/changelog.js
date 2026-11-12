@@ -16,7 +16,7 @@ const ENTRIES = [
       "Server: daily upstream ceilings no longer count a call the upstream refused.",
       "Server: /mcp and the revenue view redact secrets from error text.",
       "Server: six more status words page on their alarm values.",
-      "Server: the tollbooth Docker image runs on Node 22.23.5 as a non-root user.",
+      "Server: the tollbooth Docker image runs on Node 22.23.5 as a non-root user; a replay store written by an older image is handed to that user at boot.",
       "Site: every code block on the site has the shared copy button.",
       "Site: /company form fields use the control border; tool page breadcrumbs keep their spacing; wrap fixes on /docs, /tools and tool pages.",
       "Site: /llms.txt is shorter; route descriptions for the MPP start routes moved to /llms-full.txt.",
