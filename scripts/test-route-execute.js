@@ -597,14 +597,15 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   // own contract guarantees is not read as an error.
   {
     const challenge = { x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000" }] };
-    for (const [label, body, why] of [["null", null, "empty"], ["{}", {}, "empty"], ["a payment challenge", challenge, "challenge"], ["{error}", { error: "upstream down" }, "error-shaped"], ["{ok:false}", { ok: false }, "error-shaped"], ["{errors:[..]}", { errors: ["x"] }, "error-shaped"]]) {
+    for (const [label, body, why] of [["null", null, "empty"], ["{}", {}, "empty"], ["a payment challenge", challenge, "challenge"], ["{error}", { error: "upstream down" }, "error-shaped"], ["{ok:false}", { ok: false }, "error-shaped"], ["{errors:[..]}", { errors: ["x"] }, "error-shaped"], ["{errors:[..], data:null}", { errors: ["x"], data: null }, "error-shaped"], ["{status:404, error}", { status: 404, error: "Not Found" }, "error-shaped"], ["{statusCode:404, message, error}", { statusCode: 404, message: "Cannot GET /api/x", error: "Not Found" }, "error-shaped"]]) {
       const { e } = await run({ list: [cand("hollow.example")], pay: async () => ({ result: body, quote: null, receipt: null }) });
       ok(e?.statusCode === 502 && new RegExp(`\\(${why}\\)`).test(e.message) && e.committed !== true && e.paidUnanswered !== true, `an unpaid ${label} is a failed upstream: 502 (${why}), uncommitted (got ${e?.statusCode} ${e?.message?.slice(0, 120)})`);
       ok(guard.walletDailySpentUsd("base") === 0, `unpaid ${label}: nothing booked on the chain's day`);
     }
-    // Content beside an error is the seller's answer, and so is a lookup's
-    // not-found: sold, not refused, and no second seller is bought.
-    for (const [label, body] of [["{valid:false, errors}", { valid: false, errors: ["bad checksum"] }], ["{ok:false, status:503, health}", { ok: false, status: 503, db: "down" }], ["{status:404, error}", { status: 404, error: "Not Found" }], ["{data, errors}", { data: { price: 1 }, errors: ["one field"] }]]) {
+    // Content beside an error is the seller's answer, a not-found with a
+    // value beside it included: sold, not refused, and no second seller is
+    // bought. A 404 envelope alone (above) is not an answer.
+    for (const [label, body] of [["{valid:false, errors}", { valid: false, errors: ["bad checksum"] }], ["{ok:false, status:503, health}", { ok: false, status: 503, db: "down" }], ["{status:404, error, found:false}", { status: 404, error: "Not Found", found: false }], ["{data, errors}", { data: { price: 1 }, errors: ["one field"] }]]) {
       const c = await run({ list: [cand("answers.example"), cand("b.example")], pay: async (url) => (url.includes("answers") ? { result: body, quote: null, receipt: null } : good()) });
       ok(c.r?.receipt?.sellerPaid === false && c.r?.receipt?.seller === "https://answers.example" && c.calls.length === 1, `an unpaid ${label} is the seller's answer and is sold, with no next seller bought (got ${c.e?.statusCode || c.r?.receipt?.seller}, ${c.calls?.length} calls)`);
     }
