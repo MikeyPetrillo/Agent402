@@ -87,6 +87,11 @@ ok(patches.size === 1, `every node base runs one Node patch (${[...patches].map(
   ok(chowns.every(([l]) => /chown -h /.test(l)), "entrypoint: every chown leaves a link itself unfollowed");
   const verdict = epLines.findIndex((l) => /own_place=yes/.test(l));
   const verdictGate = epLines.slice(0, verdict).reverse().find((l) => /^\s*if \[ -d "\$dir" \]/.test(l)) || "";
+  // The record's directory is created as node first (a subdirectory of the
+  // image's /var/lib/tollbooth then comes out node's, writable), and by root
+  // only where node cannot create it; never by root alone before node tries.
+  const mkdirs = epLines.filter((l) => /\bmkdir\b/.test(l)).map((l) => l.trim());
+  ok(mkdirs.length === 1 && /^su-exec "\$TARGET_USER" mkdir -p -- "\$dir" 2>\/dev\/null \|\| mkdir -p -- "\$dir"/.test(mkdirs[0]), `entrypoint: the directory is made as node, root only as the fallback (${mkdirs.join(" | ")})`);
   ok(verdict > 0 && /\[ ! -L "\$dir" \]/.test(verdictGate) && epLines.filter((l) => /own_place=yes/.test(l)).length === 1, `entrypoint: a directory that is a link never earns the own-place verdict (${verdictGate.trim()})`);
 }
 
