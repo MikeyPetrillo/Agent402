@@ -190,7 +190,9 @@ export function actualXReadUsd(path, data) {
  * priced by estimateXReadUsd from the same params it puts on the wire.
  * `usdWithoutExpansions` is the same reads with expanded objects unbilled (the
  * card before X's 2026-11-05 notice). scripts/test-pricing-margin.js holds
- * each case under the margin bound of the tool's fixed price.
+ * each case under the margin bound of the tool's fixed price, expansions
+ * billed; x-search-recent, whose author reads are absorbed by owner decision
+ * (2026-11-12), is held there on `usdWithoutExpansions`.
  */
 export function xToolWorstCases(slug) {
   const page = Math.max(10, X_MAX_POSTS_PER_CALL());
