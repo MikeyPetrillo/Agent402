@@ -23,8 +23,6 @@ Server:
 - code-run sandboxes have no internet access.
 - The LLM tiers advertise the successors of the OpenAI models retiring
   2026-12-11; the retiring ids are still accepted.
-- Metered quotes for text in dense scripts (CJK, Thai, emoji, base64) on models
-  outside OpenAI estimate tokens at a realistic floor.
 - The insider, LinkedIn article and IPO reports fence the filer-written text
   they read.
 - Daily upstream ceilings no longer count a call the upstream refused.
