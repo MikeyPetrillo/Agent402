@@ -282,6 +282,10 @@ if (!_jevShared) {
     await new Promise((r) => setTimeout(r, 200)); // the refusal mark is a fire-and-forget write
     const fresh = await freshStatus({ JEV_DAILY_MAX_TOKENS: String(local * 2 + 100) });
     ok(fresh.first !== "ok" && fresh.after === "capped" && fresh.ownCalls === 0, `a fresh process on a capped day reads ${fresh.first} then ${fresh.after}, never ok (${JSON.stringify(fresh)})`);
+    // The refusal is marked on the shared day: read with a ceiling above the
+    // shared total, the mark alone still says a call was refused today.
+    const marked = await freshStatus({ JEV_DAILY_MAX_TOKENS: String(local * 2 + 150) });
+    ok(marked.after === "capped", `the shared refusal mark alone reads capped in a fresh process (${marked.after})`);
     // A day under the ceiling with no refusal reads ok.
     _jevReset();
     await new Promise((r) => setTimeout(r, 200)); // the reset is a fire-and-forget write
