@@ -17,14 +17,13 @@
 // fetch preload, OpenRouter through scripts/lib/openrouter-stub-preload.js):
 // nothing is settled on chain and nothing is sent upstream.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getFreePorts } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { pathToFileURL } from "node:url";
+import { bootServer } from "./lib/boot-server.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { x402Client } from "@x402/core/client";
 import { UptoEvmScheme as UptoClient } from "@x402/evm/upto/client";
@@ -182,16 +181,12 @@ async function signFor(paymentRequired) {
 
 // --- 5. Paid-mode boots ------------------------------------------------------
 const tmp = mkdtempSync(join(tmpdir(), "a402-upto-gas-"));
-const PORTS = await getFreePorts(24);
-let portIdx = 0;
-const nextPort = () => PORTS[portIdx++];
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // Facilitator stubs: Base (stock wire) and Circle (redirected by a preload).
 const st = { baseExt: [EIP], circleExt: [EIP], baseSettles: [], circleSettles: [], circleVerifies: 0 };
 const readBody = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => { b += c; }); req.on("end", () => { try { r(JSON.parse(b || "null")); } catch { r(null); } }); });
 const send = (res, code, o) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(o)); };
-const P_BASE = nextPort(), P_CIRCLE = nextPort(), P_OR = nextPort();
 const baseStub = createServer(async (req, res) => {
   const body = await readBody(req);
   if (req.url === "/supported") return send(res, 200, { kinds: [{ x402Version: 2, scheme: "exact", network: BASE }, { x402Version: 2, scheme: "upto", network: BASE, extra: { facilitatorAddress: FAC_BASE } }], extensions: st.baseExt, signers: {} });
@@ -221,7 +216,8 @@ const orStub = createServer(async (req, res) => {
   }
   send(res, 200, { data: [] });
 });
-await Promise.all([[baseStub, P_BASE], [circleStub, P_CIRCLE], [orStub, P_OR]].map(([s, p]) => new Promise((r) => s.listen(p, "127.0.0.1", r))));
+const listen = (s) => new Promise((r) => s.listen(0, "127.0.0.1", () => r(s.address().port)));
+const [P_BASE, P_CIRCLE, P_OR] = await Promise.all([baseStub, circleStub, orStub].map(listen));
 const circlePreload = join(tmp, "circle-redirect.mjs");
 writeFileSync(circlePreload, `
 const BASE = ${JSON.stringify(CIRCLE_FACILITATOR_BASE)};
@@ -236,18 +232,23 @@ globalThis.fetch = function (input, init) {
 `);
 const orPreload = join(ROOT, "scripts/lib/openrouter-stub-preload.js");
 
-const procs = [];
-async function boot(env, { tree = ROOT, arc = false } = {}) {
-  const port = nextPort();
-  const base = { ...process.env };
-  delete base.STATE_DATABASE_URL; delete base.CIRCLE_FACILITATOR_API_KEY;
-  delete base.X402_UPTO_NETWORKS; delete base.X402_UPTO_GAS_SPONSORING;
-  const child = spawn(process.execPath, ["--import", orPreload, "--import", circlePreload, "src/server.js"], {
-    cwd: tree,
+// A baseline tree is booted with its own helper, so it runs from its own root.
+const baselineBoot = process.env.BASELINE_TREE
+  ? (await import(pathToFileURL(join(process.env.BASELINE_TREE, "scripts/lib/boot-server.js")).href)).bootServer
+  : null;
+const booted = [];
+let bootN = 0;
+async function boot(env, { baseline = false, arc = false } = {}) {
+  const n = ++bootN;
+  const clear = { STATE_DATABASE_URL: "", CIRCLE_FACILITATOR_API_KEY: "", X402_UPTO_NETWORKS: "", X402_UPTO_GAS_SPONSORING: "" };
+  const srv = await (baseline ? baselineBoot : bootServer)({
+    stores: `upto-gas-${n}`,
+    args: ["--import", orPreload, "--import", circlePreload],
+    timeoutMs: 120_000,
     env: {
-      ...base, ...ownStoreEnv(`upto-gas-${port}`),
+      ...clear,
       // One fixed base URL, so two boots' 402s can be compared byte for byte.
-      PORT: String(port), BASE_URL: "http://upto-gas.test", FREE_MODE: "", NETWORK: "base", PAYMENT_NETWORKS: arc ? "base,arc" : "base",
+      BASE_URL: "http://upto-gas.test", FREE_MODE: "", NETWORK: "base", PAYMENT_NETWORKS: arc ? "base,arc" : "base",
       FACILITATOR_URL: `http://127.0.0.1:${P_BASE}`, CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "",
       AGENT402_BASE_RPC: `http://127.0.0.1:${P_CIRCLE}/rpc`,
       WALLET_ADDRESS: PAYTO, X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", SOLANA_LEADERBOARD: "off",
@@ -257,26 +258,16 @@ async function boot(env, { tree = ROOT, arc = false } = {}) {
       OPENROUTER_API_KEY: "test-key-never-sent", OPENROUTER_STUB_URL: `http://127.0.0.1:${P_OR}`, OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_FLEX: "off",
       UPSTREAM_COSTS_JSON: "", UPSTREAM_COSTS_OPTIONAL: "", UPSTREAM_COSTS_FILE: join(ROOT, "docs/example-upstream-costs.json"),
       GATEWAY_METERED_BILLING: "on",
-      SALES_LEDGER_DB: join(tmp, `sales-${port}.db`), CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${port}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-${port}.json`), TRAFFIC_DIR: tmp,
+      SALES_LEDGER_DB: join(tmp, `sales-${n}.db`), CIRCLE_PENDING_FILE: join(tmp, `circle-pending-${n}.json`), GATED_RAIL_HISTORY_FILE: join(tmp, `gated-${n}.json`), TRAFFIC_DIR: tmp,
       UPTO_TEST_CIRCLE_STUB: `http://127.0.0.1:${P_CIRCLE}`,
       ...(arc ? { CIRCLE_FACILITATOR_API_KEY: KEY } : {}),
       ...env,
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  procs.push(child);
-  const log = { text: "" };
-  child.stdout.on("data", (d) => { log.text += d; });
-  child.stderr.on("data", (d) => { log.text += d; });
-  const url = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 240; i++) {
-    try { if ((await fetch(`${url}/health`)).ok) return { url, log, child }; } catch { /* booting */ }
-    await wait(250);
-  }
-  child.kill("SIGKILL");
-  throw new Error(`server never became healthy: ${log.text.slice(-1500)}`);
+  booted.push(srv);
+  return { url: srv.url, log: { get text() { return srv.log(); } }, srv };
 }
-const stop = async (b) => { try { b.child.kill("SIGKILL"); } catch { /* gone */ } await wait(150); };
+const stop = async (b) => { try { await b.srv.stop(); } catch { /* gone */ } };
 const METERED = "/v1/metered/chat/completions";
 const CHAT_BODY = JSON.stringify({ model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 });
 const decode = (h) => JSON.parse(Buffer.from(h, "base64").toString("utf8"));
@@ -300,13 +291,13 @@ try {
     ok(!/gas sponsoring/.test(b.log.text), "switch off: nothing about sponsoring is logged");
     await stop(b);
     if (process.env.BASELINE_TREE) {
-      const a = await boot(env, { tree: process.env.BASELINE_TREE });
+      const a = await boot(env, { baseline: true });
       const m0 = await challenge(a.url), u0 = await challenge(a.url, "/api/uuid");
       ok(m0.hdr === m.hdr && m0.body === m.body, `switch off: the metered 402 header and body are byte-identical to ${process.env.BASELINE_TREE} (${m.hdr?.length} / ${m0.hdr?.length} header bytes)`);
       ok(u0.hdr === u.hdr && u0.body === u.body, "switch off: an ordinary tool's 402 is byte-identical too");
       await stop(a);
       const c = await boot({}, { arc: true });
-      const c0 = await boot({}, { arc: true, tree: process.env.BASELINE_TREE });
+      const c0 = await boot({}, { arc: true, baseline: true });
       const [x, x0] = [await challenge(c.url), await challenge(c0.url)];
       ok(x.hdr === x0.hdr && x.body === x0.body, "Arc offered, upto unset: the 402 is byte-identical to the baseline");
       await stop(c); await stop(c0);
@@ -393,7 +384,7 @@ try {
   fail++;
   console.error(`FAIL - ${e?.stack || e}`);
 } finally {
-  for (const p of procs) { try { p.kill("SIGKILL"); } catch { /* gone */ } }
+  for (const b of booted) { try { await b.stop(); } catch { /* gone */ } }
   for (const s of [baseStub, circleStub, orStub]) { try { s.close(); } catch { /* closed */ } }
   try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
 }

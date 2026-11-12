@@ -2567,14 +2567,13 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // copy - the buyer echoes its chosen accept back in the payment).
       const firstAcceptSchema = acceptOutputSchemaEnabled() ? outputSchemaFromExtensions(ext) : null;
       acceptsBuilders.set(route, () => withOutputSchemaOnFirstAccept(acceptsFor(item), firstAcceptSchema));
-      const accepts = acceptsBuilders.get(route)();
       // Permit2 gas sponsorship: a metered /v1 route that offers upto
       // (src/upto-gas-sponsoring.js). Top level, one copy per 402.
-      if (uptoGasDeclarations && isMeteredGatewayRoute(item) && accepts.some((a) => a.scheme === "upto")) Object.assign(ext, uptoGasDeclarations);
+      if (uptoGasDeclarations && isMeteredGatewayRoute(item) && acceptsFor(item).some((a) => a.scheme === "upto")) Object.assign(ext, uptoGasDeclarations);
       return [
         route,
         {
-          accepts,
+          accepts: acceptsBuilders.get(route)(),
           description: listingDescription,
           // Per-TOOL service name, not the host name.
           //
