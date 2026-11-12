@@ -153,7 +153,11 @@ for (const lit of ["::ffff:0:808:808", "64:ff9b:1::808:808", "64:ff9b::808:808"]
     process.env.DNS_LOOKUP_TIMEOUT_MS = "800";
     lookupMode = "HANG";
     const t0 = Date.now();
-    const e = await upfront("LATE_REFUSED");
+    // Raced against a 3 s timer, so a fallback with a bound of its own fails
+    // here at once instead of holding the suite open.
+    let timer;
+    const e = await Promise.race([upfront("LATE_REFUSED"), new Promise((r) => { timer = setTimeout(() => r({ statusCode: "still waiting" }), 3000); })]);
+    clearTimeout(timer);
     const took = Date.now() - t0;
     ok(e?.statusCode === 503 && e.message === LOOKUP_UNAVAILABLE && took >= 550 && took < 1200,
       `a late refusal leaves the OS resolver only the rest of the bound (${e?.statusCode}, ${took} ms of 800)`);
