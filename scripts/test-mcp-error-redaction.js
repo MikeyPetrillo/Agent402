@@ -194,6 +194,9 @@ try {
   gone(`private key: ${OTHER}`, [OTHER], "a bare run named as a private key");
   gone(`{"privateKey":"${OTHER}"}`, [OTHER], "a bare run in a camelCase privateKey field");
   gone(`{"privateKey":"0x${OTHER}"}`, [OTHER], "a 0x run in a camelCase privateKey field");
+  gone(`Private Key Hex: 0x${OTHER}`, [OTHER], "a 0x run after a spaced name whose key word is not the last word");
+  gone(`wallet private key hex 0x${OTHER}`, [OTHER], "a 0x run after a lowercase spaced key name");
+  kept(`idempotency key reused; settled 0x${OTHER}`, "a key word in an earlier clause does not reach the run");
   gone(`PRIVATE_KEY_HEX=0x${OTHER}`, [OTHER], "a 0x run named by a key name with a suffix");
 }
 

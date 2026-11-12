@@ -222,7 +222,10 @@ function redactTruncated(out, prefixes) {
 const HEX64_RE = /(?<![0-9A-Za-z])(0[xX])?[0-9a-fA-F]{64}(?![0-9A-Za-z])/g;
 // The name sitting immediately before a run: one identifier, then only
 // separators and quotes ("PRIVATE_KEY=", "\"txHash\":\"", "block ").
-const NAME_BEFORE_RE = /([A-Za-z0-9_-]+)[\s:="'`]*$/;
+// The name just before a run: up to three words joined by spaces or tabs
+// ("Private Key Hex"), ended by separators and quotes; any other punctuation
+// (";", ",", ".") ends the name, so a key word in an earlier clause is not read.
+const NAME_BEFORE_RE = /((?:[A-Za-z0-9_-]+[ \t]+){0,2}[A-Za-z0-9_-]+)[\s:="'`]*$/;
 // The words of a name: snake_case, kebab-case and camelCase pieces.
 const NAME_WORD_RE = /[A-Z]+[0-9]*(?![a-z])|[A-Z]?[a-z0-9]+/g;
 const KEY_WORDS = new Set(["key", "keys", "privkey", "private", "secret", "mnemonic", "seed"]);
