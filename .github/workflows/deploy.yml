@@ -3436,6 +3436,8 @@ jobs:
           t node scripts/test-credits-sales-gate.js
           # Stripe shadow ledger (off by default and inert, idempotent on tx hash, failures swallowed, restart-durable, caller unchanged in every world)
           t node scripts/test-stripe-shadow-ledger.js
+          # Every Stripe client sends the pinned API version, never the SDK default
+          t node scripts/test-stripe-api-version.js
           # Fetch-guard error attribution (upstream 4xx→422, 5xx→502; media Content-Type fail-fast)
           t node scripts/test-fetch-guard.js
           t node scripts/test-ssrf-literal-ip.js

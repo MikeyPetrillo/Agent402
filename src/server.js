@@ -76,7 +76,7 @@ import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus } from "./gatewa
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
 // composites (settle-after on SVM/AVM/Tempo is work done, never charged), but
 // not composite-spend-guarded (one bounded upstream price).
-import Stripe from "stripe";
+import { newStripeClient } from "./stripe-api-version.js";
 import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
 import { meteredTwinSlug, meteredQuoteSentence, isMeteredChatSlug, meteredClientTimeoutField } from "./metered-lead.js";
@@ -3210,7 +3210,7 @@ let _subs = null;
 let _humanCheckout = null; // wired below (card report checkout); read by the webhook hook and the status word
 try {
   _subs = subscriptionsEnabled() ? createStripeSubscriptions({
-    stripe: new Stripe(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
+    stripe: newStripeClient(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
     validateTarget: _monitorTargetValidators,
     onInvoicePaid: ({ invoiceId, product, amountUsd }) => {
       recordSale({ slug: product || "monitor", priceUsd: amountUsd, rail: "card", network: "stripe", payer: null, tx: invoiceId, wire: "stripe-subscription" });
@@ -3276,7 +3276,7 @@ if (_mppSubs) {
 let _credits = null;
 try {
   _credits = humanCheckoutEnabled() ? createCredits({
-    stripe: new Stripe(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
+    stripe: newStripeClient(process.env.STRIPE_SECRET_KEY), baseUrl: BASE_URL,
     // A pack PURCHASE is cash received, not revenue earned: booked on the
     // non-paying rail "card-prepaid" for reconciliation, so /revenue counts
     // the money once - when it is spent (rail "credits" below).
@@ -5067,7 +5067,7 @@ if (!humanCheckoutEnabled()) {
 if (humanCheckoutEnabled()) {
   try {
     _humanCheckout = createHumanCheckout({
-      stripe: new Stripe(process.env.STRIPE_SECRET_KEY), generate: _humanGenerate, baseUrl: BASE_URL,
+      stripe: newStripeClient(process.env.STRIPE_SECRET_KEY), generate: _humanGenerate, baseUrl: BASE_URL,
       // Card sales land in the SAME sales ledger as x402 settlements (rail
       // "card", network "stripe", the PaymentIntent as tx) so /revenue and the
       // operator surfaces see the human front door.
@@ -5537,7 +5537,7 @@ app.get("/__operator/nc-sales-tax.json", async (req, res) => {
     const rows = externalSalesForSlugs(Object.keys(NC_TAXABLE_SLUGS), since, until);
     const keyIds = [...new Set(rows.filter((r) => !r.tx && r.payer).map((r) => r.payer))];
     const keyBilling = _credits ? await _credits.billingByKeyId(keyIds) : new Map();
-    const stripeClient = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+    const stripeClient = process.env.STRIPE_SECRET_KEY ? newStripeClient(process.env.STRIPE_SECRET_KEY) : null;
     const paymentBilling = new Map();
     const report = await ncTaxReport(rows, {
       billingForKey: (id) => keyBilling.get(id) || null,
@@ -6569,7 +6569,7 @@ const mppReconciler = createMppReconciler({
   },
   stripeLookup: (process.env.STRIPE_SECRET_KEY || "").trim() ? async (pi) => {
     if (!/^pi_[A-Za-z0-9]+$/.test(String(pi))) return { error: true };
-    _stripeForReconcile ||= new Stripe(process.env.STRIPE_SECRET_KEY.trim());
+    _stripeForReconcile ||= newStripeClient(process.env.STRIPE_SECRET_KEY.trim());
     const r = await _stripeForReconcile.paymentIntents.retrieve(pi);
     return { status: r.status, amountCents: r.amount_received ?? r.amount };
   } : null,
