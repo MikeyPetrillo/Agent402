@@ -73,7 +73,7 @@ export const METERED_SLUGS = new Set([
   "fc-cast-replies", "fc-channel", "fc-user-search", "fc-cast-metrics",
   // X API v2 app-only bearer (per-post read billing) and the enrichment
   // providers - each lists only with its own key, and 503s without it.
-  "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
+  "x-search-recent", "x-search-recent-authors", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
   "exa-search", "exa-answer", "exa-contents",
   "hunter-domain-search", "hunter-email-finder", "hunter-email-verify", "hunter-company",
   "apollo-people-search", "apollo-org-enrich", "apollo-person-match",
