@@ -116,7 +116,6 @@ All endpoints return `402` without a valid x402 payment header: the same flow as
 Each call runs in a **fully isolated E2B sandbox** (ephemeral cloud VM):
 
 - **No access** to the Agent402 server's filesystem, network, or secrets
-- **No internet access**: the sandbox is created with all outbound traffic denied, so code cannot fetch URLs or install packages
 - **No state** persists between callers: the VM is destroyed after each execution
 - **A hard time limit** stops infinite loops; a run that reaches it returns `200` with `timedOut: true` and is charged
 - **Code size cap** prevents payload abuse

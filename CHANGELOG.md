@@ -20,7 +20,6 @@ Server:
 - Outbound tools resolve hostnames without the shared thread pool, so a name
   that never answers no longer delays other lookups; every resolved address is
   checked before a fetch.
-- code-run sandboxes have no internet access.
 - The LLM tiers advertise the successors of the OpenAI models retiring
   2026-12-11; the retiring ids are still accepted.
 - The insider, LinkedIn article and IPO reports fence the filer-written text

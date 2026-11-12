@@ -10,7 +10,6 @@ const ENTRIES = [
       "Payments: the proof that an EVM authorization went unused reads chain time, not the host clock.",
       "Payments: Bazaar service names end on a whole phrase and stay distinct per tier.",
       "Server: outbound tools resolve hostnames without the shared thread pool, so a name that never answers no longer delays other lookups; every resolved address is checked before a fetch.",
-      "Server: code-run sandboxes have no internet access.",
       "Server: the LLM tiers advertise the successors of the OpenAI models retiring 2026-12-11; the retiring ids are still accepted.",
       "Server: the insider, LinkedIn article and IPO reports fence the filer-written text they read.",
       "Server: daily upstream ceilings no longer count a call the upstream refused.",
