@@ -3,6 +3,15 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-12",
+    title: "Vendor updates: X search authors, security releases",
+    items: [
+      "Tools: x-search-recent stays at its price and returns each post's author id; the new x-search-recent-authors route runs the same search with author usernames, names and verified marks.",
+      "Server: the HTTP client takes the November undici security release; Stripe calls pin their API version; the MPP, viem and Solana libraries take their current minor releases.",
+      "Server: the Railway configuration runbook covers the December 2026 cutover.",
+    ],
+  },
+  {
+    date: "2026-11-12",
     title: "Leftovers: payer keys, lookups, retirements, site polish",
     items: [
       "Payments: a Solana payment is keyed on its transfer authority when other transfer accounts sit in a lookup table, and x402 v1 Solana payments carry a payer key.",
