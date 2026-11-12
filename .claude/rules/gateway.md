@@ -170,4 +170,7 @@ Loaded when a gateway, metering, model-catalog or report file is read.
 - **Quoted material:** every report kit hands the model third-party text inside `quotedMaterial` blocks
   (`src/report-grounding.js`) and carries `QUOTED_MATERIAL_RULE`, or `QUOTED_DATA_RULE` (the same rule without its
   citation sentence) where the report lists no numbered sources: the domain audit's probe blocks and the token risk
-  report's token, holder, liquidity and web blocks. `scripts/test-report-grounding.js` runs each with a planted directive.
+  report's token, holder, liquidity and web blocks. The insider report quotes its issuer line and every table (filer-written
+  names, roles, security titles); the LinkedIn article quotes the research report and its source list. The IPO digest
+  calls no model: each filer-written field reaches its markdown through `filerText` (one line, no link, tag or quote
+  marker). `scripts/test-report-grounding.js` runs each with a planted directive.
