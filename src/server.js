@@ -3105,7 +3105,7 @@ if (!FREE_MODE) startTopBuyerRefresh({ read: async (o) => { await salesLedgerRea
 // onchainSqlQueries: per UTC day, how many upstream queries onchain-sql calls
 // sent, by how each call ended, and the budget refusals (counts only;
 // src/sql-query-stats.js; also at /__operator/onchain-sql-queries.json). xSearchAuthors: per UTC day, how many distinct
-// authors and posts x-search-recent-authors calls that answered a final 200 returned,
+// authors and posts x-search-recent calls that answered a final 200 returned,
 // bucketed (counts only; src/x-search-stats.js). transcriptionUnmeasured:
 // transcription files this process could not measure by decoding since boot
 // (a busy or slow decode, no ffmpeg), which the cap then read from the

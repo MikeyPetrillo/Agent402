@@ -22,12 +22,7 @@
     {
       "slug": "x-search-recent", "name": "a recent search returns a full page with text", "requires": "X_BEARER_TOKEN",
       "input": { "query": "x402 -is:retweet", "max_results": 10 },
-      "expect": { "equals": { "authorsIncluded": false }, "gte": { "count": 1 }, "isArray": ["tweets"], "populated": ["tweets.0.id", "tweets.0.text", "tweets.0.authorId"] }
-    },
-    {
-      "slug": "x-search-recent-authors", "name": "a recent search with authors carries each row's username", "requires": "X_BEARER_TOKEN",
-      "input": { "query": "x402 -is:retweet", "max_results": 10 },
-      "expect": { "equals": { "authorsIncluded": true }, "gte": { "count": 1 }, "isArray": ["tweets"], "populated": ["tweets.0.id", "tweets.0.text", "tweets.0.author.username"] }
+      "expect": { "gte": { "count": 1 }, "isArray": ["tweets"], "populated": ["tweets.0.id", "tweets.0.text"] }
     },
     {
       "slug": "x-user-tweets", "name": "a user timeline is attributed to that user", "requires": "X_BEARER_TOKEN",

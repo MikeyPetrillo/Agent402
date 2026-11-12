@@ -188,9 +188,9 @@ export function actualXReadUsd(path, data) {
  * Worst-case X spend of one call to a tool, for each body shape that changes
  * what the handler reads: every read it sends, at the largest page it accepts,
  * priced by estimateXReadUsd from the same params it puts on the wire.
- * Expanded objects are billed (X's 2026-11-05 notice).
- * scripts/test-pricing-margin.js holds each case under the margin bound of
- * the tool's fixed price.
+ * `usdWithoutExpansions` is the same reads with expanded objects unbilled (the
+ * card before X's 2026-11-05 notice). scripts/test-pricing-margin.js holds
+ * each case under the margin bound of the tool's fixed price.
  */
 export function xToolWorstCases(slug) {
   const page = Math.max(10, X_MAX_POSTS_PER_CALL());
@@ -198,8 +198,11 @@ export function xToolWorstCases(slug) {
   const userRead = () => estimateXReadUsd("/users/by/username/u", { "user.fields": USER_FIELDS });
   const searchParams = { max_results: page, "tweet.fields": TWEET_FIELDS };
   switch (slug) {
-    case "x-search-recent": return [{ body: { query: "q" }, usd: estimateXReadUsd("/tweets/search/recent", searchParams) }];
-    case "x-search-recent-authors": return [{ body: { query: "q" }, usd: estimateXReadUsd("/tweets/search/recent", { ...searchParams, ...AUTHOR_EXPANSION }) }];
+    case "x-search-recent": return [{
+      body: { query: "q" },
+      usd: estimateXReadUsd("/tweets/search/recent", { ...searchParams, ...AUTHOR_EXPANSION }),
+      usdWithoutExpansions: estimateXReadUsd("/tweets/search/recent", searchParams),
+    }];
     case "x-user": return [{ body: { username: "u" }, usd: userRead() }];
     case "x-user-tweets": return [
       { body: { id: "1" }, usd: estimateXReadUsd("/users/1/tweets", timeline) },
@@ -368,16 +371,10 @@ function shapeTweet(t, authors) {
 
 const nowIso = () => new Date().toISOString();
 
-// x-tweet, a timeline looked up by id and x-search-recent read no author: X
-// bills each object an expansion returns, so they carry authorId, null author
-// fields and an /i/web/status link. x-search-recent-authors sends the author
-// expansion and is priced as a search plus a bulk lookup of the page's
-// authors: up to one expanded user per post, the reads x-users-lookup makes
-// for a full list of usernames.
+// x-tweet and a timeline looked up by id read no author: X bills each object
+// an expansion returns, so they carry authorId, null author fields and an
+// /i/web/status link. Search keeps its author expansion.
 const TIMELINE_USD = 0.09;
-const SEARCH_USD = 0.08;
-const USERS_LOOKUP_USD = 0.15;
-const SEARCH_AUTHORS_USD = Number((SEARCH_USD + USERS_LOOKUP_USD).toFixed(6));
 
 async function resolveUserId(username) {
   const data = await xGet(`/users/by/username/${encodeURIComponent(username)}`, { "user.fields": USER_FIELDS });
@@ -424,105 +421,74 @@ const USER_EXAMPLE = {
 
 const SHARED_TAGS = ["x", "twitter", "social", "x-api", "tweets"];
 
-// The two search routes share one handler: x-search-recent reads the posts
-// only; x-search-recent-authors also sends the author expansion and flattens
-// each author onto its row.
-const SEARCH_INPUT_SCHEMA = {
-  properties: {
-    query: { type: "string", description: "X search query (max 512 chars). Supports X operators: from:user, #tag, lang:en, -is:retweet, has:links." },
-    max_results: { type: "number", description: "Tweets per page, up to 10 (default 10)." },
-    sort_order: { type: "string", description: "recency (default) or relevancy." },
-    next_token: { type: "string", description: "Pagination token from a previous response." },
-  },
-  required: ["query"],
-};
-const searchExample = (withAuthors) => ({
-  source: "x-api-v2",
-  fetchedAt: "2026-08-20T14:10:00.000Z",
-  query: "x402 -is:retweet",
-  authorsIncluded: withAuthors,
-  count: 1,
-  tweets: [withAuthors ? TWEET_EXAMPLE : TWEET_NO_AUTHOR_EXAMPLE],
-  nextToken: "b26v89c19zqg8o3fpzbl7xxxxx",
-});
-
-function searchHandler(withAuthors) {
-  return async (i) => {
-    const query = typeof i.query === "string" ? i.query.trim() : "";
-    if (!query) throw bad('"query" is required - an X search query, e.g. "x402 -is:retweet"');
-    if (query.length > 512) throw bad(`"query" is too long (${query.length} chars, max 512)`);
-    const maxResults = takeMaxResults(i.max_results, { min: 10, max: Math.max(10, X_MAX_POSTS_PER_CALL()), dflt: 10 });
-    const sort = i.sort_order === undefined || i.sort_order === null || i.sort_order === "" ? "recency" : String(i.sort_order);
-    if (sort !== "recency" && sort !== "relevancy") throw bad('"sort_order" must be "recency" or "relevancy"');
-    const nextToken = takeToken(i.next_token, "next_token");
-
-    const data = await xGet("/tweets/search/recent", {
-      query,
-      max_results: maxResults,
-      sort_order: sort,
-      next_token: nextToken,
-      "tweet.fields": TWEET_FIELDS,
-      ...(withAuthors ? AUTHOR_EXPANSION : {}),
-    });
-    // Counted on the request's FINAL response (src/x-search-stats.js):
-    // distinct authors and posts X returned, for a final 200 only. Counts
-    // only; a call outside a request is not counted. Only the route that
-    // reads authors has any to count.
-    if (withAuthors) {
-      try {
-        const seen = xSearchCountsOf(data);
-        onFinalResponse((status, scope) => noteXSearchCall({ status, ...seen, synthetic: !!scope?.synthetic }));
-      } catch { /* bookkeeping only */ }
-    }
-    const authors = withAuthors ? authorIndex(data.includes) : null;
-    const tweets = (Array.isArray(data.data) ? data.data : []).map((t) => shapeTweet(t, authors)).filter(Boolean);
-    return {
-      source: "x-api-v2",
-      fetchedAt: nowIso(),
-      query,
-      authorsIncluded: withAuthors,
-      count: tweets.length,
-      tweets,
-      nextToken: data.meta?.next_token ?? null,
-    };
-  };
-}
-
 export const X_DATA_TOOLS = [
   {
     route: "POST /api/x-search-recent",
     name: "X recent tweet search",
     slug: "x-search-recent",
     category: "web",
-    price: `$${SEARCH_USD}`,
+    price: "$0.08",
     description:
-      `Search public tweets from the last 7 days on X (Twitter) by query, using X API v2 search operators (keywords, from:, #hashtag, lang:, -is:retweet). Returns up to 10 tweets per call with text, created time, language, engagement metrics (likes, retweets, replies, quotes, impressions), the author id and an /i/web/status link, plus a next_token for paging. The author's username, name and verification are not read and come back null (authorsIncluded false); POST /api/x-search-recent-authors ($${SEARCH_AUTHORS_USD}) runs the same search with each author flattened onto its row.`,
+      "Search public tweets from the last 7 days on X (Twitter) by query, using X API v2 search operators (keywords, from:, #hashtag, lang:, -is:retweet). Returns up to 10 tweets per call with text, created time, language, engagement metrics (likes, retweets, replies, quotes, impressions) and the author's username flattened onto each row, plus a next_token for paging.",
     tags: [...SHARED_TAGS, "search", "recent"],
     discovery: {
       bodyType: "json",
       input: { query: "x402 -is:retweet", max_results: 10 },
-      inputSchema: SEARCH_INPUT_SCHEMA,
-      output: { example: searchExample(false) },
+      inputSchema: {
+        properties: {
+          query: { type: "string", description: "X search query (max 512 chars). Supports X operators: from:user, #tag, lang:en, -is:retweet, has:links." },
+          max_results: { type: "number", description: "Tweets per page, up to 10 (default 10)." },
+          sort_order: { type: "string", description: "recency (default) or relevancy." },
+          next_token: { type: "string", description: "Pagination token from a previous response." },
+        },
+        required: ["query"],
+      },
+      output: {
+        example: {
+          source: "x-api-v2",
+          fetchedAt: "2026-08-20T14:10:00.000Z",
+          query: "x402 -is:retweet",
+          count: 1,
+          tweets: [TWEET_EXAMPLE],
+          nextToken: "b26v89c19zqg8o3fpzbl7xxxxx",
+        },
+      },
     },
-    handler: searchHandler(false),
-  },
+    handler: async (i) => {
+      const query = typeof i.query === "string" ? i.query.trim() : "";
+      if (!query) throw bad('"query" is required - an X search query, e.g. "x402 -is:retweet"');
+      if (query.length > 512) throw bad(`"query" is too long (${query.length} chars, max 512)`);
+      const maxResults = takeMaxResults(i.max_results, { min: 10, max: Math.max(10, X_MAX_POSTS_PER_CALL()), dflt: 10 });
+      const sort = i.sort_order === undefined || i.sort_order === null || i.sort_order === "" ? "recency" : String(i.sort_order);
+      if (sort !== "recency" && sort !== "relevancy") throw bad('"sort_order" must be "recency" or "relevancy"');
+      const nextToken = takeToken(i.next_token, "next_token");
 
-  {
-    route: "POST /api/x-search-recent-authors",
-    name: "X recent tweet search with authors",
-    slug: "x-search-recent-authors",
-    category: "web",
-    price: `$${SEARCH_AUTHORS_USD}`,
-    description:
-      `Search public tweets from the last 7 days on X (Twitter) by query, with each tweet's author. The same search as POST /api/x-search-recent ($${SEARCH_USD}), plus the author's username, display name and verification flattened onto each row and a status link built from the username (authorsIncluded true). Returns up to 10 tweets per call with text, created time, language and engagement metrics (likes, retweets, replies, quotes, impressions), plus a next_token for paging. Priced as the search plus a bulk lookup of up to 10 authors (POST /api/x-users-lookup, $${USERS_LOOKUP_USD}).`,
-    tags: [...SHARED_TAGS, "search", "recent", "authors", "usernames"],
-    discovery: {
-      bodyType: "json",
-      input: { query: "x402 -is:retweet", max_results: 10 },
-      inputSchema: SEARCH_INPUT_SCHEMA,
-      output: { example: searchExample(true) },
+      const data = await xGet("/tweets/search/recent", {
+        query,
+        max_results: maxResults,
+        sort_order: sort,
+        next_token: nextToken,
+        "tweet.fields": TWEET_FIELDS,
+        ...AUTHOR_EXPANSION,
+      });
+      // Counted on the request's FINAL response (src/x-search-stats.js):
+      // distinct authors and posts X returned, for a final 200 only. Counts
+      // only; a call outside a request is not counted.
+      try {
+        const seen = xSearchCountsOf(data);
+        onFinalResponse((status, scope) => noteXSearchCall({ status, ...seen, synthetic: !!scope?.synthetic }));
+      } catch { /* bookkeeping only */ }
+      const authors = authorIndex(data.includes);
+      const tweets = (Array.isArray(data.data) ? data.data : []).map((t) => shapeTweet(t, authors)).filter(Boolean);
+      return {
+        source: "x-api-v2",
+        fetchedAt: nowIso(),
+        query,
+        count: tweets.length,
+        tweets,
+        nextToken: data.meta?.next_token ?? null,
+      };
     },
-    handler: searchHandler(true),
   },
 
   {
@@ -663,7 +629,7 @@ export const X_DATA_TOOLS = [
     name: "X bulk user lookup",
     slug: "x-users-lookup",
     category: "web",
-    price: `$${USERS_LOOKUP_USD}`,
+    price: "$0.15",
     description:
       "Look up up to 10 X (Twitter) accounts by username in one call. Returns each found profile with public metrics (followers, following, tweets, listed), verification status and bio, plus the list of usernames X did not resolve.",
     tags: [...SHARED_TAGS, "users", "bulk", "lookup"],
@@ -714,7 +680,7 @@ export const __test = { takeUsername, takeId, takeMaxResults, takeToken, shapeTw
 // casts, token names and descriptions, page titles). Anyone can mint a token or
 // publish a post, so this is the cheapest prompt-injection delivery vehicle in
 // the catalog: flag it as data, never instructions, the way site-crawl does.
-const UNTRUSTED_TEXT_SLUGS = new Set(["x-search-recent", "x-search-recent-authors", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup"]);
+const UNTRUSTED_TEXT_SLUGS = new Set(["x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup"]);
 for (const t of X_DATA_TOOLS) {
   if (!UNTRUSTED_TEXT_SLUGS.has(t.slug)) continue;
   const inner = t.handler;

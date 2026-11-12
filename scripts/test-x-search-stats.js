@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// x-search-recent-authors author and post histogram (src/x-search-stats.js), offline.
+// x-search-recent author and post histogram (src/x-search-stats.js), offline.
 //
 // Proves the caller path: a local express app with the real request-scope
-// middleware (src/request-timing.js) in front of the real x-search-recent-authors
+// middleware (src/request-timing.js) in front of the real x-search-recent
 // handler (X stubbed), and a settlement stand-in that, like the x402
 // middleware, turns the handler's 200 into a 402 after the handler ran. A
 // call is counted by the distinct authors in `includes.users` and the posts
 // in `data` only on a FINAL 200; a settle failure, an upstream error and a
 // call outside a request count nothing. The answer is unchanged by the
-// counting. x-search-recent, which reads no authors, counts nothing. The counts land in the state document (file backend here),
+// counting. The counts land in the state document (file backend here),
 // survive a fresh module state, never hold a username, id or query text, and
 // days past the keep window are pruned.
 //
@@ -62,8 +62,7 @@ globalThis.fetch = async (url, init = {}) => {
 };
 
 // --- the caller path: request scope, handler, settlement stand-in ---------------
-const tool = X_DATA_TOOLS.find((t) => t.slug === "x-search-recent-authors");
-const plain = X_DATA_TOOLS.find((t) => t.slug === "x-search-recent");
+const tool = X_DATA_TOOLS.find((t) => t.slug === "x-search-recent");
 const app = express();
 app.use(requestTimingMiddleware((req) => req.path));
 app.use(express.json());
@@ -75,19 +74,15 @@ app.use((req, res, next) => {
   res.json = (body) => (res.statusCode < 400 && req.headers["x-settle"] === "fail" ? orig.call(res.status(402), { error: "settlement failed" }) : orig(body));
   next();
 });
-app.post("/api/x-search-recent-authors", async (req, res) => {
-  try { res.json(await tool.handler(req.body)); }
-  catch (e) { res.status(e.statusCode || 502).json({ error: e.message }); }
-});
 app.post("/api/x-search-recent", async (req, res) => {
-  try { res.json(await plain.handler(req.body)); }
+  try { res.json(await tool.handler(req.body)); }
   catch (e) { res.status(e.statusCode || 502).json({ error: e.message }); }
 });
 const server = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
 const base = `http://127.0.0.1:${server.address().port}`;
-const call = async (fn, headers = {}, path = "/api/x-search-recent-authors") => {
+const call = async (fn, headers = {}) => {
   answer = fn;
-  const r = await realFetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ query: "secretquery -is:retweet" }) });
+  const r = await realFetch(`${base}/api/x-search-recent`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ query: "secretquery -is:retweet" }) });
   const body = await r.json();
   await new Promise((res) => setTimeout(res, 20)); // the finish hook runs after the body is sent
   return { status: r.status, body };
@@ -108,8 +103,6 @@ try {
   ok(up.status >= 500, `an upstream 5xx is not a 200 (${up.status})`);
   const syn = await call(() => J(200, page(10, 7)), { "x-synthetic": "1" });
   ok(syn.status === 200, "a synthetic call answers 200");
-  const pl = await call(() => J(200, { data: page(10, 0).data, meta: { result_count: 10 } }), {}, "/api/x-search-recent");
-  ok(pl.status === 200 && pl.body.count === 10 && pl.body.authorsIncluded === false, `x-search-recent answers 200 without authors (${pl.status})`);
   // A call outside any request is not counted.
   answer = () => J(200, page(10, 4));
   await tool.handler({ query: "x402" });

@@ -75,7 +75,7 @@ const ROUTES = [
   "POST /api/llm-pro", "POST /api/llm-premium",
   "POST /v1/videos/generations", "POST /api/image-gen-hd", "POST /api/image-gen-premium",
   "POST /api/tts-hd", "POST /api/tts-lite", "POST /api/transcribe-pro",
-  "GET /api/x-search-recent", "GET /api/x-search-recent-authors", "GET /api/x-user-tweets", "GET /api/x-users-lookup",
+  "GET /api/x-search-recent", "GET /api/x-user-tweets", "GET /api/x-users-lookup",
   // Back on the list once its example stopped pointing at a placeholder host
   // that answers no 402 (2026-09-11). It now checks a $0.001 route on this
   // host, so the example is a healthy seller end to end.
