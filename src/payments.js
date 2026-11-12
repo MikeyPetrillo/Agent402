@@ -3227,6 +3227,51 @@ export function gatewayBatchedRailStatus() {
   return { status: !dropped.length ? "offered" : offered.length ? "partial" : "dropped", configured: [...gatewayBatchedStatus.configured], offered, dropped };
 }
 
+/**
+ * The one-way payer id a verify failure carries (recordVerifyFailure): an HMAC
+ * of the signed payer, the Solana transfer authority, or the credential, under
+ * the telemetry secret. Null without a secret. Never throws.
+ */
+export async function verifyFailurePayerKey(ctx, { idSecret: secret } = {}) {
+  // Who failed, as a one-way id. Prefer the signed EIP-3009 `from`; fall back to
+  // the credential itself (SVM/Stellar payloads carry no readable payer), which
+  // is what credentialKeyOf already derives for the 402 hint. Never an address.
+  let payerKey = null;
+  try {
+    // KEYED, not a bare hash. sha256 of an EVM address is one-way only against
+    // blind inversion: the input comes from a public, enumerable set - every
+    // address that has settled USDC on Base - so anyone holding the analytics
+    // dataset recovers the payer by hashing candidates until one matches. That is
+    // pseudonymisation, not anonymisation, and the comment here claimed the
+    // stronger thing. An HMAC under a secret we hold is neither forgeable nor
+    // enumerable and still groups (same payer, same id) - the construction the
+    // wish board already uses for caller fingerprints.
+    const { createHmac } = await import("node:crypto");
+    const idSecret = typeof secret === "string" ? secret : process.env.TELEMETRY_ID_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "";
+    const from = ctx?.paymentPayload?.payload?.authorization?.from;
+    let basis = from ? `payer:${String(from).toLowerCase()}` : null;
+    // An SVM payload carries no `authorization.from`, but its signed
+    // transaction names the buyer (svm-payer.js svmPaymentAuthority): the
+    // TransferChecked authority, the wallet whose tokens move. Before this the fallback below
+    // keyed on the credential, and a Solana credential is a fresh transaction
+    // per attempt, so one looping wallet read as a new payer every time
+    // (197 ids for 197 events, 2026-09-04). Never lowercased: base58.
+    if (!basis && isSvmNetwork(String(ctx?.requirements?.network || ""))) {
+      const svm = svmPaymentAuthority(ctx?.paymentPayload, { feePayer: ctx?.requirements?.extra?.feePayer });
+      if (svm) basis = `svm-payer:${svm}`;
+    }
+    if (!basis) {
+      const { credentialKeyOf } = await import("./verify-hint.js");
+      const cred = credentialKeyOf(ctx?.paymentPayload);
+      if (cred) basis = `credential:${cred}`;
+    }
+    // No secret configured: emit NO id rather than a reversible one. A missing
+    // dimension is a gap in telemetry; a guessable one is a claim we cannot back.
+    if (basis && idSecret) payerKey = `a402:${createHmac("sha256", idSecret).update(basis).digest("hex").slice(0, 32)}`;
+  } catch { /* telemetry is best-effort */ }
+  return payerKey;
+}
+
 // One recorder for BOTH verify-failure shapes @x402/core produces: a
 // facilitator that THROWS (non-2xx verify: CDP's shape) reaches
 // onVerifyFailure; one that answers 200 `{isValid:false}` (PayAI, Solvador,
@@ -3253,42 +3298,7 @@ async function recordVerifyFailure(ctx, reason, { detail = "" } = {}) {
     }
   } catch { /* a hint is best-effort */ }
   // Telemetry (reason, chain, route, balance BUCKET - never the payer): see posthog.js.
-  // Who failed, as a one-way id. Prefer the signed EIP-3009 `from`; fall back to
-  // the credential itself (SVM/Stellar payloads carry no readable payer), which
-  // is what credentialKeyOf already derives for the 402 hint. Never an address.
-  let payerKey = null;
-  try {
-    // KEYED, not a bare hash. sha256 of an EVM address is one-way only against
-    // blind inversion: the input comes from a public, enumerable set - every
-    // address that has settled USDC on Base - so anyone holding the analytics
-    // dataset recovers the payer by hashing candidates until one matches. That is
-    // pseudonymisation, not anonymisation, and the comment here claimed the
-    // stronger thing. An HMAC under a secret we hold is neither forgeable nor
-    // enumerable and still groups (same payer, same id) - the construction the
-    // wish board already uses for caller fingerprints.
-    const { createHmac } = await import("node:crypto");
-    const idSecret = process.env.TELEMETRY_ID_SECRET || process.env.POW_SECRET || process.env.MPP_SECRET_KEY || "";
-    const from = ctx?.paymentPayload?.payload?.authorization?.from;
-    let basis = from ? `payer:${String(from).toLowerCase()}` : null;
-    // An SVM payload carries no `authorization.from`, but its signed
-    // transaction names the buyer (svm-payer.js svmPaymentAuthority): the
-    // TransferChecked authority, the wallet whose tokens move. Before this the fallback below
-    // keyed on the credential, and a Solana credential is a fresh transaction
-    // per attempt, so one looping wallet read as a new payer every time
-    // (197 ids for 197 events, 2026-09-04). Never lowercased: base58.
-    if (!basis && isSvmNetwork(String(ctx?.requirements?.network || ""))) {
-      const svm = svmPaymentAuthority(ctx?.paymentPayload, { feePayer: ctx?.requirements?.extra?.feePayer });
-      if (svm) basis = `svm-payer:${svm}`;
-    }
-    if (!basis) {
-      const { credentialKeyOf } = await import("./verify-hint.js");
-      const cred = credentialKeyOf(ctx?.paymentPayload);
-      if (cred) basis = `credential:${cred}`;
-    }
-    // No secret configured: emit NO id rather than a reversible one. A missing
-    // dimension is a gap in telemetry; a guessable one is a claim we cannot back.
-    if (basis && idSecret) payerKey = `a402:${createHmac("sha256", idSecret).update(basis).digest("hex").slice(0, 32)}`;
-  } catch { /* telemetry is best-effort */ }
+  const payerKey = await verifyFailurePayerKey(ctx);
   import("./posthog.js").then(({ capturePostHogVerifyFailed }) => capturePostHogVerifyFailed({
     network: ctx?.requirements?.network, scheme: ctx?.requirements?.scheme, // v2 requirements carry no resource; the buyer's payload names it (2 of
     // 7,103 verify_failed events had a path before this, 2026-10-02 audit).
