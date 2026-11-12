@@ -16,14 +16,18 @@
 // one sync interval of traffic. Without a shared store the per-process count
 // is the bound, and it survives nothing a restart resets.
 //
-// WHAT A UNIT IS: a call that may have reached the upstream. The unit is taken
+// WHAT A UNIT IS: a call the upstream may have served. The unit is taken
 // before the call (so a burst cannot pass the ceiling while calls are in
-// flight) and given back only when the call provably never left this process:
-// the name did not resolve, the connection was refused or never opened, or the
-// caller's signal was already aborted when the call was made
-// (neverReachedUpstream). Everything else keeps its unit, whatever came back:
-// an upstream that answered an error, a timeout or a reset after the request
-// was written may all have been metered there.
+// flight) and given back when the call provably never left this process (the
+// name did not resolve, the connection was refused or never opened, or the
+// caller's signal was already aborted when the call was made:
+// neverReachedUpstream), or when the upstream refused it before doing any work
+// (a 4xx answer: bad request, our key refused, rate limited; for E2B also its
+// busy refusal, which the SDK documents as changing nothing:
+// upstreamRefusedBeforeWork). Everything else keeps its unit: a 2xx or 3xx
+// answer, a 5xx, a timeout or a reset after the request was written may all
+// have been served and metered there. Giving a unit back only ever lowers the
+// day's count, so this never refuses a call the old count would have let by.
 //
 // A ceiling of `0` refuses every call; `off` disables one. A malformed value
 // falls back to the default, never to disabled.
@@ -114,8 +118,27 @@ export function neverReachedUpstream(err, { abortedAtCall = false } = {}) {
 }
 
 /**
+ * True only when `x` (a fetch Response, or a thrown error and up to four
+ * causes) shows the upstream refused the call before doing any work: an HTTP
+ * status from 400 to 499, or E2B's AuthenticationError (401), RateLimitError
+ * (429) or ServiceBusyError (503, "nothing was changed by the refused call").
+ * A 5xx in general, a 2xx or a 3xx is not: the call may have been served.
+ */
+const REFUSED_ERROR_NAMES = new Set(["AuthenticationError", "RateLimitError", "ServiceBusyError"]);
+export function upstreamRefusedBeforeWork(x) {
+  let e = x;
+  for (let i = 0; i < 5 && e && typeof e === "object"; i++) {
+    const status = Number(e.status ?? e.statusCode);
+    if (Number.isInteger(status) && status >= 400 && status <= 499) return true;
+    if (typeof e.name === "string" && REFUSED_ERROR_NAMES.has(e.name)) return true;
+    e = e.cause;
+  }
+  return false;
+}
+
+/**
  * Give back the unit a call took at `takenAt`, for a call that never reached
- * the upstream. A unit taken on an earlier UTC day is not given back to today.
+ * the upstream or that the upstream refused before any work. A unit taken on an earlier UTC day is not given back to today.
  */
 export function releaseHardCap(name, takenAt = Date.now(), now = Date.now()) {
   const c = byName.get(name);
