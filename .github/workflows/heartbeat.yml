@@ -743,9 +743,11 @@ jobs:
 
       # The primary speech link's breaker on /api/tts and /api/tts-hd
       # (speechUpstream, src/tools/tts-kit.js): cooling pages (the breaker is
-      # open and calls go to the backup voices), ok clears; probing (the
-      # cool-down ended and the next call tests the link), unknown and absent
-      # do neither.
+      # open and calls go to the backup voices); ok and probing clear (probing:
+      # the cool-down ended and the next call tests the primary link, so the
+      # page's claim no longer holds; with no speech traffic the word stays
+      # probing until a call, and a failed probe reads cooling again and
+      # pages); unknown and absent do neither.
       # The status Worker runs the same check under the same title.
       - name: Speech upstream check (alarm while the breaker cools)
         if: always()
@@ -760,9 +762,9 @@ jobs:
           if [ "$STATUS" = "cooling" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports speechUpstream.status=cooling: the primary speech link throttled or failed repeatedly, so its breaker is open and /api/tts and /api/tts-hd answer from the backup voices for the cool-down, which doubles on each trip up to its most. Buyers are still served. Check the [tts] lines in the server log and the upstream's status and credits. Auto-closes when the word reads ok (a call served by the primary link)." || true
+                --body "/api/gateway-status reports speechUpstream.status=cooling: the primary speech link throttled or failed repeatedly, so its breaker is open and /api/tts and /api/tts-hd answer from the backup voices for the cool-down, which doubles on each trip up to its most. Buyers are still served. Check the [tts] lines in the server log and the upstream's status and credits. Auto-closes when the word reads ok (a call served by the primary link) or probing (the cool-down ended: the next call tries the primary link, so the backups are no longer serving by default)." || true
             fi
-          elif { [ "$STATUS" = "ok" ]; } && [ -n "$EXISTING" ]; then
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "probing" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "speechUpstream is ${STATUS}; closing." || true
           fi
 

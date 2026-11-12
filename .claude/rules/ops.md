@@ -106,7 +106,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   none is excused). Paged on their alarm values only, by the Worker and `heartbeat.yml` under one
   title each: `jevSpend` capped (closes on ok), `externalSpendGlobal` refusing (ok, off; near is a
   forecast and does neither), `solanaHistory` and `evmLogs` failing (publics, fallback; idle does
-  neither), `speechUpstream` cooling (ok; probing does neither), `firstCallAllowance` unavailable
+  neither), `speechUpstream` cooling (ok, probing: the cool-down ended and the next call tries the primary
+  link, so a quiet service does not hold the page open), `firstCallAllowance` unavailable
   (on, spent: spent is the day's cap working as set; present only while the trial is on).
   `loopLag` and `mppEvmDomainFallback` publish a flag, not a word, and page nothing.
 - **Ended MPP subscriptions:** the private half of a subscription's access key is deleted when a
