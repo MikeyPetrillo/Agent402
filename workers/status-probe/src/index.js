@@ -983,6 +983,72 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "/api/gateway-status reports replayStore.alert=sustained: a settled payment's consumed mark has waited ten minutes or more to reach the shared store (Redis). This process refuses that payment from its own mark and the retry loop keeps writing it; until it lands, another container does not see the mark and a restart drops it. Check the Redis service and the server log for [replay-guard] lines; the operator view of /api/gateway-status carries the counts. Auto-closes when replayStore.status reads ok.",
   },
   {
+    // The route judgment's daily token ceiling (jevSpend, src/tool-judge.js):
+    // capped pages, ok clears; unknown and absent do neither. The UTC day
+    // rolling reads ok again.
+    // Title and body match heartbeat.yml's.
+    title: "Route judgment token ceiling CAPPED for the day",
+    verdict: ({ gateway: b }) => wordVerdict(b.jevSpend?.status, ["capped"], ["ok"]),
+    body: () =>
+      "/api/gateway-status reports jevSpend.status=capped: the route judgment used its daily token ceiling (JEV_DAILY_MAX_TOKENS). Until the UTC day ends, route and route-execute rank without the judgment (the order before it): buyers are still served, with a weaker ranking. The day's tokens, the free share and the refusals are on the operator view of /api/gateway-status (jevSpend, operator token). Raise the ceiling on Railway or leave it. Auto-closes when the word reads ok.",
+  },
+  {
+    // The global unsettled external-spend ceiling (externalSpendGlobal,
+    // src/external-spend-guard.js): refusing pages (at the ceiling, or a
+    // purchase was refused on it inside the hold), ok and off clear; near is
+    // a forecast and does neither, as do unknown and absent.
+    // Title and body match heartbeat.yml's.
+    title: "External spend global ceiling REFUSING",
+    verdict: ({ gateway: b }) => wordVerdict(b.externalSpendGlobal?.status, ["refusing"], ["ok", "off"]),
+    body: () =>
+      "/api/gateway-status reports externalSpendGlobal.status=refusing: the unsettled spend our route-execute wallets have put out to outside sellers, across every payer, reached the global ceiling, or a purchase was refused on it within the last minute. A purchase past the ceiling is refused and not charged (external routing reads as paused for every buyer) until earlier spends settle. Check the settle path for buyers whose payments are not landing (the operator views of /api/gateway-status and /__operator/refunds.json) and the [spend-guard] lines in the server log. Auto-closes when the word reads ok or off.",
+  },
+  {
+    // Solana transaction-history reads (solanaHistory,
+    // src/solana-history-rpc.js): failing pages (most recent reads failed on
+    // every lane), publics and fallback clear; idle (no read since restart),
+    // unknown and absent do neither.
+    // Title and body match heartbeat.yml's.
+    title: "Solana history reads FAILING on every lane",
+    verdict: ({ gateway: b }) => wordVerdict(b.solanaHistory?.status, ["failing"], ["publics", "fallback"]),
+    body: () =>
+      "/api/gateway-status reports solanaHistory.status=failing: most recent Solana transaction-history reads failed on every lane, public and keyed. The revenue ledger and the Solana boards read through them and stop advancing until a lane answers. The per-lane counts, the reasons and the cache are on the operator view of /api/gateway-status (solanaHistory, operator token); check the keyed endpoint's variable on Railway. Auto-closes when the word reads publics or fallback.",
+  },
+  {
+    // EVM log reads (evmLogs, src/evm-logs-rpc.js): failing pages (most
+    // recent reads failed on every lane), publics and fallback clear; idle,
+    // unknown and absent do neither.
+    // Title and body match heartbeat.yml's.
+    title: "EVM log reads FAILING on every lane",
+    verdict: ({ gateway: b }) => wordVerdict(b.evmLogs?.status, ["failing"], ["publics", "fallback"]),
+    body: () =>
+      "/api/gateway-status reports evmLogs.status=failing: most recent EVM log reads failed on every lane, public and configured. The revenue ledger's recent window, the Base board and the activity scans read through them and stop advancing until a lane answers. The per-caller counts are on the operator view of /api/gateway-status (evmLogs, operator token); check the configured RPC variables on Railway. Auto-closes when the word reads publics or fallback.",
+  },
+  {
+    // The primary speech link's breaker on /api/tts and /api/tts-hd
+    // (speechUpstream, src/tools/tts-kit.js): cooling pages (the breaker is
+    // open and calls go to the backup voices), ok clears; probing (the
+    // cool-down ended and the next call tests the link), unknown and absent
+    // do neither.
+    // Title and body match heartbeat.yml's.
+    title: "Speech upstream breaker COOLING (backup voices serving)",
+    verdict: ({ gateway: b }) => wordVerdict(b.speechUpstream?.status, ["cooling"], ["ok"]),
+    body: () =>
+      "/api/gateway-status reports speechUpstream.status=cooling: the primary speech link throttled or failed repeatedly, so its breaker is open and /api/tts and /api/tts-hd answer from the backup voices for the cool-down, which doubles on each trip up to its most. Buyers are still served. Check the [tts] lines in the server log and the upstream's status and credits. Auto-closes when the word reads ok (a call served by the primary link).",
+  },
+  {
+    // The first-call allowance (firstCallAllowance, src/first-call-allowance.js),
+    // present only while FIRST_CALL_ALLOWANCE=on: unavailable pages (its
+    // reads of the shared store failed, so no first call is granted and the
+    // trial measures nothing), on and spent clear (spent is the day's cap
+    // working as set); unknown and absent do neither.
+    // Title and body match heartbeat.yml's.
+    title: "First-call allowance UNAVAILABLE (shared store)",
+    verdict: ({ gateway: b }) => wordVerdict(b.firstCallAllowance?.status, ["unavailable"], ["on", "spent"]),
+    body: () =>
+      "/api/gateway-status reports firstCallAllowance.status=unavailable: the first-call allowance could not read its day counters in the shared store (Redis), so no first call is granted. Buyers still meet the usual payment offer and nothing is refused for it, but the trial records nothing while it lasts. Check the Redis service and REDIS_URL on Railway, and the sharedLimits word; the last store error is on /__operator/refunds.json. Auto-closes when the word reads on or spent.",
+  },
+  {
     title: "State database DEGRADED (Postgres)",
     verdict: ({ gateway: b }) => wordVerdict(b.stateDb?.status, ["degraded"], ["on"]),
     body: () =>

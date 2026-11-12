@@ -101,6 +101,14 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   build books in its own unversioned window, so for as long as it serves the two builds' caps are
   independent (each seller and the lane can be paid up to one cap per build), and on the next
   roll-forward each sum's next rebuild (within a day) folds in that window's unexpired entries.
+- **Every status word has a pager:** each word on `/api/gateway-status` is read by a status Worker
+  alarm (`scripts/test-status-word-pagers.js` boots the server and fails on a word no verdict reads;
+  none is excused). Paged on their alarm values only, by the Worker and `heartbeat.yml` under one
+  title each: `jevSpend` capped (closes on ok), `externalSpendGlobal` refusing (ok, off; near is a
+  forecast and does neither), `solanaHistory` and `evmLogs` failing (publics, fallback; idle does
+  neither), `speechUpstream` cooling (ok; probing does neither), `firstCallAllowance` unavailable
+  (on, spent: spent is the day's cap working as set; present only while the trial is on).
+  `loopLag` and `mppEvmDomainFallback` publish a flag, not a word, and page nothing.
 - **Ended MPP subscriptions:** the private half of a subscription's access key is deleted when a
   cancel is stored or the subscription ends (`finishEnded` in `src/mpp-subscriptions.js`, reached from
   every write that ends one), and the record is reduced to `TOMBSTONE_FIELDS` unless a renewal is in

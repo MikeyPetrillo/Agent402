@@ -647,6 +647,150 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "replayStore is ${STATUS}; closing." || true
           fi
 
+      # The route judgment's daily token ceiling (jevSpend, src/tool-judge.js):
+      # capped pages, ok clears; unknown and absent do neither. The UTC day
+      # rolling reads ok again.
+      # The status Worker runs the same check under the same title.
+      - name: Route judgment ceiling check (alarm when the day's tokens are capped)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.jevSpend.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "jevSpend: $STATUS"
+          TITLE="Route judgment token ceiling CAPPED for the day"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "capped" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports jevSpend.status=capped: the route judgment used its daily token ceiling (JEV_DAILY_MAX_TOKENS). Until the UTC day ends, route and route-execute rank without the judgment (the order before it): buyers are still served, with a weaker ranking. The day's tokens, the free share and the refusals are on the operator view of /api/gateway-status (jevSpend, operator token). Raise the ceiling on Railway or leave it. Auto-closes when the word reads ok." || true
+            fi
+          elif { [ "$STATUS" = "ok" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "jevSpend is ${STATUS}; closing." || true
+          fi
+
+      # The global unsettled external-spend ceiling (externalSpendGlobal,
+      # src/external-spend-guard.js): refusing pages (at the ceiling, or a
+      # purchase was refused on it inside the hold), ok and off clear; near is
+      # a forecast and does neither, as do unknown and absent.
+      # The status Worker runs the same check under the same title.
+      - name: External spend global ceiling check (alarm while it refuses)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.externalSpendGlobal.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "externalSpendGlobal: $STATUS"
+          TITLE="External spend global ceiling REFUSING"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "refusing" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports externalSpendGlobal.status=refusing: the unsettled spend our route-execute wallets have put out to outside sellers, across every payer, reached the global ceiling, or a purchase was refused on it within the last minute. A purchase past the ceiling is refused and not charged (external routing reads as paused for every buyer) until earlier spends settle. Check the settle path for buyers whose payments are not landing (the operator views of /api/gateway-status and /__operator/refunds.json) and the [spend-guard] lines in the server log. Auto-closes when the word reads ok or off." || true
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "externalSpendGlobal is ${STATUS}; closing." || true
+          fi
+
+      # Solana transaction-history reads (solanaHistory,
+      # src/solana-history-rpc.js): failing pages (most recent reads failed on
+      # every lane), publics and fallback clear; idle (no read since restart),
+      # unknown and absent do neither.
+      # The status Worker runs the same check under the same title.
+      - name: Solana history reads check (alarm when every lane fails)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.solanaHistory.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "solanaHistory: $STATUS"
+          TITLE="Solana history reads FAILING on every lane"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "failing" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports solanaHistory.status=failing: most recent Solana transaction-history reads failed on every lane, public and keyed. The revenue ledger and the Solana boards read through them and stop advancing until a lane answers. The per-lane counts, the reasons and the cache are on the operator view of /api/gateway-status (solanaHistory, operator token); check the keyed endpoint's variable on Railway. Auto-closes when the word reads publics or fallback." || true
+            fi
+          elif { [ "$STATUS" = "publics" ] || [ "$STATUS" = "fallback" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "solanaHistory is ${STATUS}; closing." || true
+          fi
+
+      # EVM log reads (evmLogs, src/evm-logs-rpc.js): failing pages (most
+      # recent reads failed on every lane), publics and fallback clear; idle,
+      # unknown and absent do neither.
+      # The status Worker runs the same check under the same title.
+      - name: EVM log reads check (alarm when every lane fails)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.evmLogs.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "evmLogs: $STATUS"
+          TITLE="EVM log reads FAILING on every lane"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "failing" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports evmLogs.status=failing: most recent EVM log reads failed on every lane, public and configured. The revenue ledger's recent window, the Base board and the activity scans read through them and stop advancing until a lane answers. The per-caller counts are on the operator view of /api/gateway-status (evmLogs, operator token); check the configured RPC variables on Railway. Auto-closes when the word reads publics or fallback." || true
+            fi
+          elif { [ "$STATUS" = "publics" ] || [ "$STATUS" = "fallback" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "evmLogs is ${STATUS}; closing." || true
+          fi
+
+      # The primary speech link's breaker on /api/tts and /api/tts-hd
+      # (speechUpstream, src/tools/tts-kit.js): cooling pages (the breaker is
+      # open and calls go to the backup voices), ok clears; probing (the
+      # cool-down ended and the next call tests the link), unknown and absent
+      # do neither.
+      # The status Worker runs the same check under the same title.
+      - name: Speech upstream check (alarm while the breaker cools)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.speechUpstream.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "speechUpstream: $STATUS"
+          TITLE="Speech upstream breaker COOLING (backup voices serving)"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "cooling" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports speechUpstream.status=cooling: the primary speech link throttled or failed repeatedly, so its breaker is open and /api/tts and /api/tts-hd answer from the backup voices for the cool-down, which doubles on each trip up to its most. Buyers are still served. Check the [tts] lines in the server log and the upstream's status and credits. Auto-closes when the word reads ok (a call served by the primary link)." || true
+            fi
+          elif { [ "$STATUS" = "ok" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "speechUpstream is ${STATUS}; closing." || true
+          fi
+
+      # The first-call allowance (firstCallAllowance, src/first-call-allowance.js),
+      # present only while FIRST_CALL_ALLOWANCE=on: unavailable pages (its
+      # reads of the shared store failed, so no first call is granted and the
+      # trial measures nothing), on and spent clear (spent is the day's cap
+      # working as set); unknown and absent do neither.
+      # The status Worker runs the same check under the same title.
+      - name: First-call allowance check (alarm while its store is unavailable)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.firstCallAllowance.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "firstCallAllowance: $STATUS"
+          TITLE="First-call allowance UNAVAILABLE (shared store)"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "unavailable" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports firstCallAllowance.status=unavailable: the first-call allowance could not read its day counters in the shared store (Redis), so no first call is granted. Buyers still meet the usual payment offer and nothing is refused for it, but the trial records nothing while it lasts. Check the Redis service and REDIS_URL on Railway, and the sharedLimits word; the last store error is on /__operator/refunds.json. Auto-closes when the word reads on or spent." || true
+            fi
+          elif { [ "$STATUS" = "on" ] || [ "$STATUS" = "spent" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "firstCallAllowance is ${STATUS}; closing." || true
+          fi
+
       # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
       # Apart from the prepaid allowance step above, which reads exaAllowance.
       - name: Exa daily spend over its ceiling
