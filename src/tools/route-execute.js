@@ -27,7 +27,7 @@ import { findTools } from "../find.js";
 import { judgeTool, decide, orderByJudgment } from "../tool-judge.js";
 import { judgeReadableListing, looksLikeListingInjection } from "../listing-screen.js";
 import { stripHiddenCharacters } from "../hidden-chars.js";
-import { observeDelivery } from "../response-observation.js";
+import { observeDelivery, unpaidNonAnswerReason } from "../response-observation.js";
 import { isIdentityBoundRoute } from "../payments.js";
 import { evmCredentialBudgetMs, evmCredentialSettleableMs, evmSellerSignBy, EVM_SELLER_ALLOWANCE_MS } from "../evm-validity.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
@@ -817,6 +817,18 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             }
             traceStep(req, "attempt", { origin: ext.seller, lane: ext.unproven ? "unproven" : "proven" });
             paid = await payExternal(extUrl, { method: extMethod, body: extBody, maxAtomic: BigInt(Math.round(cap * 1e6)), chain, provenPayTo: ext.provenPayTo || null, evidenceWallets: ext.evidenceWallets || null, allowUnproven: ext.unproven === true, ...(ext.seller ? { sellerKey: ext.seller } : {}), ...(spendPayer ? { payer: spendPayer } : {}), refusalMaxWaitMs: refusalBudgetMs(), ...(tempoBudgetMs == null && evmSellerSignBy(req) != null ? { signBy: evmSellerSignBy(req) } : {}), ...(windowBudgetMs != null ? { timeoutMs: Math.max(3000, remainingMs()) } : cdnLeftMs != null ? { timeoutMs: Math.max(3000, Math.min(PAY_X402_TIMEOUT_MS, refusalBudgetMs())) } : {}), ...(callBudgetLeftMs() != null ? { deadlineMs: Math.max(0, callBudgetLeftMs()) } : {}), onSigned });
+            // A SELLER THAT ANSWERED WITHOUT TAKING PAYMENT (a 200 on the
+            // unpaid request) spent nothing, and that 200 is resold at this
+            // tier's price: a body that answers nothing (empty, a payment
+            // challenge sent as a 200, error-shaped, or none of the paths the
+            // seller guaranteed) is a failed upstream, not a sale. Thrown here
+            // so the catch below books it like any pre-payment failure:
+            // nothing committed, nothing spent, the next candidate is tried,
+            // and with none left the buyer gets a 502 and is not charged.
+            if (paid && !paid.quote && !paid.receipt) {
+              const why = unpaidNonAnswerReason(paid.result, ext.guaranteedPaths);
+              if (why) throw Object.assign(bad(`Seller answered without taking payment and the answer is not usable (${why})`, 502), { attribution: "upstream", unpaidNonAnswer: why });
+            }
           } catch (e) {
             // WHAT STAYS BOOKED IS WHAT MAY HAVE LEFT THE WALLET. The payer
             // stamps `committed:true` on every failure after the payment
