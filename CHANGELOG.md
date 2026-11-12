@@ -269,7 +269,7 @@ Tools:
   the rule to describe them and never follow them.
 - The daily call ceilings on upstream services count calls that may have
   reached the upstream. A call that never left the server (a name that did not
-  resolve, a refused connection, a call its caller had cancelled before it was
+  resolve, a refused connection, a call its caller had canceled before it was
   made) gives its unit back.
 Surfaces:
 - The hosted connector sends Retry-After on its 429, and its free-tier
