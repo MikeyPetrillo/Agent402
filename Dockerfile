@@ -1,15 +1,17 @@
-# SECURITY REVIEW / VERIFY-BEFORE-DEPLOY — infra hardening PR (audit A402-01/06
-# + mutable-artifacts). Still needs a Railway PREVIEW build before the deploy
-# path (the image isn't built in CI), but the /data volume behaviour this design
-# hinges on was VERIFIED against the live Railway deployment on 2026-07-18:
-# agent402-volume mounts at /data owned by root:root, so the non-root switch is
-# done via a root entrypoint that chowns /data then drops to node (below), NOT a
-# Dockerfile USER. See the Security-Model wiki page for the full checklist.
+# Infra hardening (audit A402-01/06 + mutable-artifacts). The server runs as
+# the unprivileged node user, reached through a root entrypoint that drops to
+# node with gosu (below), not a Dockerfile USER: a volume mounted at /data
+# arrives owned by root, and the entrypoint chowns it to node first when one is
+# there. The hosted service runs with no volume (its state is in Postgres and
+# Redis), so there the entrypoint only drops privileges; a self-hosted deploy
+# that mounts /data keeps working. See the Security-Model wiki page.
 #
 # Base image pinned by DIGEST for reproducible builds and CVE traceability
 # (audit: "mutable deployment artifacts"). node:22-slim = 22.23.5-slim, the
 # November 2026 security release (re-pinned 2026-11-11); the previous pin was
-# 22.23.4-slim from 2026-10-21. All five slim Dockerfiles share this digest.
+# 22.23.4-slim from 2026-10-21. All five slim Dockerfiles share this digest;
+# the tollbooth image runs the same patch on alpine
+# (scripts/test-dockerfile-node-patch.js keeps every node base on one patch).
 # Re-pin after a deliberate base bump with:
 #   docker pull node:22-slim
 #   docker inspect --format='{{index .RepoDigests 0}}' node:22-slim
@@ -106,13 +108,13 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # or media-parser compromise then lands as UID 1000 — unable to touch root-owned
 # files or escalate — instead of as root in the container.
 #
-# We do NOT use a Dockerfile `USER node`, on purpose: VERIFIED on the live
-# Railway deployment (2026-07-18) that the persistent volume `agent402-volume`
-# mounts at /data owned by root:root at RUNTIME, and it holds the memory/stats
-# SQLite (~1GB). A `USER node` container could not write it and the memory
-# boot-fail-loud would fire on deploy. Instead docker-entrypoint.sh runs as root
-# JUST long enough to chown /data to node, then execs the server via gosu so the
-# process itself is non-root. `exec` keeps node as PID 1 so it receives SIGTERM
+# We do NOT use a Dockerfile `USER node`, on purpose: a persistent volume
+# mounted at /data arrives owned by root:root at RUNTIME, and without a state
+# database it holds the memory/stats SQLite. A `USER node` container could not
+# write it and the memory boot-fail-loud would fire. Instead
+# docker-entrypoint.sh runs as root JUST long enough to chown /data to node
+# when a volume is there (the hosted service has none, so it skips that), then
+# execs the server via gosu so the process itself is non-root. `exec` keeps node as PID 1 so it receives SIGTERM
 # for the graceful drain.
 #
 # NOTE (--no-sandbox stays): src/tools/render.js still launches Chromium with

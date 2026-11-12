@@ -338,10 +338,12 @@ async function record(prod, token, components, url) {
 //      before anything is created. The two observers therefore coordinate:
 //      whichever runs first opens or closes, and neither ever duplicates.
 //   2. A bad reading is CONFIRMED by a second read 30s later before it opens
-//      anything. Production is volume-backed, so every deploy has a 60-90s
-//      no-container window, and a reading taken inside it looks exactly like an
-//      outage. That is what filed #1057 on a healthy service. A real fault
-//      fails both reads.
+//      anything. Production has no volume, so deploys overlap and a new
+//      container takes traffic before the old one stops, but a reading taken
+//      while containers swap, or while a fresh container's pools initialize,
+//      can still look like an outage. When production was volume-backed every
+//      deploy had a 60-90s no-container window, and a reading inside it filed
+//      #1057 on a healthy service. A real fault fails both reads.
 //
 // This Worker never COMMENTS on an open issue. It runs 288 times a day; the
 // heartbeat's "still low" comment would be 288 comments a day. Open and closed
@@ -501,6 +503,10 @@ export const ALARMS = [
       "The Tempo subscription gas sponsor reached its rolling 24 h ceiling (MPP_SUB_SPONSOR_DAILY_MAX_TX or MPP_SUB_SPONSOR_DAILY_MAX_USD, src/tempo-sponsor-ceiling.js): every sponsored send is refused before broadcast until the window rolls, so activations fail 402 (nobody charged) and RENEWALS go past_due, which means existing subscribers are served for free until their grace window ends. The server log names the knob that refused. Read the sponsored-send pattern before raising the knob on Railway; the issue closes when subscriptionFeePayer.ceiling reads ok.",
   },
   {
+    // The two Postgres pools src/db-status.js probes: `leads` (DATABASE_URL)
+    // and `analytics` (ANALYTICS_DATABASE_URL, else DATABASE_URL). They can be
+    // one database or two; the title names the probes, not two containers,
+    // and matches heartbeat.yml's.
     title: "Postgres UNREACHABLE (leads/analytics)",
     verdict: ({ gateway: b }) => {
       const leads = b.databases?.leads?.status;

@@ -1859,10 +1859,12 @@ jobs:
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
           fi
 
-      # Postgres reachability (DATABASE_URL, reported as `leads`, + analytics). Both databases were DOWN from
-      # 2026-07-02 to 2026-08-25 and nothing paged: the app degrades quietly when
-      # they are gone, which is right for buyers and exactly why it went
-      # unnoticed. "unconfigured"/"unknown" never page; only "unreachable" does.
+      # Postgres reachability: two probes, `leads` (DATABASE_URL) and `analytics`
+      # (ANALYTICS_DATABASE_URL, else DATABASE_URL), which can be one database or
+      # two. The databases were DOWN from 2026-07-02 to 2026-08-25 and nothing
+      # paged: the app degrades quietly when they are gone, which is right for
+      # buyers and exactly why it went unnoticed. "unconfigured"/"unknown" never
+      # page; only "unreachable" does.
       - name: Postgres reachability check (alarm when a database is unreachable)
         if: always()
         continue-on-error: true

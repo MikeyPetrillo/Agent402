@@ -58,12 +58,10 @@ on:
   # contributor found LIVE IN PRODUCTION after their own fix had already
   # merged - they were right, and CI could not have told them otherwise.
   #
-  # Trade-off accepted knowingly: the normal flow (commit to the dev branch
-  # with a trigger bump, THEN merge to main) now deploys twice in a row for
-  # the same content - once from the dev-branch push, once from the merge.
-  # Wasteful (a redundant quiet-gate wait and Railway build), never wrong
-  # (deploying identical content twice is a no-op in effect), and correctness
-  # for the class of merge that has no dev-branch push at all is worth it.
+  # The normal flow deploys once: a dev-branch push runs the tests (its
+  # commits carry [test], never [deploy], and the production environment's
+  # branch policy admits only main), and the merge to main deploys. A merge
+  # that had no dev-branch push at all deploys the same way.
   push:
     branches:
       - "claude/sweet-brown-i99jl3"
