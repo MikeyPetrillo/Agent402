@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync } from "node:fs";
 
 const ROUNDS = Number(process.env.STATS_OPEN_ROUNDS) || 6;
@@ -63,7 +64,7 @@ function child(dir, gate) {
 {
   const raw = [];
   const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const f = join(d, e.name); if (e.isDirectory()) walk(f); else if (f.endsWith(".js") && !f.endsWith("sqlite-wal.js") && /\.pragma\(\s*["'`]journal_mode\s*=\s*WAL/i.test(readFileSync(f, "utf8"))) raw.push(f); } };
-  walk(new URL("../src", import.meta.url).pathname);
+  walk(fileURLToPath(new URL("../src", import.meta.url)));
   ok(raw.length === 0, `no module switches to WAL without the retry (${raw.join(", ") || "none"})`);
 }
 
