@@ -144,6 +144,20 @@ for (const w of wires) {
   const routed = await settle(() => wires[0].run({ ...ONE }, { headers: {}, ip: "203.0.113.9" }));
   ok(routed.err?.statusCode === 502 && /no message\)\. Nothing was charged\.$/.test(routed.err.message), `a route call's no-message refusal carries the shared sentence (${routed.err?.message})`);
   const step = await settle(() => wires[0].run({ ...ONE }));
+  // The streamed path reads the request off the response it writes to: a
+  // stream that ends with no data frame is the same claim, on a route call only.
+  const emptyStream = () => ({ ok: true, status: 200, body: (async function* () { yield Buffer.from(": keep-alive\n\n"); })() });
+  for (const w of wires) {
+    const routeReq = { headers: {}, ip: "203.0.113.9" };
+    globalThis.fetch = async () => emptyStream();
+    const onRoute = fakeRes(); onRoute.req = routeReq;
+    const sr = await settle(async () => (await w.run({ stream: true, ...ONE }, routeReq)).__sse(onRoute));
+    ok(sr.err?.statusCode === 502 && /\(no tokens\)\. Nothing was charged\.$/.test(sr.err.message) && onRoute.writes === 0, `${w.name} stream: a route call's empty-stream refusal carries the shared sentence (${sr.err?.statusCode} ${sr.err?.message})`);
+    globalThis.fetch = async () => emptyStream();
+    const bare = fakeRes();
+    const ss = await settle(async () => (await w.run({ stream: true, ...ONE })).__sse(bare));
+    ok(ss.err?.statusCode === 502 && /\(no tokens\)\.$/.test(ss.err.message) && !/charged/i.test(ss.err.message), `${w.name} stream: the same refusal with no request prints no claim (${ss.err?.message})`);
+  }
   ok(step.err?.statusCode === 502 && /no message/.test(step.err.message) && !/charged/i.test(step.err.message), `the same refusal on a request-less step call prints no claim (${step.err?.message})`);
 }
 

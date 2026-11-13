@@ -260,6 +260,38 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     ok(boundRequestUrl(GET_EXT.url, { method: "POST", params }) === GET_EXT.url && boundRequestUrl(GET_EXT.url, { method: "GET", params: { n: null } }) === GET_EXT.url, "a body seller, and a GET with no params, keep the listing URL");
     const nested = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e; } })();
     ok(nested?.statusCode === 400 && /param "q" must be a string, number, or boolean/.test(nested.message), "a nested param against a GET seller is the caller's 400, as before");
+    // The charge sentence on these refusals is printed on a route call only
+    // (src/not-charged.js): through the router with the paid call's request,
+    // and never on a request-less step call.
+    {
+      const { closedSentence } = await import("../src/tools/route-execute.js");
+      const routeReq = () => ({ ip: "198.51.100.61", headers: {} });
+      const thrown = async (t, input, req) => { try { await t.handler(input, req); return null; } catch (e) { return e; } };
+      const NESTED = 'External tool "wx" is a GET endpoint - param "q" must be a string, number, or boolean.';
+      // a. The chosen seller's URL is bound by the router itself.
+      const before = paidWith;
+      const routed = await thrown(tool, { task: "forecast", include: "external", params: { q: { x: 1 } } }, routeReq());
+      ok(routed?.statusCode === 400 && routed.message === `${NESTED} Nothing was charged.`, `GET seller: the router's own bind refusal on a route call ends with the charge sentence (${routed?.message})`);
+      const stepCall = await thrown(tool, { task: "forecast", include: "external", params: { q: { x: 1 } } });
+      ok(stepCall?.statusCode === 400 && stepCall.message === NESTED, `...and prints no claim on a request-less call (${stepCall?.message})`);
+      ok(paidWith === before, "...and neither call paid the seller");
+      // b. Every candidate was set aside by the resolver, which builds the
+      // refusal request-less and keeps a bounded length of it.
+      const dropsTool = (paramsRefusal) => buildRouteExecuteTool({ getCatalog: () => CATALOG, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 }, payExternal, externalEnabled: () => true,
+        resolveExternal: async () => Object.assign([], { __gateDrops: { total: 1, byReason: { params_unbindable: 1 }, paramsRefusal } }) });
+      const resolverSaid = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e.message; } })();
+      const set = await thrown(dropsTool(resolverSaid), { task: "forecast", include: "external", params: { q: { x: 1 } } }, routeReq());
+      ok(resolverSaid === NESTED && set?.statusCode === 400 && set.message === `${NESTED} Nothing was charged.`, `GET seller: the resolver's set-aside refusal on a route call is the builder's words and the charge sentence (${set?.message})`);
+      const setStep = await thrown(dropsTool(resolverSaid), { task: "forecast", include: "external", params: { q: { x: 1 } } });
+      ok(setStep?.statusCode === 400 && setStep.message === NESTED, `...and prints no claim on a request-less call (${setStep?.message})`);
+      // A param name long enough that the resolver's 300-character bound cuts
+      // the refusal inside it: the cut is closed before the sentence is added.
+      const longName = "p".repeat(400);
+      const cut = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { [longName]: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e.message.slice(0, 300); } })();
+      const cutSet = await thrown(dropsTool(cut), { task: "forecast", include: "external", params: { [longName]: { x: 1 } } }, routeReq());
+      ok(cut.length === 300 && cut.endsWith("ppp") && cutSet?.message === 'External tool "wx" is a GET endpoint - param.... Nothing was charged.', `a refusal cut inside a long param name is closed at a whole word before the sentence (${cutSet?.message?.slice(0, 90)})`);
+      ok(closedSentence(NESTED) === NESTED && closedSentence("Too many (max 2048). ") === "Too many (max 2048)." && closedSentence("") === "" && closedSentence("ppp") === "ppp....", "a refusal that already ends as a sentence is left as written");
+    }
     const long = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: "x".repeat(BOUND_URL_MAX_CHARS) } }); return null; } catch (e) { return e; } })();
     ok(long?.statusCode === 400 && BOUND_URL_MAX_CHARS === 2048 && /max 2048/.test(long.message), "a bound URL past the 2048-character bound is refused 400, nothing sent");
     // The SSRF guard reads the bound URL: a private listing host stays refused
