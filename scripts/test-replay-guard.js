@@ -89,6 +89,21 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   ok(paymentReplayKey(fakeReq({ "x-payment": v2("eip155:8453") })) !== paymentReplayKey(fakeReq({ "x-payment": v2("eip155:137") })), "v2: same nonce and payer, different network → different key");
   ok(/^n2:[0-9a-f]{64}:[0-9a-f]{64}$/.test(ka), "a nonce key carries the earlier build's key for the deploy window");
 }
+{
+  // An EIP-3009 nonce keys a payment only on an EVM network. A signed Solana
+  // transaction or Algorand group with an authorization block typed beside it
+  // keeps one identity whatever nonce the block names, and a header naming no
+  // network never keys on its unsigned nonce.
+  const A = "0x" + "a".repeat(40);
+  const solTx = Buffer.alloc(200, 7).toString("base64");
+  const forged = (network, nonce, extra = {}) => fakeReq({ "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, ...(network ? { accepted: { scheme: "exact", network } } : {}), payload: { ...extra, authorization: { nonce, from: A } } })).toString("base64") });
+  for (const [label, net, extra] of [["Solana", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", { transaction: solTx }], ["Algorand", "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k", { paymentGroup: ["AQID"], paymentIndex: 0 }]]) {
+    const keys = ["0x01", "0x02", "0x03"].map((n) => paymentReplayKey(forged(net, n, extra)));
+    ok(keys.every((k) => k && !k.startsWith("n2:")) && new Set(keys.map((k) => k.split(":").slice(0, 2).join(":"))).size === 1, `${label}: a forged authorization nonce never mints a replay identity (${keys.map((k) => k.slice(0, 2)).join(",")})`);
+  }
+  const bare = ["0x01", "0x02"].map((n) => paymentReplayKey(forged(null, n)));
+  ok(bare.every((k) => k && !k.startsWith("n2:")), "a header naming no network never keys on its unsigned nonce");
+}
 
 // ---- A2. Guard state machine (local fallback path — no REDIS_URL in this
 // process, so every call below exercises the per-process Map/Set) -----------
@@ -100,6 +115,24 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   await g.settle(k);
   ok(await g.begin(k) === "consumed", "after settle, replay → consumed");
   ok(g._state().consumed === 1 && g._state().inFlight === 0, "state: 1 consumed, 0 in flight");
+}
+// One EIP-3009 authorization under unsigned network fields the paywall does not
+// read (a top-level `network`, a `payload.network`): one claim on this process,
+// in flight and once settled, though each copy's legacy part differs.
+{
+  const g = createReplayGuard();
+  const auth = { from: "0x" + "1".repeat(40), to: "0x" + "2".repeat(40), value: "1000", validAfter: "0", validBefore: "9999999999", nonce: "0x" + "ab".repeat(32) };
+  const base = { x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", amount: "1000" }, payload: { signature: "0x" + "cd".repeat(65), authorization: auth } };
+  const copies = [base, { ...base, network: "base" }, { ...base, network: "anything" }, { ...base, payload: { ...base.payload, network: "base-sepolia" } }];
+  const keys = copies.map((c) => paymentReplayKey(fakeReq({ "payment-signature": Buffer.from(JSON.stringify(c)).toString("base64") })));
+  ok(keys.every((x) => x.startsWith("n2:")) && new Set(keys).size > 1, "setup: each copy's nonce key differs only in its legacy part");
+  const verdicts = [];
+  for (const k of keys) verdicts.push(await g.begin(k));
+  ok(verdicts[0] === "ok" && verdicts.slice(1).every((v) => v === "inflight"), `one authorization under other unsigned network fields is one claim in flight (${verdicts.join(",")})`);
+  await g.settle(keys[0]);
+  const after = [];
+  for (const k of keys.slice(1)) after.push(await g.begin(k));
+  ok(after.every((v) => v === "consumed"), `and once settled, each copy is consumed (${after.join(",")})`);
 }
 {
   const g = createReplayGuard();

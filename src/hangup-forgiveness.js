@@ -113,13 +113,17 @@ export const DEFAULT_GLOBAL_BUDGET_USD = 2;
 //     grants, remembered documents) has changed;
 //   - attest: an attestation on Base is permanent and paid for in gas;
 //   - feedback: the verdict is stored against the sale;
-//   - the route-execute tiers and seller-payability: they pay outside sellers
-//     from our own wallet, and that payment is not returned.
+//   - every route that spends our own wallet (catalog `spendsOwnWallet` or
+//     `paysThirdPartySeller`: the route-execute tiers, seller-payability, the
+//     flight tools, decide-execute): it pays outside sellers or gas from our
+//     wallet, and that payment is not returned.
 // Readers in the same families (memory-read, memory-grants, memory-log,
 // memory-recall, feedback-summary) leave nothing behind and follow the budget.
 // scripts/test-hangup-settlement.js checks this list against the booted
 // catalog: every slug must exist, every route-execute tier must be listed, and
 // every memory route must be classified as a writer here or as a known reader.
+// scripts/test-gateway-nanopayments.js builds every flagged catalog definition
+// and fails when one is missing here (defHasLastingEffect reads the flags too).
 const LASTING_EFFECT_SLUGS = new Set([
   "memory-write", "memory-incr", "memory-cas", "memory-grant", "memory-revoke", "memory-remember", "memory-forget",
   "attest",
@@ -127,12 +131,23 @@ const LASTING_EFFECT_SLUGS = new Set([
   "route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro",
   "seller-payability",
   "flight-search", "flight-status",
+  "decide-execute",
 ]);
 export const LASTING_EFFECT_SLUG_LIST = Object.freeze([...LASTING_EFFECT_SLUGS]);
 
 /** True for a slug whose effect outlives an undelivered answer: never forgiven. */
 export function hasLastingEffect(slug) {
   return typeof slug === "string" && LASTING_EFFECT_SLUGS.has(slug);
+}
+
+/**
+ * The same question asked of a catalog definition: its slug is listed, or its
+ * flags say it spends our own wallet (`spendsOwnWallet`) or buys from an
+ * outside seller (`paysThirdPartySeller`). Read by every surface that holds
+ * the definition, so a flagged route is covered before anyone lists it.
+ */
+export function defHasLastingEffect(def) {
+  return !!def && typeof def === "object" && (hasLastingEffect(def.slug) || def.spendsOwnWallet === true || def.paysThirdPartySeller === true);
 }
 
 const KEY_KINDS = new Set(["ip", "tempo", "credits"]);

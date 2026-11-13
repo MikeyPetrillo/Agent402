@@ -46,7 +46,10 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   for 60 s (8M chars at most); the synchronous quote reads the kept count. An unpaid quote is
   limited per address (60/min); a request carrying a payment-shaped header is counted against a
   separate budget of the same size once its credential is refused (a final 401 or 402), so a
-  verified payment never spends it.
+  verified payment never spends it. A pre-payment refusal (unknown model, input too large)
+  writes its tool_calls row and PostHog events inside a per-address budget at the same figures
+  (`prePaymentWriteLimiter`, `allowWrites` in `src/prepayment-refusal.js`); past it the 400 is
+  answered unchanged and only those writes are left out, so the budget never refuses a request.
   `GATEWAY_METERED_BILLING=on` gates metered settlement, the buffered override and a credits
   stream's debit on finish alike (`recordStreamedUsage`, `meteredUsdOf` in `src/gateway-meter.js`).
 - **Model retirements** (`RETIRING_MODELS` in `llm-gateway-kit.js`): each id maps to the successor
@@ -118,7 +121,7 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   (402), 429, 404/405, 5xx, a refused or reset connection (`connect`), malformed or oversized
   body, late error, missing cost. Our own timeout (`timeout`) on a prompt at or past `HEAVY_INPUT_SHARE` of the tier's input cap, a
   lookup our resolver could not finish or a route our side lacks (`egress`; a host name that does not resolve is `connect` and counts), a stream cut with no status (`stream`), a refusal of the request itself (any other
-  4xx, bucket `refused`), a client gone and an empty answer do not count; an answer resets it. Our own `timeout` on a shorter prompt counts like the upstream's own failure. One exception: our own `timeout` on a long prompt on the direct link on `UPSTREAM_UNANSWERED_MIN` calls from `UPSTREAM_UNANSWERED_MIN_CALLERS` callers inside `UPSTREAM_UNANSWERED_WINDOW_MS`, with no answer between, opens it at once (`src/unanswered-rule.js`; the log says "did not answer within our limit"). No call
+  4xx, bucket `refused`), a client gone and an empty answer do not count; an answer resets it. Our own `timeout` on a shorter prompt counts like the upstream's own failure. One exception: our own `timeout` on a long prompt on the direct link on `UPSTREAM_UNANSWERED_MIN` calls from `UPSTREAM_UNANSWERED_MIN_CALLERS` callers inside `UPSTREAM_UNANSWERED_WINDOW_MS`, with no answer between, opens it at once (`src/unanswered-rule.js`; the log says "did not answer within our limit"). An attempt deadline the caller's own payment window shortened (`clamped`) feeds neither count. No call
   goes direct while open (`DIRECT_UPSTREAM_BREAKER_OPEN_MS`, default 5 minutes, skip bucket
   `breaker_open`); after that it is half-open (reads ok publicly) and the next call that passes the
   price check and the share draw takes the one trial: a success closes it, a counted failure

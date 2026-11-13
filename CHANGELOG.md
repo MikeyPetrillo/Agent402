@@ -6,6 +6,100 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-13 (payment and input hardening)
+Tools:
+- Transcription measures each file's length by decoding it before any upstream
+  call. WMA, raw AAC, AMR and CAF recordings are read and sent as FLAC, an
+  MP4, MKV, WebM or Ogg file holding several audio tracks is measured and sent
+  as its first track, and AAC behind an ID3 tag, an MP3 with leading padding
+  and an Ogg file sent under another format's name are read too. A PCM WAV
+  whose size alone keeps it inside the cap is sent without a decode, and a
+  call that finds the decoder busy waits its turn inside the time its payment
+  allows, or is answered a retryable 503 at once when the queue for the
+  decoder is full, by its count or by the bytes its waiting files hold. A
+  refusal says nothing was charged on a call to the route itself, in the
+  wording that names the Tempo push exception, and not inside a skill-pack
+  step.
+- A file sent for transcription whose length cannot be confirmed is
+  transcribed up to its tier's cap, and the answer says so in
+  trimmedToCapSeconds and durationUnconfirmed; both fields are in the output
+  schemas.
+- Large images sent to image-ocr wait their turn per caller, a step run by a
+  decision, by route-execute or by a skill pack included, so one caller's run
+  of large images cannot hold every place in the queue. The caller is the
+  verified payer, else the client address, an IPv6 address read as its /64. A
+  refusal says nothing was charged on a call to the route itself only.
+- code-run and code-run-pro calls made inside route-execute, a decision or a
+  skill pack count against the caller's concurrent-run limit, as a direct call
+  does, and an IPv6 caller is its /64.
+- Transcription measures and cuts each file by the audio samples it decodes,
+  not by the timestamps its container writes, and a file sent as it came is
+  uploaded under the name of the format it was measured as.
+- openapi-resolve-refs resolves long chains of refs, deeply nested documents
+  and long pointers inside cyclic refs in time proportional to their size, and
+  a cycle reached from many top-level keys once. A spec whose refs inside a
+  cycle take more than 1.5 million steps to resolve is refused with a 400
+  that says to resolve it in parts.
+- route-execute does not resell a 200 a seller sent without taking payment
+  when its body is empty or blank, an empty list, an error sent as text, or
+  text, a list or a bare value where the seller promised JSON fields; the next
+  seller is tried. A paid answer that is not JSON on a route that promised
+  JSON fields counts as a missed promise in the seller's delivery record. A
+  paid answer longer than the router reads is judged on the JSON document it
+  closed, and one that cannot be read that way, or cannot be read at all, is
+  counted as unverifiable in the delivery record and the seller dossier.
+- Report kits remove bracket runs from quoted source text across combining
+  marks, blanks, control characters and the compatibility forms of each
+  bracket.
+- The router judges read each listing as quoted data: one JSON object per
+  listing with every line break escaped, under a rule that a speaker label or
+  instruction inside it is the seller's text. The listing text they read
+  rewrites the separator after any short label, in any script and anywhere in
+  a sentence, to a dash, keeping every word, and leaves URLs, times, ratios,
+  prices, paths and IPv6 addresses as written; and /api/route's judge reads
+  the same screened text as route-execute's, with a price label formatted from
+  the parsed price. The paywall probe's judge reads a route's answer as one
+  quoted JSON string.
+- /api/route ranks with the same order as before in steps, so a ranking
+  query hands the server back between slices while it sorts.
+Payments:
+- A paid answer whose connection closed after its headers went out is kept
+  under its idempotency key, so a retry with the same key, a prepaid credits
+  key included, replays it instead of running and being debited again.
+- A subscription whose first payment settled while its record was not written
+  is rebuilt once when the same credential returns: its first period is booked
+  once, and a cancel recorded meanwhile is kept.
+- A refused Tempo push transfer is recorded as owed before its credential is
+  released, so a retry with the same credential finds the debt.
+- While many /v1 payments fail to settle across the service, only a wallet
+  that has never settled a payment is held after one payment refused for its
+  own reason, and the 429 says why; a wallet that has ever paid is served as
+  before, a caller with no proven wallet keeps the usual count, a failure of
+  unknown cause keeps its usual count, and settlements that fail for an
+  unknown cause or are counted against an address or a credits key never
+  start that bound.
+- One signed EVM authorization whose settlement keeps failing for the buyer's
+  reason is refused on its own, and a new authorization from the same wallet
+  is served at once.
+- One EVM authorization holds one claim on a server without a shared store,
+  whatever unsigned network fields a copy of its header carries.
+- The Circle Gateway batched accept is offered on no route that buys from an
+  outside seller or spends a wallet of ours, /api/decide/execute and the
+  flight routes included; those carry the plain accept. A decision run whose
+  buyer left before the first byte is settled and its review is held, as a
+  route-execute run's is.
+Packages:
+- The job-link poller follows a redirect only within the server's own origin
+  and refuses a redirect to any other origin before reading it, saying so in
+  its error. The server-side scripts use it, as do agent402-client 0.8.26 and
+  agent402-mcp 0.13.32, whose MCP output schemas also carry the transcription
+  fields trimmedToCapSeconds and durationUnconfirmed.
+Surfaces:
+- MCP connector answers whose indented JSON would pass the size ceiling are
+  sent as compact JSON.
+- /privacy lists the per-authorization settle-failure count, the list of
+  failing payer wallets and the sales-ledger read the settle refusals use.
+
 ### 2026-11-13 (model refresh)
 Gateway:
 - The /v1 chat tiers' defaults move to newer models at the same prices: base

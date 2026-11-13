@@ -13,6 +13,7 @@ import { auditRetentionDays, AUDIT_SWEEP_MS } from "./memory-retention.js";
 import { ADDRESS_MAX_AGE_MS, MAX_SEND_FAILURES, RECORD_KEEP_MS } from "./followups.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { WINDOW_MS as SETTLE_FAILURE_WINDOW_MS } from "./gateway-settle-breaker.js";
 import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { SHARE_TTL_DAYS, TOMBSTONE_DAYS, answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
@@ -256,7 +257,11 @@ so every claim below is verifiable in code.</p>
   broadcast failed (kept with its route, amount and payer until the check for a late landing ends: minutes,
   at most 24 hours while the chain cannot be read, so a transfer that lands after the 402 is booked as owed),
   the payer the settlement receipt names, and,
-  on a refused payment, the resource URL it names (see telemetry above). The optional description and
+  on a refused payment, the resource URL it names (see telemetry above). When a served call's settlement
+  fails, we count it per signed authorization (its payer, network and nonce) in our shared store for
+  ${Math.round(SETTLE_FAILURE_WINDOW_MS / 60000)} minutes, and while payments from many wallets are failing to settle, we keep a list of the
+  failing payer wallets for the same ${Math.round(SETTLE_FAILURE_WINDOW_MS / 60000)} minutes; to decide whether such a wallet is held for a while, we
+  read our sales ledger for whether that wallet has ever paid. The optional description and
   <code>reason</code> annotation fields are not read, logged or retained. The machine-readable list is in
   <a href="/.well-known/x402">/.well-known/x402</a> under <code>payment.dataHandling</code>: <code>readsOnly</code>
   names the fields read, and <code>readsAnnotationFields: false</code> states that the annotations are not.</li>

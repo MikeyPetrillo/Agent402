@@ -10,9 +10,11 @@
 import { execFile } from "node:child_process";
 import { childEnv } from "./child-env.js";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, availableParallelism } from "node:os";
 import { join } from "node:path";
 import { safeFetch } from "./fetch-guard.js";
+import { currentDispatchCaller, IN_PROCESS_CALLER } from "../dispatch-caller.js";
+import { createCallerPlaces } from "../caller-places.js";
 
 const MAX_MEDIA_BYTES = 30 * 1024 * 1024;
 const FFMPEG_TIMEOUT_MS = 90_000;
@@ -34,10 +36,65 @@ export function __setExecFileForTest(fn) { execImpl = fn || execFile; }
 
 /** The demuxer for a downloaded body, named from its magic bytes, or null.
  *  Naming it stops ffmpeg from probing the body as a playlist or a concat
- *  list, which are formats that name further inputs. */
+ *  list, which are formats that name further inputs. An ID3v2 tag at the
+ *  start is skipped by its declared size and what follows it is named (ADTS
+ *  AAC and FLAC carry such tags too; MP3 when nothing else is recognized). A
+ *  body whose start names nothing is scanned, up to MPEG_SCAN_BYTES, for two
+ *  consecutive MPEG audio frames (an MP3 with leading padding). */
 export function inputFormatOf(buffer) {
   if (!buffer || buffer.length < 12) return null;
-  const b = buffer;
+  let at = 0, tagged = false;
+  // Tags can be stacked; a few are skipped, never an unbounded walk.
+  for (let i = 0; i < 4 && at + 10 <= buffer.length && buffer[at] === 0x49 && buffer[at + 1] === 0x44 && buffer[at + 2] === 0x33; i++) {
+    const size = id3v2Size(buffer, at);
+    if (size === null) break;
+    at += size;
+    tagged = true;
+  }
+  if (tagged) {
+    const rest = at < buffer.length ? buffer.subarray(at) : Buffer.alloc(0);
+    const after = rest.length >= 12 ? magicFormatOf(rest) : null;
+    return after || mpegScanFormatOf(rest) || "mp3";
+  }
+  return magicFormatOf(buffer) || mpegScanFormatOf(buffer);
+}
+/** The size of the ID3v2 tag at `at` (header, body and footer), or null when
+ *  the header is malformed (its size bytes are syncsafe: high bit clear). */
+function id3v2Size(b, at) {
+  const flags = b[at + 5];
+  const sz = [b[at + 6], b[at + 7], b[at + 8], b[at + 9]];
+  if (sz.some((x) => x === undefined || x & 0x80) || b[at + 3] === 0xff || b[at + 4] === 0xff) return null;
+  const body = (sz[0] << 21) | (sz[1] << 14) | (sz[2] << 7) | sz[3];
+  return 10 + body + (flags & 0x10 ? 10 : 0);
+}
+/** How far into a body the MPEG frame scan looks. */
+const MPEG_SCAN_BYTES = 64 * 1024;
+const MPEG_BITRATES_V1L3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+const MPEG_BITRATES_V2L3 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+const MPEG_RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
+/** The length of the MPEG layer III frame whose header is at `i`, or 0. */
+function mp3FrameLength(b, i) {
+  if (i + 4 > b.length || b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) return 0;
+  const ver = (b[i + 1] >> 3) & 3, layer = (b[i + 1] >> 1) & 3;
+  const br = (b[i + 2] >> 4) & 15, sr = (b[i + 2] >> 2) & 3, pad = (b[i + 2] >> 1) & 1;
+  if (ver === 1 || layer !== 1 || br === 0 || br === 15 || sr === 3) return 0;
+  const kbps = (ver === 3 ? MPEG_BITRATES_V1L3 : MPEG_BITRATES_V2L3)[br];
+  const rate = MPEG_RATES[ver][sr];
+  return Math.floor(((ver === 3 ? 144 : 72) * kbps * 1000) / rate) + pad;
+}
+/** "mp3" when the first MPEG_SCAN_BYTES of a body hold a layer III frame
+ *  header followed, at that frame's length, by another; else null. */
+function mpegScanFormatOf(b) {
+  const end = Math.min(b.length - 4, MPEG_SCAN_BYTES);
+  for (let i = 0; i < end; i++) {
+    if (b[i] !== 0xff) continue;
+    const len = mp3FrameLength(b, i);
+    if (len >= 24 && mp3FrameLength(b, i + len) > 0) return "mp3";
+  }
+  return null;
+}
+/** The demuxer named by the magic bytes at the start of a body, or null. */
+function magicFormatOf(b) {
   const s4 = b.subarray(0, 4).toString("latin1");
   if (s4 === "OggS") return "ogg";
   if (s4 === "fLaC") return "flac";
@@ -47,8 +104,16 @@ export function inputFormatOf(buffer) {
   if (b[0] === 0xff && (b[1] & 0xe6) === 0xe2) return "mp3";
   if (b.subarray(4, 8).toString("latin1") === "ftyp") return "mov";
   if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "matroska";
+  // Common recorder outputs: ASF (WMA, Windows recorders), raw ADTS AAC
+  // (sync word with layer 00), AMR (phone voice memos and call recordings),
+  // CAF (Apple recording apps). None of these demuxers names a further input.
+  if (b.subarray(0, 16).equals(ASF_HEADER_GUID)) return "asf";
+  if (b[0] === 0xff && (b[1] & 0xf6) === 0xf0) return "aac";
+  if (b.subarray(0, 6).toString("latin1") === "#!AMR\n" || b.subarray(0, 9).toString("latin1") === "#!AMR-WB\n") return "amr";
+  if (s4 === "caff") return "caf";
   return null;
 }
+const ASF_HEADER_GUID = Buffer.from("3026b2758e66cf11a6d900aa0062ce6c", "hex");
 
 /** The decoders an input may open: audio only. `-vn` selects output streams;
  *  it does not stop ffprobe or ffmpeg's stream probing from opening and
@@ -60,6 +125,7 @@ export const AUDIO_DECODERS = [
   "mp1", "mp1float", "mp2", "mp2float", "mp3", "mp3float", "mp3adu", "mp3adufloat",
   "opus", "libopus", "vorbis", "libvorbis", "dca", "wavpack", "amrnb", "amrwb",
   "adpcm_ms", "adpcm_ima_wav", "adpcm_ima_qt", "gsm_ms",
+  "wmav1", "wmav2", "wmapro", "wmalossless", "wmavoice",
   "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be",
   "pcm_f32le", "pcm_f32be", "pcm_f64le", "pcm_f64be", "pcm_u8", "pcm_s8", "pcm_alaw", "pcm_mulaw",
 ].join(",");
@@ -68,8 +134,8 @@ const AUDIO_DECODER_SET = new Set(AUDIO_DECODERS.split(","));
 /** Input arguments for a downloaded file: local file reads only, the
  *  demuxer named explicitly, audio decoders only. An unrecognized body is
  *  refused before ffmpeg runs. */
-export function mediaInputArgs(buffer, inPath) {
-  const fmt = inputFormatOf(buffer);
+export function mediaInputArgs(buffer, inPath, format = null) {
+  const fmt = format || inputFormatOf(buffer);
   if (!fmt) throw bad("media could not be processed (unrecognized container; send an audio/video file such as mp3, mp4, wav, ogg, flac or webm)", 422);
   return ["-codec_whitelist", AUDIO_DECODERS, "-protocol_whitelist", "file", "-f", fmt, "-i", inPath];
 }
@@ -265,49 +331,236 @@ export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
 // Returns seconds, or null when it cannot be measured here (no ffmpeg on this
 // server, an unrecognized container, a decode that fails or outlasts its
 // deadline). It never throws and never refuses: a full pool queues, and the
-// caller decides what an unmeasured file means.
-const MEASURE_MAX_CONCURRENT = 2;
-const MEASURE_TIMEOUT_MS = 10_000;
+// caller decides what an unmeasured file means. measureAudio says which of
+// those it was: { seconds }, { undecodable } when the file itself cannot be
+// decoded here (a container the decoder is not given, or a decode that ran
+// and failed or reported no length), or { unavailable } when the measurement
+// did not run to an answer for a reason of this server's (no ffmpeg, no
+// free slot in the time the caller gave, the deadline, a temp-file error).
+//
+// The pool holds one decode per CPU the process may use (at least 2, at most
+// MEASURE_POOL_MAX); AUDIO_DECODE_SLOTS overrides it. A caller that passes
+// `deadlineAt` (the epoch ms by which its decode must be done) waits for a
+// slot for as long as that still leaves MEASURE_MIN_DECODE_MS to decode, and
+// its decode may run to that deadline (at most MEASURE_MAX_DECODE_MS). A
+// caller without one keeps the short fixed wait and deadline.
+export const MEASURE_MIN_DECODE_MS = 10_000;
+export const MEASURE_MAX_DECODE_MS = 60_000;
 const MEASURE_WAIT_MS = 5_000;
+const MEASURE_POOL_MAX = 8;
+/** Decode slots: AUDIO_DECODE_SLOTS (1 to 64) when set, else the CPUs this
+ *  process may use, held to 2..MEASURE_POOL_MAX. Read on every acquire. */
+export function measurePoolSize(env = process.env) {
+  const n = Number(env.AUDIO_DECODE_SLOTS);
+  if (Number.isInteger(n) && n >= 1 && n <= 64) return n;
+  let cpus = 2;
+  try { cpus = availableParallelism(); } catch { /* keep the floor */ }
+  return Math.max(2, Math.min(MEASURE_POOL_MAX, Number.isInteger(cpus) ? cpus : 2));
+}
 let measureActive = 0;
 const measureWaiters = [];
-// Resolves true with a slot held, or false when none came free in time.
-const measureAcquire = () => {
-  if (measureActive < MEASURE_MAX_CONCURRENT) { measureActive++; return Promise.resolve(true); }
+/** Calls that may wait for a slot, per slot: each holds its audio (up to the
+ *  upload cap) while it waits, so past this many a call is answered at once
+ *  (the caller's retryable 503, nothing spent upstream). */
+export const MEASURE_QUEUE_PER_SLOT = 4;
+/** The bytes the waiting calls may hold together: the count bound at the
+ *  upload cap (MEASURE_QUEUE_PER_SLOT waiters per slot of 25 MB each), held
+ *  under MEASURE_QUEUE_BYTES_CAP whatever the pool size. Past it a call is
+ *  answered at once, as past the count bound. */
+export const MEASURE_QUEUE_BYTES_PER_WAITER = 25 * 1024 * 1024;
+export const MEASURE_QUEUE_BYTES_CAP = 200 * 1024 * 1024;
+let queueBytesOverride = null;
+export function measureQueueMaxBytes(size = measurePoolSize()) {
+  return queueBytesOverride ?? Math.min(MEASURE_QUEUE_BYTES_CAP, MEASURE_QUEUE_PER_SLOT * size * MEASURE_QUEUE_BYTES_PER_WAITER);
+}
+let measureQueuedBytes = 0;
+// Admission is per caller (`who`: src/dispatch-caller.js admissionCallerOf,
+// the signed payer, a credits key, a Tempo sender, else the client address
+// with an IPv6 one folded to its /64; for a step an in-process executor runs,
+// the caller that dispatched it). Each caller's slots and queued places are
+// counted (src/caller-places.js): when the queue is full, a caller holding
+// nothing takes the newest queued places of callers holding more than one
+// (each answered busy, the caller's retryable 503) until its call fits, and a
+// slot that frees goes to the waiter whose caller holds the fewest places
+// (first come among equals). So one caller's run of files cannot hold every
+// slot and place while another caller's first file is refused.
+const measurePlaces = createCallerPlaces();
+// Resolves true with a slot held, "full" when the queue is full (by count or
+// by the bytes its waiters hold) or its place was taken by a caller holding
+// none, or false when none came free within `waitMs`.
+const measureAcquire = (waitMs, bytes = 0, who = IN_PROCESS_CALLER) => {
+  const size = measurePoolSize();
+  if (measureActive < size) { measureActive++; measurePlaces.hold(who); return Promise.resolve(true); }
+  if (!(waitMs > 0)) return Promise.resolve(false);
+  const fits = (taken = []) => {
+    let freed = 0;
+    for (const i of taken) freed += measureWaiters[i].bytes;
+    return measureWaiters.length - taken.length < MEASURE_QUEUE_PER_SLOT * size && measureQueuedBytes - freed + bytes <= measureQueueMaxBytes(size);
+  };
+  if (!fits()) {
+    const taken = measurePlaces.victims(measureWaiters, who, fits);
+    if (!taken) return Promise.resolve("full");
+    for (const i of taken.sort((a, b) => b - a)) measureWaiters.splice(i, 1)[0].evict();
+  }
+  measureQueuedBytes += bytes;
+  measurePlaces.hold(who);
   return new Promise((resolve) => {
-    const waiter = () => { clearTimeout(timer); resolve(true); };
-    const timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); resolve(false); }, MEASURE_WAIT_MS);
-    timer.unref?.();
+    const leave = () => { clearTimeout(waiter.timer); measureQueuedBytes -= bytes; };
+    const waiter = {
+      who, bytes,
+      grant: () => { leave(); resolve(true); },
+      evict: () => { leave(); measurePlaces.free(who); resolve("full"); },
+    };
+    waiter.timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); measureQueuedBytes -= bytes; measurePlaces.free(who); resolve(false); }, waitMs);
+    waiter.timer.unref?.();
     measureWaiters.push(waiter);
   });
 };
-const measureRelease = () => { const next = measureWaiters.shift(); if (next) next(); else measureActive--; };
+const measureRelease = (who = IN_PROCESS_CALLER) => {
+  measurePlaces.free(who);
+  let at = -1, least = Infinity;
+  for (let i = 0; i < measureWaiters.length; i++) {
+    const n = measurePlaces.count(measureWaiters[i].who);
+    if (n < least) { least = n; at = i; }
+  }
+  if (at >= 0) measureWaiters.splice(at, 1)[0].grant(); // the slot passes straight to that waiter
+  else measureActive--;
+};
+/** Slots in use and calls waiting, for tests. */
+export const __measurePoolForTest = () => ({ active: measureActive, waiting: measureWaiters.length, size: measurePoolSize(), queuedBytes: measureQueuedBytes, callers: measurePlaces.callers() });
+/** Sets the queue's byte bound for a test (null restores the default). */
+export const __setMeasureQueueMaxBytesForTest = (n) => { queueBytesOverride = n; };
 export async function measureAudioSeconds(buffer) {
-  let input;
-  try { input = mediaInputArgs(buffer, "in"); } catch { return null; }
-  if (!(await measureAcquire())) return null;
+  const m = await measureAudio(buffer);
+  return Number.isFinite(m.seconds) ? m.seconds : null;
+}
+/** { seconds, format, audioTracks? } (format: the demuxer that read it). With
+ *  `cutSeconds`, the same run also writes the first audio stream as 16 kHz
+ *  mono FLAC cut at that length (transcodeSpeech's output), answered as
+ *  `audio`: one decode measures the whole file and converts it, instead of a
+ *  measurement followed by a second decode for the conversion. */
+export async function measureAudio(buffer, { cutSeconds = null, format = null, deadlineAt = null, who = null } = {}) {
+  if (Number.isFinite(cutSeconds) && cutSeconds > 0) {
+    let outPath = null;
+    return decodeInMeasurePool(buffer, "a402-measure-", (dir) => {
+      outPath = join(dir, "out.flac");
+      // Output 0: the cut. Output 1: the whole stream at 100 one-byte samples
+      // a second on stdout, so its byte count is the length (the progress
+      // clock of a run with two outputs follows the shorter one).
+      return [...SAMPLE_CLOCK, "-t", String(cutSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath,
+        "-map", "0:a:0", "-vn", "-sn", "-dn", ...SAMPLE_CLOCK, "-ac", "1", "-ar", String(COUNTER_RATE), "-c:a", "pcm_u8", "-f", "u8", "pipe:1"];
+    }, async (seconds) => {
+      const audio = await readFile(outPath);
+      return audio.length > 0 ? { seconds, audio } : { seconds };
+    }, { format, counter: true, deadlineAt, who });
+  }
+  return decodeInMeasurePool(buffer, "a402-measure-", () => [...SAMPLE_CLOCK, "-f", "null", "-"], (seconds) => ({ seconds }), { format, deadlineAt, who });
+}
+/** Samples a second of the length counter (one byte each): 10 ms resolution. */
+const COUNTER_RATE = 100;
+/** Restamps each decoded frame from the count of samples before it, so the
+ *  progress clock and a `-t` cut follow the audio the decoder produced, not the
+ *  timestamps the container wrote (a file can stamp an hour of audio as minutes). */
+const SAMPLE_CLOCK = Object.freeze(["-af", "asetpts=N/SR/TB"]);
+
+/** The first audio stream as 16 kHz mono FLAC, cut at `maxSeconds` (ffmpeg
+ *  `-t`), for a speech upstream: FLAC is on its documented input list, and
+ *  16 kHz mono FLAC holds at most 32 KB a second, so a ten-minute cut stays
+ *  under the 25 MB upload limit. It runs in the measurement's pool, under the
+ *  same wait and deadline rules (`deadlineAt`); a cut reads only up to `maxSeconds` of audio, so it can
+ *  finish where a full measurement outlasted the deadline. Answers
+ *  { audio, seconds } (seconds: the length written, which is the file's whole
+ *  length when it is shorter than the cut), or measureAudio's { undecodable }
+ *  or { unavailable }. Never throws. */
+export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadlineAt = null, who = null }) {
+  if (!(Number.isFinite(maxSeconds) && maxSeconds > 0)) return { unavailable: "no length to cut at was given" };
+  let outPath = null;
+  return decodeInMeasurePool(buffer, "a402-speech-", (dir) => {
+    outPath = join(dir, "out.flac");
+    return [...SAMPLE_CLOCK, "-t", String(maxSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath];
+  }, async (seconds) => {
+    const audio = await readFile(outPath);
+    return audio.length > 0 ? { audio, seconds } : { undecodable: "the decoder wrote no audio" };
+  }, { format, deadlineAt, who });
+}
+
+/** Every demuxer the sniffer can name: each reads local bytes only and names
+ *  no further input. A decode under the sniffed one that fails is tried once
+ *  under each of the others (DECODE_FALLBACKS), never under autodetection. */
+export const AUDIO_DEMUXERS = Object.freeze(["mp3", "aac", "mov", "matroska", "ogg", "flac", "wav", "asf", "amr", "caf", "aiff", "avi"]);
+
+// One ffmpeg run over a buffer's first audio stream, in the measurement pool:
+// staged to a temp file, read through mediaInputArgs (named demuxer, audio
+// decoders only), bounded by the decode deadline (MEASURE_MIN_DECODE_MS, or up
+// to `deadlineAt` within MEASURE_MAX_DECODE_MS). `outArgs(dir)` is the output
+// side; `done(seconds)` turns the length the run read into the answer: the
+// last out_time it reported, or (`counter`) the bytes of its one-byte-per-
+// sample stdout at COUNTER_RATE. When the demuxer the sniffer named (or the
+// caller's `format`) cannot decode the file, or the sniffer named none, the
+// run is tried once under each other demuxer of AUDIO_DEMUXERS, inside the same
+// slot and the same overall deadline, before the file is called undecodable;
+// the answer's `format` names the demuxer that read it.
+async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = null, counter = false, deadlineAt = null, who = null } = {}) {
+  // The caller the place is held for: the one passed in, else the caller an
+  // in-process executor runs this call for, else the one shared key.
+  const caller = who || currentDispatchCaller() || IN_PROCESS_CALLER;
+  const first = format || inputFormatOf(buffer);
+  const order = [...(first ? [first] : []), ...AUDIO_DEMUXERS.filter((f) => f !== first)];
+  const budgeted = Number.isFinite(deadlineAt);
+  // A budgeted caller waits while its deadline still leaves a whole minimum decode.
+  const waitMs = budgeted ? deadlineAt - Date.now() - MEASURE_MIN_DECODE_MS : MEASURE_WAIT_MS;
+  const slot = await measureAcquire(waitMs, buffer?.length ?? 0, caller);
+  if (slot === "full") return { unavailable: "every decoder slot is busy and the queue for one is full", busy: true };
+  if (slot !== true) return { unavailable: budgeted ? "no decoder slot came free in the time this call has left" : "no decoder slot came free in time", busy: true };
+  const decodeMs = budgeted ? Math.max(MEASURE_MIN_DECODE_MS, Math.min(MEASURE_MAX_DECODE_MS, deadlineAt - Date.now())) : MEASURE_MIN_DECODE_MS;
   let dir = null;
   try {
-    dir = await mkdtemp(join(tmpdir(), "a402-measure-"));
+    dir = await mkdtemp(join(tmpdir(), prefix));
     const inPath = join(dir, "in");
-    input[input.length - 1] = inPath;
     await writeFile(inPath, buffer);
-    const stdout = await new Promise((resolve) => {
-      execImpl("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-progress", "pipe:1", "-nostats", ...input, "-map", "0:a:0", "-vn", "-f", "null", "-"],
-        { timeout: MEASURE_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env: childEnv() },
-        (err, out) => resolve(err ? null : String(out ?? "")));
-    });
-    if (stdout === null) return null;
-    // The progress stream repeats out_time_us; the last one is the total.
-    let us = null;
-    for (const line of stdout.split("\n")) {
-      if (line.startsWith("out_time_us=")) { const n = Number(line.slice(12)); if (Number.isFinite(n) && n >= 0) us = n; }
+    const deadline = Date.now() + decodeMs;
+    let failure = { undecodable: first ? "the decoder could not read its audio" : "its container is not one the decoder here reads" };
+    for (const fmt of order) {
+      const left = deadline - Date.now();
+      if (left <= 0) return fmt === order[0] ? { unavailable: "the decode outlasted its deadline" } : failure;
+      const input = mediaInputArgs(buffer, inPath, fmt);
+      const ran = await new Promise((resolve) => {
+        execImpl("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", ...(counter ? [] : ["-progress", "pipe:1"]), "-nostats", ...input, "-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", ...outArgs(dir)],
+          { timeout: Math.min(decodeMs, left), maxBuffer: 8 * 1024 * 1024, env: childEnv(), ...(counter ? { encoding: "buffer" } : {}) },
+          (err, out) => resolve(err ? { err } : { stdout: out }));
+      });
+      if (ran.err) {
+        if (ran.err.code === "ENOENT") return { unavailable: "ffmpeg is not installed on this server" };
+        // The sniffed demuxer outlasting its deadline is ours (a retry may
+        // finish); another demuxer doing so says nothing more about the file.
+        if (ran.err.killed || ran.err.signal) return fmt === order[0] && first ? { unavailable: "the decode outlasted its deadline" } : failure;
+        if (fmt === first) failure = { undecodable: "the decoder could not read its audio" };
+        continue;
+      }
+      let seconds = null;
+      if (counter) {
+        const n = Buffer.isBuffer(ran.stdout) ? ran.stdout.length : Buffer.byteLength(String(ran.stdout ?? ""), "latin1");
+        seconds = n > 0 ? n / COUNTER_RATE : null;
+      } else {
+        // The progress stream repeats out_time_us; the last one is the total.
+        for (const line of String(ran.stdout ?? "").split("\n")) {
+          if (line.startsWith("out_time_us=")) { const n = Number(line.slice(12)); if (Number.isFinite(n) && n >= 0) seconds = n / 1e6; }
+        }
+      }
+      if (seconds === null) {
+        if (fmt === first) failure = { undecodable: "the decoder reported no length for its audio" };
+        continue;
+      }
+      // A demuxer other than the sniffed one counts only when it read audio.
+      if (fmt !== first && !(seconds > 0)) continue;
+      const answer = await done(seconds);
+      return answer && typeof answer === "object" && !answer.undecodable ? { ...answer, format: fmt } : answer;
     }
-    return us === null ? null : us / 1e6;
+    return failure;
   } catch {
-    return null;
+    return { unavailable: "the file could not be staged for the decoder" };
   } finally {
-    measureRelease();
+    measureRelease(caller);
     if (dir) rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }

@@ -1,10 +1,10 @@
 {
   "client": {
-    "version": "0.8.25",
+    "version": "0.8.26",
     "sha256": "7155193615a405e418ff98527c979ba6c76ab6b869cb85979d40403db4e36215"
   },
   "mcp": {
-    "version": "0.13.31",
+    "version": "0.13.32",
     "sha256": "7155193615a405e418ff98527c979ba6c76ab6b869cb85979d40403db4e36215"
   },
   "openclaw": {

@@ -10,7 +10,7 @@ process.env.X402_INDEX_CRAWL = "off";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { PerformanceObserver } from "node:perf_hooks";
-const { routeQuery, routeQueryAsync, _cacheForTests, _setBazaarQualityForTest, warmRouteIndex, _routeIndexSettledForTest } = await import("../src/x402-index.js");
+const { routeQuery, routeQueryAsync, _routeSortYieldsForTest, _cacheForTests, _setBazaarQualityForTest, warmRouteIndex, _routeIndexSettledForTest } = await import("../src/x402-index.js");
 const { buildRoutePerfFixture, GOLDEN_QUERIES } = await import("./lib/route-perf-fixture.js");
 
 let n = 0;
@@ -109,6 +109,13 @@ console.log(`# sync hold ${sync.worst.toFixed(1)} ms ${HOLD} (${sync.worstWall.t
 ok(asy.worst < sync.worst * 0.6, `the async query's longest hold (${asy.worst.toFixed(1)} ms ${HOLD}) is well under the sync query's (${sync.worst.toFixed(1)} ms)`);
 ok(asy.worst < HOLD_BOUND_MS, `the async query's longest hold (${asy.worst.toFixed(1)} ms ${HOLD}) is under an absolute bound (${HOLD_NOTE})`);
 ok(busy > 0 && busy <= asy.total + 1, "onBusy reports the time the query actually held the thread");
+// The ranking sort of about 31,000 scored rows is the query's largest single
+// step; run whole it was the async query's longest hold (60 to 90 ms on a CI
+// runner). It runs in steps (src/timsort-steps.js), so the query yields inside it.
+const sortYields0 = typeof _routeSortYieldsForTest === "function" ? _routeSortYieldsForTest() : 0;
+await routeQueryAsync({ query: HEAVY, top: 10, include: "external", ...ctx });
+const sortYields = (typeof _routeSortYieldsForTest === "function" ? _routeSortYieldsForTest() : 0) - sortYields0;
+ok(sortYields > 10, `the ranking sort yields inside itself (${sortYields} yields)`);
 let calls = 0;
 await routeQueryAsync({ query: HEAVY, top: 10, include: "external", ...ctx }, { onBusy: () => { calls++; } });
 ok(calls > 1, `onBusy is called per slice (${calls} calls), so a budget is charged while the query runs`);

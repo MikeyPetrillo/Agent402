@@ -38,6 +38,7 @@ import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyer
 import { recordRouterPurchase, retractRouterPurchase } from "../router-purchases.js";
 import { adaptParamsToExample } from "../mpp-input-examples.js";
 import { boundRequestUrl, isQueryMethod, BOUND_URL_MAX_CHARS } from "../bound-request-url.js";
+import { runAsCallerOf } from "../dispatch-caller.js";
 
 // The external leg's default budget for a Solana payer: the short end of a
 // recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
@@ -270,6 +271,19 @@ export function sellerJudgeListing(r) {
     description: clean ? raw : "",
     tags: clean && Array.isArray(r?.tags) ? r.tags.map(String) : [],
   }, { links: false });
+}
+/** What /api/route's judge reads of one row: the same screened listing
+ *  (sellerJudgeListing; our own rows under the host "agent402"), and the
+ *  price as a figure we format from the parsed number (priceUsd), never the
+ *  row's price string: a manifest may declare any text as its price, and
+ *  nothing is added to a screened field after the screen ran. Every field
+ *  reaches the judge inside its one JSON object (src/tool-judge.js
+ *  criteriaFor). */
+export function routeJudgeListing(r) {
+  const seen = sellerJudgeListing(r?.seller === "self" ? { ...r, seller: "https://agent402" } : r);
+  const usd = typeof r?.priceUsd === "number" && Number.isFinite(r.priceUsd) && r.priceUsd >= 0 ? r.priceUsd : null;
+  const price = usd == null ? "" : ` ($${Number(usd.toPrecision(6))})`;
+  return { name: `${seen.name}${price}`.trim(), description: seen.description, tags: seen.tags };
 }
 /** The judged order over gated outside candidates (src/tool-judge.js
  *  orderByJudgment, reading sellerJudgeListing). A judged reorder stands only
@@ -1057,7 +1071,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       const underlying = toUsd(def.price);
       let result;
       try {
-        result = await def.handler(params);
+        result = await runAsCallerOf(req, () => def.handler(params));
         // Never relay an inner handler's meter sentinel (non-enumerable now,
         // but belt and braces: this object is nested into our own response).
         if (result && typeof result === "object") { try { delete result.__meterUpstreamUsd; } catch { /* frozen */ } }

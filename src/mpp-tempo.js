@@ -1749,15 +1749,19 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           if (!(bad && bad.status >= 400 && bad.status < 500)) bad = null;
         }
         if (bad) {
-          releaseReplay();
           // Until it is claimed we hold the buyer's money for nothing, and
           // they may never come back: book it as owed now. A later claim
-          // that is served voids the row (see src/tempo-push-debts.js).
+          // that is served voids the row (see src/tempo-push-debts.js). The
+          // key is released only once the row is booked: released first, a
+          // retry could be served (its void finding no row) while the sender
+          // is still being read, and the row booked after it would stand.
           let owed = false;
-          if (typeof onPushInputRefused === "function") {
-            const payer = await readPushSender();
-            try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: bad.status })) === true; } catch { owed = false; }
-          }
+          try {
+            if (typeof onPushInputRefused === "function") {
+              const payer = await readPushSender();
+              try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: bad.status })) === true; } catch { owed = false; }
+            }
+          } finally { releaseReplay(); }
           logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `push credential, transfer not claimed (${owed ? "booked as owed until claimed" : "no debt booked"}): ${String(bad.body?.error || "").slice(0, 160)}` });
           res.setHeader("Cache-Control", "no-store");
           return res.status(bad.status).json({ ...bad.body, charged: false, transferClaimed: false, payment: `The transfer you sent has not been claimed. Send this request again ${bad.retry || "with a corrected body"} and the same credential before the challenge expires (${binding.challenge?.expires || "see the challenge"}) and it pays for that request.${owed ? " Until then it is recorded as owed to the sender." : ""}` });
@@ -1785,13 +1789,16 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
             // claimed hash is refused as a replay, so the transfer is booked
             // as owed now (a later claim that is served voids the row, as
             // after an input refusal) and the key is released so the same
-            // credential can still pay if the hash was not claimed.
-            releaseReplay();
+            // credential can still pay if the hash was not claimed. The key
+            // is released after the row is booked, as above, so a retry is
+            // never served before the debt it must void exists.
             let owed = false;
-            if (typeof onPushInputRefused === "function") {
-              const payer = await readPushSender();
-              try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: 503, unanswered: true })) === true; } catch { owed = false; }
-            }
+            try {
+              if (typeof onPushInputRefused === "function") {
+                const payer = await readPushSender();
+                try { owed = (await onPushInputRefused(req, { hash: pushHash, payer, amountAtomic: String(binding.amountAtomic), amountUsd: pushAmountUsd, status: 503, unanswered: true })) === true; } catch { owed = false; }
+              }
+            } finally { releaseReplay(); }
             console.warn(`[mpp-tempo] push finalize unanswered (${req.method} ${req.path} tx=${pushHash || "?"} reason=${fcls}${f.relayStatus ? ` status=${f.relayStatus}` : ""}): the relay may have claimed the transfer - ${owed ? "recorded as owed until a claim is served" : "NOT recorded"}`);
             res.setHeader("Retry-After", String(fc.retryAfter || 5));
             return sendMppProblem(res, mppProblem(fc.kind, `The Tempo payment relay did not answer whether it claimed the transfer you sent. Retry the same request with the same credential: if the transfer was not claimed it pays for that request${owed ? "; if it was, it is recorded as owed to the sender, to be refunded" : ""}.`, { status: 503, hint: "Retry the same request with the same credential in a few seconds.", details: { reason: fcls, transferClaimed: null, ...(owed ? { refundOwed: true } : {}) } }));

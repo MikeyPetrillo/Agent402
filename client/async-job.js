@@ -12,7 +12,9 @@
 // on a delivered result, which may still happen).
 //
 // The job link must be on the same origin as the server: a Location naming
-// another host is refused rather than fetched.
+// another host is refused rather than fetched, and so is a redirect on a poll
+// that points off the origin (each hop is read with redirect: "manual" and its
+// target checked before it is fetched).
 //
 // Kept in lockstep with mcp/async-job.js (agent402-mcp).
 
@@ -51,6 +53,36 @@ export function retryAfterMs(headers, doc) {
 
 function sameOrigin(url, baseUrl) {
   try { return new URL(url).origin === new URL(baseUrl).origin; } catch { return false; }
+}
+
+const MAX_POLL_REDIRECTS = 5;
+// One poll of the job link. Redirects are followed by hand, each hop's target
+// checked against the server's origin first; a hop off the origin, an opaque
+// redirect (a browser's "manual" answer, which hides its target) or too many
+// hops throws instead of fetching. A fetch that followed a redirect anyway is
+// refused when it landed off the origin.
+async function pollJobLink(fetchImpl, jobUrl, baseUrl, slug, doc) {
+  let url = jobUrl;
+  for (let hop = 0; ; hop++) {
+    const g = await fetchImpl(url, { headers: { Accept: "application/json" }, redirect: "manual" });
+    if (!g) return g;
+    if (g.redirected && g.url && !sameOrigin(g.url, baseUrl)) {
+      throw new AsyncJobPendingError(`the job link for "${slug}" redirected to another origin; it was not followed`, { jobUrl, slug, job: doc });
+    }
+    const redirect = g.type === "opaqueredirect" || (g.status >= 300 && g.status < 400 && g.status !== 304);
+    if (!redirect) return g;
+    const loc = g.headers && typeof g.headers.get === "function" ? g.headers.get("location") : null;
+    let next = null;
+    try { next = loc ? new URL(loc, url).href : null; } catch { next = null; }
+    if (!next || !sameOrigin(next, baseUrl) || hop >= MAX_POLL_REDIRECTS) {
+      // A browser's opaque redirect hides its target: where it pointed is unknown.
+      const msg = !next && g.type === "opaqueredirect"
+        ? `the job link for "${slug}" answered with a redirect this client could not follow (its target is hidden here)`
+        : `the job link for "${slug}" redirected ${!next ? "with no readable target" : sameOrigin(next, baseUrl) ? "too many times" : "to another origin"}; it was not followed`;
+      throw new AsyncJobPendingError(msg, { jobUrl, slug, job: doc });
+    }
+    url = next;
+  }
 }
 
 // The job's lifecycle: `state` (queued | running | succeeded | failed) when
@@ -105,8 +137,8 @@ export async function awaitJob(res, { baseUrl, fetchImpl, timeoutMs = DEFAULT_AS
     }
     await sleep(wait);
     let g;
-    try { g = await fetchImpl(jobUrl, { headers: { Accept: "application/json" } }); }
-    catch { g = null; }
+    try { g = await pollJobLink(fetchImpl, jobUrl, baseUrl, slug, doc); }
+    catch (e) { if (e instanceof AsyncJobPendingError) throw e; g = null; }
     if (!g || g.status >= 500 || g.status === 429) {
       if (++failures >= MAX_POLL_FAILURES) throw new AsyncJobPendingError(`the job link for "${slug}" could not be read (${g ? `HTTP ${g.status}` : "network error"}); collect it from ${jobUrl}`, { jobUrl, slug, job: doc });
       wait = retryAfterMs(g?.headers, doc);

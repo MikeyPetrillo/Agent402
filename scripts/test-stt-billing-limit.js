@@ -5,7 +5,10 @@
 // Offline: a synthetic WAV is uploaded through the multipart handler and
 // fetch answers with bodies shaped like the transcription API's errors.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { makeMultipartHandler } from "../src/tools/stt-kit.js";
+import { makeMultipartHandler, __setMeasureForTest } from "../src/tools/stt-kit.js";
+// The decode measurement reads the WAV's own length (8 kHz 8-bit mono): this
+// suite is about the upstream's refusals, and its lane has no ffmpeg.
+__setMeasureForTest(async (b) => ({ seconds: (b.length - 44) / 8000 }));
 
 process.env.OPENAI_API_KEY = "sk-test-not-real";
 process.env.OPENROUTER_API_KEY = "or-test-not-real";
@@ -52,6 +55,26 @@ ok(rl && rl.statusCode === 503 && !/our side/i.test(rl.message) && /retry/i.test
 reply = { status: 400, body: { error: { message: "Invalid language code", type: "invalid_request_error", code: "invalid_value" } } };
 const br = await call();
 ok(br && br.statusCode === 400, "a request error stays a 400");
+
+// The charge sentence is the shared one (the route binder adds the Tempo push
+// exception to it) and is made on a route call only: a skill-pack step runs
+// the handler request-less inside a charged answer.
+{
+  const { withPushExceptionText } = await import("../src/prepayment-refusal.js");
+  const { PUSH_EXCEPTION } = await import("../src/tempo-push-debts.js");
+  const { ourBillingLimit, refuseUnservedFields, __sttFinalFailureForTest } = await import("../src/tools/stt-kit.js");
+  reply = { status: 429, body: { error: { message: "quota", type: "insufficient_quota", code: "insufficient_quota" } } };
+  const onRoute = await call();
+  ok(/Nothing was charged\. Retry later\.$/.test(onRoute?.message || "") && !/you were not charged/i.test(onRoute?.message || ""), `on a route call the billing-limit 503 says "Nothing was charged." (${onRoute?.message})`);
+  ok(withPushExceptionText(onRoute?.message, true).includes(`Nothing was charged${PUSH_EXCEPTION}.`), "and a Tempo push buyer reads the exception");
+  const offRoute = __sttFinalFailureForTest(ourBillingLimit(), { attempts: 1, diarize: false, req: undefined });
+  ok(offRoute.statusCode === 503 && !/charged/i.test(offRoute.message) && /Retry later\.$/.test(offRoute.message), `off a route call (a skill-pack step) it makes no charge claim (${offRoute.message})`);
+  const kt = await call({ keyterms: "alpha" });
+  ok(kt?.statusCode === 400 && /Nothing was charged\./.test(kt.message) && withPushExceptionText(kt.message, true).includes(`Nothing was charged${PUSH_EXCEPTION}.`), `an unserved field on a route call says nothing was charged, in the shared sentence (${kt?.message})`);
+  let step = null;
+  try { refuseUnservedFields({ entities: true }); } catch (e) { step = e; }
+  ok(step?.statusCode === 400 && !/charged/i.test(step.message), `off a route call the unserved-field 400 makes no charge claim (${step?.message})`);
+}
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

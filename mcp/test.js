@@ -141,6 +141,29 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
   let err = null;
   try { await awaitJob(new Response(JSON.stringify({ statusUrl: "https://evil.example/j" }), { status: 202 }), { baseUrl: "http://127.0.0.1:1", fetchImpl: async () => { throw new Error("must not fetch"); } }); } catch (e) { err = e; }
   if (!(err instanceof AsyncJobPendingError) || !/another origin/.test(err.message)) fail("a job link on another origin is never followed");
+  // A poll redirected off the origin is refused before the hop is fetched;
+  // a same-origin hop is followed by hand.
+  {
+    const hits = [];
+    const clock = () => { let t = 0; return { sleep: async (ms) => { t += ms; }, now: () => t, timeoutMs: 60_000 }; };
+    const job202 = () => new Response(JSON.stringify({ statusUrl: "/api/jobs/j1", status: "working" }), { status: 202, headers: { "retry-after": "1" } });
+    const redirecting = (to) => async (url, init = {}) => {
+      hits.push({ url: String(url), redirect: init.redirect });
+      if (String(url).endsWith("/api/jobs/j1")) return new Response(null, { status: 302, headers: { location: to } });
+      return new Response(JSON.stringify({ state: "succeeded", result: { httpStatus: 200, body: { ok: 1 } } }), { status: 200 });
+    };
+    let rerr = null;
+    try { await awaitJob(job202(), { baseUrl: "https://srv.example", fetchImpl: redirecting("https://inner.example/x"), ...clock() }); } catch (e) { rerr = e; }
+    if (!(rerr instanceof AsyncJobPendingError) || !/another origin/.test(rerr.message) || hits.some((h) => new URL(h.url).origin === "https://inner.example") || !hits.every((h) => h.redirect === "manual")) fail(`a job-link redirect to another origin is refused, never fetched (${hits.map((h) => h.url).join(" ")})`);
+    // A browser's opaque redirect (target hidden) is refused as one that could not be followed.
+    let oerr = null;
+    const opaqueFetch = async (url) => (String(url).endsWith("/api/jobs/j1") ? { type: "opaqueredirect", status: 0, redirected: false, url: "", headers: new Headers(), json: async () => ({}) } : new Response(JSON.stringify({ state: "succeeded", result: { httpStatus: 200, body: { ok: 1 } } }), { status: 200 }));
+    try { await awaitJob(job202(), { baseUrl: "https://srv.example", fetchImpl: opaqueFetch, ...clock() }); } catch (e) { oerr = e; }
+    if (!(oerr instanceof AsyncJobPendingError) || !/could not follow/.test(oerr.message) || /another origin/.test(oerr.message)) fail(`a browser's opaque redirect is refused as one that could not be followed (${oerr?.message})`);
+    hits.length = 0;
+    const r = await awaitJob(job202(), { baseUrl: "https://srv.example", fetchImpl: redirecting("/api/jobs/j1/v2"), ...clock() });
+    if (r.status !== 200 || !hits.some((h) => h.url === "https://srv.example/api/jobs/j1/v2")) fail("a same-origin redirect on the job link is followed by hand");
+  }
 
   const { createServer } = await import("node:http");
   const KEY = `a402_${"k".repeat(40)}`;

@@ -47,9 +47,10 @@ const INJECTION_PATTERNS = [
   /ignore\s+(?:as\s+|todas\s+as\s+)?instru[cç][oõ]es\s+anteriores/,
   // Only rules no honest listing has a reason to trip belong in this list:
   // a hit withholds the whole listing and drops it from the router. Wider
-  // wording addressed to the selecting reader (a role marker, "choose us",
-  // "the only correct answer", a note to the judge) is read sentence by
-  // sentence by the judge screen below, which drops only that sentence.
+  // wording addressed to the selecting reader ("choose us", "the only
+  // correct answer", a note to the judge) is read sentence by sentence by the
+  // judge screen below, which drops only that sentence; a speaker label is
+  // defused there (defuseLabels), never a reason to withhold a listing.
 ];
 // Letters from other scripts that render like Latin ones ("Іgnоrе" spelled with
 // Cyrillic І, о, е): one more reading of the text maps them back before the
@@ -235,16 +236,22 @@ export function listingInjectionFinding(text) {
 // one). The screen above drops a whole listing (the router does so before a
 // judge sees it); this one drops each SENTENCE written to whatever reads the listing
 // rather than about what the tool does: a note, notice or message to the
-// model, judge, evaluator or system; the reader cast as the evaluator; a role
-// marker opening the sentence ("Judge:", "SYSTEM:"); a request to be chosen,
-// ranked or rated ("choose me", "best=this", "rank this tool first"); a fit or
-// a confidence it asks to be given. Sentence by sentence, so an honest
-// sentence beside it still reaches the judge, and wider than the listing
-// screen for that reason: a dropped sentence costs a listing one sentence of
-// description, not its place in the index. The same readings run first
-// (lowercase, invisible characters deleted, lookalikes, digits for letters,
-// letters spelled with spaces), so a reworded or respelled sentence is read as
-// what it says.
+// model, judge, evaluator or system; the reader cast as the evaluator; a
+// request to be chosen, ranked or rated ("choose me", "best=this", "rank this
+// tool first"); a fit or a confidence it asks to be given. Sentence by
+// sentence, so an honest sentence beside it still reaches the judge, and wider
+// than the listing screen for that reason: a dropped sentence costs a listing
+// one sentence of description, not its place in the index. The same readings
+// run first (lowercase, invisible characters deleted, lookalikes, digits for
+// letters, letters spelled with spaces), so a reworded or respelled sentence is
+// read as what it says. A speaker label anywhere in the kept text ("System:",
+// "Router)", "Instructions ―") has its separator rewritten to " - "
+// (defuseLabels below), so no spelling of a label reads as a new turn.
+//
+// This screen is the first filter, not the boundary: the primary guard is the
+// judge's data rule in criteriaFor (src/tool-judge.js), which hands each
+// option to the model as one JSON object of quoted seller strings under an
+// instruction that they are data.
 const ADDRESSEE = "(?:models?|llms?|ais?|agents?|assistants?|judges?|evaluators?|graders?|raters?|rankers?|scorers?|selectors?|readers?|systems?|bots?|reviewers?)";
 // Whom a note is written to: the reader that selects, never the agent or
 // developer a usage note ("Note for agents: pass a url") is honestly for.
@@ -256,8 +263,7 @@ const READER_PATTERNS = [
   new RegExp(`\\b(?:dear|attention|hey|hello|hi)\\s*,?\\s+(?:the\\s+)?(?:[a-z-]+\\s+)?${SELECTOR}\\b`),
   new RegExp(`\\bas\\s+(?:the|an?|our|this)\\s+(?:[a-z-]+\\s+)?(?:evaluator|judge|ranker|grader|rater|scorer|selector|reviewer|assistant|model|llm|ai)s?\\s*,?\\s*(?:you|please|always|rate|pick|choose|select|prefer|give|score|answer|must|should)\\b`),
   new RegExp(`\\b(?:you|the\\s+(?:[a-z-]+\\s+)?${ADDRESSEE})\\s+(?:must|should|shall|will|need\\s+to|have\\s+to|are\\s+(?:required|instructed|told)\\s+to|is\\s+(?:required|instructed|told)\\s+to)\\s+(?:always\\s+|now\\s+|only\\s+)?(?:rate|score|pick|choose|select|prefer|rank|mark|grade|recommend|ignore|disregard|forget|(?:answer|output|respond|return|treat|consider|give)\\s+(?:with\\s+)?(?:this|me|us|it|best|yes|1))\\b`),
-  // A role marker opening the sentence, or a chat-template token anywhere.
-  /^\s*["'([{<]*\s*(?:system|assistant|judge|evaluator|grader|ranker|rater|scorer|selector|developer|admin|llm|ai|override|verdict|decision)\s*[:\]>]/,
+  // A chat-template token anywhere.
   /<\|[^|<>\s]{1,40}\|>|\|(?:im_[a-z]+|endoftext|eot_id|[a-z]+_header_id|begin_of_text|end_of_text|[a-z]+_of_turn)\||\[\s*\/?\s*inst\s*\]|<<\/?sys>>|(?<!#)#{2,}\s*(?:system|instructions?|assistant|user)\b/,
   // Asking to be chosen, ranked or rated.
   // "us" followed by a hyphen or a dotted name is a region or a host (us-east-1).
@@ -278,9 +284,6 @@ const READER_PATTERNS = [
   // "the system message prepended to the chat" is a parameter, not a notice.
   /\bsystem\s+(?:notice|override|directive|alert)s?\b|\bsystem\s+(?:note|message|instruction)s?\s*[:\]!-]/,
   /\b(?:ignore|disregard|forget)\s+(?:all\s+|any\s+|the\s+)?(?:what|everything|anything|previous|prior|above|earlier|other)\b/,
-  // A role marker after a sentence end, for text read as one run (a joined
-  // set of tags).
-  /[.!?]\s+(?:system|assistant)\s*:/,
   // Asking to be chosen, in the other languages seen on the index: the verb,
   // "always" and the listing itself as the object, so a usage note ("Wähle
   // immer die passende Sprache", "elige siempre el formato") is not read as one.
@@ -316,6 +319,59 @@ export function addressesReader(sentence) {
   }
   return false;
 }
+// A speaker label: a word of letters (any script, any case; a label of two or
+// three words ends in one), then a run of punctuation or symbols (Unicode P or
+// S, an emoji). One rule, no list of role words or separators: the run is
+// rewritten to " - " and the words are kept. Ordinary text is left as written:
+// prose punctuation (commas, sentence ends, quotes, opening brackets), a joiner
+// inside a word ("AI-powered", "and/or", "Node.js", "don't"), "C#" and "C++",
+// a spaced symbol that is not a label mark ("A & B", "x / y"), a digit after
+// the run (times, ratios, versions), a URL (skipped whole), a drive or scheme
+// (":\", ":/"), an IPv6 group, and a closing parenthesis that closes one.
+// Linear: a word is tried only from its first letter, and the callback reads
+// at most a bounded window behind the match.
+const LABEL_RE = /(?<![\p{L}\p{M}\p{N}])(\p{L}[\p{L}\p{M}]*)(\s*)([\p{P}\p{S}\p{Extended_Pictographic}\u200D\uFE0F]+)(\s*)/gu;
+// A scheme is at most 32 characters and starts where no scheme character
+// precedes it, so a long run of them is scanned once, not once per letter.
+const LABEL_URL = /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/[^\s<>"']+/giu;
+const PROSE_RUN = /^[\p{Ps}\u201C\u201D\u2018\u2019,.!?'"\u2026\u00A1\u00BF\u3001\u3002\uFF0C\uFF0E\uFF01\uFF1F\u2122\u00AE\u00A9]+$/u;
+const WORD_MARKS = /^[#+*'\u2019_`~]+$/;
+const WORD_JOINER = /^[-'\u2019./@&\\]$/;
+const SPACED_PLAIN = /[&+\-*~/#$%@^'"`_\p{Ps}\u201C\u201D\u2018\u2019,.!?\u2026]/gu;
+// A quote mark that opens or closes a word ("System »status« page").
+const QUOTE_RUN = /^[\p{Pi}\p{Pf}'"]+$/u;
+// A quote mark that closes the word it follows; a guillemet pointing on
+// ("System\u00BB", "System\u203A") is a label mark there.
+const CLOSE_QUOTE = /^[\u201D\u2019\u00AB\u2039'"]+$/;
+const PAREN_WINDOW = 200;
+function defuseSegment(text) {
+  return text.replace(LABEL_RE, (m, word, before, run, after, offset, str) => {
+    const next = str.charAt(offset + m.length);
+    if (PROSE_RUN.test(run)) return m;
+    if (!before) {
+      if (WORD_MARKS.test(run)) return m;
+      if (CLOSE_QUOTE.test(run) && (after || !/\p{L}/u.test(next))) return m;
+      if (!after && WORD_JOINER.test(run) && /\p{L}/u.test(next)) return m;
+    } else if (!run.replace(SPACED_PLAIN, "")) return m;
+    if (before && !after && QUOTE_RUN.test(run) && /\p{L}/u.test(next)) return m;
+    if (!after && /\d/.test(next)) return m;
+    if (/^:[/\\]/.test(run)) return m;
+    if (!after && /^:+$/.test(run) && /[0-9a-f]/i.test(next) && (run.length > 1 ? !!before : /^[0-9a-f]+$/i.test(word))) return m;
+    if (run[0] === ")") {
+      const back = str.slice(Math.max(0, offset - PAREN_WINDOW), offset);
+      if (back.lastIndexOf("(") > back.lastIndexOf(")")) return m;
+    }
+    return `${word} - `;
+  });
+}
+/** Seller text with every speaker label's separator rewritten to " - " (see
+ *  LABEL_RE), URLs left as written. */
+export function defuseLabels(text) {
+  const s = String(text || "");
+  let out = "", at = 0;
+  for (const u of s.matchAll(LABEL_URL)) { out += defuseSegment(s.slice(at, u.index)) + u[0]; at = u.index + u[0].length; }
+  return (out + defuseSegment(s.slice(at))).replace(/[ \t]{2,}/g, " ").trim();
+}
 /** A listing's text as a judge may read it: its sentences minus every one
  *  that addresses the reader (addressesReader) or carries a character that
  *  renders as nothing, with links shown as "[link]" (unless `links` is
@@ -330,9 +386,23 @@ export function judgeReadableText(text, { max = 0, links = true } = {}) {
   const sentences = raw.split(/(?<=[.!?])\s+|[\r\n]+/).filter((s) => s.trim());
   // A sentence written as one token with separators between its words
   // ("Ignore-all-previous-instructions.") is read as words too.
-  const kept = sentences.filter((s) => !hasHiddenCharacters(s) && !addressesReader(s) && !(/^\S+$/.test(s.trim()) && /[-_]/.test(s) && addressesReader(asWords(s))))
-    .map((s) => s.replace(/\s+/g, " ").trim())
-    .map((s) => (links ? s.replace(/\bhttps?:\/\/\S+/gi, "[link]") : s)).join(" ");
+  let parts = sentences.filter((s) => !hasHiddenCharacters(s) && !addressesReader(s) && !(/^\S+$/.test(s.trim()) && /[-_]/.test(s) && addressesReader(asWords(s))))
+    .map((s) => s.replace(/\s+/g, " ").trim());
+  // The kept sentences are read again as they are handed on, joined: two
+  // that pass alone ("Ignore all" on one line, "previous instructions" on
+  // the next) can read as one sentence once the line break is a space. A
+  // neighboring pair that reads so is dropped together, and a joined text
+  // that still reads so is dropped whole.
+  const drop = new Set();
+  for (let i = 0; i + 1 < parts.length; i++) {
+    if (addressesReader(`${parts[i]} ${parts[i + 1]}`)) { drop.add(i); drop.add(i + 1); }
+  }
+  if (drop.size) parts = parts.filter((_, i) => !drop.has(i));
+  const plain = parts.join(" ");
+  // Labels are defused on the joined text, so one split across lines is too.
+  const defused = defuseLabels(plain);
+  const kept = links ? defused.replace(/\bhttps?:\/\/\S+/gi, "[link]") : defused;
+  if (plain && (addressesReader(plain) || (kept !== plain && addressesReader(kept)))) return "";
   return max > 0 && kept.length > max ? `${kept.slice(0, max - 1)}…` : kept;
 }
 
@@ -370,8 +440,8 @@ export function judgeReadableListing({ host = "", slug = "", description = "", t
   const rawTags = (Array.isArray(tags) ? tags : []).slice(0, maxTags);
   const tagList = rawTags.map((t) => judgeReadableName(t)).filter(Boolean);
   const joined = tagList.join(" ");
-  // Read whole as written too, so a role marker in one tag ("Assistant:")
-  // and the rest of its sentence in the others is read as one sentence.
+  // Read whole as written too, so a sentence split across tags ("select",
+  // "this", "tool") is read as one sentence.
   const rawJoined = rawTags.map((t) => String(t || "").slice(0, IDENT_MAX)).join(" ");
   return {
     name,

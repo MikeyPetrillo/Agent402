@@ -27,6 +27,18 @@ ok(r.err && r.err.statusCode === 400, `the alias bomb answers 400 (got ${r.err ?
 ok(r.err && /expands past/.test(r.err.message), "the refusal says the aliases expand past the cap");
 ok(ms < 1000, `refused quickly (${ms} ms)`);
 
+// The cap is on the answer's bytes as written: a 3-byte character is 3, a
+// control character's escape 6. 20,000 CJK characters aliased 90 times are
+// 1.8 million characters but 5.4 MB of JSON, so they are refused.
+const cjk = `a: &a "${"\u4e00".repeat(20_000)}"\nb: [${Array(90).fill("*a").join(",")}]\n`;
+const rc = run(cjk);
+ok(cjk.length < 100_000 && rc.err?.statusCode === 400 && /expands past/.test(rc.err.message), `aliases of a multi-byte string are measured in bytes (${rc.err ? rc.err.statusCode : "served " + Buffer.byteLength(JSON.stringify(rc.out)) + " bytes"})`);
+const ctl = `a: &a "${"\\x01".repeat(5_000)}"\nb: [${Array(80).fill("*a").join(",")}]\n`;
+const rx = run(ctl);
+ok(ctl.length < 100_000 && rx.err?.statusCode === 400, `aliases of a control-character string are measured as their escapes (${rx.err ? rx.err.statusCode : "served " + Buffer.byteLength(JSON.stringify(rx.out)) + " bytes"})`);
+const cjkSmall = `a: &a "${"\u4e00".repeat(2_000)}"\nb: [${Array(90).fill("*a").join(",")}]\n`;
+ok(run(cjkSmall).out?.json.b.length === 90, "control: the same aliases of a shorter string are served");
+
 // A shallow bomb that stays under the cap is served in full.
 const small = 'a: &a [1,2,3]\nb: &b [*a,*a,*a]\nc: [*b,*b]\n';
 const s = run(small);

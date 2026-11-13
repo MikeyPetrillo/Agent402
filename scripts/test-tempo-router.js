@@ -134,12 +134,23 @@ const seller = createServer((req, res) => {
       if (sellerMode === "fail-400") { res.writeHead(400, { "content-type": "application/json" }); return res.end("{}"); }
       // A paid 200 whose body breaks off mid-read.
       if (sellerMode === "broken-body") { res.writeHead(200, { "content-type": "application/json", "content-length": "5000" }); res.write('{"partial":'); return setTimeout(() => res.destroy(), 20); }
+      // Paid 200s longer than the caller's maxBytes: a JSON number (its cut
+      // prefix still parses), an object (its prefix does not) and plain text.
+      const longBody = { "long-number": ["application/json", "7".repeat(500)], "long-object": ["application/json", JSON.stringify({ data: "x".repeat(500) })], "long-text": ["text/plain", "t".repeat(500)] }[sellerMode];
+      if (longBody) { res.writeHead(200, { "content-type": longBody[0] }); return res.end(longBody[1]); }
+      // A seller document whose own keys share our stand-ins' names, padded
+      // past the caller's maxBytes so its closed prefix is cut.
+      const keyShape = { "pad-raw": { raw: JSON.stringify({ data: { price: 1 } }) }, "pad-text": { text: JSON.stringify({ data: { price: 1 } }), truncated: false, contentType: "application/json", sha256: "0" }, "pad-value": { value: { data: { price: 1 } } }, "pad-relay": { relayError: "upstream body unreadable" } }[sellerMode];
+      if (keyShape) { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify(keyShape) + " ".repeat(200)); }
       // Charge-first, the stock mppx shape: the receipt rides on every status.
       const charged = /^fail-(\d{3})-receipt$/.exec(sellerMode);
       if (charged) { res.writeHead(Number(charged[1]), { "content-type": "application/json", "payment-receipt": rcpt }); return res.end("{}"); }
       res.writeHead(200, { "content-type": "application/json", "payment-receipt": Buffer.from(JSON.stringify({ method: "tempo", status: "success", reference: "0xfeed", timestamp: new Date().toISOString() })).toString("base64url") });
       return res.end(JSON.stringify({ scraped: true, echo: body ? JSON.parse(body) : null }));
     }
+    // A 200 to the unpaid request (no charge): bodies the reader turns into its own stand-in.
+    const free = { "free-empty-json": ["application/json", ""], "free-blank-text": ["text/plain", " \n "], "free-error-text": ["text/plain", '{"error":"upstream down"}'], "free-text": ["text/plain", "a plain answer"] }[sellerMode];
+    if (free) { res.writeHead(200, { "content-type": free[0] }); return res.end(free[1]); }
     const opts = sellerMode === "pathusd" ? { currency: PATH_USD } : sellerMode === "expensive" ? { amount: "900000" } : sellerMode === "wrong-chain" ? { chainId: 42431 }
       : sellerMode === "splits" ? { splits: [{ recipient: "0x" + "4c".repeat(20), amount: "1900" }] } : sellerMode === "push-only" ? { supportedModes: ["push"] } : sellerMode === "pull-push" ? { supportedModes: ["pull", "push"] }
       : sellerMode === "machine-token" ? { extraDetails: { machineTokenEnabled: true } } : sellerMode === "machine-token-off" ? { extraDetails: { machineTokenEnabled: false } }
@@ -267,6 +278,69 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
   let e = null, r = null;
   try { r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk }); } catch (x) { e = x; }
   ok(!e && r && r.result?.relayError === "upstream body unreadable" && r.quote?.usd === 0.002, `paid 200 with a broken body -> relayed with relayError (${e ? `threw ${e.statusCode}` : JSON.stringify(r?.result)})`);
+  // That body is ours, not the seller's: it is never judged as the seller's
+  // delivery (no kept call), and the paid call is counted as unverifiable.
+  const { observeDelivery } = await import("../src/response-observation.js");
+  const rec = observeDelivery({ origin: "https://tempo-broken.example", method: "POST", route: "/r", guaranteedPaths: ["data"], body: r?.result });
+  ok(rec?.unverifiable === 1 && rec?.calls === 0 && rec?.kept === 0, `the unreadable-body stand-in is counted as unverifiable, never as the seller's delivery (${JSON.stringify(rec)})`);
+  sellerMode = "ok";
+}
+
+// ---- a paid body cut at our maxBytes is never read as kept ----
+// Every cut body is marked (markNotSellerBody). A cut prefix that closes no
+// JSON object or array (a number a longer body would extend, an object cut
+// open, text) cannot be judged: it is counted as unverifiable, apart from
+// calls and kept. The same body read whole is observed (control).
+{
+  const { observeDelivery } = await import("../src/response-observation.js");
+  for (const [i, mode] of ["long-number", "long-object", "long-text"].entries()) {
+    sellerMode = mode;
+    const cut = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, maxBytes: 64 });
+    ok(cut.result && typeof cut.result === "object", `${mode}: cut body relayed (setup: ${JSON.stringify(cut.result).slice(0, 60)})`);
+    const cutRec = observeDelivery({ origin: `https://tempo-cut-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["data"], body: cut.result });
+    ok(cutRec?.unverifiable === 1 && cutRec.calls === 0 && cutRec.kept === 0, `${mode}: a paid body cut at our byte limit is counted as unverifiable, never as kept (${JSON.stringify(cutRec)})`);
+    const whole = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, maxBytes: 4096 });
+    const wholeBody = whole.result && typeof whole.result === "object" ? whole.result : { value: whole.result };
+    if (mode === "long-text") {
+      // Not JSON: the object is our reading of the bytes, so a promised path
+      // our own key happens to name is never met by it. Read whole, it is the
+      // seller's delivery and is observed as a missed promise.
+      const rec = whole.result?.truncated === false ? observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["text"], body: whole.result }) : null;
+      ok(rec?.calls === 1 && rec.kept === 0, `${mode}: a whole body that is not JSON is observed as a missed promise, never kept by our \`text\` key (${JSON.stringify(rec)})`);
+    } else ok(observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["data"], body: wholeBody }) !== null, `${mode}: control, the same body read whole is observed`);
+  }
+  sellerMode = "ok";
+}
+
+// ---- a cut seller prefix is judged as the seller's JSON, whatever its keys ----
+// The reader marks what it built; a seller's own `raw`, `text`, `value` or
+// `relayError` key never makes its cut document read as one of our stand-ins.
+{
+  const { observeDelivery, deliveryObservation } = await import("../src/response-observation.js");
+  for (const mode of ["pad-raw", "pad-text", "pad-value", "pad-relay"]) {
+    sellerMode = mode;
+    const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, maxBytes: 160 });
+    ok(r.result?._truncated === true, `${mode}: the padded seller document is cut (setup: ${JSON.stringify(r.result).slice(0, 60)})`);
+    const origin = `https://tempo-${mode}.example`;
+    observeDelivery({ origin, method: "POST", route: "/r", guaranteedPaths: ["data.price"], body: r.result });
+    const rec = deliveryObservation(origin, "POST", "/r");
+    ok(rec?.calls === 1 && rec.kept === 0 && rec.unverifiable === 0, `${mode}: a cut prefix missing its promised path is a missed promise, never kept (${JSON.stringify(rec)})`);
+  }
+  sellerMode = "ok";
+}
+
+// ---- a 200 to the unpaid request is judged on the seller's bytes ----
+// The reader's stand-in ({ text, truncated, contentType, sha256 }) is ours: an
+// empty or blank body, or an error envelope sent as text, is not an answer to
+// resell, and a promised path one of our keys names is never met by it.
+{
+  const { unpaidNonAnswerReason } = await import("../src/response-observation.js");
+  for (const [mode, paths, want] of [["free-empty-json", [], "empty"], ["free-blank-text", [], "empty"], ["free-error-text", [], "error-shaped"], ["free-text", ["text"], "missing-fields"], ["free-text", [], null]]) {
+    sellerMode = mode;
+    const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk });
+    const got = r.quote === null ? unpaidNonAnswerReason(r.result, paths) : "paid";
+    ok(got === want, `${mode}${paths.length ? ` (promised ${paths})` : ""}: an unpaid 200 reads as ${want ?? "an answer"} (got ${got})`);
+  }
   sellerMode = "ok";
 }
 

@@ -38,6 +38,7 @@ import { withDistrust } from "./tls-distrust.js";
 // (__setBuyerAddressGuardForTest in x402-buyer.js); still refuses a distrusted chain.
 const unguardedDispatcher = new UndiciAgent({ connect: withDistrust() });
 import { readBytesCapped, readTextCapped, decodeUtf8 } from "./capped-body.js";
+import { markNotSellerBody } from "./response-observation.js";
 
 
 /** The tempo/charge challenge this wallet pays: the first one it CAN pay (USDC.e,
@@ -625,7 +626,7 @@ export async function payTempo(url, {
     // A paid 200 is relayed even when its body cannot be read: the payment
     // went through, so this never throws (the x402 readAfterSpend rule).
     let result;
-    try { result = await readCapped(paid, maxBytes); } catch { result = { relayError: "upstream body unreadable" }; }
+    try { result = await readCapped(paid, maxBytes); } catch { result = markNotSellerBody({ relayError: "upstream body unreadable" }, { kind: "unreadable" }); }
     return {
       result,
       quote: { atomic: String(quotedAtomic), usd: Number(quotedAtomic) / 1e6, network: TEMPO_CAIP2 },
@@ -662,6 +663,15 @@ async function readCapped(res, maxBytes) {
   const { bytes: buf, truncated } = await readBytesCapped(res, maxBytes);
   const text = decodeUtf8(buf);
   const ct = res.headers.get("content-type") || "";
-  if (/json/i.test(ct)) { try { return JSON.parse(text); } catch { /* fall through */ } }
-  return { text, truncated, contentType: ct, sha256: createHash("sha256").update(buf).digest("hex") };
+  // A cut body is a prefix: one that still parses is not what the seller sent
+  // either, so it is marked like the x402 reader's (never read as a seller body).
+  if (/json/i.test(ct)) {
+    try {
+      const j = JSON.parse(text);
+      return truncated ? (j && typeof j === "object" && !Array.isArray(j) ? markNotSellerBody({ ...j, _truncated: true }) : markNotSellerBody({ value: j, _truncated: true }, { wrapped: true })) : j;
+    } catch { /* fall through */ }
+  }
+  // Not JSON: this object is our own reading of the bytes, cut or whole, never
+  // the seller's body, so no path the seller promised is met by its keys.
+  return markNotSellerBody({ text, truncated, contentType: ct, sha256: createHash("sha256").update(buf).digest("hex") }, { kind: "text" });
 }

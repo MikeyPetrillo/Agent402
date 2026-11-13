@@ -39,7 +39,7 @@ t node scripts/test-memory-fnv1a.js
 # Security regressions (proto-pollution, input-DoS, 500-hardening)
 t node scripts/test-security.js
 
-# @step 2: Offline suites (4 scripts, one process each)
+# @step 2: Offline suites (5 scripts, one process each)
 # "Settlement reconciliation (facilitator said paid vs chain says landed — offline)"
 t node scripts/test-settlement-reconcile.js
 # "Tollbooth x402 middleware mode + MPP (real @x402/express settles after the handler; real mppx client buys over the MPP wire; stub facilitator — offline)"
@@ -48,6 +48,8 @@ t node scripts/test-tollbooth-mpp.js
 t node scripts/test-buyer-balance-trend.js
 # "Spending-wallet chain words (five hanging RPCs read side by side under one deadline, unknown not a stall; offline)"
 t node scripts/test-upstream-buyer-status.js
+# "Stepped sort equals the engine's sort (same comparisons, same order; offline)"
+t node scripts/test-timsort-steps.js
 
 # @step 3: Shared limits (REAL redis: the counter primitive on both backends, two Redis instances read one count, a store that does not answer is a miss and never an exception; then two servers and two control replicas on one Redis: a breaker, a money guard and a budget counted on A refuse on B, an operator session minted on A is honoured and revoked on B, the judge's token ceiling and a wallet's in-flight runs are summed across A and B)
 t node scripts/test-shared-limits.js

@@ -49,7 +49,7 @@ import { markGatedRailOffered } from "./gated-rails.js";
 import { gatedRailWasOffered, recordGatedRailOffered } from "./gated-rail-history.js";
 import { shared } from "./shared-limits.js";
 import { spendsBeforeSettlement, isLongRunningSlug } from "./composite-spend-guard.js";
-import { hasLastingEffect } from "./hangup-forgiveness.js";
+import { hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { withSettleDemotion, isFundsRefusal, demotedList, settleAttemptOf } from "./settle-demotion.js";
 import { createRobinhoodOrder, stateDbOrderStore, withRobinhoodGasOrder, ownFirstAttemptOf, ownRefusedOf, facilitatorRetryOf, withOwnRefusalMemo } from "./robinhood-order.js";
 import { toolFailureMonitor, setDemotedReader } from "./tool-failure-monitor.js";
@@ -759,12 +759,14 @@ export function acceptsForItem(item, rails) {
   // that takes the first accept it can sign keeps taking the plain one, and a
   // Gateway-aware client picks this one by extra.name. Never on an
   // identity-bound route (above): those keep the plain EVM accept only.
-  // Never on a route whose effect outlives the answer (hasLastingEffect:
-  // memory writers, attest, feedback, the route-execute tiers,
-  // seller-payability): a batched payment Gateway leaves pending is answered
-  // 402 AFTER the handler ran (x402 runs the handler before it settles), and
-  // its resend runs the handler again, so the effect would happen twice.
-  const gatewayKinds = rails.gatewayKinds instanceof Map && !hasLastingEffect(item.slug) ? rails.gatewayKinds : null;
+  // Never on a route whose effect outlives the answer (defHasLastingEffect:
+  // memory writers, attest, feedback, and every definition flagged
+  // spendsOwnWallet or paysThirdPartySeller, such as the route-execute tiers,
+  // seller-payability, the flight tools and decide-execute): a batched payment
+  // Gateway leaves pending is answered 402 AFTER the handler ran (x402 runs
+  // the handler before it settles), and its resend runs the handler again, so
+  // the effect, or the outside purchase, would happen twice.
+  const gatewayKinds = rails.gatewayKinds instanceof Map && !defHasLastingEffect(item) ? rails.gatewayKinds : null;
   const batched = gatewayKinds
     ? evmCaip2.filter((caip2) => gatewayKinds.has(caip2) && (!allowed || allowed.has(caip2)))
       .map((caip2) => ({ scheme: "exact", payTo: payToFor(caip2), price: priceOf(caip2), network: caip2, ...gatewayAcceptFields(gatewayKinds.get(caip2)) }))
@@ -2666,7 +2668,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // a per-accept schema would cost 13x on every 402.
       const example = slim.output.example;
       const oversized = example !== undefined && JSON.stringify(example).length > 2048;
-      const schema = oversized ? null : boundedResponseSchemaFor(path, example, BAZAAR_SCHEMA_MAX_BYTES);
+      const schema = oversized ? null : boundedResponseSchemaFor(path, example, BAZAAR_SCHEMA_MAX_BYTES, slim.output.optional);
       slim.output = {
         type: slim.output.type || "json",
         ...(example !== undefined
@@ -2991,7 +2993,7 @@ export function contractWalletEligible(route, item) {
   const path = route.split(" ")[1] || "";
   if (item.identityBound || isIdentityBoundRoute(item)) return false;
   if (spendsBeforeSettlement(item) || item.longRunning || isLongRunningSlug(item.slug)) return false;
-  if (hasLastingEffect(item.slug)) return false;
+  if (defHasLastingEffect(item)) return false;
   if (path.startsWith("/v1/") || path === "/v1") return false;
   if (typeof item.quote === "function" || typeof item.tierQuote === "function" || item.metered) return false;
   if (item.modelBacked) return false;

@@ -40,6 +40,7 @@ import { externalTempoPaymentsSteps, gatewayBatchedPayments } from "./sales-ledg
 import { createBlockClock, rpcHeaderReader, dateFromAnchors } from "./block-clock.js";
 import { NOMINAL_BLOCK_MS, blockMs, blocksForSeconds, refreshBlockMs, blockTimeChanges } from "./chain-block-time.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
+import { enableWal } from "./sqlite-wal.js";
 
 // The `from` of a mint; such a transfer settled no call (syncEvmChain).
 const ZERO_EVM_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -76,7 +77,7 @@ export const LEDGER_BLOCK_MS = Object.freeze(Object.defineProperties({}, Object.
 const msPerBlock = (chain) => blockMs(chain);
 
 const db = new Database(DB_PATH);
-db.pragma("journal_mode = WAL");
+enableWal(db);
 db.exec(`
 CREATE TABLE IF NOT EXISTS transfers (
   chain    TEXT NOT NULL,

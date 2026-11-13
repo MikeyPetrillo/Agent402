@@ -121,13 +121,25 @@ function addRequiredForRoute(path, example, schema) {
   return schema;
 }
 
-/** The 200 schema for a tool: typed properties from its example, and a
- *  `required` list only where the sweeps enforce it. */
-export function responseSchemaFor(path, example) {
+/** A tool's declared optional output fields (discovery.output.optional:
+ *  field name to a typed schema with a description) added to an object
+ *  schema's properties. Never required: they are present only on some answers
+ *  (a transcript cut at its tier's cap, say), so no example shows them. */
+export function withOptionalOutput(schema, optional) {
+  if (!optional || typeof optional !== "object" || schema?.type !== "object" || !schema.properties) return schema;
+  const properties = { ...schema.properties };
+  for (const [k, v] of Object.entries(optional)) if (!(k in properties) && v && typeof v === "object") properties[k] = v;
+  return { ...schema, properties };
+}
+
+/** The 200 schema for a tool: typed properties from its example (and its
+ *  declared optional fields), and a `required` list only where the sweeps
+ *  enforce it. */
+export function responseSchemaFor(path, example, optional = null) {
   if (!example || typeof example !== "object" || Array.isArray(example)) return { type: "object" };
   const schema = schemaFromExample(example);
   if (schema.type !== "object" || !schema.properties) return { type: "object" };
-  return addRequiredForRoute(path, example, schema);
+  return withOptionalOutput(addRequiredForRoute(path, example, schema), optional);
 }
 
 /** A typed schema for a tool's output that fits a byte budget.
@@ -149,12 +161,18 @@ export function boundedSchemaFromExample(example, maxBytes = 1500) {
  *  policy as /openapi.json, but keeps the 402's stricter byte budget. Arrays
  *  and scalar/raw outputs are schemas too: treating a speech response string
  *  as an object makes the official Bazaar validator reject the declaration. */
-export function boundedResponseSchemaFor(path, example, maxBytes = 1500) {
+export function boundedResponseSchemaFor(path, example, maxBytes = 1500, optional = null) {
   if (example === null || example === undefined) return null;
   for (let depth = MAX_DEPTH; depth >= 1; depth--) {
-    const schema = addRequiredForRoute(path, example, schemaAtDepth(example, depth));
-    if (!schema || !Object.keys(schema).length) return null;
-    if (JSON.stringify(schema).length <= maxBytes) return schema;
+    const base = addRequiredForRoute(path, example, schemaAtDepth(example, depth));
+    if (!base || !Object.keys(base).length) return null;
+    // The declared optional fields first, typed only (as the example's are);
+    // a budget they do not fit drops them before the example's own fields
+    // are shallowed.
+    const typed = optional && typeof optional === "object" ? Object.fromEntries(Object.entries(optional).map(([k, v]) => [k, v && typeof v === "object" && v.type ? { type: v.type } : {}])) : null;
+    for (const schema of typed ? [withOptionalOutput(base, typed), base] : [base]) {
+      if (JSON.stringify(schema).length <= maxBytes) return schema;
+    }
   }
   return null;
 }

@@ -38,6 +38,48 @@ export function applyObservationsSnapshot(rows) {
   version++;
 }
 
+// The bodies our own readers built in place of the seller's (cut at our byte
+// limit, or unreadable), each with the kind of stand-in it is. A WeakMap keyed
+// on the objects themselves: a seller's JSON can carry `_truncated`,
+// `relayError`, `raw`, `text` or `value`, but never one of these identities,
+// so a stand-in's kind is read from the mark, never from its keys.
+//   json        a cut JSON object prefix plus our `_truncated` key (default)
+//   wrapped     our `{ value }` wrapper around a cut prefix that was not an
+//               object (an array or a scalar)
+//   unreadable  our `{ relayError }`: the body could not be read at all
+//   raw         the x402 reader's `{ raw[, _truncated] }` reading of bytes
+//               that were not JSON
+//   text        the Tempo reader's `{ text, truncated, contentType, sha256 }`
+//               reading of bytes that were not JSON
+const NOT_SELLER_BODY = new WeakMap();
+const STAND_IN_KINDS = new Set(["json", "wrapped", "unreadable", "raw", "text"]);
+/** Mark a body our reader cut or could not read, so delivery is not judged on
+ *  it, with the kind of stand-in it is (above). `{ wrapped: true }` is the
+ *  same as `{ kind: "wrapped" }`. Returns the body. */
+export function markNotSellerBody(body, { kind, wrapped = false } = {}) {
+  if (body && typeof body === "object") {
+    const k = wrapped ? "wrapped" : kind;
+    NOT_SELLER_BODY.set(body, STAND_IN_KINDS.has(k) ? k : "json");
+  }
+  return body;
+}
+
+/** What the seller sent, read back from a stand-in our readers built:
+ *  { unreadable }, { text, cut } (the Tempo reader's text reading, the x402
+ *  reader's { raw }) or { json, cut } (a JSON prefix cut at our byte limit,
+ *  our `_truncated` key taken off, or the value inside our `{ value }`
+ *  wrapper). The branch is chosen by the mark our reader set, never by a
+ *  key's name, so a seller's cut prefix is always judged as its own JSON. */
+function standInSent(body) {
+  switch (NOT_SELLER_BODY.get(body)) {
+    case "unreadable": return { unreadable: true };
+    case "text": return { text: String(body.text ?? ""), cut: body.truncated === true };
+    case "raw": return { text: String(body.raw ?? ""), cut: body._truncated === true };
+    case "wrapped": return { json: body.value, cut: body._truncated === true };
+    default: { const { _truncated, ...rest } = body; return { json: rest, cut: _truncated === true }; }
+  }
+}
+
 /** Is a dotted path present in a parsed JSON body?
  *
  *  Presence, never value: `null` counts as present, because the seller promised
@@ -73,21 +115,52 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
     if (!origin || !route) return null;
     const paths = (Array.isArray(guaranteedPaths) ? guaranteedPaths : []).slice(0, MAX_PATHS_PER_ROUTE);
     if (!paths.length) return null;              // no promise, nothing to verify
-    // A body we cut at our own byte limit (readAfterSpend marks it
-    // `_truncated`) or could not read is not what the seller sent: a missing
-    // path there is ours, so the call is not observed either way.
-    if (body && typeof body === "object" && (body._truncated === true || typeof body.relayError === "string")) return null;
+    // A body our reader could not read at all (the seller settled, then cut
+    // or reset the answer) cannot be judged, so it is counted as unverifiable,
+    // as a cut is: a seller that aborts after settling never keeps a clean
+    // record. Recognized by the object identity our own readers mark
+    // (markNotSellerBody), never by a key, since a seller can send any
+    // key. A body our reader holds whole (a non-JSON answer to a route that
+    // promised JSON paths) is the seller's delivery: it is read back and
+    // judged on the seller's bytes, never on our stand-in's keys, so a missed
+    // promise is counted.
+    // A body cut at our byte limit is the seller's choice of size, so it never
+    // leaves the record untouched. A cut whose prefix parses to an object or
+    // an array closed that document (only trailing bytes went unread) and is
+    // judged on it. Any other cut (a prefix that does not parse, or parses only
+    // as a scalar a longer body would extend) cannot be judged: it is counted
+    // as unverifiable, beside calls and kept, so padding an answer past the
+    // limit shows in the record instead of keeping it clean.
+    let unverifiable = false;
+    if (body && typeof body === "object" && NOT_SELLER_BODY.has(body)) {
+      const sent = standInSent(body);
+      if (sent.unreadable) unverifiable = true;
+      else {
+        let read;
+        if ("json" in sent) read = sent.json;
+        else { try { read = JSON.parse(sent.text); } catch { read = undefined; } }
+        if (sent.cut && !(read !== null && typeof read === "object")) unverifiable = true;
+        body = read === undefined ? null : read;
+      }
+    }
     const k = key(origin, method, route);
     // Bounded: drop the oldest route rather than growing without limit. This
     // map is observation, so losing the least recently used one costs nothing
     // that a later call cannot re-establish.
     if (!store.has(k) && store.size >= MAX_ROUTES) store.delete(store.keys().next().value);
 
+    const prev = store.get(k) || { calls: 0, kept: 0, unverifiable: 0, lastMissing: [], firstSeenAt: now(), lastSeenAt: 0 };
+    if (unverifiable) {
+      const rec = { ...prev, unverifiable: Math.min((prev.unverifiable || 0) + 1, WINDOW * 1000), lastSeenAt: now() };
+      store.set(k, rec);
+      version++;
+      return rec;
+    }
     const missing = paths.filter((p) => !pathPresent(body, p));
-    const prev = store.get(k) || { calls: 0, kept: 0, lastMissing: [], firstSeenAt: now(), lastSeenAt: 0 };
     const rec = {
       calls: Math.min(prev.calls + 1, WINDOW * 1000),
       kept: prev.kept + (missing.length ? 0 : 1),
+      unverifiable: prev.unverifiable || 0,
       // Only the NAMES the seller themselves published, so this carries nothing
       // the seller has not already put in a public document.
       lastMissing: missing.slice(0, MAX_PATHS_PER_ROUTE),
@@ -106,13 +179,17 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
  *  bought it. Null means UNOBSERVED and must never be rendered as a pass. */
 export function deliveryObservation(origin, method, route) {
   const rec = store.get(key(origin, method, route));
-  if (!rec || !rec.calls) return null;
+  if (!rec || !(rec.calls || rec.unverifiable)) return null;
   return {
     calls: rec.calls,
     kept: rec.kept,
     // A route bought once that delivered once is not "100% reliable", and a
     // rate alone invites reading it that way. The count travels with it.
-    keptRate: Number((rec.kept / rec.calls).toFixed(3)),
+    // Null when every call was unverifiable: no call could be judged.
+    keptRate: rec.calls ? Number((rec.kept / rec.calls).toFixed(3)) : null,
+    // Calls whose answer ran past our read limit in a form that cannot be
+    // judged (counted apart from calls, never as kept).
+    unverifiable: rec.unverifiable || 0,
     lastMissing: rec.lastMissing,
     lastSeenAt: new Date(rec.lastSeenAt).toISOString(),
   };
@@ -163,11 +240,35 @@ const ERROR_ENVELOPE_KEYS = new Set([
  *                   404 or 410 envelope alone is not an answer either, so the
  *                   next seller is tried.
  *   missing-fields  the seller guaranteed response paths and none is present
- * An empty array, a number or a string with text is the seller's answer.
+ *   unreadable      our reader could not read the body at all
+ * A stand-in our reader built (markNotSellerBody) is judged on the bytes the
+ * seller sent, never on its own keys.
+ * A top-level array or scalar is judged by the promised shape: the guaranteed
+ * paths are object paths, so with any promised it is missing-fields; with
+ * none, an array of no items (or only empty ones) or a blank string is empty,
+ * and a number, a boolean, text or an array with an item is the answer.
  */
 export function unpaidNonAnswerReason(body, guaranteedPaths = []) {
   if (body === null || body === undefined || body === "") return "empty";
-  if (typeof body !== "object" || Array.isArray(body)) return null;
+  if (typeof body !== "object" || Array.isArray(body)) {
+    if ((Array.isArray(guaranteedPaths) ? guaranteedPaths : []).length) return "missing-fields";
+    const blank = (v) => v === null || v === undefined || (typeof v === "string" && !v.trim())
+      || (Array.isArray(v) && v.length === 0) || (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0);
+    if (Array.isArray(body)) return body.every(blank) ? "empty" : null;
+    return blank(body) ? "empty" : null;
+  }
+  // A stand-in our own reader built is judged on what the seller sent, never
+  // on the keys we wrote: an empty or blank body is empty, text that parses
+  // as JSON is judged as that JSON, other text answers only a seller that
+  // promised no JSON paths, and a body we could not read answers nothing.
+  if (NOT_SELLER_BODY.has(body)) {
+    const sent = standInSent(body);
+    if (sent.unreadable) return "unreadable";
+    if ("json" in sent) return unpaidNonAnswerReason(sent.json, guaranteedPaths);
+    if (!sent.text.trim()) return "empty";
+    if (!sent.cut) { try { return unpaidNonAnswerReason(JSON.parse(sent.text), guaranteedPaths); } catch { /* plain text */ } }
+    return Array.isArray(guaranteedPaths) && guaranteedPaths.length ? "missing-fields" : null;
+  }
   const hasKeys = (o) => { for (const k in o) { if (Object.hasOwn(o, k)) return true; } return false; };
   if (!hasKeys(body)) return "empty";
   if (typeof body.x402Version === "number" && Array.isArray(body.accepts) && body.accepts.length > 0) return "challenge";

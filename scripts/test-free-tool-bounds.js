@@ -175,6 +175,28 @@ function rng(seed) {
   const rc = await loopHold(() => tool.handler({ spec: cyc }));
   ok(rc.err?.statusCode === 413, "resolve-refs: a doubling cycle is refused (" + rc.err?.statusCode + ")");
   ok(rc.turns >= 10 && rc.hold < BOUND_MS, "resolve-refs: the doubling cycle gave the event loop back " + rc.turns + " times (longest gap " + rc.hold.toFixed(0) + "ms)");
+  // A long pointer inside that cycle: met on every pass round it, walked once.
+  // 800 and 1,600 segments (a 47 KB and a 90 KB spec) cost what the bare
+  // cycle costs, inside the free tier's CPU bound, and the pointer's length
+  // is charged to the step budget.
+  for (const segs of [800, 1600]) {
+    const withPtr = doubling(24);
+    const ptr = "#/deep/" + Array(segs).fill("a").join("/");
+    for (let i = 0; i < 24; i++) withPtr.components.schemas["S" + i].properties.d = { $ref: ptr };
+    withPtr.components.schemas.S24 = { $ref: "#/components/schemas/S0" };
+    let node = { type: "string" }; for (let i = 0; i < segs; i++) node = { a: node };
+    withPtr.deep = node;
+    const parsed = JSON.parse(JSON.stringify(withPtr));
+    const rp = await bestOf(() => tool.handler({ spec: parsed }));
+    ok(rp.err?.statusCode === 413 && rp.ms < BOUND_MS, `resolve-refs: a ${JSON.stringify(parsed).length}-byte doubling cycle holding a ${segs}-segment pointer is refused in ${rp.ms.toFixed(0)}ms of CPU (${rp.err?.statusCode})`);
+  }
+  {
+    const { __resolveRefsBudgetForTest } = await import("../src/tools/api-kit.js");
+    const ptr = "#/deep/" + Array(400).fill("a").join("/");
+    let node = 1; for (let i = 0; i < 400; i++) node = { a: node };
+    const steps = (await __resolveRefsBudgetForTest({ deep: node, p: { $ref: ptr } })).steps - (await __resolveRefsBudgetForTest({ deep: node, p: 1 })).steps;
+    ok(steps >= ptr.length, `resolve-refs: a pointer's walk is charged to the step budget (${steps} steps for a ${ptr.length}-character pointer)`);
+  }
   const cycSmall = doubling(10); cycSmall.components.schemas.S10 = { $ref: "#/components/schemas/S0" };
   ok(JSON.stringify(await tool.handler({ spec: cycSmall })) === JSON.stringify(oldAnswer(cycSmall)), "resolve-refs: a ten-level doubling cycle answers as the full walk did");
   // One long string referenced many times.
@@ -190,6 +212,118 @@ function rng(seed) {
   for (let i = 0; i < 300; i++) shared.paths["/r" + i] = { get: { responses: { 400: { schema: { $ref: "#/components/schemas/Err" } }, 500: { schema: { $ref: "#/components/schemas/Err" } } } } };
   const rs = await tool.handler({ spec: shared });
   ok(rs.resolved === 600 && JSON.stringify(rs) === JSON.stringify(oldAnswer(shared)), "resolve-refs: one schema referenced 600 times is served and counted 600 times");
+  // A reused target's ref lists replay on every reuse: 3,000 unresolved refs
+  // in one schema referenced 140 times. Each replay is charged to the walk's
+  // step counter and merged through a set, so the loop is held no longer than
+  // the free tier's loop bound (test-redos-free-tier, 250 ms).
+  const replay = { paths: {}, components: { schemas: { A: { allOf: Array.from({ length: 3000 }, (_, i) => ({ $ref: "#/x/" + i })) } } } };
+  for (let i = 0; i < 140; i++) replay.paths["/p" + i] = { get: { schema: { $ref: "#/components/schemas/A" } } };
+  const rr = await loopHold(() => tool.handler({ spec: replay }));
+  ok(!rr.err && rr.out.unresolved.length === 3000 && rr.out.resolved === 140 && rr.hold < 250, "resolve-refs: a schema of 3,000 unresolved refs reused 140 times holds the loop " + rr.hold.toFixed(0) + "ms (" + (rr.err?.statusCode || rr.out?.resolved) + ")");
+  // One merge of a long list (30,000 unresolved refs in one schema, used twice).
+  const wide = { paths: { "/a": { $ref: "#/components/schemas/A" }, "/b": { $ref: "#/components/schemas/A" } }, components: { schemas: { A: { allOf: Array.from({ length: 30_000 }, (_, i) => ({ $ref: "#/x/" + i })) } } } };
+  const rw = await loopHold(() => tool.handler({ spec: wide }));
+  ok(!rw.err && rw.out.unresolved.length === 30_000 && rw.hold < 250, "resolve-refs: a list of 30,000 unresolved refs is merged through a set, the loop held " + rw.hold.toFixed(0) + "ms");
+  // The replay is charged by length, whatever the clock says: one more reuse
+  // of a target holding 3,000 unresolved refs adds at least 3,000 steps, and a
+  // walk with N reuses counts the first merge and every replay (N + 1 lists).
+  {
+    const { __resolveRefsBudgetForTest } = await import("../src/tools/api-kit.js");
+    const specOf = (n) => { const s = { paths: {}, components: { schemas: { A: { allOf: Array.from({ length: 3000 }, (_, i) => ({ $ref: "#/x/" + i })) } } } }; for (let i = 0; i < n; i++) s.paths["/p" + i] = { get: { schema: { $ref: "#/components/schemas/A" } } }; return s; };
+    const s139 = (await __resolveRefsBudgetForTest(specOf(139))).steps, s140 = (await __resolveRefsBudgetForTest(specOf(140))).steps;
+    ok(s140 - s139 >= 3000 && s140 >= 141 * 3000, `resolve-refs: each replay of a 3,000-ref list is charged to the step budget (one more reuse adds ${s140 - s139} steps; ${s140} steps for 140 reuses)`);
+  }
+  const replaySmall = { paths: {}, components: { schemas: { A: { allOf: [{ $ref: "#/x/1" }, { $ref: "https://e.example/s#/B" }, { $ref: "#/x/1" }] }, B: { items: { $ref: "#/components/schemas/A" } } } } };
+  for (let i = 0; i < 5; i++) replaySmall.paths["/p" + i] = { get: { a: { $ref: "#/components/schemas/A" }, b: { $ref: "#/components/schemas/B" } } };
+  ok(JSON.stringify(await tool.handler({ spec: replaySmall })) === JSON.stringify(oldAnswer(replaySmall)), "resolve-refs: reused targets with unresolved and external refs answer as the full walk did");
+  // A chain of refs, each target a ref to the next: the path of refs in
+  // progress grows one ref a step and is never copied, so a chain d deep adds
+  // to it d times (a copy per step would add about d squared over two).
+  const chainOf = (d) => { const s = { c: {} }; for (let i = 0; i < d; i++) s.c["s" + i] = { $ref: "#/c/s" + (i + 1) }; s.c["s" + d] = { type: "string" }; s.p = { $ref: "#/c/s0" }; return s; };
+  {
+    const realAdd = Set.prototype.add;
+    let adds = 0;
+    Set.prototype.add = function (v) { adds++; return realAdd.call(this, v); };
+    try { await tool.handler({ spec: chainOf(2000) }); } finally { Set.prototype.add = realAdd; }
+    ok(adds < 20 * 2000, `resolve-refs: a 2,000-deep ref chain makes ${adds} set adds, linear in its depth`);
+  }
+  const deepChain = chainOf(8_000); // deeper than any spec the 100 KB body limit admits
+  const rch = await loopHold(() => tool.handler({ spec: deepChain }));
+  ok(!rch.err && rch.out.resolved > 8_000 && rch.hold < 250, `resolve-refs: an 8,000-deep ref chain (${JSON.stringify(deepChain).length} bytes) answers with the loop held ${rch.hold.toFixed(0)}ms (${rch.err?.statusCode || rch.err?.message || rch.out?.resolved})`);
+  const loopBack = chainOf(500); loopBack.c.s500 = { $ref: "#/c/s250" };
+  ok(JSON.stringify(await tool.handler({ spec: loopBack })) === JSON.stringify(oldAnswer(loopBack)), "resolve-refs: a 500-deep chain that loops back answers as the full walk did");
+  // A ref cycle reached along many paths: a 2,000-ref cycle and 1,500 keys
+  // that reference its head (about 94 KB), and the same through one wrapper
+  // ref per key. Nothing inside a cycle is reusable from inside it, so the
+  // walk's steps are capped: refused with a 400 naming the cap, inside the
+  // free tier's CPU bound.
+  {
+    const { RESOLVE_REFS_MAX_STEPS } = await import("../src/tools/api-kit.js");
+    const cycleKeys = (L, N, wrap) => { const s = { c: {}, w: {} }; for (let i = 0; i < L; i++) s.c["s" + i] = { $ref: "#/c/s" + ((i + 1) % L) }; for (let i = 0; i < N; i++) { if (wrap) { s.w["w" + i] = { $ref: "#/c/s0" }; s["k" + i] = { $ref: "#/w/w" + i }; } else s["k" + i] = { $ref: "#/c/s0" }; } return s; };
+    for (const [label, spec] of [["1,500 keys", cycleKeys(2000, 1500, false)], ["1,000 wrapped keys", cycleKeys(2000, 1000, true)]]) {
+      const r = await bestOf(() => tool.handler({ spec }));
+      ok(Number.isFinite(RESOLVE_REFS_MAX_STEPS) && r.err?.statusCode === 400 && /steps/.test(r.err.message) && /in parts/.test(r.err.message) && r.ms < BOUND_MS, `resolve-refs: a ${JSON.stringify(spec).length}-byte spec of ${label} into a 2,000-ref cycle is refused with a 400 in ${r.ms.toFixed(0)}ms of CPU (${r.err?.statusCode || "answered"} ${String(r.err?.message || "").slice(0, 60)})`);
+    }
+    // A cycle met with no ref in progress resolves the same way each time, so
+    // it is resolved once and reused: 1,500 keys referencing the head of a
+    // small cycle with a large body answer as the full walk did, in steps
+    // linear in the spec.
+    const big = { c: { A: { type: "object", properties: { b: { $ref: "#/c/B" } } }, B: { type: "object", properties: Object.fromEntries(Array.from({ length: 200 }, (_, i) => ["p" + i, { type: "string" }])) } } };
+    big.c.B.properties.a = { $ref: "#/c/A" };
+    for (let i = 0; i < 1500; i++) big["k" + i] = { $ref: "#/c/A" };
+    const { __resolveRefsBudgetForTest } = await import("../src/tools/api-kit.js");
+    const steps = (await __resolveRefsBudgetForTest(JSON.parse(JSON.stringify(big)))).steps;
+    ok(steps < 20_000, `resolve-refs: a cycle reached from 1,500 top-level keys is walked once and reused (${steps} steps)`);
+    ok(JSON.stringify(await tool.handler({ spec: JSON.parse(JSON.stringify(big)) })) === JSON.stringify(oldAnswer(big)), "resolve-refs: and answers as the full walk did");
+  }
+  // The size budget is what the answer writes, measured, not a floor under it.
+  // A leaf that prints longer than it reads in a spec (a 24-character number,
+  // a control character written as a 6-byte escape, a 3-byte character) and a
+  // ref left in place with sibling keys, each referenced from a spec the body
+  // limit admits, are refused with the 413 naming the cap, quickly; written
+  // out, each was 45 to 150 MB.
+  {
+    const { __resolveRefsBudgetForTest } = await import("../src/tools/api-kit.js");
+    const fanOut = (target, n) => { const s = { c: { T: target }, p: [] }; for (let i = 0; i < n; i++) s.p.push({ $ref: "#/c/T" }); return JSON.parse(JSON.stringify(s)); };
+    const nums = (n) => Array.from({ length: n }, (_, i) => -1.2345678901234567e-300 * (i + 1));
+    const amplifiers = [
+      ["2,000 24-character numbers placed 1,500 times", fanOut(nums(2000), 1500)],
+      ["a 12,000-character control-character string placed 1,300 times", fanOut("\u0001".repeat(12_000), 1300)],
+      ["a 25,000-character CJK string placed 600 times", fanOut("\u4e00".repeat(25_000), 600)],
+      ["an unresolved ref with a 50 KB sibling placed 3,000 times", fanOut({ $ref: "#/nope", pad: "x".repeat(50_000) }, 3000)],
+    ];
+    for (const [label, spec] of amplifiers) {
+      const inBytes = Buffer.byteLength(JSON.stringify(spec));
+      const r = await bestOf(() => tool.handler({ spec }));
+      ok(inBytes < 102_400 && r.err?.statusCode === 413 && /16 MB/.test(r.err.message) && r.ms < BOUND_MS / 4, `resolve-refs: a ${inBytes}-byte spec of ${label} is refused with the 413 in ${r.ms.toFixed(1)}ms of CPU (${r.err?.statusCode || "answered"})`);
+    }
+    // Under the cap, the numeric shape is served: its body stays inside the
+    // cap and is written out inside the free tier's loop bound (250 ms).
+    const under = fanOut(nums(2000), 300);
+    const served = await tool.handler({ spec: under });
+    let body = "";
+    const write = await bestOf(() => { body = JSON.stringify(served); return body; });
+    const outBytes = Buffer.byteLength(body);
+    ok(outBytes > 10_000_000 && outBytes <= RESOLVE_REFS_MAX_BYTES + 1000 && write.ms < 250, `resolve-refs: a numeric answer near the cap is served at ${outBytes} bytes against a ${RESOLVE_REFS_MAX_BYTES}-byte cap and written in ${write.ms.toFixed(0)}ms of CPU`);
+    // The budget is never under the written spec, on every shape above (cut
+    // to fit the cap) and on random specs mixing every kind of leaf.
+    const rand2 = rng(20261113);
+    const leaf = () => [-1.2345678901234567e-300, 1e21, 0.1, -0, 42, true, false, null, "plain", 'q"b\\s', "\u0001\u001f", "\u4e00\u00e9", "\ud83d\ude00", "\ud800"][Math.floor(rand2() * 14)];
+    let under2 = 0, checked = 0;
+    const specs = [fanOut(nums(50), 20), fanOut("\u0001".repeat(100), 20), fanOut("\u4e00".repeat(100), 20), fanOut({ $ref: "#/nope", pad: ["\u4e00", 1e-300, { $ref: "#/c/T" }] }, 20)];
+    for (let i = 0; i < 300; i++) {
+      const pool = Array.from({ length: 6 }, () => leaf());
+      const t = { a: pool.slice(0, 3), [leaf() + ""]: leaf(), r: { $ref: rand2() < 0.5 ? "#/nope" : "https://e.example/x", sib: pool } };
+      specs.push(fanOut(rand2() < 0.5 ? t : pool, 1 + Math.floor(rand2() * 5)));
+    }
+    for (const spec of specs) {
+      const charged = (await __resolveRefsBudgetForTest(spec)).bytes;
+      const written = Buffer.byteLength(JSON.stringify((await tool.handler({ spec })).spec));
+      checked++;
+      if (charged < written) { under2++; if (under2 === 1) console.error(`  charged ${charged} < written ${written}: ${JSON.stringify(spec).slice(0, 200)}`); }
+    }
+    ok(under2 === 0 && checked === specs.length, `resolve-refs: the size budget is at least the written answer on ${checked - under2}/${checked} specs`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +750,13 @@ function rng(seed) {
   // The other bound is the size of the answer.
   const heavy = await tool.handler({ json: Array.from({ length: 2100 }, (_, i) => ({ id: i, text: "y".repeat(8000) })) }).then(() => null, (e) => e);
   ok(heavy?.statusCode === 413 && heavy.message.includes(JSON_TO_CSV_MAX_BYTES / 1_000_000 + " MB") && /2100 rows of 2 columns/.test(heavy.message) && /fewer rows per call/.test(heavy.message), "json-to-csv: a sheet past " + JSON_TO_CSV_MAX_BYTES / 1_000_000 + " MB of CSV is refused with the cap, the counts and how to split (" + heavy?.statusCode + " " + heavy?.message + ")");
+  // That size is the answer's, as written: the CSV is a JSON string, so a
+  // control character used as the delimiter is a 6-byte escape. 3,000 rows of
+  // 3,000 columns delimited by U+0001 were 54 MB written out.
+  const ctl = await bestOf(() => tool.handler({ json: Array.from({ length: 3000 }, (_, i) => ({ [i]: 1 })), delimiter: "\u0001" }));
+  ok(ctl.err?.statusCode === 413 && ctl.err.message.includes(JSON_TO_CSV_MAX_BYTES / 1_000_000 + " MB") && ctl.ms < BOUND_MS, `json-to-csv: a sparse sheet delimited by a control character is refused at the cap in ${ctl.ms.toFixed(0)}ms of CPU (${ctl.err?.statusCode || "served " + Buffer.byteLength(JSON.stringify(ctl.out)) + " bytes"})`);
+  const tab = await tool.handler({ json: Array.from({ length: 1000 }, (_, i) => ({ [i]: 1 })), delimiter: "\u0001" });
+  ok(tab.columns === 1000 && Buffer.byteLength(JSON.stringify(tab)) <= JSON_TO_CSV_MAX_BYTES + 1000, "json-to-csv: control, a smaller sheet with that delimiter is served inside the cap");
 }
 
 // ---------------------------------------------------------------------------

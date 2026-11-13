@@ -20,7 +20,13 @@ Loaded when a media, document or worker-pool tool file is read.
 - **Media and documents:** the OCR language data is baked into the image at build
   (`scripts/fetch-tessdata.js`, pinned and hash-checked; `OCR_TESSDATA_DIR` overrides the
   directory), so `image-ocr` never fetches a model at request time; an engine that does not
-  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. PDF transforms
+  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. **OCR admission:** one image
+  over `OCR_LARGE_PIXELS` (16 MP) is in the engine at a time, at most `OCR_LARGE_QUEUE_MAX` (2)
+  wait up to `OCR_LARGE_WAIT_MS` (15 s) and the next is a 503 with Retry-After (no upstream call);
+  admission is per caller (signed payer, credits key, Tempo sender, else the client address,
+  `ocrCallerOf` in `src/tools/ocr-kit.js`): a caller holding nothing is never refused while a
+  queued place belongs to a caller that holds another, which loses that place with a 503. On the
+  free tier the caller is the client address. Suite: `scripts/test-ocr-crash.js`. PDF transforms
   (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
   `pdf-worker.js`) with a heap limit, a decoded-stream cap and a deadline that terminates it
   (422). The Office builders (`xlsx-create`, `docx-create`, `pptx-create`; `src/tools/office-ops.js`)
@@ -82,14 +88,23 @@ Loaded when a media, document or worker-pool tool file is read.
   follows the decoder, a small-file test and a decode of the format's ordinary shapes
   (`scripts/test-image.js`).
 - **Transcription length:** the per-tier cap of `transcribe` and `transcribe-pro` holds the longer of the duration a
-  file's headers declare and the length its audio measures. `measureAudioSeconds` (`src/tools/media-kit.js`) decodes
-  the first audio stream to nowhere with ffmpeg (audio-only whitelist, its own two-slot pool that queues, 10 s
-  deadline) and never refuses: where it cannot measure (no ffmpeg, a failed or slow decode) a lossy audio-only file in
-  one or two channels at a reported sample rate of 48 kHz or less is held to the shortest its bytes can play
-  (`byteFloorApplies`, `byteFloorSeconds`, `src/tools/stt-kit.js`); a file with a video track, more channels, a higher
-  sample rate (192 kHz Vorbis passes 640 kbps) or no reported sample rate keeps its declared length, since its bytes
-  are not all audio at the floor's rate. The unmeasured count since boot is `transcriptionUnmeasured.sinceBoot` on
-  `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
+  file's headers declare and the length its audio measures. `measureAudio` (`src/tools/media-kit.js`) decodes the first
+  audio stream to nowhere with ffmpeg (audio-only whitelist) and answers `{ seconds }`, `{ undecodable }` or
+  `{ unavailable }`. Its pool holds one decode per CPU the process may use (`os.availableParallelism()`, held to 2..8;
+  `AUDIO_DECODE_SLOTS`, 1 to 64, overrides it). A transcription call passes `deadlineAt` (`decodeDeadlineAt` in
+  `src/tools/stt-kit.js`: the route's payment-window budget, the CDN answer window and the payment authorization,
+  whichever ends first, less the upstream's whole cap, 60 s or 120 s diarized): it waits for a slot while that still
+  leaves a 10 s decode, and its decode may run to it (at most 60 s). A caller without one waits 5 s and decodes for 10 s.
+  A PCM WAV (PCM, float, A-law, mu-law; one fmt chunk whose fields agree, 8 kHz or more) whose bytes over 8,000 a
+  second fit the cap is sent as it came with no decode (`pcmWavMaxSeconds`); every compressed codec can hold silence in
+  a few bytes, so its bytes bound nothing and it is always decoded. `prepareAudioWithinCap` (`src/tools/stt-kit.js`): a
+  measured file inside the cap goes byte for byte when its container is on the upstream's list (flac, mp3, mp4/m4a,
+  ogg, wav, webm), else as 16 kHz mono FLAC (`transcodeSpeech`, same pool and deadline). Unmeasured, a lossy audio-only
+  file whose bytes alone play past the cap is the 422 (`byteFloorApplies`); any other file is cut at the cap with
+  `-t`, and a cut that reached the cap is what is sent, the answer carrying `trimmedToCapSeconds` and
+  `durationUnconfirmed: true`. A file ffmpeg cannot decode is a 400 (format unreadable, no upstream call); a decoder that
+  cannot run (no slot in the time the budget leaves, deadline, no ffmpeg) is a retryable 503 with no upstream call. The unmeasured count since boot
+  is `transcriptionUnmeasured.sinceBoot` on `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
 - **Image generation moderation:** the three GPT Image tiers (`src/tools/image-gen-kit.js`) send
   `moderation: "low"` unless the caller sends `"auto"` (any other value is a 400 naming the field).
   A 400 whose OpenAI error names the `moderation` parameter (`error.param`, or an

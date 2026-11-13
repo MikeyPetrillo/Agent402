@@ -2833,7 +2833,7 @@ export function skillsIndex(baseUrl) {
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--accent);margin-bottom:14px;">IN CLAUDE</div>
       <h2 style="font-weight:700;font-size:var(--fs-xl);margin:0 0 14px;color:var(--ink);">One tool call, payment handled</h2>
       <p style="font-size:var(--fs-base);line-height:1.6;color:var(--muted);margin:0 0 16px;">Through MCP a pack is a single tool the model can pick. Ask for the job in words - the connector chooses the pack, settles the payment, and returns the ledger.</p>
-      ${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.31
+      ${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.32
 
 <span style="color:var(--on-panel-faint);">"run a security audit on example.com"</span>`, { name: "the install command", html: true, wrap: true, size: "xs", style: "margin:0" })}
     </div>
@@ -3023,7 +3023,7 @@ ${packTool ? `
 ${codeBlock(`${e(packClientSnippet(packTool.slug, Object.fromEntries((pack.promptArgs || []).map((a) => [a.name, a.substitute ?? "..."]))))}`, { name: "the client code", html: true, style: "margin-top:12px" })}` : ""}
 
 <h2 style="font-weight:700;font-size:var(--fs-xl);margin-top:40px;letter-spacing:-.01em;">Run it in Claude</h2>
-${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.31`, { name: "the install command", html: true, style: "margin-top:12px" })}
+${codeBlock(`claude mcp add agent402 -s user -- npx -y agent402-mcp@0.13.32`, { name: "the install command", html: true, style: "margin-top:12px" })}
 <p style="color:var(--muted);font-size:var(--fs-base);margin-top:12px;">Then paste this prompt into Claude:</p>
 ${codeBlock(pack.claudePrompt, { name: "the prompt", wrap: true, style: "margin:14px 0" })}
 

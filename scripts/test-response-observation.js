@@ -159,15 +159,76 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(/resolvedCandidateOf\(/.test(server), "...and the resolver builds its candidates with that function");
 }
 
-// A BODY WE CUT IS NOT WHAT THE SELLER SENT. readAfterSpend marks a body cut
-// at our own byte limit `_truncated` (and one it could not read `relayError`):
-// a guaranteed path missing from it is ours, so the call is not observed, and
-// the published keep rate is the seller's own.
+// A BODY WE COULD NOT READ IS NOT WHAT THE SELLER SENT, and a body cut at our
+// byte limit is the seller's choice of size. readAfterSpend marks both by
+// identity, not by a key: a cut whose prefix closed a JSON object or array is
+// judged on it; any other cut, and a body we could not read at all, is
+// counted as unverifiable, apart from calls and kept, so padding an answer
+// past the limit, or aborting it after settling, never keeps a record clean.
 {
   const o = "https://cut.example";
-  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { raw: "{\"result\":{\"va", _truncated: true } }) === null
-    && deliveryObservation(o, "POST", "/r") === null, "a body cut at our byte limit is not observed");
-  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { relayError: "upstream body unreadable" } }) === null, "nor is a body we could not read");
+  const { readAfterSpend } = await import("../src/x402-buyer.js");
+  const { markNotSellerBody: markNotSellerBodyFor } = await import("../src/response-observation.js");
+  const cut = await readAfterSpend(new Response(JSON.stringify({ result: { pad: "x".repeat(500), value: 1 } })), 64);
+  ok(cut?._truncated === true, "our reader cut the oversized body (setup)");
+  observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cut });
+  ok(deliveryObservation(o, "POST", "/r")?.unverifiable === 1 && deliveryObservation(o, "POST", "/r")?.calls === 0 && deliveryObservation(o, "POST", "/r")?.keptRate === null,
+    `a body cut at our byte limit that cannot be parsed is counted as unverifiable, never as kept (${JSON.stringify(deliveryObservation(o, "POST", "/r"))})`);
+  // A cut that still parses (a long number cut to a shorter one) is ours too.
+  const cutParsed = await readAfterSpend(new Response("7".repeat(500)), 64);
+  ok(cutParsed?._truncated === true && typeof cutParsed.value === "number", "our reader cut a body whose prefix still parses (setup)");
+  observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cutParsed });
+  ok(deliveryObservation(o, "POST", "/r")?.unverifiable === 2 && deliveryObservation(o, "POST", "/r")?.calls === 0, "a cut whose prefix parses only as a scalar a longer body would extend is unverifiable too");
+  const unread = await readAfterSpend(new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } })), 64);
+  ok(typeof unread?.relayError === "string", "our reader could not read the body (setup)");
+  observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: unread });
+  ok(deliveryObservation(o, "POST", "/r")?.unverifiable === 3 && deliveryObservation(o, "POST", "/r")?.calls === 0 && deliveryObservation(o, "POST", "/r")?.kept === 0, `a body we could not read is counted as unverifiable, never kept (${JSON.stringify(deliveryObservation(o, "POST", "/r"))})`);
+  const fresh = "https://abort.example";
+  observeDelivery({ origin: fresh, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: unread });
+  ok(deliveryObservation(fresh, "POST", "/r")?.unverifiable === 1 && deliveryObservation(fresh, "POST", "/r")?.keptRate === null, "a route whose only paid answer was unreadable has a record, and no kept rate");
+  // The same keys sent BY THE SELLER are the seller's own answer: observed,
+  // so an echoed `_truncated` or `relayError` cannot hide a missed promise.
+  const echoed = await readAfterSpend(new Response(JSON.stringify({ _truncated: true, relayError: "x" })), 4096);
+  ok(echoed?._truncated === true && typeof echoed.relayError === "string", "a seller body carrying those keys reads through whole (setup)");
+  const e = "https://echo.example";
+  observeDelivery({ origin: e, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: echoed });
+  ok(deliveryObservation(e, "POST", "/r")?.calls === 1 && deliveryObservation(e, "POST", "/r")?.kept === 0, "a seller body with `_truncated:true` is observed as a missed promise");
+  observeDelivery({ origin: e, method: "POST", route: "/r2", guaranteedPaths: ["result.value"], body: { relayError: "upstream body unreadable" } });
+  ok(deliveryObservation(e, "POST", "/r2")?.kept === 0, "and so is one with a `relayError` string");
+  // A whole body that is not JSON comes back as our own { raw } reading: a
+  // promised `raw` is never met by our key.
+  const prose = await readAfterSpend(new Response("plain words, not JSON"), 4096);
+  ok(typeof prose?.raw === "string" && !prose._truncated, "our reader wraps a whole non-JSON body (setup)");
+  // It is still the seller's whole delivery: judged on the seller's bytes, so
+  // a route that promised JSON paths and answered prose is a missed promise.
+  observeDelivery({ origin: o, method: "POST", route: "/raw", guaranteedPaths: ["raw"], body: prose });
+  ok(deliveryObservation(o, "POST", "/raw")?.calls === 1 && deliveryObservation(o, "POST", "/raw")?.kept === 0, "a whole non-JSON body on a JSON route is observed as a missed promise, never kept by our `raw` key");
+  const tempoTextForTest = (text, truncated) => markNotSellerBodyFor({ text, truncated, contentType: "text/plain", sha256: "0" }, { kind: "text" });
+  observeDelivery({ origin: o, method: "POST", route: "/tt", guaranteedPaths: ["text"], body: tempoTextForTest("prose", false) });
+  ok(deliveryObservation(o, "POST", "/tt")?.kept === 0, "and so is the Tempo reader's whole text reading, never kept by our `text` key");
+  observeDelivery({ origin: o, method: "POST", route: "/tc", guaranteedPaths: ["text"], body: tempoTextForTest("prose", true) });
+  ok(deliveryObservation(o, "POST", "/tc")?.unverifiable === 1 && deliveryObservation(o, "POST", "/tc")?.kept === 0, "a cut text reading is counted as unverifiable, never kept by our text key");
+  observeDelivery({ origin: o, method: "POST", route: "/tcj", guaranteedPaths: ["data"], body: tempoTextForTest('{"other":1}' + " ".repeat(40), true) });
+  ok(deliveryObservation(o, "POST", "/tcj")?.calls === 1 && deliveryObservation(o, "POST", "/tcj")?.kept === 0, "a cut text reading that closed a JSON object is judged on it");
+  // Padding past the read limit: a seller whose JSON answer misses its
+  // promised path, padded with trailing whitespace past our cap, is judged on
+  // the document it closed. Twenty kept calls and five padded misses read 0.8.
+  {
+    const p = "https://pad.example";
+    for (let i = 0; i < 20; i++) observeDelivery({ origin: p, method: "POST", route: "/q", guaranteedPaths: ["result.value"], body: { result: { value: i } } });
+    for (let i = 0; i < 5; i++) {
+      const padded = await readAfterSpend(new Response(JSON.stringify({ other: i }) + " ".repeat(600)), 64);
+      if (i === 0) ok(padded?._truncated === true, "our reader cut the padded answer (setup)");
+      observeDelivery({ origin: p, method: "POST", route: "/q", guaranteedPaths: ["result.value"], body: padded });
+    }
+    const d = deliveryObservation(p, "POST", "/q");
+    ok(d?.calls === 25 && d?.kept === 20 && d?.keptRate === 0.8 && d?.unverifiable === 0, `padded misses are judged on the document they closed: 0.8, not a clean record (${JSON.stringify(d)})`);
+    const paddedKept = await readAfterSpend(new Response(JSON.stringify({ result: { value: 1 } }) + " ".repeat(600)), 64);
+    observeDelivery({ origin: p, method: "POST", route: "/k", guaranteedPaths: ["result.value"], body: paddedKept });
+    ok(deliveryObservation(p, "POST", "/k")?.kept === 1, "control: a padded answer holding its promised path is kept");
+  }
+  observeDelivery({ origin: o, method: "POST", route: "/tj", guaranteedPaths: ["data"], body: tempoTextForTest('{"data":1}', false) });
+  ok(deliveryObservation(o, "POST", "/tj")?.kept === 1, "control: whole text that parses as the promised JSON is kept");
   observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { result: { value: 1 } } });
   ok(deliveryObservation(o, "POST", "/r")?.calls === 1 && deliveryObservation(o, "POST", "/r")?.keptRate === 1, "control: a whole body is observed as before");
 }
@@ -221,6 +282,88 @@ ok(o.lastMissing.join(",") === "data.attributes",
     ok(got === why, `${label} is not an answer: ${why} (got ${got})`);
   }
   ok(unpaidNonAnswerReason({ ok: false, errors: ["bad checksum"] }, ["ok", "errors"]) === null, "keys the seller's contract guarantees are its answer");
+  // Our readers' stand-ins are judged on the seller's bytes, never on our keys.
+  const { markNotSellerBody } = await import("../src/response-observation.js");
+  const tempoText = (text, truncated = false) => markNotSellerBody({ text, truncated, contentType: "text/plain", sha256: "0" }, { kind: "text" });
+  for (const [label, body, paths, why] of [
+    ["an empty body read as text", tempoText(""), [], "empty"],
+    ["a blank body read as text", tempoText(" \n\t"), [], "empty"],
+    ["an error envelope sent as text", tempoText('{"error":"down"}'), [], "error-shaped"],
+    ["a challenge sent as text", tempoText(JSON.stringify(challenge)), [], "challenge"],
+    ["text when the seller promised a path our key names", tempoText("hello"), ["text"], "missing-fields"],
+    ["an x402 reader's empty { raw }", markNotSellerBody({ raw: "" }, { kind: "raw" }), [], "empty"],
+    ["an x402 reader's { raw } error envelope", markNotSellerBody({ raw: '{"ok":false}' }, { kind: "raw" }), [], "error-shaped"],
+    ["a body our reader could not read", markNotSellerBody({ relayError: "upstream body unreadable" }, { kind: "unreadable" }), ["relayError"], "unreadable"],
+    ["a cut JSON prefix holding only an error", markNotSellerBody({ error: "x", _truncated: true }), [], "error-shaped"],
+    ["a cut JSON prefix where the seller promised our key", markNotSellerBody({ note: "n", _truncated: true }), ["_truncated"], "missing-fields"],
+  ]) {
+    const got = unpaidNonAnswerReason(body, paths);
+    ok(got === why, `stand-in: ${label} is not an answer: ${why} (got ${got})`);
+  }
+  for (const [label, body] of [["plain text", tempoText("an answer")], ["a cut text prefix", tempoText('{"error":"x", "data": 1', true)], ["a cut JSON number", markNotSellerBody({ value: 777, _truncated: true })], ["a cut JSON object with content", markNotSellerBody({ data: "x", _truncated: true })]]) {
+    const got = unpaidNonAnswerReason(body, []);
+    ok(got === null, `stand-in: ${label} is the seller's answer (got ${got})`);
+  }
+  ok(unpaidNonAnswerReason({ text: "", truncated: false, contentType: "", sha256: "0" }, []) === null, "control: the same keys from a seller's own JSON are its answer");
+  // A top-level array or scalar is judged by the promised shape: guaranteed
+  // paths are object paths, so it answers none of them; with none promised,
+  // an array of nothing or a blank string is empty.
+  for (const [label, body, paths, why] of [
+    ["[] on a route that promised paths", [], ["data"], "missing-fields"],
+    ["42 on a route that promised paths", 42, ["data"], "missing-fields"],
+    ["\"ok\" on a route that promised paths", "ok", ["data"], "missing-fields"],
+    ["[1] on a route that promised paths", [1], ["data"], "missing-fields"],
+    ["[] with nothing promised", [], [], "empty"],
+    ["an array of only empty items", [null, "", {}, []], [], "empty"],
+    ["a blank string", "  ", [], "empty"],
+    ["[] read as text by our reader", tempoText("[]"), ["data"], "missing-fields"],
+    ["42 read as text by our reader", tempoText("42"), ["data"], "missing-fields"],
+    ["[] read as text with nothing promised", tempoText("[]"), [], "empty"],
+  ]) {
+    const got = unpaidNonAnswerReason(body, paths);
+    ok(got === why, `shape: ${label} is not an answer: ${why} (got ${got})`);
+  }
+  for (const [label, body] of [["42", 42], ["false", false], ["text", "ok"], ["[0]", [0]], ["[{a:1}]", [{ a: 1 }]]]) {
+    ok(unpaidNonAnswerReason(body, []) === null, `shape: ${label} with nothing promised is the seller's answer`);
+  }
+  // A seller's own top-level `value` key is never read as our wrapper: a cut
+  // prefix is judged on the keys the seller sent.
+  ok(unpaidNonAnswerReason(markNotSellerBody({ value: [1, 2], _truncated: true }), ["data.price"]) === "missing-fields", "a cut prefix whose own key is `value` answers none of the promised paths");
+  ok(unpaidNonAnswerReason(markNotSellerBody({ value: "text", _truncated: true }), ["data.price"]) === "missing-fields", "nor does one holding a string under `value`");
+  ok(unpaidNonAnswerReason(markNotSellerBody({ value: { price: 1 }, _truncated: true }), ["value.price"]) === null, "control: a seller that promised `value.price` and sent it is answered");
+  // A seller's cut JSON prefix whose own keys share our stand-ins' names
+  // (`raw`, `text`, `value`, `truncated`, `relayError`) is still the seller's
+  // JSON: the reader's mark says what a stand-in is, never its keys.
+  {
+    const { readAfterSpend: readSeller } = await import("../src/x402-buyer.js");
+    const pad = " ".repeat(200);
+    const o2 = "https://keyshape.example";
+    const shapes = [
+      ["raw", { raw: JSON.stringify({ data: { price: 1 } }) }],
+      ["raw + _truncated", { raw: JSON.stringify({ data: { price: 1 } }), _truncated: false }],
+      ["text set", { text: JSON.stringify({ data: { price: 1 } }), truncated: false, contentType: "application/json", sha256: "0" }],
+      ["value", { value: { data: { price: 1 } } }],
+      ["relayError", { relayError: "upstream body unreadable" }],
+    ];
+    for (const [label, doc] of shapes) {
+      const cutDoc = await readSeller(new Response(JSON.stringify(doc) + pad), JSON.stringify(doc).length + 8);
+      ok(cutDoc?._truncated === true, `key shape ${label}: the seller's padded JSON is cut (setup)`);
+      const route = `/ks-${label.replace(/\W+/g, "-")}`;
+      observeDelivery({ origin: o2, method: "POST", route, guaranteedPaths: ["data.price"], body: cutDoc });
+      const rec = deliveryObservation(o2, "POST", route);
+      ok(rec?.calls === 1 && rec?.kept === 0 && rec?.unverifiable === 0, `key shape ${label}: a cut seller prefix is judged as the seller's own JSON, a missed promise (${JSON.stringify(rec)})`);
+      ok(unpaidNonAnswerReason(cutDoc, ["data.price"]) === "missing-fields", `key shape ${label}: an unpaid cut prefix answers none of the promised paths`);
+    }
+    // Controls: our own readings, marked by our readers, are read back.
+    const ours = await readSeller(new Response(JSON.stringify({ data: { price: 1 } }).slice(0, -1) + "x"), 4096);
+    ok(typeof ours?.raw === "string" && unpaidNonAnswerReason(ours, []) === null, "control: our own { raw } reading of non-JSON bytes is read as text");
+    const unreadable = await readSeller(new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } })), 64);
+    ok(unpaidNonAnswerReason(unreadable, ["data.price"]) === "unreadable", "control: our own unreadable stand-in is unreadable");
+  }
+  const { readAfterSpend: readCut } = await import("../src/x402-buyer.js");
+  const cutNumber = await readCut(new Response("7".repeat(500)), 64);
+  ok(unpaidNonAnswerReason(cutNumber, ["value"]) === "missing-fields", "our own wrapper around a cut number never meets a promised `value` path");
+  ok(unpaidNonAnswerReason(cutNumber, []) === null, "control: with nothing promised a cut number is still the seller's answer");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

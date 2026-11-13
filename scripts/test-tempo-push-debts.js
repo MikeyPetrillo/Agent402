@@ -110,12 +110,14 @@ app.use(slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaymentAttem
 // A refund send claims the debt in the moment after the gate's check and
 // before the handler (another container's refund run), when armed.
 let claimInWindow = null;
+// Holds the next chain read of a push sender until released (a slow RPC).
+let senderHold = null, senderEntered = null;
 app.use(createTempoGate({
   secretKey: SECRET, realm: REALM, priceFor, replayGuard: createReplayGuard(),
   preValidate: (req) => (req.body?.text ? null : { status: 400, body: { error: "Missing required parameter: text" } }),
   validate: async () => { if (validateNext) { const v = validateNext; validateNext = null; return v; } return { ok: true, validation: {} }; },
   broadcast: async () => { if (failNext) { const f = failNext; failNext = null; return f; } return { ok: true, receipt: { method: "tempo", status: "success", reference: `0xr${++n}`, timestamp: new Date().toISOString() } }; },
-  pushSender: async () => SENDER,
+  pushSender: async () => { const g = senderHold; if (g) { senderHold = null; senderEntered?.(); await g; } return SENDER; },
   onPushNotClaimed: (req, info) => debts.notClaimed(req, info),
   onPushInputRefused: (req, info) => debts.inputRefused(req, info),
   pushClaimAllowed: (hash) => {
@@ -594,6 +596,35 @@ for (const [label, headers, status, error, tail] of [
   failNext = { ok: false, cls: "replay", error: "Transaction hash has already been used", reason: "x" };
   const r3 = await post(cred3, { text: "x" });
   ok(r3.status === 402 && r3.body.details?.refundOwed === true && rowsFor(h3).length === 1 && rowsFor(h3)[0].status === "owed", `...a retry refused as a replay leaves the debt owed and says so (${r3.status} ${JSON.stringify(r3.body.details)})`);
+}
+
+// The debt is booked before the credential's key is let go. A copy of the
+// same credential sent while the refused request still reads the sender must
+// not be served (its void would find no row, and the row booked after it
+// would stand for a served transfer, to be refunded). Both refusals that book
+// on the hash: an unanswered finalize and an input refusal.
+for (const [label, i, firstBody, fail] of [["an unanswered finalize", 76, { text: "x" }, { ok: false, cls: "relay-unreachable", connectPhase: false, error: "reset after send", reason: "x" }], ["an input refusal", 77, {}, null]]) {
+  const h = hashFor(i);
+  const cred = pushCred(h);
+  let release;
+  senderHold = new Promise((r) => { release = r; });
+  const entered = new Promise((r) => { senderEntered = r; });
+  failNext = fail;
+  const w0 = console.warn; console.warn = () => {};
+  let r1, r2;
+  try {
+    const first = post(cred, firstBody);
+    await entered;
+    r2 = await post(cred, { text: "x" });
+    release();
+    r1 = await first;
+  } finally { console.warn = w0; senderHold = null; senderEntered = null; }
+  const rows = rowsFor(h);
+  const servedSales = sales.filter((x) => x === h).length;
+  ok(!(servedSales > 0 && rows.some((row) => row.status === "owed")), `${label}: a copy sent while the debt is being booked is never both served and owed (copy ${r2.status}, first ${r1.status}, sales ${servedSales}, rows ${JSON.stringify(rows.map((row) => row.status))})`);
+  ok(r2.status === 402 && r2.body?.details?.reason === "replay" && r2.body?.details?.charged === false, `${label}: ...the copy is told the credential is in flight, not charged (${r2.status} ${JSON.stringify(r2.body?.details)})`);
+  const r3 = await post(cred, { text: "x" });
+  ok(r3.status === 200 && rowsFor(h).length === 1 && rowsFor(h)[0].status === "void" && sales.filter((x) => x === h).length === 1, `${label}: ...and a retry after the answer is served once, its debt void (${r3.status} ${JSON.stringify(rowsFor(h).map((row) => row.status))})`);
 }
 
 // A pull transaction that landed after its 402 (the gate's late-landing

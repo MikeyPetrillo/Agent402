@@ -308,6 +308,7 @@ import { routeExcludedCategory } from "./route-category.js";
 import { withoutAttributions } from "./data-attribution.js";
 import { stripHiddenCharacters } from "./hidden-chars.js";
 import { looksLikeListingInjection, matchesInjectionPhrase, listingInjectionFinding } from "./listing-screen.js";
+import { timSortSteps } from "./timsort-steps.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
 import { contained } from "./contained-turn.js";
 
@@ -2022,7 +2023,7 @@ const DEFAULT_SEEDS = [
   "https://agentservices.to", // AgentServices — 50 paid APIs for AI agents (#aiservices)
   "https://agents.daedalusdevelopmentgroup.com", // DDG Agent-Payable Services (#222)
   "https://jmt-x402-proxy.jmthomasofficial.workers.dev", // JMT x402 server (#221)
-  "https://nolawealthfinancial.com", // Still OS Notary Protocol — Ed25519-signed notarization, OFAC/SDN screening, CPI/GDP signals, USDC on Base (#434)
+  "https://stillosdigitalholdings.com", // Still OS Notary Protocol: signed notarization and screening, USDC on Base (#434)
   "https://x402.evidencesupply.com", // Evidence Supply — corroborated agent-action verification, USDC on Base
   "https://x402.lagaceta.net", // Colombia TRM — official USD/COP Superfinanciera series, prepaid x402 GET on Base USDC
   "https://api.surplusintelligence.ai", // Surplus Intelligence — OpenAI-compatible inference market, x402 (Base USDC, exact + upto) and MPP (Tempo) on one 402; /.well-known/x402 manifest (verified 2026-08-26)
@@ -10795,6 +10796,9 @@ const ROUTE_CANDIDATE_YIELD_MASK = 15;
 let candidateYields = 0;
 /** Test hook: yields taken while unindexed rows were tested. */
 export function _routeCandidateYieldsForTest() { return candidateYields; }
+let routeSortYields = 0;
+/** Test hook: yields taken inside the ranking sort. */
+export function _routeSortYieldsForTest() { return routeSortYields; }
 const ROUTE_DECORATE_SLICE_MS = 6;
 // Test hook: the next query throws this error at its first step (a request
 // whose handler rejects must answer 500 alone and leave the next request whole).
@@ -11082,9 +11086,14 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
   // compare unequal to each other), so the order among such ties depends on
   // the comparison sequence, and a different array shape gives a different
   // sequence. Keeping the exact call the ranking was pinned on keeps the
-  // published order byte-identical; the sort is a few ms of the query.
+  // published order byte-identical. That call is the engine's TimSort run in
+  // steps (src/timsort-steps.js): the same comparisons in the same order, so
+  // the same order, with a yield between slices. Run whole, the sort of about
+  // 31,000 scored rows was the async query's longest hold (17 ms on a laptop,
+  // 60 to 90 ms on a CI runner).
   if (!memoHit) {
-    scored.sort((a, b) => (b[0] !== a[0] ? b[0] - a[0] : tiebreak(a, b)));
+    const sortSteps = timSortSteps(scored, (a, b) => (b[0] !== a[0] ? b[0] - a[0] : tiebreak(a, b)));
+    for (let r = sortSteps.next(); !r.done; r = sortSteps.next()) { routeSortYields++; yield; }
     if (scoredMemo) Object.assign(scoredMemo, { key: memoKey, scored, local: localRef, categoryExcluded });
   }
 

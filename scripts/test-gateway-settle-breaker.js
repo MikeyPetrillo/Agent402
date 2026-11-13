@@ -18,12 +18,27 @@ process.env.GATEWAY_SETTLE_BREAKER_MAX = "3";
 process.env.GATEWAY_SETTLE_BREAKER_WINDOW_MS = "900";
 process.env.GATEWAY_SETTLE_BREAKER_GLOBAL_MAX = "6";
 process.env.POSTHOG_TEST_CAPTURE = "1";
+// A sales ledger of this run's own (THE SERVICE-WIDE BOUND reads whether a
+// wallet has ever paid from it).
+{
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "gwb-sales-"));
+  process.env.SALES_LEDGER_DB = join(dir, "sales.db");
+  process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+}
 // With a REDIS_URL the breaker writes through to the shared store, whose
 // windows and alarm flag outlive this process: a run keys them under its own
 // prefix so no other run (or a concurrent one on the same Redis) reads them.
 if (!process.env.SHARED_LIMITS_PREFIX) process.env.SHARED_LIMITS_PREFIX = `gwb-test-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
 const b = await import("../src/gateway-settle-breaker.js");
+// The server hands the breaker its sales ledger (src/server.js); the breaker
+// never imports it, so the decide service, which reaches the breaker through
+// the gateway kit, never loads the ledger.
+const salesLedger = await import("../src/sales-ledger.js");
+b.setGatewaySettleBreakerSalesLedger(salesLedger);
 const { LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
 const { LLM_MESSAGES_TOOLS } = await import("../src/tools/llm-messages-kit.js");
 const { LLM_RESPONSES_TOOLS } = await import("../src/tools/llm-responses-kit.js");
@@ -259,7 +274,7 @@ const chatBody = { model: "mistralai/ministral-8b-2512", messages: [{ role: "use
   const src = (await import("node:fs")).readFileSync(new URL("../src/gateway-settle-breaker.js", import.meta.url), "utf8");
   ok(!/statusCode = 503/.test(src) && !/briefly paused/.test(src) && !/flag(Set|Get)\("gwb-pause"/.test(src), "the module holds no 503, no pause message and neither writes nor reads the earlier build's pause flag");
   const consult = src.slice(src.indexOf("export function gatewaySettleBreakerCheck"), src.indexOf("/** Counts only"));
-  ok(!/flagGet|GlobalAlarm/.test(consult), "the consult reads no alarm flag: the alarm is off the serving path");
+  ok(!/gwb-alarm|GlobalAlarm/.test(consult) && /sharedWideUntil|wideBoundUntil/.test(consult), "the consult reads no alarm flag (the alarm is off the serving path); it reads the service-wide bound only");
 }
 
 // --- the finish listener reads the FINAL outcome -------------------------------
@@ -853,6 +868,276 @@ delete process.env.OPENAI_API_KEY;
   await b._gatewaySettleBreakerReset();
 }
 
+// --- THE SERVICE-WIDE BOUND: rotating wallets are held after one unsettled run ---
+// The per-key counts start at zero for every new wallet. Once GLOBAL_MAX
+// distinct buyers' /v1 failures are read against them inside the window, a
+// /v1 consult reads a wallet's own verdict and unknown counts at
+// BURST_MAX_FAILS (1). The share rule is unchanged: a wallet whose payments
+// settle, a fresh wallet, a wallet failing only for our reasons and the
+// catalog consult are served as before.
+{
+  const { toolErrorFields } = await import("../src/tool-error-fields.js");
+  ok(b.BURST_MAX_FAILS === 1 && b.AUTH_MAX_FAILS === 3, `the burst count reads 1 and the authorization count MAX_FAILS by default (${b.BURST_MAX_FAILS}, ${b.AUTH_MAX_FAILS})`);
+  await b._gatewaySettleBreakerReset();
+  // Rotation through the real consult and finish listener: each wallet is
+  // served until refused. Five wallets reach the per-key limit (3 each); the
+  // sixth distinct buyer raises the bound, and from then on every new wallet
+  // is held after its first unsettled run.
+  const rot = (i) => "0x" + "5".repeat(36) + i.toString(16).padStart(4, "0");
+  let served = 0;
+  const perWallet = [];
+  for (let i = 0; i < 12; i++) {
+    let n = 0;
+    for (let j = 0; j < 5; j++) {
+      const req = fakeReq({ from: rot(i) });
+      try { await b.gatewaySettleBreakerCheck(req); } catch (e) { if (e.statusCode !== 429) throw e; break; }
+      n++; failWith(req, "insufficient_funds");
+    }
+    perWallet.push(n); served += n;
+  }
+  ok(served === 5 * 3 + 7 && perWallet.slice(5).every((n) => n === 1), `twelve rotated wallets are served ${served} unpaid runs, not ${12 * 3}: the five before the bound three each, every wallet after it one (${perWallet.join(",")})`);
+  const st = b.gatewaySettleBreakerStatus();
+  ok(st.wideBound === true && st.wideTrips === 1, `the bound reads up on the operator counts (${st.wideBound}, ${st.wideTrips})`);
+  const W = "0x" + "6".repeat(40);
+  b.recordGatewaySettleFailure(W);
+  let err = null;
+  try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W })); } catch (e) { err = e; }
+  ok(err?.statusCode === 429 && /failed to settle \(1 in the last/.test(err.message) && /Nothing was charged/.test(err.message), `while the bound is up a wallet with one failure of its own and nothing settled is refused before the handler (${err?.statusCode}: ${String(err?.message).slice(0, 70)})`);
+  ok(/while payments from many wallets are failing to settle here, a wallet that has never settled a payment is held after its first such failure/.test(err?.message || ""), "and the 429 says the service-wide bound is why one failure holds it");
+  ok(err && err.retryAfterMs <= 900 + 5, `the refusal lasts no longer than the bound (${err?.retryAfterMs} ms)`);
+  // A failure of unknown cause may be the settling side's (a facilitator's
+  // bare 4xx): while the bound is up it keeps its usual count, so a fresh
+  // wallet with one is served, and is held only at UNKNOWN_MAX_FAILS.
+  const U = "0x" + "7".repeat(39) + "1";
+  b.recordGatewaySettleFailure(U, Date.now(), { fault: "unknown" });
+  err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: U })); } catch (e) { err = e; }
+  ok(b.gatewaySettleBreakerStatus().wideBound === true && err === null, `while the bound is up, a fresh wallet with one failure of unknown cause is served (${err?.statusCode ?? "served"})`);
+  for (let i = 1; i < b.UNKNOWN_MAX_FAILS; i++) b.recordGatewaySettleFailure(U, Date.now(), { fault: "unknown" });
+  err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: U })); } catch (e) { err = e; }
+  ok(err?.statusCode === 429 && /did not complete/.test(err.message) && !/many wallets/.test(err.message), `control: at its usual count (${b.UNKNOWN_MAX_FAILS}) the unknown-cause count holds it, with no bound wording (${err?.statusCode ?? "served"})`);
+  // Never refused: a wallet whose payments settle, a fresh one, one failing
+  // for our reasons only, and the catalog consult.
+  const P = "0x" + "8".repeat(40);
+  b.recordGatewaySettleSuccess(P); b.recordGatewaySettleSuccess(P); b.recordGatewaySettleFailure(P);
+  const N = "0x" + "9".repeat(39) + "1";
+  for (let i = 0; i < 2; i++) b.recordGatewaySettleFailure(N, Date.now(), { fault: "not-buyer" });
+  const served2 = [];
+  for (const [label, who, opts] of [["a wallet that settled two calls beside one failure", P, {}], ["a fresh wallet", "0x" + "a".repeat(40), {}], ["a wallet failing only for our reasons", N, {}], ["the catalog consult for the held wallet", W, { global: false }]]) {
+    let e = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: who }), opts); } catch (x) { e = x; }
+    served2.push(`${label}: ${e ? e.statusCode : "served"}`);
+  }
+  ok(served2.every((x) => x.endsWith("served")), `while the bound is up these are served as before (${served2.join("; ")})`);
+  // The lower count is a wallet's: a key that names none (the client address
+  // a caller with no proven wallet falls back to, shared by everyone behind
+  // it) keeps its usual count, so one caller's unsettled run never holds the
+  // next caller from that address. Two wallets behind one address are keyed
+  // apart: the one that failed is held, the other is served.
+  {
+    const SHARED = "203.0.113.55";
+    b.recordGatewaySettleFailure(`ip:${SHARED}`);
+    let e = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ ip: SHARED })); } catch (x) { e = x; }
+    ok(b.gatewaySettleBreakerStatus().wideBound === true && e === null, `while the bound is up, a caller with no wallet behind an address where another failed once is served (${e?.statusCode ?? "served"})`);
+    const A = "0x" + "c".repeat(39) + "1", B = "0x" + "c".repeat(39) + "2";
+    b.recordGatewaySettleFailure(A);
+    let ea = null, eb = null;
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: A, ip: SHARED })); } catch (x) { ea = x; }
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: B, ip: SHARED })); } catch (x) { eb = x; }
+    ok(ea?.statusCode === 429 && eb === null, `two wallets behind one address: the one that failed is held, the other is served (${ea?.statusCode ?? "served"}, ${eb?.statusCode ?? "served"})`);
+    // Control: the address key still meets its usual count.
+    for (let i = 0; i < 2; i++) b.recordGatewaySettleFailure(`ip:${SHARED}`);
+    e = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ ip: SHARED })); } catch (x) { e = x; }
+    ok(e?.statusCode === 429, `control: the address key is refused at its usual count (${e?.statusCode ?? "served"})`);
+  }
+  // Only a wallet that has never settled gets the lower count. A long-time
+  // payer whose settled calls are all older than the window (fifty of them)
+  // and whose sales are on the books is served after one failure; the same
+  // history with no sale on the books (the control) is held.
+  {
+    const { recordSale } = await import("../src/sales-ledger.js");
+    const LOYAL = "0x" + "f".repeat(39) + "5", STRANGER = "0x" + "f".repeat(39) + "6";
+    for (let i = 0; i < 50; i++) { b.recordGatewaySettleSuccess(LOYAL, Date.now() - 2000); b.recordGatewaySettleSuccess(STRANGER, Date.now() - 2000); }
+    for (let i = 0; i < 50; i++) recordSale({ slug: "llm-chat", priceUsd: 0.01, rail: "usdc", network: "eip155:8453", payer: LOYAL, tx: "0x" + i.toString(16).padStart(64, "0") });
+    b.recordGatewaySettleFailure(LOYAL); b.recordGatewaySettleFailure(STRANGER);
+    const tryIt = async (who) => { try { await b.gatewaySettleBreakerCheck(fakeReq({ from: who })); return "served"; } catch (e) { return e.statusCode; } };
+    const loyal = await tryIt(LOYAL), stranger = await tryIt(STRANGER);
+    ok(b.gatewaySettleBreakerStatus().wideBound === true && loyal === "served" && stranger === 429, `while the bound is up a wallet with fifty paid sales (settled before the window) and one failure is served; one with no sale on the books is held (paid ${loyal}, never paid ${stranger})`);
+    // A ledger that cannot answer never puts a buyer under the lower count.
+    const ODD = "0x" + "f".repeat(39) + "7";
+    b.recordGatewaySettleFailure(ODD);
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(() => { throw new Error("ledger down"); });
+    const odd = await tryIt(ODD);
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(null);
+    ok(odd === "served" && (await tryIt(ODD)) === 429, `a paid-sale read that throws serves the wallet (${odd}); the real read holds it`);
+    // A ledger whose first load has not landed reads "never paid" for every
+    // wallet (its mirror is empty): the wallet is served until it lands.
+    const EARLY = "0x" + "f".repeat(39) + "9";
+    b.recordGatewaySettleFailure(EARLY);
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(null, { loaded: () => false });
+    const early = await tryIt(EARLY);
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(null);
+    ok(early === "served" && (await tryIt(EARLY)) === 429, `a sales ledger not loaded yet serves the wallet (${early}); the loaded ledger holds it`);
+    // A process that registered no ledger (the decide service) reads every
+    // wallet as paid: the wallet is served; registering the ledger holds it.
+    const NONE = "0x" + "f".repeat(39) + "a";
+    b.recordGatewaySettleFailure(NONE);
+    b.setGatewaySettleBreakerSalesLedger({});
+    const none = await tryIt(NONE);
+    b.setGatewaySettleBreakerSalesLedger(salesLedger);
+    ok(none === "served" && (await tryIt(NONE)) === 429, `with no sales ledger registered the wallet is served (${none}); the registered ledger holds it`);
+    // The same through the real ledger in database mode, its first load not
+    // landed (the database refuses the connection): it reports itself not
+    // loaded, its read says "never paid", and the wallet is served.
+    {
+      const { execFileSync } = await import("node:child_process");
+      const { childJson } = await import("./lib/child-json.js");
+      const { createServer } = await import("node:net");
+      const { mkdtempSync, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const probe = createServer(); await new Promise((r) => probe.listen(0, "127.0.0.1", r));
+      const dead = probe.address().port; await new Promise((r) => probe.close(r));
+      const dir = mkdtempSync(join(tmpdir(), "gwb-unloaded-"));
+      const src = `
+        const b = await import(${JSON.stringify(new URL("../src/gateway-settle-breaker.js", import.meta.url).href)});
+        const sl = await import(${JSON.stringify(new URL("../src/sales-ledger.js", import.meta.url).href)});
+        b.setGatewaySettleBreakerSalesLedger(sl);
+        for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure("0x" + "e".repeat(35) + "2" + i.toString(16).padStart(4, "0"), Date.now(), { fault: "buyer" });
+        const W = "0x" + "e".repeat(39) + "7";
+        b.recordGatewaySettleFailure(W);
+        const hdr = Buffer.from(JSON.stringify({ payload: { authorization: { from: W } } })).toString("base64");
+        const req = { header: (n) => (String(n).toLowerCase() === "payment-signature" ? hdr : undefined), headers: {}, ip: "203.0.113.9" };
+        let verdict = "served"; try { await b.gatewaySettleBreakerCheck(req); } catch (e) { verdict = e.statusCode; }
+        console.log(JSON.stringify({ backend: sl.salesLedgerBackend, loaded: sl.salesLedgerLoaded(), paid: sl.payerHasPaidSale(W), wide: b.gatewaySettleBreakerStatus().wideBound, verdict }));
+        process.exit(0);`;
+      let out = null;
+      try {
+        const env = { ...process.env, STATE_DATABASE_URL: `postgres://u:p@127.0.0.1:${dead}/none?sslmode=disable`, STATE_STORE_RETRY_MS: "600000", SALES_LEDGER_DB: join(dir, "sales.db"), SHARED_LIMITS_PREFIX: `${process.env.SHARED_LIMITS_PREFIX}-unloaded` };
+        delete env.REDIS_URL; delete env.LEDGER_JOURNAL_REDIS;
+        out = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", src], { env, encoding: "utf8", timeout: 60_000 }));
+      } catch (e) { out = { error: String(e?.message || e).slice(0, 300) }; }
+      finally { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
+      ok(out?.backend === "pg" && out.loaded === false && out.paid === false && out.wide === true && out.verdict === "served", `database mode before the first load: the ledger reads not loaded and "never paid", and the wallet is served while the bound is up (${JSON.stringify(out)})`);
+    }
+    // A wallet with one settled call and two verdicts inside the window is
+    // read under the share rule at the usual count, as with the bound down.
+    const MIXED = "0x" + "f".repeat(39) + "8";
+    b.recordGatewaySettleSuccess(MIXED); b.recordGatewaySettleFailure(MIXED); b.recordGatewaySettleFailure(MIXED);
+    const mixed = await tryIt(MIXED);
+    ok(mixed === "served", `while the bound is up a wallet with one settled call and two buyer-fault failures is served as with the bound down (${mixed})`);
+  }
+  // The trigger counts only failures read against a buyer.
+  await b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 8; i++) b.recordGatewaySettleFailure(`0x${"b".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { fault: "not-buyer" });
+  for (let i = 0; i < 8; i++) b.recordGatewaySettleFailure(null, Date.now(), { withdrawn: true });
+  for (let i = 0; i < 8; i++) b.recordGatewaySettleFailure(`0x${"c".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { walletCount: false });
+  for (let i = 0; i < 8; i++) b.recordGatewaySettleFailure(`0x${"d".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { global: false });
+  ok(b.gatewaySettleBreakerStatus().wideBound === false, "failures of ours, withdrawn sub-cent refusals, pending payments and catalog failures never raise the bound");
+  // Address- and credits-keyed buyer-fault failures never raise it either: the
+  // bound never holds those keys, so they cannot raise it for every wallet.
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure(`ip:198.51.100.${i + 1}`, Date.now(), { fault: "buyer" });
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure(`credits:key${i}`, Date.now(), { fault: "buyer" });
+  ok(b.gatewaySettleBreakerStatus().wideBound === false, "twelve address-keyed and twelve credits-keyed buyer-fault failures do not raise the bound");
+  // Failures of unknown cause (a facilitator's bare 4xx, a bare
+  // settlement_failed, a 402 with no receipt) never raise it either; twelve
+  // distinct buyers' buyer verdicts do, and a never-paid wallet is then held
+  // after one.
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure(`0x${"e".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { fault: "unknown" });
+  ok(b.gatewaySettleBreakerStatus().wideBound === false, "twelve distinct buyers' failures of unknown cause do not raise the bound");
+  {
+    let reqs = 0;
+    for (const [i, reason] of [[0, "circle_http_400"], [1, ""], [2, "settlement_failed"]]) {
+      const req = fakeReq({ from: `0x${"e".repeat(36)}${(0x100 + i).toString(16).padStart(4, "0")}` });
+      try { await b.gatewaySettleBreakerCheck(req); reqs++; } catch { /* counted below */ }
+      failWith(req, reason || null);
+    }
+    ok(reqs === 3 && b.gatewaySettleBreakerStatus().wideBound === false, "unclassified settle answers through the real finish listener do not raise the bound either");
+  }
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure(`0x${"e".repeat(35)}1${i.toString(16).padStart(4, "0")}`, Date.now(), { fault: "buyer" });
+  {
+    const NP = "0x" + "e".repeat(39) + "9";
+    b.recordGatewaySettleFailure(NP);
+    let e1 = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: NP })); } catch (e) { e1 = e; }
+    ok(b.gatewaySettleBreakerStatus().wideBound === true && e1?.statusCode === 429, `twelve buyer-fault failures raise the bound, and a never-paid wallet with one failure is then held (${e1?.statusCode || "served"})`);
+    const FU = "0x" + "e".repeat(39) + "8";
+    b.recordGatewaySettleFailure(FU, Date.now(), { fault: "unknown" });
+    let e2 = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: FU })); } catch (e) { e2 = e; }
+    ok(b.gatewaySettleBreakerStatus().wideBound === true && e2 === null, `with those twelve holding the bound up, a fresh wallet with one failure of unknown cause is served (${e2?.statusCode || "served"})`);
+  }
+  await b._gatewaySettleBreakerReset();
+  const V = "0x" + "e".repeat(39) + "2";
+  b.recordGatewaySettleFailure(V);
+  err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: V })); } catch (e) { err = e; }
+  ok(err === null, `control: with the bound down one failure refuses nothing (${err?.statusCode || "served"})`);
+  // The bound lifts with its window.
+  await b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 6; i++) b.recordGatewaySettleFailure(rot(100 + i));
+  b.recordGatewaySettleFailure(W);
+  err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W })); } catch (e) { err = e; }
+  ok(err?.statusCode === 429, "control: the bound is up again after six more buyers");
+  // A failure recorded late in the bound's window is held only to the bound's end.
+  const raisedAt = Date.now();
+  await sleep(450);
+  const L = "0x" + "1".repeat(39) + "4";
+  b.recordGatewaySettleFailure(L);
+  err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: L })); } catch (e) { err = e; }
+  ok(err?.statusCode === 429 && err.retryAfterMs <= raisedAt + 900 - Date.now() + 20, `a failure late in the bound's window is held only until the bound ends (${err?.retryAfterMs} ms, bound ends in about ${raisedAt + 900 - Date.now()} ms)`);
+  await sleep(500);
+  ok(b.gatewaySettleBreakerStatus().wideBound === false, "the bound lifts once its window ends");
+
+  // --- ONE AUTHORIZATION RE-PRESENTED -------------------------------------
+  // Counted per authorization only when the settle failed for the buyer's
+  // reason (the wallet's own classification). A failure of ours or of unknown
+  // cause never counts, so the same authorization re-presented after them is
+  // served every time; AUTH_MAX_FAILS buyer verdicts refuse that authorization
+  // alone, and a new authorization from the same wallet is served at once.
+  await b._gatewaySettleBreakerReset();
+  const A = "0x" + "f".repeat(39) + "3", NET = "eip155:8453";
+  const authHeader = (from, nonce) => Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: NET }, payload: { signature: "0x" + "11".repeat(65), authorization: { from, to: "0x" + "0".repeat(40), value: "1000", validAfter: "0", validBefore: "9999999999", nonce } } })).toString("base64");
+  const authReq = (from, nonce) => { const req = fakeReq({ from, network: NET }); const h = authHeader(from, nonce); req.header = (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined); return req; };
+  const NONCE = "0x" + "ab".repeat(32);
+  const reRun = async (nonce, reason, n) => {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const req = authReq(A, nonce);
+      try { await b.gatewaySettleBreakerCheck(req); } catch (e) { out.push(e.statusCode); continue; }
+      out.push("served"); failWith(req, reason);
+    }
+    return out.join(",");
+  };
+  const ours = await reRun("0x" + "a1".repeat(32), "timeout", 6);
+  ok(ours === "served,served,served,served,served,served", `one authorization re-presented after settles that failed for our reasons is served every time (${ours})`);
+  const unk = await reRun("0x" + "a2".repeat(32), "settlement_failed", 4);
+  ok(unk === "served,served,served,served", `one authorization re-presented after settles of unknown cause is served every time (${unk})`);
+  // The wallet has settled calls, so its own share rule does not refuse it and
+  // the refusal below is the authorization's alone.
+  const kA = b.gatewaySettleBreakerCountKey(authReq(A, NONCE));
+  await b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 10; i++) b.recordGatewaySettleSuccess(kA);
+  const statuses = (await reRun(NONCE, "insufficient_funds", 5)).split(",");
+  ok(statuses.join(",") === "served,served,served,429,429", `one authorization re-presented after buyer verdicts is served three times, then refused (${statuses.join(",")})`);
+  ok(typeof b.gatewaySettleBreakerAuthKey === "function" && b.gatewaySettleBreakerAuthKey(authReq(A, NONCE)) === b.gatewaySettleBreakerAuthKey(authReq(A, "0x00" + "ab".repeat(32))) && b.gatewaySettleBreakerAuthKey(authReq(A, NONCE)) !== b.gatewaySettleBreakerAuthKey(authReq(A, "0x" + "cd".repeat(32))) && b.gatewaySettleBreakerAuthKey(fakeReq({ tempo: "0xtempopayer" })) === null, "the authorization key reads the canonical nonce, and only for a signed EVM payment");
+  err = null; try { await b.gatewaySettleBreakerCheck(authReq(A, NONCE)); } catch (e) { err = e; }
+  const f = err ? toolErrorFields(err) : {};
+  ok(/This payment authorization on eip155:8453 was served 3 times/.test(err?.message || "") && /Sign a new authorization \(a new nonce\)/.test(err?.message || "") && /Nothing was charged/.test(err?.message || "") && f.hint === "sign-new-authorization" && !f.refusedNetwork && Number.isInteger(f.retryAfterSeconds), `the 429 says to sign a new authorization, in words and a field (${err?.message?.slice(0, 80)}; ${JSON.stringify(f)})`);
+  const k = b.gatewaySettleBreakerCountKey(authReq(A, NONCE));
+  ok(b.gatewaySettleBreakerBlocked(k).blocked === false && b.gatewaySettleBreakerBlocked(k).fails === 3, "the wallet itself, with settled calls, is not refused");
+  err = null; try { await b.gatewaySettleBreakerCheck(authReq(A, "0x" + "cd".repeat(32))); } catch (e) { err = e; }
+  ok(err === null, `the same wallet with a new authorization is served at once (${err?.statusCode || "served"})`);
+  // A buyer signing a new authorization per call is never refused, whatever fails on our side.
+  await b._gatewaySettleBreakerReset();
+  let refused = 0;
+  for (let i = 0; i < 30; i++) {
+    const req = authReq(A, "0x" + (1000 + i).toString(16).padStart(64, "0"));
+    try { await b.gatewaySettleBreakerCheck(req); } catch { refused++; continue; }
+    failWith(req, "timeout");
+  }
+  ok(refused === 0, `thirty fresh authorizations whose settles fail for our reasons: none refused (${refused})`);
+  // A payment still settling is not counted against its authorization.
+  for (let i = 0; i < 5; i++) b.recordGatewaySettleFailure(k, Date.now(), { walletCount: false, authKey: b.gatewaySettleBreakerAuthKey(authReq(A, "0x" + "ee".repeat(32))) });
+  ok(b.gatewaySettleBreakerBlocked(k, Date.now(), { authKey: b.gatewaySettleBreakerAuthKey(authReq(A, "0x" + "ee".repeat(32))) }).authFails === 0, "a payment still settling is not counted against its authorization");
+  await b._gatewaySettleBreakerReset();
+}
+
 // The shared half (only with a REDIS_URL): a trip's alarm flag is written by
 // a window add's reply, after the call that tripped it returned. The test
 // reset waits for every write already sent before it clears the flag.
@@ -914,6 +1199,33 @@ if (process.env.REDIS_URL) {
     `${label}: another replica's shared strikes refuse here in the ${withBlk ? "neutral blocklist" : "verdict"} words (${err?.statusCode}: ${String(err?.message).slice(0, 90)})`);
     await shared.windowClear("gwb-fail", k2);
     await shared.windowClear("gwb-blk", k2);
+  }
+  // THE SERVICE-WIDE BOUND raised on another replica (gwb-wide) holds here a
+  // wallet with one failure of its own; the alarm flag alone (gwb-alarm) does
+  // not (the control), and neither does the bound for a wallet with none.
+  {
+    await b._gatewaySettleBreakerReset();
+    const W3 = "0x" + "4".repeat(40);
+    const k3 = b.gatewaySettleBreakerCountKey(fakeReq({ from: W3, network: X }));
+    b.recordGatewaySettleFailure(k3);
+    const tryW = async (who = W3) => { try { await b.gatewaySettleBreakerCheck(fakeReq({ from: who, network: X })); return "served"; } catch (e) { return e.statusCode; } };
+    await shared.flagSet("gwb-alarm", "all", Date.now() + 5000);
+    const withAlarm = await tryW();
+    await shared.flagSet("gwb-wide", "all", Date.now() + 5000);
+    const withWide = await tryW(), fresh = await tryW("0x" + "3".repeat(40));
+    ok(withAlarm === "served" && withWide === 429 && fresh === "served" && !b.gatewaySettleBreakerStatus().wideBound, `another replica's service-wide bound holds a wallet with one failure here; the alarm flag alone does not, nor a fresh wallet (alarm ${withAlarm}, bound ${withWide}, fresh ${fresh})`);
+    // Another replica's runs under one authorization (gwb-auth) refuse it here.
+    await b._gatewaySettleBreakerReset();
+    const W4 = "0x" + "2".repeat(40);
+    const h = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: X }, payload: { authorization: { from: W4, nonce: "0x" + "77".repeat(32) } } })).toString("base64");
+    const authReq = () => { const req = fakeReq({ from: W4, network: X }); req.header = (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined); return req; };
+    const ak = b.gatewaySettleBreakerAuthKey(authReq());
+    const now = Date.now();
+    for (let i = 0; i < 3; i++) await shared.windowAdd("gwb-auth", ak, { windowMs: KEY_LIFE_MS, member: `other:${i}`, now });
+    let err = null;
+    try { await b.gatewaySettleBreakerCheck(authReq(), { now }); } catch (e) { err = e; }
+    ok(err?.statusCode === 429 && /This payment authorization/.test(err.message), `another replica's runs under one authorization refuse it here (${err?.statusCode}: ${String(err?.message).slice(0, 60)})`);
+    await shared.windowClear("gwb-auth", ak);
   }
   await b._gatewaySettleBreakerReset();
 }

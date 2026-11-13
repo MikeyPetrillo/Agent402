@@ -32,7 +32,7 @@ Both tiers are **wallet-only** - every call burns real upstream transcription cr
 
 ## Supported audio formats
 
-mp3, m4a, wav, ogg, flac, webm (max 25 MB). mp4, mpeg and mpga files are accepted too when their duration can be read; one whose duration cannot be read answers `422` and is not charged on x402.
+mp3, m4a, wav, ogg, flac, webm (max 25 MB). mp4, mpeg and mpga files are accepted too when their duration can be read; one whose duration cannot be read answers `422` and is not charged on x402. WMA (ASF), raw AAC (ADTS), AMR and CAF files are read too: each is measured by decoding and sent upstream as FLAC. A file with more than one audio track (Matroska, WebM, Ogg, MP4) is measured and transcribed on its first audio track.
 
 ## Request / Response
 
@@ -47,6 +47,8 @@ mp3, m4a, wav, ogg, flac, webm (max 25 MB). mp4, mpeg and mpga files are accepte
 ```
 
 Only `url` is required. `language` (ISO-639-1 code) is optional but improves accuracy.
+
+The file's length is measured by decoding it before any upstream call. A file whose length cannot be confirmed is transcribed up to the tier's cap, and the answer says so with two more fields: `trimmedToCapSeconds` (the cap it was cut at) and `durationUnconfirmed: true`. Both are absent from every other answer.
 
 ## See also
 

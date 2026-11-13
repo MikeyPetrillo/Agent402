@@ -8,7 +8,8 @@
 //   code-run-pro  $0.05  — 60s timeout, 50k chars, Python/JS
 
 import { redactSecrets } from "./redact.js";
-import { payerFromRequest } from "../payer.js";
+import { callerKeyOf, currentDispatchCaller } from "../dispatch-caller.js";
+import { isRouteCall } from "../not-charged.js";
 import { perReplica } from "../rate-limit.js";
 import { takeHardCap, hardCapError, releaseHardCap, neverReachedUpstream, upstreamRefusedBeforeWork } from "../upstream-hard-caps.js";
 
@@ -44,13 +45,13 @@ let e2bInFlight = 0;
 const PER_PAYER_MAX_CONCURRENT = perReplica(2);
 const PER_IP_MAX_CONCURRENT = perReplica(4);
 const payerInFlight = new Map();
+// The caller a run counts against: the route's own request, else the caller
+// a request-less step runs for (route-execute, decide and skill packs call
+// `def.handler(params)` inside runAsCallerOf), so a routed run is capped as a
+// direct one is. src/dispatch-caller.js: the identity payer, a credits key, a
+// Tempo sender, else the client address (an IPv6 one folded to its /64).
 function payerKeyOf(req) {
-  if (!req) return null;
-  const payer = payerFromRequest(req);
-  if (payer) return `payer:${payer}`;
-  if (req.creditsKeyId) return `credits:${req.creditsKeyId}`;
-  if (req.mppTempoSender) return `tempo:${String(req.mppTempoSender).toLowerCase()}`;
-  return req.ip ? `ip:${req.ip}` : null;
+  return callerKeyOf(req) || currentDispatchCaller();
 }
 const limitFor = (key) => (key?.startsWith("ip:") ? PER_IP_MAX_CONCURRENT : PER_PAYER_MAX_CONCURRENT);
 
@@ -203,7 +204,7 @@ function makeHandler(tierSlug) {
     const who = payerKeyOf(req);
     if (who) {
       const n = payerInFlight.get(who) || 0;
-      if (n >= limitFor(who)) throw bad(`Too many concurrent runs: at most ${limitFor(who)} at a time per caller. This call is not charged on x402.`, 429);
+      if (n >= limitFor(who)) throw bad(`Too many concurrent runs: at most ${limitFor(who)} at a time per caller.${isRouteCall(req) ? " This call is not charged on x402." : ""}`, 429);
       payerInFlight.set(who, n + 1);
     }
     try {

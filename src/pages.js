@@ -20,7 +20,7 @@ import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./r
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { publicPremiumUsdByNetwork as premiumUsdByNetworkName } from "./public-networks.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
-import { hasLastingEffect } from "./hangup-forgiveness.js";
+import { defHasLastingEffect } from "./hangup-forgiveness.js";
 import { mppOffersFor, mppRailsPhrase, mppOfferShortProse } from "./mpp-offers.js";
 import { tempoOfferedFor, tempoDiscoveryInfo } from "./mpp-tempo.js";
 import { WALLET_ONLY_POLICY_REASON, powCostPhrase } from "./pow.js";
@@ -370,14 +370,15 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   }).join("\n");
 
   // --- Response fields from the documented example (same derivation as /openapi.json).
-  const respSchema = responseSchemaFor(tool.path, example);
+  const respSchema = responseSchemaFor(tool.path, example, tool.discovery?.output?.optional);
   const respRequired = new Set(respSchema.required || []);
-  const respRows = outKeys.map((k) => {
+  const optionalOut = !binaryTypes && tool.discovery?.output?.optional && typeof tool.discovery.output.optional === "object" ? Object.entries(tool.discovery.output.optional).filter(([k]) => !outKeys.includes(k)) : [];
+  const respRows = [...outKeys.map((k) => {
     const v = example[k];
     let sample = typeof v === "string" ? v : v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `${v.length} item${v.length === 1 ? "" : "s"} in the example` : `${Object.keys(v).length} field${Object.keys(v).length === 1 ? "" : "s"}: ${Object.keys(v).slice(0, 6).join(", ")}`;
     if (sample && sample.length > 80) sample = sample.slice(0, 77) + "...";
     return `<tr><td><code>${e(k)}</code></td><td>${e(exampleValueType(v))}</td><td>${respRequired.has(k) ? "yes" : "no"}</td><td>${e(sample ?? "")}</td></tr>`;
-  }).join("\n");
+  }), ...optionalOut.map(([k, v]) => `<tr><td><code>${e(k)}</code></td><td>${e(String(v?.type || ""))}</td><td>no</td><td>${e(String(v?.description || ""))}</td></tr>`)].join("\n");
 
   // --- Errors and behavior: only statements that hold for this tool.
   const facts = [];
@@ -524,7 +525,7 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
 
   <h2 class="tp-h2">From an MCP client</h2>
   ${codeBlock(`catalog.call ${mcpArgs}`, { name: "the MCP call" })}
-  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.31</code>.</p>
+  <p class="tp-sub">${mcpNote} Local install: <code>npx -y agent402-mcp@0.13.32</code>.</p>
 
   <h2 class="tp-h2">Errors and behavior</h2>
   <ul class="tp-facts">${facts.map((f) => `<li>${f}</li>`).join("\n")}</ul>
@@ -843,7 +844,7 @@ export function openapiSpec(baseUrl, catalog) {
           // can produce), never the JSON note its discovery example carries.
           content: binaryTypesOf(tool)
             ? Object.fromEntries(binaryTypesOf(tool).map((t) => [t, { schema: { type: "string", format: "binary" } }]))
-            : { "application/json": { schema: responseSchemaFor(path, discovery?.output?.example), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) } },
+            : { "application/json": { schema: responseSchemaFor(path, discovery?.output?.example, discovery?.output?.optional), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) } },
         },
         402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment). A first-contact body also carries payment: this request's price in dollars on the named network, how to pay, the proof-of-work path on a free-tier tool (noWallet), the caller's own inputs on a route quoted from its body (quote), and links to /llms.txt, the pay section of /agents.md and the MCP connector" },
         400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, and a JSON body, or form parts for a multipart tool), with the other method under alternate where it is served; a call over 1024 bytes carries only method and url" },
@@ -903,11 +904,11 @@ export function openapiSpec(baseUrl, catalog) {
           // it (src/gateway-nanopayments.js): the same price on a second
           // exact accept the buyer pays from a Gateway balance, no gas per payment.
           // Identity-bound routes and routes with a lasting effect
-          // (hasLastingEffect) keep the plain accept only. Absent while
+          // (defHasLastingEffect) keep the plain accept only. Absent while
           // the option is off.
           ...(() => {
             const gw = gatewayOfferPublic();
-            if (!gw || tool.identityBound || hasLastingEffect(tool.slug)) return {};
+            if (!gw || tool.identityBound || defHasLastingEffect(tool)) return {};
             return { nanopayments: { kind: gw.kind, networks: Object.keys(gw.networks), buyerGas: "none per payment. After a USDC deposit into Gateway (an on-chain transfer the buyer makes and pays gas for), each payment is a signature against that balance, with no gas per payment.", settlement: "batched off chain by Circle Gateway", select: `the accept whose extra.name is ${gw.kind}` } };
           })(),
         };

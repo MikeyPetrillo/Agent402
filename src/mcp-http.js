@@ -3,6 +3,7 @@ import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
 import { gatewayOfferPublic, gatewayOfferNetworkNames } from "./gateway-nanopayments.js";
 import { inputDepthRefusal } from "./handler-input.js";
+import { runAsCallerOf } from "./dispatch-caller.js";
 // The report/monitor ladder, DERIVED from the same tables that sell them.
 // No cycle: report-tiers is a leaf over the kit tier tables, and neither
 // checkout module imports this one.
@@ -1453,7 +1454,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           if (signal?.aborted) throw Object.assign(new Error("request aborted"), { statusCode: 499 });
           const tooDeep = inputDepthRefusal(params);
           if (tooDeep) throw Object.assign(new Error(tooDeep), { statusCode: 400 });
-          result = await entry.def.handler(params, { headers: {}, query: params, body: params, ip, signal });
+          const callReq = { headers: {}, query: params, body: params, ip, signal };
+          result = await runAsCallerOf(callReq, () => entry.def.handler(params, callReq));
         } catch (handlerErr) {
           // statusCode lets the analytics dispatcher split 4xx (bad input) from
           // 5xx (handler/upstream broke). errorMessage flows into the diagnostic
@@ -1523,6 +1525,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // The text block is built once: when it fits the ceiling the compact
         // form fits too (it is the same JSON less whitespace), so it is sent
         // as built and the answer is not serialized again to be measured.
+        // When it does not fit, the compact form is sent instead.
         const maxBytes = mcpMaxAnswerBytes();
         let pretty;
         try { pretty = JSON.stringify(result, null, 2); } catch { pretty = undefined; }
@@ -1532,11 +1535,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         }
         const { value, bound } = boundAnswer(result, maxBytes);
         if (bound) result = withAnswerBound(value, bound);
-        // A cut answer is sent compact, as it was sized.
-        if (isNamed) return bound ? mcpJsonResult(result, JSON.stringify(result)) : mcpJsonResult(result, pretty);
+        // Past this point the indented form is over the ceiling, so the text
+        // block is compact whether or not the answer was cut: a cut answer as
+        // it was sized, an uncut one as the form the bound measured to fit.
+        const compact = JSON.stringify(result);
+        if (isNamed) return mcpJsonResult(result, compact);
         return {
-          // A cut answer is already large: no indentation on top of it.
-          content: [{ type: "text", text: bound ? JSON.stringify(result) : pretty }],
+          content: [{ type: "text", text: compact }],
           structuredContent: { slug: entry.def.slug, result, ...(bound ? { answerBound: bound } : {}) },
         };
       } catch (err) {

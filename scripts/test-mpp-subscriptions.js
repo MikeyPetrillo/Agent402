@@ -139,6 +139,7 @@ const advance = (ms) => { clock += ms; };
 
 function makeEngine(opts = {}) {
   const calls = { activate: 0, charge: 0, sales: [] };
+  const usedCreds = new Set();
   let chargeBehaviour = () => ({ reference: `0xtx${calls.charge}` });
   let findBehaviour = { found: false };
   const engine = createMppSubscriptions({
@@ -151,6 +152,8 @@ function makeEngine(opts = {}) {
     activate: async (header, ctx) => {
       calls.activate++;
       if (opts.activateThrows) throw new Error("simulated settlement failure: node said no");
+      // mppx claims a credential once: a second activation of it is refused.
+      if (opts.oneUse) { const sig = ctx.binding.credential.payload.signature; if (usedCreds.has(sig)) throw new Error("subscription credential has already been used"); usedCreds.add(sig); }
       // What mppx's own activation persists after the first on-chain transfer.
       await engine._subStore.put({
         accessKey: { accessKeyAddress: ctx.accessKey.accessKeyAddress, keyType: ctx.accessKey.keyType },
@@ -384,6 +387,97 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   // subscription or a second charge.
   const again = await engine.activateFromCredential(liveHeader);
   ok(again.replay === true && again.subId === liveSubId && calls.activate === 1 && calls.sales.length === 1, "replaying the activation credential returns the existing subscription and charges nothing again");
+}
+
+// A first payment that settled (mppx wrote its record) but whose record of ours
+// was never written: the retry of the same credential is refused by mppx as
+// used, so the engine rebuilds its record from mppx's and hands the paid
+// subscription back, never "nothing was charged".
+{
+  const lost = makeEngine({ name: "lost-house-record", oneUse: true });
+  const { engine, calls } = lost;
+  const offer = await engine.mintOffer({ product: "domain-monitor", target: "example.org", email: "lost@example.com" });
+  const signed = await signCredential(Challenge.deserialize(offer.header));
+  // The first write of our record fails, whichever store call makes it.
+  const cas = engine._store.compareAndSet.bind(engine._store), put = engine._store.put.bind(engine._store);
+  let failOnce = true;
+  const boom = (k) => { if (failOnce && String(k).startsWith("a402:sub:mpp_")) { failOnce = false; throw new Error("simulated store failure"); } };
+  const failing = async (k, d) => { boom(k); return cas(k, d); };
+  const failingPut = async (k, v) => { boom(k); return put(k, v); };
+  engine._store.compareAndSet = failing; engine._store.put = failingPut;
+  let firstErr = null;
+  try { await engine.activateFromCredential(signed.header); } catch (e) { firstErr = e; }
+  engine._store.compareAndSet = cas; engine._store.put = put;
+  ok(firstErr && calls.activate === 1 && calls.sales.length === 0, `setup: the first payment settled and our record write failed (${firstErr?.message})`);
+  let again = null, againErr = null;
+  try { again = await engine.activateFromCredential(signed.header); } catch (e) { againErr = e; }
+  ok(!againErr && again?.status === "active" && again.replay === true && typeof again.manageToken === "string", `the retry hands back the paid subscription, rebuilt from mppx's record (${againErr ? `${againErr.statusCode} ${againErr.message}` : again?.status})`);
+  ok(calls.activate === 1 && calls.sales.length === 1 && calls.sales[0].tx === "0xactivation" && calls.sales[0].payer === signed.account.address.toLowerCase(), `nothing settles twice and the first payment is booked once (activations ${calls.activate}, sales ${calls.sales.length})`);
+  const rec = engine.get(again?.subId);
+  ok(rec && rec.product === "domain-monitor" && rec.target === "example.org" && rec.email === "lost@example.com" && rec.billingAnchor && rec.lastChargedPeriod === 0, "the rebuilt record carries the binding and mppx's billing anchor");
+  const third = await engine.activateFromCredential(signed.header);
+  ok(third.replay === true && third.subId === again.subId && calls.sales.length === 1, "a further retry finds the rebuilt record and books nothing");
+  // mppx's record says the subscription was canceled since: rebuilt as canceled.
+  const offer2 = await engine.mintOffer({ product: "domain-monitor", target: "example.net", email: "lost@example.com" });
+  const signed2 = await signCredential(Challenge.deserialize(offer2.header));
+  failOnce = true;
+  engine._store.compareAndSet = failing; engine._store.put = failingPut;
+  try { await engine.activateFromCredential(signed2.header); } catch { /* setup */ }
+  engine._store.compareAndSet = cas; engine._store.put = put;
+  const mrec = await engine._subStore.get(`sub-${calls.activate}`);
+  await engine._subStore.put({ ...mrec, canceledAt: new Date(clock).toISOString() });
+  const canceled = await engine.activateFromCredential(signed2.header);
+  ok(canceled.replay === true && canceled.status === "canceled" && engine.get(canceled.subId)?.status === "canceled", `a settled record mppx has since canceled is rebuilt canceled, not active (${canceled.status})`);
+}
+
+// Two retries of one credential whose house record is missing, at once: the
+// record is created once (create-if-absent) and the first period is booked
+// once; a record stored meanwhile (a cancel) is never overwritten by a rebuild.
+{
+  const race = makeEngine({ name: "rebuild-race", oneUse: true });
+  const { engine, calls } = race;
+  const offer = await engine.mintOffer({ product: "domain-monitor", target: "race.example.org", email: "race@example.com" });
+  const signed = await signCredential(Challenge.deserialize(offer.header));
+  // The first write of our record fails, whichever store call makes it.
+  const cas = engine._store.compareAndSet.bind(engine._store), put = engine._store.put.bind(engine._store);
+  let failOnce = true;
+  const boom = (k) => { if (failOnce && String(k).startsWith("a402:sub:mpp_")) { failOnce = false; throw new Error("simulated store failure"); } };
+  engine._store.compareAndSet = async (k, d) => { boom(k); return cas(k, d); };
+  engine._store.put = async (k, v) => { boom(k); return put(k, v); };
+  try { await engine.activateFromCredential(signed.header); } catch { /* setup: settled, our record not written */ }
+  engine._store.compareAndSet = cas; engine._store.put = put;
+  ok(calls.activate === 1 && calls.sales.length === 0, "setup: the first payment settled and our record was not written");
+  const salesBefore = calls.sales.length;
+  const [r1, r2] = await Promise.all([engine.activateFromCredential(signed.header), engine.activateFromCredential(signed.header)]);
+  ok(r1.subId === r2.subId && calls.sales.length === salesBefore + 1 && calls.activate === 1, `two concurrent rebuilds of one credential book the first period once (sales ${calls.sales.length - salesBefore}, activations ${calls.activate})`);
+  // A cancel stored after the rebuild survives a further retry.
+  const stored = engine.get(r1.subId);
+  await engine._store.put(`a402:sub:${r1.subId}`, { ...stored, status: "canceled", canceledAt: new Date(clock).toISOString(), canceledReason: "requested" });
+  const again = await engine.activateFromCredential(signed.header);
+  const after = await engine._store.get(`a402:sub:${r1.subId}`);
+  ok(again.replay === true && after?.status === "canceled" && calls.sales.length === salesBefore + 1, `a retry after a stored cancel neither rewrites it nor books again (${after?.status}, sales ${calls.sales.length - salesBefore})`);
+}
+
+// An activation whose create-if-absent write loses books nothing: a retry of
+// the same credential that arrived while the first payment was settling
+// rebuilt the record and booked the period, so the activation hands back that
+// record and the period is booked once.
+{
+  const lose = makeEngine({ name: "activation-loses-write" });
+  const { engine, calls } = lose;
+  const offer = await engine.mintOffer({ product: "domain-monitor", target: "lose.example.org", email: "lose@example.com" });
+  const signed = await signCredential(Challenge.deserialize(offer.header));
+  const cas = engine._store.compareAndSet.bind(engine._store);
+  let retried = null, stole = false;
+  engine._store.compareAndSet = async (k, d) => {
+    if (!stole && String(k).startsWith("a402:sub:mpp_")) { stole = true; retried = await engine.activateFromCredential(signed.header); }
+    return cas(k, d);
+  };
+  const first = await engine.activateFromCredential(signed.header);
+  engine._store.compareAndSet = cas;
+  ok(retried?.replay === true && retried.subId === first.subId && calls.activate === 1, `setup: the retry rebuilt the record before the activation wrote it (${retried?.subId}, activations ${calls.activate})`);
+  ok(calls.sales.length === 1 && calls.sales[0].tx === "0xactivation", `the activation that lost the write books nothing: the first period is booked once (sales ${calls.sales.length})`);
+  ok(first.replay === false && first.status === "active" && typeof first.manageToken === "string", "the activation still hands back the stored subscription");
 }
 
 // ---------------------------------------------------------------------------

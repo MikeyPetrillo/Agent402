@@ -233,6 +233,14 @@ check("delivery observations attach to their route and a low keep rate is flagge
   assert.ok(r.flags.some((f) => /delivered less than 80%.*\/api\/a/.test(f)));
   assert.ok(!r.flags.some((f) => /\/api\/b/.test(f) && /delivered less/.test(f)));
 });
+check("answers past our read limit that could not be checked are counted and flagged, never read as kept", () => {
+  const d = new Map([["POST /api/a", { calls: 2, kept: 2, keptRate: 1, unverifiable: 4, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }], ["POST /api/b", { calls: 0, kept: 0, keptRate: null, unverifiable: 1, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }]]);
+  const r = base({ deliveries: d });
+  assert.equal(r.delivery.unverifiable, 5);
+  assert.equal(r.delivery.kept, 2);
+  assert.ok(r.flags.some((f) => /past our read limit.*\/api\/a/.test(f)));
+  assert.ok(!r.flags.some((f) => /past our read limit.*\/api\/b/.test(f)));
+});
 
 // --- identity / health flags -------------------------------------------------
 check("crawl failure, robots block, failed paywall probe and injected listing text are each a flag", () => {
@@ -389,6 +397,19 @@ check("a still-loading index refuses the PAID path instead of selling never-craw
   assert.match(String(err.message), /still loading/i);
   // Never charged, and never a claim about the seller.
   assert.ok(!/never crawled/i.test(String(err.message)));
+});
+
+check("the loading refusal says nothing was charged on a route call only", () => {
+  // The HTTP route passes the request as the second argument; a decide or
+  // route-execute step runs the handler request-less inside a charged answer.
+  const t = build({ getIndexReadiness: () => ({ ready: false, state: "first-crawl", retryAfterSeconds: 60 }) });
+  let onRoute = null, step = null;
+  try { t.handler({ origin: "unknown.example" }, { headers: {} }); } catch (e) { onRoute = e; }
+  try { t.handler({ origin: "unknown.example" }); } catch (e) { step = e; }
+  assert.equal(onRoute?.statusCode, 503);
+  assert.match(String(onRoute.message), /Nothing was charged\. Retry in 60s\.$/);
+  assert.equal(step?.statusCode, 503);
+  assert.ok(!/charged/i.test(String(step.message)), step?.message);
 });
 
 check("a seller we DO hold is answered normally while the index loads", () => {

@@ -103,6 +103,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok(w.status === "unauthenticated" && w.unauthenticatedInWindow === 1 && w.threshold === 1 && w.scope === "instance" && w.secretConfigured === true && Object.keys(cdnOriginStatus({ enabled: true, secret: SECRET })).join(",") === "status", `a CDN-range peer without the secret reads unauthenticated at the count; the public word carries no count (${JSON.stringify(w)})`);
   ok(cdnOriginStatus({ enabled: true, secret: SECRET, threshold: 2 }).status === "ok" && cdnOriginStatus({ enabled: true, secret: SECRET, full: true, threshold: 2 }).unauthenticatedInWindow === 1, "below the alert count the word stays ok (a probe reaching the origin host directly is not a lost secret); the operator still sees the count");
   ok(cdnOriginStatus({ enabled: true, secret: SECRET, threshold: 1, now: Date.now() + 61 * 60_000 }).status === "ok", "...and the word clears once the hour has passed");
+  // Our own loopback replay carries the buyer's resolved address (which may be
+  // in the CDN's ranges, a Worker's) and no origin secret: not counted when
+  // isReplay proves it on a loopback socket; a forged proof, or a proof off a
+  // loopback socket, still counts.
+  __resetCdnOriginStatus();
+  const replayRun = (socketIp, proven) => {
+    const proto = { get ip() { return "104.16.0.30"; } };
+    const req = Object.create(proto);
+    req.headers = { "x-forwarded-for": "104.16.0.30" };
+    req.socket = { remoteAddress: socketIp };
+    cdnClientIpMiddleware({ ranges: R, log: () => {}, enabled: true, secret: SECRET, isReplay: () => proven })(req, {}, () => {});
+  };
+  replayRun("127.0.0.1", true); replayRun("::ffff:127.0.0.1", true); replayRun("::1", true);
+  ok(cdnOriginStatus({ enabled: true, secret: SECRET, full: true, threshold: 1 }).unauthenticatedInWindow === 0, "a proven loopback replay from a CDN-range address is not counted as an unauthenticated CDN peer");
+  replayRun("127.0.0.1", false);
+  replayRun("104.16.0.30", true);
+  ok(cdnOriginStatus({ enabled: true, secret: SECRET, full: true, threshold: 1 }).unauthenticatedInWindow === 2, "an unproven loopback request, or a proof off a loopback socket, still counts");
+  __resetCdnOriginStatus();
   run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: "x" }, { enabled: true, secret: "" });
   ok(cdnOriginStatus({ enabled: true, secret: "", full: true }).secretConfigured === false, "with no secret configured the operator view says so");
   __resetCdnOriginStatus();
@@ -133,6 +151,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/cdnClientIpMiddleware\(\{\s*shared: sharedLimitsEnabled\(\) \? \{[\s\S]{0,400}?sharedLimits\.windowAdd\([\s\S]{0,400}?sharedLimits\.windowRead\(/.test(serverSrc),
     "server.js mounts the resolver with the shared limiter store's window, so the count spans replicas");
+  ok(/cdnClientIpMiddleware\(\{[\s\S]{0,1200}?isReplay: isOwnReplay\b/.test(serverSrc) && /replayClientIpMiddleware\(\{ isReplay: isOwnReplay \}\)/.test(serverSrc),
+    "server.js hands the resolver the same replay proof the trust-proxy mount uses (src/own-replay.js)");
 }
 
 // ---- end to end ----
@@ -156,6 +176,7 @@ const boot = async (extraEnv) => {
 };
 const limited7 = (s) => s.slice(0, 6).every((x) => x !== 429) && s[6] === 429;
 const auth = { [ORIGIN_AUTH_HEADER]: SECRET };
+const LOOPBACK_SECRET = "ab".repeat(24);
 
 try {
   // ---- CDN_PROXY off (the default): main's behavior ----
@@ -171,7 +192,7 @@ try {
   }
 
   // ---- CDN_PROXY on, with the origin secret (the word turns at 5 unauthenticated requests an hour) ----
-  const { buy, burst, challenges, cdnWord } = await boot({ CDN_PROXY: "cloudflare", CDN_ORIGIN_SECRET: SECRET, CDN_ORIGIN_UNAUTH_ALERT: "5" });
+  const { buy, burst, challenges, cdnWord } = await boot({ CDN_PROXY: "cloudflare", CDN_ORIGIN_SECRET: SECRET, CDN_ORIGIN_UNAUTH_ALERT: "5", MCP_LOOPBACK_TEST_SECRET: LOOPBACK_SECRET });
 
   // 1. Direct (peer 203.0.113.7), a different forged CF-Connecting-IP on every
   //    call (and the secret): one bucket, the 7th is limited.
@@ -191,6 +212,11 @@ try {
 
   // So far every CDN-range peer carried the secret: the status word is ok.
   ok((await cdnWord()) === "ok", "on: with every CDN peer authenticated, /api/gateway-status reads cdnOrigin ok");
+  // 2a. Our own loopback replays (the connector's marker, proven by its
+  //     per-process secret) carrying a CDN-range client address and no origin
+  //     secret are not CDN peers: past the alert count the word stays ok.
+  for (let i = 0; i < 7; i++) await buy({ "x-forwarded-for": "104.16.0.40", "x-agent402-via": `mcp;k=${LOOPBACK_SECRET}` });
+  ok((await cdnWord()) === "ok", "on: proven loopback replays from a CDN-range client address leave cdnOrigin ok");
 
   // 2b. A CDN-range peer without the secret, or with a wrong one, is not
   //     trusted: it keeps its own bucket. One such request (a probe calling

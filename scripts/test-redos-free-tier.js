@@ -142,6 +142,7 @@ if (runsSoloChecks(SHARD)) {
     listingInjectionFinding: (s) => screen.listingInjectionFinding(s),
     addressesReader: (s) => screen.addressesReader(s),
     judgeReadableText: (s) => screen.judgeReadableText(s),
+    defuseLabels: (s) => screen.defuseLabels(s),
     judgeReadableName: (s) => screen.judgeReadableName(s),
     judgeReadableListing: (s) => screen.judgeReadableListing({ host: s, slug: s, description: s, tags: [s, s] }),
     // The screen's parts on their own: every reading of the text with no hint,

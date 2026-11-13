@@ -24,6 +24,8 @@
 // engine fails, elsewhere it skips the engine-backed assertions.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { Jimp } from "jimp";
+import { withPushExceptionText } from "../src/prepayment-refusal.js";
+import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
 import { deflateSync, crc32 } from "node:zlib";
 import { OCR_TOOLS, OCR_MAX_PIXELS, OCR_MAX_SIDE, OCR_LARGE_PIXELS, OCR_LARGE_QUEUE_MAX, __ocrLargeTest, ocrDownscaleSide, imageFormatOf, checkImageHeader, tessdataInstalled, __ocrTest } from "../src/tools/ocr-kit.js";
 
@@ -147,7 +149,15 @@ async function call(input) {
       `...naming maxMegapixels, maxSide, width, height and megapixels (${JSON.stringify({ maxMegapixels: r?.maxMegapixels, maxSide: r?.maxSide, width: r?.width, height: r?.height, megapixels: r?.megapixels })})`);
     ok(Number.isInteger(r?.downscaleToLongestSide) && r.downscaleToLongestSide < 12277 && r.fix.includes(`at most ${r.downscaleToLongestSide} pixels`) && r.message.includes(r.fix),
       `...and the side to downscale to (${r?.downscaleToLongestSide}), in the fix and the message`);
-    ok(/Nothing was charged\.$/.test(r?.message) && /downscaled/.test(r?.howToCallNote || ""), "...ending 'Nothing was charged.', with a howToCall note to resend it downscaled");
+    ok(!/charged/i.test(r?.message) && /downscaled/.test(r?.howToCallNote || ""), "...with no charge claim of its own (the handler adds it on a route call), and a howToCall note to resend it downscaled");
+    // The charge sentence is the shared one, made on a route call only: a
+    // skill-pack step runs the handler request-less inside a charged answer.
+    const image = pngHead(12277, 5213).toString("base64");
+    const onRoute = await ocr.handler({ image }, { headers: {} }).then(() => null, (e) => e);
+    ok(onRoute?.statusCode === 422 && /Nothing was charged\.$/.test(onRoute.message) && !("chargeClaim" in onRoute), `on a route call the 422 ends "Nothing was charged." (${onRoute?.message?.slice(-40)})`);
+    ok(withPushExceptionText(onRoute?.message, true).includes(`Nothing was charged${PUSH_EXCEPTION}.`), "...which a Tempo push buyer reads with the exception the route binder adds");
+    const step = await ocr.handler({ image }).then(() => null, (e) => e);
+    ok(step?.statusCode === 422 && !/charged/i.test(step.message), `as a skill-pack step (no request) it makes no charge claim (${step?.message?.slice(-40)})`);
   }
   // The hint's longest side lands under the cap at the image's own aspect
   // ratio, whichever way a resizer rounds the short side, and is the largest
@@ -252,7 +262,7 @@ async function call(input) {
     // ahead of it still wait.
     const tOver = Date.now();
     const overflow = await __ocrLargeTest.acquire(5_000).then(() => null, (e) => e);
-    ok(Date.now() - tOver < 2_500 && order.length === 0 && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX && overflow?.statusCode === 503 && overflow.retryAfter === 60 && overflow.shed === true && overflow.hint === "large-image-busy" && /Nothing was charged\./.test(overflow.message),
+    ok(Date.now() - tOver < 2_500 && order.length === 0 && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX && overflow?.statusCode === 503 && overflow.retryAfter === 60 && overflow.shed === true && overflow.hint === "large-image-busy" && !/charged/i.test(overflow.message),
       `past ${OCR_LARGE_QUEUE_MAX} waiting, a large image is a 503 at once with Retry-After 60 (got ${overflow?.statusCode})`);
     first();
     const r2 = await second;
@@ -265,7 +275,18 @@ async function call(input) {
     const t0 = Date.now();
     const late = await __ocrLargeTest.acquire(80).then(() => null, (e) => e);
     ok(late?.statusCode === 503 && Date.now() - t0 >= 70 && __ocrLargeTest.state().waiting === 0, `a waiter past its wait is a 503 and leaves the queue (after ${Date.now() - t0} ms)`);
-    hold();
+    // Through the handler, a large image refused for want of a place says
+    // nothing was charged on a route call only.
+    {
+      const fill = [__ocrLargeTest.acquire(5_000, "ip:192.0.2.1"), __ocrLargeTest.acquire(5_000, "ip:192.0.2.2")].map((p) => p.then((rel) => rel, () => null));
+      const image = pngHead(5000, 4000).toString("base64");
+      const busyRoute = await ocr.handler({ image }, { headers: {}, ip: "192.0.2.3" }).then(() => null, (e) => e);
+      ok(busyRoute?.statusCode === 503 && busyRoute.hint === "large-image-busy" && /Nothing was charged\./.test(busyRoute.message), `on a route call the busy 503 says nothing was charged (${busyRoute?.statusCode})`);
+      const busyStep = await ocr.handler({ image }).then(() => null, (e) => e);
+      ok(busyStep?.statusCode === 503 && !/charged/i.test(busyStep.message), `as a skill-pack step the busy 503 makes no charge claim (${busyStep?.statusCode})`);
+      hold();
+      for (const rel of await Promise.all(fill)) if (rel) rel();
+    }
 
     // A small image never waits on the slot; a large one does, and the worker
     // that read it is retired (its grown WASM memory released).
@@ -283,6 +304,122 @@ async function call(input) {
     ok(await big === "ran", "...and runs once it is released");
     await new Promise((r) => setTimeout(r, 20));
     ok(terminated === 1 && !__ocrLargeTest.state().busy, `the worker that read the large image is retired (terminated ${terminated}), the slot freed`);
+
+    // The slot passes on only once the retired worker has terminated.
+    let terminatedAt = 0;
+    __ocrTest.inject("tur", { recognize: async () => ({ data: { text: "x", lines: [] } }), terminate: () => new Promise((r) => setTimeout(() => { terminatedAt = Date.now(); r(); }, 150)) });
+    const slow = __ocrLargeTest.recognize(png16, "tur", "png", 16_000_001, "ip:198.51.100.1");
+    await new Promise((r) => setImmediate(r));
+    const nextAt = await __ocrLargeTest.acquire(5_000, "ip:198.51.100.2").then((rel) => { const at = Date.now(); rel(); return at; });
+    await slow;
+    ok(terminatedAt > 0 && nextAt >= terminatedAt, `the next large image gets the slot after the retired worker terminated (terminated ${terminatedAt ? "yes" : "no"}, next ${nextAt - terminatedAt} ms after)`);
+    ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "the slot and every caller's place are free afterwards");
+  }
+
+  // --- the large-image slot is admitted per caller ---
+  {
+    const A = "payer:0x00000000000000000000000000000000000000aa", B = "ip:203.0.113.7", C = "ip:203.0.113.8", D = "ip:203.0.113.9";
+    const relA = await __ocrLargeTest.acquire(50, A);
+    const a2 = __ocrLargeTest.acquire(5_000, A).then((rel) => rel, (e) => e);
+    const a3 = __ocrLargeTest.acquire(5_000, A).then((rel) => rel, (e) => e);
+    ok(__ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, "one caller alone may hold the slot and both queued places");
+    const b1 = __ocrLargeTest.acquire(5_000, B).then((rel) => rel, (e) => e);
+    const shed = await a3;
+    ok(shed?.statusCode === 503 && !/charged/i.test(shed.message) && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `a caller with nothing in the slot takes the last queued place of a caller holding several (that one answered ${shed?.statusCode})`);
+    const c1 = __ocrLargeTest.acquire(5_000, C).then((rel) => rel, (e) => e);
+    const shed2 = await a2;
+    ok(shed2?.statusCode === 503 && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `a second newcomer takes the caller's queued place too, while it holds the slot (that one answered ${shed2?.statusCode})`);
+    const d1 = await __ocrLargeTest.acquire(5_000, D).then(() => null, (e) => e);
+    ok(d1?.statusCode === 503, `a newcomer is refused only when every queued place is a caller's only one (got ${d1?.statusCode})`);
+    relA();
+    const rb = await b1;
+    ok(typeof rb === "function" && __ocrLargeTest.state().holder === B, "the first newcomer's image is read next, in order");
+    rb();
+    const rc = await c1;
+    ok(typeof rc === "function" && __ocrLargeTest.state().holder === C, "then the second's");
+    rc();
+    ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every place is released");
+    // The caller is read from the request: a signed payer first, else the address.
+    let seen = null;
+    __ocrTest.inject("tur", { recognize: async () => { seen = __ocrLargeTest.state().holder; return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+    const big = pngHead(4100, 4100);
+    const tool = OCR_TOOLS.find((t) => t.slug === "image-ocr");
+    await tool.handler({ image: big.toString("base64"), lang: "tur" }, { ip: D.slice(3), headers: {} }).catch(() => {});
+    ok(seen === D, `a large image's place is held for the caller's address when no payer is signed (held for ${seen})`);
+    // An in-process executor calls the handler with no request: the place is
+    // held for the caller that dispatched the step (runAsCallerOf), and with
+    // no caller at all under one shared key, never uncounted.
+    const { runAsCallerOf, IN_PROCESS_CALLER } = await import("../src/dispatch-caller.js");
+    seen = null;
+    __ocrTest.inject("tur", { recognize: async () => { seen = __ocrLargeTest.state().holder; return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+    await runAsCallerOf({ ip: C.slice(3), headers: {} }, () => tool.handler({ image: big.toString("base64"), lang: "tur" })).catch(() => {});
+    ok(seen === C, `a step dispatched without a request holds its place for the dispatching caller (held for ${seen})`);
+    seen = null;
+    __ocrTest.inject("tur", { recognize: async () => { seen = __ocrLargeTest.state().holder; return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+    await tool.handler({ image: big.toString("base64"), lang: "tur" }).catch(() => {});
+    ok(seen === IN_PROCESS_CALLER, `a call with no caller at all is held under the shared key (held for ${seen})`);
+    // The caller key reads the identity payer: in FREE_MODE no payment header
+    // is verified, so a typed x-payment naming a wallet never changes the key.
+    {
+      const { callerKeyOf } = await import("../src/dispatch-caller.js");
+      const forged = Buffer.from(JSON.stringify({ x402Version: 1, scheme: "exact", network: "base", payload: { authorization: { from: "0x" + "ab".repeat(20) } } })).toString("base64");
+      const withHeader = (ip) => ({ ip, headers: { "x-payment": forged }, header: (n) => (String(n).toLowerCase() === "x-payment" ? forged : undefined) });
+      const had = process.env.FREE_MODE;
+      try {
+        process.env.FREE_MODE = "true";
+        ok(callerKeyOf(withHeader("198.51.100.40")) === "ip:198.51.100.40" && callerKeyOf({ ip: "198.51.100.40", headers: {} }) === "ip:198.51.100.40", `in FREE_MODE a forged x-payment does not change the caller key (${callerKeyOf(withHeader("198.51.100.40"))})`);
+        delete process.env.FREE_MODE;
+        ok(callerKeyOf(withHeader("198.51.100.40")) === `payer:0x${"ab".repeat(20)}`, `control: on a paid deployment, where the gate verified it, the signed payer is the key (${callerKeyOf(withHeader("198.51.100.40"))})`);
+      } finally { if (had === undefined) delete process.env.FREE_MODE; else process.env.FREE_MODE = had; }
+      // An IPv6 caller is its /64 (one host rotating addresses is one caller);
+      // an IPv4 caller is its full address.
+      const k = (ip) => callerKeyOf({ ip, headers: {} });
+      ok(k("2001:db8:1:2::a") === k("2001:db8:1:2:ffff:1:2:3") && k("2001:db8:1:2::a") === "ip:2001:db8:1:2::/64", `addresses in one IPv6 /64 share one caller key (${k("2001:db8:1:2::a")}, ${k("2001:db8:1:2:ffff:1:2:3")})`);
+      ok(k("2001:db8:1:3::a") !== k("2001:db8:1:2::a"), "a neighboring /64 is another caller");
+      ok(k("198.51.100.40") === "ip:198.51.100.40" && k("198.51.100.41") === "ip:198.51.100.41", "an IPv4 caller is keyed on its full address");
+      // The large-image place itself follows the fold.
+      seen = null;
+      __ocrTest.inject("tur", { recognize: async () => { seen = __ocrLargeTest.state().holder; return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+      await tool.handler({ image: big.toString("base64"), lang: "tur" }, { ip: "2001:db8:5:6::99", headers: {} }).catch(() => {});
+      ok(seen === "ip:2001:db8:5:6::/64", `a large image's place is held for the caller's /64 (held for ${seen})`);
+    }
+    // A skill pack runs its steps request-less too: each step's place is held
+    // for the caller that bought the pack, never under the shared key.
+    {
+      const { buildSkillTools } = await import("../src/tools/skill-runner.js");
+      const { SKILL_PACKS } = await import("../src/skills.js");
+      const pack = SKILL_PACKS[0];
+      const holders = [];
+      const probe = async () => {
+        __ocrTest.inject("tur", { recognize: async () => { holders.push(__ocrLargeTest.state().holder); return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+        return tool.handler({ image: big.toString("base64"), lang: "tur" });
+      };
+      const inlineHandlers = Object.fromEntries(pack.toolSlugs.map((s) => [s, probe]));
+      const packTool = buildSkillTools({ getCatalog: () => ({}), inlineHandlers }).find((t) => t.slug === `skill-${pack.slug}`);
+      await packTool.handler(packTool.discovery.input, { ip: D.slice(3), headers: {} }).catch(() => {});
+      ok(holders.length > 0 && holders.every((h) => h === D), `a skill pack's steps hold their places for the caller that bought the pack (${holders.length} steps, held for ${[...new Set(holders)].join(", ")})`);
+      // Every generic dispatch (the HTTP route and the hosted MCP connector)
+      // runs the handler inside its caller's key, so any tool that calls other
+      // tools' handlers in-process passes the caller on.
+      const { readFileSync } = await import("node:fs");
+      const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+      const mcp = readFileSync(new URL("../src/mcp-http.js", import.meta.url), "utf8");
+      ok(!/[^>] tool\.handler\(input, req\)/.test(server.replace(/runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\)/g, "")) && /runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\)/.test(server), "the HTTP tool route runs every handler inside its caller's key");
+      ok(/runAsCallerOf\(callReq, \(\) => entry\.def\.handler\(params, callReq\)\)/.test(mcp) && !/await entry\.def\.handler\(/.test(mcp), "the MCP connector runs every handler inside its caller's key");
+    }
+    // Request-less places fill the slot and both queued places: they are
+    // counted, so a named newcomer still takes the last queued one.
+    const relU = await __ocrLargeTest.acquire(50);
+    const u2 = __ocrLargeTest.acquire(5_000).then((rel) => rel, (e) => e);
+    const u3 = __ocrLargeTest.acquire(5_000).then((rel) => rel, (e) => e);
+    const n1 = __ocrLargeTest.acquire(5_000, B).then((rel) => rel, (e) => e);
+    const shedU = await Promise.race([u3, new Promise((r) => setTimeout(() => r("still queued"), 300))]);
+    ok(shedU?.statusCode === 503 && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `a named newcomer takes the last queued place of request-less calls holding the slot and the queue (that one answered ${shedU?.statusCode || shedU})`);
+    relU();
+    const ru2 = await u2; ru2(); const rn1 = await n1;
+    ok(typeof rn1 === "function", "and its image is read in turn");
+    rn1();
+    ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every request-less place is released");
   }
 
   // --- engine-backed ---

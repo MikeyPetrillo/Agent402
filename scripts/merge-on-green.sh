@@ -145,6 +145,11 @@ for i in $(seq 1 60); do
 done
 [ -z "$MISSING" ] || { echo "required check(s) never completed:$MISSING - not merging"; exit 1; }
 echo "every ruleset-required check is green on PR $PR"
+# Mark the PR ready now, once CI is green and before the Strix wait: Strix does
+# not review a draft PR, so a draft marked ready only after the wait never gets
+# its review and the wait refuses. Readiness does not move the head; the merge
+# below stays pinned to the tested SHA.
+gh pr ready "$PR" >/dev/null 2>&1 || true
 
 # STRIX. Strix posts its security review as the GitHub user strix-security[bot]
 # and publishes no check run, so no required check can hold a merge for it.
@@ -296,7 +301,6 @@ case "$DL" in
   *) echo "production ledgerDeadLetter: $DL" ;;
 esac
 
-gh pr ready "$PR" >/dev/null 2>&1 || true
 # Pinned to the tested SHA: if the branch moved since, gh refuses and we stop.
 gh pr merge "$PR" --merge --admin --match-head-commit "$SHA"
 MERGE=$(gh pr view "$PR" --json mergeCommit -q '.mergeCommit.oid // empty' || true)

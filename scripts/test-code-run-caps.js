@@ -136,6 +136,28 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
     e = await Promise.race([third3, new Promise((r) => setTimeout(() => r("still running"), 50))]);
     ok(e?.statusCode === 429, `a credits key is the key across IPs (got ${e?.statusCode ?? e})`);
     release3(); await Promise.all([...held3, third3]);
+    // A routed run (route-execute, decide, a skill pack) calls the handler with
+    // no request inside runAsCallerOf: it counts against the dispatching
+    // caller, and its refusal makes no charge claim (the answer it sits in is
+    // charged). Addresses in one IPv6 /64 are one caller.
+    const { runAsCallerOf } = await import("../src/dispatch-caller.js");
+    let release4; const gate4 = new Promise((r) => { release4 = r; });
+    behavior = { create: async () => sandbox(async () => { await gate4; return { logs: { stdout: ["ok\n"], stderr: [] }, text: null, error: null }; }) };
+    const v6 = (n) => ({ ...req(`2001:db8:1:2::${n.toString(16)}`), headers: {} });
+    const routed = (n) => runAsCallerOf(v6(n), () => run({ code: `r${n}` }));
+    const held4 = Array.from({ length: __test.PER_IP_MAX_CONCURRENT }, (_, k) => routed(k + 1));
+    await new Promise((r) => setTimeout(r, 10));
+    const past = routed(99).catch((x) => x);
+    e = await Promise.race([past, new Promise((r) => setTimeout(() => r("still running"), 50))]);
+    ok(e?.statusCode === 429 && /too many concurrent runs/i.test(e.message) && !/charged/i.test(e.message), `a routed run past its caller's limit is a 429 with no charge claim, across one /64 (got ${e?.statusCode ?? e}: ${e?.message})`);
+    const direct = run({ code: "z" }, { ...req("2001:db8:1:2::77"), headers: {} }).catch((x) => x);
+    e = await Promise.race([direct, new Promise((r) => setTimeout(() => r("still running"), 50))]);
+    ok(e?.statusCode === 429 && /not charged on x402/.test(e.message), `a direct call from the same /64 shares the routed runs' limit and keeps its charge sentence (got ${e?.statusCode ?? e})`);
+    const elsewhere = routed(0).then(() => "ran", (x) => x);
+    const otherNet = runAsCallerOf({ ...req("2001:db8:9:9::1"), headers: {} }, () => run({ code: "o" }));
+    release4();
+    await Promise.all([...held4, past, direct, otherNet]);
+    ok((await elsewhere)?.statusCode === 429, "the same /64 is still one caller while its runs hold every place");
   } finally {
     __test.setSandbox(undefined);
     if (realKey === undefined) delete process.env.E2B_API_KEY; else process.env.E2B_API_KEY = realKey;

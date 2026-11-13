@@ -86,10 +86,11 @@ export function decomposePrompt(task, maxSteps, { guidance = "" } = {}) {
  *  text for every seller, so a longer or link-laden listing buys no advantage
  *  and a URL in a listing is never offered to the model as somewhere to go. */
 // A sentence written to whatever rates the listing rather than about what the
-// tool does (a fit it asks for, a note or notice to the judge, a role marker,
-// a request to be chosen, an instruction to set aside the rules) is dropped
-// before the judge reads it, by the one screen route-execute's seller judge
-// reads too (src/listing-screen.js judgeReadableText).
+// tool does (a fit it asks for, a note or notice to the judge, a request to
+// be chosen, an instruction to set aside the rules) is dropped before the
+// judge reads it, and a speaker label's separator is rewritten to a dash, by
+// the one screen route-execute's seller judge reads too
+// (src/listing-screen.js judgeReadableText).
 export function judgeText(desc, max = 300) {
   return judgeReadableText(desc, { max });
 }

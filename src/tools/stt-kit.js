@@ -54,8 +54,10 @@
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
-import { measureAudioSeconds } from "./media-kit.js";
+import { measureAudio, transcodeSpeech, inputFormatOf } from "./media-kit.js";
+import { admissionCallerOf } from "../dispatch-caller.js";
 import { redactSecrets } from "./redact.js";
+import { NOT_CHARGED, notChargedOn } from "../not-charged.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 import { assertUpstreamBody } from "./llm-gateway-kit.js";
@@ -63,7 +65,7 @@ import { capturePostHogGatewayUsage } from "../posthog.js";
 import { audioProviderPolicy } from "../openrouter-audio-policy.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
-import { attributed, ATTRIBUTION, KIND, secondsOf, isDnsFailure } from "../upstream-deadline.js";
+import { attributed, ATTRIBUTION, KIND, secondsOf, isDnsFailure, currentBudget, handlerBudgetMs, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -91,13 +93,13 @@ export const STT_TIERS = Object.freeze({
 });
 const TIERS = STT_TIERS;
 
-function validateInput(input) {
+function validateInput(input, req = null) {
   const url = typeof input.url === "string" ? input.url.trim() : "";
   if (!url) throw bad('"url" is required - a URL pointing to an audio file (mp3, wav, m4a, etc.)');
   if (!/^https?:\/\//i.test(url)) throw bad('"url" must be an HTTP(S) URL');
 
   const language = typeof input.language === "string" ? input.language.trim().toLowerCase() : undefined;
-  refuseUnservedFields(input);
+  refuseUnservedFields(input, req);
   return { url, language, diarize: diarizeFlag(input.diarize) };
 }
 
@@ -105,14 +107,14 @@ function validateInput(input) {
  *  (see the header), so a request that sets one is a 400, never a transcript
  *  that silently ignored it. An empty list or `entities: false` asks for
  *  nothing and passes. Multipart spellings: keyterms, keyterms[], entities. */
-export function refuseUnservedFields(input) {
+export function refuseUnservedFields(input, req = null) {
   const kt = input?.keyterms ?? input?.["keyterms[]"];
   if (kt !== undefined && kt !== null && kt !== "" && !(Array.isArray(kt) && kt.length === 0)) {
-    throw bad('"keyterms" is not supported by the transcription models this route serves; remove it (nothing was charged)');
+    throw bad(`"keyterms" is not supported by the transcription models this route serves; remove it.${notChargedOn(req)}`);
   }
   const ent = input?.entities;
   if (ent !== undefined && ent !== null && ent !== "" && ent !== false && ent !== "false") {
-    throw bad('"entities" (entity detection) is not supported by the transcription models this route serves; remove it (nothing was charged)');
+    throw bad(`"entities" (entity detection) is not supported by the transcription models this route serves; remove it.${notChargedOn(req)}`);
   }
 }
 
@@ -165,7 +167,11 @@ async function probeContainer(buf, filename) {
     for (const pic of meta?.common?.picture || []) pictureBytes += pic?.data?.length || 0;
     const channels = Number(meta?.format?.numberOfChannels);
     const sampleRate = Number(meta?.format?.sampleRate);
-    return { durationSec: d, lossy: meta?.format?.lossless === false, hasVideo: meta?.format?.hasVideo, channels: Number.isInteger(channels) ? channels : null, sampleRate: Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : null, pictureBytes };
+    // Audio tracks the container lists (TrackType audio is 2): a file with
+    // more than one is converted to the first, the one that was measured.
+    const tracks = Array.isArray(meta?.format?.trackInfo) ? meta.format.trackInfo : [];
+    const audioTracks = tracks.filter((t) => t && (t.type === 2 || t.audio)).length;
+    return { audioTracks, durationSec: d, lossy: meta?.format?.lossless === false, hasVideo: meta?.format?.hasVideo, channels: Number.isInteger(channels) ? channels : null, sampleRate: Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : null, pictureBytes };
   } catch {
     return null;
   }
@@ -204,49 +210,205 @@ export function byteFloorApplies(container) {
     && Number.isFinite(container.sampleRate) && container.sampleRate > 0 && container.sampleRate <= 48000;
 }
 
-let measureImpl = measureAudioSeconds;
-/** Test seam: replace the decode measurement (null restores it). */
-export function __setMeasureForTest(fn) { measureImpl = fn || measureAudioSeconds; }
+// The longest a PCM WAV can play, from its byte count alone: every sample
+// frame takes channels x bytes-per-sample bytes, so a header of 8 kHz, 8-bit,
+// mono or more reads at least PCM_MIN_BYTES_PER_SECOND (64 kbps) and the whole
+// file cannot play longer than its bytes over that rate. Only uncompressed
+// codecs qualify (PCM, float, A-law, mu-law, or the extensible header naming
+// one), in a file with one fmt chunk, ahead of the data, whose fields agree.
+// A compressed codec (ADPCM; MP3, AAC, Opus, Vorbis, FLAC) has no such floor:
+// it can hold a second of silence in a few bytes, so its bytes bound nothing.
+const PCM_MIN_BYTES_PER_SECOND = 8000;
+const PCM_TAGS = new Set([1, 3, 6, 7]);
+const WAV_CHUNK_WALK_MAX = 64;
+/** Seconds a PCM WAV of this size cannot play past, or null when the file is
+ *  not one whose bytes bound its length. Pure; exported for tests. */
+export function pcmWavMaxSeconds(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 44) return null;
+  if (buf.toString("latin1", 0, 4) !== "RIFF" || buf.toString("latin1", 8, 12) !== "WAVE") return null;
+  let off = 12, fmt = -1, fmtSize = 0, fmts = 0, data = false;
+  for (let i = 0; off + 8 <= buf.length; i++) {
+    if (i >= WAV_CHUNK_WALK_MAX) return null;
+    const id = buf.toString("latin1", off, off + 4);
+    const size = buf.readUInt32LE(off + 4);
+    if (id === "fmt ") {
+      if (data || ++fmts > 1 || size < 16 || off + 8 + size > buf.length) return null;
+      fmt = off + 8; fmtSize = size;
+    } else if (id === "data") data = true;
+    off += 8 + size + (size & 1);
+  }
+  if (fmts !== 1 || !data) return null;
+  let tag = buf.readUInt16LE(fmt);
+  const ch = buf.readUInt16LE(fmt + 2), rate = buf.readUInt32LE(fmt + 4), byteRate = buf.readUInt32LE(fmt + 8);
+  const align = buf.readUInt16LE(fmt + 12), bits = buf.readUInt16LE(fmt + 14);
+  if (tag === 0xfffe) { if (fmtSize < 40) return null; tag = buf.readUInt16LE(fmt + 24); }
+  if (!PCM_TAGS.has(tag) || ch < 1 || bits < 8 || bits % 8 !== 0 || rate < 8000) return null;
+  if (align !== ch * (bits / 8) || byteRate !== rate * align) return null;
+  return buf.length / PCM_MIN_BYTES_PER_SECOND;
+}
+
+let measureImpl = measureAudio;
+/** Test seam: replace the decode measurement (null restores it). The stand-in
+ *  answers seconds (a number, or null when unmeasured) or measureAudio's own
+ *  shape ({ seconds } | { undecodable } | { unavailable }). */
+export function __setMeasureForTest(fn) { measureImpl = fn || measureAudio; }
+let transcodeImpl = transcodeSpeech;
+/** Test seam: replace the cut-and-convert run (null restores it). Same answer
+ *  shape as transcodeSpeech: { audio, seconds } | { undecodable } | { unavailable }. */
+export function __setTranscodeForTest(fn) { transcodeImpl = fn || transcodeSpeech; }
 let unmeasured = 0;
 /** Files whose audio could not be measured by decoding since boot (the byte floor bounded the ones it applies to). */
 export const sttUnmeasuredSinceBoot = () => unmeasured;
 
-/** Throws 422 when the audio exceeds the tier's advertised duration cap, or
- *  when the duration cannot be read at all (an unreadable container would
- *  otherwise be an unbounded upstream bill). Small tolerance for container
- *  rounding. Exported for tests.
+/** Containers sent upstream as they arrived: the ones on the speech upstream's
+ *  documented input list (flac, mp3, mp4/m4a, ogg, wav, webm). Any other
+ *  container the decoder reads (ASF/WMA, raw AAC, AMR, CAF, AIFF, AVI) is
+ *  converted to FLAC first, so the upstream is never handed a format it does
+ *  not list. */
+const UPSTREAM_READY = new Set(["flac", "mp3", "mov", "ogg", "wav", "matroska"]);
+/** File-name extensions that name each container sent as it came, the first
+ *  being the one used when the buyer's name names another (or none): the
+ *  upstream then reads the bytes as the container that was measured. */
+const NAME_EXTS = { wav: ["wav"], mp3: ["mp3", "mpga", "mpeg"], flac: ["flac"], ogg: ["ogg", "oga", "opus"], matroska: ["webm", "mkv"], mov: ["m4a", "mp4", "mov"] };
+/** The upload name for bytes sent as they came: the buyer's own name when its
+ *  extension names the measured container, else audio.<that container>. Pure; exported for tests. */
+export function upstreamNameFor(filename, format) {
+  const exts = NAME_EXTS[format];
+  if (!exts) return filename;
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(filename ?? ""));
+  return m && exts.includes(m[1].toLowerCase()) ? filename : `audio.${exts[0]}`;
+}
+/** A cut that wrote at least this close to the cap may have dropped audio past it. */
+const CUT_REACHED_SLACK_SEC = 0.25;
+
+function overCapError(durationSec, tierSlug) {
+  const tier = TIERS[tierSlug];
+  const mins = (durationSec / 60).toFixed(1);
+  const upsell = tierSlug === "transcribe" ? " For up to 10 minutes, use /api/transcribe-pro." : "";
+  return bad(`Audio is ${mins} minutes - this tier accepts up to ${tier.maxMinutes} minutes.${upsell} Split longer recordings into chunks.`, 422);
+}
+/** The charge sentence is made on a route call only (finalFailure's rule): a
+ *  skill-pack step runs inside a charged answer and prints the step's error. */
+function unreadableError(reason, tierSlug, req) {
+  return Object.assign(bad(`This file's audio format could not be read: ${reason}, so its length can be neither measured nor trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap. Send a standard mp3, wav, m4a, ogg, flac, or webm file.${notChargedOn(req)}`, 400), { hint: "format-unreadable" });
+}
+/** Our decoder could not run (no slot in the time the call's budget leaves
+ *  after the upstream's, its deadline, no ffmpeg here):
+ *  the length is unbounded, so no upstream call. The charge sentence is made
+ *  on a route call only (finalFailure's rule). */
+function decoderBusyError(reason, tierSlug, req) {
+  return Object.assign(attributed(bad(`This file's length could not be confirmed, and it could not be trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap just now: ${reason}. This is on our side, not your file.${notChargedOn(req)} Retry in a minute.`, 503), ATTRIBUTION.OURS), { retryAfter: 30 });
+}
+
+/** The audio to send upstream, bounded by the tier's duration cap. Throws 422
+ *  when the audio exceeds the cap, or when the duration cannot be read at all
+ *  (an unreadable container would otherwise be an unbounded upstream bill).
+ *  Small tolerance for container rounding.
  *
  *  The length that is capped is the longer of what the headers declare and
  *  what the audio measures: the file is decoded locally (ffmpeg, no upstream
- *  call) and the decoder's own clock is read. Where it cannot be decoded here
- *  (no ffmpeg on this server, a failed or slow decode), a lossy audio-only
- *  file in one or two channels at up to 48 kHz is held to the shortest its byte count can
- *  play (byteFloorApplies); any other file keeps its declared length. A
- *  file inside the cap passes either way; the returned duration is the one
- *  the margin math uses. */
-export async function assertWithinDurationCap(buf, filename, tierSlug) {
+ *  call) and the decoder's own clock is read. A measured file inside the cap
+ *  goes byte for byte when its container is on the upstream's list, else as
+ *  FLAC (transcodeSpeech, cut at the cap plus the tolerance).
+ *
+ *  A PCM WAV whose byte count alone bounds it under the cap
+ *  (pcmWavMaxSeconds) is sent as it came, with no decode. Every other file
+ *  waits for a decoder slot for as long as the call's budget still leaves
+ *  the decode and the upstream call their time (decodeDeadlineAt).
+ *
+ *  Where the measurement gave no length (no free decoder slot in the time
+ *  the budget leaves, its deadline, no ffmpeg), the length a file declares is not taken on trust: a
+ *  lossy audio-only file in one or two channels at up to 48 kHz whose bytes
+ *  alone play past the cap is the 422 (byteFloorApplies), and any other file
+ *  is cut at the cap. A cut that wrote less than the cap read the whole file
+ *  (that is its measured length, and the file goes as above); one that reached
+ *  the cap is what is sent, and the answer says so (trimmedToCapSeconds,
+ *  durationUnconfirmed). When the cut cannot run either, a retryable 503 and
+ *  no upstream call. A file the decoder cannot read at all (no cut is
+ *  possible) is a 400 that names it. Returns { buf, filename, durationSec,
+ *  trimmedToCapSeconds?, durationUnconfirmed? }; durationSec is the length the
+ *  margin math and the answer use. */
+export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null, { diarize = false } = {}) {
   const tier = TIERS[tierSlug];
-  const container = await probeContainer(buf, filename);
-  if (container === null) {
-    throw bad("Could not read the audio duration from the file - send a standard mp3, wav, m4a, ogg, flac, or webm file", 422);
-  }
+  const durationUnreadable = () => bad("Could not read the audio duration from the file - send a standard mp3, wav, m4a, ogg, flac, or webm file", 422);
+  // The header parser picks its reader from the file name, so bytes under the
+  // wrong name (an Ogg file named .m4a or .mp3) can declare nothing. Such a
+  // file is still measured by decoding: served only on a measured length, and
+  // as the decoded FLAC, since its track count is unknown. Unmeasured, it is
+  // the 422 it always was.
+  const declared = await probeContainer(buf, filename);
+  const headerless = declared === null;
+  const container = declared ?? { audioTracks: 0, durationSec: 0, pictureBytes: 0 };
   const capSec = tier.maxMinutes * 60;
-  let durationSec = container.durationSec;
-  if (durationSec <= capSec + 2) {
-    let measured = null;
-    try { measured = await measureImpl(buf); } catch { /* unmeasured: the byte floor below */ }
-    if (Number.isFinite(measured) && measured > 0) durationSec = Math.max(durationSec, measured);
-    else {
-      unmeasured++;
-      if (byteFloorApplies(container)) durationSec = Math.max(durationSec, byteFloorSeconds(buf.length, container.pictureBytes));
-    }
+  const overCap = (sec) => sec > capSec + 2;
+  // A container with more than one audio track declares the longest track's
+  // length (Matroska, WebM, Ogg) or the first's (MP4). Only the first track is
+  // sent, cut at the cap, so the declared length bounds nothing here: the
+  // first track's measured length decides, and its bytes are not the file's.
+  const declaredBounds = !(container.audioTracks > 1);
+  const withDeclared = (sec) => (declaredBounds ? Math.max(container.durationSec, sec) : sec);
+  if (declaredBounds && overCap(container.durationSec)) throw overCapError(container.durationSec, tierSlug);
+  const sniffed = inputFormatOf(buf);
+  // A container with more than one audio track is sent as its first, the one
+  // measured, never as it came (the upstream could read another); so is a
+  // file whose header declared nothing.
+  const multiTrack = container.audioTracks > 1 || headerless;
+  const asFlac = (t) => ({ buf: t.audio, filename: "audio.flac" });
+  // A PCM WAV whose bytes alone cannot play past the cap goes as it came,
+  // without a decode (the measurement pool's state does not matter to it).
+  const bound = sniffed === "wav" && !multiTrack ? pcmWavMaxSeconds(buf) : null;
+  if (bound !== null && !overCap(bound)) return { buf, filename: upstreamNameFor(filename, "wav"), durationSec: container.durationSec };
+  // A busy pool queues inside the call's budget, leaving the upstream its time.
+  const deadlineAt = decodeDeadlineAt(req, diarize);
+  // The decode pool admits per caller (media-kit.js): this call's caller, or
+  // the caller that dispatched it when it runs as a step with no request.
+  const who = admissionCallerOf(req);
+
+  let measured = null, undecodable = null, unavailable = null, format = sniffed, cut = null;
+  try {
+    // A file that will be converted is measured and converted in one decode.
+    const m = await measureImpl(buf, !UPSTREAM_READY.has(sniffed) || multiTrack ? { cutSeconds: capSec + 2, deadlineAt, who } : { deadlineAt, who });
+    if (m && typeof m === "object") {
+      measured = m.seconds ?? null; undecodable = m.undecodable || null; unavailable = m.unavailable || null;
+      if (typeof m.format === "string") format = m.format;
+      if (m.audio) cut = m.audio;
+    } else measured = m;
+  } catch { /* unmeasured: below */ }
+  // Sent as it came only when the sniffed demuxer read it, the upstream lists
+  // its container and it holds one audio track; else as the decoded FLAC.
+  const ready = !multiTrack && format === sniffed && UPSTREAM_READY.has(format);
+  if (Number.isFinite(measured) && measured > 0) {
+    const durationSec = withDeclared(measured);
+    if (overCap(durationSec)) throw overCapError(durationSec, tierSlug);
+    if (ready) return { buf, filename: upstreamNameFor(filename, format), durationSec };
+    if (cut) return { ...asFlac({ audio: cut }), durationSec };
+    const t = await transcodeImpl(buf, { maxSeconds: capSec + 2, format, deadlineAt, who });
+    if (t?.audio) return { ...asFlac(t), durationSec };
+    if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
+    throw decoderBusyError(t?.unavailable || "the conversion did not run", tierSlug, req);
   }
-  if (durationSec > capSec + 2) {
-    const mins = (durationSec / 60).toFixed(1);
-    const upsell = tierSlug === "transcribe" ? " For up to 10 minutes, use /api/transcribe-pro." : "";
-    throw bad(`Audio is ${mins} minutes - this tier accepts up to ${tier.maxMinutes} minutes.${upsell} Split longer recordings into chunks.`, 422);
+  if (headerless) throw durationUnreadable();
+  unmeasured++;
+  if (declaredBounds && byteFloorApplies(container) && overCap(byteFloorSeconds(buf.length, container.pictureBytes))) {
+    throw overCapError(byteFloorSeconds(buf.length, container.pictureBytes), tierSlug);
   }
-  return durationSec;
+  if (undecodable) throw unreadableError(undecodable, tierSlug, req);
+  const t = await transcodeImpl(buf, { maxSeconds: capSec, format, deadlineAt, who });
+  if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
+  if (!t?.audio || !(Number.isFinite(t.seconds) && t.seconds > 0)) throw decoderBusyError(t?.unavailable || unavailable || "the decoder gave no answer", tierSlug, req);
+  if (t.seconds < capSec - CUT_REACHED_SLACK_SEC) {
+    // The cut read the whole file: its length is measured after all.
+    const durationSec = withDeclared(t.seconds);
+    return ready && (!t.format || t.format === sniffed) ? { buf, filename: upstreamNameFor(filename, sniffed), durationSec } : { ...asFlac(t), durationSec };
+  }
+  return { ...asFlac(t), durationSec: t.seconds, trimmedToCapSeconds: capSec, durationUnconfirmed: true };
+}
+
+/** The duration prepareAudioWithinCap bounds, for callers that need only the
+ *  number (tests, the margin suite). A serving path sends prepareAudioWithinCap's
+ *  `buf`, never the original bytes. */
+export async function assertWithinDurationCap(buf, filename, tierSlug) {
+  return (await prepareAudioWithinCap(buf, filename, tierSlug)).durationSec;
 }
 
 const BILLING_CODES = new Set(["insufficient_quota", "billing_hard_limit_reached", "billing_not_active", "billing_limit_reached"]);
@@ -263,9 +425,10 @@ export function isOurBillingLimit(status, bodyText) {
 export function ourKeyRefused(status) {
   return Object.assign(attributed(bad(`Transcription is unavailable right now: the speech-to-text provider refused this server's key (HTTP ${status}); this is on our side, not your input`, 502), ATTRIBUTION.OURS, KIND.OUR_KEY), { upstreamStatus: status });
 }
-/** The refusal for our billing limit: names our side, no upstream name. */
+/** The refusal for our billing limit: names our side, no upstream name. The
+ *  charge sentence is added by finalFailure on a route call only. */
 export function ourBillingLimit() {
-  return Object.assign(bad("Transcription is unavailable right now because this server reached its own spending limit for speech-to-text. This is on our side, not your input; you were not charged. Retry later.", 503), { noRetry: true });
+  return Object.assign(bad("Transcription is unavailable right now because this server reached its own spending limit for speech-to-text. This is on our side, not your input.", 503), { noRetry: true, ourBillingLimit: true });
 }
 
 // --- one more attempt on a transient upstream failure -----------------------
@@ -273,6 +436,22 @@ export function ourBillingLimit() {
 // 120 s. The cap now bounds BOTH attempts together, counted from the start of
 // the first, so a call never runs longer than it could before.
 const UPSTREAM_CAP_MS = Object.freeze({ default: 60_000, diarize: 120_000 });
+/** The upstream's cap per path (default, diarize), for tests of the decode budget. */
+export const STT_UPSTREAM_CAP_MS = UPSTREAM_CAP_MS;
+
+/** The epoch ms by which this call's decode must end so its upstream call
+ *  (the path's whole cap, both attempts) still fits: the route's budget (the
+ *  payment window, src/upstream-deadline.js; a fresh one off a route), the
+ *  CDN answer window and the payment authorization, whichever ends first,
+ *  less that cap. The decode pool waits for a slot up to it. */
+function decodeDeadlineAt(req, diarize) {
+  const b = currentBudget();
+  let left = b ? b.remaining() : handlerBudgetMs(PAYMENT_WINDOW_BUDGET_MS);
+  try { const c = cdnSyncLeftMs(req); if (c !== null) left = Math.min(left, c); } catch { /* no bound to read */ }
+  try { const p = req && typeof req === "object" && req.headers ? evmCredentialBudgetMs(req) : null; if (p !== null) left = Math.min(left, p); } catch { /* no bound to read */ }
+  const upstreamMs = retryKnobs.capMs ?? (diarize ? UPSTREAM_CAP_MS.diarize : UPSTREAM_CAP_MS.default);
+  return Date.now() + left - upstreamMs;
+}
 const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
 /** A rate limit is retried only when the upstream names a wait this short. */
 export const STT_RETRY_AFTER_MAX_MS = 3_000;
@@ -468,14 +647,19 @@ function retryLeftMs(startedAt, capMs, req) {
   return left;
 }
 
-const NOT_CHARGED = "Nothing was charged.";
 /** The 5xx a buyer gets: what failed, that it was not charged, what to do.
  *  The charge claim is made only on a route call (`req` present): a skill
  *  pack runs this handler as one step of a charged 200 and prints the step's
  *  error, where the claim would be false. On a route call it is true on every
  *  payment but a Tempo transfer sent before the call, and the route binder
  *  adds that exception to this exact sentence (server.js withPushException). */
+/** finalFailure, for tests of the charge sentence on and off a route call. */
+export function __sttFinalFailureForTest(err, opts) { return finalFailure(err, opts); }
 function finalFailure(err, { attempts, diarize, req }) {
+  if (err?.ourBillingLimit && typeof err.message === "string" && !err.message.includes(NOT_CHARGED)) {
+    err.message = `${err.message}${notChargedOn(req)} Retry later.`;
+    return err;
+  }
   if (!err || !(err.statusCode >= 500) || err.hardCap || err.noRetry || typeof err.message !== "string" || err.message.includes(NOT_CHARGED)) return err;
   const tried = attempts > 1 ? ` (${attempts} attempts)` : "";
   // The other path is named only while this server can serve it.
@@ -483,8 +667,7 @@ function finalFailure(err, { attempts, diarize, req }) {
     ? (OPENAI_KEY() ? ", or send the call without diarize for a transcript without speaker labels (a different model serves it)" : "")
     : (OPENROUTER_KEY() ? ", or send diarize:true (a different model serves that at the same price)" : "");
   const what = err.message.replace(/\s+-\s+retry(?: shortly)?\s*$/i, "").replace(/[.\s]+$/, "");
-  const routeCall = !!(req && typeof req === "object" && req.headers);
-  err.message = `${what}${tried}.${routeCall ? ` ${NOT_CHARGED}` : ""} Retry in a minute${other}.`;
+  err.message = `${what}${tried}.${notChargedOn(req)} Retry in a minute${other}.`;
   return err;
 }
 
@@ -535,12 +718,19 @@ async function transcribeBuffer(buf, filename, tierSlug, language, diarize, prob
   return out;
 }
 
+/** Sends what prepareAudioWithinCap bounded (its durationSec is the margin
+ *  math's and the answer's duration); a cut file's answer says so. */
+async function transcribePrepared(prep, tierSlug, language, diarize, req) {
+  const out = await transcribeBuffer(prep.buf, prep.filename, tierSlug, language, diarize, prep.durationSec, req);
+  if (prep.trimmedToCapSeconds) Object.assign(out, { trimmedToCapSeconds: prep.trimmedToCapSeconds, durationUnconfirmed: true });
+  return out;
+}
+
 function makeHandler(tierSlug) {
   return async (input, req) => {
-    const { url, language, diarize } = validateInput(input);
+    const { url, language, diarize } = validateInput(input, req);
     const { buf, filename } = await fetchAudio(url);
-    const probedDuration = await assertWithinDurationCap(buf, filename, tierSlug); // measured for the margin cap; also the answer's duration
-    return transcribeBuffer(buf, filename, tierSlug, language, diarize, probedDuration, req);
+    return transcribePrepared(await prepareAudioWithinCap(buf, filename, tierSlug, req, { diarize }), tierSlug, language, diarize, req);
   };
 }
 
@@ -568,13 +758,18 @@ export function makeMultipartHandler(tierSlug) {
     if (!file) throw bad('multipart body has no "file" part');
     const language = typeof fields.language === "string" && fields.language ? fields.language : undefined;
     const diarize = diarizeFlag(fields.diarize);
-    refuseUnservedFields(fields);
-    const probedDuration = await assertWithinDurationCap(file.buf, file.filename, tierSlug);
-    return transcribeBuffer(file.buf, file.filename, tierSlug, language, diarize, probedDuration, req);
+    refuseUnservedFields(fields, req);
+    return transcribePrepared(await prepareAudioWithinCap(file.buf, file.filename, tierSlug, req, { diarize }), tierSlug, language, diarize, req);
   };
 }
 
 const RETRY_NOTE = " A transient upstream failure gets one more attempt inside the same time limit, and an answer served that way says so in agent402_retried.";
+const TRIM_NOTE = " A file whose length cannot be confirmed is transcribed up to the cap, and the answer says so (trimmedToCapSeconds, durationUnconfirmed).";
+/** Fields an answer carries only when its file was cut at the cap. */
+const TRIM_OUTPUT = Object.freeze({
+  trimmedToCapSeconds: { type: "number", description: "Present only when the file's length could not be confirmed: the audio was transcribed up to this many seconds (the tier's cap)" },
+  durationUnconfirmed: { type: "boolean", description: "Present (true) only with trimmedToCapSeconds: the file's full length was not confirmed" },
+});
 const SHARED_TAGS = ["stt", "speech-to-text", "transcription", "audio", "whisper", "openai"];
 
 export const STT_TOOLS = [
@@ -585,7 +780,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.030",
     description:
-      "Transcribe audio to text with the gpt-transcribe model. Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels, word timestamps and a language confidence score (the scribe-v2 model, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes." + RETRY_NOTE,
+      "Transcribe audio to text with the gpt-transcribe model. Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels, word timestamps and a language confidence score (the scribe-v2 model, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes." + TRIM_NOTE + RETRY_NOTE,
     tags: [...SHARED_TAGS, "gpt-transcribe"],
     discovery: {
       bodyType: "json",
@@ -606,6 +801,7 @@ export const STT_TOOLS = [
           language: "en",
           duration: 12.6,
         },
+        optional: TRIM_OUTPUT,
       },
     },
     handler: makeHandler("transcribe"),
@@ -617,7 +813,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "Pro tier for longer recordings (model-backed, gpt-transcribe, the same model as the standard tier): transcribes an audio file at a URL. Max 10 minutes and 25 MB, the longer cap of the transcribe routes. Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score. No API key needed; pay per call via x402." + RETRY_NOTE,
+      "Pro tier for longer recordings (model-backed, gpt-transcribe, the same model as the standard tier): transcribes an audio file at a URL. Max 10 minutes and 25 MB, the longer cap of the transcribe routes. Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score. No API key needed; pay per call via x402." + TRIM_NOTE + RETRY_NOTE,
     tags: [...SHARED_TAGS, "gpt-transcribe", "pro"],
     discovery: {
       bodyType: "json",
@@ -638,6 +834,7 @@ export const STT_TOOLS = [
           language: "en",
           duration: 12.6,
         },
+        optional: TRIM_OUTPUT,
       },
     },
     handler: makeHandler("transcribe-pro"),
@@ -655,7 +852,7 @@ export const STT_TOOLS = [
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>", language: "en" },
       inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
-      output: { example: { text: "Example transcript.", duration: 3.2, model: "gpt-transcribe" } },
+      output: { example: { text: "Example transcript.", duration: 3.2, model: "gpt-transcribe" }, optional: TRIM_OUTPUT },
     },
     handler: makeMultipartHandler("transcribe"),
   },
@@ -672,8 +869,12 @@ export const STT_TOOLS = [
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>" },
       inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
-      output: { example: { text: "Example transcript.", duration: 420.5, model: "gpt-transcribe" } },
+      output: { example: { text: "Example transcript.", duration: 420.5, model: "gpt-transcribe" }, optional: TRIM_OUTPUT },
     },
     handler: makeMultipartHandler("transcribe-pro"),
   },
 ];
+// Each call runs under its route's payment-window budget: the decode pool's
+// wait reads it (decodeDeadlineAt), so a queued decode still leaves the
+// upstream call its time.
+underBudgetAll(STT_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

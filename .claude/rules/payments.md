@@ -78,7 +78,23 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   and the heartbeat and the status Worker page on `burst` under one issue per word that `ok`
   closes. The shared flags are `gwb-alarm` and `cg-alarm`, read by the status words only; the
   earlier `gwb-pause` and `cg-pause` are neither written nor read, and payer-only windows are not
-  read for a payment that names a network, so a deploy overlap refuses nobody. A wallet is refused only when it holds
+  read for a payment that names a network, so a deploy overlap refuses nobody. **Service-wide bound:**
+  `GATEWAY_SETTLE_BREAKER_GLOBAL_MAX` distinct buyers whose `/v1` failures are a verdict on their
+  payment (`buyer` only; never unknown, not-buyer, withdrawn or pending) raise the flag `gwb-wide`
+  for one window; while it is up a `/v1` consult reads a key's verdict count (never its unknown
+  count, which keeps `_UNKNOWN_MAX`) at
+  `GATEWAY_SETTLE_BREAKER_BURST_MAX` (default 1) only for a wallet that has never settled (no
+  settled call in the window and no paid sale on the books, `payerHasPaidSale`, read only while the
+  flag is up and the lower count would refuse; a read that throws counts as paid), under the same
+  share rule, its refusal held no longer than the flag. A rotated wallet is served one unpaid run
+  instead of three; a wallet that has ever paid, a fresh wallet, a wallet whose failures are of
+  unknown cause (below `_UNKNOWN_MAX`) and the catalog consult are served as before. The 429 says
+  the service-wide bound is why.
+  **One authorization:** a served run whose settle fails for the buyer's fault (the same `buyer`
+  class the wallet count reads; never ours, an unknown cause, a withdrawn sub-cent refusal or a
+  payment still settling) is also counted per signed EVM authorization (`payer@network#nonce`, shared `gwb-auth`);
+  at `GATEWAY_SETTLE_BREAKER_AUTH_MAX` (default `MAX`) that authorization alone is refused with
+  `hint: sign-new-authorization`, and a new authorization from the wallet is served at once. A wallet is refused only when it holds
   `GATEWAY_SETTLE_BREAKER_MAX` failures in the window AND they are more than
   `GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE` (default 0.5) of its outcomes there; settled calls
   stay in the window as outcomes and never erase failures, so a buyer settling hundreds of

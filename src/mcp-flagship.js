@@ -450,6 +450,8 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       text: { type: "string" },
       language: { type: "string" },
       duration: { type: "number" },
+      trimmedToCapSeconds: { type: "number", description: "Present only when the file's length could not be confirmed: the audio was transcribed up to this many seconds (the tier's cap)" },
+      durationUnconfirmed: { type: "boolean", description: "Present (true) only with trimmedToCapSeconds: the file's full length was not confirmed" },
     },
     required: ["text"],
   },
@@ -531,7 +533,7 @@ export function mcpJsonResult(obj, text = JSON.stringify(obj, null, 2)) {
  * Hosted URL is parameterized; npm / Claude Code / Cursor notes
  * match docs/ecosystem-listings.md + wiki/MCP-Connector.md.
  */
-export const AGENT402_MCP_VERSION = "0.13.31";
+export const AGENT402_MCP_VERSION = "0.13.32";
 
 /** A listed MCP tool description, at most `max` characters. Hosts truncate or
  *  skip long descriptions, so the listing keeps the first whole sentences; the
@@ -563,12 +565,12 @@ export function mcpInstallHints(baseUrl) {
       mcpServers: {
         agent402: {
           command: "npx",
-          args: ["-y", "agent402-mcp@0.13.31"],
+          args: ["-y", "agent402-mcp@0.13.32"],
           env: { AGENT_KEY: "0xYOUR_PRIVATE_KEY" },
         },
       },
     },
-    npm: "npx -y agent402-mcp@0.13.31",
+    npm: "npx -y agent402-mcp@0.13.32",
     maintainer: "Havok Holdings LLC",
   };
 }

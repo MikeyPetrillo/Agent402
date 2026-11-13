@@ -170,6 +170,19 @@ process.env.MODEL_CATALOG_URL = "http://127.0.0.1:9/api/v1/models";
   ok(calls.log.length === 1 && calls.log[0][6]?.prePayment === true && calls.log[0][0] === "v1-chat-metered" && calls.log[0][1] === 400, "the recorder writes the [tool-error] line marked pre-payment");
   ok(calls.row.length === 1 && calls.row[0].prePayment === true && calls.row[0].errored === true && calls.row[0].status === 400, "the recorder writes the tool_calls row marked pre-payment");
   ok(calls.ph.length === 1 && calls.ph[0].prePayment === true && calls.ph[0].refusalReason === "unknown_model", "the recorder sends the PostHog tool_call marked pre-payment with its class");
+  // Past the caller's write budget: the log line (sampled) still runs, the row and both events do not.
+  {
+    const c = { log: [], row: [], ph: [] };
+    let left = 2;
+    const r2 = createPrePaymentRefusalRecorder({
+      logToolError: (...a) => c.log.push(a), recordToolCall: async (r) => { c.row.push(r); }, captureToolCall: (r) => c.ph.push(r),
+      isSynthetic: (req) => !!req.synthetic, requestShape: () => [], allowWrites: () => left-- > 0,
+    });
+    for (let i = 0; i < 5; i++) r2({}, "v1-chat-metered", 400, "m");
+    r2({ synthetic: true }, "v1-chat-metered", 400, "m");
+    ok(c.log.length === 6 && c.row.length === 3 && c.ph.length === 3, `past the write budget only the log line runs; synthetic traffic is never budgeted (log ${c.log.length}, row ${c.row.length}, ph ${c.ph.length})`);
+    ok(c.log.filter((a) => a[6]?.capture === false).length === 3, "the log call is told to leave out its PostHog event past the budget");
+  }
   const boom = createPrePaymentRefusalRecorder({ logToolError: () => { throw new Error("x"); }, recordToolCall: async () => {}, captureToolCall: () => {}, isSynthetic: () => false, requestShape: () => [] });
   let threw = false; try { boom({}, "s", 400, "m"); } catch { threw = true; }
   ok(!threw, "a failing log never breaks the response");

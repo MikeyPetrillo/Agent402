@@ -72,7 +72,7 @@ import { creditFromTx as solanaCreditFromTx } from "./solana-buyer.js";
 import { historyAwareRpc, solanaHistoryStatus } from "./solana-history-rpc.js";
 import { evmLogsStatus } from "./evm-logs-rpc.js";
 import { compositeGuardBlocked, compositeGuardAlarmStatus, recordCompositeSpendFailure, OWN_GLOBAL_BOUND_SLUGS, recordCompositeSpendSuccess, EXPENSIVE_COMPOSITE_SLUGS, isLongRunningSlug, spendsBeforeSettlement, _compositeGuardState, compositeUsageSnapshot, withCompositeContext } from "./composite-spend-guard.js";
-import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus } from "./gateway-settle-breaker.js";
+import { gatewaySettleBreakerCheck, gatewaySettleFailuresStatus, setGatewaySettleBreakerSalesLedger } from "./gateway-settle-breaker.js";
 // Single-upstream-call routes that run long (40 s+): EVM exact only, like the
 // composites (settle-after on SVM/AVM/Tempo is work done, never charged), but
 // not composite-spend-guarded (one bounded upstream price).
@@ -378,7 +378,8 @@ import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary, hangupW
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
-import { createAsyncJobs, wantsAsync, isAsyncLoopbackToken, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
+import { createAsyncJobs, wantsAsync } from "./async-jobs.js";
+import { isOwnReplay } from "./own-replay.js";
 import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
 import { trustProxyHops, replayClientIpMiddleware, forwardedWithoutHopsWarning } from "./trust-proxy.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
@@ -736,7 +737,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -746,6 +747,10 @@ import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
 import { creditsSalesEnabled, creditsTopupFields } from "./credits-sales.js";
+
+// The /v1 settle breaker reads whether a wallet has ever paid from the sales
+// ledger, handed in here so the breaker never imports it (see the module).
+setGatewaySettleBreakerSalesLedger({ payerHasPaidSale, salesLedgerLoaded });
 
 // Listed only with a key, like every other env-gated kit: a tool we cannot serve
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
@@ -820,7 +825,8 @@ const NEXT_CALL = { search: "answer", decide: "decide-execute" };
 }
 import { buildSkillTools, modelBackedPackSlugs } from "./tools/skill-runner.js";
 import { applyCapturedExamples, loadCapturedExamples } from "./tool-output-examples.js";
-import { buildRouteExecuteTool, EXEC_TIERS } from "./tools/route-execute.js";
+import { buildRouteExecuteTool, EXEC_TIERS, routeJudgeListing } from "./tools/route-execute.js";
+import { runAsCallerOf } from "./dispatch-caller.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
@@ -2658,8 +2664,8 @@ app.use((req, _res, next) => renderPathStore.run(req.path, next));
 const TRUST_PROXY_HOPS = trustProxyHops();
 app.set("trust proxy", TRUST_PROXY_HOPS);
 if (TRUST_PROXY_HOPS === 0) {
-  app.use(forwardedWithoutHopsWarning({ isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]) }));
-  app.use(replayClientIpMiddleware({ isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]) }));
+  app.use(forwardedWithoutHopsWarning({ isReplay: isOwnReplay }));
+  app.use(replayClientIpMiddleware({ isReplay: isOwnReplay }));
 }
 // Through the CDN proxy the edge-reported peer is a CDN address and the client
 // is CF-Connecting-IP; from any other peer that header is ignored. req.ip is
@@ -2678,6 +2684,8 @@ if (CDN_PROXY_ON) {
       windowAdd: (...a) => sharedLimitsWrite("cdn-origin", sharedLimits.windowAdd(...a)),
       windowRead: (...a) => sharedLimits.windowRead(...a).then((r) => { if (!r?.ok) noteSharedLimitsDegraded("cdn-origin", r); return r; }),
     } : null,
+    // Our own loopback replays are not CDN peers: the count skips them.
+    isReplay: isOwnReplay,
   }));
   app.use(cdnSyncDeadlineMiddleware());
 }
@@ -7580,7 +7588,7 @@ setInterval(contained("prepayment-log-sampler", () => prePaymentLogSampler.tick(
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
-function logToolError(slug, status, message, shape, synthetic, probe, { prePayment = false } = {}) {
+function logToolError(slug, status, message, shape, synthetic, probe, { prePayment = false, capture = true } = {}) {
   // Every caller's message is scrubbed of configured secrets and credential-
   // bearing URLs before the log line, PostHog and the failure monitor read it.
   message = redactSecrets(message || "");
@@ -7608,7 +7616,8 @@ function logToolError(slug, status, message, shape, synthetic, probe, { prePayme
   // PostHog mirrors the same payload as a "tool_error" event with slug/
   // status/errorClass/shape properties. Same privacy posture, a no-op when
   // POSTHOG_API_KEY is unset.
-  capturePostHogToolError({ slug, status, message, shape, synthetic, probe, prePayment });
+  // `capture: false`: a pre-payment refusal past its caller's write budget.
+  if (capture) capturePostHogToolError({ slug, status, message, shape, synthetic, probe, prePayment });
   // The last 5xx message per slug, for /__operator/tool-failures.json.
   try { toolFailureMonitor().noteToolMessage(slug, status, message, { synthetic }); } catch { /* bookkeeping only */ }
 }
@@ -7652,10 +7661,16 @@ function isSyntheticRequest(req) {
   catch { return false; }
 }
 // A /v1 input refusal answered BEFORE any payment gate records what a handler
-// 400 records, marked pre-payment (src/prepayment-refusal.js).
+// 400 records, marked pre-payment (src/prepayment-refusal.js). Such a refusal
+// is free to send, so each address's refusals write the tool_calls row and
+// the PostHog events inside a budget at the refused-credential figures; past
+// it the answer is unchanged and only those writes are left out (the limiter
+// governs our writes, never a request).
+const prePaymentWriteLimiter = createRateLimiter("prepayment-refusal-writes", { perMin: METERED_UNPAID_QUOTES_PER_MIN, perHour: METERED_UNPAID_QUOTES_PER_HOUR });
 const recordPrePaymentRefusal = createPrePaymentRefusalRecorder({
   logToolError, recordToolCall, captureToolCall: capturePostHogToolCall,
   isSynthetic: isSyntheticRequest, requestShape, redact: redactSecrets, refusalReason,
+  allowWrites: (req) => !prePaymentWriteLimiter.check(clientIp(req)).limited,
 });
 function requestShape(req) {
   // Return the top-level keys of body + query, deduped and bounded. Values
@@ -9179,17 +9194,15 @@ async function computeRouteJudged(q, k, include, net, ip = null, meter = null) {
     }
   }
   if (shortlist.length < 2) return out;
-  const hostOfSeller = (u) => { try { return new URL(u).host; } catch { return String(u || ""); } };
   const judgeStarted = Date.now();
-  const ordered = await orderByJudgment(String(q), shortlist, (r) => {
-    const desc = String(r.description || r.name || "");
-    const price = r.price != null && r.price !== "" ? ` (${typeof r.price === "number" ? `$${r.price}` : r.price})` : "";
-    const clean = !looksLikeListingInjection(desc);
-    return { name: `${r.seller === "self" ? "agent402" : hostOfSeller(r.seller)} ${r.slug || ""}${price}`.trim(), description: clean ? desc : "", tags: clean && Array.isArray(r.tags) ? r.tags : [] };
+  // Each row as the judge reads it (routeJudgeListing, the screen
+  // route-execute's seller judge reads): the screened listing and a price we
+  // format from the parsed figure, all inside the row's one JSON option; no
+  // seller text is joined to it after the screen.
   // 800 ms bound (was 2 s): production measured the judgment wait at ~150 ms
   // p95 and never past 800 ms (2026-09-25), so the bound only caps a slow
   // judge instead of making a free search wait up to 2 s for it.
-  }, { timeoutMs: 800, pool: "free", admit: routeJudgeAdmit(ip) });
+  const ordered = await orderByJudgment(String(q), shortlist, routeJudgeListing, { timeoutMs: 800, pool: "free", admit: routeJudgeAdmit(ip) });
   // The judgment is a network call inside a free search: log when it is what
   // the caller waited for, so the slow-compute line can be read as CPU or wait.
   const judgeMs = Date.now() - judgeStarted;
@@ -10457,13 +10470,12 @@ app.use(fullAnswerMiddleware((path) => {
 // A job's loopback (HTTP job or MCP task) carries a progress key; the handler
 // reports its stages to that job through the request scope (src/job-progress.js).
 app.use(progressMiddleware());
-// Our own loopbacks pass both sync windows below: an async job's replay (its
-// marker, from a local socket; the async middleware below verifies it) and
-// the MCP connector's paid replay. Both windows are mounted before the async
-// marker exists, so this predicate is what decides for them.
-const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-const isInternalReplay = (req) => isMcpLoopback(req)
-  || (req.headers[ASYNC_LOOPBACK_HEADER] !== undefined && LOOPBACK_ADDRESSES.has(String(req.socket?.remoteAddress || "")));
+// Our own loopbacks pass both sync windows below: an async job's replay and
+// the MCP connector's paid replay, proved by the same per-process secret the
+// address resolvers above read (src/own-replay.js), never by a header's
+// presence on a local socket. Both windows are mounted before the async
+// marker is verified, so this predicate is what decides for them.
+const isInternalReplay = isOwnReplay;
 // A Tempo push credential's transfer is final before the call: both windows
 // defer its refusal to the Tempo gate (which books the transfer as owed until
 // the credential comes back with the header), but only while that gate is
@@ -12428,8 +12440,8 @@ for (const tool of ALL_KIT) {
         res.once("close", () => { if (chargeCancelledForClientGone(req)) ctl.abort(clientGoneError()); });
       }
       const result = EXPENSIVE_COMPOSITE_SLUGS.has(tool.slug)
-        ? await runInAbortableScope(() => tool.handler(input, req), { signal: clientGoneCtl.signal })
-        : await tool.handler(input, req);
+        ? await runInAbortableScope(() => runAsCallerOf(req, () => tool.handler(input, req)), { signal: clientGoneCtl.signal })
+        : await runAsCallerOf(req, () => tool.handler(input, req));
       coverRelease?.settling?.();
 
       // A handler that spent real money upstream (external route-execute) leaves

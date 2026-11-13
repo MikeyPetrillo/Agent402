@@ -74,6 +74,12 @@ const server = createServer(async (req, res) => {
   // The Bazaar feed (base-list-sweep): every route on its list is listed but
   // one slow route and one that is not slow.
   if (url.pathname === "/platform/v2/x402/discovery/resources") return json(200, { items: SWEEP_LISTED.map((p) => ({ resource: `${T}${p}` })), pagination: { total: SWEEP_LISTED.length } });
+  // A job link that redirects: off the origin (OTHER, a second server), or
+  // to a same-origin job.
+  if (url.pathname === "/v1/redirected-job") return json(202, { jobId: "r", status: "working", statusUrl: url.searchParams.get("to") === "same" ? "/api/jobs/hop-same" : "/api/jobs/hop-off" }, { "retry-after": "1" });
+  if (url.pathname === "/api/jobs/hop-off") { polls.push({ id: "hop-off" }); res.writeHead(302, { location: `${OTHER}/latest/meta-data` }); return res.end(); }
+  if (url.pathname === "/api/jobs/hop-same") { polls.push({ id: "hop-same" }); res.writeHead(307, { location: "/api/jobs/hop-landed" }); return res.end(); }
+  if (url.pathname === "/api/jobs/hop-landed") { polls.push({ id: "hop-landed" }); return json(200, { state: "succeeded", result: { httpStatus: 200, body: { via: "hop" } } }); }
   const jm = url.pathname.match(/^\/api\/jobs\/(\w+)$/);
   if (jm) {
     polls.push({ id: jm[1] });
@@ -107,6 +113,11 @@ const server = createServer(async (req, res) => {
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const T = `http://127.0.0.1:${server.address().port}`;
+// A second origin a job-link redirect points at; it must never be reached.
+let otherHits = 0;
+const other = createServer((req, res) => { otherHits++; res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ state: "succeeded", result: { httpStatus: 200, body: { leaked: true } } })); });
+await new Promise((r) => other.listen(0, "127.0.0.1", r));
+const OTHER = `http://localhost:${other.address().port}`;
 const SWEEP_SRC = readFileSync(new URL("base-list-sweep.js", import.meta.url), "utf8");
 const SWEEP_LISTED = [...SWEEP_SRC.matchAll(/"(?:GET|POST) (\/[^"\s]+)"/g)].map((m) => m[1]).filter((p) => p !== "/v1/research" && p !== "/api/rsi");
 const reset = () => { seen = []; polls = []; };
@@ -136,6 +147,17 @@ const call = (path, prefer) => paidCallHonoringSlowRoutes(async (extra, attempt)
   ok(seen.length === 1 && seen[0].prefer === "respond-async", `a slow route's paid call carries Prefer: respond-async up front, one call (${seen.map((s) => s.prefer).join()})`);
   ok(r.res.status === 200 && body.via === "job" && JSON.parse(Buffer.from(r.res.headers.get("payment-response"), "base64").toString()).transaction === "tx-job-report", "the job is followed to the route's own answer: status, receipt and body");
   ok(polls.length === 2 && r.job?.state === "succeeded" && r.jobFailed === false && r.attempts === 1 && r.fallback === false && r.prefer === "respond-async", `the job link is polled to its terminal state (${polls.length} polls, ${JSON.stringify(r.job)})`);
+}
+// The job link is read with the script's own fetch: a redirect on a poll is
+// followed only on the server's origin, never to another host.
+{
+  reset(); otherHits = 0;
+  let err = null;
+  try { await call("/v1/redirected-job", RESPOND_ASYNC); } catch (e) { err = e; }
+  ok(err && /another origin/.test(err.message) && otherHits === 0 && polls.some((p) => p.id === "hop-off"), `a job link redirected to another origin is not followed (other origin reached ${otherHits} times; ${err?.message})`);
+  reset();
+  const r = await call("/v1/redirected-job?to=same", RESPOND_ASYNC);
+  ok(r.res.status === 200 && (await r.res.json()).via === "hop" && polls.some((p) => p.id === "hop-landed"), "a same-origin redirect on the job link is followed");
 }
 // A job id is a bearer link to the paid answer: the helper hands back the
 // job's state only, and a job still pending reaches the caller with its link
@@ -270,5 +292,6 @@ globalThis.fetch = async (input, init) => {
 }
 
 server.close();
+other.close();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
