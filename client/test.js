@@ -50,13 +50,13 @@ const advisoryWarnings = [];
   const clock = () => { let t = 0; return { sleep: async (ms) => { t += ms; }, now: () => t, timeoutMs: 60_000 }; };
   const redirecting = (to) => async (url, init = {}) => {
     hits.push({ url: String(url), redirect: init.redirect });
-    if (String(url).startsWith("https://inner.example")) return done();
+    if (new URL(String(url)).origin === "https://inner.example") return done();
     if (String(url).endsWith("/api/jobs/j1")) return new Response(null, { status: 302, headers: { location: to } });
     return done();
   };
   let err = null;
   try { await awaitJob(job202(), { baseUrl: BASE, fetchImpl: redirecting("https://inner.example/latest/meta-data"), ...clock() }); } catch (e) { err = e; }
-  ok(err instanceof AsyncJobPendingError && /another origin/.test(err.message) && !hits.some((h) => h.url.startsWith("https://inner.example")), `a job-link redirect to another origin is refused, never fetched (${hits.map((h) => h.url).join(" ")})`);
+  ok(err instanceof AsyncJobPendingError && /another origin/.test(err.message) && !hits.some((h) => new URL(h.url).origin === "https://inner.example"), `a job-link redirect to another origin is refused, never fetched (${hits.map((h) => h.url).join(" ")})`);
   ok(hits.length > 0 && hits.every((h) => h.redirect === "manual"), "every job-link poll is sent with redirect: manual");
   // A browser answers a manual redirect as opaque, target hidden: refused,
   // and the message says it could not be followed, not where it pointed.
