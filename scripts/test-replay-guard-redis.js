@@ -226,6 +226,20 @@ const key = (suffix) => `replay-guard-redis-test:${runId}:${suffix}`;
   await client.set(legacy, String(Date.now()), { EX: 60 });
   ok(await gA.begin(kd) === "inflight", "real redis: an earlier build's raw-header claim on the same header is honored");
   await client.del(legacy);
+  // A build that derives this family's identity another way tags the same
+  // header hash with its own primary: its claim and its mark hold this header
+  // on every replica, another payment of the family is accepted, and a key
+  // of another family at the same header hash is not held.
+  const { createHash } = await import("node:crypto");
+  const h = (x) => createHash("sha256").update(`${runId} ${x}`).digest("hex");
+  const mine = `s2:${h("entries")}:${h("header")}`, theirs = `s2:${h("entries, derived another way")}:${h("header")}`, another = `s2:${h("other entries")}:${h("other header")}`, cross = `t2:${h("transaction")}:${h("header")}`;
+  ok(await gA.begin(theirs) === "ok" && await gB.held(mine) === "inflight" && await gB.begin(mine) === "inflight", "real redis: a header another derivation of its family holds in flight is refused");
+  ok(await gB.begin(another) === "ok" && await gB.held(cross) === null, "real redis: another payment of the family is accepted, and another family's key at the same header hash is not held");
+  await gB.release(another);
+  await gA.settle(theirs);
+  ok(await gB.held(mine) === "consumed" && await gB.begin(mine) === "consumed", "real redis: a header another derivation of its family consumed is refused");
+  ok(await gB.begin(cross) === "ok", "real redis: another family's key at the same header hash is accepted");
+  await gB.release(cross);
 }
 
 // --- held(): the read-only twin, one MGET on the real client ----------------

@@ -526,6 +526,109 @@ function memoryRedis() {
   } finally { __setTestClient(null); }
 }
 
+// ---- A6b. The deploy window when a build derives a family's identity another
+// way: both builds write their primary's name, tagged, at the hash of the
+// header itself, so an entry there under another primary of the SAME family
+// is this very header, held by the other build. Another header in the family
+// is another payment, and an entry tagged by another family never matches.
+{
+  const { createHash } = await import("node:crypto");
+  const { paymentReplayKeyAsync } = await import("../src/replay-guard.js");
+  const sha = (x) => createHash("sha256").update(x).digest("hex");
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
+  const permit2 = (nonce) => b64({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: { signature: "0x" + "5".repeat(130), permit2Authorization: { from: "0x" + "a".repeat(40), nonce, deadline: "1999999999", permitted: { token: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "1000" } } } });
+  const svm = (tx) => b64({ x402Version: 2, accepted: { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, payload: { transaction: Buffer.from(tx).toString("base64") } });
+  // One header per family under this build's key, and the key a build that
+  // derives the identity another way would give the same header (same last
+  // part: the header's own hash). A Stellar key is written out: its identity
+  // needs a signed envelope (scripts/test-stellar-nonce-claim.js reads one).
+  const keyOf = async (header) => paymentReplayKeyAsync(fakeReq({ "payment-signature": header }));
+  const families = {
+    p2: [await keyOf(permit2("71")), await keyOf(permit2("72"))],
+    t2: [await keyOf(svm("signed transaction one")), await keyOf(svm("signed transaction two"))],
+    s2: [`s2:${sha("stellar entries one")}:${sha("stellar header one")}`, `s2:${sha("stellar entries two")}:${sha("stellar header two")}`],
+  };
+  ok(Object.entries(families).every(([f, ks]) => ks.every((k) => new RegExp(`^${f}:[0-9a-f]{64}:[0-9a-f]{64}$`).test(String(k))) && ks[0] !== ks[1]), `setup: a Permit2, a signed-transaction and a Stellar key, two payments each (${Object.values(families).map((ks) => String(ks[0]).slice(0, 3)).join(" ")})`);
+  const otherShape = (key) => { const [f, id, raw] = String(key).split(":"); return `${f}:${sha(`another derivation\n${id}`)}:${raw}`; };
+  const primaryOf = (key) => String(key).split(":").slice(0, 2).join(":");
+  const legacyOf = (key) => "c:" + String(key).split(":")[2];
+  for (const [family, [key, other]] of Object.entries(families)) {
+    const mem = memoryRedis();
+    __setTestClient(mem);
+    try {
+      const earlier = createReplayGuard(), current = createReplayGuard();
+      const old = otherShape(key);
+      ok(primaryOf(old) !== primaryOf(key) && legacyOf(old) === legacyOf(key), `${family} setup: the two derivations name one header under two primaries`);
+      // In flight on the other build: refused here, the refused claim given
+      // back, the other build's claim left to it; released there, accepted here.
+      ok(await earlier.begin(old) === "ok", `${family} derivation change: the other build claims the payment`);
+      const theirs = await mem.get("replay:f:" + legacyOf(key));
+      ok(await current.held(key) === "inflight" && await current.begin(key) === "inflight", `${family} derivation change: the same header is refused while the other build runs it (inflight)`);
+      ok(!mem.kv.has("replay:f:" + primaryOf(key)) && await mem.get("replay:f:" + legacyOf(key)) === theirs, `${family} derivation change: the refused claim is given back and the other build's claim is left to it`);
+      ok(await current.begin(other) === "ok", `${family} derivation change: another payment of the family is accepted meanwhile`);
+      await current.release(other);
+      await earlier.release(old);
+      ok(await current.held(key) === null && await current.begin(key) === "ok", `${family} derivation change: once the other build releases it, the same header is accepted (a retry is never held)`);
+      await current.release(key);
+      // Consumed on the other build: refused here for as long as the mark lives.
+      ok(await earlier.begin(old) === "ok", `${family} derivation change: the other build claims it again`);
+      await earlier.settle(old);
+      ok(await current.held(key) === "consumed" && await current.begin(key) === "consumed", `${family} derivation change: the same header is refused after the other build granted it (consumed)`);
+      ok(!mem.kv.has("replay:f:" + primaryOf(key)), `${family} derivation change: a refused re-send leaves no claim behind`);
+      ok(await current.begin(other) === "ok", `${family} derivation change: another payment of the family is still accepted`);
+      await current.settle(other);
+      // The other direction: this build first, the other derivation second.
+      const third = `${family}:${sha(`third ${family}`)}:${sha(`third header ${family}`)}`;
+      ok(await current.begin(third) === "ok" && await earlier.begin(otherShape(third)) === "inflight", `${family} derivation change: a payment this build runs is refused under the other derivation`);
+      await current.settle(third);
+      ok(await earlier.begin(otherShape(third)) === "consumed", `${family} derivation change: and refused consumed once this build granted it`);
+    } finally { __setTestClient(null); }
+    // An entry tagged by another family at the same header hash never matches,
+    // nor does one this key's own primary tagged with nothing at the primary.
+    for (const foreign of [...Object.keys(families).filter((f) => f !== family), "n2", "c", "zz"]) {
+      const mem2 = memoryRedis();
+      __setTestClient(mem2);
+      try {
+        const g = createReplayGuard();
+        const tag = `v2|${foreign}:${sha(`foreign ${foreign}`)}`;
+        await mem2.set("replay:c:" + legacyOf(key), tag, { EX: 3600 });
+        await mem2.set("replay:f:" + legacyOf(key), `${tag}|token`, { EX: 120 });
+        ok(await g.held(key) === null && await g.begin(key) === "ok", `${family}: an entry tagged by ${foreign} at the same header hash never refuses it`);
+        await g.release(key);
+      } finally { __setTestClient(null); }
+    }
+    const mem3 = memoryRedis();
+    __setTestClient(mem3);
+    try {
+      const g = createReplayGuard();
+      await mem3.set("replay:c:" + legacyOf(key), `v2|${primaryOf(key)}`, { EX: 3600 });
+      await mem3.set("replay:f:" + legacyOf(key), `v2|${primaryOf(key)}|token`, { EX: 120 });
+      ok(await g.held(key) === null && await g.begin(key) === "ok", `${family}: a tagged twin of this key's own primary, with nothing at the primary, does not refuse it`);
+      await g.release(key);
+      await mem3.set("replay:c:" + legacyOf(key), "v2|", { EX: 3600 });
+      ok(await g.begin(key) === "ok", `${family}: a tag that names no primary does not refuse it`);
+      await g.release(key);
+    } finally { __setTestClient(null); }
+  }
+  // A nonce key's legacy name is shared by every payer that signs the nonce:
+  // a tagged entry there under another primary is another payer's, in flight
+  // or consumed, whatever derivation wrote it.
+  {
+    const mem = memoryRedis();
+    __setTestClient(mem);
+    try {
+      const g = createReplayGuard();
+      const kn = paymentReplayKey(fakeReq({ "x-payment": evmCred({ nonce: "0x7a", from: "0x" + "c".repeat(40) }) }));
+      const name = "n:" + kn.split(":")[2];
+      await mem.set("replay:c:" + name, `v2|n2:${sha("another payer")}`, { EX: 3600 });
+      await mem.set("replay:f:" + name, `v2|n2:${sha("another payer")}|token`, { EX: 120 });
+      ok(await g.held(kn) === null && await g.begin(kn) === "ok", "nonce key: another primary's tagged entries at the shared nonce name never refuse this payer");
+      await g.settle(kn);
+      ok(await g.begin(kn) === "consumed", "nonce key: and its own settle still refuses its re-send");
+    } finally { __setTestClient(null); }
+  }
+}
+
 // ---- A7. A real signed Solana transaction and a real Algorand group key on
 // what the chain consumes (the message bytes; the group id or transaction
 // id), so fields the facilitator ignores, a deeply nested filler, a rewritten
