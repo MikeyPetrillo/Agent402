@@ -448,6 +448,47 @@ try {
     }
     await stop(prod); await stop(on);
   }
+  // 5f. A route whose listing cannot give up the bytes of a further upto
+  // accept is withheld: it keeps every exact accept and one upto accept, on
+  // Base (the first network that is not explicit-only) whatever order
+  // X402_UPTO_NETWORKS lists, and declares no gas sponsoring.
+  {
+    const exactOf = (pr) => JSON.stringify((pr?.accepts || []).filter((a) => a.scheme === "exact").map((a) => [a.network, a.amount, a.payTo, a.asset]));
+    const call = async (url, route) => {
+      const [method, path] = route.split(" ");
+      const r = await fetch(`${url}${path}`, method === "GET" ? {} : { method, headers: { "content-type": "application/json" }, body: "{}" });
+      await r.text();
+      const hdr = r.headers.get("payment-required");
+      return { status: r.status, pr: hdr ? decode(hdr) : null };
+    };
+    const prod = await boot({ X402_UPTO_NETWORKS: BASE }, { arc: true });
+    for (const order of [`${ARC},${BASE}`, `${BASE},${ARC}`]) {
+      const b = await boot({ X402_UPTO_NETWORKS: order, X402_UPTO_GAS_SPONSORING: "on", FRED_API_KEY: "test-key-never-sent" }, { arc: true });
+      const line = /x402 upto: (\d+) route\(s\) offer upto on (\S+) only, with no gas sponsoring declaration: [^(]*\(([^)]*)\)/.exec(b.log.text);
+      const withheld = line ? line[3].split(", ").filter((r) => r && r !== "...") : [];
+      ok(!!line && Number(line[1]) > 0 && withheld.length > 0, `X402_UPTO_NETWORKS=${order}: some routes are withheld to fit their 402 budget (${line ? line[1] : 0})`);
+      ok(line?.[2] === BASE, `X402_UPTO_NETWORKS=${order}: the warning names the network actually kept (${line?.[2]})`);
+      for (const route of withheld) {
+        const [a, w] = [await call(prod.url, route), await call(b.url, route)];
+        const upto = (w.pr?.accepts || []).filter((x) => x.scheme === "upto");
+        ok(w.status === 402 && exactOf(w.pr) === exactOf(a.pr) && exactOf(a.pr) !== "[]", `${order} ${route}: every exact accept stays`);
+        ok(upto.length === 1 && upto[0].network === BASE, `${order} ${route}: Base upto stays, and only Base (${upto.map((x) => x.network).join(", ") || "none"})`);
+        ok(!GAS_KEYS_IN(w.pr), `${order} ${route}: no gas sponsoring declaration`);
+      }
+      // Every FRED route's 402 listing ends with the FRED notice with upto on.
+      const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
+      const { FRED_NOTICE } = await import("../src/data-attribution.js");
+      const fredRoutes = MACRO_TOOLS.filter((t) => t.usesFred === true).map((t) => t.route);
+      const missing = [];
+      for (const route of fredRoutes) { const w = await call(b.url, route); if (!(w.status === 402 && String(w.pr?.resource?.description || "").endsWith(FRED_NOTICE))) missing.push(`${route} (${w.status})`); }
+      ok(fredRoutes.length >= 12 && missing.length === 0, `${order}: every FRED route's 402 listing keeps the FRED notice (${fredRoutes.length} routes; missing: ${missing.join(", ") || "none"})`);
+      // Control: a metered route that fits keeps both upto networks.
+      const m = await challenge(b.url);
+      ok(new Set((m.pr?.accepts || []).filter((x) => x.scheme === "upto").map((x) => x.network)).size === 2, `${order}: a route that fits keeps upto on both networks`);
+      await stop(b);
+    }
+    await stop(prod);
+  }
 } catch (e) {
   fail++;
   console.error(`FAIL - ${e?.stack || e}`);

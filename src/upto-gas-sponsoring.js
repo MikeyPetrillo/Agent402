@@ -40,6 +40,15 @@ const DECLARE = {
  *  same switch to decide whether it lists upto at all. */
 export const UPTO_EXPLICIT_ONLY = Object.freeze(["eip155:5042"]);
 
+/** The one upto network a route keeps when its further upto accepts do not
+ *  fit its 402 budget: the first one offered that is not explicit-only (Base
+ *  when it is offered, whatever order X402_UPTO_NETWORKS lists them in), else
+ *  the first. Undefined when none is offered. */
+export function uptoNetworkKept(uptoCaip2) {
+  const list = Array.isArray(uptoCaip2) ? uptoCaip2 : [];
+  return list.find((c) => !UPTO_EXPLICIT_ONLY.includes(c)) ?? list[0];
+}
+
 /** The upto networks the operator asked for (X402_UPTO_NETWORKS: a CSV of
  *  CAIP-2 ids, or "all"), restricted to `evmCaip2`. Unset is []. A list keeps
  *  its own order (the order the 402 offers upto in); "all" keeps evmCaip2's. */

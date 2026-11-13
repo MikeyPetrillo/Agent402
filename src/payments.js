@@ -11,7 +11,8 @@ import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
-import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute } from "./upto-gas-sponsoring.js";
+import { attributionTailOf } from "./data-attribution.js";
+import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
@@ -1110,10 +1111,31 @@ export function catalogServiceNameFor(catalog) {
 
 // A query-parameter hint ("?bytes=1..1024", " (?ext=png)") in catalog text.
 const QUERY_HINT = /\s\??\(?\?[a-zA-Z_][a-zA-Z0-9_]*=/;
-const PAREN_QUERY_HINT = /\s*\(\?[a-zA-Z_][a-zA-Z0-9_]*=[^()]*\)/g;
+// The hint alone: a leading \s* would rescan every whitespace run from each
+// of its positions (quadratic), so the space before a hint is trimmed from the
+// text before it instead (stripParenHints).
+const PAREN_QUERY_HINT = /\(\?[a-zA-Z_]\w*=[^()]*\)/g;
 const SENTENCE_BREAK = /(?<=[.!?])(?<!\b(?:e\.g|i\.e|St|Mt|Dr|Mr|Ms|vs)\.)\s+/;
+// Trailing punctuation and a trailing lead-in word, trimmed by scanning from
+// the end: an end-anchored regex with a leading run (/[,;:]+$/, /\s+word$/)
+// restarts at every position of a long run, which is quadratic.
+const HINT_HEAD_PUNCT = new Set([",", ";", ":", "-", "("]);
+const HINT_LEAD_WORDS = ["via", "with", "using", "by", "pass", "passing", "set", "use", "e.g."];
+const trimPunctEnd = (h) => {
+  let end = h.length;
+  while (end > 0 && HINT_HEAD_PUNCT.has(h[end - 1])) end--;
+  return h.slice(0, end);
+};
+const trimLeadWord = (h) => {
+  const low = h.toLowerCase();
+  for (const w of HINT_LEAD_WORDS) {
+    const at = low.length - w.length;
+    if (at > 0 && low.endsWith(w) && /\s/.test(h[at - 1])) return h.slice(0, at).trimEnd();
+  }
+  return h;
+};
 const trimHintHead = (head) => {
-  let h = head.replace(/[,;:\-(]+$/, "").trim().replace(/\s+(via|with|using|by|pass|passing|set|use|e\.g\.)$/i, "").replace(/[,;:\-(]+$/, "").trim();
+  let h = trimPunctEnd(trimLeadWord(trimPunctEnd(head).trim())).trim();
   // "..., default on; add" keeps the clause before the one that held the hint.
   const semi = h.lastIndexOf(";");
   if (semi >= 12) h = h.slice(0, semi).trim();
@@ -1123,8 +1145,16 @@ const trimHintHead = (head) => {
  *  hint in parentheses goes on its own, a sentence that opens with a hint (or
  *  introduces one with a colon) goes whole, a hint later in a sentence ends
  *  that sentence, and every sentence without a hint is kept. */
+function stripParenHints(s) {
+  let out = "", last = 0;
+  for (const m of s.matchAll(PAREN_QUERY_HINT)) {
+    out += s.slice(last, m.index).trimEnd();
+    last = m.index + m[0].length;
+  }
+  return last ? out + s.slice(last) : s;
+}
 function dropQueryHints(s) {
-  const text = s.replace(PAREN_QUERY_HINT, "");
+  const text = stripParenHints(s);
   if (!QUERY_HINT.test(` ${text}`)) return text;
   const kept = [];
   for (const sentence of text.split(SENTENCE_BREAK)) {
@@ -1137,6 +1167,8 @@ function dropQueryHints(s) {
   return kept.join(" ").trim();
 }
 
+// The least room a kept attribution sentence leaves for the text before it.
+const ATTRIBUTION_MIN_LEAD = 80;
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (!s) return s;
   // A catalog description often carries query-parameter hints ("?bytes=1..1024
@@ -1145,6 +1177,14 @@ export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   // only and keep the sentences around them; the catalog text is untouched.
   s = dropQueryHints(s) || s;
   if (s.length <= max) return s;
+  // A description that ends with a data source's attribution sentence keeps
+  // it whole: the cut shortens the text before it (src/data-attribution.js).
+  const tail = attributionTailOf(s);
+  if (tail && s.length > tail.length) {
+    const room = max - tail.length - 1;
+    const lead = s.slice(0, s.length - tail.length).trim();
+    if (room >= ATTRIBUTION_MIN_LEAD) return `${bazaarCapDescription(lead, room)} ${tail}`;
+  }
   const head = s.slice(0, max);
   const sentenceEnd = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), head.endsWith(".") ? head.length - 1 : -1);
   if (sentenceEnd >= Math.floor(max * 0.5)) return head.slice(0, sentenceEnd + 1).trim();
@@ -1240,6 +1280,9 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   // inside the per-route 402 budget (scripts/test-bazaar-descriptions.js).
   "judge": "Ask typed questions about any content and get answers your code can branch on, not prose. Send state (a string or object) and up to 8 questions keyed by your own ids: choice returns the pick with probabilities and confidence, score a fractional level index with probabilities, noul the probability of yes. Use it for routing, triage, classification and gating. Served by jev-latest with two fallbacks; name one first with model. Model-backed, not deterministic.",
   "loop-gate": "Should an agent loop run another iteration? Send the goal, the last output and its iteration, plus optional maxIterations, budget, history and constraints; get back decision (continue, stop or escalate), reason, confidence (0 to 1), the checks behind it and a next step. Budget and iteration limits are checked in code first, with no model call; otherwise a judgment model answers. Use it between iterations.",
+  // Under the 402 budget's description cut: the word cut of the catalog text
+  // would leave a fragment before the FRED notice.
+  "sahm-rule": "Real-time Sahm Rule recession indicator (SAHMREALTIME): it triggers when 3-month average US unemployment rises 0.50 points above its prior 12-month low. Use it to check the signal. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
   // Under the 402 budget's description cut, so the FRED notice stays.
   "fred-release-observations": "Every series in one FRED release in a single call: a whole jobs, CPI or GDP report without listing series IDs first, paged by cursor. Use it to load an economic report at once. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
   "memory-write": "Persistent key-value memory scoped to the paying wallet: the x402 payment is the authentication, the wallet owns the namespace. Write any JSON value (up to 64KB) under a key, with an optional TTL, or delete it; read it back on any later session with the matching read route. Use it when an agent needs state that survives the session or crosses runs without an account or API key.",
@@ -2324,7 +2367,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     }
     const { keys, refused: notHonored } = gasSponsoringKeys(wantedKeys, uptoCaip2, uptoExtensionsByNetwork);
     for (const r of notHonored) console.warn(`x402 upto gas sponsoring: REFUSING ${r.key}, the facilitator settling upto on ${r.networks.join(", ")} does not advertise it.`);
-    if (keys.length) console.log(`x402 upto gas sponsoring: declaring ${keys.join(", ")} on the metered upto routes (${uptoCaip2.join(", ")})`);
+    if (keys.length) console.log(`x402 upto gas sponsoring: declaring ${keys.join(", ")} on the metered upto routes (${uptoCaip2.join(", ")}); read from /supported at boot only, so a facilitator change takes effect at the next restart`);
     return keys;
   })();
   const uptoGasDeclarations = uptoGasKeys.length ? gasSponsoringDeclarations(uptoGasKeys) : null;
@@ -2560,11 +2603,14 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds });
   // Routes whose 402 could not fit an upto accept past the first one (or the
   // gas sponsoring declaration) inside the per-route budget: they keep every
-  // exact accept and the first upto accept, and offer no more upto than that.
+  // exact accept and one upto accept (uptoNetworkKept: Base before Arc), and
+  // offer no more upto than that.
   const uptoWithheld = new WeakSet();
   const acceptsFor = (item) => {
     const rails = railsNow();
-    return acceptsForItem(item, uptoWithheld.has(item) ? { ...rails, uptoCaip2: rails.uptoCaip2.slice(0, 1) } : rails);
+    if (!uptoWithheld.has(item)) return acceptsForItem(item, rails);
+    const kept = uptoNetworkKept(rails.uptoCaip2);
+    return acceptsForItem(item, { ...rails, uptoCaip2: kept ? [kept] : [] });
   };
   // Read at call time, like acceptsFor: a rail dropped or joined after boot
   // is reflected in what discovery publishes as well as in the 402.
@@ -2715,7 +2761,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     })
   );
   if (uptoWithheldRoutes.length) {
-    console.warn(`x402 upto: ${uptoWithheldRoutes.length} route(s) offer upto on ${uptoCaip2[0]} only, with no gas sponsoring declaration: the further upto accepts did not fit the per-route 402 budget (${uptoWithheldRoutes.slice(0, 5).join(", ")}${uptoWithheldRoutes.length > 5 ? ", ..." : ""}).`);
+    console.warn(`x402 upto: ${uptoWithheldRoutes.length} route(s) offer upto on ${uptoNetworkKept(uptoCaip2)} only, with no gas sponsoring declaration: the further upto accepts did not fit the per-route 402 budget (${uptoWithheldRoutes.slice(0, 5).join(", ")}${uptoWithheldRoutes.length > 5 ? ", ..." : ""}).`);
   }
 
   // Wildcard price entries for paths that are deliberately NOT catalog tools —

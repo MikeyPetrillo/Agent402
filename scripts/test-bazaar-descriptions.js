@@ -50,17 +50,57 @@ ok(bazaarCapDescription("Read from a store. ?key=k returns the value; omit key t
 ok(bazaarCapDescription("Look up a MIME type by file extension (?ext=png) or extensions by MIME type (?type=image/png). Covers ~50 common types.") === "Look up a MIME type by file extension or extensions by MIME type. Covers ~50 common types.", "cap: a hint in parentheses is removed in place");
 ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1 This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data.", "cap: an abbreviation (St.) does not end a sentence, so no fragment is left behind");
 ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data. This product is not endorsed by the Federal Reserve Bank of St. Louis.", "cap: a hint that ends its own sentence goes alone, and the notice after it stays");
-// The FRED terms require their notice on every surface that serves the data:
-// each route whose catalog text carries it keeps it in its listing copy.
+// The FRED terms require their notice on every surface that serves the data.
+// The set of FRED routes is derived from code, not from which text already
+// carries the notice: the macro kit's functions that reach a FRED host,
+// closed over the calls between them, and every tool whose handler calls one.
+// Each must carry the usesFred marker, end its catalog text with the notice,
+// and keep it in its listing at the Bazaar cut and at the 402 budget's
+// shorter cut (the most any 402, with any upto networks on, cuts it to).
 {
-  const NOTICE = /not endorsed or certified by the Federal Reserve Bank of St\. Louis\.$/;
-  const fred = (res?.endpoints || []).filter((e) => /Federal Reserve Bank of St\. Louis/.test(e.description || ""));
-  ok(fred.length >= 7, `FRED routes found in the catalog (${fred.length})`);
-  for (const e of fred) {
-    const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS[e.slug] || e.description);
-    ok(NOTICE.test(listed), `${e.slug}: the listing keeps the FRED notice (${listed.slice(-60)})`);
-    ok(listed.length <= CHALLENGE_SHORT_DESCRIPTION_MAX || e.slug !== "fred-release-observations", `${e.slug}: the listing sits under the 402 budget's description cut (${listed.length})`);
+  const { FRED_NOTICE, attributionTailOf } = await import("../src/data-attribution.js");
+  const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
+  const { readdir } = await import("node:fs/promises");
+  const FRED_HOST = /stlouisfed\.org/;
+  const kitSrc = await readFile(new URL("../src/tools/macro-kit.js", import.meta.url), "utf8");
+  const fns = new Map();
+  for (const m of kitSrc.matchAll(/^(?:export )?(?:async )?function (\w+)\s*\(/gm)) {
+    const close = kitSrc.indexOf("\n}\n", m.index);
+    fns.set(m[1], kitSrc.slice(m.index, close < 0 ? undefined : close));
   }
+  const reached = new Set(["FRED_BASE"]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [name, body] of fns) {
+      if (reached.has(name)) continue;
+      if (FRED_HOST.test(body) || [...reached].some((r) => new RegExp(`\\b${r}\\b`).test(body.slice(body.indexOf("{"))))) { reached.add(name); grew = true; }
+    }
+  }
+  ok(["fredObservations", "fetchFredYields", "fetchLatestYieldCurve", "fetchFredYieldsViaKeyedApi"].every((n) => reached.has(n)), `FRED-reaching functions derived from the kit (${[...reached].join(", ")})`);
+  const callsFred = (t) => { const h = String(t.handler); return FRED_HOST.test(h) || [...reached].some((r) => new RegExp(`\\b${r}\\b`).test(h)); };
+  const derived = MACRO_TOOLS.filter(callsFred).map((t) => t.slug).sort();
+  const marked = MACRO_TOOLS.filter((t) => t.usesFred === true).map((t) => t.slug).sort();
+  ok(derived.length >= 12 && JSON.stringify(derived) === JSON.stringify(marked), `every tool whose handler reaches FRED carries usesFred, and only those (derived ${derived.join(",")}; marked ${marked.join(",")})`);
+  const otherKits = [];
+  for (const file of await readdir(new URL("../src/tools/", import.meta.url))) {
+    if (!file.endsWith(".js") || file === "macro-kit.js") continue;
+    if (FRED_HOST.test(await readFile(new URL(`../src/tools/${file}`, import.meta.url), "utf8"))) otherKits.push(file);
+  }
+  ok(otherKits.length === 0, `no other kit calls a FRED host directly (${otherKits.join(", ") || "none"})`);
+  for (const t of MACRO_TOOLS.filter((x) => x.usesFred === true)) {
+    ok(attributionTailOf(t.description) === FRED_NOTICE, `${t.slug}: the catalog text ends with the FRED notice`);
+    const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS[t.slug] || t.description);
+    const cut = bazaarCapDescription(listed, CHALLENGE_SHORT_DESCRIPTION_MAX);
+    ok(listed.endsWith(FRED_NOTICE) && cut.endsWith(FRED_NOTICE) && cut.length <= CHALLENGE_SHORT_DESCRIPTION_MAX, `${t.slug}: the listing keeps the FRED notice at both cuts (${listed.length} / ${cut.length} chars)`);
+    const live = (res?.endpoints || []).find((e) => e.slug === t.slug);
+    ok(!live || String(live.description || "").endsWith(FRED_NOTICE), `${t.slug}: the live catalog text ends with the notice`);
+  }
+  // The cut keeps a trailing attribution sentence for any route: the text
+  // before it is shortened at a sentence end, and the notice is never cut.
+  const lead = "A first sentence about the data that runs on for a while. A second sentence that adds detail and runs on further than the cut allows here.";
+  const kept = bazaarCapDescription(`${lead} ${FRED_NOTICE}`, 200);
+  ok(kept === `A first sentence about the data that runs on for a while. ${FRED_NOTICE}`, `cut: a trailing attribution sentence stays whole and the text before it is cut at a sentence (got ${JSON.stringify(kept)})`);
+  ok(bazaarCapDescription(`${lead} Not the notice.`, 200).endsWith("allows here.") === false, "cut: text without an attribution tail is cut as before");
 }
 {
   const { bazaarTagsFor, BAZAAR_ICON_PATH } = await import("../src/payments.js");
