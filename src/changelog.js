@@ -18,6 +18,7 @@ const ENTRIES = [
       "Search: /api/route scores our own rows without their attribution sentences, as /api/find and catalog search do.",
       "Server: /privacy says route, decide and demand-board text can also reach judgment models over OpenRouter.",
       "Server: The web framework takes its November security release.",
+      "Server: /health stays 200 while a state database write waits for its retry; the stateDb status word reports the outage.",
     ],
   },
   {
