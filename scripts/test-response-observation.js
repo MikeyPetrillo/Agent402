@@ -159,15 +159,33 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(/resolvedCandidateOf\(/.test(server), "...and the resolver builds its candidates with that function");
 }
 
-// A BODY WE CUT IS NOT WHAT THE SELLER SENT. readAfterSpend marks a body cut
-// at our own byte limit `_truncated` (and one it could not read `relayError`):
+// A BODY WE CUT IS NOT WHAT THE SELLER SENT. readAfterSpend marks the body it
+// cut at our own byte limit (or could not read) by identity, not by a key:
 // a guaranteed path missing from it is ours, so the call is not observed, and
 // the published keep rate is the seller's own.
 {
   const o = "https://cut.example";
-  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { raw: "{\"result\":{\"va", _truncated: true } }) === null
+  const { readAfterSpend } = await import("../src/x402-buyer.js");
+  const cut = await readAfterSpend(new Response(JSON.stringify({ result: { pad: "x".repeat(500), value: 1 } })), 64);
+  ok(cut?._truncated === true, "our reader cut the oversized body (setup)");
+  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cut }) === null
     && deliveryObservation(o, "POST", "/r") === null, "a body cut at our byte limit is not observed");
-  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { relayError: "upstream body unreadable" } }) === null, "nor is a body we could not read");
+  // A cut that still parses (a long number cut to a shorter one) is ours too.
+  const cutParsed = await readAfterSpend(new Response("7".repeat(500)), 64);
+  ok(cutParsed?._truncated === true && typeof cutParsed.value === "number", "our reader cut a body whose prefix still parses (setup)");
+  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cutParsed }) === null, "a cut body that still parses is not observed either");
+  const unread = await readAfterSpend(new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } })), 64);
+  ok(typeof unread?.relayError === "string", "our reader could not read the body (setup)");
+  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: unread }) === null, "nor is a body we could not read");
+  // The same keys sent BY THE SELLER are the seller's own answer: observed,
+  // so an echoed `_truncated` or `relayError` cannot hide a missed promise.
+  const echoed = await readAfterSpend(new Response(JSON.stringify({ _truncated: true, relayError: "x" })), 4096);
+  ok(echoed?._truncated === true && typeof echoed.relayError === "string", "a seller body carrying those keys reads through whole (setup)");
+  const e = "https://echo.example";
+  observeDelivery({ origin: e, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: echoed });
+  ok(deliveryObservation(e, "POST", "/r")?.calls === 1 && deliveryObservation(e, "POST", "/r")?.kept === 0, "a seller body with `_truncated:true` is observed as a missed promise");
+  observeDelivery({ origin: e, method: "POST", route: "/r2", guaranteedPaths: ["result.value"], body: { relayError: "upstream body unreadable" } });
+  ok(deliveryObservation(e, "POST", "/r2")?.kept === 0, "and so is one with a `relayError` string");
   observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { result: { value: 1 } } });
   ok(deliveryObservation(o, "POST", "/r")?.calls === 1 && deliveryObservation(o, "POST", "/r")?.keptRate === 1, "control: a whole body is observed as before");
 }

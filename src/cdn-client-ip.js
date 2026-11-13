@@ -186,11 +186,17 @@ export function cdnOriginStatus({ full = false, now = Date.now(), enabled = cdnP
 /** Tests: forget the counted peers (this process's count and its mirror of the shared window). */
 export function __resetCdnOriginStatus() { unauthenticatedCdnPeers.length = 0; unauthenticatedCdnPeersTotal = 0; lastUnauthenticatedCdnPeerAt = 0; cdnSharedMirror = { count: 0, at: 0 }; }
 
+function isOwnReplay(req, isReplay) {
+  if (typeof isReplay !== "function") return false;
+  try { return LOOPBACK_PEERS.has(String(req.socket?.remoteAddress || "")) && isReplay(req) === true; } catch { return false; }
+}
+
 /** Express middleware: mount right after app.set("trust proxy", ...) and
  *  before any middleware that reads req.ip. Off (CDN_PROXY unset), it only
  *  calls next(). `shared` ({ windowAdd, windowRead }, src/shared-limits.js)
  *  makes the unauthenticated count span the replicas. */
-export function cdnClientIpMiddleware({ enabled = cdnProxyEnabled(), secret = cdnOriginSecret(), ranges = null, log = console.warn, shared = null } = {}) {
+const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+export function cdnClientIpMiddleware({ enabled = cdnProxyEnabled(), secret = cdnOriginSecret(), ranges = null, log = console.warn, shared = null, isReplay = null } = {}) {
   if (!enabled) return function cdnClientIpOff(_req, _res, next) { next(); };
   if (!secret) log(`[cdn-client-ip] CDN_PROXY is on but CDN_ORIGIN_SECRET is unset or shorter than ${MIN_ORIGIN_SECRET_LENGTH} characters: CF-Connecting-IP is ignored on every request`);
   cdnShared = shared && typeof shared.windowAdd === "function" && typeof shared.windowRead === "function" ? shared : null;
@@ -200,7 +206,11 @@ export function cdnClientIpMiddleware({ enabled = cdnProxyEnabled(), secret = cd
     try { edgeIp = req.ip || ""; } catch { edgeIp = ""; }
     const authed = originAuthOk(req.headers[ORIGIN_AUTH_HEADER], secret);
     delete req.headers[ORIGIN_AUTH_HEADER];
-    if (!authed && inCdnRanges(edgeIp, list)) noteUnauthenticatedCdnPeer();
+    // Our own loopback replay (an async job's, the connector's) carries the
+    // buyer's resolved address in X-Forwarded-For and no origin secret: it is
+    // not a CDN peer reaching the origin, so it is never counted. `isReplay`
+    // proves the replay (a per-process secret) on a loopback socket.
+    if (!authed && inCdnRanges(edgeIp, list) && !isOwnReplay(req, isReplay)) noteUnauthenticatedCdnPeer();
     const { ip, viaCdn } = resolveClientIp(edgeIp, req.headers["cf-connecting-ip"], list, authed);
     if (viaCdn) {
       Object.defineProperty(req, "ip", { value: ip, configurable: true, enumerable: true, writable: true });

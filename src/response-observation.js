@@ -38,6 +38,17 @@ export function applyObservationsSnapshot(rows) {
   version++;
 }
 
+// The bodies our own readers built in place of the seller's (cut at our byte
+// limit, or unreadable). A WeakSet of the objects themselves: a seller's JSON
+// can carry `_truncated` or `relayError`, but never one of these identities.
+const NOT_SELLER_BODY = new WeakSet();
+/** Mark a body our reader cut or could not read, so delivery is not judged on
+ *  it. Returns the body. */
+export function markNotSellerBody(body) {
+  if (body && typeof body === "object") NOT_SELLER_BODY.add(body);
+  return body;
+}
+
 /** Is a dotted path present in a parsed JSON body?
  *
  *  Presence, never value: `null` counts as present, because the seller promised
@@ -73,10 +84,11 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
     if (!origin || !route) return null;
     const paths = (Array.isArray(guaranteedPaths) ? guaranteedPaths : []).slice(0, MAX_PATHS_PER_ROUTE);
     if (!paths.length) return null;              // no promise, nothing to verify
-    // A body we cut at our own byte limit (readAfterSpend marks it
-    // `_truncated`) or could not read is not what the seller sent: a missing
-    // path there is ours, so the call is not observed either way.
-    if (body && typeof body === "object" && (body._truncated === true || typeof body.relayError === "string")) return null;
+    // A body we cut at our own byte limit or could not read is not what the
+    // seller sent: a missing path there is ours, so the call is not observed
+    // either way. Recognized by the object identity our own readers mark
+    // (markNotSellerBody), never by a key, since a seller can send any key.
+    if (body && typeof body === "object" && NOT_SELLER_BODY.has(body)) return null;
     const k = key(origin, method, route);
     // Bounded: drop the oldest route rather than growing without limit. This
     // map is observation, so losing the least recently used one costs nothing

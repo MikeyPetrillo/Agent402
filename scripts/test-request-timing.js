@@ -27,6 +27,19 @@ __resetTimingForTest();
   const { createHash } = await import("node:crypto");
   ok(!a.includes("203") && createHash("sha256").update("203.0.113.5").digest("hex").slice(0, 12) !== a, "the key is not the address and not its plain hash");
   ok(callerKeyOf({}) === null && currentCallerKey() === null, "no address, no key; outside a request, null");
+  // Two processes (two replicas) with the service's shared secret give one
+  // caller one key, so a count merged across replicas counts callers; a
+  // different secret gives a different key.
+  const { execFileSync } = await import("node:child_process");
+  const { childJson } = await import("./lib/child-json.js");
+  const keyIn = (env) => childJson(execFileSync(process.execPath, ["--input-type=module", "-e",
+    `import { callerKeyOf } from ${JSON.stringify(new URL("../src/request-timing.js", import.meta.url).href)}; console.log(JSON.stringify({ k: callerKeyOf({ ip: "203.0.113.5" }) }));`],
+    { env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env }, encoding: "utf8" })).k;
+  const SHARED = { POW_SECRET: "test-shared-secret-".padEnd(40, "s") };
+  const k1 = keyIn(SHARED), k2 = keyIn(SHARED);
+  ok(/^[0-9a-f]{12}$/.test(k1) && k1 === k2, `two processes with the shared secret give one caller the same key (${k1}, ${k2})`);
+  ok(keyIn({ POW_SECRET: "another-secret-".padEnd(40, "o") }) !== k1, "a different secret gives a different key");
+  ok(keyIn({ HANGUP_FORGIVE_SALT: SHARED.POW_SECRET }) === k1 && keyIn({ MPP_SECRET_KEY: SHARED.POW_SECRET }) === k1, "the secret is read in the hangup digest's order (any one of them keys it)");
   // The key is hashed only when a rule reads it, and once: the middleware
   // itself never reads the address.
   {
