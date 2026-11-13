@@ -11,7 +11,7 @@ const ENTRIES = [
       "Tools: transcription measures and cuts each file by the audio samples it decodes, not by the timestamps its container writes, and a file sent as it came is uploaded under the name of the format it was measured as.",
       "Tools: openapi-resolve-refs resolves long chains of refs and deeply nested documents in time proportional to their size.",
       "Tools: route-execute does not resell a 200 a seller sent without taking payment when its body is empty or blank, an error sent as text, or text where the seller promised JSON fields; the next seller is tried.",
-      "Tools: report kits remove bracket runs from quoted source text across combining marks, blanks and the compatibility forms of each bracket.",
+      "Tools: report kits remove bracket runs from quoted source text across combining marks, blanks, control characters and the compatibility forms of each bracket.",
       "Tools: the listing text a router judge reads drops a sentence opened by a role marker behind markdown list, heading or emphasis marks, a closing brace, a lookalike colon, a guillemet or an arrow.",
       "Payments: a paid answer whose connection closed after its headers went out is kept under its idempotency key, so a retry with the same key, a prepaid credits key included, replays it instead of running and being debited again.",
       "Payments: a subscription whose first payment settled while its record was not written is rebuilt once when the same credential returns: its first period is booked once, and a cancel recorded meanwhile is kept.",

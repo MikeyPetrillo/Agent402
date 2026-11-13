@@ -411,9 +411,11 @@ const OPEN_ALL = OPEN_SINGLE + OPEN_QUOTE + OPEN_MULTI;
 const CLOSE_ALL = CLOSE_SINGLE + CLOSE_QUOTE + CLOSE_MULTI;
 // What can sit between two brackets of one run: any whitespace, any combining
 // or enclosing mark (it draws on the bracket before it, so "<" with an accent
-// over it is still a bracket) and the braille blank, which renders as a space.
-// The classes share no character, so a run is matched in one pass.
-const RUN_GAP = "[\\s\\p{M}\\u2800]*";
+// over it is still a bracket), the braille blank, which renders as a space,
+// and any C0 or C1 control, which renders as nothing. They form one character
+// class (a union, so the tab and line breaks that are both a space and a
+// control match once), and a run is matched in one pass.
+const RUN_GAP = "[\\s\\p{M}\\p{Cc}\\u2800]*";
 const BRACKET_RUN_RE = new RegExp(`[${OPEN_ALL}](?:${RUN_GAP}[${OPEN_ALL}])+|[${CLOSE_ALL}](?:${RUN_GAP}[${CLOSE_ALL}])+|[${OPEN_MULTI}${CLOSE_MULTI}]`, "gu");
 /** Every character neutralizeQuoteMarkers treats as an opening or closing bracket. */
 export const QUOTE_MARKER_BRACKETS = Object.freeze({ open: OPEN_ALL, close: CLOSE_ALL, multi: OPEN_MULTI + CLOSE_MULTI });

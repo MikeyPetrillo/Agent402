@@ -31,7 +31,8 @@ Tools:
   when its body is empty or blank, an error sent as text, or text where the
   seller promised JSON fields; the next seller is tried.
 - Report kits remove bracket runs from quoted source text across combining
-  marks, blanks and the compatibility forms of each bracket.
+  marks, blanks, control characters and the compatibility forms of each
+  bracket.
 - The listing text a router judge reads drops a sentence opened by a role
   marker behind markdown list, heading or emphasis marks, a closing brace, a
   lookalike colon, a guillemet or an arrow.
