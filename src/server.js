@@ -656,6 +656,7 @@ import { CRAWL_TOOLS } from "./tools/crawl-kit.js";
 import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-window.js";
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, refreshJevSpendShared, orderByJudgment } from "./tool-judge.js";
+import { judgeReadableListing } from "./listing-screen.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
 import { EXA_TOOLS, exaEnabled, exaSpendStatus, refreshExaSpendShared, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
 import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
@@ -9198,7 +9199,10 @@ async function computeRouteJudged(q, k, include, net, ip = null, meter = null) {
     const desc = String(r.description || r.name || "");
     const price = r.price != null && r.price !== "" ? ` (${typeof r.price === "number" ? `$${r.price}` : r.price})` : "";
     const clean = !looksLikeListingInjection(desc);
-    return { name: `${r.seller === "self" ? "agent402" : hostOfSeller(r.seller)} ${r.slug || ""}${price}`.trim(), description: clean ? desc : "", tags: clean && Array.isArray(r.tags) ? r.tags : [] };
+    // The same judge screen route-execute's seller judge reads
+    // (judgeReadableListing), so the two judges never read different text.
+    const seen = judgeReadableListing({ host: r.seller === "self" ? "agent402" : hostOfSeller(r.seller), slug: String(r.slug || ""), description: clean ? desc : "", tags: clean && Array.isArray(r.tags) ? r.tags.map(String) : [] }, { links: false });
+    return { name: `${seen.name}${price}`.trim(), description: seen.description, tags: seen.tags };
   // 800 ms bound (was 2 s): production measured the judgment wait at ~150 ms
   // p95 and never past 800 ms (2026-09-25), so the bound only caps a slow
   // judge instead of making a free search wait up to 2 s for it.
