@@ -38,6 +38,7 @@ import {
 import { usdcKindsFromSupported, ARC_PROFILE } from "../src/circle-supported.js";
 import { CircleFacilitatorClient, CIRCLE_FACILITATOR_BASE, preflightUptoPayment, pendingNonceOf, CIRCLE_EVM_FALLBACK_PROFILES } from "../src/circle-facilitator.js";
 import { applyMeteredSettlement } from "../src/gateway-meter.js";
+import { CHALLENGE_VARIABLE_MAX_BYTES, UPTO_ACCEPT_JSON_BYTES } from "../src/payments.js";
 import { setUpstreamCostsForTest } from "../src/upstream-costs.js";
 
 let pass = 0, fail = 0;
@@ -414,6 +415,38 @@ try {
     ok(/REFUSING eip2612GasSponsoring, the facilitator settling upto on eip155:5042/.test(b.log.text), "and the refusal names Arc");
     await stop(b);
     st.circleExt = [EIP];
+  }
+  // 5e. The 402's headers. Production's /v1 chat 402 measures about 16,000
+  // bytes with Base upto on (scripts/test-challenge-size.js), 200 under its
+  // 16,200 ceiling. An upto network past the first and the declaration are
+  // charged to the route's own budget, so switching Arc upto and sponsoring
+  // on never grows the chat 402 past that headroom; every exact accept stays.
+  {
+    const HEADROOM = 200;
+    const post = async (url, path) => {
+      const r = await fetch(`${url}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: CHAT_BODY });
+      await r.text();
+      let total = 20; r.headers.forEach((v, k) => { total += k.length + v.length + 4; });
+      const hdr = r.headers.get("payment-required");
+      return { status: r.status, total, pr: hdr ? decode(hdr) : null };
+    };
+    const exactOf = (pr) => JSON.stringify((pr?.accepts || []).filter((a) => a.scheme === "exact").map((a) => [a.network, a.amount, a.payTo]));
+    const prod = await boot({ X402_UPTO_NETWORKS: BASE }, { arc: true });
+    const on = await boot({ X402_UPTO_NETWORKS: `${BASE},${ARC}`, X402_UPTO_GAS_SPONSORING: "on" }, { arc: true });
+    for (const path of ["/v1/chat/completions", METERED]) {
+      const [a, b] = [await post(prod.url, path), await post(on.url, path)];
+      ok(a.status === 402 && b.status === 402 && exactOf(a.pr) === exactOf(b.pr) && exactOf(a.pr) !== "[]", `${path}: every exact accept is offered unchanged with Arc upto and sponsoring on`);
+      const extra = (b.pr?.accepts || []).filter((x) => x.scheme === "upto").slice(1);
+      const gas = b.pr?.extensions?.[EIP] ? JSON.stringify({ [EIP]: b.pr.extensions[EIP] }).length : 0;
+      const variable = JSON.stringify({ bazaar: b.pr?.extensions?.bazaar }).length + String(b.pr?.resource?.description || "").length + extra.reduce((n, x) => n + JSON.stringify(x).length + 1, 0) + gas;
+      ok(variable <= CHALLENGE_VARIABLE_MAX_BYTES, `${path}: the listing, the upto accepts past the first and the declaration fit the per-route budget (${variable} <= ${CHALLENGE_VARIABLE_MAX_BYTES})`);
+      for (const x of extra) ok(JSON.stringify(x).length + 1 <= UPTO_ACCEPT_JSON_BYTES, `${path}: the ${x.network} upto accept is within the bytes the budget charges for it (${JSON.stringify(x).length + 1} <= ${UPTO_ACCEPT_JSON_BYTES})`);
+      if (path === "/v1/chat/completions") {
+        ok(b.total - a.total <= HEADROOM, `${path}: Arc upto and sponsoring add ${b.total - a.total} header bytes over production's configuration (at most ${HEADROOM})`);
+        ok(extra.some((x) => x.network === ARC) && !!b.pr?.extensions?.[EIP], `${path}: and the route still offers Arc upto and the declaration`);
+      }
+    }
+    await stop(prod); await stop(on);
   }
 } catch (e) {
   fail++;

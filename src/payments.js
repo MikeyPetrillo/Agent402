@@ -855,6 +855,20 @@ export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES
 // of 596 keep their full sample output.
 export const CHALLENGE_VARIABLE_MAX_BYTES = Number(process.env.CHALLENGE_VARIABLE_MAX_BYTES) || 1_900;
 export const CHALLENGE_SHORT_DESCRIPTION_MAX = 300;
+// One upto requirement as the 402 carries it (scheme, network, amount, asset,
+// payTo, maxTimeoutSeconds and extra with the Permit2 method and facilitator
+// address): 327 to 330 JSON bytes measured on Base and Arc, with its comma,
+// rounded up (scripts/test-upto-gas-sponsoring.js reads the real ones).
+export const UPTO_ACCEPT_JSON_BYTES = 340;
+/** The bytes a route's upto offer adds past what the per-route budget was
+ *  set against: the fixed offer (every exact accept, and production's one
+ *  upto network) is measured with test-challenge-size's total, so only an
+ *  upto accept past the first and the gas sponsoring declaration are charged
+ *  to the route's variable budget. Zero when neither is offered. */
+export function uptoChallengeBytes(uptoAccepts, gasDeclarations = null) {
+  const extra = Math.max(0, (Number(uptoAccepts) || 0) - 1) * UPTO_ACCEPT_JSON_BYTES;
+  return extra + (gasDeclarations ? JSON.stringify(gasDeclarations).length : 0);
+}
 const LONG_EXAMPLE_STRING = 200;
 // A shortened input string is a placeholder, not a value: a buyer or a sweep
 // that replays the 402's example must take the full one from /openapi.json
@@ -2544,7 +2558,14 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // family) keep listings that differ (x402ServiceNames).
   const serviceNameFor = catalogServiceNameFor(catalog);
   const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds });
-  const acceptsFor = (item) => acceptsForItem(item, railsNow());
+  // Routes whose 402 could not fit an upto accept past the first one (or the
+  // gas sponsoring declaration) inside the per-route budget: they keep every
+  // exact accept and the first upto accept, and offer no more upto than that.
+  const uptoWithheld = new WeakSet();
+  const acceptsFor = (item) => {
+    const rails = railsNow();
+    return acceptsForItem(item, uptoWithheld.has(item) ? { ...rails, uptoCaip2: rails.uptoCaip2.slice(0, 1) } : rails);
+  };
   // Read at call time, like acceptsFor: a rail dropped or joined after boot
   // is reflected in what discovery publishes as well as in the 402.
   liveRails = railsNow;
@@ -2609,12 +2630,29 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // route's `accepts` on every request, so a rail restored after boot joins
   // each 402 when these are run again (restoreRail below).
   const acceptsBuilders = new Map();
+  const uptoWithheldRoutes = [];
   const routes = Object.fromEntries(
     Object.entries(catalog).map(([route, item]) => {
       const ext = {};
       const path = route.split(" ")[1];
       const { keepListing, descriptionFirst, ...discovery } = item.discovery || {};
-      const fitted = fitChallenge(item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path) : null, capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description), declareDiscoveryExtension, undefined, { keepListing: keepListing === true, descriptionFirst: descriptionFirst === true });
+      const slimmed = item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path) : null;
+      const listingText = capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description);
+      const fitOpts = { keepListing: keepListing === true, descriptionFirst: descriptionFirst === true };
+      // Upto past the first network and the gas sponsoring declaration are
+      // charged to this route's budget (uptoChallengeBytes), so switching
+      // them on shrinks the listing instead of growing the 402's headers.
+      const uptoNets = acceptsFor(item).filter((a) => a.scheme === "upto").length;
+      const declares = !!uptoGasDeclarations && isMeteredGatewayRoute(item) && uptoNets > 0;
+      const uptoBytes = uptoChallengeBytes(uptoNets, declares ? uptoGasDeclarations : null);
+      let fitted = fitChallenge(slimmed, listingText, declareDiscoveryExtension, CHALLENGE_VARIABLE_MAX_BYTES - uptoBytes, fitOpts);
+      let declareGas = declares;
+      if (uptoBytes > 0 && fitted.bytes + uptoBytes > CHALLENGE_VARIABLE_MAX_BYTES) {
+        uptoWithheld.add(item);
+        uptoWithheldRoutes.push(route);
+        declareGas = false;
+        fitted = fitChallenge(slimmed, listingText, declareDiscoveryExtension, undefined, fitOpts);
+      }
       if (fitted.slim) Object.assign(ext, declareDiscoveryExtension(fitted.slim));
       const listingDescription = fitted.description;
       if (builderCode) Object.assign(ext, { [BUILDER_CODE]: declareBuilderCodeExtension(builderCode) });
@@ -2629,7 +2667,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       acceptsBuilders.set(route, () => withOutputSchemaOnFirstAccept(acceptsFor(item), firstAcceptSchema));
       // Permit2 gas sponsorship: a metered /v1 route that offers upto
       // (src/upto-gas-sponsoring.js). Top level, one copy per 402.
-      if (uptoGasDeclarations && isMeteredGatewayRoute(item) && acceptsFor(item).some((a) => a.scheme === "upto")) Object.assign(ext, uptoGasDeclarations);
+      if (declareGas) Object.assign(ext, uptoGasDeclarations);
       return [
         route,
         {
@@ -2676,6 +2714,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       ];
     })
   );
+  if (uptoWithheldRoutes.length) {
+    console.warn(`x402 upto: ${uptoWithheldRoutes.length} route(s) offer upto on ${uptoCaip2[0]} only, with no gas sponsoring declaration: the further upto accepts did not fit the per-route 402 budget (${uptoWithheldRoutes.slice(0, 5).join(", ")}${uptoWithheldRoutes.length > 5 ? ", ..." : ""}).`);
+  }
 
   // Wildcard price entries for paths that are deliberately NOT catalog tools —
   // today just the retired pairwise converters. They must never enter `catalog`:
