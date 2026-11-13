@@ -19,6 +19,7 @@ import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 delete process.env.OPENROUTER_API_KEY; delete process.env.DECIDE_OPENROUTER_API_KEY; delete process.env.OPENAI_API_KEY;
 process.env.TYPESAFE_API_KEY = "ts_test";
+process.env.POSTHOG_TEST_CAPTURE = "1"; // in-memory telemetry sink: a refused call must record no sale
 
 const L = await import("../src/tools/loop-gate-kit.js");
 const { LOOP_GATE_TOOLS, LOOP_LIMITS, NEXT_STEPS, RECENT_HISTORY, loopGate, prepareLoopGate, validateLoopGateRequest, lexicalChecks, similarity, composeDecision } = L;
@@ -187,6 +188,27 @@ ok(/same price/.test(tool.description), "the description says the code-only stop
   ok(empty?.statusCode === 502, "a 200 with no answers is a 502, never a guessed decision");
   const partial = await fails(base, { fetchImpl: async (url, init) => { const b = JSON.parse(init.body); const answers = { goal_met: { type: "noul", noul: 0.2 }, stuck: { type: "noul", noul: 0.2 }, next_step: { type: "choice", choice: "teleport", confidence: 0.9 } }; return { ok: true, status: 200, text: async () => JSON.stringify({ answers, questions: b.questions }) }; } });
   ok(partial?.statusCode === 502, "a next step outside the published enum is a 502");
+  // A noul with no probability, through loopGate() and the judge's own walk
+  // (strictProbabilities): /v1/judge would pass it on as noProbability, the
+  // loop gate cannot branch on it. The walk stops at that leg (it may have
+  // billed us), the call is an uncharged 502, and no sale is recorded for it.
+  {
+    const { _testEventsForTest } = await import("../src/posthog.js");
+    const sales = () => _testEventsForTest().filter((e) => e.event === "gateway_usage" && e.properties.tier === "loop-gate").length;
+    const before = sales();
+    let legs = 0;
+    const nullNoul = await fails(base, { fetchImpl: async (url, init) => {
+      legs++;
+      const b = JSON.parse(init.body);
+      const answers = { goal_met: { type: "noul", noul: null }, stuck: { type: "noul", noul: 0.2 }, next_step: { type: "choice", choice: "iterate", confidence: 0.8, probabilities: Object.fromEntries(Object.keys(b.questions.next_step.criteria).map((k) => [k, k === "iterate" ? 0.8 : 0])) } };
+      return { ok: true, status: 200, text: async () => JSON.stringify({ model: "jev-1.14.0", answers, usage: { input_tokens: 300, output_tokens: 20 } }) };
+    } });
+    ok(nullNoul?.statusCode === 502 && nullNoul.mayBeBilled === true && legs === 1, `a null goal_met noul is an uncharged 502 and ends the walk (${nullNoul?.statusCode}, ${legs} leg)`);
+    ok(sales() === before, "the refused call records no loop-gate sale (the judge refused it inside its walk)");
+    // Control: the same stub with a number records exactly one sale.
+    await run(base, { goalMet: 0.2 });
+    ok(sales() === before + 1, "control: an answered call records one loop-gate sale");
+  }
   let bad = null;
   try { composeDecision({ req: validateLoopGateRequest(base), checks: prepareLoopGate(base).checks }, { goal_met: { type: "noul", noul: 0.1 }, stuck: { type: "noul", noul: 0.1 }, next_step: { type: "choice", choice: "iterate" } }, "m"); } catch (e) { bad = e; }
   ok(bad?.statusCode === 502, "a choice with no confidence cannot be composed into a decision");
