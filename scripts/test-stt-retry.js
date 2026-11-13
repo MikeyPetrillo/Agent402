@@ -52,7 +52,10 @@ globalThis.fetch = async (url, init) => {
 };
 installEgressMeter(); // wraps the stub: every attempt below passes the meter and the ceiling
 
-const { STT_TOOLS, STT_TIERS, STT_MARGIN, STT_RETRY_AFTER_MAX_MS, makeMultipartHandler, __setSttRetryForTest } = await import("../src/tools/stt-kit.js");
+const { STT_TOOLS, STT_TIERS, STT_MARGIN, STT_RETRY_AFTER_MAX_MS, makeMultipartHandler, __setSttRetryForTest, __setMeasureForTest } = await import("../src/tools/stt-kit.js");
+// The decode measurement reads the WAV's own length (8 kHz 8-bit mono): this
+// suite is about the upstream attempts, and its lane has no ffmpeg.
+__setMeasureForTest(async (b) => ({ seconds: (b.length - 44) / 8000 }));
 
 // Rates derived from each tier's own price so one attempt at the cap sits
 // exactly on the margin bound: two billed attempts fit only for audio of at

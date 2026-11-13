@@ -64,7 +64,7 @@ ok(ffmpegCalls > 0 && probeCalls > 0, `found ffmpeg (${ffmpegCalls}) and ffprobe
 ok(offenders.length === 0, `every ffmpeg/ffprobe call names an audio-only decoder list; ffmpeg calls keep -vn${offenders.length ? ":\n  " + offenders.join("\n  ") : ""}`);
 
 // ---- 2. the argument lists the kit passes ----------------------------------
-const VIDEO_DECODERS = ["magicyuv", "h264", "hevc", "mpeg4", "vp8", "vp9", "av1", "mjpeg", "png", "prores", "rawvideo"];
+const VIDEO_DECODERS = ["magicyuv", "h264", "hevc", "mpeg4", "vp8", "vp9", "av1", "mjpeg", "png", "prores", "rawvideo", "wmv1", "wmv2", "wmv3", "vc1", "wmv3image", "vc1image"];
 const allowed = AUDIO_DECODERS.split(",");
 ok(allowed.length > 5 && VIDEO_DECODERS.every((d) => !allowed.includes(d)), "AUDIO_DECODERS names no video or image decoder");
 const calls = [];

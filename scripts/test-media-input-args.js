@@ -53,8 +53,15 @@ for (const [label, body] of [["an HLS playlist", "#EXTM3U\n#EXT-X-TARGETDURATION
 }
 
 // Magic-byte table.
-const table = [["fLaC", "flac"], ["ID3\x04", "mp3"], ["\xff\xfb\x90\x00", "mp3"], ["\x1a\x45\xdf\xa3", "matroska"], ["FORM\0\0\0\0AIFF", "aiff"], ["RIFF\0\0\0\0AVI ", "avi"], ["RIFF\0\0\0\0XXXX", null]];
+const table = [["fLaC", "flac"], ["ID3\x04", "mp3"], ["\xff\xfb\x90\x00", "mp3"], ["\x1a\x45\xdf\xa3", "matroska"], ["FORM\0\0\0\0AIFF", "aiff"], ["RIFF\0\0\0\0AVI ", "avi"], ["RIFF\0\0\0\0XXXX", null],
+  // Recorder containers: ASF (WMA), raw ADTS AAC (MPEG-4 and MPEG-2 sync words), AMR narrow and wide band, CAF.
+  ["\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c", "asf"], ["\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6d", null],
+  ["\xff\xf1\x50\x80", "aac"], ["\xff\xf9\x50\x80", "aac"], ["#!AMR\n", "amr"], ["#!AMR-WB\n", "amr"], ["#!AMRX", null], ["caff\0\x01\0\0", "caf"]];
 for (const [head, fmt] of table) ok(inputFormatOf(pad(head)) === fmt, `magic ${JSON.stringify(head)} -> ${fmt}`);
+
+// A recorder container's input names its own demuxer.
+calls.length = 0; await settle(probeMedia(pad("\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c")));
+if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
 
 __setExecFileForTest(null);
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);

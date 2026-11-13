@@ -5,7 +5,10 @@
 // Offline: a synthetic WAV is uploaded through the multipart handler and
 // fetch answers with bodies shaped like the transcription API's errors.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { makeMultipartHandler } from "../src/tools/stt-kit.js";
+import { makeMultipartHandler, __setMeasureForTest } from "../src/tools/stt-kit.js";
+// The decode measurement reads the WAV's own length (8 kHz 8-bit mono): this
+// suite is about the upstream's refusals, and its lane has no ffmpeg.
+__setMeasureForTest(async (b) => ({ seconds: (b.length - 44) / 8000 }));
 
 process.env.OPENAI_API_KEY = "sk-test-not-real";
 process.env.OPENROUTER_API_KEY = "or-test-not-real";
