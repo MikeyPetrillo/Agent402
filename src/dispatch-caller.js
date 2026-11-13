@@ -2,7 +2,8 @@
 // (decide's steps, route-execute's local tier) invoke a tool as
 // `def.handler(params)` with no request, on purpose: a step must never see the
 // paying request's credential or payer. A per-caller admission rule (the
-// large-image slot in src/tools/ocr-kit.js) still needs to know whose call it
+// large-image slot in src/tools/ocr-kit.js, the audio decode pool in
+// src/tools/media-kit.js) still needs to know whose call it
 // is, so the executor runs the step inside runAsCallerOf(req, fn): an opaque
 // key (the verified signed payer, a credits key, a Tempo sender, else the client
 // address, an IPv6 one folded to its /64 as every per-address bound folds it)
@@ -34,6 +35,13 @@ export function callerKeyOf(req) {
 /** The caller key the current request-less call runs for, or null. */
 export function currentDispatchCaller() {
   return scope.getStore() || null;
+}
+
+/** The key a per-caller admission rule holds a place under: the request's
+ *  caller, else the caller an in-process executor runs this call for, else
+ *  the one shared key, so a place is never held uncounted. */
+export function admissionCallerOf(req) {
+  return callerKeyOf(req) || currentDispatchCaller() || IN_PROCESS_CALLER;
 }
 
 /** Run `fn` with the caller of `req` (or the enclosing dispatch's caller)

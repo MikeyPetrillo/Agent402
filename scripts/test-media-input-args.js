@@ -144,6 +144,94 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
   }
 }
 
+// Admission is per caller: one caller's run of files holding the slot and
+// every queued place never refuses another caller's first file. The newcomer
+// takes the first caller's newest queued place (that waiter is answered busy),
+// the next slot that frees goes to the caller holding none, and a caller that
+// already holds a place takes none from anyone.
+{
+  const { measureAudio, MEASURE_QUEUE_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
+  const { runAsCallerOf } = await import("../src/dispatch-caller.js");
+  const hadSlots = process.env.AUDIO_DECODE_SLOTS;
+  process.env.AUDIO_DECODE_SLOTS = "1";
+  const held = [];
+  __setExecFileForTest((bin, args, opts, cb) => { held.push(cb); });
+  const done = (cb) => cb(null, "out_time_us=1000000\n");
+  const mp3 = Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), Buffer.alloc(64)]);
+  const A = "ip:198.51.100.5", B = "ip:198.51.100.7", C = "ip:203.0.113.9";
+  const keep = setInterval(() => {}, 1_000);
+  const tick = () => new Promise((r) => setTimeout(r, 30));
+  try {
+    const settled = new Map();
+    const track = (name, p) => { p.then((v) => settled.set(name, v)); return p; };
+    const aRuns = [];
+    for (let i = 0; i <= MEASURE_QUEUE_PER_SLOT; i++) aRuns.push(track(`a${i}`, measureAudio(mp3, { format: "mp3", who: A })));
+    await tick();
+    ok(__measurePoolForTest().active === 1 && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `one caller holds the slot and every queued place (setup, ${JSON.stringify(__measurePoolForTest())})`);
+    const aMore = await measureAudio(mp3, { format: "mp3", who: A });
+    ok(aMore?.busy === true, "a caller already holding places is refused when the queue is full");
+    const aStep = await runAsCallerOf({ ip: A.slice(3), headers: {} }, () => measureAudio(mp3, { format: "mp3" }));
+    ok(aStep?.busy === true && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT && !settled.has(`a${MEASURE_QUEUE_PER_SLOT}`), "a step that caller dispatched is keyed on it, so it takes no place either");
+    // A second caller's first file, dispatched as a step with no request.
+    const bRun = track("b", runAsCallerOf({ ip: B.slice(3), headers: {} }, () => measureAudio(mp3, { format: "mp3" })));
+    await tick();
+    ok(!settled.has("b") && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `a second caller's first file is queued, not refused (${JSON.stringify(settled.get("b"))})`);
+    ok(settled.get(`a${MEASURE_QUEUE_PER_SLOT}`)?.busy === true, "the place it took was the first caller's newest queued one, answered busy");
+    // A third caller with none also finds a place; B, holding one, takes none.
+    const cRun = track("c", measureAudio(mp3, { format: "mp3", who: C }));
+    await tick();
+    ok(!settled.has("c") && settled.get(`a${MEASURE_QUEUE_PER_SLOT - 1}`)?.busy === true, "a third caller's first file takes the first caller's next queued place");
+    const bMore = await runAsCallerOf({ ip: B.slice(3), headers: {} }, () => measureAudio(mp3, { format: "mp3" }));
+    ok(bMore?.busy === true, "a step keyed on its dispatcher, which holds a place, takes none (keyed on the dispatcher, not the shared key)");
+    // The slot that frees goes to a caller holding no slot, ahead of the first caller's queue.
+    done(held.shift());
+    await tick();
+    done(held.shift());
+    await tick();
+    ok(settled.get("b")?.seconds === 1 && !settled.has("a1"), `the next freed slot decodes the second caller's file before the first caller's queue (${JSON.stringify([...settled.keys()])})`);
+    __setExecFileForTest((bin, args, opts, cb) => setImmediate(() => done(cb)));
+    while (held.length) done(held.shift());
+    await Promise.all([...aRuns, bRun, cRun]);
+    ok(settled.get("c")?.seconds === 1, "the third caller's file decodes too");
+    ok(__measurePoolForTest().active === 0 && __measurePoolForTest().waiting === 0 && __measurePoolForTest().callers === 0 && __measurePoolForTest().queuedBytes === 0, `the pool and its per-caller counts drain (${JSON.stringify(__measurePoolForTest())})`);
+  } finally {
+    clearInterval(keep);
+    if (hadSlots === undefined) delete process.env.AUDIO_DECODE_SLOTS; else process.env.AUDIO_DECODE_SLOTS = hadSlots;
+  }
+}
+
+// The transcription routes hold their decode place for the request's caller:
+// the identity payer (never a typed x-payment, which nothing verified in
+// FREE_MODE), else the address with an IPv6 one folded to its /64; a step run
+// with no request is keyed on the caller that dispatched it.
+{
+  const { prepareAudioWithinCap, __setMeasureForTest, __setTranscodeForTest } = await import("../src/tools/stt-kit.js");
+  const { runAsCallerOf, IN_PROCESS_CALLER } = await import("../src/dispatch-caller.js");
+  let seen = [];
+  __setMeasureForTest(async (buf, opts) => { seen.push(opts?.who); return { unavailable: "stub" }; });
+  __setTranscodeForTest(async (buf, opts) => { seen.push(opts?.who); return { unavailable: "stub" }; });
+  const ogg = Buffer.concat([Buffer.from("OggS", "latin1"), Buffer.alloc(200)]);
+  const whoFor = async (req, run = (fn) => fn()) => { seen = []; await run(() => prepareAudioWithinCap(ogg, "a.ogg", "transcribe", req)).catch(() => {}); return seen; };
+  const forged = Buffer.from(JSON.stringify({ x402Version: 1, scheme: "exact", network: "base", payload: { authorization: { from: "0x" + "ab".repeat(20) } } })).toString("base64");
+  const withHeader = (ip) => ({ ip, headers: { "x-payment": forged }, header: (n) => (String(n).toLowerCase() === "x-payment" ? forged : undefined) });
+  const had = process.env.FREE_MODE;
+  try {
+    process.env.FREE_MODE = "true";
+    const plain = await whoFor({ ip: "198.51.100.40", headers: {} });
+    const forgedSeen = await whoFor(withHeader("198.51.100.40"));
+    ok(plain.length > 0 && plain.every((w) => w === "ip:198.51.100.40") && forgedSeen.length > 0 && forgedSeen.every((w) => w === "ip:198.51.100.40"), `a forged x-payment does not change the decode place's key (${plain} / ${forgedSeen})`);
+    const v6 = await whoFor({ ip: "2001:db8:5:6::99", headers: {} });
+    ok(v6.length > 0 && v6.every((w) => w === "ip:2001:db8:5:6::/64"), `an IPv6 caller's decode place is keyed on its /64 (${v6})`);
+    const step = await whoFor(null, (fn) => runAsCallerOf({ ip: "203.0.113.9", headers: {} }, fn));
+    ok(step.length > 0 && step.every((w) => w === "ip:203.0.113.9"), `a step inside runAsCallerOf is keyed on its dispatcher (${step})`);
+    const none = await whoFor(null);
+    ok(none.length > 0 && none.every((w) => w === IN_PROCESS_CALLER), `a call with no caller at all is held under the shared key (${none})`);
+  } finally {
+    if (had === undefined) delete process.env.FREE_MODE; else process.env.FREE_MODE = had;
+    __setMeasureForTest(null); __setTranscodeForTest(null);
+  }
+}
+
 __setExecFileForTest(null);
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

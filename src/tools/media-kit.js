@@ -13,6 +13,8 @@ import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir, availableParallelism } from "node:os";
 import { join } from "node:path";
 import { safeFetch } from "./fetch-guard.js";
+import { currentDispatchCaller, IN_PROCESS_CALLER } from "../dispatch-caller.js";
+import { createCallerPlaces } from "../caller-places.js";
 
 const MAX_MEDIA_BYTES = 30 * 1024 * 1024;
 const FFMPEG_TIMEOUT_MS = 90_000;
@@ -372,24 +374,60 @@ export function measureQueueMaxBytes(size = measurePoolSize()) {
   return queueBytesOverride ?? Math.min(MEASURE_QUEUE_BYTES_CAP, MEASURE_QUEUE_PER_SLOT * size * MEASURE_QUEUE_BYTES_PER_WAITER);
 }
 let measureQueuedBytes = 0;
+// Admission is per caller (`who`: src/dispatch-caller.js admissionCallerOf,
+// the signed payer, a credits key, a Tempo sender, else the client address
+// with an IPv6 one folded to its /64; for a step an in-process executor runs,
+// the caller that dispatched it). Each caller's slots and queued places are
+// counted (src/caller-places.js): when the queue is full, a caller holding
+// nothing takes the newest queued places of callers holding more than one
+// (each answered busy, the caller's retryable 503) until its call fits, and a
+// slot that frees goes to the waiter whose caller holds the fewest places
+// (first come among equals). So one caller's run of files cannot hold every
+// slot and place while another caller's first file is refused.
+const measurePlaces = createCallerPlaces();
 // Resolves true with a slot held, "full" when the queue is full (by count or
-// by the bytes its waiters hold), or false when none came free within `waitMs`.
-const measureAcquire = (waitMs, bytes = 0) => {
+// by the bytes its waiters hold) or its place was taken by a caller holding
+// none, or false when none came free within `waitMs`.
+const measureAcquire = (waitMs, bytes = 0, who = IN_PROCESS_CALLER) => {
   const size = measurePoolSize();
-  if (measureActive < size) { measureActive++; return Promise.resolve(true); }
+  if (measureActive < size) { measureActive++; measurePlaces.hold(who); return Promise.resolve(true); }
   if (!(waitMs > 0)) return Promise.resolve(false);
-  if (measureWaiters.length >= MEASURE_QUEUE_PER_SLOT * size || measureQueuedBytes + bytes > measureQueueMaxBytes(size)) return Promise.resolve("full");
+  const fits = (taken = []) => {
+    let freed = 0;
+    for (const i of taken) freed += measureWaiters[i].bytes;
+    return measureWaiters.length - taken.length < MEASURE_QUEUE_PER_SLOT * size && measureQueuedBytes - freed + bytes <= measureQueueMaxBytes(size);
+  };
+  if (!fits()) {
+    const taken = measurePlaces.victims(measureWaiters, who, fits);
+    if (!taken) return Promise.resolve("full");
+    for (const i of taken.sort((a, b) => b - a)) measureWaiters.splice(i, 1)[0].evict();
+  }
   measureQueuedBytes += bytes;
+  measurePlaces.hold(who);
   return new Promise((resolve) => {
-    const waiter = () => { clearTimeout(timer); measureQueuedBytes -= bytes; resolve(true); };
-    const timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); measureQueuedBytes -= bytes; resolve(false); }, waitMs);
-    timer.unref?.();
+    const leave = () => { clearTimeout(waiter.timer); measureQueuedBytes -= bytes; };
+    const waiter = {
+      who, bytes,
+      grant: () => { leave(); resolve(true); },
+      evict: () => { leave(); measurePlaces.free(who); resolve("full"); },
+    };
+    waiter.timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); measureQueuedBytes -= bytes; measurePlaces.free(who); resolve(false); }, waitMs);
+    waiter.timer.unref?.();
     measureWaiters.push(waiter);
   });
 };
-const measureRelease = () => { const next = measureWaiters.shift(); if (next) next(); else measureActive--; };
+const measureRelease = (who = IN_PROCESS_CALLER) => {
+  measurePlaces.free(who);
+  let at = -1, least = Infinity;
+  for (let i = 0; i < measureWaiters.length; i++) {
+    const n = measurePlaces.count(measureWaiters[i].who);
+    if (n < least) { least = n; at = i; }
+  }
+  if (at >= 0) measureWaiters.splice(at, 1)[0].grant(); // the slot passes straight to that waiter
+  else measureActive--;
+};
 /** Slots in use and calls waiting, for tests. */
-export const __measurePoolForTest = () => ({ active: measureActive, waiting: measureWaiters.length, size: measurePoolSize(), queuedBytes: measureQueuedBytes });
+export const __measurePoolForTest = () => ({ active: measureActive, waiting: measureWaiters.length, size: measurePoolSize(), queuedBytes: measureQueuedBytes, callers: measurePlaces.callers() });
 /** Sets the queue's byte bound for a test (null restores the default). */
 export const __setMeasureQueueMaxBytesForTest = (n) => { queueBytesOverride = n; };
 export async function measureAudioSeconds(buffer) {
@@ -401,7 +439,7 @@ export async function measureAudioSeconds(buffer) {
  *  mono FLAC cut at that length (transcodeSpeech's output), answered as
  *  `audio`: one decode measures the whole file and converts it, instead of a
  *  measurement followed by a second decode for the conversion. */
-export async function measureAudio(buffer, { cutSeconds = null, format = null, deadlineAt = null } = {}) {
+export async function measureAudio(buffer, { cutSeconds = null, format = null, deadlineAt = null, who = null } = {}) {
   if (Number.isFinite(cutSeconds) && cutSeconds > 0) {
     let outPath = null;
     return decodeInMeasurePool(buffer, "a402-measure-", (dir) => {
@@ -414,9 +452,9 @@ export async function measureAudio(buffer, { cutSeconds = null, format = null, d
     }, async (seconds) => {
       const audio = await readFile(outPath);
       return audio.length > 0 ? { seconds, audio } : { seconds };
-    }, { format, counter: true, deadlineAt });
+    }, { format, counter: true, deadlineAt, who });
   }
-  return decodeInMeasurePool(buffer, "a402-measure-", () => [...SAMPLE_CLOCK, "-f", "null", "-"], (seconds) => ({ seconds }), { format, deadlineAt });
+  return decodeInMeasurePool(buffer, "a402-measure-", () => [...SAMPLE_CLOCK, "-f", "null", "-"], (seconds) => ({ seconds }), { format, deadlineAt, who });
 }
 /** Samples a second of the length counter (one byte each): 10 ms resolution. */
 const COUNTER_RATE = 100;
@@ -434,7 +472,7 @@ const SAMPLE_CLOCK = Object.freeze(["-af", "asetpts=N/SR/TB"]);
  *  { audio, seconds } (seconds: the length written, which is the file's whole
  *  length when it is shorter than the cut), or measureAudio's { undecodable }
  *  or { unavailable }. Never throws. */
-export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadlineAt = null }) {
+export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadlineAt = null, who = null }) {
   if (!(Number.isFinite(maxSeconds) && maxSeconds > 0)) return { unavailable: "no length to cut at was given" };
   let outPath = null;
   return decodeInMeasurePool(buffer, "a402-speech-", (dir) => {
@@ -443,7 +481,7 @@ export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadl
   }, async (seconds) => {
     const audio = await readFile(outPath);
     return audio.length > 0 ? { audio, seconds } : { undecodable: "the decoder wrote no audio" };
-  }, { format, deadlineAt });
+  }, { format, deadlineAt, who });
 }
 
 /** Every demuxer the sniffer can name: each reads local bytes only and names
@@ -462,13 +500,16 @@ export const AUDIO_DEMUXERS = Object.freeze(["mp3", "aac", "mov", "matroska", "o
 // run is tried once under each other demuxer of AUDIO_DEMUXERS, inside the same
 // slot and the same overall deadline, before the file is called undecodable;
 // the answer's `format` names the demuxer that read it.
-async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = null, counter = false, deadlineAt = null } = {}) {
+async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = null, counter = false, deadlineAt = null, who = null } = {}) {
+  // The caller the place is held for: the one passed in, else the caller an
+  // in-process executor runs this call for, else the one shared key.
+  const caller = who || currentDispatchCaller() || IN_PROCESS_CALLER;
   const first = format || inputFormatOf(buffer);
   const order = [...(first ? [first] : []), ...AUDIO_DEMUXERS.filter((f) => f !== first)];
   const budgeted = Number.isFinite(deadlineAt);
   // A budgeted caller waits while its deadline still leaves a whole minimum decode.
   const waitMs = budgeted ? deadlineAt - Date.now() - MEASURE_MIN_DECODE_MS : MEASURE_WAIT_MS;
-  const slot = await measureAcquire(waitMs, buffer?.length ?? 0);
+  const slot = await measureAcquire(waitMs, buffer?.length ?? 0, caller);
   if (slot === "full") return { unavailable: "every decoder slot is busy and the queue for one is full", busy: true };
   if (slot !== true) return { unavailable: budgeted ? "no decoder slot came free in the time this call has left" : "no decoder slot came free in time", busy: true };
   const decodeMs = budgeted ? Math.max(MEASURE_MIN_DECODE_MS, Math.min(MEASURE_MAX_DECODE_MS, deadlineAt - Date.now())) : MEASURE_MIN_DECODE_MS;
@@ -519,7 +560,7 @@ async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = nul
   } catch {
     return { unavailable: "the file could not be staged for the decoder" };
   } finally {
-    measureRelease();
+    measureRelease(caller);
     if (dir) rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }

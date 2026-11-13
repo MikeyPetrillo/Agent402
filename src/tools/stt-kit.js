@@ -55,6 +55,7 @@ import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 import { measureAudio, transcodeSpeech, inputFormatOf } from "./media-kit.js";
+import { admissionCallerOf } from "../dispatch-caller.js";
 import { redactSecrets } from "./redact.js";
 import { NOT_CHARGED, notChargedOn } from "../not-charged.js";
 import { upstreamCosts } from "../upstream-costs.js";
@@ -359,11 +360,14 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   if (bound !== null && !overCap(bound)) return { buf, filename: upstreamNameFor(filename, "wav"), durationSec: container.durationSec };
   // A busy pool queues inside the call's budget, leaving the upstream its time.
   const deadlineAt = decodeDeadlineAt(req, diarize);
+  // The decode pool admits per caller (media-kit.js): this call's caller, or
+  // the caller that dispatched it when it runs as a step with no request.
+  const who = admissionCallerOf(req);
 
   let measured = null, undecodable = null, unavailable = null, format = sniffed, cut = null;
   try {
     // A file that will be converted is measured and converted in one decode.
-    const m = await measureImpl(buf, !UPSTREAM_READY.has(sniffed) || multiTrack ? { cutSeconds: capSec + 2, deadlineAt } : { deadlineAt });
+    const m = await measureImpl(buf, !UPSTREAM_READY.has(sniffed) || multiTrack ? { cutSeconds: capSec + 2, deadlineAt, who } : { deadlineAt, who });
     if (m && typeof m === "object") {
       measured = m.seconds ?? null; undecodable = m.undecodable || null; unavailable = m.unavailable || null;
       if (typeof m.format === "string") format = m.format;
@@ -378,7 +382,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
     if (overCap(durationSec)) throw overCapError(durationSec, tierSlug);
     if (ready) return { buf, filename: upstreamNameFor(filename, format), durationSec };
     if (cut) return { ...asFlac({ audio: cut }), durationSec };
-    const t = await transcodeImpl(buf, { maxSeconds: capSec + 2, format, deadlineAt });
+    const t = await transcodeImpl(buf, { maxSeconds: capSec + 2, format, deadlineAt, who });
     if (t?.audio) return { ...asFlac(t), durationSec };
     if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
     throw decoderBusyError(t?.unavailable || "the conversion did not run", tierSlug, req);
@@ -389,7 +393,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
     throw overCapError(byteFloorSeconds(buf.length, container.pictureBytes), tierSlug);
   }
   if (undecodable) throw unreadableError(undecodable, tierSlug, req);
-  const t = await transcodeImpl(buf, { maxSeconds: capSec, format, deadlineAt });
+  const t = await transcodeImpl(buf, { maxSeconds: capSec, format, deadlineAt, who });
   if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
   if (!t?.audio || !(Number.isFinite(t.seconds) && t.seconds > 0)) throw decoderBusyError(t?.unavailable || unavailable || "the decoder gave no answer", tierSlug, req);
   if (t.seconds < capSec - CUT_REACHED_SLACK_SEC) {

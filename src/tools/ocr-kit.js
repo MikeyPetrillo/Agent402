@@ -12,7 +12,8 @@
 // than browser/PDF tooling. PoW-eligible (pure CPU, no network in the hot path).
 import { loadTesseract } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
-import { callerKeyOf, currentDispatchCaller, IN_PROCESS_CALLER } from "../dispatch-caller.js";
+import { admissionCallerOf } from "../dispatch-caller.js";
+import { createCallerPlaces } from "../caller-places.js";
 import { notChargedOn } from "../not-charged.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -429,7 +430,7 @@ export const OCR_LARGE_RETIRE_WAIT_MS = 10_000;
 let largeBusy = false;
 let largeHolder = null;
 const largeWaiters = [];
-const largeCallers = new Map(); // caller -> places held (the slot and queued)
+const largeCallers = createCallerPlaces(); // caller -> places held (the slot and queued)
 
 function largeBusyError() {
   return Object.assign(
@@ -439,17 +440,9 @@ function largeBusyError() {
 }
 
 // A place with no caller key is counted under the one shared key, never not
-// at all, so the eviction rule below sees it.
-const placeKey = (who) => who || IN_PROCESS_CALLER;
-function holdPlace(who) {
-  const k = placeKey(who);
-  largeCallers.set(k, (largeCallers.get(k) || 0) + 1);
-}
-function freePlace(who) {
-  const k = placeKey(who);
-  const n = (largeCallers.get(k) || 0) - 1;
-  if (n > 0) largeCallers.set(k, n); else largeCallers.delete(k);
-}
+// at all, so the eviction rule below sees it (src/caller-places.js).
+const holdPlace = (who) => largeCallers.hold(who);
+const freePlace = (who) => largeCallers.free(who);
 
 /** Wait for the large-image slot; resolves to its release function. */
 function acquireLargeSlot(waitMs = OCR_LARGE_WAIT_MS, who = null) {
@@ -457,7 +450,7 @@ function acquireLargeSlot(waitMs = OCR_LARGE_WAIT_MS, who = null) {
   if (!largeBusy) { largeBusy = true; largeHolder = who; holdPlace(who); return Promise.resolve(release); }
   if (largeWaiters.length >= OCR_LARGE_QUEUE_MAX) {
     // A newcomer takes the last queued place of a caller holding more than one.
-    const victimAt = largeCallers.has(placeKey(who)) ? -1 : largeWaiters.findLastIndex((w) => (largeCallers.get(placeKey(w.who)) || 0) > 1);
+    const victimAt = largeCallers.victims(largeWaiters, who)?.[0] ?? -1;
     if (victimAt < 0) return Promise.reject(largeBusyError());
     const [victim] = largeWaiters.splice(victimAt, 1);
     clearTimeout(victim.timer);
@@ -487,7 +480,7 @@ function releaseLargeSlot(who = null) {
 /** Test hook for the large-image slot. */
 export const __ocrLargeTest = {
   acquire: acquireLargeSlot,
-  state: () => ({ busy: largeBusy, waiting: largeWaiters.length, holder: largeHolder, callers: largeCallers.size }),
+  state: () => ({ busy: largeBusy, waiting: largeWaiters.length, holder: largeHolder, callers: largeCallers.callers() }),
   recognize: doRecognize,
 };
 
@@ -495,7 +488,7 @@ export const __ocrLargeTest = {
  *  caller an in-process executor runs this call for (src/dispatch-caller.js),
  *  else one shared key, so a place is never held uncounted. */
 function ocrCallerOf(req) {
-  return callerKeyOf(req) || currentDispatchCaller() || IN_PROCESS_CALLER;
+  return admissionCallerOf(req);
 }
 
 async function doRecognize(buf, lang, fmt, pixels = 0, who = null) {
