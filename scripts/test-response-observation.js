@@ -161,10 +161,10 @@ ok(o.lastMissing.join(",") === "data.attributes",
 
 // A BODY WE COULD NOT READ IS NOT WHAT THE SELLER SENT, and a body cut at our
 // byte limit is the seller's choice of size. readAfterSpend marks both by
-// identity, not by a key: an unreadable body is not observed; a cut whose
-// prefix closed a JSON object or array is judged on it; any other cut is
+// identity, not by a key: a cut whose prefix closed a JSON object or array is
+// judged on it; any other cut, and a body we could not read at all, is
 // counted as unverifiable, apart from calls and kept, so padding an answer
-// past the limit never keeps a record clean.
+// past the limit, or aborting it after settling, never keeps a record clean.
 {
   const o = "https://cut.example";
   const { readAfterSpend } = await import("../src/x402-buyer.js");
@@ -181,7 +181,11 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(deliveryObservation(o, "POST", "/r")?.unverifiable === 2 && deliveryObservation(o, "POST", "/r")?.calls === 0, "a cut whose prefix parses only as a scalar a longer body would extend is unverifiable too");
   const unread = await readAfterSpend(new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } })), 64);
   ok(typeof unread?.relayError === "string", "our reader could not read the body (setup)");
-  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: unread }) === null, "nor is a body we could not read");
+  observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: unread });
+  ok(deliveryObservation(o, "POST", "/r")?.unverifiable === 3 && deliveryObservation(o, "POST", "/r")?.calls === 0 && deliveryObservation(o, "POST", "/r")?.kept === 0, `a body we could not read is counted as unverifiable, never kept (${JSON.stringify(deliveryObservation(o, "POST", "/r"))})`);
+  const fresh = "https://abort.example";
+  observeDelivery({ origin: fresh, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: unread });
+  ok(deliveryObservation(fresh, "POST", "/r")?.unverifiable === 1 && deliveryObservation(fresh, "POST", "/r")?.keptRate === null, "a route whose only paid answer was unreadable has a record, and no kept rate");
   // The same keys sent BY THE SELLER are the seller's own answer: observed,
   // so an echoed `_truncated` or `relayError` cannot hide a missed promise.
   const echoed = await readAfterSpend(new Response(JSON.stringify({ _truncated: true, relayError: "x" })), 4096);

@@ -107,9 +107,11 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
     if (!origin || !route) return null;
     const paths = (Array.isArray(guaranteedPaths) ? guaranteedPaths : []).slice(0, MAX_PATHS_PER_ROUTE);
     if (!paths.length) return null;              // no promise, nothing to verify
-    // A body our reader could not read at all says nothing either way: the
-    // call is not observed. Recognized by the object identity our own readers
-    // mark (markNotSellerBody), never by a key, since a seller can send any
+    // A body our reader could not read at all (the seller settled, then cut
+    // or reset the answer) cannot be judged, so it is counted as unverifiable,
+    // as a cut is: a seller that aborts after settling never keeps a clean
+    // record. Recognized by the object identity our own readers mark
+    // (markNotSellerBody), never by a key, since a seller can send any
     // key. A body our reader holds whole (a non-JSON answer to a route that
     // promised JSON paths) is the seller's delivery: it is read back and
     // judged on the seller's bytes, never on our stand-in's keys, so a missed
@@ -124,12 +126,14 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
     let unverifiable = false;
     if (body && typeof body === "object" && NOT_SELLER_BODY.has(body)) {
       const sent = standInSent(body);
-      if (sent.unreadable) return null;
-      let read;
-      if ("json" in sent) read = sent.json;
-      else { try { read = JSON.parse(sent.text); } catch { read = undefined; } }
-      if (sent.cut && !(read !== null && typeof read === "object")) unverifiable = true;
-      body = read === undefined ? null : read;
+      if (sent.unreadable) unverifiable = true;
+      else {
+        let read;
+        if ("json" in sent) read = sent.json;
+        else { try { read = JSON.parse(sent.text); } catch { read = undefined; } }
+        if (sent.cut && !(read !== null && typeof read === "object")) unverifiable = true;
+        body = read === undefined ? null : read;
+      }
     }
     const k = key(origin, method, route);
     // Bounded: drop the oldest route rather than growing without limit. This
