@@ -638,7 +638,9 @@ section("1. MCP connector, 402 challenge and 404 on a booted server");
     // Control for the screens: our own catalog descriptions keep every sentence.
     const pricing = await (await fetch(`${base}/api/pricing`)).json();
     const descs = (pricing.endpoints || []).map((e) => String(e.description || "")).filter(Boolean);
-    const dropped = descs.filter((dsc) => screen.judgeReadableText(dsc, { links: false }) !== dsc.replace(/\s+/g, " ").trim());
+    // A label's separator is rewritten to " - " (defuseLabels); every word stays.
+    const wordsOf = (t) => (String(t).match(/[\p{L}\p{N}]+/gu) || []).join(" ");
+    const dropped = descs.filter((dsc) => { const read = screen.judgeReadableText(dsc, { links: false }); return read !== screen.defuseLabels(dsc.replace(/\s+/g, " ").trim()) || wordsOf(read) !== wordsOf(dsc); });
     ok(descs.length >= 400 && dropped.length === 0, `control: every one of our ${descs.length} catalog descriptions reaches a judge whole${dropped.length ? ` (cut: ${dropped.slice(0, 3).map((x) => JSON.stringify(x.slice(0, 80))).join(", ")})` : ""}`);
     ok((await fetch(`${base}/health`)).ok, "the server is still healthy after the run");
   } finally {
