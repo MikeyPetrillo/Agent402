@@ -42,6 +42,7 @@
 // Covered by scripts/test-exa-kit.js (offline, stubbed fetch).
 
 import { markUntrusted } from "./provenance.js";
+import { stripHiddenCharacters } from "../hidden-chars.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { meterUpstreamSpend } from "../posthog.js";
 import { createSharedDailySpend } from "../shared-limits.js";
@@ -402,13 +403,19 @@ function shapeResult(r) {
 // Search response notes (2026-10-19): `warnings` name a request field that
 // had no effect, `notices` say how the results were produced. Each item is
 // {code, path, message}; codes are an open set. Passed through as those three
-// strings, bounded, and only when there are any.
+// strings, bounded, and only when there are any. They are third-party text an
+// agent reads, so each is screened as an upstream error message is (redact.js
+// upstreamErrorText): every hidden character removed (TAG text, zero-width and
+// bidi controls, variation-selector carriers, soft hyphens), control
+// characters read as spaces, whitespace collapsed; a message empty after that
+// is dropped.
 export const EXA_NOTE_MAX_ITEMS = 10;
 export const EXA_NOTE_MAX_CHARS = 500;
+const screenNote = (v) => stripHiddenCharacters(v).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
 export function exaNotes(list) {
   if (!Array.isArray(list)) return [];
-  const str = (v) => (typeof v === "string" ? v.slice(0, EXA_NOTE_MAX_CHARS) : null);
-  return list.filter((n) => n && typeof n === "object" && typeof n.message === "string" && n.message)
+  const str = (v) => (typeof v === "string" ? screenNote(v.slice(0, EXA_NOTE_MAX_CHARS * 4)).slice(0, EXA_NOTE_MAX_CHARS) : null);
+  return list.filter((n) => n && typeof n === "object" && typeof n.message === "string" && str(n.message))
     .slice(0, EXA_NOTE_MAX_ITEMS)
     .map((n) => ({ code: str(n.code), path: str(n.path), message: str(n.message) }));
 }
