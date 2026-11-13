@@ -75,7 +75,11 @@ async function pollJobLink(fetchImpl, jobUrl, baseUrl, slug, doc) {
     let next = null;
     try { next = loc ? new URL(loc, url).href : null; } catch { next = null; }
     if (!next || !sameOrigin(next, baseUrl) || hop >= MAX_POLL_REDIRECTS) {
-      throw new AsyncJobPendingError(`the job link for "${slug}" redirected ${next && sameOrigin(next, baseUrl) ? "too many times" : "to another origin"}; it was not followed`, { jobUrl, slug, job: doc });
+      // A browser's opaque redirect hides its target: where it pointed is unknown.
+      const msg = !next && g.type === "opaqueredirect"
+        ? `the job link for "${slug}" answered with a redirect this client could not follow (its target is hidden here)`
+        : `the job link for "${slug}" redirected ${!next ? "with no readable target" : sameOrigin(next, baseUrl) ? "too many times" : "to another origin"}; it was not followed`;
+      throw new AsyncJobPendingError(msg, { jobUrl, slug, job: doc });
     }
     url = next;
   }

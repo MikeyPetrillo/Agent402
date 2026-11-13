@@ -20,7 +20,13 @@ Loaded when a media, document or worker-pool tool file is read.
 - **Media and documents:** the OCR language data is baked into the image at build
   (`scripts/fetch-tessdata.js`, pinned and hash-checked; `OCR_TESSDATA_DIR` overrides the
   directory), so `image-ocr` never fetches a model at request time; an engine that does not
-  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. PDF transforms
+  start within `OCR_INIT_TIMEOUT_MS` (default 30000) answers 503. **OCR admission:** one image
+  over `OCR_LARGE_PIXELS` (16 MP) is in the engine at a time, at most `OCR_LARGE_QUEUE_MAX` (2)
+  wait up to `OCR_LARGE_WAIT_MS` (15 s) and the next is a 503 with Retry-After (no upstream call);
+  admission is per caller (signed payer, credits key, Tempo sender, else the client address,
+  `ocrCallerOf` in `src/tools/ocr-kit.js`): a caller holding nothing is never refused while a
+  queued place belongs to a caller that holds another, which loses that place with a 503. On the
+  free tier the caller is the client address. Suite: `scripts/test-ocr-crash.js`. PDF transforms
   (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
   `pdf-worker.js`) with a heap limit, a decoded-stream cap and a deadline that terminates it
   (422). The Office builders (`xlsx-create`, `docx-create`, `pptx-create`; `src/tools/office-ops.js`)

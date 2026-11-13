@@ -58,6 +58,14 @@ const advisoryWarnings = [];
   try { await awaitJob(job202(), { baseUrl: BASE, fetchImpl: redirecting("https://inner.example/latest/meta-data"), ...clock() }); } catch (e) { err = e; }
   ok(err instanceof AsyncJobPendingError && /another origin/.test(err.message) && !hits.some((h) => h.url.startsWith("https://inner.example")), `a job-link redirect to another origin is refused, never fetched (${hits.map((h) => h.url).join(" ")})`);
   ok(hits.length > 0 && hits.every((h) => h.redirect === "manual"), "every job-link poll is sent with redirect: manual");
+  // A browser answers a manual redirect as opaque, target hidden: refused,
+  // and the message says it could not be followed, not where it pointed.
+  {
+    let oerr = null;
+    const opaqueFetch = async (url) => (String(url).endsWith("/api/jobs/j1") ? { type: "opaqueredirect", status: 0, redirected: false, url: "", headers: new Headers(), json: async () => ({}) } : done());
+    try { await awaitJob(job202(), { baseUrl: BASE, fetchImpl: opaqueFetch, ...clock() }); } catch (e) { oerr = e; }
+    ok(oerr instanceof AsyncJobPendingError && /could not follow/.test(oerr.message) && !/another origin/.test(oerr.message), `a browser's opaque redirect is refused as one that could not be followed (${oerr?.message})`);
+  }
   hits.length = 0;
   const r = await awaitJob(job202(), { baseUrl: BASE, fetchImpl: redirecting("/api/jobs/j1/v2"), ...clock() });
   ok(r.status === 200 && hits.some((h) => h.url === `${BASE}/api/jobs/j1/v2`), "a same-origin redirect on the job link is followed by hand");
