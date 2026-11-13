@@ -2375,7 +2375,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       return [];
     }
     const { keys, refused: notHonored } = gasSponsoringKeys(wantedKeys, uptoCaip2, uptoExtensionsByNetwork);
-    for (const r of notHonored) console.warn(`x402 upto gas sponsoring: REFUSING ${r.key}, the facilitator settling upto on ${r.networks.join(", ")} does not advertise it.`);
+    for (const { key: extension, networks } of notHonored) console.warn(`x402 upto gas sponsoring: REFUSING ${extension}, the facilitator settling upto on ${networks.join(", ")} does not advertise it.`);
     if (keys.length) console.log(`x402 upto gas sponsoring: declaring ${keys.join(", ")} on the metered upto routes (${uptoCaip2.join(", ")}); read from /supported at boot only, so a facilitator change takes effect at the next restart`);
     return keys;
   })();
