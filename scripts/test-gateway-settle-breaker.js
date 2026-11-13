@@ -922,7 +922,14 @@ delete process.env.OPENAI_API_KEY;
   b.recordGatewaySettleFailure(W);
   err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W })); } catch (e) { err = e; }
   ok(err?.statusCode === 429, "control: the bound is up again after six more buyers");
-  await sleep(950);
+  // A failure recorded late in the bound's window is held only to the bound's end.
+  const raisedAt = Date.now();
+  await sleep(450);
+  const L = "0x" + "1".repeat(39) + "4";
+  b.recordGatewaySettleFailure(L);
+  err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: L })); } catch (e) { err = e; }
+  ok(err?.statusCode === 429 && err.retryAfterMs <= raisedAt + 900 - Date.now() + 20, `a failure late in the bound's window is held only until the bound ends (${err?.retryAfterMs} ms, bound ends in about ${raisedAt + 900 - Date.now()} ms)`);
+  await sleep(500);
   ok(b.gatewaySettleBreakerStatus().wideBound === false, "the bound lifts once its window ends");
 
   // --- ONE AUTHORIZATION RE-PRESENTED -------------------------------------
