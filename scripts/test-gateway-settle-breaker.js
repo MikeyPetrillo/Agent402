@@ -903,11 +903,18 @@ delete process.env.OPENAI_API_KEY;
   let err = null;
   try { await b.gatewaySettleBreakerCheck(fakeReq({ from: W })); } catch (e) { err = e; }
   ok(err?.statusCode === 429 && /failed to settle \(1 in the last/.test(err.message) && /Nothing was charged/.test(err.message), `while the bound is up a wallet with one failure of its own and nothing settled is refused before the handler (${err?.statusCode}: ${String(err?.message).slice(0, 70)})`);
+  ok(/while payments from many wallets are failing to settle here, a wallet that has never settled a payment is held after its first such failure/.test(err?.message || ""), "and the 429 says the service-wide bound is why one failure holds it");
   ok(err && err.retryAfterMs <= 900 + 5, `the refusal lasts no longer than the bound (${err?.retryAfterMs} ms)`);
+  // A failure of unknown cause may be the settling side's (a facilitator's
+  // bare 4xx): while the bound is up it keeps its usual count, so a fresh
+  // wallet with one is served, and is held only at UNKNOWN_MAX_FAILS.
   const U = "0x" + "7".repeat(39) + "1";
   b.recordGatewaySettleFailure(U, Date.now(), { fault: "unknown" });
   err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: U })); } catch (e) { err = e; }
-  ok(err?.statusCode === 429 && /did not complete/.test(err.message), `one failure of unknown cause is read at the burst count too (${err?.statusCode})`);
+  ok(b.gatewaySettleBreakerStatus().wideBound === true && err === null, `while the bound is up, a fresh wallet with one failure of unknown cause is served (${err?.statusCode ?? "served"})`);
+  for (let i = 1; i < b.UNKNOWN_MAX_FAILS; i++) b.recordGatewaySettleFailure(U, Date.now(), { fault: "unknown" });
+  err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: U })); } catch (e) { err = e; }
+  ok(err?.statusCode === 429 && /did not complete/.test(err.message) && !/many wallets/.test(err.message), `control: at its usual count (${b.UNKNOWN_MAX_FAILS}) the unknown-cause count holds it, with no bound wording (${err?.statusCode ?? "served"})`);
   // Never refused: a wallet whose payments settle, a fresh one, one failing
   // for our reasons only, and the catalog consult.
   const P = "0x" + "8".repeat(40);
@@ -1051,6 +1058,10 @@ delete process.env.OPENAI_API_KEY;
     b.recordGatewaySettleFailure(NP);
     let e1 = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: NP })); } catch (e) { e1 = e; }
     ok(b.gatewaySettleBreakerStatus().wideBound === true && e1?.statusCode === 429, `twelve buyer-fault failures raise the bound, and a never-paid wallet with one failure is then held (${e1?.statusCode || "served"})`);
+    const FU = "0x" + "e".repeat(39) + "8";
+    b.recordGatewaySettleFailure(FU, Date.now(), { fault: "unknown" });
+    let e2 = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: FU })); } catch (e) { e2 = e; }
+    ok(b.gatewaySettleBreakerStatus().wideBound === true && e2 === null, `with those twelve holding the bound up, a fresh wallet with one failure of unknown cause is served (${e2?.statusCode || "served"})`);
   }
   await b._gatewaySettleBreakerReset();
   const V = "0x" + "e".repeat(39) + "2";

@@ -46,9 +46,10 @@
 // buyer's payment counts toward raising it: a failure of unknown cause (a
 // facilitator's bare 4xx, a bare settlement_failed, a 402 with no receipt)
 // never does, so an incident on the settling side cannot raise it. While it
-// is up, a /v1 consult reads a key's buyer-verdict and unknown-cause counts
-// at BURST_MAX_FAILS (default 1) instead of MAX_FAILS and UNKNOWN_MAX_FAILS
-// ONLY for a wallet that has never settled: no settled call inside the
+// is up, a /v1 consult reads a key's buyer-verdict count at BURST_MAX_FAILS
+// (default 1) instead of MAX_FAILS ONLY for a wallet that has never settled
+// (its unknown-cause count keeps UNKNOWN_MAX_FAILS, so a failure on the
+// settling side never holds a wallet sooner while the bound is up): no settled call inside the
 // window AND no paid sale on the books at any time (payerHasPaidSale,
 // src/sales-ledger.js, registered by the server; one indexed read, made only
 // while the bound is up and only when the lower count would refuse). Any wallet that has ever paid is
@@ -522,8 +523,10 @@ function everPaid(key) {
   if (!reader || !loaded) return true;
   try { if (!loaded()) return true; return !!reader(p); } catch { return true; }
 }
-/** A key's verdict and unknown-cause verdicts, read at the burst count only
- *  for a wallet that has never settled (THE SERVICE-WIDE BOUND): no settled
+/** A key's verdict and unknown-cause verdicts. The buyer-verdict count is
+ *  read at the burst count only for a wallet that has never settled (THE
+ *  SERVICE-WIDE BOUND); the unknown-cause count always keeps its usual
+ *  count, since that cause may be the settling side's: no settled
  *  call in the window, and (read last, only when the lower count would
  *  refuse) no paid sale ever. A key that names no wallet (the client-address
  *  fallback, a credits key) is shared by callers who are not one buyer, so
@@ -531,11 +534,9 @@ function everPaid(key) {
 function burstAwareVerdicts(key, fArgs, uArgs, nOks, burstUntil, now) {
   const normal = [verdict(fArgs[0], fArgs[1], nOks, MAX_FAILS), verdict(uArgs[0], uArgs[1], nOks, UNKNOWN_MAX_FAILS)];
   if (!(burstUntil > now) || nOks > 0 || !payerOfKey(key)) return normal;
-  const low = [clampToBurst(verdict(fArgs[0], fArgs[1], nOks, BURST_MAX_FAILS), burstUntil, now), clampToBurst(verdict(uArgs[0], uArgs[1], nOks, BURST_MAX_FAILS), burstUntil, now)];
-  if ((low[0].blocked && !normal[0].blocked) || (low[1].blocked && !normal[1].blocked)) {
-    if (everPaid(key)) return normal;
-  }
-  return [normal[0].blocked ? normal[0] : low[0], normal[1].blocked ? normal[1] : low[1]];
+  const low = clampToBurst(verdict(fArgs[0], fArgs[1], nOks, BURST_MAX_FAILS), burstUntil, now);
+  if (normal[0].blocked || !low.blocked || everPaid(key)) return normal;
+  return [{ ...low, wideBound: true }, normal[1]];
 }
 /** A refusal reached at the burst count is held no longer than the alarm. */
 function clampToBurst(v, burstUntil, now) {
@@ -555,7 +556,7 @@ function authVerdict(times, n) {
  *  which (a verdict first), and the refusal's words follow it. */
 function combined(v, u, blocklisted = false, a = null) {
   const out = { blocked: v.blocked || u.blocked || !!a?.blocked, fails: v.fails, oks: v.oks, unknownFails: u.fails, authFails: a?.fails || 0, blocklisted: !!blocklisted };
-  if (v.blocked) return { ...out, kind: "buyer", until: v.until };
+  if (v.blocked) return { ...out, kind: "buyer", until: v.until, ...(v.wideBound ? { wideBound: true } : {}) };
   if (u.blocked) return { ...out, kind: "unknown", until: u.until };
   if (a?.blocked) return { ...out, kind: "authorization", until: a.until };
   return out;
@@ -908,7 +909,7 @@ function decide(req, key, now, global, b) {
       ? `Settlement of this wallet's recent payments${on} did not complete (${b.unknownFails} in the last ${mins} min: each verified and was served, and its settlement did not complete); ${until}`
       : b.blocklisted
       ? `Recent payments from this wallet${on} were not settled (${b.fails} in the last ${mins} min: each verified and was served, and settlement did not proceed for this wallet; each refused settlement's PAYMENT-RESPONSE receipt carries its reason code); ${until}`
-      : `Recent payments from this wallet${on} failed to settle (${b.fails} in the last ${mins} min: they verified, the call was served, and the settlement then refused the payment itself, for its balance, its signature, or an authorization already used or expired); ${until} ${network ? `Before paying on ${network} again, check the wallet's balance of the payment token there and sign a new authorization.` : "Check the wallet's USDC balance on the paying chain and sign a new authorization before retrying."}`);
+      : `Recent payments from this wallet${on} failed to settle (${b.fails} in the last ${mins} min: they verified, the call was served, and the settlement then refused the payment itself, for its balance, its signature, or an authorization already used or expired)${b.wideBound ? `; while payments from many wallets are failing to settle here, a wallet that has never settled a payment is held after ${BURST_MAX_FAILS === 1 ? "its first such failure" : `${BURST_MAX_FAILS} such failures`}` : ""}; ${until} ${network ? `Before paying on ${network} again, check the wallet's balance of the payment token there and sign a new authorization.` : "Check the wallet's USDC balance on the paying chain and sign a new authorization before retrying."}`);
     e.statusCode = 429;
     e.retryAfterMs = b.until - now;
     // Machine-readable, beside the message (src/tool-error-fields.js):
