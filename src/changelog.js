@@ -13,7 +13,7 @@ const ENTRIES = [
       "Payments: a refused Tempo push transfer is recorded as owed before its credential is released, so a retry with the same credential finds the debt.",
       "Payments: while many /v1 payments fail to settle across the service, only a wallet that has never settled a payment is held after one unsettled run; a wallet that has ever paid is served as before, and settlements that fail for an unknown cause never start that bound.",
       "Payments: one signed EVM authorization whose settlement keeps failing for the buyer's reason is refused on its own, and a new authorization from the same wallet is served at once.",
-      "Packages: the job-link poller follows a redirect by hand within the server's origin and says when a redirect could not be followed. The server-side scripts use it now; agent402-client and agent402-mcp ship it in their next release.",
+      "Packages: the job-link poller follows a redirect only within the server's own origin and refuses a redirect to any other origin before reading it, saying so in its error. The server-side scripts use it, as do agent402-client 0.8.26 and agent402-mcp 0.13.32, whose MCP output schemas also carry the transcription fields trimmedToCapSeconds and durationUnconfirmed.",
       "Surfaces: MCP connector answers whose indented JSON would pass the size ceiling are sent as compact JSON.",
     ],
   },
