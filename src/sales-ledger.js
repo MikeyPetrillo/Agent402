@@ -479,6 +479,10 @@ function pgWrite(label, fn, onError = false, onFail = null) {
 }
 /** Resolves once the first load (DDL, the one-time file import, the sweep, the full pull) is done; immediately in file mode. */
 export function salesLedgerReady() { return readyP().catch(() => {}); }
+/** False in database mode until the first Postgres load lands: the mirror is
+ *  empty before then, so a read of it answers "no row" for every payer. File
+ *  mode is always loaded. */
+export function salesLedgerLoaded() { return loader ? loader.isLoaded() : true; }
 /** Resolves once every queued write has landed (tests and shutdown). */
 export function salesLedgerFlush() { return enqueue(async () => {}); }
 /** Land any dead-lettered rows, then pull other containers' writes now (the timer does this every REFRESH_MS). Resolves the rows pulled. */

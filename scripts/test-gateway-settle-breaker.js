@@ -935,6 +935,47 @@ delete process.env.OPENAI_API_KEY;
     const odd = await tryIt(ODD);
     b.setGatewaySettleBreakerPaidSaleReaderForTest(null);
     ok(odd === "served" && (await tryIt(ODD)) === 429, `a paid-sale read that throws serves the wallet (${odd}); the real read holds it`);
+    // A ledger whose first load has not landed reads "never paid" for every
+    // wallet (its mirror is empty): the wallet is served until it lands.
+    const EARLY = "0x" + "f".repeat(39) + "9";
+    b.recordGatewaySettleFailure(EARLY);
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(null, { loaded: () => false });
+    const early = await tryIt(EARLY);
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(null);
+    ok(early === "served" && (await tryIt(EARLY)) === 429, `a sales ledger not loaded yet serves the wallet (${early}); the loaded ledger holds it`);
+    // The same through the real ledger in database mode, its first load not
+    // landed (the database refuses the connection): it reports itself not
+    // loaded, its read says "never paid", and the wallet is served.
+    {
+      const { execFileSync } = await import("node:child_process");
+      const { childJson } = await import("./lib/child-json.js");
+      const { createServer } = await import("node:net");
+      const { mkdtempSync, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const probe = createServer(); await new Promise((r) => probe.listen(0, "127.0.0.1", r));
+      const dead = probe.address().port; await new Promise((r) => probe.close(r));
+      const dir = mkdtempSync(join(tmpdir(), "gwb-unloaded-"));
+      const src = `
+        const b = await import(${JSON.stringify(new URL("../src/gateway-settle-breaker.js", import.meta.url).href)});
+        const sl = await import(${JSON.stringify(new URL("../src/sales-ledger.js", import.meta.url).href)});
+        for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure("0x" + "e".repeat(35) + "2" + i.toString(16).padStart(4, "0"), Date.now(), { fault: "buyer" });
+        const W = "0x" + "e".repeat(39) + "7";
+        b.recordGatewaySettleFailure(W);
+        const hdr = Buffer.from(JSON.stringify({ payload: { authorization: { from: W } } })).toString("base64");
+        const req = { header: (n) => (String(n).toLowerCase() === "payment-signature" ? hdr : undefined), headers: {}, ip: "203.0.113.9" };
+        let verdict = "served"; try { await b.gatewaySettleBreakerCheck(req); } catch (e) { verdict = e.statusCode; }
+        console.log(JSON.stringify({ backend: sl.salesLedgerBackend, loaded: sl.salesLedgerLoaded(), paid: sl.payerHasPaidSale(W), wide: b.gatewaySettleBreakerStatus().wideBound, verdict }));
+        process.exit(0);`;
+      let out = null;
+      try {
+        const env = { ...process.env, STATE_DATABASE_URL: `postgres://u:p@127.0.0.1:${dead}/none?sslmode=disable`, STATE_STORE_RETRY_MS: "600000", SALES_LEDGER_DB: join(dir, "sales.db"), SHARED_LIMITS_PREFIX: `${process.env.SHARED_LIMITS_PREFIX}-unloaded` };
+        delete env.REDIS_URL; delete env.LEDGER_JOURNAL_REDIS;
+        out = childJson(execFileSync(process.execPath, ["--input-type=module", "-e", src], { env, encoding: "utf8", timeout: 60_000 }));
+      } catch (e) { out = { error: String(e?.message || e).slice(0, 300) }; }
+      finally { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
+      ok(out?.backend === "pg" && out.loaded === false && out.paid === false && out.wide === true && out.verdict === "served", `database mode before the first load: the ledger reads not loaded and "never paid", and the wallet is served while the bound is up (${JSON.stringify(out)})`);
+    }
     // A wallet with one settled call and two verdicts inside the window is
     // read under the share rule at the usual count, as with the bound down.
     const MIXED = "0x" + "f".repeat(39) + "8";

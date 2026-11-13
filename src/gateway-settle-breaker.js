@@ -143,7 +143,7 @@ import { isGatewayPendingAnswer } from "./gateway-wire.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { positiveNum as num } from "./env-num.js";
-import { payerHasPaidSale } from "./sales-ledger.js";
+import { payerHasPaidSale, salesLedgerLoaded } from "./sales-ledger.js";
 
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
 export const MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_MAX, 3);
@@ -492,14 +492,21 @@ function payerOfKey(key) {
   return s.slice(s.indexOf(":") + 1) || null;
 }
 let paidSaleReader = payerHasPaidSale;
-/** Tests: stand in for the sales ledger's paid-sale read (null restores it). */
-export function setGatewaySettleBreakerPaidSaleReaderForTest(fn) { paidSaleReader = typeof fn === "function" ? fn : payerHasPaidSale; }
-/** Has this key's wallet ever paid? A read that throws counts as paid, so a
- *  ledger that cannot answer never puts a buyer under the lower count. */
+let ledgerLoaded = salesLedgerLoaded;
+/** Tests: stand in for the sales ledger's paid-sale read and, optionally, its
+ *  loaded state (null restores both). */
+export function setGatewaySettleBreakerPaidSaleReaderForTest(fn, { loaded = null } = {}) {
+  paidSaleReader = typeof fn === "function" ? fn : payerHasPaidSale;
+  ledgerLoaded = typeof loaded === "function" ? loaded : salesLedgerLoaded;
+}
+/** Has this key's wallet ever paid? A ledger whose first load has not landed
+ *  (its mirror is empty, so every read says "never") and a read that throws
+ *  both count as paid, so a ledger that cannot answer never puts a buyer under
+ *  the lower count. */
 function everPaid(key) {
   const p = payerOfKey(key);
   if (!p) return false;
-  try { return !!paidSaleReader(p); } catch { return true; }
+  try { if (!ledgerLoaded()) return true; return !!paidSaleReader(p); } catch { return true; }
 }
 /** A key's verdict and unknown-cause verdicts, read at the burst count only
  *  for a wallet that has never settled (THE SERVICE-WIDE BOUND): no settled
