@@ -27,6 +27,12 @@ ok(decide([A, B], { choice: NONE, confidence: 0.95 }).action === "refuse", "a co
 ok(decide([A, B], { choice: NONE, confidence: 0.86 }).action === "run", "a none-of-these under the refuse band still runs find's top");
 ok(decide([A, B], { choice: "pdf-extract-pages", confidence: 0.9 }).selection.overrode === undefined, "confirming find's top records no override");
 ok(criteriaFor([A])[NONE], "the no-match option is always offered");
+{
+  // Seller text is bounded inside criteriaFor, whatever a caller bounded first.
+  const huge = { slug: "huge", name: "n".repeat(2_000_000), description: "d".repeat(50_000), tags: Array.from({ length: 30 }, (_, i) => `${i}`.padEnd(5_000, "t")) };
+  const crit = JSON.parse(criteriaFor([huge]).huge);
+  ok(crit.name.length === 120 && crit.tags.length === 10 && crit.tags.every((t) => t.length === 40) && crit.description.length <= 2000 && criteriaFor([huge]).huge.length < 4_000, `a 2 MB name, 30 tags of 5,000 chars and a long description make a bounded option (name ${crit.name.length}, ${crit.tags.length} tags of ${crit.tags[0]?.length}, ${criteriaFor([huge]).huge.length} chars)`);
+}
 
 // --- judgeTool: stubbed endpoint, fails open
 const orig = globalThis.fetch;

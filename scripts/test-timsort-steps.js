@@ -80,4 +80,50 @@ const big = rows(30000, rng(99), 30000);
 const { steps } = drive(timSortSteps(big, (a, b) => a.k - b.k));
 ok(steps > 100, `a 30,000-row sort yields at intervals (${steps} yields)`);
 ok(big.every((x, i) => i === 0 || big[i - 1].k <= x.k), "and sorts");
+
+// A comparator that throws mid-sort leaves the array as it was (the engine
+// sorts a copy too), in every trial, whenever the throw lands.
+{
+  let intact = 0;
+  const trials = 50;
+  for (let t = 0; t < trials; t++) {
+    const r = rng(1000 + t);
+    const arr = rows(400, r, 50);
+    const before = arr.slice();
+    let calls = 0;
+    const throwAt = 1 + Math.floor(r() * 2500);
+    let threw = false;
+    try { drive(timSortSteps(arr, (a, b) => { if (++calls === throwAt) throw new Error("comparator failed"); return a.k - b.k; }, { stepCompares: 13 })); } catch { threw = true; }
+    if (!threw || (arr.length === before.length && arr.every((x, i) => x === before[i]))) intact++;
+  }
+  ok(intact === trials, `a throwing comparator leaves the array untouched (${intact} of ${trials} trials intact)`);
+}
+
+// undefined and holes: the engine moves them to the end (values, then the
+// undefineds, then the holes) and never asks the comparator about them.
+{
+  const cases = [
+    [3, undefined, 1, 2],
+    [undefined, 3],
+    [undefined],
+    [undefined, undefined, 5, 4],
+    // eslint-disable-next-line no-sparse-arrays
+    [3, , 1, , 2],
+    // eslint-disable-next-line no-sparse-arrays
+    [, undefined, 9, , 7, undefined, 8],
+    Object.assign(new Array(40), { 3: 5, 17: undefined, 20: 1, 39: 2 }),
+  ];
+  const r = rng(77);
+  const mixed = Array.from({ length: 300 }, () => r() < 0.1 ? undefined : Math.floor(r() * 100));
+  for (let i = 0; i < 300; i += 7) delete mixed[i];
+  cases.push(mixed);
+  for (const [ci, arr] of cases.entries()) {
+    const e = arr.slice(), s = arr.slice();
+    const logE = [], logS = [];
+    e.sort((a, b) => { logE.push(`${a},${b}`); return a - b; });
+    drive(timSortSteps(s, (a, b) => { logS.push(`${a},${b}`); return a - b; }, { stepCompares: 5 }));
+    const shape = (x) => Array.from({ length: x.length }, (_, i) => (i in x ? (x[i] === undefined ? "u" : x[i]) : "hole")).join("|");
+    ok(shape(e) === shape(s) && logE.join(" ") === logS.join(" ") && !logS.some((c) => c.includes("undefined")), `undefined and holes, case ${ci}: same order, holes and comparator calls as the engine (${shape(s).slice(0, 60)})`);
+  }
+}
 console.log(`test-timsort-steps: ${n} passed`);

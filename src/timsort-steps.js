@@ -12,8 +12,13 @@
 // same adaptive threshold. So it asks the comparator the same questions in the
 // same order and leaves the array in the same order as arr.sort(cmp), including
 // for a comparator that is not a consistent order (one whose answers depend on
-// the order it is asked in). test-timsort-steps.js holds it to the engine's own
-// sort on random arrays and on comparators that answer at random.
+// the order it is asked in). Like the engine, it sorts a copy holding the
+// array's values other than undefined (holes skipped, the comparator never
+// called on either) and writes the result back only when the sort finishes:
+// the sorted values, then the undefineds, then the holes. A comparator that
+// throws leaves the array as it was. test-timsort-steps.js holds it to the
+// engine's own sort on random arrays, on comparators that answer at random,
+// on undefined and holes, and on a comparator that throws.
 //
 // The generator yields once every STEP_COMPARES comparisons; the caller decides
 // whether a yield ends a slice. A leaf module: no imports.
@@ -27,9 +32,28 @@ function minRunLength(nArg) {
   return n + r;
 }
 
-/** Sort `a` in place with `cmpFn`, yielding every STEP_COMPARES comparisons.
- *  Returns `a`. The order is arr.sort(cmpFn)'s. */
-export function* timSortSteps(a, cmpFn, { stepCompares = STEP_COMPARES } = {}) {
+/** Sort `target` with `cmpFn`, yielding every STEP_COMPARES comparisons.
+ *  Returns `target`, in arr.sort(cmpFn)'s order, written back only once the
+ *  sort finishes (a throw leaves it untouched). */
+export function* timSortSteps(target, cmpFn, { stepCompares = STEP_COMPARES } = {}) {
+  const length = target.length;
+  const work = [];
+  let undefs = 0;
+  for (let i = 0; i < length; i++) {
+    if (!(i in target)) continue;
+    const v = target[i];
+    if (v === undefined) undefs++; else work.push(v);
+  }
+  yield* sortWork(work, cmpFn, stepCompares);
+  let i = 0;
+  for (; i < work.length; i++) target[i] = work[i];
+  for (let u = 0; u < undefs; u++) target[i++] = undefined;
+  for (; i < length; i++) delete target[i];
+  return target;
+}
+
+/** The sort itself, in place over `a` (no undefined, no holes). */
+function* sortWork(a, cmpFn, stepCompares) {
   const length = a.length;
   if (length < 2) return a;
   let budget = stepCompares;
