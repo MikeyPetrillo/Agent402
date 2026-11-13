@@ -267,6 +267,9 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
   let e = null, r = null;
   try { r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk }); } catch (x) { e = x; }
   ok(!e && r && r.result?.relayError === "upstream body unreadable" && r.quote?.usd === 0.002, `paid 200 with a broken body -> relayed with relayError (${e ? `threw ${e.statusCode}` : JSON.stringify(r?.result)})`);
+  // That body is ours, not the seller's: the delivery check skips it.
+  const { observeDelivery } = await import("../src/response-observation.js");
+  ok(observeDelivery({ origin: "https://tempo-broken.example", method: "POST", route: "/r", guaranteedPaths: ["data"], body: r?.result }) === null, "the unreadable-body stand-in is not judged as the seller's delivery");
   sellerMode = "ok";
 }
 

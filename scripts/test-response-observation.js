@@ -170,6 +170,10 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(cut?._truncated === true, "our reader cut the oversized body (setup)");
   ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cut }) === null
     && deliveryObservation(o, "POST", "/r") === null, "a body cut at our byte limit is not observed");
+  // A cut that still parses (a long number cut to a shorter one) is ours too.
+  const cutParsed = await readAfterSpend(new Response("7".repeat(500)), 64);
+  ok(cutParsed?._truncated === true && typeof cutParsed.value === "number", "our reader cut a body whose prefix still parses (setup)");
+  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cutParsed }) === null, "a cut body that still parses is not observed either");
   const unread = await readAfterSpend(new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } })), 64);
   ok(typeof unread?.relayError === "string", "our reader could not read the body (setup)");
   ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: unread }) === null, "nor is a body we could not read");
