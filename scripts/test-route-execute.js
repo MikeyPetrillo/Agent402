@@ -571,7 +571,7 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   const guard = await import("../src/external-spend-guard.js");
   const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
   const cand = (host, networks = ["eip155:8453"]) => ({ seller: `https://${host}`, slug: host, url: `https://${host}/x`, method: "POST", price: "$0.001", networks });
-  const reqOn = (network) => ({ ip: "198.51.100.77", header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ network, payload: {} })).toString("base64") : undefined) });
+  const reqOn = (network) => ({ ip: "198.51.100.77", headers: {}, header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ network, payload: {} })).toString("base64") : undefined) });
   const run = async ({ list, pay, chains = ["base"], network = "eip155:8453", wallet = () => null, resolve = null }) => {
     guard.__reset();
     const calls = [];
@@ -715,7 +715,7 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     try {
       const slow = (nets) => async () => { await new Promise((r) => setTimeout(r, 700)); return [cand("sv.example", nets)]; };
       const { e, calls } = await run({ list: [], resolve: slow([SOL]), pay: good, chains: ["solana"], network: SOL });
-      ok(e?.statusCode === 504 && /nothing is charged/.test(e.message) && calls.length === 0, `Solana payer: a slow resolve is refused 504 before any payment (status ${e?.statusCode}, paid ${calls.length}x)`);
+      ok(e?.statusCode === 504 && /Nothing was spent\. Nothing was charged\./.test(e.message) && calls.length === 0, `Solana payer: a slow resolve is refused 504 before any payment (status ${e?.statusCode}, paid ${calls.length}x)`);
       ok(guard.walletDailySpentUsd("solana") === 0, "Solana payer: the refusal books nothing on the chain's day");
       const b = await run({ list: [], resolve: slow(["eip155:8453"]), pay: good });
       ok(b.r?.receipt?.external === true && b.calls.length === 1, "CONTROL: the same slow resolve on a Base payer still pays");
