@@ -190,6 +190,17 @@ function rng(seed) {
   for (let i = 0; i < 300; i++) shared.paths["/r" + i] = { get: { responses: { 400: { schema: { $ref: "#/components/schemas/Err" } }, 500: { schema: { $ref: "#/components/schemas/Err" } } } } };
   const rs = await tool.handler({ spec: shared });
   ok(rs.resolved === 600 && JSON.stringify(rs) === JSON.stringify(oldAnswer(shared)), "resolve-refs: one schema referenced 600 times is served and counted 600 times");
+  // A reused target's ref lists replay on every reuse: 3,000 unresolved refs
+  // in one schema referenced 140 times. Each replay is charged to the walk's
+  // step counter and merged through a set, so the loop is held no longer than
+  // the free tier's loop bound (test-redos-free-tier, 250 ms).
+  const replay = { paths: {}, components: { schemas: { A: { allOf: Array.from({ length: 3000 }, (_, i) => ({ $ref: "#/x/" + i })) } } } };
+  for (let i = 0; i < 140; i++) replay.paths["/p" + i] = { get: { schema: { $ref: "#/components/schemas/A" } } };
+  const rr = await loopHold(() => tool.handler({ spec: replay }));
+  ok(!rr.err && rr.out.unresolved.length === 3000 && rr.out.resolved === 140 && rr.hold < 250, "resolve-refs: a schema of 3,000 unresolved refs reused 140 times holds the loop " + rr.hold.toFixed(0) + "ms (" + (rr.err?.statusCode || rr.out?.resolved) + ")");
+  const replaySmall = { paths: {}, components: { schemas: { A: { allOf: [{ $ref: "#/x/1" }, { $ref: "https://e.example/s#/B" }, { $ref: "#/x/1" }] }, B: { items: { $ref: "#/components/schemas/A" } } } } };
+  for (let i = 0; i < 5; i++) replaySmall.paths["/p" + i] = { get: { a: { $ref: "#/components/schemas/A" }, b: { $ref: "#/components/schemas/B" } } };
+  ok(JSON.stringify(await tool.handler({ spec: replaySmall })) === JSON.stringify(oldAnswer(replaySmall)), "resolve-refs: reused targets with unresolved and external refs answer as the full walk did");
 }
 
 // ---------------------------------------------------------------------------

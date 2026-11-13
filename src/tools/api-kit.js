@@ -1702,7 +1702,7 @@ function resolveRefsTooLarge() {
 }
 
 function newResolveReport(budget) {
-  return { resolved: 0, circular: [], unresolved: [], external: [], budget: budget || { bytes: 0, steps: 0, sliceStart: performance.now() }, memo: new Map() };
+  return { resolved: 0, circular: [], unresolved: [], external: [], has: { circular: new Set(), unresolved: new Set(), external: new Set() }, budget: budget || { bytes: 0, steps: 0, sliceStart: performance.now() }, memo: new Map() };
 }
 
 // Approximate serialized size of one output value: a floor on its JSON length.
@@ -1711,8 +1711,23 @@ function chargeResolved(report, bytes) {
   if (report.budget.bytes > RESOLVE_REFS_MAX_BYTES) throw resolveRefsTooLarge();
 }
 
-function mergeRefList(into, from) {
-  for (const r of from) if (!into.includes(r)) into.push(r);
+// Each list keeps its order of first sight; a set beside it answers "seen?"
+// in constant time, so a merge costs one step per ref it replays.
+function addRef(report, kind, ref) {
+  const has = report.has[kind];
+  if (!has.has(ref)) { has.add(ref); report[kind].push(ref); }
+}
+function mergeRefList(report, kind, from) {
+  for (const r of from) addRef(report, kind, r);
+}
+// A merge replays a whole list: its length is charged to the step counter,
+// and a slice that has run its time ends before it.
+async function chargeReplay(budget, n) {
+  budget.steps += n;
+  if (n && performance.now() - budget.sliceStart > RESOLVE_SLICE_MS) {
+    await new Promise((r) => setImmediate(r));
+    budget.sliceStart = performance.now();
+  }
 }
 
 const isNode = (v) => v !== null && typeof v === "object";
@@ -1737,18 +1752,18 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
   if (typeof node.$ref === "string") {
     const ref = node.$ref;
     if (!ref.startsWith("#/")) {
-      if (!report.external.includes(ref)) report.external.push(ref);
+      addRef(report, "external", ref);
       chargeResolved(report, ref.length + 11);
       return node;
     }
     if (resolvingPath.has(ref)) {
-      if (!report.circular.includes(ref)) report.circular.push(ref);
+      addRef(report, "circular", ref);
       chargeResolved(report, ref.length + 11);
       return node;
     }
     const target = jsonPointerLookup(root, ref);
     if (target === undefined) {
-      if (!report.unresolved.includes(ref)) report.unresolved.push(ref);
+      addRef(report, "unresolved", ref);
       chargeResolved(report, ref.length + 11);
       return node;
     }
@@ -1756,8 +1771,9 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
     if (seen) {
       chargeResolved(report, seen.bytes);
       report.resolved += 1 + seen.resolved;
-      mergeRefList(report.unresolved, seen.unresolved);
-      mergeRefList(report.external, seen.external);
+      await chargeReplay(budget, seen.unresolved.length + seen.external.length);
+      mergeRefList(report, "unresolved", seen.unresolved);
+      mergeRefList(report, "external", seen.external);
       return seen.value;
     }
     const sub = newResolveReport(report.budget);
@@ -1767,9 +1783,10 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
     nextPath.add(ref);
     const value = await deepResolveRefs(target, root, nextPath, sub);
     report.resolved += 1 + sub.resolved;
-    mergeRefList(report.circular, sub.circular);
-    mergeRefList(report.unresolved, sub.unresolved);
-    mergeRefList(report.external, sub.external);
+    await chargeReplay(budget, sub.circular.length + sub.unresolved.length + sub.external.length);
+    mergeRefList(report, "circular", sub.circular);
+    mergeRefList(report, "unresolved", sub.unresolved);
+    mergeRefList(report, "external", sub.external);
     if (!sub.circular.length) {
       report.memo.set(ref, { value, bytes: report.budget.bytes - before, resolved: sub.resolved, unresolved: sub.unresolved, external: sub.external });
     }
