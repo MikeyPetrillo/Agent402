@@ -38,7 +38,10 @@ try {
   const gen = await call("image-gen", { prompt: "apple" });
   const hd = await call("image-gen-hd", { prompt: "apple" });
   const prem = await call("image-gen-premium", { prompt: "apple" });
-  ok(gen.req.model === "gpt-image-2" && gen.req.quality === "low" && gen.req.size === "1024x1024" && gen.req.n === 1, "image-gen: gpt-image-2, low, 1024x1024, n=1");
+  ok(gen.req.model === "gpt-image-2.6-flare" && gen.req.quality === "low" && gen.req.size === "1024x1024" && gen.req.n === 1, "image-gen: gpt-image-2.6-flare, low, 1024x1024, n=1");
+  ok(hd.req.model === "gpt-image-2.6-flare" && prem.req.model === "gpt-image-2.6-sunburst", "hd renders on flare, premium on sunburst (gpt-image-2's named replacements)");
+  ok([gen, hd, prem].every((x) => x.req.complexity === "low" && x.req.moderation === "low"), 'every tier sends complexity "low" (upstream default "high" plans longer) and moderation "low"');
+  ok([gen, hd, prem].every((x) => x.out.model === x.req.model), "the answer names the model that rendered");
   ok(hd.req.quality === "medium" && hd.req.size === "1024x1024", "image-gen-hd: medium, 1024x1024");
   ok(prem.req.quality === "medium" && prem.req.size === "1536x1024", "image-gen-premium defaults to landscape 1536x1024");
   ok(JSON.stringify({ ...prem.req, prompt: 0 }) !== JSON.stringify({ ...hd.req, prompt: 0 }), "premium's upstream request differs from hd's (a premium that is hd under another name fails here)");
@@ -134,6 +137,23 @@ try {
     ok(!isModerationParamError(400, { code: "moderation_blocked", param: "moderation", message: "x" }) && !isModerationParamError(500, { param: "moderation" }) && isModerationParamError(400, { param: "moderation" }), "the fallback test reads 400 + the parameter, and never a content refusal");
   }
 
+  // ---- a model that does not take complexity: one retry without it ----
+  {
+    upstream = [openAIError(400, { message: "Unknown parameter: 'complexity'.", type: "invalid_request_error", param: "complexity", code: "unknown_parameter" })];
+    const r = await call("image-gen-premium", { prompt: "a" });
+    ok(r.out.image && sent.length === 2 && sent[0].body.complexity === "low" && !("complexity" in sent[1].body) && sent[1].body.moderation === "low" && sent[1].body.model === "gpt-image-2.6-sunburst",
+      `a 400 naming complexity sends the same request once more without it and serves it (${sent.length} requests)`);
+    upstream = [openAIError(400, { message: "Unknown parameter: 'complexity'.", param: "complexity", code: "unknown_parameter" }), openAIError(400, { message: "Unknown parameter: 'complexity'.", param: "complexity", code: "unknown_parameter" })];
+    const e = await thrown("image-gen", { prompt: "a" });
+    ok(e?.statusCode === 400 && sent.length === 2, `a second refusal is final: two requests, a 400 (${sent.length}, ${e?.statusCode})`);
+    upstream = [openAIError(400, { message: "Your request was rejected by the safety system.", param: "complexity", code: "moderation_blocked" })];
+    const e2 = await thrown("image-gen", { prompt: "a" });
+    ok(e2?.statusCode === 400 && sent.length === 1 && /content check refused/.test(e2.message), "a content refusal is never retried as a complexity fallback");
+    upstream = [];
+    const { RETIRED_IMAGE_MODELS } = await import("../src/tools/image-gen-kit.js");
+    ok(Object.values(TIERS).every((t) => !Object.hasOwn(RETIRED_IMAGE_MODELS, t.model)) && RETIRED_IMAGE_MODELS["gpt-image-2"]?.until === "2027-02-10" && Object.values(TIERS).some((t) => t.model === RETIRED_IMAGE_MODELS["gpt-image-2"].use), "no tier sends a retiring image model; gpt-image-2's mapping names a model a tier sends");
+  }
+
   // ---- a content-check refusal: 400, plain message, no retry, counted ----
   {
     const before = imageModerationStats().sinceBoot;
@@ -147,7 +167,7 @@ try {
     const e2 = await thrown("image-gen", { prompt: "a", moderation: "auto" });
     ok(e2?.statusCode === 400 && sent.length === 1 && sent[0].body.moderation === "auto" && /This call chose moderation "auto", the stricter level; "low" is the default level\./.test(e2.message) && !/filters less strictly|try "low"|send "low"|use "low"/i.test(e2.message), `a "safety system" message on an auto call: 400, no retry, states the default and the stricter choice, with no advice to change the level (${e2?.message})`);
     // Never routed elsewhere: every request in the refusal went to the one images endpoint and model.
-    ok(sent.every((x) => new URL(x.url).pathname === "/v1/images/generations" && x.body.model === "gpt-image-2"), "a refused prompt goes to no other model or endpoint");
+    ok(sent.every((x) => new URL(x.url).pathname === "/v1/images/generations" && [TIERS["image-gen-premium"].model, TIERS["image-gen"].model].includes(x.body.model)), "a refused prompt goes to no other model or endpoint");
     upstream = [];
     const after = imageModerationStats().sinceBoot;
     ok(after.refusals.low - before.refusals.low === 1 && after.refusals.auto - before.refusals.auto === 1, `refusals are counted by level (${JSON.stringify(after.refusals)})`);
