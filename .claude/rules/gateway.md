@@ -70,6 +70,17 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `agent402_reasoning_adjusted {field, requested, used, reason}` on the answer, the same JSON in
   `X-Agent402-Reasoning-Adjusted` on a stream. It adds no refusal. Suite:
   `scripts/test-llm-answer-fit.js`.
+- **Judgment over OpenRouter** (`src/decision-one.js`): Decision-1, Gemini Decision-1 and the
+  pinned Jev version (`jevOpenRouterModel`) on OpenRouter's Decisions endpoint, each on while
+  `OPENROUTER_API_KEY` is set and its own switch is not `off`: `DECISION_ONE`, `GEMINI_DECISION`,
+  `JEV_OPENROUTER` (`openRouterDecisionsEnabled`). Every body carries `data_collection: "deny"`, and
+  `zdr: true` for a model whose every endpoint is ZDR (`DECISIONS_ZDR_MODELS`). /v1/judge walks its
+  backends in `firstAnswer` (judge-kit); the internal judges (discovery rerank, wish classification,
+  tool-judge, the decide planner) walk the OpenRouter legs in turn. /v1/judge stops at any leg that
+  may have billed us (`mayBeBilled`: a timeout, or a 200 the caller cannot use); only a certain
+  non-charge (refused, 5xx, 429, credentials) passes to the next leg. The internal judges stop after
+  an OpenRouter leg that may have billed, but a TypeSafe-leg timeout or unusable 200 still goes on to
+  OpenRouter: that spend is ours, bounded by the daily ceilings. Suite: `scripts/test-decision-one.js`.
 - **Report products:** kits under `src/tools/*-report-kit.js`, `src/report-tiers.js`,
   house style in `src/house-style.js`, samples in `src/sample-reports.js`. Every kit that serves
   model prose passes it through `sanitizeReportProse` (`src/report-grounding.js`: a link stays a

@@ -59,14 +59,14 @@ const recorded = ({ m, e }, { source, usd, tier, model, priceUsd }, label) => {
 const SPEECH_FRONT = SPEECH_MODELS[0].id;
 const T = {
   models: [["acme/", { completion: 2, prompt: 1 }], ...(U.REQUIRED_MODEL_ROWS || []).map((id) => [id, { completion: 2, prompt: 1 }])],
-  speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "x-ai/grok-voice-tts-1.0": 0.125, [SPEECH_FRONT]: 0.0625 },
+  speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "x-ai/grok-voice-tts-1.0": 0.125, [SPEECH_FRONT]: 0.0625, "mistralai/voxtral-mini-tts-3-0": 0.03125 },
   embeddings: { "text-embedding-3-small": 8, "text-embedding-3-large": 16 },
-  openai: { "gpt-image-2": { completion: 40, prompt: 5 }, "gpt-4o": { completion: 90, prompt: 10 } },
+  openai: { "gpt-image-2.6-flare": { completion: 40, prompt: 5 }, "gpt-image-2.6-sunburst": { completion: 41, prompt: 6 }, "gpt-4o": { completion: 90, prompt: 10 } },
   sttPerMinute: { "gpt-transcribe": 0.6, "elevenlabs/scribe-v2": 1.2 },
   media: { "fake/image-model": { worstCaseUsd: 1, listedMaxUsd: 1 }, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 1, listedMaxUsd: 1 } },
   fees: { webSearchPerUse: 0.25, groundedPerCall: 0.125, rerankPerUnit: 5, settlementPerCall: 0.5 },
   meter: { markup: 1.25 },
-  vendor: { exa: { search: 0.5, instant: 0.25, lite: 0.25, answer: 1, content: 0.125 }, x: { postRead: 0.5, userRead: 0.25 }, decisions: { luna: 1, decisionOne: 1, jev: 1, maxShare: 0.9 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } },
+  vendor: { exa: { search: 0.5, instant: 0.25, lite: 0.25, answer: 1, content: 0.125 }, x: { postRead: 0.5, userRead: 0.25 }, decisions: { luna: 1, decisionOne: 1, gemini: 1, jev: 1, maxShare: 0.9 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } },
 };
 U.setUpstreamCostsForTest(T);
 ok(U.upstreamCostsStatus() === "ok", "the fake table is complete (every key a serving path reads)");
@@ -170,9 +170,10 @@ try {
     stub(() => json({ data: [{ b64_json: "iVBORw0KGgo" }], usage }));
     const out = await bySlug(IMAGE_GEN_TOOLS, slug).handler({ prompt: "apple" });
     restore();
-    ok(out.model === "gpt-image-2" && out.image, `${slug} served an image`);
-    const row = T.openai["gpt-image-2"];
-    recorded(await take(), { source: "image-gen", usd: (usage.input_tokens * row.prompt + usage.output_tokens * row.completion) / 1e6, tier: slug, model: "gpt-image-2", priceUsd: priceOf(IMAGE_GEN_TOOLS, slug) }, slug);
+    const model = slug === "image-gen-premium" ? "gpt-image-2.6-sunburst" : "gpt-image-2.6-flare";
+    ok(out.model === model && out.image, `${slug} served an image on ${model}`);
+    const row = T.openai[model];
+    recorded(await take(), { source: "image-gen", usd: (usage.input_tokens * row.prompt + usage.output_tokens * row.completion) / 1e6, tier: slug, model, priceUsd: priceOf(IMAGE_GEN_TOOLS, slug) }, slug);
   }
   // ---- image model without its own row: nothing metered (a chat row's fallback would price image tokens wrong) ----
   {
@@ -211,6 +212,11 @@ try {
     const out = await judge({ state: "a short state", questions: q, model: DECISION_ONE }, { fetchImpl: d1 });
     ok(out.model === DECISION_ONE && out.answers.yes.noul === 0.7, "judge answered on Decision-1");
     recorded(await take(), { source: "judge", usd: (tokens / 1e6) * T.vendor.decisions.decisionOne, tier: "judge", model: DECISION_ONE, priceUsd: JUDGE_PRICE_USD }, "judge on Decision-1");
+    // Jev over OpenRouter (TypeSafe down) is metered at Jev's own rate.
+    const jevOr = async (url, init) => (hostOf(url) === "openrouter.ai" && JSON.parse(init.body).model === "typesafe/jev-1.14" ? json({ answers: { yes: { type: "noul", noul: 0.4 } }, usage: { input_tokens: tokens }, model: "typesafe/jev-1.14" }) : json({ error: "down" }, 500));
+    const viaOr = await judge({ state: "a short state", questions: q }, { fetchImpl: jevOr });
+    ok(viaOr.model === "jev-1.14.0" && viaOr.answers.yes.noul === 0.4, "judge answered on Jev over OpenRouter");
+    recorded(await take(), { source: "judge", usd: (tokens / 1e6) * T.vendor.decisions.jev, tier: "judge", model: "jev-1.14.0", priceUsd: JUDGE_PRICE_USD }, "judge on Jev over OpenRouter");
     const lunaTokens = 250;
     const luna = async (url) => (hostOf(url) === "api.openai.com" ? json({ answers: [{ type: "predicate", name: "fine", probability: 0.6 }], usage: { input_tokens: lunaTokens }, model: "gpt-6-luna" }) : json({ error: "wrong upstream" }, 500));
     const dec = await decisions({ input: "a short state", questions: [{ type: "predicate", name: "fine", instructions: "Is it fine?" }] }, { fetchImpl: luna });
@@ -221,7 +227,7 @@ try {
     const { loopGate, LOOP_GATE_PRICE_USD } = await import("../src/tools/loop-gate-kit.js");
     const gateTokens = 350;
     const gate = async (url, init) => {
-      if (hostOf(url) !== "openrouter.ai") return json({ error: "wrong upstream" }, 500);
+      if (hostOf(url) !== "openrouter.ai" || JSON.parse(init.body).model !== "microsoft/microsoft-decision-1") return json({ error: "wrong upstream" }, 500);
       const q = JSON.parse(init.body).questions;
       const answers = { goal_met: { type: "noul", noul: 0.2 }, stuck: { type: "noul", noul: 0.1 }, next_step: { type: "choice", choice: "iterate", confidence: 0.8, probabilities: Object.fromEntries(Object.keys(q.next_step.criteria).map((k) => [k, k === "iterate" ? 0.8 : 0])) } };
       return json({ answers, usage: { input_tokens: gateTokens, output_tokens: 4 }, model: "microsoft/microsoft-decision-1" });

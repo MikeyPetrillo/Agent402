@@ -2,12 +2,14 @@
 // outside-seller leg and /api/route. It chooses only among candidates it is
 // given and may answer "none of these". No model writes the answer: the chosen
 // tool runs unchanged. Fails open to the lexical order; ROUTE_JUDGE=off disables.
-// Microsoft Decision-1 (src/decision-one.js) answers when Jev fails, and alone
-// when no TypeSafe key is set: every caller here already degrades to the
-// lexical order on a null, so a second backend only adds answers.
+// When TypeSafe fails, the same Jev version is asked over OpenRouter, then
+// Microsoft Decision-1 (src/decision-one.js); with no TypeSafe key those two
+// serve alone. Every caller here already degrades to the lexical order on a
+// null, so another backend only adds answers. Every leg books against the one
+// daily ceiling (and the free share) before it is sent.
 import { createHash } from "node:crypto";
 import { priceUsdOf } from "./price-usd.js";
-import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "./decision-one.js";
+import { askDecisionOne, openRouterJudgeModels, decisionsRequestBytes } from "./decision-one.js";
 import { raceDeadline } from "./inflight-gauge.js";
 import { createSharedDailySpend } from "./shared-limits.js";
 import { createSharedCeilingView } from "./daily-ceilings.js";
@@ -25,7 +27,7 @@ const TIMEOUT_MS = () => Number(process.env.ROUTE_JUDGE_TIMEOUT_MS || 4000);
 // Description window the judge reads, plus the curated tags.
 const DESC_MAX = 300;
 
-export const toolJudgeEnabled = () => (!!keyOf() || decisionOneEnabled()) && String(process.env.ROUTE_JUDGE || "").toLowerCase() !== "off";
+export const toolJudgeEnabled = () => (!!keyOf() || openRouterJudgeModels(MODEL).length > 0) && String(process.env.ROUTE_JUDGE || "").toLowerCase() !== "off";
 
 // ---------------------------------------------------------------------------
 // Guards: every judgment is cached per question for a day and booked against a
@@ -56,9 +58,11 @@ const freeShare = () => {
   const n = Number(process.env.ROUTE_JUDGE_FREE_SHARE ?? 0.5);
   return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.5;
 };
-const spend = { day: "", tokens: 0, freeTokens: 0, calls: 0, refused: 0, capRefused: 0, cacheHits: 0 };
+// `calls` counts every booked call; `openRouterCalls` the ones sent over
+// OpenRouter (Jev there, or Decision-1), so the word shows both routes.
+const spend = { day: "", tokens: 0, freeTokens: 0, calls: 0, openRouterCalls: 0, refused: 0, capRefused: 0, cacheHits: 0 };
 const today = () => new Date().toISOString().slice(0, 10);
-function rollDay() { const d = today(); if (spend.day !== d) { spend.day = d; spend.tokens = 0; spend.freeTokens = 0; spend.calls = 0; spend.refused = 0; spend.capRefused = 0; spend.cacheHits = 0; } }
+function rollDay() { const d = today(); if (spend.day !== d) { spend.day = d; spend.tokens = 0; spend.freeTokens = 0; spend.calls = 0; spend.openRouterCalls = 0; spend.refused = 0; spend.capRefused = 0; spend.cacheHits = 0; } }
 // The shared day as this process last read it, for the status word: a new
 // process's own counters start empty, so on a day another replica (or this
 // service before a deploy) was refused at the ceiling, the word reads the
@@ -90,7 +94,7 @@ export function jevSpendStatus(now = Date.now()) {
     if (jevShared.enabled) void refreshJevSpendShared(now);
     status = localCapped || sharedCapped ? "capped" : jevShared.enabled && !viewed ? "unknown" : "ok";
   }
-  return { day: spend.day, tokens: spend.tokens, ...(viewed ? { sharedTokens } : {}), capTokens: cap, freeTokens: spend.freeTokens, freeCapTokens: Math.floor(cap * freeShare()), calls: spend.calls, cacheHits: spend.cacheHits, refusedToday: spend.refused, status };
+  return { day: spend.day, tokens: spend.tokens, ...(viewed ? { sharedTokens } : {}), capTokens: cap, freeTokens: spend.freeTokens, freeCapTokens: Math.floor(cap * freeShare()), calls: spend.calls, openRouterCalls: spend.openRouterCalls, cacheHits: spend.cacheHits, refusedToday: spend.refused, status };
 }
 export function _jevReset() { spend.day = ""; rollDay(); cache.clear(); jevShared.reset(); jevSharedFree.reset(); jevView.reset(); jevViewDay = ""; }
 /** Test seam: the day's shared token totals (null without a shared store). */
@@ -139,10 +143,14 @@ const hasAnswers = (j) => !!j?.answers && typeof j.answers === "object";
 // free search is never held much past its bound.
 const OWN_TIMER_GRACE_MS = 250;
 
-/** One judgment under the ceiling, or null. Never throws. Jev first; when it
- *  fails (non-ok, timeout, network, or an answer `usable` rejects), Decision-1
- *  is asked the same questions within what is left of the timeout, booked
- *  against the same ceiling and free share. `pool: "free"` books against the
+/** One judgment under the ceiling, or null. Never throws. Jev on TypeSafe
+ *  first; when it fails (non-ok, timeout, network, or an answer `usable`
+ *  rejects), the OpenRouter legs (openRouterJudgeModels: the pinned Jev
+ *  version, then Decision-1) are asked the same questions in turn within what
+ *  is left of the timeout, each booked against the same ceiling and free share.
+ *  An OpenRouter leg that may have billed us (a timeout, or a 200 `usable`
+ *  rejects) ends the walk with null; one that certainly did not (refused, 5xx,
+ *  429) passes to the next. `pool: "free"` books against the
  *  free share as well. `outcome` (optional object) learns `skipped: "budget"`
  *  when a ceiling refused it.
  *
@@ -158,7 +166,8 @@ function callJev(payload, fetchImpl, timeoutMs, opts = {}) {
     .then((r) => (r.timedOut ? null : r.value), () => null);
 }
 async function callJevUnbounded(payload, fetchImpl, timeoutMs, { pool = "paid", outcome = null, usable = hasAnswers } = {}) {
-  const fallback = decisionOneEnabled();
+  const viaOpenRouter = openRouterJudgeModels(MODEL);
+  const fallback = viaOpenRouter.length > 0;
   if (!keyOf() && !fallback) return null;
   const cap = jevDailyMaxTokens();
   if (!(cap > 0)) return null;
@@ -180,20 +189,28 @@ async function callJevUnbounded(payload, fetchImpl, timeoutMs, { pool = "paid", 
         // caller reads it as no judgment and caches that).
         if (usable(j) || !fallback) return j;
       }
-    } catch { /* fall through to Decision-1 */ }
+    } catch { /* fall through to OpenRouter */ }
     if (!fallback) return null;
   }
-  // Too little time left to be worth a second call.
-  const left = deadline - Date.now();
-  if (left < 250) return null;
-  const est = Buffer.byteLength(JSON.stringify({ ...payload, model: DECISION_ONE_MODEL })) + OUTPUT_ALLOWANCE_TOKENS;
-  if (!(await book(est, cap, free, outcome))) return null;
-  try {
-    const j = await askDecisionOne(payload, { fetchImpl, timeoutMs: left });
-    return usable(j) ? j : null;
-  } catch {
-    return null;
+  // Jev over OpenRouter first (the same model), then Decision-1, each while
+  // the deadline leaves time for it and the ceiling has room.
+  for (const model of viaOpenRouter) {
+    const left = deadline - Date.now();
+    if (left < 250) return null; // too little time left to be worth another call
+    const est = decisionsRequestBytes(payload, model) + OUTPUT_ALLOWANCE_TOKENS;
+    if (!(await book(est, cap, free, outcome))) return null;
+    spend.openRouterCalls++;
+    try {
+      const j = await askDecisionOne(payload, { fetchImpl, timeoutMs: left, model });
+      if (usable(j)) return j;
+      return null; // a 200 this caller cannot use was billed: no second leg
+    } catch (e) {
+      // Booked above. A leg that may have billed us (mayBeBilled) ends the
+      // walk; any other failure passes to the next leg within what is left.
+      if (e?.mayBeBilled) return null;
+    }
   }
+  return null;
 }
 
 export function criteriaFor(candidates) {

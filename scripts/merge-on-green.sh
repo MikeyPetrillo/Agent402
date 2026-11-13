@@ -18,10 +18,16 @@
 # and every SHA is shape-checked before it is used, so an API hiccup cannot
 # turn into a merge of "null".
 #
-#   scripts/merge-on-green.sh <pr-number> [branch]
+#   scripts/merge-on-green.sh <pr-number> [branch] [--no-strix]
 #
-# Needs gh (authenticated). Exits non-zero, merging nothing, on any doubt.
+# After CI is green it also waits for Strix's security review of the head SHA
+# (see "Strix" below); --no-strix is the owner's explicit override.
+#
+# Needs gh (authenticated) and jq. Exits non-zero, merging nothing, on any doubt.
 set -euo pipefail
+NO_STRIX=0; ARGS=()
+for a in "$@"; do case "$a" in --no-strix) NO_STRIX=1 ;; *) ARGS+=("$a") ;; esac; done
+set -- ${ARGS[@]+"${ARGS[@]}"}
 PR="${1:?pr number}"
 BRANCH="${2:-claude/sweet-brown-i99jl3}"
 WORKFLOW="${GATE_WORKFLOW:-Deploy to Railway}"
@@ -103,7 +109,7 @@ gh run watch "$RUN" --interval 30 >/dev/null 2>&1 || true
 LANES=$(gh run view "$RUN" --json jobs -q '.jobs[] | select(.name | test("^test(-|$)")) | "\(.name)=\(.conclusion)"' || true)
 [ -n "$LANES" ] || { echo "$GATE_EVENT run $RUN has no test lanes - not merging"; exit 1; }
 echo "$LANES" | sed 's/^/  /'
-if echo "$LANES" | grep -vq '=success$'; then
+if [ "$(grep -vc '=success$' <<<"$LANES" || true)" != "0" ]; then
   echo "$GATE_EVENT run $RUN is NOT green on every test lane - not merging"
   exit 1
 fi
@@ -139,6 +145,127 @@ for i in $(seq 1 60); do
 done
 [ -z "$MISSING" ] || { echo "required check(s) never completed:$MISSING - not merging"; exit 1; }
 echo "every ruleset-required check is green on PR $PR"
+
+# STRIX. Strix posts its security review as the GitHub user strix-security[bot]
+# and publishes no check run, so no required check can hold a merge for it.
+# Wait (bounded, STRIX_WAIT_SECONDS, default 1800) for its verdict on THIS head
+# SHA. Two readings, both pinned to the head SHA:
+#   - its PR reviews whose commit_id is the head SHA: ANY of them in state
+#     CHANGES_REQUESTED refuses (a later COMMENTED review does not clear it),
+#     and a Critical or High finding in any of their bodies or their review
+#     comments ("**Severity:** HIGH") refuses;
+#   - the pinned summary comment (marker strix-pr-review:master), whose
+#     "Review N on this PR · `<sha>`" line must name the head SHA and must list
+#     no Critical or High finding ("**HIGH**"). A clean review posts only this.
+# A review of the head SHA merges only beside a summary of the same SHA; a
+# summary that is missing or names an older SHA keeps waiting and then refuses.
+# Once the summary names the head SHA, the reviews are read again, so a
+# verdict that landed between the two reads still refuses. A failed or
+# unparsable gh read is "not yet": the wait goes on, and a wait that ends on
+# one refuses and names it.
+# A review or summary of an older SHA does not count. A billing-required
+# comment counts only when it was posted after the head commit's committer
+# date (an old one says nothing about this push). No verdict in time, or Strix
+# saying it could not run, stops here for the owner: never merge without it
+# silently.
+STRIX_BOT="strix-security[bot]"
+STRIX_WAIT_SECONDS="${STRIX_WAIT_SECONDS:-1800}"
+STRIX_POLL_SECONDS="${STRIX_POLL_SECONDS:-60}"
+# grep -c reads all of its input: under pipefail, grep -q would quit at the
+# first match and the writer's SIGPIPE would fail the pipeline, reading a
+# Critical or High finding as clean.
+strix_high() { local n; n=$(grep -Eic '\*\*Severity:\*\*[[:space:]]*(CRITICAL|HIGH)([^A-Za-z]|$)|\*\*(CRITICAL|HIGH)\*\*' || true); [ "${n:-0}" -gt 0 ]; }
+if [ "$NO_STRIX" = "1" ]; then
+  echo "################################################################"
+  echo "## --no-strix: the OWNER chose to merge PR #$PR WITHOUT Strix's"
+  echo "## security review of $SHA. Nothing below checked it."
+  echo "################################################################"
+else
+  # The head commit's committer date, the floor for a billing-required
+  # comment. Unreadable: no such comment counts, and the wait runs its course.
+  HEAD_DATE=$(gh api "repos/{owner}/{repo}/commits/$SHA" --jq '.commit.committer.date' 2>/dev/null || true)
+  [[ "$HEAD_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || HEAD_DATE=""
+  # One list read: gh's whole output is captured first, then parsed into one
+  # array of Strix's entries. A failed or unparsable read prints nothing and
+  # returns 1, so the caller treats it as "not yet", never as an empty list.
+  strix_list() {
+    local raw
+    raw=$(gh api "$1" --paginate 2>/dev/null) || return 1
+    printf '%s' "$raw" | jq -s -c -e --arg bot "$STRIX_BOT" 'if all(.[]; type == "array") then [.[][] | select(.user.login == $bot)] else error("not a list") end' 2>/dev/null
+  }
+  # Reads Strix's reviews of the head SHA and refuses on changes requested or a
+  # Critical or High finding in them or their comments. Sets RID and RSTATE.
+  # Returns 1 when a read fails or cannot be parsed (the caller keeps waiting).
+  strix_check_reviews() {
+    local all headreviews rids cr rcomments
+    RID=""; RSTATE=""
+    all=$(strix_list "repos/{owner}/{repo}/pulls/$PR/reviews") || { STRIX_READ_FAIL="reviews"; return 1; }
+    headreviews=$(printf '%s' "$all" | jq -c --arg sha "$SHA" '[.[] | select(.commit_id == $sha)]' 2>/dev/null) || { STRIX_READ_FAIL="reviews"; return 1; }
+    [ "$(printf '%s' "$headreviews" | jq -r 'length')" = "0" ] && return 0
+    rids=$(printf '%s' "$headreviews" | jq -c '[.[].id]')
+    printf '%s' "$rids" | jq -e 'all(.[]; type == "number")' >/dev/null 2>&1 || { echo "a Strix review of $SHA has an unreadable id ($rids) - not merging"; exit 1; }
+    RID=$(printf '%s' "$headreviews" | jq -r 'last | .id'); RSTATE=$(printf '%s' "$headreviews" | jq -r 'last | .state')
+    cr=$(printf '%s' "$headreviews" | jq -r '[.[] | select(.state == "CHANGES_REQUESTED") | .id] | first // empty')
+    if [ -n "$cr" ]; then echo "Strix requested changes on $SHA (review $cr) - not merging"; exit 1; fi
+    rcomments=$(strix_list "repos/{owner}/{repo}/pulls/$PR/comments") || { STRIX_READ_FAIL="review comments"; return 1; }
+    rcomments=$(printf '%s' "$rcomments" | jq -r --argjson rids "$rids" '[.[] | select(.pull_request_review_id as $r | any($rids[]; . == $r)) | .body // ""] | join("\n")')
+    if { printf '%s' "$headreviews" | jq -r '.[].body // ""'; printf '%s\n' "$rcomments"; } | strix_high; then
+      echo "Strix reports a Critical or High finding on $SHA (review $RID) - not merging"; exit 1
+    fi
+    STRIX_NO_REVIEW=0
+  }
+  # Deadline check, then one poll interval. Returns 1 once the wait is spent.
+  strix_next() {
+    [ "$waited" -ge "$STRIX_WAIT_SECONDS" ] && return 1
+    echo "waiting for Strix's review of $SHA (${waited}s of ${STRIX_WAIT_SECONDS}s)"
+    sleep "$STRIX_POLL_SECONDS"; waited=$((waited + STRIX_POLL_SECONDS))
+  }
+  STRIX_OK=""; STRIX_NO_REVIEW=1; STRIX_READ_FAIL=""
+  waited=0
+  while :; do
+    STRIX_WHY="no Strix review of $SHA arrived within ${STRIX_WAIT_SECONDS}s"; STRIX_READ_FAIL=""
+    if ! strix_check_reviews; then
+      STRIX_WHY="the last read of Strix's $STRIX_READ_FAIL on PR $PR failed or could not be parsed, so its verdict on $SHA cannot be read"
+      strix_next || break; continue
+    fi
+    if ! COMMENTS=$(strix_list "repos/{owner}/{repo}/issues/$PR/comments"); then
+      STRIX_READ_FAIL="PR comments"
+      STRIX_WHY="the last read of Strix's PR comments on PR $PR failed or could not be parsed, so its summary of $SHA cannot be read"
+      strix_next || break; continue
+    fi
+    SUMMARY=$(printf '%s' "$COMMENTS" | jq -r '[.[] | select(.body | contains("<!-- strix-pr-review:master -->"))] | last | .body // empty' 2>/dev/null || true)
+    SUMSHA=$(printf '%s' "$SUMMARY" | grep -Eo 'Review [0-9]+ on this PR · `[0-9a-f]{7,40}`' | tail -1 | grep -Eo '[0-9a-f]{7,40}' || true)
+    if [ -n "$SUMSHA" ] && [ "${SHA#"$SUMSHA"}" != "$SHA" ]; then
+      if printf '%s' "$SUMMARY" | strix_high; then echo "Strix's summary of $SHA lists a Critical or High finding - not merging"; exit 1; fi
+      # A review can land between the first read and the summary read: read the
+      # reviews of $SHA once more, so the merge never outruns a late verdict.
+      if ! strix_check_reviews; then
+        STRIX_WHY="the re-read of Strix's $STRIX_READ_FAIL on PR $PR failed or could not be parsed, so its verdict on $SHA cannot be confirmed"
+        strix_next || break; continue
+      fi
+      if [ -n "$RID" ]; then STRIX_OK="Strix review $RID of $SHA: $RSTATE, and its summary of $SHA: no Critical or High finding"
+      else STRIX_OK="Strix summary of $SHA: no Critical or High finding"; fi
+      break
+    fi
+    if [ -n "$RID" ]; then
+      STRIX_WHY="Strix reviewed $SHA (review $RID), but its pinned summary comment is $([ -n "$SUMSHA" ] && echo "stale (it names $SUMSHA)" || echo "missing"), so its Critical and High check of $SHA cannot be read"
+    fi
+    if [ -n "$HEAD_DATE" ] && printf '%s' "$COMMENTS" | jq -e --arg since "$HEAD_DATE" '[.[] | select((.body | contains("<!-- strix:pr-review-billing-required -->")) and ((.created_at // "") > $since))] | length > 0' >/dev/null 2>&1; then
+      STRIX_WHY="Strix says it could not review this PR (its workspace billing), after $SHA was committed; no review of $SHA exists"; STRIX_NO_REVIEW=0; break
+    fi
+    strix_next || break
+  done
+  if [ -z "$STRIX_OK" ]; then
+    echo "STRIX: $STRIX_WHY - not merging."
+    if [ "$STRIX_NO_REVIEW" = "1" ] && [ -z "$STRIX_READ_FAIL" ]; then
+      echo "Strix may not re-review commits pushed after the PR was opened, so a review of this head may never come."
+    fi
+    echo "The owner decides: re-request Strix's review of $SHA (tag @strix-security in a PR comment, or re-run it),"
+    echo "then run this again; or merge without it on purpose: scripts/merge-on-green.sh $PR --no-strix"
+    exit 1
+  fi
+  echo "$STRIX_OK"
+fi
 
 # The markers job on MAIN rescans every subject in the push range, and a merge
 # whose range carries a subject it rejects leaves deploy and publish SKIPPED on
@@ -201,7 +328,7 @@ gh run watch "$MAIN" --exit-status --interval 30 >/dev/null 2>&1 && echo "main r
 H=""
 for _ in $(seq 1 60); do
   H=$(curl -s --max-time 8 "${TARGET_URL:-https://agent402.tools}/health" || true)
-  if printf '%s' "$H" | grep -q "\"build\":\"${MERGE:0:7}\""; then echo "PROD: $H"; exit 0; fi
+  if grep -q "\"build\":\"${MERGE:0:7}\"" <<<"$H"; then echo "PROD: $H"; exit 0; fi
   sleep 10
 done
 echo "prod did not report ${MERGE:0:7} within 10 min; last: $H"

@@ -43,8 +43,8 @@ ok(SUCC === "deepseek/deepseek-v4-flash", "deepseek-chat names its successor");
       ok(want ? chain[1] === want : (!list.includes(chain[1]) || (TIERS[tier].fallbacks || []).includes(chain[1])), `${req} on ${tier}: successor ${want || "none (tier admits none; a tier fallback may still serve)"}`);
     }
   }
-  ok(failoverChain("openai/gpt-4o-mini", "v1-chat-metered")[1] === "openai/gpt-6-luna" && failoverChain("openai/gpt-4o-mini", "v1-chat").join() === "openai/gpt-4o-mini,openai/gpt-6-luna,deepseek/deepseek-chat", "gpt-4o-mini: metered falls back to gpt-6-luna; base falls back through its tier fallbacks, never to an error");
-  ok(failoverChain("anthropic/claude-haiku-4.5", "v1-chat").slice(-2).join() === "openai/gpt-6-luna,deepseek/deepseek-chat" && failoverChain("openai/gpt-4o-mini", "v1-chat", { fallback: false }).length === 1, "every base model ends on the tier fallbacks; model_fallback:false keeps the requested model alone");
+  ok(failoverChain("openai/gpt-4o-mini", "v1-chat-metered")[1] === "openai/gpt-6-luna" && failoverChain("openai/gpt-4o-mini", "v1-chat").join() === "openai/gpt-4o-mini,openai/gpt-6-luna,deepseek/deepseek-v4.1-flash" && TIERS["v1-chat"].fallbacks.join() === "openai/gpt-6-luna,deepseek/deepseek-v4.1-flash", "gpt-4o-mini: metered falls back to gpt-6-luna; base falls back through its tier fallbacks, never to an error");
+  ok(failoverChain("anthropic/claude-haiku-4.5", "v1-chat").slice(-2).join() === "openai/gpt-6-luna,deepseek/deepseek-v4.1-flash" && failoverChain("openai/gpt-4o-mini", "v1-chat", { fallback: false }).length === 1, "every base model ends on the tier fallbacks; model_fallback:false keeps the requested model alone");
   ok(!Object.values(AVAILABILITY_SUCCESSORS).flat().includes("openai/gpt-4.1-nano"), "no successor is a model OpenAI removes 2026-10-23 (gpt-4.1-nano)");
 }
 

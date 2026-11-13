@@ -3,6 +3,27 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-13",
+    title: "Model refresh",
+    items: [
+      "Gateway: The /v1 chat tiers' defaults move to newer models at the same prices: base gpt-6-luna, pro gpt-6.1-terra, premium claude-opus-5.5; the bare claude-opus, claude-haiku and x-ai/grok names serve opus-5.5, haiku-5.5 and grok-4.7. Every replaced model id is still served when a call names it.",
+      "Gateway: Nano admits claude-haiku-5.5 and deepseek-v4.1-flash; qwen3.8-flash joins base, auto, grounded and metered, and takes a rung in auto's fast code ranking; pro admits gemini-3.8-flash and gemini-4-argon; premium admits gemini-4-argon and claude-fable-5.2.",
+      "Gateway: A tier serves its own default when a call names it, at that tier's price, and /v1/models lists it under that tier: gpt-6-luna named on base is served on base, on the chat, Messages and Responses wires.",
+      "Gateway: /api/llm and /api/llm-pro default to gpt-6-luna. A call there that names no model is served without the temperature and top_p it sends, and the answer names them in agent402_params_not_sent.",
+      "Gateway: Image tiers render on gpt-image-2.6 flare and sunburst. A one-link image edit route's refusal no longer names an empty failover.",
+      "Gateway: Gateway examples name models each tier serves at its own price: base its default, gpt-6-luna; the /v1/pro tier gpt-6.1-terra.",
+      "Speech: TTS (/api/tts, /api/tts-hd): Voxtral TTS 3 joins the backups behind Voxtral Mini, same voices.",
+      "Judgment: /v1/judge and /v1/decisions add Gemini Decision-1 and the same pinned Jev version over OpenRouter as fallbacks. The discovery reranker, wish classification and the decide planner ask that Jev version over OpenRouter before Decision-1. Decisions requests carry a no-data-collection preference, and zero data retention where every endpoint offers it.",
+      "Judgment: /v1/judge, /v1/judge/vision, /locate and /long keep the other answers when a noul has no probability, marked noProbability: true; an answer with none stays an uncharged 502.",
+      "Search: Neural search sends the legacy fast and instant types as lite and says so, and passes upstream warnings and notices through, screened of hidden characters.",
+      "Search: /api/route scores our own rows without their attribution sentences, as /api/find and catalog search do.",
+      "Server: /privacy says route, decide and demand-board text can also reach judgment models over OpenRouter.",
+      "Server: The web framework takes its November security release.",
+      "Server: /health stays 200 while a state database write waits for its retry; the stateDb status word reports the outage.",
+      "Server: cve-lookup waits up to 25 s for the NVD record read, which now takes several seconds; the EPSS and KEV reads keep 10 s.",
+    ],
+  },
+  {
+    date: "2026-11-13",
     title: "Image header bound",
     items: [
       "Server: the TIFF header reader bounds every tag's declared value count by the file size, whatever the tag's type.",

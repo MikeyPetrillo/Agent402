@@ -29,7 +29,7 @@ const tools = await agent402Tools();
 // const tools = await agent402Tools({ fetch: payFetch });
 
 const { text } = await generateText({
-  model: openai("gpt-4o"),
+  model: openai("gpt-6-luna"),
   tools,
   prompt: "Hash 'hello world' with sha256",
 });

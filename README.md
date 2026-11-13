@@ -245,9 +245,9 @@ price per call whatever the length.
 | `POST /v1/metered/chat/completions` | from $0.001 | **the default** - every explicit model the flat chat tiers serve, quoted per request from the body (200k chars in on every model and more on a larger context window, 8,192 tokens out) |
 | `POST /v1/nano/chat/completions` | $0.003 | nano models - priced for high-frequency agent loops |
 | `POST /v1/auto/chat/completions` | $0.01 | **no model needed** - deterministic eval-ranked routing (code / reasoning / long / general), optional `quality: fast \| balanced \| best` at the same price, decision disclosed via `agent402_router` |
-| `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-4o-mini, claude haiku, gemini flash, deepseek, llama…) |
-| `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet, gemini pro, grok) |
-| `POST /v1/premium/chat/completions` | $0.50 | frontier (gpt-5.6 sol and terra, gpt-6 astra, claude opus and claude fable 5.1) |
+| `POST /v1/chat/completions` | $0.02 | budget/mid models (gpt-6-luna by default, claude haiku, gemini flash, deepseek, llama…) |
+| `POST /v1/pro/chat/completions` | $0.10 | mid-frontier (gpt-6.1 terra by default, gpt-6 sol, claude sonnet, gemini pro and 4 argon, grok) |
+| `POST /v1/premium/chat/completions` | $0.50 | frontier (claude opus 5.5 by default, gpt-5.6 sol and terra, gpt-6 astra, claude fable 5.1 and 5.2, gemini 4 argon) |
 | `POST /v1/grounded/chat/completions` | $0.03 | the auto router plus a live web search on every call - answers carry OpenAI-wire `url_citation` annotations; never cached |
 | `POST /v1/{nano,auto,pro,premium}/messages`, `POST /v1/messages` | tier price | the **Anthropic Messages wire** on every tier (same allowlist, caps and failover as the chat route); `effort` (low to max) is the depth control on Claude 4.7+, older Claude takes `thinking.budget_tokens` |
 | `POST /v1/{nano,auto,pro,premium}/responses`, `POST /v1/responses` | tier price | the **OpenAI Responses wire** on every tier (function tools only, no server state) |
@@ -499,7 +499,7 @@ import { agent402Tools } from "agent402-openai-tools";
 
 const openai = new OpenAI();
 const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render"] });
-const res = await openai.chat.completions.create({ model: "gpt-4o-mini", tools, messages: [...] });
+const res = await openai.chat.completions.create({ model: "gpt-6-luna", tools, messages: [...] });
 // when the model returns a tool call: await execute(call.function.name, JSON.parse(call.function.arguments));
 ```
 

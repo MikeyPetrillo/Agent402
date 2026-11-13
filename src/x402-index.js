@@ -305,6 +305,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES } from "./crawl-cadence.js";
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
+import { withoutAttributions } from "./data-attribution.js";
 import { stripHiddenCharacters } from "./hidden-chars.js";
 import { looksLikeListingInjection, matchesInjectionPhrase, listingInjectionFinding } from "./listing-screen.js";
 import { registerMemoryStore, approxBytes } from "./memory-stores.js";
@@ -10176,11 +10177,18 @@ function computeToolStatics(t) {
   let st;
   const name = sellerText(t.name), slug = sellerText(t.slug);
   const tags = Array.isArray(t.tags) ? t.tags.map(sellerText) : [];
-  const hay = `${name} ${sellerText(t.description)} ${sellerText(t.category)} ${tags.join(" ")}`.toLowerCase();
+  const description = sellerText(t.description);
+  const hay = `${name} ${description} ${sellerText(t.category)} ${tags.join(" ")}`.toLowerCase();
+  // Our own rows are scored without their attribution sentences (legal
+  // notices, not what a tool does), as /api/find and catalog.search rank them
+  // (src/data-attribution.js). Computed here, once per row object, so the
+  // query path reads the stripped text and never strips per request. The
+  // injection screen still reads the whole text.
+  const scored = t.seller === LOCAL_SELLER ? `${name} ${withoutAttributions(description)} ${sellerText(t.category)} ${tags.join(" ")}`.toLowerCase() : hay;
   st = {
     slug: slug.toLowerCase(),
     name: name.toLowerCase(),
-    hay,
+    hay: scored,
     // Metadata sanitization (M6, defends "Five Attacks on x402" Attack IV-E1 —
     // metadata manipulation): a single crafted external listing whose text tries
     // to command the selecting agent ("ignore previous instructions", "always

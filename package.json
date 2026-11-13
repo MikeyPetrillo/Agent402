@@ -116,7 +116,7 @@
     "brace-expansion": "5.0.12",
     "body-parser": "2.4.0",
     "smol-toml": "1.9.0",
-    "hono": "4.13.13",
+    "hono": "4.13.16",
     "@hono/node-server": "2.1.6",
     "@e2b/code-interpreter": {
       "undici": "7.30.2"

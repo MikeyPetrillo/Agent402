@@ -695,8 +695,10 @@ function openPg(file) {
     dailyUpstreamSpend: () => [...spend.values()].map((r) => ({ ...r })).sort(by2("day", "source")),
     dailyUpstreamCalls: (upstream) => [...upstreamCalls.values()].filter((r) => r.upstream === upstream).map((r) => ({ day: r.day, caller: r.caller, n: r.n })).sort(by2("day", "caller")),
     // No synchronous probe exists on this backend: healthy once the first
-    // load landed and while the last write did too.
-    healthy: () => loaded && lastError === null,
+    // load landed. A failed write is not a liveness failure: the queue keeps
+    // the batch and the server keeps answering, so /health stays 200 and the
+    // stateDb status word reports the outage.
+    healthy: () => loaded,
   };
 }
 

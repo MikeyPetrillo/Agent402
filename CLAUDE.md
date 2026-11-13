@@ -165,7 +165,11 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   (`scripts/test-ci-gating.js`).
 - **Flow:** commit to the dev branch with `[test]` only (never `[deploy]` on dev), push, open a
   draft PR, let CI run, merge with `scripts/merge-on-green.sh <pr>` (push-event run, every
-  required check green, pinned to the tested SHA).
+  required check green, pinned to the tested SHA). It then waits `STRIX_WAIT_SECONDS` (default
+  1800) for Strix's pinned summary of that SHA and merges on a clean one (Strix posts no review
+  on a clean PR). It refuses on changes requested in any review of that SHA, a Critical or High
+  finding, or no current summary by the deadline (Strix may not re-review a push made after the
+  PR opened: the owner re-requests it, or passes `--no-strix`, the owner's explicit override).
 - A merge to `main` is not a package release: check `npm view <pkg> version` against the local
   `package.json`.
 - The deploy job's "Bazaar listing validation on the new build" step (after Verify, keys blanked)

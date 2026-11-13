@@ -166,8 +166,11 @@ console.log("\n# failover chain — every candidate model re-clamped at its own 
   const nano = TIERS["v1-chat-nano"];
   // The inversion the re-clamp closes: gpt-4.1-nano clamp is a no-op at
   // n=4 × 768 out; that body priced at deepseek's bound busts the price.
-  const unclamped = { model: "deepseek/deepseek-chat", messages: [{ role: "user", content: "hi" }], max_tokens: 768, n: 4 };
-  const preFix = worstCaseUpstreamCost(unclamped, nano, 0);
+  // The fallback under test: the first nano fallback whose unclamped body
+  // would bill over the price; every link before it fails.
+  const unclampedOf = (model) => ({ model, messages: [{ role: "user", content: "hi" }], max_tokens: 768, n: 4 });
+  const PRICEY = nano.fallbacks.find((m) => worstCaseUpstreamCost(unclampedOf(m), nano, 0).totalUsd > nano.price) || nano.fallbacks[0];
+  const preFix = worstCaseUpstreamCost(unclampedOf(PRICEY), nano, 0);
   ok(preFix.totalUsd > nano.price, `documented: UNclamped fallback body would bill over the $${nano.price} price (why the re-clamp exists)`);
 
   // Behavioral: primary 502s, the fallback outbound body must be re-clamped.
@@ -177,15 +180,15 @@ console.log("\n# failover chain — every candidate model re-clamped at its own 
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body);
     outbounds.push(body);
-    if (body.model === "mistralai/ministral-8b-2512") return { ok: false, status: 502, text: async () => "provider down" };
+    if (body.model !== PRICEY) return { ok: false, status: 502, text: async () => "provider down" };
     return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-m", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }) };
   };
   const nanoTool = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-nano");
   const res = await nanoTool.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], max_tokens: 768, n: 4 });
-  ok(res.model === "deepseek/deepseek-chat", `failover still serves the buyer (served ${res.model})`);
+  ok(res.model === PRICEY, `failover still serves the buyer (served ${res.model})`);
   ok(outbounds[0].model === "mistralai/ministral-8b-2512" && outbounds[0].max_tokens === 768, "primary model keeps its own clamp (768 out — no behavior change)");
-  const fb = outbounds[1];
-  ok(fb.model === "deepseek/deepseek-chat" && fb.max_tokens < 768, "fallback outbound is re-clamped at its own cost (max_tokens below 768)");
+  const fb = outbounds.find((b) => b.model === PRICEY);
+  ok(fb && fb.max_tokens < 768, "fallback outbound is re-clamped at its own cost (max_tokens below 768)");
   const fbWc = worstCaseUpstreamCost(fb, nano, 0);
   ok(fbWc.totalUsd < nano.price, `re-clamped fallback worst-case < price $${nano.price}`);
   globalThis.fetch = realFetch;
@@ -277,6 +280,51 @@ console.log("\n# /v1/images/generations - per-link bounds");
   await rejects(() => imgTool.handler({ prompt: "x".repeat(IMAGES_MAX_PROMPT_CHARS + 1) }), "Prompt too long", "images handler rejects an over-cap prompt");
   ok(fetches === 0, "…and made zero upstream fetches doing it");
   globalThis.fetch = realFetch;
+}
+
+// ---------------------------------------------------------------------------
+// 4b. GPT Image tiers (src/tools/image-gen-kit.js) - billed per token from the
+//     model's OWN row in the private table (openai.<model>): text input at its
+//     prompt rate, image output at its completion rate. Size, quality, n=1 and
+//     the planning level are locked per tier; outputTokenBound is the tier's
+//     measured output (a render above it is logged, never refused). Asserted:
+//     the bound on the row within MARGIN x the tier price, and the prompt cap
+//     (counted at English density) plus the bound within the price.
+console.log("\n# GPT Image tiers - the model's row x the tier's output bound");
+// Owner exceptions to the MARGIN rule on an image tier's bound, one entry per
+// reviewed tier. An excepted tier is still held to its price: the row x the
+// bound, and the prompt cap plus the bound, never pass it. The output prints
+// one fixed line naming the exception, never a verdict or a figure.
+const IMAGE_BOUND_OWNER_EXCEPTIONS = new Map([
+  ["image-gen", { decided: "2026-11-13", reason: "owner 2026-11-13: entry price kept" }],
+]);
+ok(IMAGE_BOUND_OWNER_EXCEPTIONS.size === 1 && IMAGE_BOUND_OWNER_EXCEPTIONS.has("image-gen"), "the image bound exception names exactly one tier, image-gen");
+{
+  const { TIERS: IMAGE_GEN_TIERS, IMAGE_GEN_TOOLS } = await import("../src/tools/image-gen-kit.js");
+  for (const [slug, t] of Object.entries(IMAGE_GEN_TIERS)) {
+    const price = Number(String(IMAGE_GEN_TOOLS.find((x) => x.slug === slug)?.price).replace("$", ""));
+    const row = upstreamCosts().openai?.[t.model];
+    if (!row) {
+      ok(!(process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1"), `${slug}: the private table has no openai row for ${t.model} (required under CI)`);
+      continue;
+    }
+    const outUsd = (t.outputTokenBound * row.completion) / 1e6;
+    const promptTokens = countTokens("the quick brown fox. ".repeat(Math.floor(t.maxPromptChars / 21)));
+    const worst = outUsd + (promptTokens * row.prompt) / 1e6;
+    ok(Number.isFinite(price) && price > 0 && Number.isFinite(worst) && outUsd > 0 && t.outputTokenBound > 0, `${slug}: a price, a bound and a priced row for ${t.model}`);
+    const imgException = IMAGE_BOUND_OWNER_EXCEPTIONS.get(slug);
+    if (imgException) {
+      console.log(`ok - ${slug}: owner exception applies (${imgException.decided})`);
+      // An exception the bound no longer needs is removed, not kept: this
+      // fails once the bound fits MARGIN. The line names the slug and date only.
+      ok(outUsd > MARGIN * price * (1 + 1e-9), `${slug}: owner exception still current (${imgException.decided})`);
+    } else {
+      ok(outUsd <= MARGIN * price * (1 + 1e-9), `${slug}: ${t.outputTokenBound} output tokens on ${t.model}'s row are within ${MARGIN} x the tier price`);
+    }
+    ok(outUsd <= price, `${slug}: ${t.outputTokenBound} output tokens on ${t.model}'s row are within the tier price`);
+    ok(worst <= price, `${slug}: the prompt cap plus the output bound on ${t.model}'s row is within the tier price`);
+    table.push({ tier: slug, price, worst, model: t.model });
+  }
 }
 
 // ---------------------------------------------------------------------------

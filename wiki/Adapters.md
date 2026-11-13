@@ -80,7 +80,7 @@ const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], fr
 
 const messages = [{ role: "user", content: "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?" }];
 for (let turn = 0; turn < 4; turn++) {
-  const res = await openai.chat.completions.create({ model: "gpt-4o-mini", messages, tools });
+  const res = await openai.chat.completions.create({ model: "gpt-6-luna", messages, tools });
   const msg = res.choices[0].message;
   messages.push(msg);
   if (!msg.tool_calls?.length) { console.log(msg.content); break; }
@@ -129,7 +129,7 @@ import { agent402Tools } from "agent402-ai-sdk";
 
 const tools = await agent402Tools({ fetch: payFetch });   // agent402Tools() alone: the proof-of-work free tier
 const { text } = await generateText({
-  model: openai("gpt-4o-mini"),
+  model: openai("gpt-6-luna"),
   tools,
   stopWhen: stepCountIs(6),
   prompt: "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?",
@@ -145,7 +145,7 @@ import { agent402Tools } from "agent402-langchain";
 
 const tools = await agent402Tools({ fetch: payFetch });   // agent402Tools() alone: the proof-of-work free tier
 const agent = createReactAgent({
-  llm: new ChatOpenAI({ model: "gpt-4o-mini" }),
+  llm: new ChatOpenAI({ model: "gpt-6-luna" }),
   tools,
 });
 const res = await agent.invoke({
@@ -161,7 +161,7 @@ import { openai } from "@llamaindex/openai";
 import { agent402Tools } from "agent402-llamaindex";
 
 const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
-const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
+const myAgent = agent({ tools, llm: openai({ model: "gpt-6-luna" }) });
 const res = await myAgent.run("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
 ```
 

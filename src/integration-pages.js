@@ -103,7 +103,7 @@ ${PER_SLUG_PAID}
 
 const messages = [{ role: "user", content: "${SEARCH_THEN_ANSWER}" }];
 for (let turn = 0; turn < 4; turn++) {
-  const res = await openai.chat.completions.create({ model: "gpt-4o-mini", messages, tools });
+  const res = await openai.chat.completions.create({ model: "gpt-6-luna", messages, tools });
   const msg = res.choices[0].message;
   messages.push(msg);
   if (!msg.tool_calls?.length) { console.log(msg.content); break; }
@@ -176,7 +176,7 @@ ${X402_FETCH}
 const tools = await agent402Tools({ fetch: payFetch });
 
 const { text } = await generateText({
-  model: openai("gpt-4o"),
+  model: openai("gpt-6.1-terra"),
   tools,
   stopWhen: stepCountIs(6),   // find, search, answer, then reply
   prompt: "${SEARCH_THEN_ANSWER}",
@@ -207,7 +207,7 @@ ${X402_FETCH}
 
 // an array of four tools; agent402_call pays search and answer through this fetch
 const tools = await agent402Tools({ fetch: payFetch });
-const agent = createAgent({ model: new ChatOpenAI({ model: "gpt-4o-mini" }), tools });
+const agent = createAgent({ model: new ChatOpenAI({ model: "gpt-6-luna" }), tools });
 
 const result = await agent.invoke({
   messages: [{ role: "user", content: "${SEARCH_THEN_ANSWER}" }],
@@ -270,7 +270,7 @@ ${X402_FETCH}
 // web search, then a cited answer: both paid per call from the wallet
 const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 
-const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
+const myAgent = agent({ tools, llm: openai({ model: "gpt-6-luna" }) });
 const res = await myAgent.run("${SEARCH_THEN_ANSWER}");
 console.log(res.data.result);`,
     noWalletExample: `// free tier: every tool listed here is compute-payable (proof-of-work, no wallet)
