@@ -50,6 +50,31 @@ const pairs = [
   [{ network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x1111111111111111111111111111111111111111", maxAmountRequired: "10000" },
     { network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x1111111111111111111111111111111111111111", max_amount_required: "10000" }],
 ];
+// One rule wherever both spellings are present: the camelCase value wins when
+// it is usable (non-blank text or a finite number), in either key order, and
+// the snake_case value is read only when the camelCase one is absent or
+// unusable. Checked on a stored tool, a crawled manifest row, a price object
+// and an OpenAPI payment object.
+const { normaliseOpenapiTools } = await import("../src/x402-index.js");
+const openapiPriceOf = (payment) => normaliseOpenapiTools({ openapi: "3.1.0", info: { title: "s" }, paths: { "/api/a": { post: { summary: "a", "x-payment-info": payment } } } }, "https://snake.example")[0]?.price ?? null;
+const usd = (v) => (v == null ? null : Number(String(v).replace(/[^0-9.]/g, "")));
+const readers = [
+  ["stored tool", (o) => storedTool(o).priceUsd],
+  ["manifest row", (o) => priceOf(o)],
+  ["price object", (o) => priceOf({ price: o })],
+  ["OpenAPI payment object", (o) => openapiPriceOf(o)],
+];
+for (const [label, read] of readers) {
+  const lowFirst = usd(read({ priceUsd: 0.001, price_usd: 9 })), highFirst = usd(read({ price_usd: 0.001, priceUsd: 9 }));
+  ok(lowFirst === 0.001 && highFirst === 9, `${label}: the camelCase price wins over its snake_case twin in either key order (${lowFirst}, ${highFirst})`);
+  const snakeFirst = usd(read({ price_usd: 9, priceUsd: 0.001 })), camelFirst = usd(read({ priceUsd: 9, price_usd: 0.001 }));
+  ok(snakeFirst === 0.001 && camelFirst === 9, `${label}: the same with the keys written the other way round (${snakeFirst}, ${camelFirst})`);
+  const unusable = [{ toString: 1, valueOf: 2 }, {}, "  ", NaN, null].map((bad) => usd(read({ priceUsd: bad, price_usd: 0.002 })));
+  ok(unusable.every((v) => v === 0.002), `${label}: an unusable camelCase price gives way to a usable snake_case one (${JSON.stringify(unusable)})`);
+}
+const folded = storedTool({ priceUsd: 9, price_usd: 0.001, amountUsd: "1", amount_usd: "2", maxAmountRequired: "10", max_amount_required: "20" });
+ok(!("price_usd" in folded) && !("amount_usd" in folded) && !("max_amount_required" in folded) && folded.amountUsd === "1" && folded.maxAmountRequired === "10",
+  `a stored tool keeps one figure per price key and no snake_case twin (${JSON.stringify(folded)})`);
 for (const [camelEntry, snakeEntry] of pairs) {
   const a = priceOf(camelEntry), b = priceOf(snakeEntry);
   ok(a != null && a === b, `a crawled manifest entry is priced the same in either spelling (${JSON.stringify(Object.keys(snakeEntry))}: ${a} vs ${b})`);

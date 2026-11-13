@@ -614,21 +614,24 @@ const SELLER_PRICE_KEYS = ["price", "maxAmountRequired", "amount", "priceUsd", "
 /** A seller value as a price reader may take it: text or a finite number, else undefined. */
 export const sellerNumText = (v) => (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) ? v : undefined);
 // The snake_case spellings of the price keys. Every reader takes the
-// camelCase key, so a seller who writes `price_usd` or `max_amount_required`
-// is read through the camelCase twin: the snake value fills the camelCase key
-// when that key is absent, with the same text-or-finite-number rule.
+// camelCase key alone, so the two spellings are folded into it once, by one
+// rule: the camelCase value the seller wrote wins when it is usable (non-blank
+// text or a finite number); the snake_case value is read only when the
+// camelCase one is absent or unusable. The snake_case keys are then removed,
+// so no reader can take a second figure from the same object.
 const SELLER_PRICE_SNAKE_KEYS = [["price_usd", "priceUsd"], ["amount_usd", "amountUsd"], ["max_amount_required", "maxAmountRequired"]];
-/** The object with each absent camelCase price key filled from its snake_case
- *  spelling; the same object when nothing was filled. A value that is not text
- *  or a finite number is never carried over. */
+const usablePrice = (v) => (typeof v === "string" ? (v.trim() ? v : undefined) : sellerNumText(v));
+/** The object with its snake_case price keys folded into the camelCase ones
+ *  (see the rule above); the same object when it carries no snake_case key. */
 export function withCamelPriceKeys(o) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return o;
   let out = null;
   for (const [snake, camel] of SELLER_PRICE_SNAKE_KEYS) {
-    if (o[camel] !== undefined && o[camel] !== null) continue;
-    const v = sellerNumText(o[snake]);
-    if (v === undefined) continue;
-    (out ||= { ...o })[camel] = v;
+    if (!(snake in o)) continue;
+    out ||= { ...o };
+    const v = usablePrice(o[snake]);
+    if (v !== undefined && usablePrice(o[camel]) === undefined) out[camel] = v;
+    delete out[snake];
   }
   return out || o;
 }
@@ -650,7 +653,7 @@ function cleanSellerTool(t) {
   let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
   const camel = withCamelPriceKeys(out || t);
   if (camel !== (out || t)) out = camel;
-  for (const k of [...SELLER_PRICE_KEYS, ...SELLER_PRICE_SNAKE_KEYS.map(([snake]) => snake)]) {
+  for (const k of SELLER_PRICE_KEYS) {
     const v = (out || t)[k];
     if (v === undefined || v === null || sellerNumText(v) !== undefined) continue;
     out ||= { ...t };
@@ -3097,7 +3100,7 @@ function dollarLabelOf(obj) {
  *  and no dollar field beside it. */
 function bareAmountEntry(raw) {
   return !!raw && typeof raw === "object" && raw.amount != null
-    && raw.price_usd == null && raw.priceUsd == null && raw.price == null
+    && withCamelPriceKeys(raw).priceUsd == null && raw.price == null
     && raw.unit == null && raw.currency == null
     && !acceptShaped(raw) && !atomicContext(raw) && dollarLabelOf(raw) == null;
 }
@@ -3115,7 +3118,7 @@ function baseUnitReading(ctx, amount) {
 
 function parseManifestPrice(raw) {
   raw = withCamelPriceKeys(raw);
-  let p = raw?.price_usd ?? raw?.priceUsd ?? raw?.price ?? null;
+  let p = raw?.priceUsd ?? raw?.price ?? null;
   // An entry whose own amount sits beside payment context: a label first,
   // else base units. Accept-shaped entries keep their old rule (the accepts
   // reader prices them); MPP-shaped ones (currency + method/intent) had none.
@@ -3137,7 +3140,7 @@ function parseManifestPrice(raw) {
   // kill it - the test asserts the OUTCOME (an array declares nothing) instead.
   if (p && typeof p === "object" && !Array.isArray(p)) {
     const o = withCamelPriceKeys(p);
-    p = o.amountUsd ?? o.priceUsd ?? o.price_usd ?? dollarLabelOf(o) ?? null;
+    p = o.amountUsd ?? o.priceUsd ?? dollarLabelOf(o) ?? null;
     if (p == null) {
       const fig = o.amount ?? o.value;
       if (fig != null) p = atomicContext(o) ? atomicAmountToDollars(o, fig) : fig;
