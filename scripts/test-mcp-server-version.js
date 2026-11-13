@@ -19,6 +19,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pkg = JSON.parse(readFileSync(join(ROOT, "mcp", "package.json"), "utf8"));
 const registry = JSON.parse(readFileSync(join(ROOT, "mcp", "server.json"), "utf8"));
 ok(registry.version === pkg.version, `the registry entry lists the package version (${registry.version} vs ${pkg.version})`);
+// A missing or unreadable package file yields 0.0.0, never a throw at import.
+{
+  const { mcpPackageVersionFrom } = await import("../src/mcp-package-version.js");
+  const warn = console.warn; let warned = 0; console.warn = () => { warned++; };
+  const missing = mcpPackageVersionFrom(new URL("file:///nonexistent/mcp/package.json"));
+  const real = mcpPackageVersionFrom(new URL("../mcp/package.json", import.meta.url));
+  console.warn = warn;
+  ok(missing === "0.0.0" && warned === 1, "a missing mcp/package.json reads as 0.0.0 with one warning");
+  ok(real === pkg.version, "the package file's version is read as written");
+}
 const dockerfile = readFileSync(join(ROOT, "Dockerfile"), "utf8");
 ok(/^COPY\s+mcp\/package\.json\s+\.\/mcp\/package\.json\s*$/m.test(dockerfile), "the image copies mcp/package.json, which the connector reads at import");
 

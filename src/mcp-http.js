@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { frontDoorJson } from "./front-door.js";
 import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
@@ -102,13 +101,14 @@ import {
   MAX_CALLS_PER_BURST,
   MAX_CALLS_PER_WINDOW,
 } from "./rate-limit.js";
+import { mcpPackageVersionFrom } from "./mcp-package-version.js";
 
 // The connector reports the version the MCP Registry lists for it (the
 // agent402-mcp package version in mcp/server.json) with the server's build as
 // semver build metadata: "0.13.32+build.abc1234", "+build.dev" with no commit.
 // A client comparing serverInfo with the registry entry sees the same version,
 // and the build still names the deploy. The image copies mcp/package.json.
-const MCP_PACKAGE_VERSION = JSON.parse(readFileSync(new URL("../mcp/package.json", import.meta.url), "utf8")).version;
+const MCP_PACKAGE_VERSION = mcpPackageVersionFrom(new URL("../mcp/package.json", import.meta.url));
 const VERSION = `${MCP_PACKAGE_VERSION}+build.${(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || "dev").slice(0, 7)}`;
 
 // Mirrors server.js's FIND_WEAK_SCORE: an empty result set, or a top score
