@@ -61,6 +61,7 @@ import { capturePostHogDiscovery, capturePostHogToolGone, toolGoneSourceOf } fro
 import { retiredEntryForSlug } from "./retired-tools.js";
 import { rankBy as rankLeaderboard } from "./leaderboard.js";
 import { SKILL_PACKS, PACK_PRICE_RANGE, buildPromptMessages, rankSkillPacks } from "./skills.js";
+import { withoutAttributions } from "./data-attribution.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { meteredFromPrice, meteredQuoteSentence, flatTiersLine } from "./metered-lead.js";
 import { leadSentence } from "./positioning.js";
@@ -293,7 +294,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // skill pack served as an Agent Skill. Armed by MCP_SKILLS=on, and only on a
   // mount that lists catalog.call, the call every skill body names.
   const skillSet = mcpSkillsEnabled() && !scoped
-    ? buildSkillSet({ freeSlugs, priceOf: (slug) => tools.get(slug)?.def?.price ?? null })
+    ? buildSkillSet({ freeSlugs, priceOf: (slug) => tools.get(slug)?.def?.price ?? null, toolOf: (slug) => tools.get(slug)?.def ?? null })
     : null;
 
   // MCP Tasks (io.modelcontextprotocol/tasks). Armed only when tasks are enabled
@@ -404,14 +405,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // below), and `matched` is how many tools scored at all, which is the number
   // the answer was silently withholding.
   function searchTools(query, limit = 10) {
-    const q = String(query || "");
+    const q = withoutAttributions(String(query || ""));
     const terms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
     applyFrontDoorTerms(terms, q);
     const scored = [];
     for (const { def, free } of tools.values()) {
       const slug = def.slug.toLowerCase();
       const tagSet = new Set((def.tags || []).map((tg) => String(tg).toLowerCase()));
-      const hay = `${def.name} ${def.description} ${def.category} ${(def.tags || []).join(" ")}`.toLowerCase();
+      const hay = `${def.name} ${withoutAttributions(def.description)} ${def.category} ${(def.tags || []).join(" ")}`.toLowerCase();
       let score = 0;
       for (const term of terms) {
         if (slug === term) score += 10;

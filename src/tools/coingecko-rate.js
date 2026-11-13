@@ -64,7 +64,8 @@ function localRefill(now) {
 // which lists "Data provided by CoinGecko" among the accepted forms). Every
 // CoinGecko-backed tool's description ends with it; the vendor-name check in
 // scripts/test-no-third-party-names.js allows it there and nowhere else.
-export const COINGECKO_ATTRIBUTION = "Data provided by CoinGecko.";
+// The sentence lives in src/data-attribution.js (key "coingecko").
+export { COINGECKO_ATTRIBUTION } from "../data-attribution.js";
 
 /** This process's bucket alone: the fallback, and the whole decision without
  *  a shared store. Takes one request's worth of budget. Returns null when

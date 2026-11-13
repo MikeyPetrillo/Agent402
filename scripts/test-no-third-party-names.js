@@ -111,6 +111,29 @@ const { data: vdata, vendors: VENDOR_SET, allow: VENDOR_ALLOW } = loadVendorData
     };
     walk(pack, "");
   }
+  // The packs' own listings end with the attribution sentences of the sources
+  // their tools serve (src/data-attribution.js): read them as built.
+  const { buildSkillTools } = await import("../src/tools/skill-runner.js");
+  const kitTools = [];
+  for (const f of readdirSync(toolsDir).filter((f) => f.endsWith(".js") && !/-worker\.js$/.test(f))) {
+    for (const v of Object.values(await import(new URL(f, toolsDir)))) if (Array.isArray(v)) for (const t of v) if (t && typeof t === "object" && typeof t.slug === "string" && typeof t.route === "string") kitTools.push(t);
+  }
+  const packDefs = buildSkillTools({ getCatalog: () => Object.fromEntries(kitTools.map((t) => [t.route, t])) });
+  for (const t of packDefs) for (const [field, text] of [["name", t.name], ["description", t.description]]) if (vendorHits(t.slug, field, text, VENDORS, ALLOW).length) found.push(`skill-runner.js ${t.slug} ${field}`);
+  // At an allowed place a source with an attribution sentence is named only
+  // inside that sentence: the text before the description's attribution run
+  // names none of them.
+  const { ATTRIBUTION_TAILS, attributionTailOf } = await import("../src/data-attribution.js");
+  const attributed = new Set(ATTRIBUTION_TAILS.flatMap((x) => vendorHits("", "", x, VENDORS, {})));
+  const outside = [];
+  for (const t of [...kitTools, ...packDefs]) {
+    const d = String(t.description || "");
+    const tail = attributionTailOf(d) || "";
+    if (vendorHits(t.slug, "description", d.slice(0, d.length - tail.length), VENDORS, {}).some((k) => attributed.has(k))) outside.push(t.slug);
+  }
+  ok(attributed.size >= 4, `the attribution sentences name the sources the vendor list carries (${attributed.size})`);
+  ok(outside.length === 0, `a source is named only inside its attribution sentence (${outside.join(", ") || "none outside"})`);
+  ok(packDefs.length === SKILL_PACKS.length, `the vendor check read every pack's own listing (${packDefs.length})`);
   ok(seen.size >= 400 && SKILL_PACKS.length >= 10, `the vendor check read the catalog (${seen.size} tools, ${SKILL_PACKS.length} skill packs)`);
   ok(found.length === 0, `no public tool or skill-pack text names an upstream vendor outside a required attribution${found.length ? ":\n    " + found.join("\n    ") : ""}`);
 }

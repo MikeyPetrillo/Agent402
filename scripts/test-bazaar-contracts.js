@@ -19,6 +19,7 @@ import { hasShortenedExample, replayableInput, openapiOperation } from "./lib/re
 import { listingInjectionFinding, addressesReader } from "../src/listing-screen.js";
 import { readFileSync } from "node:fs";
 import { BAZAAR_DESCRIPTIONS, bazaarCapDescription, isExamplePointer, TAG_FILLER, slugRepeatsTag } from "../src/payments.js";
+import { attributionTailOf } from "../src/data-attribution.js";
 
 // Routes whose 402 carried a real sample output on the baseline tree. A route
 // over its byte budget may carry the /openapi.json pointer instead (counted
@@ -175,6 +176,7 @@ try {
   // for an oversized route, counted apart so it never reads as a real example.
   has.outputPointer = 0; has.outputSchemaPointer = 0;
   let wholeListingSeen = 0;
+  const attributedSeen = new Set();
   const LISTING_ICON = /\.(?:png|jpe?g|webp|gif)$/i;
   const iconPaths = new Set();
 
@@ -312,7 +314,14 @@ try {
     if (!outputSchema) fail(route, "bazaar extension has no output schema");
     else if (pointer) has.outputSchemaPointer++;
     else has.outputSchema++;
-    if (/Federal Reserve Bank of St\. Louis/.test(endpoint.description || "") && !/not endorsed or certified by the Federal Reserve Bank of St\. Louis\.$/.test(desc)) fail(route, "listing lost the FRED notice its catalog text carries");
+    // A catalog text that ends with the attribution its sources' terms require
+    // (src/data-attribution.js; a pack carries one per source its tools serve)
+    // keeps the same run at the end of its 402 listing, whatever the budget cut.
+    const attribution = attributionTailOf(endpoint.description || "");
+    if (attribution) {
+      attributedSeen.add(endpoint.slug);
+      if (!desc.endsWith(attribution)) fail(route, `listing lost the attribution its catalog text ends with: ...${desc.slice(-80)}`);
+    }
     if (WHOLE_LISTING_ROUTES.has(route)) {
       wholeListingSeen++;
       const source = BAZAAR_DESCRIPTIONS[endpoint.slug] || endpoint.description;
@@ -368,6 +377,8 @@ try {
   }
   console.log(`listing fields on ${rows.length} routes: ${Object.entries(has).map(([k, v]) => `${k} ${v}`).join(", ")}`);
   console.log(`sample outputs: ${has.output} real, ${has.outputPointer} /openapi.json pointers (schemas: ${has.outputSchema} real, ${has.outputSchemaPointer} for a pointer)`);
+  // FRED, CoinGecko, Jupiter, OpenStreetMap, Open-Meteo and NVD routes, and the packs that run them.
+  if (attributedSeen.size < 60 || ![...attributedSeen].some((s) => s.startsWith("skill-"))) fail("catalog", `checked the attribution on ${attributedSeen.size} listings, packs included (expected 60 or more)`);
   if (wholeListingSeen !== WHOLE_LISTING_ROUTES.size) fail("catalog", `checked ${wholeListingSeen} of ${WHOLE_LISTING_ROUTES.size} typed-judgment listings`);
   if (!quotedPriced) fail("catalog", "no quoted route was checked against its published range (the metered tiers and decide are quoted)");
   if (!speechSeen) fail("POST /v1/audio/speech", "route was not validated as a raw output");

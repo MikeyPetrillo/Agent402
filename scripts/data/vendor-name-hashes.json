@@ -29,7 +29,8 @@
  ],
  "attribution": {
   "187d035394c577c58b34": [
-   "^(crypto-(price|market|history|trending|global)|stablecoin-peg|price-[a-z]+|coin-[a-z-]+|coins-list|global-defi|exchanges|exchange-tickers|exchange-rates|rwa-[a-z]+)$::^description$"
+   "^(crypto-(price|market|history|trending|global)|stablecoin-peg|price-[a-z]+|coin-[a-z-]+|coins-list|global-defi|exchanges|exchange-tickers|exchange-rates|rwa-[a-z]+)$::^description$",
+   "^skill-(cheapest-rail|crypto-dossier|crypto-research|defi-dashboard|defi-protocol-scanner|gas-optimizer|macro-dashboard|market-brief|nft-portfolio|price-monitor)$::^description$"
   ],
   "1e9cc37678c0112d7a39": [
    "^(sol-token-safety|sol-price|sol-swap-quote|sol-token-lookup|sol-token-search|token-brief)$::^description$"
@@ -41,10 +42,12 @@
    "^apollo-people-search$::^description$"
   ],
   "91ae68a817b9bc2b9b13": [
-   "^(geocode|reverse-geocode|place-search)$::^description$"
+   "^(geocode|reverse-geocode|place-search)$::^description$",
+   "^skill-(location-intel|trip-planner)$::^description$"
   ],
   "955d3d03f58c01c26cbe": [
-   "^weather-(current|daily|hourly|history|air-quality)$::^description$"
+   "^weather-(current|daily|hourly|history|air-quality)$::^description$",
+   "^skill-(weather-brief)$::^description$"
   ],
   "f80f21938e5248ec70b8": [
    "^eas-attestations$::^description$",

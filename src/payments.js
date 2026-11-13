@@ -11,7 +11,7 @@ import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
-import { attributionTailOf } from "./data-attribution.js";
+import { attributionTailOf, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from "./data-attribution.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
@@ -931,6 +931,14 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
   }
   if (keepListing) return { slim: b, description: d, trimmed, bytes: size(b, d) };
   if (d && d.length > CHALLENGE_SHORT_DESCRIPTION_MAX && size(b, d) > max) { d = bazaarCapDescription(d, CHALLENGE_SHORT_DESCRIPTION_MAX); trimmed.push("description"); }
+  // A listing that ends with an attribution (src/data-attribution.js) pays for
+  // it from the text before it, not from the sample output: the lead is cut
+  // further, never under ATTRIBUTION_MIN_LEAD, when that alone fits the budget.
+  const tail = d && size(b, d) > max ? attributionTailOf(d) : null;
+  if (tail) {
+    const fit = d.length - (size(b, d) - max);
+    if (fit >= tail.length + 1 + ATTRIBUTION_MIN_LEAD) { d = bazaarCapDescription(d, fit); trimmed.push("description-lead"); }
+  }
   toPointer();
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
 }
@@ -1178,7 +1186,8 @@ export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   s = dropQueryHints(s) || s;
   if (s.length <= max) return s;
   // A description that ends with a data source's attribution sentence keeps
-  // it whole: the cut shortens the text before it (src/data-attribution.js).
+  // it whole (a run of them, for a skill pack that serves several sources):
+  // the cut shortens the text before it (src/data-attribution.js).
   const tail = attributionTailOf(s);
   if (tail && s.length > tail.length) {
     const room = max - tail.length - 1;
@@ -1223,7 +1232,7 @@ export function bazaarTagsFor(item) {
 export const BAZAAR_DESCRIPTIONS = Object.freeze({
   // 2026-09-22: the slugs buyers pay for most had catalog fallbacks; these
   // say what comes back and when to pick the tool.
-  "crypto-price": "Live spot price for one or many coins in any quote currency: last price, 24h change, 24h volume and market cap per coin, from a maintained market feed and answered in under a second. Use it when an agent needs a current crypto price to size, compare or display, or a cheap read to poll on a schedule.",
+  "crypto-price": `Live spot price for one or many coins in any quote currency: last price, 24h change, 24h volume and market cap per coin, from a maintained market feed and answered in under a second. Use it when an agent needs a current crypto price to size, compare or display, or a cheap read to poll on a schedule. ${COINGECKO_ATTRIBUTION}`,
   "bestsellers": "What agents actually pay for across a 500+ tool x402 catalog: the tools ranked by settled calls, distinct buyers and dollars over a window you choose, read from the seller's own sales ledger rather than the chain. Use it when an agent is deciding what to build, what to buy, or what paying demand on x402 looks like this week.",
   "demand-radar": "What agents keep asking for that nobody serves yet: aggregated, qualified demand clusters from a live agent-demand board, with caller counts and how long each need has persisted. Use it when a seller or an agent is choosing what to build next and wants unmet demand with evidence instead of guesses.",
   "stock-quote": "End-of-day US equity quote from a licensed feed: last close, day range, consolidated volume, previous close and the change between them, from the consolidated end-of-day summary across all US exchanges and ATSs. Use it when an agent needs a current price for a US stock without an exchange account; indices, FX and crypto are not covered here.",
@@ -1291,7 +1300,7 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   // says what it answers and when to reach for it.
   "perp-funding": "Current and historical funding rate for one perpetual futures market, from a live derivatives venue: hourly rate, the 8-hour and annualized equivalents, the mark-vs-oracle premium, and a window of past prints with average, minimum, maximum and the share that were positive. Use it when an agent needs to know what holding a leveraged position costs right now, or wants to detect a funding regime flip before sizing a trade.",
   "perp-markets": "Every listed perpetual futures market in one call: mark, oracle and mid price, 24-hour change, funding (hourly, 8-hour, annualized), open interest in coins and dollars, 24-hour notional volume and max leverage, sortable by volume, open interest, funding or change. Use it as the one-shot market map before drilling into a single symbol.",
-  "sol-token-safety": "Risk summary for one Solana token mint: a graded risk score with the concrete reasons behind it, mint and freeze authority state, how much of the liquidity pool is locked, top-holder concentration, holder count and whether the token is verified. Use it to read the published risk evidence on an unfamiliar token, and to screen a list of mints in seconds. Evidence, not a 'safe' or 'scam' verdict.",
+  "sol-token-safety": `Risk summary for one Solana token mint: a graded risk score with the concrete reasons behind it, mint and freeze authority state, how much of the liquidity pool is locked, top-holder concentration, holder count and whether the token is verified. Use it to read the published risk evidence on an unfamiliar token, and to screen a list of mints in seconds. Evidence, not a 'safe' or 'scam' verdict. ${JUPITER_ATTRIBUTION}`,
   "defi-yields": "Live yield opportunities across DeFi, filterable by chain, protocol, token symbol, stablecoin-only, minimum TVL and minimum APY: pool identity, TVL in dollars, total APY split into base and reward, 1-day, 7-day and 30-day APY change, impermanent-loss risk and exposure type. Use it to find, compare or monitor where a given asset earns the most right now.",
   "crypto-news": "Recent crypto headlines aggregated from the public feeds of major outlets, deduplicated and newest first, each with title, source, publish time, canonical URL and a short summary, filterable by keyword, source and time window. Use it when an agent needs what happened in the last hours rather than what a model was trained on.",
   "v1-images-fast": "Generate an image from a text prompt at a flat price per picture, no token math and no subscription: the OpenAI images request shape in, base64 PNG, JPEG or WebP out, with an automatic fallback model so a provider outage does not become your error. Use it when an agent needs a picture cheaply and predictably.",

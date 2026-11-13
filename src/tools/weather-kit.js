@@ -9,6 +9,7 @@
 // data-kit and gov-kit by covering every location worldwide.
 // Source: api.open-meteo.com (CC BY 4.0).
 import { safeFetch, retryTransient } from "./fetch-guard.js";
+import { OPEN_METEO_ATTRIBUTION } from "../data-attribution.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -70,13 +71,15 @@ function tempUnitOf(raw) {
 // Every weather tool's description ends with it, and each answer's `source`
 // names the API and the licence; the vendor-name check in
 // scripts/test-no-third-party-names.js allows it in the descriptions only.
-export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0).";
+// The sentence lives in src/data-attribution.js (key "open-meteo").
+export { OPEN_METEO_ATTRIBUTION };
 
 export const WEATHER_TOOLS = [
   {
     route: "GET /api/weather-current",
     name: "Current weather (global)",
     slug: "weather-current",
+    attribution: "open-meteo",
     category: "data",
     price: "$0.002",
     description:
@@ -149,6 +152,7 @@ export const WEATHER_TOOLS = [
     route: "GET /api/weather-daily",
     name: "Daily forecast (global)",
     slug: "weather-daily",
+    attribution: "open-meteo",
     category: "data",
     price: "$0.002",
     description:
@@ -219,6 +223,7 @@ export const WEATHER_TOOLS = [
     route: "GET /api/weather-hourly",
     name: "Hourly forecast (global)",
     slug: "weather-hourly",
+    attribution: "open-meteo",
     category: "data",
     price: "$0.002",
     description:
@@ -286,6 +291,7 @@ export const WEATHER_TOOLS = [
     route: "GET /api/weather-history",
     name: "Historical weather (global)",
     slug: "weather-history",
+    attribution: "open-meteo",
     category: "data",
     price: "$0.002",
     description:
@@ -359,6 +365,7 @@ export const WEATHER_TOOLS = [
     route: "GET /api/weather-air-quality",
     name: "Air quality (global)",
     slug: "weather-air-quality",
+    attribution: "open-meteo",
     category: "data",
     price: "$0.002",
     description:

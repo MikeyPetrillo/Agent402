@@ -28,6 +28,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { SKILL_PACKS } from "../src/skills.js";
+import { attributionTailOf } from "../src/data-attribution.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = 3091;
@@ -64,6 +65,11 @@ try {
   // Walk every pack — render contract should hold for all of them. If one
   // breaks (e.g. a missing field or a bad esc on some specific string), it
   // surfaces by name.
+  // The attribution run each pack's own catalog text ends with (the sources
+  // its tools serve; test-bazaar-descriptions derives it from the tools).
+  const pricing = await (await fetch(`${BASE}/api/pricing`)).json();
+  const packTail = new Map((pricing.endpoints || []).filter((e) => e.category === "skill-pack").map((e) => [e.slug.replace(/^skill-/, ""), attributionTailOf(e.description || "")]));
+  let attributedPages = 0;
   let perPackPass = 0;
   for (const pack of SKILL_PACKS) {
     const res = await fetch(`${BASE}/skills/${pack.slug}`);
@@ -96,8 +102,16 @@ try {
     if (!html.includes(esc(pack.claudePrompt))) { fail(`/skills/${pack.slug} missing claudePrompt copy box`); break; }
     if (!html.includes("application/ld+json") || !html.includes('"HowTo"')) { fail(`/skills/${pack.slug} missing JSON-LD HowTo`); break; }
 
+    // The pack's attribution sentences, under its tool list.
+    const tail = packTail.get(pack.slug);
+    if (tail) {
+      if (!html.includes(`>${esc(tail)}</p>`)) { fail(`/skills/${pack.slug} missing the attribution its sources require: ${tail}`); break; }
+      attributedPages++;
+    }
+
     perPackPass++;
   }
+  ok(attributedPages >= 10, `every pack whose tools need an attribution shows it (${attributedPages} packs)`);
   ok(perPackPass === SKILL_PACKS.length, `every skill pack renders the full contract (${perPackPass}/${SKILL_PACKS.length})`);
 
   // Negative: an unknown slug must 404, not render an empty pack. A regression
