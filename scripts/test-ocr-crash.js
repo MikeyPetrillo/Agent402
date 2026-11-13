@@ -283,6 +283,48 @@ async function call(input) {
     ok(await big === "ran", "...and runs once it is released");
     await new Promise((r) => setTimeout(r, 20));
     ok(terminated === 1 && !__ocrLargeTest.state().busy, `the worker that read the large image is retired (terminated ${terminated}), the slot freed`);
+
+    // The slot passes on only once the retired worker has terminated.
+    let terminatedAt = 0;
+    __ocrTest.inject("tur", { recognize: async () => ({ data: { text: "x", lines: [] } }), terminate: () => new Promise((r) => setTimeout(() => { terminatedAt = Date.now(); r(); }, 150)) });
+    const slow = __ocrLargeTest.recognize(png16, "tur", "png", 16_000_001, "ip:198.51.100.1");
+    await new Promise((r) => setImmediate(r));
+    const nextAt = await __ocrLargeTest.acquire(5_000, "ip:198.51.100.2").then((rel) => { const at = Date.now(); rel(); return at; });
+    await slow;
+    ok(terminatedAt > 0 && nextAt >= terminatedAt, `the next large image gets the slot after the retired worker terminated (terminated ${terminatedAt ? "yes" : "no"}, next ${nextAt - terminatedAt} ms after)`);
+    ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "the slot and every caller's place are free afterwards");
+  }
+
+  // --- the large-image slot is admitted per caller ---
+  {
+    const A = "payer:0x00000000000000000000000000000000000000aa", B = "ip:203.0.113.7", C = "ip:203.0.113.8", D = "ip:203.0.113.9";
+    const relA = await __ocrLargeTest.acquire(50, A);
+    const a2 = __ocrLargeTest.acquire(5_000, A).then((rel) => rel, (e) => e);
+    const a3 = __ocrLargeTest.acquire(5_000, A).then((rel) => rel, (e) => e);
+    ok(__ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, "one caller alone may hold the slot and both queued places");
+    const b1 = __ocrLargeTest.acquire(5_000, B).then((rel) => rel, (e) => e);
+    const shed = await a3;
+    ok(shed?.statusCode === 503 && /Nothing was charged\./.test(shed.message) && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `a caller with nothing in the slot takes the last queued place of a caller holding several (that one answered ${shed?.statusCode})`);
+    const c1 = __ocrLargeTest.acquire(5_000, C).then((rel) => rel, (e) => e);
+    const shed2 = await a2;
+    ok(shed2?.statusCode === 503 && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `a second newcomer takes the caller's queued place too, while it holds the slot (that one answered ${shed2?.statusCode})`);
+    const d1 = await __ocrLargeTest.acquire(5_000, D).then(() => null, (e) => e);
+    ok(d1?.statusCode === 503, `a newcomer is refused only when every queued place is a caller's only one (got ${d1?.statusCode})`);
+    relA();
+    const rb = await b1;
+    ok(typeof rb === "function" && __ocrLargeTest.state().holder === B, "the first newcomer's image is read next, in order");
+    rb();
+    const rc = await c1;
+    ok(typeof rc === "function" && __ocrLargeTest.state().holder === C, "then the second's");
+    rc();
+    ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every place is released");
+    // The caller is read from the request: a signed payer first, else the address.
+    let seen = null;
+    __ocrTest.inject("tur", { recognize: async () => { seen = __ocrLargeTest.state().holder; return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+    const big = pngHead(4100, 4100);
+    const tool = OCR_TOOLS.find((t) => t.slug === "image-ocr");
+    await tool.handler({ image: big.toString("base64"), lang: "tur" }, { ip: D.slice(3), headers: {} }).catch(() => {});
+    ok(seen === D, `a large image's place is held for the caller's address when no payer is signed (held for ${seen})`);
   }
 
   // --- engine-backed ---
