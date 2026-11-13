@@ -18,6 +18,16 @@ process.env.GATEWAY_SETTLE_BREAKER_MAX = "3";
 process.env.GATEWAY_SETTLE_BREAKER_WINDOW_MS = "900";
 process.env.GATEWAY_SETTLE_BREAKER_GLOBAL_MAX = "6";
 process.env.POSTHOG_TEST_CAPTURE = "1";
+// A sales ledger of this run's own (THE SERVICE-WIDE BOUND reads whether a
+// wallet has ever paid from it).
+{
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "gwb-sales-"));
+  process.env.SALES_LEDGER_DB = join(dir, "sales.db");
+  process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+}
 // With a REDIS_URL the breaker writes through to the shared store, whose
 // windows and alarm flag outlive this process: a run keys them under its own
 // prefix so no other run (or a concurrent one on the same Redis) reads them.
@@ -905,6 +915,33 @@ delete process.env.OPENAI_API_KEY;
     served2.push(`${label}: ${e ? e.statusCode : "served"}`);
   }
   ok(served2.every((x) => x.endsWith("served")), `while the bound is up these are served as before (${served2.join("; ")})`);
+  // Only a wallet that has never settled gets the lower count. A long-time
+  // payer whose settled calls are all older than the window (fifty of them)
+  // and whose sales are on the books is served after one failure; the same
+  // history with no sale on the books (the control) is held.
+  {
+    const { recordSale } = await import("../src/sales-ledger.js");
+    const LOYAL = "0x" + "f".repeat(39) + "5", STRANGER = "0x" + "f".repeat(39) + "6";
+    for (let i = 0; i < 50; i++) { b.recordGatewaySettleSuccess(LOYAL, Date.now() - 2000); b.recordGatewaySettleSuccess(STRANGER, Date.now() - 2000); }
+    for (let i = 0; i < 50; i++) recordSale({ slug: "llm-chat", priceUsd: 0.01, rail: "usdc", network: "eip155:8453", payer: LOYAL, tx: "0x" + i.toString(16).padStart(64, "0") });
+    b.recordGatewaySettleFailure(LOYAL); b.recordGatewaySettleFailure(STRANGER);
+    const tryIt = async (who) => { try { await b.gatewaySettleBreakerCheck(fakeReq({ from: who })); return "served"; } catch (e) { return e.statusCode; } };
+    const loyal = await tryIt(LOYAL), stranger = await tryIt(STRANGER);
+    ok(b.gatewaySettleBreakerStatus().wideBound === true && loyal === "served" && stranger === 429, `while the bound is up a wallet with fifty paid sales (settled before the window) and one failure is served; one with no sale on the books is held (paid ${loyal}, never paid ${stranger})`);
+    // A ledger that cannot answer never puts a buyer under the lower count.
+    const ODD = "0x" + "f".repeat(39) + "7";
+    b.recordGatewaySettleFailure(ODD);
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(() => { throw new Error("ledger down"); });
+    const odd = await tryIt(ODD);
+    b.setGatewaySettleBreakerPaidSaleReaderForTest(null);
+    ok(odd === "served" && (await tryIt(ODD)) === 429, `a paid-sale read that throws serves the wallet (${odd}); the real read holds it`);
+    // A wallet with one settled call and two verdicts inside the window is
+    // read under the share rule at the usual count, as with the bound down.
+    const MIXED = "0x" + "f".repeat(39) + "8";
+    b.recordGatewaySettleSuccess(MIXED); b.recordGatewaySettleFailure(MIXED); b.recordGatewaySettleFailure(MIXED);
+    const mixed = await tryIt(MIXED);
+    ok(mixed === "served", `while the bound is up a wallet with one settled call and two buyer-fault failures is served as with the bound down (${mixed})`);
+  }
   // The trigger counts only failures read against a buyer.
   await b._gatewaySettleBreakerReset();
   for (let i = 0; i < 8; i++) b.recordGatewaySettleFailure(`0x${"b".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { fault: "not-buyer" });
@@ -912,6 +949,29 @@ delete process.env.OPENAI_API_KEY;
   for (let i = 0; i < 8; i++) b.recordGatewaySettleFailure(`0x${"c".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { walletCount: false });
   for (let i = 0; i < 8; i++) b.recordGatewaySettleFailure(`0x${"d".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { global: false });
   ok(b.gatewaySettleBreakerStatus().wideBound === false, "failures of ours, withdrawn sub-cent refusals, pending payments and catalog failures never raise the bound");
+  // Failures of unknown cause (a facilitator's bare 4xx, a bare
+  // settlement_failed, a 402 with no receipt) never raise it either; twelve
+  // distinct buyers' buyer verdicts do, and a never-paid wallet is then held
+  // after one.
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure(`0x${"e".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { fault: "unknown" });
+  ok(b.gatewaySettleBreakerStatus().wideBound === false, "twelve distinct buyers' failures of unknown cause do not raise the bound");
+  {
+    let reqs = 0;
+    for (const [i, reason] of [[0, "circle_http_400"], [1, ""], [2, "settlement_failed"]]) {
+      const req = fakeReq({ from: `0x${"e".repeat(36)}${(0x100 + i).toString(16).padStart(4, "0")}` });
+      try { await b.gatewaySettleBreakerCheck(req); reqs++; } catch { /* counted below */ }
+      failWith(req, reason || null);
+    }
+    ok(reqs === 3 && b.gatewaySettleBreakerStatus().wideBound === false, "unclassified settle answers through the real finish listener do not raise the bound either");
+  }
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure(`0x${"e".repeat(35)}1${i.toString(16).padStart(4, "0")}`, Date.now(), { fault: "buyer" });
+  {
+    const NP = "0x" + "e".repeat(39) + "9";
+    b.recordGatewaySettleFailure(NP);
+    let e1 = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: NP })); } catch (e) { e1 = e; }
+    ok(b.gatewaySettleBreakerStatus().wideBound === true && e1?.statusCode === 429, `twelve buyer-fault failures raise the bound, and a never-paid wallet with one failure is then held (${e1?.statusCode || "served"})`);
+  }
+  await b._gatewaySettleBreakerReset();
   const V = "0x" + "e".repeat(39) + "2";
   b.recordGatewaySettleFailure(V);
   err = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ from: V })); } catch (e) { err = e; }

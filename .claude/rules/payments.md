@@ -79,12 +79,15 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   closes. The shared flags are `gwb-alarm` and `cg-alarm`, read by the status words only; the
   earlier `gwb-pause` and `cg-pause` are neither written nor read, and payer-only windows are not
   read for a payment that names a network, so a deploy overlap refuses nobody. **Service-wide bound:**
-  `GATEWAY_SETTLE_BREAKER_GLOBAL_MAX` distinct buyers whose `/v1` failures are read against them
-  (verdict or unknown; never not-buyer, withdrawn or pending) raise the flag `gwb-wide` for one
-  window; while it is up a `/v1` consult reads a key's verdict and unknown counts at
-  `GATEWAY_SETTLE_BREAKER_BURST_MAX` (default 1), under the same share rule, its refusal held no
-  longer than the flag, so a rotated wallet is served one unpaid run instead of three or nine and a
-  wallet whose payments settle, a fresh wallet and the catalog consult are served as before.
+  `GATEWAY_SETTLE_BREAKER_GLOBAL_MAX` distinct buyers whose `/v1` failures are a verdict on their
+  payment (`buyer` only; never unknown, not-buyer, withdrawn or pending) raise the flag `gwb-wide`
+  for one window; while it is up a `/v1` consult reads a key's verdict and unknown counts at
+  `GATEWAY_SETTLE_BREAKER_BURST_MAX` (default 1) only for a wallet that has never settled (no
+  settled call in the window and no paid sale on the books, `payerHasPaidSale`, read only while the
+  flag is up and the lower count would refuse; a read that throws counts as paid), under the same
+  share rule, its refusal held no longer than the flag. A rotated wallet is served one unpaid run
+  instead of three or nine; a wallet that has ever paid, a fresh wallet and the catalog consult are
+  served as before.
   **One authorization:** a served run whose settle fails for the buyer's fault (the same `buyer`
   class the wallet count reads; never ours, an unknown cause, a withdrawn sub-cent refusal or a
   payment still settling) is also counted per signed EVM authorization (`payer@network#nonce`, shared `gwb-auth`);

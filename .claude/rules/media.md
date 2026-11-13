@@ -89,7 +89,7 @@ Loaded when a media, document or worker-pool tool file is read.
   ogg, wav, webm), else as 16 kHz mono FLAC (`transcodeSpeech`, same pool and deadline). Unmeasured, a lossy audio-only
   file whose bytes alone play past the cap is the 422 (`byteFloorApplies`); any other file is cut at the cap with
   `-t`, and a cut that reached the cap is what is sent, the answer carrying `trimmedToCapSeconds` and
-  `durationUnconfirmed: true`. A file ffmpeg cannot decode is a 400 (format unreadable, not charged); a decoder that
+  `durationUnconfirmed: true`. A file ffmpeg cannot decode is a 400 (format unreadable, no upstream call); a decoder that
   cannot run (no slot, deadline, no ffmpeg) is a retryable 503 with no upstream call. The unmeasured count since boot
   is `transcriptionUnmeasured.sinceBoot` on `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
 - **Image generation moderation:** the three GPT Image tiers (`src/tools/image-gen-kit.js`) send

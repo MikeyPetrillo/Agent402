@@ -42,16 +42,20 @@
 // read against them (a verdict on the payment, or of unknown cause; never
 // ours, a withdrawn sub-cent refusal or a payment still settling) are
 // counted on their own, and at GLOBAL_MAX_FAILS inside the window the bound
-// is up for one window (shared flag gwb-wide). While it is up, a /v1
-// consult reads a key's buyer-verdict and unknown-cause counts at
-// BURST_MAX_FAILS (default 1) instead of MAX_FAILS and UNKNOWN_MAX_FAILS:
-// a wallet whose OWN payments mostly fail is held after its first unsettled
-// run instead of its third or ninth, for no longer than the alarm lasts. The
-// share rule is unchanged, so a wallet whose payments settle (failures at or
-// under MIN_FAIL_SHARE of its outcomes) is never refused by it, a fresh
-// wallet with no failure is served, failures that are ours (not-buyer) are
-// not read at the lower count, and the catalog consult (global:false) is
-// untouched.
+// is up for one window (shared flag gwb-wide). Only a verdict on the
+// buyer's payment counts toward raising it: a failure of unknown cause (a
+// facilitator's bare 4xx, a bare settlement_failed, a 402 with no receipt)
+// never does, so an incident on the settling side cannot raise it. While it
+// is up, a /v1 consult reads a key's buyer-verdict and unknown-cause counts
+// at BURST_MAX_FAILS (default 1) instead of MAX_FAILS and UNKNOWN_MAX_FAILS
+// ONLY for a wallet that has never settled: no settled call inside the
+// window AND no paid sale on the books at any time (payerHasPaidSale,
+// src/sales-ledger.js, one indexed read, made only while the bound is up and
+// only when the lower count would refuse). Any wallet that has ever paid is
+// read at the usual counts, a fresh wallet with no failure is served,
+// failures that are ours (not-buyer) are not read at the lower count, a
+// refusal at the lower count lasts no longer than the bound, and the catalog
+// consult (global:false) is untouched.
 //
 // ONE AUTHORIZATION RE-PRESENTED. A served run whose settle fails for a
 // reason that is the buyer's (WHO IS COUNTED: buyer, the same classification
@@ -139,6 +143,7 @@ import { isGatewayPendingAnswer } from "./gateway-wire.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { positiveNum as num } from "./env-num.js";
+import { payerHasPaidSale } from "./sales-ledger.js";
 
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
 export const MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_MAX, 3);
@@ -338,10 +343,9 @@ async function sharedBlocked(key, now, { burstUntilP = 0, authKey = null } = {})
   const [f, o, u, k, a] = r.results;
   const timesOf = (w, localCount, map, mapKey = key) => (w.count > localCount && Array.isArray(w.entries) ? w.entries.map((e) => e.score).sort((x, y) => x - y) : inWindow(map.get(mapKey) || [], now));
   const nOks = Math.max(o.count, local.oks);
-  const burst = burstUntil > now;
+  const [v, uv] = burstAwareVerdicts(key, [timesOf(f, local.fails, fails), Math.max(f.count, local.fails)], [timesOf(u, local.unknownFails, unknownFails), Math.max(u.count, local.unknownFails)], nOks, burstUntil, now);
   return combined(
-    clampToBurst(verdict(timesOf(f, local.fails, fails), Math.max(f.count, local.fails), nOks, burst ? BURST_MAX_FAILS : MAX_FAILS), burstUntil, now),
-    clampToBurst(verdict(timesOf(u, local.unknownFails, unknownFails), Math.max(u.count, local.unknownFails), nOks, burst ? BURST_MAX_FAILS : UNKNOWN_MAX_FAILS), burstUntil, now),
+    v, uv,
     local.blocklisted || (k?.count || 0) > 0,
     authKey ? authVerdict(timesOf(a, local.authFails, authFails, authKey), Math.max(a?.count || 0, local.authFails)) : null,
   );
@@ -479,6 +483,37 @@ function verdict(failTimes, nFails, nOks, max = MAX_FAILS) {
   const idx = Math.max(0, failTimes.length - max);
   return { ...out, blocked: true, until: (failTimes[idx] ?? failTimes[failTimes.length - 1] ?? Date.now()) + WINDOW_MS };
 }
+/** The payer address inside a count key, as the sales ledger spells it
+ *  (an EVM key's address, or a rail-prefixed signer's address), or null for
+ *  a key that names no wallet (an IP or a credits key). */
+function payerOfKey(key) {
+  const s = buyerOf(String(key || ""));
+  if (s.startsWith("ip:") || s.startsWith("credits:")) return null;
+  return s.slice(s.indexOf(":") + 1) || null;
+}
+let paidSaleReader = payerHasPaidSale;
+/** Tests: stand in for the sales ledger's paid-sale read (null restores it). */
+export function setGatewaySettleBreakerPaidSaleReaderForTest(fn) { paidSaleReader = typeof fn === "function" ? fn : payerHasPaidSale; }
+/** Has this key's wallet ever paid? A read that throws counts as paid, so a
+ *  ledger that cannot answer never puts a buyer under the lower count. */
+function everPaid(key) {
+  const p = payerOfKey(key);
+  if (!p) return false;
+  try { return !!paidSaleReader(p); } catch { return true; }
+}
+/** A key's verdict and unknown-cause verdicts, read at the burst count only
+ *  for a wallet that has never settled (THE SERVICE-WIDE BOUND): no settled
+ *  call in the window, and (read last, only when the lower count would
+ *  refuse) no paid sale ever. */
+function burstAwareVerdicts(key, fArgs, uArgs, nOks, burstUntil, now) {
+  const normal = [verdict(fArgs[0], fArgs[1], nOks, MAX_FAILS), verdict(uArgs[0], uArgs[1], nOks, UNKNOWN_MAX_FAILS)];
+  if (!(burstUntil > now) || nOks > 0) return normal;
+  const low = [clampToBurst(verdict(fArgs[0], fArgs[1], nOks, BURST_MAX_FAILS), burstUntil, now), clampToBurst(verdict(uArgs[0], uArgs[1], nOks, BURST_MAX_FAILS), burstUntil, now)];
+  if ((low[0].blocked && !normal[0].blocked) || (low[1].blocked && !normal[1].blocked)) {
+    if (everPaid(key)) return normal;
+  }
+  return [normal[0].blocked ? normal[0] : low[0], normal[1].blocked ? normal[1] : low[1]];
+}
 /** A refusal reached at the burst count is held no longer than the alarm. */
 function clampToBurst(v, burstUntil, now) {
   if (!v.blocked || !(burstUntil > now) || !(v.until > burstUntil)) return v;
@@ -548,7 +583,7 @@ function raiseWideBound(now, nBuyers, { acrossReplicas = false } = {}) {
   wideUntil = now + WINDOW_MS;
   if (!fresh) return;
   wideTrips++;
-  console.warn(`[gateway-breaker] /v1 payments from ${nBuyers} buyer(s)${acrossReplicas ? " across replicas" : ""} failed to settle inside ${Math.round(WINDOW_MS / 1000)} s - until ${new Date(wideUntil).toISOString()} a wallet whose own payments mostly fail is held after ${BURST_MAX_FAILS} unsettled /v1 run(s); a wallet whose payments settle is served as before`);
+  console.warn(`[gateway-breaker] /v1 payments from ${nBuyers} buyer(s)${acrossReplicas ? " across replicas" : ""} failed to settle inside ${Math.round(WINDOW_MS / 1000)} s - until ${new Date(wideUntil).toISOString()} a wallet that has never settled a payment is held after ${BURST_MAX_FAILS} unsettled /v1 run(s); a wallet that has ever paid is served as before`);
 }
 /** A /v1 failure read against its buyer, for THE SERVICE-WIDE BOUND. */
 function noteWideFailure(key, now) {
@@ -579,10 +614,9 @@ export function gatewaySettleBreakerBlocked(key, now = Date.now(), { burstUntil 
     if (at.length) authFails.set(authKey, at); else authFails.delete(authKey);
     a = authVerdict(at, at.length);
   }
-  const burst = burstUntil > now;
+  const [v, uv] = burstAwareVerdicts(key, [arr, arr.length], [unk, unk.length], ok.length, burstUntil, now);
   return combined(
-    clampToBurst(verdict(arr, arr.length, ok.length, burst ? BURST_MAX_FAILS : MAX_FAILS), burstUntil, now),
-    clampToBurst(verdict(unk, unk.length, ok.length, burst ? BURST_MAX_FAILS : UNKNOWN_MAX_FAILS), burstUntil, now),
+    v, uv,
     blk.length > 0, a,
   );
 }
@@ -642,8 +676,9 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
     if (authFails.size > AUTH_KEYS_MAX) { for (const [k, t] of authFails) if (!inWindow(t, now).length) authFails.delete(k); }
     while (authFails.size > AUTH_KEYS_MAX) authFails.delete(authFails.keys().next().value);
   }
-  // THE SERVICE-WIDE BOUND counts a /v1 failure read against its buyer.
-  const wide = !!global && !!key && !withdrawn && walletCount && fault !== "not-buyer";
+  // THE SERVICE-WIDE BOUND counts a /v1 failure that is a verdict on its
+  // buyer's payment; one of unknown cause never raises it.
+  const wide = !!global && !!key && !withdrawn && walletCount && isBuyer;
   if (wide) noteWideFailure(key, now);
   if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown, blocklisted: blocklisted && isBuyer, authKey: authCounted ? authKey : null, wide });
   if (!isBuyer && key) noteUnprovenFailure(key, now);
