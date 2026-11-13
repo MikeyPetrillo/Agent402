@@ -126,7 +126,7 @@ ok(fo.content[0].text === "Hi there!" && seen.join(",") === "google/gemini-3.1-f
 seen = [];
 globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b.model + (b.effort ? `@${b.effort}` : "")); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model, b.model === "google/gemini-3.1-flash-lite" ? { stop_reason: "max_tokens", content: [{ type: "thinking", thinking: "hmm" }] } : {})) }; };
 const pe = await nanoTool.handler({ model: "google/gemini-3.1-flash-lite", max_tokens: 64, messages: msg() }, fakeReq);
-ok(pe.content[0].text === "Hi there!" && pe.agent402_reasoning_adjusted === undefined && seen.join(",") === "google/gemini-3.1-flash-lite,google/gemini-3.1-flash-lite@minimal,deepseek/deepseek-chat", `a max_tokens answer with nothing said is never served: one same-model try at the lowest effort, then the chain walked on with the same model's default retry skipped (${seen.join(" -> ")})`);
+ok(pe.content[0].text === "Hi there!" && pe.agent402_reasoning_adjusted === undefined && seen.join(",") === "google/gemini-3.1-flash-lite,google/gemini-3.1-flash-lite@minimal,deepseek/deepseek-v4.1-flash", `a max_tokens answer with nothing said is never served: one same-model try at the lowest effort, then the chain walked on with the same model's default retry skipped (${seen.join(" -> ")})`);
 globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model, { stop_reason: "max_tokens", content: [] })) }; };
 await nanoTool.handler({ model: "google/gemini-3.1-flash-lite", max_tokens: 64, messages: msg() }, fakeReq).then(() => ok(false, "end-to-end empty must not serve"), (e) => ok(e.statusCode === 502 && /thinking consumed it/.test(e.message), "chain empty end-to-end -> 502 (settlement cancelled)"));
 globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => "busy" });
@@ -157,7 +157,7 @@ await proTool.handler({ model: "anthropic/claude-sonnet-5", max_tokens: 64, mess
 // thinking always wins; the pro tier is untouched.
 {
   const prem = bySlug("v1-chat-premium-messages");
-  ok(prem.discovery.input.max_tokens === 1024 && prem.discovery.input.model === "anthropic/claude-opus-5", "the premium example leaves 1,024 tokens for a model that reasons first");
+  ok(prem.discovery.input.max_tokens === 1024 && prem.discovery.input.model === "anthropic/claude-opus-5.5", "the premium example leaves 1,024 tokens for a model that reasons first");
   const sent = [];
   globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); sent.push(b); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model)) }; };
   await prem.handler(prem.discovery.input, fakeReq);

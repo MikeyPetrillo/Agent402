@@ -73,7 +73,7 @@ const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];
 // tier whose price only a broader row (or none) would answer. Without its row
 // a flat tier prices it at the tier's max_price bound and the metered tier
 // refuses it, so a missing one is a gap.
-export const REQUIRED_MODEL_ROWS = ["openai/gpt-6.1-terra", "moonshotai/kimi-k3.1-pro"];
+export const REQUIRED_MODEL_ROWS = ["openai/gpt-6.1-terra", "moonshotai/kimi-k3.1-pro", "google/gemini-4-argon", "google/gemini-3.8-flash", "anthropic/claude-fable-5.2"];
 
 function parse(text) {
   const raw = String(text || "").trim();
