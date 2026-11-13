@@ -22,7 +22,7 @@
     "exa": { "search": 1, "instant": 1, "lite": 1, "answer": 1, "content": 1 },
     "x": { "postRead": 1, "userRead": 1 },
     "decisions": { "luna": 1, "decisionOne": 1,
-      "jev": 1, "maxShare": 1 },
+      "gemini": 1, "jev": 1, "maxShare": 1 },
     "cdp": { "sqlQuery": 1 },
     "direct": { "minSaving": 0.5 }
   }

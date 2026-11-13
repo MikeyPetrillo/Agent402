@@ -140,5 +140,27 @@ cache.set("https://cap.example", entry("https://cap.example", [{ slug: "hash", n
 const exact = scoreOf("hash", "hash");
 ok(exact > 0 && exact <= 13, `an exact one-term slug match stays within the documented 10 + 2 + 1 (got ${exact})`);
 
+// A legal notice is not what a tool does: our own rows score without their
+// attribution sentences (src/data-attribution.js), as /api/find ranks them.
+// Two local tools differ only by a notice; the notice's words find neither,
+// and every other query scores them alike.
+{
+  const { ATTRIBUTION_TAILS } = await import("../src/data-attribution.js");
+  cache.clear();
+  const notice = ATTRIBUTION_TAILS[0];
+  const base = "Convert an amount between two currencies at the latest published rate.";
+  const def = (slug, description) => ({ name: slug, slug, category: "finance", price: "$0.002", tags: ["currency"], description });
+  const catalog = { "GET /api/fx-plain": def("fx-plain", base), "GET /api/fx-noted": def("fx-noted", `${base} ${notice}`) };
+  const ctx = { ...CTX, catalog, toolCount: 2 };
+  const local = (q) => routeQuery({ query: q, top: 20, include: "local", ...ctx }).results;
+  const score = (q, slug) => local(q).find((x) => x.slug === slug)?.score ?? 0;
+  const noticeWords = notice.toLowerCase().match(/[a-z]{6,}/g).filter((w) => !base.toLowerCase().includes(w)).slice(0, 3).join(" ");
+  ok(noticeWords.split(" ").length >= 2 && !local(noticeWords).some((x) => x.slug === "fx-noted"), `a query of the notice's own words ("${noticeWords}") does not find the tool that carries it`);
+  for (const q of ["convert currency amount", "latest published rate", "currencies"]) {
+    ok(score(q, "fx-noted") > 0 && score(q, "fx-noted") === score(q, "fx-plain"), `"${q}": the notice moves no score (${score(q, "fx-noted")} = ${score(q, "fx-plain")})`);
+  }
+  ok(routeQuery({ query: "currency", top: 20, include: "local", ...ctx }).results.find((x) => x.slug === "fx-noted")?.description?.endsWith(notice) === true, "the answer still carries the full description");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

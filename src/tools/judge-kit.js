@@ -20,18 +20,19 @@
 // retired a data source once already for deriving income without permission.
 
 import { upstreamCosts } from "../upstream-costs.js";
-import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL, JUDGMENT_KEY_REFUSED, JUDGMENT_BALANCE_OUT } from "../decision-one.js";
+import { askDecisionOne, decisionOneEnabled, openRouterDecisionsEnabled, jevOpenRouterModel, DECISION_ONE_MODEL, GEMINI_DECISION_MODEL, JUDGMENT_KEY_REFUSED, JUDGMENT_BALANCE_OUT } from "../decision-one.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget, handlerBudgetMs, PAYMENT_WINDOW_BUDGET_MS, attributed, ATTRIBUTION, KIND } from "../upstream-deadline.js";
 
-// THREE BACKENDS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
-// then Microsoft Decision-1 (over OpenRouter, the Jev wire with another model
-// id), then OpenAI's Decisions API (gpt-6-luna); on /v1/decisions, OpenAI's own
-// wire, Luna answers first, then Jev, then Decision-1. A buyer of /v1/judge can
-// name any one first with "model". All return probabilities over the same three
-// question kinds, so a Luna answer is translated into the shape /v1/judge has
-// always published, a Decision-1 answer already has it, and the answer names
-// the model that served.
+// FOUR MODELS, one answer shape. On /v1/judge TypeSafe's Jev answers first,
+// then the same Jev version over OpenRouter (a second route to one model),
+// then Microsoft Decision-1 and Gemini Decision-1 (over OpenRouter, the Jev
+// wire with another model id), then OpenAI's Decisions API (gpt-6-luna); on
+// /v1/decisions, OpenAI's own wire, Luna answers first, then the rest in that
+// order. A buyer of /v1/judge can name any model first with "model". All return
+// probabilities over the same three question kinds, so a Luna answer is
+// translated into the shape /v1/judge has always published, the OpenRouter
+// answers already have it, and the answer names the model that served.
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
 export const LUNA = "gpt-6-luna";
@@ -47,10 +48,17 @@ export const DECISION_ONE = "microsoft-decision-1";
 // Decision-1's input rate (USD per 1M tokens), from the private table under
 // the same rule as Luna's: no rate, no Decision-1 on the paid route.
 const decisionOneRate = () => upstreamCosts().vendor?.decisions?.decisionOne ?? null;
+// The buyer's name for Gemini Decision-1, and its rate under the same rule.
+export const GEMINI_DECISION = "gemini-decision-1";
+const geminiRate = () => upstreamCosts().vendor?.decisions?.gemini ?? null;
+// Jev over OpenRouter bills at Jev's own rate (vendor.decisions.jev).
+const jevRate = () => upstreamCosts().vendor?.decisions?.jev ?? null;
 export const jevEnabled = () => !!keyOf();
 export const lunaEnabled = () => !!openaiKey() && lunaRate() != null && lunaMaxShare() != null;
 export const decisionOneOffered = () => decisionOneEnabled() && decisionOneRate() != null && lunaMaxShare() != null;
-export const judgeEnabled = () => jevEnabled() || lunaEnabled() || decisionOneOffered();
+export const geminiDecisionOffered = () => openRouterDecisionsEnabled(GEMINI_DECISION_MODEL) && geminiRate() != null && lunaMaxShare() != null;
+export const jevOpenRouterOffered = () => { const m = jevOpenRouterModel(JEV_PINNED); return !!m && openRouterDecisionsEnabled(m) && jevRate() != null && lunaMaxShare() != null; };
+export const judgeEnabled = () => jevEnabled() || jevOpenRouterOffered() || lunaEnabled() || decisionOneOffered() || geminiDecisionOffered();
 // Both routes sell at this price. Luna and Decision-1 are tried only when the
 // request's worst case (one token per byte of the body we send) stays within
 // the table's share of it; a larger request goes to Jev, whose rate fits the
@@ -59,6 +67,8 @@ export const JUDGE_PRICE_USD = 0.001;
 const fits = (r, share, bytes) => r != null && share != null && (bytes * r) / 1e6 <= share * JUDGE_PRICE_USD;
 export function lunaFits(bytes) { return fits(lunaRate(), lunaMaxShare(), bytes); }
 export function decisionOneFits(bytes) { return fits(decisionOneRate(), lunaMaxShare(), bytes); }
+export function geminiDecisionFits(bytes) { return fits(geminiRate(), lunaMaxShare(), bytes); }
+export function jevOpenRouterFits(bytes) { return fits(jevRate(), lunaMaxShare(), bytes); }
 
 // Every bound below exists to make the upstream token count knowable in advance.
 export const LIMITS = {
@@ -70,7 +80,7 @@ export const LIMITS = {
   scoreLevels: 10,              // the API's own maximum
   bodyBytes: Number(process.env.JUDGE_MAX_BODY_BYTES || 16_000),   // the money bound: one token per byte worst case
 };
-const MODELS = new Set([LUNA, DECISION_ONE, "jev-latest", "jev-preview"]);
+const MODELS = new Set([LUNA, DECISION_ONE, GEMINI_DECISION, "jev-latest", "jev-preview"]);
 // DEADLINES (src/upstream-deadline.js): every backend read keeps its 25 s cap
 // (the measured judgment tail runs to about 30 s) and the whole walk runs
 // under the route's payment-window budget; a read that outlives its cap is a
@@ -158,11 +168,14 @@ async function callJev(body, fetchImpl = fetch) {
   return post(ENDPOINT, keyOf(), { ...body, model: upstreamJevModel(body.model) }, fetchImpl, (j) => j?.answers && typeof j.answers === "object");
 }
 
-// The Jev body with only the model changed. Same error classes as post().
-async function callDecisionOne(body, fetchImpl = fetch) {
-  return askDecisionOne(body, { fetchImpl, timeoutMs: TIMEOUT_MS });
+// The Jev body with only the model changed, to one of the OpenRouter models.
+// Same error classes as post().
+const OPENROUTER_MODEL = { "decision-one": DECISION_ONE_MODEL, gemini: GEMINI_DECISION_MODEL };
+const openRouterModelOf = (b) => (b === "jev-openrouter" ? jevOpenRouterModel(JEV_PINNED) : OPENROUTER_MODEL[b]);
+async function callOpenRouter(b, body, fetchImpl = fetch) {
+  return askDecisionOne(body, { fetchImpl, timeoutMs: TIMEOUT_MS, model: openRouterModelOf(b) });
 }
-const decisionOneBytes = (body) => Buffer.byteLength(JSON.stringify({ ...body, model: DECISION_ONE_MODEL }));
+const openRouterBytes = (b, body) => Buffer.byteLength(JSON.stringify({ ...body, model: openRouterModelOf(b) }));
 
 async function callLuna(request, fetchImpl = fetch) {
   return post(LUNA_ENDPOINT, openaiKey(), request, fetchImpl, (j) => Array.isArray(j?.answers));
@@ -210,6 +223,11 @@ export async function post(url, key, body, fetchImpl, hasAnswers, extraHeaders =
 const unreadable = () => { const e = new Error("Judgment upstream returned an answer this route cannot read."); e.statusCode = 502; e.mayBeBilled = true; return e; };
 const num = (v) => typeof v === "number" && Number.isFinite(v);
 const prob = (v) => num(v) && v >= 0 && v <= 1;
+// A Decisions answer may carry `probability: null` (the upstream's own shape
+// since 2026-10-14): the model gave no probability for that question. It is
+// passed on as an explicit no-probability answer, never read as a value, and
+// never drops the request's other answers.
+const NO_PROBABILITY = (type) => ({ type, noul: null, noProbability: true });
 const byValue = (list, key = "value") => Object.fromEntries((Array.isArray(list) ? list : []).map((p) => [p?.[key], p?.probability]));
 
 /** A validated /v1/judge body as a Decisions request. Question names are
@@ -234,40 +252,64 @@ export function fromDecisions(j, body, ids) {
   ids.forEach((id, i) => {
     const a = byName.get(`q${i}`), q = body.questions[id];
     if (q.type === "noul" && a?.type === "predicate" && prob(a.probability)) answers[id] = { type: "noul", noul: a.probability };
+    else if (q.type === "noul" && a?.type === "predicate" && a.probability === null) answers[id] = NO_PROBABILITY("noul");
     else if (q.type === "choice" && a?.type === "choice" && Object.hasOwn(q.criteria, a.choice)) {
       answers[id] = { type: "choice", choice: a.choice, confidence: a.confidence, probabilities: byValue(a.probabilities) };
     } else if (q.type === "score" && a?.type === "score" && num(a.score) && a.score >= 0 && a.score <= q.criteria.length - 1) {
       answers[id] = { type: "score", score: a.score, confidence: a.confidence, legend: Object.fromEntries(q.criteria.map((d, n) => [n, d])), probabilities: byValue(a.probabilities) };
     } else throw unreadable();
   });
+  return someValue(answers, body);
+}
+
+/** An answer set in which every question came back with no probability
+ *  carries nothing to branch on: it is an uncharged 502, as before. */
+function someValue(answers, body) {
+  if (Object.keys(body.questions).every((id) => answers[id]?.noProbability === true)) throw unreadable();
   return answers;
 }
 
 /** Jev's answers, only when every question has one of its own type: an empty
  *  or partial answer is an uncharged 502, never a charged 200. */
 function checkJev(answers, body) {
+  const out = {};
   for (const [id, q] of Object.entries(body.questions)) {
     const a = answers?.[id];
+    // A noul the model answered with no probability (null) is kept, marked.
+    if (q.type === "noul" && a?.type === "noul" && (a.noul === null || a.probability === null) && !prob(a.noul)) { out[id] = NO_PROBABILITY("noul"); continue; }
     const good = a?.type === q.type && (q.type === "noul" ? prob(a.noul) : q.type === "choice" ? Object.hasOwn(q.criteria, a.choice) : num(a.score));
     if (!good) throw unreadable();
+    out[id] = a;
   }
-  return answers;
+  return someValue(out, body);
 }
 
-/** The order the backends are tried in: the one the buyer named first, the
- *  others as fallbacks, each only when it is configured and (Luna,
- *  Decision-1) fits. Named Luna (and /v1/decisions): luna, jev, decision-one.
- *  Named Decision-1: decision-one, jev, luna. Otherwise jev, decision-one,
- *  luna. */
+/** The order the backends are tried in: the model the buyer named first,
+ *  then the rest in the default order, each only when it is configured and
+ *  (every model priced from the table) fits. The default order is jev,
+ *  jev-openrouter (the same pinned Jev version over OpenRouter; never for
+ *  jev-preview), decision-one, gemini, luna. Named Luna (and /v1/decisions):
+ *  luna first. Named Jev: both Jev routes first. */
+const DEFAULT_ORDER = ["jev", "jev-openrouter", "decision-one", "gemini", "luna"];
 function backends(body, lunaBytes) {
-  const luna = lunaEnabled() && lunaFits(lunaBytes) ? ["luna"] : [];
-  const jev = jevEnabled() ? ["jev"] : [];
-  const d1 = decisionOneOffered() && decisionOneFits(decisionOneBytes(body)) ? ["decision-one"] : [];
-  if (body.model === LUNA) return [...luna, ...jev, ...d1];
-  if (body.model === DECISION_ONE) return [...d1, ...jev, ...luna];
-  return [...jev, ...d1, ...luna];
+  const usable = {
+    jev: jevEnabled(),
+    "jev-openrouter": body.model !== "jev-preview" && jevOpenRouterOffered() && jevOpenRouterFits(openRouterBytes("jev-openrouter", body)),
+    "decision-one": decisionOneOffered() && decisionOneFits(openRouterBytes("decision-one", body)),
+    gemini: geminiDecisionOffered() && geminiDecisionFits(openRouterBytes("gemini", body)),
+    luna: lunaEnabled() && lunaFits(lunaBytes),
+  };
+  const first = body.model === LUNA ? ["luna"] : body.model === DECISION_ONE ? ["decision-one"] : body.model === GEMINI_DECISION ? ["gemini"] : [];
+  return [...first, ...DEFAULT_ORDER.filter((b) => !first.includes(b))].filter((b) => usable[b]);
 }
-const nameOf = (b) => (b === "luna" ? LUNA : b === "decision-one" ? DECISION_ONE : "jev-latest");
+const nameOf = (b) => (b === "luna" ? LUNA : b === "decision-one" ? DECISION_ONE : b === "gemini" ? GEMINI_DECISION : "jev-latest");
+// The answer's fallback field names a different MODEL only: Jev served over
+// OpenRouter is the model the buyer was first offered.
+const fellBack = (backend, order) => nameOf(backend) !== nameOf(order[0]);
+// The model an OpenRouter answer is named by: the buyer's own enum value, not
+// the dated upstream id the router answers with; Jev over OpenRouter is the
+// pinned version it is.
+const servedName = (b) => (b === "jev-openrouter" ? JEV_PINNED : nameOf(b));
 
 /** Luna and Decision-1 bill input tokens at their private rates per 1M and
  *  report the count; recorded after every served call into the same meter and
@@ -275,7 +317,8 @@ const nameOf = (b) => (b === "luna" ? LUNA : b === "decision-one" ? DECISION_ONE
  *  recorded with no figure (volume stays queryable; nothing is invented). */
 function recordJudgeSpend(tier, backend, out) {
   try {
-    const rate = backend === "luna" ? lunaRate() : backend === "decision-one" ? decisionOneRate() : null;
+    // Jev direct has no meter row (as before); over OpenRouter it is priced.
+    const rate = backend === "luna" ? lunaRate() : backend === "decision-one" ? decisionOneRate() : backend === "gemini" ? geminiRate() : backend === "jev-openrouter" ? jevRate() : null;
     const tokens = Number(out?.j?.usage?.input_tokens) || 0;
     const upstreamUsd = rate != null && tokens > 0 ? Math.round((tokens / 1e6) * rate * 1e6) / 1e6 : null;
     capturePostHogGatewayUsage({ tier, model: out?.model, priceUsd: JUDGE_PRICE_USD, upstreamUsd, promptTokens: tokens, source: "judge" });
@@ -300,6 +343,8 @@ async function firstAnswer(order, attempt) {
   throw last || Object.assign(new Error("Judgment is not configured on this server."), { statusCode: 503 });
 }
 
+export const JUDGE_NOTE = "Typed judgment. choice/score answers carry `probabilities` and `confidence`; a noul carries `noul`, a probability from 0 to 1, and no confidence. Gate on confidence for choice/score and on distance from 0.5 for a noul. A noul the model gave no probability for reads `noul: null` with `noProbability: true`; treat it as unknown.";
+
 export function judge(input, opts = {}) {
   // The whole backend walk runs under one budget: the caller's when it runs
   // under one already, else the route's payment-window budget (the measured
@@ -309,28 +354,29 @@ export function judge(input, opts = {}) {
 
 // `tier` names the route the spend is recorded under: "judge" here, and the
 // route's own slug when another kit (the loop gate) sells a judgment.
-async function judgeUnderBudget(input, { fetchImpl = fetch, tier = "judge" } = {}) {
+// `strictProbabilities`: a caller that reads every noul as a number (the loop
+// gate) has a no-probability answer refused as unreadable, as before.
+async function judgeUnderBudget(input, { fetchImpl = fetch, tier = "judge", strictProbabilities = false } = {}) {
   if (!judgeEnabled()) { const e = new Error("Judgment is not configured on this server."); e.statusCode = 503; throw e; }
   const body = validateJudgeRequest(input);
   const { ids, request } = toDecisions(body);
   const order = backends(body, Buffer.byteLength(JSON.stringify(request)));
   const { backend, out } = await firstAnswer(order, async (b) => {
-    if (b === "jev") { const j = await callJev(body, fetchImpl); return { j, answers: checkJev(j.answers, body), model: j.model || "jev-latest" }; }
-    // Decision-1 is named by the buyer's own enum value, not the dated
-    // upstream id the router answers with.
-    if (b === "decision-one") { const j = await callDecisionOne(body, fetchImpl); return { j, answers: checkJev(j.answers, body), model: DECISION_ONE }; }
+    const strict = (answers) => { if (strictProbabilities && Object.values(answers).some((a) => a?.noProbability)) throw unreadable(); return answers; };
+    if (b === "jev") { const j = await callJev(body, fetchImpl); return { j, answers: strict(checkJev(j.answers, body)), model: j.model || "jev-latest" }; }
+    if (b !== "luna") { const j = await callOpenRouter(b, body, fetchImpl); return { j, answers: strict(checkJev(j.answers, body)), model: servedName(b) }; }
     const j = await callLuna(request, fetchImpl);
-    return { j, answers: fromDecisions(j, body, ids), model: j.model || LUNA };
+    return { j, answers: strict(fromDecisions(j, body, ids)), model: j.model || LUNA };
   });
   recordJudgeSpend(tier, backend, out);
   return {
     model: out.model,
-    ...(backend !== order[0] ? { fallbackFrom: nameOf(order[0]) } : {}),
+    ...(fellBack(backend, order) ? { fallbackFrom: nameOf(order[0]) } : {}),
     // Answers are shaped by the model over the BUYER'S OWN state, so they are
     // returned as-is. The state came from the caller; we add nothing to it.
     answers: out.answers,
     usage: out.j.usage ? { input_tokens: out.j.usage.input_tokens, output_tokens: out.j.usage.output_tokens ?? 0 } : undefined,
-    note: "Typed judgment. choice/score answers carry `probabilities` and `confidence`; a noul carries `noul`, a probability from 0 to 1, and no confidence. Gate on confidence for choice/score and on distance from 0.5 for a noul.",
+    note: JUDGE_NOTE,
   };
 }
 
@@ -411,26 +457,33 @@ export function validateDecisionsRequest(input = {}) {
  *  502); returned in the buyer's question order. */
 function checkLuna(answers, request) {
   const byName = new Map(answers.map((a) => [a?.name, a]));
-  return request.questions.map((q) => {
+  const out = request.questions.map((q) => {
     const a = byName.get(q.name);
-    const good = a?.type === q.type && (q.type === "predicate" ? prob(a.probability)
+    // A predicate with `probability: null` is OpenAI's own no-probability answer, passed on.
+    const good = a?.type === q.type && (q.type === "predicate" ? prob(a.probability) || a.probability === null
       : q.type === "choice" ? q.choices.some((c) => c.value === a.choice)
       : num(a.score) && a.score >= 0 && a.score <= q.levels.length - 1);
     if (!good) throw unreadable();
     return a;
   });
+  if (out.every((a) => a.type === "predicate" && a.probability === null)) throw unreadable();
+  return out;
 }
+
+// A listed probability, null where the model gave none, 0 where it is absent.
+const probOrNull = (p, k) => (p?.[k] === null ? null : p?.[k] ?? 0);
 
 /** Jev answers in the Decisions shape, for when Jev served this route. */
 export function toDecisionsAnswers(answers, request, levels) {
   return request.questions.map((q) => {
     const a = answers?.[q.name];
     if (q.type === "predicate" && num(a?.noul)) return { type: "predicate", name: q.name, probability: a.noul };
+    if (q.type === "predicate" && a?.noProbability === true) return { type: "predicate", name: q.name, probability: null };
     if (q.type === "choice" && typeof a?.choice === "string") {
-      return { type: "choice", name: q.name, choice: a.choice, probabilities: q.choices.map((c) => ({ value: c.value, probability: a.probabilities?.[c.value] ?? 0 })), confidence: a.confidence };
+      return { type: "choice", name: q.name, choice: a.choice, probabilities: q.choices.map((c) => ({ value: c.value, probability: probOrNull(a.probabilities, c.value) })), confidence: a.confidence };
     }
     if (q.type === "score" && num(a?.score)) {
-      return { type: "score", name: q.name, score: a.score, probabilities: levels[q.name].map((l, n) => ({ value: n, label: l?.label, probability: a.probabilities?.[n] ?? 0 })), confidence: a.confidence };
+      return { type: "score", name: q.name, score: a.score, probabilities: levels[q.name].map((l, n) => ({ value: n, label: l?.label, probability: probOrNull(a.probabilities, n) })), confidence: a.confidence };
     }
     throw unreadable();
   });
@@ -442,13 +495,13 @@ export async function decisions(input, { fetchImpl = fetch } = {}) {
   const order = backends(body, Buffer.byteLength(JSON.stringify(request)));
   const { backend, out } = await firstAnswer(order, async (b) => {
     if (b === "luna") { const j = await callLuna(request, fetchImpl); return { j, answers: checkLuna(j.answers, request), model: j.model || LUNA }; }
-    const j = b === "jev" ? await callJev(body, fetchImpl) : await callDecisionOne(body, fetchImpl);
-    return { j, answers: toDecisionsAnswers(checkJev(j.answers, body), request, levels), model: b === "jev" ? j.model || "jev-latest" : DECISION_ONE };
+    const j = b === "jev" ? await callJev(body, fetchImpl) : await callOpenRouter(b, body, fetchImpl);
+    return { j, answers: toDecisionsAnswers(checkJev(j.answers, body), request, levels), model: b === "jev" ? j.model || "jev-latest" : servedName(b) };
   });
   recordJudgeSpend("decisions", backend, out);
   return {
     model: out.model,
-    ...(backend !== order[0] ? { fallback_from: nameOf(order[0]) } : {}),
+    ...(fellBack(backend, order) ? { fallback_from: nameOf(order[0]) } : {}),
     answers: out.answers,
     usage: out.j.usage ? { input_tokens: out.j.usage.input_tokens, output_tokens: 0, total_tokens: out.j.usage.input_tokens } : undefined,
   };
@@ -460,7 +513,7 @@ export const JUDGE_TOOLS = [{
   slug: "judge",
   category: "ai",
   price: "$0.001",
-  description: "Ask a typed question about any content and get an answer your code can branch on, not prose to parse. Send state (the content, a string or object) and questions (your own ids mapped to question objects); get back answers keyed by those ids. Three question types: choice (pick one of your named options: returns choice, probabilities per option and confidence), score (a position on levels you describe, lowest first: returns score as a fractional level index, probabilities per level index, confidence and a legend naming each level), and noul (a yes/no: returns noul, the probability of yes from 0 to 1). Up to 8 questions per call, answered in parallel over one piece of state. Use it for routing, triage, classification and gating decisions. Served by jev-latest, with Microsoft Decision-1 (microsoft-decision-1) and gpt-6-luna as fallbacks (name any one first with model); the answer names the model that served, and fallbackFrom when the first was unavailable. Model-backed, not deterministic.",
+  description: "Ask a typed question about any content and get an answer your code can branch on, not prose to parse. Send state (the content, a string or object) and questions (your own ids mapped to question objects); get back answers keyed by those ids. Three question types: choice (pick one of your named options: returns choice, probabilities per option and confidence), score (a position on levels you describe, lowest first: returns score as a fractional level index, probabilities per level index, confidence and a legend naming each level), and noul (a yes/no: returns noul, the probability of yes from 0 to 1). Up to 8 questions per call, answered in parallel over one piece of state. Use it for routing, triage, classification and gating decisions. Served by jev-latest (over a second route when its first is down), with Microsoft Decision-1 (microsoft-decision-1), Gemini Decision-1 (gemini-decision-1) and gpt-6-luna as fallbacks (name any one first with model); the answer names the model that served, and fallbackFrom when the first was unavailable. Model-backed, not deterministic.",
   tags: ["ai", "classify", "judgment", "routing", "extraction"],
   discovery: {
     bodyType: "json",
@@ -472,7 +525,7 @@ export const JUDGE_TOOLS = [{
       required: ["state", "questions"],
       properties: {
         state: { type: ["string", "object", "array"], description: `The content to judge. Up to ${LIMITS.stateChars} characters.` },
-        model: { type: "string", enum: [...MODELS], description: "Which model answers first; the others are fallbacks. jev-latest is the Jev version we have tested (the answer names it); jev-preview is the newer Jev release, which its maker labels a preview. microsoft-decision-1 is Microsoft Decision-1, a model-backed judgment, not deterministic. Defaults to jev-latest." },
+        model: { type: "string", enum: [...MODELS], description: "Which model answers first; the others are fallbacks. jev-latest is the Jev version we have tested (the answer names it); jev-preview is the newer Jev release, which its maker labels a preview. microsoft-decision-1 is Microsoft Decision-1 and gemini-decision-1 is Gemini Decision-1, each a model-backed judgment, not deterministic. Defaults to jev-latest." },
         questions: { type: "object", description: "Your own ids mapped to question objects. Each has type (choice/score/noul), instructions, and criteria for choice/score." },
       },
     },
@@ -497,7 +550,7 @@ export const JUDGE_TOOLS = [{
         is_reproducible: { type: "noul", noul: 0.3 },
       },
       usage: { input_tokens: 363, output_tokens: 37 },
-      note: "Typed judgment. choice/score answers carry `probabilities` and `confidence`; a noul carries `noul`, a probability from 0 to 1, and no confidence. Gate on confidence for choice/score and on distance from 0.5 for a noul.",
+      note: JUDGE_NOTE,
     } },
   },
   // Pure, synchronous input check the paid gates can run BEFORE a payment
@@ -511,7 +564,7 @@ export const JUDGE_TOOLS = [{
   slug: "decisions",
   category: "ai",
   price: "$0.001",
-  description: "OpenAI's Decisions API on its own wire: point an OpenAI SDK's base URL here and client.decisions.create works unchanged, paid per call. Send input (text, or user messages with input_text parts) and questions; get back answers your code can branch on. predicate returns the probability a condition holds; choice returns one of your values with probabilities and confidence; score returns a probability-weighted position on your ordered levels. Up to 8 questions per call. Served by gpt-6-luna, with jev-latest and Microsoft Decision-1 as fallbacks; the answer names the model that served, and fallback_from when the first was unavailable. Text input only. Model-backed, not deterministic.",
+  description: "OpenAI's Decisions API on its own wire: point an OpenAI SDK's base URL here and client.decisions.create works unchanged, paid per call. Send input (text, or user messages with input_text parts) and questions; get back answers your code can branch on. predicate returns the probability a condition holds; choice returns one of your values with probabilities and confidence; score returns a probability-weighted position on your ordered levels. Up to 8 questions per call. Served by gpt-6-luna, with jev-latest, Microsoft Decision-1 and Gemini Decision-1 as fallbacks; the answer names the model that served, and fallback_from when the first was unavailable. Text input only. Model-backed, not deterministic.",
   tags: ["ai", "classify", "judgment", "routing", "openai", "decisions"],
   discovery: {
     bodyType: "json",

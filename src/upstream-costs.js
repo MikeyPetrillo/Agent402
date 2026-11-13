@@ -18,7 +18,7 @@
 //     media: { model: { worstCaseUsd, listedMaxUsd } },
 //     meter: { markup },
 //     vendor: { exa: { search, instant, answer, content }, x: { postRead, userRead },
-//               decisions: { luna, decisionOne, jev, maxShare },      luna, decisionOne, jev: USD per 1M input tokens; maxShare: largest share of the price a call may cost
+//               decisions: { luna, decisionOne, gemini, jev, maxShare }, luna, decisionOne, gemini, jev: USD per 1M input tokens; maxShare: largest share of the price a call may cost
 //               cdp: { sqlQuery },                                    USD per query sent to the SQL query service
 //               direct: { minSaving? } } }                            optional: the price-guard margin, a fraction from 0
 //                                                                     to below 1, that the direct pricebook's per-call
@@ -49,7 +49,7 @@ const REQUIRED = [
   ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["fees", "rerankPerUnit"], ["meter", "markup"],
   ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "lite"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
-  ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "jev"],
+  ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "gemini"], ["vendor", "decisions", "jev"],
   // The direct image model (USD per 1M tokens: prompt for text input,
   // completion for image output), which the spend meter prices from this row.
   ["openai", "gpt-image-2"],
