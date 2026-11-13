@@ -2326,5 +2326,26 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   } finally { if (savedKey !== undefined) process.env.OPENAI_API_KEY = savedKey; }
 }
 
+// The published examples (Bazaar listings, /openapi.json, test-all) name a
+// model each tier serves as itself, never one OpenAI has scheduled to retire,
+// and quote the tier's own price: base names its default (gpt-6-luna, which
+// nano also serves) and is still quoted at the base price, not nano's.
+{
+  const { RETIRING_MODELS, flatTierQuoteUsd } = await import("../src/tools/llm-gateway-kit.js");
+  const bySlug = Object.fromEntries(LLM_GATEWAY_TOOLS.map((t) => [t.slug, t]));
+  const priceOf = (slug) => Number(String(bySlug[slug].price).replace("$", ""));
+  for (const t of LLM_GATEWAY_TOOLS) {
+    const m = t.discovery?.input?.model;
+    if (typeof m === "string") ok(!(canonicalModel(m) in RETIRING_MODELS) && !(m in RETIRING_MODELS), `${t.slug}: the example model ${m} is not a retiring id`);
+    const outM = t.discovery?.output?.example?.model;
+    if (typeof outM === "string") ok(!(canonicalModel(outM) in RETIRING_MODELS), `${t.slug}: the example answer names no retiring id (${outM})`);
+  }
+  const base = bySlug["v1-chat"].discovery;
+  ok(!("model" in base.input) && base.output.example.model === TIERS["v1-chat"].defaultModel && TIERS["v1-chat"].defaultModel === "openai/gpt-6-luna", "base: the example omits model and is answered by the base default, gpt-6-luna");
+  ok(flatTierQuoteUsd("v1-chat", base.input.model) === priceOf("v1-chat") && priceOf("v1-chat") !== priceOf("v1-chat-nano"), "base: the example is quoted at the base price, not the nano price");
+  ok(flatTierQuoteUsd("v1-chat", TIERS["v1-chat"].defaultModel) === priceOf("v1-chat-nano"), "control: naming gpt-6-luna on base quotes nano's price, which is why the example omits it");
+  ok(bySlug["v1-chat-pro"].discovery.input.model === "openai/gpt-6.1-terra" && flatTierQuoteUsd("v1-chat-pro", "openai/gpt-6.1-terra") === priceOf("v1-chat-pro"), "pro: the example names gpt-6.1-terra at the pro price");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -9,7 +9,7 @@
 // daily ceiling (and the free share) before it is sent.
 import { createHash } from "node:crypto";
 import { priceUsdOf } from "./price-usd.js";
-import { askDecisionOne, decisionOneEnabled, openRouterDecisionsEnabled, jevOpenRouterModel, DECISION_ONE_MODEL } from "./decision-one.js";
+import { askDecisionOne, openRouterJudgeModels, decisionsRequestBytes } from "./decision-one.js";
 import { raceDeadline } from "./inflight-gauge.js";
 import { createSharedDailySpend } from "./shared-limits.js";
 import { createSharedCeilingView } from "./daily-ceilings.js";
@@ -18,9 +18,6 @@ const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/sy
 // Pinned to the tested Jev version (see JEV_PINNED in src/tools/judge-kit.js).
 const MODEL = (process.env.TYPESAFE_MODEL || process.env.JEV_MODEL || "jev-1.14.0").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
-// The pinned Jev version's OpenRouter id, or null when it has none.
-const JEV_OPENROUTER_MODEL = jevOpenRouterModel(MODEL);
-const jevOpenRouterOn = () => !!JEV_OPENROUTER_MODEL && openRouterDecisionsEnabled(JEV_OPENROUTER_MODEL);
 
 export const NONE = "none_of_these";
 // Starting points, not a calibration (the discovery rerank uses the same bands).
@@ -30,7 +27,7 @@ const TIMEOUT_MS = () => Number(process.env.ROUTE_JUDGE_TIMEOUT_MS || 4000);
 // Description window the judge reads, plus the curated tags.
 const DESC_MAX = 300;
 
-export const toolJudgeEnabled = () => (!!keyOf() || jevOpenRouterOn() || decisionOneEnabled()) && String(process.env.ROUTE_JUDGE || "").toLowerCase() !== "off";
+export const toolJudgeEnabled = () => (!!keyOf() || openRouterJudgeModels(MODEL).length > 0) && String(process.env.ROUTE_JUDGE || "").toLowerCase() !== "off";
 
 // ---------------------------------------------------------------------------
 // Guards: every judgment is cached per question for a day and booked against a
@@ -165,7 +162,7 @@ function callJev(payload, fetchImpl, timeoutMs, opts = {}) {
     .then((r) => (r.timedOut ? null : r.value), () => null);
 }
 async function callJevUnbounded(payload, fetchImpl, timeoutMs, { pool = "paid", outcome = null, usable = hasAnswers } = {}) {
-  const viaOpenRouter = [...(jevOpenRouterOn() ? [JEV_OPENROUTER_MODEL] : []), ...(decisionOneEnabled() ? [DECISION_ONE_MODEL] : [])];
+  const viaOpenRouter = openRouterJudgeModels(MODEL);
   const fallback = viaOpenRouter.length > 0;
   if (!keyOf() && !fallback) return null;
   const cap = jevDailyMaxTokens();
@@ -196,7 +193,7 @@ async function callJevUnbounded(payload, fetchImpl, timeoutMs, { pool = "paid", 
   for (const model of viaOpenRouter) {
     const left = deadline - Date.now();
     if (left < 250) return null; // too little time left to be worth another call
-    const est = Buffer.byteLength(JSON.stringify({ ...payload, model })) + OUTPUT_ALLOWANCE_TOKENS;
+    const est = decisionsRequestBytes(payload, model) + OUTPUT_ALLOWANCE_TOKENS;
     if (!(await book(est, cap, free, outcome))) return null;
     spend.openRouterCalls++;
     try {

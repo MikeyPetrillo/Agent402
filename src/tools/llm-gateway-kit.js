@@ -2227,7 +2227,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     defaultedModel = model;
   }
   if (model) model = aliasModelFor(input.model, model, { ...paramCtx, effort: input.reasoning?.effort ?? input.reasoning_effort });
-  if (!model) throw bad('"model" is required (e.g. "openai/gpt-4o-mini" or "gpt-4o-mini")');
+  if (!model) throw bad('"model" is required (e.g. "openai/gpt-6-luna" or "gpt-6-luna")');
   // Model-id variants that change what is BILLED, not just how it routes.
   // The allowlist's ":variant" match exists for cost-neutral routing hints
   // (:nitro, :floor); these two are not that. Live-verified 2026-08-19
@@ -4714,9 +4714,12 @@ export function meteredQuoteUsd(input) {
 }
 
 const SHARED_TAGS = ["llm", "ai", "inference", "chat", "gateway", "openai-compatible"];
-const EXAMPLE = { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 };
+// The examples name models each tier serves (pro: its default gpt-6.1-terra;
+// base omits model and is served its default), never an id scheduled to
+// retire (scripts/test-llm-gateway.js).
+const EXAMPLE = { model: "openai/gpt-6-luna", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 };
 const EXAMPLE_OUT = {
-  id: "gen-…", object: "chat.completion", created: 1750000000, model: "openai/gpt-4o-mini",
+  id: "gen-…", object: "chat.completion", created: 1750000000, model: "openai/gpt-6-luna",
   choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
   usage: { prompt_tokens: 12, completion_tokens: 1, total_tokens: 13 },
 };
@@ -4727,7 +4730,7 @@ const METERED_DEFAULT_NOTE = defaultModelCompatNote(TIERS["v1-chat-metered"]);
 
 const INPUT_SCHEMA = {
   properties: {
-    model: { type: "string", description: `Model id - OpenRouter form (openai/gpt-4o-mini) or bare OpenAI form (gpt-4o-mini). GET /v1/models lists the allowlist per tier. Optional: omit it and the tier serves its documented default (x402.defaultModel on /v1/models), named back in agent402_default_model; the price does not change.${METERED_DEFAULT_NOTE ? ` On ${TIERS["v1-chat-metered"].route.split(" ")[1]}: ${METERED_DEFAULT_NOTE}` : ""}` },
+    model: { type: "string", description: `Model id - OpenRouter form (openai/gpt-6-luna) or bare OpenAI form (gpt-6-luna). GET /v1/models lists the allowlist per tier. Optional: omit it and the tier serves its documented default (x402.defaultModel on /v1/models), named back in agent402_default_model; the price does not change.${METERED_DEFAULT_NOTE ? ` On ${TIERS["v1-chat-metered"].route.split(" ")[1]}: ${METERED_DEFAULT_NOTE}` : ""}` },
     messages: { type: "array", description: "OpenAI chat messages: [{role, content}] - text and image_url content blocks supported" },
     max_tokens: { type: "number", description: "Output token cap (clamped to the tier maximum)" },
     zdr: { type: "boolean", description: "Optional - true routes only to zero-data-retention providers (OpenRouter provider.zdr); the only provider preference a caller may set." },
@@ -4765,7 +4768,7 @@ export const LLM_GATEWAY_TOOLS = [
     description:
       `OpenAI-compatible chat completions priced per request from the request itself. The 402 quotes the input, estimated from its tokens with headroom, plus your max_tokens, from $${METER_MIN_SETTLE_USD} up to a $${METERED_MAX_QUOTE_USD} per-call cap. Any model from the flat tiers (GET /v1/models). Pay the quote over x402 exact, or authorize it as a ceiling over upto and settle actual usage. Set max_tokens to what you need: it is what you pay for.${METERED_DEFAULT_NOTE ? ` ${METERED_DEFAULT_NOTE}` : ""}`,
     tags: [...["llm", "ai", "inference", "chat", "gateway", "openai-compatible"], "metered", "pay-per-token"],
-    discovery: { bodyType: "json", input: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4o-mini" } } },
+    discovery: { bodyType: "json", input: { model: "openai/gpt-6-luna", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-6-luna" } } },
     handler: makeHandler("v1-chat-metered"),
   },
   {
@@ -4861,7 +4864,9 @@ export const LLM_GATEWAY_TOOLS = [
     description:
       "OpenAI-compatible chat completions, base tier: point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call over x402 or MPP (the 402 lists every accepted rail), no API key, no signup. Returns the standard chat.completion object (choices[].message.content, usage). Budget/mid models: gpt-6-luna (the default when model is omitted), claude haiku, gemini flash, deepseek, llama, mistral, qwen. Full wire compatibility incl. tools/function-calling and response_format. GET /v1/models lists every model. Streaming supported (stream: true). One flat price per call up to the tier caps; /v1/metered/chat/completions quotes each call from its own size instead. Model-backed. " + defaultModelCompatNote(TIERS["v1-chat"]),
     tags: SHARED_TAGS,
-    discovery: { bodyType: "json", input: EXAMPLE, inputSchema: INPUT_SCHEMA, output: { example: EXAMPLE_OUT } },
+    // No model named: the base tier serves its default (gpt-6-luna) at the base
+    // price. Naming luna would quote the nano tier, where it is listed.
+    discovery: { bodyType: "json", input: { messages: EXAMPLE.messages, max_tokens: EXAMPLE.max_tokens }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: TIERS["v1-chat"].defaultModel } } },
     handler: makeHandler("v1-chat"),
   },
   {
@@ -4873,7 +4878,7 @@ export const LLM_GATEWAY_TOOLS = [
     description:
       "OpenAI-compatible chat completions, pro tier: gpt-6.1 terra (the default when model is omitted), gpt-6 sol, claude sonnet, gemini pro and flash, gemini 4 argon, grok - paid per call in USDC over x402. Same wire format as /v1/chat/completions with higher input/output caps (48k chars in, 4096 tokens out). " + defaultModelCompatNote(TIERS["v1-chat-pro"]),
     tags: SHARED_TAGS,
-    discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-4o" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4o" } } },
+    discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-6.1-terra" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-6.1-terra" } } },
     handler: makeHandler("v1-chat-pro"),
   },
   {

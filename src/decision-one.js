@@ -28,6 +28,26 @@ const JEV_OPENROUTER_ID = /^typesafe\/jev-\d{1,3}\.\d{1,3}$/;
 // Each model has its own off switch; any other model id is refused unsent.
 const switchOf = (model) => (model === DECISION_ONE_MODEL ? "DECISION_ONE" : model === GEMINI_DECISION_MODEL ? "GEMINI_DECISION" : JEV_OPENROUTER_ID.test(String(model)) ? "JEV_OPENROUTER" : null);
 const labelOf = (model) => (model === DECISION_ONE_MODEL ? "Decision-1" : model === GEMINI_DECISION_MODEL ? "Gemini Decision-1" : "Jev on OpenRouter");
+// Our data policy on every Decisions request. OpenRouter's Decisions body
+// takes the same `provider` preferences as chat (DecisionsRequest.provider,
+// read 2026-11-12), so the request states the account's posture itself:
+// data_collection "deny" always, and zdr:true only for a model whose every
+// endpoint is a zero-data-retention endpoint, so the flag never narrows
+// routing or refuses a call (the same rule as src/openrouter-audio-policy.js).
+// Decision-1 and TypeSafe's Jev endpoints are ZDR; Gemini Decision-1's is
+// not. scripts/test-gateway-model-ids.js checks the set live.
+export const DECISIONS_ZDR_MODELS = Object.freeze([DECISION_ONE_MODEL]);
+const zdrModel = (model) => DECISIONS_ZDR_MODELS.includes(model) || JEV_OPENROUTER_ID.test(String(model));
+/** The `provider` object a Decisions request to `model` carries. */
+export function decisionsProviderPolicy(model) {
+  return { data_collection: "deny", ...(zdrModel(model) ? { zdr: true } : {}) };
+}
+/** The exact body sent for `body` to `model` (the caller's body, `model`
+ *  set, our provider policy); its byte length is every caller's estimate. */
+export function decisionsPayload(body, model) {
+  return JSON.stringify({ ...body, model, provider: decisionsProviderPolicy(model) });
+}
+export const decisionsRequestBytes = (body, model) => Buffer.byteLength(decisionsPayload(body, model));
 const ENDPOINT = () => (process.env.DECISION_ONE_URL || "https://openrouter.ai/api/alpha/decisions").trim();
 const keyOf = () => (process.env.OPENROUTER_API_KEY || "").trim();
 // DEADLINES (src/upstream-deadline.js): the one read runs under its own cap
@@ -80,7 +100,7 @@ const fail = (msg, statusCode, mayBeBilled = false) => {
 export async function askDecisionOne(body, { fetchImpl = fetch, timeoutMs = TIMEOUT_MS, apiKey = keyOf(), model = DECISION_ONE_MODEL } = {}) {
   const label = labelOf(model);
   if (!openRouterDecisionsEnabled(model, apiKey)) throw fail(`${label} is not configured on this server.`, 503);
-  const payload = JSON.stringify({ ...body, model });
+  const payload = decisionsPayload(body, model);
   const bytes = Buffer.byteLength(payload);
   if (bytes > maxBodyBytes()) throw fail(`Judgment request is ${bytes} bytes; ${label} accepts ${maxBodyBytes()}.`, 503);
   if (!bookBytes(bytes)) throw fail(`${label}'s daily ceiling is reached on this server.`, 503);
@@ -115,4 +135,33 @@ export async function askDecisionOne(body, { fetchImpl = fetch, timeoutMs = TIME
   let j; try { j = JSON.parse(text); } catch { throw fail("Judgment upstream returned an unreadable body.", 502, true); }
   if (!j?.answers || typeof j.answers !== "object" || Array.isArray(j.answers)) throw fail("Judgment upstream returned no answers.", 502, true);
   return j;
+}
+
+/** The OpenRouter legs an internal judge asks after TypeSafe, in order: the
+ *  pinned Jev version by its OpenRouter id (when it has one and its switch is
+ *  on), then Decision-1 (when its switch is on). Empty without a key. */
+export function openRouterJudgeModels(pinned, apiKey = keyOf()) {
+  const jev = jevOpenRouterModel(pinned);
+  return [
+    ...(jev && openRouterDecisionsEnabled(jev, apiKey) ? [jev] : []),
+    ...(openRouterDecisionsEnabled(DECISION_ONE_MODEL, apiKey) ? [DECISION_ONE_MODEL] : []),
+  ];
+}
+
+/** Ask those legs in turn with the same body under one deadline. Resolves to
+ *  { j, model } for the first answer `usable` accepts; otherwise throws the
+ *  last leg's error. Every leg is booked by askDecisionOne against the day's
+ *  byte ceiling before it is sent. */
+export async function askOpenRouterJudge(body, { pinned, deadline, apiKey = keyOf(), fetchImpl = fetch, usable = () => true } = {}) {
+  let last = null;
+  for (const model of openRouterJudgeModels(pinned, apiKey)) {
+    const left = deadline - Date.now();
+    if (left < 250) break; // too little time left to be worth another call
+    try {
+      const j = await askDecisionOne(body, { fetchImpl, timeoutMs: left, apiKey, model });
+      if (usable(j)) return { j, model };
+      last = fail(`${labelOf(model)} returned an answer this caller cannot read.`, 502, true);
+    } catch (e) { last = e; }
+  }
+  throw last || fail("No judgment backend is configured on this server.", 503);
 }

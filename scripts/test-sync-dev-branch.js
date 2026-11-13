@@ -3,7 +3,7 @@
 // clone in the OS temp dir and runs the real script against it.
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, mkdirSync, copyFileSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -147,6 +147,89 @@ function repo() {
   const merge = mog.indexOf("gh pr merge"), trapAt = mog.search(/trap '[^']*sync-dev-branch\.sh[^']*' EXIT/), watch = mog.indexOf("gh run watch \"$MAIN\"");
   const direct = mog.split("\n").filter((l) => /sync-dev-branch\.sh/.test(l) && !/^\s*trap /.test(l));
   ok(merge > -1 && trapAt > merge && watch > trapAt && direct.length === 0, "merge-on-green runs the dev sync from an EXIT trap set after the merge, with no direct call before main's run is watched");
+}
+
+// merge-on-green.sh waits, after CI is green, for Strix's review of the PR
+// head SHA. Run end to end against stubbed gh, curl and sleep (no network, no
+// GitHub): the script is copied into a temp dir whose scripts/ holds only a
+// stub dev sync, so nothing else it reads exists there.
+{
+  const SHA = "a".repeat(40), OLD = "b".repeat(40), MERGE = "c".repeat(40), PR = "77", BOT = "strix-security[bot]";
+  const GH = `#!/usr/bin/env node
+const fs = require("fs"), path = require("path"), D = process.env.STUB_DIR, a = process.argv.slice(2), j = a.join(" ");
+const out = (s) => { process.stdout.write(String(s) + "\\n"); process.exit(0); };
+const file = (n) => { const p = path.join(D, n); return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "[]"; };
+if (a[0] === "pr" && a[1] === "view") {
+  if (j.includes("headRefOid")) out(process.env.STUB_SHA);
+  if (j.includes("isCrossRepository")) out("false");
+  if (j.includes("headRefName")) out("dev");
+  if (j.includes("statusCheckRollup")) out("CodeQL=SUCCESS");
+  if (j.includes("mergeCommit")) out(fs.existsSync(path.join(D, "merged")) ? process.env.STUB_MERGE : "");
+}
+if (a[0] === "pr" && a[1] === "ready") out("");
+if (a[0] === "pr" && a[1] === "merge") { fs.writeFileSync(path.join(D, "merged"), j); out("merged"); }
+if (a[0] === "run" && a[1] === "list") out(j.includes("--branch main") ? "222" : "111");
+if (a[0] === "run" && a[1] === "watch") process.exit(0);
+if (a[0] === "run" && a[1] === "view") out("test-unit=success");
+if (a[0] === "api" && a[1].endsWith("/rules/branches/main")) out("CodeQL");
+if (a[0] === "api" && /\\/pulls\\/\\d+\\/reviews$/.test(a[1])) {
+  const n = Number(file("polls") === "[]" ? 0 : file("polls")) + 1; fs.writeFileSync(path.join(D, "polls"), String(n));
+  const seq = path.join(D, "reviews." + n + ".json"); out(fs.existsSync(seq) ? fs.readFileSync(seq, "utf8") : file("reviews.json"));
+}
+if (a[0] === "api" && /\\/pulls\\/\\d+\\/comments$/.test(a[1])) out(file("review-comments.json"));
+if (a[0] === "api" && /\\/issues\\/\\d+\\/comments$/.test(a[1])) out(file("issue-comments.json"));
+process.stderr.write("stub gh: unexpected " + j + "\\n"); process.exit(2);
+`;
+  const CURL = `#!/bin/sh
+case "$*" in *gateway-status*) echo '{"ledgerDeadLetter":{"status":"ok"}}' ;; *health*) echo '{"build":"${MERGE.slice(0, 7)}"}' ;; esac
+`;
+  const SLEEP = `#!/bin/sh
+echo x >> "$STUB_DIR/sleeps"
+`;
+  const review = (id, state, commit, body = "Strix flagged findings below.") => ({ id, state, commit_id: commit, body, user: { login: BOT } });
+  const comment = (rid, body) => ({ pull_request_review_id: rid, body, user: { login: BOT } });
+  const issue = (body) => ({ body, user: { login: BOT } });
+  const summary = (sha, lines) => `<!-- strix-pr-review:master -->\n## Strix Security Review\n\n${lines}\n\n<sub>Review 2 on this PR · \`${sha.slice(0, 7)}\` · requested</sub>`;
+  const mog = (files, args = [], env = {}) => {
+    const root = mkdtempSync(join(tmpdir(), "a402-mog-")), bin = join(root, "bin"), stubs = join(root, "stub"), cwd = join(root, "repo");
+    for (const d of [bin, stubs, join(cwd, "scripts")]) mkdirSync(d, { recursive: true });
+    copyFileSync(fileURLToPath(new URL("./merge-on-green.sh", import.meta.url)), join(cwd, "scripts", "merge-on-green.sh"));
+    writeFileSync(join(cwd, "scripts", "sync-dev-branch.sh"), "echo dev-sync-stub\n");
+    for (const [n, body] of [["gh", GH], ["curl", CURL], ["sleep", SLEEP]]) { writeFileSync(join(bin, n), body); chmodSync(join(bin, n), 0o755); }
+    for (const [n, v] of Object.entries(files)) writeFileSync(join(stubs, n), typeof v === "string" ? v : JSON.stringify(v));
+    let out, code = 0;
+    try {
+      out = execFileSync("bash", ["scripts/merge-on-green.sh", PR, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_DIR: stubs, STUB_SHA: SHA, STUB_MERGE: MERGE, GATE_WORKFLOW: "Deploy", STRIX_WAIT_SECONDS: "180", STRIX_POLL_SECONDS: "60", TARGET_URL: "http://stub.invalid", ...env } });
+    } catch (e) { code = e.status; out = `${e.stdout}${e.stderr}`; }
+    const merged = existsSync(join(stubs, "merged")), sleeps = existsSync(join(stubs, "sleeps")) ? readFileSync(join(stubs, "sleeps"), "utf8").trim().split("\n").length : 0;
+    rmSync(root, { recursive: true, force: true });
+    return { out, code, merged, sleeps };
+  };
+  let r = mog({ "reviews.json": [review(9, "APPROVED", SHA, "Looks good.")] });
+  ok(r.code === 0 && r.merged && /Strix review 9 of a{40}: APPROVED/.test(r.out), `strix: an approved review of the head SHA merges (exit ${r.code})`);
+  r = mog({ "reviews.json": [review(9, "CHANGES_REQUESTED", SHA)] });
+  ok(r.code === 1 && !r.merged && /requested changes/.test(r.out), "strix: changes requested on the head SHA refuses");
+  r = mog({ "reviews.json": [review(9, "COMMENTED", SHA, "Strix flagged a finding.\n- 🟠 **HIGH** forged fence")] });
+  ok(r.code === 1 && !r.merged && /Critical or High/.test(r.out), "strix: a High finding in the review body refuses");
+  r = mog({ "reviews.json": [review(9, "COMMENTED", SHA)], "review-comments.json": [comment(9, "### 🔴 Key leak\n\n**Severity:** CRITICAL · **CWE-200**")] });
+  ok(r.code === 1 && !r.merged, "strix: a Critical finding in the review's own comments refuses");
+  r = mog({ "reviews.json": [review(9, "COMMENTED", SHA)], "review-comments.json": [comment(8, "**Severity:** HIGH"), comment(9, "**Severity:** MEDIUM · **CWE-770**")] });
+  ok(r.code === 0 && r.merged, "strix: Medium findings merge, and a High in an older review's comments is not this review's");
+  r = mog({ "reviews.json": [review(5, "APPROVED", OLD)], "reviews.3.json": [review(5, "APPROVED", OLD), review(9, "APPROVED", SHA)] });
+  ok(r.code === 0 && r.merged && r.sleeps === 2, `strix: a review of an older SHA keeps it waiting until the head's arrives (${r.sleeps} waits)`);
+  r = mog({ "reviews.json": [review(5, "APPROVED", OLD)], "issue-comments.json": [issue(summary(OLD, "✅ **No open security findings.**"))] });
+  ok(r.code === 1 && !r.merged && r.sleeps === 3 && /owner decides/i.test(r.out) && /--no-strix/.test(r.out), `strix: no review of the head SHA in time refuses and tells the owner (${r.sleeps} waits)`);
+  r = mog({ "issue-comments.json": [issue(summary(SHA, "✅ **No open security findings.**"))] });
+  ok(r.code === 0 && r.merged && /Strix summary of a{40}/.test(r.out), "strix: a clean summary pinned to the head SHA (no review posted) merges");
+  r = mog({ "issue-comments.json": [issue(summary(SHA, "**To fix before merging** (1)\n\n- 🟠 **HIGH** [x](y)"))] });
+  ok(r.code === 1 && !r.merged, "strix: a summary of the head SHA listing a High finding refuses");
+  r = mog({ "issue-comments.json": [issue("<!-- strix:pr-review-billing-required -->\nStrix could not run.")] });
+  ok(r.code === 1 && !r.merged && r.sleeps === 0 && /could not review/.test(r.out), "strix: Strix saying it could not run stops at once for the owner");
+  r = mog({}, ["--no-strix"]);
+  ok(r.code === 0 && r.merged && /--no-strix: the OWNER chose to merge PR #77 WITHOUT/.test(r.out) && !/waiting for Strix/.test(r.out), "strix: --no-strix merges, and says so loudly");
+  r = mog({}, ["dev", "--no-strix"]);
+  ok(r.code === 0 && r.merged, "strix: --no-strix also works after the branch argument");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
