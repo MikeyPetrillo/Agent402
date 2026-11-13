@@ -155,7 +155,8 @@ export function openRouterJudgeModels(pinned, apiKey = keyOf()) {
  *  timeout or a 200 `usable` rejects (mayBeBilled) the walk ends there, as
  *  /v1/judge's does. Every leg is booked by askDecisionOne against the day's
  *  byte ceiling before it is sent. */
-export async function askOpenRouterJudge(body, { pinned, deadline, apiKey = keyOf(), fetchImpl = fetch, usable = () => true } = {}) {
+// fetchImpl passes through: undefined takes askDecisionOne's own default.
+export async function askOpenRouterJudge(body, { pinned, deadline, apiKey = keyOf(), fetchImpl, usable = () => true } = {}) {
   let last = null;
   for (const model of openRouterJudgeModels(pinned, apiKey)) {
     const left = deadline - Date.now();
