@@ -214,6 +214,22 @@ function rng(seed) {
   const replaySmall = { paths: {}, components: { schemas: { A: { allOf: [{ $ref: "#/x/1" }, { $ref: "https://e.example/s#/B" }, { $ref: "#/x/1" }] }, B: { items: { $ref: "#/components/schemas/A" } } } } };
   for (let i = 0; i < 5; i++) replaySmall.paths["/p" + i] = { get: { a: { $ref: "#/components/schemas/A" }, b: { $ref: "#/components/schemas/B" } } };
   ok(JSON.stringify(await tool.handler({ spec: replaySmall })) === JSON.stringify(oldAnswer(replaySmall)), "resolve-refs: reused targets with unresolved and external refs answer as the full walk did");
+  // A chain of refs, each target a ref to the next: the path of refs in
+  // progress grows one ref a step and is never copied, so a chain d deep adds
+  // to it d times (a copy per step would add about d squared over two).
+  const chainOf = (d) => { const s = { c: {} }; for (let i = 0; i < d; i++) s.c["s" + i] = { $ref: "#/c/s" + (i + 1) }; s.c["s" + d] = { type: "string" }; s.p = { $ref: "#/c/s0" }; return s; };
+  {
+    const realAdd = Set.prototype.add;
+    let adds = 0;
+    Set.prototype.add = function (v) { adds++; return realAdd.call(this, v); };
+    try { await tool.handler({ spec: chainOf(2000) }); } finally { Set.prototype.add = realAdd; }
+    ok(adds < 20 * 2000, `resolve-refs: a 2,000-deep ref chain makes ${adds} set adds, linear in its depth`);
+  }
+  const deepChain = chainOf(8_000); // deeper than any spec the 100 KB body limit admits
+  const rch = await loopHold(() => tool.handler({ spec: deepChain }));
+  ok(!rch.err && rch.out.resolved > 8_000 && rch.hold < 250, `resolve-refs: an 8,000-deep ref chain (${JSON.stringify(deepChain).length} bytes) answers with the loop held ${rch.hold.toFixed(0)}ms (${rch.err?.statusCode || rch.err?.message || rch.out?.resolved})`);
+  const loopBack = chainOf(500); loopBack.c.s500 = { $ref: "#/c/s250" };
+  ok(JSON.stringify(await tool.handler({ spec: loopBack })) === JSON.stringify(oldAnswer(loopBack)), "resolve-refs: a 500-deep chain that loops back answers as the full walk did");
 }
 
 // ---------------------------------------------------------------------------

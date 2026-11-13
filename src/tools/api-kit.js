@@ -1674,9 +1674,10 @@ function jsonPointerLookup(root, ref) {
 
 // Walk the spec, replacing `{ $ref: "..." }` nodes with the target value.
 // `resolvingPath` is the set of refs currently in progress on THIS branch of
-// the walk — passing a fresh copy down means sibling refs to the same target
-// both resolve, but re-entering the same ref within its own resolution chain
-// is detected as a cycle and left intact.
+// the walk: the walk is depth first and one branch at a time, so a ref is
+// added on entering its target and removed on leaving it. Sibling refs to the
+// same target both resolve, but re-entering the same ref within its own
+// resolution chain is detected as a cycle and left intact.
 //
 // Sibling keys of `$ref` are dropped to match JSON Schema Draft 7 / OpenAPI
 // 3.0 semantics. Callers needing OpenAPI 3.1 merge behavior should pre-merge
@@ -1744,11 +1745,17 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
     chargeResolved(report, typeof node === "string" ? node.length + 2 : 4);
     return node;
   }
-  // The clock is read once per 256 nodes; a slice that has run its time ends here.
+  // The clock is read once per 256 nodes; a slice that has run its time ends
+  // here. Short of that the walk still awaits once per 256 nodes: an await
+  // unwinds the calls under it, so a deeply nested document (an array inside
+  // an array thousands deep, a long chain of refs) never holds more than 256
+  // levels of the walk on the stack at once.
   const budget = report.budget;
-  if ((++budget.steps & 255) === 0 && performance.now() - budget.sliceStart > RESOLVE_SLICE_MS) {
-    await new Promise((r) => setImmediate(r));
-    budget.sliceStart = performance.now();
+  if ((++budget.steps & 255) === 0) {
+    if (performance.now() - budget.sliceStart > RESOLVE_SLICE_MS) {
+      await new Promise((r) => setImmediate(r));
+      budget.sliceStart = performance.now();
+    } else await null;
   }
   if (Array.isArray(node)) {
     chargeResolved(report, 2 + node.length);
@@ -1786,9 +1793,12 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
     const sub = newResolveReport(report.budget);
     sub.memo = report.memo;
     const before = report.budget.bytes;
-    const nextPath = new Set(resolvingPath);
-    nextPath.add(ref);
-    const value = await deepResolveRefs(target, root, nextPath, sub);
+    // One path set for the whole walk: the ref is in it while its target is
+    // walked and out of it after, so each step costs one add and one delete
+    // (a copy per step would cost the chain's depth, squared over a chain).
+    resolvingPath.add(ref);
+    let value;
+    try { value = await deepResolveRefs(target, root, resolvingPath, sub); } finally { resolvingPath.delete(ref); }
     report.resolved += 1 + sub.resolved;
     await chargeReplay(budget, sub.circular.length + sub.unresolved.length + sub.external.length);
     mergeRefList(report, "circular", sub.circular);
