@@ -159,6 +159,9 @@ function repo() {
 const fs = require("fs"), path = require("path"), D = process.env.STUB_DIR, a = process.argv.slice(2), j = a.join(" ");
 const out = (s) => { const b = Buffer.from(String(s) + "\\n"); for (let o = 0; o < b.length;) { try { o += fs.writeSync(1, b, o); } catch (e) { if (e.code !== "EAGAIN") throw e; } } process.exit(0); };
 const file = (n) => { const p = path.join(D, n); return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "[]"; };
+fs.appendFileSync(path.join(D, "calls"), j + "\\n");
+// A draft PR (stub file "draft") gets no Strix review or summary until it is marked ready.
+const draft = fs.existsSync(path.join(D, "draft"));
 if (a[0] === "pr" && a[1] === "view") {
   if (j.includes("headRefOid")) out(process.env.STUB_SHA);
   if (j.includes("isCrossRepository")) out("false");
@@ -166,7 +169,7 @@ if (a[0] === "pr" && a[1] === "view") {
   if (j.includes("statusCheckRollup")) out("CodeQL=SUCCESS");
   if (j.includes("mergeCommit")) out(fs.existsSync(path.join(D, "merged")) ? process.env.STUB_MERGE : "");
 }
-if (a[0] === "pr" && a[1] === "ready") out("");
+if (a[0] === "pr" && a[1] === "ready") { fs.rmSync(path.join(D, "draft"), { force: true }); out(""); }
 if (a[0] === "pr" && a[1] === "merge") { fs.writeFileSync(path.join(D, "merged"), j); out("merged"); }
 if (a[0] === "run" && a[1] === "list") out(j.includes("--branch main") ? "222" : "111");
 if (a[0] === "run" && a[1] === "watch") process.exit(0);
@@ -174,12 +177,14 @@ if (a[0] === "run" && a[1] === "view") out("test-unit=success");
 if (a[0] === "api" && a[1].endsWith("/rules/branches/main")) out("CodeQL");
 if (a[0] === "api" && /\\/pulls\\/\\d+\\/reviews$/.test(a[1])) {
   const n = Number(file("polls") === "[]" ? 0 : file("polls")) + 1; fs.writeFileSync(path.join(D, "polls"), String(n));
+  if (draft) out("[]");
   // A failed read: gh may have printed a first page before it failed.
   if (fs.existsSync(path.join(D, "reviews." + n + ".fail")) || fs.existsSync(path.join(D, "reviews.fail"))) { process.stdout.write("[]\\n"); process.exit(1); }
   const seq = path.join(D, "reviews." + n + ".json"); out(fs.existsSync(seq) ? fs.readFileSync(seq, "utf8") : file("reviews.json"));
 }
-if (a[0] === "api" && /\\/pulls\\/\\d+\\/comments$/.test(a[1])) out(file("review-comments.json"));
+if (a[0] === "api" && /\\/pulls\\/\\d+\\/comments$/.test(a[1])) out(draft ? "[]" : file("review-comments.json"));
 if (a[0] === "api" && /\\/issues\\/\\d+\\/comments$/.test(a[1])) {
+  if (draft) out("[]");
   const n = file("polls") === "[]" ? 0 : Number(file("polls")); const seq = path.join(D, "issue-comments." + n + ".json");
   out(fs.existsSync(seq) ? fs.readFileSync(seq, "utf8") : file("issue-comments.json"));
 }
@@ -208,9 +213,10 @@ echo x >> "$STUB_DIR/sleeps"
       out = execFileSync("bash", ["scripts/merge-on-green.sh", PR, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_DIR: stubs, STUB_SHA: SHA, STUB_MERGE: MERGE, GATE_WORKFLOW: "Deploy", STRIX_WAIT_SECONDS: "180", STRIX_POLL_SECONDS: "60", TARGET_URL: "http://stub.invalid", ...env } });
     } catch (e) { code = e.status; out = `${e.stdout}${e.stderr}`; }
+    const calls = existsSync(join(stubs, "calls")) ? readFileSync(join(stubs, "calls"), "utf8").trim().split("\n") : [];
     const merged = existsSync(join(stubs, "merged")), sleeps = existsSync(join(stubs, "sleeps")) ? readFileSync(join(stubs, "sleeps"), "utf8").trim().split("\n").length : 0;
     rmSync(root, { recursive: true, force: true });
-    return { out, code, merged, sleeps };
+    return { out, code, merged, sleeps, calls };
   };
   const CLEAN = issue(summary(SHA, "✅ **No open security findings.**"));
   let r = mog({ "reviews.json": [review(9, "APPROVED", SHA, "Looks good.")], "issue-comments.json": [CLEAN] });
@@ -262,6 +268,16 @@ echo x >> "$STUB_DIR/sleeps"
   }
   const mogSrc = readFileSync(new URL("./merge-on-green.sh", import.meta.url), "utf8");
   ok(!/\|\s*grep\s+(-[A-Za-z]*q|[^|\n]*\s-[A-Za-z]*q\b)/.test(mogSrc), "merge-on-green pipes into no grep -q (under pipefail, an early exit fails the pipeline)");
+  // Strix does not review a draft PR, so the PR is marked ready once CI is
+  // green and before the first read of Strix's reviews; marked ready only after
+  // the wait, a draft never gets its review and the wait refuses.
+  r = mog({ draft: "1", "reviews.json": [review(9, "APPROVED", SHA, "Looks good.")], "issue-comments.json": [CLEAN] });
+  const readyAt = r.calls.findIndex((c) => c.startsWith("pr ready")), firstReviews = r.calls.findIndex((c) => /^api \S*\/pulls\/77\/reviews/.test(c)), rollupAt = r.calls.findIndex((c) => c.includes("statusCheckRollup"));
+  ok(readyAt > rollupAt && rollupAt >= 0 && firstReviews > readyAt, `strix: "pr ready" runs after the required checks and before the first Strix reviews read (ready ${readyAt}, reviews ${firstReviews})`);
+  ok(r.code === 0 && r.merged && r.sleeps === 0 && /Strix review 9 of a{40}: APPROVED/.test(r.out), `strix: a draft PR is marked ready before the wait, so its review arrives and it merges (exit ${r.code}, ${r.sleeps} waits)`);
+  ok(r.calls.filter((c) => c.startsWith("pr ready")).length === 1 && r.calls.find((c) => c.startsWith("pr merge"))?.includes(`--match-head-commit ${SHA}`), "strix: the PR is marked ready once and the merge stays pinned to the tested SHA");
+  r = mog({ draft: "1" }, ["--no-strix"]);
+  ok(r.code === 0 && r.merged && r.calls.some((c) => c.startsWith("pr ready")), "strix: --no-strix still marks a draft ready before merging");
   r = mog({}, ["--no-strix"]);
   ok(r.code === 0 && r.merged && /--no-strix: the OWNER chose to merge PR #77 WITHOUT/.test(r.out) && !/waiting for Strix/.test(r.out), "strix: --no-strix merges, and says so loudly");
   r = mog({}, ["dev", "--no-strix"]);
