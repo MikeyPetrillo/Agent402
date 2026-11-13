@@ -457,10 +457,13 @@ export function composeSellerDossier(a) {
     routesObserved: observed.length,
     calls: observed.reduce((n, o) => n + (o.calls || 0), 0),
     kept: observed.reduce((n, o) => n + (o.kept || 0), 0),
+    unverifiable: observed.reduce((n, o) => n + (o.unverifiable || 0), 0),
     rows: observed,
   };
   const lowKeep = observed.filter((o) => o.calls >= 3 && o.keptRate < 0.8);
   if (lowKeep.length) flags.push(`${lowKeep.length} route(s) we paid delivered less than 80% of the time (${lowKeep.map((o) => o.route).join(", ")})`);
+  const overLimit = observed.filter((o) => (o.unverifiable || 0) >= 3);
+  if (overLimit.length) flags.push(`${overLimit.length} route(s) we paid answered past our read limit in a form we could not check, 3 or more times (${overLimit.map((o) => o.route).join(", ")})`);
 
   return {
     origin,

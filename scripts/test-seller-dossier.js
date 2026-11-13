@@ -233,6 +233,14 @@ check("delivery observations attach to their route and a low keep rate is flagge
   assert.ok(r.flags.some((f) => /delivered less than 80%.*\/api\/a/.test(f)));
   assert.ok(!r.flags.some((f) => /\/api\/b/.test(f) && /delivered less/.test(f)));
 });
+check("answers past our read limit that could not be checked are counted and flagged, never read as kept", () => {
+  const d = new Map([["POST /api/a", { calls: 2, kept: 2, keptRate: 1, unverifiable: 4, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }], ["POST /api/b", { calls: 0, kept: 0, keptRate: null, unverifiable: 1, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }]]);
+  const r = base({ deliveries: d });
+  assert.equal(r.delivery.unverifiable, 5);
+  assert.equal(r.delivery.kept, 2);
+  assert.ok(r.flags.some((f) => /past our read limit.*\/api\/a/.test(f)));
+  assert.ok(!r.flags.some((f) => /past our read limit.*\/api\/b/.test(f)));
+});
 
 // --- identity / health flags -------------------------------------------------
 check("crawl failure, robots block, failed paywall probe and injected listing text are each a flag", () => {

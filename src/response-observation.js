@@ -107,19 +107,29 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
     if (!origin || !route) return null;
     const paths = (Array.isArray(guaranteedPaths) ? guaranteedPaths : []).slice(0, MAX_PATHS_PER_ROUTE);
     if (!paths.length) return null;              // no promise, nothing to verify
-    // A body we cut at our own byte limit or could not read is not what the
-    // seller sent: a missing path there is ours, so the call is not observed
-    // either way. Recognized by the object identity our own readers mark
-    // (markNotSellerBody), never by a key, since a seller can send any key.
-    // A body our reader holds whole (a non-JSON answer to a route that
+    // A body our reader could not read at all says nothing either way: the
+    // call is not observed. Recognized by the object identity our own readers
+    // mark (markNotSellerBody), never by a key, since a seller can send any
+    // key. A body our reader holds whole (a non-JSON answer to a route that
     // promised JSON paths) is the seller's delivery: it is read back and
     // judged on the seller's bytes, never on our stand-in's keys, so a missed
     // promise is counted.
+    // A body cut at our byte limit is the seller's choice of size, so it never
+    // leaves the record untouched. A cut whose prefix parses to an object or
+    // an array closed that document (only trailing bytes went unread) and is
+    // judged on it. Any other cut (a prefix that does not parse, or parses only
+    // as a scalar a longer body would extend) cannot be judged: it is counted
+    // as unverifiable, beside calls and kept, so padding an answer past the
+    // limit shows in the record instead of keeping it clean.
+    let unverifiable = false;
     if (body && typeof body === "object" && NOT_SELLER_BODY.has(body)) {
       const sent = standInSent(body);
-      if (sent.unreadable || sent.cut) return null;
-      if ("json" in sent) body = sent.json;
-      else { try { body = JSON.parse(sent.text); } catch { body = null; } }
+      if (sent.unreadable) return null;
+      let read;
+      if ("json" in sent) read = sent.json;
+      else { try { read = JSON.parse(sent.text); } catch { read = undefined; } }
+      if (sent.cut && !(read !== null && typeof read === "object")) unverifiable = true;
+      body = read === undefined ? null : read;
     }
     const k = key(origin, method, route);
     // Bounded: drop the oldest route rather than growing without limit. This
@@ -127,11 +137,18 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
     // that a later call cannot re-establish.
     if (!store.has(k) && store.size >= MAX_ROUTES) store.delete(store.keys().next().value);
 
+    const prev = store.get(k) || { calls: 0, kept: 0, unverifiable: 0, lastMissing: [], firstSeenAt: now(), lastSeenAt: 0 };
+    if (unverifiable) {
+      const rec = { ...prev, unverifiable: Math.min((prev.unverifiable || 0) + 1, WINDOW * 1000), lastSeenAt: now() };
+      store.set(k, rec);
+      version++;
+      return rec;
+    }
     const missing = paths.filter((p) => !pathPresent(body, p));
-    const prev = store.get(k) || { calls: 0, kept: 0, lastMissing: [], firstSeenAt: now(), lastSeenAt: 0 };
     const rec = {
       calls: Math.min(prev.calls + 1, WINDOW * 1000),
       kept: prev.kept + (missing.length ? 0 : 1),
+      unverifiable: prev.unverifiable || 0,
       // Only the NAMES the seller themselves published, so this carries nothing
       // the seller has not already put in a public document.
       lastMissing: missing.slice(0, MAX_PATHS_PER_ROUTE),
@@ -150,13 +167,17 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
  *  bought it. Null means UNOBSERVED and must never be rendered as a pass. */
 export function deliveryObservation(origin, method, route) {
   const rec = store.get(key(origin, method, route));
-  if (!rec || !rec.calls) return null;
+  if (!rec || !(rec.calls || rec.unverifiable)) return null;
   return {
     calls: rec.calls,
     kept: rec.kept,
     // A route bought once that delivered once is not "100% reliable", and a
     // rate alone invites reading it that way. The count travels with it.
-    keptRate: Number((rec.kept / rec.calls).toFixed(3)),
+    // Null when every call was unverifiable: no call could be judged.
+    keptRate: rec.calls ? Number((rec.kept / rec.calls).toFixed(3)) : null,
+    // Calls whose answer ran past our read limit in a form that cannot be
+    // judged (counted apart from calls, never as kept).
+    unverifiable: rec.unverifiable || 0,
     lastMissing: rec.lastMissing,
     lastSeenAt: new Date(rec.lastSeenAt).toISOString(),
   };

@@ -159,22 +159,26 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(/resolvedCandidateOf\(/.test(server), "...and the resolver builds its candidates with that function");
 }
 
-// A BODY WE CUT IS NOT WHAT THE SELLER SENT. readAfterSpend marks the body it
-// cut at our own byte limit (or could not read) by identity, not by a key:
-// a guaranteed path missing from it is ours, so the call is not observed, and
-// the published keep rate is the seller's own.
+// A BODY WE COULD NOT READ IS NOT WHAT THE SELLER SENT, and a body cut at our
+// byte limit is the seller's choice of size. readAfterSpend marks both by
+// identity, not by a key: an unreadable body is not observed; a cut whose
+// prefix closed a JSON object or array is judged on it; any other cut is
+// counted as unverifiable, apart from calls and kept, so padding an answer
+// past the limit never keeps a record clean.
 {
   const o = "https://cut.example";
   const { readAfterSpend } = await import("../src/x402-buyer.js");
   const { markNotSellerBody: markNotSellerBodyFor } = await import("../src/response-observation.js");
   const cut = await readAfterSpend(new Response(JSON.stringify({ result: { pad: "x".repeat(500), value: 1 } })), 64);
   ok(cut?._truncated === true, "our reader cut the oversized body (setup)");
-  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cut }) === null
-    && deliveryObservation(o, "POST", "/r") === null, "a body cut at our byte limit is not observed");
+  observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cut });
+  ok(deliveryObservation(o, "POST", "/r")?.unverifiable === 1 && deliveryObservation(o, "POST", "/r")?.calls === 0 && deliveryObservation(o, "POST", "/r")?.keptRate === null,
+    `a body cut at our byte limit that cannot be parsed is counted as unverifiable, never as kept (${JSON.stringify(deliveryObservation(o, "POST", "/r"))})`);
   // A cut that still parses (a long number cut to a shorter one) is ours too.
   const cutParsed = await readAfterSpend(new Response("7".repeat(500)), 64);
   ok(cutParsed?._truncated === true && typeof cutParsed.value === "number", "our reader cut a body whose prefix still parses (setup)");
-  ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cutParsed }) === null, "a cut body that still parses is not observed either");
+  observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: cutParsed });
+  ok(deliveryObservation(o, "POST", "/r")?.unverifiable === 2 && deliveryObservation(o, "POST", "/r")?.calls === 0, "a cut whose prefix parses only as a scalar a longer body would extend is unverifiable too");
   const unread = await readAfterSpend(new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } })), 64);
   ok(typeof unread?.relayError === "string", "our reader could not read the body (setup)");
   ok(observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: unread }) === null, "nor is a body we could not read");
@@ -198,7 +202,27 @@ ok(o.lastMissing.join(",") === "data.attributes",
   const tempoTextForTest = (text, truncated) => markNotSellerBodyFor({ text, truncated, contentType: "text/plain", sha256: "0" });
   observeDelivery({ origin: o, method: "POST", route: "/tt", guaranteedPaths: ["text"], body: tempoTextForTest("prose", false) });
   ok(deliveryObservation(o, "POST", "/tt")?.kept === 0, "and so is the Tempo reader's whole text reading, never kept by our `text` key");
-  ok(observeDelivery({ origin: o, method: "POST", route: "/tc", guaranteedPaths: ["text"], body: tempoTextForTest("prose", true) }) === null, "a cut text reading is still not observed");
+  observeDelivery({ origin: o, method: "POST", route: "/tc", guaranteedPaths: ["text"], body: tempoTextForTest("prose", true) });
+  ok(deliveryObservation(o, "POST", "/tc")?.unverifiable === 1 && deliveryObservation(o, "POST", "/tc")?.kept === 0, "a cut text reading is counted as unverifiable, never kept by our text key");
+  observeDelivery({ origin: o, method: "POST", route: "/tcj", guaranteedPaths: ["data"], body: tempoTextForTest('{"other":1}' + " ".repeat(40), true) });
+  ok(deliveryObservation(o, "POST", "/tcj")?.calls === 1 && deliveryObservation(o, "POST", "/tcj")?.kept === 0, "a cut text reading that closed a JSON object is judged on it");
+  // Padding past the read limit: a seller whose JSON answer misses its
+  // promised path, padded with trailing whitespace past our cap, is judged on
+  // the document it closed. Twenty kept calls and five padded misses read 0.8.
+  {
+    const p = "https://pad.example";
+    for (let i = 0; i < 20; i++) observeDelivery({ origin: p, method: "POST", route: "/q", guaranteedPaths: ["result.value"], body: { result: { value: i } } });
+    for (let i = 0; i < 5; i++) {
+      const padded = await readAfterSpend(new Response(JSON.stringify({ other: i }) + " ".repeat(600)), 64);
+      if (i === 0) ok(padded?._truncated === true, "our reader cut the padded answer (setup)");
+      observeDelivery({ origin: p, method: "POST", route: "/q", guaranteedPaths: ["result.value"], body: padded });
+    }
+    const d = deliveryObservation(p, "POST", "/q");
+    ok(d?.calls === 25 && d?.kept === 20 && d?.keptRate === 0.8 && d?.unverifiable === 0, `padded misses are judged on the document they closed: 0.8, not a clean record (${JSON.stringify(d)})`);
+    const paddedKept = await readAfterSpend(new Response(JSON.stringify({ result: { value: 1 } }) + " ".repeat(600)), 64);
+    observeDelivery({ origin: p, method: "POST", route: "/k", guaranteedPaths: ["result.value"], body: paddedKept });
+    ok(deliveryObservation(p, "POST", "/k")?.kept === 1, "control: a padded answer holding its promised path is kept");
+  }
   observeDelivery({ origin: o, method: "POST", route: "/tj", guaranteedPaths: ["data"], body: tempoTextForTest('{"data":1}', false) });
   ok(deliveryObservation(o, "POST", "/tj")?.kept === 1, "control: whole text that parses as the promised JSON is kept");
   observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { result: { value: 1 } } });
