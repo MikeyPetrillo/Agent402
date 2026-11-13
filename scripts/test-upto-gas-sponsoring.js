@@ -262,7 +262,7 @@ const real = globalThis.fetch;
 globalThis.fetch = function (input, init) {
   const u = typeof input === "string" ? input : input instanceof URL ? input.href : input && input.url;
   if (STUB && typeof u === "string" && u.startsWith(BASE)) return real(STUB + u.slice(BASE.length), init);
-  if (STUB && typeof u === "string" && u.startsWith("https://rpc.mainnet.arc.io")) return real(STUB + "/rpc", init);
+  if (STUB && typeof u === "string" && (() => { try { return new URL(u).hostname === "rpc.mainnet.arc.io"; } catch { return false; } })()) return real(STUB + "/rpc", init);
   return real(input, init);
 };
 `);

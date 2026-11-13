@@ -152,7 +152,7 @@ try {
   // same scripts in the same order: a runner that drifts from its expansion
   // fails here.
   const rawWf = load(rawDeployWorkflow());
-  const runnerStep = (s) => new RegExp(`^bash ${RUNNER.replace(/[.]/g, "\\.")} \\S+ \\S+$`).test(String(s.run || "").trim());
+  const runnerStep = (s) => new RegExp(`^bash ${RUNNER.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")} \\S+ \\S+$`).test(String(s.run || "").trim());
   let compared = 0;
   for (const [key, job] of Object.entries(rawWf.jobs)) {
     const rSteps = (job.steps || []).filter(runnerStep);
