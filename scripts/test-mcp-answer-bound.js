@@ -132,6 +132,9 @@ CATALOG["GET /api/wide"] = { ...def("wide", async () => ({ label: "wide", text: 
 // A flagship (web.search) whose answer is past the ceiling.
 const FLAG_ROWS = Array.from({ length: 3000 }, (_, i) => ({ title: `t${i}`, url: `https://example.com/${i}`, description: "d".repeat(40), age: null }));
 CATALOG["GET /api/search"] = { ...def("search", async () => ({ query: "q", count: FLAG_ROWS.length, results: FLAG_ROWS })), description: "flagship test tool", tags: ["flagship"] };
+// A flagship (web.news) whose answer fits compact and passes the ceiling indented.
+const NEWS_WANT = { query: "q", count: 2000, results: Array.from({ length: 2000 }, () => ({ title: "t", url: null })) };
+CATALOG["GET /api/search-news"] = { ...def("search-news", async () => NEWS_WANT), description: "news test tool", tags: ["news"] };
 // An answer under the ceiling whose serializations are recorded: each call
 // of its toJSON keeps the stack that asked for it.
 const SERIALIZED_BY = [];
@@ -175,7 +178,12 @@ try {
   const airyWant = { label: "airy", rows: AIRY_ROWS };
   ok(bytes(airyWant) < MAX && Buffer.byteLength(JSON.stringify(airyWant, null, 2)) > MAX, "setup: the airy answer fits the ceiling compact and passes it indented");
   const airy = (await rpc("tools/call", { name: "catalog.call", arguments: { slug: "airy", params: {} } })).result;
-  ok(airy.content[0].text === JSON.stringify(airyWant, null, 2) && airy.structuredContent.answerBound === undefined && airy.structuredContent.result.rows.length === AIRY_ROWS.length, "an answer that fits compact is sent whole, indented as built, with no answerBound");
+  ok(airy.content[0].text === JSON.stringify(airyWant) && Buffer.byteLength(airy.content[0].text) <= MAX && airy.structuredContent.answerBound === undefined && airy.structuredContent.result.rows.length === AIRY_ROWS.length, `an answer that fits compact but not indented is sent whole and compact, under the ceiling, with no answerBound (${Buffer.byteLength(airy.content[0].text)} of ${MAX})`);
+  // The same for a flagship (named tool) answer.
+  ok(bytes(NEWS_WANT) < MAX && Buffer.byteLength(JSON.stringify(NEWS_WANT, null, 2)) > MAX, "setup: the news answer fits the ceiling compact and passes it indented");
+  const flagAiry = (await rpc("tools/call", { name: "web.news", arguments: { query: "q" } })).result;
+  const flagAiryText = flagAiry?.content?.[0]?.text || "";
+  ok(flagAiry?.isError !== true && flagAiryText === JSON.stringify(NEWS_WANT) && Buffer.byteLength(flagAiryText) <= MAX, `a flagship answer that fits compact but not indented is sent compact, under the ceiling (${Buffer.byteLength(flagAiryText)} of ${MAX})`);
 
   // An answer that fits is sent as built: serialized once for the text
   // block, never again to be measured against the ceiling.
