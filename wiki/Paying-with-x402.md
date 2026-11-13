@@ -36,7 +36,9 @@ and it carries a typed output schema twice: inside the `bazaar` discovery extens
 input schema and an example) and as `accepts[0].outputSchema` on the first accept, so a client
 that reads the spec's field knows the response shape before it pays. The schema sits on the
 first accept only: a buyer echoes its chosen accept back in the payment, so one copy is what
-keeps the challenge under the header ceiling.
+keeps the challenge under the header ceiling. The field is not signed, so an echoed accept that
+carries no `outputSchema`, or one from an earlier 402, still matches when every other term is the
+same: a payment signed just before a release that changed a route's output schema is accepted.
 
 ## JavaScript (x402 v2 SDKs)
 

@@ -210,6 +210,43 @@ try {
     ok(facCalls.settle > before, `and it reached the facilitator to settle (${before} -> ${facCalls.settle})`);
   }
 
+  // A payment signed against a 402 from the previous build: the echoed accept
+  // carries that build's outputSchema (integer where this one says number).
+  // No signature covers the field, so the payment matches and settles; the
+  // same stale schema beside any other changed term is still refused, and
+  // nothing reaches the facilitator for it.
+  {
+    const mintStale = async () => {
+      const client = new x402Client();
+      registerExactEvmScheme(client, { signer: privateKeyToAccount(generatePrivateKey()) });
+      let minted = null;
+      const capturing = async (input, init) => {
+        const r = input instanceof Request ? input : new Request(input, init);
+        minted = r.headers.get("payment-signature") || minted;
+        if (minted) return new Response("{}", { status: 402, headers: { "Content-Type": "application/json" } });
+        return fetch(input, init);
+      };
+      await wrapFetchWithPayment(capturing, client)(`${B}/api/uuid`).catch(() => {});
+      const p = JSON.parse(Buffer.from(minted, "base64").toString("utf8"));
+      const ours = JSON.stringify(p.accepted.outputSchema || {});
+      const older = JSON.parse(ours.replace(/"type":"(?:number|string)"/, '"type":"integer"'));
+      p.accepted = { ...p.accepted, outputSchema: older };
+      return { p, ours, older: JSON.stringify(older) };
+    };
+    const first = await mintStale();
+    ok(first.ours !== "{}" && first.older !== first.ours, `the echoed accept carries an outputSchema, and the older one differs from ours (${first.older.slice(0, 80)})`);
+    const before = facCalls.settle;
+    const paid = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": b64(first.p) } });
+    ok(paid.status === 200 && facCalls.settle === before + 1, `a payment echoing an earlier build's outputSchema is accepted and settles (${paid.status}; settles ${before} -> ${facCalls.settle})`);
+    for (const [field, value] of [["amount", "1"], ["payTo", "0x1111111111111111111111111111111111111111"], ["network", "eip155:1"], ["asset", "0x1111111111111111111111111111111111111111"], ["scheme", "upto"], ["maxTimeoutSeconds", 1], ["extra", { name: "Other", version: "9" }]]) {
+      const { p } = await mintStale();
+      p.accepted = { ...p.accepted, [field]: value };
+      const [v0, s0] = [facCalls.verify, facCalls.settle];
+      const r = await fetch(`${B}/api/uuid`, { headers: { "payment-signature": b64(p) } });
+      ok(r.status === 402 && facCalls.verify === v0 && facCalls.settle === s0, `an earlier build's outputSchema with a different ${field} is refused before the facilitator (${r.status})`);
+    }
+  }
+
   // A payment PAYLOAD of x402 version 1 (not a v2 payload with a v1-era key
   // in its echoed block) is refused before the paywall: every 402 here offers
   // version 2 only, and the library matches a v1 payload on scheme and network
