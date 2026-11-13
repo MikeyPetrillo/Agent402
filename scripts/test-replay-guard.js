@@ -116,6 +116,24 @@ function evmCred({ network = "eip155:8453", nonce = "0xabc", from = "0x" + "1".r
   ok(await g.begin(k) === "consumed", "after settle, replay → consumed");
   ok(g._state().consumed === 1 && g._state().inFlight === 0, "state: 1 consumed, 0 in flight");
 }
+// One EIP-3009 authorization under unsigned network fields the paywall does not
+// read (a top-level `network`, a `payload.network`): one claim on this process,
+// in flight and once settled, though each copy's legacy part differs.
+{
+  const g = createReplayGuard();
+  const auth = { from: "0x" + "1".repeat(40), to: "0x" + "2".repeat(40), value: "1000", validAfter: "0", validBefore: "9999999999", nonce: "0x" + "ab".repeat(32) };
+  const base = { x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", amount: "1000" }, payload: { signature: "0x" + "cd".repeat(65), authorization: auth } };
+  const copies = [base, { ...base, network: "base" }, { ...base, network: "anything" }, { ...base, payload: { ...base.payload, network: "base-sepolia" } }];
+  const keys = copies.map((c) => paymentReplayKey(fakeReq({ "payment-signature": Buffer.from(JSON.stringify(c)).toString("base64") })));
+  ok(keys.every((x) => x.startsWith("n2:")) && new Set(keys).size > 1, "setup: each copy's nonce key differs only in its legacy part");
+  const verdicts = [];
+  for (const k of keys) verdicts.push(await g.begin(k));
+  ok(verdicts[0] === "ok" && verdicts.slice(1).every((v) => v === "inflight"), `one authorization under other unsigned network fields is one claim in flight (${verdicts.join(",")})`);
+  await g.settle(keys[0]);
+  const after = [];
+  for (const k of keys.slice(1)) after.push(await g.begin(k));
+  ok(after.every((v) => v === "consumed"), `and once settled, each copy is consumed (${after.join(",")})`);
+}
 {
   const g = createReplayGuard();
   const k = "n:retry";

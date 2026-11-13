@@ -307,10 +307,11 @@ function namesOf(key) {
   if (!m) return { primary: String(key), legacy: null };
   return { primary: `n2:${m[1]}`, legacy: `n:${m[2]}` };
 }
-// The per-process state keys a Stellar, chain-transaction or payload-keyed
-// payment on its identity alone: two encodings of one signed artifact share it, while their legacy parts (each
-// header's own hash) differ.
-const localKeyOf = (key) => (/^(?:s2|p2|t2):/.test(String(key)) ? namesOf(key).primary : key);
+// The per-process state keys every payment on its identity alone: two
+// encodings of one signed artifact share it, while their legacy parts differ
+// (each header's own hash; for a nonce key, the network an unsigned field of
+// the header names, which a sender can spell any way).
+const localKeyOf = (key) => (/^(?:s2|p2|t2|n2):/.test(String(key)) ? namesOf(key).primary : key);
 const isLegacyEntry = (v) => v != null && !String(v).startsWith(LEGACY_TAG);
 
 // A settled payment's consumed mark is kept at least this long. /privacy and
