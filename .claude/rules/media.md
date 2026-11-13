@@ -82,14 +82,16 @@ Loaded when a media, document or worker-pool tool file is read.
   follows the decoder, a small-file test and a decode of the format's ordinary shapes
   (`scripts/test-image.js`).
 - **Transcription length:** the per-tier cap of `transcribe` and `transcribe-pro` holds the longer of the duration a
-  file's headers declare and the length its audio measures. `measureAudioSeconds` (`src/tools/media-kit.js`) decodes
-  the first audio stream to nowhere with ffmpeg (audio-only whitelist, its own two-slot pool that queues, 10 s
-  deadline) and never refuses: where it cannot measure (no ffmpeg, a failed or slow decode) a lossy audio-only file in
-  one or two channels at a reported sample rate of 48 kHz or less is held to the shortest its bytes can play
-  (`byteFloorApplies`, `byteFloorSeconds`, `src/tools/stt-kit.js`); a file with a video track, more channels, a higher
-  sample rate (192 kHz Vorbis passes 640 kbps) or no reported sample rate keeps its declared length, since its bytes
-  are not all audio at the floor's rate. The unmeasured count since boot is `transcriptionUnmeasured.sinceBoot` on
-  `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
+  file's headers declare and the length its audio measures. `measureAudio` (`src/tools/media-kit.js`) decodes the first
+  audio stream to nowhere with ffmpeg (audio-only whitelist, its own two-slot pool that queues, 10 s deadline) and
+  answers `{ seconds }`, `{ undecodable }` or `{ unavailable }`. `prepareAudioWithinCap` (`src/tools/stt-kit.js`): a
+  measured file inside the cap goes byte for byte when its container is on the upstream's list (flac, mp3, mp4/m4a,
+  ogg, wav, webm), else as 16 kHz mono FLAC (`transcodeSpeech`, same pool and deadline). Unmeasured, a lossy audio-only
+  file whose bytes alone play past the cap is the 422 (`byteFloorApplies`); any other file is cut at the cap with
+  `-t`, and a cut that reached the cap is what is sent, the answer carrying `trimmedToCapSeconds` and
+  `durationUnconfirmed: true`. A file ffmpeg cannot decode is a 400 (format unreadable, not charged); a decoder that
+  cannot run (no slot, deadline, no ffmpeg) is a retryable 503 with no upstream call. The unmeasured count since boot
+  is `transcriptionUnmeasured.sinceBoot` on `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
 - **Image generation moderation:** the three GPT Image tiers (`src/tools/image-gen-kit.js`) send
   `moderation: "low"` unless the caller sends `"auto"` (any other value is a 400 naming the field).
   A 400 whose OpenAI error names the `moderation` parameter (`error.param`, or an

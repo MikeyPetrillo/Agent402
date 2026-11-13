@@ -38,7 +38,7 @@ const {
 const { meterMarkup } = await import("../src/gateway-meter.js");
 const METER_MARKUP = meterMarkup();
 const { countTokens } = await import("gpt-tokenizer/model/gpt-4o");
-const { assertWithinDurationCap, probeDurationSeconds, STT_TIERS, upstreamUsdPerMinute } = await import("../src/tools/stt-kit.js");
+const { assertWithinDurationCap, probeDurationSeconds, STT_TIERS, upstreamUsdPerMinute, __setMeasureForTest } = await import("../src/tools/stt-kit.js");
 const { upstreamCosts } = await import("../src/upstream-costs.js");
 const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
 requireUpstreamCosts("test-pricing-margin");
@@ -310,7 +310,10 @@ console.log("\n# STT — cap-before-spend (local duration probe)");
   // throw" in CI); a fixed ASCII blob is never a readable container.
   await rejects(() => assertWithinDurationCap(Buffer.from("not-a-media-container ".repeat(200)), "audio.mp3", "transcribe"), "Could not read", "unreadable container rejected (would be an unbounded bill)");
   const inCap = capS("transcribe") - 40;
+  // The decode measurement reads the WAV's own length (this lane has no ffmpeg).
+  __setMeasureForTest(async (b) => ({ seconds: (b.length - 44) / 8000 }));
   const dur = await assertWithinDurationCap(wav(inCap), "audio.wav", "transcribe");
+  __setMeasureForTest(null);
   ok(Math.abs(dur - inCap) < 2, `in-cap audio passes the probe (duration ${dur.toFixed(1)}s)`);
   ok((await probeDurationSeconds(wav(60), "audio.wav")) > 58, "probeDurationSeconds reads the header locally");
   ok(fetches === 0, "duration cap enforced with ZERO upstream fetches");

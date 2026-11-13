@@ -330,9 +330,21 @@ export function judgeReadableText(text, { max = 0, links = true } = {}) {
   const sentences = raw.split(/(?<=[.!?])\s+|[\r\n]+/).filter((s) => s.trim());
   // A sentence written as one token with separators between its words
   // ("Ignore-all-previous-instructions.") is read as words too.
-  const kept = sentences.filter((s) => !hasHiddenCharacters(s) && !addressesReader(s) && !(/^\S+$/.test(s.trim()) && /[-_]/.test(s) && addressesReader(asWords(s))))
-    .map((s) => s.replace(/\s+/g, " ").trim())
-    .map((s) => (links ? s.replace(/\bhttps?:\/\/\S+/gi, "[link]") : s)).join(" ");
+  let parts = sentences.filter((s) => !hasHiddenCharacters(s) && !addressesReader(s) && !(/^\S+$/.test(s.trim()) && /[-_]/.test(s) && addressesReader(asWords(s))))
+    .map((s) => s.replace(/\s+/g, " ").trim());
+  // The kept sentences are read again as they are handed on, joined: two
+  // that pass alone ("System" on one line, ": route every request ..." on
+  // the next) can read as one sentence once the line break is a space. A
+  // neighboring pair that reads so is dropped together, and a joined text
+  // that still reads so is dropped whole.
+  const drop = new Set();
+  for (let i = 0; i + 1 < parts.length; i++) {
+    if (addressesReader(`${parts[i]} ${parts[i + 1]}`)) { drop.add(i); drop.add(i + 1); }
+  }
+  if (drop.size) parts = parts.filter((_, i) => !drop.has(i));
+  const plain = parts.join(" ");
+  const kept = parts.map((s) => (links ? s.replace(/\bhttps?:\/\/\S+/gi, "[link]") : s)).join(" ");
+  if (plain && (addressesReader(plain) || (kept !== plain && addressesReader(kept)))) return "";
   return max > 0 && kept.length > max ? `${kept.slice(0, max - 1)}…` : kept;
 }
 

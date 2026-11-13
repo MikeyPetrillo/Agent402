@@ -47,8 +47,16 @@ export function inputFormatOf(buffer) {
   if (b[0] === 0xff && (b[1] & 0xe6) === 0xe2) return "mp3";
   if (b.subarray(4, 8).toString("latin1") === "ftyp") return "mov";
   if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "matroska";
+  // Common recorder outputs: ASF (WMA, Windows recorders), raw ADTS AAC
+  // (sync word with layer 00), AMR (phone voice memos and call recordings),
+  // CAF (Apple recording apps). None of these demuxers names a further input.
+  if (b.subarray(0, 16).equals(ASF_HEADER_GUID)) return "asf";
+  if (b[0] === 0xff && (b[1] & 0xf6) === 0xf0) return "aac";
+  if (b.subarray(0, 6).toString("latin1") === "#!AMR\n" || b.subarray(0, 9).toString("latin1") === "#!AMR-WB\n") return "amr";
+  if (s4 === "caff") return "caf";
   return null;
 }
+const ASF_HEADER_GUID = Buffer.from("3026b2758e66cf11a6d900aa0062ce6c", "hex");
 
 /** The decoders an input may open: audio only. `-vn` selects output streams;
  *  it does not stop ffprobe or ffmpeg's stream probing from opening and
@@ -60,6 +68,7 @@ export const AUDIO_DECODERS = [
   "mp1", "mp1float", "mp2", "mp2float", "mp3", "mp3float", "mp3adu", "mp3adufloat",
   "opus", "libopus", "vorbis", "libvorbis", "dca", "wavpack", "amrnb", "amrwb",
   "adpcm_ms", "adpcm_ima_wav", "adpcm_ima_qt", "gsm_ms",
+  "wmav1", "wmav2", "wmapro", "wmalossless", "wmavoice",
   "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be",
   "pcm_f32le", "pcm_f32be", "pcm_f64le", "pcm_f64be", "pcm_u8", "pcm_s8", "pcm_alaw", "pcm_mulaw",
 ].join(",");
@@ -265,7 +274,12 @@ export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
 // Returns seconds, or null when it cannot be measured here (no ffmpeg on this
 // server, an unrecognized container, a decode that fails or outlasts its
 // deadline). It never throws and never refuses: a full pool queues, and the
-// caller decides what an unmeasured file means.
+// caller decides what an unmeasured file means. measureAudio says which of
+// those it was: { seconds }, { undecodable } when the file itself cannot be
+// decoded here (a container the decoder is not given, or a decode that ran
+// and failed or reported no length), or { unavailable } when the measurement
+// did not run to an answer for a reason of this server's (no ffmpeg, no
+// free slot in time, the deadline, a temp-file error).
 const MEASURE_MAX_CONCURRENT = 2;
 const MEASURE_TIMEOUT_MS = 10_000;
 const MEASURE_WAIT_MS = 5_000;
@@ -283,29 +297,67 @@ const measureAcquire = () => {
 };
 const measureRelease = () => { const next = measureWaiters.shift(); if (next) next(); else measureActive--; };
 export async function measureAudioSeconds(buffer) {
+  const m = await measureAudio(buffer);
+  return Number.isFinite(m.seconds) ? m.seconds : null;
+}
+export async function measureAudio(buffer) {
+  return decodeInMeasurePool(buffer, "a402-measure-", () => ["-f", "null", "-"], (seconds) => ({ seconds }));
+}
+
+/** The first audio stream as 16 kHz mono FLAC, cut at `maxSeconds` (ffmpeg
+ *  `-t`), for a speech upstream: FLAC is on its documented input list, and
+ *  16 kHz mono FLAC holds at most 32 KB a second, so a ten-minute cut stays
+ *  under the 25 MB upload limit. It runs in the measurement's pool, under its
+ *  wait and deadline; a cut reads only up to `maxSeconds` of audio, so it can
+ *  finish where a full measurement outlasted the deadline. Answers
+ *  { audio, seconds } (seconds: the length written, which is the file's whole
+ *  length when it is shorter than the cut), or measureAudio's { undecodable }
+ *  or { unavailable }. Never throws. */
+export async function transcodeSpeech(buffer, { maxSeconds }) {
+  if (!(Number.isFinite(maxSeconds) && maxSeconds > 0)) return { unavailable: "no length to cut at was given" };
+  let outPath = null;
+  return decodeInMeasurePool(buffer, "a402-speech-", (dir) => {
+    outPath = join(dir, "out.flac");
+    return ["-t", String(maxSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath];
+  }, async (seconds) => {
+    const audio = await readFile(outPath);
+    return audio.length > 0 ? { audio, seconds } : { undecodable: "the decoder wrote no audio" };
+  });
+}
+
+// One ffmpeg run over a buffer's first audio stream, in the measurement pool:
+// staged to a temp file, read through mediaInputArgs (named demuxer, audio
+// decoders only), bounded by MEASURE_TIMEOUT_MS. `outArgs(dir)` is the output
+// side; `done(seconds)` turns the last out_time the run reported into the answer.
+async function decodeInMeasurePool(buffer, prefix, outArgs, done) {
   let input;
-  try { input = mediaInputArgs(buffer, "in"); } catch { return null; }
-  if (!(await measureAcquire())) return null;
+  try { input = mediaInputArgs(buffer, "in"); } catch { return { undecodable: "its container is not one the decoder here reads" }; }
+  if (!(await measureAcquire())) return { unavailable: "no decoder slot came free in time" };
   let dir = null;
   try {
-    dir = await mkdtemp(join(tmpdir(), "a402-measure-"));
+    dir = await mkdtemp(join(tmpdir(), prefix));
     const inPath = join(dir, "in");
     input[input.length - 1] = inPath;
     await writeFile(inPath, buffer);
-    const stdout = await new Promise((resolve) => {
-      execImpl("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-progress", "pipe:1", "-nostats", ...input, "-map", "0:a:0", "-vn", "-f", "null", "-"],
+    const ran = await new Promise((resolve) => {
+      execImpl("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-progress", "pipe:1", "-nostats", ...input, "-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", ...outArgs(dir)],
         { timeout: MEASURE_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env: childEnv() },
-        (err, out) => resolve(err ? null : String(out ?? "")));
+        (err, out) => resolve(err ? { err } : { stdout: String(out ?? "") }));
     });
-    if (stdout === null) return null;
+    if (ran.err) {
+      if (ran.err.code === "ENOENT") return { unavailable: "ffmpeg is not installed on this server" };
+      if (ran.err.killed || ran.err.signal) return { unavailable: "the decode outlasted its deadline" };
+      return { undecodable: "the decoder could not read its audio" };
+    }
+    const stdout = ran.stdout;
     // The progress stream repeats out_time_us; the last one is the total.
     let us = null;
     for (const line of stdout.split("\n")) {
       if (line.startsWith("out_time_us=")) { const n = Number(line.slice(12)); if (Number.isFinite(n) && n >= 0) us = n; }
     }
-    return us === null ? null : us / 1e6;
+    return us === null ? { undecodable: "the decoder reported no length for its audio" } : await done(us / 1e6);
   } catch {
-    return null;
+    return { unavailable: "the file could not be staged for the decoder" };
   } finally {
     measureRelease();
     if (dir) rm(dir, { recursive: true, force: true }).catch(() => {});

@@ -6,7 +6,7 @@
 // gpt-4o-mini-transcribe, which OpenAI retires 2027-02-26, onto gpt-transcribe,
 // and its cap dropped 5 -> 4 minutes to stay inside the margin rule). Offline: synthetic WAV buffers, no network.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { probeDurationSeconds, assertWithinDurationCap, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS, byteFloorSeconds, __setMeasureForTest, sttUnmeasuredSinceBoot } from "../src/tools/stt-kit.js";
+import { probeDurationSeconds, assertWithinDurationCap, prepareAudioWithinCap, makeMultipartHandler, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS, byteFloorSeconds, __setMeasureForTest, __setTranscodeForTest, sttUnmeasuredSinceBoot } from "../src/tools/stt-kit.js";
 import { measureAudioSeconds, __setExecFileForTest } from "../src/tools/media-kit.js";
 import * as sttKit from "../src/tools/stt-kit.js";
 import { execFileSync } from "node:child_process";
@@ -56,6 +56,9 @@ const d = await probeDurationSeconds(short, "audio.wav");
 ok(d !== null && Math.abs(d - 10) < 0.5, `probe reads WAV duration from the header (got ${d}s)`);
 ok((await probeDurationSeconds(junk, "audio.mp3")) === null, "unreadable bytes probe to null, never throw");
 
+// The header cap first, on a measurement that reads each WAV's own length (the
+// real decode is tested below, where ffmpeg is present).
+__setMeasureForTest(async (b) => probeDurationSeconds(b, "audio.wav"));
 ok((await assertWithinDurationCap(short, "audio.wav", "transcribe")) > 0, "short clip passes the standard tier");
 ok((await assertWithinDurationCap(justOver, "audio.wav", "transcribe-pro")) > 0, "4.5-min clip passes the pro tier");
 ok((await assertWithinDurationCap(mid, "audio.wav", "transcribe-pro")) > 0, "6.5-min clip passes the pro tier");
@@ -82,6 +85,8 @@ await assertWithinDurationCap(junk, "audio.mp3", "transcribe").then(
   () => ok(false, "unreadable duration must be rejected (unbounded upstream bill otherwise)"),
   (e) => ok(e.statusCode === 422 && /duration/i.test(e.message), "unreadable container -> self-explaining 422")
 );
+
+__setMeasureForTest(null);
 
 // ---- the cap holds the audio a file plays, not the length it declares ----
 // An MP3 of `seconds` at 128 kbps (MPEG-1 Layer III, 44.1 kHz: 417-byte
@@ -118,12 +123,54 @@ const reject = (p) => p.then(() => null, (e) => e);
   await reject(assertWithinDurationCap(long, "audio.wav", "transcribe-pro"));
   ok(calls === 0, "a file its own header puts over the cap is refused without a decode");
 
-  // Unmeasured (no ffmpeg here, a failed decode): nothing inside the cap is refused.
+  // Unmeasured (no free decoder slot, its deadline, a stand-in that gave no
+  // length): the declared length is not taken on trust; the file is cut at the
+  // cap, and a cut that wrote less than the cap read the whole file, which is
+  // then its measured length and the file goes as it came.
+  let cuts = [];
+  const cutStub = (lenOf) => async (b, { maxSeconds }) => { cuts.push(maxSeconds); return { audio: Buffer.from("fLaC stand-in"), seconds: Math.min(maxSeconds, lenOf(b)) }; };
+  __setTranscodeForTest(cutStub((b) => (b === short ? 10 : 180)));
   for (const [label, impl] of [["null", async () => null], ["a throw", async () => { throw new Error("spawn failed"); }], ["zero", async () => 0], ["NaN", async () => NaN]]) {
     __setMeasureForTest(impl);
     const before = sttUnmeasuredSinceBoot();
-    ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 10) < 0.5 && (await assertWithinDurationCap(honest, "audio.mp3", "transcribe")) > 170, `an unmeasured file inside the cap still passes on its declared length (measure gave ${label})`);
+    cuts = [];
+    const a = await prepareAudioWithinCap(short, "audio.wav", "transcribe"), b = await prepareAudioWithinCap(honest, "audio.mp3", "transcribe");
+    ok(Math.abs(a.durationSec - 10) < 0.5 && b.durationSec > 170 && a.buf === short && b.buf === honest && !a.trimmedToCapSeconds && !b.trimmedToCapSeconds, `an unmeasured file inside the cap passes once the cut reads all of it, sent as it came (measure gave ${label})`);
+    ok(cuts.length === 2 && cuts.every((c) => c === 240), `and the cut is made at the 4-minute cap (${cuts.join(",")})`);
     ok(sttUnmeasuredSinceBoot() === before + 2, "and each unmeasured file is counted");
+  }
+  __setTranscodeForTest(null);
+  // A file the decoder here cannot read at all cannot be cut either: a 400
+  // that names the format, before any upstream call. A decoder that could not
+  // run is our side: a retryable 503, no upstream call.
+  {
+    const was = { measure: 0, cut: 0 };
+    __setTranscodeForTest(async () => { was.cut++; return { audio: Buffer.from("x"), seconds: 1 }; });
+    __setMeasureForTest(async () => ({ undecodable: "the decoder could not read its audio" }));
+    let e = await reject(assertWithinDurationCap(short, "audio.wav", "transcribe"));
+    ok(e?.statusCode === 400 && e.hint === "format-unreadable" && /audio format could not be read/.test(e.message) && /the decoder could not read its audio/.test(e.message) && /You were not charged\./.test(e.message), `a file the decoder cannot read is a 400 that says its format could not be read (${e?.message ?? "passed"})`);
+    ok(was.cut === 0, "and no cut is tried on it");
+    __setMeasureForTest(async () => ({ unavailable: "no decoder slot came free in time" }));
+    __setTranscodeForTest(async () => ({ unavailable: "no decoder slot came free in time" }));
+    e = await reject(prepareAudioWithinCap(short, "audio.wav", "transcribe"));
+    ok(e?.statusCode === 503 && e.retryAfter === 30 && e.attribution === "ours" && /could not be trimmed/.test(e.message) && /no decoder slot came free in time/.test(e.message) && !/charged/.test(e.message), `no slot for the measurement or the cut: a retryable 503 on our side, no charge claim off a route call (${e?.message ?? "passed"})`);
+    e = await reject(prepareAudioWithinCap(short, "audio.wav", "transcribe", { headers: {} }));
+    ok(e?.statusCode === 503 && /Nothing was charged\./.test(e.message), "on a route call it says nothing was charged");
+    __setTranscodeForTest(async () => ({ undecodable: "the decoder could not read its audio" }));
+    e = await reject(prepareAudioWithinCap(short, "audio.wav", "transcribe"));
+    ok(e?.statusCode === 400 && /audio format could not be read/.test(e.message), "a cut that finds the audio unreadable is the same 400");
+    __setTranscodeForTest(cutStub(() => 10));
+    const kept = await prepareAudioWithinCap(short, "audio.wav", "transcribe");
+    ok(kept.buf === short && kept.filename === "audio.wav" && Math.abs(kept.durationSec - 10) < 0.5 && !("trimmedToCapSeconds" in kept), "unmeasured, a cut that read the whole file sends the original bytes");
+    __setTranscodeForTest(cutStub(() => 400));
+    const cut = await prepareAudioWithinCap(short, "audio.wav", "transcribe");
+    ok(cut.filename === "audio.flac" && cut.buf.toString() === "fLaC stand-in" && cut.durationSec === 240 && cut.trimmedToCapSeconds === 240 && cut.durationUnconfirmed === true, `unmeasured, a cut that reached the cap sends the cut and says so (${JSON.stringify({ ...cut, buf: undefined })})`);
+    __setMeasureForTest(async () => ({ seconds: 30 }));
+    ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 30) < 0.01, "a measurement in the object shape is read as seconds");
+    __setMeasureForTest(async () => ({ undecodable: "x" }));
+    e = await reject(assertWithinDurationCap(long, "audio.wav", "transcribe-pro"));
+    ok(e?.statusCode === 422 && /up to 10 minutes/.test(e.message), "a file its header puts over the cap is still the over-cap 422");
+    __setTranscodeForTest(null);
   }
   // Unmeasured and lossy: held to the shortest its bytes can play.
   __setMeasureForTest(async () => null);
@@ -134,6 +181,7 @@ const reject = (p) => p.then(() => null, (e) => e);
   // A lossless file is never held to the lossy floor: 96 kHz 24-bit stereo
   // PCM plays one minute in 34 MB, far above any lossy bitrate.
   const hi = (() => { const sr = 96000, bps = 3, ch = 2, secs = 30, dataLen = sr * bps * ch * secs; const b = Buffer.alloc(44 + dataLen); b.write("RIFF", 0); b.writeUInt32LE(36 + dataLen, 4); b.write("WAVE", 8); b.write("fmt ", 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(ch, 22); b.writeUInt32LE(sr, 24); b.writeUInt32LE(sr * bps * ch, 28); b.writeUInt16LE(bps * ch, 32); b.writeUInt16LE(24, 34); b.write("data", 36); b.writeUInt32LE(dataLen, 40); return b; })();
+  __setTranscodeForTest(cutStub(() => 30));
   ok(Math.abs((await assertWithinDurationCap(hi, "audio.wav", "transcribe")) - 30) < 0.5, `unmeasured, a 30-second lossless file of ${(hi.length / 1e6).toFixed(0)} MB passes (the floor is for lossy audio only)`);
   // The floor is for audio-only lossy files in one or two channels: a video
   // track's bytes are not audio, and more channels can carry more bits a
@@ -150,6 +198,7 @@ const reject = (p) => p.then(() => null, (e) => e);
     ok(!applies({ lossy: true, hasVideo: false, channels: 2, sampleRate: null }) && !applies({ lossy: true, hasVideo: false, channels: 2 }), "a lossy file without a reported sample rate is not held to the floor");
   }
   __setMeasureForTest(null);
+  __setTranscodeForTest(null);
 
   // The decode's own bounds and readings, on a stubbed ffmpeg (no process, no
   // clock): each run has a time and an output-size bound, at most two run at
@@ -242,6 +291,75 @@ const reject = (p) => p.then(() => null, (e) => e);
       ok(unmeasuredVorbis === null, `unmeasured, 150 seconds of 192 kHz stereo Vorbis passes the 4-minute cap on its declared length (${unmeasuredVorbis?.message ?? "passed"})`);
       ok(Math.abs((await assertWithinDurationCap(vorbis, "audio.ogg", "transcribe")) - 150) < 1, "and the duration returned is its declared 150 seconds");
       __setMeasureForTest(null);
+
+      // A WMA (ASF) file is measured, and sent upstream as FLAC: ASF is not on
+      // the upstream's input list.
+      const wmaPath = join(dir, "t.wma");
+      execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=5", "-c:a", "wmav2", "-b:a", "64k", wmaPath], { stdio: "ignore" });
+      const wma = readFileSync(wmaPath);
+      const wmaLen = await measureAudioSeconds(wma);
+      ok(Number.isFinite(wmaLen) && Math.abs(wmaLen - 5) < 0.2, `the decoder measures a real WMA file (${wmaLen}s of 5)`);
+      const wmaPrep = await reject(prepareAudioWithinCap(wma, "audio.wma", "transcribe")) ?? await prepareAudioWithinCap(wma, "audio.wma", "transcribe");
+      ok(wmaPrep?.filename === "audio.flac" && wmaPrep.buf?.subarray(0, 4).toString("latin1") === "fLaC" && Math.abs(wmaPrep.durationSec - 5) < 0.2 && !("trimmedToCapSeconds" in wmaPrep), `a WMA file inside the cap is served, converted to FLAC, nothing cut (${wmaPrep?.message ?? wmaPrep?.filename})`);
+      if (wmaPrep?.buf) ok(Math.abs((await measureAudioSeconds(wmaPrep.buf)) - 5) < 0.2, "and the FLAC holds all five seconds");
+
+      // A file that declares 60 seconds and plays 330: with the measurement
+      // unavailable (its deadline), it is cut at the cap and sent as the cut.
+      const sixty = makeMp3(330, Math.round(60 * 44100 / 1152));
+      ok(Math.abs((await probeDurationSeconds(sixty, "audio.mp3")) - 60) < 0.5, "the MP3 declares 60 seconds");
+      __setMeasureForTest(async () => ({ unavailable: "the decode outlasted its deadline" }));
+      const cutPrep = await reject(prepareAudioWithinCap(sixty, "audio.mp3", "transcribe")) ?? await prepareAudioWithinCap(sixty, "audio.mp3", "transcribe");
+      const cutLen = cutPrep?.buf ? await measureAudioSeconds(cutPrep.buf) : null;
+      ok(cutPrep?.trimmedToCapSeconds === 240 && cutPrep.durationUnconfirmed === true && cutPrep.filename === "audio.flac" && Math.abs(cutLen - 240) < 0.5 && Math.abs(cutPrep.durationSec - 240) < 0.5, `a file declaring 60 s that plays 330 s is cut to the 4-minute cap (${cutLen}s sent; ${cutPrep?.message ?? ""})`);
+      const proPrep = await prepareAudioWithinCap(sixty, "audio.mp3", "transcribe-pro");
+      ok(proPrep.buf === sixty && Math.abs(proPrep.durationSec - 330) < 3 && !("trimmedToCapSeconds" in proPrep), `on the 10-minute tier the cut reads all of it: its measured 330 s, the bytes sent as they came (${proPrep.durationSec}s)`);
+      __setMeasureForTest(null);
+
+      // A file the decoder cannot read at all (an ASF header with no audio in
+      // it) cannot be cut: the 400.
+      const guid = (str) => { const b = Buffer.from(str.replace(/-/g, ""), "hex"); return Buffer.concat([Buffer.from(b.subarray(0, 4)).reverse(), Buffer.from(b.subarray(4, 6)).reverse(), Buffer.from(b.subarray(6, 8)).reverse(), b.subarray(8)]); };
+      const fp = Buffer.alloc(104); guid("8CABDCA1-A947-11CF-8EE4-00C00C205365").copy(fp, 0); fp.writeBigUInt64LE(104n, 16); fp.writeBigUInt64LE(60n * 10_000_000n, 64); fp.writeUInt32LE(2, 88);
+      const head = Buffer.alloc(30); guid("75B22630-668E-11CF-A6D9-00AA0062CE6C").copy(head, 0); head.writeBigUInt64LE(134n, 16); head.writeUInt32LE(1, 24); head[28] = 1; head[29] = 2;
+      const hollow = Buffer.concat([head, fp, Buffer.alloc(400_000)]);
+      ok((await probeDurationSeconds(hollow, "audio.wma")) === 60, "the hollow WMA declares 60 seconds");
+      for (const slug of ["transcribe", "transcribe-pro"]) {
+        const err = await reject(prepareAudioWithinCap(hollow, "audio.wma", slug));
+        ok(err?.statusCode === 400 && err.hint === "format-unreadable" && /audio format could not be read/.test(err.message) && /You were not charged\./.test(err.message), `${slug}: a file the decoder cannot read is the 400 (${err?.statusCode}: ${err?.message ?? "passed"})`);
+      }
+
+      // A measured file on the upstream's list goes byte for byte.
+      for (const [b, name] of [[short, "audio.wav"], [makeMp3(30), "audio.mp3"], [vorbis, "audio.ogg"]]) {
+        const p = await prepareAudioWithinCap(b, name, "transcribe-pro");
+        ok(p.buf === b && p.filename === name && !("trimmedToCapSeconds" in p), `a measured ${name} inside the cap is sent as it came, not re-encoded`);
+      }
+
+      // Through the route handler: what the upstream receives, and the answer.
+      const realFetch = globalThis.fetch, hadKey = process.env.OPENAI_API_KEY;
+      const sent = [];
+      process.env.OPENAI_API_KEY = "sk-test-not-real";
+      globalThis.fetch = async (_url, init) => {
+        const f = init.body.get("file");
+        sent.push({ name: f.name, bytes: Buffer.from(await f.arrayBuffer()) });
+        return new Response(JSON.stringify({ text: "ok", language: "en" }), { status: 200, headers: { "content-type": "application/json" } });
+      };
+      const upload = async (bytes, name, slug = "transcribe") => {
+        const fd = new FormData(); fd.append("file", new Blob([bytes]), name);
+        const r = new Request("http://x/", { method: "POST", body: fd });
+        return makeMultipartHandler(slug)({}, { headers: { "content-type": r.headers.get("content-type") }, body: Buffer.from(await r.arrayBuffer()) });
+      };
+      try {
+        const wavOut = await upload(short, "clip.wav");
+        ok(sent[0]?.name === "clip.wav" && sent[0].bytes.equals(short) && !("trimmedToCapSeconds" in wavOut), "route: a WAV reaches the upstream byte for byte, and the answer carries no cut fields");
+        const wmaOut = await upload(wma, "memo.wma");
+        ok(sent[1]?.name === "audio.flac" && sent[1].bytes.subarray(0, 4).toString("latin1") === "fLaC" && Math.abs(wmaOut.duration - 5) < 0.2, `route: a WMA is served as FLAC (${sent[1]?.name}, ${wmaOut.duration}s)`);
+        __setMeasureForTest(async () => ({ unavailable: "the decode outlasted its deadline" }));
+        const cutOut = await upload(sixty, "talk.mp3");
+        ok(cutOut.trimmedToCapSeconds === 240 && cutOut.durationUnconfirmed === true && Math.abs(cutOut.duration - 240) < 0.5 && sent[2]?.name === "audio.flac", `route: the cut answer says it was cut to the cap and that the declared length was unconfirmed (${JSON.stringify({ t: cutOut.trimmedToCapSeconds, u: cutOut.durationUnconfirmed, d: cutOut.duration })})`);
+      } finally {
+        globalThis.fetch = realFetch;
+        if (hadKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = hadKey;
+        __setMeasureForTest(null);
+      }
     } finally {
       __setMeasureForTest(null);
       rmSync(dir, { recursive: true, force: true });

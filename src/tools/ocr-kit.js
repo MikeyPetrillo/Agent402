@@ -12,6 +12,7 @@
 // than browser/PDF tooling. PoW-eligible (pure CPU, no network in the hot path).
 import { loadTesseract } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
+import { payerFromRequest } from "../payer.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -47,11 +48,23 @@ export const OCR_WORKER_MAX = 3;
 const OCR_INIT_TIMEOUT_MS = Number(process.env.OCR_INIT_TIMEOUT_MS) || 30_000;
 const workers = new Map(); // lang -> { promise, active, retired }
 
+// Each entry carries `gone`, settled once its worker has terminated (or never
+// started), so a caller that must wait for the thread to be gone can await it.
+function newEntry(promise) {
+  const entry = { promise, active: 0, retired: false, terminated: null };
+  entry.gone = new Promise((r) => { entry.markGone = r; });
+  return entry;
+}
+function terminateEntry(entry, worker) {
+  if (!entry.terminated) {
+    entry.terminated = Promise.resolve(worker ?? entry.promise).then((w) => w.terminate()).catch(() => { /* never started */ });
+    entry.terminated.finally(() => entry.markGone?.());
+  }
+  return entry.terminated;
+}
 function retireEntry(entry) {
   entry.retired = true;
-  if (entry.active === 0) {
-    entry.promise.then((w) => w.terminate()).catch(() => { /* never started */ });
-  }
+  if (entry.active === 0) terminateEntry(entry);
 }
 
 function dropEntry(lang, entry) {
@@ -70,7 +83,7 @@ function getWorkerEntry(lang) {
     throw bad(`OCR language data for "${lang}" is not installed on this server`, 503);
   }
   mkdirSync(TESS_CACHE_DIR, { recursive: true });
-  entry = { promise: null, active: 0, retired: false };
+  entry = newEntry(null);
   const started = loadTesseract().then(({ createWorker }) => createWorker(lang, undefined, {
     langPath: TESSDATA_DIR,
     cachePath: TESS_CACHE_DIR,
@@ -114,7 +127,7 @@ function getWorkerEntry(lang) {
 export const __ocrTest = {
   workerCount: () => workers.size,
   /** Put a stand-in engine in a language's slot (fault-path tests). */
-  inject(lang, worker) { workers.set(lang, { promise: Promise.resolve(worker), active: 0, retired: false }); },
+  inject(lang, worker) { workers.set(lang, newEntry(Promise.resolve(worker))); },
   async shutdown() { for (const [lang, entry] of [...workers]) dropEntry(lang, entry); },
 };
 
@@ -396,12 +409,23 @@ export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OU
 // hold gigabytes. Only one image above OCR_LARGE_PIXELS is in the engine at a
 // time; the next waits up to OCR_LARGE_WAIT_MS for its turn (at most
 // OCR_LARGE_QUEUE_MAX waiting), then answers 503 with Retry-After. Smaller
-// images never wait here.
+// images never wait here. The slot is held until the worker that read the
+// image has terminated (its memory is gone), up to OCR_LARGE_RETIRE_WAIT_MS.
+//
+// Admission is per caller (the signed payer, a credits key, a Tempo sender,
+// else the client address): a caller with nothing in the slot or its queue
+// is never refused for want of room while a queued place belongs to a caller
+// that already holds the slot or another place. That place goes to it, and
+// the caller it was taken from is answered 503 (not charged), so one caller's
+// run of large images cannot hold every place.
 export const OCR_LARGE_PIXELS = 16_000_000;
 export const OCR_LARGE_WAIT_MS = 15_000;
 export const OCR_LARGE_QUEUE_MAX = 2;
+export const OCR_LARGE_RETIRE_WAIT_MS = 10_000;
 let largeBusy = false;
+let largeHolder = null;
 const largeWaiters = [];
+const largeCallers = new Map(); // caller -> places held (the slot and queued)
 
 function largeBusyError() {
   return Object.assign(
@@ -410,52 +434,91 @@ function largeBusyError() {
   );
 }
 
+function holdPlace(who) {
+  if (who) largeCallers.set(who, (largeCallers.get(who) || 0) + 1);
+}
+function freePlace(who) {
+  if (!who) return;
+  const n = (largeCallers.get(who) || 0) - 1;
+  if (n > 0) largeCallers.set(who, n); else largeCallers.delete(who);
+}
+
 /** Wait for the large-image slot; resolves to its release function. */
-function acquireLargeSlot(waitMs = OCR_LARGE_WAIT_MS) {
-  if (!largeBusy) { largeBusy = true; return Promise.resolve(releaseLargeSlot); }
-  if (largeWaiters.length >= OCR_LARGE_QUEUE_MAX) return Promise.reject(largeBusyError());
+function acquireLargeSlot(waitMs = OCR_LARGE_WAIT_MS, who = null) {
+  const release = () => releaseLargeSlot(who);
+  if (!largeBusy) { largeBusy = true; largeHolder = who; holdPlace(who); return Promise.resolve(release); }
+  if (largeWaiters.length >= OCR_LARGE_QUEUE_MAX) {
+    // A newcomer takes the last queued place of a caller holding more than one.
+    const victimAt = who && !largeCallers.has(who) ? largeWaiters.findLastIndex((w) => w.who && (largeCallers.get(w.who) || 0) > 1) : -1;
+    if (victimAt < 0) return Promise.reject(largeBusyError());
+    const [victim] = largeWaiters.splice(victimAt, 1);
+    clearTimeout(victim.timer);
+    freePlace(victim.who);
+    victim.reject(largeBusyError());
+  }
+  holdPlace(who);
   return new Promise((resolve, reject) => {
-    const waiter = { resolve: () => { clearTimeout(waiter.timer); resolve(releaseLargeSlot); } };
+    const waiter = { who, reject, resolve: () => { clearTimeout(waiter.timer); largeHolder = who; resolve(release); } };
     waiter.timer = setTimeout(() => {
       const i = largeWaiters.indexOf(waiter);
       if (i >= 0) largeWaiters.splice(i, 1);
+      freePlace(who);
       reject(largeBusyError());
     }, waitMs);
     largeWaiters.push(waiter);
   });
 }
 
-function releaseLargeSlot() {
+function releaseLargeSlot(who = null) {
+  freePlace(who);
   const next = largeWaiters.shift();
   if (next) next.resolve(); // the slot passes straight to the next waiter
-  else largeBusy = false;
+  else { largeBusy = false; largeHolder = null; }
 }
 
 /** Test hook for the large-image slot. */
 export const __ocrLargeTest = {
   acquire: acquireLargeSlot,
-  state: () => ({ busy: largeBusy, waiting: largeWaiters.length }),
+  state: () => ({ busy: largeBusy, waiting: largeWaiters.length, holder: largeHolder, callers: largeCallers.size }),
   recognize: doRecognize,
 };
 
-async function doRecognize(buf, lang, fmt, pixels = 0) {
-  const release = pixels > OCR_LARGE_PIXELS ? await acquireLargeSlot() : null;
+/** The caller a large image's place is held for. */
+function ocrCallerOf(req) {
+  if (!req || typeof req !== "object") return null;
+  const payer = payerFromRequest(req);
+  if (payer) return `payer:${payer}`;
+  if (req.creditsKeyId) return `credits:${req.creditsKeyId}`;
+  if (req.mppTempoSender) return `tempo:${String(req.mppTempoSender).toLowerCase()}`;
+  return req.ip ? `ip:${req.ip}` : null;
+}
+
+async function doRecognize(buf, lang, fmt, pixels = 0, who = null) {
+  const release = pixels > OCR_LARGE_PIXELS ? await acquireLargeSlot(OCR_LARGE_WAIT_MS, who) : null;
+  const used = {};
   try {
-    return await recognizeOn(buf, lang, fmt);
+    return await recognizeOn(buf, lang, fmt, used);
   } finally {
     if (release) {
       // The engine's WASM memory grows to fit the largest image it read and
       // never shrinks (a 64 MP image left a worker about 560 MB larger), so
-      // the worker that read a large image is retired once its calls finish.
-      const entry = workers.get(lang);
-      if (entry) dropEntry(lang, entry);
+      // the worker that read a large image is retired once its calls finish,
+      // and the slot passes on once that worker has terminated.
+      const entry = used.entry;
+      if (entry) {
+        dropEntry(lang, entry);
+        let timer;
+        await Promise.race([entry.gone, new Promise((r) => { timer = setTimeout(r, OCR_LARGE_RETIRE_WAIT_MS); timer.unref?.(); })]);
+        clearTimeout(timer);
+      }
       release();
     }
   }
 }
 
-async function recognizeOn(buf, lang, fmt) {
+async function recognizeOn(buf, lang, fmt, used = {}) {
   const entry = getWorkerEntry(lang);
+  used.entry = entry;
   entry.active++;
   try {
     const worker = await entry.promise;
@@ -512,7 +575,7 @@ export const OCR_TOOLS = [
         },
       },
     },
-    handler: async (i) => {
+    handler: async (i, req) => {
       const lang = String(i.lang ?? "eng").toLowerCase();
       if (!SUPPORTED_LANGS.has(lang)) {
         throw bad(`unsupported lang "${lang}". Supported: ${[...SUPPORTED_LANGS].join(", ")}`);
@@ -537,7 +600,7 @@ export const OCR_TOOLS = [
       const fmt = imageFormatOf(buf);
       if (!fmt) throw notAnImage(buf, from);
       const { width, height } = checkImageHeader(buf, fmt);
-      const data = await doRecognize(buf, lang, fmt, width * height);
+      const data = await doRecognize(buf, lang, fmt, width * height, ocrCallerOf(req));
       const lines = (data.lines ?? []).map((l) => ({
         text: (l.text ?? "").replace(/\s+$/g, ""),
         confidence: typeof l.confidence === "number" ? +l.confidence.toFixed(2) : null,
