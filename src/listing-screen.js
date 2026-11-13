@@ -331,7 +331,9 @@ export function addressesReader(sentence) {
 // Linear: a word is tried only from its first letter, and the callback reads
 // at most a bounded window behind the match.
 const LABEL_RE = /(?<![\p{L}\p{M}\p{N}])(\p{L}[\p{L}\p{M}]*)(\s*)([\p{P}\p{S}\p{Extended_Pictographic}\u200D\uFE0F]+)(\s*)/gu;
-const LABEL_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/giu;
+// A scheme is at most 32 characters and starts where no scheme character
+// precedes it, so a long run of them is scanned once, not once per letter.
+const LABEL_URL = /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/[^\s<>"']+/giu;
 const PROSE_RUN = /^[\p{Ps}\u201C\u201D\u2018\u2019,.!?'"\u2026\u00A1\u00BF\u3001\u3002\uFF0C\uFF0E\uFF01\uFF1F\u2122\u00AE\u00A9]+$/u;
 const WORD_MARKS = /^[#+*'\u2019_`~]+$/;
 const WORD_JOINER = /^[-'\u2019./@&\\]$/;
