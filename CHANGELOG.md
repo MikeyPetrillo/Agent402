@@ -12,9 +12,12 @@ Payments:
   category, a PNG icon, a description, and input and output schemas; the
   typed-judgment routes keep their whole description and judge's model list
   beside a link to the full sample answer.
-- Descriptions keep the sentences around a query hint, and every route that
-  serves FRED data, the Treasury yield, CPI and Sahm Rule routes included,
-  carries the FRED notice in its listing.
+- Descriptions keep the sentences around a query hint.
+- Every Bazaar listing that serves third-party data ends with the attribution
+  that source requires (FRED, CoinGecko, Jupiter, OpenStreetMap, Open-Meteo,
+  NVD), the skill packs that run those tools included; their skill pages and
+  MCP skill files carry the same lines. Catalog search no longer ranks tools
+  on these notices.
 - A payment signed against the previous release's 402 is accepted when only
   the output schema it echoes differs.
 - Output schemas read from examples type numbers as number, so a fractional

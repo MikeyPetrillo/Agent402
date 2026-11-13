@@ -478,7 +478,7 @@ try {
       // Every FRED route's 402 listing ends with the FRED notice with upto on.
       const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
       const { FRED_NOTICE } = await import("../src/data-attribution.js");
-      const fredRoutes = MACRO_TOOLS.filter((t) => t.usesFred === true).map((t) => t.route);
+      const fredRoutes = MACRO_TOOLS.filter((t) => t.attribution === "fred").map((t) => t.route);
       const missing = [];
       for (const route of fredRoutes) { const w = await call(b.url, route); if (!(w.status === 402 && String(w.pr?.resource?.description || "").endsWith(FRED_NOTICE))) missing.push(`${route} (${w.status})`); }
       ok(fredRoutes.length >= 12 && missing.length === 0, `${order}: every FRED route's 402 listing keeps the FRED notice (${fredRoutes.length} routes; missing: ${missing.join(", ") || "none"})`);

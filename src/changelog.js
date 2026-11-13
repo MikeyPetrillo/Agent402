@@ -6,7 +6,8 @@ const ENTRIES = [
     title: "Bazaar listings",
     items: [
       "Payments: every route's Bazaar listing carries a service name, five tags led by its category, a PNG icon, a description, and input and output schemas; the typed-judgment routes keep their whole description and judge's model list beside a link to the full sample answer.",
-      "Payments: descriptions keep the sentences around a query hint, and every route that serves FRED data, the Treasury yield, CPI and Sahm Rule routes included, carries the FRED notice in its listing.",
+      "Payments: descriptions keep the sentences around a query hint.",
+      "Payments: every Bazaar listing that serves third-party data ends with the attribution that source requires (FRED, CoinGecko, Jupiter, OpenStreetMap, Open-Meteo, NVD), the skill packs that run those tools included; their skill pages and MCP skill files carry the same lines. Catalog search no longer ranks tools on these notices.",
       "Payments: a payment signed against the previous release's 402 is accepted when only the output schema it echoes differs.",
       "Payments: output schemas read from examples type numbers as number, so a fractional answer always matches its listing.",
       "Server: the HTTP adapter used by the MCP connector takes its November security release.",
