@@ -2128,6 +2128,11 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     }
     ok(K.flatTierQuoteUsd("v1-chat-nano", "openai/gpt-6-luna") === TIERS["v1-chat-nano"].price && K.flatTierQuoteUsd("v1-chat-pro", "openai/gpt-6-luna") === TIERS["v1-chat-nano"].price, "gpt-6-luna named on nano or pro keeps nano's price");
     ok(!tierAllows("v1-chat", "openai/gpt-6-luna-pro") && !tierAllows("v1-chat-pro", "openai/gpt-6-luna"), "a tier admits only its own default ids, by exact id");
+    // /v1/models says so: each listed tier's default ids are listed under it, once.
+    const listedRows = modelsList().data;
+    const unlisted = Object.entries(TIERS).filter(([s, t]) => !t.metered && listedRows.some((r) => r.x402?.tier === s))
+      .flatMap(([s, t]) => [t.defaultModel, t.defaultModelCompat].filter(Boolean).filter((d) => listedRows.filter((r) => r.id === d && r.x402?.tier === s).length !== 1).map((d) => `${s}: ${d}`));
+    ok(unlisted.length === 0, `/v1/models lists each tier's own default ids under that tier, once${unlisted.length ? ` - ${unlisted.join("; ")}` : ""}`);
     const mm = validateMessagesRequest({ max_tokens: 64, messages: m1 }, "v1-chat");
     const rr = validateResponsesRequest({ input: "hi", max_output_tokens: 64 }, "v1-chat");
     ok(mm.body.model === "openai/gpt-6-luna" && rr.body.model === "openai/gpt-6-luna", `Messages and Responses on base, no model: gpt-6-luna (${mm.body.model}, ${rr.body.model})`);
