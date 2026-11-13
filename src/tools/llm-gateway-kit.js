@@ -370,7 +370,7 @@ export const TIERS = {
     // `defaulted`); a caller naming it on this route is served here too, at
     // this tier's price (tierAllows admits a tier's own defaults by name).
     defaultModel: "openai/gpt-6-luna", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
-    // A default call carrying temperature or top_p (which luna does not take)
+    // A default call carrying temperature, top_p or top_k (which luna does not take)
     // is served by the Gemini wire's base default, which does (defaultModelFor).
     defaultModelCompat: "google/gemini-3.5-flash-lite",
     reasoningDefault: "lowest", // budget tier: lowest non-none effort on default-on reasoning models
@@ -421,7 +421,7 @@ export const TIERS = {
     // tools and 1M context. gpt-4o was the default until its 2027-01-14
     // shutdown was scheduled; a call naming gpt-4o is served by terra from then.
     defaultModel: "openai/gpt-6.1-terra", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
-    // A default call carrying temperature or top_p (which terra does not take)
+    // A default call carrying temperature, top_p or top_k (which terra does not take)
     // is served by the Gemini wire's pro default, which does (defaultModelFor).
     defaultModelCompat: "google/gemini-3.6-flash",
     reasoningDefault: "low", // real reasoning, but never medium/high by default under a 4k cap
@@ -1417,7 +1417,7 @@ export function noUpstreamSampling(model) {
  *  from the tier object, never typed twice. */
 export function defaultModelCompatNote(tier) {
   if (!tier?.defaultModel || !tier.defaultModelCompat) return null;
-  const params = noUpstreamSampling(tier.defaultModel) ? "temperature or top_p" : "temperature, top_p, top_k, an assistant prefill or a fixed reasoning budget";
+  const params = noUpstreamSampling(tier.defaultModel) ? "temperature, top_p or top_k" : "temperature, top_p, top_k, an assistant prefill or a fixed reasoning budget";
   return `The default is ${tier.defaultModel}; a call that names no model and carries a parameter ${tier.defaultModel} does not take (${params}) is served by ${tier.defaultModelCompat}.`;
 }
 

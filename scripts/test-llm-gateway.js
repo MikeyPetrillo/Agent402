@@ -2138,7 +2138,9 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     for (const [slug, compat] of [["v1-chat", "google/gemini-3.5-flash-lite"], ["v1-chat-pro", "google/gemini-3.6-flash"]]) {
       const t = validateRequest({ messages: m1, max_tokens: 64, temperature: 0.2 }, slug), tp = validateRequest({ messages: m1, max_tokens: 64, top_p: 0.5 }, slug);
       ok(TIERS[slug].defaultModelCompat === compat && t.model === compat && t.temperature === 0.2 && tp.model === compat && tierAllows(slug, compat), `${slug}, no model, temperature or top_p: served by ${compat} with the knob`);
-      ok(LLM_GATEWAY_TOOLS.find((x) => x.slug === slug).description.includes(K.defaultModelCompatNote(TIERS[slug])) && /temperature or top_p/.test(K.defaultModelCompatNote(TIERS[slug])), `${slug}: the description carries the compat clause`);
+      let tk = null; try { tk = validateRequest({ messages: m1, max_tokens: 64, top_k: 40 }, slug).model; } catch (e) { tk = e.message; }
+      ok(tk === compat, `${slug}, no model, top_k: served by ${compat} (${tk})`);
+      ok(LLM_GATEWAY_TOOLS.find((x) => x.slug === slug).description.includes(K.defaultModelCompatNote(TIERS[slug])) && /temperature, top_p or top_k/.test(K.defaultModelCompatNote(TIERS[slug])), `${slug}: the description carries the compat clause, top_k named`);
     }
     ok(validateRequest({ model: "openai/gpt-6.1-terra", messages: m1, max_tokens: 64, temperature: 0.2 }, "v1-chat-pro").model === "openai/gpt-6.1-terra", "a call naming terra with temperature is served terra, as before");
     ok(K.noUpstreamSampling("gpt-6-luna") && K.noUpstreamSampling("openai/o3") && !K.noUpstreamSampling("openai/gpt-4o-mini") && !K.noUpstreamSampling("google/gemini-3.6-flash"), "noUpstreamSampling reads the OpenAI reasoning families only");
