@@ -7,13 +7,24 @@
 // its own helpers, so the two paths share one log line and one row writer.
 import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 
+//
+// A refusal is free to send, so its writes are bounded per caller:
+// `allowWrites(req)` (server.js: a per-address budget at the refused-credential
+// figures) answers whether this one may write the row and the PostHog events.
+// Past it the refusal is answered exactly the same and still reaches the
+// sampled log line (counted in its summary); only the row and the two events
+// are left out. Our own synthetic traffic is never budgeted.
+
 /** Returns `record(req, slug, status, message, startedAt)`; never throws. */
-export function createPrePaymentRefusalRecorder({ logToolError, recordToolCall, captureToolCall, isSynthetic, requestShape, redact = (s) => s, refusalReason = () => null, now = Date.now } = {}) {
+export function createPrePaymentRefusalRecorder({ logToolError, recordToolCall, captureToolCall, isSynthetic, requestShape, redact = (s) => s, refusalReason = () => null, allowWrites = () => true, now = Date.now } = {}) {
   return function recordPrePaymentRefusal(req, slug, status, message, startedAt = now()) {
     try {
       const synthetic = !!isSynthetic(req);
       const errorMessage = redact(String(message || ""));
-      logToolError(slug, status, errorMessage, requestShape(req), synthetic, false, { prePayment: true });
+      let writes = true;
+      if (!synthetic) { try { writes = allowWrites(req) !== false; } catch { writes = true; } }
+      logToolError(slug, status, errorMessage, requestShape(req), synthetic, false, { prePayment: true, capture: writes });
+      if (!writes) return;
       const latencyMs = Math.max(0, now() - startedAt);
       Promise.resolve(recordToolCall({ slug, latencyMs, cached: false, errored: true, status, synthetic, probe: false, prePayment: true })).catch(() => {});
       captureToolCall({ slug, latencyMs, cached: false, errored: true, status, synthetic, probe: false, refusalReason: refusalReason(errorMessage, status), prePayment: true });

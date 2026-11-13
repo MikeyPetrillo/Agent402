@@ -7580,7 +7580,7 @@ setInterval(contained("prepayment-log-sampler", () => prePaymentLogSampler.tick(
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
-function logToolError(slug, status, message, shape, synthetic, probe, { prePayment = false } = {}) {
+function logToolError(slug, status, message, shape, synthetic, probe, { prePayment = false, capture = true } = {}) {
   // Every caller's message is scrubbed of configured secrets and credential-
   // bearing URLs before the log line, PostHog and the failure monitor read it.
   message = redactSecrets(message || "");
@@ -7608,7 +7608,8 @@ function logToolError(slug, status, message, shape, synthetic, probe, { prePayme
   // PostHog mirrors the same payload as a "tool_error" event with slug/
   // status/errorClass/shape properties. Same privacy posture, a no-op when
   // POSTHOG_API_KEY is unset.
-  capturePostHogToolError({ slug, status, message, shape, synthetic, probe, prePayment });
+  // `capture: false`: a pre-payment refusal past its caller's write budget.
+  if (capture) capturePostHogToolError({ slug, status, message, shape, synthetic, probe, prePayment });
   // The last 5xx message per slug, for /__operator/tool-failures.json.
   try { toolFailureMonitor().noteToolMessage(slug, status, message, { synthetic }); } catch { /* bookkeeping only */ }
 }
@@ -7652,10 +7653,16 @@ function isSyntheticRequest(req) {
   catch { return false; }
 }
 // A /v1 input refusal answered BEFORE any payment gate records what a handler
-// 400 records, marked pre-payment (src/prepayment-refusal.js).
+// 400 records, marked pre-payment (src/prepayment-refusal.js). Such a refusal
+// is free to send, so each address's refusals write the tool_calls row and
+// the PostHog events inside a budget at the refused-credential figures; past
+// it the answer is unchanged and only those writes are left out (the limiter
+// governs our writes, never a request).
+const prePaymentWriteLimiter = createRateLimiter("prepayment-refusal-writes", { perMin: METERED_UNPAID_QUOTES_PER_MIN, perHour: METERED_UNPAID_QUOTES_PER_HOUR });
 const recordPrePaymentRefusal = createPrePaymentRefusalRecorder({
   logToolError, recordToolCall, captureToolCall: capturePostHogToolCall,
   isSynthetic: isSyntheticRequest, requestShape, redact: redactSecrets, refusalReason,
+  allowWrites: (req) => !prePaymentWriteLimiter.check(clientIp(req)).limited,
 });
 function requestShape(req) {
   // Return the top-level keys of body + query, deduped and bounded. Values
