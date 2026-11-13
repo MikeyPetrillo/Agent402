@@ -680,6 +680,7 @@ import { corsMiddleware } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
+import { isBinaryListing, listingMimeTypeOf, responseTypesOf } from "./tool-media-type.js";
 import { createIdempotency, implicitReplayAllowed, chargedReplayVerdict } from "./idempotency.js";
 import { mountMcp, mcpClientsSeenSinceBoot } from "./mcp-http.js";
 import { guidesIndex, guidePage, guideTitles, BUYING_AT_VOLUME_PATH } from "./guides.js";
@@ -1052,7 +1053,7 @@ const CATALOG = {
         },
         required: ["url"],
       },
-      output: { example: { contentType: "image/png", body: "(binary PNG image)" } },
+      output: { example: "(raw image/png bytes, not JSON)" },
     },
   },
   "POST /api/pdf": {
@@ -10364,6 +10365,12 @@ app.get("/api/pricing", (_req, res) => {
         // 402 itself is unchanged). Absent on routes every rail can pay.
         ...(x402EvmOnly(def) ? { networks: pricingNetworksFor(def) } : {}),
         ...(def.identityBound ? { identityBound: true } : {}),
+        // The content type the published example answers with, on a tool
+        // whose answer is raw bytes (the same field its x402 listing carries),
+        // and every type a 200 can carry where there is more than one.
+        // Absent on JSON-only rows.
+        ...(isBinaryListing(def) ? { mimeType: listingMimeTypeOf(def) } : {}),
+        ...(responseTypesOf(def).length > 1 ? { responseTypes: responseTypesOf(def) } : {}),
         // A route that runs as a job on "Prefer: respond-async"; recommended
         // (with its expected and maximum seconds) on the slow ones.
         ...(def.asyncProfile ? { async: asyncAdvice(def) } : {}),

@@ -12,6 +12,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
 import { attributionTailOf, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from "./data-attribution.js";
+import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema } from "./tool-media-type.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
@@ -2638,7 +2639,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // (BAZAAR_DESCRIPTIONS, by slug); everyone else gets the catalog description
   // truncated at a SENTENCE boundary under 500, never mid-word with "...".
   const capDesc = (s) => bazaarCapDescription(s);
-  const slimDiscovery = (d, path) => {
+  const slimDiscovery = (d, path, item) => {
     if (!d) return d;
     const slim = { ...d };
     if (slim.inputSchema) {
@@ -2666,6 +2667,14 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // budget. The complete typed schema is always in /openapi.json, which
       // the listing links. One copy here, never one per accept: with 13 rails
       // a per-accept schema would cost 13x on every 402.
+      // A tool whose published example answers raw bytes (its def's
+      // mimeType, src/tool-media-type.js) carries a string naming those bytes
+      // and a string schema with their media type, never a JSON object a
+      // buyer could take for the answer's shape.
+      if (isBinaryListing(item)) {
+        slim.output = { type: slim.output.type || "json", example: binaryOutputExample(item), schema: binaryOutputSchema(item) };
+        return boundDiscoveryBlock(slim, BAZAAR_DISCOVERY_MAX_BYTES);
+      }
       const example = slim.output.example;
       const oversized = example !== undefined && JSON.stringify(example).length > 2048;
       const schema = oversized ? null : boundedResponseSchemaFor(path, example, BAZAAR_SCHEMA_MAX_BYTES, slim.output.optional);
@@ -2693,7 +2702,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       const ext = {};
       const path = route.split(" ")[1];
       const { keepListing, descriptionFirst, ...discovery } = item.discovery || {};
-      const slimmed = item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path) : null;
+      const slimmed = item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path, item) : null;
       const listingText = capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description);
       const fitOpts = { keepListing: keepListing === true, descriptionFirst: descriptionFirst === true };
       // Upto past the first network and the gas sponsoring declaration are
@@ -2757,7 +2766,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           // Use the protocol's own sanitizer: printable ASCII, ≤32 chars,
           // case-insensitive dedupe, and the official maximum of five tags.
           tags: bazaarTagsFor(item),
-          mimeType: "application/json",
+          // The content type the published example answers with: JSON, or
+          // the raw bytes a binary tool sends (its def's mimeType).
+          mimeType: listingMimeTypeOf(item),
           resource: `${baseUrl}${route.split(" ")[1]}`,
           // Canonical brand icon on every Bazaar/discovery record. Without it,
           // downstream directories (OpenSea's x402 tools surface, etc.) scrape

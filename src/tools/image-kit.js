@@ -23,7 +23,8 @@ import { runImageOffThread, LARGE_JOB_TIMEOUT_MS } from "./image-pool.js";
 // The content types resize/convert/thumbnail answer with (raw bytes through
 // the route binder's __binary sentinel, chosen by `format`). Declared on each
 // def as `binaryTypes` so the tool page and /openapi.json describe bytes, not
-// a JSON object.
+// a JSON object; `mimeType` is the one the published example answers with,
+// which the x402 listing carries (src/tool-media-type.js).
 const IMAGE_OUT_TYPES = [...new Set(Object.values(MIME))];
 
 // Re-exported for scripts/test-image.js, which imports the parser surface from
@@ -217,6 +218,7 @@ export const IMAGE_TOOLS = [
       "Resize an image to given pixel dimensions. Send a base64 PNG/JPEG/BMP and width and/or height (give one to scale proportionally). Returns the resized image. Deterministic, no network.",
     tags: ["image", "resize", "scale", "thumbnail", "png", "jpeg"],
     binaryTypes: IMAGE_OUT_TYPES,
+    mimeType: MIME.png, // the example sends no format: png
     discovery: {
       bodyType: "json",
       input: { image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==", width: 256 },
@@ -229,7 +231,7 @@ export const IMAGE_TOOLS = [
         },
         required: ["image"],
       },
-      output: { example: { __note: "returns the resized image as binary (Content-Type set accordingly)" } },
+      output: { example: "(raw image bytes, not JSON: image/png by default, image/jpeg or image/bmp by format)" },
     },
     handler: async (i) =>
       transformOffThread("resize", i.image, { width: i.width, height: i.height, format: i.format, quality: i.quality }),
@@ -240,6 +242,7 @@ export const IMAGE_TOOLS = [
       "Convert an image between formats (PNG, JPEG, BMP). Send a base64 image and the target format; returns the converted image. Optional jpeg quality (1-100). Deterministic, no network.",
     tags: ["image", "convert", "format", "png", "jpeg", "bmp"],
     binaryTypes: IMAGE_OUT_TYPES,
+    mimeType: MIME.jpeg, // the example converts to jpeg
     discovery: {
       bodyType: "json",
       input: { image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==", format: "jpeg", quality: 80 },
@@ -251,7 +254,7 @@ export const IMAGE_TOOLS = [
         },
         required: ["image", "format"],
       },
-      output: { example: { __note: "returns the converted image as binary" } },
+      output: { example: "(raw image bytes, not JSON: image/jpeg for this example, image/png or image/bmp by format)" },
     },
     handler: async (i) => {
       if (!i.format) throw bad('Missing "format" (png, jpeg, or bmp)');
@@ -264,6 +267,7 @@ export const IMAGE_TOOLS = [
       "Make a square thumbnail of an image - scales and center-crops to NxN (default 128). Send a base64 image and optional size. Returns the thumbnail. Deterministic, no network.",
     tags: ["image", "thumbnail", "crop", "square", "preview"],
     binaryTypes: IMAGE_OUT_TYPES,
+    mimeType: MIME.png, // the example sends no format: png
     discovery: {
       bodyType: "json",
       input: { image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==", size: 128 },
@@ -275,7 +279,7 @@ export const IMAGE_TOOLS = [
         },
         required: ["image"],
       },
-      output: { example: { __note: "returns the square thumbnail as binary" } },
+      output: { example: "(raw image bytes, not JSON: image/png by default, image/jpeg or image/bmp by format)" },
     },
     handler: async (i) =>
       transformOffThread("thumbnail", i.image, { size: i.size, format: i.format, quality: i.quality }),

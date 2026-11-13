@@ -2455,7 +2455,7 @@ const networkTools = [
         },
         required: ["text"],
       },
-      output: { example: { contentType: "image/png", body: "(binary PNG image)" } },
+      output: { example: "(raw image/png bytes, not JSON)" },
     },
     handler: async (input) => {
       // Accept any reasonable "encode this" alias.
