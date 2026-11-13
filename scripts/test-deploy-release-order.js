@@ -45,6 +45,23 @@ ok(triggerAt > upsertAt && upsertAt >= 0, "the deploy trigger runs after the ups
   ok(blanked.every((k) => k in env && String(env[k] ?? "") === ""), `the Bazaar validation step blanks the upstream keys (${blanked.filter((k) => !(k in env) || String(env[k] ?? "") !== "").join(", ") || "all blank"})`);
   ok(/TARGET_URL=https:\/\/agent402\.tools/.test(String(bazaar.run || "")), "the validator reads production's 402s");
   ok(/exit 1/.test(String(bazaar.run || "")) && !bazaar["continue-on-error"], "an INVALID verdict with no clean run fails the job");
+  // The run's FAIL and unreadable rows are printed on their own before the
+  // tail (a default run prints more lines than a short tail keeps), here and
+  // in the heartbeat's step; neither says "flagship" of what it checked, and
+  // the heartbeat's issue title is the one an open issue is found by.
+  const heartbeat = load(readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"));
+  const hbStep = Object.values(heartbeat.jobs || {}).flatMap((j) => j.steps || []).find((s) => /node scripts\/bazaar-validate\.js/.test(String(s.run || ""))) || {};
+  const ROWS_LINE = String.raw`echo "$OUT" | grep -E '^(FAIL|\?\?) |INVALID|UNREADABLE' || true`;
+  for (const [label, step] of [["deploy", bazaar], ["heartbeat", hbStep]]) {
+    const run = String(step.run || "");
+    const rowsAt = run.indexOf(ROWS_LINE);
+    const tailAt = run.search(/echo "\$OUT" \| tail -\d+/);
+    const tail = Number((run.match(/echo "\$OUT" \| tail -(\d+)/) || [])[1] || 0);
+    ok(rowsAt >= 0 && tailAt > rowsAt, `the ${label} step prints the validator's FAIL and unreadable rows before its tail`);
+    ok(tail >= 40, `the ${label} step's tail keeps a whole default run (${tail} lines)`);
+    ok(!/flagship/i.test(`${step.name || ""} ${run}`), `the ${label} step names what it checked as checked routes`);
+  }
+  ok(/TITLE="Bazaar listing validation FAILED"/.test(String(hbStep.run || "")), "the heartbeat's issue title is unchanged");
 }
 
 // The jobs a commit-subject marker starts read the markers job's outputs, so

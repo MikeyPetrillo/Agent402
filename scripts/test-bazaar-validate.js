@@ -1,5 +1,8 @@
 // Offline guard for scripts/bazaar-validate.js (stub validator, no network).
-import { validateOne, FLAGSHIP_PATHS } from "./bazaar-validate.js";
+import { createServer } from "node:http";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { validateOne, FLAGSHIP_PATHS, defaultEndpoints, NON_JSON_LISTING_MAX, runDeadlineMs } from "./bazaar-validate.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -34,6 +37,78 @@ r = await validateOne(ep, { fetchImpl: fetchWith([resp(502, "<html>bad gateway</
 ok(!r.ok && /502/.test(r.error), "validator 5xx/non-JSON -> unreadable, never valid");
 r = await validateOne(ep, { fetchImpl: async () => { throw new Error("ECONNRESET"); } });
 ok(!r.ok && /unreachable/.test(r.error), "network error -> unreadable");
+
+// The default run covers every non-JSON listing on /api/pricing beside the
+// flagship set, derived from the rows (mimeType), capped.
+{
+  const row = (path, extra = {}) => ({ method: "GET", path, slug: path.slice(5), ...extra });
+  const catalog = [row("/api/search"), row("/api/hash"), row("/api/other"), row("/api/bytes", { mimeType: "image/png" }), row("/api/json-typed", { mimeType: "application/json" })];
+  const d = defaultEndpoints(catalog);
+  ok(d.chosen.map((e) => e.path).join() === "/api/search,/api/hash,/api/bytes", `default set = flagship rows in the catalog + the non-JSON listing (${d.chosen.map((e) => e.path).join()})`);
+  const many = Array.from({ length: NON_JSON_LISTING_MAX + 3 }, (_, i) => row(`/api/b${i}`, { mimeType: "image/png" }));
+  const capped = defaultEndpoints(many);
+  ok(capped.nonJson.length === NON_JSON_LISTING_MAX && capped.nonJsonSkipped === 3, `non-JSON listings are capped at ${NON_JSON_LISTING_MAX} and the remainder is counted (${capped.nonJsonSkipped})`);
+}
+
+// The guard as the deploy job and the heartbeat run it (no arguments), against
+// a stub catalog and a stub validator: a binary listing the validator calls
+// INVALID fails the run, and the same catalog passes when it is valid.
+{
+  const run = async (invalidPath, { throttled = false, env = {} } = {}) => {
+    const asked = [];
+    const stub = createServer((req, res) => {
+      let body = "";
+      req.on("data", (d) => { body += d; });
+      req.on("end", () => {
+        res.setHeader("content-type", "application/json");
+        if (req.url === "/api/pricing") {
+          return res.end(JSON.stringify({ endpoints: [
+            { method: "GET", path: "/api/hash", slug: "hash", price: "$0.001" },
+            { method: "GET", path: "/api/plain", slug: "plain", price: "$0.001" },
+            { method: "GET", path: "/api/qr", slug: "qr", price: "$0.001", mimeType: "image/png" },
+          ] }));
+        }
+        if (req.url === "/validate") {
+          const { resource } = JSON.parse(body || "{}");
+          const path = new URL(resource).pathname;
+          asked.push(path);
+          if (throttled) { res.statusCode = 429; res.setHeader("retry-after", "60"); return res.end(""); }
+          const bad = path === invalidPath;
+          return res.end(JSON.stringify({ valid: !bad, statusCode: 402, preflight: bad ? [{ check: "resource.mimeType", passed: false, severity: "required", detail: "stub rejection" }] : [], simulation: { outcome: bad ? "rejected" : "accepted" }, index: { active: true } }));
+        }
+        res.statusCode = 404; res.end("{}");
+      });
+    });
+    await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${stub.address().port}`;
+    let out = "";
+    const child = spawn(process.execPath, [fileURLToPath(new URL("./bazaar-validate.js", import.meta.url))], { env: { ...process.env, TARGET_URL: base, BAZAAR_VALIDATE_URL: `${base}/validate`, BAZAAR_VALIDATE_CONCURRENCY: "1", ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { out += d; });
+    // A run that outlives this is stopped and reads as a failure (code null).
+    const stop = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    const code = await new Promise((r) => child.on("exit", r));
+    clearTimeout(stop);
+    await new Promise((r) => stub.close(r));
+    return { code, asked, out };
+  };
+  const bad = await run("/api/qr");
+  ok(bad.asked.includes("/api/qr") && !bad.asked.includes("/api/plain"), `a no-argument run validates the binary listing and no plain non-flagship row (asked ${bad.asked.join()})`);
+  ok(bad.code === 1 && /FAIL GET \/api\/qr/.test(bad.out), `an INVALID binary listing fails the run (exit ${bad.code})`);
+  const good = await run(null);
+  ok(good.code === 0 && good.asked.length === 2, `control: the same catalog passes when the validator accepts it (exit ${good.code}, ${good.asked.length} calls)`);
+
+  // A validator that answers 429 with Retry-After 60 to every call: the run
+  // ends at its deadline with every route unreadable (exit 2, which the
+  // callers warn on), instead of waiting a minute per retry per route. The
+  // retries are set here: this file zeroes them in its own environment above.
+  const t0 = Date.now();
+  const slow = await run(null, { throttled: true, env: { BAZAAR_VALIDATE_DEADLINE_MS: "1500", BAZAAR_VALIDATE_429_RETRIES: "4" } });
+  const took = Date.now() - t0;
+  ok(slow.code === 2 && took < 20_000, `a throttled validator ends the run at its deadline with exit 2 (exit ${slow.code}, ${took} ms)`);
+  ok((slow.out.match(/^\?\? .*run deadline reached/gm) || []).length === 2 && !/BAZAAR VALIDATION OK/.test(slow.out), "every route the deadline cut is reported unreadable, never valid");
+  ok(runDeadlineMs(false, {}) === 480_000 && runDeadlineMs(true, {}) === 0 && runDeadlineMs(false, { BAZAAR_VALIDATE_DEADLINE_MS: "90000" }) === 90_000 && runDeadlineMs(true, { BAZAAR_VALIDATE_DEADLINE_MS: "0" }) === 0 && runDeadlineMs(false, { BAZAAR_VALIDATE_DEADLINE_MS: "junk" }) === 480_000, "the deadline defaults to 8 minutes (none for --all) and BAZAAR_VALIDATE_DEADLINE_MS overrides it");
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

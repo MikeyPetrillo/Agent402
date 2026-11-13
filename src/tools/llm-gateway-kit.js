@@ -4979,6 +4979,7 @@ export const LLM_GATEWAY_TOOLS = [
     tags: ["tts", "text-to-speech", "speech", "audio", "voice", ...SHARED_TAGS],
     // Raw audio bytes through the __binary sentinel, typed by response_format.
     binaryTypes: [...new Set(Object.values(SPEECH_FORMATS))],
+    mimeType: SPEECH_FORMATS.mp3, // the example sends no response_format: mp3
     discovery: {
       bodyType: "json",
       input: { input: "Agent402 serves 500+ tools, paid per call.", voice: "alloy" },

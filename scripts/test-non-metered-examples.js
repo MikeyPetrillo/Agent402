@@ -374,7 +374,7 @@ async function callExample(path, method, op, slug) {
         const buf = await res.arrayBuffer();
         body = { __bytes: buf.byteLength };
       }
-      return { status: res.status, body, threw: null };
+      return { status: res.status, body, threw: null, contentType: ct };
     } catch (e) {
       return { status: 0, body: null, threw: e.message || String(e) };
     }
@@ -740,6 +740,18 @@ async function main() {
       // A binary response is recorded here as { __bytes } - not a body to hold
       // against a JSON example (test-all.js records it as a byte count).
       const binary = r.body && r.body.__bytes !== undefined;
+      // The content type the published example answered with is the one its
+      // listing names: /openapi.json lists the listing's type first (the
+      // def's mimeType, which the x402 listing and /api/pricing also carry).
+      // Held wherever either side is not JSON, so a tool that answers raw
+      // bytes while it is listed as JSON fails here, and so does the reverse.
+      {
+        const declared = Object.keys(t.op?.responses?.["200"]?.content || {});
+        const answered = String(r.contentType || "").split(";")[0].trim().toLowerCase();
+        if (declared.length && (answered !== "application/json" || declared[0] !== "application/json") && answered !== declared[0]) {
+          shapeMismatches.push(`${t.method} ${t.path} → published example answered ${answered || "no content type"}, its listing names ${declared[0]}`);
+        }
+      }
       const missing = binary ? [] : missingDocumentedKeys(t.path, t.op, r.body);
       if (missing.length) shapeMismatches.push(`${t.method} ${t.path} → missing documented keys: ${missing.join(",")}`);
       // Present-but-empty is its own failure: a published example that returns
