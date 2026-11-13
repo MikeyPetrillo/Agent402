@@ -2173,6 +2173,12 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     const days = (Date.parse(`${r.until}T00:00:00Z`) - Date.now()) / 86_400_000;
     if (days <= 30) ok(false, `${where}: ${m} retires ${r.until} (${Math.floor(days)} days left): replace it before 30 days remain`);
   }
+  // Stricter, today: no default, compat default, fallback or auto rung names
+  // an id with a retirement date at all (scheduled or past), so moving one
+  // back to such an id fails now, not 30 days before its date.
+  for (const [slug, t] of Object.entries(TIERS)) if (t.defaultModelCompat) named.set(`${slug} compat default`, t.defaultModelCompat);
+  const dated = [...named].filter(([, m]) => Object.hasOwn(K.RETIRING_MODELS, m) || !!K.retiringModel(m)).map(([w, m]) => `${w}: ${m} (${K.RETIRING_MODELS[m]?.until || "retired"})`);
+  ok(dated.length === 0, `no default, fallback or auto rung names an id on the retirement table${dated.length ? ` - ${dated.join("; ")}` : ""}`);
   ok(named.size > 10, `the 30-day guard reads ${named.size} default/fallback/rung slots, ${scheduled} naming a scheduled retirement (each fails CI from 30 days before its date)`);
 }
 
