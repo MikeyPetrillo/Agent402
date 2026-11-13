@@ -613,39 +613,39 @@ const SELLER_LIST_KEYS = ["tags", "aliases", "networks"];
 const SELLER_PRICE_KEYS = ["price", "maxAmountRequired", "amount", "priceUsd", "amountUsd"];
 /** A seller value as a price reader may take it: text or a finite number, else undefined. */
 export const sellerNumText = (v) => (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) ? v : undefined);
-// The snake_case spellings of the price keys. Every reader takes the
-// camelCase key alone, so a snake_case key is folded into its own camelCase
-// twin: the camelCase value the seller wrote wins when it is usable (non-blank
-// text or a finite number); the snake_case value is read only when the
-// camelCase one is absent or unusable. The snake_case key is then removed, so
-// no reader can take a second figure from the same object.
-const PRICE_USD_SNAKE_KEYS = [["price_usd", "priceUsd"]];
-const SELLER_PRICE_SNAKE_KEYS = [...PRICE_USD_SNAKE_KEYS, ["amount_usd", "amountUsd"], ["max_amount_required", "maxAmountRequired"]];
+// The snake_case spellings of the price keys, each beside its camelCase twin.
+// Folding an object puts a usable snake_case value (non-blank text or a
+// finite number) into the camelCase key when that key is absent or unusable;
+// a usable camelCase value is kept.
+const SELLER_PRICE_SNAKE_KEYS = [["price_usd", "priceUsd"], ["amount_usd", "amountUsd"], ["max_amount_required", "maxAmountRequired"]];
 const usablePrice = (v) => (typeof v === "string" ? (v.trim() ? v : undefined) : sellerNumText(v));
 /** The object with its snake_case price keys folded into the camelCase ones
- *  (see the rule above); the same object when it carries none of `pairs`. */
-export function withCamelPriceKeys(o, pairs = SELLER_PRICE_SNAKE_KEYS) {
+ *  (see above); the same object when nothing changes. `keepSnake` leaves a
+ *  usable snake_case key in place (a stored tool keeps what the seller wrote)
+ *  and removes only an unusable one; without it every snake_case key is
+ *  removed, so a reader takes one figure per key. */
+export function withCamelPriceKeys(o, { keepSnake = false } = {}) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return o;
   let out = null;
-  for (const [snake, camel] of pairs) {
+  for (const [snake, camel] of SELLER_PRICE_SNAKE_KEYS) {
     if (!(snake in o)) continue;
-    out ||= { ...o };
     const v = usablePrice(o[snake]);
-    if (v !== undefined && usablePrice(o[camel]) === undefined) out[camel] = v;
-    delete out[snake];
+    if (v !== undefined && usablePrice(o[camel]) === undefined) (out ||= { ...o })[camel] = v;
+    if (!(keepSnake && (v !== undefined || o[snake] == null))) delete (out ||= { ...o })[snake];
   }
   return out || o;
 }
-// The manifest and OpenAPI readers price an entry in two passes. The first
-// reads the keys those readers have always read (`price_usd` among them, as
-// `priceUsd`), so an entry that had a price keeps it. Only an entry the first
-// pass leaves unpriced is read again through widePriceView, where
-// `amount_usd` and `max_amount_required` stand in for their camelCase twins
-// on the entry itself, its `price` and `payment` objects and each `accepts`
-// or `offers` item. A key added later can so fill a gap and never move a
-// price: beside an `amount` in dollars, `max_amount_required` would otherwise
-// turn the entry into an accept quoting base units.
-const withCamelPriceUsd = (o) => withCamelPriceKeys(o, PRICE_USD_SNAKE_KEYS);
+// The manifest and OpenAPI readers price an entry in two passes. The first is
+// the reading they have always done, unchanged: the row reader takes
+// `price_usd` before `priceUsd` and `price`, a price object takes `amountUsd`,
+// `priceUsd`, then `price_usd`, and `amount_usd` and `max_amount_required`
+// are not read. An entry that pass prices keeps that price exactly. Only an
+// entry it leaves unpriced is read again through widePriceView, where each
+// snake_case key stands in for its camelCase twin on the entry itself, its
+// `price` and `payment` objects and each `accepts` or `offers` item. The
+// snake_case spellings so fill a gap and never move a price: beside an
+// `amount` in dollars, `max_amount_required` would otherwise turn the entry
+// into an accept quoting base units.
 /** The entry with every snake_case price key folded, nested payment shapes
  *  included; the same object when there is none. */
 function widePriceView(o, depth = 0) {
@@ -683,7 +683,7 @@ function cleanTextKeys(o, keys) {
 function cleanSellerTool(t) {
   if (!t || typeof t !== "object" || Array.isArray(t)) return null;
   let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
-  const camel = withCamelPriceKeys(out || t);
+  const camel = withCamelPriceKeys(out || t, { keepSnake: true });
   if (camel !== (out || t)) out = camel;
   for (const k of SELLER_PRICE_KEYS) {
     const v = (out || t)[k];
@@ -3132,7 +3132,7 @@ function dollarLabelOf(obj) {
  *  and no dollar field beside it. */
 function bareAmountEntry(raw) {
   return !!raw && typeof raw === "object" && raw.amount != null
-    && withCamelPriceUsd(raw).priceUsd == null && raw.price == null
+    && raw.price_usd == null && raw.priceUsd == null && raw.price == null
     && raw.unit == null && raw.currency == null
     && !acceptShaped(raw) && !atomicContext(raw) && dollarLabelOf(raw) == null;
 }
@@ -3149,8 +3149,7 @@ function baseUnitReading(ctx, amount) {
 }
 
 function parseManifestPrice(raw) {
-  raw = withCamelPriceUsd(raw);
-  let p = raw?.priceUsd ?? raw?.price ?? null;
+  let p = raw?.price_usd ?? raw?.priceUsd ?? raw?.price ?? null;
   // An entry whose own amount sits beside payment context: a label first,
   // else base units. Accept-shaped entries keep their old rule (the accepts
   // reader prices them); MPP-shaped ones (currency + method/intent) had none.
@@ -3171,8 +3170,8 @@ function parseManifestPrice(raw) {
   // survives a future edit to that key list, and noted because no mutation can
   // kill it - the test asserts the OUTCOME (an array declares nothing) instead.
   if (p && typeof p === "object" && !Array.isArray(p)) {
-    const o = withCamelPriceUsd(p);
-    p = o.amountUsd ?? o.priceUsd ?? dollarLabelOf(o) ?? null;
+    const o = p;
+    p = o.amountUsd ?? o.priceUsd ?? o.price_usd ?? dollarLabelOf(o) ?? null;
     if (p == null) {
       const fig = o.amount ?? o.value;
       if (fig != null) p = atomicContext(o) ? atomicAmountToDollars(o, fig) : fig;

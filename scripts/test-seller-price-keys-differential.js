@@ -6,11 +6,10 @@
 // priced before the snake_case keys were read (recorded by running the same
 // rows through that revision of src/x402-index.js); NOW holds today's price.
 //
-// Asserted: every entry that had a price keeps it exactly, an entry that had
-// none may gain one, and NOW matches. The one deliberate difference is
-// CAMEL_WINS: a row or payment object carrying BOTH priceUsd and price_usd
-// with different usable values reads the camelCase one in every reader (the
-// row reader took the snake_case one, the price-object reader the camelCase).
+// Asserted: every entry that had a price keeps it exactly, with no exception,
+// an entry that had none may gain one, and NOW matches. A row or OpenAPI
+// payment object carrying both priceUsd and price_usd so still reads price_usd
+// (the row reader's order), and a price object still reads priceUsd.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 const ix = await import("../src/x402-index.js");
 
@@ -96,25 +95,17 @@ function rawPriceWith(ix, [kind, v]) {
 }
 
 const BEFORE = ["$5", "$0.02", "$0.01", null, "$0.05", "$5", "$5", "$0.01", "$0.01", "$0.01", "$5", "$5", "$0.001", "$0.001", "$0.01", "$0.01", null, null, null, null, null, "$0.003", null, null, null, null, "$0.001", "$0.001", "$9", "$0.002", null, "$0.01", "$5", "$5", "$5", "$5", "$0.001", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$0.05", "$5", "$5", "$5", "$0.05", "$5", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$70000", null, null, "$5", "$0.05", "$0.001", null, "$5", "$5", "$0.002", "$0.002", "$0.001", null, "$5", "$0.01", "$0.01", "$0.01", null, "$0.001", "$9", "$5", "$5", "$5", "$5", null, "free", "$0.001", null, null, "$5", "$0.001", null, "$5", "$0.05", "$0.02"];
-const NOW = ["$5", "$0.02", "$0.01", null, "$0.05", "$5", "$5", "$0.01", "$0.01", "$0.01", "$5", "$5", "$0.001", "$0.001", "$0.01", "$0.01", null, "$0.001", "$0.001", null, "$0.003", "$0.003", null, "$0.001", "$0.001", "$0.001", "$5", "$5", "$0.001", "$0.002", "$0.002", "$0.01", "$5", "$5", "$5", "$5", "$0.001", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$0.05", "$5", "$5", "$5", "$0.05", "$5", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$70000", null, "$5", "$5", "$0.05", "$0.001", "$0.001", "$5", "$5", "$0.002", "$0.002", "$0.001", "$0.001", "$5", "$0.01", "$0.01", "$0.01", "$0.01", "$5", "$0.001", "$5", "$5", "$5", "$5", null, "free", "$0.001", null, null, "$5", "$0.001", "$0.001", "$5", "$0.05", "$0.02"];
-const CAMEL_WINS = new Set([26, 27, 28, 75, 76]);
+const NOW = ["$5", "$0.02", "$0.01", null, "$0.05", "$5", "$5", "$0.01", "$0.01", "$0.01", "$5", "$5", "$0.001", "$0.001", "$0.01", "$0.01", null, "$0.001", "$0.001", null, "$0.003", "$0.003", null, "$0.001", "$0.001", "$0.001", "$0.001", "$0.001", "$9", "$0.002", "$0.002", "$0.01", "$5", "$5", "$5", "$5", "$0.001", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$0.05", "$5", "$5", "$5", "$0.05", "$5", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$70000", null, "$5", "$5", "$0.05", "$0.001", "$0.001", "$5", "$5", "$0.002", "$0.002", "$0.001", "$0.001", "$5", "$0.01", "$0.01", "$0.01", "$0.01", "$0.001", "$9", "$5", "$5", "$5", "$5", null, "free", "$0.001", null, null, "$5", "$0.001", "$0.001", "$5", "$0.05", "$0.02"];
 
 ok(ROWS.length === BEFORE.length && ROWS.length === NOW.length && ROWS.length >= 90, `the table lines up (${ROWS.length} rows)`);
 let kept = 0, added = 0;
 ROWS.forEach((row, i) => {
   const got = priceWith(ix, row), label = `#${i} ${row[0]} ${JSON.stringify(row[1]).slice(0, 140)}`;
   ok(got === NOW[i], `${label}: priced ${got}, recorded ${NOW[i]}`);
-  if (CAMEL_WINS.has(i)) {
-    const o = row[0] === "openapi" ? Object.values(row[1])[0] : row[1];
-    const camel = `$${String(o.priceUsd).replace(/^\$/, "")}`;
-    ok(o.priceUsd !== undefined && o.price_usd !== undefined && got === camel, `${label}: both spellings of one key read the camelCase value (${got} vs ${camel})`);
-    return;
-  }
   if (BEFORE[i] != null) { kept++; ok(got === BEFORE[i], `${label}: was priced ${BEFORE[i]}, now ${got}`); }
   else if (got != null) added++;
 });
-ok(kept >= 60 && added >= 10, `the table holds entries that keep a price and entries that gain one (${kept} kept, ${added} gained)`);
-ok(CAMEL_WINS.size === 5, `only the both-spellings-of-one-key entries differ (${CAMEL_WINS.size})`);
+ok(kept === BEFORE.filter((p) => p != null).length && kept >= 70 && added >= 10, `every entry that had a price is checked, and some gain one (${kept} kept, ${added} gained)`);
 
-console.log(`test-seller-price-keys-differential: ${pass} passed, ${fail} failed (${ROWS.length} rows, ${kept} kept, ${added} gained, ${CAMEL_WINS.size} camelCase-wins)`);
+console.log(`test-seller-price-keys-differential: ${pass} passed, ${fail} failed (${ROWS.length} rows, ${kept} kept, ${added} gained)`);
 process.exit(fail ? 1 : 0);
