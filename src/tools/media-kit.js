@@ -361,23 +361,37 @@ const measureWaiters = [];
  *  upload cap) while it waits, so past this many a call is answered at once
  *  (the caller's retryable 503, nothing spent upstream). */
 export const MEASURE_QUEUE_PER_SLOT = 4;
-// Resolves true with a slot held, "full" when the queue is full, or false
-// when none came free within `waitMs`.
-const measureAcquire = (waitMs) => {
+/** The bytes the waiting calls may hold together: the count bound at the
+ *  upload cap (MEASURE_QUEUE_PER_SLOT waiters per slot of 25 MB each), held
+ *  under MEASURE_QUEUE_BYTES_CAP whatever the pool size. Past it a call is
+ *  answered at once, as past the count bound. */
+export const MEASURE_QUEUE_BYTES_PER_WAITER = 25 * 1024 * 1024;
+export const MEASURE_QUEUE_BYTES_CAP = 200 * 1024 * 1024;
+let queueBytesOverride = null;
+export function measureQueueMaxBytes(size = measurePoolSize()) {
+  return queueBytesOverride ?? Math.min(MEASURE_QUEUE_BYTES_CAP, MEASURE_QUEUE_PER_SLOT * size * MEASURE_QUEUE_BYTES_PER_WAITER);
+}
+let measureQueuedBytes = 0;
+// Resolves true with a slot held, "full" when the queue is full (by count or
+// by the bytes its waiters hold), or false when none came free within `waitMs`.
+const measureAcquire = (waitMs, bytes = 0) => {
   const size = measurePoolSize();
   if (measureActive < size) { measureActive++; return Promise.resolve(true); }
   if (!(waitMs > 0)) return Promise.resolve(false);
-  if (measureWaiters.length >= MEASURE_QUEUE_PER_SLOT * size) return Promise.resolve("full");
+  if (measureWaiters.length >= MEASURE_QUEUE_PER_SLOT * size || measureQueuedBytes + bytes > measureQueueMaxBytes(size)) return Promise.resolve("full");
+  measureQueuedBytes += bytes;
   return new Promise((resolve) => {
-    const waiter = () => { clearTimeout(timer); resolve(true); };
-    const timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); resolve(false); }, waitMs);
+    const waiter = () => { clearTimeout(timer); measureQueuedBytes -= bytes; resolve(true); };
+    const timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); measureQueuedBytes -= bytes; resolve(false); }, waitMs);
     timer.unref?.();
     measureWaiters.push(waiter);
   });
 };
 const measureRelease = () => { const next = measureWaiters.shift(); if (next) next(); else measureActive--; };
 /** Slots in use and calls waiting, for tests. */
-export const __measurePoolForTest = () => ({ active: measureActive, waiting: measureWaiters.length, size: measurePoolSize() });
+export const __measurePoolForTest = () => ({ active: measureActive, waiting: measureWaiters.length, size: measurePoolSize(), queuedBytes: measureQueuedBytes });
+/** Sets the queue's byte bound for a test (null restores the default). */
+export const __setMeasureQueueMaxBytesForTest = (n) => { queueBytesOverride = n; };
 export async function measureAudioSeconds(buffer) {
   const m = await measureAudio(buffer);
   return Number.isFinite(m.seconds) ? m.seconds : null;
@@ -454,7 +468,7 @@ async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = nul
   const budgeted = Number.isFinite(deadlineAt);
   // A budgeted caller waits while its deadline still leaves a whole minimum decode.
   const waitMs = budgeted ? deadlineAt - Date.now() - MEASURE_MIN_DECODE_MS : MEASURE_WAIT_MS;
-  const slot = await measureAcquire(waitMs);
+  const slot = await measureAcquire(waitMs, buffer?.length ?? 0);
   if (slot === "full") return { unavailable: "every decoder slot is busy and the queue for one is full", busy: true };
   if (slot !== true) return { unavailable: budgeted ? "no decoder slot came free in the time this call has left" : "no decoder slot came free in time", busy: true };
   const decodeMs = budgeted ? Math.max(MEASURE_MIN_DECODE_MS, Math.min(MEASURE_MAX_DECODE_MS, deadlineAt - Date.now())) : MEASURE_MIN_DECODE_MS;

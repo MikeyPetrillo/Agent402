@@ -113,6 +113,37 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
   }
 }
 
+// The queue is bounded by the bytes its waiters hold too: past the bound a
+// call is answered at once (busy: the caller's retryable 503) while the count
+// bound still has room, and the bytes leave the queue with each waiter.
+{
+  const { measureAudio, measureQueueMaxBytes, MEASURE_QUEUE_PER_SLOT, MEASURE_QUEUE_BYTES_CAP, __measurePoolForTest, __setMeasureQueueMaxBytesForTest } = await import("../src/tools/media-kit.js");
+  ok(measureQueueMaxBytes(2) === MEASURE_QUEUE_BYTES_CAP && measureQueueMaxBytes(8) === MEASURE_QUEUE_BYTES_CAP && MEASURE_QUEUE_BYTES_CAP === 200 * 1024 * 1024 && measureQueueMaxBytes(1) === MEASURE_QUEUE_PER_SLOT * 25 * 1024 * 1024, `the byte bound is ${MEASURE_QUEUE_PER_SLOT} x slots x 25 MB, held to 200 MB`);
+  const hadSlots = process.env.AUDIO_DECODE_SLOTS;
+  process.env.AUDIO_DECODE_SLOTS = "1";
+  const held = [];
+  __setExecFileForTest((bin, args, opts, cb) => { held.push(cb); });
+  const mp3 = Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), Buffer.alloc(64)]);
+  __setMeasureQueueMaxBytesForTest(mp3.length * 2);
+  const keep = setInterval(() => {}, 1_000);
+  try {
+    const running = [measureAudio(mp3, { format: "mp3" }), measureAudio(mp3, { format: "mp3" }), measureAudio(mp3, { format: "mp3" })];
+    await new Promise((r) => setTimeout(r, 50));
+    ok(__measurePoolForTest().waiting === 2 && __measurePoolForTest().queuedBytes === mp3.length * 2, `two waiters hold their bytes (${JSON.stringify(__measurePoolForTest())})`);
+    const t0 = Date.now();
+    const over = await measureAudio(mp3, { format: "mp3" });
+    ok(2 < MEASURE_QUEUE_PER_SLOT && over?.busy === true && /queue for one is full/.test(over.unavailable || "") && Date.now() - t0 < 1_000, `past the byte bound a call is answered at once while the count bound has room (${JSON.stringify(over)})`);
+    __setExecFileForTest((bin, args, opts, cb) => setImmediate(() => cb(Object.assign(new Error("stub"), { code: 1 }))));
+    while (held.length) held.shift()(Object.assign(new Error("stub"), { code: 1 }));
+    await Promise.all(running);
+    ok(__measurePoolForTest().queuedBytes === 0 && __measurePoolForTest().waiting === 0, "the queued bytes leave with their waiters");
+  } finally {
+    clearInterval(keep);
+    __setMeasureQueueMaxBytesForTest(null);
+    if (hadSlots === undefined) delete process.env.AUDIO_DECODE_SLOTS; else process.env.AUDIO_DECODE_SLOTS = hadSlots;
+  }
+}
+
 __setExecFileForTest(null);
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
