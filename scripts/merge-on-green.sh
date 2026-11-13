@@ -109,7 +109,7 @@ gh run watch "$RUN" --interval 30 >/dev/null 2>&1 || true
 LANES=$(gh run view "$RUN" --json jobs -q '.jobs[] | select(.name | test("^test(-|$)")) | "\(.name)=\(.conclusion)"' || true)
 [ -n "$LANES" ] || { echo "$GATE_EVENT run $RUN has no test lanes - not merging"; exit 1; }
 echo "$LANES" | sed 's/^/  /'
-if echo "$LANES" | grep -vq '=success$'; then
+if [ "$(grep -vc '=success$' <<<"$LANES" || true)" != "0" ]; then
   echo "$GATE_EVENT run $RUN is NOT green on every test lane - not merging"
   exit 1
 fi
@@ -171,7 +171,10 @@ echo "every ruleset-required check is green on PR $PR"
 STRIX_BOT="strix-security[bot]"
 STRIX_WAIT_SECONDS="${STRIX_WAIT_SECONDS:-1800}"
 STRIX_POLL_SECONDS="${STRIX_POLL_SECONDS:-60}"
-strix_high() { grep -Eiq '\*\*Severity:\*\*[[:space:]]*(CRITICAL|HIGH)([^A-Za-z]|$)|\*\*(CRITICAL|HIGH)\*\*'; }
+# grep -c reads all of its input: under pipefail, grep -q would quit at the
+# first match and the writer's SIGPIPE would fail the pipeline, reading a
+# Critical or High finding as clean.
+strix_high() { local n; n=$(grep -Eic '\*\*Severity:\*\*[[:space:]]*(CRITICAL|HIGH)([^A-Za-z]|$)|\*\*(CRITICAL|HIGH)\*\*' || true); [ "${n:-0}" -gt 0 ]; }
 if [ "$NO_STRIX" = "1" ]; then
   echo "################################################################"
   echo "## --no-strix: the OWNER chose to merge PR #$PR WITHOUT Strix's"
@@ -325,7 +328,7 @@ gh run watch "$MAIN" --exit-status --interval 30 >/dev/null 2>&1 && echo "main r
 H=""
 for _ in $(seq 1 60); do
   H=$(curl -s --max-time 8 "${TARGET_URL:-https://agent402.tools}/health" || true)
-  if printf '%s' "$H" | grep -q "\"build\":\"${MERGE:0:7}\""; then echo "PROD: $H"; exit 0; fi
+  if grep -q "\"build\":\"${MERGE:0:7}\"" <<<"$H"; then echo "PROD: $H"; exit 0; fi
   sleep 10
 done
 echo "prod did not report ${MERGE:0:7} within 10 min; last: $H"

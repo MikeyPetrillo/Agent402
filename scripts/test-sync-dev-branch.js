@@ -157,7 +157,7 @@ function repo() {
   const SHA = "a".repeat(40), OLD = "b".repeat(40), MERGE = "c".repeat(40), PR = "77", BOT = "strix-security[bot]";
   const GH = `#!/usr/bin/env node
 const fs = require("fs"), path = require("path"), D = process.env.STUB_DIR, a = process.argv.slice(2), j = a.join(" ");
-const out = (s) => { process.stdout.write(String(s) + "\\n"); process.exit(0); };
+const out = (s) => { const b = Buffer.from(String(s) + "\\n"); for (let o = 0; o < b.length;) { try { o += fs.writeSync(1, b, o); } catch (e) { if (e.code !== "EAGAIN") throw e; } } process.exit(0); };
 const file = (n) => { const p = path.join(D, n); return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "[]"; };
 if (a[0] === "pr" && a[1] === "view") {
   if (j.includes("headRefOid")) out(process.env.STUB_SHA);
@@ -253,6 +253,15 @@ echo x >> "$STUB_DIR/sleeps"
   ok(r.code === 1 && !r.merged && /requested changes on a{40} \(review 10\)/.test(r.out), "strix: changes requested between the reviews read and the summary read refuses");
   r = mog({ "reviews.2.json": [review(10, "COMMENTED", SHA, "- 🟠 **HIGH** late finding")], "issue-comments.json": [CLEAN] });
   ok(r.code === 1 && !r.merged && /Critical or High finding on a{40} \(review 10\)/.test(r.out), "strix: a High review that lands between the reads refuses");
+  // The High sits in the review body, read first; a large comment body follows
+  // it into the same check. A reader that quits at the first match leaves the
+  // second writer a broken pipe, which pipefail would read as "no finding".
+  for (let i = 0; i < 3; i++) {
+    r = mog({ "reviews.json": [review(9, "COMMENTED", SHA, "- 🟠 **HIGH** early finding")], "review-comments.json": [comment(9, "x".repeat(400000))], "issue-comments.json": [CLEAN] });
+    ok(r.code === 1 && !r.merged && /Critical or High finding on a{40} \(review 9\)/.test(r.out), `strix: a High finding followed by a long comment refuses (run ${i + 1})`);
+  }
+  const mogSrc = readFileSync(new URL("./merge-on-green.sh", import.meta.url), "utf8");
+  ok(!/\|\s*grep\s+(-[A-Za-z]*q|[^|\n]*\s-[A-Za-z]*q\b)/.test(mogSrc), "merge-on-green pipes into no grep -q (under pipefail, an early exit fails the pipeline)");
   r = mog({}, ["--no-strix"]);
   ok(r.code === 0 && r.merged && /--no-strix: the OWNER chose to merge PR #77 WITHOUT/.test(r.out) && !/waiting for Strix/.test(r.out), "strix: --no-strix merges, and says so loudly");
   r = mog({}, ["dev", "--no-strix"]);
