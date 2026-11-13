@@ -280,17 +280,19 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
   sellerMode = "ok";
 }
 
-// ---- a paid body cut at our maxBytes is ours, not the seller's ----
-// Every cut body is marked (markNotSellerBody), including a JSON body whose
-// cut prefix still parses, so the delivery check never judges it; the same
-// body read whole is the seller's and is observed (control).
+// ---- a paid body cut at our maxBytes is never read as kept ----
+// Every cut body is marked (markNotSellerBody). A cut prefix that closes no
+// JSON object or array (a number a longer body would extend, an object cut
+// open, text) cannot be judged: it is counted as unverifiable, apart from
+// calls and kept. The same body read whole is observed (control).
 {
   const { observeDelivery } = await import("../src/response-observation.js");
   for (const [i, mode] of ["long-number", "long-object", "long-text"].entries()) {
     sellerMode = mode;
     const cut = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, maxBytes: 64 });
     ok(cut.result && typeof cut.result === "object", `${mode}: cut body relayed (setup: ${JSON.stringify(cut.result).slice(0, 60)})`);
-    ok(observeDelivery({ origin: `https://tempo-cut-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["data"], body: cut.result }) === null, `${mode}: a paid body cut at our byte limit is not judged as the seller's delivery`);
+    const cutRec = observeDelivery({ origin: `https://tempo-cut-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["data"], body: cut.result });
+    ok(cutRec?.unverifiable === 1 && cutRec.calls === 0 && cutRec.kept === 0, `${mode}: a paid body cut at our byte limit is counted as unverifiable, never as kept (${JSON.stringify(cutRec)})`);
     const whole = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, maxBytes: 4096 });
     const wholeBody = whole.result && typeof whole.result === "object" ? whole.result : { value: whole.result };
     if (mode === "long-text") {
