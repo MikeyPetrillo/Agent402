@@ -168,8 +168,8 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
   const many = Array.from({ length: 15 }, (_, k) => ({ code: "RESTRICTIONS_RELAXED", path: "/query", message: `notice ${k}`, details: { x: 1 } }));
   stub(200, { results: [{ title: "T", url: "https://e.example" }], warnings: [{ code: "IGNORED_FIELD", path: "/startCrawlDate", message: "m".repeat(900) }, null, { code: "X" }], notices: many });
   const out = await tool("exa-search").handler({ query: "agent payments", type: "auto" });
-  ok(out.warnings.length === 1 && out.warnings[0].code === "IGNORED_FIELD" && out.warnings[0].path === "/startCrawlDate" && out.warnings[0].message.length === EXA_NOTE_MAX_CHARS, "a warning passes through as code, path and message, the message bounded; an item without a message is dropped");
-  ok(out.notices.length === EXA_NOTE_MAX_ITEMS && out.notices[0].message === "notice 0" && !("details" in out.notices[0]), `notices pass through, at most ${EXA_NOTE_MAX_ITEMS}, as code, path and message`);
+  ok(out.warnings?.length === 1 && out.warnings[0].code === "IGNORED_FIELD" && out.warnings[0].path === "/startCrawlDate" && out.warnings[0].message.length === EXA_NOTE_MAX_CHARS, "a warning passes through as code, path and message, the message bounded; an item without a message is dropped");
+  ok(out.notices?.length === EXA_NOTE_MAX_ITEMS && out.notices[0].message === "notice 0" && !("details" in out.notices[0]), `notices pass through, at most ${EXA_NOTE_MAX_ITEMS}, as code, path and message`);
   eq(exaNotes("not a list"), [], "a notes field that is not a list reads as none");
 }
 
