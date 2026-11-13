@@ -933,31 +933,46 @@ delete process.env.OPENAI_API_KEY;
   ok(b.gatewaySettleBreakerStatus().wideBound === false, "the bound lifts once its window ends");
 
   // --- ONE AUTHORIZATION RE-PRESENTED -------------------------------------
-  // A settle that fails for a reason of ours never counts against the wallet,
-  // and the authorization stays unspent. The same signed authorization is
-  // served AUTH_MAX_FAILS times unsettled, then refused; a new authorization
-  // from the same wallet is served at once.
+  // Counted per authorization only when the settle failed for the buyer's
+  // reason (the wallet's own classification). A failure of ours or of unknown
+  // cause never counts, so the same authorization re-presented after them is
+  // served every time; AUTH_MAX_FAILS buyer verdicts refuse that authorization
+  // alone, and a new authorization from the same wallet is served at once.
   await b._gatewaySettleBreakerReset();
   const A = "0x" + "f".repeat(39) + "3", NET = "eip155:8453";
   const authHeader = (from, nonce) => Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: NET }, payload: { signature: "0x" + "11".repeat(65), authorization: { from, to: "0x" + "0".repeat(40), value: "1000", validAfter: "0", validBefore: "9999999999", nonce } } })).toString("base64");
   const authReq = (from, nonce) => { const req = fakeReq({ from, network: NET }); const h = authHeader(from, nonce); req.header = (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined); return req; };
   const NONCE = "0x" + "ab".repeat(32);
-  const statuses = [];
-  for (let i = 0; i < 5; i++) {
-    const req = authReq(A, NONCE);
-    try { await b.gatewaySettleBreakerCheck(req); } catch (e) { statuses.push(e.statusCode); continue; }
-    statuses.push("served"); failWith(req, "timeout");
-  }
-  ok(statuses.join(",") === "served,served,served,429,429", `one authorization re-presented after settles that failed for our reasons is served three times, then refused (${statuses.join(",")})`);
+  const reRun = async (nonce, reason, n) => {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const req = authReq(A, nonce);
+      try { await b.gatewaySettleBreakerCheck(req); } catch (e) { out.push(e.statusCode); continue; }
+      out.push("served"); failWith(req, reason);
+    }
+    return out.join(",");
+  };
+  const ours = await reRun("0x" + "a1".repeat(32), "timeout", 6);
+  ok(ours === "served,served,served,served,served,served", `one authorization re-presented after settles that failed for our reasons is served every time (${ours})`);
+  const unk = await reRun("0x" + "a2".repeat(32), "settlement_failed", 4);
+  ok(unk === "served,served,served,served", `one authorization re-presented after settles of unknown cause is served every time (${unk})`);
+  // The wallet has settled calls, so its own share rule does not refuse it and
+  // the refusal below is the authorization's alone.
+  const kA = b.gatewaySettleBreakerCountKey(authReq(A, NONCE));
+  await b._gatewaySettleBreakerReset();
+  for (let i = 0; i < 10; i++) b.recordGatewaySettleSuccess(kA);
+  const statuses = (await reRun(NONCE, "insufficient_funds", 5)).split(",");
+  ok(statuses.join(",") === "served,served,served,429,429", `one authorization re-presented after buyer verdicts is served three times, then refused (${statuses.join(",")})`);
   ok(typeof b.gatewaySettleBreakerAuthKey === "function" && b.gatewaySettleBreakerAuthKey(authReq(A, NONCE)) === b.gatewaySettleBreakerAuthKey(authReq(A, "0x00" + "ab".repeat(32))) && b.gatewaySettleBreakerAuthKey(authReq(A, NONCE)) !== b.gatewaySettleBreakerAuthKey(authReq(A, "0x" + "cd".repeat(32))) && b.gatewaySettleBreakerAuthKey(fakeReq({ tempo: "0xtempopayer" })) === null, "the authorization key reads the canonical nonce, and only for a signed EVM payment");
   err = null; try { await b.gatewaySettleBreakerCheck(authReq(A, NONCE)); } catch (e) { err = e; }
   const f = err ? toolErrorFields(err) : {};
   ok(/This payment authorization on eip155:8453 was served 3 times/.test(err?.message || "") && /Sign a new authorization \(a new nonce\)/.test(err?.message || "") && /Nothing was charged/.test(err?.message || "") && f.hint === "sign-new-authorization" && !f.refusedNetwork && Number.isInteger(f.retryAfterSeconds), `the 429 says to sign a new authorization, in words and a field (${err?.message?.slice(0, 80)}; ${JSON.stringify(f)})`);
   const k = b.gatewaySettleBreakerCountKey(authReq(A, NONCE));
-  ok(b.gatewaySettleBreakerBlocked(k).fails === 0 && b.gatewaySettleBreakerBlocked(k).unknownFails === 0, "nothing was counted against the wallet itself");
+  ok(b.gatewaySettleBreakerBlocked(k).blocked === false && b.gatewaySettleBreakerBlocked(k).fails === 3, "the wallet itself, with settled calls, is not refused");
   err = null; try { await b.gatewaySettleBreakerCheck(authReq(A, "0x" + "cd".repeat(32))); } catch (e) { err = e; }
   ok(err === null, `the same wallet with a new authorization is served at once (${err?.statusCode || "served"})`);
   // A buyer signing a new authorization per call is never refused, whatever fails on our side.
+  await b._gatewaySettleBreakerReset();
   let refused = 0;
   for (let i = 0; i < 30; i++) {
     const req = authReq(A, "0x" + (1000 + i).toString(16).padStart(64, "0"));

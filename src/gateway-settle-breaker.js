@@ -53,15 +53,15 @@
 // not read at the lower count, and the catalog consult (global:false) is
 // untouched.
 //
-// ONE AUTHORIZATION RE-PRESENTED. A settle that fails for a reason of ours
-// leaves the signed authorization unspent, and the receipt invites the buyer
-// to resend it. Those failures never count against the wallet, so one
-// authorization could be re-presented and served unpaid with no bound. Every
-// served run that does not settle is therefore also counted per signed EVM
-// authorization (payer, network and nonce): at AUTH_MAX_FAILS inside the
-// window that one authorization is refused, the 429 says to sign a new one,
-// and a new authorization from the same wallet is served at once. A buyer
-// signs a new authorization for every new call, so none is ever refused here.
+// ONE AUTHORIZATION RE-PRESENTED. A served run whose settle fails for a
+// reason that is the buyer's (WHO IS COUNTED: buyer, the same classification
+// the wallet's own count reads) is also counted per signed EVM authorization
+// (payer, network and nonce): at AUTH_MAX_FAILS inside the window that one
+// authorization is refused, the 429 says to sign a new one, and a new
+// authorization from the same wallet is served at once. A failure of ours, an
+// unknown cause, a withdrawn sub-cent refusal and a payment still settling are
+// never counted here, so a failure of ours never refuses an authorization;
+// a run of those on one key raises the alarm instead (below).
 //
 // ONE PAYER ON SEVERAL NETWORKS. The per-network count lets one wallet reach
 // the refusing count on every network a route offers, each one a run served
@@ -161,9 +161,9 @@ const MAX_OKS_KEPT = 5000;
  *  failures at while the burst alarm is up (THE SERVICE-WIDE BOUND): at least
  *  1, never above MAX_FAILS. */
 export const BURST_MAX_FAILS = Math.min(MAX_FAILS, Math.max(1, Math.floor(num(process.env.GATEWAY_SETTLE_BREAKER_BURST_MAX, 1))));
-/** Served runs that did not settle under ONE signed EVM authorization inside
- *  the window before that authorization is refused (ONE AUTHORIZATION
- *  RE-PRESENTED). */
+/** Served runs under ONE signed EVM authorization whose settle failed for a
+ *  reason that is the buyer's, inside the window, before that authorization
+ *  is refused (ONE AUTHORIZATION RE-PRESENTED). */
 export const AUTH_MAX_FAILS = Math.max(1, Math.floor(num(process.env.GATEWAY_SETTLE_BREAKER_AUTH_MAX, MAX_FAILS)));
 const AUTH_KEYS_MAX = 20_000;
 /** DISTINCT buyers with a /v1 settle failure inside the window that raise the
@@ -198,7 +198,7 @@ const unknownFails = new Map();
 const blocklistFails = new Map();
 const unprovenAlarmed = new Map(); // key -> until when its run has raised the alarm
 // authorization key -> number[]: served runs under that one signed
-// authorization that did not settle (shared window gwb-auth).
+// authorization whose settle failed for the buyer's reason (shared window gwb-auth).
 const authFails = new Map();
 let unprovenTrips = 0;
 // buyer -> the time of its latest settle failure inside the window: the burst
@@ -629,9 +629,10 @@ function noteUnprovenFailure(key, now) {
 export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, withdrawn = false, walletCount = true, fault = "buyer", blocklisted = false, authKey = null } = {}) {
   const isBuyer = fault !== "unknown" && fault !== "not-buyer";
   const unknown = fault === "unknown" && !!key;
-  // ONE AUTHORIZATION RE-PRESENTED: every served run that did not settle,
-  // whoever's the fault, except a payment still settling (walletCount:false).
-  const authCounted = typeof authKey === "string" && !!authKey && !!key && walletCount;
+  // ONE AUTHORIZATION RE-PRESENTED: a served run that did not settle for a
+  // reason that is the buyer's (the wallet's own classification, isBuyer);
+  // never ours, an unknown cause, or a payment still settling (walletCount:false).
+  const authCounted = typeof authKey === "string" && !!authKey && !!key && walletCount && isBuyer;
   if (authCounted) {
     const at = inWindow(authFails.get(authKey) || [], now);
     at.push(now);

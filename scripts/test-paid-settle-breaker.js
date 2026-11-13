@@ -323,22 +323,35 @@ try {
       const r = await pay(WALLET_ONLY, PAYER_D);
       ok(r.status === 402 && settles === before + 1, `facilitator 503 at settle ${i}: served, not settled -> 402, never 429 (status ${r.status}, settles ${settles})`);
     }
-    // ONE authorization re-presented while the facilitator fails: the same
-    // signed credential is served MAX times unsettled, then refused before
-    // the handler with the field that says to sign a new one; a new
-    // authorization from the same wallet is served at once.
+    // ONE authorization re-presented while the facilitator fails (ours): the
+    // same signed credential is served every time and never refused, since a
+    // failure of ours never counts against an authorization.
     const PAYER_R = "0x00000000000000000000000000000000000000d6";
     const same = credential(await acceptFor(WALLET_ONLY), PAYER_R);
-    const resend = () => fetch(`${B}${WALLET_ONLY.path}`, { method: WALLET_ONLY.method, headers: { "content-type": "application/json", "payment-signature": same } });
+    const resend = (cred = same) => fetch(`${B}${WALLET_ONLY.path}`, { method: WALLET_ONLY.method, headers: { "content-type": "application/json", "payment-signature": cred } });
     const st = [];
-    for (let i = 0; i < MAX; i++) { const s0 = settles; const r = await resend(); st.push(`${r.status}${settles === s0 + 1 ? "" : "!"}`); }
+    for (let i = 0; i < MAX + 2; i++) { const s0 = settles; const r = await resend(); st.push(`${r.status}${settles === s0 + 1 ? "" : "!"}`); }
+    ok(st.every((x) => x === "402"), `one authorization re-presented after ${MAX + 2} settles that failed on our side: served every time, never refused (${st.join(",")})`);
+    // The same re-presentation when the settle is a verdict on the buyer's
+    // payment: a wallet that has settled calls (so its own share rule does not
+    // refuse it) re-sends one authorization; it is served MAX times, then that
+    // authorization alone is refused before the handler with the field that
+    // says to sign a new one, and a new authorization is served at once.
+    const PAYER_V = "0x00000000000000000000000000000000000000d7";
+    settleMode = "ok";
+    for (let i = 0; i < MAX + 1; i++) await pay(WALLET_ONLY, PAYER_V);
+    settleMode = "fail";
+    const sameV = credential(await acceptFor(WALLET_ONLY), PAYER_V);
+    const sv = [];
+    for (let i = 0; i < MAX; i++) { const s0 = settles; const r = await resend(sameV); sv.push(`${r.status}${settles === s0 + 1 ? "" : "!"}`); }
     const s0 = settles;
-    const rr = await resend();
+    const rr = await resend(sameV);
     const rb = await rr.json().catch(() => ({}));
-    ok(st.every((x) => x === "402") && rr.status === 429 && settles === s0 && rb.hint === "sign-new-authorization" && /Sign a new authorization/.test(rb.error || ""), `one authorization re-presented: served ${MAX} times unsettled, then refused 429 before the handler (${st.join(",")} then ${rr.status} ${rb.hint}: ${String(rb.error).slice(0, 60)})`);
+    ok(sv.every((x) => x === "402") && rr.status === 429 && settles === s0 && rb.hint === "sign-new-authorization" && /Sign a new authorization/.test(rb.error || ""), `one authorization re-presented after buyer verdicts: served ${MAX} times unsettled, then refused 429 before the handler (${sv.join(",")} then ${rr.status} ${rb.hint}: ${String(rb.error).slice(0, 60)})`);
     const s1 = settles;
-    const fresh = await pay(WALLET_ONLY, PAYER_R);
+    const fresh = await pay(WALLET_ONLY, PAYER_V);
     ok(fresh.status === 402 && settles === s1 + 1, `the same wallet with a new authorization is served at once (status ${fresh.status})`);
+    settleMode = "down";
   }
   // Through the wire, what a revert proves: with the token's balance words it
   // is a verdict (three refuse, in the verdict words); without them it is of

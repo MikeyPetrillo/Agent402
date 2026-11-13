@@ -85,8 +85,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `GATEWAY_SETTLE_BREAKER_BURST_MAX` (default 1), under the same share rule, its refusal held no
   longer than the flag, so a rotated wallet is served one unpaid run instead of three or nine and a
   wallet whose payments settle, a fresh wallet and the catalog consult are served as before.
-  **One authorization:** every served run that does not settle (any fault, except a payment still
-  settling) is also counted per signed EVM authorization (`payer@network#nonce`, shared `gwb-auth`);
+  **One authorization:** a served run whose settle fails for the buyer's fault (the same `buyer`
+  class the wallet count reads; never ours, an unknown cause, a withdrawn sub-cent refusal or a
+  payment still settling) is also counted per signed EVM authorization (`payer@network#nonce`, shared `gwb-auth`);
   at `GATEWAY_SETTLE_BREAKER_AUTH_MAX` (default `MAX`) that authorization alone is refused with
   `hint: sign-new-authorization`, and a new authorization from the wallet is served at once. A wallet is refused only when it holds
   `GATEWAY_SETTLE_BREAKER_MAX` failures in the window AND they are more than
