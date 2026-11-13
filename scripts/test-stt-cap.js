@@ -30,6 +30,25 @@ for (const [slug, tier] of Object.entries(STT_TIERS)) {
   ok(Math.abs(Number(tool.price.replace("$", "")) - tier.priceUsd) < 1e-9, `${slug}: the catalog price string matches the tier price the margin is computed on`);
   ok(new RegExp(`Max ${tier.maxMinutes} minutes`).test(tool.description) && tool.description.includes(tier.model) && tool.discovery.output.example.model === tier.model, `${slug}: description states the ${tier.maxMinutes}-minute cap and the model; the example names the model actually sent`);
 }
+// A cut file is disclosed: both tiers' descriptions say so, and every
+// transcription route's output schema (openapi, the 402's listing, the tool
+// page) carries the two fields an answer cut at the cap adds, never required.
+{
+  const { responseSchemaFor, boundedResponseSchemaFor } = await import("../src/openapi-schema.js");
+  const { BAZAAR_SCHEMA_MAX_BYTES } = await import("../src/payments.js");
+  for (const t of STT_TOOLS) {
+    const opt = t.discovery?.output?.optional || {};
+    ok(opt.trimmedToCapSeconds?.type === "number" && opt.durationUnconfirmed?.type === "boolean", `${t.slug}: the output declares trimmedToCapSeconds (number) and durationUnconfirmed (boolean)`);
+    const path = t.route.split(" ")[1];
+    const full = responseSchemaFor(path, t.discovery.output.example, opt);
+    const bounded = boundedResponseSchemaFor(path, t.discovery.output.example, BAZAAR_SCHEMA_MAX_BYTES, opt);
+    ok(full.properties?.trimmedToCapSeconds && full.properties?.durationUnconfirmed && !(full.required || []).some((k) => /trimmed|Unconfirmed/.test(k)), `${t.slug}: the openapi schema lists both, neither required`);
+    ok(bounded?.properties?.trimmedToCapSeconds?.type === "number" && bounded?.properties?.durationUnconfirmed?.type === "boolean" && JSON.stringify(bounded).length <= BAZAAR_SCHEMA_MAX_BYTES, `${t.slug}: the 402 listing's schema lists both inside its ${BAZAAR_SCHEMA_MAX_BYTES}-byte budget (${JSON.stringify(bounded).length})`);
+  }
+  for (const slug of ["transcribe", "transcribe-pro"]) {
+    ok(/A file whose length cannot be confirmed is transcribed up to the cap, and the answer says so/.test(STT_TOOLS.find((t) => t.slug === slug).description), `${slug}: the description says a file of unconfirmed length is transcribed up to the cap and the answer says so`);
+  }
+}
 // The retiring models are gone from every tier (OpenAI shutdown 2027-02-26).
 ok(!Object.values(STT_TIERS).some((t) => /gpt-4o(-mini)?-transcribe|whisper-1/.test(t.model)), "no tier sends gpt-4o-mini-transcribe, gpt-4o-transcribe or whisper-1");
 ok(STT_TIERS.transcribe.model === "gpt-transcribe" && STT_TIERS["transcribe-pro"].model === "gpt-transcribe", "both tiers send gpt-transcribe (they differ in cap and price only, and the pro copy says so)");

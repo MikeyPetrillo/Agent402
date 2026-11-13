@@ -176,6 +176,10 @@ try {
   // for an oversized route, counted apart so it never reads as a real example.
   has.outputPointer = 0; has.outputSchemaPointer = 0;
   let wholeListingSeen = 0;
+  // The transcription routes declare the two fields a cut answer adds
+  // (discovery.output.optional); their listing's schema carries both.
+  const TRIM_ROUTES = new Set(["/api/transcribe", "/api/transcribe-pro", "/v1/audio/transcriptions", "/v1/pro/audio/transcriptions"]);
+  let trimSeen = 0;
   const attributedSeen = new Set();
   const LISTING_ICON = /\.(?:png|jpe?g|webp|gif)$/i;
   const iconPaths = new Set();
@@ -337,6 +341,10 @@ try {
     }
     if (example === undefined || !outputSchema) continue;
     if (JSON.stringify(outputSchema).length > 500) fail(route, "output schema exceeds the 500-byte budget");
+    if (TRIM_ROUTES.has(endpoint.path)) {
+      trimSeen++;
+      if (outputSchema.properties?.trimmedToCapSeconds?.type !== "number" || outputSchema.properties?.durationUnconfirmed?.type !== "boolean") fail(route, "output schema lacks trimmedToCapSeconds and durationUnconfirmed");
+    }
 
     const type = jsonType(example);
     if (type === "object") {
@@ -379,6 +387,7 @@ try {
   console.log(`sample outputs: ${has.output} real, ${has.outputPointer} /openapi.json pointers (schemas: ${has.outputSchema} real, ${has.outputSchemaPointer} for a pointer)`);
   // FRED, CoinGecko, Jupiter, OpenStreetMap, Open-Meteo and NVD routes, and the packs that run them.
   if (attributedSeen.size < 60 || ![...attributedSeen].some((s) => s.startsWith("skill-"))) fail("catalog", `checked the attribution on ${attributedSeen.size} listings, packs included (expected 60 or more)`);
+  if (trimSeen !== TRIM_ROUTES.size) fail("catalog", `checked ${trimSeen} of ${TRIM_ROUTES.size} transcription listings for the cut-answer fields`);
   if (wholeListingSeen !== WHOLE_LISTING_ROUTES.size) fail("catalog", `checked ${wholeListingSeen} of ${WHOLE_LISTING_ROUTES.size} typed-judgment listings`);
   if (!quotedPriced) fail("catalog", "no quoted route was checked against its published range (the metered tiers and decide are quoted)");
   if (!speechSeen) fail("POST /v1/audio/speech", "route was not validated as a raw output");

@@ -450,6 +450,8 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       text: { type: "string" },
       language: { type: "string" },
       duration: { type: "number" },
+      trimmedToCapSeconds: { type: "number", description: "Present only when the file's length could not be confirmed: the audio was transcribed up to this many seconds (the tier's cap)" },
+      durationUnconfirmed: { type: "boolean", description: "Present (true) only with trimmedToCapSeconds: the file's full length was not confirmed" },
     },
     required: ["text"],
   },

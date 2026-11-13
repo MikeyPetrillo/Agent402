@@ -2666,7 +2666,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // a per-accept schema would cost 13x on every 402.
       const example = slim.output.example;
       const oversized = example !== undefined && JSON.stringify(example).length > 2048;
-      const schema = oversized ? null : boundedResponseSchemaFor(path, example, BAZAAR_SCHEMA_MAX_BYTES);
+      const schema = oversized ? null : boundedResponseSchemaFor(path, example, BAZAAR_SCHEMA_MAX_BYTES, slim.output.optional);
       slim.output = {
         type: slim.output.type || "json",
         ...(example !== undefined

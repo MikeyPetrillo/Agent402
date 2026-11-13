@@ -658,6 +658,12 @@ export function makeMultipartHandler(tierSlug) {
 }
 
 const RETRY_NOTE = " A transient upstream failure gets one more attempt inside the same time limit, and an answer served that way says so in agent402_retried.";
+const TRIM_NOTE = " A file whose length cannot be confirmed is transcribed up to the cap, and the answer says so (trimmedToCapSeconds, durationUnconfirmed).";
+/** Fields an answer carries only when its file was cut at the cap. */
+const TRIM_OUTPUT = Object.freeze({
+  trimmedToCapSeconds: { type: "number", description: "Present only when the file's length could not be confirmed: the audio was transcribed up to this many seconds (the tier's cap)" },
+  durationUnconfirmed: { type: "boolean", description: "Present (true) only with trimmedToCapSeconds: the file's full length was not confirmed" },
+});
 const SHARED_TAGS = ["stt", "speech-to-text", "transcription", "audio", "whisper", "openai"];
 
 export const STT_TOOLS = [
@@ -668,7 +674,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.030",
     description:
-      "Transcribe audio to text with the gpt-transcribe model. Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels, word timestamps and a language confidence score (the scribe-v2 model, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes." + RETRY_NOTE,
+      "Transcribe audio to text with the gpt-transcribe model. Provide a URL to an audio file (mp3, wav, m4a, etc.) and get back the transcript. Add diarize:true for speaker labels, word timestamps and a language confidence score (the scribe-v2 model, same price). No API key needed; pay per call via x402. Max 4 minutes of audio, 25 MB file size; /api/transcribe-pro takes the same models to 10 minutes." + TRIM_NOTE + RETRY_NOTE,
     tags: [...SHARED_TAGS, "gpt-transcribe"],
     discovery: {
       bodyType: "json",
@@ -689,6 +695,7 @@ export const STT_TOOLS = [
           language: "en",
           duration: 12.6,
         },
+        optional: TRIM_OUTPUT,
       },
     },
     handler: makeHandler("transcribe"),
@@ -700,7 +707,7 @@ export const STT_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "Pro tier for longer recordings (model-backed, gpt-transcribe, the same model as the standard tier): transcribes an audio file at a URL. Max 10 minutes and 25 MB, the longer cap of the transcribe routes. Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score. No API key needed; pay per call via x402." + RETRY_NOTE,
+      "Pro tier for longer recordings (model-backed, gpt-transcribe, the same model as the standard tier): transcribes an audio file at a URL. Max 10 minutes and 25 MB, the longer cap of the transcribe routes. Returns the transcript text, language and duration; diarize:true adds speaker labels, word timestamps and a language confidence score. No API key needed; pay per call via x402." + TRIM_NOTE + RETRY_NOTE,
     tags: [...SHARED_TAGS, "gpt-transcribe", "pro"],
     discovery: {
       bodyType: "json",
@@ -721,6 +728,7 @@ export const STT_TOOLS = [
           language: "en",
           duration: 12.6,
         },
+        optional: TRIM_OUTPUT,
       },
     },
     handler: makeHandler("transcribe-pro"),
@@ -738,7 +746,7 @@ export const STT_TOOLS = [
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>", language: "en" },
       inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
-      output: { example: { text: "Example transcript.", duration: 3.2, model: "gpt-transcribe" } },
+      output: { example: { text: "Example transcript.", duration: 3.2, model: "gpt-transcribe" }, optional: TRIM_OUTPUT },
     },
     handler: makeMultipartHandler("transcribe"),
   },
@@ -755,7 +763,7 @@ export const STT_TOOLS = [
       bodyType: "form-data",
       input: { file: "<audio bytes, multipart part named file>" },
       inputSchema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary", description: "The audio file, as a multipart part named `file`" }, language: { type: "string", description: "Optional ISO-639-1 hint" }, diarize: { type: "string", description: "\"true\" for speaker labels, word timestamps and language_confidence (the scribe-v2 model)" } } },
-      output: { example: { text: "Example transcript.", duration: 420.5, model: "gpt-transcribe" } },
+      output: { example: { text: "Example transcript.", duration: 420.5, model: "gpt-transcribe" }, optional: TRIM_OUTPUT },
     },
     handler: makeMultipartHandler("transcribe-pro"),
   },

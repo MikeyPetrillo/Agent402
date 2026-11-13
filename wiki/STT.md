@@ -48,6 +48,8 @@ mp3, m4a, wav, ogg, flac, webm (max 25 MB). mp4, mpeg and mpga files are accepte
 
 Only `url` is required. `language` (ISO-639-1 code) is optional but improves accuracy.
 
+The file's length is measured by decoding it before any upstream call. A file whose length cannot be confirmed is transcribed up to the tier's cap, and the answer says so with two more fields: `trimmedToCapSeconds` (the cap it was cut at) and `durationUnconfirmed: true`. Both are absent from every other answer.
+
 ## See also
 
 - [[Text-to-Speech|TTS]] - the reverse: text to audio
