@@ -372,8 +372,18 @@ const reject = (p) => p.then(() => null, (e) => e);
       e = await reject(withBudget(() => prepareAudioWithinCap(makeMp3(9), "audio.mp3", "transcribe", route), UP.default + MIN_DECODE + 1_500));
       const tWait = Date.now() - waitStart;
       ok(e?.statusCode === 503 && tWait >= 1_200 && tWait < 4_000, `a budget with 1.5 s to spare waits that long for a slot, then the 503 (${tWait} ms)`);
+      let tD = Date.now();
       e = await reject(withBudget(() => prepareAudioWithinCap(makeMp3(9), "audio.mp3", "transcribe", route, { diarize: true }), UP.default + MIN_DECODE + 30_000));
-      ok(e?.statusCode === 503, `the diarized path leaves its longer upstream cap (${UP.diarize} ms) out of the wait (${e?.statusCode ?? "passed"})`);
+      tD = Date.now() - tD;
+      ok(e?.statusCode === 503 && tD < 1_000, `the diarized path keeps its longer upstream cap (${UP.diarize} ms) out of the wait: no room, the 503 at once (${tD} ms)`);
+      // The route handler passes diarize through (the OpenAI wire's multipart field).
+      const fd = new FormData(); fd.append("file", new Blob([makeMp3(9)]), "a.mp3"); fd.append("diarize", "true");
+      const rq = new Request("http://x/", { method: "POST", body: fd });
+      const mreq = { headers: { "content-type": rq.headers.get("content-type") }, body: Buffer.from(await rq.arrayBuffer()) };
+      tD = Date.now();
+      e = await reject(withBudget(() => makeMultipartHandler("transcribe")({}, mreq), UP.default + MIN_DECODE + 30_000));
+      tD = Date.now() - tD;
+      ok(e?.statusCode === 503 && tD < 1_000, `a diarized upload reaches the decode with its longer upstream cap (${tD} ms, ${e?.statusCode ?? "passed"})`);
       for (const h of held.splice(0)) answer(h, 8);
       ok(await until(() => blocker.done) && calls.every((c) => c.done), "the held calls finish once answered");
     } finally {
