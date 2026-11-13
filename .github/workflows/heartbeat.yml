@@ -236,7 +236,7 @@ jobs:
 
       # Bazaar listing validation - Coinbase's keyless, read-only
       # POST /platform/v2/x402/validate probes our checked routes (the flagship
-      # set and every listing whose content type is not JSON) the way the
+      # set and every listing whose content type is not JSON, up to 12) the way the
       # Bazaar crawler does (402 shape, PAYMENT-REQUIRED, accepts, bazaar
       # extension, simulated accept, index membership). Never called before
       # 2026-08-19; a broken 402 on one route could silently drop its listing

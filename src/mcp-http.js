@@ -103,11 +103,11 @@ import {
 } from "./rate-limit.js";
 import { mcpPackageVersionFrom } from "./mcp-package-version.js";
 
-// The connector reports the version the MCP Registry lists for it (the
-// agent402-mcp package version in mcp/server.json) with the server's build as
+// serverInfo reports the agent402-mcp package version in the deployed build
+// (mcp/package.json, which the image copies) with the server's build as
 // semver build metadata: "0.13.32+build.abc1234", "+build.dev" with no commit.
-// A client comparing serverInfo with the registry entry sees the same version,
-// and the build still names the deploy. The image copies mcp/package.json.
+// The MCP Registry lists that version once the package is published; the
+// build names the deploy.
 const MCP_PACKAGE_VERSION = mcpPackageVersionFrom(new URL("../mcp/package.json", import.meta.url));
 const VERSION = `${MCP_PACKAGE_VERSION}+build.${(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || "dev").slice(0, 7)}`;
 

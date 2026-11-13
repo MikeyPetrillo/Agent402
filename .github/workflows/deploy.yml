@@ -5313,7 +5313,7 @@ jobs:
       # listing is red on its own run. Only when every run could not read the
       # validator (exit 2, CDP-side) does the step warn instead: it then has
       # no verdict on our build. The checked routes are the flagship set and
-      # every listing whose content type is not JSON. Each run prints its
+      # every listing whose content type is not JSON (up to 12). Each run prints its
       # FAIL and unreadable rows first, so a long run's tail never hides one,
       # and ends at the script's own deadline (8 minutes) at the latest.
       - name: Bazaar listing validation on the new build
