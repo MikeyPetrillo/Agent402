@@ -1261,7 +1261,7 @@ jobs:
       # hours in model-drift.yml, not on a push: an upstream price change is
       # not a defect in the change under review.
 
-      - name: Offline suites (4 scripts, one process each)
+      - name: Offline suites (5 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a2 2
 
       - name: "Replay guard, cross-replica (REAL redis — two guard instances prove shared claim/settle/release; fails open to local state on a redis outage — 2026-08-16)"
