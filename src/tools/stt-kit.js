@@ -318,17 +318,23 @@ function decoderBusyError(reason, tierSlug, req) {
  *  margin math and the answer use. */
 export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null, { diarize = false } = {}) {
   const tier = TIERS[tierSlug];
-  const container = await probeContainer(buf, filename);
-  if (container === null) {
-    throw bad("Could not read the audio duration from the file - send a standard mp3, wav, m4a, ogg, flac, or webm file", 422);
-  }
+  const durationUnreadable = () => bad("Could not read the audio duration from the file - send a standard mp3, wav, m4a, ogg, flac, or webm file", 422);
+  // The header parser picks its reader from the file name, so bytes under the
+  // wrong name (an Ogg file named .m4a or .mp3) can declare nothing. Such a
+  // file is still measured by decoding: served only on a measured length, and
+  // as the decoded FLAC, since its track count is unknown. Unmeasured, it is
+  // the 422 it always was.
+  const declared = await probeContainer(buf, filename);
+  const headerless = declared === null;
+  const container = declared ?? { audioTracks: 0, durationSec: 0, pictureBytes: 0 };
   const capSec = tier.maxMinutes * 60;
   const overCap = (sec) => sec > capSec + 2;
   if (overCap(container.durationSec)) throw overCapError(container.durationSec, tierSlug);
   const sniffed = inputFormatOf(buf);
   // A container with more than one audio track is sent as its first, the one
-  // measured, never as it came (the upstream could read another).
-  const multiTrack = container.audioTracks > 1;
+  // measured, never as it came (the upstream could read another); so is a
+  // file whose header declared nothing.
+  const multiTrack = container.audioTracks > 1 || headerless;
   const asFlac = (t) => ({ buf: t.audio, filename: "audio.flac" });
   // A PCM WAV whose bytes alone cannot play past the cap goes as it came,
   // without a decode (the measurement pool's state does not matter to it).
@@ -360,6 +366,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
     if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
     throw decoderBusyError(t?.unavailable || "the conversion did not run", tierSlug, req);
   }
+  if (headerless) throw durationUnreadable();
   unmeasured++;
   if (byteFloorApplies(container) && overCap(byteFloorSeconds(buf.length, container.pictureBytes))) {
     throw overCapError(byteFloorSeconds(buf.length, container.pictureBytes), tierSlug);

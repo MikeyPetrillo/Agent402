@@ -489,7 +489,7 @@ const reject = (p) => p.then(() => null, (e) => e);
         const mp3 = gen("p.mp3", ["-c:a", "libmp3lame", "-f", "mp3"]);
         const ogg = gen("p.ogg", ["-c:a", "libopus", "-f", "ogg"]);
         const id3 = (body, n = 1000) => { const h = Buffer.alloc(10 + n); h.write("ID3", 0); h[3] = 4; h[6] = (n >> 21) & 127; h[7] = (n >> 14) & 127; h[8] = (n >> 7) & 127; h[9] = n & 127; return Buffer.concat([h, body]); };
-        const cases = [["ADTS AAC behind an ID3 tag", id3(adts), "audio.aac", "flac"], ["an MP3 behind 3000 zero bytes", Buffer.concat([Buffer.alloc(3000), mp3]), "audio.mp3", "as-is"], ["ADTS AAC behind 3000 zero bytes (no sniff; a fallback demuxer reads it)", Buffer.concat([Buffer.alloc(3000), adts]), "audio.aac", "flac"], ["Ogg behind an ID3 tag and 3000 zero bytes (sniffed as mp3; only the ogg fallback reads it)", id3(Buffer.concat([Buffer.alloc(3000), ogg])), "audio.mp3", "flac"]];
+        const cases = [["ADTS AAC behind an ID3 tag", id3(adts), "audio.aac", "flac"], ["an MP3 behind 3000 zero bytes", Buffer.concat([Buffer.alloc(3000), mp3]), "audio.mp3", "as-is"], ["ADTS AAC behind 3000 zero bytes (no sniff; a fallback demuxer reads it)", Buffer.concat([Buffer.alloc(3000), adts]), "audio.aac", "flac"], ["Ogg behind an ID3 tag and 3000 zero bytes (sniffed as mp3; only the ogg fallback reads it)", id3(Buffer.concat([Buffer.alloc(3000), ogg])), "audio.mp3", "flac"], ["an Ogg file named .m4a (its header parse declares nothing; the decoder reads it)", ogg, "audio.m4a", "flac"], ["an Ogg file named .flac (its header parse declares nothing; the decoder reads it)", ogg, "audio.flac", "flac"]];
         for (const [label, b, name, how] of cases) {
           for (const slug of ["transcribe", "transcribe-pro"]) {
             let p = null, err = null;
@@ -498,6 +498,12 @@ const reject = (p) => p.then(() => null, (e) => e);
             ok(!err && sent && Math.abs(p.durationSec - 6) < 0.3 && !("trimmedToCapSeconds" in p), `${slug}: ${label} is measured and served ${how === "as-is" ? "as it came" : "as FLAC"} (${err ? `${err.statusCode}: ${err.message}` : `${p?.filename}, ${p?.durationSec}s`})`);
           }
         }
+      }
+
+      // Bytes that neither the header parse nor the decoder reads stay the 422.
+      for (const slug of ["transcribe", "transcribe-pro"]) {
+        const e = await reject(prepareAudioWithinCap(junk, "audio.m4a", slug, { headers: {} }));
+        ok(e?.statusCode === 422 && /Could not read the audio duration/.test(e.message), `${slug}: bytes no reader measures are the 422 (${e ? `${e.statusCode}: ${e.message}` : "passed"})`);
       }
 
       // A file converted for the upstream is measured and converted in ONE
