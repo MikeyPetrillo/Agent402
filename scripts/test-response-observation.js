@@ -186,6 +186,11 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(deliveryObservation(e, "POST", "/r")?.calls === 1 && deliveryObservation(e, "POST", "/r")?.kept === 0, "a seller body with `_truncated:true` is observed as a missed promise");
   observeDelivery({ origin: e, method: "POST", route: "/r2", guaranteedPaths: ["result.value"], body: { relayError: "upstream body unreadable" } });
   ok(deliveryObservation(e, "POST", "/r2")?.kept === 0, "and so is one with a `relayError` string");
+  // A whole body that is not JSON comes back as our own { raw } reading: a
+  // promised `raw` is never met by our key.
+  const prose = await readAfterSpend(new Response("plain words, not JSON"), 4096);
+  ok(typeof prose?.raw === "string" && !prose._truncated, "our reader wraps a whole non-JSON body (setup)");
+  ok(observeDelivery({ origin: o, method: "POST", route: "/raw", guaranteedPaths: ["raw"], body: prose }) === null, "a whole non-JSON body is not judged as the seller's delivery");
   observeDelivery({ origin: o, method: "POST", route: "/r", guaranteedPaths: ["result.value"], body: { result: { value: 1 } } });
   ok(deliveryObservation(o, "POST", "/r")?.calls === 1 && deliveryObservation(o, "POST", "/r")?.keptRate === 1, "control: a whole body is observed as before");
 }

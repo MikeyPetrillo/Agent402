@@ -671,6 +671,7 @@ async function readCapped(res, maxBytes) {
       return truncated ? markNotSellerBody({ ...(j && typeof j === "object" && !Array.isArray(j) ? j : { value: j }), _truncated: true }) : j;
     } catch { /* fall through */ }
   }
-  const out = { text, truncated, contentType: ct, sha256: createHash("sha256").update(buf).digest("hex") };
-  return truncated ? markNotSellerBody(out) : out;
+  // Not JSON: this object is our own reading of the bytes, cut or whole, never
+  // the seller's body, so no path the seller promised is met by its keys.
+  return markNotSellerBody({ text, truncated, contentType: ct, sha256: createHash("sha256").update(buf).digest("hex") });
 }

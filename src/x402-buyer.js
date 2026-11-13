@@ -376,7 +376,8 @@ export async function readAfterSpend(res, maxBytes) {
   const truncated = read.truncated || text.length > maxBytes;
   const body = truncated ? text.slice(0, maxBytes) : text;
   try { const j = JSON.parse(body); return truncated ? markNotSellerBody({ ...(j && typeof j === "object" && !Array.isArray(j) ? j : { value: j }), _truncated: true }) : j; }
-  catch { return truncated ? markNotSellerBody({ raw: body.slice(0, 4000), _truncated: true }) : { raw: body.slice(0, 4000) }; }
+  // Not JSON: { raw } is our own reading of the bytes, never the seller's body.
+  catch { return markNotSellerBody(truncated ? { raw: body.slice(0, 4000), _truncated: true } : { raw: body.slice(0, 4000) }); }
 }
 
 // REFUSE-THEN-SETTLE-LATE (2026-09-03). A refused paid retry falls through to
