@@ -206,11 +206,11 @@ export async function probeOxAlphaAvailability({ fetchImpl } = {}) {
 // no LLM in the routing path, identical requests always route identically.
 //
 // Each list doubles as the tier's failover chain: a provider error walks down
-// the ranking, and every list contains openai/gpt-4o-mini — the model the
-// daily paid canary proves alive. It retires 2027-01-14 (RETIRING_MODELS) and
-// stays the terminal rung until a successor is decided (gpt-5-nano returns no
-// content under about 32 output tokens, so it cannot take the slot as is);
-// test-llm-gateway fails 30 days before the date while a rung still names it.
+// the ranking, and every list contains openai/gpt-6-luna, OpenAI's named
+// replacement for gpt-4o-mini (which held the slot until it was scheduled to
+// shut down 2027-01-14; RETIRING_MODELS keeps a caller naming it served). It
+// answers at the auto tier's injected effort with no reasoning tokens.
+// test-llm-gateway fails 30 days before a date while a rung names a scheduled id.
 //
 // The `quality` knob picks the BAND (fast / balanced / best); all three stay
 // inside the flat $0.01 price — a per-request price can't exist under x402's
@@ -244,25 +244,25 @@ export const AUTO_QUALITIES = ["fast", "balanced", "best"];
 export const AUTO_RANKINGS = {
   // fast — cheapest/snappiest serving; right for high-frequency loop turns.
   fast: {
-    code: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "qwen/qwen-2.5-coder-32b-instruct", "openai/gpt-4o-mini"],
-    reasoning: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
-    long: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
-    general: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
+    code: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "qwen/qwen-2.5-coder-32b-instruct", "deepseek/deepseek-chat"],
+    reasoning: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "deepseek/deepseek-chat", "openai/gpt-5.6-luna"],
+    long: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "deepseek/deepseek-chat", "openai/gpt-5.6-luna"],
+    general: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "deepseek/deepseek-chat", "openai/gpt-5.6-luna"],
   },
   // balanced — the default band. deepseek-chat keeps the code head (proven,
   // cheap); gpt-5.6-luna leads the rest (1M ctx covers `long` natively).
   balanced: {
-    code: ["deepseek/deepseek-chat", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
-    reasoning: ["openai/gpt-5.6-luna", "deepseek/deepseek-chat", "openai/gpt-4o-mini"],
-    long: ["openai/gpt-5.6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-4o-mini"],
-    general: ["openai/gpt-5.6-luna", "openai/gpt-4o-mini", "deepseek/deepseek-chat"],
+    code: ["deepseek/deepseek-chat", "openai/gpt-5.6-luna", "openai/gpt-6-luna"],
+    reasoning: ["openai/gpt-5.6-luna", "deepseek/deepseek-chat", "openai/gpt-6-luna"],
+    long: ["openai/gpt-5.6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-6-luna"],
+    general: ["openai/gpt-5.6-luna", "openai/gpt-6-luna", "deepseek/deepseek-chat"],
   },
   // best — strongest models that still fit the tier's price bound.
   best: {
-    code: ["openai/gpt-5.6-luna", "deepseek/deepseek-chat", "openai/gpt-4o-mini"],
-    reasoning: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
-    long: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
-    general: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-4o-mini"],
+    code: ["openai/gpt-5.6-luna", "deepseek/deepseek-chat", "openai/gpt-6-luna"],
+    reasoning: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-6-luna"],
+    long: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-6-luna"],
+    general: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-6-luna"],
   },
 };
 
@@ -318,11 +318,12 @@ export const TIERS = {
     maxTokens: 768,
     maxPrice: { prompt: 0.5, completion: 1.5 }, // catastrophe bound above the priciest allowlisted model
     // Server-chosen upstream failover, tried in order when the requested
-    // model's provider errors. The terminal entry is deliberately gpt-4o-mini:
+    // model's provider errors. The terminal entry is gemini-3.1-flash-lite:
     // the daily canary proves it alive every morning, and it fits the nano
-    // caps under the clamp. Fallback models bypass
+    // caps under the clamp (gpt-4o-mini held it until its 2027-01-14 shutdown
+    // was scheduled). Fallback models bypass
     // the tier allowlist (server-chosen, caps still enforced by the body).
-    fallbacks: ["deepseek/deepseek-chat", "openai/gpt-4o-mini"],
+    fallbacks: ["deepseek/deepseek-chat", "google/gemini-3.1-flash-lite"],
     prefixes: [
       // gpt-4.1-nano retired here 2026-09-02 ahead of OpenAI's 2026-10-23 removal; gpt-5.6-luna is its named successor and the tier default.
       // gpt-5-nano shuts down 2026-12-11: no longer listed here; RETIRING_MODELS keeps
@@ -349,9 +350,14 @@ export const TIERS = {
     ],
   },
   "v1-chat": {
-    // gpt-4o-mini retires 2027-01-14 (RETIRING_MODELS) and stays the default
-    // until a successor is decided; test-llm-gateway fails 30 days ahead.
-    defaultModel: "openai/gpt-4o-mini", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
+    // gpt-6-luna: OpenAI's named replacement for gpt-4o-mini, which was the
+    // default until its 2027-01-14 shutdown was scheduled. A call naming no
+    // model is served it here at this tier's price and caps (tierAllows'
+    // `defaulted`); a caller NAMING it keeps its nano home and price.
+    defaultModel: "openai/gpt-6-luna", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
+    // A default call carrying temperature or top_p (which luna does not take)
+    // is served by the Gemini wire's base default, which does (defaultModelFor).
+    defaultModelCompat: "google/gemini-3.5-flash-lite",
     reasoningDefault: "lowest", // budget tier: lowest non-none effort on default-on reasoning models
     route: "POST /v1/chat/completions",
     price: 0.02,
@@ -367,7 +373,9 @@ export const TIERS = {
     prefixes: [
       // gpt-5-nano stays admitted on base through RETIRING_MODELS' keepOn (a
       // nano model on a pricier tier is harmless), no longer listed here.
-      "openai/gpt-4o-mini", "openai/gpt-4.1-mini",
+      // gpt-4o-mini and gpt-4.1-mini shut down 2027-01-14: listed here until
+      // then no more; keepOn keeps both admitted (as themselves until that
+      // day, then served by gpt-6-luna at this tier's price).
       // gpt-5.6-terra was admitted here until a repricing put it OVER this
       // tier's completion bound, so
       // `provider.max_price` refused every non-flex attempt and each call burnt
@@ -394,9 +402,13 @@ export const TIERS = {
     ],
   },
   "v1-chat-pro": {
-    // gpt-4o retires 2027-01-14 (RETIRING_MODELS) and stays the default until
-    // a successor is decided; test-llm-gateway fails 30 days ahead.
-    defaultModel: "openai/gpt-4o", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
+    // gpt-6.1-terra: the 6.1 generation's mid model, listed below gpt-4o,
+    // tools and 1M context. gpt-4o was the default until its 2027-01-14
+    // shutdown was scheduled; a call naming gpt-4o is served by terra from then.
+    defaultModel: "openai/gpt-6.1-terra", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
+    // A default call carrying temperature or top_p (which terra does not take)
+    // is served by the Gemini wire's pro default, which does (defaultModelFor).
+    defaultModelCompat: "google/gemini-3.6-flash",
     reasoningDefault: "low", // real reasoning, but never medium/high by default under a 4k cap
     route: "POST /v1/pro/chat/completions",
     price: 0.10,
@@ -421,7 +433,8 @@ export const TIERS = {
       },
     },
     prefixes: [
-      "openai/gpt-4o", "openai/gpt-4.1",
+      // gpt-4o and gpt-4.1 (and their families) shut down 2027-01-14: no
+      // longer listed; RETIRING_MODELS' keepOn keeps them admitted here.
       // claude-sonnet prefix covers claude-sonnet-5 — see MODEL_COST below.
       "anthropic/claude-sonnet", // covers claude-sonnet-4.x and -5; 3.5/3.7-sonnet left OpenRouter (2026-08-19)
       // bare gemini-pro left OpenRouter 2026-08-19; gemini-2.5-pro left 2026-09-29
@@ -535,7 +548,7 @@ export const TIERS = {
     maxPrice: { prompt: 0.6, completion: 3 }, // catastrophe bound above the priciest ranked model
     router: true,
     priceSort: true, // budget router: cheapest provider under the cap
-    fallbacks: ["openai/gpt-4o-mini"],
+    fallbacks: ["openai/gpt-6-luna"],
     prefixes: [...new Set(Object.values(AUTO_RANKINGS).flatMap((byCategory) => Object.values(byCategory).flat()))],
   },
   // Grounded tier - the auto router plus OpenRouter's web-search plugin on
@@ -560,7 +573,7 @@ export const TIERS = {
     maxPrice: { prompt: 0.6, completion: 3 },
     router: true,
     priceSort: true,
-    fallbacks: ["openai/gpt-4o-mini"],
+    fallbacks: ["openai/gpt-6-luna"],
     prefixes: [...new Set(Object.values(AUTO_RANKINGS).flatMap((byCategory) => Object.values(byCategory).flat()))],
     web: { id: "web", engine: "exa", max_results: 5 },
     get fixedUpstreamUsd() { return feeOf("groundedPerCall"); },
@@ -848,13 +861,14 @@ export const RETIRING_MODELS = Object.freeze({
   // date for them yet, so these entries are SCHEDULED (asItselfUntil): each
   // id is served as itself until that day, and from then on canonicalModel
   // serves the named successor, disclosed in agent402_model_substituted. A
-  // dated snapshot (gpt-4o-2024-08-06) follows its family id. The successors
-  // are provisional; test-llm-gateway fails 30 days before the date while a
-  // tier default, fallback or auto rung still names a retiring id.
-  "openai/gpt-4o": { until: "2027-01-14", use: "openai/gpt-6.1-sol", asItselfUntil: true },
-  "openai/gpt-4o-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
-  "openai/gpt-4.1": { until: "2027-01-14", use: "openai/gpt-6.1-sol", asItselfUntil: true },
-  "openai/gpt-4.1-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true },
+  // dated snapshot (gpt-4o-2024-08-06) follows its family id. gpt-4o's
+  // successor is the pro tier's default (gpt-6.1-terra), the mini ids' is the
+  // base default (gpt-6-luna, the notice's named replacement). No tier lists
+  // these ids any more; `keepOn` keeps each family admitted where it was.
+  "openai/gpt-4o": { until: "2027-01-14", use: "openai/gpt-6.1-terra", asItselfUntil: true, keepOn: ["v1-chat-pro", "v1-chat-metered"] },
+  "openai/gpt-4o-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true, keepOn: ["v1-chat", "v1-chat-pro", "v1-chat-auto", "v1-chat-grounded", "v1-chat-metered"] },
+  "openai/gpt-4.1": { until: "2027-01-14", use: "openai/gpt-6.1-sol", asItselfUntil: true, keepOn: ["v1-chat-pro", "v1-chat-metered"] },
+  "openai/gpt-4.1-mini": { until: "2027-01-14", use: "openai/gpt-6-luna", asItselfUntil: true, keepOn: ["v1-chat", "v1-chat-pro", "v1-chat-metered"] },
   // OpenAI shuts down GPT-5, GPT-5 mini, GPT-5 nano, GPT-5 pro, o3 and o3-pro on
   // 2026-12-11 (OpenAI's deprecations page, notice of 2026-06-11). SCHEDULED
   // like the entries above; each successor is the replacement that notice
@@ -1113,12 +1127,17 @@ function prefixesAdmit(tier, id) {
  *  under that tier's caps, price and clamp. Without this a base call naming
  *  gpt-5-nano would move to nano on 2026-12-11 (gpt-5.6-luna's only flat
  *  home), with nano's smaller input and output caps. A caller naming the
- *  successor itself keeps the successor's own home tier and price. */
-export function tierAllows(tierSlug, model, requested) {
+ *  successor itself keeps the successor's own home tier and price.
+ *  `defaulted`: the caller named no model and the wire chose the tier's own
+ *  default (defaultModelFor); a tier always serves its default to such a call,
+ *  at its own price and caps, though a caller NAMING that model may have
+ *  another home (gpt-6-luna is base's default and nano's model). */
+export function tierAllows(tierSlug, model, requested, { defaulted = false } = {}) {
   const tier = TIERS[tierSlug];
   if (!tier) return false;
   const id = canonicalModel(model).toLowerCase();
   if (retiringModel(id)) return false;
+  if (defaulted && !canonicalModelRaw(requested) && [tier.defaultModel, tier.defaultModelCompat].some((d) => d && d.toLowerCase() === id)) return true;
   // Belt for refuseCostVariants: a "-contributor" listing is never admitted
   // by a family prefix (meta/muse-spark admits meta/muse-spark-1.3-...).
   if (/-contributor(?:$|:)/.test(id)) return false;
@@ -1324,8 +1343,19 @@ export function adaptiveOnlyClaude(model) {
 export function defaultModelFor(tier, ctx = {}) {
   if (!tier?.defaultModel) return null;
   if (!tier.defaultModelCompat) return tier.defaultModel;
+  const sampling = Object.values(ctx.sampling || {}).some((v) => v !== undefined);
+  if (sampling && noUpstreamSampling(tier.defaultModel)) return tier.defaultModelCompat;
   try { refuseUnsupportedParams(tier.defaultModel, ctx); return tier.defaultModel; }
   catch { return tier.defaultModelCompat; }
+}
+
+/** OpenAI's reasoning families list no temperature or top_p upstream, and
+ *  OpenRouter drops both silently (gpt-6-luna and gpt-6.1-terra, live catalog
+ *  2026-11-12). A call naming one keeps that behavior; a call naming NO model
+ *  that sends a sampling knob is served the tier's defaultModelCompat, which
+ *  takes it, so the knob a buyer set still does what it says. */
+export function noUpstreamSampling(model) {
+  return /^openai\/(?:gpt-[5-9]|o[1-9])/.test(canonicalModel(model).toLowerCase());
 }
 
 /** The plain clause every machine-readable surface carries beside a tier's
@@ -1333,7 +1363,8 @@ export function defaultModelFor(tier, ctx = {}) {
  *  from the tier object, never typed twice. */
 export function defaultModelCompatNote(tier) {
   if (!tier?.defaultModel || !tier.defaultModelCompat) return null;
-  return `The default is ${tier.defaultModel}; a call that names no model and carries a parameter ${tier.defaultModel} does not take (temperature, top_p, top_k, an assistant prefill or a fixed reasoning budget) is served by ${tier.defaultModelCompat}.`;
+  const params = noUpstreamSampling(tier.defaultModel) ? "temperature or top_p" : "temperature, top_p, top_k, an assistant prefill or a fixed reasoning budget";
+  return `The default is ${tier.defaultModel}; a call that names no model and carries a parameter ${tier.defaultModel} does not take (${params}) is served by ${tier.defaultModelCompat}.`;
 }
 
 /** The chat wire's refuseUnsupportedParams context, read once from the body. */
@@ -2153,7 +2184,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // ":batch" is the asynchronous batch
   // API (24h window), not a chat completion this path can serve.
   refuseCostVariants(model);
-  if (!tierAllows(tierSlug, model, input.model)) {
+  if (!tierAllows(tierSlug, model, input.model, { defaulted: defaultedModel === model })) {
     // "auto" reaches here only when the request was not gated at the auto
     // price (no request, or FREE_MODE): name the route that serves it.
     if (model === AUTO_MODEL && TIERS[AUTO_TIER]) {
@@ -4762,7 +4793,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.02",
     description:
-      "OpenAI-compatible chat completions, base tier: point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call over x402 or MPP (the 402 lists every accepted rail), no API key, no signup. Returns the standard chat.completion object (choices[].message.content, usage). Budget/mid models: gpt-4o-mini (the default when model is omitted), claude haiku, gemini flash, deepseek, llama, mistral, qwen. Full wire compatibility incl. tools/function-calling and response_format. GET /v1/models lists every model. Streaming supported (stream: true). One flat price per call up to the tier caps; /v1/metered/chat/completions quotes each call from its own size instead. Model-backed.",
+      "OpenAI-compatible chat completions, base tier: point any OpenAI SDK at base_url https://agent402.tools/v1 and pay per call over x402 or MPP (the 402 lists every accepted rail), no API key, no signup. Returns the standard chat.completion object (choices[].message.content, usage). Budget/mid models: gpt-6-luna (the default when model is omitted), claude haiku, gemini flash, deepseek, llama, mistral, qwen. Full wire compatibility incl. tools/function-calling and response_format. GET /v1/models lists every model. Streaming supported (stream: true). One flat price per call up to the tier caps; /v1/metered/chat/completions quotes each call from its own size instead. Model-backed. " + defaultModelCompatNote(TIERS["v1-chat"]),
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: EXAMPLE, inputSchema: INPUT_SCHEMA, output: { example: EXAMPLE_OUT } },
     handler: makeHandler("v1-chat"),
@@ -4774,7 +4805,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.10",
     description:
-      "OpenAI-compatible chat completions, pro tier: gpt-4o, gpt-4.1, gpt-6 sol, claude sonnet, gemini pro, grok - paid per call in USDC over x402. Same wire format as /v1/chat/completions with higher input/output caps (48k chars in, 4096 tokens out).",
+      "OpenAI-compatible chat completions, pro tier: gpt-6.1 terra (the default when model is omitted), gpt-6 sol, claude sonnet, gemini pro, grok - paid per call in USDC over x402. Same wire format as /v1/chat/completions with higher input/output caps (48k chars in, 4096 tokens out). " + defaultModelCompatNote(TIERS["v1-chat-pro"]),
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-4o" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4o" } } },
     handler: makeHandler("v1-chat-pro"),

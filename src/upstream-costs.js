@@ -50,9 +50,9 @@ const REQUIRED = [
   ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "lite"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
   ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "jev"],
-  // The direct image model (USD per 1M tokens: prompt for text input,
-  // completion for image output), which the spend meter prices from this row.
-  ["openai", "gpt-image-2"],
+  // The direct image models (USD per 1M tokens: prompt for text input,
+  // completion for image output), which the spend meter prices from each row.
+  ["openai", "gpt-image-2.6-flare"], ["openai", "gpt-image-2.6-sunburst"],
   // The image edit route's only link (llm-images-fast-kit.js).
   ["media", "black-forest-labs/flux-3-image-klein"],
   // The SQL query service, USD per query: every query cdp-kit.js's query run

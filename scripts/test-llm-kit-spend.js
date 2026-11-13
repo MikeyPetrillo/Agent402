@@ -86,7 +86,19 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
   const llm = LLM_TOOLS.find((t) => t.slug === "llm"), pro = LLM_TOOLS.find((t) => t.slug === "llm-pro");
   const m = [{ role: "user", content: "hello" }];
   await llm.handler({ messages: m });
-  ok(sent.at(-1).model === "gpt-4o-mini" && sent.at(-1).reasoning_effort === undefined, "llm: no model is still gpt-4o-mini, with no reasoning_effort");
+  ok(sent.at(-1).model === "gpt-6-luna" && sent.at(-1).reasoning_effort === "low", "llm: no model is gpt-6-luna (gpt-4o-mini's named replacement), at reasoning_effort low");
+  await pro.handler({ messages: m });
+  ok(sent.at(-1).model === "gpt-6-luna", "llm-pro: no model is gpt-6-luna");
+  {
+    const r = await llm.handler({ messages: m, temperature: 0.2, top_p: 0.9 });
+    ok(sent.at(-1).model === "gpt-6-luna" && !("temperature" in sent.at(-1)) && !("top_p" in sent.at(-1)) && JSON.stringify(r.agent402_params_not_sent?.params) === '["temperature","top_p"]', "llm, no model, temperature and top_p: gpt-6-luna served without them, the answer names both");
+    const named = await llm.handler({ model: "gpt-4o-mini", messages: m, temperature: 0.2 });
+    ok(retiredSuccessor("gpt-4o-mini") || (sent.at(-1).temperature === 0.2 && named.agent402_params_not_sent === undefined), "llm, gpt-4o-mini named with temperature: sent as asked while it is served as itself");
+    const plain = await llm.handler({ messages: m });
+    ok(plain.agent402_params_not_sent === undefined, "control: no sampling knob, no disclosure");
+  }
+  await llm.handler({ model: "gpt-4o-mini", messages: m });
+  ok((retiredSuccessor("gpt-4o-mini") ? sent.at(-1).model === "gpt-6-luna" : sent.at(-1).model === "gpt-4o-mini" && sent.at(-1).reasoning_effort === undefined), "llm: gpt-4o-mini by id is served as itself (no reasoning_effort) until its date, then as gpt-6-luna");
   await llm.handler({ model: "gpt-6-luna", messages: m });
   ok(sent.at(-1).model === "gpt-6-luna" && sent.at(-1).reasoning_effort === "low", "llm: gpt-6-luna by id gets reasoning_effort low by default");
   await pro.handler({ model: "gpt-6.1-sol", messages: m, reasoning_effort: "high" });

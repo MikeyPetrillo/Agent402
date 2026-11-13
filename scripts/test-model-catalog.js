@@ -22,12 +22,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
 
-const LISTED = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4", "deepseek/deepseek-chat-v3.1", "openai/gpt-4o-mini", "anthropic/claude-opus-5", "openai/gpt-3.5-turbo-0613", "openai/gpt-4"];
+const LISTED = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4", "deepseek/deepseek-chat-v3.1", "openai/gpt-4o-mini", "anthropic/claude-opus-5", "openai/gpt-3.5-turbo-0613", "openai/gpt-4", "openai/gpt-6.1-terra"];
 for (let i = 0; i < 120; i++) LISTED.push(`filler/model-${i}`);
 const BAD = "deepseek/deepseek-v4-1-flash-1017-uncensored";
 const DOTTED = "deepseek/deepseek-v4.1-flash-1017";
 // Context windows (tokens) the stub list states for a few ids.
-const CTX = { [DOTTED]: 1_048_576, "deepseek/deepseek-v4-flash": 1_048_576, "openai/gpt-4o-mini": 128_000, "deepseek/deepseek-chat-v3.1": 163_840 };
+const CTX = { [DOTTED]: 1_048_576, "deepseek/deepseek-v4-flash": 1_048_576, "openai/gpt-4o-mini": 128_000, "openai/gpt-6.1-terra": 128_000, "deepseek/deepseek-chat-v3.1": 163_840 };
 
 // --- unit -------------------------------------------------------------------
 // Offline: a miss-triggered read goes to a closed local port unless stubbed.
@@ -202,9 +202,10 @@ process.env.MODEL_CATALOG_URL = "http://127.0.0.1:9/api/v1/models";
   // /v1/models publishes each model's own metered cap.
   {
     const list = k.modelsList().data;
-    const mini = list.find((m) => m.id === "openai/gpt-4o-mini" && m.x402?.meteredMaxInputChars !== undefined);
+    // gpt-6.1-terra: an id a tier lists, given a 128k window by the stub.
+    const mini = list.find((m) => m.id === "openai/gpt-6.1-terra" && m.x402?.meteredMaxInputChars !== undefined);
     const wild = list.find((m) => m.id.endsWith("/*") && m.x402?.meteredMaxInputChars !== undefined);
-    ok(mini?.x402.meteredMaxInputChars === maxInputCharsFor("v1-chat-metered", "openai/gpt-4o-mini") && mini.x402.meteredMaxInputChars === 384_000, `a model with a larger window publishes its own cap (${mini?.x402?.meteredMaxInputChars})`);
+    ok(mini?.x402.meteredMaxInputChars === maxInputCharsFor("v1-chat-metered", "openai/gpt-6.1-terra") && mini.x402.meteredMaxInputChars === 384_000, `a model with a larger window publishes its own cap (${mini?.x402?.meteredMaxInputChars})`);
     ok(!wild || wild.x402.meteredMaxInputChars === floor, "a vendor wildcard publishes the floor");
   }
   // A large quote is counted in pieces that yield the loop, and the quote reads the kept count.

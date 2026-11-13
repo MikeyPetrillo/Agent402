@@ -97,7 +97,7 @@ throws(() => validateRequest({ model: "made-up-model-9000", messages: msg1() }, 
   ok(nv.stream === undefined, "non-stream requests carry no stream flag");
 }
 throws(() => validateRequest({ model: "gpt-4o-mini", messages: [] }, "v1-chat"), "non-empty", "empty messages rejected");
-ok(validateRequest({ messages: msg1() }, "v1-chat").model === "openai/gpt-4o-mini", "missing model is served as the tier default (was a 400 until 2026-08-28)");
+ok(validateRequest({ messages: msg1() }, "v1-chat").model === "openai/gpt-6-luna", "missing model is served as the tier default (was a 400 until 2026-08-28)");
 throws(() => validateRequest({ model: "gpt-4o-mini", messages: msg1("x".repeat(40_000)) }, "v1-chat"), "Input too large", "input char cap enforced");
 throws(() => validateRequest({ model: "gpt-4o-mini", messages: Array.from({ length: 101 }, () => ({ role: "user", content: "x" })) }, "v1-chat"), "Too many messages", "message count cap enforced");
 
@@ -473,8 +473,8 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 {
   ok(TIERS["v1-chat-auto"].price === 0.01, "auto tier priced at $0.01");
   ok(
-    Object.values(AUTO_RANKINGS).every((byCategory) => Object.values(byCategory).every((list) => list.includes("openai/gpt-4o-mini"))),
-    "every ranking in every quality band contains the canary-proven terminal model"
+    Object.values(AUTO_RANKINGS).every((byCategory) => Object.values(byCategory).every((list) => list.includes("openai/gpt-6-luna"))),
+    "every ranking in every quality band contains gpt-6-luna, the terminal model that replaced gpt-4o-mini"
   );
 
   // Classification is lexical and deterministic.
@@ -670,6 +670,17 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const pro = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-pro");
   await pro.handler({ model: "openai/gpt-4o", messages: msg1(), max_tokens: 5 }, fakeReqC);
   ok(seen.provider?.sort === undefined && seen.provider?.max_price, "pro tier does NOT sort by price (a quantized provider is a buyer-visible quality change); cap still rides");
+  {
+    // A base call naming no model reaches the upstream as gpt-6-luna under
+    // base's caps and output budget, and the answer names the default.
+    const base = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat");
+    seen = null;
+    const outB = await base.handler({ messages: msg1(), max_tokens: 2048 }, fakeReqC);
+    ok(seen?.model === "openai/gpt-6-luna" && seen.max_tokens > TIERS["v1-chat-nano"].maxTokens && outB.agent402_default_model === "openai/gpt-6-luna" && outB.agent402_tier === undefined, `base, no model: upstream gpt-6-luna at base's output budget (${seen?.model}, max_tokens ${seen?.max_tokens}), named as the default`);
+    seen = null;
+    await pro.handler({ messages: msg1(), max_tokens: 64 }, fakeReqC);
+    ok(seen?.model === "openai/gpt-6.1-terra", `pro, no model: upstream gpt-6.1-terra (${seen?.model})`);
+  }
   process.env.OPENROUTER_PROVIDER_SORT = "off";
   seen = null;
   await nano.handler({ model: "deepseek/deepseek-chat", messages: msg1(), max_tokens: 5 }, fakeReqC);
@@ -1196,9 +1207,9 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   delete process.env.OPENROUTER_API_KEY;
   // Advertised on /v1/models the way the loop limits are.
   const list = modelsList().data;
-  const proRow = list.find((m) => m.x402.tier === "v1-chat-pro"), nanoRow = list.find((m) => m.id === "openai/gpt-5.6-luna" && m.x402.tier === "v1-chat-nano"), baseRow = list.find((m) => m.id === "openai/gpt-4o-mini" && m.x402.tier === "v1-chat");
+  const proRow = list.find((m) => m.x402.tier === "v1-chat-pro"), nanoRow = list.find((m) => m.id === "openai/gpt-5.6-luna" && m.x402.tier === "v1-chat-nano"), baseRow = list.find((m) => m.id === "anthropic/claude-haiku-4.5" && m.x402.tier === "v1-chat");
   ok(proRow?.x402.serviceTiers?.priority && !("upstreamPriceFactor" in proRow.x402.serviceTiers.priority) && JSON.stringify(proRow.x402.serviceTiers.priority.values) === '["priority","fast"]' && proRow.x402.serviceTiers.priority.param === "service_tier", "/v1/models: pro rows advertise the priority knob with its spellings and no upstream price factor");
-  ok(nanoRow?.x402.serviceTiers?.priority === false && nanoRow.x402.serviceTiers.flexFirst === true && baseRow?.x402.serviceTiers?.flexFirst === false, "/v1/models: nano says priority false and flexFirst true on luna; base says flexFirst false on gpt-4o-mini");
+  ok(nanoRow?.x402.serviceTiers?.priority === false && nanoRow.x402.serviceTiers.flexFirst === true && baseRow?.x402.serviceTiers?.flexFirst === false, "/v1/models: nano says priority false and flexFirst true on luna; base says flexFirst false on claude-haiku-4.5");
 }
 
 // /v1/rerank (2026-08-19) - Cohere wire over OpenRouter's /rerank, one locked
@@ -1506,10 +1517,13 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 // ---- a missing model is served as the tier default, never refused (2026-08-28) ----
 {
   const { validateRequest: vr, TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
-  for (const [slug, expect] of [["v1-chat-nano", "openai/gpt-6-luna"], ["v1-chat", "openai/gpt-4o-mini"], ["v1-chat-pro", "openai/gpt-4o"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-metered", "anthropic/claude-haiku-5.5"]]) {
+  for (const [slug, expect] of [["v1-chat-nano", "openai/gpt-6-luna"], ["v1-chat", "openai/gpt-6-luna"], ["v1-chat-pro", "openai/gpt-6.1-terra"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-metered", "anthropic/claude-haiku-5.5"]]) {
     const b = vr({ messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, slug, { clamp: false });
     ok(b.model === expect && b.__defaultedModel === expect && !Object.keys(b).includes("__defaultedModel") && T[slug].defaultModel === expect, `${slug}: no model -> ${expect} (marker non-enumerable)`);
-    ok(T[slug].prefixes.some((p) => expect === p || expect.startsWith(p.endsWith("/") ? p : p + "-") || expect === p), `${slug}: the default is inside the tier's own allowlist`);
+    // Inside the tier's own allowlist, or (base's gpt-6-luna) served to a call
+    // naming no model while a caller naming it keeps its cheaper home tier.
+    const inList = T[slug].prefixes.some((p) => expect === p || expect.startsWith(p.endsWith("/") ? p : p + "-") || expect === p);
+    ok(inList || (tierFor(expect) !== slug && T[tierFor(expect)].price <= T[slug].price), `${slug}: the default is inside the tier's own allowlist, or named it keeps a cheaper home (${tierFor(expect)})`);
   }
   const explicit = vr({ model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, "v1-chat", { clamp: false });
   ok(explicit.model === "openai/gpt-4o-mini" && explicit.__defaultedModel === undefined, "an explicit model is never marked as defaulted");
@@ -1735,7 +1749,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // OpenAI's 2027-01-14 shutdown of gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-mini:
   // served as themselves until the day, then by the scheduled successor.
   {
-    const sched = [["openai/gpt-4o", "openai/gpt-6.1-sol", "v1-chat-pro"], ["openai/gpt-4o-mini", "openai/gpt-6-luna", "v1-chat"], ["openai/gpt-4.1", "openai/gpt-6.1-sol", "v1-chat-pro"], ["openai/gpt-4.1-mini", "openai/gpt-6-luna", "v1-chat"]];
+    const sched = [["openai/gpt-4o", "openai/gpt-6.1-terra", "v1-chat-pro"], ["openai/gpt-4o-mini", "openai/gpt-6-luna", "v1-chat"], ["openai/gpt-4.1", "openai/gpt-6.1-sol", "v1-chat-pro"], ["openai/gpt-4.1-mini", "openai/gpt-6-luna", "v1-chat"]];
     const m1 = [{ role: "user", content: "hi" }];
     for (const [id, use, home] of sched) {
       ok(RETIRING_MODELS[id]?.until === "2027-01-14" && RETIRING_MODELS[id].use === use && RETIRING_MODELS[id].asItselfUntil === true, `${id}: scheduled to retire 2027-01-14, successor ${use}`);
@@ -1749,7 +1763,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     }
     K.setRetiringClockForTest(() => Date.parse("2027-01-14T00:00:00Z"));
     const dated = validateRequest({ model: "openai/gpt-4o-2024-08-06", messages: m1 }, "v1-chat-pro");
-    ok(dated.model === "openai/gpt-6.1-sol" && dated.__substitutedFrom === "openai/gpt-4o-2024-08-06", "a dated snapshot follows its family id onto the successor, the requested snapshot named");
+    ok(dated.model === "openai/gpt-6.1-terra" && dated.__substitutedFrom === "openai/gpt-4o-2024-08-06", "a dated snapshot follows its family id onto the successor, the requested snapshot named");
     K.setRetiringClockForTest(null);
     ok(validateRequest({ model: "openai/gpt-4o-2024-08-06", messages: m1 }, "v1-chat-pro").model === "openai/gpt-4o-2024-08-06", "before the date a dated snapshot is served as asked");
   }
@@ -2018,7 +2032,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(mp.body.model === H5, `Messages wire: no model, no sampling -> ${H5} (${mp.body.model})`);
     // Machine-readable surfaces name both models, read from the tier object.
     const note = K.defaultModelCompatNote(M);
-    ok(typeof note === "string" && note.includes(M.defaultModel) && note.includes(M.defaultModelCompat) && K.defaultModelCompatNote(TIERS["v1-chat"]) === null, `compat note names both models, null on a tier without one: ${note}`);
+    ok(typeof note === "string" && note.includes(M.defaultModel) && note.includes(M.defaultModelCompat) && K.defaultModelCompatNote(TIERS["v1-chat-nano"]) === null, `compat note names both models, null on a tier without one: ${note}`);
     const chatEntries = K.modelsList().data.filter((d) => d.x402?.meteredEndpoint);
     ok(chatEntries.length > 0 && chatEntries.every((d) => d.x402.meteredDefaultModel === M.defaultModel && d.x402.meteredDefaultModelCompat === M.defaultModelCompat), `/v1/models: every chat entry names the metered default and its compat model (${chatEntries.length} entries)`);
     const { LLM_MESSAGES_TOOLS } = await import("../src/tools/llm-messages-kit.js");
@@ -2051,7 +2065,45 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ok(validateRequest({ model: H4, messages: m1, temperature: 0.2 }, "v1-chat").temperature === 0.2, "Haiku 4.5 keeps temperature");
   ok(validateRequest({ model: H4, messages: [...m1, { role: "assistant", content: "Sure," }] }, "v1-chat").model === H4, "Haiku 4.5 keeps the assistant prefill");
   ok(!tierAllows("v1-chat", "openai/gpt-6-luna") && tierFor("openai/gpt-6-luna") === "v1-chat-nano", "gpt-6-luna is not admitted on base (a buyer naming it keeps the nano price)");
-  ok(TIERS["v1-chat"].defaultModel === "openai/gpt-4o-mini" && TIERS["v1-chat-pro"].defaultModel === "openai/gpt-4o" && K.failoverChain("openai/gpt-4o", "v1-chat-pro")[1] === "openai/gpt-4.1", "base and pro defaults and gpt-4o's successor are unchanged until a replacement is decided");
+  // Base's default is gpt-6-luna: a call naming no model is served it on base,
+  // at base's price and caps, on every wire; a call NAMING it keeps nano's
+  // price (price by model), and a call naming another model is unaffected.
+  {
+    const { validateMessagesRequest } = await import("../src/tools/llm-messages-kit.js");
+    const { validateResponsesRequest } = await import("../src/tools/llm-responses-kit.js");
+    const dflt = validateRequest({ messages: m1, max_tokens: 64 }, "v1-chat");
+    ok(dflt.model === "openai/gpt-6-luna" && dflt.__defaultedModel === "openai/gpt-6-luna" && K.crossTierHome("v1-chat", undefined) === null && K.flatTierQuoteUsd("v1-chat", undefined) === TIERS["v1-chat"].price, "base, no model: gpt-6-luna at base's own price");
+    ok(validateRequest({ model: "default", messages: m1, max_tokens: 64 }, "v1-chat").model === "openai/gpt-6-luna", 'base, model "default": gpt-6-luna');
+    ok(K.flatTierQuoteUsd("v1-chat", "openai/gpt-6-luna") === TIERS["v1-chat-nano"].price && K.crossTierHome("v1-chat", "gpt-6-luna") === "v1-chat-nano", "base, gpt-6-luna named: quoted and served at its nano home");
+    ok(!tierAllows("v1-chat", "openai/gpt-6-luna", undefined) && !tierAllows("v1-chat", "openai/gpt-6-luna", "openai/gpt-6-luna", { defaulted: true }), "the default admission needs a call that named no model");
+    ok(!tierAllows("v1-chat-pro", "openai/gpt-6-luna", undefined, { defaulted: true }), "a default admits only the tier's own default");
+    const mm = validateMessagesRequest({ max_tokens: 64, messages: m1 }, "v1-chat");
+    const rr = validateResponsesRequest({ input: "hi", max_output_tokens: 64 }, "v1-chat");
+    ok(mm.body.model === "openai/gpt-6-luna" && rr.body.model === "openai/gpt-6-luna", `Messages and Responses on base, no model: gpt-6-luna (${mm.body.model}, ${rr.body.model})`);
+    const pro = validateRequest({ messages: m1, max_tokens: 64 }, "v1-chat-pro");
+    ok(pro.model === "openai/gpt-6.1-terra" && tierAllows("v1-chat-pro", "openai/gpt-6.1-terra"), "pro, no model: gpt-6.1-terra, which pro also lists by name");
+    // luna and terra list no sampling knobs: a default call carrying one is
+    // served by the tier's compat default, which takes it; a named call is not moved.
+    for (const [slug, compat] of [["v1-chat", "google/gemini-3.5-flash-lite"], ["v1-chat-pro", "google/gemini-3.6-flash"]]) {
+      const t = validateRequest({ messages: m1, max_tokens: 64, temperature: 0.2 }, slug), tp = validateRequest({ messages: m1, max_tokens: 64, top_p: 0.5 }, slug);
+      ok(TIERS[slug].defaultModelCompat === compat && t.model === compat && t.temperature === 0.2 && tp.model === compat && tierAllows(slug, compat), `${slug}, no model, temperature or top_p: served by ${compat} with the knob`);
+      ok(LLM_GATEWAY_TOOLS.find((x) => x.slug === slug).description.includes(K.defaultModelCompatNote(TIERS[slug])) && /temperature or top_p/.test(K.defaultModelCompatNote(TIERS[slug])), `${slug}: the description carries the compat clause`);
+    }
+    ok(validateRequest({ model: "openai/gpt-6.1-terra", messages: m1, max_tokens: 64, temperature: 0.2 }, "v1-chat-pro").model === "openai/gpt-6.1-terra", "a call naming terra with temperature is served terra, as before");
+    ok(K.noUpstreamSampling("gpt-6-luna") && K.noUpstreamSampling("openai/o3") && !K.noUpstreamSampling("openai/gpt-4o-mini") && !K.noUpstreamSampling("google/gemini-3.6-flash"), "noUpstreamSampling reads the OpenAI reasoning families only");
+  }
+  // gpt-4o, gpt-4o-mini, gpt-4.1 and gpt-4.1-mini left the tier lists; keepOn
+  // keeps each admitted, as itself, on exactly the tiers that admitted it.
+  {
+    const homes = (id) => Object.keys(TIERS).filter((s) => tierAllows(s, id)).join(",");
+    const listed = (id) => Object.values(TIERS).some((t) => t.prefixes.some((p) => id === p || id.startsWith(p + "-")));
+    K.setRetiringClockForTest(() => Date.parse("2027-01-13T23:59:59Z"));
+    ok(homes("openai/gpt-4o-mini") === "v1-chat,v1-chat-pro,v1-chat-auto,v1-chat-grounded,v1-chat-metered" && tierFor("openai/gpt-4o-mini-2024-07-18") === "v1-chat", `gpt-4o-mini (and its snapshot) admitted where it was (${homes("openai/gpt-4o-mini")})`);
+    ok(homes("openai/gpt-4o") === "v1-chat-pro,v1-chat-metered" && homes("openai/gpt-4.1") === "v1-chat-pro,v1-chat-metered" && homes("openai/gpt-4.1-mini") === "v1-chat,v1-chat-pro,v1-chat-metered", "gpt-4o, gpt-4.1 and gpt-4.1-mini admitted where they were");
+    ok(["openai/gpt-4o", "openai/gpt-4o-mini", "openai/gpt-4.1", "openai/gpt-4.1-mini"].every((id) => !listed(id)), "none of the four is advertised by a tier list");
+    K.setRetiringClockForTest(null);
+  }
+  ok(TIERS["v1-chat"].defaultModel === "openai/gpt-6-luna" && TIERS["v1-chat-pro"].defaultModel === "openai/gpt-6.1-terra" && K.failoverChain("openai/gpt-4o", "v1-chat-pro")[1] === "openai/gpt-4.1", "base and pro defaults are gpt-6-luna and gpt-6.1-terra; gpt-4o's availability successor is unchanged");
   // A default, fallback or auto rung with a scheduled retirement must be
   // replaced before its date: this fails from 30 days ahead while one names it.
   const named = new Map();
@@ -2068,7 +2120,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     const days = (Date.parse(`${r.until}T00:00:00Z`) - Date.now()) / 86_400_000;
     if (days <= 30) ok(false, `${where}: ${m} retires ${r.until} (${Math.floor(days)} days left): replace it before 30 days remain`);
   }
-  ok(scheduled > 0, `the 30-day guard sees ${scheduled} default/fallback/rung slots naming a scheduled retirement (each fails CI from 30 days before its date)`);
+  ok(named.size > 10, `the 30-day guard reads ${named.size} default/fallback/rung slots, ${scheduled} naming a scheduled retirement (each fails CI from 30 days before its date)`);
 }
 
 // ---- a reasoning budget follows the margin clamp (fitReasoningToCap) ----
@@ -2179,7 +2231,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   ];
   ok(texts.filter(([w]) => /premium/.test(w)).length >= 3 && texts.some(([w]) => /Home/.test(w)), `the check reads the premium description, both premium rows and the wiki home row (${texts.length} texts)`);
   for (const [where, text] of texts) ok(named(text).length === 0, `${where} names no retired id (${named(text).join(", ") || "none"})`);
-  ok(named("frontier (gpt-5 and gpt-6 astra, o3)").length === 2 && named("GPT-4o/4.1, o3/o3-mini").length === 1, "control: the old premium and proxy wording is caught");
+  ok(named("frontier (gpt-5 and gpt-6 astra, o3)").length === 2 && named("GPT-4o/4.1, o3/o3-mini").length === 2, "control: the old premium and proxy wording is caught");
   const flex = rd("wiki/LLM-Gateway.md").split("\n").find((l) => l.startsWith("Where the upstream offers it")) || "";
   for (const [id, e] of Object.entries(RETIRING_MODELS).filter(([, e]) => e.asItself?.flex)) {
     ok(flex.includes(short(id)) && flex.includes(e.until), `the wiki's flex sentence names ${short(id)} with the date its flex row ends (${e.until})`);

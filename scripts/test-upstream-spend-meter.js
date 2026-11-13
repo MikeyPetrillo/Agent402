@@ -61,7 +61,7 @@ const T = {
   models: [["acme/", { completion: 2, prompt: 1 }], ...(U.REQUIRED_MODEL_ROWS || []).map((id) => [id, { completion: 2, prompt: 1 }])],
   speech: { "hexgrad/kokoro-82m": 0.5, "elevenlabs/eleven-v4-turbo": 0.25, "x-ai/grok-voice-tts-1.0": 0.125, [SPEECH_FRONT]: 0.0625 },
   embeddings: { "text-embedding-3-small": 8, "text-embedding-3-large": 16 },
-  openai: { "gpt-image-2": { completion: 40, prompt: 5 }, "gpt-4o": { completion: 90, prompt: 10 } },
+  openai: { "gpt-image-2.6-flare": { completion: 40, prompt: 5 }, "gpt-image-2.6-sunburst": { completion: 41, prompt: 6 }, "gpt-4o": { completion: 90, prompt: 10 } },
   sttPerMinute: { "gpt-transcribe": 0.6, "elevenlabs/scribe-v2": 1.2 },
   media: { "fake/image-model": { worstCaseUsd: 1, listedMaxUsd: 1 }, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 1, listedMaxUsd: 1 } },
   fees: { webSearchPerUse: 0.25, groundedPerCall: 0.125, rerankPerUnit: 5, settlementPerCall: 0.5 },
@@ -170,9 +170,10 @@ try {
     stub(() => json({ data: [{ b64_json: "iVBORw0KGgo" }], usage }));
     const out = await bySlug(IMAGE_GEN_TOOLS, slug).handler({ prompt: "apple" });
     restore();
-    ok(out.model === "gpt-image-2" && out.image, `${slug} served an image`);
-    const row = T.openai["gpt-image-2"];
-    recorded(await take(), { source: "image-gen", usd: (usage.input_tokens * row.prompt + usage.output_tokens * row.completion) / 1e6, tier: slug, model: "gpt-image-2", priceUsd: priceOf(IMAGE_GEN_TOOLS, slug) }, slug);
+    const model = slug === "image-gen-premium" ? "gpt-image-2.6-sunburst" : "gpt-image-2.6-flare";
+    ok(out.model === model && out.image, `${slug} served an image on ${model}`);
+    const row = T.openai[model];
+    recorded(await take(), { source: "image-gen", usd: (usage.input_tokens * row.prompt + usage.output_tokens * row.completion) / 1e6, tier: slug, model, priceUsd: priceOf(IMAGE_GEN_TOOLS, slug) }, slug);
   }
   // ---- image model without its own row: nothing metered (a chat row's fallback would price image tokens wrong) ----
   {

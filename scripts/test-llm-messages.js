@@ -311,7 +311,7 @@ delete process.env.OPENROUTER_API_KEY;
 // ---- a missing model is served as the tier default (2026-08-28) ----
 {
   const v = validateMessagesRequest({ max_tokens: 16, messages: [{ role: "user", content: "hi" }] }, "v1-chat");
-  ok(v.body.model === "openai/gpt-4o-mini" && v.defaultedModel === "openai/gpt-4o-mini", "no model on v1-chat -> the tier default, marked defaultedModel");
+  ok(v.body.model === "openai/gpt-6-luna" && v.defaultedModel === "openai/gpt-6-luna", "no model on v1-chat -> the tier default, marked defaultedModel");
   const e = validateMessagesRequest({ model: "openai/gpt-4o-mini", ...{ max_tokens: 16, messages: [{ role: "user", content: "hi" }] } }, "v1-chat");
   ok(e.defaultedModel === null, "an explicit model is not marked as defaulted");
 }
