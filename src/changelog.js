@@ -5,7 +5,7 @@ const ENTRIES = [
     date: "2026-11-13",
     title: "Payment and input hardening",
     items: [
-      "Tools: transcription measures each file's length by decoding it before any upstream call. WMA, raw AAC, AMR and CAF recordings are read and sent as FLAC, an MP4 or MKV holding several audio tracks is sent as its first track, and AAC behind an ID3 tag or an MP3 with leading padding is read too.",
+      "Tools: transcription measures each file's length by decoding it before any upstream call. WMA, raw AAC, AMR and CAF recordings are read and sent as FLAC, an MP4 or MKV holding several audio tracks is sent as its first track, and AAC behind an ID3 tag or an MP3 with leading padding is read too. A PCM WAV whose size alone keeps it inside the cap is sent without a decode, and a call that finds the decoder busy waits its turn inside the time its payment allows.",
       "Tools: a file sent for transcription whose length cannot be confirmed is transcribed up to its tier's cap, and the answer says so in trimmedToCapSeconds and durationUnconfirmed; both fields are in the output schemas.",
       "Tools: large images sent to image-ocr wait their turn per caller, so one caller's run of large images cannot hold every place in the queue.",
       "Payments: a paid answer whose connection closed after its headers went out is kept under its idempotency key, so a retry with the same key, a prepaid credits key included, replays it instead of running and being debited again.",

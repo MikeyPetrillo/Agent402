@@ -11,7 +11,10 @@ Tools:
 - Transcription measures each file's length by decoding it before any upstream
   call. WMA, raw AAC, AMR and CAF recordings are read and sent as FLAC, an MP4
   or MKV holding several audio tracks is sent as its first track, and AAC
-  behind an ID3 tag or an MP3 with leading padding is read too.
+  behind an ID3 tag or an MP3 with leading padding is read too. A PCM WAV
+  whose size alone keeps it inside the cap is sent without a decode, and a
+  call that finds the decoder busy waits its turn inside the time its payment
+  allows.
 - A file sent for transcription whose length cannot be confirmed is
   transcribed up to its tier's cap, and the answer says so in
   trimmedToCapSeconds and durationUnconfirmed; both fields are in the output

@@ -137,7 +137,7 @@ const reject = (p) => p.then(() => null, (e) => e);
   e = await reject(assertWithinDurationCap(lying, "audio.mp3", "transcribe-pro"));
   ok(e?.statusCode === 422 && /10 minutes/.test(e.message), "a file that plays 20 minutes is refused by the 10-minute tier whatever its header declares");
   __setMeasureForTest(async () => 5);
-  ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 10) < 0.5, "a measurement shorter than the declared length never shortens it");
+  ok(Math.abs((await assertWithinDurationCap(makeMp3(10), "audio.mp3", "transcribe")) - 10) < 0.5, "a measurement shorter than the declared length never shortens it");
   calls = 0;
   __setMeasureForTest(async () => { calls++; return 1; });
   await reject(assertWithinDurationCap(long, "audio.wav", "transcribe-pro"));
@@ -147,15 +147,17 @@ const reject = (p) => p.then(() => null, (e) => e);
   // length): the declared length is not taken on trust; the file is cut at the
   // cap, and a cut that wrote less than the cap read the whole file, which is
   // then its measured length and the file goes as it came.
+  // A 10-second MP3: compressed, so its bytes bound nothing and every path below decodes it.
+  const tiny = makeMp3(10);
   let cuts = [];
   const cutStub = (lenOf) => async (b, { maxSeconds }) => { cuts.push(maxSeconds); return { audio: Buffer.from("fLaC stand-in"), seconds: Math.min(maxSeconds, lenOf(b)) }; };
-  __setTranscodeForTest(cutStub((b) => (b === short ? 10 : 180)));
+  __setTranscodeForTest(cutStub((b) => (b === tiny ? 10 : 180)));
   for (const [label, impl] of [["null", async () => null], ["a throw", async () => { throw new Error("spawn failed"); }], ["zero", async () => 0], ["NaN", async () => NaN]]) {
     __setMeasureForTest(impl);
     const before = sttUnmeasuredSinceBoot();
     cuts = [];
-    const a = await prepareAudioWithinCap(short, "audio.wav", "transcribe"), b = await prepareAudioWithinCap(honest, "audio.mp3", "transcribe");
-    ok(Math.abs(a.durationSec - 10) < 0.5 && b.durationSec > 170 && a.buf === short && b.buf === honest && !a.trimmedToCapSeconds && !b.trimmedToCapSeconds, `an unmeasured file inside the cap passes once the cut reads all of it, sent as it came (measure gave ${label})`);
+    const a = await prepareAudioWithinCap(tiny, "audio.mp3", "transcribe"), b = await prepareAudioWithinCap(honest, "audio.mp3", "transcribe");
+    ok(Math.abs(a.durationSec - 10) < 0.5 && b.durationSec > 170 && a.buf === tiny && b.buf === honest && !a.trimmedToCapSeconds && !b.trimmedToCapSeconds, `an unmeasured file inside the cap passes once the cut reads all of it, sent as it came (measure gave ${label})`);
     ok(cuts.length === 2 && cuts.every((c) => c === 240), `and the cut is made at the 4-minute cap (${cuts.join(",")})`);
     ok(sttUnmeasuredSinceBoot() === before + 2, "and each unmeasured file is counted");
   }
@@ -167,41 +169,41 @@ const reject = (p) => p.then(() => null, (e) => e);
     const was = { measure: 0, cut: 0 };
     __setTranscodeForTest(async () => { was.cut++; return { audio: Buffer.from("x"), seconds: 1 }; });
     __setMeasureForTest(async () => ({ undecodable: "the decoder could not read its audio" }));
-    let e = await reject(assertWithinDurationCap(short, "audio.wav", "transcribe"));
+    let e = await reject(assertWithinDurationCap(tiny, "audio.mp3", "transcribe"));
     ok(e?.statusCode === 400 && e.hint === "format-unreadable" && /audio format could not be read/.test(e.message) && /the decoder could not read its audio/.test(e.message), `a file the decoder cannot read is a 400 that says its format could not be read (${e?.message ?? "passed"})`);
     // The charge sentence is a route call's only: a skill-pack step runs inside a charged answer.
     ok(!/not charged/i.test(e.message), `off a route (a skill-pack step) the 400 makes no charge claim (${e?.message})`);
-    const onRoute = await reject(prepareAudioWithinCap(short, "audio.wav", "transcribe", { headers: {} }));
+    const onRoute = await reject(prepareAudioWithinCap(tiny, "audio.mp3", "transcribe", { headers: {} }));
     ok(onRoute?.statusCode === 400 && /You were not charged\./.test(onRoute.message), `on a route call the 400 says the caller was not charged (${onRoute?.message})`);
     ok(was.cut === 0, "and no cut is tried on it");
     __setMeasureForTest(async () => ({ unavailable: "no decoder slot came free in time" }));
     __setTranscodeForTest(async () => ({ unavailable: "no decoder slot came free in time" }));
-    e = await reject(prepareAudioWithinCap(short, "audio.wav", "transcribe"));
+    e = await reject(prepareAudioWithinCap(tiny, "audio.mp3", "transcribe"));
     ok(e?.statusCode === 503 && e.retryAfter === 30 && e.attribution === "ours" && /could not be trimmed/.test(e.message) && /no decoder slot came free in time/.test(e.message) && !/charged/.test(e.message), `no slot for the measurement or the cut: a retryable 503 on our side, no charge claim off a route call (${e?.message ?? "passed"})`);
-    e = await reject(prepareAudioWithinCap(short, "audio.wav", "transcribe", { headers: {} }));
+    e = await reject(prepareAudioWithinCap(tiny, "audio.mp3", "transcribe", { headers: {} }));
     ok(e?.statusCode === 503 && /Nothing was charged\./.test(e.message), "on a route call it says nothing was charged");
     __setTranscodeForTest(async () => ({ undecodable: "the decoder could not read its audio" }));
-    e = await reject(prepareAudioWithinCap(short, "audio.wav", "transcribe"));
+    e = await reject(prepareAudioWithinCap(tiny, "audio.mp3", "transcribe"));
     ok(e?.statusCode === 400 && /audio format could not be read/.test(e.message), "a cut that finds the audio unreadable is the same 400");
     __setTranscodeForTest(cutStub(() => 10));
-    const kept = await prepareAudioWithinCap(short, "audio.wav", "transcribe");
-    ok(kept.buf === short && kept.filename === "audio.wav" && Math.abs(kept.durationSec - 10) < 0.5 && !("trimmedToCapSeconds" in kept), "unmeasured, a cut that read the whole file sends the original bytes");
+    const kept = await prepareAudioWithinCap(tiny, "audio.mp3", "transcribe");
+    ok(kept.buf === tiny && kept.filename === "audio.mp3" && Math.abs(kept.durationSec - 10) < 0.5 && !("trimmedToCapSeconds" in kept), "unmeasured, a cut that read the whole file sends the original bytes");
     __setTranscodeForTest(cutStub(() => 400));
-    const cut = await prepareAudioWithinCap(short, "audio.wav", "transcribe");
+    const cut = await prepareAudioWithinCap(tiny, "audio.mp3", "transcribe");
     ok(cut.filename === "audio.flac" && cut.buf.toString() === "fLaC stand-in" && cut.durationSec === 240 && cut.trimmedToCapSeconds === 240 && cut.durationUnconfirmed === true, `unmeasured, a cut that reached the cap sends the cut and says so (${JSON.stringify({ ...cut, buf: undefined })})`);
     __setMeasureForTest(async () => ({ seconds: 30 }));
-    ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 30) < 0.01, "a measurement in the object shape is read as seconds");
+    ok(Math.abs((await assertWithinDurationCap(tiny, "audio.mp3", "transcribe")) - 30) < 0.01, "a measurement in the object shape is read as seconds");
     __setMeasureForTest(async () => ({ undecodable: "x" }));
     e = await reject(assertWithinDurationCap(long, "audio.wav", "transcribe-pro"));
     ok(e?.statusCode === 422 && /up to 10 minutes/.test(e.message), "a file its header puts over the cap is still the over-cap 422");
-    // Bytes the sniffed demuxer (wav, on the upstream's list) did not read and
+    // Bytes the sniffed demuxer (mp3, on the upstream's list) did not read and
     // a fallback demuxer (ogg, also on the list) did: what goes upstream is
     // the FLAC cut at the cap, never the original bytes.
     const sent = [];
     __setMeasureForTest(async () => ({ seconds: 10, format: "ogg" }));
     __setTranscodeForTest(async (b, o) => { sent.push(o); return { audio: Buffer.from("fLaC capped"), seconds: 10, format: o.format }; });
-    const fb = await prepareAudioWithinCap(short, "audio.wav", "transcribe");
-    ok(fb.buf !== short && fb.filename === "audio.flac" && fb.buf.toString() === "fLaC capped" && sent.length === 1 && sent[0].maxSeconds === 242 && sent[0].format === "ogg", `bytes only a fallback demuxer read are sent as the FLAC cut at the cap, not as they came (${fb.filename}, ${JSON.stringify(sent)})`);
+    const fb = await prepareAudioWithinCap(tiny, "audio.mp3", "transcribe");
+    ok(fb.buf !== tiny && fb.filename === "audio.flac" && fb.buf.toString() === "fLaC capped" && sent.length === 1 && sent[0].maxSeconds === 242 && sent[0].format === "ogg", `bytes only a fallback demuxer read are sent as the FLAC cut at the cap, not as they came (${fb.filename}, ${JSON.stringify(sent)})`);
     __setTranscodeForTest(null);
   }
   // Unmeasured and lossy: held to the shortest its bytes can play.
@@ -243,6 +245,9 @@ const reject = (p) => p.then(() => null, (e) => e);
     // A run under any demuxer but the sniffed one (mp3) is a failed decode at
     // once: those are the fallbacks a failed decode is retried under.
     const fallbacks = [];
+    // Two slots, whatever this machine's CPU count (the pool's size is tested below).
+    const hadSlots = process.env.AUDIO_DECODE_SLOTS;
+    process.env.AUDIO_DECODE_SLOTS = "2";
     __setExecFileForTest((bin, args, opts, cb) => {
       const fmt = args[args.indexOf("-i") - 1];
       if (fmt !== "mp3") { fallbacks.push(fmt); setImmediate(() => cb(Object.assign(new Error("exit 1"), { code: 1 }))); return; }
@@ -276,7 +281,107 @@ const reject = (p) => p.then(() => null, (e) => e);
       last.cb(null, "progress=end\n");
       ok((await calls[idx(last)]) === null, "a decode that never reported how far it got is no measurement (null, never a guess)");
       ok(new Set(held.map(idx)).size === 3 && held.every((h) => idx(h) >= 0), "each call ran its own decode once");
-    } finally { __setExecFileForTest(null); }
+    } finally {
+      __setExecFileForTest(null);
+      if (hadSlots === undefined) delete process.env.AUDIO_DECODE_SLOTS; else process.env.AUDIO_DECODE_SLOTS = hadSlots;
+    }
+  }
+
+  // A busy pool queues inside the call's budget instead of refusing: on a
+  // stubbed ffmpeg that holds each decode until the test answers it.
+  {
+    const mediaKit = await import("../src/tools/media-kit.js");
+    const { withBudget } = await import("../src/upstream-deadline.js");
+    const { availableParallelism } = await import("node:os");
+    const MIN_DECODE = mediaKit.MEASURE_MIN_DECODE_MS ?? 10_000;
+    const UP = sttKit.STT_UPSTREAM_CAP_MS ?? { default: 60_000, diarize: 120_000 };
+    const until = async (cond, ms = 30_000) => { const end = Date.now() + ms; while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 5)); return cond(); };
+    const settle = (p) => { const s = { done: false, value: null, err: null }; p.then((v) => { s.done = true; s.value = v; }, (e) => { s.done = true; s.err = e; }); return s; };
+    const hadSlots = process.env.AUDIO_DECODE_SLOTS;
+    const held = [];
+    __setMeasureForTest(null); __setTranscodeForTest(null);
+    __setExecFileForTest((bin, args, opts, cb) => {
+      let bytes = -1;
+      try { bytes = readFileSync(args[args.indexOf("-i") + 1]).length; } catch { /* the run is still held */ }
+      held.push({ args, opts, cb, bytes, cut: args.includes("-t") });
+    });
+    const answer = (h, seconds) => h.cb(null, `out_time_us=${Math.round(seconds * 1e6)}\nprogress=end\n`);
+    const route = { headers: {} };
+    // The pool's wait timer is unref'd (it never holds a server open); this keeps the test's process up.
+    const keep = setInterval(() => {}, 1_000);
+    try {
+      // The pool's size: the env override, else the CPUs this process may use (2 to 8).
+      const size = mediaKit.measurePoolSize;
+      ok(typeof size === "function", "the decode pool's size is read from one function");
+      if (typeof size === "function") {
+        const cpus = availableParallelism();
+        ok(size({ AUDIO_DECODE_SLOTS: "3" }) === 3 && size({ AUDIO_DECODE_SLOTS: "12" }) === 12, "AUDIO_DECODE_SLOTS sets the pool's size");
+        ok(size({}) === Math.max(2, Math.min(8, cpus)) && size({ AUDIO_DECODE_SLOTS: "0" }) === size({}) && size({ AUDIO_DECODE_SLOTS: "many" }) === size({}), `unset or unreadable, the size follows the CPU count, held to 2..8 (${size({})} for ${cpus})`);
+      }
+      process.env.AUDIO_DECODE_SLOTS = "3";
+      const three = [makeMp3(5), makeMp3(6), makeMp3(7)];
+      const runs3 = three.map((b) => settle(prepareAudioWithinCap(b, "audio.mp3", "transcribe", route)));
+      ok(await until(() => held.length === 3), `with AUDIO_DECODE_SLOTS=3, three decodes run at once (${held.length})`);
+      for (const h of held.splice(0)) answer(h, three.findIndex((b) => b.length === h.bytes) + 5);
+      ok(await until(() => runs3.every((r) => r.done)) && runs3.every((r, i) => r.value?.buf === three[i]), "and each is served");
+
+      // Two slots, three calls: the third waits past the old five-second
+      // refusal and is measured (never cut) when a slot frees.
+      process.env.AUDIO_DECODE_SLOTS = "2";
+      const mp3s = [makeMp3(5), makeMp3(6), makeMp3(7)];
+      const idx = (h) => mp3s.findIndex((b) => b.length === h.bytes);
+      const calls = mp3s.map((b) => settle(prepareAudioWithinCap(b, "audio.mp3", "transcribe", route)));
+      ok(await until(() => held.length === 2), `two decodes start (${held.length})`);
+      ok(held.every((h) => h.opts?.timeout > MIN_DECODE && h.opts.timeout <= 60_000), `a decode with budget to spare may run past ${MIN_DECODE} ms (${held.map((h) => h.opts?.timeout).join(",")})`);
+      await new Promise((r) => setTimeout(r, 5_600));
+      const third = calls[[0, 1, 2].find((i) => !held.some((h) => idx(h) === i))];
+      ok(held.length === 2 && !third.done, `after 5.6 s the third call still waits for a slot, not refused (${third.err?.statusCode ?? "pending"})`);
+      const first = held.shift();
+      answer(first, idx(first) + 5);
+      ok(await until(() => held.length === 2), "a freed slot goes to the waiting call");
+      const next = held[1];
+      ok(!next.cut && idx(next) >= 0 && next !== held[0], `the waiting call's run is its measurement, not a cut at the cap (${next.cut ? "cut" : "measure"})`);
+      answer(next, idx(next) + 5);
+      ok(await until(() => third.done) && third.value?.buf === mp3s[idx(next)] && Math.abs(third.value.durationSec - (idx(next) + 5)) < 0.01 && !third.value.trimmedToCapSeconds, `and it is served, measured, as it came (${third.err?.message ?? third.value?.durationSec})`);
+
+      // One slot still held by the second call; hold the other too.
+      const blocker = settle(prepareAudioWithinCap(makeMp3(8), "audio.mp3", "transcribe", route));
+      ok(await until(() => held.length === 2), "both slots held again");
+      // A PCM WAV whose bytes alone play under the cap goes as it came, at once, with no decode.
+      const wav = makeWav(10);
+      ok(typeof sttKit.pcmWavMaxSeconds === "function" && Math.abs(sttKit.pcmWavMaxSeconds(wav) - wav.length / 8000) < 1e-9, "a PCM WAV is bounded by its bytes at 8,000 bytes a second");
+      const t0 = Date.now();
+      const quick = await Promise.race([prepareAudioWithinCap(wav, "audio.wav", "transcribe", route).catch((e) => e), new Promise((r) => setTimeout(() => r("waited"), 1_500))]);
+      ok(quick?.buf === wav && Math.abs(quick.durationSec - 10) < 0.5 && held.length === 2, `with the pool full, a byte-bounded WAV is sent as it came in ${Date.now() - t0} ms, no decode (${quick === "waited" ? "waited" : quick?.message ?? quick?.filename})`);
+      // Bytes that do not bound it (the 4.5-minute WAV, a compressed codec) still wait for a decode.
+      ok(sttKit.pcmWavMaxSeconds?.(justOver) > 242 && sttKit.pcmWavMaxSeconds?.(makeMp3(5)) === null, "a WAV too large to bound, and an MP3, are not byte-bounded");
+      if (typeof sttKit.pcmWavMaxSeconds === "function") {
+        const adpcm = Buffer.from(wav); adpcm.writeUInt16LE(2, 20);
+        const twoFmt = Buffer.concat([wav.subarray(0, 36), wav.subarray(12, 36), wav.subarray(36)]); twoFmt.writeUInt32LE(twoFmt.length - 8, 4);
+        const slow = Buffer.from(wav); slow.writeUInt32LE(4000, 24); slow.writeUInt32LE(4000, 28);
+        const lying = Buffer.from(wav); lying.writeUInt32LE(16000, 28);
+        ok([adpcm, twoFmt, slow, lying].every((b) => sttKit.pcmWavMaxSeconds(b) === null), "a compressed WAV codec, a second fmt chunk, a rate under 8 kHz and fields that disagree are not byte-bounded");
+      }
+
+      // The 503 comes only when the budget cannot hold the wait plus the upstream call.
+      const short503 = Date.now();
+      let e = await reject(withBudget(() => prepareAudioWithinCap(makeMp3(9), "audio.mp3", "transcribe", route), UP.default + MIN_DECODE - 2_000));
+      const tShort = Date.now() - short503;
+      ok(e?.statusCode === 503 && e.retryAfter === 30 && /Nothing was charged\./.test(e.message) && tShort < 1_000 && held.length === 2, `a budget with no room past the upstream's ${UP.default} ms and a decode answers the retryable 503 at once (${tShort} ms, ${e?.message ?? "passed"})`);
+      const waitStart = Date.now();
+      e = await reject(withBudget(() => prepareAudioWithinCap(makeMp3(9), "audio.mp3", "transcribe", route), UP.default + MIN_DECODE + 1_500));
+      const tWait = Date.now() - waitStart;
+      ok(e?.statusCode === 503 && tWait >= 1_200 && tWait < 4_000, `a budget with 1.5 s to spare waits that long for a slot, then the 503 (${tWait} ms)`);
+      e = await reject(withBudget(() => prepareAudioWithinCap(makeMp3(9), "audio.mp3", "transcribe", route, { diarize: true }), UP.default + MIN_DECODE + 30_000));
+      ok(e?.statusCode === 503, `the diarized path leaves its longer upstream cap (${UP.diarize} ms) out of the wait (${e?.statusCode ?? "passed"})`);
+      for (const h of held.splice(0)) answer(h, 8);
+      ok(await until(() => blocker.done) && calls.every((c) => c.done), "the held calls finish once answered");
+    } finally {
+      for (const h of held.splice(0)) answer(h, 1);
+      clearInterval(keep);
+      __setExecFileForTest(null);
+      if (hadSlots === undefined) delete process.env.AUDIO_DECODE_SLOTS; else process.env.AUDIO_DECODE_SLOTS = hadSlots;
+    }
   }
 
   // The real decode. Under CI a missing ffmpeg fails the suite: the lane installs it.

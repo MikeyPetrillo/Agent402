@@ -10,7 +10,7 @@
 import { execFile } from "node:child_process";
 import { childEnv } from "./child-env.js";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, availableParallelism } from "node:os";
 import { join } from "node:path";
 import { safeFetch } from "./fetch-guard.js";
 
@@ -334,23 +334,43 @@ export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
 // decoded here (a container the decoder is not given, or a decode that ran
 // and failed or reported no length), or { unavailable } when the measurement
 // did not run to an answer for a reason of this server's (no ffmpeg, no
-// free slot in time, the deadline, a temp-file error).
-const MEASURE_MAX_CONCURRENT = 2;
-const MEASURE_TIMEOUT_MS = 10_000;
+// free slot in the time the caller gave, the deadline, a temp-file error).
+//
+// The pool holds one decode per CPU the process may use (at least 2, at most
+// MEASURE_POOL_MAX); AUDIO_DECODE_SLOTS overrides it. A caller that passes
+// `deadlineAt` (the epoch ms by which its decode must be done) waits for a
+// slot for as long as that still leaves MEASURE_MIN_DECODE_MS to decode, and
+// its decode may run to that deadline (at most MEASURE_MAX_DECODE_MS). A
+// caller without one keeps the short fixed wait and deadline.
+export const MEASURE_MIN_DECODE_MS = 10_000;
+export const MEASURE_MAX_DECODE_MS = 60_000;
 const MEASURE_WAIT_MS = 5_000;
+const MEASURE_POOL_MAX = 8;
+/** Decode slots: AUDIO_DECODE_SLOTS (1 to 64) when set, else the CPUs this
+ *  process may use, held to 2..MEASURE_POOL_MAX. Read on every acquire. */
+export function measurePoolSize(env = process.env) {
+  const n = Number(env.AUDIO_DECODE_SLOTS);
+  if (Number.isInteger(n) && n >= 1 && n <= 64) return n;
+  let cpus = 2;
+  try { cpus = availableParallelism(); } catch { /* keep the floor */ }
+  return Math.max(2, Math.min(MEASURE_POOL_MAX, Number.isInteger(cpus) ? cpus : 2));
+}
 let measureActive = 0;
 const measureWaiters = [];
-// Resolves true with a slot held, or false when none came free in time.
-const measureAcquire = () => {
-  if (measureActive < MEASURE_MAX_CONCURRENT) { measureActive++; return Promise.resolve(true); }
+// Resolves true with a slot held, or false when none came free within `waitMs`.
+const measureAcquire = (waitMs) => {
+  if (measureActive < measurePoolSize()) { measureActive++; return Promise.resolve(true); }
+  if (!(waitMs > 0)) return Promise.resolve(false);
   return new Promise((resolve) => {
     const waiter = () => { clearTimeout(timer); resolve(true); };
-    const timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); resolve(false); }, MEASURE_WAIT_MS);
+    const timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); resolve(false); }, waitMs);
     timer.unref?.();
     measureWaiters.push(waiter);
   });
 };
 const measureRelease = () => { const next = measureWaiters.shift(); if (next) next(); else measureActive--; };
+/** Slots in use and calls waiting, for tests. */
+export const __measurePoolForTest = () => ({ active: measureActive, waiting: measureWaiters.length, size: measurePoolSize() });
 export async function measureAudioSeconds(buffer) {
   const m = await measureAudio(buffer);
   return Number.isFinite(m.seconds) ? m.seconds : null;
@@ -360,7 +380,7 @@ export async function measureAudioSeconds(buffer) {
  *  mono FLAC cut at that length (transcodeSpeech's output), answered as
  *  `audio`: one decode measures the whole file and converts it, instead of a
  *  measurement followed by a second decode for the conversion. */
-export async function measureAudio(buffer, { cutSeconds = null, format = null } = {}) {
+export async function measureAudio(buffer, { cutSeconds = null, format = null, deadlineAt = null } = {}) {
   if (Number.isFinite(cutSeconds) && cutSeconds > 0) {
     let outPath = null;
     return decodeInMeasurePool(buffer, "a402-measure-", (dir) => {
@@ -373,9 +393,9 @@ export async function measureAudio(buffer, { cutSeconds = null, format = null } 
     }, async (seconds) => {
       const audio = await readFile(outPath);
       return audio.length > 0 ? { seconds, audio } : { seconds };
-    }, { format, counter: true });
+    }, { format, counter: true, deadlineAt });
   }
-  return decodeInMeasurePool(buffer, "a402-measure-", () => ["-f", "null", "-"], (seconds) => ({ seconds }), { format });
+  return decodeInMeasurePool(buffer, "a402-measure-", () => ["-f", "null", "-"], (seconds) => ({ seconds }), { format, deadlineAt });
 }
 /** Samples a second of the length counter (one byte each): 10 ms resolution. */
 const COUNTER_RATE = 100;
@@ -383,13 +403,13 @@ const COUNTER_RATE = 100;
 /** The first audio stream as 16 kHz mono FLAC, cut at `maxSeconds` (ffmpeg
  *  `-t`), for a speech upstream: FLAC is on its documented input list, and
  *  16 kHz mono FLAC holds at most 32 KB a second, so a ten-minute cut stays
- *  under the 25 MB upload limit. It runs in the measurement's pool, under its
- *  wait and deadline; a cut reads only up to `maxSeconds` of audio, so it can
+ *  under the 25 MB upload limit. It runs in the measurement's pool, under the
+ *  same wait and deadline rules (`deadlineAt`); a cut reads only up to `maxSeconds` of audio, so it can
  *  finish where a full measurement outlasted the deadline. Answers
  *  { audio, seconds } (seconds: the length written, which is the file's whole
  *  length when it is shorter than the cut), or measureAudio's { undecodable }
  *  or { unavailable }. Never throws. */
-export async function transcodeSpeech(buffer, { maxSeconds, format = null }) {
+export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadlineAt = null }) {
   if (!(Number.isFinite(maxSeconds) && maxSeconds > 0)) return { unavailable: "no length to cut at was given" };
   let outPath = null;
   return decodeInMeasurePool(buffer, "a402-speech-", (dir) => {
@@ -398,7 +418,7 @@ export async function transcodeSpeech(buffer, { maxSeconds, format = null }) {
   }, async (seconds) => {
     const audio = await readFile(outPath);
     return audio.length > 0 ? { audio, seconds } : { undecodable: "the decoder wrote no audio" };
-  }, { format });
+  }, { format, deadlineAt });
 }
 
 /** Every demuxer the sniffer can name: each reads local bytes only and names
@@ -408,7 +428,8 @@ export const AUDIO_DEMUXERS = Object.freeze(["mp3", "aac", "mov", "matroska", "o
 
 // One ffmpeg run over a buffer's first audio stream, in the measurement pool:
 // staged to a temp file, read through mediaInputArgs (named demuxer, audio
-// decoders only), bounded by MEASURE_TIMEOUT_MS. `outArgs(dir)` is the output
+// decoders only), bounded by the decode deadline (MEASURE_MIN_DECODE_MS, or up
+// to `deadlineAt` within MEASURE_MAX_DECODE_MS). `outArgs(dir)` is the output
 // side; `done(seconds)` turns the length the run read into the answer: the
 // last out_time it reported, or (`counter`) the bytes of its one-byte-per-
 // sample stdout at COUNTER_RATE. When the demuxer the sniffer named (or the
@@ -416,16 +437,20 @@ export const AUDIO_DEMUXERS = Object.freeze(["mp3", "aac", "mov", "matroska", "o
 // run is tried once under each other demuxer of AUDIO_DEMUXERS, inside the same
 // slot and the same overall deadline, before the file is called undecodable;
 // the answer's `format` names the demuxer that read it.
-async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = null, counter = false } = {}) {
+async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = null, counter = false, deadlineAt = null } = {}) {
   const first = format || inputFormatOf(buffer);
   const order = [...(first ? [first] : []), ...AUDIO_DEMUXERS.filter((f) => f !== first)];
-  if (!(await measureAcquire())) return { unavailable: "no decoder slot came free in time" };
+  const budgeted = Number.isFinite(deadlineAt);
+  // A budgeted caller waits while its deadline still leaves a whole minimum decode.
+  const waitMs = budgeted ? deadlineAt - Date.now() - MEASURE_MIN_DECODE_MS : MEASURE_WAIT_MS;
+  if (!(await measureAcquire(waitMs))) return { unavailable: budgeted ? "no decoder slot came free in the time this call has left" : "no decoder slot came free in time", busy: true };
+  const decodeMs = budgeted ? Math.max(MEASURE_MIN_DECODE_MS, Math.min(MEASURE_MAX_DECODE_MS, deadlineAt - Date.now())) : MEASURE_MIN_DECODE_MS;
   let dir = null;
   try {
     dir = await mkdtemp(join(tmpdir(), prefix));
     const inPath = join(dir, "in");
     await writeFile(inPath, buffer);
-    const deadline = Date.now() + MEASURE_TIMEOUT_MS;
+    const deadline = Date.now() + decodeMs;
     let failure = { undecodable: first ? "the decoder could not read its audio" : "its container is not one the decoder here reads" };
     for (const fmt of order) {
       const left = deadline - Date.now();
@@ -433,7 +458,7 @@ async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = nul
       const input = mediaInputArgs(buffer, inPath, fmt);
       const ran = await new Promise((resolve) => {
         execImpl("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", ...(counter ? [] : ["-progress", "pipe:1"]), "-nostats", ...input, "-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", ...outArgs(dir)],
-          { timeout: Math.min(MEASURE_TIMEOUT_MS, left), maxBuffer: 8 * 1024 * 1024, env: childEnv(), ...(counter ? { encoding: "buffer" } : {}) },
+          { timeout: Math.min(decodeMs, left), maxBuffer: 8 * 1024 * 1024, env: childEnv(), ...(counter ? { encoding: "buffer" } : {}) },
           (err, out) => resolve(err ? { err } : { stdout: out }));
       });
       if (ran.err) {

@@ -55,7 +55,7 @@ import { capturePostHogGatewayUsage } from "../posthog.js";
 import { audioProviderPolicy } from "../openrouter-audio-policy.js";
 import { cdnSyncLeftMs } from "../cdn-sync-window.js";
 import { evmCredentialBudgetMs } from "../evm-validity.js";
-import { attributed, ATTRIBUTION, KIND, secondsOf, isDnsFailure } from "../upstream-deadline.js";
+import { attributed, ATTRIBUTION, KIND, secondsOf, isDnsFailure, currentBudget, handlerBudgetMs, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 
 const OPENAI_KEY = () => (process.env.OPENAI_API_KEY || "").trim();
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -200,6 +200,43 @@ export function byteFloorApplies(container) {
     && Number.isFinite(container.sampleRate) && container.sampleRate > 0 && container.sampleRate <= 48000;
 }
 
+// The longest a PCM WAV can play, from its byte count alone: every sample
+// frame takes channels x bytes-per-sample bytes, so a header of 8 kHz, 8-bit,
+// mono or more reads at least PCM_MIN_BYTES_PER_SECOND (64 kbps) and the whole
+// file cannot play longer than its bytes over that rate. Only uncompressed
+// codecs qualify (PCM, float, A-law, mu-law, or the extensible header naming
+// one), in a file with one fmt chunk, ahead of the data, whose fields agree.
+// A compressed codec (ADPCM; MP3, AAC, Opus, Vorbis, FLAC) has no such floor:
+// it can hold a second of silence in a few bytes, so its bytes bound nothing.
+const PCM_MIN_BYTES_PER_SECOND = 8000;
+const PCM_TAGS = new Set([1, 3, 6, 7]);
+const WAV_CHUNK_WALK_MAX = 64;
+/** Seconds a PCM WAV of this size cannot play past, or null when the file is
+ *  not one whose bytes bound its length. Pure; exported for tests. */
+export function pcmWavMaxSeconds(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 44) return null;
+  if (buf.toString("latin1", 0, 4) !== "RIFF" || buf.toString("latin1", 8, 12) !== "WAVE") return null;
+  let off = 12, fmt = -1, fmtSize = 0, fmts = 0, data = false;
+  for (let i = 0; off + 8 <= buf.length; i++) {
+    if (i >= WAV_CHUNK_WALK_MAX) return null;
+    const id = buf.toString("latin1", off, off + 4);
+    const size = buf.readUInt32LE(off + 4);
+    if (id === "fmt ") {
+      if (data || ++fmts > 1 || size < 16 || off + 8 + size > buf.length) return null;
+      fmt = off + 8; fmtSize = size;
+    } else if (id === "data") data = true;
+    off += 8 + size + (size & 1);
+  }
+  if (fmts !== 1 || !data) return null;
+  let tag = buf.readUInt16LE(fmt);
+  const ch = buf.readUInt16LE(fmt + 2), rate = buf.readUInt32LE(fmt + 4), byteRate = buf.readUInt32LE(fmt + 8);
+  const align = buf.readUInt16LE(fmt + 12), bits = buf.readUInt16LE(fmt + 14);
+  if (tag === 0xfffe) { if (fmtSize < 40) return null; tag = buf.readUInt16LE(fmt + 24); }
+  if (!PCM_TAGS.has(tag) || ch < 1 || bits < 8 || bits % 8 !== 0 || rate < 8000) return null;
+  if (align !== ch * (bits / 8) || byteRate !== rate * align) return null;
+  return buf.length / PCM_MIN_BYTES_PER_SECOND;
+}
+
 let measureImpl = measureAudio;
 /** Test seam: replace the decode measurement (null restores it). The stand-in
  *  answers seconds (a number, or null when unmeasured) or measureAudio's own
@@ -234,7 +271,8 @@ function unreadableError(reason, tierSlug, req) {
   const routeCall = !!(req && typeof req === "object" && req.headers);
   return Object.assign(bad(`This file's audio format could not be read: ${reason}, so its length can be neither measured nor trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap. Send a standard mp3, wav, m4a, ogg, flac, or webm file.${routeCall ? " You were not charged." : ""}`, 400), { hint: "format-unreadable" });
 }
-/** Our decoder could not run (no slot in time, its deadline, no ffmpeg here):
+/** Our decoder could not run (no slot in the time the call's budget leaves
+ *  after the upstream's, its deadline, no ffmpeg here):
  *  the length is unbounded, so no upstream call. The charge sentence is made
  *  on a route call only (finalFailure's rule). */
 function decoderBusyError(reason, tierSlug, req) {
@@ -253,8 +291,13 @@ function decoderBusyError(reason, tierSlug, req) {
  *  goes byte for byte when its container is on the upstream's list, else as
  *  FLAC (transcodeSpeech, cut at the cap plus the tolerance).
  *
- *  Where the measurement gave no length (no free decoder slot in time, its
- *  deadline, no ffmpeg), the length a file declares is not taken on trust: a
+ *  A PCM WAV whose byte count alone bounds it under the cap
+ *  (pcmWavMaxSeconds) is sent as it came, with no decode. Every other file
+ *  waits for a decoder slot for as long as the call's budget still leaves
+ *  the decode and the upstream call their time (decodeDeadlineAt).
+ *
+ *  Where the measurement gave no length (no free decoder slot in the time
+ *  the budget leaves, its deadline, no ffmpeg), the length a file declares is not taken on trust: a
  *  lossy audio-only file in one or two channels at up to 48 kHz whose bytes
  *  alone play past the cap is the 422 (byteFloorApplies), and any other file
  *  is cut at the cap. A cut that wrote less than the cap read the whole file
@@ -265,7 +308,7 @@ function decoderBusyError(reason, tierSlug, req) {
  *  possible) is a 400 that names it. Returns { buf, filename, durationSec,
  *  trimmedToCapSeconds?, durationUnconfirmed? }; durationSec is the length the
  *  margin math and the answer use. */
-export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null) {
+export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null, { diarize = false } = {}) {
   const tier = TIERS[tierSlug];
   const container = await probeContainer(buf, filename);
   if (container === null) {
@@ -279,11 +322,17 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null)
   // measured, never as it came (the upstream could read another).
   const multiTrack = container.audioTracks > 1;
   const asFlac = (t) => ({ buf: t.audio, filename: "audio.flac" });
+  // A PCM WAV whose bytes alone cannot play past the cap goes as it came,
+  // without a decode (the measurement pool's state does not matter to it).
+  const bound = sniffed === "wav" && !multiTrack ? pcmWavMaxSeconds(buf) : null;
+  if (bound !== null && !overCap(bound)) return { buf, filename, durationSec: container.durationSec };
+  // A busy pool queues inside the call's budget, leaving the upstream its time.
+  const deadlineAt = decodeDeadlineAt(req, diarize);
 
   let measured = null, undecodable = null, unavailable = null, format = sniffed, cut = null;
   try {
     // A file that will be converted is measured and converted in one decode.
-    const m = await measureImpl(buf, !UPSTREAM_READY.has(sniffed) || multiTrack ? { cutSeconds: capSec + 2 } : {});
+    const m = await measureImpl(buf, !UPSTREAM_READY.has(sniffed) || multiTrack ? { cutSeconds: capSec + 2, deadlineAt } : { deadlineAt });
     if (m && typeof m === "object") {
       measured = m.seconds ?? null; undecodable = m.undecodable || null; unavailable = m.unavailable || null;
       if (typeof m.format === "string") format = m.format;
@@ -298,7 +347,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null)
     if (overCap(durationSec)) throw overCapError(durationSec, tierSlug);
     if (ready) return { buf, filename, durationSec };
     if (cut) return { ...asFlac({ audio: cut }), durationSec };
-    const t = await transcodeImpl(buf, { maxSeconds: capSec + 2, format });
+    const t = await transcodeImpl(buf, { maxSeconds: capSec + 2, format, deadlineAt });
     if (t?.audio) return { ...asFlac(t), durationSec };
     if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
     throw decoderBusyError(t?.unavailable || "the conversion did not run", tierSlug, req);
@@ -308,7 +357,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null)
     throw overCapError(byteFloorSeconds(buf.length, container.pictureBytes), tierSlug);
   }
   if (undecodable) throw unreadableError(undecodable, tierSlug, req);
-  const t = await transcodeImpl(buf, { maxSeconds: capSec, format });
+  const t = await transcodeImpl(buf, { maxSeconds: capSec, format, deadlineAt });
   if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
   if (!t?.audio || !(Number.isFinite(t.seconds) && t.seconds > 0)) throw decoderBusyError(t?.unavailable || unavailable || "the decoder gave no answer", tierSlug, req);
   if (t.seconds < capSec - CUT_REACHED_SLACK_SEC) {
@@ -350,6 +399,22 @@ export function ourBillingLimit() {
 // 120 s. The cap now bounds BOTH attempts together, counted from the start of
 // the first, so a call never runs longer than it could before.
 const UPSTREAM_CAP_MS = Object.freeze({ default: 60_000, diarize: 120_000 });
+/** The upstream's cap per path (default, diarize), for tests of the decode budget. */
+export const STT_UPSTREAM_CAP_MS = UPSTREAM_CAP_MS;
+
+/** The epoch ms by which this call's decode must end so its upstream call
+ *  (the path's whole cap, both attempts) still fits: the route's budget (the
+ *  payment window, src/upstream-deadline.js; a fresh one off a route), the
+ *  CDN answer window and the payment authorization, whichever ends first,
+ *  less that cap. The decode pool waits for a slot up to it. */
+function decodeDeadlineAt(req, diarize) {
+  const b = currentBudget();
+  let left = b ? b.remaining() : handlerBudgetMs(PAYMENT_WINDOW_BUDGET_MS);
+  try { const c = cdnSyncLeftMs(req); if (c !== null) left = Math.min(left, c); } catch { /* no bound to read */ }
+  try { const p = req && typeof req === "object" && req.headers ? evmCredentialBudgetMs(req) : null; if (p !== null) left = Math.min(left, p); } catch { /* no bound to read */ }
+  const upstreamMs = retryKnobs.capMs ?? (diarize ? UPSTREAM_CAP_MS.diarize : UPSTREAM_CAP_MS.default);
+  return Date.now() + left - upstreamMs;
+}
 const CONNECT_FAILURES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"]);
 /** A rate limit is retried only when the upstream names a wait this short. */
 export const STT_RETRY_AFTER_MAX_MS = 3_000;
@@ -624,7 +689,7 @@ function makeHandler(tierSlug) {
   return async (input, req) => {
     const { url, language, diarize } = validateInput(input);
     const { buf, filename } = await fetchAudio(url);
-    return transcribePrepared(await prepareAudioWithinCap(buf, filename, tierSlug, req), tierSlug, language, diarize, req);
+    return transcribePrepared(await prepareAudioWithinCap(buf, filename, tierSlug, req, { diarize }), tierSlug, language, diarize, req);
   };
 }
 
@@ -653,7 +718,7 @@ export function makeMultipartHandler(tierSlug) {
     const language = typeof fields.language === "string" && fields.language ? fields.language : undefined;
     const diarize = diarizeFlag(fields.diarize);
     refuseUnservedFields(fields);
-    return transcribePrepared(await prepareAudioWithinCap(file.buf, file.filename, tierSlug, req), tierSlug, language, diarize, req);
+    return transcribePrepared(await prepareAudioWithinCap(file.buf, file.filename, tierSlug, req, { diarize }), tierSlug, language, diarize, req);
   };
 }
 
@@ -768,3 +833,7 @@ export const STT_TOOLS = [
     handler: makeMultipartHandler("transcribe-pro"),
   },
 ];
+// Each call runs under its route's payment-window budget: the decode pool's
+// wait reads it (decodeDeadlineAt), so a queued decode still leaves the
+// upstream call its time.
+underBudgetAll(STT_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

@@ -89,14 +89,21 @@ Loaded when a media, document or worker-pool tool file is read.
   (`scripts/test-image.js`).
 - **Transcription length:** the per-tier cap of `transcribe` and `transcribe-pro` holds the longer of the duration a
   file's headers declare and the length its audio measures. `measureAudio` (`src/tools/media-kit.js`) decodes the first
-  audio stream to nowhere with ffmpeg (audio-only whitelist, its own two-slot pool that queues, 10 s deadline) and
-  answers `{ seconds }`, `{ undecodable }` or `{ unavailable }`. `prepareAudioWithinCap` (`src/tools/stt-kit.js`): a
+  audio stream to nowhere with ffmpeg (audio-only whitelist) and answers `{ seconds }`, `{ undecodable }` or
+  `{ unavailable }`. Its pool holds one decode per CPU the process may use (`os.availableParallelism()`, held to 2..8;
+  `AUDIO_DECODE_SLOTS`, 1 to 64, overrides it). A transcription call passes `deadlineAt` (`decodeDeadlineAt` in
+  `src/tools/stt-kit.js`: the route's payment-window budget, the CDN answer window and the payment authorization,
+  whichever ends first, less the upstream's whole cap, 60 s or 120 s diarized): it waits for a slot while that still
+  leaves a 10 s decode, and its decode may run to it (at most 60 s). A caller without one waits 5 s and decodes for 10 s.
+  A PCM WAV (PCM, float, A-law, mu-law; one fmt chunk whose fields agree, 8 kHz or more) whose bytes over 8,000 a
+  second fit the cap is sent as it came with no decode (`pcmWavMaxSeconds`); every compressed codec can hold silence in
+  a few bytes, so its bytes bound nothing and it is always decoded. `prepareAudioWithinCap` (`src/tools/stt-kit.js`): a
   measured file inside the cap goes byte for byte when its container is on the upstream's list (flac, mp3, mp4/m4a,
   ogg, wav, webm), else as 16 kHz mono FLAC (`transcodeSpeech`, same pool and deadline). Unmeasured, a lossy audio-only
   file whose bytes alone play past the cap is the 422 (`byteFloorApplies`); any other file is cut at the cap with
   `-t`, and a cut that reached the cap is what is sent, the answer carrying `trimmedToCapSeconds` and
   `durationUnconfirmed: true`. A file ffmpeg cannot decode is a 400 (format unreadable, no upstream call); a decoder that
-  cannot run (no slot, deadline, no ffmpeg) is a retryable 503 with no upstream call. The unmeasured count since boot
+  cannot run (no slot in the time the budget leaves, deadline, no ffmpeg) is a retryable 503 with no upstream call. The unmeasured count since boot
   is `transcriptionUnmeasured.sinceBoot` on `/__operator/tool-failures.json`. Suite: `scripts/test-stt-cap.js`.
 - **Image generation moderation:** the three GPT Image tiers (`src/tools/image-gen-kit.js`) send
   `moderation: "low"` unless the caller sends `"auto"` (any other value is a 400 naming the field).
