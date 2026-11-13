@@ -375,7 +375,7 @@ export async function readAfterSpend(res, maxBytes) {
   const text = decodeUtf8(read.bytes);
   const truncated = read.truncated || text.length > maxBytes;
   const body = truncated ? text.slice(0, maxBytes) : text;
-  try { const j = JSON.parse(body); return truncated ? markNotSellerBody({ ...(j && typeof j === "object" && !Array.isArray(j) ? j : { value: j }), _truncated: true }) : j; }
+  try { const j = JSON.parse(body); return truncated ? (j && typeof j === "object" && !Array.isArray(j) ? markNotSellerBody({ ...j, _truncated: true }) : markNotSellerBody({ value: j, _truncated: true }, { wrapped: true })) : j; }
   // Not JSON: { raw } is our own reading of the bytes, never the seller's body.
   catch { return markNotSellerBody(truncated ? { raw: body.slice(0, 4000), _truncated: true } : { raw: body.slice(0, 4000) }); }
 }

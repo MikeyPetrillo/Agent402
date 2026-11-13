@@ -668,7 +668,7 @@ async function readCapped(res, maxBytes) {
   if (/json/i.test(ct)) {
     try {
       const j = JSON.parse(text);
-      return truncated ? markNotSellerBody({ ...(j && typeof j === "object" && !Array.isArray(j) ? j : { value: j }), _truncated: true }) : j;
+      return truncated ? (j && typeof j === "object" && !Array.isArray(j) ? markNotSellerBody({ ...j, _truncated: true }) : markNotSellerBody({ value: j, _truncated: true }, { wrapped: true })) : j;
     } catch { /* fall through */ }
   }
   // Not JSON: this object is our own reading of the bytes, cut or whole, never

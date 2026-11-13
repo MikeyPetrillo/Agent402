@@ -42,17 +42,26 @@ export function applyObservationsSnapshot(rows) {
 // limit, or unreadable). A WeakSet of the objects themselves: a seller's JSON
 // can carry `_truncated` or `relayError`, but never one of these identities.
 const NOT_SELLER_BODY = new WeakSet();
+// The stand-ins whose `value` key is our own wrapper around a cut JSON prefix
+// that was not an object (an array or a scalar). Known by identity, as above:
+// a seller's own top-level `value` key is never read as our wrapper.
+const WRAPPED_VALUE = new WeakSet();
 /** Mark a body our reader cut or could not read, so delivery is not judged on
- *  it. Returns the body. */
-export function markNotSellerBody(body) {
-  if (body && typeof body === "object") NOT_SELLER_BODY.add(body);
+ *  it. `{ wrapped: true }` says its `value` key is our wrapper around a
+ *  non-object prefix. Returns the body. */
+export function markNotSellerBody(body, { wrapped = false } = {}) {
+  if (body && typeof body === "object") {
+    NOT_SELLER_BODY.add(body);
+    if (wrapped) WRAPPED_VALUE.add(body);
+  }
   return body;
 }
 
 /** What the seller sent, read back from a stand-in our readers built:
  *  { unreadable }, { text, cut } (the Tempo reader's text reading, the x402
- *  reader's { raw }) or { json } (a JSON prefix cut at our byte limit, our
- *  `_truncated` key and `{ value }` wrapper taken off). */
+ *  reader's { raw }) or { json, cut } (a JSON prefix cut at our byte limit,
+ *  our `_truncated` key taken off, and our `{ value }` wrapper only when the
+ *  reader marked it as ours: never by the key's name). */
 function standInSent(body) {
   const keys = Object.keys(body);
   const only = (...names) => keys.length === names.length && names.every((n) => keys.includes(n));
@@ -60,8 +69,7 @@ function standInSent(body) {
   if (only("text", "truncated", "contentType", "sha256") && typeof body.text === "string") return { text: body.text, cut: body.truncated === true };
   if ((only("raw") || only("raw", "_truncated")) && typeof body.raw === "string") return { text: body.raw, cut: body._truncated === true };
   const { _truncated, ...rest } = body;
-  const restKeys = Object.keys(rest);
-  return { json: restKeys.length === 1 && restKeys[0] === "value" ? rest.value : rest };
+  return { json: WRAPPED_VALUE.has(body) ? body.value : rest, cut: _truncated === true };
 }
 
 /** Is a dotted path present in a parsed JSON body?
@@ -103,7 +111,16 @@ export function observeDelivery({ origin, method, route, guaranteedPaths, body, 
     // seller sent: a missing path there is ours, so the call is not observed
     // either way. Recognized by the object identity our own readers mark
     // (markNotSellerBody), never by a key, since a seller can send any key.
-    if (body && typeof body === "object" && NOT_SELLER_BODY.has(body)) return null;
+    // A body our reader holds whole (a non-JSON answer to a route that
+    // promised JSON paths) is the seller's delivery: it is read back and
+    // judged on the seller's bytes, never on our stand-in's keys, so a missed
+    // promise is counted.
+    if (body && typeof body === "object" && NOT_SELLER_BODY.has(body)) {
+      const sent = standInSent(body);
+      if (sent.unreadable || sent.cut) return null;
+      if ("json" in sent) body = sent.json;
+      else { try { body = JSON.parse(sent.text); } catch { body = null; } }
+    }
     const k = key(origin, method, route);
     // Bounded: drop the oldest route rather than growing without limit. This
     // map is observation, so losing the least recently used one costs nothing
@@ -193,11 +210,20 @@ const ERROR_ENVELOPE_KEYS = new Set([
  *   unreadable      our reader could not read the body at all
  * A stand-in our reader built (markNotSellerBody) is judged on the bytes the
  * seller sent, never on its own keys.
- * An empty array, a number or a string with text is the seller's answer.
+ * A top-level array or scalar is judged by the promised shape: the guaranteed
+ * paths are object paths, so with any promised it is missing-fields; with
+ * none, an array of no items (or only empty ones) or a blank string is empty,
+ * and a number, a boolean, text or an array with an item is the answer.
  */
 export function unpaidNonAnswerReason(body, guaranteedPaths = []) {
   if (body === null || body === undefined || body === "") return "empty";
-  if (typeof body !== "object" || Array.isArray(body)) return null;
+  if (typeof body !== "object" || Array.isArray(body)) {
+    if ((Array.isArray(guaranteedPaths) ? guaranteedPaths : []).length) return "missing-fields";
+    const blank = (v) => v === null || v === undefined || (typeof v === "string" && !v.trim())
+      || (Array.isArray(v) && v.length === 0) || (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0);
+    if (Array.isArray(body)) return body.every(blank) ? "empty" : null;
+    return blank(body) ? "empty" : null;
+  }
   // A stand-in our own reader built is judged on what the seller sent, never
   // on the keys we wrote: an empty or blank body is empty, text that parses
   // as JSON is judged as that JSON, other text answers only a seller that
