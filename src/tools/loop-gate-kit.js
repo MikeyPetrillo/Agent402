@@ -244,7 +244,7 @@ export async function loopGate(input, { fetchImpl = fetch } = {}) {
   if (!judgeEnabled()) { const e = new Error("Judgment is not configured on this server; only the budget and iteration checks can answer here."); e.statusCode = 503; throw e; }
   // The judge re-validates the request it is handed (the same bounds) and
   // walks its backends under the route's payment-window budget.
-  const j = await judge({ state: prepared.request.state, questions: prepared.request.questions }, { fetchImpl, tier: "loop-gate" });
+  const j = await judge({ state: prepared.request.state, questions: prepared.request.questions }, { fetchImpl, tier: "loop-gate", strictProbabilities: true });
   return composeDecision(prepared, j.answers, j.model);
 }
 

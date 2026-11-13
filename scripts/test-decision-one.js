@@ -27,7 +27,8 @@ delete process.env.ROUTE_JUDGE;
 
 const { setUpstreamCostsForTest, upstreamCostsGaps } = await import("../src/upstream-costs.js");
 const { OPENROUTER_ATTRIBUTION } = await import("../src/openrouter-attribution.js");
-const { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL, _decisionOneSpendReset } = await import("../src/decision-one.js");
+const { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL, GEMINI_DECISION_MODEL, jevOpenRouterModel, openRouterDecisionsEnabled, _decisionOneSpendReset } = await import("../src/decision-one.js");
+const JEV_OR = "typesafe/jev-1.14";
 const toolJudge = await import("../src/tool-judge.js");
 const rerank = await import("../src/discovery-rerank.js");
 const wish = await import("../src/wish-classify.js");
@@ -118,8 +119,8 @@ const choiceAnswer = (choice, confidence) => reply(200, { answers: { best: { typ
     toolJudge._jevReset();
     const s = stub({ [TYPESAFE]: jev, [OPENROUTER]: choiceAnswer("html-to-json", 0.93) });
     const r = await toolJudge.judgeTool("extract a web page into structured json", [A, B], { fetchImpl: s.fetchImpl });
-    ok(s.hosts() === `${TYPESAFE},${OPENROUTER}` && r?.choice === "html-to-json", `tool-judge: ${why} falls back to Decision-1`);
-    ok(withoutModel(s.calls[1].body) === withoutModel(s.calls[0].body) && s.calls[1].body.model === DECISION_ONE_MODEL, "...with Jev's body, only the model changed");
+    ok(s.hosts() === `${TYPESAFE},${OPENROUTER}` && r?.choice === "html-to-json", `tool-judge: ${why} falls back to OpenRouter`);
+    ok(withoutModel(s.calls[1].body) === withoutModel(s.calls[0].body) && s.calls[1].body.model === JEV_OR, "...asking the same Jev version there first, with Jev's body, only the model changed");
     if (why === "a Jev 5xx") {
       const st = toolJudge.jevSpendStatus();
       const want = Buffer.byteLength(s.calls[0].raw) + Buffer.byteLength(s.calls[1].raw) + 600;
@@ -358,6 +359,204 @@ const DOWN = reply(503, {});
   ok(s.calls.length === 2 && e?.statusCode === 503, `the daily ceiling admits what fits and refuses the next call unsent (sent ${s.calls.length})`);
   delete process.env.DECISION_ONE_DAILY_MAX_BYTES;
   _decisionOneSpendReset();
+}
+
+// ---- the OpenRouter models: Gemini Decision-1 and Jev there ------------------
+// The same client, `model` picking; one day's bytes for every model.
+const { GEMINI_DECISION, JEV_PINNED, geminiDecisionOffered, geminiDecisionFits, jevOpenRouterOffered, JUDGE_NOTE } = kit;
+const fullTable = (over = {}) => ({
+  models: [["fake/model", { prompt: 1, completion: 1 }]],
+  vendor: { decisions: { luna: RATE, decisionOne: RATE, gemini: RATE, jev: RATE, maxShare: SHARE, ...over } },
+});
+/** OpenRouter replies chosen by the model the body names. */
+const byModel = (map) => (body) => (body.model in map ? (typeof map[body.model] === "function" ? map[body.model]() : map[body.model]) : DOWN);
+const orModels = (s) => s.calls.filter((c) => c.host === OPENROUTER).map((c) => c.body.model).join();
+{
+  ok(jevOpenRouterModel("jev-1.14.0") === JEV_OR && jevOpenRouterModel("jev-1.14.2") === null && jevOpenRouterModel("jev-preview") === null && jevOpenRouterModel("") === null,
+    "the pinned Jev version maps to OpenRouter's id; a patch release or the preview maps to none");
+  ok(JEV_PINNED === "jev-1.14.0" && jevOpenRouterModel(JEV_PINNED) === JEV_OR, "the pin stays jev-1.14.0, and its OpenRouter id is typesafe/jev-1.14");
+  const body = { state: "s", model: "jev-latest", questions: { q: { type: "noul", instructions: "?" } } };
+  const s = stub({ [OPENROUTER]: reply(200, { answers: { q: { type: "noul", noul: 0.7 } } }) });
+  await askDecisionOne(body, { fetchImpl: s.fetchImpl, model: GEMINI_DECISION_MODEL });
+  ok(s.calls[0].body.model === GEMINI_DECISION_MODEL && withoutModel(s.calls[0].body) === withoutModel(body) && s.calls[0].path === "/api/alpha/decisions", "Gemini Decision-1 is asked on the same endpoint with only the model changed");
+  process.env.GEMINI_DECISION = "off";
+  ok(!openRouterDecisionsEnabled(GEMINI_DECISION_MODEL) && decisionOneEnabled() && openRouterDecisionsEnabled(JEV_OR), "GEMINI_DECISION=off turns off Gemini alone");
+  delete process.env.GEMINI_DECISION;
+  process.env.JEV_OPENROUTER = "off";
+  ok(!openRouterDecisionsEnabled(JEV_OR) && decisionOneEnabled(), "JEV_OPENROUTER=off turns off Jev over OpenRouter alone");
+  delete process.env.JEV_OPENROUTER;
+  let e = null; const s2 = stub({ [OPENROUTER]: reply(200, { answers: {} }) });
+  try { await askDecisionOne(body, { fetchImpl: s2.fetchImpl, model: "other/model" }); } catch (x) { e = x; }
+  ok(e?.statusCode === 503 && s2.calls.length === 0, "a model this client does not list is refused unsent");
+
+  const bytes = Buffer.byteLength(JSON.stringify({ ...body, model: DECISION_ONE_MODEL }));
+  process.env.DECISION_ONE_DAILY_MAX_BYTES = String(bytes * 2 + 10);
+  _decisionOneSpendReset();
+  const s3 = stub({ [OPENROUTER]: reply(200, { answers: { q: { type: "noul", noul: 0.5 } } }) });
+  await askDecisionOne(body, { fetchImpl: s3.fetchImpl });
+  await askDecisionOne(body, { fetchImpl: s3.fetchImpl, model: JEV_OR });
+  e = null; try { await askDecisionOne(body, { fetchImpl: s3.fetchImpl, model: GEMINI_DECISION_MODEL }); } catch (x) { e = x; }
+  ok(s3.calls.length === 2 && e?.statusCode === 503, "the daily byte ceiling is one count across every OpenRouter model");
+  delete process.env.DECISION_ONE_DAILY_MAX_BYTES;
+  _decisionOneSpendReset();
+}
+{
+  setUpstreamCostsForTest(fullTable());
+  ok(geminiDecisionOffered() && jevOpenRouterOffered(), "with their table rates both new models are offered");
+  ok(JUDGE_TOOLS[0].discovery.inputSchema.properties.model.enum.includes(GEMINI_DECISION) && /Gemini Decision-1/.test(JUDGE_TOOLS[0].description) && /Gemini Decision-1/.test(JUDGE_TOOLS[1].description), "the /v1/judge enum names gemini-decision-1 and both descriptions name it");
+  ok(JUDGE_TOOLS[1].discovery.inputSchema.properties.model.enum.join() === LUNA, "/v1/decisions keeps its one-model enum");
+
+  // Every backend down: each is tried once, in order.
+  for (const [why, input, want] of [
+    ["the default", JUDGE_IN, `${TYPESAFE},${OPENROUTER},${OPENROUTER},${OPENROUTER},${OPENAI}`, `${JEV_OR},${DECISION_ONE_MODEL},${GEMINI_DECISION_MODEL}`],
+    ["naming gemini-decision-1", { ...JUDGE_IN, model: GEMINI_DECISION }, `${OPENROUTER},${TYPESAFE},${OPENROUTER},${OPENROUTER},${OPENAI}`, `${GEMINI_DECISION_MODEL},${JEV_OR},${DECISION_ONE_MODEL}`],
+    ["naming jev-preview", { ...JUDGE_IN, model: "jev-preview" }, `${TYPESAFE},${OPENROUTER},${OPENROUTER},${OPENAI}`, `${DECISION_ONE_MODEL},${GEMINI_DECISION_MODEL}`],
+  ].map(([a, b, c, d]) => [a, b, [c, d]])) {
+    const s = stub({ [TYPESAFE]: DOWN, [OPENROUTER]: DOWN, [OPENAI]: DOWN });
+    let e = null; try { await judge(input, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+    ok(e?.statusCode >= 500 && s.hosts() === want[0] && orModels(s) === want[1], `/v1/judge ${why}: ${s.hosts()} (${orModels(s)})`);
+  }
+  {
+    const s = stub({ [TYPESAFE]: DOWN, [OPENROUTER]: byModel({ [JEV_OR]: reply(200, JEV_SHAPE("typesafe/jev-1.14-20261014")) }), [OPENAI]: LUNA_OK });
+    const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
+    ok(s.hosts() === `${TYPESAFE},${OPENROUTER}` && s.calls[1].body.model === JEV_OR && withoutModel(s.calls[1].body) === withoutModel(s.calls[0].body),
+      "/v1/judge: a TypeSafe outage is answered by the same Jev version over OpenRouter, with Jev's body, only the model changed");
+    ok(r.model === JEV_PINNED && !("fallbackFrom" in r) && r.answers.repro.noul === 0.32, `...the answer names the model that served (${r.model}) and no fallback, since the model is the same`);
+  }
+  {
+    const s = stub({ [TYPESAFE]: DOWN, [OPENROUTER]: byModel({ [JEV_OR]: timeout, [DECISION_ONE_MODEL]: D1_OK }) });
+    let e = null; try { await judge(JUDGE_IN, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+    ok(e?.statusCode >= 500 && orModels(s) === JEV_OR, "a timed-out Jev over OpenRouter ends the call uncharged; no further backend is asked");
+  }
+  {
+    const s = stub({ [OPENROUTER]: byModel({ [GEMINI_DECISION_MODEL]: reply(200, JEV_SHAPE("google/gemini-decision-1-20261111")) }) });
+    const r = await judge({ ...JUDGE_IN, model: GEMINI_DECISION }, { fetchImpl: s.fetchImpl });
+    ok(orModels(s) === GEMINI_DECISION_MODEL && r.model === GEMINI_DECISION && !("fallbackFrom" in r), "/v1/judge naming gemini-decision-1 is served by Gemini Decision-1, named by the buyer's enum value");
+  }
+  {
+    const DEC_IN = { input: "I was charged twice.", questions: [{ type: "predicate", name: "angry", instructions: "Is the customer angry?" }] };
+    const s = stub({ [OPENAI]: DOWN, [TYPESAFE]: DOWN, [OPENROUTER]: byModel({ [JEV_OR]: reply(200, { answers: { angry: { type: "noul", noul: 0.6 } }, usage: { input_tokens: 40 } }) }) });
+    const r = await decisions(DEC_IN, { fetchImpl: s.fetchImpl });
+    ok(r.model === JEV_PINNED && r.fallback_from === LUNA && r.answers[0].probability === 0.6, "/v1/decisions: after Luna and TypeSafe, Jev over OpenRouter answers; fallback_from names Luna");
+  }
+  // The price bound: a model is sent a request only while its worst case fits.
+  setUpstreamCostsForTest(fullTable({ gemini: RATE * 4 }));
+  ok(geminiDecisionFits(250) && !geminiDecisionFits(251), "Gemini Decision-1 is held to the table's share of the price at its own rate");
+  {
+    const mid = { ...JUDGE_IN, state: "x".repeat(300) };
+    const s = stub({ [OPENROUTER]: DOWN, [TYPESAFE]: DOWN, [OPENAI]: DOWN });
+    let e = null; try { await judge({ ...mid, model: GEMINI_DECISION }, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+    ok(!orModels(s).includes(GEMINI_DECISION_MODEL), `a request past Gemini's bound is never sent to it, even when named (${orModels(s)})`);
+  }
+  setUpstreamCostsForTest(fullTable({ gemini: undefined }));
+  ok(!geminiDecisionOffered() && upstreamCostsGaps().includes("vendor.decisions.gemini"), "without vendor.decisions.gemini Gemini is not offered, and the table reads partial");
+  setUpstreamCostsForTest(fullTable({ jev: undefined }));
+  ok(!jevOpenRouterOffered(), "without vendor.decisions.jev Jev over OpenRouter is not offered on the paid route");
+  setUpstreamCostsForTest(fullTable());
+  process.env.JEV_OPENROUTER = "off";
+  {
+    const s = stub({ [TYPESAFE]: DOWN, [OPENROUTER]: DOWN, [OPENAI]: DOWN });
+    try { await judge(JUDGE_IN, { fetchImpl: s.fetchImpl }); } catch { /* expected */ }
+    ok(!orModels(s).includes(JEV_OR), "JEV_OPENROUTER=off keeps the paid route off that leg");
+  }
+  delete process.env.JEV_OPENROUTER;
+
+  // With the private table (UPSTREAM_COSTS_FILE), each OpenRouter model's
+  // largest admitted request costs at most the table's share of the price.
+  if (process.env.UPSTREAM_COSTS_FILE) {
+    setUpstreamCostsForTest(null);
+    const { upstreamCosts } = await import("../src/upstream-costs.js");
+    const d = upstreamCosts().vendor?.decisions || {};
+    for (const [k, fitsFn] of [["gemini", geminiDecisionFits], ["jev", kit.jevOpenRouterFits], ["decisionOne", decisionOneFits]]) {
+      const okAll = [1, 1000, 4000, kit.LIMITS.bodyBytes].every((b) => !fitsFn(b) || (b * d[k]) / 1e6 <= d.maxShare * JUDGE_PRICE_USD);
+      ok(d[k] != null ? okAll : true, `private table: every ${k} request admitted stays within the price share${d[k] == null ? " (key absent: not offered)" : ""}`);
+    }
+    setUpstreamCostsForTest(fullTable());
+  }
+}
+
+// ---- null probabilities: one null never drops the other answers ----------------
+{
+  setUpstreamCostsForTest(fullTable());
+  const withNull = (shape) => { const j = JEV_SHAPE(shape); j.answers.repro = { type: "noul", noul: null }; return reply(200, j); };
+  {
+    const s = stub({ [TYPESAFE]: withNull("jev-1.14.0") });
+    const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
+    ok(r.answers.repro.noul === null && r.answers.repro.noProbability === true && r.answers.team.choice === "frontend" && r.answers.sev.score === 1.4,
+      "/v1/judge: a null noul is an explicit no-probability answer and every other answer is kept");
+    ok(r.note === JUDGE_NOTE && /noProbability/.test(r.note) && s.hosts() === TYPESAFE, "...the note documents it, and no other backend is asked");
+  }
+  {
+    const s = stub({ [TYPESAFE]: DOWN, [OPENROUTER]: byModel({ [JEV_OR]: withNull("typesafe/jev-1.14") }) });
+    const r = await judge(JUDGE_IN, { fetchImpl: s.fetchImpl });
+    ok(r.answers.repro.noProbability === true && r.answers.team.choice === "frontend", "the same over OpenRouter's Decisions endpoint");
+  }
+  {
+    const s = stub({ [TYPESAFE]: reply(200, { answers: { repro: { type: "noul", noul: null } } }), [OPENROUTER]: D1_OK });
+    let e = null; try { await judge({ state: "s", questions: { repro: { type: "noul", instructions: "?" } } }, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
+    ok(e?.statusCode === 502 && e.mayBeBilled && s.hosts() === TYPESAFE, "an answer set with no probability at all is an uncharged 502, as before");
+  }
+  {
+    const s = stub({ [TYPESAFE]: withNull("jev-1.14.0") });
+    let e = null; try { await judge(JUDGE_IN, { fetchImpl: s.fetchImpl, strictProbabilities: true }); } catch (x) { e = x; }
+    ok(e?.statusCode === 502, "a caller that needs every number (the loop gate) still reads a null as unreadable");
+  }
+  {
+    const luna = { answers: [
+      { type: "score", name: "q0", score: 1.27, probabilities: [], confidence: 0.15 },
+      { type: "predicate", name: "q1", probability: null },
+      { type: "choice", name: "q2", choice: "frontend", probabilities: [{ value: "frontend", probability: null }], confidence: 0.97 },
+    ], usage: { input_tokens: 300 } };
+    const s = stub({ [OPENAI]: reply(200, luna) });
+    const r = await judge({ ...JUDGE_IN, model: LUNA }, { fetchImpl: s.fetchImpl });
+    ok(r.model === LUNA && r.answers.repro.noProbability === true && r.answers.repro.noul === null && r.answers.team.choice === "frontend" && r.answers.sev.score === 1.27,
+      "/v1/judge from the Decisions shape: a null predicate probability is kept as no probability beside the other answers");
+    ok(r.answers.team.probabilities.frontend === null, "...and a null option probability stays null, never a number");
+  }
+  {
+    const DEC_IN = { input: "I was charged twice.", questions: [
+      { type: "predicate", name: "angry", instructions: "Is the customer angry?" },
+      { type: "choice", name: "dept", instructions: "Which team?", choices: [{ value: "billing", description: "money" }, { value: "tech", description: "bugs" }] },
+    ] };
+    const s = stub({ [OPENAI]: reply(200, { answers: [{ type: "predicate", name: "angry", probability: null }, { type: "choice", name: "dept", choice: "billing", probabilities: [{ value: "billing", probability: 0.9 }, { value: "tech", probability: 0.1 }], confidence: 0.8 }] }) });
+    const r = await decisions(DEC_IN, { fetchImpl: s.fetchImpl });
+    ok(r.answers[0].probability === null && r.answers[1].choice === "billing", "/v1/decisions: a null predicate probability passes through beside the other answers");
+    const s2 = stub({ [OPENAI]: DOWN, [TYPESAFE]: reply(200, { answers: { angry: { type: "noul", noul: null }, dept: { type: "choice", choice: "billing", confidence: 0.8, probabilities: { billing: 0.9, tech: null } } } }) });
+    const r2 = await decisions(DEC_IN, { fetchImpl: s2.fetchImpl });
+    ok(r2.answers[0].probability === null && r2.answers[1].probabilities.find((p) => p.value === "tech").probability === null && r2.answers[1].probabilities.find((p) => p.value === "billing").probability === 0.9,
+      "/v1/decisions from Jev: no probability reads null, never 0");
+    const s3 = stub({ [OPENAI]: reply(200, { answers: [{ type: "predicate", name: "only", probability: null }] }), [TYPESAFE]: JEV_OK });
+    let e = null; try { await decisions({ input: "x", questions: [{ type: "predicate", name: "only", instructions: "?" }] }, { fetchImpl: s3.fetchImpl }); } catch (x) { e = x; }
+    ok(e?.statusCode === 502 && s3.hosts() === OPENAI, "/v1/decisions: every answer null is an uncharged 502, and no second backend is paid");
+  }
+}
+
+// ---- tool-judge: Jev over OpenRouter is booked like every other leg -------------
+{
+  toolJudge._jevReset();
+  const s = stub({ [TYPESAFE]: reply(503, {}), [OPENROUTER]: byModel({ [JEV_OR]: reply(503, {}), [DECISION_ONE_MODEL]: choiceAnswer("html-to-json", 0.93) }) });
+  const r = await toolJudge.judgeTool("extract a web page into structured json, three legs", [A, B], { fetchImpl: s.fetchImpl });
+  const st = toolJudge.jevSpendStatus();
+  const want = s.calls.reduce((n, c) => n + Buffer.byteLength(c.raw) + 300, 0);
+  ok(r?.choice === "html-to-json" && orModels(s) === `${JEV_OR},${DECISION_ONE_MODEL}`, "tool-judge: TypeSafe down, then Jev over OpenRouter down, then Decision-1 answers");
+  ok(st.calls === 3 && st.openRouterCalls === 2 && st.tokens === want, `...every leg is booked against the one daily ceiling (${st.tokens} of ${want}; ${st.openRouterCalls} over OpenRouter)`);
+
+  toolJudge._jevReset();
+  // Room for TypeSafe and Jev over OpenRouter, not for Decision-1.
+  process.env.JEV_DAILY_MAX_TOKENS = String(Buffer.byteLength(s.calls[0].raw) + Buffer.byteLength(s.calls[1].raw) + 600 + 5);
+  const sc = stub({ [TYPESAFE]: reply(503, {}), [OPENROUTER]: byModel({ [JEV_OR]: reply(503, {}), [DECISION_ONE_MODEL]: choiceAnswer("html-to-json", 0.93) }) });
+  const outcome = {};
+  const rc = await toolJudge.judgeTool("extract a web page into structured json, three legs", [A, B], { fetchImpl: sc.fetchImpl, outcome });
+  ok(rc === null && orModels(sc) === JEV_OR && outcome.skipped === "budget", "tool-judge: a leg past the ceiling is not sent, and says budget");
+  delete process.env.JEV_DAILY_MAX_TOKENS;
+
+  toolJudge._jevReset();
+  delete process.env.TYPESAFE_API_KEY;
+  const sa = stub({ [OPENROUTER]: byModel({ [JEV_OR]: choiceAnswer("pdf-extract-pages", 0.95) }) });
+  const ra = await toolJudge.judgeTool("pages from a pdf", [A, B], { fetchImpl: sa.fetchImpl });
+  ok(ra?.choice === "pdf-extract-pages" && orModels(sa) === JEV_OR && toolJudge.jevSpendStatus().openRouterCalls === 1, "tool-judge: with no TypeSafe key, Jev over OpenRouter serves first");
+  process.env.TYPESAFE_API_KEY = "ts-test-not-real";
+  toolJudge._jevReset();
 }
 
 console.warn = quiet;
