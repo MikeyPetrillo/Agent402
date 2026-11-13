@@ -42,7 +42,7 @@
 // this instance's closure.
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { EVM_RPCS } from "./evm-rpcs.js";
-import { ADDR, TX, UUID, UINT, B32, SECP256K1_HALF_N, isObj, lc } from "./circle-shapes.js";
+import { ADDR, TX, UUID, UINT, B32, SECP256K1_HALF_N, isObj, lc, txt, uintText } from "./circle-shapes.js";
 import { SettleError, VerifyError } from "@x402/core/types";
 import {
   verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature,
@@ -172,12 +172,12 @@ export async function preflightArcPayment(paymentPayload, requirements, nowSec =
  * cannot verify as an EOA's is refused.
  */
 export async function preflightUsdcPayment(paymentPayload, requirements, nowSec = Math.floor(Date.now() / 1000), { contractVerifier = null, profiles = [ARC_PROFILE] } = {}) {
-  const refuse = (reason, payer) => ({ reason, payer: ADDR.test(String(payer || "")) ? payer : undefined });
+  const refuse = (reason, payer) => ({ reason, payer: ADDR.test(txt(payer)) ? payer : undefined });
   if (!isObj(requirements) || requirements.scheme !== "exact") return refuse("unsupported_scheme");
   const profile = profiles.find((p) => p.caip2 === requirements.network);
   if (!profile) return refuse("invalid_network");
   if (lc(requirements.asset) !== lc(profile.asset)) return refuse("invalid_payment_requirements");
-  if (!ADDR.test(String(requirements.payTo || "")) || !UINT.test(String(requirements.amount ?? ""))) return refuse("invalid_payment_requirements");
+  if (!ADDR.test(txt(requirements.payTo)) || !UINT.test(uintText(requirements.amount))) return refuse("invalid_payment_requirements");
   if (!isObj(paymentPayload) || paymentPayload.x402Version !== 2) return refuse("invalid_x402_version");
   const accepted = paymentPayload.accepted;
   if (isObj(accepted) && (accepted.network !== profile.caip2 || lc(accepted.asset) !== lc(profile.asset))) return refuse("invalid_network");
@@ -186,9 +186,9 @@ export async function preflightUsdcPayment(paymentPayload, requirements, nowSec 
   const sig = isObj(inner) ? inner.signature : null;
   if (!isObj(auth) || typeof sig !== "string" || !/^0x[0-9a-fA-F]+$/.test(sig)) return refuse("invalid_payload");
   const payer = auth.from;
-  if (!ADDR.test(String(auth.from || "")) || !ADDR.test(String(auth.to || ""))) return refuse("invalid_payload", payer);
-  for (const f of ["value", "validAfter", "validBefore"]) if (!UINT.test(String(auth[f] ?? ""))) return refuse("invalid_payload", payer);
-  if (!B32.test(String(auth.nonce || ""))) return refuse("invalid_payload", payer);
+  if (!ADDR.test(txt(auth.from)) || !ADDR.test(txt(auth.to))) return refuse("invalid_payload", payer);
+  for (const f of ["value", "validAfter", "validBefore"]) if (!UINT.test(txt(auth[f]))) return refuse("invalid_payload", payer);
+  if (!B32.test(txt(auth.nonce))) return refuse("invalid_payload", payer);
   if (lc(auth.to) !== lc(requirements.payTo)) return refuse("invalid_exact_evm_payload_recipient_mismatch", payer);
   if (BigInt(auth.value) !== BigInt(requirements.amount)) return refuse("invalid_exact_evm_payload_authorization_value_mismatch", payer);
   if (BigInt(auth.validAfter) > BigInt(nowSec)) return refuse("invalid_exact_evm_payload_authorization_valid_after", payer);
@@ -224,14 +224,18 @@ export async function preflightUsdcPayment(paymentPayload, requirements, nowSec 
  * gas sponsoring permit, when the buyer attached one, must be for the same
  * owner and token and approve Permit2; Circle checks its signature.
  */
+/** The fields of a signed EIP-2612 gas sponsoring permit (@x402/evm
+ *  extractEip2612GasSponsoringInfo reads these). */
+const EIP2612_PERMIT_FIELDS = Object.freeze(["from", "asset", "spender", "amount", "nonce", "deadline", "signature"]);
+
 export async function preflightUptoPayment(paymentPayload, requirements, nowSec = Math.floor(Date.now() / 1000), { profiles = [ARC_PROFILE], settle = false } = {}) {
-  const refuse = (reason, payer) => ({ reason, payer: ADDR.test(String(payer || "")) ? payer : undefined });
+  const refuse = (reason, payer) => ({ reason, payer: ADDR.test(txt(payer)) ? payer : undefined });
   if (!isObj(requirements) || requirements.scheme !== "upto") return refuse("unsupported_scheme");
   const profile = profiles.find((p) => p.caip2 === requirements.network);
   if (!profile) return refuse("invalid_network");
   if (lc(requirements.asset) !== lc(profile.asset)) return refuse("invalid_payment_requirements");
   const facilitator = isObj(requirements.extra) ? requirements.extra.facilitatorAddress : null;
-  if (!ADDR.test(String(requirements.payTo || "")) || !UINT.test(String(requirements.amount ?? "")) || !ADDR.test(String(facilitator || ""))) return refuse("invalid_payment_requirements");
+  if (!ADDR.test(txt(requirements.payTo)) || !UINT.test(uintText(requirements.amount)) || !ADDR.test(txt(facilitator))) return refuse("invalid_payment_requirements");
   if (!isObj(paymentPayload) || paymentPayload.x402Version !== 2) return refuse("invalid_x402_version");
   const accepted = paymentPayload.accepted;
   if (!isObj(accepted) || accepted.scheme !== "upto" || accepted.network !== profile.caip2 || lc(accepted.asset) !== lc(profile.asset)) return refuse("invalid_network");
@@ -242,9 +246,9 @@ export async function preflightUptoPayment(paymentPayload, requirements, nowSec 
   const payer = p2.from;
   const permitted = p2.permitted;
   const witness = p2.witness;
-  if (!ADDR.test(String(p2.from || "")) || !ADDR.test(String(p2.spender || "")) || !isObj(permitted) || !isObj(witness)) return refuse("invalid_payload", payer);
-  if (!ADDR.test(String(permitted.token || "")) || !ADDR.test(String(witness.to || "")) || !ADDR.test(String(witness.facilitator || ""))) return refuse("invalid_payload", payer);
-  for (const v of [permitted.amount, p2.nonce, p2.deadline, witness.validAfter]) if (!UINT.test(String(v ?? ""))) return refuse("invalid_payload", payer);
+  if (!ADDR.test(txt(p2.from)) || !ADDR.test(txt(p2.spender)) || !isObj(permitted) || !isObj(witness)) return refuse("invalid_payload", payer);
+  if (!ADDR.test(txt(permitted.token)) || !ADDR.test(txt(witness.to)) || !ADDR.test(txt(witness.facilitator))) return refuse("invalid_payload", payer);
+  for (const v of [permitted.amount, p2.nonce, p2.deadline, witness.validAfter]) if (!UINT.test(txt(v))) return refuse("invalid_payload", payer);
   if (lc(p2.spender) !== lc(x402UptoPermit2ProxyAddress)) return refuse("invalid_permit2_spender", payer);
   if (lc(witness.to) !== lc(requirements.payTo)) return refuse("invalid_permit2_recipient_mismatch", payer);
   if (lc(witness.facilitator) !== lc(facilitator)) return refuse("invalid_upto_evm_payload_facilitator_mismatch", payer);
@@ -256,7 +260,12 @@ export async function preflightUptoPayment(paymentPayload, requirements, nowSec 
   if (BigInt(witness.validAfter) > BigInt(nowSec)) return refuse("permit2_not_yet_valid", payer);
   const ext = isObj(paymentPayload.extensions) ? paymentPayload.extensions : null;
   const permit = ext && isObj(ext.eip2612GasSponsoring) && isObj(ext.eip2612GasSponsoring.info) ? ext.eip2612GasSponsoring.info : null;
-  if (permit && permit.from !== undefined) {
+  // The server declares the key with an info of {description, version} and
+  // the client SDK merges that declaration into the payload when the buyer
+  // already holds the allowance, so an info carrying no permit field is an
+  // echo, not a permit. One that carries any permit field is a permit: its
+  // owner must be present and be the Permit2 signer.
+  if (permit && EIP2612_PERMIT_FIELDS.some((k) => permit[k] !== undefined)) {
     if (lc(permit.from) !== lc(p2.from) || lc(permit.asset) !== lc(profile.asset) || lc(permit.spender) !== lc(PERMIT2_ADDRESS)) return refuse("invalid_eip2612_extension", payer);
   }
   if (BigInt(`0x${sig.slice(66, 130)}`) > SECP256K1_HALF_N) return refuse("invalid_upto_evm_payload_signature", payer);
@@ -289,9 +298,9 @@ const signerOf = (paymentPayload) => paymentPayload?.payload?.authorization?.fro
  *  same number in 32-byte hex. */
 export function pendingNonceOf(paymentPayload) {
   const exact = paymentPayload?.payload?.authorization?.nonce;
-  if (exact !== undefined) return exact;
+  if (exact !== undefined) return typeof exact === "string" ? exact : undefined;
   const p2 = paymentPayload?.payload?.permit2Authorization?.nonce;
-  if (!UINT.test(String(p2 ?? ""))) return undefined;
+  if (!UINT.test(txt(p2))) return undefined;
   const hex = BigInt(p2).toString(16);
   return hex.length <= 64 ? `0x${hex.padStart(64, "0")}` : undefined;
 }
@@ -311,7 +320,7 @@ export async function isLocalEoaSignature(auth, sig, profile = ARC_PROFILE) {
 export async function isContractWalletPayment(paymentPayload) {
   const auth = paymentPayload?.payload?.authorization;
   const sig = paymentPayload?.payload?.signature;
-  if (!isObj(auth) || typeof sig !== "string" || !ADDR.test(String(auth.from || ""))) return false;
+  if (!isObj(auth) || typeof sig !== "string" || !ADDR.test(txt(auth.from))) return false;
   return !(await isLocalEoaSignature(auth, sig));
 }
 
