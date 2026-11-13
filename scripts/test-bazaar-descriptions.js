@@ -31,6 +31,26 @@ for (const must of ["search", "answer", "extract", "render", "vin-decode", "geo-
   const mr = BAZAAR_DESCRIPTIONS["memory-read"] || "";
   ok(bazaarCapDescription(mr) === mr && /paying wallet/.test(mr) && /omit it to list/.test(mr) && /own namespace by default/.test(mr) && /granted/.test(mr) && !/\?[a-z]+=/.test(mr), "memory-read: curated copy reads whole and names the key read, the key list, the payer's own namespace and a granted one");
 }
+// The cut runs in linear time: long runs of whitespace, separators or hints
+// (100,000 characters each) are cut in well under the bound, where a pattern
+// that rescans a run from each of its positions takes seconds.
+{
+  const N = 100_000, BOUND_MS = 250;
+  const hostile = {
+    spaces: " ".repeat(N), "spaces then an open hint": `a${" ".repeat(N)}(?x=1`, "spaces between words": `a${" ".repeat(N)}b`,
+    "a hint then spaces": `word ?x=1${" ".repeat(N)}z`, "a sentence head then spaces": `Lorem ipsum dolor sit amet${" ".repeat(N)}x ?a=1`,
+    "a sentence head then commas": `Lorem ipsum dolor sit amet${",".repeat(N)}x ?a=1`, "a head then a lead-in word run": `Lorem ipsum dolor sit amet${" via".repeat(N / 4)} ?a=1`,
+    "open hints": "(?a=".repeat(N / 4), "hint keys": "?a=".repeat(N / 3), "sentence ends": ". ".repeat(N / 2) + "?a=1",
+    "an attribution tail after spaces": `${" ".repeat(N)}This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.`,
+  };
+  for (const [name, text] of Object.entries(hostile)) {
+    const t0 = performance.now();
+    bazaarCapDescription(text);
+    bazaarCapDescription(text, CHALLENGE_SHORT_DESCRIPTION_MAX);
+    const ms = performance.now() - t0;
+    ok(ms < BOUND_MS, `cap: ${name} (${text.length} chars) is cut in ${ms.toFixed(1)} ms (under ${BOUND_MS})`);
+  }
+}
 // generic cap behaviour
 const long = "A".repeat(298) + ". " + "B".repeat(600);
 ok(bazaarCapDescription(long) === "A".repeat(298) + ".", "cap: truncates at the last sentence end under 500 (when it sits past the halfway mark)");
