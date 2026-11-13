@@ -2336,9 +2336,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const priceOf = (slug) => Number(String(bySlug[slug].price).replace("$", ""));
   for (const t of LLM_GATEWAY_TOOLS) {
     const m = t.discovery?.input?.model;
-    if (typeof m !== "string") continue;
-    const c = canonicalModel(m);
-    ok(!(c in RETIRING_MODELS) && !(m in RETIRING_MODELS), `${t.slug}: the example model ${m} is not a retiring id`);
+    if (typeof m === "string") ok(!(canonicalModel(m) in RETIRING_MODELS) && !(m in RETIRING_MODELS), `${t.slug}: the example model ${m} is not a retiring id`);
     const outM = t.discovery?.output?.example?.model;
     if (typeof outM === "string") ok(!(canonicalModel(outM) in RETIRING_MODELS), `${t.slug}: the example answer names no retiring id (${outM})`);
   }
