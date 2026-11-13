@@ -6,7 +6,8 @@ const ENTRIES = [
     title: "Bazaar listings",
     items: [
       "Payments: every route's Bazaar listing carries a service name, five tags led by its category, a PNG icon, a description, and input and output schemas; the typed-judgment routes keep their whole description and judge's model list beside a link to the full sample answer.",
-      "Payments: descriptions keep the sentences around a query hint, and every FRED listing carries the FRED notice.",
+      "Payments: descriptions keep the sentences around a query hint, and every route that serves FRED data, the Treasury yield, CPI and Sahm Rule routes included, carries the FRED notice in its listing.",
+      "Payments: a payment signed against the previous release's 402 is accepted when only the output schema it echoes differs.",
       "Payments: output schemas read from examples type numbers as number, so a fractional answer always matches its listing.",
       "Server: the HTTP adapter used by the MCP connector takes its November security release.",
     ],
