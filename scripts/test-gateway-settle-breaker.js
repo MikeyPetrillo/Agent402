@@ -34,6 +34,11 @@ process.env.POSTHOG_TEST_CAPTURE = "1";
 if (!process.env.SHARED_LIMITS_PREFIX) process.env.SHARED_LIMITS_PREFIX = `gwb-test-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
 const b = await import("../src/gateway-settle-breaker.js");
+// The server hands the breaker its sales ledger (src/server.js); the breaker
+// never imports it, so the decide service, which reaches the breaker through
+// the gateway kit, never loads the ledger.
+const salesLedger = await import("../src/sales-ledger.js");
+b.setGatewaySettleBreakerSalesLedger(salesLedger);
 const { LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
 const { LLM_MESSAGES_TOOLS } = await import("../src/tools/llm-messages-kit.js");
 const { LLM_RESPONSES_TOOLS } = await import("../src/tools/llm-responses-kit.js");
@@ -943,6 +948,14 @@ delete process.env.OPENAI_API_KEY;
     const early = await tryIt(EARLY);
     b.setGatewaySettleBreakerPaidSaleReaderForTest(null);
     ok(early === "served" && (await tryIt(EARLY)) === 429, `a sales ledger not loaded yet serves the wallet (${early}); the loaded ledger holds it`);
+    // A process that registered no ledger (the decide service) reads every
+    // wallet as paid: the wallet is served; registering the ledger holds it.
+    const NONE = "0x" + "f".repeat(39) + "a";
+    b.recordGatewaySettleFailure(NONE);
+    b.setGatewaySettleBreakerSalesLedger({});
+    const none = await tryIt(NONE);
+    b.setGatewaySettleBreakerSalesLedger(salesLedger);
+    ok(none === "served" && (await tryIt(NONE)) === 429, `with no sales ledger registered the wallet is served (${none}); the registered ledger holds it`);
     // The same through the real ledger in database mode, its first load not
     // landed (the database refuses the connection): it reports itself not
     // loaded, its read says "never paid", and the wallet is served.
@@ -959,6 +972,7 @@ delete process.env.OPENAI_API_KEY;
       const src = `
         const b = await import(${JSON.stringify(new URL("../src/gateway-settle-breaker.js", import.meta.url).href)});
         const sl = await import(${JSON.stringify(new URL("../src/sales-ledger.js", import.meta.url).href)});
+        b.setGatewaySettleBreakerSalesLedger(sl);
         for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure("0x" + "e".repeat(35) + "2" + i.toString(16).padStart(4, "0"), Date.now(), { fault: "buyer" });
         const W = "0x" + "e".repeat(39) + "7";
         b.recordGatewaySettleFailure(W);

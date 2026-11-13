@@ -50,8 +50,8 @@
 // at BURST_MAX_FAILS (default 1) instead of MAX_FAILS and UNKNOWN_MAX_FAILS
 // ONLY for a wallet that has never settled: no settled call inside the
 // window AND no paid sale on the books at any time (payerHasPaidSale,
-// src/sales-ledger.js, one indexed read, made only while the bound is up and
-// only when the lower count would refuse). Any wallet that has ever paid is
+// src/sales-ledger.js, registered by the server; one indexed read, made only
+// while the bound is up and only when the lower count would refuse). Any wallet that has ever paid is
 // read at the usual counts, a fresh wallet with no failure is served,
 // failures that are ours (not-buyer) are not read at the lower count, a
 // refusal at the lower count lasts no longer than the bound, and the catalog
@@ -143,7 +143,6 @@ import { isGatewayPendingAnswer } from "./gateway-wire.js";
 import { onSettleOutcome } from "./hangup-settlement.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { positiveNum as num } from "./env-num.js";
-import { payerHasPaidSale, salesLedgerLoaded } from "./sales-ledger.js";
 
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
 export const MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_MAX, 3);
@@ -491,22 +490,37 @@ function payerOfKey(key) {
   if (s.startsWith("ip:") || s.startsWith("credits:")) return null;
   return s.slice(s.indexOf(":") + 1) || null;
 }
-let paidSaleReader = payerHasPaidSale;
-let ledgerLoaded = salesLedgerLoaded;
-/** Tests: stand in for the sales ledger's paid-sale read and, optionally, its
- *  loaded state (null restores both). */
-export function setGatewaySettleBreakerPaidSaleReaderForTest(fn, { loaded = null } = {}) {
-  paidSaleReader = typeof fn === "function" ? fn : payerHasPaidSale;
-  ledgerLoaded = typeof loaded === "function" ? loaded : salesLedgerLoaded;
+// The sales ledger is handed in by the process that serves /v1 (src/server.js
+// at import), never imported here: the decide service reaches this module
+// through the gateway kit, and importing the ledger would load it there and
+// claim a ledger journal. A process that registers none reads every wallet as
+// paid (served), so the lower count never holds a buyer for want of a ledger.
+let registeredReader = null;
+let registeredLoaded = null;
+/** The /v1 server: the sales ledger's paid-sale read and its loaded state. */
+export function setGatewaySettleBreakerSalesLedger({ payerHasPaidSale, salesLedgerLoaded } = {}) {
+  registeredReader = typeof payerHasPaidSale === "function" ? payerHasPaidSale : null;
+  registeredLoaded = typeof salesLedgerLoaded === "function" ? salesLedgerLoaded : null;
 }
-/** Has this key's wallet ever paid? A ledger whose first load has not landed
- *  (its mirror is empty, so every read says "never") and a read that throws
- *  both count as paid, so a ledger that cannot answer never puts a buyer under
- *  the lower count. */
+let paidSaleReader = null;
+let ledgerLoaded = null;
+/** Tests: stand in for the registered ledger's paid-sale read and, optionally,
+ *  its loaded state (null restores both to the registered ledger's). */
+export function setGatewaySettleBreakerPaidSaleReaderForTest(fn, { loaded = null } = {}) {
+  paidSaleReader = typeof fn === "function" ? fn : null;
+  ledgerLoaded = typeof loaded === "function" ? loaded : null;
+}
+/** Has this key's wallet ever paid? No ledger registered, a ledger whose
+ *  first load has not landed (its mirror is empty, so every read says
+ *  "never") and a read that throws all count as paid, so a ledger that cannot
+ *  answer never puts a buyer under the lower count. */
 function everPaid(key) {
   const p = payerOfKey(key);
   if (!p) return false;
-  try { if (!ledgerLoaded()) return true; return !!paidSaleReader(p); } catch { return true; }
+  const reader = paidSaleReader || registeredReader;
+  const loaded = ledgerLoaded || registeredLoaded;
+  if (!reader || !loaded) return true;
+  try { if (!loaded()) return true; return !!reader(p); } catch { return true; }
 }
 /** A key's verdict and unknown-cause verdicts, read at the burst count only
  *  for a wallet that has never settled (THE SERVICE-WIDE BOUND): no settled
