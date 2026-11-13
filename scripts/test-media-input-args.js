@@ -59,6 +59,26 @@ const table = [["fLaC", "flac"], ["ID3\x04", "mp3"], ["\xff\xfb\x90\x00", "mp3"]
   ["\xff\xf1\x50\x80", "aac"], ["\xff\xf9\x50\x80", "aac"], ["#!AMR\n", "amr"], ["#!AMR-WB\n", "amr"], ["#!AMRX", null], ["caff\0\x01\0\0", "caf"]];
 for (const [head, fmt] of table) ok(inputFormatOf(pad(head)) === fmt, `magic ${JSON.stringify(head)} -> ${fmt}`);
 
+// An ID3v2 tag is skipped by its declared size and what follows is named; a
+// body whose start names nothing is scanned for two consecutive MP3 frames.
+{
+  const id3 = (body, n) => { const h = Buffer.alloc(10 + n); h.write("ID3", 0); h[3] = 4; h[6] = (n >> 21) & 127; h[7] = (n >> 14) & 127; h[8] = (n >> 7) & 127; h[9] = n & 127; return Buffer.concat([h, body]); };
+  // A 128 kbps 44.1 kHz layer III frame header; its frame is 417 bytes long.
+  const frame = Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x00]), Buffer.alloc(413)]);
+  const frames = Buffer.concat([frame, frame, frame]);
+  const adts = Buffer.concat([Buffer.from([0xff, 0xf1, 0x50, 0x80]), Buffer.alloc(40)]);
+  const cases = [
+    ["ADTS AAC behind a 2000-byte ID3 tag", id3(adts, 2000), "aac"],
+    ["FLAC behind an ID3 tag", id3(pad("fLaC"), 300), "flac"],
+    ["MP3 frames behind an ID3 tag", id3(frames, 300), "mp3"],
+    ["an ID3 tag over nothing it names", id3(Buffer.alloc(64), 300), "mp3"],
+    ["MP3 frames behind 3000 zero bytes", Buffer.concat([Buffer.alloc(3000), frames]), "mp3"],
+    ["one lone frame header in other bytes", Buffer.concat([Buffer.alloc(3000, 0x41), Buffer.from([0xff, 0xfb, 0x90, 0x00]), Buffer.alloc(100, 0x41)]), null],
+    ["MP3 frames past the scan's reach", Buffer.concat([Buffer.alloc(70 * 1024), frames]), null],
+  ];
+  for (const [label, body, fmt] of cases) ok(inputFormatOf(body) === fmt, `${label} -> ${fmt} (${inputFormatOf(body)})`);
+}
+
 // A recorder container's input names its own demuxer.
 calls.length = 0; await settle(probeMedia(pad("\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c")));
 if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");

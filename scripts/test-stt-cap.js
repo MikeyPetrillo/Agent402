@@ -8,6 +8,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { probeDurationSeconds, assertWithinDurationCap, prepareAudioWithinCap, makeMultipartHandler, STT_TIERS, upstreamUsdPerMinute, STT_MARGIN, STT_TOOLS, byteFloorSeconds, __setMeasureForTest, __setTranscodeForTest, sttUnmeasuredSinceBoot } from "../src/tools/stt-kit.js";
 import { measureAudioSeconds, __setExecFileForTest } from "../src/tools/media-kit.js";
+import { execFile as realExecFile } from "node:child_process";
 import * as sttKit from "../src/tools/stt-kit.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -148,7 +149,11 @@ const reject = (p) => p.then(() => null, (e) => e);
     __setTranscodeForTest(async () => { was.cut++; return { audio: Buffer.from("x"), seconds: 1 }; });
     __setMeasureForTest(async () => ({ undecodable: "the decoder could not read its audio" }));
     let e = await reject(assertWithinDurationCap(short, "audio.wav", "transcribe"));
-    ok(e?.statusCode === 400 && e.hint === "format-unreadable" && /audio format could not be read/.test(e.message) && /the decoder could not read its audio/.test(e.message) && /You were not charged\./.test(e.message), `a file the decoder cannot read is a 400 that says its format could not be read (${e?.message ?? "passed"})`);
+    ok(e?.statusCode === 400 && e.hint === "format-unreadable" && /audio format could not be read/.test(e.message) && /the decoder could not read its audio/.test(e.message), `a file the decoder cannot read is a 400 that says its format could not be read (${e?.message ?? "passed"})`);
+    // The charge sentence is a route call's only: a skill-pack step runs inside a charged answer.
+    ok(!/not charged/i.test(e.message), `off a route (a skill-pack step) the 400 makes no charge claim (${e?.message})`);
+    const onRoute = await reject(prepareAudioWithinCap(short, "audio.wav", "transcribe", { headers: {} }));
+    ok(onRoute?.statusCode === 400 && /You were not charged\./.test(onRoute.message), `on a route call the 400 says the caller was not charged (${onRoute?.message})`);
     ok(was.cut === 0, "and no cut is tried on it");
     __setMeasureForTest(async () => ({ unavailable: "no decoder slot came free in time" }));
     __setTranscodeForTest(async () => ({ unavailable: "no decoder slot came free in time" }));
@@ -208,7 +213,12 @@ const reject = (p) => p.then(() => null, (e) => e);
     // Each call decodes a file of its own length, so the stub knows which
     // call a run belongs to whatever order the temp-file writes finish in.
     const held = [];
+    // A run under any demuxer but the sniffed one (mp3) is a failed decode at
+    // once: those are the fallbacks a failed decode is retried under.
+    const fallbacks = [];
     __setExecFileForTest((bin, args, opts, cb) => {
+      const fmt = args[args.indexOf("-i") - 1];
+      if (fmt !== "mp3") { fallbacks.push(fmt); setImmediate(() => cb(Object.assign(new Error("exit 1"), { code: 1 }))); return; }
       let bytes = -1;
       try { bytes = readFileSync(args[args.indexOf("-i") + 1]).length; } catch { /* asserted below */ }
       held.push({ bin, args, opts, cb, bytes });
@@ -233,6 +243,7 @@ const reject = (p) => p.then(() => null, (e) => e);
       failed.cb(Object.assign(new Error("exit 1"), { code: 1 }), "out_time_us=4000000\n");
       ok((await calls[idx(ran)]) === 5, "a decode that finished reports its last out_time in seconds");
       ok((await calls[idx(failed)]) === null, "a decode that failed is no measurement, whatever it printed before failing");
+      ok(fallbacks.length === 11 && new Set(fallbacks).size === 11 && !fallbacks.includes("mp3"), `a failed decode is retried once under each other whitelisted demuxer, never autodetected (${fallbacks.join(",")})`);
       ok(await until(() => held.length === 3), "the waiting decode starts when a slot frees");
       const last = held[2];
       last.cb(null, "progress=end\n");
@@ -323,8 +334,59 @@ const reject = (p) => p.then(() => null, (e) => e);
       const hollow = Buffer.concat([head, fp, Buffer.alloc(400_000)]);
       ok((await probeDurationSeconds(hollow, "audio.wma")) === 60, "the hollow WMA declares 60 seconds");
       for (const slug of ["transcribe", "transcribe-pro"]) {
-        const err = await reject(prepareAudioWithinCap(hollow, "audio.wma", slug));
+        const err = await reject(prepareAudioWithinCap(hollow, "audio.wma", slug, { headers: {} }));
         ok(err?.statusCode === 400 && err.hint === "format-unreadable" && /audio format could not be read/.test(err.message) && /You were not charged\./.test(err.message), `${slug}: a file the decoder cannot read is the 400 (${err?.statusCode}: ${err?.message ?? "passed"})`);
+      }
+
+      // Files the upstream took as they came before the decoder measured them:
+      // ADTS AAC behind an ID3 tag, and an MP3 behind leading zero padding.
+      // Each is read by the decoder, measured and served, never the 400.
+      {
+        const gen = (name, args) => { const p = join(dir, name); execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=6", "-ac", "1", ...args, p], { stdio: "ignore" }); return readFileSync(p); };
+        const adts = gen("p.aac", ["-c:a", "aac", "-f", "adts"]);
+        const mp3 = gen("p.mp3", ["-c:a", "libmp3lame", "-f", "mp3"]);
+        const id3 = (body, n = 1000) => { const h = Buffer.alloc(10 + n); h.write("ID3", 0); h[3] = 4; h[6] = (n >> 21) & 127; h[7] = (n >> 14) & 127; h[8] = (n >> 7) & 127; h[9] = n & 127; return Buffer.concat([h, body]); };
+        const cases = [["ADTS AAC behind an ID3 tag", id3(adts), "audio.aac", "flac"], ["an MP3 behind 3000 zero bytes", Buffer.concat([Buffer.alloc(3000), mp3]), "audio.mp3", "as-is"], ["ADTS AAC behind 3000 zero bytes (no sniff; a fallback demuxer reads it)", Buffer.concat([Buffer.alloc(3000), adts]), "audio.aac", "flac"]];
+        for (const [label, b, name, how] of cases) {
+          for (const slug of ["transcribe", "transcribe-pro"]) {
+            let p = null, err = null;
+            try { p = await prepareAudioWithinCap(b, name, slug, { headers: {} }); } catch (e) { err = e; }
+            const sent = how === "as-is" ? p?.buf === b : p?.filename === "audio.flac" && p.buf?.subarray(0, 4).toString("latin1") === "fLaC";
+            ok(!err && sent && Math.abs(p.durationSec - 6) < 0.3 && !("trimmedToCapSeconds" in p), `${slug}: ${label} is measured and served ${how === "as-is" ? "as it came" : "as FLAC"} (${err ? `${err.statusCode}: ${err.message}` : `${p?.filename}, ${p?.durationSec}s`})`);
+          }
+        }
+      }
+
+      // A file converted for the upstream is measured and converted in ONE
+      // decode (a WMA): the conversion is the measurement's own output.
+      {
+        const runs = [];
+        __setExecFileForTest((bin, args, opts, cb) => { runs.push(args); return realExecFile(bin, args, opts, cb); });
+        let p = null;
+        try { p = await prepareAudioWithinCap(wma, "audio.wma", "transcribe", { headers: {} }); } finally { __setExecFileForTest(null); }
+        ok(runs.length === 1 && p?.filename === "audio.flac" && Math.abs(p.durationSec - 5) < 0.2, `a WMA inside the cap is measured and converted in one decode (${runs.length} run(s), ${p?.durationSec}s)`);
+        if (p?.buf) ok(Math.abs((await measureAudioSeconds(p.buf)) - 5) < 0.2, "and the FLAC from that decode holds all five seconds");
+        // Over the cap, the same single run still reads the whole length.
+        const longWma = join(dir, "long.wma");
+        execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=300", "-c:a", "wmav2", "-b:a", "32k", longWma], { stdio: "ignore" });
+        const e = await reject(prepareAudioWithinCap(readFileSync(longWma), "audio.wma", "transcribe", { headers: {} }));
+        ok(e?.statusCode === 422 && /Audio is 5\.0 minutes/.test(e.message), `a five-minute WMA is refused at its full measured length (${e?.message ?? "passed"})`);
+      }
+
+      // An MP4 holding two audio tracks (3 s, then 9 s): measured on the first
+      // and sent as that track alone, never as the container (the upstream
+      // could read the other).
+      {
+        const multi = join(dir, "multi.m4a");
+        execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=3", "-f", "lavfi", "-i", "sine=f=880:d=9", "-map", "0", "-map", "1", "-c:a", "aac", multi], { stdio: "ignore" });
+        const mb = readFileSync(multi);
+        const p = await prepareAudioWithinCap(mb, "audio.m4a", "transcribe", { headers: {} });
+        const sentLen = p.buf !== mb ? await measureAudioSeconds(p.buf) : null;
+        ok(p.buf !== mb && p.filename === "audio.flac" && Math.abs(sentLen - 3) < 0.3, `a two-track MP4 is sent as its measured first track (${p.filename}, ${sentLen}s sent)`);
+        const single = join(dir, "single.m4a");
+        execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=3", "-c:a", "aac", single], { stdio: "ignore" });
+        const sb = readFileSync(single);
+        ok((await prepareAudioWithinCap(sb, "audio.m4a", "transcribe")).buf === sb, "control: a one-track MP4 is still sent as it came");
       }
 
       // A measured file on the upstream's list goes byte for byte.

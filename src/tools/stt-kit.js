@@ -157,7 +157,11 @@ async function probeContainer(buf, filename) {
     for (const pic of meta?.common?.picture || []) pictureBytes += pic?.data?.length || 0;
     const channels = Number(meta?.format?.numberOfChannels);
     const sampleRate = Number(meta?.format?.sampleRate);
-    return { durationSec: d, lossy: meta?.format?.lossless === false, hasVideo: meta?.format?.hasVideo, channels: Number.isInteger(channels) ? channels : null, sampleRate: Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : null, pictureBytes };
+    // Audio tracks the container lists (TrackType audio is 2): a file with
+    // more than one is converted to the first, the one that was measured.
+    const tracks = Array.isArray(meta?.format?.trackInfo) ? meta.format.trackInfo : [];
+    const audioTracks = tracks.filter((t) => t && (t.type === 2 || t.audio)).length;
+    return { audioTracks, durationSec: d, lossy: meta?.format?.lossless === false, hasVideo: meta?.format?.hasVideo, channels: Number.isInteger(channels) ? channels : null, sampleRate: Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : null, pictureBytes };
   } catch {
     return null;
   }
@@ -224,8 +228,11 @@ function overCapError(durationSec, tierSlug) {
   const upsell = tierSlug === "transcribe" ? " For up to 10 minutes, use /api/transcribe-pro." : "";
   return bad(`Audio is ${mins} minutes - this tier accepts up to ${tier.maxMinutes} minutes.${upsell} Split longer recordings into chunks.`, 422);
 }
-function unreadableError(reason, tierSlug) {
-  return Object.assign(bad(`This file's audio format could not be read: ${reason}, so its length can be neither measured nor trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap. Send a standard mp3, wav, m4a, ogg, flac, or webm file. You were not charged.`, 400), { hint: "format-unreadable" });
+/** The charge sentence is made on a route call only (finalFailure's rule): a
+ *  skill-pack step runs inside a charged answer and prints the step's error. */
+function unreadableError(reason, tierSlug, req) {
+  const routeCall = !!(req && typeof req === "object" && req.headers);
+  return Object.assign(bad(`This file's audio format could not be read: ${reason}, so its length can be neither measured nor trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap. Send a standard mp3, wav, m4a, ogg, flac, or webm file.${routeCall ? " You were not charged." : ""}`, 400), { hint: "format-unreadable" });
 }
 /** Our decoder could not run (no slot in time, its deadline, no ffmpeg here):
  *  the length is unbounded, so no upstream call. The charge sentence is made
@@ -267,35 +274,47 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null)
   const capSec = tier.maxMinutes * 60;
   const overCap = (sec) => sec > capSec + 2;
   if (overCap(container.durationSec)) throw overCapError(container.durationSec, tierSlug);
-  const ready = UPSTREAM_READY.has(inputFormatOf(buf));
+  const sniffed = inputFormatOf(buf);
+  // A container with more than one audio track is sent as its first, the one
+  // measured, never as it came (the upstream could read another).
+  const multiTrack = container.audioTracks > 1;
   const asFlac = (t) => ({ buf: t.audio, filename: "audio.flac" });
 
-  let measured = null, undecodable = null, unavailable = null;
+  let measured = null, undecodable = null, unavailable = null, format = sniffed, cut = null;
   try {
-    const m = await measureImpl(buf);
-    if (m && typeof m === "object") { measured = m.seconds ?? null; undecodable = m.undecodable || null; unavailable = m.unavailable || null; } else measured = m;
+    // A file that will be converted is measured and converted in one decode.
+    const m = await measureImpl(buf, !UPSTREAM_READY.has(sniffed) || multiTrack ? { cutSeconds: capSec + 2 } : {});
+    if (m && typeof m === "object") {
+      measured = m.seconds ?? null; undecodable = m.undecodable || null; unavailable = m.unavailable || null;
+      if (typeof m.format === "string") format = m.format;
+      if (m.audio) cut = m.audio;
+    } else measured = m;
   } catch { /* unmeasured: below */ }
+  // Sent as it came only when the sniffed demuxer read it, the upstream lists
+  // its container and it holds one audio track; else as the decoded FLAC.
+  const ready = !multiTrack && format === sniffed && UPSTREAM_READY.has(format);
   if (Number.isFinite(measured) && measured > 0) {
     const durationSec = Math.max(container.durationSec, measured);
     if (overCap(durationSec)) throw overCapError(durationSec, tierSlug);
     if (ready) return { buf, filename, durationSec };
-    const t = await transcodeImpl(buf, { maxSeconds: capSec + 2 });
+    if (cut) return { ...asFlac({ audio: cut }), durationSec };
+    const t = await transcodeImpl(buf, { maxSeconds: capSec + 2, format });
     if (t?.audio) return { ...asFlac(t), durationSec };
-    if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug);
+    if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
     throw decoderBusyError(t?.unavailable || "the conversion did not run", tierSlug, req);
   }
   unmeasured++;
   if (byteFloorApplies(container) && overCap(byteFloorSeconds(buf.length, container.pictureBytes))) {
     throw overCapError(byteFloorSeconds(buf.length, container.pictureBytes), tierSlug);
   }
-  if (undecodable) throw unreadableError(undecodable, tierSlug);
-  const t = await transcodeImpl(buf, { maxSeconds: capSec });
-  if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug);
+  if (undecodable) throw unreadableError(undecodable, tierSlug, req);
+  const t = await transcodeImpl(buf, { maxSeconds: capSec, format });
+  if (t?.undecodable) throw unreadableError(t.undecodable, tierSlug, req);
   if (!t?.audio || !(Number.isFinite(t.seconds) && t.seconds > 0)) throw decoderBusyError(t?.unavailable || unavailable || "the decoder gave no answer", tierSlug, req);
   if (t.seconds < capSec - CUT_REACHED_SLACK_SEC) {
     // The cut read the whole file: its length is measured after all.
     const durationSec = Math.max(container.durationSec, t.seconds);
-    return ready ? { buf, filename, durationSec } : { ...asFlac(t), durationSec };
+    return ready && (!t.format || t.format === sniffed) ? { buf, filename, durationSec } : { ...asFlac(t), durationSec };
   }
   return { ...asFlac(t), durationSec: t.seconds, trimmedToCapSeconds: capSec, durationUnconfirmed: true };
 }

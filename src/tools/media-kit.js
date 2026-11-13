@@ -34,10 +34,65 @@ export function __setExecFileForTest(fn) { execImpl = fn || execFile; }
 
 /** The demuxer for a downloaded body, named from its magic bytes, or null.
  *  Naming it stops ffmpeg from probing the body as a playlist or a concat
- *  list, which are formats that name further inputs. */
+ *  list, which are formats that name further inputs. An ID3v2 tag at the
+ *  start is skipped by its declared size and what follows it is named (ADTS
+ *  AAC and FLAC carry such tags too; MP3 when nothing else is recognized). A
+ *  body whose start names nothing is scanned, up to MPEG_SCAN_BYTES, for two
+ *  consecutive MPEG audio frames (an MP3 with leading padding). */
 export function inputFormatOf(buffer) {
   if (!buffer || buffer.length < 12) return null;
-  const b = buffer;
+  let at = 0, tagged = false;
+  // Tags can be stacked; a few are skipped, never an unbounded walk.
+  for (let i = 0; i < 4 && at + 10 <= buffer.length && buffer[at] === 0x49 && buffer[at + 1] === 0x44 && buffer[at + 2] === 0x33; i++) {
+    const size = id3v2Size(buffer, at);
+    if (size === null) break;
+    at += size;
+    tagged = true;
+  }
+  if (tagged) {
+    const rest = at < buffer.length ? buffer.subarray(at) : Buffer.alloc(0);
+    const after = rest.length >= 12 ? magicFormatOf(rest) : null;
+    return after || mpegScanFormatOf(rest) || "mp3";
+  }
+  return magicFormatOf(buffer) || mpegScanFormatOf(buffer);
+}
+/** The size of the ID3v2 tag at `at` (header, body and footer), or null when
+ *  the header is malformed (its size bytes are syncsafe: high bit clear). */
+function id3v2Size(b, at) {
+  const flags = b[at + 5];
+  const sz = [b[at + 6], b[at + 7], b[at + 8], b[at + 9]];
+  if (sz.some((x) => x === undefined || x & 0x80) || b[at + 3] === 0xff || b[at + 4] === 0xff) return null;
+  const body = (sz[0] << 21) | (sz[1] << 14) | (sz[2] << 7) | sz[3];
+  return 10 + body + (flags & 0x10 ? 10 : 0);
+}
+/** How far into a body the MPEG frame scan looks. */
+const MPEG_SCAN_BYTES = 64 * 1024;
+const MPEG_BITRATES_V1L3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+const MPEG_BITRATES_V2L3 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+const MPEG_RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
+/** The length of the MPEG layer III frame whose header is at `i`, or 0. */
+function mp3FrameLength(b, i) {
+  if (i + 4 > b.length || b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) return 0;
+  const ver = (b[i + 1] >> 3) & 3, layer = (b[i + 1] >> 1) & 3;
+  const br = (b[i + 2] >> 4) & 15, sr = (b[i + 2] >> 2) & 3, pad = (b[i + 2] >> 1) & 1;
+  if (ver === 1 || layer !== 1 || br === 0 || br === 15 || sr === 3) return 0;
+  const kbps = (ver === 3 ? MPEG_BITRATES_V1L3 : MPEG_BITRATES_V2L3)[br];
+  const rate = MPEG_RATES[ver][sr];
+  return Math.floor(((ver === 3 ? 144 : 72) * kbps * 1000) / rate) + pad;
+}
+/** "mp3" when the first MPEG_SCAN_BYTES of a body hold a layer III frame
+ *  header followed, at that frame's length, by another; else null. */
+function mpegScanFormatOf(b) {
+  const end = Math.min(b.length - 4, MPEG_SCAN_BYTES);
+  for (let i = 0; i < end; i++) {
+    if (b[i] !== 0xff) continue;
+    const len = mp3FrameLength(b, i);
+    if (len >= 24 && mp3FrameLength(b, i + len) > 0) return "mp3";
+  }
+  return null;
+}
+/** The demuxer named by the magic bytes at the start of a body, or null. */
+function magicFormatOf(b) {
   const s4 = b.subarray(0, 4).toString("latin1");
   if (s4 === "OggS") return "ogg";
   if (s4 === "fLaC") return "flac";
@@ -77,8 +132,8 @@ const AUDIO_DECODER_SET = new Set(AUDIO_DECODERS.split(","));
 /** Input arguments for a downloaded file: local file reads only, the
  *  demuxer named explicitly, audio decoders only. An unrecognized body is
  *  refused before ffmpeg runs. */
-export function mediaInputArgs(buffer, inPath) {
-  const fmt = inputFormatOf(buffer);
+export function mediaInputArgs(buffer, inPath, format = null) {
+  const fmt = format || inputFormatOf(buffer);
   if (!fmt) throw bad("media could not be processed (unrecognized container; send an audio/video file such as mp3, mp4, wav, ogg, flac or webm)", 422);
   return ["-codec_whitelist", AUDIO_DECODERS, "-protocol_whitelist", "file", "-f", fmt, "-i", inPath];
 }
@@ -300,9 +355,30 @@ export async function measureAudioSeconds(buffer) {
   const m = await measureAudio(buffer);
   return Number.isFinite(m.seconds) ? m.seconds : null;
 }
-export async function measureAudio(buffer) {
-  return decodeInMeasurePool(buffer, "a402-measure-", () => ["-f", "null", "-"], (seconds) => ({ seconds }));
+/** { seconds, format, audioTracks? } (format: the demuxer that read it). With
+ *  `cutSeconds`, the same run also writes the first audio stream as 16 kHz
+ *  mono FLAC cut at that length (transcodeSpeech's output), answered as
+ *  `audio`: one decode measures the whole file and converts it, instead of a
+ *  measurement followed by a second decode for the conversion. */
+export async function measureAudio(buffer, { cutSeconds = null, format = null } = {}) {
+  if (Number.isFinite(cutSeconds) && cutSeconds > 0) {
+    let outPath = null;
+    return decodeInMeasurePool(buffer, "a402-measure-", (dir) => {
+      outPath = join(dir, "out.flac");
+      // Output 0: the cut. Output 1: the whole stream at 100 one-byte samples
+      // a second on stdout, so its byte count is the length (the progress
+      // clock of a run with two outputs follows the shorter one).
+      return ["-t", String(cutSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath,
+        "-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "1", "-ar", String(COUNTER_RATE), "-c:a", "pcm_u8", "-f", "u8", "pipe:1"];
+    }, async (seconds) => {
+      const audio = await readFile(outPath);
+      return audio.length > 0 ? { seconds, audio } : { seconds };
+    }, { format, counter: true });
+  }
+  return decodeInMeasurePool(buffer, "a402-measure-", () => ["-f", "null", "-"], (seconds) => ({ seconds }), { format });
 }
+/** Samples a second of the length counter (one byte each): 10 ms resolution. */
+const COUNTER_RATE = 100;
 
 /** The first audio stream as 16 kHz mono FLAC, cut at `maxSeconds` (ffmpeg
  *  `-t`), for a speech upstream: FLAC is on its documented input list, and
@@ -313,7 +389,7 @@ export async function measureAudio(buffer) {
  *  { audio, seconds } (seconds: the length written, which is the file's whole
  *  length when it is shorter than the cut), or measureAudio's { undecodable }
  *  or { unavailable }. Never throws. */
-export async function transcodeSpeech(buffer, { maxSeconds }) {
+export async function transcodeSpeech(buffer, { maxSeconds, format = null }) {
   if (!(Number.isFinite(maxSeconds) && maxSeconds > 0)) return { unavailable: "no length to cut at was given" };
   let outPath = null;
   return decodeInMeasurePool(buffer, "a402-speech-", (dir) => {
@@ -322,40 +398,72 @@ export async function transcodeSpeech(buffer, { maxSeconds }) {
   }, async (seconds) => {
     const audio = await readFile(outPath);
     return audio.length > 0 ? { audio, seconds } : { undecodable: "the decoder wrote no audio" };
-  });
+  }, { format });
 }
+
+/** Every demuxer the sniffer can name: each reads local bytes only and names
+ *  no further input. A decode under the sniffed one that fails is tried once
+ *  under each of the others (DECODE_FALLBACKS), never under autodetection. */
+export const AUDIO_DEMUXERS = Object.freeze(["mp3", "aac", "mov", "matroska", "ogg", "flac", "wav", "asf", "amr", "caf", "aiff", "avi"]);
 
 // One ffmpeg run over a buffer's first audio stream, in the measurement pool:
 // staged to a temp file, read through mediaInputArgs (named demuxer, audio
 // decoders only), bounded by MEASURE_TIMEOUT_MS. `outArgs(dir)` is the output
-// side; `done(seconds)` turns the last out_time the run reported into the answer.
-async function decodeInMeasurePool(buffer, prefix, outArgs, done) {
-  let input;
-  try { input = mediaInputArgs(buffer, "in"); } catch { return { undecodable: "its container is not one the decoder here reads" }; }
+// side; `done(seconds)` turns the length the run read into the answer: the
+// last out_time it reported, or (`counter`) the bytes of its one-byte-per-
+// sample stdout at COUNTER_RATE. When the demuxer the sniffer named (or the
+// caller's `format`) cannot decode the file, or the sniffer named none, the
+// run is tried once under each other demuxer of AUDIO_DEMUXERS, inside the same
+// slot and the same overall deadline, before the file is called undecodable;
+// the answer's `format` names the demuxer that read it.
+async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = null, counter = false } = {}) {
+  const first = format || inputFormatOf(buffer);
+  const order = [...(first ? [first] : []), ...AUDIO_DEMUXERS.filter((f) => f !== first)];
   if (!(await measureAcquire())) return { unavailable: "no decoder slot came free in time" };
   let dir = null;
   try {
     dir = await mkdtemp(join(tmpdir(), prefix));
     const inPath = join(dir, "in");
-    input[input.length - 1] = inPath;
     await writeFile(inPath, buffer);
-    const ran = await new Promise((resolve) => {
-      execImpl("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-progress", "pipe:1", "-nostats", ...input, "-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", ...outArgs(dir)],
-        { timeout: MEASURE_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env: childEnv() },
-        (err, out) => resolve(err ? { err } : { stdout: String(out ?? "") }));
-    });
-    if (ran.err) {
-      if (ran.err.code === "ENOENT") return { unavailable: "ffmpeg is not installed on this server" };
-      if (ran.err.killed || ran.err.signal) return { unavailable: "the decode outlasted its deadline" };
-      return { undecodable: "the decoder could not read its audio" };
+    const deadline = Date.now() + MEASURE_TIMEOUT_MS;
+    let failure = { undecodable: first ? "the decoder could not read its audio" : "its container is not one the decoder here reads" };
+    for (const fmt of order) {
+      const left = deadline - Date.now();
+      if (left <= 0) return fmt === order[0] ? { unavailable: "the decode outlasted its deadline" } : failure;
+      const input = mediaInputArgs(buffer, inPath, fmt);
+      const ran = await new Promise((resolve) => {
+        execImpl("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", ...(counter ? [] : ["-progress", "pipe:1"]), "-nostats", ...input, "-map", "0:a:0", "-vn", "-sn", "-dn", "-map_metadata", "-1", ...outArgs(dir)],
+          { timeout: Math.min(MEASURE_TIMEOUT_MS, left), maxBuffer: 8 * 1024 * 1024, env: childEnv(), ...(counter ? { encoding: "buffer" } : {}) },
+          (err, out) => resolve(err ? { err } : { stdout: out }));
+      });
+      if (ran.err) {
+        if (ran.err.code === "ENOENT") return { unavailable: "ffmpeg is not installed on this server" };
+        // The sniffed demuxer outlasting its deadline is ours (a retry may
+        // finish); another demuxer doing so says nothing more about the file.
+        if (ran.err.killed || ran.err.signal) return fmt === order[0] && first ? { unavailable: "the decode outlasted its deadline" } : failure;
+        if (fmt === first) failure = { undecodable: "the decoder could not read its audio" };
+        continue;
+      }
+      let seconds = null;
+      if (counter) {
+        const n = Buffer.isBuffer(ran.stdout) ? ran.stdout.length : Buffer.byteLength(String(ran.stdout ?? ""), "latin1");
+        seconds = n > 0 ? n / COUNTER_RATE : null;
+      } else {
+        // The progress stream repeats out_time_us; the last one is the total.
+        for (const line of String(ran.stdout ?? "").split("\n")) {
+          if (line.startsWith("out_time_us=")) { const n = Number(line.slice(12)); if (Number.isFinite(n) && n >= 0) seconds = n / 1e6; }
+        }
+      }
+      if (seconds === null) {
+        if (fmt === first) failure = { undecodable: "the decoder reported no length for its audio" };
+        continue;
+      }
+      // A demuxer other than the sniffed one counts only when it read audio.
+      if (fmt !== first && !(seconds > 0)) continue;
+      const answer = await done(seconds);
+      return answer && typeof answer === "object" && !answer.undecodable ? { ...answer, format: fmt } : answer;
     }
-    const stdout = ran.stdout;
-    // The progress stream repeats out_time_us; the last one is the total.
-    let us = null;
-    for (const line of stdout.split("\n")) {
-      if (line.startsWith("out_time_us=")) { const n = Number(line.slice(12)); if (Number.isFinite(n) && n >= 0) us = n; }
-    }
-    return us === null ? { undecodable: "the decoder reported no length for its audio" } : await done(us / 1e6);
+    return failure;
   } catch {
     return { unavailable: "the file could not be staged for the decoder" };
   } finally {
