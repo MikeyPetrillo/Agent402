@@ -5,7 +5,10 @@
 // large-image slot in src/tools/ocr-kit.js) still needs to know whose call it
 // is, so the executor runs the step inside runAsCallerOf(req, fn): an opaque
 // key (the signed payer, a credits key, a Tempo sender, else the client
-// address) is held in async context, never the request itself.
+// address) is held in async context, never the request itself. The generic
+// dispatches (the HTTP tool route, the hosted MCP connector) and the skill
+// packs run every handler that way, so a tool that calls other tools'
+// handlers in-process passes its caller on.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { payerFromRequest } from "./payer.js";
 

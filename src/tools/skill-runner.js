@@ -32,6 +32,7 @@ import { packAttributions, withAttributions } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
 import { capturePostHogPackStep } from "../posthog.js";
 import { callerInputError } from "../caller-input-errors.js";
+import { runAsCallerOf } from "../dispatch-caller.js";
 
 // Cap for the media-pipeline URL→base64 bridge below. Must route through
 // safeFetch (SSRF guard + size cap), never raw fetch — the URL is caller-supplied.
@@ -2242,12 +2243,16 @@ export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
           },
         },
       },
-      handler: async (input) =>
-        runPack(slug, input, {
+      // Every step runs request-less (handler(input)), inside the dispatching
+      // caller's key (src/dispatch-caller.js), so a per-caller admission rule
+      // a step meets (the large-image OCR slot) counts it as that caller's,
+      // never under one key every pack's steps share.
+      handler: async (input, req) =>
+        runAsCallerOf(req, () => runPack(slug, input, {
           catalog: getCatalog(),
           inlineHandlers,
           packIndex,
-        }),
+        })),
     };
   });
 }

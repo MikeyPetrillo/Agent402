@@ -337,6 +337,30 @@ async function call(input) {
     __ocrTest.inject("tur", { recognize: async () => { seen = __ocrLargeTest.state().holder; return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
     await tool.handler({ image: big.toString("base64"), lang: "tur" }).catch(() => {});
     ok(seen === IN_PROCESS_CALLER, `a call with no caller at all is held under the shared key (held for ${seen})`);
+    // A skill pack runs its steps request-less too: each step's place is held
+    // for the caller that bought the pack, never under the shared key.
+    {
+      const { buildSkillTools } = await import("../src/tools/skill-runner.js");
+      const { SKILL_PACKS } = await import("../src/skills.js");
+      const pack = SKILL_PACKS[0];
+      const holders = [];
+      const probe = async () => {
+        __ocrTest.inject("tur", { recognize: async () => { holders.push(__ocrLargeTest.state().holder); return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+        return tool.handler({ image: big.toString("base64"), lang: "tur" });
+      };
+      const inlineHandlers = Object.fromEntries(pack.toolSlugs.map((s) => [s, probe]));
+      const packTool = buildSkillTools({ getCatalog: () => ({}), inlineHandlers }).find((t) => t.slug === `skill-${pack.slug}`);
+      await packTool.handler(packTool.discovery.input, { ip: D.slice(3), headers: {} }).catch(() => {});
+      ok(holders.length > 0 && holders.every((h) => h === D), `a skill pack's steps hold their places for the caller that bought the pack (${holders.length} steps, held for ${[...new Set(holders)].join(", ")})`);
+      // Every generic dispatch (the HTTP route and the hosted MCP connector)
+      // runs the handler inside its caller's key, so any tool that calls other
+      // tools' handlers in-process passes the caller on.
+      const { readFileSync } = await import("node:fs");
+      const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+      const mcp = readFileSync(new URL("../src/mcp-http.js", import.meta.url), "utf8");
+      ok(!/[^>] tool\.handler\(input, req\)/.test(server.replace(/runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\)/g, "")) && /runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\)/.test(server), "the HTTP tool route runs every handler inside its caller's key");
+      ok(/runAsCallerOf\(callReq, \(\) => entry\.def\.handler\(params, callReq\)\)/.test(mcp) && !/await entry\.def\.handler\(/.test(mcp), "the MCP connector runs every handler inside its caller's key");
+    }
     // Request-less places fill the slot and both queued places: they are
     // counted, so a named newcomer still takes the last queued one.
     const relU = await __ocrLargeTest.acquire(50);

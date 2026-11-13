@@ -826,6 +826,7 @@ const NEXT_CALL = { search: "answer", decide: "decide-execute" };
 import { buildSkillTools, modelBackedPackSlugs } from "./tools/skill-runner.js";
 import { applyCapturedExamples, loadCapturedExamples } from "./tool-output-examples.js";
 import { buildRouteExecuteTool, EXEC_TIERS, routeJudgeListing } from "./tools/route-execute.js";
+import { runAsCallerOf } from "./dispatch-caller.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
@@ -12439,8 +12440,8 @@ for (const tool of ALL_KIT) {
         res.once("close", () => { if (chargeCancelledForClientGone(req)) ctl.abort(clientGoneError()); });
       }
       const result = EXPENSIVE_COMPOSITE_SLUGS.has(tool.slug)
-        ? await runInAbortableScope(() => tool.handler(input, req), { signal: clientGoneCtl.signal })
-        : await tool.handler(input, req);
+        ? await runInAbortableScope(() => runAsCallerOf(req, () => tool.handler(input, req)), { signal: clientGoneCtl.signal })
+        : await runAsCallerOf(req, () => tool.handler(input, req));
       coverRelease?.settling?.();
 
       // A handler that spent real money upstream (external route-execute) leaves
