@@ -920,6 +920,27 @@ delete process.env.OPENAI_API_KEY;
     served2.push(`${label}: ${e ? e.statusCode : "served"}`);
   }
   ok(served2.every((x) => x.endsWith("served")), `while the bound is up these are served as before (${served2.join("; ")})`);
+  // The lower count is a wallet's: a key that names none (the client address
+  // a caller with no proven wallet falls back to, shared by everyone behind
+  // it) keeps its usual count, so one caller's unsettled run never holds the
+  // next caller from that address. Two wallets behind one address are keyed
+  // apart: the one that failed is held, the other is served.
+  {
+    const SHARED = "203.0.113.55";
+    b.recordGatewaySettleFailure(`ip:${SHARED}`);
+    let e = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ ip: SHARED })); } catch (x) { e = x; }
+    ok(b.gatewaySettleBreakerStatus().wideBound === true && e === null, `while the bound is up, a caller with no wallet behind an address where another failed once is served (${e?.statusCode ?? "served"})`);
+    const A = "0x" + "c".repeat(39) + "1", B = "0x" + "c".repeat(39) + "2";
+    b.recordGatewaySettleFailure(A);
+    let ea = null, eb = null;
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: A, ip: SHARED })); } catch (x) { ea = x; }
+    try { await b.gatewaySettleBreakerCheck(fakeReq({ from: B, ip: SHARED })); } catch (x) { eb = x; }
+    ok(ea?.statusCode === 429 && eb === null, `two wallets behind one address: the one that failed is held, the other is served (${ea?.statusCode ?? "served"}, ${eb?.statusCode ?? "served"})`);
+    // Control: the address key still meets its usual count.
+    for (let i = 0; i < 2; i++) b.recordGatewaySettleFailure(`ip:${SHARED}`);
+    e = null; try { await b.gatewaySettleBreakerCheck(fakeReq({ ip: SHARED })); } catch (x) { e = x; }
+    ok(e?.statusCode === 429, `control: the address key is refused at its usual count (${e?.statusCode ?? "served"})`);
+  }
   // Only a wallet that has never settled gets the lower count. A long-time
   // payer whose settled calls are all older than the window (fifty of them)
   // and whose sales are on the books is served after one failure; the same

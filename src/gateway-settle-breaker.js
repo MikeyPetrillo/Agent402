@@ -525,10 +525,12 @@ function everPaid(key) {
 /** A key's verdict and unknown-cause verdicts, read at the burst count only
  *  for a wallet that has never settled (THE SERVICE-WIDE BOUND): no settled
  *  call in the window, and (read last, only when the lower count would
- *  refuse) no paid sale ever. */
+ *  refuse) no paid sale ever. A key that names no wallet (the client-address
+ *  fallback, a credits key) is shared by callers who are not one buyer, so
+ *  it keeps its usual count: one caller's failure never holds another. */
 function burstAwareVerdicts(key, fArgs, uArgs, nOks, burstUntil, now) {
   const normal = [verdict(fArgs[0], fArgs[1], nOks, MAX_FAILS), verdict(uArgs[0], uArgs[1], nOks, UNKNOWN_MAX_FAILS)];
-  if (!(burstUntil > now) || nOks > 0) return normal;
+  if (!(burstUntil > now) || nOks > 0 || !payerOfKey(key)) return normal;
   const low = [clampToBurst(verdict(fArgs[0], fArgs[1], nOks, BURST_MAX_FAILS), burstUntil, now), clampToBurst(verdict(uArgs[0], uArgs[1], nOks, BURST_MAX_FAILS), burstUntil, now)];
   if ((low[0].blocked && !normal[0].blocked) || (low[1].blocked && !normal[1].blocked)) {
     if (everPaid(key)) return normal;
