@@ -49,6 +49,8 @@ Server:
 - The web framework takes its November security release.
 - /health stays 200 while a state database write waits for its retry; the
   stateDb status word reports the outage.
+- cve-lookup waits up to 25 s for the NVD record read, which now takes
+  several seconds; the EPSS and KEV reads keep 10 s.
 
 ### 2026-11-13 (image header bound)
 Server:

@@ -19,6 +19,7 @@ const ENTRIES = [
       "Server: /privacy says route, decide and demand-board text can also reach judgment models over OpenRouter.",
       "Server: The web framework takes its November security release.",
       "Server: /health stays 200 while a state database write waits for its retry; the stateDb status word reports the outage.",
+      "Server: cve-lookup waits up to 25 s for the NVD record read, which now takes several seconds; the EPSS and KEV reads keep 10 s.",
     ],
   },
   {
