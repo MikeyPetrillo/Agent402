@@ -144,6 +144,9 @@ const seller = createServer((req, res) => {
       res.writeHead(200, { "content-type": "application/json", "payment-receipt": Buffer.from(JSON.stringify({ method: "tempo", status: "success", reference: "0xfeed", timestamp: new Date().toISOString() })).toString("base64url") });
       return res.end(JSON.stringify({ scraped: true, echo: body ? JSON.parse(body) : null }));
     }
+    // A 200 to the unpaid request (no charge): bodies the reader turns into its own stand-in.
+    const free = { "free-empty-json": ["application/json", ""], "free-blank-text": ["text/plain", " \n "], "free-error-text": ["text/plain", '{"error":"upstream down"}'], "free-text": ["text/plain", "a plain answer"] }[sellerMode];
+    if (free) { res.writeHead(200, { "content-type": free[0] }); return res.end(free[1]); }
     const opts = sellerMode === "pathusd" ? { currency: PATH_USD } : sellerMode === "expensive" ? { amount: "900000" } : sellerMode === "wrong-chain" ? { chainId: 42431 }
       : sellerMode === "splits" ? { splits: [{ recipient: "0x" + "4c".repeat(20), amount: "1900" }] } : sellerMode === "push-only" ? { supportedModes: ["push"] } : sellerMode === "pull-push" ? { supportedModes: ["pull", "push"] }
       : sellerMode === "machine-token" ? { extraDetails: { machineTokenEnabled: true } } : sellerMode === "machine-token-off" ? { extraDetails: { machineTokenEnabled: false } }
@@ -295,6 +298,21 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
       // promised path our own key happens to name is never met by it.
       ok(whole.result?.truncated === false && observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["text"], body: whole.result }) === null, `${mode}: a whole body that is not JSON is not judged as the seller's delivery`);
     } else ok(observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["data"], body: wholeBody }) !== null, `${mode}: control, the same body read whole is observed`);
+  }
+  sellerMode = "ok";
+}
+
+// ---- a 200 to the unpaid request is judged on the seller's bytes ----
+// The reader's stand-in ({ text, truncated, contentType, sha256 }) is ours: an
+// empty or blank body, or an error envelope sent as text, is not an answer to
+// resell, and a promised path one of our keys names is never met by it.
+{
+  const { unpaidNonAnswerReason } = await import("../src/response-observation.js");
+  for (const [mode, paths, want] of [["free-empty-json", [], "empty"], ["free-blank-text", [], "empty"], ["free-error-text", [], "error-shaped"], ["free-text", ["text"], "missing-fields"], ["free-text", [], null]]) {
+    sellerMode = mode;
+    const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk });
+    const got = r.quote === null ? unpaidNonAnswerReason(r.result, paths) : "paid";
+    ok(got === want, `${mode}${paths.length ? ` (promised ${paths})` : ""}: an unpaid 200 reads as ${want ?? "an answer"} (got ${got})`);
   }
   sellerMode = "ok";
 }

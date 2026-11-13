@@ -49,6 +49,21 @@ export function markNotSellerBody(body) {
   return body;
 }
 
+/** What the seller sent, read back from a stand-in our readers built:
+ *  { unreadable }, { text, cut } (the Tempo reader's text reading, the x402
+ *  reader's { raw }) or { json } (a JSON prefix cut at our byte limit, our
+ *  `_truncated` key and `{ value }` wrapper taken off). */
+function standInSent(body) {
+  const keys = Object.keys(body);
+  const only = (...names) => keys.length === names.length && names.every((n) => keys.includes(n));
+  if (only("relayError")) return { unreadable: true };
+  if (only("text", "truncated", "contentType", "sha256") && typeof body.text === "string") return { text: body.text, cut: body.truncated === true };
+  if ((only("raw") || only("raw", "_truncated")) && typeof body.raw === "string") return { text: body.raw, cut: body._truncated === true };
+  const { _truncated, ...rest } = body;
+  const restKeys = Object.keys(rest);
+  return { json: restKeys.length === 1 && restKeys[0] === "value" ? rest.value : rest };
+}
+
 /** Is a dotted path present in a parsed JSON body?
  *
  *  Presence, never value: `null` counts as present, because the seller promised
@@ -175,11 +190,26 @@ const ERROR_ENVELOPE_KEYS = new Set([
  *                   404 or 410 envelope alone is not an answer either, so the
  *                   next seller is tried.
  *   missing-fields  the seller guaranteed response paths and none is present
+ *   unreadable      our reader could not read the body at all
+ * A stand-in our reader built (markNotSellerBody) is judged on the bytes the
+ * seller sent, never on its own keys.
  * An empty array, a number or a string with text is the seller's answer.
  */
 export function unpaidNonAnswerReason(body, guaranteedPaths = []) {
   if (body === null || body === undefined || body === "") return "empty";
   if (typeof body !== "object" || Array.isArray(body)) return null;
+  // A stand-in our own reader built is judged on what the seller sent, never
+  // on the keys we wrote: an empty or blank body is empty, text that parses
+  // as JSON is judged as that JSON, other text answers only a seller that
+  // promised no JSON paths, and a body we could not read answers nothing.
+  if (NOT_SELLER_BODY.has(body)) {
+    const sent = standInSent(body);
+    if (sent.unreadable) return "unreadable";
+    if ("json" in sent) return unpaidNonAnswerReason(sent.json, guaranteedPaths);
+    if (!sent.text.trim()) return "empty";
+    if (!sent.cut) { try { return unpaidNonAnswerReason(JSON.parse(sent.text), guaranteedPaths); } catch { /* plain text */ } }
+    return Array.isArray(guaranteedPaths) && guaranteedPaths.length ? "missing-fields" : null;
+  }
   const hasKeys = (o) => { for (const k in o) { if (Object.hasOwn(o, k)) return true; } return false; };
   if (!hasKeys(body)) return "empty";
   if (typeof body.x402Version === "number" && Array.isArray(body.accepts) && body.accepts.length > 0) return "challenge";

@@ -244,6 +244,29 @@ ok(o.lastMissing.join(",") === "data.attributes",
     ok(got === why, `${label} is not an answer: ${why} (got ${got})`);
   }
   ok(unpaidNonAnswerReason({ ok: false, errors: ["bad checksum"] }, ["ok", "errors"]) === null, "keys the seller's contract guarantees are its answer");
+  // Our readers' stand-ins are judged on the seller's bytes, never on our keys.
+  const { markNotSellerBody } = await import("../src/response-observation.js");
+  const tempoText = (text, truncated = false) => markNotSellerBody({ text, truncated, contentType: "text/plain", sha256: "0" });
+  for (const [label, body, paths, why] of [
+    ["an empty body read as text", tempoText(""), [], "empty"],
+    ["a blank body read as text", tempoText(" \n\t"), [], "empty"],
+    ["an error envelope sent as text", tempoText('{"error":"down"}'), [], "error-shaped"],
+    ["a challenge sent as text", tempoText(JSON.stringify(challenge)), [], "challenge"],
+    ["text when the seller promised a path our key names", tempoText("hello"), ["text"], "missing-fields"],
+    ["an x402 reader's empty { raw }", markNotSellerBody({ raw: "" }), [], "empty"],
+    ["an x402 reader's { raw } error envelope", markNotSellerBody({ raw: '{"ok":false}' }), [], "error-shaped"],
+    ["a body our reader could not read", markNotSellerBody({ relayError: "upstream body unreadable" }), ["relayError"], "unreadable"],
+    ["a cut JSON prefix holding only an error", markNotSellerBody({ error: "x", _truncated: true }), [], "error-shaped"],
+    ["a cut JSON prefix where the seller promised our key", markNotSellerBody({ note: "n", _truncated: true }), ["_truncated"], "missing-fields"],
+  ]) {
+    const got = unpaidNonAnswerReason(body, paths);
+    ok(got === why, `stand-in: ${label} is not an answer: ${why} (got ${got})`);
+  }
+  for (const [label, body] of [["plain text", tempoText("an answer")], ["a cut text prefix", tempoText('{"error":"x", "data": 1', true)], ["a cut JSON number", markNotSellerBody({ value: 777, _truncated: true })], ["a cut JSON object with content", markNotSellerBody({ data: "x", _truncated: true })]]) {
+    const got = unpaidNonAnswerReason(body, []);
+    ok(got === null, `stand-in: ${label} is the seller's answer (got ${got})`);
+  }
+  ok(unpaidNonAnswerReason({ text: "", truncated: false, contentType: "", sha256: "0" }, []) === null, "control: the same keys from a seller's own JSON are its answer");
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
