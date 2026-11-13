@@ -10,8 +10,12 @@ carries its own version on npm.
 Payments:
 - Every route's Bazaar listing carries a service name, five tags led by its
   category, a PNG icon, a description, and input and output schemas; the
-  judge, decisions and loop-gate routes now publish their output example.
-- Descriptions keep their full text when they mention a query parameter.
+  typed-judgment routes keep their whole description and judge's model list
+  beside a link to the full sample answer.
+- Descriptions keep the sentences around a query hint, and every FRED listing
+  carries the FRED notice.
+- Output schemas read from examples type numbers as number, so a fractional
+  answer always matches its listing.
 Server:
 - The HTTP adapter used by the MCP connector takes its November security
   release.

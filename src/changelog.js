@@ -5,8 +5,9 @@ const ENTRIES = [
     date: "2026-11-12",
     title: "Bazaar listings",
     items: [
-      "Payments: every route's Bazaar listing carries a service name, five tags led by its category, a PNG icon, a description, and input and output schemas; the judge, decisions and loop-gate routes now publish their output example.",
-      "Payments: descriptions keep their full text when they mention a query parameter.",
+      "Payments: every route's Bazaar listing carries a service name, five tags led by its category, a PNG icon, a description, and input and output schemas; the typed-judgment routes keep their whole description and judge's model list beside a link to the full sample answer.",
+      "Payments: descriptions keep the sentences around a query hint, and every FRED listing carries the FRED notice.",
+      "Payments: output schemas read from examples type numbers as number, so a fractional answer always matches its listing.",
       "Server: the HTTP adapter used by the MCP connector takes its November security release.",
     ],
   },
