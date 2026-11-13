@@ -38,6 +38,7 @@ import { withDistrust } from "./tls-distrust.js";
 // (__setBuyerAddressGuardForTest in x402-buyer.js); still refuses a distrusted chain.
 const unguardedDispatcher = new UndiciAgent({ connect: withDistrust() });
 import { readBytesCapped, readTextCapped, decodeUtf8 } from "./capped-body.js";
+import { markNotSellerBody } from "./response-observation.js";
 
 
 /** The tempo/charge challenge this wallet pays: the first one it CAN pay (USDC.e,
@@ -625,7 +626,7 @@ export async function payTempo(url, {
     // A paid 200 is relayed even when its body cannot be read: the payment
     // went through, so this never throws (the x402 readAfterSpend rule).
     let result;
-    try { result = await readCapped(paid, maxBytes); } catch { result = { relayError: "upstream body unreadable" }; }
+    try { result = await readCapped(paid, maxBytes); } catch { result = markNotSellerBody({ relayError: "upstream body unreadable" }); }
     return {
       result,
       quote: { atomic: String(quotedAtomic), usd: Number(quotedAtomic) / 1e6, network: TEMPO_CAIP2 },
@@ -663,5 +664,6 @@ async function readCapped(res, maxBytes) {
   const text = decodeUtf8(buf);
   const ct = res.headers.get("content-type") || "";
   if (/json/i.test(ct)) { try { return JSON.parse(text); } catch { /* fall through */ } }
-  return { text, truncated, contentType: ct, sha256: createHash("sha256").update(buf).digest("hex") };
+  const out = { text, truncated, contentType: ct, sha256: createHash("sha256").update(buf).digest("hex") };
+  return truncated ? markNotSellerBody(out) : out;
 }

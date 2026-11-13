@@ -54,6 +54,7 @@ import { spendWindowCeilings, noteSpendWindowOver, noteSpendWindowRefused } from
 import { reserveUnprovenSellerSpend, releaseUnprovenSellerSpend } from "./base-unproven.js";
 import { usdFigure } from "./price-usd.js";
 import { EVM_BUYER_CHAINS, isEvmBuyerChain, evmBuyerChainEnabled, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
+import { markNotSellerBody } from "./response-observation.js";
 
 /** The buyer-visible 409 when a Base unproven daily cap refuses: every figure
  *  through usdFigure, as the lane's other sentences print them. */
@@ -370,12 +371,12 @@ async function readCapped(res, maxBytes) {
 // The buyer gets a 200 (is charged, covering our spend) with a best-effort body.
 export async function readAfterSpend(res, maxBytes) {
   let read;
-  try { read = await readBytesCapped(res, byteCeilingFor(maxBytes)); } catch { return { relayError: "upstream body unreadable" }; }
+  try { read = await readBytesCapped(res, byteCeilingFor(maxBytes)); } catch { return markNotSellerBody({ relayError: "upstream body unreadable" }); }
   const text = decodeUtf8(read.bytes);
   const truncated = read.truncated || text.length > maxBytes;
   const body = truncated ? text.slice(0, maxBytes) : text;
-  try { const j = JSON.parse(body); return truncated ? { ...(j && typeof j === "object" && !Array.isArray(j) ? j : { value: j }), _truncated: true } : j; }
-  catch { return { raw: body.slice(0, 4000), ...(truncated ? { _truncated: true } : {}) }; }
+  try { const j = JSON.parse(body); return truncated ? markNotSellerBody({ ...(j && typeof j === "object" && !Array.isArray(j) ? j : { value: j }), _truncated: true }) : j; }
+  catch { return truncated ? markNotSellerBody({ raw: body.slice(0, 4000), _truncated: true }) : { raw: body.slice(0, 4000) }; }
 }
 
 // REFUSE-THEN-SETTLE-LATE (2026-09-03). A refused paid retry falls through to
