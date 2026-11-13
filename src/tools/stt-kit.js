@@ -56,6 +56,7 @@ import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 import { measureAudio, transcodeSpeech, inputFormatOf } from "./media-kit.js";
 import { redactSecrets } from "./redact.js";
+import { NOT_CHARGED, notChargedOn } from "../not-charged.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
 import { assertUpstreamBody } from "./llm-gateway-kit.js";
@@ -91,13 +92,13 @@ export const STT_TIERS = Object.freeze({
 });
 const TIERS = STT_TIERS;
 
-function validateInput(input) {
+function validateInput(input, req = null) {
   const url = typeof input.url === "string" ? input.url.trim() : "";
   if (!url) throw bad('"url" is required - a URL pointing to an audio file (mp3, wav, m4a, etc.)');
   if (!/^https?:\/\//i.test(url)) throw bad('"url" must be an HTTP(S) URL');
 
   const language = typeof input.language === "string" ? input.language.trim().toLowerCase() : undefined;
-  refuseUnservedFields(input);
+  refuseUnservedFields(input, req);
   return { url, language, diarize: diarizeFlag(input.diarize) };
 }
 
@@ -105,14 +106,14 @@ function validateInput(input) {
  *  (see the header), so a request that sets one is a 400, never a transcript
  *  that silently ignored it. An empty list or `entities: false` asks for
  *  nothing and passes. Multipart spellings: keyterms, keyterms[], entities. */
-export function refuseUnservedFields(input) {
+export function refuseUnservedFields(input, req = null) {
   const kt = input?.keyterms ?? input?.["keyterms[]"];
   if (kt !== undefined && kt !== null && kt !== "" && !(Array.isArray(kt) && kt.length === 0)) {
-    throw bad('"keyterms" is not supported by the transcription models this route serves; remove it (nothing was charged)');
+    throw bad(`"keyterms" is not supported by the transcription models this route serves; remove it.${notChargedOn(req)}`);
   }
   const ent = input?.entities;
   if (ent !== undefined && ent !== null && ent !== "" && ent !== false && ent !== "false") {
-    throw bad('"entities" (entity detection) is not supported by the transcription models this route serves; remove it (nothing was charged)');
+    throw bad(`"entities" (entity detection) is not supported by the transcription models this route serves; remove it.${notChargedOn(req)}`);
   }
 }
 
@@ -288,16 +289,14 @@ function overCapError(durationSec, tierSlug) {
 /** The charge sentence is made on a route call only (finalFailure's rule): a
  *  skill-pack step runs inside a charged answer and prints the step's error. */
 function unreadableError(reason, tierSlug, req) {
-  const routeCall = !!(req && typeof req === "object" && req.headers);
-  return Object.assign(bad(`This file's audio format could not be read: ${reason}, so its length can be neither measured nor trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap. Send a standard mp3, wav, m4a, ogg, flac, or webm file.${routeCall ? " You were not charged." : ""}`, 400), { hint: "format-unreadable" });
+  return Object.assign(bad(`This file's audio format could not be read: ${reason}, so its length can be neither measured nor trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap. Send a standard mp3, wav, m4a, ogg, flac, or webm file.${notChargedOn(req)}`, 400), { hint: "format-unreadable" });
 }
 /** Our decoder could not run (no slot in the time the call's budget leaves
  *  after the upstream's, its deadline, no ffmpeg here):
  *  the length is unbounded, so no upstream call. The charge sentence is made
  *  on a route call only (finalFailure's rule). */
 function decoderBusyError(reason, tierSlug, req) {
-  const routeCall = !!(req && typeof req === "object" && req.headers);
-  return Object.assign(attributed(bad(`This file's length could not be confirmed, and it could not be trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap just now: ${reason}. This is on our side, not your file.${routeCall ? ` ${NOT_CHARGED}` : ""} Retry in a minute.`, 503), ATTRIBUTION.OURS), { retryAfter: 30 });
+  return Object.assign(attributed(bad(`This file's length could not be confirmed, and it could not be trimmed to this tier's ${TIERS[tierSlug].maxMinutes}-minute cap just now: ${reason}. This is on our side, not your file.${notChargedOn(req)} Retry in a minute.`, 503), ATTRIBUTION.OURS), { retryAfter: 30 });
 }
 
 /** The audio to send upstream, bounded by the tier's duration cap. Throws 422
@@ -341,7 +340,13 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   const container = declared ?? { audioTracks: 0, durationSec: 0, pictureBytes: 0 };
   const capSec = tier.maxMinutes * 60;
   const overCap = (sec) => sec > capSec + 2;
-  if (overCap(container.durationSec)) throw overCapError(container.durationSec, tierSlug);
+  // A container with more than one audio track declares the longest track's
+  // length (Matroska, WebM, Ogg) or the first's (MP4). Only the first track is
+  // sent, cut at the cap, so the declared length bounds nothing here: the
+  // first track's measured length decides, and its bytes are not the file's.
+  const declaredBounds = !(container.audioTracks > 1);
+  const withDeclared = (sec) => (declaredBounds ? Math.max(container.durationSec, sec) : sec);
+  if (declaredBounds && overCap(container.durationSec)) throw overCapError(container.durationSec, tierSlug);
   const sniffed = inputFormatOf(buf);
   // A container with more than one audio track is sent as its first, the one
   // measured, never as it came (the upstream could read another); so is a
@@ -369,7 +374,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   // its container and it holds one audio track; else as the decoded FLAC.
   const ready = !multiTrack && format === sniffed && UPSTREAM_READY.has(format);
   if (Number.isFinite(measured) && measured > 0) {
-    const durationSec = Math.max(container.durationSec, measured);
+    const durationSec = withDeclared(measured);
     if (overCap(durationSec)) throw overCapError(durationSec, tierSlug);
     if (ready) return { buf, filename: upstreamNameFor(filename, format), durationSec };
     if (cut) return { ...asFlac({ audio: cut }), durationSec };
@@ -380,7 +385,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   }
   if (headerless) throw durationUnreadable();
   unmeasured++;
-  if (byteFloorApplies(container) && overCap(byteFloorSeconds(buf.length, container.pictureBytes))) {
+  if (declaredBounds && byteFloorApplies(container) && overCap(byteFloorSeconds(buf.length, container.pictureBytes))) {
     throw overCapError(byteFloorSeconds(buf.length, container.pictureBytes), tierSlug);
   }
   if (undecodable) throw unreadableError(undecodable, tierSlug, req);
@@ -389,7 +394,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   if (!t?.audio || !(Number.isFinite(t.seconds) && t.seconds > 0)) throw decoderBusyError(t?.unavailable || unavailable || "the decoder gave no answer", tierSlug, req);
   if (t.seconds < capSec - CUT_REACHED_SLACK_SEC) {
     // The cut read the whole file: its length is measured after all.
-    const durationSec = Math.max(container.durationSec, t.seconds);
+    const durationSec = withDeclared(t.seconds);
     return ready && (!t.format || t.format === sniffed) ? { buf, filename: upstreamNameFor(filename, sniffed), durationSec } : { ...asFlac(t), durationSec };
   }
   return { ...asFlac(t), durationSec: t.seconds, trimmedToCapSeconds: capSec, durationUnconfirmed: true };
@@ -416,9 +421,10 @@ export function isOurBillingLimit(status, bodyText) {
 export function ourKeyRefused(status) {
   return Object.assign(attributed(bad(`Transcription is unavailable right now: the speech-to-text provider refused this server's key (HTTP ${status}); this is on our side, not your input`, 502), ATTRIBUTION.OURS, KIND.OUR_KEY), { upstreamStatus: status });
 }
-/** The refusal for our billing limit: names our side, no upstream name. */
+/** The refusal for our billing limit: names our side, no upstream name. The
+ *  charge sentence is added by finalFailure on a route call only. */
 export function ourBillingLimit() {
-  return Object.assign(bad("Transcription is unavailable right now because this server reached its own spending limit for speech-to-text. This is on our side, not your input; you were not charged. Retry later.", 503), { noRetry: true });
+  return Object.assign(bad("Transcription is unavailable right now because this server reached its own spending limit for speech-to-text. This is on our side, not your input.", 503), { noRetry: true, ourBillingLimit: true });
 }
 
 // --- one more attempt on a transient upstream failure -----------------------
@@ -637,14 +643,19 @@ function retryLeftMs(startedAt, capMs, req) {
   return left;
 }
 
-const NOT_CHARGED = "Nothing was charged.";
 /** The 5xx a buyer gets: what failed, that it was not charged, what to do.
  *  The charge claim is made only on a route call (`req` present): a skill
  *  pack runs this handler as one step of a charged 200 and prints the step's
  *  error, where the claim would be false. On a route call it is true on every
  *  payment but a Tempo transfer sent before the call, and the route binder
  *  adds that exception to this exact sentence (server.js withPushException). */
+/** finalFailure, for tests of the charge sentence on and off a route call. */
+export function __sttFinalFailureForTest(err, opts) { return finalFailure(err, opts); }
 function finalFailure(err, { attempts, diarize, req }) {
+  if (err?.ourBillingLimit && typeof err.message === "string" && !err.message.includes(NOT_CHARGED)) {
+    err.message = `${err.message}${notChargedOn(req)} Retry later.`;
+    return err;
+  }
   if (!err || !(err.statusCode >= 500) || err.hardCap || err.noRetry || typeof err.message !== "string" || err.message.includes(NOT_CHARGED)) return err;
   const tried = attempts > 1 ? ` (${attempts} attempts)` : "";
   // The other path is named only while this server can serve it.
@@ -652,8 +663,7 @@ function finalFailure(err, { attempts, diarize, req }) {
     ? (OPENAI_KEY() ? ", or send the call without diarize for a transcript without speaker labels (a different model serves it)" : "")
     : (OPENROUTER_KEY() ? ", or send diarize:true (a different model serves that at the same price)" : "");
   const what = err.message.replace(/\s+-\s+retry(?: shortly)?\s*$/i, "").replace(/[.\s]+$/, "");
-  const routeCall = !!(req && typeof req === "object" && req.headers);
-  err.message = `${what}${tried}.${routeCall ? ` ${NOT_CHARGED}` : ""} Retry in a minute${other}.`;
+  err.message = `${what}${tried}.${notChargedOn(req)} Retry in a minute${other}.`;
   return err;
 }
 
@@ -714,7 +724,7 @@ async function transcribePrepared(prep, tierSlug, language, diarize, req) {
 
 function makeHandler(tierSlug) {
   return async (input, req) => {
-    const { url, language, diarize } = validateInput(input);
+    const { url, language, diarize } = validateInput(input, req);
     const { buf, filename } = await fetchAudio(url);
     return transcribePrepared(await prepareAudioWithinCap(buf, filename, tierSlug, req, { diarize }), tierSlug, language, diarize, req);
   };
@@ -744,7 +754,7 @@ export function makeMultipartHandler(tierSlug) {
     if (!file) throw bad('multipart body has no "file" part');
     const language = typeof fields.language === "string" && fields.language ? fields.language : undefined;
     const diarize = diarizeFlag(fields.diarize);
-    refuseUnservedFields(fields);
+    refuseUnservedFields(fields, req);
     return transcribePrepared(await prepareAudioWithinCap(file.buf, file.filename, tierSlug, req, { diarize }), tierSlug, language, diarize, req);
   };
 }

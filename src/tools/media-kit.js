@@ -357,10 +357,17 @@ export function measurePoolSize(env = process.env) {
 }
 let measureActive = 0;
 const measureWaiters = [];
-// Resolves true with a slot held, or false when none came free within `waitMs`.
+/** Calls that may wait for a slot, per slot: each holds its audio (up to the
+ *  upload cap) while it waits, so past this many a call is answered at once
+ *  (the caller's retryable 503, nothing spent upstream). */
+export const MEASURE_QUEUE_PER_SLOT = 4;
+// Resolves true with a slot held, "full" when the queue is full, or false
+// when none came free within `waitMs`.
 const measureAcquire = (waitMs) => {
-  if (measureActive < measurePoolSize()) { measureActive++; return Promise.resolve(true); }
+  const size = measurePoolSize();
+  if (measureActive < size) { measureActive++; return Promise.resolve(true); }
   if (!(waitMs > 0)) return Promise.resolve(false);
+  if (measureWaiters.length >= MEASURE_QUEUE_PER_SLOT * size) return Promise.resolve("full");
   return new Promise((resolve) => {
     const waiter = () => { clearTimeout(timer); resolve(true); };
     const timer = setTimeout(() => { const i = measureWaiters.indexOf(waiter); if (i !== -1) measureWaiters.splice(i, 1); resolve(false); }, waitMs);
@@ -447,7 +454,9 @@ async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = nul
   const budgeted = Number.isFinite(deadlineAt);
   // A budgeted caller waits while its deadline still leaves a whole minimum decode.
   const waitMs = budgeted ? deadlineAt - Date.now() - MEASURE_MIN_DECODE_MS : MEASURE_WAIT_MS;
-  if (!(await measureAcquire(waitMs))) return { unavailable: budgeted ? "no decoder slot came free in the time this call has left" : "no decoder slot came free in time", busy: true };
+  const slot = await measureAcquire(waitMs);
+  if (slot === "full") return { unavailable: "every decoder slot is busy and the queue for one is full", busy: true };
+  if (slot !== true) return { unavailable: budgeted ? "no decoder slot came free in the time this call has left" : "no decoder slot came free in time", busy: true };
   const decodeMs = budgeted ? Math.max(MEASURE_MIN_DECODE_MS, Math.min(MEASURE_MAX_DECODE_MS, deadlineAt - Date.now())) : MEASURE_MIN_DECODE_MS;
   let dir = null;
   try {

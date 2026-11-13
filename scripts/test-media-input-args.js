@@ -83,6 +83,36 @@ for (const [head, fmt] of table) ok(inputFormatOf(pad(head)) === fmt, `magic ${J
 calls.length = 0; await settle(probeMedia(pad("\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c")));
 if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
 
+// The decode pool's queue is bounded: each waiting call holds its audio, so
+// past MEASURE_QUEUE_PER_SLOT waiters a slot the call is answered at once
+// (unavailable, busy: the caller's retryable 503), never queued.
+{
+  const { measureAudio, MEASURE_QUEUE_PER_SLOT, __measurePoolForTest } = await import("../src/tools/media-kit.js");
+  const hadSlots = process.env.AUDIO_DECODE_SLOTS;
+  process.env.AUDIO_DECODE_SLOTS = "1";
+  const held = [];
+  __setExecFileForTest((bin, args, opts, cb) => { held.push(cb); });
+  const mp3 = Buffer.concat([Buffer.from("ID3\x04\0\0\0\0\0\0", "latin1"), Buffer.alloc(64)]);
+  const keep = setInterval(() => {}, 1_000);
+  try {
+    const running = [measureAudio(mp3, { format: "mp3" })];
+    for (let i = 0; i < MEASURE_QUEUE_PER_SLOT; i++) running.push(measureAudio(mp3, { format: "mp3" }));
+    await new Promise((r) => setTimeout(r, 50));
+    ok(MEASURE_QUEUE_PER_SLOT === 4 && __measurePoolForTest().active === 1 && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `one decode runs and ${MEASURE_QUEUE_PER_SLOT} wait for the one slot (${JSON.stringify(__measurePoolForTest())})`);
+    const t0 = Date.now();
+    const over = await measureAudio(mp3, { format: "mp3" });
+    ok(over?.busy === true && /queue for one is full/.test(over.unavailable || "") && Date.now() - t0 < 1_000 && __measurePoolForTest().waiting === MEASURE_QUEUE_PER_SLOT, `past the queue's bound a call is answered at once, unavailable (${JSON.stringify(over)}, ${Date.now() - t0} ms)`);
+    // Free the stub's runs as they start, so every queued call drains.
+    __setExecFileForTest((bin, args, opts, cb) => setImmediate(() => cb(Object.assign(new Error("stub"), { code: 1 }))));
+    while (held.length) held.shift()(Object.assign(new Error("stub"), { code: 1 }));
+    await Promise.all(running);
+    ok(__measurePoolForTest().active === 0 && __measurePoolForTest().waiting === 0, "the pool drains once the slot frees");
+  } finally {
+    clearInterval(keep);
+    if (hadSlots === undefined) delete process.env.AUDIO_DECODE_SLOTS; else process.env.AUDIO_DECODE_SLOTS = hadSlots;
+  }
+}
+
 __setExecFileForTest(null);
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

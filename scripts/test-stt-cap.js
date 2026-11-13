@@ -15,6 +15,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
+import { withPushExceptionText } from "../src/prepayment-refusal.js";
+import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
 requireUpstreamCosts("test-stt-cap");
 
 let pass = 0, fail = 0;
@@ -174,7 +176,8 @@ const reject = (p) => p.then(() => null, (e) => e);
     // The charge sentence is a route call's only: a skill-pack step runs inside a charged answer.
     ok(!/not charged/i.test(e.message), `off a route (a skill-pack step) the 400 makes no charge claim (${e?.message})`);
     const onRoute = await reject(prepareAudioWithinCap(tiny, "audio.mp3", "transcribe", { headers: {} }));
-    ok(onRoute?.statusCode === 400 && /You were not charged\./.test(onRoute.message), `on a route call the 400 says the caller was not charged (${onRoute?.message})`);
+    ok(onRoute?.statusCode === 400 && /Nothing was charged\./.test(onRoute.message) && !/You were not charged/.test(onRoute.message), `on a route call the 400 says nothing was charged, in the shared sentence (${onRoute?.message})`);
+    ok(withPushExceptionText(onRoute?.message, true)?.includes(`Nothing was charged${PUSH_EXCEPTION}.`), "and a Tempo push buyer reads the exception the route binder adds to that sentence");
     ok(was.cut === 0, "and no cut is tried on it");
     __setMeasureForTest(async () => ({ unavailable: "no decoder slot came free in time" }));
     __setTranscodeForTest(async () => ({ unavailable: "no decoder slot came free in time" }));
@@ -481,7 +484,7 @@ const reject = (p) => p.then(() => null, (e) => e);
       ok((await probeDurationSeconds(hollow, "audio.wma")) === 60, "the hollow WMA declares 60 seconds");
       for (const slug of ["transcribe", "transcribe-pro"]) {
         const err = await reject(prepareAudioWithinCap(hollow, "audio.wma", slug, { headers: {} }));
-        ok(err?.statusCode === 400 && err.hint === "format-unreadable" && /audio format could not be read/.test(err.message) && /You were not charged\./.test(err.message), `${slug}: a file the decoder cannot read is the 400 (${err?.statusCode}: ${err?.message ?? "passed"})`);
+        ok(err?.statusCode === 400 && err.hint === "format-unreadable" && /audio format could not be read/.test(err.message) && /Nothing was charged\./.test(err.message), `${slug}: a file the decoder cannot read is the 400 (${err?.statusCode}: ${err?.message ?? "passed"})`);
       }
 
       // Files the upstream took as they came before the decoder measured them:
@@ -540,6 +543,20 @@ const reject = (p) => p.then(() => null, (e) => e);
         execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=3", "-c:a", "aac", single], { stdio: "ignore" });
         const sb = readFileSync(single);
         ok((await prepareAudioWithinCap(sb, "audio.m4a", "transcribe")).buf === sb, "control: a one-track MP4 is still sent as it came");
+        // Matroska, WebM and Ogg declare the LONGEST track's length (here 600 s
+        // behind a 3 s first track): served as the first track's FLAC, measured
+        // on that track; a first track over the cap is refused at its own length.
+        for (const ext of ["mkv", "webm", "ogg"]) {
+          const gen = (name, d0, d1) => { const pth = join(dir, name); execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", `sine=f=440:d=${d0}`, "-f", "lavfi", "-i", `sine=f=880:d=${d1}`, "-map", "0", "-map", "1", "-c:a", "libopus", "-b:a", "16k", pth], { stdio: "ignore" }); return readFileSync(pth); };
+          const two = gen(`two.${ext}`, 3, 600);
+          let tp = null, te = null;
+          try { tp = await prepareAudioWithinCap(two, `audio.${ext}`, "transcribe", { headers: {} }); } catch (e) { te = e; }
+          const tLen = tp?.buf ? await measureAudioSeconds(tp.buf) : null;
+          ok(!te && tp.filename === "audio.flac" && tp.buf?.subarray(0, 4).toString("latin1") === "fLaC" && Math.abs(tLen - 3) < 0.3 && Math.abs(tp.durationSec - 3) < 0.3 && !("trimmedToCapSeconds" in tp), `a two-track ${ext} (3 s, then 600 s) is served as its first track's FLAC (${te ? `${te.statusCode}: ${te.message}` : `${tp.filename}, ${tLen}s sent`})`);
+          const longFirst = gen(`two-long.${ext}`, 300, 3);
+          const le = await reject(prepareAudioWithinCap(longFirst, `audio.${ext}`, "transcribe", { headers: {} }));
+          ok(le?.statusCode === 422 && /Audio is 5\.0 minutes/.test(le.message), `a two-track ${ext} whose first track runs 300 s is refused at that length (${le ? `${le.statusCode}: ${le.message}` : "passed"})`);
+        }
       }
 
       // A Matroska file whose block timestamps run at a tenth of its audio:

@@ -4,23 +4,25 @@
 // paying request's credential or payer. A per-caller admission rule (the
 // large-image slot in src/tools/ocr-kit.js) still needs to know whose call it
 // is, so the executor runs the step inside runAsCallerOf(req, fn): an opaque
-// key (the signed payer, a credits key, a Tempo sender, else the client
+// key (the verified signed payer, a credits key, a Tempo sender, else the client
 // address) is held in async context, never the request itself. The generic
 // dispatches (the HTTP tool route, the hosted MCP connector) and the skill
 // packs run every handler that way, so a tool that calls other tools'
 // handlers in-process passes its caller on.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { payerFromRequest } from "./payer.js";
+import { identityPayerOf } from "./payer.js";
 
 const scope = new AsyncLocalStorage();
 /** The key every request-less call with no caller of its own shares, so its
  *  places are still counted (and one caller's run of them stays visible). */
 export const IN_PROCESS_CALLER = "in-process";
 
-/** The caller key of a request, or null when it names none. */
+/** The caller key of a request, or null when it names none. The payer is the
+ *  identity payer (identityPayerOf: null in FREE_MODE, where no payment header
+ *  is verified), so a header a caller typed never chooses its key there. */
 export function callerKeyOf(req) {
   if (!req || typeof req !== "object") return null;
-  const payer = payerFromRequest(req);
+  const payer = identityPayerOf(req);
   if (payer) return `payer:${payer}`;
   if (req.creditsKeyId) return `credits:${req.creditsKeyId}`;
   if (req.mppTempoSender) return `tempo:${String(req.mppTempoSender).toLowerCase()}`;

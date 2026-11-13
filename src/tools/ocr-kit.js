@@ -13,6 +13,7 @@
 import { loadTesseract } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 import { callerKeyOf, currentDispatchCaller, IN_PROCESS_CALLER } from "../dispatch-caller.js";
+import { notChargedOn } from "../not-charged.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -197,14 +198,16 @@ export function ocrDownscaleSide(width, height) {
 
 /** The 422 for an image over the cap: the limits, the image's own size and the
  *  side to downscale to, in fields and in the message (a connector shows the
- *  message alone). */
+ *  message alone). The handler adds the charge sentence on a route call only
+ *  (`chargeClaim`, src/not-charged.js). */
 function tooLarge(width, height) {
   const megapixels = Math.round((width * height) / 1e4) / 100;
   const side = ocrDownscaleSide(width, height);
   const fix = `Downscale the image so its longest side is at most ${side} pixels (that keeps its aspect ratio and lands under ${OCR_MAX_MEGAPIXELS} megapixels) and send it again. Text that stays about 20 pixels tall or more reads as well at that size as at full size.`;
   return Object.assign(
-    bad(`the image is ${width}x${height} pixels (${megapixels} megapixels); image-ocr reads images up to ${OCR_MAX_MEGAPIXELS} megapixels and ${OCR_MAX_SIDE} pixels a side. ${fix} Nothing was charged.`, 422),
+    bad(`the image is ${width}x${height} pixels (${megapixels} megapixels); image-ocr reads images up to ${OCR_MAX_MEGAPIXELS} megapixels and ${OCR_MAX_SIDE} pixels a side. ${fix}`, 422),
     {
+      chargeClaim: true,
       hint: "image-too-large",
       width, height, megapixels,
       maxMegapixels: OCR_MAX_MEGAPIXELS, maxSide: OCR_MAX_SIDE, maxPixels: OCR_MAX_PIXELS,
@@ -430,8 +433,8 @@ const largeCallers = new Map(); // caller -> places held (the slot and queued)
 
 function largeBusyError() {
   return Object.assign(
-    bad(`image-ocr is reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels; retry in a minute, or send this one downscaled below ${OCR_LARGE_PIXELS / 1e6} megapixels to be read at once. Nothing was charged.`, 503),
-    { retryAfter: 60, shed: true, hint: "large-image-busy" },
+    bad(`image-ocr is reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels; retry in a minute, or send this one downscaled below ${OCR_LARGE_PIXELS / 1e6} megapixels to be read at once.`, 503),
+    { retryAfter: 60, shed: true, hint: "large-image-busy", chargeClaim: true },
   );
 }
 
@@ -578,44 +581,52 @@ export const OCR_TOOLS = [
       },
     },
     handler: async (i, req) => {
-      const lang = String(i.lang ?? "eng").toLowerCase();
-      if (!SUPPORTED_LANGS.has(lang)) {
-        throw bad(`unsupported lang "${lang}". Supported: ${[...SUPPORTED_LANGS].join(", ")}`);
+      try { return await readImageText(i, req); } catch (err) {
+        if (err?.chargeClaim && typeof err.message === "string") { err.message += notChargedOn(req); delete err.chargeClaim; }
+        throw err;
       }
-
-      let buf;
-      let from;
-      if (i.image) {
-        buf = decodeImageInput(i.image);
-        from = '"image"';
-      } else if (i.url) {
-        const url = String(i.url).trim();
-        if (!/^https?:\/\//i.test(url)) throw bad('"url" must be http(s)');
-        const { buffer } = await safeFetch(url, { binary: true, maxBytes: MAX_FETCH });
-        if (!buffer || buffer.length < 8) throw bad("fetched image too small or empty", 502);
-        buf = buffer;
-        from = "The file at that URL";
-      } else {
-        throw bad('Provide either "image" (base64) or "url"');
-      }
-
-      const fmt = imageFormatOf(buf);
-      if (!fmt) throw notAnImage(buf, from);
-      const { width, height } = checkImageHeader(buf, fmt);
-      const data = await doRecognize(buf, lang, fmt, width * height, ocrCallerOf(req));
-      const lines = (data.lines ?? []).map((l) => ({
-        text: (l.text ?? "").replace(/\s+$/g, ""),
-        confidence: typeof l.confidence === "number" ? +l.confidence.toFixed(2) : null,
-        bbox: l.bbox ? { x0: l.bbox.x0, y0: l.bbox.y0, x1: l.bbox.x1, y1: l.bbox.y1 } : null,
-      }));
-      return {
-        text: (data.text ?? "").replace(/\s+$/g, ""),
-        confidence: typeof data.confidence === "number" ? +data.confidence.toFixed(2) : null,
-        lang,
-        lineCount: lines.length,
-        lines,
-        source: "tesseract.js (Tesseract WASM, Apache-2.0)",
-      };
     },
   },
 ];
+
+/** The image-ocr handler's body; the handler adds the charge sentence. */
+async function readImageText(i, req) {
+  const lang = String(i.lang ?? "eng").toLowerCase();
+  if (!SUPPORTED_LANGS.has(lang)) {
+    throw bad(`unsupported lang "${lang}". Supported: ${[...SUPPORTED_LANGS].join(", ")}`);
+  }
+
+  let buf;
+  let from;
+  if (i.image) {
+    buf = decodeImageInput(i.image);
+    from = '"image"';
+  } else if (i.url) {
+    const url = String(i.url).trim();
+    if (!/^https?:\/\//i.test(url)) throw bad('"url" must be http(s)');
+    const { buffer } = await safeFetch(url, { binary: true, maxBytes: MAX_FETCH });
+    if (!buffer || buffer.length < 8) throw bad("fetched image too small or empty", 502);
+    buf = buffer;
+    from = "The file at that URL";
+  } else {
+    throw bad('Provide either "image" (base64) or "url"');
+  }
+
+  const fmt = imageFormatOf(buf);
+  if (!fmt) throw notAnImage(buf, from);
+  const { width, height } = checkImageHeader(buf, fmt);
+  const data = await doRecognize(buf, lang, fmt, width * height, ocrCallerOf(req));
+  const lines = (data.lines ?? []).map((l) => ({
+    text: (l.text ?? "").replace(/\s+$/g, ""),
+    confidence: typeof l.confidence === "number" ? +l.confidence.toFixed(2) : null,
+    bbox: l.bbox ? { x0: l.bbox.x0, y0: l.bbox.y0, x1: l.bbox.x1, y1: l.bbox.y1 } : null,
+  }));
+  return {
+    text: (data.text ?? "").replace(/\s+$/g, ""),
+    confidence: typeof data.confidence === "number" ? +data.confidence.toFixed(2) : null,
+    lang,
+    lineCount: lines.length,
+    lines,
+    source: "tesseract.js (Tesseract WASM, Apache-2.0)",
+  };
+}
