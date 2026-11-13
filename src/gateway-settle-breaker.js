@@ -30,11 +30,38 @@
 // only, and the same wallet paying on another offered network is served at
 // once. The 429 names the refused network and says so.
 //
-// NO REQUEST IS REFUSED FOR OTHER BUYERS' FAILURES. Distinct buyers failing
-// to settle on the /v1 tiers inside one window are counted, and at
+// NO REQUEST IS REFUSED FOR OTHER BUYERS' FAILURES ALONE. Distinct buyers
+// failing to settle on the /v1 tiers inside one window are counted, and at
 // GLOBAL_MAX_FAILS the count is reported: a console.warn and the
 // settleFailures word on /api/gateway-status (ok / burst), which the status
-// Worker and the heartbeat page on. It refuses nothing.
+// Worker and the heartbeat page on.
+//
+// THE SERVICE-WIDE BOUND. Every new wallet starts at zero, so the per-key
+// counts alone let a caller who rotates wallets be served MAX_FAILS unpaid
+// /v1 runs per wallet with no end. Distinct buyers whose /v1 failures are
+// read against them (a verdict on the payment, or of unknown cause; never
+// ours, a withdrawn sub-cent refusal or a payment still settling) are
+// counted on their own, and at GLOBAL_MAX_FAILS inside the window the bound
+// is up for one window (shared flag gwb-wide). While it is up, a /v1
+// consult reads a key's buyer-verdict and unknown-cause counts at
+// BURST_MAX_FAILS (default 1) instead of MAX_FAILS and UNKNOWN_MAX_FAILS:
+// a wallet whose OWN payments mostly fail is held after its first unsettled
+// run instead of its third or ninth, for no longer than the alarm lasts. The
+// share rule is unchanged, so a wallet whose payments settle (failures at or
+// under MIN_FAIL_SHARE of its outcomes) is never refused by it, a fresh
+// wallet with no failure is served, failures that are ours (not-buyer) are
+// not read at the lower count, and the catalog consult (global:false) is
+// untouched.
+//
+// ONE AUTHORIZATION RE-PRESENTED. A settle that fails for a reason of ours
+// leaves the signed authorization unspent, and the receipt invites the buyer
+// to resend it. Those failures never count against the wallet, so one
+// authorization could be re-presented and served unpaid with no bound. Every
+// served run that does not settle is therefore also counted per signed EVM
+// authorization (payer, network and nonce): at AUTH_MAX_FAILS inside the
+// window that one authorization is refused, the 429 says to sign a new one,
+// and a new authorization from the same wallet is served at once. A buyer
+// signs a new authorization for every new call, so none is ever refused here.
 //
 // ONE PAYER ON SEVERAL NETWORKS. The per-network count lets one wallet reach
 // the refusing count on every network a route offers, each one a run served
@@ -85,7 +112,8 @@
 // external-spend guards), and shared across replicas through
 // src/shared-limits.js when a Redis is configured: every failure is written
 // to a shared window under the same key, the burst alarm is a shared flag
-// read by the status word only (never on the serving path), and the consult
+// read by the status word only, the service-wide bound is a shared flag
+// read by the /v1 consult (THE SERVICE-WIDE BOUND), and the consult
 // reads the shared counts with this process's own as the floor. Without Redis the consult is synchronous, exactly as before; with it
 // the consult returns a promise (the handlers await it), and when the shared
 // store does not answer the consult decides on this process's counts alone,
@@ -103,7 +131,7 @@
 // calls stay in the window as outcomes; they do not erase the failures.
 import { payerFromRequest, paymentHeaderOf } from "./payer.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
-import { decodePaymentHeader } from "./payment-header.js";
+import { decodePaymentHeader, canonicalNonce } from "./payment-header.js";
 import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { settleFailureFault, isBlocklistSettleVerdict, SETTLE_FAULT, RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
@@ -129,6 +157,15 @@ export const HARD_MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_HARD_MAX, 4
 export const UNKNOWN_MAX_FAILS = Math.max(MAX_FAILS, num(process.env.GATEWAY_SETTLE_BREAKER_UNKNOWN_MAX, 3 * MAX_FAILS));
 /** Settled outcomes kept per key (the window's rate needs a count, not every stamp). */
 const MAX_OKS_KEPT = 5000;
+/** The count a /v1 consult reads a key's buyer-verdict and unknown-cause
+ *  failures at while the burst alarm is up (THE SERVICE-WIDE BOUND): at least
+ *  1, never above MAX_FAILS. */
+export const BURST_MAX_FAILS = Math.min(MAX_FAILS, Math.max(1, Math.floor(num(process.env.GATEWAY_SETTLE_BREAKER_BURST_MAX, 1))));
+/** Served runs that did not settle under ONE signed EVM authorization inside
+ *  the window before that authorization is refused (ONE AUTHORIZATION
+ *  RE-PRESENTED). */
+export const AUTH_MAX_FAILS = Math.max(1, Math.floor(num(process.env.GATEWAY_SETTLE_BREAKER_AUTH_MAX, MAX_FAILS)));
+const AUTH_KEYS_MAX = 20_000;
 /** DISTINCT buyers with a /v1 settle failure inside the window that raise the
  *  burst alarm (the settleFailures word, a console.warn). An alarm only: no
  *  request is refused for it. Distinct, not a sum of failures: one wallet
@@ -160,6 +197,9 @@ const unknownFails = new Map();
 // signature story the receipt does not tell.
 const blocklistFails = new Map();
 const unprovenAlarmed = new Map(); // key -> until when its run has raised the alarm
+// authorization key -> number[]: served runs under that one signed
+// authorization that did not settle (shared window gwb-auth).
+const authFails = new Map();
 let unprovenTrips = 0;
 // buyer -> the time of its latest settle failure inside the window: the burst
 // alarm counts distinct buyers (see GLOBAL_MAX_FAILS), so a count key's
@@ -170,6 +210,11 @@ let globalFailKeys = new Map();
 let anonSeq = 0;
 let globalAlarmUntil = 0;
 let globalTrips = 0;
+// buyer -> the time of its latest /v1 failure read against it (THE
+// SERVICE-WIDE BOUND), and until when the bound is up on this process.
+let wideFailKeys = new Map();
+let wideUntil = 0;
+let wideTrips = 0;
 // buyer -> Map(network -> when its count on that network last read refusing
 // after a /v1 failure). The buyer is the count key's own payer text
 // (buyerOf), never re-cased; only a key that names a network is held here.
@@ -184,7 +229,12 @@ let multiNetworkTrips = 0;
 // per counted verdict that was our blocklist's: it only picks the refusal's
 // words), gwb-global (one entry per distinct buyer; a keyless failure is its own
 // entry), gwb-nets (per payer, one entry per network its count reads
-// refusing on), and the flag gwb-alarm. A window add returns the shared count, so
+// refusing on), gwb-auth (per signed EVM authorization, one entry per
+// served run under it that did not settle), gwb-wide-buyers (one entry per
+// distinct buyer whose /v1 failure was read against it), the flag gwb-alarm
+// (read by the status word only) and the flag gwb-wide (THE SERVICE-WIDE
+// BOUND, read by the /v1 consult; an earlier build neither writes nor reads
+// it, so a deploy overlap refuses nobody for it). A window add returns the shared count, so
 // the trip decision is made on the count every replica contributed to. An
 // earlier build also kept gwb-bill (billing refusals, then counted against
 // the wallet); this build neither writes nor reads it, and it expires with
@@ -217,8 +267,17 @@ function write(p) {
   w.finally(() => pendingWrites.delete(w));
   return w;
 }
-function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true, unknown = false, blocklisted = false }) {
+function sharedRecordFailure(key, now, { global, withdrawn, walletCount = true, unknown = false, blocklisted = false, authKey = null, wide = false }) {
   const member = `${PROC}:${++sharedSeq}`;
+  if (wide) {
+    void write(shared.windowAdd("gwb-wide-buyers", "all", { windowMs: WINDOW_MS, member: sharedKey(buyerOf(key)), now })).then((r) => {
+      if (!r?.ok || r.count < GLOBAL_MAX_FAILS) return;
+      void write(shared.flagSet("gwb-wide", "all", now + WINDOW_MS, { now }));
+      void write(shared.windowClear("gwb-wide-buyers", "all"));
+      raiseWideBound(now, r.count, { acrossReplicas: true });
+    });
+  }
+  if (authKey) void write(shared.windowAdd("gwb-auth", sharedKey(authKey), { windowMs: WINDOW_MS, member, now }));
   if (global) {
     void write(shared.windowAdd("gwb-global", "all", { windowMs: WINDOW_MS, member: key ? sharedKey(buyerOf(key)) : `${withdrawn ? "withdrawn" : "anon"}:${member}`, now })).then((r) => {
       if (!r?.ok || r.count < GLOBAL_MAX_FAILS) return;
@@ -264,24 +323,38 @@ function sharedRecordSuccess(key, now) {
  *  may not have landed yet), and the lift time comes from whichever
  *  failure list is read. A store that does not answer leaves it to this
  *  process's counts. */
-async function sharedBlocked(key, now) {
-  const local = gatewaySettleBreakerBlocked(key, now);
-  if (!key) return local;
-  const r = await shared.windowReadMany([
+async function sharedBlocked(key, now, { burstUntilP = 0, authKey = null } = {}) {
+  if (!key) return gatewaySettleBreakerBlocked(key, now);
+  // The alarm read (when asked for) runs beside the window read.
+  const [r, burstUntil] = await Promise.all([shared.windowReadMany([
     { name: "gwb-fail", key: sharedKey(key), windowMs: WINDOW_MS },
     { name: "gwb-ok", key: sharedKey(key), windowMs: WINDOW_MS },
     { name: "gwb-unk", key: sharedKey(key), windowMs: WINDOW_MS },
     { name: "gwb-blk", key: sharedKey(key), windowMs: WINDOW_MS },
-  ], { now });
+    ...(authKey ? [{ name: "gwb-auth", key: sharedKey(authKey), windowMs: WINDOW_MS }] : []),
+  ], { now }), Promise.resolve(burstUntilP).catch(() => 0)]);
+  const local = gatewaySettleBreakerBlocked(key, now, { burstUntil, authKey });
   if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return local; }
-  const [f, o, u, k] = r.results;
-  const timesOf = (w, localCount, map) => (w.count > localCount && Array.isArray(w.entries) ? w.entries.map((e) => e.score).sort((x, y) => x - y) : inWindow(map.get(key) || [], now));
+  const [f, o, u, k, a] = r.results;
+  const timesOf = (w, localCount, map, mapKey = key) => (w.count > localCount && Array.isArray(w.entries) ? w.entries.map((e) => e.score).sort((x, y) => x - y) : inWindow(map.get(mapKey) || [], now));
   const nOks = Math.max(o.count, local.oks);
+  const burst = burstUntil > now;
   return combined(
-    verdict(timesOf(f, local.fails, fails), Math.max(f.count, local.fails), nOks),
-    verdict(timesOf(u, local.unknownFails, unknownFails), Math.max(u.count, local.unknownFails), nOks, UNKNOWN_MAX_FAILS),
+    clampToBurst(verdict(timesOf(f, local.fails, fails), Math.max(f.count, local.fails), nOks, burst ? BURST_MAX_FAILS : MAX_FAILS), burstUntil, now),
+    clampToBurst(verdict(timesOf(u, local.unknownFails, unknownFails), Math.max(u.count, local.unknownFails), nOks, burst ? BURST_MAX_FAILS : UNKNOWN_MAX_FAILS), burstUntil, now),
     local.blocklisted || (k?.count || 0) > 0,
+    authKey ? authVerdict(timesOf(a, local.authFails, authFails, authKey), Math.max(a?.count || 0, local.authFails)) : null,
   );
+}
+/** Until when THE SERVICE-WIDE BOUND is up (0: it is not), with the shared
+ *  flag folded in. Read by the /v1 consult; a store that does not answer
+ *  leaves this process's own. */
+async function sharedWideUntil(now) {
+  const local = wideBoundUntil(now);
+  if (local) return local;
+  const r = await shared.flagGet("gwb-wide", "all", { now });
+  if (!r.ok) { noteSharedLimitsDegraded(CONTROL, r); return local; }
+  return r.until > now ? r.until : 0;
 }
 /** The alarm with the shared flag folded in. Read by the status word only,
  *  never by the consult. */
@@ -372,6 +445,22 @@ export function gatewaySettleBreakerSharedKeyOf(req) {
   const key = gatewaySettleBreakerCountKey(req);
   return key ? sharedKey(key) : null;
 }
+/** The signed EVM authorization a call paid with, as one key: its count key
+ *  (payer@network) and its canonical nonce (EIP-3009 authorization, or a
+ *  Permit2 authorization). Null for any other rail or a payment naming no
+ *  nonce. */
+export function gatewaySettleBreakerAuthKey(req) {
+  const key = gatewaySettleBreakerCountKey(req);
+  if (!key || !EVM_PAYER.test(buyerOf(key))) return null;
+  try {
+    const p = decodePaymentHeader(paymentHeaderOf(req));
+    const inner = p?.payload;
+    const raw = inner?.authorization?.nonce ?? inner?.permit2Authorization?.nonce;
+    if (raw == null || (typeof raw !== "string" && typeof raw !== "number")) return null;
+    const nonce = canonicalNonce(raw);
+    return nonce ? `${key}#${nonce.slice(0, 160)}` : null;
+  } catch { return null; }
+}
 const EVM_PAYER = /^0x[0-9a-f]{40}$/;
 const EVM_COUNT_KEY = /^(0x[0-9a-f]{40})@(.+)$/;
 /** The buyer inside a count key (the burst alarm counts buyers, not networks). */
@@ -390,13 +479,27 @@ function verdict(failTimes, nFails, nOks, max = MAX_FAILS) {
   const idx = Math.max(0, failTimes.length - max);
   return { ...out, blocked: true, until: (failTimes[idx] ?? failTimes[failTimes.length - 1] ?? Date.now()) + WINDOW_MS };
 }
-/** One key's state from its two counts: refused when its verdicts or its
- *  unknown failures are at their limit; `kind` says which (a verdict first),
- *  and the refusal's words follow it. */
-function combined(v, u, blocklisted = false) {
-  const out = { blocked: v.blocked || u.blocked, fails: v.fails, oks: v.oks, unknownFails: u.fails, blocklisted: !!blocklisted };
+/** A refusal reached at the burst count is held no longer than the alarm. */
+function clampToBurst(v, burstUntil, now) {
+  if (!v.blocked || !(burstUntil > now) || !(v.until > burstUntil)) return v;
+  return { ...v, until: burstUntil };
+}
+/** One authorization's unsettled runs: refused at AUTH_MAX_FAILS (no share
+ *  rule: an authorization settles once or not at all). */
+function authVerdict(times, n) {
+  const out = { blocked: false, fails: n };
+  if (n < AUTH_MAX_FAILS) return out;
+  const idx = Math.max(0, times.length - AUTH_MAX_FAILS);
+  return { ...out, blocked: true, until: (times[idx] ?? times[times.length - 1] ?? Date.now()) + WINDOW_MS };
+}
+/** One key's state from its counts: refused when its verdicts, its unknown
+ *  failures or this call's authorization are at their limit; `kind` says
+ *  which (a verdict first), and the refusal's words follow it. */
+function combined(v, u, blocklisted = false, a = null) {
+  const out = { blocked: v.blocked || u.blocked || !!a?.blocked, fails: v.fails, oks: v.oks, unknownFails: u.fails, authFails: a?.fails || 0, blocklisted: !!blocklisted };
   if (v.blocked) return { ...out, kind: "buyer", until: v.until };
   if (u.blocked) return { ...out, kind: "unknown", until: u.until };
+  if (a?.blocked) return { ...out, kind: "authorization", until: a.until };
   return out;
 }
 /** The alarm, raised for one payer (this process's word; the shared flag is
@@ -437,10 +540,31 @@ function pruneNetworksAtLimit(now) {
   }
 }
 function pruneGlobal(now) { for (const [k, t] of globalFailKeys) if (now - t >= WINDOW_MS) globalFailKeys.delete(k); }
+/** Until when THE SERVICE-WIDE BOUND is up on this process (0: it is not). */
+function wideBoundUntil(now) { if (wideUntil > now) return wideUntil; wideUntil = 0; return 0; }
+function raiseWideBound(now, nBuyers, { acrossReplicas = false } = {}) {
+  if (acrossReplicas && wideUntil > now) return;
+  const fresh = wideUntil <= now;
+  wideUntil = now + WINDOW_MS;
+  if (!fresh) return;
+  wideTrips++;
+  console.warn(`[gateway-breaker] /v1 payments from ${nBuyers} buyer(s)${acrossReplicas ? " across replicas" : ""} failed to settle inside ${Math.round(WINDOW_MS / 1000)} s - until ${new Date(wideUntil).toISOString()} a wallet whose own payments mostly fail is held after ${BURST_MAX_FAILS} unsettled /v1 run(s); a wallet whose payments settle is served as before`);
+}
+/** A /v1 failure read against its buyer, for THE SERVICE-WIDE BOUND. */
+function noteWideFailure(key, now) {
+  for (const [k, t] of wideFailKeys) if (now - t >= WINDOW_MS) wideFailKeys.delete(k);
+  wideFailKeys.set(buyerOf(key), now);
+  if (wideFailKeys.size < GLOBAL_MAX_FAILS) return;
+  const n = wideFailKeys.size;
+  wideFailKeys = new Map();
+  raiseWideBound(now, n);
+}
 
-/** Per-key state (this process): see `verdict`. */
-export function gatewaySettleBreakerBlocked(key, now = Date.now()) {
-  if (!key) return { blocked: false, fails: 0, oks: 0, unknownFails: 0, blocklisted: false };
+/** Per-key state (this process): see `verdict`. `burstUntil` (a /v1 consult
+ *  while the alarm is up) reads the key's verdict and unknown counts at
+ *  BURST_MAX_FAILS; `authKey` adds this call's authorization count. */
+export function gatewaySettleBreakerBlocked(key, now = Date.now(), { burstUntil = 0, authKey = null } = {}) {
+  if (!key) return { blocked: false, fails: 0, oks: 0, unknownFails: 0, authFails: 0, blocklisted: false };
   const arr = inWindow(fails.get(key) || [], now);
   if (arr.length) fails.set(key, arr); else fails.delete(key);
   const unk = inWindow(unknownFails.get(key) || [], now);
@@ -449,7 +573,18 @@ export function gatewaySettleBreakerBlocked(key, now = Date.now()) {
   if (ok.length) oks.set(key, ok); else oks.delete(key);
   const blk = inWindow(blocklistFails.get(key) || [], now);
   if (blk.length) blocklistFails.set(key, blk); else blocklistFails.delete(key);
-  return combined(verdict(arr, arr.length, ok.length), verdict(unk, unk.length, ok.length, UNKNOWN_MAX_FAILS), blk.length > 0);
+  let a = null;
+  if (authKey) {
+    const at = inWindow(authFails.get(authKey) || [], now);
+    if (at.length) authFails.set(authKey, at); else authFails.delete(authKey);
+    a = authVerdict(at, at.length);
+  }
+  const burst = burstUntil > now;
+  return combined(
+    clampToBurst(verdict(arr, arr.length, ok.length, burst ? BURST_MAX_FAILS : MAX_FAILS), burstUntil, now),
+    clampToBurst(verdict(unk, unk.length, ok.length, burst ? BURST_MAX_FAILS : UNKNOWN_MAX_FAILS), burstUntil, now),
+    blk.length > 0, a,
+  );
 }
 
 /** The burst alarm (this process): raised for WINDOW_MS once GLOBAL_MAX_FAILS buyers fail to settle inside a window (a failure recorded with no buyer counts on its own), or once one payer's failures read refusing on MULTI_NETWORK_MIN networks. It refuses nothing. */
@@ -491,10 +626,25 @@ function noteUnprovenFailure(key, now) {
  *  `fault` (WHO IS COUNTED): "buyer" counts at MAX_FAILS, "unknown" at
  *  UNKNOWN_MAX_FAILS, "not-buyer" never; both of the latter feed the one-key
  *  alarm. `walletCount:false` keeps a buyer failure off the wallet. */
-export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, withdrawn = false, walletCount = true, fault = "buyer", blocklisted = false } = {}) {
+export function recordGatewaySettleFailure(key, now = Date.now(), { global = true, withdrawn = false, walletCount = true, fault = "buyer", blocklisted = false, authKey = null } = {}) {
   const isBuyer = fault !== "unknown" && fault !== "not-buyer";
   const unknown = fault === "unknown" && !!key;
-  if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown, blocklisted: blocklisted && isBuyer });
+  // ONE AUTHORIZATION RE-PRESENTED: every served run that did not settle,
+  // whoever's the fault, except a payment still settling (walletCount:false).
+  const authCounted = typeof authKey === "string" && !!authKey && !!key && walletCount;
+  if (authCounted) {
+    const at = inWindow(authFails.get(authKey) || [], now);
+    at.push(now);
+    if (at.length > MAX_OKS_KEPT) at.splice(0, at.length - MAX_OKS_KEPT);
+    authFails.delete(authKey);
+    authFails.set(authKey, at);
+    if (authFails.size > AUTH_KEYS_MAX) { for (const [k, t] of authFails) if (!inWindow(t, now).length) authFails.delete(k); }
+    while (authFails.size > AUTH_KEYS_MAX) authFails.delete(authFails.keys().next().value);
+  }
+  // THE SERVICE-WIDE BOUND counts a /v1 failure read against its buyer.
+  const wide = !!global && !!key && !withdrawn && walletCount && fault !== "not-buyer";
+  if (wide) noteWideFailure(key, now);
+  if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown, blocklisted: blocklisted && isBuyer, authKey: authCounted ? authKey : null, wide });
   if (!isBuyer && key) noteUnprovenFailure(key, now);
   if (unknown) {
     const u = inWindow(unknownFails.get(key) || [], now);
@@ -580,6 +730,7 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
   req.__gatewaySettleBreakerArmed = true;
   // Read at finish time, so an upgrade after arming counts.
   const state = { global };
+  const authKey = gatewaySettleBreakerAuthKey(req);
   Object.defineProperty(req, "__gatewaySettleBreakerState", { value: state, enumerable: false, configurable: true });
   onSettleOutcome(req, res, () => {
     const global = state.global;
@@ -625,7 +776,7 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
           ? settleFailureFault({ receipt, raw: req[RAW_SETTLE_RECEIPT] || null, network: gatewaySettleBreakerNetwork(req) })
           : marked === "buyer" || marked === "not-buyer" ? marked : "unknown";
         const blocklisted = receipt?.success === false && isBlocklistSettleVerdict({ receipt, raw: req[RAW_SETTLE_RECEIPT] || null });
-        recordGatewaySettleFailure(key, Date.now(), { global, fault, blocklisted });
+        recordGatewaySettleFailure(key, Date.now(), { global, fault, blocklisted, authKey });
       } else if (st === 200) recordGatewaySettleSuccess(key);
       // Anything else (a 4xx/5xx the handler threw) was never settled and is
       // not this wallet's doing: neither counted nor cleared.
@@ -638,7 +789,9 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
  * THE CONSULT LINE. Every gateway handler awaits this first, before validation
  * and before any upstream call. Throws 429 while this buyer's key is blocked
  * (for an EVM payer, on the network this payment names only); otherwise arms
- * the outcome listener. Nothing here refuses for other buyers' failures.
+ * the outcome listener. Nothing here refuses for other buyers' failures
+ * alone: while THE SERVICE-WIDE BOUND is up a /v1 key is read at
+ * BURST_MAX_FAILS on its own failures, under the same share rule.
  * `global` says whether this call's settle failure feeds the burst alarm
  * (the /v1 tiers) or the wallet's count only (the catalog consult).
  * Synchronous (returns undefined, throws at once) without a shared store; a
@@ -652,13 +805,21 @@ export function gatewaySettleBreakerCheck(req, { now = Date.now(), global = true
 }
 function consultKey(req, now, global) {
   const key = gatewaySettleBreakerCountKey(req);
+  const authKey = key ? gatewaySettleBreakerAuthKey(req) : null;
+  // A /v1 consult reads THE SERVICE-WIDE BOUND; the catalog consult never does.
   if (!SHARED) {
-    decide(req, key, now, global, gatewaySettleBreakerBlocked(key, now));
+    const burstUntil = global && key ? wideBoundUntil(now) : 0;
+    decide(req, key, now, global, gatewaySettleBreakerBlocked(key, now, { burstUntil, authKey }));
     return undefined;
   }
   // Shared: this key's windows, read with this process's own counts as the
   // floor; a store that does not answer leaves the decision to those counts.
-  return (async () => { decide(req, key, now, global, await sharedBlocked(key, now)); })();
+  // The bound's flag is read beside them (this process's own first; an
+  // unanswered read leaves this process's).
+  return (async () => {
+    const burstUntilP = global && key ? sharedWideUntil(now).catch(() => wideBoundUntil(now)) : 0;
+    decide(req, key, now, global, await sharedBlocked(key, now, { burstUntilP, authKey }));
+  })();
 }
 function decide(req, key, now, global, b) {
   if (b.blocked) {
@@ -680,7 +841,9 @@ function decide(req, key, now, global, b) {
     // A wallet whose strikes include our blocklist's verdict is told only
     // that settlement did not proceed for it (each receipt carries the reason
     // code): no balance or signature story the receipt does not tell.
-    const e = new Error(b.kind === "unknown"
+    const e = new Error(b.kind === "authorization"
+      ? `This payment authorization${on} was served ${b.authFails} times in the last ${mins} min and its settlement did not complete; this one authorization is refused until ${new Date(b.until).toISOString()} (about ${secs} s). Sign a new authorization (a new nonce) and the call is served at once. Nothing was charged for this request.`
+      : b.kind === "unknown"
       ? `Settlement of this wallet's recent payments${on} did not complete (${b.unknownFails} in the last ${mins} min: each verified and was served, and its settlement did not complete); ${until}`
       : b.blocklisted
       ? `Recent payments from this wallet${on} were not settled (${b.fails} in the last ${mins} min: each verified and was served, and settlement did not proceed for this wallet; each refused settlement's PAYMENT-RESPONSE receipt carries its reason code); ${until}`
@@ -693,7 +856,8 @@ function decide(req, key, now, global, b) {
     // route's offer is built per request by the paywall and is not held
     // here, so the fields name its 402 instead of repeating a list.
     e.retryAfter = secs;
-    if (network) { e.retry = "other-network"; e.refusedNetwork = network; e.otherNetworksFrom = "accepts[].network in this route's 402"; }
+    if (b.kind === "authorization") e.hint = "sign-new-authorization";
+    else if (network) { e.retry = "other-network"; e.refusedNetwork = network; e.otherNetworksFrom = "accepts[].network in this route's 402"; }
     try { req?.res?.setHeader?.("Retry-After", String(secs)); } catch { /* headers are best-effort */ }
     throw e;
   }
@@ -723,7 +887,9 @@ export function gatewaySettleBreakerStatus(now = Date.now()) {
     // the refusing count and raised the alarm instead.
     unprovenTrips,
     globalAlarm: g.alarm, globalAlarmUntil: g.alarm ? new Date(g.until).toISOString() : null, globalTrips,
-    maxFails: MAX_FAILS, unknownMaxFails: UNKNOWN_MAX_FAILS, minFailShare: MIN_FAIL_SHARE, hardMaxFails: HARD_MAX_FAILS, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
+    // THE SERVICE-WIDE BOUND on this process: whether it is up, and how often it was raised.
+    wideBound: wideBoundUntil(now) > 0, wideTrips,
+    maxFails: MAX_FAILS, unknownMaxFails: UNKNOWN_MAX_FAILS, burstMaxFails: BURST_MAX_FAILS, authMaxFails: AUTH_MAX_FAILS, minFailShare: MIN_FAIL_SHARE, hardMaxFails: HARD_MAX_FAILS, windowMs: WINDOW_MS, globalMaxFails: GLOBAL_MAX_FAILS,
   };
 }
 
@@ -737,7 +903,7 @@ export async function gatewaySettleFailuresStatus({ full = false, now = Date.now
   const status = g.alarm ? "burst" : "ok";
   if (!full) return { status };
   const s = gatewaySettleBreakerStatus(now);
-  return { status, until: g.alarm ? new Date(g.until).toISOString() : null, buyersInWindow: s.globalFailsInWindow, threshold: GLOBAL_MAX_FAILS, windowMinutes: WINDOW_MS / 60_000, trips: s.globalTrips, blockedKeys: s.blockedKeys, trackedKeys: s.trackedKeys, multiNetworkThreshold: MULTI_NETWORK_MIN, multiNetworkTrips: s.multiNetworkTrips, payersWithNetworkAtLimit: s.payersWithNetworkAtLimit, unprovenTrips: s.unprovenTrips };
+  return { status, until: g.alarm ? new Date(g.until).toISOString() : null, buyersInWindow: s.globalFailsInWindow, threshold: GLOBAL_MAX_FAILS, windowMinutes: WINDOW_MS / 60_000, trips: s.globalTrips, blockedKeys: s.blockedKeys, trackedKeys: s.trackedKeys, multiNetworkThreshold: MULTI_NETWORK_MIN, multiNetworkTrips: s.multiNetworkTrips, payersWithNetworkAtLimit: s.payersWithNetworkAtLimit, unprovenTrips: s.unprovenTrips, wideBound: s.wideBound, wideTrips: s.wideTrips, burstMaxFails: BURST_MAX_FAILS };
 }
 
 /** Test-only. With a shared store it returns a promise that settles once
@@ -745,17 +911,22 @@ export async function gatewaySettleFailuresStatus({ full = false, now = Date.now
  *  shared windows and flag are cleared after them; await it. */
 export function _gatewaySettleBreakerReset() {
   const keys = new Set([...fails.keys(), ...oks.keys(), ...unknownFails.keys()]);
+  const authKeys = [...authFails.keys()];
+  authFails.clear();
   fails.clear(); unknownFails.clear(); blocklistFails.clear(); unprovenFails.clear(); unprovenAlarmed.clear(); unprovenTrips = 0; oks.clear(); globalFailKeys = new Map(); globalAlarmUntil = 0; globalTrips = 0;
+  wideFailKeys = new Map(); wideUntil = 0; wideTrips = 0;
   networksAtLimit.clear(); multiNetworkTrips = 0;
   if (!SHARED) return undefined;
   return (async () => {
     while (pendingWrites.size) await Promise.allSettled([...pendingWrites]);
     await Promise.allSettled([
       ...[...keys].flatMap((k) => ["gwb-fail", "gwb-ok", "gwb-unk", "gwb-blk"].map((name) => shared.windowClear(name, sharedKey(k)))),
+      ...authKeys.map((k) => shared.windowClear("gwb-auth", sharedKey(k))),
       ...[...new Set([...keys].filter((k) => networkOf(k)).map((k) => sharedKey(buyerOf(k))))].map((payer) => shared.windowClear("gwb-nets", payer)),
       shared.flagSet("gwb-alarm", "all", 0), shared.windowClear("gwb-global", "all"),
+      shared.flagSet("gwb-wide", "all", 0), shared.windowClear("gwb-wide-buyers", "all"),
     ]);
-    globalAlarmUntil = 0; globalTrips = 0; multiNetworkTrips = 0;
+    globalAlarmUntil = 0; globalTrips = 0; multiNetworkTrips = 0; wideUntil = 0; wideTrips = 0; wideFailKeys = new Map();
   })();
 }
 /** Whether this process writes the breaker through to the shared store. */

@@ -78,7 +78,17 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   and the heartbeat and the status Worker page on `burst` under one issue per word that `ok`
   closes. The shared flags are `gwb-alarm` and `cg-alarm`, read by the status words only; the
   earlier `gwb-pause` and `cg-pause` are neither written nor read, and payer-only windows are not
-  read for a payment that names a network, so a deploy overlap refuses nobody. A wallet is refused only when it holds
+  read for a payment that names a network, so a deploy overlap refuses nobody. **Service-wide bound:**
+  `GATEWAY_SETTLE_BREAKER_GLOBAL_MAX` distinct buyers whose `/v1` failures are read against them
+  (verdict or unknown; never not-buyer, withdrawn or pending) raise the flag `gwb-wide` for one
+  window; while it is up a `/v1` consult reads a key's verdict and unknown counts at
+  `GATEWAY_SETTLE_BREAKER_BURST_MAX` (default 1), under the same share rule, its refusal held no
+  longer than the flag, so a rotated wallet is served one unpaid run instead of three or nine and a
+  wallet whose payments settle, a fresh wallet and the catalog consult are served as before.
+  **One authorization:** every served run that does not settle (any fault, except a payment still
+  settling) is also counted per signed EVM authorization (`payer@network#nonce`, shared `gwb-auth`);
+  at `GATEWAY_SETTLE_BREAKER_AUTH_MAX` (default `MAX`) that authorization alone is refused with
+  `hint: sign-new-authorization`, and a new authorization from the wallet is served at once. A wallet is refused only when it holds
   `GATEWAY_SETTLE_BREAKER_MAX` failures in the window AND they are more than
   `GATEWAY_SETTLE_BREAKER_MIN_FAIL_SHARE` (default 0.5) of its outcomes there; settled calls
   stay in the window as outcomes and never erase failures, so a buyer settling hundreds of

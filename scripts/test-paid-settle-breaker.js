@@ -278,12 +278,26 @@ try {
     ok(paid.status === 200, `and a /v1 buyer whose payment settles gets its 200 during the alarm (got ${paid.status})`);
     const txt = JSON.stringify(g) + JSON.stringify(op);
     ok(!txt.includes(wallet(1)), "the alarm is reported without naming a wallet");
+    // THE SERVICE-WIDE BOUND: GLOBAL_MAX buyers' payments failed, so a wallet
+    // whose own payments mostly fail is held after ONE unsettled /v1 run, not
+    // MAX: wallet 99 (one failure, nothing settled) is refused before its
+    // handler; wallet 98 (one settled, then one failure) is still served.
+    {
+      const b2 = settles;
+      const held = await pay(V1(97), wallet(99));
+      const hb = await held.json().catch(() => ({}));
+      ok(held.status === 429 && settles === b2 && /failed to settle \(1 in the last/.test(hb.error || "") && /Nothing was charged/.test(hb.error || ""), `while the bound is up a wallet with one failed /v1 settle of its own is refused 429 before the handler (status ${held.status}, settles ${settles} == ${b2}: ${String(hb.error).slice(0, 70)})`);
+      const s98 = settles;
+      const f98 = await pay(V1(96), wallet(98));
+      const again = await pay(V1(95), wallet(98));
+      ok(f98.status === 402 && again.status === 402 && settles === s98 + 2, `a wallet that settled a call is served beside one failure while the bound is up (statuses ${f98.status},${again.status}, settles ${settles - s98})`);
+    }
     // Control: the per-wallet rule still acts on its own wallet during the alarm.
     const w = wallet(0x92);
     for (let i = 0; i < MAX; i++) await pay(V1(300 + i), w);
     const b1 = settles;
     const own = await pay(V1(310), w);
-    ok(own.status === 429 && settles === b1, `control: during the alarm a wallet with ${MAX} failed settles of its own is refused 429 before the handler (status ${own.status})`);
+    ok(own.status === 429 && settles === b1, `control: during the alarm a wallet with failed settles of its own is refused 429 before the handler (status ${own.status})`);
   }
   // A FACILITATOR billing refusal on an EVM rail (free_tier_exhausted, both
   // wire shapes), and the facilitator answering HTTP 503 at settle. Neither is
@@ -309,6 +323,22 @@ try {
       const r = await pay(WALLET_ONLY, PAYER_D);
       ok(r.status === 402 && settles === before + 1, `facilitator 503 at settle ${i}: served, not settled -> 402, never 429 (status ${r.status}, settles ${settles})`);
     }
+    // ONE authorization re-presented while the facilitator fails: the same
+    // signed credential is served MAX times unsettled, then refused before
+    // the handler with the field that says to sign a new one; a new
+    // authorization from the same wallet is served at once.
+    const PAYER_R = "0x00000000000000000000000000000000000000d6";
+    const same = credential(await acceptFor(WALLET_ONLY), PAYER_R);
+    const resend = () => fetch(`${B}${WALLET_ONLY.path}`, { method: WALLET_ONLY.method, headers: { "content-type": "application/json", "payment-signature": same } });
+    const st = [];
+    for (let i = 0; i < MAX; i++) { const s0 = settles; const r = await resend(); st.push(`${r.status}${settles === s0 + 1 ? "" : "!"}`); }
+    const s0 = settles;
+    const rr = await resend();
+    const rb = await rr.json().catch(() => ({}));
+    ok(st.every((x) => x === "402") && rr.status === 429 && settles === s0 && rb.hint === "sign-new-authorization" && /Sign a new authorization/.test(rb.error || ""), `one authorization re-presented: served ${MAX} times unsettled, then refused 429 before the handler (${st.join(",")} then ${rr.status} ${rb.hint}: ${String(rb.error).slice(0, 60)})`);
+    const s1 = settles;
+    const fresh = await pay(WALLET_ONLY, PAYER_R);
+    ok(fresh.status === 402 && settles === s1 + 1, `the same wallet with a new authorization is served at once (status ${fresh.status})`);
   }
   // Through the wire, what a revert proves: with the token's balance words it
   // is a verdict (three refuse, in the verdict words); without them it is of
