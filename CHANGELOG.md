@@ -6,6 +6,35 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-13 (model refresh)
+Gateway:
+- Tier defaults move to newer models at the same prices: base gpt-6-luna, pro
+  gpt-6.1-terra, premium claude-opus-5.5; the bare claude-opus, claude-haiku
+  and x-ai/grok names serve opus-5.5, haiku-5.5 and grok-4.7. Every replaced
+  model id is still served when a call names it.
+- Nano admits claude-haiku-5.5, deepseek-v4.1-flash and qwen3.8-flash; pro
+  admits gemini-3.8-flash and gemini-4-argon; premium admits gemini-4-argon
+  and claude-fable-5.2.
+- Image tiers render on gpt-image-2.6 flare and sunburst. A one-link image
+  edit route's refusal no longer names an empty failover.
+- Speech adds a second backup voice model with the same named voices.
+- Gateway examples name models each tier serves at its own price (base: its
+  default; pro: gpt-6.1-terra).
+Judgment:
+- /v1/judge and /v1/decisions add Gemini Decision-1 and the same pinned Jev
+  version over OpenRouter as fallbacks. The discovery reranker, wish
+  classification and the decide planner ask that Jev version over OpenRouter
+  before Decision-1. Decisions requests carry a no-data-collection preference,
+  and zero data retention where every endpoint offers it.
+- /v1/judge, /v1/judge/vision, /locate and /long keep the other answers when a
+  noul has no probability, marked noProbability: true; an answer with none
+  stays an uncharged 502.
+Search:
+- Neural search sends the retired fast and instant types as lite and says so,
+  and passes upstream warnings and notices through.
+Server:
+- The web framework takes its November security release.
+
 ### 2026-11-13 (image header bound)
 Server:
 - The TIFF header reader bounds every tag's declared value count by the file
