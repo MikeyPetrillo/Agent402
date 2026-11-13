@@ -272,6 +272,19 @@ export function sellerJudgeListing(r) {
     tags: clean && Array.isArray(r?.tags) ? r.tags.map(String) : [],
   }, { links: false });
 }
+/** What /api/route's judge reads of one row: the same screened listing
+ *  (sellerJudgeListing; our own rows under the host "agent402"), and the
+ *  price as a figure we format from the parsed number (priceUsd), never the
+ *  row's price string: a manifest may declare any text as its price, and
+ *  nothing is added to a screened field after the screen ran. Every field
+ *  reaches the judge inside its one JSON object (src/tool-judge.js
+ *  criteriaFor). */
+export function routeJudgeListing(r) {
+  const seen = sellerJudgeListing(r?.seller === "self" ? { ...r, seller: "https://agent402" } : r);
+  const usd = typeof r?.priceUsd === "number" && Number.isFinite(r.priceUsd) && r.priceUsd >= 0 ? r.priceUsd : null;
+  const price = usd == null ? "" : ` ($${Number(usd.toPrecision(6))})`;
+  return { name: `${seen.name}${price}`.trim(), description: seen.description, tags: seen.tags };
+}
 /** The judged order over gated outside candidates (src/tool-judge.js
  *  orderByJudgment, reading sellerJudgeListing). A judged reorder stands only
  *  when its pick's own match score meets the floor (judgedOverrideAllowed);

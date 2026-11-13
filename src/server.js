@@ -657,7 +657,6 @@ import { CRAWL_TOOLS } from "./tools/crawl-kit.js";
 import { spendWindowStatus, refreshSpendWindowShared } from "./router-spend-window.js";
 import { X_DATA_TOOLS, xDataEnabled, xDataSpendStatus, refreshXDataSpendShared } from "./tools/x-data-kit.js";
 import { jevSpendStatus, refreshJevSpendShared, orderByJudgment } from "./tool-judge.js";
-import { judgeReadableListing } from "./listing-screen.js";
 import { noteRouteAnswer, noteRoutePurchase } from "./route-conversion.js";
 import { EXA_TOOLS, exaEnabled, exaSpendStatus, refreshExaSpendShared, exaAllowanceStatus, exaCallsToday } from "./tools/exa-kit.js";
 import { upstreamBudgetStatus, registerUpstreamCounter } from "./upstream-budgets.js";
@@ -826,7 +825,7 @@ const NEXT_CALL = { search: "answer", decide: "decide-execute" };
 }
 import { buildSkillTools, modelBackedPackSlugs } from "./tools/skill-runner.js";
 import { applyCapturedExamples, loadCapturedExamples } from "./tool-output-examples.js";
-import { buildRouteExecuteTool, EXEC_TIERS } from "./tools/route-execute.js";
+import { buildRouteExecuteTool, EXEC_TIERS, routeJudgeListing } from "./tools/route-execute.js";
 import { buildSellerTrustTool } from "./tools/seller-trust.js";
 import { buildSellerDossierTool } from "./tools/seller-dossier.js";
 import { buildSellerPayabilityTool } from "./tools/seller-payability-kit.js";
@@ -9194,20 +9193,15 @@ async function computeRouteJudged(q, k, include, net, ip = null, meter = null) {
     }
   }
   if (shortlist.length < 2) return out;
-  const hostOfSeller = (u) => { try { return new URL(u).host; } catch { return String(u || ""); } };
   const judgeStarted = Date.now();
-  const ordered = await orderByJudgment(String(q), shortlist, (r) => {
-    const desc = String(r.description || r.name || "");
-    const price = r.price != null && r.price !== "" ? ` (${typeof r.price === "number" ? `$${r.price}` : r.price})` : "";
-    const clean = !looksLikeListingInjection(desc);
-    // The same judge screen route-execute's seller judge reads
-    // (judgeReadableListing), so the two judges never read different text.
-    const seen = judgeReadableListing({ host: r.seller === "self" ? "agent402" : hostOfSeller(r.seller), slug: String(r.slug || ""), description: clean ? desc : "", tags: clean && Array.isArray(r.tags) ? r.tags.map(String) : [] }, { links: false });
-    return { name: `${seen.name}${price}`.trim(), description: seen.description, tags: seen.tags };
+  // Each row as the judge reads it (routeJudgeListing, the screen
+  // route-execute's seller judge reads): the screened listing and a price we
+  // format from the parsed figure, all inside the row's one JSON option; no
+  // seller text is joined to it after the screen.
   // 800 ms bound (was 2 s): production measured the judgment wait at ~150 ms
   // p95 and never past 800 ms (2026-09-25), so the bound only caps a slow
   // judge instead of making a free search wait up to 2 s for it.
-  }, { timeoutMs: 800, pool: "free", admit: routeJudgeAdmit(ip) });
+  const ordered = await orderByJudgment(String(q), shortlist, routeJudgeListing, { timeoutMs: 800, pool: "free", admit: routeJudgeAdmit(ip) });
   // The judgment is a network call inside a free search: log when it is what
   // the caller waited for, so the slow-compute line can be read as CPU or wait.
   const judgeMs = Date.now() - judgeStarted;
