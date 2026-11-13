@@ -309,8 +309,8 @@ export function directHeavyOutput(body) {
  *  cap is at or past DIRECT_HEAVY_OUTPUT_TOKENS (a timeout on it then reads
  *  the unanswered rule instead of counting); `clamped` says the attempt's
  *  timeout was shorter than the configured direct timeout (the caller's own
- *  window cut it), and a timeout on it reads the unanswered rule too, never
- *  the single-caller count. */
+ *  window cut it), and a timeout on it counts nowhere: neither the
+ *  single-caller count nor the unanswered rule. */
 export function noteDirectOutcome(ok, reason, caller = undefined, { heavy = false, clamped = false } = {}) {
   if (ok) { directUnanswered.clear(); breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
   const timeout = String(reason) === "timeout";
@@ -327,9 +327,11 @@ export function noteDirectOutcome(ok, reason, caller = undefined, { heavy = fals
     }
     return;
   }
-  // The caller key is read (hashed) only here, for a heavy or clamped
-  // timeout: one caller alone never reaches the rule's caller count.
-  if (timeout && directUnanswered.note(caller === undefined ? currentCallerKey() : caller)) {
+  // A deadline the caller's own window shortened says nothing about the
+  // link, so it feeds neither count; only a heavy call's full-length
+  // deadline reads the unanswered rule. The caller key is read (hashed) only
+  // here: one caller alone never reaches the rule's caller count.
+  if (timeout && !clamped && directUnanswered.note(caller === undefined ? currentCallerKey() : caller)) {
     const st = directUnanswered.state();
     directUnanswered.clear();
     console.warn(`[direct-upstream] the direct link did not answer within our limit on ${st.deadlines} calls from ${st.callers} callers; the next calls go to OpenRouter for the open period`);

@@ -424,11 +424,18 @@ setEnv(ON);
   for (let i = 0; i < 4; i++) D.noteDirectOutcome(false, "timeout", "caller-clamped", { clamped: true });
   ok(!D.directBreakerState().open && D.directBreakerState().fails === 0, "the outcome reader ignores clamped timeouts");
   ok(D.directHeavyOutput({ max_completion_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS }) && !D.directHeavyOutput({ max_tokens: D.DIRECT_HEAVY_OUTPUT_TOKENS - 1 }), "max_completion_tokens reads as the output cap too");
-  // Clamped timeouts still feed the unanswered rule (many calls, several
-  // callers): a hung link whose every caller is on a short window opens.
+  // A clamped deadline is the caller's own choice, so it never feeds the
+  // shared unanswered rule either, whatever the caller count (heavy or not);
+  // the same calls at full length from ten callers do open it.
   reset();
   await quietWarn(async () => { for (let i = 0; i < 30; i++) D.noteDirectOutcome(false, "timeout", `caller-clamped-${i % 10}`, { clamped: true }); });
-  ok(D.directBreakerState().open && D.directBreakerState().opens >= 1 && D.directBreakerState().fails === 0, `clamped timeouts from ten callers open the breaker through the unanswered rule (opens ${D.directBreakerState().opens}, fails ${D.directBreakerState().fails})`);
+  ok(!D.directBreakerState().open && D.directBreakerState().opens === 0 && D.directBreakerState().fails === 0, `clamped timeouts from ten callers leave the breaker closed (opens ${D.directBreakerState().opens}, fails ${D.directBreakerState().fails})`);
+  reset();
+  await quietWarn(async () => { for (let i = 0; i < 30; i++) D.noteDirectOutcome(false, "timeout", `caller-clamped-${i % 10}`, { clamped: true, heavy: true }); });
+  ok(!D.directBreakerState().open && D.directBreakerState().opens === 0, `clamped heavy timeouts from ten callers leave the breaker closed (opens ${D.directBreakerState().opens})`);
+  reset();
+  await quietWarn(async () => { for (let i = 0; i < 30; i++) D.noteDirectOutcome(false, "timeout", `caller-full-${i % 10}`, { heavy: true }); });
+  ok(D.directBreakerState().open && D.directBreakerState().opens >= 1 && D.directBreakerState().fails === 0, `full-length heavy timeouts from ten callers open the breaker through the unanswered rule (opens ${D.directBreakerState().opens})`);
   reset();
   await quietWarn(async () => { for (let i = 0; i < 30; i++) D.noteDirectOutcome(false, "timeout", "caller-clamped-one", { clamped: true }); });
   ok(!D.directBreakerState().open && D.directBreakerState().opens === 0 && D.directBreakerState().fails === 0, "thirty clamped timeouts from one caller leave it closed");
