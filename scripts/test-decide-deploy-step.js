@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { load } from "js-yaml";
 import { decideDeployPaths, touchesDecide } from "./decide-deploy-paths.js";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -38,7 +39,7 @@ const RUNS = [
 const baseCli = (input, id) => spawnSync(process.execPath, [fileURLToPath(new URL("./decide-deploy-paths.js", import.meta.url)), "--base", String(id)], { input, encoding: "utf8" }).stdout.trim();
 ok(baseCli(JSON.stringify(RUNS), 300) === sha("a") && baseCli("not json", 300) === "", "the --base CLI takes the last successful deploy run's head and prints nothing on bad input");
 
-const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
+const wf = load(expandedDeployWorkflow());
 const steps = wf.jobs.deploy.steps;
 const idx = steps.findIndex((s) => s.name === "Deploy the decide service at the same commit");
 ok(idx >= 0, "the deploy job has the decide deploy step");

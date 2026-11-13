@@ -124,7 +124,7 @@ for (const [status, want, why] of [[401, 503, "a refused key is OUR problem, a 5
   ok(t.slug === "judge" && t.route === "POST /v1/judge" && t.price === "$0.001", "route, slug and price are declared");
   ok(/not deterministic|model-backed/i.test(t.description),
     "the description says it is MODEL-BACKED: this catalog's headline claim is that its tools are deterministic, and this one is not");
-  const ex = t.discovery.example;
+  const ex = t.discovery.output.example;
   ok(ex.answers.severity.confidence !== undefined && ex.answers.is_reproducible.noul !== undefined,
     "the published example shows a score WITH confidence and a noul WITHOUT, matching the real wire");
   ok(ex.answers.is_reproducible.confidence === undefined, "and never invents a confidence on the noul");

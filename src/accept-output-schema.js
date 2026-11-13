@@ -36,11 +36,18 @@
 // one accept carrying the field. The advertised field is ours, the buyer's
 // signature covers the EIP-3009 authorization and never the echoed accept, so
 // the match seam is made tolerant instead: when nothing matches and the
-// echoed accept carries NO outputSchema, the schema we advertised for that
-// scheme + network is restored onto it and the match runs again. Every other
-// field still has to be byte-exact (a different amount or payTo stays
-// refused), and an accept carrying a DIFFERENT outputSchema is never
-// overwritten. Rollout switch: ACCEPT_OUTPUT_SCHEMA=off stops declaring the
+// echoed accept carries no outputSchema, or one that differs from ours, the
+// schema we advertise for that scheme + network is put onto it and the match
+// runs again. Every other field still has to be byte-exact (a different
+// amount, payTo, network, asset, scheme, timeout or extra stays refused), and
+// when the second match fails too the buyer's own value is put back.
+// A differing one is a 402 read from an earlier build: a deploy that changes a
+// route's output schema (integer to number, say) would otherwise refuse every
+// payment signed against the previous 402. No signature covers the field:
+// @x402/evm (exact EIP-3009 and upto Permit2), @x402/svm, @x402/stellar and
+// @x402/avm never read it, and the Circle preflights and the Gateway client
+// (src/circle-facilitator.js, src/gateway-nanopayments.js) check the signed
+// authorization against our requirement, never the echoed accept. Rollout switch: ACCEPT_OUTPUT_SCHEMA=off stops declaring the
 // field (a facilitator that refuses it on /verify is one flag away; the
 // daily paid canary on Base is the live proof that CDP does not).
 const PATCHED = Symbol.for("agent402.acceptOutputSchema");
@@ -81,20 +88,21 @@ export function stampOutputSchema(paymentOptions, requirements) {
 }
 
 /**
- * Pure: when a v2 payload's echoed accept carries NO outputSchema and a
- * requirement with its scheme + network advertises one, restore ours onto the
- * accept (in place). Returns true when it restored. Never overwrites a value
- * the buyer sent, never touches v1 payloads, never invents a schema.
+ * Pure: when a requirement with a v2 payload's scheme + network advertises an
+ * outputSchema and the echoed accept carries none, or a different one, put
+ * ours onto the accept (in place). Returns an undo function when it changed
+ * the accept, else null. Never touches v1 payloads, never invents a schema.
  */
 export function restoreOutputSchemaOnAccepted(requirements, paymentPayload) {
   const accepted = paymentPayload?.accepted;
-  if (paymentPayload?.x402Version !== 2 || !accepted || typeof accepted !== "object") return false;
-  if (accepted.outputSchema !== undefined) return false;
-  if (!Array.isArray(requirements)) return false;
+  if (paymentPayload?.x402Version !== 2 || !accepted || typeof accepted !== "object" || Array.isArray(accepted)) return null;
+  if (!Array.isArray(requirements)) return null;
   const req = requirements.find((r) => r && isSchema(r.outputSchema) && r.scheme === accepted.scheme && r.network === accepted.network);
-  if (!req) return false;
+  if (!req || accepted.outputSchema === req.outputSchema) return null;
+  const had = Object.prototype.hasOwnProperty.call(accepted, "outputSchema");
+  const prior = accepted.outputSchema;
   accepted.outputSchema = req.outputSchema;
-  return true;
+  return () => { if (had) accepted.outputSchema = prior; else delete accepted.outputSchema; };
 }
 
 /** Install once on the resource server class (idempotent). Returns true when it patched. */
@@ -114,9 +122,12 @@ export function installAcceptOutputSchema(ResourceServerClass) {
   const find = function findMatchingRequirements(availableRequirements, paymentPayload) {
     const found = origFind.call(this, availableRequirements, paymentPayload);
     if (found) return found;
-    let restored = false;
-    try { restored = restoreOutputSchemaOnAccepted(availableRequirements, paymentPayload); } catch { restored = false; }
-    return restored ? origFind.call(this, availableRequirements, paymentPayload) : found;
+    let undo = null;
+    try { undo = restoreOutputSchemaOnAccepted(availableRequirements, paymentPayload); } catch { undo = null; }
+    if (!undo) return found;
+    const again = origFind.call(this, availableRequirements, paymentPayload);
+    if (!again) undo();
+    return again;
   };
   find[PATCHED] = true;
   proto.findMatchingRequirements = find;

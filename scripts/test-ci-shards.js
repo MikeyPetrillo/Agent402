@@ -19,11 +19,13 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { load } from "js-yaml";
 import { shardCount, shardJobName, laneJobNames, inShard, shardFromEnv, pickShard, runsSoloChecks } from "./lib/ci-shards.js";
+import { expandedDeployWorkflow, rawDeployWorkflow, RUNNER } from "./lib/ci-workflow.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const WF_TEXT = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+// The lane lists live in scripts/ci/lanes; the expanded text puts each back in its step.
+const WF_TEXT = expandedDeployWorkflow();
 const wf = load(WF_TEXT);
 
 // Scripts a step runs on every shard because the others need what they leave
@@ -59,6 +61,9 @@ writeFileSync(join(bin, "node"), '#!/bin/sh\nfor a in "$@"; do case "$a" in scri
 writeFileSync(join(bin, "docker"), "#!/bin/sh\nexit 0\n");
 chmodSync(join(bin, "node"), 0o755);
 chmodSync(join(bin, "docker"), 0o755);
+
+// A step's own env, expressions read as "x" (as in the step's script).
+const stepEnv = (step) => Object.fromEntries(Object.entries(step.env || {}).map(([k, v]) => [k, String(v).replace(/\$\{\{[^}]*\}\}/g, "x")]));
 
 let simCount = 0;
 /** Problems with one workflow's sharded lanes (empty = sound). */
@@ -100,7 +105,7 @@ function analyze(w) {
         if (definesT(step.run)) {
           if (step.if !== undefined) { problems.push(`${key}: a t step carries if: ${step.if}`); continue; }
           const script = String(step.run).replace(/\$\{\{[^}]*\}\}/g, "x");
-          const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: `${bin}:${process.env.PATH}`, HOME: runnerTemp, RUNNER_TEMP: runnerTemp, CI_SHARD: String(job.env?.CI_SHARD === "${{ matrix.shard }}" ? k : job.env?.CI_SHARD), CI_SHARDS: String(job.env?.CI_SHARDS), SHARD_REC: rec } });
+          const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...stepEnv(step), PATH: `${bin}:${process.env.PATH}`, HOME: runnerTemp, RUNNER_TEMP: runnerTemp, CI_SHARD: String(job.env?.CI_SHARD === "${{ matrix.shard }}" ? k : job.env?.CI_SHARD), CI_SHARDS: String(job.env?.CI_SHARDS), SHARD_REC: rec } });
           simCount++;
           if (r.status !== 0) problems.push(`${key} shard ${k}: step "${step.name}" exits ${r.status} in the dry run (${(r.stderr || "").trim().slice(0, 160)})`);
           continue;
@@ -141,6 +146,36 @@ try {
     }
   }
   ok(laneJobNames("test-x", { steps: [] }).join() === "test-x", "an unsharded lane is required under its own name");
+
+  // The expanded text is what the checks above read; the runner is what CI runs.
+  // Run both for every shard of every lane that uses the runner and require the
+  // same scripts in the same order: a runner that drifts from its expansion
+  // fails here.
+  const rawWf = load(rawDeployWorkflow());
+  const runnerStep = (s) => new RegExp(`^bash ${RUNNER.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")} \\S+ \\S+$`).test(String(s.run || "").trim());
+  let compared = 0;
+  for (const [key, job] of Object.entries(rawWf.jobs)) {
+    const rSteps = (job.steps || []).filter(runnerStep);
+    if (!rSteps.length) continue;
+    const xSteps = (wf.jobs[key].steps || []).filter((s) => definesT(s.run));
+    const n = shardCount(job);
+    for (let k = 1; k <= n; k++) {
+      const shardEnv = job.env?.CI_SHARDS !== undefined ? { CI_SHARD: String(k), CI_SHARDS: String(job.env.CI_SHARDS) } : {};
+      const record = (steps, argsOf) => {
+        const dir = mkdtempSync(join(tmp, `cmp-${key}-${k}-`));
+        const rec = join(dir, "rec");
+        writeFileSync(rec, "");
+        const codes = steps.map((step) => spawnSync("bash", argsOf(step), { encoding: "utf8", env: { ...stepEnv(step), PATH: `${bin}:${process.env.PATH}`, HOME: dir, RUNNER_TEMP: dir, SHARD_REC: rec, ...shardEnv } }).status);
+        return { codes, list: readFileSync(rec, "utf8") };
+      };
+      const viaRunner = record(rSteps, (step) => String(step.run).trim().split(/\s+/).slice(1));
+      const viaText = record(xSteps, (step) => ["-c", String(step.run).replace(/\$\{\{[^}]*\}\}/g, "x")]);
+      compared++;
+      ok(viaRunner.codes.every((c) => c === 0) && rSteps.length === xSteps.length && viaRunner.list === viaText.list && viaText.list.length > 0,
+        `${key} shard ${k}/${n}: ${RUNNER} runs the same ${viaText.list.split("\n").filter(Boolean).length} scripts in the same order as the expanded steps`);
+    }
+  }
+  ok(compared >= 20, `the runner was compared with its expansion on ${compared} lane shards`);
 
   // The round-robin rule over a list: every index in exactly one shard.
   for (const total of [1, 2, 3, 5]) {

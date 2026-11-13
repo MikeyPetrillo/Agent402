@@ -42,7 +42,7 @@
 // this instance's closure.
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { EVM_RPCS } from "./evm-rpcs.js";
-import { ADDR, TX, UUID, UINT, B32, SECP256K1_HALF_N, isObj, lc } from "./circle-shapes.js";
+import { ADDR, TX, UUID, UINT, B32, SECP256K1_HALF_N, isObj, lc, txt, uintText } from "./circle-shapes.js";
 import { SettleError, VerifyError } from "@x402/core/types";
 import {
   verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature,
@@ -54,6 +54,7 @@ import {
   CircleResponseError, safeReason, arcKindsFromSupported, usdcKindsFromSupported,
 } from "./circle-supported.js";
 import { EVM_TOKEN_DOMAINS } from "./evm-usdc-domain.js";
+import { PERMIT2_ADDRESS, uptoPermit2WitnessTypes, x402UptoPermit2ProxyAddress } from "@x402/evm";
 
 export {
   ARC_CAIP2, ARC_CHAIN_ID, ARC_USDC, ARC_PROFILE, CIRCLE_FACILITATOR_BASE, CIRCLE_LABEL,
@@ -171,12 +172,12 @@ export async function preflightArcPayment(paymentPayload, requirements, nowSec =
  * cannot verify as an EOA's is refused.
  */
 export async function preflightUsdcPayment(paymentPayload, requirements, nowSec = Math.floor(Date.now() / 1000), { contractVerifier = null, profiles = [ARC_PROFILE] } = {}) {
-  const refuse = (reason, payer) => ({ reason, payer: ADDR.test(String(payer || "")) ? payer : undefined });
+  const refuse = (reason, payer) => ({ reason, payer: ADDR.test(txt(payer)) ? payer : undefined });
   if (!isObj(requirements) || requirements.scheme !== "exact") return refuse("unsupported_scheme");
   const profile = profiles.find((p) => p.caip2 === requirements.network);
   if (!profile) return refuse("invalid_network");
   if (lc(requirements.asset) !== lc(profile.asset)) return refuse("invalid_payment_requirements");
-  if (!ADDR.test(String(requirements.payTo || "")) || !UINT.test(String(requirements.amount ?? ""))) return refuse("invalid_payment_requirements");
+  if (!ADDR.test(txt(requirements.payTo)) || !UINT.test(uintText(requirements.amount))) return refuse("invalid_payment_requirements");
   if (!isObj(paymentPayload) || paymentPayload.x402Version !== 2) return refuse("invalid_x402_version");
   const accepted = paymentPayload.accepted;
   if (isObj(accepted) && (accepted.network !== profile.caip2 || lc(accepted.asset) !== lc(profile.asset))) return refuse("invalid_network");
@@ -185,9 +186,9 @@ export async function preflightUsdcPayment(paymentPayload, requirements, nowSec 
   const sig = isObj(inner) ? inner.signature : null;
   if (!isObj(auth) || typeof sig !== "string" || !/^0x[0-9a-fA-F]+$/.test(sig)) return refuse("invalid_payload");
   const payer = auth.from;
-  if (!ADDR.test(String(auth.from || "")) || !ADDR.test(String(auth.to || ""))) return refuse("invalid_payload", payer);
-  for (const f of ["value", "validAfter", "validBefore"]) if (!UINT.test(String(auth[f] ?? ""))) return refuse("invalid_payload", payer);
-  if (!B32.test(String(auth.nonce || ""))) return refuse("invalid_payload", payer);
+  if (!ADDR.test(txt(auth.from)) || !ADDR.test(txt(auth.to))) return refuse("invalid_payload", payer);
+  for (const f of ["value", "validAfter", "validBefore"]) if (!UINT.test(txt(auth[f]))) return refuse("invalid_payload", payer);
+  if (!B32.test(txt(auth.nonce))) return refuse("invalid_payload", payer);
   if (lc(auth.to) !== lc(requirements.payTo)) return refuse("invalid_exact_evm_payload_recipient_mismatch", payer);
   if (BigInt(auth.value) !== BigInt(requirements.amount)) return refuse("invalid_exact_evm_payload_authorization_value_mismatch", payer);
   if (BigInt(auth.validAfter) > BigInt(nowSec)) return refuse("invalid_exact_evm_payload_authorization_valid_after", payer);
@@ -211,6 +212,99 @@ export async function preflightUsdcPayment(paymentPayload, requirements, nowSec 
   return refuse(verdict === "unverifiable" ? "contract_signature_unverifiable" : "invalid_exact_evm_payload_signature", payer);
 }
 
+/**
+ * Local preflight for an Arc `upto` (Permit2) payment, the same rule as the
+ * exact one: nothing reaches Circle unless this server has verified it. The
+ * Permit2 authorization must name the requirement's token, the x402 upto
+ * proxy as spender, our payTo as the witness recipient, the facilitator the
+ * requirement names, a live window, and a ceiling: equal to the requirement
+ * on verify, and at or above the amount asked on settle (the metered amount,
+ * which may be lower, never higher). The signature must be a low-s ECDSA
+ * signature by `from` over Permit2's typed data on this chain. An EIP-2612
+ * gas sponsoring permit, when the buyer attached one, must be for the same
+ * owner and token and approve Permit2; Circle checks its signature.
+ */
+/** The fields of a signed EIP-2612 gas sponsoring permit (@x402/evm
+ *  extractEip2612GasSponsoringInfo reads these). */
+const EIP2612_PERMIT_FIELDS = Object.freeze(["from", "asset", "spender", "amount", "nonce", "deadline", "signature"]);
+
+export async function preflightUptoPayment(paymentPayload, requirements, nowSec = Math.floor(Date.now() / 1000), { profiles = [ARC_PROFILE], settle = false } = {}) {
+  const refuse = (reason, payer) => ({ reason, payer: ADDR.test(txt(payer)) ? payer : undefined });
+  if (!isObj(requirements) || requirements.scheme !== "upto") return refuse("unsupported_scheme");
+  const profile = profiles.find((p) => p.caip2 === requirements.network);
+  if (!profile) return refuse("invalid_network");
+  if (lc(requirements.asset) !== lc(profile.asset)) return refuse("invalid_payment_requirements");
+  const facilitator = isObj(requirements.extra) ? requirements.extra.facilitatorAddress : null;
+  if (!ADDR.test(txt(requirements.payTo)) || !UINT.test(uintText(requirements.amount)) || !ADDR.test(txt(facilitator))) return refuse("invalid_payment_requirements");
+  if (!isObj(paymentPayload) || paymentPayload.x402Version !== 2) return refuse("invalid_x402_version");
+  const accepted = paymentPayload.accepted;
+  if (!isObj(accepted) || accepted.scheme !== "upto" || accepted.network !== profile.caip2 || lc(accepted.asset) !== lc(profile.asset)) return refuse("invalid_network");
+  const inner = paymentPayload.payload;
+  const p2 = isObj(inner) ? inner.permit2Authorization : null;
+  const sig = isObj(inner) ? inner.signature : null;
+  if (!isObj(p2) || typeof sig !== "string" || !/^0x[0-9a-fA-F]{130}$/.test(sig)) return refuse("invalid_payload");
+  const payer = p2.from;
+  const permitted = p2.permitted;
+  const witness = p2.witness;
+  if (!ADDR.test(txt(p2.from)) || !ADDR.test(txt(p2.spender)) || !isObj(permitted) || !isObj(witness)) return refuse("invalid_payload", payer);
+  if (!ADDR.test(txt(permitted.token)) || !ADDR.test(txt(witness.to)) || !ADDR.test(txt(witness.facilitator))) return refuse("invalid_payload", payer);
+  for (const v of [permitted.amount, p2.nonce, p2.deadline, witness.validAfter]) if (!UINT.test(txt(v))) return refuse("invalid_payload", payer);
+  if (lc(p2.spender) !== lc(x402UptoPermit2ProxyAddress)) return refuse("invalid_permit2_spender", payer);
+  if (lc(witness.to) !== lc(requirements.payTo)) return refuse("invalid_permit2_recipient_mismatch", payer);
+  if (lc(witness.facilitator) !== lc(facilitator)) return refuse("invalid_upto_evm_payload_facilitator_mismatch", payer);
+  if (lc(permitted.token) !== lc(profile.asset)) return refuse("permit2_token_mismatch", payer);
+  const ceiling = BigInt(permitted.amount);
+  const asked = BigInt(requirements.amount);
+  if (settle ? asked > ceiling : asked !== ceiling) return refuse(settle ? "upto_settlement_exceeds_amount" : "permit2_amount_mismatch", payer);
+  if (BigInt(p2.deadline) < BigInt(nowSec + 6)) return refuse("permit2_deadline_expired", payer);
+  if (BigInt(witness.validAfter) > BigInt(nowSec)) return refuse("permit2_not_yet_valid", payer);
+  const ext = isObj(paymentPayload.extensions) ? paymentPayload.extensions : null;
+  const permit = ext && isObj(ext.eip2612GasSponsoring) && isObj(ext.eip2612GasSponsoring.info) ? ext.eip2612GasSponsoring.info : null;
+  // The server declares the key with an info of {description, version} and
+  // the client SDK merges that declaration into the payload when the buyer
+  // already holds the allowance, so an info carrying no permit field is an
+  // echo, not a permit. One that carries any permit field is a permit: its
+  // owner must be present and be the Permit2 signer.
+  if (permit && EIP2612_PERMIT_FIELDS.some((k) => permit[k] !== undefined)) {
+    if (lc(permit.from) !== lc(p2.from) || lc(permit.asset) !== lc(profile.asset) || lc(permit.spender) !== lc(PERMIT2_ADDRESS)) return refuse("invalid_eip2612_extension", payer);
+  }
+  if (BigInt(`0x${sig.slice(66, 130)}`) > SECP256K1_HALF_N) return refuse("invalid_upto_evm_payload_signature", payer);
+  try {
+    const valid = await verifyTypedData({
+      address: p2.from,
+      domain: { name: "Permit2", chainId: profile.chainId, verifyingContract: PERMIT2_ADDRESS },
+      types: uptoPermit2WitnessTypes,
+      primaryType: "PermitWitnessTransferFrom",
+      message: {
+        permitted: { token: permitted.token, amount: ceiling },
+        spender: p2.spender,
+        nonce: BigInt(p2.nonce),
+        deadline: BigInt(p2.deadline),
+        witness: { to: witness.to, facilitator: witness.facilitator, validAfter: BigInt(witness.validAfter) },
+      },
+      signature: sig,
+    });
+    if (valid) return null;
+  } catch { /* an unparseable signature is refused below */ }
+  return refuse("invalid_upto_evm_payload_signature", payer);
+}
+
+/** The signer of an EVM payload: authorization.from (exact) or
+ *  permit2Authorization.from (upto). */
+const signerOf = (paymentPayload) => paymentPayload?.payload?.authorization?.from ?? paymentPayload?.payload?.permit2Authorization?.from;
+
+/** The nonce a pending settlement is booked under (src/circle-pending.js keys
+ *  on a 32-byte hex nonce): EIP-3009's as signed, a Permit2 uint nonce as the
+ *  same number in 32-byte hex. */
+export function pendingNonceOf(paymentPayload) {
+  const exact = paymentPayload?.payload?.authorization?.nonce;
+  if (exact !== undefined) return typeof exact === "string" ? exact : undefined;
+  const p2 = paymentPayload?.payload?.permit2Authorization?.nonce;
+  if (!UINT.test(txt(p2))) return undefined;
+  const hex = BigInt(p2).toString(16);
+  return hex.length <= 64 ? `0x${hex.padStart(64, "0")}` : undefined;
+}
+
 /** True when `sig` is a valid ECDSA signature by `auth.from` over the
  *  profile's (Arc by default) EIP-3009 typed data. Pure: no RPC call. */
 export async function isLocalEoaSignature(auth, sig, profile = ARC_PROFILE) {
@@ -226,7 +320,7 @@ export async function isLocalEoaSignature(auth, sig, profile = ARC_PROFILE) {
 export async function isContractWalletPayment(paymentPayload) {
   const auth = paymentPayload?.payload?.authorization;
   const sig = paymentPayload?.payload?.signature;
-  if (!isObj(auth) || typeof sig !== "string" || !ADDR.test(String(auth.from || ""))) return false;
+  if (!isObj(auth) || typeof sig !== "string" || !ADDR.test(txt(auth.from))) return false;
   return !(await isLocalEoaSignature(auth, sig));
 }
 
@@ -324,7 +418,7 @@ export function createContractVerifier({ publicClient = null, rpcUrl, timeoutMs 
  * non-JSON error body. This client's errors are already reduced.
  */
 export class CircleFacilitatorClient extends HTTPFacilitatorClient {
-  constructor({ apiKey, fetchImpl, now, pendingBudgetMs = PENDING_BUDGET_MS, pendingPollMs = PENDING_POLL_MS, onPending = null, contractVerifier = null, profiles = [ARC_PROFILE], label = CIRCLE_LABEL } = {}) {
+  constructor({ apiKey, fetchImpl, now, pendingBudgetMs = PENDING_BUDGET_MS, pendingPollMs = PENDING_POLL_MS, onPending = null, contractVerifier = null, profiles = [ARC_PROFILE], label = CIRCLE_LABEL, upto = false } = {}) {
     super({ url: "http://127.0.0.1:0" });
     // The stock constructor sets `url`; remove it (see the class comment).
     delete this.url;
@@ -349,6 +443,10 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     const list = Array.isArray(profiles) && profiles.length ? profiles : [ARC_PROFILE];
     this._profiles = Object.freeze([...list]);
     this._networks = new Set(this._profiles.map((p) => p.caip2));
+    // `upto` on Arc only, and only when asked (X402_UPTO_NETWORKS names
+    // eip155:5042): /supported then also reports Circle's Arc upto kind and
+    // the preflight admits a Permit2 payment. Off, upto is refused as before.
+    this._uptoNetworks = Object.freeze(upto === true && this._networks.has(ARC_CAIP2) ? [ARC_CAIP2] : []);
     // The verifier checks against Arc's domain and Arc's RPC, so it is kept
     // only by an instance that settles Arc, and handed to the preflight only
     // for an Arc requirement (_preflight). Any other network refuses every
@@ -360,7 +458,10 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
   /** The CAIP-2 networks this instance settles. */
   get networks() { return [...this._networks]; }
 
-  _preflight(paymentPayload, paymentRequirements) {
+  _preflight(paymentPayload, paymentRequirements, { settle = false } = {}) {
+    if (paymentRequirements?.scheme === "upto" && this._uptoNetworks.includes(paymentRequirements?.network)) {
+      return preflightUptoPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { profiles: this._profiles, settle });
+    }
     const contractVerifier = paymentRequirements?.network === ARC_CAIP2 ? this._contractVerifier : null;
     return preflightUsdcPayment(paymentPayload, paymentRequirements, Math.floor(this._now() / 1000), { contractVerifier, profiles: this._profiles });
   }
@@ -421,7 +522,7 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     const r = await this._request("supported", "/supported", { auth: false, timeoutMs: SUPPORTED_TIMEOUT_MS });
     if (!r.ok) throw new CircleResponseError("supported", r.status, r.parseError ? r.parseError.reason : reasonFromErrorBody(r.data, r.status));
     if (r.parseError) throw r.parseError;
-    return usdcKindsFromSupported(r.data, this._profiles);
+    return usdcKindsFromSupported(r.data, this._profiles, { uptoNetworks: this._uptoNetworks });
   }
 
   async verify(paymentPayload, paymentRequirements) {
@@ -438,7 +539,7 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     // The payer is the signer this server verified (authorization.from, bound
     // by the local signature check or, for a contract wallet, by its on-chain
     // check), never an address the facilitator names.
-    const payer = paymentPayload.payload.authorization.from;
+    const payer = signerOf(paymentPayload);
     if (r.data.isValid === true) return { isValid: true, payer };
     return { isValid: false, invalidReason: safeReason(r.data.invalidReason), payer };
   }
@@ -447,8 +548,8 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
     // The requirement's network once the preflight has accepted it; a refusal
     // names it only when it is one of ours.
     const network = this._networks.has(paymentRequirements?.network) ? paymentRequirements.network : this._profiles[0].caip2;
-    const signedFrom = paymentPayload?.payload?.authorization?.from;
-    const refused = await this._preflight(paymentPayload, paymentRequirements);
+    const signedFrom = signerOf(paymentPayload);
+    const refused = await this._preflight(paymentPayload, paymentRequirements, { settle: true });
     if (refused) return { success: false, errorReason: refused.reason, transaction: "", network, payer: refused.payer };
     const r = await this._request("settle", "/settle", {
       method: "POST", timeoutMs: SETTLE_TIMEOUT_MS,
@@ -482,7 +583,7 @@ export class CircleFacilitatorClient extends HTTPFacilitatorClient {
         // refund instead of a silent charge.
         if (this._onPending) {
           try {
-            await this._onPending({ paymentId, payer, network, nonce: paymentPayload?.payload?.authorization?.nonce, amount: String(paymentRequirements?.amount ?? ""), resource: paymentPayload?.resource?.url });
+            await this._onPending({ paymentId, payer, network, nonce: pendingNonceOf(paymentPayload), amount: String(paymentRequirements?.amount ?? ""), resource: paymentPayload?.resource?.url });
           } catch { /* booking never breaks the settle path */ }
         }
       }

@@ -9541,14 +9541,17 @@ app.get("/favicon.svg", (_req, res) =>
   res.type("image/svg+xml").set("Cache-Control", "public, max-age=31536000, immutable").send(FAVICON_SVG)
 );
 let faviconPngCache = null;
-app.get("/favicon.ico", async (_req, res) => {
+const sendFaviconPng = async (_req, res) => {
   try {
     faviconPngCache ??= await rasterizeSvg(FAVICON_SVG, 512);
     res.type("image/png").set("Cache-Control", "public, max-age=31536000, immutable").send(faviconPngCache);
   } catch {
     res.redirect(302, "/favicon.svg");
   }
-});
+};
+app.get("/favicon.ico", sendFaviconPng);
+// The same PNG under a .png name: the x402 listing icon (BAZAAR_ICON_PATH).
+app.get("/favicon.png", sendFaviconPng);
 
 // 1200×630 social card for link previews (og:image / twitter:image).
 // `width`/`height` letterbox the same art onto other canvases — GitHub's

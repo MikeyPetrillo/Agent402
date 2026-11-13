@@ -35,7 +35,8 @@ import { stepProgress } from "../job-progress.js";
 import { completeSynthesis, proseOf, reportChat, costOf, settleWithin } from "../report-synthesis.js";
 import { checkReportGrounding, sanitizeReportProse } from "../report-grounding.js";
 import { bad, upstreamUserId } from "./llm-gateway-kit.js";
-import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase, JUPITER_ATTRIBUTION } from "./solana-intel-kit.js";
+import { SOLANA_INTEL_TOOLS, MINTS, jupiterBase } from "./solana-intel-kit.js";
+import { attribute } from "../data-attribution.js";
 import { markUntrusted } from "./provenance.js";
 import { recordCompositeUsage } from "../composite-spend-guard.js";
 
@@ -512,7 +513,7 @@ export const TOKEN_BRIEF_TOOLS = [
 ];
 // The brief reads Jupiter, whose license requires the attribution (see
 // JUPITER_ATTRIBUTION in solana-intel-kit.js).
-for (const t of TOKEN_BRIEF_TOOLS) t.description = `${t.description} ${JUPITER_ATTRIBUTION}`;
+for (const t of TOKEN_BRIEF_TOOLS) attribute(t, "jupiter");
 
 // Exported for the offline test (pure helpers, no network).
 export const __test = { BASE58_RE, lpLockedBucket, concentrationBucket, authorityBucket, normMint };

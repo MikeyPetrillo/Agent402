@@ -28,6 +28,7 @@
 //   light    ($0.05 floor)  pure-CPU bundles, PoW-eligible
 //
 import { SKILL_PACKS, PACK_PRICES } from "../skills.js";
+import { packAttributions, withAttributions } from "../data-attribution.js";
 import { safeFetch } from "./fetch-guard.js";
 import { capturePostHogPackStep } from "../posthog.js";
 import { callerInputError } from "../caller-input-errors.js";
@@ -2193,6 +2194,10 @@ async function runPack(packSlug, args, ctx) {
 // at call time (after the ALL_KIT loop has finished populating it).
 export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
   const packIndex = new Map(SKILL_PACKS.map((p) => [p.slug, p]));
+  // The tools registered so far (server.js builds the packs after every kit),
+  // so a pack's description ends with the attribution sentences of the
+  // sources its tools serve (src/data-attribution.js).
+  const toolBySlug = new Map(Object.values(getCatalog() || {}).map((t) => [t?.slug, t]));
 
   return SKILL_PACKS.map((pack) => {
     const slug = pack.slug;
@@ -2208,10 +2213,12 @@ export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
       category: "skill-pack",
       price: `$${price.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}` /* whole milli-dollars: the derived pack price is charged as derived, never rounded to a cent */,
       // Lead with what the pack does.
-      description:
+      description: withAttributions(
         `${pack.tagline} ${pack.title} skill pack: one x402 payment runs ` +
         `${pack.toolSlugs.length} underlying tools (${pack.toolSlugs.join(", ")}); ` +
         `partial-success per step.`,
+        packAttributions(pack.toolSlugs, (s) => toolBySlug.get(s)),
+      ),
       // Optional curated search words (`searchTags`).
       tags: ["skill-pack", "workflow", slug, ...(Array.isArray(pack.searchTags) ? pack.searchTags : [])],
       discovery: {

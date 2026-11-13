@@ -7,6 +7,7 @@
 import { partialFields, clampFields } from "./partial-answer.js";
 import { toolList } from "./pages.js";
 import { queryTerms } from "./query-terms.js";
+import { withoutAttributions } from "./data-attribution.js";
 import { rankSkillPacks } from "./skills.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { UNIT_ALIASES } from "./tools/kit2.js";
@@ -203,7 +204,8 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // without signal. Keep the cap tight so each scoring pass is bounded.
   // Unicode-aware (src/query-terms.js): CJK runs become bigrams + the run;
   // Latin runs are unchanged.
-  const rawTerms = queryTerms(q, { max: 64 });
+  // A pasted description's attribution notice is not part of the task.
+  const rawTerms = queryTerms(withoutAttributions(q), { max: 64 });
   const terms = rawTerms.filter((t) => t.length > 1 && !STOPWORDS.has(t)).slice(0, 32);
   // Unit-word synonym: "convert miles to kilometers"-style tasks used to hit a
   // dedicated pairwise slug; now they must resolve to unit-convert. One
@@ -293,7 +295,8 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
     // Deliberately in `hay` rather than beside the slug: an alias is a name the
     // tool also answers to, not a stronger claim than its own name, and the
     // tag cap on the 402 challenge means aliases can never live in `tags`.
-    hay: `${t.name} ${t.description} ${t.category} ${(t.tags || []).join(" ")} ${(t.aliases || []).join(" ")}`.toLowerCase(),
+    // Attribution notices (src/data-attribution.js) are not ranked on.
+    hay: `${t.name} ${withoutAttributions(t.description)} ${t.category} ${(t.tags || []).join(" ")} ${(t.aliases || []).join(" ")}`.toLowerCase(),
   }));
   const N = all.length || 1;
   // ONE-LETTER TYPOS. A word no tool mentions anywhere ("danctions") used to

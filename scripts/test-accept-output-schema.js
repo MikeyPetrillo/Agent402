@@ -46,10 +46,10 @@ const base = "eip155:8453", sol = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
   // The real class: patched once, idempotent, and the built requirements
   // (what the 402 serialises AND what verify deep-equals the echoed accept
   // against) carry the schema on the Base exact requirement only.
-  // findMatchingRequirements stands in for the core's: every field but extra
-  // deep-equal (key order ignored), which is exactly what refuses a stripped
-  // echo.
-  const norm = (o) => JSON.stringify(Object.keys(o).sort().reduce((a, k) => (k === "extra" ? a : (a[k] = o[k], a)), {}));
+  // findMatchingRequirements stands in for the core's: every field deep-equal
+  // (key order ignored; the core reads extra as a subset, and every extra here
+  // is whole), which is exactly what refuses a stripped echo.
+  const norm = (o) => JSON.stringify(Object.keys(o).sort().reduce((a, k) => (a[k] = o[k], a), {}));
   class Fake {
     async buildPaymentRequirementsFromOptions(options) { return options.map((o) => ({ scheme: o.scheme, network: o.network, amount: "1000", extra: {} })); }
     findMatchingRequirements(reqs, payload) { return reqs.find((r) => norm(r) === norm(payload.accepted)); }
@@ -65,10 +65,20 @@ const base = "eip155:8453", sol = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
   ok(matched === built[0] && stripped.accepted.outputSchema === schema, "an echo missing outputSchema is matched after OUR schema is restored onto it (in place, so verify/settle see the advertised accept)");
   const wrongAmount = { x402Version: 2, accepted: { scheme: "exact", network: base, amount: "999", extra: {} }, payload: {} };
   ok(new Fake().findMatchingRequirements(built, wrongAmount) === undefined, "restoring never makes a different amount match (every other field stays byte-exact)");
-  const wrongSchema = { x402Version: 2, accepted: { scheme: "exact", network: base, amount: "1000", extra: {}, outputSchema: { type: "string" } }, payload: {} };
-  ok(new Fake().findMatchingRequirements(built, wrongSchema) === undefined && wrongSchema.accepted.outputSchema.type === "string", "an echo carrying a DIFFERENT outputSchema is refused and never overwritten");
+  // A 402 fetched from the previous build: the same accept with an older
+  // output schema (integer where this build says number). Not signed by any
+  // scheme, so ours is put on it and it matches; every other field stays exact.
+  const stale = { type: "object", properties: { hex: { type: "integer" } }, required: ["hex"] };
+  const staleEcho = { x402Version: 2, accepted: { scheme: "exact", network: base, amount: "1000", extra: {}, outputSchema: stale }, payload: {} };
+  ok(new Fake().findMatchingRequirements(built, staleEcho) === built[0] && staleEcho.accepted.outputSchema === schema, "an echo whose outputSchema differs from ours (an earlier build's 402) matches, with ours put on it");
+  for (const [field, value] of [["amount", "999"], ["payTo", "0xother"], ["asset", "0xother"], ["maxTimeoutSeconds", 1], ["extra", { name: "Other" }]]) {
+    const stray = { x402Version: 2, accepted: { scheme: "exact", network: base, amount: "1000", extra: {}, outputSchema: stale, [field]: value }, payload: {} };
+    ok(new Fake().findMatchingRequirements(built, stray) === undefined && stray.accepted.outputSchema === stale, `a differing outputSchema with a different ${field} is refused, and the buyer's own value is put back`);
+  }
+  const strayMissing = { x402Version: 2, accepted: { scheme: "exact", network: base, amount: "999", extra: {} }, payload: {} };
+  ok(new Fake().findMatchingRequirements(built, strayMissing) === undefined && !("outputSchema" in strayMissing.accepted), "a refused echo that carried none is left carrying none");
   const v1 = { x402Version: 1, accepted: { scheme: "exact", network: base, amount: "1000" }, payload: {} };
-  ok(restoreOutputSchemaOnAccepted(built, v1) === false && v1.accepted.outputSchema === undefined, "v1 payloads are never touched");
+  ok(restoreOutputSchemaOnAccepted(built, v1) === null && v1.accepted.outputSchema === undefined, "v1 payloads are never touched");
   const otherRail = { x402Version: 2, accepted: { scheme: "exact", network: sol, amount: "1000", extra: {} }, payload: {} };
   ok(new Fake().findMatchingRequirements(built, otherRail) === built[1] && otherRail.accepted.outputSchema === undefined, "a rail that advertises no schema matches as before, nothing restored");
   ok(typeof x402ResourceServer.prototype.buildPaymentRequirementsFromOptions === "function", "the vendor class still exposes the seam this patches (a rename upstream fails here, not silently in prod)");

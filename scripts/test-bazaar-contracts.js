@@ -16,6 +16,22 @@ import { boundedSchemaFromExample, SHAPE_HAPPY_PATH_ONLY } from "../src/openapi-
 import { gradeX402Response } from "../src/tools/x402-kit.js";
 import { CAIP2_PATTERN } from "../src/avm-network.js";
 import { hasShortenedExample, replayableInput, openapiOperation } from "./lib/replayable-example.js";
+import { listingInjectionFinding, addressesReader } from "../src/listing-screen.js";
+import { readFileSync } from "node:fs";
+import { BAZAAR_DESCRIPTIONS, bazaarCapDescription, isExamplePointer, TAG_FILLER, slugRepeatsTag } from "../src/payments.js";
+import { attributionTailOf } from "../src/data-attribution.js";
+
+// Routes whose 402 carried a real sample output on the baseline tree. A route
+// over its byte budget may carry the /openapi.json pointer instead (counted
+// apart below); one of these giving up its real example to it is a regression.
+const REAL_EXAMPLE_BASELINE = new Set(JSON.parse(readFileSync(new URL("./bazaar-example-baseline.json", import.meta.url), "utf8")).routes);
+// The typed-judgment listings (descriptionFirst in their kits): each keeps its
+// whole description beside the sample-answer pointer, and judge its model enum.
+const openapiOutputExample = (openapi, endpoint) => {
+  const ok = openapiOperation(openapi, endpoint.method || "GET", endpoint.path)?.responses?.["200"]?.content?.["application/json"];
+  return ok?.example ?? ok?.examples?.default?.value;
+};
+const WHOLE_LISTING_ROUTES = new Set(["POST /v1/judge", "POST /v1/decisions", "POST /v1/judge/vision", "POST /api/loop-gate"]);
 
 const MAX_CHALLENGE_BYTES = 12_000;
 // The JSON body mirrors the header's PaymentRequired object (see
@@ -75,7 +91,7 @@ const child = spawn(process.execPath, ["src/server.js"], {
     // upstream: payment middleware runs before handlers, so dummy non-secret
     // values are sufficient to include the nine gated paid routes.
     OPENROUTER_TTS_ENABLED: "true", X_BEARER_TOKEN: "test",
-    APOLLO_API_KEY: "test",
+    APOLLO_API_KEY: "test", TYPESAFE_API_KEY: "test",
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
     MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     STATS_ALLOW_EPHEMERAL: "true",
@@ -153,6 +169,16 @@ try {
   let largestOwn = { route: "", bytes: 0 };
   let speechSeen = false;
   let specificTagSeen = false;
+  // Fields the Bazaar ranks on (description, output schema, service metadata):
+  // routes that carry each one, printed and required of every route.
+  const has = { serviceName: 0, tags: 0, icon: 0, description: 0, input: 0, output: 0, outputSchema: 0, screened: 0 };
+  // A pointer stands in for a sample output too large for the 402: legitimate
+  // for an oversized route, counted apart so it never reads as a real example.
+  has.outputPointer = 0; has.outputSchemaPointer = 0;
+  let wholeListingSeen = 0;
+  const attributedSeen = new Set();
+  const LISTING_ICON = /\.(?:png|jpe?g|webp|gif)$/i;
+  const iconPaths = new Set();
 
   for (const { endpoint, route, status, encoded, bodyText, cacheControl } of rows) {
     if (status !== 402) { fail(route, `expected 402, got ${status}`); continue; }
@@ -189,6 +215,36 @@ try {
       const graded = gradeX402Response({ href: `${base}${endpoint.path}`, protocol: "https:", status, cacheControl, bodyText, paymentRequiredHeader: encoded });
       const hygiene = (graded.checks || []).find((c) => c.id === "error-hygiene");
       if (!hygiene || hygiene.status !== "pass") fail(route, `402 body fails error-hygiene: ${hygiene?.detail || "check missing"}`);
+    }
+    const listing = paymentRequired.resource || {};
+    if (typeof listing.serviceName === "string" && listing.serviceName.trim()) has.serviceName++; else fail(route, "listing has no serviceName");
+    if (Array.isArray(listing.tags) && listing.tags.length >= 1 && listing.tags.length <= 5 && (!endpoint.category || listing.tags[0] === endpoint.category)) has.tags++;
+    else fail(route, `listing tags are not 1..5 led by the category: ${JSON.stringify(listing.tags)}`);
+    // The slug outranks the generic fillers: a listing that reaches a filler
+    // carries its slug first, unless the slug only repeats a tag it has.
+    if (Array.isArray(listing.tags) && endpoint.slug) {
+      // The trailing run of fillers (a tool may carry "x402" as its own tag).
+      let firstFiller = listing.tags.length;
+      while (firstFiller > 0 && TAG_FILLER.includes(listing.tags[firstFiller - 1])) firstFiller--;
+      if (firstFiller === listing.tags.length) firstFiller = -1;
+      const named = firstFiller < 0 ? listing.tags : listing.tags.slice(0, firstFiller);
+      if (firstFiller >= 0 && !named.includes(endpoint.slug) && !slugRepeatsTag(endpoint.slug, named)) fail(route, `listing reaches a filler tag before its slug: ${JSON.stringify(listing.tags)}`);
+      if (listing.tags.indexOf(endpoint.slug) > firstFiller && firstFiller >= 0) fail(route, `listing puts a filler before its slug: ${JSON.stringify(listing.tags)}`);
+    }
+    let iconPath = "";
+    try { iconPath = new URL(listing.iconUrl).pathname; } catch { /* checked below */ }
+    if (LISTING_ICON.test(iconPath)) { has.icon++; iconPaths.add(iconPath); } else fail(route, `listing icon is not a PNG, JPG, WebP or GIF path: ${listing.iconUrl}`);
+    const desc = String(listing.description || "");
+    if (desc.length >= 40 && desc.length <= 500 && !/(?:^|\s)\(?\?[a-zA-Z_]\w*=/.test(desc)) has.description++;
+    else fail(route, `listing description is ${desc.length} chars or keeps a query hint (40..500, no hint): ${desc.slice(0, 80)}`);
+    // The Bazaar delists metadata that reads as an instruction to an agent.
+    // Our own two screens read every listing the way they read a seller's.
+    {
+      const finding = listingInjectionFinding(`${listing.serviceName ?? ""} ${desc} ${(listing.tags || []).join(" ")} ${endpoint.slug ?? ""} ${endpoint.path}`);
+      const sentence = desc.split(/(?<=[.!?])\s+/).find((x) => addressesReader(x));
+      const ident = [listing.serviceName, ...(listing.tags || [])].find((x) => x && addressesReader(x));
+      if (finding || sentence || ident) fail(route, `listing trips the listing screen (${finding || "reader"}): ${sentence || ident || desc.slice(0, 80)}`);
+      else has.screened++;
     }
     const resource = ResourceInfoSchema.safeParse(paymentRequired.resource);
     if (!resource.success) fail(route, `ResourceInfoSchema: ${resource.error.issues[0]?.message || "invalid"}`);
@@ -248,6 +304,37 @@ try {
       if (JSON.stringify(accepts[0]?.outputSchema) !== JSON.stringify(outputSchema)) fail(route, "accepts[0].outputSchema is not the extension's typed output schema");
       if (accepts.slice(1).some((a) => a.outputSchema !== undefined)) fail(route, "outputSchema duplicated onto a later accept");
     } else if (accepts[0]?.outputSchema !== undefined) fail(route, "accepts[0].outputSchema present with no extension schema to source it");
+    if (extension.info?.input) has.input++; else fail(route, "bazaar extension has no input");
+    const pointer = isExamplePointer(example);
+    if (example === undefined) fail(route, "bazaar extension has no output example");
+    else if (pointer) {
+      has.outputPointer++;
+      if (REAL_EXAMPLE_BASELINE.has(route)) fail(route, "the 402 carried a real sample output on the baseline and now carries the /openapi.json pointer");
+    } else has.output++;
+    if (!outputSchema) fail(route, "bazaar extension has no output schema");
+    else if (pointer) has.outputSchemaPointer++;
+    else has.outputSchema++;
+    // A catalog text that ends with the attribution its sources' terms require
+    // (src/data-attribution.js; a pack carries one per source its tools serve)
+    // keeps the same run at the end of its 402 listing, whatever the budget cut.
+    const attribution = attributionTailOf(endpoint.description || "");
+    if (attribution) {
+      attributedSeen.add(endpoint.slug);
+      if (!desc.endsWith(attribution)) fail(route, `listing lost the attribution its catalog text ends with: ...${desc.slice(-80)}`);
+    }
+    if (WHOLE_LISTING_ROUTES.has(route)) {
+      wholeListingSeen++;
+      const source = BAZAAR_DESCRIPTIONS[endpoint.slug] || endpoint.description;
+      if (!source) fail(route, "no catalog description to compare the listing with");
+      else if (desc !== bazaarCapDescription(source)) fail(route, `listing description was cut by the byte budget (${desc.length} of ${bazaarCapDescription(source).length} chars): ${desc.slice(-60)}`);
+      if (!(pointer || isDeepStrictEqual(example, openapiOutputExample(openapi, endpoint)))) fail(route, "sample output is neither the real example nor the /openapi.json pointer");
+      if (endpoint.path === "/v1/judge") {
+        const modelEnum = extension.schema?.properties?.input?.properties?.body?.properties?.model?.enum;
+        const published = openapiOperation(openapi, "POST", endpoint.path)?.requestBody?.content?.["application/json"]?.schema?.properties?.model?.enum;
+        if (!Array.isArray(published) || !published.length) fail(route, "/openapi.json publishes no model enum to compare the listing with");
+        else if (!isDeepStrictEqual(modelEnum, published)) fail(route, `listing input lost the model enum (${JSON.stringify(modelEnum)})`);
+      }
+    }
     if (example === undefined || !outputSchema) continue;
     if (JSON.stringify(outputSchema).length > 500) fail(route, "output schema exceeds the 500-byte budget");
 
@@ -280,6 +367,19 @@ try {
   }
 
   if (rows.length !== endpoints.length) fail("catalog", `probed ${rows.length}/${endpoints.length} endpoints`);
+  // The icon every listing names is served as an image (a host without
+  // Chromium redirects to the SVG, which this boot may be).
+  for (const iconPath of iconPaths) {
+    const icon = await fetch(`${base}${iconPath}`, { redirect: "manual" });
+    await icon.arrayBuffer();
+    const type = icon.headers.get("content-type") || "";
+    if (!(icon.status === 200 && type.startsWith("image/png")) && icon.status !== 302) fail(`GET ${iconPath}`, `listing icon answers ${icon.status} ${type}`);
+  }
+  console.log(`listing fields on ${rows.length} routes: ${Object.entries(has).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+  console.log(`sample outputs: ${has.output} real, ${has.outputPointer} /openapi.json pointers (schemas: ${has.outputSchema} real, ${has.outputSchemaPointer} for a pointer)`);
+  // FRED, CoinGecko, Jupiter, OpenStreetMap, Open-Meteo and NVD routes, and the packs that run them.
+  if (attributedSeen.size < 60 || ![...attributedSeen].some((s) => s.startsWith("skill-"))) fail("catalog", `checked the attribution on ${attributedSeen.size} listings, packs included (expected 60 or more)`);
+  if (wholeListingSeen !== WHOLE_LISTING_ROUTES.size) fail("catalog", `checked ${wholeListingSeen} of ${WHOLE_LISTING_ROUTES.size} typed-judgment listings`);
   if (!quotedPriced) fail("catalog", "no quoted route was checked against its published range (the metered tiers and decide are quoted)");
   if (!speechSeen) fail("POST /v1/audio/speech", "route was not validated as a raw output");
   if (!specificTagSeen) fail("POST /api/extract", "representative route-specific tag did not survive sanitization");

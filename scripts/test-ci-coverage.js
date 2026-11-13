@@ -20,6 +20,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { expandedDeployWorkflow, laneManifestProblems } from "./lib/ci-workflow.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOWS = join(ROOT, ".github", "workflows");
@@ -39,11 +40,16 @@ const scripts = readdirSync(join(ROOT, "scripts"))
   .sort();
 ok(scripts.length > 100, `found the test corpus (${scripts.length} suites)`);
 
-// Any workflow may invoke a suite, not only deploy.yml.
+// Any workflow may invoke a suite, not only deploy.yml. deploy.yml's test lists
+// live in scripts/ci/lanes and count only through a step that runs them, so it
+// is read expanded (scripts/lib/ci-workflow.js): a section no step runs is not
+// coverage.
 const workflowText = readdirSync(WORKFLOWS)
   .filter((f) => /\.ya?ml$/.test(f))
-  .map((f) => readFileSync(join(WORKFLOWS, f), "utf8"))
+  .map((f) => (f === "deploy.yml" ? expandedDeployWorkflow() : readFileSync(join(WORKFLOWS, f), "utf8")))
   .join("\n");
+const manifest = laneManifestProblems();
+ok(manifest.length === 0, manifest.length ? `scripts/ci/lanes and deploy.yml agree: ${manifest.join("; ")}` : "every scripts/ci/lanes section is run by exactly one deploy.yml step of its own lane");
 ok(workflowText.length > 0, "workflow files are readable");
 
 const orphaned = scripts.filter((f) => !EXEMPT.has(f) && !workflowText.includes(`scripts/${f}`));

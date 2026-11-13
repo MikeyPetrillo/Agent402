@@ -64,7 +64,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { verifyTypedData, parseCompactSignature, compactSignatureToSignature, serializeSignature } from "viem";
 import { createJsonDocument } from "./json-document.js";
 import { trackStoreReady, leased } from "./state-db.js";
-import { ADDR, TX as TX_HASH, UUID, UINT, B32, REASON, SECP256K1_HALF_N, isObj, lc } from "./circle-shapes.js";
+import { ADDR, TX as TX_HASH, UUID, UINT, B32, REASON, SECP256K1_HALF_N, isObj, lc, txt, uintText } from "./circle-shapes.js";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -299,13 +299,13 @@ export async function isGatewayEoaSignature(kind, auth, sig) {
  * are Gateway's own where one exists.
  */
 export async function preflightGatewayPayment(paymentPayload, requirements, kinds, nowSec = Math.floor(Date.now() / 1000)) {
-  const refuse = (reason, payer) => ({ reason, payer: ADDR.test(String(payer || "")) ? payer : undefined });
+  const refuse = (reason, payer) => ({ reason, payer: ADDR.test(txt(payer)) ? payer : undefined });
   if (!isObj(requirements) || requirements.scheme !== "exact") return refuse("unsupported_scheme");
   const kind = kinds instanceof Map ? kinds.get(requirements.network) : null;
   if (!kind) return refuse("unsupported_network");
   if (!isObj(requirements.extra) || requirements.extra.name !== GATEWAY_KIND_NAME) return refuse("unsupported_domain");
   if (lc(requirements.asset) !== kind.asset) return refuse("unsupported_asset");
-  if (!ADDR.test(String(requirements.payTo || "")) || !UINT.test(String(requirements.amount ?? ""))) return refuse("invalid_payload");
+  if (!ADDR.test(txt(requirements.payTo)) || !UINT.test(uintText(requirements.amount))) return refuse("invalid_payload");
   if (!isObj(paymentPayload) || paymentPayload.x402Version !== 2) return refuse("invalid_payload");
   if (!isGatewayBatchedPayment(paymentPayload)) return refuse("unsupported_domain");
   const accepted = paymentPayload.accepted;
@@ -315,9 +315,9 @@ export async function preflightGatewayPayment(paymentPayload, requirements, kind
   const sig = isObj(inner) ? inner.signature : null;
   if (!isObj(auth) || typeof sig !== "string" || !/^0x[0-9a-fA-F]+$/.test(sig)) return refuse("invalid_payload");
   const payer = auth.from;
-  if (!ADDR.test(String(auth.from || "")) || !ADDR.test(String(auth.to || ""))) return refuse("invalid_payload", payer);
-  for (const f of ["value", "validAfter", "validBefore"]) if (!UINT.test(String(auth[f] ?? ""))) return refuse("invalid_payload", payer);
-  if (!B32.test(String(auth.nonce || ""))) return refuse("invalid_payload", payer);
+  if (!ADDR.test(txt(auth.from)) || !ADDR.test(txt(auth.to))) return refuse("invalid_payload", payer);
+  for (const f of ["value", "validAfter", "validBefore"]) if (!UINT.test(txt(auth[f]))) return refuse("invalid_payload", payer);
+  if (!B32.test(txt(auth.nonce))) return refuse("invalid_payload", payer);
   if (lc(auth.to) !== lc(requirements.payTo)) return refuse("address_mismatch", payer);
   if (lc(auth.from) === lc(auth.to)) return refuse("self_transfer", payer);
   if (BigInt(auth.value) !== BigInt(requirements.amount)) return refuse("amount_mismatch", payer);
@@ -341,7 +341,7 @@ async function resumeCheck(paymentPayload, requirements, kinds) {
   if (lc(requirements.asset) !== kind.asset || paymentPayload.accepted.network !== requirements.network) return "unsupported_network";
   const auth = paymentPayload?.payload?.authorization;
   const sig = paymentPayload?.payload?.signature;
-  if (!isObj(auth) || typeof sig !== "string" || !ADDR.test(String(auth.from || "")) || !UINT.test(String(auth.value ?? "")) || !UINT.test(String(requirements.amount ?? ""))) return "invalid_payload";
+  if (!isObj(auth) || typeof sig !== "string" || !ADDR.test(txt(auth.from)) || !UINT.test(txt(auth.value)) || !UINT.test(uintText(requirements.amount))) return "invalid_payload";
   if (lc(auth.to) !== lc(requirements.payTo)) return "address_mismatch";
   if (BigInt(auth.value) !== BigInt(requirements.amount)) return "amount_mismatch";
   if (!(await isGatewayEoaSignature(kind, auth, sig))) return "invalid_signature";

@@ -205,6 +205,9 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   If another app holds :3000, boot on a free port and export `TARGET_URL`.
 - CI runs parallel lanes; `scripts/test-ci-gating.js` derives them and requires each to gate
   deploy/publish. Browser page checks and both catalog sweeps live in the sweeps lane.
+  A lane's script list lives in `scripts/ci/lanes/<lane>.sh` under the `# @step N` its
+  deploy.yml step runs (`bash scripts/ci/run-step.sh <lane> N`); add a test line there, and
+  guards read deploy.yml through `scripts/lib/ci-workflow.js`.
 - Paid-mode tests boot their own server: `scripts/test-idempotency.js`, `client/test.js`,
   `scripts/test-mpp-shim.js` (run MPP paid-path suites alone; they share a local stats DB).
 - Metered slugs (LLM tiers, search, report products) are excluded from the catalog sweeps

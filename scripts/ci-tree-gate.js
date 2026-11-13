@@ -105,7 +105,9 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop()
   const { laneJobNames } = await import("./lib/ci-shards.js");
   let LANES = [];
   try {
-    const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
+    // The test lists live in scripts/ci/lanes (also part of the tree); the expanded text has them in place.
+    const { expandedDeployWorkflow } = await import("./lib/ci-workflow.js");
+    const wf = load(expandedDeployWorkflow());
     LANES = requiredLaneJobs(wf, laneJobNames);
   } catch { LANES = []; }
   // No lanes discovered means the workflow could not be read, which is not a

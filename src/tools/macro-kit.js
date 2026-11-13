@@ -293,9 +293,9 @@ let fxDashCache = null;
 
 export const MACRO_TOOLS = [
   {
-    route: "GET /api/treasury-yield-curve", name: "US Treasury daily yield curve", slug: "treasury-yield-curve", category: "data", price: "$0.005",
+    route: "GET /api/treasury-yield-curve", name: "US Treasury daily yield curve", slug: "treasury-yield-curve", category: "data", attribution: "fred", price: "$0.005",
     description:
-      "Latest US Treasury daily constant-maturity yield curve in one object: recordDate plus mo1, mo3, mo6, yr1, yr2, yr3, yr5, yr7, yr10, yr20 and yr30, each a yield in percent. Source: FRED DGS* series (St. Louis Fed), public domain. No params - always returns the most recent published curve, which trails today by a business day or two; for a date range use treasury-yield-history.",
+      "Latest US Treasury daily constant-maturity yield curve in one object: recordDate plus mo1, mo3, mo6, yr1, yr2, yr3, yr5, yr7, yr10, yr20 and yr30, each a yield in percent. Source: FRED DGS* series (St. Louis Fed), public domain. No params - always returns the most recent published curve, which trails today by a business day or two; for a date range use treasury-yield-history. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["treasury", "yield-curve", "interest-rates", "rates", "macro", "bonds", "fed", "10-year", "yields"],
     discovery: {
       input: {},
@@ -307,9 +307,9 @@ export const MACRO_TOOLS = [
     handler: async () => ({ ...(await fetchLatestYieldCurve()), unit: "percent", source: "FRED DGS* constant-maturity series (St. Louis Fed)" }),
   },
   {
-    route: "GET /api/treasury-yield-history", name: "US Treasury yield history", slug: "treasury-yield-history", category: "data", price: "$0.005",
+    route: "GET /api/treasury-yield-history", name: "US Treasury yield history", slug: "treasury-yield-history", category: "data", attribution: "fred", price: "$0.005",
     description:
-      "Daily history of US Treasury constant-maturity yields over the last N business days, oldest first: one row per day with recordDate and each maturity's yield in percent. Source: FRED DGS* series (St. Louis Fed), public domain. ?days=30 (1-250, default 30).",
+      "Daily history of US Treasury constant-maturity yields over the last N business days, oldest first: one row per day with recordDate and each maturity's yield in percent. Source: FRED DGS* series (St. Louis Fed), public domain. ?days=30 (1-250, default 30). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["treasury", "yield-curve", "history", "interest-rates", "rates", "macro", "bonds", "time-series"],
     discovery: {
       input: { days: 30 },
@@ -327,9 +327,9 @@ export const MACRO_TOOLS = [
     },
   },
   {
-    route: "GET /api/yield-curve-spread", name: "Treasury yield-curve spreads + inversion", slug: "yield-curve-spread", category: "data", price: "$0.005",
+    route: "GET /api/yield-curve-spread", name: "Treasury yield-curve spreads + inversion", slug: "yield-curve-spread", category: "data", attribution: "fred", price: "$0.005",
     description:
-      "Derived 2s10s and 3m10y Treasury yield-curve spreads (in basis points) plus a boolean flag per spread that is true when the curve is inverted. Source: FRED constant-maturity yields (public domain). No params.",
+      "Derived 2s10s and 3m10y Treasury yield-curve spreads (in basis points) plus a boolean flag per spread that is true when the curve is inverted. Source: FRED constant-maturity yields (public domain). No params. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["yield-curve", "spread", "2s10s", "3m10y", "inversion", "recession", "macro", "treasury", "rates", "bonds"],
     discovery: {
       input: {},
@@ -791,9 +791,9 @@ async function fredObservations({ seriesId, startDate, endDate, limit, units, fr
 
 MACRO_TOOLS.push(
   {
-    route: "GET /api/fred-series", name: "FRED time series", slug: "fred-series", category: "data", price: "$0.005",
+    route: "GET /api/fred-series", name: "FRED time series", slug: "fred-series", category: "data", attribution: "fred", price: "$0.005",
     description:
-      "Fetch any of FRED's ~800,000 economic time series by series ID - GDP (GDPC1), CPI (CPIAUCSL), unemployment (UNRATE), fed funds (DFF), and so on. Supports date windowing and the standard FRED units transformations (lin, chg, ch1, pch, pc1, pca, cca, log). ?seriesId=GDPC1&startDate=2018-01-01&endDate=2023-12-31&units=pc1 This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Fetch any of FRED's ~800,000 economic time series by series ID - GDP (GDPC1), CPI (CPIAUCSL), unemployment (UNRATE), fed funds (DFF), and so on. Supports date windowing and the standard FRED units transformations (lin, chg, ch1, pch, pc1, pca, cca, log). ?seriesId=GDPC1&startDate=2018-01-01&endDate=2023-12-31&units=pc1. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "series", "time-series", "gdp", "cpi", "inflation", "unemployment", "fed", "macro", "economic-data", "st-louis-fed"],
     discovery: {
       input: { seriesId: "GDPC1", startDate: "2018-01-01", endDate: "2022-12-31" },
@@ -827,9 +827,9 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/fred-search", name: "FRED catalog search", slug: "fred-search", category: "data", price: "$0.005",
+    route: "GET /api/fred-search", name: "FRED catalog search", slug: "fred-search", category: "data", attribution: "fred", price: "$0.005",
     description:
-      "Full-text search across FRED's ~800,000 economic time series. Returns series IDs (use with /api/fred-series), titles, frequency, units, and a popularity score. ?q=unemployment+rate&limit=10 This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Full-text search across FRED's ~800,000 economic time series. Returns series IDs (use with /api/fred-series), titles, frequency, units, and a popularity score. ?q=unemployment+rate&limit=10. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "search", "catalog", "economic-data", "st-louis-fed", "macro", "time-series"],
     discovery: {
       input: { q: "consumer price index", limit: 5 },
@@ -862,9 +862,9 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/fred-series-info", name: "FRED series metadata", slug: "fred-series-info", category: "data", price: "$0.005",
+    route: "GET /api/fred-series-info", name: "FRED series metadata", slug: "fred-series-info", category: "data", attribution: "fred", price: "$0.005",
     description:
-      "Metadata for a FRED series: title, frequency, units, seasonal adjustment, observation date range, and popularity. Use before /api/fred-series to confirm the series fits your needs. ?seriesId=UNRATE This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Metadata for a FRED series: title, frequency, units, seasonal adjustment, observation date range, and popularity. Use before /api/fred-series to confirm the series fits your needs. ?seriesId=UNRATE. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "series", "metadata", "economic-data", "st-louis-fed", "macro"],
     discovery: {
       input: { seriesId: "UNRATE" },
@@ -897,7 +897,7 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/fred-release-calendar", name: "FRED economic release calendar", slug: "fred-release-calendar", category: "data", price: "$0.005",
+    route: "GET /api/fred-release-calendar", name: "FRED economic release calendar", slug: "fred-release-calendar", category: "data", attribution: "fred", price: "$0.005",
     description:
       "Upcoming and very-recent US economic data release dates - CPI, employment, GDP, FOMC minutes, Treasury auctions, etc. Useful for scheduling agents around event-driven moves. The window starts at today's date in US Central time (America/Chicago, FRED's zone). ?days=14 (default 14, range 1-90). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "calendar", "releases", "cpi", "jobs", "gdp", "fomc", "macro", "economic-data"],
@@ -941,9 +941,9 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/sahm-rule", name: "Sahm Rule recession indicator", slug: "sahm-rule", category: "data", price: "$0.005",
+    route: "GET /api/sahm-rule", name: "Sahm Rule recession indicator", slug: "sahm-rule", category: "data", attribution: "fred", price: "$0.005",
     description:
-      "Real-time Sahm Rule recession indicator from FRED (SAHMREALTIME series). The Sahm Rule triggers when the 3-month moving average of US unemployment rises ≥0.50 percentage points above its prior-12-month low. No params.",
+      "Real-time Sahm Rule recession indicator from FRED (SAHMREALTIME series). The Sahm Rule triggers when the 3-month moving average of US unemployment rises ≥0.50 percentage points above its prior-12-month low. No params. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["sahm-rule", "recession", "unemployment", "macro", "fred", "indicator", "signal"],
     discovery: {
       input: {},
@@ -963,9 +963,9 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/cpi-yoy", name: "US CPI year-over-year inflation", slug: "cpi-yoy", aliases: ["us-cpi-year-over-year-inflation", "cpi-inflation", "inflation-rate"], category: "data", price: "$0.005",
+    route: "GET /api/cpi-yoy", name: "US CPI year-over-year inflation", slug: "cpi-yoy", aliases: ["us-cpi-year-over-year-inflation", "cpi-inflation", "inflation-rate"], category: "data", attribution: "fred", price: "$0.005",
     description:
-      "Latest US Consumer Price Index year-over-year inflation rate (headline CPI-U) plus the trailing 12 months of YoY readings - the headline inflation number. A month with no published value is listed in missingDates rather than dropped silently. Source: FRED CPIAUCSL with pc1 transformation. No params.",
+      "Latest US Consumer Price Index year-over-year inflation rate (headline CPI-U) plus the trailing 12 months of YoY readings - the headline inflation number. A month with no published value is listed in missingDates rather than dropped silently. Source: FRED CPIAUCSL with pc1 transformation. No params. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["cpi", "inflation", "yoy", "consumer-price-index", "macro", "fred", "bls", "headline-inflation"],
     discovery: {
       input: {},
@@ -990,7 +990,7 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/unemployment-rate", name: "US unemployment rate (UNRATE)", slug: "unemployment-rate", category: "data", price: "$0.005",
+    route: "GET /api/unemployment-rate", name: "US unemployment rate (UNRATE)", slug: "unemployment-rate", category: "data", attribution: "fred", price: "$0.005",
     description:
       "Latest US unemployment rate (current, as of date) plus a trailing N-month history of {date, value} for trend, seasonally adjusted, in percent. Source: FRED UNRATE (Bureau of Labor Statistics). A month with no published value is listed in missingDates rather than dropped silently. ?months=12 (1-120, default 12). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["unemployment", "unrate", "labor", "jobs", "bls", "fred", "macro"],
@@ -1016,7 +1016,7 @@ MACRO_TOOLS.push(
     },
   },
   {
-    route: "GET /api/fed-funds", name: "Effective federal funds rate", slug: "fed-funds", aliases: ["effective-federal-funds-rate", "federal-funds-rate", "fed-funds-rate"], category: "data", price: "$0.005",
+    route: "GET /api/fed-funds", name: "Effective federal funds rate", slug: "fed-funds", aliases: ["effective-federal-funds-rate", "federal-funds-rate", "fed-funds-rate"], category: "data", attribution: "fred", price: "$0.005",
     description:
       "Current effective federal funds rate (current, as of date, in percent) plus a trailing N-day history of {date, value}. Source: FRED DFF (Board of Governors), a daily series that includes weekends. ?days=30 (1-365, default 30). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fed-funds", "interest-rates", "monetary-policy", "fomc", "fed", "macro", "fred"],
@@ -1053,7 +1053,7 @@ MACRO_TOOLS.push(
     //   50  = Employment Situation           53  = Gross Domestic Product
     //   91  = G.17 Industrial Production     151 = JOLTS
     // Full release list: https://fred.stlouisfed.org/releases
-    route: "GET /api/fred-release-observations", name: "FRED bulk release observations (v2)", slug: "fred-release-observations", category: "data", price: "$0.005",
+    route: "GET /api/fred-release-observations", name: "FRED bulk release observations (v2)", slug: "fred-release-observations", category: "data", attribution: "fred", price: "$0.005",
     description:
       "Bulk-fetch observations for every series in a FRED release in one call. Use it to grab an entire economic report (jobs report, CPI report, GDP release) without enumerating constituent series IDs first. Returns paginated; pass lastSeriesId + lastObservationDate back to fetch the next page. ?releaseId=18 for H.15 (Selected Interest Rates), 10 for CPI, 50 for Employment Situation, 53 for GDP. Source: FRED API v2 /release/observations endpoint. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
     tags: ["fred", "release", "bulk", "observations", "v2", "cpi", "jobs", "gdp", "h15", "interest-rates", "employment", "macro", "economic-data"],

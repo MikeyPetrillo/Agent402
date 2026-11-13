@@ -6,6 +6,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFile } from "node:fs/promises";
 import { BAZAAR_DESCRIPTIONS, BAZAAR_DESCRIPTION_MAX, bazaarCapDescription, fitChallenge, CHALLENGE_SHORT_DESCRIPTION_MAX, isExamplePointer, x402ServiceName, x402ServiceNames, SERVICE_NAME_MAX, catalogServiceNameFor } from "../src/payments.js";
 import { RUGCHECK_SLUGS, rugcheckEnabled } from "../src/tools/solana-intel-kit.js";
+import { JUDGE_TOOLS, judgeEnabled } from "../src/tools/judge-kit.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -15,7 +16,7 @@ const slugs = new Set((res?.endpoints || []).map((e) => e.slug));
 ok(slugs.size > 400, `live catalog readable (${slugs.size} slugs) - boot the server or set TARGET_URL`);
 for (const [slug, text] of Object.entries(BAZAAR_DESCRIPTIONS)) {
   // A tool switched off on this boot keeps its copy for when it is listed again.
-  const gatedOff = !rugcheckEnabled() && RUGCHECK_SLUGS.has(slug);
+  const gatedOff = (!rugcheckEnabled() && RUGCHECK_SLUGS.has(slug)) || (!judgeEnabled() && JUDGE_TOOLS.some((t) => t.slug === slug));
   ok(slugs.has(slug) || gatedOff, `curated description key "${slug}" is a real catalog slug`);
   ok(text.length <= BAZAAR_DESCRIPTION_MAX && text.length >= 120, `${slug}: ${text.length} chars (120..${BAZAAR_DESCRIPTION_MAX})`);
   ok(/Use it|use it|Use this/.test(text), `${slug}: says WHEN to use it`);
@@ -23,7 +24,33 @@ for (const [slug, text] of Object.entries(BAZAAR_DESCRIPTIONS)) {
   ok(!/untrustedContent|\/api\/|see also/i.test(text), `${slug}: no internal cross-references / schema jargon`);
 }
 // the flagships all have curated copy
-for (const must of ["search", "answer", "extract", "render", "vin-decode", "geo-lookup", "hash", "sql-guard", "route-execute", "v1-chat-auto", "v1-embeddings", "image-ocr", "memory-write"]) ok(!!BAZAAR_DESCRIPTIONS[must], `flagship ${must} has curated Bazaar copy`);
+for (const must of ["search", "answer", "extract", "render", "vin-decode", "geo-lookup", "hash", "sql-guard", "route-execute", "v1-chat-auto", "v1-embeddings", "image-ocr", "memory-write", "memory-read"]) ok(!!BAZAAR_DESCRIPTIONS[must], `flagship ${must} has curated Bazaar copy`);
+// memory-read's listing: the catalog text is mostly query hints, so the
+// curated copy says what a read returns and whose namespace it reads.
+{
+  const mr = BAZAAR_DESCRIPTIONS["memory-read"] || "";
+  ok(bazaarCapDescription(mr) === mr && /paying wallet/.test(mr) && /omit it to list/.test(mr) && /own namespace by default/.test(mr) && /granted/.test(mr) && !/\?[a-z]+=/.test(mr), "memory-read: curated copy reads whole and names the key read, the key list, the payer's own namespace and a granted one");
+}
+// The cut runs in linear time: long runs of whitespace, separators or hints
+// (100,000 characters each) are cut in well under the bound, where a pattern
+// that rescans a run from each of its positions takes seconds.
+{
+  const N = 100_000, BOUND_MS = 250;
+  const hostile = {
+    spaces: " ".repeat(N), "spaces then an open hint": `a${" ".repeat(N)}(?x=1`, "spaces between words": `a${" ".repeat(N)}b`,
+    "a hint then spaces": `word ?x=1${" ".repeat(N)}z`, "a sentence head then spaces": `Lorem ipsum dolor sit amet${" ".repeat(N)}x ?a=1`,
+    "a sentence head then commas": `Lorem ipsum dolor sit amet${",".repeat(N)}x ?a=1`, "a head then a lead-in word run": `Lorem ipsum dolor sit amet${" via".repeat(N / 4)} ?a=1`,
+    "open hints": "(?a=".repeat(N / 4), "hint keys": "?a=".repeat(N / 3), "sentence ends": ". ".repeat(N / 2) + "?a=1",
+    "an attribution tail after spaces": `${" ".repeat(N)}This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.`,
+  };
+  for (const [name, text] of Object.entries(hostile)) {
+    const t0 = performance.now();
+    bazaarCapDescription(text);
+    bazaarCapDescription(text, CHALLENGE_SHORT_DESCRIPTION_MAX);
+    const ms = performance.now() - t0;
+    ok(ms < BOUND_MS, `cap: ${name} (${text.length} chars) is cut in ${ms.toFixed(1)} ms (under ${BOUND_MS})`);
+  }
+}
 // generic cap behaviour
 const long = "A".repeat(298) + ". " + "B".repeat(600);
 ok(bazaarCapDescription(long) === "A".repeat(298) + ".", "cap: truncates at the last sentence end under 500 (when it sits past the halfway mark)");
@@ -37,6 +64,155 @@ const words = "word ".repeat(200).trim();
 const capped = bazaarCapDescription(words);
 ok(capped.length <= BAZAAR_DESCRIPTION_MAX && capped.endsWith("word.") && !capped.includes("..."), `cap: word boundary + period, never mid-word '...' (${capped.length} chars)`);
 ok(bazaarCapDescription("short") === "short" && bazaarCapDescription("") === "", "cap: short/empty untouched");
+// A hint drops itself, not the sentences after it (the listing keeps what it says).
+ok(bazaarCapDescription("Read from a store. ?key=k returns the value; omit key to list keys. Keys expire on their TTL. Reads your own store by default; add ?owner=0x1 to read a granted one.") === "Read from a store. Keys expire on their TTL. Reads your own store by default.",
+  `cap: a sentence opening with a hint goes, later sentences stay, and a hint clause after a semicolon goes with its clause (got ${JSON.stringify(bazaarCapDescription("Read from a store. ?key=k returns the value; omit key to list keys. Keys expire on their TTL. Reads your own store by default; add ?owner=0x1 to read a granted one."))})`);
+ok(bazaarCapDescription("Look up a MIME type by file extension (?ext=png) or extensions by MIME type (?type=image/png). Covers ~50 common types.") === "Look up a MIME type by file extension or extensions by MIME type. Covers ~50 common types.", "cap: a hint in parentheses is removed in place");
+ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1 This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data.", "cap: an abbreviation (St.) does not end a sentence, so no fragment is left behind");
+ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not endorsed by the Federal Reserve Bank of St. Louis.") === "Series data. This product is not endorsed by the Federal Reserve Bank of St. Louis.", "cap: a hint that ends its own sentence goes alone, and the notice after it stays");
+// The FRED terms require their notice on every surface that serves the data.
+// The set of FRED routes is derived from code, not from which text already
+// carries the notice: the macro kit's functions that reach a FRED host,
+// closed over the calls between them, and every tool whose handler calls one.
+// Each must carry attribution "fred", end its catalog text with the notice,
+// and keep it in its listing at the Bazaar cut and at the 402 budget's
+// shorter cut (the most any 402, with any upto networks on, cuts it to).
+{
+  const { FRED_NOTICE, attributionTailOf } = await import("../src/data-attribution.js");
+  const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
+  const { readdir } = await import("node:fs/promises");
+  const FRED_HOST = /stlouisfed\.org/;
+  const kitSrc = await readFile(new URL("../src/tools/macro-kit.js", import.meta.url), "utf8");
+  const fns = new Map();
+  for (const m of kitSrc.matchAll(/^(?:export )?(?:async )?function (\w+)\s*\(/gm)) {
+    const close = kitSrc.indexOf("\n}\n", m.index);
+    fns.set(m[1], kitSrc.slice(m.index, close < 0 ? undefined : close));
+  }
+  const reached = new Set(["FRED_BASE"]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [name, body] of fns) {
+      if (reached.has(name)) continue;
+      if (FRED_HOST.test(body) || [...reached].some((r) => new RegExp(`\\b${r}\\b`).test(body.slice(body.indexOf("{"))))) { reached.add(name); grew = true; }
+    }
+  }
+  ok(["fredObservations", "fetchFredYields", "fetchLatestYieldCurve", "fetchFredYieldsViaKeyedApi"].every((n) => reached.has(n)), `FRED-reaching functions derived from the kit (${[...reached].join(", ")})`);
+  const callsFred = (t) => { const h = String(t.handler); return FRED_HOST.test(h) || [...reached].some((r) => new RegExp(`\\b${r}\\b`).test(h)); };
+  const derived = MACRO_TOOLS.filter(callsFred).map((t) => t.slug).sort();
+  const marked = MACRO_TOOLS.filter((t) => t.attribution === "fred").map((t) => t.slug).sort();
+  ok(derived.length >= 12 && JSON.stringify(derived) === JSON.stringify(marked), `every tool whose handler reaches FRED carries attribution "fred", and only those (derived ${derived.join(",")}; marked ${marked.join(",")})`);
+  const otherKits = [];
+  for (const file of await readdir(new URL("../src/tools/", import.meta.url))) {
+    if (!file.endsWith(".js") || file === "macro-kit.js") continue;
+    if (FRED_HOST.test(await readFile(new URL(`../src/tools/${file}`, import.meta.url), "utf8"))) otherKits.push(file);
+  }
+  ok(otherKits.length === 0, `no other kit calls a FRED host directly (${otherKits.join(", ") || "none"})`);
+  for (const t of MACRO_TOOLS.filter((x) => x.attribution === "fred")) {
+    ok(attributionTailOf(t.description) === FRED_NOTICE, `${t.slug}: the catalog text ends with the FRED notice`);
+    const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS[t.slug] || t.description);
+    const cut = bazaarCapDescription(listed, CHALLENGE_SHORT_DESCRIPTION_MAX);
+    ok(listed.endsWith(FRED_NOTICE) && cut.endsWith(FRED_NOTICE) && cut.length <= CHALLENGE_SHORT_DESCRIPTION_MAX, `${t.slug}: the listing keeps the FRED notice at both cuts (${listed.length} / ${cut.length} chars)`);
+    const live = (res?.endpoints || []).find((e) => e.slug === t.slug);
+    ok(!live || String(live.description || "").endsWith(FRED_NOTICE), `${t.slug}: the live catalog text ends with the notice`);
+  }
+  // The cut keeps a trailing attribution sentence for any route: the text
+  // before it is shortened at a sentence end, and the notice is never cut.
+  const lead = "A first sentence about the data that runs on for a while. A second sentence that adds detail and runs on further than the cut allows here.";
+  const kept = bazaarCapDescription(`${lead} ${FRED_NOTICE}`, 200);
+  ok(kept === `A first sentence about the data that runs on for a while. ${FRED_NOTICE}`, `cut: a trailing attribution sentence stays whole and the text before it is cut at a sentence (got ${JSON.stringify(kept)})`);
+  ok(bazaarCapDescription(`${lead} Not the notice.`, 200).endsWith("allows here.") === false, "cut: text without an attribution tail is cut as before");
+}
+// Every source whose terms require an attribution (src/data-attribution.js):
+// the set is read from code, the tools' `attribution` marks across every kit
+// and the tools each skill pack runs, never from which text already carries a
+// sentence. A marked tool's catalog text, its curated copy (if any) and its
+// listing at both cuts end with its sentence; a pack's do the same with the
+// sentences of every source its tools serve; and text that ends with a
+// sentence belongs to a tool marked with it.
+{
+  const { ATTRIBUTIONS, attributionTailOf } = await import("../src/data-attribution.js");
+  const { readdir } = await import("node:fs/promises");
+  const { buildSkillTools } = await import("../src/tools/skill-runner.js");
+  const { SKILL_PACKS } = await import("../src/skills.js");
+  const SENTENCES = Object.values(ATTRIBUTIONS);
+  const tools = new Map();
+  for (const file of (await readdir(new URL("../src/tools/", import.meta.url))).filter((f) => f.endsWith(".js") && !/-worker\.js$/.test(f)).sort()) {
+    const mod = await import(new URL(`../src/tools/${file}`, import.meta.url));
+    for (const v of Object.values(mod)) if (Array.isArray(v)) for (const t of v) if (t && typeof t === "object" && typeof t.slug === "string" && typeof t.route === "string" && typeof t.description === "string" && !tools.has(t.slug)) tools.set(t.slug, t);
+  }
+  const live = new Map((res?.endpoints || []).map((e) => [e.slug, e]));
+  const listingEnds = (slug, text, want) => {
+    const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS[slug] || text);
+    const cut = bazaarCapDescription(listed, CHALLENGE_SHORT_DESCRIPTION_MAX);
+    const keeps = (x) => { const tail = attributionTailOf(x) || ""; return want.every((w) => tail.includes(w)) && x.endsWith(want[want.length - 1]); };
+    return { ok: keeps(listed) && keeps(cut) && cut.length <= CHALLENGE_SHORT_DESCRIPTION_MAX, listed, cut };
+  };
+  const bySource = {};
+  const unknownKeys = [], unmarkedTails = [], midText = [];
+  for (const t of tools.values()) {
+    const tail = attributionTailOf(t.description);
+    for (const sentence of SENTENCES) if (t.description.includes(sentence) && !(tail || "").includes(sentence)) midText.push(t.slug);
+    if (t.attribution === undefined) { if (tail) unmarkedTails.push(t.slug); continue; }
+    const want = ATTRIBUTIONS[t.attribution];
+    if (!want) { unknownKeys.push(`${t.slug}=${t.attribution}`); continue; }
+    (bySource[t.attribution] ||= []).push(t.slug);
+    ok(tail === want, `${t.slug}: the catalog text ends with the ${t.attribution} attribution`);
+    if (BAZAAR_DESCRIPTIONS[t.slug]) ok(attributionTailOf(BAZAAR_DESCRIPTIONS[t.slug]) === want, `${t.slug}: the curated listing copy ends with the ${t.attribution} attribution`);
+    const r = listingEnds(t.slug, t.description, [want]);
+    ok(r.ok, `${t.slug}: the listing keeps the ${t.attribution} attribution at both cuts (${r.listed.length} / ${r.cut.length} chars)`);
+    const e = live.get(t.slug);
+    ok(!e || attributionTailOf(String(e.description || "")) === want, `${t.slug}: the live catalog text ends with the ${t.attribution} attribution`);
+  }
+  ok(unknownKeys.length === 0, `every tool attribution names a known source (${unknownKeys.join(", ") || "none unknown"})`);
+  ok(unmarkedTails.length === 0, `text that ends with an attribution belongs to a tool marked with that source (${unmarkedTails.join(", ") || "none unmarked"})`);
+  ok(midText.length === 0, `no attribution sentence sits anywhere but the end of a description (${midText.join(", ") || "none"})`);
+  const counts = Object.fromEntries(Object.keys(ATTRIBUTIONS).map((k) => [k, (bySource[k] || []).length]));
+  ok(Object.values(counts).every((n) => n > 0) && counts.fred >= 12 && counts.coingecko >= 24 && counts.jupiter >= 5, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
+  // Skill packs: the sources of the tools each pack runs, in pack order.
+  const catalog = Object.fromEntries([...tools.values()].map((t) => [t.route, t]));
+  const packTools = new Map(buildSkillTools({ getCatalog: () => catalog }).map((t) => [t.slug, t]));
+  let packsWithSources = 0;
+  for (const pack of SKILL_PACKS) {
+    const keys = [...new Set(pack.toolSlugs.map((s) => tools.get(s)?.attribution).filter(Boolean))];
+    const def = packTools.get(`skill-${pack.slug}`);
+    const tail = attributionTailOf(def?.description || "") || "";
+    if (!keys.length) { ok(!tail, `skill-${pack.slug}: no tool it runs needs an attribution, and its text carries none`); continue; }
+    packsWithSources++;
+    const want = keys.map((k) => ATTRIBUTIONS[k]);
+    ok(want.every((w) => tail.includes(w)) && tail.length === want.join(" ").length, `skill-${pack.slug}: the pack text ends with the ${keys.join(" + ")} attribution`);
+    const r = listingEnds(def.slug, def.description, want);
+    ok(r.ok, `skill-${pack.slug}: the listing keeps the ${keys.join(" + ")} attribution at both cuts (${r.listed.length} / ${r.cut.length} chars)`);
+    const e = live.get(def.slug);
+    ok(!e || attributionTailOf(String(e.description || "")) === tail, `skill-${pack.slug}: the live catalog text ends with the same attribution`);
+  }
+  ok(packsWithSources >= 10, `the packs whose tools need an attribution are read from their steps (${packsWithSources})`);
+  // The cut keeps a run of two sentences whole, as a two-source pack needs.
+  const two = `${ATTRIBUTIONS.fred} ${ATTRIBUTIONS.coingecko}`;
+  const kept2 = bazaarCapDescription(`${lead2()} ${two}`, CHALLENGE_SHORT_DESCRIPTION_MAX);
+  ok(kept2.endsWith(two) && kept2.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && attributionTailOf(kept2) === two, `cut: a run of two attribution sentences stays whole (got ${JSON.stringify(kept2.slice(-80))})`);
+  function lead2() { return "A first sentence about the data that runs on for a while. ".repeat(8).trim(); }
+  // Over the 402 budget, a listing that ends with an attribution cuts its lead
+  // further before it gives up its sample output, and keeps the sentence.
+  const declare = (bl) => ({ bazaar: { info: { input: bl.input, output: bl.output } } });
+  const block = { input: { q: "x" }, output: { type: "json", example: { rows: [1, 2, 3, 4, 5, 6, 7, 8] } } };
+  const text = `${lead2()} ${ATTRIBUTIONS.openstreetmap}`;
+  const short = bazaarCapDescription(text, CHALLENGE_SHORT_DESCRIPTION_MAX);
+  const budget = JSON.stringify(declare(block)).length + short.length - 40;
+  const f = fitChallenge(block, text, declare, budget);
+  ok(f.trimmed.includes("description-lead") && !isExamplePointer(f.slim.output.example) && f.description.endsWith(ATTRIBUTIONS.openstreetmap) && f.bytes <= budget,
+    `budget: an attributed listing shortens its lead, keeps the sentence and its sample output (${f.trimmed.join()}; ${f.description.length} chars)`);
+  const tight = fitChallenge(block, text, declare, JSON.stringify(declare(block)).length + 60);
+  ok(isExamplePointer(tight.slim.output.example) && tight.description.endsWith(ATTRIBUTIONS.openstreetmap), "budget: with no room for a lead the sample output gives way and the sentence stays");
+}
+{
+  const { bazaarTagsFor, BAZAAR_ICON_PATH } = await import("../src/payments.js");
+  ok(JSON.stringify(bazaarTagsFor({ category: "time", tags: ["schedule"], slug: "cron-next" })) === JSON.stringify(["time", "schedule", "cron-next", "agents", "x402"]), "tags: category, own tags, then the slug, and a filler only when those run out");
+  ok(JSON.stringify(bazaarTagsFor({ category: "skill-pack", tags: ["workflow", "fixed-income-desk"], slug: "skill-fixed-income-desk" })) === JSON.stringify(["skill-pack", "workflow", "fixed-income-desk", "agents", "x402"]), "tags: a slug that holds an existing tag (skill-fixed-income-desk beside fixed-income-desk) is not repeated");
+  ok(!bazaarTagsFor({ category: "crypto", tags: ["price", "spot"], slug: "price-coingecko" }).includes("price-coingecko"), "tags: a slug that is a tag plus the data source's name is not repeated");
+  ok(bazaarTagsFor({ category: "math", tags: ["percent"], slug: "percentage" }).includes("percentage"), "tags: a tag inside a slug's word (percent in percentage) is not a repeat");
+  ok(bazaarTagsFor({ category: "web", tags: ["a", "b", "c", "d", "e"], slug: "s" }).length === 5, "tags: at most five");
+  ok(/\.(?:png|jpe?g|webp|gif)$/.test(BAZAAR_ICON_PATH), `icon: the listing icon path names a format the Bazaar lists (${BAZAAR_ICON_PATH})`);
+}
 // The per-route 402 budget: under it nothing changes; over it the route gives
 // up input descriptions first, then description length, then its sample output.
 {
@@ -64,6 +240,20 @@ ok(bazaarCapDescription("short") === "short" && bazaarCapDescription("") === "",
   ok(fitInline.trimmed.includes("input-example-strings") && fitInline.slim.input.prompt === "an apple" && fitInline.slim.input.image.length < 100 && /openapi/.test(fitInline.slim.input.image),
     "budget: a long input example string becomes a pointer to /openapi.json, and short fields stay");
   ok(fitChallenge(null, "short", declare, 10).slim === null, "budget: a route with no discovery block only shortens its description");
+  // descriptionFirst (the typed-judgment kits): past the input descriptions the
+  // sample output points to /openapi.json before the input's types-only cut or
+  // the description; a block that fits once the output is a pointer keeps both.
+  {
+    const enumBlock = { ...block, inputSchema: { properties: { model: { type: "string", enum: ["a", "b"], description: "z".repeat(300) } } } };
+    const noOut = JSON.stringify(declare({ ...enumBlock, inputSchema: { properties: { model: { type: "string", enum: ["a", "b"] } } }, output: { type: "json", example: { truncated: true, note: "full example in /openapi.json" } } })).length;
+    const df = fitChallenge(enumBlock, long, declare, noOut + long.length, { descriptionFirst: true });
+    ok(df.trimmed.join() === "input-descriptions,output-example" && df.description === long && JSON.stringify(df.slim.inputSchema.properties.model.enum) === '["a","b"]' && isExamplePointer(df.slim.output.example),
+      `budget: descriptionFirst gives the sample output up before the input enum and the description (got ${df.trimmed.join()})`);
+    const plain = fitChallenge(enumBlock, long, declare, noOut + long.length);
+    ok(plain.trimmed.includes("input-types-only") || plain.trimmed.includes("description"), "budget: without descriptionFirst the same block cuts the input or the description first");
+    const roomyDf = fitChallenge(enumBlock, long, declare, 1_000_000, { descriptionFirst: true });
+    ok(roomyDf.trimmed.length === 0 && roomyDf.slim.output.example === block.output.example, "budget: descriptionFirst under the budget keeps the real sample output");
+  }
 }
 const live = (res?.endpoints || []).map((e) => e.description || "");
 ok(live.length > 0, "catalog descriptions readable");

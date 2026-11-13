@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
 import { decideSkip, requiredLaneJobs } from "./ci-tree-gate.js";
 import { laneJobNames, shardCount } from "./lib/ci-shards.js";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.error("FAIL:", m); } };
@@ -53,7 +54,7 @@ ok(decideSkip({ ...base, ref: "refs/heads/other" }).skip === false, "skipped a p
 ok(decideSkip({ ...base, ref: undefined }).skip === false, "skipped without knowing the ref");
 
 // --- workflow wiring --------------------------------------------------------
-const wf = load(readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8"));
+const wf = load(expandedDeployWorkflow());
 const jobs = wf.jobs;
 // Derived, not listed. A hardcoded copy here would have gone stale the moment
 // test-unit-c was added and quietly stopped checking the new lane - the exact

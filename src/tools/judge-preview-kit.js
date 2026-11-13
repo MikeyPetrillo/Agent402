@@ -308,6 +308,9 @@ export const JUDGE_PREVIEW_TOOLS = [{
   aliases: ["image-question", "image-classify", "screenshot-check"],
   discovery: {
     bodyType: "json",
+    // The listing keeps its whole description; the sample answer points to
+    // /openapi.json when the image example leaves no room for it.
+    descriptionFirst: true,
     inputSchema: {
       type: "object",
       required: ["images", "questions"],
@@ -322,7 +325,7 @@ export const JUDGE_PREVIEW_TOOLS = [{
       images: { picture: { format: "png", data_base64: EXAMPLE_PNG } },
       questions: { has_red: { type: "noul", instructions: "Does `picture` contain a red shape?" } },
     },
-    example: { model: "jev-1.14.0", preview: true, answers: { has_red: { type: "noul", noul: 0.99 } }, usage: { input_tokens: 520, output_tokens: 20 } },
+    output: { example: { model: "jev-1.14.0", preview: true, answers: { has_red: { type: "noul", noul: 0.99 } }, usage: { input_tokens: 520, output_tokens: 20 } } },
   },
   validateInput: (input) => { validateVisionRequest(input); },
   handler: (input) => judgeVision(input),
@@ -346,7 +349,7 @@ export const JUDGE_PREVIEW_TOOLS = [{
       },
     },
     input: { image: { format: "png", data_base64: EXAMPLE_PNG }, targets: ["the red square"] },
-    example: { model: "jev-1.14.0", preview: true, results: [{ target: "the red square", present: 0.99, found: true, box: { top: 0.57, bottom: 0.83, left: 0.6, right: 0.9 }, boxConfidence: 0.95 }] },
+    output: { example: { model: "jev-1.14.0", preview: true, results: [{ target: "the red square", present: 0.99, found: true, box: { top: 0.57, bottom: 0.83, left: 0.6, right: 0.9 }, boxConfidence: 0.95 }] } },
   },
   validateInput: (input) => { validateLocateRequest(input); },
   handler: (input) => locate(input),
@@ -373,7 +376,7 @@ export const JUDGE_PREVIEW_TOOLS = [{
       state: "Section 1. The tenant pays rent on the first of each month. Section 2. Either party may end this lease with 60 days written notice.",
       questions: { has_notice: { type: "noul", instructions: "Does the document set a notice period for ending the agreement?" } },
     },
-    example: { model: "jev-1.14.0", preview: true, answers: { has_notice: { type: "noul", noul: 0.98 } }, usage: { input_tokens: 64, output_tokens: 20 } },
+    output: { example: { model: "jev-1.14.0", preview: true, answers: { has_notice: { type: "noul", noul: 0.98 } }, usage: { input_tokens: 64, output_tokens: 20 } } },
   },
   validateInput: (input) => { validateLongRequest(input); },
   handler: (input) => judgeLong(input),

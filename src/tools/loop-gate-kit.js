@@ -271,6 +271,9 @@ export const LOOP_GATE_TOOLS = [{
   aliases: ["should-continue", "loop-check", "iteration-gate"],
   discovery: {
     bodyType: "json",
+    // The listing keeps its whole description; the sample answer points to
+    // /openapi.json when it does not fit beside it.
+    descriptionFirst: true,
     inputSchema: {
       type: "object",
       required: ["goal", "lastOutput", "iteration"],
@@ -287,13 +290,13 @@ export const LOOP_GATE_TOOLS = [{
     input: EXAMPLE_INPUT,
     // The documented example trips the budget check, so this answer comes from
     // code and a host without a judgment model answers it too.
-    example: {
+    output: { example: {
       decision: "stop",
       reason: "Budget exhausted: spent 0.52 USD of 0.5 USD. No model was consulted.",
       confidence: 1,
       checks: { goalMet: null, budgetExceeded: true, iterationsExhausted: false, repeating: false, stuck: false, constraintBreached: false },
       model: null,
-    },
+    } },
   },
   // Pure, synchronous input check the paid gates can run BEFORE a payment
   // round trip (src/handler-input.js preValidateInput).

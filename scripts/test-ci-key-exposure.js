@@ -21,11 +21,12 @@
 // line away from burning CU on every push, with nothing to catch it.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync, readdirSync } from "node:fs";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const deploy = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+const deploy = expandedDeployWorkflow();
 const nonMetered = readFileSync(new URL("./test-non-metered-examples.js", import.meta.url), "utf8");
 // METERED_SLUGS lives in src/metered-slugs.js (the server publishes its count).
 const meteredSrc = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8");

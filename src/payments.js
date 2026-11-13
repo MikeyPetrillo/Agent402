@@ -11,6 +11,8 @@ import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
+import { attributionTailOf, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from "./data-attribution.js";
+import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
@@ -854,6 +856,20 @@ export function boundDiscoveryBlock(block, maxBytes = BAZAAR_DISCOVERY_MAX_BYTES
 // of 596 keep their full sample output.
 export const CHALLENGE_VARIABLE_MAX_BYTES = Number(process.env.CHALLENGE_VARIABLE_MAX_BYTES) || 1_900;
 export const CHALLENGE_SHORT_DESCRIPTION_MAX = 300;
+// One upto requirement as the 402 carries it (scheme, network, amount, asset,
+// payTo, maxTimeoutSeconds and extra with the Permit2 method and facilitator
+// address): 327 to 330 JSON bytes measured on Base and Arc, with its comma,
+// rounded up (scripts/test-upto-gas-sponsoring.js reads the real ones).
+export const UPTO_ACCEPT_JSON_BYTES = 340;
+/** The bytes a route's upto offer adds past what the per-route budget was
+ *  set against: the fixed offer (every exact accept, and production's one
+ *  upto network) is measured with test-challenge-size's total, so only an
+ *  upto accept past the first and the gas sponsoring declaration are charged
+ *  to the route's variable budget. Zero when neither is offered. */
+export function uptoChallengeBytes(uptoAccepts, gasDeclarations = null) {
+  const extra = Math.max(0, (Number(uptoAccepts) || 0) - 1) * UPTO_ACCEPT_JSON_BYTES;
+  return extra + (gasDeclarations ? JSON.stringify(gasDeclarations).length : 0);
+}
 const LONG_EXAMPLE_STRING = 200;
 // A shortened input string is a placeholder, not a value: a buyer or a sweep
 // that replays the 402's example must take the full one from /openapi.json
@@ -891,11 +907,23 @@ function withoutPropertyDescriptions(schema) {
 /** `keepListing`: the route's description and sample output are part of what it
  *  sells (its 402 names prices, its example is the product), so only the input
  *  side may give way. The size guard still checks the route's real total. */
-export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABLE_MAX_BYTES, { keepListing = false } = {}) {
+/** `descriptionFirst`: the listing description and the input's enums and
+ *  bounds outrank the sample output, so past the input descriptions the
+ *  output gives way to the pointer before either is cut (a model-backed route
+ *  whose example is a long typed answer; /openapi.json keeps it whole). */
+export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABLE_MAX_BYTES, { keepListing = false, descriptionFirst = false } = {}) {
   const size = (b, d) => JSON.stringify(b ? declare(b) : {}).length + String(d || "").length;
   let b = slim, d = description;
   const trimmed = [];
+  const toPointer = () => {
+    if (b?.output && b.output.example !== undefined && !isExamplePointer(b.output.example) && size(b, d) > max) {
+      const { schema: _schema, ...rest } = b.output;
+      b = { ...b, output: { ...rest, example: examplePointer() } };
+      trimmed.push("output-example");
+    }
+  };
   if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: withoutPropertyDescriptions(b.inputSchema) }; trimmed.push("input-descriptions"); }
+  if (descriptionFirst && !keepListing) toPointer();
   if (b?.inputSchema && size(b, d) > max) { b = { ...b, inputSchema: typesOnly(b.inputSchema) }; trimmed.push("input-types-only"); }
   if (b?.input !== undefined && size(b, d) > max) {
     const input = shortExampleStrings(b.input);
@@ -903,11 +931,15 @@ export function fitChallenge(slim, description, declare, max = CHALLENGE_VARIABL
   }
   if (keepListing) return { slim: b, description: d, trimmed, bytes: size(b, d) };
   if (d && d.length > CHALLENGE_SHORT_DESCRIPTION_MAX && size(b, d) > max) { d = bazaarCapDescription(d, CHALLENGE_SHORT_DESCRIPTION_MAX); trimmed.push("description"); }
-  if (b?.output && b.output.example !== undefined && !isExamplePointer(b.output.example) && size(b, d) > max) {
-    const { schema: _schema, ...rest } = b.output;
-    b = { ...b, output: { ...rest, example: examplePointer() } };
-    trimmed.push("output-example");
+  // A listing that ends with an attribution (src/data-attribution.js) pays for
+  // it from the text before it, not from the sample output: the lead is cut
+  // further, never under ATTRIBUTION_MIN_LEAD, when that alone fits the budget.
+  const tail = d && size(b, d) > max ? attributionTailOf(d) : null;
+  if (tail) {
+    const fit = d.length - (size(b, d) - max);
+    if (fit >= tail.length + 1 + ATTRIBUTION_MIN_LEAD) { d = bazaarCapDescription(d, fit); trimmed.push("description-lead"); }
   }
+  toPointer();
   return { slim: b, description: d, trimmed, bytes: size(b, d) };
 }
 
@@ -1085,26 +1117,110 @@ export function catalogServiceNameFor(catalog) {
       : "Agent402.tools";
 }
 
+// A query-parameter hint ("?bytes=1..1024", " (?ext=png)") in catalog text.
+const QUERY_HINT = /\s\??\(?\?[a-zA-Z_][a-zA-Z0-9_]*=/;
+// The hint alone: a leading \s* would rescan every whitespace run from each
+// of its positions (quadratic), so the space before a hint is trimmed from the
+// text before it instead (stripParenHints).
+const PAREN_QUERY_HINT = /\(\?[a-zA-Z_]\w*=[^()]*\)/g;
+const SENTENCE_BREAK = /(?<=[.!?])(?<!\b(?:e\.g|i\.e|St|Mt|Dr|Mr|Ms|vs)\.)\s+/;
+// Trailing punctuation and a trailing lead-in word, trimmed by scanning from
+// the end: an end-anchored regex with a leading run (/[,;:]+$/, /\s+word$/)
+// restarts at every position of a long run, which is quadratic.
+const HINT_HEAD_PUNCT = new Set([",", ";", ":", "-", "("]);
+const HINT_LEAD_WORDS = ["via", "with", "using", "by", "pass", "passing", "set", "use", "e.g."];
+const trimPunctEnd = (h) => {
+  let end = h.length;
+  while (end > 0 && HINT_HEAD_PUNCT.has(h[end - 1])) end--;
+  return h.slice(0, end);
+};
+const trimLeadWord = (h) => {
+  const low = h.toLowerCase();
+  for (const w of HINT_LEAD_WORDS) {
+    const at = low.length - w.length;
+    if (at > 0 && low.endsWith(w) && /\s/.test(h[at - 1])) return h.slice(0, at).trimEnd();
+  }
+  return h;
+};
+const trimHintHead = (head) => {
+  let h = trimPunctEnd(trimLeadWord(trimPunctEnd(head).trim())).trim();
+  // "..., default on; add" keeps the clause before the one that held the hint.
+  const semi = h.lastIndexOf(";");
+  if (semi >= 12) h = h.slice(0, semi).trim();
+  return /[.!?)]$/.test(h) ? h : `${h}.`;
+};
+/** Catalog text without its query-parameter hints, sentence by sentence: a
+ *  hint in parentheses goes on its own, a sentence that opens with a hint (or
+ *  introduces one with a colon) goes whole, a hint later in a sentence ends
+ *  that sentence, and every sentence without a hint is kept. */
+function stripParenHints(s) {
+  let out = "", last = 0;
+  for (const m of s.matchAll(PAREN_QUERY_HINT)) {
+    out += s.slice(last, m.index).trimEnd();
+    last = m.index + m[0].length;
+  }
+  return last ? out + s.slice(last) : s;
+}
+function dropQueryHints(s) {
+  const text = stripParenHints(s);
+  if (!QUERY_HINT.test(` ${text}`)) return text;
+  const kept = [];
+  for (const sentence of text.split(SENTENCE_BREAK)) {
+    const at = ` ${sentence}`.search(QUERY_HINT);
+    if (at < 0) { kept.push(sentence); continue; }
+    const head = sentence.slice(0, at).trim();
+    if (at < 12 || /:$/.test(head)) continue;
+    kept.push(trimHintHead(head));
+  }
+  return kept.join(" ").trim();
+}
+
+// The least room a kept attribution sentence leaves for the text before it.
+const ATTRIBUTION_MIN_LEAD = 80;
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (!s) return s;
-  // A catalog description often ends in a query-parameter hint ("?bytes=1..1024
-  // returns hex; or ?min=&max= ..."), which is right for /api/find and reads as
-  // a fragment on a Bazaar card (measured 2026-09-22). Drop the
-  // hint tail here only; the catalog text is untouched.
-  const hint = s.search(/\s\??\(?\?[a-zA-Z_][a-zA-Z0-9_]*=/);
-  if (hint >= 12) {
-    let head = s.slice(0, hint).trim();
-    // "... Query params:" introduces the hint; drop that sentence with it.
-    if (/:$/.test(head)) { const cut = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? ")); if (cut >= 12) head = head.slice(0, cut + 1); }
-    s = head.replace(/[,;:\-(]+$/, "").trim().replace(/\s+(via|with|using|by|pass|passing|set|use|e\.g\.)$/i, "").replace(/[,;:\-(]+$/, "").trim();
-    if (!/[.!?)]$/.test(s)) s += ".";
-  }
+  // A catalog description often carries query-parameter hints ("?bytes=1..1024
+  // returns hex; or ?min=&max= ..."), which are right for /api/find and read as
+  // a fragment on a Bazaar card (measured 2026-09-22). Drop the hints here
+  // only and keep the sentences around them; the catalog text is untouched.
+  s = dropQueryHints(s) || s;
   if (s.length <= max) return s;
+  // A description that ends with a data source's attribution sentence keeps
+  // it whole (a run of them, for a skill pack that serves several sources):
+  // the cut shortens the text before it (src/data-attribution.js).
+  const tail = attributionTailOf(s);
+  if (tail && s.length > tail.length) {
+    const room = max - tail.length - 1;
+    const lead = s.slice(0, s.length - tail.length).trim();
+    if (room >= ATTRIBUTION_MIN_LEAD) return `${bazaarCapDescription(lead, room)} ${tail}`;
+  }
   const head = s.slice(0, max);
   const sentenceEnd = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), head.endsWith(".") ? head.length - 1 : -1);
   if (sentenceEnd >= Math.floor(max * 0.5)) return head.slice(0, sentenceEnd + 1).trim();
   const wordEnd = head.lastIndexOf(" ");
   return (wordEnd > 0 ? head.slice(0, wordEnd) : head).trim().replace(/[,;:\-]+$/, "") + ".";
+}
+
+// The listing icon: the 512px PNG mark (server.js), on a path whose extension
+// names a format the Bazaar accepts (PNG, JPG, WebP, GIF; never SVG).
+export const BAZAAR_ICON_PATH = "/favicon.png";
+export const TAG_FILLER = Object.freeze(["agents", "x402", "tools"]);
+const tagWords = (t) => String(t ?? "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+/** True when `slug` holds one of `tags` as whole words ("skill-fixed-income-desk"
+ *  holds "fixed-income-desk", "price-coingecko" holds "price"): such a slug
+ *  repeats a tag the listing already carries. */
+export function slugRepeatsTag(slug, tags) {
+  const own = tagWords(slug).join("-");
+  if (!own) return false;
+  return (tags ?? []).some((t) => { const w = tagWords(t).join("-"); return w && w !== own && `-${own}-`.includes(`-${w}-`); });
+}
+/** A listing's tags (at most five, the protocol's own sanitizer): the
+ *  category, the tool's own tags, then its slug unless it only repeats one
+ *  of those, and the generic fillers only when those run out. */
+export function bazaarTagsFor(item) {
+  const named = [item?.category, ...(item?.tags ?? [])].filter(Boolean);
+  const slug = item?.slug && !slugRepeatsTag(item.slug, named) ? [item.slug] : [];
+  return sanitizeTags([...named, ...slug, ...TAG_FILLER]);
 }
 
 /** Purpose-written Bazaar copy for the flagship routes: WHAT it returns and
@@ -1116,7 +1232,7 @@ export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
 export const BAZAAR_DESCRIPTIONS = Object.freeze({
   // 2026-09-22: the slugs buyers pay for most had catalog fallbacks; these
   // say what comes back and when to pick the tool.
-  "crypto-price": "Live spot price for one or many coins in any quote currency: last price, 24h change, 24h volume and market cap per coin, from a maintained market feed and answered in under a second. Use it when an agent needs a current crypto price to size, compare or display, or a cheap read to poll on a schedule.",
+  "crypto-price": `Live spot price for one or many coins in any quote currency: last price, 24h change, 24h volume and market cap per coin, from a maintained market feed and answered in under a second. Use it when an agent needs a current crypto price to size, compare or display, or a cheap read to poll on a schedule. ${COINGECKO_ATTRIBUTION}`,
   "bestsellers": "What agents actually pay for across a 500+ tool x402 catalog: the tools ranked by settled calls, distinct buyers and dollars over a window you choose, read from the seller's own sales ledger rather than the chain. Use it when an agent is deciding what to build, what to buy, or what paying demand on x402 looks like this week.",
   "demand-radar": "What agents keep asking for that nobody serves yet: aggregated, qualified demand clusters from a live agent-demand board, with caller counts and how long each need has persisted. Use it when a seller or an agent is choosing what to build next and wants unmet demand with evidence instead of guesses.",
   "stock-quote": "End-of-day US equity quote from a licensed feed: last close, day range, consolidated volume, previous close and the change between them, from the consolidated end-of-day summary across all US exchanges and ATSs. Use it when an agent needs a current price for a US stock without an exchange account; indices, FX and crypto are not covered here.",
@@ -1167,13 +1283,24 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "v1-chat-auto": "OpenAI-compatible chat completions with the model chosen server-side: omit model and the gateway routes the prompt to the top-ranked model for its task (code, reasoning, long-context, general) from a fixed eval-derived ranking, failing over automatically on provider errors. Flat price per call, 16k chars in, 1024 tokens out, streaming supported. Use it as a drop-in OpenAI base_url when you want good answers without picking a model.",
   "v1-embeddings": "OpenAI-compatible text embeddings (text-embedding-3-small by default; 3-large and ada-002 supported), up to 64 inputs or 16k chars per call, returned in the standard OpenAI shape. A repeat of identical inputs within 10 minutes is free from cache to the payer that paid for it, paying again by its own EVM x402 signature, verified Tempo sender or credits key. Use it for semantic search, clustering and retrieval from any OpenAI SDK by changing base_url.",
   "image-ocr": "Extract text from a PNG or JPEG image - full text, overall confidence and per-line bounding boxes - from a URL or base64 payload, Tesseract on-device (no upstream API). Default English; other ISO 639-2 languages on request. Use it when an agent needs the words in a screenshot, scan or photo.",
+  "memory-read": "Read persistent key-value memory scoped to the paying wallet: pass a key to get its stored JSON value, or omit it to list the namespace's keys with their update times and expiry. Reads the payer's own namespace by default, or one another wallet has granted it access to. Use it when an agent resumes a task and needs the state an earlier session wrote.",
+  // 2026-11-12: the typed-judgment routes. Each listing reads whole beside
+  // its input schema (the model enum on judge) and its sample-answer pointer
+  // inside the per-route 402 budget (scripts/test-bazaar-descriptions.js).
+  "judge": "Ask typed questions about any content and get answers your code can branch on, not prose. Send state (a string or object) and up to 8 questions keyed by your own ids: choice returns the pick with probabilities and confidence, score a fractional level index with probabilities, noul the probability of yes. Use it for routing, triage, classification and gating. Served by jev-latest with two fallbacks; name one first with model. Model-backed, not deterministic.",
+  "loop-gate": "Should an agent loop run another iteration? Send the goal, the last output and its iteration, plus optional maxIterations, budget, history and constraints; get back decision (continue, stop or escalate), reason, confidence (0 to 1), the checks behind it and a next step. Budget and iteration limits are checked in code first, with no model call; otherwise a judgment model answers. Use it between iterations.",
+  // Under the 402 budget's description cut: the word cut of the catalog text
+  // would leave a fragment before the FRED notice.
+  "sahm-rule": "Real-time Sahm Rule recession indicator (SAHMREALTIME): it triggers when 3-month average US unemployment rises 0.50 points above its prior 12-month low. Use it to check the signal. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+  // Under the 402 budget's description cut, so the FRED notice stays.
+  "fred-release-observations": "Every series in one FRED release in a single call: a whole jobs, CPI or GDP report without listing series IDs first, paged by cursor. Use it to load an economic report at once. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
   "memory-write": "Persistent key-value memory scoped to the paying wallet: the x402 payment is the authentication, the wallet owns the namespace. Write any JSON value (up to 64KB) under a key, with an optional TTL, or delete it; read it back on any later session with the matching read route. Use it when an agent needs state that survives the session or crosses runs without an account or API key.",
   // 2026-08-22 additions: the new families' flagships. Bazaar is the one surface
   // where a buyer-side agent browses by DESCRIPTION rather than by name, so each
   // says what it answers and when to reach for it.
   "perp-funding": "Current and historical funding rate for one perpetual futures market, from a live derivatives venue: hourly rate, the 8-hour and annualized equivalents, the mark-vs-oracle premium, and a window of past prints with average, minimum, maximum and the share that were positive. Use it when an agent needs to know what holding a leveraged position costs right now, or wants to detect a funding regime flip before sizing a trade.",
   "perp-markets": "Every listed perpetual futures market in one call: mark, oracle and mid price, 24-hour change, funding (hourly, 8-hour, annualized), open interest in coins and dollars, 24-hour notional volume and max leverage, sortable by volume, open interest, funding or change. Use it as the one-shot market map before drilling into a single symbol.",
-  "sol-token-safety": "Risk summary for one Solana token mint: a graded risk score with the concrete reasons behind it, mint and freeze authority state, how much of the liquidity pool is locked, top-holder concentration, holder count and whether the token is verified. Use it to read the published risk evidence on an unfamiliar token, and to screen a list of mints in seconds. Evidence, not a 'safe' or 'scam' verdict.",
+  "sol-token-safety": `Risk summary for one Solana token mint: a graded risk score with the concrete reasons behind it, mint and freeze authority state, how much of the liquidity pool is locked, top-holder concentration, holder count and whether the token is verified. Use it to read the published risk evidence on an unfamiliar token, and to screen a list of mints in seconds. Evidence, not a 'safe' or 'scam' verdict. ${JUPITER_ATTRIBUTION}`,
   "defi-yields": "Live yield opportunities across DeFi, filterable by chain, protocol, token symbol, stablecoin-only, minimum TVL and minimum APY: pool identity, TVL in dollars, total APY split into base and reward, 1-day, 7-day and 30-day APY change, impermanent-loss risk and exposure type. Use it to find, compare or monitor where a given asset earns the most right now.",
   "crypto-news": "Recent crypto headlines aggregated from the public feeds of major outlets, deduplicated and newest first, each with title, source, publish time, canonical URL and a short summary, filterable by keyword, source and time window. Use it when an agent needs what happened in the last hours rather than what a model was trained on.",
   "v1-images-fast": "Generate an image from a text prompt at a flat price per picture, no token math and no subscription: the OpenAI images request shape in, base64 PNG, JPEG or WebP out, with an automatic fallback model so a provider outage does not become your error. Use it when an agent needs a picture cheaply and predictably.",
@@ -1658,7 +1785,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   };
   const bookPending = async (entry) => (await book()).book(entry);
   if (evmCaip2.includes(ARC_CAIP2)) {
-    circleClient = circleClientFromEnv(process.env, { onPending: bookPending });
+    // Circle lists Arc `upto` to this server only when X402_UPTO_NETWORKS
+    // names eip155:5042 itself; otherwise its answer is exact only, as before.
+    circleClient = circleClientFromEnv(process.env, { onPending: bookPending, upto: uptoListedByName(ARC_CAIP2) });
     if (!circleClient) {
       console.warn(
         "WARNING: PAYMENT_NETWORKS enables `arc` but CIRCLE_FACILITATOR_API_KEY is unset - " +
@@ -2170,10 +2299,11 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   //      (measured while building the trial test).
   const uptoWanted = String(process.env.X402_UPTO_NETWORKS || "").trim();
   let uptoCaip2 = [];
+  const uptoExtensionsByNetwork = new Map();
   if (uptoWanted) {
-    const wanted = uptoWanted.toLowerCase() === "all"
-      ? evmCaip2
-      : uptoWanted.split(",").map((x) => x.trim()).filter(Boolean).filter((c) => evmCaip2.includes(c));
+    // "all" never adds Arc: Arc offers upto only when listed by name
+    // (src/upto-gas-sponsoring.js UPTO_EXPLICIT_ONLY).
+    const wanted = uptoNetworksWanted(process.env, evmCaip2);
     // Ask each facilitator CLIENT, not its URL.
     //
     // The first version fetched `${url}/supported` directly, which bypasses
@@ -2185,14 +2315,20 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     // filter the settle path uses, so the gate can only ever agree with where
     // payments will really go.
     const advertised = new Set();
-    await Promise.all(facilitatorClients.map(async (client) => {
-      try {
-        const kinds = (await client.getSupported())?.kinds || [];
-        for (const k of kinds) {
-          if (String(k?.scheme || "").toLowerCase() === "upto" && k?.network) advertised.add(String(k.network));
-        }
-      } catch { /* a facilitator that cannot be reached advertises nothing */ }
+    // Read in facilitatorClients order, so the first client that advertises
+    // upto on a network (the one @x402/core routes it to) names the
+    // extensions that network's settle can honor.
+    const reads = await Promise.all(facilitatorClients.map(async (client) => {
+      try { return await client.getSupported(); } catch { return null; /* a facilitator that cannot be reached advertises nothing */ }
     }));
+    for (const sup of reads) {
+      for (const k of sup?.kinds || []) {
+        if (String(k?.scheme || "").toLowerCase() !== "upto" || !k?.network) continue;
+        const net = String(k.network);
+        if (!advertised.has(net)) uptoExtensionsByNetwork.set(net, Array.isArray(sup?.extensions) ? sup.extensions : []);
+        advertised.add(net);
+      }
+    }
     const claimed = wanted.filter((c) => advertised.has(c));
 
     // PROVE it, do not take its word. A facilitator advertising upto says
@@ -2228,6 +2364,22 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       console.warn(`x402 upto: REFUSING to offer upto on ${refused.join(", ")} — not advertised by a facilitator we route through, or not priceable here.`);
     }
   }
+  // Permit2 gas sponsorship on the metered upto accepts (X402_UPTO_GAS_SPONSORING,
+  // default off): declared only when the facilitator that settles upto on
+  // EVERY offered upto network advertises the key at /supported.
+  const uptoGasKeys = (() => {
+    const wantedKeys = gasSponsoringWanted(process.env);
+    if (!wantedKeys.length) return [];
+    if (!uptoCaip2.length) {
+      console.warn("x402 upto gas sponsoring: X402_UPTO_GAS_SPONSORING is set but no network offers upto; nothing is declared.");
+      return [];
+    }
+    const { keys, refused: notHonored } = gasSponsoringKeys(wantedKeys, uptoCaip2, uptoExtensionsByNetwork);
+    for (const { key: extension, networks } of notHonored) console.warn(`x402 upto gas sponsoring: REFUSING ${extension}, the facilitator settling upto on ${networks.join(", ")} does not advertise it.`);
+    if (keys.length) console.log(`x402 upto gas sponsoring: declaring ${keys.join(", ")} on the metered upto routes (${uptoCaip2.join(", ")}); read from /supported at boot only, so a facilitator change takes effect at the next restart`);
+    return keys;
+  })();
+  const uptoGasDeclarations = uptoGasKeys.length ? gasSponsoringDeclarations(uptoGasKeys) : null;
 
   // accepts[0].outputSchema (src/accept-output-schema.js): the accept below
   // declares it, this patch carries it onto the requirement the core builds -
@@ -2458,7 +2610,17 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // family) keep listings that differ (x402ServiceNames).
   const serviceNameFor = catalogServiceNameFor(catalog);
   const railsNow = () => ({ evmCaip2, svmCaip2, stellarCaip2, avmCaip2, walletAddress, solanaWallet, stellarWallet, algorandWallet, uptoCaip2, gatewayKinds });
-  const acceptsFor = (item) => acceptsForItem(item, railsNow());
+  // Routes whose 402 could not fit an upto accept past the first one (or the
+  // gas sponsoring declaration) inside the per-route budget: they keep every
+  // exact accept and one upto accept (uptoNetworkKept: Base before Arc), and
+  // offer no more upto than that.
+  const uptoWithheld = new WeakSet();
+  const acceptsFor = (item) => {
+    const rails = railsNow();
+    if (!uptoWithheld.has(item)) return acceptsForItem(item, rails);
+    const kept = uptoNetworkKept(rails.uptoCaip2);
+    return acceptsForItem(item, { ...rails, uptoCaip2: kept ? [kept] : [] });
+  };
   // Read at call time, like acceptsFor: a rail dropped or joined after boot
   // is reflected in what discovery publishes as well as in the 402.
   liveRails = railsNow;
@@ -2523,12 +2685,29 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // route's `accepts` on every request, so a rail restored after boot joins
   // each 402 when these are run again (restoreRail below).
   const acceptsBuilders = new Map();
+  const uptoWithheldRoutes = [];
   const routes = Object.fromEntries(
     Object.entries(catalog).map(([route, item]) => {
       const ext = {};
       const path = route.split(" ")[1];
-      const { keepListing, ...discovery } = item.discovery || {};
-      const fitted = fitChallenge(item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path) : null, capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description), declareDiscoveryExtension, undefined, { keepListing: keepListing === true });
+      const { keepListing, descriptionFirst, ...discovery } = item.discovery || {};
+      const slimmed = item.bazaar !== false && item.discovery ? slimDiscovery(discovery, path) : null;
+      const listingText = capDesc(BAZAAR_DESCRIPTIONS[item.slug] || item.description);
+      const fitOpts = { keepListing: keepListing === true, descriptionFirst: descriptionFirst === true };
+      // Upto past the first network and the gas sponsoring declaration are
+      // charged to this route's budget (uptoChallengeBytes), so switching
+      // them on shrinks the listing instead of growing the 402's headers.
+      const uptoNets = acceptsFor(item).filter((a) => a.scheme === "upto").length;
+      const declares = !!uptoGasDeclarations && isMeteredGatewayRoute(item) && uptoNets > 0;
+      const uptoBytes = uptoChallengeBytes(uptoNets, declares ? uptoGasDeclarations : null);
+      let fitted = fitChallenge(slimmed, listingText, declareDiscoveryExtension, CHALLENGE_VARIABLE_MAX_BYTES - uptoBytes, fitOpts);
+      let declareGas = declares;
+      if (uptoBytes > 0 && fitted.bytes + uptoBytes > CHALLENGE_VARIABLE_MAX_BYTES) {
+        uptoWithheld.add(item);
+        uptoWithheldRoutes.push(route);
+        declareGas = false;
+        fitted = fitChallenge(slimmed, listingText, declareDiscoveryExtension, undefined, fitOpts);
+      }
       if (fitted.slim) Object.assign(ext, declareDiscoveryExtension(fitted.slim));
       const listingDescription = fitted.description;
       if (builderCode) Object.assign(ext, { [BUILDER_CODE]: declareBuilderCodeExtension(builderCode) });
@@ -2541,6 +2720,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // copy - the buyer echoes its chosen accept back in the payment).
       const firstAcceptSchema = acceptOutputSchemaEnabled() ? outputSchemaFromExtensions(ext) : null;
       acceptsBuilders.set(route, () => withOutputSchemaOnFirstAccept(acceptsFor(item), firstAcceptSchema));
+      // Permit2 gas sponsorship: a metered /v1 route that offers upto
+      // (src/upto-gas-sponsoring.js). Top level, one copy per 402.
+      if (declareGas) Object.assign(ext, uptoGasDeclarations);
       return [
         route,
         {
@@ -2572,20 +2754,24 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           // crypto, llm, ...) - every entry is honestly tagged with what it is.
           // Use the protocol's own sanitizer: printable ASCII, ≤32 chars,
           // case-insensitive dedupe, and the official maximum of five tags.
-          tags: sanitizeTags([item.category, ...(item.tags ?? []), "agents", "x402", "tools"]),
+          tags: bazaarTagsFor(item),
           mimeType: "application/json",
           resource: `${baseUrl}${route.split(" ")[1]}`,
           // Canonical brand icon on every Bazaar/discovery record. Without it,
           // downstream directories (OpenSea's x402 tools surface, etc.) scrape
           // the site favicon at index time and cache it forever — which is how
           // the pre-rebrand logo got frozen on OpenSea. The URL serves the
-          // current 512px PNG mark (image/png despite the .ico name).
-          iconUrl: `${baseUrl}/favicon.ico`,
+          // current 512px PNG mark; the path ends in .png because the Bazaar
+          // lists PNG, JPG, WebP and GIF icons only.
+          iconUrl: `${baseUrl}${BAZAAR_ICON_PATH}`,
           extensions: Object.keys(ext).length ? ext : undefined,
         },
       ];
     })
   );
+  if (uptoWithheldRoutes.length) {
+    console.warn(`x402 upto: ${uptoWithheldRoutes.length} route(s) offer upto on ${uptoNetworkKept(uptoCaip2)} only, with no gas sponsoring declaration: the further upto accepts did not fit the per-route 402 budget (${uptoWithheldRoutes.slice(0, 5).join(", ")}${uptoWithheldRoutes.length > 5 ? ", ..." : ""}).`);
+  }
 
   // Wildcard price entries for paths that are deliberately NOT catalog tools —
   // today just the retired pairwise converters. They must never enter `catalog`:
@@ -2604,7 +2790,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       tags: sanitizeTags([cfg.category, "agents", "x402", "tools"]),
       mimeType: "application/json",
       resource: `${baseUrl}${route.split(" ")[1]}`,
-      iconUrl: `${baseUrl}/favicon.ico`,
+      iconUrl: `${baseUrl}${BAZAAR_ICON_PATH}`,
     };
   }
 

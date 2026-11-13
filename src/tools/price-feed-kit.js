@@ -8,7 +8,8 @@
 // rate limit), never PoW-eligible. Covered by scripts/test-price-feed-kit.js.
 
 import { protocols as llamaProtocols } from "./defi-kit.js";
-import { cgTake, cgRefusal, isCoinGeckoHost, COINGECKO_ATTRIBUTION } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, isCoinGeckoHost } from "./coingecko-rate.js";
+import { attribute } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
@@ -277,7 +278,7 @@ export const PRICE_FEED_TOOLS = [
 ];
 // price-coingecko reads CoinGecko, whose terms require the attribution (see
 // COINGECKO_ATTRIBUTION in coingecko-rate.js).
-for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") t.description = `${t.description} ${COINGECKO_ATTRIBUTION}`;
+for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") attribute(t, "coingecko");
 
 // Every handler runs under one budget (src/upstream-deadline.js): the 20 s
 // data-kit budget, except defi-tvl, whose protocol document keeps its 25 s

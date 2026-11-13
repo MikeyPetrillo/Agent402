@@ -21,6 +21,7 @@ import { spawn } from "node:child_process";
 import { getFreePort } from "./lib/free-port.js";
 import http from "node:http";
 import { readFileSync } from "node:fs";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 const PORT = await getFreePort();
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -83,7 +84,7 @@ if (code === "timeout") srv.kill("SIGKILL");
 
 // --- 4. the numbers and the shape ---------------------------------------------
 const srvSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-const wf = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+const wf = expandedDeployWorkflow();
 const num = (m) => (m ? Number(String(m[1]).replace(/_/g, "")) : NaN);
 const drain = num(srvSrc.match(/const DRAIN_DEADLINE_MS = ([0-9_]+)/));
 const grace = num(wf.match(/RAILWAY_DEPLOYMENT_DRAINING_SECONDS:"(\d+)"/)) * 1000;

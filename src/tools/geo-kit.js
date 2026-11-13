@@ -10,6 +10,7 @@
 // wire) as an automatic fallback when Nominatim itself fails (see below).
 import { safeFetch } from "./fetch-guard.js";
 import { nominatimSlot } from "./nominatim-pace.js";
+import { OSM_ATTRIBUTION } from "../data-attribution.js";
 
 const NOMINATIM_SOURCE = "nominatim.openstreetmap.org (ODbL)";
 const PHOTON_SOURCE = "photon.komoot.io (ODbL)";
@@ -145,13 +146,15 @@ async function photonSearch({ q, limit, countryCodes = null, bbox = null }) {
 // https://operations.osmfoundation.org/policies/nominatim/). Every geo tool's
 // description ends with it and each answer's `source` names the licence; the
 // vendor-name check in scripts/test-no-third-party-names.js allows it there.
-export const OSM_ATTRIBUTION = "Data © OpenStreetMap contributors, ODbL (openstreetmap.org/copyright).";
+// The sentence lives in src/data-attribution.js (key "openstreetmap").
+export { OSM_ATTRIBUTION };
 
 export const GEO_TOOLS = [
   {
     route: "GET /api/geocode",
     name: "Geocode address",
     slug: "geocode",
+    attribution: "openstreetmap",
     category: "data",
     price: "$0.001",
     description:
@@ -214,6 +217,7 @@ export const GEO_TOOLS = [
     route: "GET /api/reverse-geocode",
     name: "Reverse geocode",
     slug: "reverse-geocode",
+    attribution: "openstreetmap",
     category: "data",
     price: "$0.001",
     description:
@@ -317,6 +321,7 @@ export const GEO_TOOLS = [
     route: "GET /api/place-search",
     name: "Place search",
     slug: "place-search",
+    attribution: "openstreetmap",
     category: "data",
     price: "$0.001",
     description:

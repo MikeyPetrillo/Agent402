@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as policy from "../facilitator/access-policy.js";
+import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
 const { tokenMatches } = policy;
 const openFacilitatorRefusal = policy.openFacilitatorRefusal || (() => null);
@@ -59,7 +60,7 @@ ok(/FACILITATOR_ALLOW_OPEN/.test(read("facilitator/README.md")), "README documen
 // The CI lane that runs this suite installs the facilitator's own lockfile
 // first, so the boot check above runs there instead of skipping.
 {
-  const wf = read(".github/workflows/deploy.yml");
+  const wf = expandedDeployWorkflow();
   const job = wf.slice(wf.indexOf("\n  test-unit-b2:\n"), wf.indexOf("\n  test-unit-b4:\n"));
   const install = job.indexOf("- name: Install facilitator dependencies (secretless)");
   const runs = job.indexOf("t node scripts/test-facilitator-access-policy.js");

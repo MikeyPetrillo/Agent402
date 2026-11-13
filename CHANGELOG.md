@@ -6,6 +6,26 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-12 (Bazaar listings)
+Payments:
+- Every route's Bazaar listing carries a service name, five tags led by its
+  category, a PNG icon, a description, and input and output schemas; the
+  typed-judgment routes keep their whole description and judge's model list
+  beside a link to the full sample answer.
+- Descriptions keep the sentences around a query hint.
+- Every Bazaar listing that serves third-party data ends with the attribution
+  that source requires (FRED, CoinGecko, Jupiter, OpenStreetMap, Open-Meteo,
+  NVD), the skill packs that run those tools included; their skill pages and
+  MCP skill files carry the same lines. Catalog search no longer ranks tools
+  on these notices.
+- A payment signed against the previous release's 402 is accepted when only
+  the output schema it echoes differs.
+- Output schemas read from examples type numbers as number, so a fractional
+  answer always matches its listing.
+Server:
+- The HTTP adapter used by the MCP connector takes its November security
+  release.
+
 ### 2026-11-12 (vendor updates: security releases)
 Server:
 - The HTTP client takes the November undici security release; Stripe calls

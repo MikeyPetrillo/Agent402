@@ -22,6 +22,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { expandWorkflow } from "./lib/ci-workflow.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPTS = join(ROOT, "scripts");
@@ -100,7 +101,9 @@ export function violations({ scriptsDir = SCRIPTS, workflowsDir = WORKFLOWS } = 
   const storeSteps = new Set();
   for (const f of readdirSync(workflowsDir)) {
     if (!/\.ya?ml$/.test(f)) continue;
-    for (const s of storeStepScripts(readFileSync(join(workflowsDir, f), "utf8"))) storeSteps.add(s);
+    // deploy.yml's test lists live in scripts/ci/lanes; read them in their steps.
+    const text = readFileSync(join(workflowsDir, f), "utf8");
+    for (const s of storeStepScripts(f === "deploy.yml" ? expandWorkflow(text).text : text)) storeSteps.add(s);
   }
   const bad = [], keepless = [];
   let offline = 0;

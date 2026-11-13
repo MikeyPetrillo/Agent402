@@ -31,7 +31,7 @@ checkout you were given, never `git stash`.
    no em dashes; US spelling; no hidden characters in instruction files; commit subjects carry
    `[test]` and stay under 72 characters; page dates regenerated after a page module or kit
    edit; generated files regenerated, not hand-merged; a new `scripts/test-*.js` runs in exactly
-   one `deploy.yml` lane; a new env var is documented in `CLAUDE.md` or the matching
+   one `deploy.yml` lane (its list in `scripts/ci/lanes/<lane>.sh`); a new env var is documented in `CLAUDE.md` or the matching
    `.claude/rules/` file with its default.
 5. Run: `test-copy-absolutes`, `test-no-third-party-names`, `test-us-spelling`,
    `test-hidden-chars`, `test-price-prose`, `test-static-pages`, `test-page-dates`,
