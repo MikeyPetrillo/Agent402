@@ -6,6 +6,42 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-13 (listing types, charge sentences and price keys)
+Index:
+- The seller index also reads the price spellings amount_usd and
+  max_amount_required, beside price_usd, each wherever its camelCase spelling
+  is read: amount_usd in a price object and an OpenAPI payment object,
+  max_amount_required on an entry that names its asset, in a payment object and
+  in accepts items. They are read only where an entry would otherwise have no
+  price, so a listing that already had a price keeps it, one that writes both
+  priceUsd and price_usd included.
+Surfaces:
+- A tool that answers with bytes is listed under the content type its example
+  returns: qr, screenshot, image-resize and image-thumbnail as image/png,
+  image-convert as image/jpeg and /v1/audio/speech as audio/mpeg. The x402
+  listing, /openapi.json and /api/pricing read the type from one field on the
+  tool, /openapi.json lists a route's other answer types after it, and a binary
+  listing names its output type as binary with a sample string that names its
+  bytes.
+- The hosted /mcp connector reports serverInfo.version as the agent402-mcp
+  package version in the deployed build followed by that build, in the form
+  <package version>+build.<sha>.
+Tools:
+- Refusals from /api/decide, the route-execute tiers and the /v1 chat
+  completions tiers that say a call was not charged use one sentence, "Nothing
+  was charged.", on a call to the route itself. A step error recorded inside a
+  decision run carries no charge sentence.
+Payments:
+- A refusal sent to a Tempo payer whose transfer was claimed before the call
+  ran says in one sentence that the failure is recorded as a refund owed to the
+  sending wallet, in place of the sentence that nothing was charged.
+- Across a deploy, a payment whose credential is held under an earlier key of
+  the same payment family is refused as the same payment; a different payment
+  in that family is served.
+Server:
+- The server and worker image builds print the end of npm's debug log when the
+  install step fails, and fail with npm's exit code.
+
 ### 2026-11-13 (payment and input hardening)
 Tools:
 - Transcription measures each file's length by decoding it before any upstream

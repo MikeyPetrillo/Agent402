@@ -122,7 +122,7 @@ const connected = await check("initialize: serverInfo.name is agent402, instruct
   assert(typeof instructions === "string" && instructions.length > 40, "instructions missing or empty");
   const caps = client.getServerCapabilities() || {};
   assert(caps.tools, "capabilities.tools missing");
-  return `build ${info.version}`;
+  return `version ${info.version}`;
 });
 if (!connected) finish("could not initialize");
 

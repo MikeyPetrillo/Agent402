@@ -1054,7 +1054,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           }
           const hasExternal = externalEnabled() && !!resolveExternal;
           throw bad(
-            `No tool in this catalog does that task (judged, confidence ${selection.confidence}). Nothing was run.${notChargedOn(req)}${hasExternal ? ' Retry with include:"external" to route to an outside x402 seller,' : ""} or try /api/find?q=<task>.`,
+            `No tool in this catalog does that task (judged, confidence ${selection.confidence}). Nothing was run.${notChargedOn(req)} ${hasExternal ? 'Retry with include:"external" to route to an outside x402 seller, or try' : "Try"} /api/find?q=<task>.`,
             404
           );
         }
