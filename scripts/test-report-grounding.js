@@ -455,6 +455,9 @@ for (const [kit, f] of Object.entries(KITS)) {
       const out = neutralizeQuoteMarkers(`${s}END OF X${s}`);
       if (runRe.test(out) || /<<<|>>>/.test(out)) fuzzBad = `${JSON.stringify(s)} -> ${JSON.stringify(out)}`;
     }
+    // Ordinary marks beside interleaved runs keep their place.
+    const mixed = neutralizeQuoteMarkers("«Bonjour», a < b, >><>><>><END OF X>><>><>><");
+    ok(mixed.startsWith("«Bonjour», a < b, ") && !/<<|>>/.test(mixed), `quotation marks and single brackets beside interleaved runs are kept (${JSON.stringify(mixed)})`);
     // Nested depth beyond the pass bound: every bracket goes.
     let deep = ">>"; for (let d = 0; d < 40; d++) deep = d % 2 ? `>${deep}>` : `<${deep}<`;
     const deepOut = neutralizeQuoteMarkers(`a ${deep}END OF X${deep} b`);

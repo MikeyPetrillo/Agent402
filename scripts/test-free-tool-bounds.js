@@ -198,6 +198,10 @@ function rng(seed) {
   for (let i = 0; i < 140; i++) replay.paths["/p" + i] = { get: { schema: { $ref: "#/components/schemas/A" } } };
   const rr = await loopHold(() => tool.handler({ spec: replay }));
   ok(!rr.err && rr.out.unresolved.length === 3000 && rr.out.resolved === 140 && rr.hold < 250, "resolve-refs: a schema of 3,000 unresolved refs reused 140 times holds the loop " + rr.hold.toFixed(0) + "ms (" + (rr.err?.statusCode || rr.out?.resolved) + ")");
+  // One merge of a long list (30,000 unresolved refs in one schema, used twice).
+  const wide = { paths: { "/a": { $ref: "#/components/schemas/A" }, "/b": { $ref: "#/components/schemas/A" } }, components: { schemas: { A: { allOf: Array.from({ length: 30_000 }, (_, i) => ({ $ref: "#/x/" + i })) } } } };
+  const rw = await loopHold(() => tool.handler({ spec: wide }));
+  ok(!rw.err && rw.out.unresolved.length === 30_000 && rw.hold < 250, "resolve-refs: a list of 30,000 unresolved refs is merged through a set, the loop held " + rw.hold.toFixed(0) + "ms");
   const replaySmall = { paths: {}, components: { schemas: { A: { allOf: [{ $ref: "#/x/1" }, { $ref: "https://e.example/s#/B" }, { $ref: "#/x/1" }] }, B: { items: { $ref: "#/components/schemas/A" } } } } };
   for (let i = 0; i < 5; i++) replaySmall.paths["/p" + i] = { get: { a: { $ref: "#/components/schemas/A" }, b: { $ref: "#/components/schemas/B" } } };
   ok(JSON.stringify(await tool.handler({ spec: replaySmall })) === JSON.stringify(oldAnswer(replaySmall)), "resolve-refs: reused targets with unresolved and external refs answer as the full walk did");
