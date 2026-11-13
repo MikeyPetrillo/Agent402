@@ -83,6 +83,11 @@ Payments:
   is served at once.
 - One EVM authorization holds one claim on a server without a shared store,
   whatever unsigned network fields a copy of its header carries.
+- The Circle Gateway batched accept is offered on no route that buys from an
+  outside seller or spends a wallet of ours, /api/decide/execute and the
+  flight routes included; those carry the plain accept. A decision run whose
+  buyer left before the first byte is settled and its review is held, as a
+  route-execute run's is.
 Packages:
 - The job-link poller follows a redirect only within the server's own origin
   and refuses a redirect to any other origin before reading it, saying so in

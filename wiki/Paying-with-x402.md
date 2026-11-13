@@ -86,7 +86,8 @@ right now is machine-readable: `/api/pricing` (`payment.acceptKinds`,
   is never served is recorded as owed to the paying wallet and refunded under
   the [refund policy](https://agent402.tools/terms).
 - **Where it is not offered:** identity-bound routes (memory, attest, feedback,
-  my-usage) and routes with a lasting effect (such as the route-execute tiers)
+  my-usage) and routes with a lasting effect (such as the route-execute tiers,
+  `/api/decide/execute` and the flight routes, which buy from outside sellers)
   carry the plain accept only.
 
 `agent402-client` 0.8.20 and later pays the batched accept when constructed

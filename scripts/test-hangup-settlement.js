@@ -787,7 +787,10 @@ try {
   {
     const MEMORY_READERS = new Set(["memory-read", "memory-grants", "memory-log", "memory-recall"]);
     const slugs = new Set(((await (await fetch(`${B}/api/pricing`)).json()).endpoints || []).map((e) => e.slug));
-    const missing = LASTING_EFFECT_SLUG_LIST.filter((sl) => !slugs.has(sl));
+    // decide-execute is served only while the decision service is configured
+    // (DECIDE_SERVICE_URL): absent here exactly when its sibling decide is.
+    const switched = (sl) => sl === "decide-execute" && !slugs.has("decide");
+    const missing = LASTING_EFFECT_SLUG_LIST.filter((sl) => !slugs.has(sl) && !switched(sl));
     ok(slugs.size > 100 && missing.length === 0, `every lasting-effect slug is a live catalog route (missing: ${JSON.stringify(missing)})`);
     const tiers = [...slugs].filter((sl) => sl.startsWith("route-execute"));
     ok(tiers.length >= 4 && tiers.every(hasLastingEffect), `every route-execute tier is on the list (${JSON.stringify(tiers)})`);

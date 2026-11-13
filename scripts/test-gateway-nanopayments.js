@@ -51,7 +51,7 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -77,7 +77,7 @@ import { registerFacilitatorFailureHooks, gatewayPendingBookWanted, acceptsForIt
 import { EventEmitter } from "node:events";
 import { planRefunds, executeRefunds, GATEWAY_NO_ID_HOLD } from "./refund-run.js";
 import { CIRCLE_FACILITATOR_BASE } from "../src/circle-supported.js";
-import { LASTING_EFFECT_SLUG_LIST } from "../src/hangup-forgiveness.js";
+import { LASTING_EFFECT_SLUG_LIST, hasLastingEffect, defHasLastingEffect } from "../src/hangup-forgiveness.js";
 
 let pass = 0;
 const check = async (name, fn) => {
@@ -1159,6 +1159,44 @@ await check("payments: the batched accept respects a tool's onlyNetworks; the pe
   assert.deepEqual(batchedNets, ["eip155:5042"], `batched only where the tool can be served (${batchedNets})`);
   assert.equal(gatewayPendingBookWanted({ STATE_DATABASE_URL: "postgres://x/y", GATEWAY_PENDING_FILE: "/nonexistent/p.json" }), true);
   assert.equal(gatewayPendingBookWanted({ GATEWAY_PENDING_FILE: "/nonexistent/p.json" }), false, "control");
+});
+
+await check("payments: no route that spends our wallet or pays an outside seller is offered the batched accept, and each is on the lasting-effect list", async () => {
+  const gk = new Map([["eip155:8453", baseKind], ["eip155:5042", kinds.get("eip155:5042")]]);
+  const rails = { evmCaip2: ["eip155:8453", "eip155:5042"], svmCaip2: [], stellarCaip2: [], avmCaip2: [], walletAddress: TREASURY, gatewayKinds: gk };
+  const batchedNets = (def) => acceptsForItem(def, rails).filter((a) => a.extra?.name === GATEWAY_KIND_NAME).map((a) => a.network);
+  // Every catalog definition carrying either flag, built from its own kit. A
+  // kit that starts carrying a flag fails the file scan below until it is
+  // built here, so a new wallet-spending route is checked from its first day.
+  const { buildRouteExecuteTool, EXEC_TIERS } = await import("../src/tools/route-execute.js");
+  const { buildSellerPayabilityTool } = await import("../src/tools/seller-payability-kit.js");
+  const { ATTEST_TOOLS } = await import("../src/tools/attest-kit.js");
+  const { buildFlightTools } = await import("../src/tools/flights-kit.js");
+  const { buildDecideTools } = await import("../src/tools/decide-kit.js");
+  const seller = [{ maxUsd: 0.01, url: "https://seller.example/x" }];
+  const built = [
+    ...EXEC_TIERS.map((tier) => buildRouteExecuteTool({ getCatalog: () => ({}), tier })),
+    buildSellerPayabilityTool({ pay: async () => ({}), fetchImpl: async () => new Response(""), assertPublicUrl: async () => {} }),
+    ...ATTEST_TOOLS,
+    ...buildFlightTools({ sellers: { search: seller, status: seller }, pay: async () => ({}) }),
+    ...buildDecideTools({ getCatalog: () => ({}), ledger: {} }),
+  ];
+  const flagged = built.filter((d) => d.spendsOwnWallet === true || d.paysThirdPartySeller === true);
+  const slugs = flagged.map((d) => d.slug);
+  for (const slug of ["route-execute", "seller-payability", "attest", "flight-search", "flight-status", "decide-execute"]) assert.ok(slugs.includes(slug), `${slug} is built and flagged (${slugs.join(", ")})`);
+  const files = ["src", "src/tools"].flatMap((d) => readdirSync(new URL(`../${d}/`, import.meta.url)).filter((f) => f.endsWith(".js")).map((f) => `${d}/${f}`))
+    .filter((f) => { const t = readFileSync(new URL(`../${f}`, import.meta.url), "utf8"); return /route: "/.test(t) && /(spendsOwnWallet|paysThirdPartySeller): true/.test(t); });
+  const builtFrom = ["src/tools/route-execute.js", "src/tools/seller-payability-kit.js", "src/tools/attest-kit.js", "src/tools/flights-kit.js", "src/tools/decide-kit.js"];
+  assert.deepEqual(files.filter((f) => !builtFrom.includes(f)), [], "every kit that flags a route is built in this check");
+  const offered = flagged.filter((d) => batchedNets(d).length > 0).map((d) => d.slug);
+  assert.deepEqual(offered, [], "no flagged route carries a batched accept: a pending answer's resend would run it, and buy from outside sellers, twice");
+  const unlisted = flagged.filter((d) => !hasLastingEffect(d.slug)).map((d) => d.slug);
+  assert.deepEqual(unlisted, [], "every flagged route is on the lasting-effect list (no hang-up ticket, implicit replay off, a disconnect held for review)");
+  // The rule reads the flags, so a flagged route nobody has listed yet is covered.
+  assert.deepEqual(batchedNets({ slug: "new-spender", price: "$0.01", spendsOwnWallet: true }), [], "an unlisted spendsOwnWallet route gets no batched accept");
+  assert.deepEqual(batchedNets({ slug: "new-buyer", price: "$0.01", paysThirdPartySeller: true }), [], "an unlisted paysThirdPartySeller route gets no batched accept");
+  assert.ok(defHasLastingEffect({ slug: "new-spender", spendsOwnWallet: true }) && !defHasLastingEffect({ slug: "hash" }) && !defHasLastingEffect(null), "defHasLastingEffect reads the flags and the list");
+  assert.deepEqual(batchedNets({ slug: "hash", price: "$0.005" }), ["eip155:8453", "eip155:5042"], "control: an ordinary tool keeps the batched accept on both networks");
 });
 
 /** A routed resource server over a fresh pending book. */
