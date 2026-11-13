@@ -614,19 +614,20 @@ const SELLER_PRICE_KEYS = ["price", "maxAmountRequired", "amount", "priceUsd", "
 /** A seller value as a price reader may take it: text or a finite number, else undefined. */
 export const sellerNumText = (v) => (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) ? v : undefined);
 // The snake_case spellings of the price keys. Every reader takes the
-// camelCase key alone, so the two spellings are folded into it once, by one
-// rule: the camelCase value the seller wrote wins when it is usable (non-blank
+// camelCase key alone, so a snake_case key is folded into its own camelCase
+// twin: the camelCase value the seller wrote wins when it is usable (non-blank
 // text or a finite number); the snake_case value is read only when the
-// camelCase one is absent or unusable. The snake_case keys are then removed,
-// so no reader can take a second figure from the same object.
-const SELLER_PRICE_SNAKE_KEYS = [["price_usd", "priceUsd"], ["amount_usd", "amountUsd"], ["max_amount_required", "maxAmountRequired"]];
+// camelCase one is absent or unusable. The snake_case key is then removed, so
+// no reader can take a second figure from the same object.
+const PRICE_USD_SNAKE_KEYS = [["price_usd", "priceUsd"]];
+const SELLER_PRICE_SNAKE_KEYS = [...PRICE_USD_SNAKE_KEYS, ["amount_usd", "amountUsd"], ["max_amount_required", "maxAmountRequired"]];
 const usablePrice = (v) => (typeof v === "string" ? (v.trim() ? v : undefined) : sellerNumText(v));
 /** The object with its snake_case price keys folded into the camelCase ones
- *  (see the rule above); the same object when it carries no snake_case key. */
-export function withCamelPriceKeys(o) {
+ *  (see the rule above); the same object when it carries none of `pairs`. */
+export function withCamelPriceKeys(o, pairs = SELLER_PRICE_SNAKE_KEYS) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return o;
   let out = null;
-  for (const [snake, camel] of SELLER_PRICE_SNAKE_KEYS) {
+  for (const [snake, camel] of pairs) {
     if (!(snake in o)) continue;
     out ||= { ...o };
     const v = usablePrice(o[snake]);
@@ -634,6 +635,37 @@ export function withCamelPriceKeys(o) {
     delete out[snake];
   }
   return out || o;
+}
+// The manifest and OpenAPI readers price an entry in two passes. The first
+// reads the keys those readers have always read (`price_usd` among them, as
+// `priceUsd`), so an entry that had a price keeps it. Only an entry the first
+// pass leaves unpriced is read again through widePriceView, where
+// `amount_usd` and `max_amount_required` stand in for their camelCase twins
+// on the entry itself, its `price` and `payment` objects and each `accepts`
+// or `offers` item. A key added later can so fill a gap and never move a
+// price: beside an `amount` in dollars, `max_amount_required` would otherwise
+// turn the entry into an accept quoting base units.
+const withCamelPriceUsd = (o) => withCamelPriceKeys(o, PRICE_USD_SNAKE_KEYS);
+/** The entry with every snake_case price key folded, nested payment shapes
+ *  included; the same object when there is none. */
+function widePriceView(o, depth = 0) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return o;
+  let out = withCamelPriceKeys(o);
+  if (depth >= 2) return out;
+  for (const k of ["price", "payment"]) {
+    const w = widePriceView(o[k], depth + 1);
+    if (w !== o[k]) { if (out === o) out = { ...o }; out[k] = w; }
+  }
+  for (const k of ["accepts", "offers"]) {
+    if (!Array.isArray(o[k])) continue;
+    let list = null;
+    for (let i = 0; i < o[k].length && i < 64; i++) {
+      const w = widePriceView(o[k][i], depth + 1);
+      if (w !== o[k][i]) (list ||= o[k].slice())[i] = w;
+    }
+    if (list) { if (out === o) out = { ...o }; out[k] = list; }
+  }
+  return out;
 }
 const MANIFEST_TEXT_KEYS = ["name", "description", "homepage", "title", "network", "payTo"];
 const asSellerText = (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : undefined);
@@ -3100,7 +3132,7 @@ function dollarLabelOf(obj) {
  *  and no dollar field beside it. */
 function bareAmountEntry(raw) {
   return !!raw && typeof raw === "object" && raw.amount != null
-    && withCamelPriceKeys(raw).priceUsd == null && raw.price == null
+    && withCamelPriceUsd(raw).priceUsd == null && raw.price == null
     && raw.unit == null && raw.currency == null
     && !acceptShaped(raw) && !atomicContext(raw) && dollarLabelOf(raw) == null;
 }
@@ -3117,7 +3149,7 @@ function baseUnitReading(ctx, amount) {
 }
 
 function parseManifestPrice(raw) {
-  raw = withCamelPriceKeys(raw);
+  raw = withCamelPriceUsd(raw);
   let p = raw?.priceUsd ?? raw?.price ?? null;
   // An entry whose own amount sits beside payment context: a label first,
   // else base units. Accept-shaped entries keep their old rule (the accepts
@@ -3139,7 +3171,7 @@ function parseManifestPrice(raw) {
   // survives a future edit to that key list, and noted because no mutation can
   // kill it - the test asserts the OUTCOME (an array declares nothing) instead.
   if (p && typeof p === "object" && !Array.isArray(p)) {
-    const o = withCamelPriceKeys(p);
+    const o = withCamelPriceUsd(p);
     p = o.amountUsd ?? o.priceUsd ?? dollarLabelOf(o) ?? null;
     if (p == null) {
       const fig = o.amount ?? o.value;
@@ -3176,15 +3208,22 @@ export function singleResourceManifestTool(manifest, originUrl) {
   if (!url) return null;
   if (!Array.isArray(manifest?.accepts) || !manifest.accepts.length) return null;
   const meta = (r && typeof r === "object") ? r : {};
-  const tool = bazaarItemToTool({
+  const toolOf = (accepts) => bazaarItemToTool({
     resource: url,
-    accepts: manifest.accepts,
+    accepts,
     serviceName: meta.serviceName || manifest.serviceName || "",
     description: meta.description || manifest.description || "",
     tags: Array.isArray(meta.tags) ? meta.tags : [],
     method: meta.method || manifest.method,
   }, originUrl);
+  let tool = toolOf(manifest.accepts);
   if (!tool) return null;
+  // Second pass (see widePriceView): only when the accepts gave no price.
+  if (tool.price == null) {
+    const wide = widePriceView({ accepts: manifest.accepts }).accepts;
+    const again = wide !== manifest.accepts ? toolOf(wide) : null;
+    if (again && again.price != null) tool = again;
+  }
   // Provenance is the seller's own manifest, not a registry that observed them.
   return { ...tool, provenance: "manifest" };
 }
@@ -3435,6 +3474,8 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   const exampleByKey = exampleOf ? new Map() : null;
   // Manifest-level default, applied only to rows that declare nothing.
   const manifestAccepts = manifestPaymentAccepts(manifest);
+  const widePayment = widePriceView(manifest.payment);
+  const manifestAcceptsWide = widePayment !== manifest.payment ? manifestPaymentAccepts({ payment: widePayment }) : manifestAccepts;
   // A catalogue row that carries only a bare `amount` under a manifest whose
   // own accepts name an asset by identifier is quoting that accept's base
   // units, as the x402 field means; read alone it is a dollar figure a million
@@ -3459,8 +3500,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   };
 
   for (const list of catalogues) {
-    for (const listed of list.slice(0, 1000)) {
-      const raw = withCamelPriceKeys(listed);
+    for (const raw of list.slice(0, 1000)) {
       let ref = "", name = "", description = "", price = null, inputSchema = null;
       const methodList = [];
       // What this entry says about money, from its own accepts / flat payment
@@ -3469,7 +3509,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
       const entryAccepts = typeof raw === "string"
         ? manifestAccepts
         : catalogueEntryAccepts(raw, manifestAccepts);
-      const pay = entryAccepts.length ? paymentFieldsFromAccepts(entryAccepts) : null;
+      let pay = entryAccepts.length ? paymentFieldsFromAccepts(entryAccepts) : null;
       if (typeof raw === "string") {
         ref = raw.trim();
       } else if (raw && typeof raw === "object") {
@@ -3490,6 +3530,20 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
           for (const m of raw.methods) {
             if (MANIFEST_HTTP_METHODS.has(String(m).toUpperCase())) methodList.push(String(m).toUpperCase());
           }
+        }
+      }
+      // Second pass (see widePriceView): only an entry with no price yet.
+      if (price == null && !(pay && pay.price != null)) {
+        const wide = typeof raw === "string" ? raw : widePriceView(raw);
+        if (wide !== raw || manifestAcceptsWide !== manifestAccepts) {
+          const wideAccepts = typeof wide === "string" ? manifestAcceptsWide : catalogueEntryAccepts(wide, manifestAcceptsWide);
+          const widePay = wideAccepts.length ? paymentFieldsFromAccepts(wideAccepts) : null;
+          let widePrice = wide !== raw ? parseManifestPrice(wide) : null;
+          if (wide !== raw && manifestAtomic && bareAmountEntry(wide)) {
+            const usd = baseUnitReading(manifestAtomic, wide.amount);
+            if (usd != null) widePrice = `$${usd}`;
+          }
+          if (widePrice != null || (widePay && widePay.price != null)) { price = widePrice; pay = widePay; }
         }
       }
       if (!ref) continue;
@@ -3975,6 +4029,20 @@ const SCALAR_PRICE_KEYS = ["x-price", "x-x402-price", "x-x402-price-usdc", "x-pr
 const OBJECT_PAYMENT_KEYS = ["x-payment-info", "x-x402", "x-402", "x-payment", "x-x402-payment", "x-pricing", "x-payment-protocol"];
 const isScalar = (v) => typeof v === "number" || typeof v === "string";
 export function openapiOperationPayment(op) {
+  const first = openapiOperationPaymentOnce(op);
+  if (first.price != null || first.paid === false || !op || typeof op !== "object") return first;
+  // Second pass (see widePriceView): only an operation with no price yet.
+  let wide = null;
+  for (const k of Object.keys(op)) {
+    if (!OBJECT_PAYMENT_KEYS.includes(k.toLowerCase())) continue;
+    const w = widePriceView(op[k]);
+    if (w !== op[k]) (wide ||= { ...op })[k] = w;
+  }
+  if (!wide) return first;
+  const again = openapiOperationPaymentOnce(wide);
+  return again.price != null ? again : first;
+}
+function openapiOperationPaymentOnce(op) {
   const out = { paid: null, price: null, networks: [], payToByNetwork: {} };
   if (!op || typeof op !== "object") return out;
   const lower = new Map(Object.keys(op).map((k) => [k.toLowerCase(), op[k]]));
@@ -4023,14 +4091,13 @@ export function openapiOperationPayment(op) {
   if (atomic != null) { annotated = true; takeAtomic({ network: get("x-x402-network") }, atomic); }
   if (get("x-x402-network") != null) { annotated = true; addNetwork(get("x-x402-network")); }
   for (const k of OBJECT_PAYMENT_KEYS) {
-    let v = get(k);
+    const v = get(k);
     if (v == null) continue;
     annotated = true;
     if (isScalar(v)) { takePrice(parseManifestPrice({ price: v })); continue; }
     if (typeof v !== "object" || Array.isArray(v)) continue;
     // Dollar figures first: price_usd / priceUsd / price (scalar or object) and
     // the dialect-specific spellings.
-    v = withCamelPriceKeys(v);
     takePrice(parseManifestPrice(v));
     for (const key of ["amountUsd", "price_usdc"]) {
       if (out.price || v[key] == null) continue;
