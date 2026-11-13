@@ -2678,6 +2678,8 @@ if (CDN_PROXY_ON) {
       windowAdd: (...a) => sharedLimitsWrite("cdn-origin", sharedLimits.windowAdd(...a)),
       windowRead: (...a) => sharedLimits.windowRead(...a).then((r) => { if (!r?.ok) noteSharedLimitsDegraded("cdn-origin", r); return r; }),
     } : null,
+    // Our own loopback replays are not CDN peers: the count skips them.
+    isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]),
   }));
   app.use(cdnSyncDeadlineMiddleware());
 }
