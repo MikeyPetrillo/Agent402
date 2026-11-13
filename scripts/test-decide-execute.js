@@ -614,6 +614,41 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ok(ledger.creditState(c.token).state === "redeemed", "a settlement that fails after a paid leg does not restore the credit");
 }
 
+// ---- a router refusal recorded as a step error carries no charge claim ----
+// The router is handed the run's request, so its refusal to a route caller
+// ends "Nothing was charged."; inside a run that goes on to be delivered and
+// charged that sentence would describe the wrong call.
+{
+  const { NOT_CHARGED, withoutChargeClaim } = await import("../src/not-charged.js");
+  ok(withoutChargeClaim("A failed. Nothing was charged. Retry later.") === "A failed. Retry later." && withoutChargeClaim("A failed. Nothing was spent. Nothing was charged.") === "A failed. Nothing was spent." && withoutChargeClaim("Nothing was charged.") === "" && withoutChargeClaim("A failed.") === "A failed.",
+    "the charge sentence is taken out mid-message and last, with no doubled space or orphan period");
+  const mkRouter = (over) => buildRouteExecuteTool({
+    getCatalog: () => ({}), baseUrl: "https://agent402.tools", tier: EXEC_TIERS.find((t) => t.slug === "route-execute-pro"),
+    externalEnabled: () => true, externalChains: () => ["base"], payExternal: async () => { throw new Error("no payment is expected"); },
+    resolveExternal: async (task, { onlyUrl }) => [{ seller: new URL(onlyUrl).origin, url: onlyUrl, slug: "ext-q", method: "POST", price: "$0.01", priceUsd: 0.01, networks: ["eip155:8453"], wire: "x402" }],
+    ...over,
+  });
+  const cases = [
+    ["wallet-low", mkRouter({ spendingWalletStatus: async () => ({ status: "low" }) }), { q: "x" }, /temporarily unavailable\. Retry later\.$/, 503],
+    ["unbindable-param", mkRouter({ resolveExternal: async (task, { onlyUrl }) => [{ seller: new URL(onlyUrl).origin, url: onlyUrl, slug: "ext-q", method: "GET", price: "$0.01", priceUsd: 0.01, networks: ["eip155:8453"], wire: "x402" }] }), { q: { nested: 1 } }, /param "q" must be a string, number, or boolean\.$/, 400],
+  ];
+  for (const [label, router, stepParams, wording, status] of cases) {
+    const id = `dClaim-${label}`, endpoint = `https://${label}.example/x`;
+    const outside = tool(`e-${label}`, { firstParty: false, seller: `${label}.example`, endpoint, priceUsd: 0.01, inputSchema: { type: "object", properties: { q: {} }, required: [] } });
+    ledger.saveDecision({ decisionId: id, depth: "plan", priceUsd: 0.02, plan: [{ step: 1, purpose: "x", tool: outside, fallbacks: [], dependsOn: [] }, { step: 2, purpose: "y", tool: tool("b"), fallbacks: [], dependsOn: [] }], costViaUsd: 0.05, now: clock });
+    ledger.markDecisionSettled(id);
+    const c = ledger.mintCredit({ decisionId: id, amountUsd: 0.05, ttlMs: 3600_000, now: clock });
+    ledger.activateCredit(c.hash);
+    const run = makeExecuteHandler({ ledger, getCatalog: () => ({ rx: router, b: catalog.b }), now, spendingWalletStatus: async () => ({ status: "ok" }) });
+    const out = await run({ decisionId: id, creditToken: c.token, params: { 1: stepParams } }, { ...mkReq(`0x${label}`), __meteredQuoteUsd: 0.001 });
+    const a = out.steps[0].attempts?.[0];
+    ok(out.steps[0].status === "failed" && out.steps[1].status === "ok" && a?.status === status && wording.test(a?.error || ""), `${label}: the router's refusal is the step's error in a run that still delivers (${JSON.stringify(a)})`);
+    ok(!JSON.stringify(out).includes(NOT_CHARGED) && !/charged/i.test(a?.error || ""), `${label}: no step error in the run carries a charge claim (${a?.error})`);
+    let direct = null; try { await router.handler({ task: "x", include: "external", target: endpoint, params: stepParams }, { ...mkReq(`0x${label}`), __meteredQuoteUsd: 0.001 }); } catch (e) { direct = e; }
+    ok(direct?.statusCode === status && direct.message.includes(NOT_CHARGED) && withoutChargeClaim(direct.message) === a?.error, `${label}: the same refusal on a direct route call still says it (${direct?.message})`);
+  }
+}
+
 // ---- a run that fails only on the caller's own inputs is a 400 ----
 {
   ledger.saveDecision({ decisionId: "dIn", depth: "quick", priceUsd: 0.005, plan: [{ step: 1, purpose: "x", tool: tool("a"), fallbacks: [], dependsOn: [] }], costViaUsd: 0.01, now: clock });

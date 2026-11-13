@@ -18,6 +18,13 @@ export function isRouteCall(req) {
   return !!(req && typeof req === "object" && req.headers && typeof req.headers === "object");
 }
 
+/** `text` with the shared sentence taken out and the spacing closed up: for
+ *  an error recorded inside an answer that can itself be charged (a step
+ *  error of a decide run), where the claim would describe the wrong call. */
+export function withoutChargeClaim(text) {
+  return String(text ?? "").split(NOT_CHARGED).map((part) => part.trim()).filter(Boolean).join(" ");
+}
+
 /** " Nothing was charged." on a route call, "" otherwise: append to a sentence. */
 export function notChargedOn(req) {
   return isRouteCall(req) ? ` ${NOT_CHARGED}` : "";

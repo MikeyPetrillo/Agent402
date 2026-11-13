@@ -27,7 +27,7 @@ import { planShape } from "../decide/plan-shape.js";
 import { attemptErrorCode } from "../decide/skip-codes.js";
 import { createReplanGuard } from "../decide/replan-guard.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
-import { notChargedOn } from "../not-charged.js";
+import { notChargedOn, withoutChargeClaim } from "../not-charged.js";
 export { SKIP_CODES, attemptErrorCode, skipCodeOf } from "../decide/skip-codes.js";
 
 export const NEUTRALITY_NOTE = "Every candidate is scored by one formula with the same weights: fit to the step, observed reliability, price, schema quality and a freshness pass mark. It has no term for who sells the tool, and every tool carries firstParty. Fit is judged from the same bounded description for every tool; reliability counts one observation per payer per day. Outside tools are eligible when a live 402 was seen within the configured window and their input schema is known.";
@@ -794,7 +794,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
             // A 4xx means our request was wrong for this tool, not that the tool
             // is unreliable; only a failure on the tool's side counts against it
             // (a run stopped on our side is neither).
-            attempts.push({ id: tool.id, error: String(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: e?.runStopped ? false : !(e?.statusCode >= 400 && e?.statusCode < 500), code: attemptErrorCode(e) });
+            attempts.push({ id: tool.id, error: withoutChargeClaim(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: e?.runStopped ? false : !(e?.statusCode >= 400 && e?.statusCode < 500), code: attemptErrorCode(e) });
             continue;
           }
         }
@@ -867,7 +867,10 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
             // failed on its own side whatever status the router relays: it counts
             // against the seller's reliability, so the next plans rank it lower.
             const sellerRefused = /refused the payment|rejected the paid retry|Seller .* failed/i.test(String(e?.message || ""));
-            attempts.push({ id: tool.id, error: String(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: sellerRefused || !(e?.statusCode >= 400 && e?.statusCode < 500), code: attemptErrorCode(e, { sellerRefused, timedOut }), ...(maybePaid ? { mayHavePaid: true } : {}) });
+            // The router is handed this run's request, so its refusal carries
+            // the shared charge sentence; a step error is recorded inside a
+            // run that can be delivered and charged, so it is taken out here.
+            attempts.push({ id: tool.id, error: withoutChargeClaim(e?.message || e).slice(0, 240), status: e?.statusCode || 500, toolFault: sellerRefused || !(e?.statusCode >= 400 && e?.statusCode < 500), code: attemptErrorCode(e, { sellerRefused, timedOut }), ...(maybePaid ? { mayHavePaid: true } : {}) });
             if (maybePaid) {
               // The payment may have left (or may still leave: a timed-out leg is
               // not canceled). Book its worst case and try no other paid seller.
