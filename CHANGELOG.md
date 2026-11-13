@@ -21,18 +21,24 @@ Tools:
   trimmedToCapSeconds and durationUnconfirmed; both fields are in the output
   schemas.
 - Large images sent to image-ocr wait their turn per caller, a step run by a
-  decision or by route-execute included, so one caller's run of large images
-  cannot hold every place in the queue.
+  decision, by route-execute or by a skill pack included, so one caller's run
+  of large images cannot hold every place in the queue.
 - Transcription measures and cuts each file by the audio samples it decodes,
   not by the timestamps its container writes, and a file sent as it came is
   uploaded under the name of the format it was measured as.
 - openapi-resolve-refs resolves long chains of refs, deeply nested documents
-  and long pointers inside cyclic refs in time proportional to their size.
+  and long pointers inside cyclic refs in time proportional to their size, and
+  a cycle reached from many top-level keys once. A spec whose refs inside a
+  cycle take more than 1.5 million steps to resolve is refused with a 400
+  that says to resolve it in parts.
 - route-execute does not resell a 200 a seller sent without taking payment
   when its body is empty or blank, an empty list, an error sent as text, or
   text, a list or a bare value where the seller promised JSON fields; the next
   seller is tried. A paid answer that is not JSON on a route that promised
-  JSON fields counts as a missed promise in the seller's delivery record.
+  JSON fields counts as a missed promise in the seller's delivery record. A
+  paid answer longer than the router reads is judged on the JSON document it
+  closed, and one that cannot be read that way is counted as unverifiable in
+  the delivery record and the seller dossier.
 - Report kits remove bracket runs from quoted source text across combining
   marks, blanks, control characters and the compatibility forms of each
   bracket.
@@ -41,7 +47,11 @@ Tools:
   instruction inside it is the seller's text. The listing text they read drops
   a sentence opened by a role marker behind markdown list, heading or emphasis
   marks, a closing brace, a lookalike colon, a guillemet or an arrow, and
-  /api/route's judge reads the same screened text as route-execute's.
+  /api/route's judge reads the same screened text as route-execute's, with a
+  price label formatted from the parsed price. The paywall probe's judge reads
+  a route's answer as one quoted JSON string.
+- /api/route ranks with the same order as before in steps, so a ranking
+  query hands the server back between slices while it sorts.
 Payments:
 - A paid answer whose connection closed after its headers went out is kept
   under its idempotency key, so a retry with the same key, a prepaid credits
