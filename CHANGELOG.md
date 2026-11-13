@@ -16,9 +16,10 @@ Tools:
   whose size alone keeps it inside the cap is sent without a decode, and a
   call that finds the decoder busy waits its turn inside the time its payment
   allows, or is answered a retryable 503 at once when the queue for the
-  decoder is full. A refusal says nothing was charged on a call to the route
-  itself, in the wording that names the Tempo push exception, and not inside a
-  skill-pack step.
+  decoder is full, by its count or by the bytes its waiting files hold. A
+  refusal says nothing was charged on a call to the route itself, in the
+  wording that names the Tempo push exception, and not inside a skill-pack
+  step.
 - A file sent for transcription whose length cannot be confirmed is
   transcribed up to its tier's cap, and the answer says so in
   trimmedToCapSeconds and durationUnconfirmed; both fields are in the output
@@ -26,8 +27,11 @@ Tools:
 - Large images sent to image-ocr wait their turn per caller, a step run by a
   decision, by route-execute or by a skill pack included, so one caller's run
   of large images cannot hold every place in the queue. The caller is the
-  verified payer, else the client address. A refusal says nothing was charged
-  on a call to the route itself only.
+  verified payer, else the client address, an IPv6 address read as its /64. A
+  refusal says nothing was charged on a call to the route itself only.
+- code-run and code-run-pro calls made inside route-execute, a decision or a
+  skill pack count against the caller's concurrent-run limit, as a direct call
+  does, and an IPv6 caller is its /64.
 - Transcription measures and cuts each file by the audio samples it decodes,
   not by the timestamps its container writes, and a file sent as it came is
   uploaded under the name of the format it was measured as.
@@ -42,19 +46,20 @@ Tools:
   seller is tried. A paid answer that is not JSON on a route that promised
   JSON fields counts as a missed promise in the seller's delivery record. A
   paid answer longer than the router reads is judged on the JSON document it
-  closed, and one that cannot be read that way is counted as unverifiable in
-  the delivery record and the seller dossier.
+  closed, and one that cannot be read that way, or cannot be read at all, is
+  counted as unverifiable in the delivery record and the seller dossier.
 - Report kits remove bracket runs from quoted source text across combining
   marks, blanks, control characters and the compatibility forms of each
   bracket.
 - The router judges read each listing as quoted data: one JSON object per
   listing with every line break escaped, under a rule that a speaker label or
-  instruction inside it is the seller's text. The listing text they read drops
-  a sentence opened by a role marker behind markdown list, heading or emphasis
-  marks, a closing brace, a lookalike colon, a guillemet or an arrow, and
-  /api/route's judge reads the same screened text as route-execute's, with a
-  price label formatted from the parsed price. The paywall probe's judge reads
-  a route's answer as one quoted JSON string.
+  instruction inside it is the seller's text. The listing text they read
+  rewrites the separator after any short label, in any script and anywhere in
+  a sentence, to a dash, keeping every word, and leaves URLs, times, ratios,
+  prices, paths and IPv6 addresses as written; and /api/route's judge reads
+  the same screened text as route-execute's, with a price label formatted from
+  the parsed price. The paywall probe's judge reads a route's answer as one
+  quoted JSON string.
 - /api/route ranks with the same order as before in steps, so a ranking
   query hands the server back between slices while it sorts.
 Payments:

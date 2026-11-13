@@ -59,7 +59,7 @@
     "src/tools/chain-kit.js": "2026-11-10",
     "src/tools/chain-rpc-kit.js": "2026-09-22",
     "src/tools/child-env.js": "2026-11-10",
-    "src/tools/code-run-kit.js": "2026-11-12",
+    "src/tools/code-run-kit.js": "2026-11-13",
     "src/tools/coingecko-cache.js": "2026-11-10",
     "src/tools/coingecko-rate.js": "2026-11-12",
     "src/tools/compression-kit.js": "2026-09-10",
