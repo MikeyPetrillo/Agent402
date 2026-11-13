@@ -497,6 +497,15 @@ const orModels = (s) => s.calls.filter((c) => c.host === OPENROUTER).map((c) => 
 }
 {
   setUpstreamCostsForTest(fullTable());
+  {
+    // The /v1/judge Bazaar listing names no fallback count: the backend list
+    // grows (Gemini Decision-1 and Jev over OpenRouter joined), and a typed
+    // count goes stale the day it does.
+    const { BAZAAR_DESCRIPTIONS } = await import("../src/payments.js");
+    const COUNT = /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:more\s+)?(?:fallbacks?|backups?|backends?)\b/i;
+    ok(typeof BAZAAR_DESCRIPTIONS.judge === "string" && /fallbacks/.test(BAZAAR_DESCRIPTIONS.judge) && !COUNT.test(BAZAAR_DESCRIPTIONS.judge), `the /v1/judge listing says it has fallbacks and names no count (${(BAZAAR_DESCRIPTIONS.judge || "").match(/Served by[^.]*\./)?.[0]})`);
+    ok(COUNT.test("Served by jev-latest with two fallbacks; name one first with model.") && COUNT.test("with 3 fallbacks"), "control: the count pattern reads a typed count");
+  }
   ok(geminiDecisionOffered() && jevOpenRouterOffered(), "with their table rates both new models are offered");
   ok(JUDGE_TOOLS[0].discovery.inputSchema.properties.model.enum.includes(GEMINI_DECISION) && /Gemini Decision-1/.test(JUDGE_TOOLS[0].description) && /Gemini Decision-1/.test(JUDGE_TOOLS[1].description), "the /v1/judge enum names gemini-decision-1 and both descriptions name it");
   ok(JUDGE_TOOLS[1].discovery.inputSchema.properties.model.enum.join() === LUNA, "/v1/decisions keeps its one-model enum");
