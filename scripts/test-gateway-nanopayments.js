@@ -1197,6 +1197,8 @@ await check("payments: no route that spends our wallet or pays an outside seller
   assert.deepEqual(batchedNets({ slug: "new-buyer", price: "$0.01", paysThirdPartySeller: true }), [], "an unlisted paysThirdPartySeller route gets no batched accept");
   assert.ok(defHasLastingEffect({ slug: "new-spender", spendsOwnWallet: true }) && !defHasLastingEffect({ slug: "hash" }) && !defHasLastingEffect(null), "defHasLastingEffect reads the flags and the list");
   assert.deepEqual(batchedNets({ slug: "hash", price: "$0.005" }), ["eip155:8453", "eip155:5042"], "control: an ordinary tool keeps the batched accept on both networks");
+  // The published surfaces ask the same question of the definition.
+  assert.match(readFileSync(new URL("../src/pages.js", import.meta.url), "utf8"), /if \(!gw \|\| tool\.identityBound \|\| defHasLastingEffect\(tool\)\) return \{\};/, "openapi's nanopayments block reads defHasLastingEffect");
 });
 
 /** A routed resource server over a fresh pending book. */
@@ -1629,12 +1631,13 @@ await check("every catalog route's 402 stays under the challenge ceiling with th
   try {
     const pricing = await (await fetch(`${base}/api/pricing`)).json();
     const lasting = new Set(LASTING_EFFECT_SLUG_LIST);
+    const openapi = await (await fetch(`${base}/openapi.json`)).json();
     const routes = pricing.endpoints.map((e) => ({ method: e.method || "GET", path: e.path, slug: e.slug })).filter((r) => r.path);
     assert.ok(routes.filter((r) => lasting.has(r.slug)).length >= 8, "the lasting-effect routes are in the catalog");
     const lastingSeen = new Set();
     assert.ok(routes.length > 400, `the catalog lists its routes (${routes.length})`);
     let worst = { bytes: 0, total: 0, path: null };
-    let n = 0;
+    let n = 0, compared = 0;
     const one = async (r) => {
       await new Promise((resolve, reject) => {
         const req = httpRequest(`${base}${r.path}`, { method: r.method, headers: r.method === "POST" ? { "content-type": "application/json" } : {}, maxHeaderSize: 262144 }, (res) => {
@@ -1646,6 +1649,10 @@ await check("every catalog route's 402 stays under the challenge ceiling with th
             n++;
             if (pr.length > worst.bytes) worst = { bytes: pr.length, total, path: r.path };
             const offered = !!batchedOf(decode(pr), "eip155:8453") || !!batchedOf(decode(pr), "eip155:5042");
+            const info = openapi.paths?.[r.path]?.[r.method.toLowerCase()]?.["x-payment-info"];
+            if (info) compared++;
+            const published = !!info?.nanopayments;
+            if (info && published !== offered) reject(new Error(`${r.path}: openapi's nanopayments block (${published}) disagrees with the 402's batched accept (${offered})`));
             // Identity-bound routes (memory, my-usage, attest, feedback) are
             // proven plain-only by the memory check above; here they may lack it.
             const identityBound = /\/memory|my-usage|attest|feedback|receipts/.test(r.path);
@@ -1662,6 +1669,7 @@ await check("every catalog route's 402 stays under the challenge ceiling with th
     const queue = [...routes];
     await Promise.all(Array.from({ length: 8 }, async () => { for (let r = queue.shift(); r; r = queue.shift()) await one(r); }));
     assert.ok(n > 400, `${n} routes answered a 402`);
+    assert.ok(compared > 400, `openapi's nanopayments block was compared on ${compared} routes`);
     for (const slug of ["route-execute", "route-execute-plus", "seller-payability", "memory-write", "attest", "feedback"]) assert.ok(lastingSeen.has(slug), `${slug} answered a 402 with no batched accept`);
     console.log(`    widest challenge ${worst.bytes} base64 bytes (${worst.total} header bytes total) on ${worst.path}`);
     assert.ok(worst.bytes <= 12_000, `the widest challenge is under the 12,000-byte echo ceiling (${worst.bytes} on ${worst.path})`);
