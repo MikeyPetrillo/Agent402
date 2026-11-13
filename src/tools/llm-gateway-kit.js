@@ -5042,7 +5042,10 @@ export function modelsList() {
     // them again would duplicate every id. Instead each chat entry carries
     // `meteredEndpoint`, the route that quotes the same model per request.
     if (tier.metered) continue;
-    for (const p of tier.prefixes) {
+    // tierAllows admits a tier's own default ids by name at its price, so a
+    // default no prefix covers (base's gpt-6-luna) is listed under it too.
+    const ownDefaults = [tier.defaultModel, tier.defaultModelCompat].filter((d) => d && !prefixesAdmit(tier, d.toLowerCase()));
+    for (const p of [...tier.prefixes, ...ownDefaults]) {
       // A family prefix that is not itself an upstream id is advertised as
       // the concrete model it resolves to (PREFIX_CANONICAL) - an agent
       // must be able to send any id on this list verbatim.

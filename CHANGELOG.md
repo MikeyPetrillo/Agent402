@@ -16,9 +16,9 @@ Gateway:
   base, auto, grounded and metered, and takes a rung in auto's fast code
   ranking; pro admits gemini-3.8-flash and gemini-4-argon; premium admits
   gemini-4-argon and claude-fable-5.2.
-- A tier serves its own default when a call names it, at that tier's price:
-  gpt-6-luna named on base is served on base, on the chat, Messages and
-  Responses wires.
+- A tier serves its own default when a call names it, at that tier's price,
+  and /v1/models lists it under that tier: gpt-6-luna named on base is served
+  on base, on the chat, Messages and Responses wires.
 - /api/llm and /api/llm-pro default to gpt-6-luna. A call there that names no
   model is served without the temperature and top_p it sends, and the answer
   names them in agent402_params_not_sent.
