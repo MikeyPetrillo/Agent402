@@ -13,12 +13,13 @@
 // tool we did not offer.
 //
 // FALLBACK. When Jev fails (non-ok, timeout, network, or no answers object),
-// Microsoft Decision-1 (src/decision-one.js) is asked the same questions over
-// OpenRouter within what is left of the timeout, booked against the same daily
-// ceiling and metered under its own model name. It also serves alone when no
-// TypeSafe key is set: the planner already falls back to the model judge on
-// null, so a second backend only adds answers.
-import { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL } from "../../src/decision-one.js";
+// the same Jev version is asked over OpenRouter, then Microsoft Decision-1
+// (src/decision-one.js), the same questions within what is left of the
+// timeout, each booked against the same daily ceiling and metered under its
+// own model name. Those two also serve alone when no TypeSafe key is set: the
+// planner already falls back to the model judge on null, so another backend
+// only adds answers.
+import { askDecisionOne, openRouterJudgeModels, decisionsRequestBytes, DECISION_ONE_MODEL } from "../../src/decision-one.js";
 import { upstreamCosts } from "../../src/upstream-costs.js";
 
 const ENDPOINT = () => (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
@@ -42,8 +43,9 @@ const usdPerMtok = () => {
   const n = Number(process.env.DECIDE_JEV_USD_PER_MTOK);
   return Number.isFinite(n) && n >= 0 && String(process.env.DECIDE_JEV_USD_PER_MTOK ?? "").trim() !== "" ? n : null;
 };
-// Decision-1's input rate (USD per 1M tokens) from the private table, or null.
-const decisionOneUsdPerMtok = () => upstreamCosts().vendor?.decisions?.decisionOne ?? null;
+// An OpenRouter leg's input rate (USD per 1M tokens) from the private table,
+// or null: Decision-1 at its own, Jev over OpenRouter at Jev's (vendor.decisions.jev).
+const openRouterUsdPerMtok = (model) => (model === DECISION_ONE_MODEL ? upstreamCosts().vendor?.decisions?.decisionOne : upstreamCosts().vendor?.decisions?.jev) ?? null;
 
 export function jevQuestions(listing) {
   const questions = {};
@@ -86,10 +88,11 @@ export function jevChoiceQuestions(items, textOf = (t) => String(t || "").slice(
 export function makeJevJudge({ apiKey = jevApiKey(), fetchImpl = fetch, decisionOneKey = decisionOneApiKey() } = {}) {
   const spend = { day: "", tokens: 0 };
   const roll = () => { const d = new Date().toISOString().slice(0, 10); if (spend.day !== d) { spend.day = d; spend.tokens = 0; } };
-  // One request under the daily ceiling (Jev, then Decision-1 on a failure);
-  // the parsed body, or null. Never throws.
+  // One request under the daily ceiling (Jev, then Jev over OpenRouter and
+  // Decision-1 on a failure); the parsed body, or null. Never throws.
   async function ask(task, questions, stage, { timeoutMs = 8000, meter = null } = {}) {
-    const fallback = decisionOneEnabled(decisionOneKey);
+    const viaOpenRouter = openRouterJudgeModels(MODEL(), decisionOneKey);
+    const fallback = viaOpenRouter.length > 0;
     if ((!apiKey && !fallback) || !Object.keys(questions).length) return null;
     const cap = dailyMaxTokens();
     if (!(cap > 0)) return null;
@@ -129,20 +132,21 @@ export function makeJevJudge({ apiKey = jevApiKey(), fetchImpl = fetch, decision
       }
       if (!fallback) return null;
     }
-    const left = deadline - Date.now();
-    if (left < 250) return null;
-    const t1 = Date.now();
-    const note = noteFor(DECISION_ONE_MODEL, decisionOneUsdPerMtok(), t1);
-    const est = Buffer.byteLength(JSON.stringify({ ...payload, model: DECISION_ONE_MODEL }));
-    if (spend.tokens + est > cap) { note("skipped_ceiling", null); return null; }
-    spend.tokens += est;
-    try {
-      const j = await askDecisionOne(payload, { fetchImpl, timeoutMs: left, apiKey: decisionOneKey });
-      return { j, note };
-    } catch (e) {
-      note(e?.statusCode === 504 ? "timeout" : e?.mayBeBilled ? "unparseable" : "failed", null);
-      return null;
+    for (const model of viaOpenRouter) {
+      const left = deadline - Date.now();
+      if (left < 250) return null;
+      const note = noteFor(model, openRouterUsdPerMtok(model), Date.now());
+      const est = decisionsRequestBytes(payload, model);
+      if (spend.tokens + est > cap) { note("skipped_ceiling", null); return null; }
+      spend.tokens += est;
+      try {
+        const j = await askDecisionOne(payload, { fetchImpl, timeoutMs: left, apiKey: decisionOneKey, model });
+        return { j, note };
+      } catch (e) {
+        note(e?.statusCode === 504 ? "timeout" : e?.mayBeBilled ? "unparseable" : "failed", null);
+      }
     }
+    return null;
   }
 
   async function judge(task, listing, opts = {}) {

@@ -27,7 +27,7 @@ delete process.env.ROUTE_JUDGE;
 
 const { setUpstreamCostsForTest, upstreamCostsGaps } = await import("../src/upstream-costs.js");
 const { OPENROUTER_ATTRIBUTION } = await import("../src/openrouter-attribution.js");
-const { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL, GEMINI_DECISION_MODEL, jevOpenRouterModel, openRouterDecisionsEnabled, _decisionOneSpendReset } = await import("../src/decision-one.js");
+const { askDecisionOne, decisionOneEnabled, DECISION_ONE_MODEL, GEMINI_DECISION_MODEL, jevOpenRouterModel, openRouterDecisionsEnabled, _decisionOneSpendReset, decisionsRequestBytes, decisionsProviderPolicy, openRouterJudgeModels } = await import("../src/decision-one.js");
 const JEV_OR = "typesafe/jev-1.14";
 const toolJudge = await import("../src/tool-judge.js");
 const rerank = await import("../src/discovery-rerank.js");
@@ -41,9 +41,9 @@ const quiet = console.warn; console.warn = () => {};
 
 const RATE = 1;  // placeholder, the same as docs/example-upstream-costs.json
 const SHARE = 1; // placeholder, the same as docs/example-upstream-costs.json
-const table = ({ luna = RATE, decisionOne = RATE } = {}) => ({
+const table = ({ luna = RATE, decisionOne = RATE, jev = null } = {}) => ({
   models: [["fake/model", { prompt: 1, completion: 1 }]],
-  vendor: { decisions: { ...(luna == null ? {} : { luna }), ...(decisionOne == null ? {} : { decisionOne }), maxShare: SHARE } },
+  vendor: { decisions: { ...(luna == null ? {} : { luna }), ...(decisionOne == null ? {} : { decisionOne }), ...(jev == null ? {} : { jev }), maxShare: SHARE } },
 });
 setUpstreamCostsForTest(table());
 
@@ -66,7 +66,9 @@ function stub(routes) {
   };
   return { calls, fetchImpl, hosts: () => calls.map((c) => c.host).join() };
 }
-const withoutModel = (b) => { const { model, ...rest } = b; return JSON.stringify(rest); };
+// The OpenRouter body is the caller's with `model` set and our provider policy
+// added (asserted on its own below), so both are set aside to compare the rest.
+const withoutModel = (b) => { const { model, provider, ...rest } = b; return JSON.stringify(rest); };
 
 // ---- the client --------------------------------------------------------------
 {
@@ -108,6 +110,24 @@ const withoutModel = (b) => { const { model, ...rest } = b; return JSON.stringif
     let e = null; try { await askDecisionOne(body, { fetchImpl: s3.fetchImpl }); } catch (x) { e = x; }
     ok(e?.statusCode === code && !!e.mayBeBilled === billed && !/secret/.test(e.message), `${why} throws ${code}${billed ? ", may be billed" : ", not billed"}, and never relays the body`);
   }
+}
+
+// ---- our data policy on every Decisions request --------------------------------
+{
+  const body = { state: "s", model: "jev-latest", questions: { q: { type: "noul", instructions: "?" } } };
+  const s = stub({ [OPENROUTER]: reply(200, { answers: { q: { type: "noul", noul: 0.5 } } }) });
+  for (const m of [DECISION_ONE_MODEL, JEV_OR, GEMINI_DECISION_MODEL]) await askDecisionOne(body, { fetchImpl: s.fetchImpl, model: m });
+  const prov = s.calls.map((c) => JSON.stringify(c.body.provider));
+  const zdr = JSON.stringify({ data_collection: "deny", zdr: true }), deny = JSON.stringify({ data_collection: "deny" });
+  ok(prov[0] === zdr && prov[1] === zdr, `Decision-1 and Jev over OpenRouter are sent data_collection deny and zdr (${prov[0]}, ${prov[1]})`);
+  ok(prov[2] === deny, `Gemini Decision-1 is sent data_collection deny without zdr, since its endpoint is not ZDR (${prov[2]})`);
+  ok(s.calls.every((c, i) => Buffer.byteLength(c.raw) === decisionsRequestBytes(body, [DECISION_ONE_MODEL, JEV_OR, GEMINI_DECISION_MODEL][i])), "every caller's byte estimate is the exact body sent");
+  const s2 = stub({ [OPENROUTER]: reply(200, { answers: { q: { type: "noul", noul: 0.5 } } }) });
+  await askDecisionOne({ ...body, provider: { data_collection: "allow" } }, { fetchImpl: s2.fetchImpl });
+  ok(JSON.stringify(s2.calls[0].body.provider) === zdr, "a provider field already in the body is replaced by ours");
+  ok(JSON.stringify(decisionsProviderPolicy("typesafe/jev-1.13")) === zdr, "every TypeSafe Jev id on OpenRouter gets zdr");
+  ok(openRouterJudgeModels("jev-1.14.0").join() === `${JEV_OR},${DECISION_ONE_MODEL}` && openRouterJudgeModels("jev-preview").join() === DECISION_ONE_MODEL && openRouterJudgeModels("jev-1.14.0", "").length === 0,
+    "the internal legs: the pinned Jev over OpenRouter, then Decision-1; none without a key");
 }
 
 // ---- internal fallback: tool-judge -------------------------------------------
@@ -162,14 +182,43 @@ const choiceAnswer = (choice, confidence) => reply(200, { answers: { best: { typ
 
 // ---- internal fallback: discovery-rerank and wish-classify --------------------
 {
+  const D_OR = (m) => m; // readability: the OpenRouter models in the order asked
   const TOOLS = [{ slug: "extract", name: "Extract", description: "Readable text from a URL." }, { slug: "skill-structured-scrape", name: "Scrape", description: "Web page to JSON." }];
+  const pick = (map) => (body) => (body.model in map ? (typeof map[body.model] === "function" ? map[body.model]() : map[body.model]) : reply(503, {}));
+  const orOf = (s) => s.calls.filter((c) => c.host === OPENROUTER).map((c) => c.body.model).join();
   for (const [why, jev] of [["a Jev 5xx", reply(500, {})], ["a Jev timeout", timeout]]) {
     rerank.__resetCache();
     const s = stub({ [TYPESAFE]: jev, [OPENROUTER]: choiceAnswer("skill-structured-scrape", 0.95) });
     const rows = [{ text: "web page into json" }];
     const sum = await rerank.rerankMisses(rows, () => TOOLS, { fetchImpl: s.fetchImpl });
-    ok(s.hosts() === `${TYPESAFE},${OPENROUTER}` && rows[0].rerank?.kind === "index-miss" && sum.failed === 0, `discovery-rerank: ${why} falls back to Decision-1`);
-    ok(withoutModel(s.calls[1].body) === withoutModel(s.calls[0].body), "...with Jev's body, only the model changed");
+    ok(s.hosts() === `${TYPESAFE},${OPENROUTER}` && rows[0].rerank?.kind === "index-miss" && sum.failed === 0, `discovery-rerank: ${why} falls back to OpenRouter`);
+    ok(withoutModel(s.calls[1].body) === withoutModel(s.calls[0].body) && s.calls[1].body.model === JEV_OR, "...asking the same Jev version there first, with Jev's body, only the model changed");
+  }
+  {
+    rerank.__resetCache();
+    const s = stub({ [TYPESAFE]: reply(500, {}), [OPENROUTER]: pick({ [JEV_OR]: reply(503, {}), [DECISION_ONE_MODEL]: choiceAnswer("skill-structured-scrape", 0.95) }) });
+    const rows = [{ text: "web page into json, again" }];
+    await rerank.rerankMisses(rows, () => TOOLS, { fetchImpl: s.fetchImpl });
+    ok(orOf(s) === D_OR(`${JEV_OR},${DECISION_ONE_MODEL}`) && rows[0].rerank?.kind === "index-miss", "discovery-rerank: Jev over OpenRouter down too, Decision-1 answers");
+    rerank.__resetCache();
+    const u = stub({ [TYPESAFE]: reply(500, {}), [OPENROUTER]: pick({ [JEV_OR]: reply(200, { answers: { best: { choice: 7 } } }), [DECISION_ONE_MODEL]: choiceAnswer("skill-structured-scrape", 0.95) }) });
+    const rows2 = [{ text: "page to json" }];
+    await rerank.rerankMisses(rows2, () => TOOLS, { fetchImpl: u.fetchImpl });
+    ok(orOf(u) === `${JEV_OR},${DECISION_ONE_MODEL}` && rows2[0].rerank?.kind === "index-miss", "discovery-rerank: an unreadable Jev answer over OpenRouter goes on to Decision-1");
+    rerank.__resetCache();
+    delete process.env.TYPESAFE_API_KEY;
+    const a = stub({ [OPENROUTER]: choiceAnswer("skill-structured-scrape", 0.95) });
+    const rows3 = [{ text: "json from a page" }];
+    ok(rerank.rerankEnabled(), "discovery-rerank: enabled with only the OpenRouter key");
+    await rerank.rerankMisses(rows3, () => TOOLS, { fetchImpl: a.fetchImpl });
+    ok(a.hosts() === OPENROUTER && orOf(a) === JEV_OR && rows3[0].rerank?.kind === "index-miss", "discovery-rerank: with no TypeSafe key, Jev over OpenRouter serves first");
+    process.env.TYPESAFE_API_KEY = "ts-test-not-real";
+    process.env.JEV_OPENROUTER = "off";
+    rerank.__resetCache();
+    const off = stub({ [TYPESAFE]: reply(500, {}), [OPENROUTER]: choiceAnswer("skill-structured-scrape", 0.95) });
+    await rerank.rerankMisses([{ text: "html to json" }], () => TOOLS, { fetchImpl: off.fetchImpl });
+    ok(orOf(off) === DECISION_ONE_MODEL, "discovery-rerank: JEV_OPENROUTER=off goes straight to Decision-1");
+    delete process.env.JEV_OPENROUTER;
   }
   rerank.__resetCache();
   const s = stub({ [TYPESAFE]: choiceAnswer("extract", 0.95), [OPENROUTER]: choiceAnswer("skill-structured-scrape", 0.95) });
@@ -178,13 +227,28 @@ const choiceAnswer = (choice, confidence) => reply(200, { answers: { best: { typ
   ok(s.hosts() === TYPESAFE && rows[0].rerank?.kind === "confirmed", "discovery-rerank: a Jev answer is used and Decision-1 is never asked");
 
   const noul = (p) => reply(200, { answers: { advertises: { type: "noul", noul: p } } });
-  for (const [why, jev] of [["a Jev 5xx", reply(502, {})], ["a Jev timeout", timeout]]) {
+  for (const [why, jev] of [["a Jev 5xx", reply(502, {})], ["a Jev timeout", timeout], ["a Jev answer with no probability", noul(null)]]) {
     wish.__resetCache();
     const s2 = stub({ [TYPESAFE]: jev, [OPENROUTER]: noul(0.95) });
     const rows2 = [{ text: "buy my endpoint for $0.10" }];
     await wish.classifyWishes(rows2, { fetchImpl: s2.fetchImpl });
-    ok(s2.hosts() === `${TYPESAFE},${OPENROUTER}` && rows2[0].intent?.kind === "advertisement", `wish-classify: ${why} falls back to Decision-1`);
-    ok(withoutModel(s2.calls[1].body) === withoutModel(s2.calls[0].body), "...with Jev's body, only the model changed");
+    ok(s2.hosts() === `${TYPESAFE},${OPENROUTER}` && rows2[0].intent?.kind === "advertisement", `wish-classify: ${why} falls back to OpenRouter`);
+    ok(withoutModel(s2.calls[1].body) === withoutModel(s2.calls[0].body) && s2.calls[1].body.model === JEV_OR, "...asking the same Jev version there first, with Jev's body, only the model changed");
+  }
+  {
+    wish.__resetCache();
+    const s2 = stub({ [TYPESAFE]: reply(502, {}), [OPENROUTER]: pick({ [JEV_OR]: noul(null), [DECISION_ONE_MODEL]: noul(0.95) }) });
+    const rows2 = [{ text: "buy my api for $0.20" }];
+    await wish.classifyWishes(rows2, { fetchImpl: s2.fetchImpl });
+    ok(orOf(s2) === `${JEV_OR},${DECISION_ONE_MODEL}` && rows2[0].intent?.kind === "advertisement", "wish-classify: no probability from Jev over OpenRouter goes on to Decision-1");
+    wish.__resetCache();
+    delete process.env.TYPESAFE_API_KEY;
+    const a = stub({ [OPENROUTER]: noul(0.95) });
+    const rows3 = [{ text: "my endpoint, $0.30 a call" }];
+    ok(wish.wishClassifyEnabled(), "wish-classify: enabled with only the OpenRouter key");
+    await wish.classifyWishes(rows3, { fetchImpl: a.fetchImpl });
+    ok(a.hosts() === OPENROUTER && orOf(a) === JEV_OR && rows3[0].intent?.kind === "advertisement", "wish-classify: with no TypeSafe key, Jev over OpenRouter serves first");
+    process.env.TYPESAFE_API_KEY = "ts-test-not-real";
   }
   wish.__resetCache();
   const s3 = stub({ [TYPESAFE]: noul(0.05), [OPENROUTER]: noul(0.95) });
@@ -195,23 +259,37 @@ const choiceAnswer = (choice, confidence) => reply(200, { answers: { best: { typ
 
 // ---- internal fallback: the decide service's judge ---------------------------
 {
+  setUpstreamCostsForTest(table({ jev: RATE })); // Jev over OpenRouter is metered at Jev's rate
   const listing = [{ purpose: "fear index", candidates: [{ key: "s1c1", name: "a", description: "fear index", inputs: [] }] }];
   const d1 = reply(200, { model: `${DECISION_ONE_MODEL}-20261009`, answers: { s1c1: { type: "noul", noul: 0.9 } }, usage: { input_tokens: 500, output_tokens: 1 } });
   for (const [why, jev] of [["a Jev 5xx", reply(503, {})], ["a Jev timeout", timeout], ["a Jev 200 without answers", reply(200, { model: "jev" })]]) {
     const s = stub({ [TYPESAFE]: jev, [OPENROUTER]: d1 });
     const meter = [];
     const r = await makeJevJudge({ apiKey: "k", decisionOneKey: "or-k", fetchImpl: s.fetchImpl }).judge("fear", listing, { meter });
-    const row = meter.find((m) => m.model === DECISION_ONE_MODEL);
-    ok(r?.fits?.s1c1 === 0.9 && s.hosts() === `${TYPESAFE},${OPENROUTER}`, `decide: ${why} falls back to Decision-1`);
-    ok(row?.outcome === "ok" && row.promptTokens === 500 && Math.abs(row.costUsd - (500 / 1e6) * RATE) < 1e-15, "...metered under its own model name, priced from the private table");
+    const row = meter.find((m) => m.model === JEV_OR);
+    ok(r?.fits?.s1c1 === 0.9 && s.hosts() === `${TYPESAFE},${OPENROUTER}` && s.calls[1].body.model === JEV_OR, `decide: ${why} falls back to the same Jev version over OpenRouter`);
+    ok(row?.outcome === "ok" && row.promptTokens === 500 && Math.abs(row.costUsd - (500 / 1e6) * RATE) < 1e-15, "...metered under its own model name, priced at Jev's rate from the private table");
     ok(withoutModel(s.calls[1].body) === withoutModel(s.calls[0].body) && s.calls[1].headers.authorization === "Bearer or-k", "...with Jev's body and decide's own OpenRouter key");
   }
-  setUpstreamCostsForTest(table({ decisionOne: null }));
+  {
+    // Jev over OpenRouter down: Decision-1 answers, each leg metered and booked.
+    const orPick = (body) => (body.model === JEV_OR ? reply(503, {}) : d1);
+    const s = stub({ [TYPESAFE]: reply(503, {}), [OPENROUTER]: orPick });
+    const meter = [];
+    const judgeD = makeJevJudge({ apiKey: "k", decisionOneKey: "or-k", fetchImpl: s.fetchImpl });
+    const r = await judgeD.judge("fear", listing, { meter });
+    const d1row = meter.find((m) => m.model === DECISION_ONE_MODEL), jrow = meter.find((m) => m.model === JEV_OR);
+    ok(r?.fits?.s1c1 === 0.9 && s.calls.map((c) => c.body.model).join() === `jev-1.14.0,${JEV_OR},${DECISION_ONE_MODEL}`, "decide: Jev, then Jev over OpenRouter, then Decision-1");
+    ok(jrow?.outcome === "failed" && jrow.costUsd === 0 && d1row?.outcome === "ok" && Math.abs(d1row.costUsd - (500 / 1e6) * RATE) < 1e-15, "...each leg metered under its own model name");
+    const booked = Buffer.byteLength(s.calls[0].raw) + Buffer.byteLength(s.calls[1].raw) + Buffer.byteLength(s.calls[2].raw);
+    ok(judgeD.status().bookedTokens === booked, `...and all three are booked against the one daily ceiling (${judgeD.status().bookedTokens} of ${booked})`);
+  }
+  setUpstreamCostsForTest(table());
   const sn = stub({ [TYPESAFE]: reply(503, {}), [OPENROUTER]: d1 });
   const meter = [];
   await makeJevJudge({ apiKey: "k", decisionOneKey: "or-k", fetchImpl: sn.fetchImpl }).judge("fear", listing, { meter });
-  ok(meter.find((m) => m.model === DECISION_ONE_MODEL)?.costUsd === null, "decide: without the table's rate the cost is recorded as unknown, never zero");
-  setUpstreamCostsForTest(table());
+  ok(meter.find((m) => m.model === JEV_OR)?.costUsd === null, "decide: without the table's rate the cost is recorded as unknown, never zero");
+  setUpstreamCostsForTest(table({ jev: RATE }));
   const ok200 = stub({ [TYPESAFE]: reply(200, { answers: { s1c1: { type: "noul", noul: 0.4 } }, usage: { input_tokens: 9 } }), [OPENROUTER]: d1 });
   const r = await makeJevJudge({ apiKey: "k", decisionOneKey: "or-k", fetchImpl: ok200.fetchImpl }).judge("fear", listing);
   ok(r.fits.s1c1 === 0.4 && ok200.hosts() === TYPESAFE, "decide: a Jev answer is used and Decision-1 is never asked");
@@ -220,10 +298,11 @@ const choiceAnswer = (choice, confidence) => reply(200, { answers: { best: { typ
   const capped = stub({ [TYPESAFE]: reply(503, {}), [OPENROUTER]: d1 });
   const cm = [];
   await makeJevJudge({ apiKey: "k", decisionOneKey: "or-k", fetchImpl: capped.fetchImpl }).judge("fear", listing, { meter: cm });
-  ok(capped.hosts() === TYPESAFE && cm.some((m) => m.model === DECISION_ONE_MODEL && m.outcome === "skipped_ceiling"), "decide: the fallback is booked against the same daily ceiling and skipped past it");
+  ok(capped.hosts() === TYPESAFE && cm.some((m) => m.model === JEV_OR && m.outcome === "skipped_ceiling"), "decide: the fallback is booked against the same daily ceiling and skipped past it");
   delete process.env.DECIDE_JEV_DAILY_MAX_TOKENS;
   const alone = stub({ [OPENROUTER]: d1 });
-  ok((await makeJevJudge({ apiKey: "", decisionOneKey: "or-k", fetchImpl: alone.fetchImpl }).judge("fear", listing))?.fits?.s1c1 === 0.9 && alone.hosts() === OPENROUTER, "decide: with no TypeSafe key Decision-1 serves alone");
+  ok((await makeJevJudge({ apiKey: "", decisionOneKey: "or-k", fetchImpl: alone.fetchImpl }).judge("fear", listing))?.fits?.s1c1 === 0.9 && alone.hosts() === OPENROUTER && alone.calls[0].body.model === JEV_OR, "decide: with no TypeSafe key Jev over OpenRouter serves first");
+  setUpstreamCostsForTest(table());
 }
 
 // ---- paid route: /v1/judge and /v1/decisions ---------------------------------
@@ -349,7 +428,7 @@ const DOWN = reply(503, {});
   let e = null; try { await askDecisionOne(big, { fetchImpl: s.fetchImpl }); } catch (x) { e = x; }
   ok(e?.statusCode === 503 && s.calls.length === 0, "a body over the per-call cap is refused before anything is sent");
 
-  const bytes = Buffer.byteLength(JSON.stringify({ ...small, model: DECISION_ONE_MODEL }));
+  const bytes = decisionsRequestBytes(small, DECISION_ONE_MODEL);
   process.env.DECISION_ONE_DAILY_MAX_BYTES = String(bytes * 2);
   _decisionOneSpendReset();
   s = stub({ [OPENROUTER]: answer });
@@ -389,7 +468,7 @@ const orModels = (s) => s.calls.filter((c) => c.host === OPENROUTER).map((c) => 
   try { await askDecisionOne(body, { fetchImpl: s2.fetchImpl, model: "other/model" }); } catch (x) { e = x; }
   ok(e?.statusCode === 503 && s2.calls.length === 0, "a model this client does not list is refused unsent");
 
-  const bytes = Buffer.byteLength(JSON.stringify({ ...body, model: DECISION_ONE_MODEL }));
+  const bytes = Math.max(decisionsRequestBytes(body, DECISION_ONE_MODEL), decisionsRequestBytes(body, JEV_OR));
   process.env.DECISION_ONE_DAILY_MAX_BYTES = String(bytes * 2 + 10);
   _decisionOneSpendReset();
   const s3 = stub({ [OPENROUTER]: reply(200, { answers: { q: { type: "noul", noul: 0.5 } } }) });

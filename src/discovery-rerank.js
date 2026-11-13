@@ -36,16 +36,17 @@
 import { logSafe } from "./log-safe.js";
 import { looksLikeListingInjection } from "./x402-index.js";
 import { stripFormattingCarriers } from "./hidden-chars.js";
-import { askDecisionOne, decisionOneEnabled } from "./decision-one.js";
+import { askOpenRouterJudge, openRouterJudgeModels } from "./decision-one.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 // Pinned to the tested Jev version (see JEV_PINNED in src/tools/judge-kit.js).
 const MODEL = (process.env.TYPESAFE_MODEL || process.env.JEV_MODEL || "jev-1.14.0").trim();
 const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
-// Microsoft Decision-1 answers when Jev fails, and alone when no TypeSafe key
-// is set: this surface is operator-only and fails open per row, so a second
-// backend only adds answers.
-export const rerankEnabled = () => !!keyOf() || decisionOneEnabled();
+// When TypeSafe fails, the same Jev version is asked over OpenRouter, then
+// Microsoft Decision-1 (src/decision-one.js); with no TypeSafe key those two
+// serve alone. This surface is operator-only and fails open per row, so
+// another backend only adds answers.
+export const rerankEnabled = () => !!keyOf() || openRouterJudgeModels(MODEL).length > 0;
 
 const MAX_ROWS = Number(process.env.RERANK_MAX_ROWS || 40);
 const CANDIDATES = Number(process.env.RERANK_CANDIDATES || 5);
@@ -83,8 +84,9 @@ export function buildCriteria(results, { descMax = DESC_MAX } = {}) {
   return criteria;
 }
 
-// Jev first; Decision-1 with the same body when Jev fails or answers in a
-// shape this cannot read. Throws only when neither gave a usable answer.
+// Jev first; then Jev over OpenRouter and Decision-1 with the same body, under
+// one more timeout, when Jev fails or answers in a shape this cannot read.
+// Throws only when no backend gave a usable answer.
 async function ask(query, criteria, fetchImpl) {
   const body = {
     state: `An AI agent searched a catalog of paid API tools for: "${String(query).slice(0, 400)}"`,
@@ -113,8 +115,10 @@ async function ask(query, criteria, fetchImpl) {
       jevError = e;
     }
   }
-  if (!decisionOneEnabled()) throw jevError || new Error("no judgment backend");
-  return read(await askDecisionOne(body, { fetchImpl, timeoutMs: TIMEOUT_MS }));
+  if (!openRouterJudgeModels(MODEL).length) throw jevError || new Error("no judgment backend");
+  const usable = (j) => { try { read(j); return true; } catch { return false; } };
+  const { j } = await askOpenRouterJudge(body, { pinned: MODEL, deadline: Date.now() + TIMEOUT_MS, fetchImpl, usable });
+  return read(j);
 }
 
 /**

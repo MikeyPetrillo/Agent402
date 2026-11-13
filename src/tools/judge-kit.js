@@ -20,7 +20,7 @@
 // retired a data source once already for deriving income without permission.
 
 import { upstreamCosts } from "../upstream-costs.js";
-import { askDecisionOne, decisionOneEnabled, openRouterDecisionsEnabled, jevOpenRouterModel, DECISION_ONE_MODEL, GEMINI_DECISION_MODEL, JUDGMENT_KEY_REFUSED, JUDGMENT_BALANCE_OUT } from "../decision-one.js";
+import { askDecisionOne, decisionOneEnabled, openRouterDecisionsEnabled, jevOpenRouterModel, DECISION_ONE_MODEL, GEMINI_DECISION_MODEL, JUDGMENT_KEY_REFUSED, JUDGMENT_BALANCE_OUT, decisionsRequestBytes } from "../decision-one.js";
 import { capturePostHogGatewayUsage } from "../posthog.js";
 import { upstreamFetch, bodyUnderDeadline, withBudget, currentBudget, handlerBudgetMs, PAYMENT_WINDOW_BUDGET_MS, attributed, ATTRIBUTION, KIND } from "../upstream-deadline.js";
 
@@ -175,7 +175,7 @@ const openRouterModelOf = (b) => (b === "jev-openrouter" ? jevOpenRouterModel(JE
 async function callOpenRouter(b, body, fetchImpl = fetch) {
   return askDecisionOne(body, { fetchImpl, timeoutMs: TIMEOUT_MS, model: openRouterModelOf(b) });
 }
-const openRouterBytes = (b, body) => Buffer.byteLength(JSON.stringify({ ...body, model: openRouterModelOf(b) }));
+const openRouterBytes = (b, body) => decisionsRequestBytes(body, openRouterModelOf(b));
 
 async function callLuna(request, fetchImpl = fetch) {
   return post(LUNA_ENDPOINT, openaiKey(), request, fetchImpl, (j) => Array.isArray(j?.answers));

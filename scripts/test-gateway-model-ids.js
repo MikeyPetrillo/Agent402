@@ -223,6 +223,20 @@ for (const e of TTS_BACKUP_ENTRIES) {
     else if (eps.length > 0 && nonZdr.length === 0) console.log(`note - ${id} is now ZDR on every endpoint; it can join AUDIO_ZDR_MODELS`);
   }
 }
+// 1f. The Decisions data policy (src/decision-one.js) sends zdr:true to
+//     Decision-1 and the pinned Jev version over OpenRouter: the same rule,
+//     every endpoint each lists must be a ZDR endpoint.
+{
+  const { DECISION_ONE_MODEL, GEMINI_DECISION_MODEL, decisionsProviderPolicy, jevOpenRouterModel } = await import("../src/decision-one.js");
+  const { JEV_PINNED } = await import("../src/tools/judge-kit.js");
+  const zdrNames = new Set(((await (await fetch("https://openrouter.ai/api/v1/endpoints/zdr", { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null))?.data || []).map((e) => e.name));
+  for (const id of [DECISION_ONE_MODEL, jevOpenRouterModel(JEV_PINNED), GEMINI_DECISION_MODEL]) {
+    const eps = (await (await fetch(`https://openrouter.ai/api/v1/models/${id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null))?.data?.endpoints || [];
+    const nonZdr = eps.filter((e) => !zdrNames.has(e.name)).map((e) => e.name);
+    if (decisionsProviderPolicy(id).zdr) ok(eps.length > 0 && nonZdr.length === 0, `${id}: every Decisions endpoint is ZDR, so zdr:true never narrows its routing${nonZdr.length ? ` (not ZDR: ${nonZdr.join(", ")})` : ""}`);
+    else if (eps.length > 0 && nonZdr.length === 0) console.log(`note - ${id} is now ZDR on every endpoint; it can join DECISIONS_ZDR_MODELS`);
+  }
+}
 // 4. Price floor: for every live model a tier admits, MODEL_COST must not price
 //    it UNDER the DEAREST endpoint a default-tier call can be routed to, prompt
 //    and completion taken separately, while that endpoint sits inside the
