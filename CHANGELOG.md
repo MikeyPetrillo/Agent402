@@ -8,18 +8,27 @@ carries its own version on npm.
 
 ### 2026-11-13 (model refresh)
 Gateway:
-- Tier defaults move to newer models at the same prices: base gpt-6-luna, pro
-  gpt-6.1-terra, premium claude-opus-5.5; the bare claude-opus, claude-haiku
-  and x-ai/grok names serve opus-5.5, haiku-5.5 and grok-4.7. Every replaced
-  model id is still served when a call names it.
-- Nano admits claude-haiku-5.5, deepseek-v4.1-flash and qwen3.8-flash; pro
-  admits gemini-3.8-flash and gemini-4-argon; premium admits gemini-4-argon
-  and claude-fable-5.2.
-- Image tiers render on gpt-image-2.6 flare and sunburst. A one-link image
-  edit route's refusal no longer names an empty failover.
-- Speech adds a second backup voice model with the same named voices.
-- Gateway examples name models each tier serves at its own price (base: its
-  default; pro: gpt-6.1-terra).
+- The /v1 chat tiers' defaults move to newer models at the same prices: base
+  gpt-6-luna, pro gpt-6.1-terra, premium claude-opus-5.5; the bare claude-opus,
+  claude-haiku and x-ai/grok names serve opus-5.5, haiku-5.5 and grok-4.7. Every
+  replaced model id is still served when a call names it.
+- Nano admits claude-haiku-5.5 and deepseek-v4.1-flash; qwen3.8-flash joins
+  base, auto, grounded and metered, and takes a rung in auto's fast code
+  ranking; pro admits gemini-3.8-flash and gemini-4-argon; premium admits
+  gemini-4-argon and claude-fable-5.2.
+- A tier serves its own default when a call names it, at that tier's price:
+  gpt-6-luna named on base is served on base, on the chat, Messages and
+  Responses wires.
+- /api/llm and /api/llm-pro default to gpt-6-luna. A call there that names no
+  model is served without the temperature and top_p it sends, and the answer
+  names them in agent402_params_not_sent.
+- Image tiers render on gpt-image-2.6 flare and sunburst. A one-link image edit
+  route's refusal no longer names an empty failover.
+- Gateway examples name models each tier serves at its own price: base its
+  default, gpt-6-luna; the /v1/pro tier gpt-6.1-terra.
+Speech:
+- TTS (/api/tts, /api/tts-hd): Voxtral TTS 3 joins the backups behind Voxtral
+  Mini, same voices.
 Judgment:
 - /v1/judge and /v1/decisions add Gemini Decision-1 and the same pinned Jev
   version over OpenRouter as fallbacks. The discovery reranker, wish
@@ -27,12 +36,16 @@ Judgment:
   before Decision-1. Decisions requests carry a no-data-collection preference,
   and zero data retention where every endpoint offers it.
 - /v1/judge, /v1/judge/vision, /locate and /long keep the other answers when a
-  noul has no probability, marked noProbability: true; an answer with none
-  stays an uncharged 502.
+  noul has no probability, marked noProbability: true; an answer with none stays
+  an uncharged 502.
 Search:
-- Neural search sends the retired fast and instant types as lite and says so,
-  and passes upstream warnings and notices through.
+- Neural search sends the legacy fast and instant types as lite and says so, and
+  passes upstream warnings and notices through, screened of hidden characters.
+- /api/route scores our own rows without their attribution sentences, as
+  /api/find and catalog search do.
 Server:
+- /privacy says route, decide and demand-board text can also reach judgment
+  models over OpenRouter.
 - The web framework takes its November security release.
 
 ### 2026-11-13 (image header bound)
