@@ -4866,7 +4866,7 @@ export const LLM_GATEWAY_TOOLS = [
     tags: SHARED_TAGS,
     // No model named: the base tier serves its default (gpt-6-luna) at the base
     // price. Naming luna would quote the nano tier, where it is listed.
-    discovery: { bodyType: "json", input: { messages: EXAMPLE.messages, max_tokens: EXAMPLE.max_tokens }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: TIERS["v1-chat"].defaultModel, agent402_default_model: TIERS["v1-chat"].defaultModel } } },
+    discovery: { bodyType: "json", input: { messages: EXAMPLE.messages, max_tokens: EXAMPLE.max_tokens }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: TIERS["v1-chat"].defaultModel } } },
     handler: makeHandler("v1-chat"),
   },
   {
