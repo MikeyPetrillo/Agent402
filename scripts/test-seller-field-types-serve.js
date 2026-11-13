@@ -31,6 +31,30 @@ ok(!("name" in c.manifest) && c.manifest.homepage === "7", `manifest text fields
 const good = { manifest: { name: "Good" }, tools: [{ route: "/a", name: "a", slug: "a", tags: ["x"] }] };
 ok(clean(good) === good, "a clean entry is stored as it came (same object)");
 
+// Snake_case price keys are read through their camelCase twins: what the cache
+// stores and what the manifest reader prices match the camelCase spelling.
+const { normaliseManifestTools } = await import("../src/x402-index.js");
+const storedTool = (over) => clean({ tools: [{ route: "/a", name: "a", ...over }] }).tools[0];
+const sCamel = storedTool({ priceUsd: "0.01", amountUsd: 0.02, maxAmountRequired: "10000" });
+const sSnake = storedTool({ price_usd: "0.01", amount_usd: 0.02, max_amount_required: "10000" });
+ok(sSnake.priceUsd === sCamel.priceUsd && sSnake.amountUsd === sCamel.amountUsd && sSnake.maxAmountRequired === sCamel.maxAmountRequired,
+  `a stored tool's snake_case price keys fill the camelCase keys (${JSON.stringify({ priceUsd: sSnake.priceUsd, amountUsd: sSnake.amountUsd, maxAmountRequired: sSnake.maxAmountRequired })})`);
+ok(storedTool({ priceUsd: "0.02", price_usd: "0.01" }).priceUsd === "0.02", "a camelCase price key the seller wrote wins over its snake_case twin");
+const hostile = storedTool({ price_usd: { toString: 1, valueOf: 2 }, max_amount_required: { toString: "x" }, amount_usd: Infinity });
+ok(!("priceUsd" in hostile) && !("price_usd" in hostile) && !("maxAmountRequired" in hostile) && !("max_amount_required" in hostile) && !("amountUsd" in hostile) && !("amount_usd" in hostile),
+  `a snake_case price that is not text or a finite number is dropped, not carried over (${JSON.stringify(Object.keys(hostile))})`);
+const priceOf = (entry) => normaliseManifestTools({ resources: [{ resource: "https://snake.example/api/a", name: "a", ...entry }] }, "https://snake.example")[0]?.price ?? null;
+const pairs = [
+  [{ price: { amountUsd: "0.01" } }, { price: { amount_usd: "0.01" } }],
+  [{ priceUsd: "0.01" }, { price_usd: "0.01" }],
+  [{ network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x1111111111111111111111111111111111111111", maxAmountRequired: "10000" },
+    { network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x1111111111111111111111111111111111111111", max_amount_required: "10000" }],
+];
+for (const [camelEntry, snakeEntry] of pairs) {
+  const a = priceOf(camelEntry), b = priceOf(snakeEntry);
+  ok(a != null && a === b, `a crawled manifest entry is priced the same in either spelling (${JSON.stringify(Object.keys(snakeEntry))}: ${a} vs ${b})`);
+}
+
 // The server: odd sellers beside a well-formed one, read from a stored index.
 const dir = mkdtempSync(join(tmpdir(), "a402-field-types-"));
 const now = Date.now();

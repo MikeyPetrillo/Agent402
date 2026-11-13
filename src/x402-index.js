@@ -613,6 +613,25 @@ const SELLER_LIST_KEYS = ["tags", "aliases", "networks"];
 const SELLER_PRICE_KEYS = ["price", "maxAmountRequired", "amount", "priceUsd", "amountUsd"];
 /** A seller value as a price reader may take it: text or a finite number, else undefined. */
 export const sellerNumText = (v) => (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) ? v : undefined);
+// The snake_case spellings of the price keys. Every reader takes the
+// camelCase key, so a seller who writes `price_usd` or `max_amount_required`
+// is read through the camelCase twin: the snake value fills the camelCase key
+// when that key is absent, with the same text-or-finite-number rule.
+const SELLER_PRICE_SNAKE_KEYS = [["price_usd", "priceUsd"], ["amount_usd", "amountUsd"], ["max_amount_required", "maxAmountRequired"]];
+/** The object with each absent camelCase price key filled from its snake_case
+ *  spelling; the same object when nothing was filled. A value that is not text
+ *  or a finite number is never carried over. */
+export function withCamelPriceKeys(o) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return o;
+  let out = null;
+  for (const [snake, camel] of SELLER_PRICE_SNAKE_KEYS) {
+    if (o[camel] !== undefined && o[camel] !== null) continue;
+    const v = sellerNumText(o[snake]);
+    if (v === undefined) continue;
+    (out ||= { ...o })[camel] = v;
+  }
+  return out || o;
+}
 const MANIFEST_TEXT_KEYS = ["name", "description", "homepage", "title", "network", "payTo"];
 const asSellerText = (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : undefined);
 function cleanTextKeys(o, keys) {
@@ -629,7 +648,9 @@ function cleanTextKeys(o, keys) {
 function cleanSellerTool(t) {
   if (!t || typeof t !== "object" || Array.isArray(t)) return null;
   let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
-  for (const k of SELLER_PRICE_KEYS) {
+  const camel = withCamelPriceKeys(out || t);
+  if (camel !== (out || t)) out = camel;
+  for (const k of [...SELLER_PRICE_KEYS, ...SELLER_PRICE_SNAKE_KEYS.map(([snake]) => snake)]) {
     const v = (out || t)[k];
     if (v === undefined || v === null || sellerNumText(v) !== undefined) continue;
     out ||= { ...t };
@@ -3093,6 +3114,7 @@ function baseUnitReading(ctx, amount) {
 }
 
 function parseManifestPrice(raw) {
+  raw = withCamelPriceKeys(raw);
   let p = raw?.price_usd ?? raw?.priceUsd ?? raw?.price ?? null;
   // An entry whose own amount sits beside payment context: a label first,
   // else base units. Accept-shaped entries keep their old rule (the accepts
@@ -3114,7 +3136,7 @@ function parseManifestPrice(raw) {
   // survives a future edit to that key list, and noted because no mutation can
   // kill it - the test asserts the OUTCOME (an array declares nothing) instead.
   if (p && typeof p === "object" && !Array.isArray(p)) {
-    const o = p;
+    const o = withCamelPriceKeys(p);
     p = o.amountUsd ?? o.priceUsd ?? o.price_usd ?? dollarLabelOf(o) ?? null;
     if (p == null) {
       const fig = o.amount ?? o.value;
@@ -3434,7 +3456,8 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   };
 
   for (const list of catalogues) {
-    for (const raw of list.slice(0, 1000)) {
+    for (const listed of list.slice(0, 1000)) {
+      const raw = withCamelPriceKeys(listed);
       let ref = "", name = "", description = "", price = null, inputSchema = null;
       const methodList = [];
       // What this entry says about money, from its own accepts / flat payment
@@ -3997,13 +4020,14 @@ export function openapiOperationPayment(op) {
   if (atomic != null) { annotated = true; takeAtomic({ network: get("x-x402-network") }, atomic); }
   if (get("x-x402-network") != null) { annotated = true; addNetwork(get("x-x402-network")); }
   for (const k of OBJECT_PAYMENT_KEYS) {
-    const v = get(k);
+    let v = get(k);
     if (v == null) continue;
     annotated = true;
     if (isScalar(v)) { takePrice(parseManifestPrice({ price: v })); continue; }
     if (typeof v !== "object" || Array.isArray(v)) continue;
     // Dollar figures first: price_usd / priceUsd / price (scalar or object) and
     // the dialect-specific spellings.
+    v = withCamelPriceKeys(v);
     takePrice(parseManifestPrice(v));
     for (const key of ["amountUsd", "price_usdc"]) {
       if (out.price || v[key] == null) continue;
