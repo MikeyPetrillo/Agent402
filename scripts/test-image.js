@@ -540,6 +540,17 @@ const hex = (n) => (n >>> 0).toString(16).padStart(8, "0");
   await decodes("a TIFF whose maker note has an unreadable type", tiff([[...page(40, 30), [37500, 6, 0, 8]]]));
 
   // --- Tag counts, sample layout, tiles ----------------------------------------
+  // A JPEG-in-TIFF table tag typed BYTE with a huge count: every type's count
+  // is bounded by the file, so the layout never sizes an array from it.
+  for (const tag of [519, 520, 521]) {
+    for (const count of [100000, 0xffffffff]) {
+      const evil = tiff([hollow(10, 10, { 259: [259, 3, 1, 6], [tag]: [tag, 1, count, 8] })]);
+      let threw = null;
+      try { tiffLayout(evil); } catch (e) { threw = e; }
+      ok(threw && /declares \d+ values, more than the file holds/.test(threw.message), `a BYTE-typed tag ${tag} declaring ${count} values is refused before any array is sized (${threw?.message || "no throw"})`);
+    }
+  }
+  await refusedBy("a JPEG-in-TIFF BYTE table tag declaring 4 billion values", tiff([hollow(10, 10, { 259: [259, 3, 1, 6], 519: [519, 1, 0xffffffff, 8] })]), /^tiff tag 519 declares 4294967295 values, more than the file holds/, convert);
   await refusedBy("a TIFF tag declaring 2 billion values", tiff([[...hollow(10, 10), [700, 3, 0x7fffffff, 8]]]), /^tiff tag 700 declares 2147483647 values, more than the file holds/, convert);
   await refusedBy("a TIFF whose tags together declare more values than the file holds", tiff([[...hollow(10, 10), ...Array.from({ length: 200 }, (_, k) => [1000 + k, 3, 60, 8])]]), /^tiff tags declare more value bytes than the file holds/, convert);
   await refusedBy("a TIFF with 60000 bits per sample", tiff([hollow(10, 10, { 258: [258, 3, 1, 60000], 277: [277, 3, 1, 60000] })]), /^source image too large \(tiff samples decode to 45000000000 bytes/, convert);

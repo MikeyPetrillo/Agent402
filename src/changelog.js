@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-13",
+    title: "Image header bound",
+    items: [
+      "Server: the TIFF header reader bounds every tag's declared value count by the file size, whatever the tag's type.",
+    ],
+  },
+  {
     date: "2026-11-12",
     title: "Bazaar listings",
     items: [

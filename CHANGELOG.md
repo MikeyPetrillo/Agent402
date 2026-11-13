@@ -6,6 +6,11 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-13 (image header bound)
+Server:
+- The TIFF header reader bounds every tag's declared value count by the file
+  size, whatever the tag's type.
+
 ### 2026-11-12 (Bazaar listings)
 Payments:
 - Every route's Bazaar listing carries a service name, five tags led by its

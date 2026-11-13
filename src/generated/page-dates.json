@@ -115,7 +115,7 @@
     "src/tools/hyperliquid-shared.js": "2026-10-21",
     "src/tools/image-child.js": "2026-11-09",
     "src/tools/image-gen-kit.js": "2026-11-11",
-    "src/tools/image-headers.js": "2026-11-09",
+    "src/tools/image-headers.js": "2026-11-13",
     "src/tools/image-kit.js": "2026-11-09",
     "src/tools/image-ops.js": "2026-11-09",
     "src/tools/image-pool.js": "2026-11-10",

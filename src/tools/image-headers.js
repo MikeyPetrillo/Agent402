@@ -317,7 +317,10 @@ export function tiffLayout(buf, maxPixels = Infinity, budget = Infinity) {
         throw bad(`tiff tag ${tag} is not a BYTE, SHORT or LONG value`);
       }
       if (!unit) { if (num !== 0 && k === 0) return null; continue; }
-      if (TIFF_LOOPED.has(type) && num * unit > buf.length) {
+      // Every value lives in the file, so no tag of any type can declare more
+      // values than the file has bytes: a BYTE tag with a huge count would
+      // otherwise size an array further down.
+      if ((TIFF_LOOPED.has(type) || TIFF_OFFSETS.has(tag) || TIFF_SCALAR.has(tag)) && num * unit > buf.length) {
         throw bad(`tiff tag ${tag} declares ${num} values, more than the file holds`);
       }
       if (type !== 1 && type !== 7) {
@@ -424,7 +427,7 @@ export function tiffLayout(buf, maxPixels = Infinity, budget = Infinity) {
   let jpeg = null;
   if (TIFF_JPEG.has(compression)) {
     spend((tags.get(519)?.num ?? 0) + (tags.get(520)?.num ?? 0) + (tags.get(521)?.num ?? 0));
-    const list = (tag) => Array.from({ length: tags.get(tag)?.num ?? 0 }, (_, j) => value(tags, tag, j));
+    const list = (tag) => Array.from({ length: Math.min(tags.get(tag)?.num ?? 0, buf.length) }, (_, j) => value(tags, tag, j));
     // JPEGTables, a byte field the decoder puts ahead of every strip.
     const tables = tags.get(347);
     if (tables && tables.type !== 1 && tables.type !== 7) throw bad("tiff tag 347 is not a byte field");
