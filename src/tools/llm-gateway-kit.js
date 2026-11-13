@@ -4301,7 +4301,7 @@ function makeHandler(routeTier) {
     // attempt whose timeout the caller's own window clamped below the
     // unclamped one (the configured direct timeout, itself capped by the
     // route's default, as attemptTimeoutMs takes it) never counts as the
-    // single-caller failure (it reads the unanswered rule instead).
+    // single-caller failure, nor feeds the shared unanswered rule.
     const directOpts = (model, timeoutMs, directBody, defaultMs) => ({
       heavy: heavyInput({ size: promptChars, max: maxInputCharsFor(tierSlug, model) }) || directHeavyOutput(directBody) || directHeavyOutput(body),
       clamped: directAttemptClamped(timeoutMs, directCfg?.timeoutMs, defaultMs),

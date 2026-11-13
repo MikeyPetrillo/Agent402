@@ -31,6 +31,8 @@ import { GEMINI_PATH_BY_TIER } from "../src/tools/llm-gemini-kit.js";
 import { PRE_PAYMENT_WIRES, meteredPrePaymentRefusal } from "../src/gateway-prepayment.js";
 import { _setModelCatalogForTest } from "../src/model-catalog.js";
 import { readFileSync } from "node:fs";
+import { perReplica } from "../src/rate-limit.js";
+import { METERED_UNPAID_QUOTES_PER_MIN } from "../src/unpaid-quote-budget.js";
 const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
 requireUpstreamCosts("test-llm-wire-parity");
 
@@ -389,6 +391,27 @@ try {
   const galias = await send(paid, "gemini", M, gbody, { path: `/v1/metered/v1beta/models/${UNLISTED}:generateContent` });
   ok(galias.status === 400 && !galias.paymentRequired && WIRES.gemini.prepayShape(galias.j, "unknown_model"), `the Google-shaped path's model is checked the same way (${galias.status} ${galias.text.slice(0, 120)})`);
   ok(upstreamCalls.length === upstreamBefore, "no pre-payment row reached the model upstream");
+  // Each address's pre-payment refusals write the row and the PostHog events
+  // inside a per-minute budget; past it every request is still answered the
+  // same 400, and only those writes are left out. Another address is untouched.
+  {
+    const budget = perReplica(METERED_UNPAID_QUOTES_PER_MIN);
+    const extra = 5, ip = "10.79.0.1", slug = WIRES.chat.slug(M);
+    const mark = paid.log().length;
+    const statuses = [];
+    for (let i = 0; i < budget + extra; i++) {
+      const r = await fetch(`${paid.url}${WIRES.chat.path(M)}`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip, authorization: "Bearer a402_notarealkey0" }, body: JSON.stringify(WIRES.chat.body({ model: UNLISTED })) });
+      await r.arrayBuffer();
+      statuses.push(r.status);
+    }
+    const other = await send(paid, "chat", M, WIRES.chat.body({ model: UNLISTED }));
+    await sleep(300);
+    const events = (kind) => paid.log().slice(mark).split("\n").filter((l) => l.startsWith("[posthog-test] ")).map((l) => { try { return JSON.parse(l.slice(15)); } catch { return null; } })
+      .filter((e) => e?.event === kind && e.properties?.slug === slug && e.properties?.prePayment === true).length;
+    ok(statuses.every((s) => s === 400), `every refusal past the write budget is still answered 400 (${[...new Set(statuses)].join(",")} over ${statuses.length})`);
+    ok(events("tool_call") === budget + 1 && events("tool_error") === budget + 1, `one address writes ${budget} refusals' events, then none; another address still writes (tool_call ${events("tool_call")}, tool_error ${events("tool_error")}, want ${budget + 1})`);
+    ok(other.status === 400 && other.event?.prePayment === true, "a refusal from another address is recorded as before");
+  }
 } catch (e) {
   fail++; console.log(`FAIL - paid boot: ${e.message}`);
 } finally { await paid?.stop(); fac.close(); upstream.close(); }
