@@ -378,7 +378,8 @@ import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary, hangupW
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
-import { createAsyncJobs, wantsAsync, isAsyncLoopbackToken, LOOPBACK_HEADER as ASYNC_LOOPBACK_HEADER } from "./async-jobs.js";
+import { createAsyncJobs, wantsAsync } from "./async-jobs.js";
+import { isOwnReplay } from "./own-replay.js";
 import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
 import { trustProxyHops, replayClientIpMiddleware, forwardedWithoutHopsWarning } from "./trust-proxy.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
@@ -2663,8 +2664,8 @@ app.use((req, _res, next) => renderPathStore.run(req.path, next));
 const TRUST_PROXY_HOPS = trustProxyHops();
 app.set("trust proxy", TRUST_PROXY_HOPS);
 if (TRUST_PROXY_HOPS === 0) {
-  app.use(forwardedWithoutHopsWarning({ isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]) }));
-  app.use(replayClientIpMiddleware({ isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]) }));
+  app.use(forwardedWithoutHopsWarning({ isReplay: isOwnReplay }));
+  app.use(replayClientIpMiddleware({ isReplay: isOwnReplay }));
 }
 // Through the CDN proxy the edge-reported peer is a CDN address and the client
 // is CF-Connecting-IP; from any other peer that header is ignored. req.ip is
@@ -2684,7 +2685,7 @@ if (CDN_PROXY_ON) {
       windowRead: (...a) => sharedLimits.windowRead(...a).then((r) => { if (!r?.ok) noteSharedLimitsDegraded("cdn-origin", r); return r; }),
     } : null,
     // Our own loopback replays are not CDN peers: the count skips them.
-    isReplay: (req) => isMcpLoopback(req) || isAsyncLoopbackToken(req.headers[ASYNC_LOOPBACK_HEADER]),
+    isReplay: isOwnReplay,
   }));
   app.use(cdnSyncDeadlineMiddleware());
 }
@@ -10474,13 +10475,12 @@ app.use(fullAnswerMiddleware((path) => {
 // A job's loopback (HTTP job or MCP task) carries a progress key; the handler
 // reports its stages to that job through the request scope (src/job-progress.js).
 app.use(progressMiddleware());
-// Our own loopbacks pass both sync windows below: an async job's replay (its
-// marker, from a local socket; the async middleware below verifies it) and
-// the MCP connector's paid replay. Both windows are mounted before the async
-// marker exists, so this predicate is what decides for them.
-const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-const isInternalReplay = (req) => isMcpLoopback(req)
-  || (req.headers[ASYNC_LOOPBACK_HEADER] !== undefined && LOOPBACK_ADDRESSES.has(String(req.socket?.remoteAddress || "")));
+// Our own loopbacks pass both sync windows below: an async job's replay and
+// the MCP connector's paid replay, proved by the same per-process secret the
+// address resolvers above read (src/own-replay.js), never by a header's
+// presence on a local socket. Both windows are mounted before the async
+// marker is verified, so this predicate is what decides for them.
+const isInternalReplay = isOwnReplay;
 // A Tempo push credential's transfer is final before the call: both windows
 // defer its refusal to the Tempo gate (which books the transfer as owed until
 // the credential comes back with the header), but only while that gate is

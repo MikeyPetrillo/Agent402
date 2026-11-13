@@ -151,8 +151,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/cdnClientIpMiddleware\(\{\s*shared: sharedLimitsEnabled\(\) \? \{[\s\S]{0,400}?sharedLimits\.windowAdd\([\s\S]{0,400}?sharedLimits\.windowRead\(/.test(serverSrc),
     "server.js mounts the resolver with the shared limiter store's window, so the count spans replicas");
-  ok(/cdnClientIpMiddleware\(\{[\s\S]{0,1200}?isReplay: \(req\) => isMcpLoopback\(req\) \|\| isAsyncLoopbackToken\(/.test(serverSrc),
-    "server.js hands the resolver the same replay proof the trust-proxy mount uses");
+  ok(/cdnClientIpMiddleware\(\{[\s\S]{0,1200}?isReplay: isOwnReplay\b/.test(serverSrc) && /replayClientIpMiddleware\(\{ isReplay: isOwnReplay \}\)/.test(serverSrc),
+    "server.js hands the resolver the same replay proof the trust-proxy mount uses (src/own-replay.js)");
 }
 
 // ---- end to end ----

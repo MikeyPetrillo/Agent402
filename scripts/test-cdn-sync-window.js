@@ -150,6 +150,36 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
     ok(/cdnSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, isInternal: isInternalReplay, isTempoPush \}\)/.test(server) && /slowSyncWindowMiddleware\(\{ asyncRouteOf, wantsAsync, carriesPaymentAttempt, followsJobAnswer, isInternal: isInternalReplay, isTempoPush \}\)/.test(server), "server.js hands both sync windows the one internal-replay predicate and the one push-credential predicate");
     ok(/const isTempoPush = \(req\) => tempoGateMounted && isTempoPushCredential\(req\.headers\.authorization\)/.test(server) && /app\.use\(tempoGate\);\s*\n\s*tempoGateMounted = true;/.test(server), "the push predicate holds only while the Tempo gate is mounted, so a window never defers to a gate that is not there");
     ok(server.indexOf("const isInternalReplay = ") < server.indexOf("app.use(cdnSyncWindowMiddleware("), "...defined before the CDN window is mounted");
+    // ONE replay proof for every exemption: the windows read the predicate
+    // the address resolvers read, so they cannot drift apart.
+    ok(/const isInternalReplay = isOwnReplay;/.test(server) && (server.match(/isReplay: isOwnReplay\b/g) || []).length === 3 && !/LOOP_?BACK_ADDRESSES|\[ASYNC_LOOPBACK_HEADER\] !== undefined/.test(server), "every replay exemption in server.js reads the one predicate, none a header's presence on a local socket");
+  }
+  // The predicate itself: a forged marker on a loopback socket is not a
+  // replay; the live runner's token and the MCP loopback marker are. Both
+  // windows refuse the first and pass the others.
+  {
+    const { isOwnReplay } = await import("../src/own-replay.js");
+    const { createAsyncJobs, LOOPBACK_HEADER } = await import("../src/async-jobs.js");
+    const { mcpLoopbackHeaders, MCP_VIA_HEADER } = await import("../src/mcp-loopback.js");
+    const jobs = createAsyncJobs({ port: 1, asyncRouteOf: () => null, store: {} }); // the runner is never started: only its token is read
+    const sock = { remoteAddress: "127.0.0.1" };
+    const forged = { method: "POST", viaCdn: true, socket: sock, headers: { [LOOPBACK_HEADER]: "1", "user-agent": "curl/8" } };
+    const forgedLong = { method: "POST", viaCdn: true, socket: sock, headers: { [LOOPBACK_HEADER]: "f".repeat(48), "user-agent": "curl/8" } };
+    const genuine = { method: "POST", viaCdn: true, socket: sock, headers: { [LOOPBACK_HEADER]: jobs.loopbackToken, "user-agent": "curl/8" } };
+    const mcp = { method: "POST", viaCdn: true, socket: sock, headers: { [MCP_VIA_HEADER]: Object.values(mcpLoopbackHeaders())[0], "user-agent": "curl/8" } };
+    const copy = (req) => ({ ...req, headers: { ...req.headers } }); // the MCP marker is read once per request
+    ok(!isOwnReplay(copy(forged)) && !isOwnReplay(copy(forgedLong)) && isOwnReplay(copy(genuine)) && isOwnReplay(copy(mcp)), "a forged loopback marker on a local socket is not our replay; the runner's token and the MCP marker are");
+    const { slowSyncWindowMiddleware } = await import("../src/slow-sync-window.js");
+    const res = () => { const r = { code: null, body: null, setHeader() {}, set() { return r; }, status(c) { r.code = c; return r; }, json(b) { r.body = b; return r; } }; return r; };
+    const windows = {
+      cdn: cdnSyncWindowMiddleware({ asyncRouteOf: () => ({ slug: "s", asyncProfile: { maxSeconds: 999 } }), wantsAsync: () => false, carriesPaymentAttempt: () => true, maxSeconds: 1, isInternal: isOwnReplay }),
+      slow: slowSyncWindowMiddleware({ asyncRouteOf: () => ({ slug: "s", asyncProfile: { slow: true, maxSeconds: 999 } }), wantsAsync: () => false, carriesPaymentAttempt: () => true, followsJobAnswer: () => false, isInternal: isOwnReplay, windowSeconds: 1 }),
+    };
+    for (const [name, mw] of Object.entries(windows)) {
+      const out = {};
+      for (const [label, req] of Object.entries({ forged, forgedLong, genuine, mcp })) { let passed = false; const r = res(); mw({ ...req, headers: { ...req.headers } }, r, () => { passed = true; }); out[label] = passed ? "passed" : r.code; }
+      ok(out.forged !== "passed" && out.forgedLong !== "passed" && out.genuine === "passed" && out.mcp === "passed", `the ${name} window refuses a forged loopback marker and passes our own replays (${JSON.stringify(out)})`);
+    }
   }
 }
 
