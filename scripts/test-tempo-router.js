@@ -138,6 +138,10 @@ const seller = createServer((req, res) => {
       // prefix still parses), an object (its prefix does not) and plain text.
       const longBody = { "long-number": ["application/json", "7".repeat(500)], "long-object": ["application/json", JSON.stringify({ data: "x".repeat(500) })], "long-text": ["text/plain", "t".repeat(500)] }[sellerMode];
       if (longBody) { res.writeHead(200, { "content-type": longBody[0] }); return res.end(longBody[1]); }
+      // A seller document whose own keys share our stand-ins' names, padded
+      // past the caller's maxBytes so its closed prefix is cut.
+      const keyShape = { "pad-raw": { raw: JSON.stringify({ data: { price: 1 } }) }, "pad-text": { text: JSON.stringify({ data: { price: 1 } }), truncated: false, contentType: "application/json", sha256: "0" }, "pad-value": { value: { data: { price: 1 } } }, "pad-relay": { relayError: "upstream body unreadable" } }[sellerMode];
+      if (keyShape) { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify(keyShape) + " ".repeat(200)); }
       // Charge-first, the stock mppx shape: the receipt rides on every status.
       const charged = /^fail-(\d{3})-receipt$/.exec(sellerMode);
       if (charged) { res.writeHead(Number(charged[1]), { "content-type": "application/json", "payment-receipt": rcpt }); return res.end("{}"); }
@@ -304,6 +308,23 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
       const rec = whole.result?.truncated === false ? observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["text"], body: whole.result }) : null;
       ok(rec?.calls === 1 && rec.kept === 0, `${mode}: a whole body that is not JSON is observed as a missed promise, never kept by our \`text\` key (${JSON.stringify(rec)})`);
     } else ok(observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["data"], body: wholeBody }) !== null, `${mode}: control, the same body read whole is observed`);
+  }
+  sellerMode = "ok";
+}
+
+// ---- a cut seller prefix is judged as the seller's JSON, whatever its keys ----
+// The reader marks what it built; a seller's own `raw`, `text`, `value` or
+// `relayError` key never makes its cut document read as one of our stand-ins.
+{
+  const { observeDelivery, deliveryObservation } = await import("../src/response-observation.js");
+  for (const mode of ["pad-raw", "pad-text", "pad-value", "pad-relay"]) {
+    sellerMode = mode;
+    const r = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, maxBytes: 160 });
+    ok(r.result?._truncated === true, `${mode}: the padded seller document is cut (setup: ${JSON.stringify(r.result).slice(0, 60)})`);
+    const origin = `https://tempo-${mode}.example`;
+    observeDelivery({ origin, method: "POST", route: "/r", guaranteedPaths: ["data.price"], body: r.result });
+    const rec = deliveryObservation(origin, "POST", "/r");
+    ok(rec?.calls === 1 && rec.kept === 0 && rec.unverifiable === 0, `${mode}: a cut prefix missing its promised path is a missed promise, never kept (${JSON.stringify(rec)})`);
   }
   sellerMode = "ok";
 }
