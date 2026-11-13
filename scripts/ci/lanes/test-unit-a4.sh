@@ -256,6 +256,8 @@ t node scripts/test-copy-absolutes.js
 # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
 t node scripts/test-resale-copy.js
 t node scripts/test-mcp-dockerfiles.js
+# Both images print npm's debug log when npm ci fails and keep its exit code (runs the install group under /bin/sh with a stub npm)
+t node scripts/test-dockerfile-npm-log.js
 # Every tracked Dockerfile's node base runs one Node patch, pinned by digest; the tollbooth image runs as node (offline)
 t node scripts/test-dockerfile-node-patch.js
 # Buyer packages price quotes from one known-asset table: copies identical, table matches the rails (offline)

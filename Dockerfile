@@ -25,7 +25,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY package.json package-lock.json ./
 # ffmpeg powers the audio tools (normalize/convert/info); gosu drops privileges
 # at startup (see the entrypoint). Installed alongside Chromium's deps.
-RUN npm ci --omit=dev && npx playwright install --with-deps chromium \
+# A failed npm ci prints the tail of npm's debug log before the build fails
+# with npm's own exit code (scripts/test-dockerfile-npm-log.js).
+RUN { npm ci --omit=dev || { s=$?; echo "npm ci failed (exit $s); npm debug log:" >&2; \
+      for f in "${HOME:-/root}"/.npm/_logs/*-debug-0.log; do [ -f "$f" ] && tail -n 200 "$f" >&2; done; exit $s; }; } \
+  && npx playwright install --with-deps chromium \
   && apt-get update && apt-get install -y --no-install-recommends ffmpeg gosu \
   && rm -rf /var/lib/apt/lists/* \
   # sanity-check gosu works (it silently no-ops on a broken install)
