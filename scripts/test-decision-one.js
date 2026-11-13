@@ -203,8 +203,13 @@ const choiceAnswer = (choice, confidence) => reply(200, { answers: { best: { typ
     rerank.__resetCache();
     const u = stub({ [TYPESAFE]: reply(500, {}), [OPENROUTER]: pick({ [JEV_OR]: reply(200, { answers: { best: { choice: 7 } } }), [DECISION_ONE_MODEL]: choiceAnswer("skill-structured-scrape", 0.95) }) });
     const rows2 = [{ text: "page to json" }];
-    await rerank.rerankMisses(rows2, () => TOOLS, { fetchImpl: u.fetchImpl });
-    ok(orOf(u) === `${JEV_OR},${DECISION_ONE_MODEL}` && rows2[0].rerank?.kind === "index-miss", "discovery-rerank: an unreadable Jev answer over OpenRouter goes on to Decision-1");
+    const sumU = await rerank.rerankMisses(rows2, () => TOOLS, { fetchImpl: u.fetchImpl });
+    ok(orOf(u) === JEV_OR && !rows2[0].rerank && sumU.failed === 1, `discovery-rerank: an unreadable Jev answer over OpenRouter (a billed 200) ends the walk; Decision-1 is not asked (${orOf(u)})`);
+    rerank.__resetCache();
+    const t = stub({ [TYPESAFE]: reply(500, {}), [OPENROUTER]: pick({ [JEV_OR]: timeout, [DECISION_ONE_MODEL]: choiceAnswer("skill-structured-scrape", 0.95) }) });
+    const rowsT = [{ text: "page to json, timed out" }];
+    const sumT = await rerank.rerankMisses(rowsT, () => TOOLS, { fetchImpl: t.fetchImpl });
+    ok(orOf(t) === JEV_OR && !rowsT[0].rerank && sumT.failed === 1, `discovery-rerank: a timed-out Jev over OpenRouter ends the walk; Decision-1 is not asked (${orOf(t)})`);
     rerank.__resetCache();
     delete process.env.TYPESAFE_API_KEY;
     const a = stub({ [OPENROUTER]: choiceAnswer("skill-structured-scrape", 0.95) });
@@ -240,7 +245,12 @@ const choiceAnswer = (choice, confidence) => reply(200, { answers: { best: { typ
     const s2 = stub({ [TYPESAFE]: reply(502, {}), [OPENROUTER]: pick({ [JEV_OR]: noul(null), [DECISION_ONE_MODEL]: noul(0.95) }) });
     const rows2 = [{ text: "buy my api for $0.20" }];
     await wish.classifyWishes(rows2, { fetchImpl: s2.fetchImpl });
-    ok(orOf(s2) === `${JEV_OR},${DECISION_ONE_MODEL}` && rows2[0].intent?.kind === "advertisement", "wish-classify: no probability from Jev over OpenRouter goes on to Decision-1");
+    ok(orOf(s2) === JEV_OR && rows2[0].intent?.kind !== "advertisement", `wish-classify: no probability from Jev over OpenRouter (a billed 200) ends the walk; Decision-1 is not asked (${orOf(s2)})`);
+    wish.__resetCache();
+    const s2b = stub({ [TYPESAFE]: reply(502, {}), [OPENROUTER]: pick({ [JEV_OR]: reply(503, {}), [DECISION_ONE_MODEL]: noul(0.95) }) });
+    const rows2b = [{ text: "buy my api for $0.25" }];
+    await wish.classifyWishes(rows2b, { fetchImpl: s2b.fetchImpl });
+    ok(orOf(s2b) === `${JEV_OR},${DECISION_ONE_MODEL}` && rows2b[0].intent?.kind === "advertisement", "wish-classify: control: a 503 from Jev over OpenRouter (not billed) goes on to Decision-1");
     wish.__resetCache();
     delete process.env.TYPESAFE_API_KEY;
     const a = stub({ [OPENROUTER]: noul(0.95) });
@@ -283,6 +293,12 @@ const choiceAnswer = (choice, confidence) => reply(200, { answers: { best: { typ
     ok(jrow?.outcome === "failed" && jrow.costUsd === 0 && d1row?.outcome === "ok" && Math.abs(d1row.costUsd - (500 / 1e6) * RATE) < 1e-15, "...each leg metered under its own model name");
     const booked = Buffer.byteLength(s.calls[0].raw) + Buffer.byteLength(s.calls[1].raw) + Buffer.byteLength(s.calls[2].raw);
     ok(judgeD.status().bookedTokens === booked, `...and all three are booked against the one daily ceiling (${judgeD.status().bookedTokens} of ${booked})`);
+  }
+  for (const [why, leg] of [["a timed-out", timeout], ["an unreadable 200 from", reply(200, "nope")]]) {
+    // Jev over OpenRouter may have billed us: the walk ends, Decision-1 is not asked.
+    const s = stub({ [TYPESAFE]: reply(503, {}), [OPENROUTER]: (body) => (body.model === JEV_OR ? (typeof leg === "function" ? leg() : leg) : d1) });
+    const r = await makeJevJudge({ apiKey: "k", decisionOneKey: "or-k", fetchImpl: s.fetchImpl }).judge("fear", listing);
+    ok(r === null && s.calls.map((c) => c.body.model).join() === `jev-1.14.0,${JEV_OR}`, `decide: ${why} Jev over OpenRouter ends the walk; Decision-1 is not asked (${s.calls.map((c) => c.body.model).join()})`);
   }
   setUpstreamCostsForTest(table());
   const sn = stub({ [TYPESAFE]: reply(503, {}), [OPENROUTER]: d1 });
@@ -620,6 +636,12 @@ const orModels = (s) => s.calls.filter((c) => c.host === OPENROUTER).map((c) => 
   ok(r?.choice === "html-to-json" && orModels(s) === `${JEV_OR},${DECISION_ONE_MODEL}`, "tool-judge: TypeSafe down, then Jev over OpenRouter down, then Decision-1 answers");
   ok(st.calls === 3 && st.openRouterCalls === 2 && st.tokens === want, `...every leg is booked against the one daily ceiling (${st.tokens} of ${want}; ${st.openRouterCalls} over OpenRouter)`);
 
+  for (const [why, leg] of [["a timed-out", timeout], ["an unreadable 200 from", reply(200, { answers: { best: { choice: 7 } } })]]) {
+    toolJudge._jevReset();
+    const sb = stub({ [TYPESAFE]: reply(503, {}), [OPENROUTER]: byModel({ [JEV_OR]: leg, [DECISION_ONE_MODEL]: choiceAnswer("html-to-json", 0.93) }) });
+    const rb = await toolJudge.judgeTool(`extract a web page into structured json, ${why}`, [A, B], { fetchImpl: sb.fetchImpl });
+    ok(rb === null && orModels(sb) === JEV_OR, `tool-judge: ${why} Jev over OpenRouter ends the walk; Decision-1 is not asked (${orModels(sb)})`);
+  }
   toolJudge._jevReset();
   // Room for TypeSafe and Jev over OpenRouter, not for Decision-1.
   process.env.JEV_DAILY_MAX_TOKENS = String(Buffer.byteLength(s.calls[0].raw) + Buffer.byteLength(s.calls[1].raw) + 600 + 5);

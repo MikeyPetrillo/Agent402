@@ -144,6 +144,9 @@ export function makeJevJudge({ apiKey = jevApiKey(), fetchImpl = fetch, decision
         return { j, note };
       } catch (e) {
         note(e?.statusCode === 504 ? "timeout" : e?.mayBeBilled ? "unparseable" : "failed", null);
+        // A leg that may have billed us (a timeout, an unreadable 200) ends
+        // the walk; only a certain non-charge passes to the next leg.
+        if (e?.mayBeBilled) return null;
       }
     }
     return null;

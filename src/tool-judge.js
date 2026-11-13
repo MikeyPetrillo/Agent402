@@ -143,10 +143,14 @@ const hasAnswers = (j) => !!j?.answers && typeof j.answers === "object";
 // free search is never held much past its bound.
 const OWN_TIMER_GRACE_MS = 250;
 
-/** One judgment under the ceiling, or null. Never throws. Jev first; when it
- *  fails (non-ok, timeout, network, or an answer `usable` rejects), Decision-1
- *  is asked the same questions within what is left of the timeout, booked
- *  against the same ceiling and free share. `pool: "free"` books against the
+/** One judgment under the ceiling, or null. Never throws. Jev on TypeSafe
+ *  first; when it fails (non-ok, timeout, network, or an answer `usable`
+ *  rejects), the OpenRouter legs (openRouterJudgeModels: the pinned Jev
+ *  version, then Decision-1) are asked the same questions in turn within what
+ *  is left of the timeout, each booked against the same ceiling and free share.
+ *  An OpenRouter leg that may have billed us (a timeout, or a 200 `usable`
+ *  rejects) ends the walk with null; one that certainly did not (refused, 5xx,
+ *  429) passes to the next. `pool: "free"` books against the
  *  free share as well. `outcome` (optional object) learns `skipped: "budget"`
  *  when a ceiling refused it.
  *
@@ -199,7 +203,12 @@ async function callJevUnbounded(payload, fetchImpl, timeoutMs, { pool = "paid", 
     try {
       const j = await askDecisionOne(payload, { fetchImpl, timeoutMs: left, model });
       if (usable(j)) return j;
-    } catch { /* booked above; the next leg is asked within what is left */ }
+      return null; // a 200 this caller cannot use was billed: no second leg
+    } catch (e) {
+      // Booked above. A leg that may have billed us (mayBeBilled) ends the
+      // walk; any other failure passes to the next leg within what is left.
+      if (e?.mayBeBilled) return null;
+    }
   }
   return null;
 }

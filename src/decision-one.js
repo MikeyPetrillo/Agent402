@@ -150,7 +150,10 @@ export function openRouterJudgeModels(pinned, apiKey = keyOf()) {
 
 /** Ask those legs in turn with the same body under one deadline. Resolves to
  *  { j, model } for the first answer `usable` accepts; otherwise throws the
- *  last leg's error. Every leg is booked by askDecisionOne against the day's
+ *  last leg's error. The next leg is asked only when the failed one certainly
+ *  did not bill us (refused, 5xx, 429, credentials, a request error); after a
+ *  timeout or a 200 `usable` rejects (mayBeBilled) the walk ends there, as
+ *  /v1/judge's does. Every leg is booked by askDecisionOne against the day's
  *  byte ceiling before it is sent. */
 export async function askOpenRouterJudge(body, { pinned, deadline, apiKey = keyOf(), fetchImpl = fetch, usable = () => true } = {}) {
   let last = null;
@@ -162,6 +165,7 @@ export async function askOpenRouterJudge(body, { pinned, deadline, apiKey = keyO
       if (usable(j)) return { j, model };
       last = fail(`${labelOf(model)} returned an answer this caller cannot read.`, 502, true);
     } catch (e) { last = e; }
+    if (last?.mayBeBilled) break; // this leg may have billed us: no second one
   }
   throw last || fail("No judgment backend is configured on this server.", 503);
 }
