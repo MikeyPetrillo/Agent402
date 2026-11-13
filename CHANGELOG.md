@@ -20,22 +20,28 @@ Tools:
   transcribed up to its tier's cap, and the answer says so in
   trimmedToCapSeconds and durationUnconfirmed; both fields are in the output
   schemas.
-- Large images sent to image-ocr wait their turn per caller, so one caller's
-  run of large images cannot hold every place in the queue.
+- Large images sent to image-ocr wait their turn per caller, a step run by a
+  decision or by route-execute included, so one caller's run of large images
+  cannot hold every place in the queue.
 - Transcription measures and cuts each file by the audio samples it decodes,
   not by the timestamps its container writes, and a file sent as it came is
   uploaded under the name of the format it was measured as.
-- openapi-resolve-refs resolves long chains of refs and deeply nested
-  documents in time proportional to their size.
+- openapi-resolve-refs resolves long chains of refs, deeply nested documents
+  and long pointers inside cyclic refs in time proportional to their size.
 - route-execute does not resell a 200 a seller sent without taking payment
-  when its body is empty or blank, an error sent as text, or text where the
-  seller promised JSON fields; the next seller is tried.
+  when its body is empty or blank, an empty list, an error sent as text, or
+  text, a list or a bare value where the seller promised JSON fields; the next
+  seller is tried. A paid answer that is not JSON on a route that promised
+  JSON fields counts as a missed promise in the seller's delivery record.
 - Report kits remove bracket runs from quoted source text across combining
   marks, blanks, control characters and the compatibility forms of each
   bracket.
-- The listing text a router judge reads drops a sentence opened by a role
-  marker behind markdown list, heading or emphasis marks, a closing brace, a
-  lookalike colon, a guillemet or an arrow.
+- The router judges read each listing as quoted data: one JSON object per
+  listing with every line break escaped, under a rule that a speaker label or
+  instruction inside it is the seller's text. The listing text they read drops
+  a sentence opened by a role marker behind markdown list, heading or emphasis
+  marks, a closing brace, a lookalike colon, a guillemet or an arrow, and
+  /api/route's judge reads the same screened text as route-execute's.
 Payments:
 - A paid answer whose connection closed after its headers went out is kept
   under its idempotency key, so a retry with the same key, a prepaid credits
@@ -48,8 +54,8 @@ Payments:
 - While many /v1 payments fail to settle across the service, only a wallet
   that has never settled a payment is held after one unsettled run; a wallet
   that has ever paid is served as before, a caller with no proven wallet keeps
-  the usual count, and settlements that fail for an unknown cause never start
-  that bound.
+  the usual count, and settlements that fail for an unknown cause or are
+  counted against an address or a credits key never start that bound.
 - One signed EVM authorization whose settlement keeps failing for the buyer's
   reason is refused on its own, and a new authorization from the same wallet
   is served at once.
