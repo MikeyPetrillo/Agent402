@@ -82,7 +82,8 @@ ok(await uptoReason(good) === "OK", "control: a valid upto payment passes the pr
   ok(await uptoReason(withPermit(noFrom)) === "invalid_eip2612_extension", "an EIP-2612 permit with no owner (from) is refused");
   ok(await uptoReason(withPermit({ spender: `0x${"ee".repeat(20)}`, signature: `0x${"22".repeat(65)}` })) === "invalid_eip2612_extension", "a partial permit (spender and signature, no from) is refused");
   ok(await uptoReason(withPermit({ description: "the server's declaration", version: "1" })) === "OK", "the server's own declaration echoed back (no permit field) passes: the client merges it in when it holds the allowance");
-  ok(await uptoReason(withPermit({ ...permitInfo, from: hostile({ toString: 1 }) })) === "invalid_eip2612_extension", "a permit whose from is an object is refused, not thrown on");
+  const objFrom = await attempt(() => uptoReason(withPermit({ ...permitInfo, from: hostile({ toString: 1 }) })));
+  ok(objFrom.r === "invalid_eip2612_extension", `a permit whose from is an object is refused, not thrown on (${objFrom.threw ? `threw ${objFrom.threw}` : objFrom.r})`);
 }
 
 // --- exact (EIP-3009) on Arc ---------------------------------------------------
