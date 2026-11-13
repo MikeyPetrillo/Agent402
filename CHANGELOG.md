@@ -9,8 +9,8 @@ carries its own version on npm.
 ### 2026-11-13 (listing types, charge sentences and price keys)
 Index:
 - The seller index also reads the price spellings amount_usd and
-  max_amount_required, beside price_usd, each wherever its camelCase spelling
-  is read: amount_usd in a price object and an OpenAPI payment object,
+  max_amount_required, beside price_usd, in a seller's manifest and OpenAPI
+  document: amount_usd in a price object and an OpenAPI payment object,
   max_amount_required on an entry that names its asset, in a payment object and
   in accepts items. They are read only where an entry would otherwise have no
   price, so a listing that already had a price keeps it, one that writes both
@@ -30,7 +30,7 @@ Tools:
 - Refusals from /api/decide, the route-execute tiers and the /v1 chat
   completions tiers that say a call was not charged use one sentence, "Nothing
   was charged.", on a call to the route itself. A step error recorded inside a
-  decision run carries no charge sentence.
+  decision run no longer carries that sentence.
 Payments:
 - A refusal sent to a Tempo payer whose transfer was claimed before the call
   ran says in one sentence that the failure is recorded as a refund owed to the
