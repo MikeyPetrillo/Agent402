@@ -1731,6 +1731,13 @@ async function chargeReplay(budget, n) {
 }
 
 const isNode = (v) => v !== null && typeof v === "object";
+/** Tests: the walk's step budget after resolving `spec` (steps counts each
+ *  node visited and each ref a merge replays). */
+export async function __resolveRefsBudgetForTest(spec) {
+  const report = newResolveReport();
+  await deepResolveRefs(spec, spec, new Set(), report);
+  return { ...report.budget };
+}
 
 async function deepResolveRefs(node, root, resolvingPath, report) {
   if (!isNode(node)) {

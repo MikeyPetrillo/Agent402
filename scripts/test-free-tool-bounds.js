@@ -202,6 +202,15 @@ function rng(seed) {
   const wide = { paths: { "/a": { $ref: "#/components/schemas/A" }, "/b": { $ref: "#/components/schemas/A" } }, components: { schemas: { A: { allOf: Array.from({ length: 30_000 }, (_, i) => ({ $ref: "#/x/" + i })) } } } };
   const rw = await loopHold(() => tool.handler({ spec: wide }));
   ok(!rw.err && rw.out.unresolved.length === 30_000 && rw.hold < 250, "resolve-refs: a list of 30,000 unresolved refs is merged through a set, the loop held " + rw.hold.toFixed(0) + "ms");
+  // The replay is charged by length, whatever the clock says: one more reuse
+  // of a target holding 3,000 unresolved refs adds at least 3,000 steps, and a
+  // walk with N reuses counts the first merge and every replay (N + 1 lists).
+  {
+    const { __resolveRefsBudgetForTest } = await import("../src/tools/api-kit.js");
+    const specOf = (n) => { const s = { paths: {}, components: { schemas: { A: { allOf: Array.from({ length: 3000 }, (_, i) => ({ $ref: "#/x/" + i })) } } } }; for (let i = 0; i < n; i++) s.paths["/p" + i] = { get: { schema: { $ref: "#/components/schemas/A" } } }; return s; };
+    const s139 = (await __resolveRefsBudgetForTest(specOf(139))).steps, s140 = (await __resolveRefsBudgetForTest(specOf(140))).steps;
+    ok(s140 - s139 >= 3000 && s140 >= 141 * 3000, `resolve-refs: each replay of a 3,000-ref list is charged to the step budget (one more reuse adds ${s140 - s139} steps; ${s140} steps for 140 reuses)`);
+  }
   const replaySmall = { paths: {}, components: { schemas: { A: { allOf: [{ $ref: "#/x/1" }, { $ref: "https://e.example/s#/B" }, { $ref: "#/x/1" }] }, B: { items: { $ref: "#/components/schemas/A" } } } } };
   for (let i = 0; i < 5; i++) replaySmall.paths["/p" + i] = { get: { a: { $ref: "#/components/schemas/A" }, b: { $ref: "#/components/schemas/B" } } };
   ok(JSON.stringify(await tool.handler({ spec: replaySmall })) === JSON.stringify(oldAnswer(replaySmall)), "resolve-refs: reused targets with unresolved and external refs answer as the full walk did");
