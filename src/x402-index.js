@@ -2022,7 +2022,7 @@ const DEFAULT_SEEDS = [
   "https://agentservices.to", // AgentServices — 50 paid APIs for AI agents (#aiservices)
   "https://agents.daedalusdevelopmentgroup.com", // DDG Agent-Payable Services (#222)
   "https://jmt-x402-proxy.jmthomasofficial.workers.dev", // JMT x402 server (#221)
-  "https://nolawealthfinancial.com", // Still OS Notary Protocol — Ed25519-signed notarization, OFAC/SDN screening, CPI/GDP signals, USDC on Base (#434)
+  "https://stillosdigitalholdings.com", // Still OS Notary Protocol — Ed25519-signed notarization, OFAC/SDN screening, CPI/GDP signals, USDC on Base (#434). Repointed 2026-11-13: the previously seeded nolawealthfinancial.com now 308-redirects cross-host to this origin, and schemeUpgradeOf only follows a same-hostname http→https upgrade, so the old entry resolved to nothing for the crawler.
   "https://x402.evidencesupply.com", // Evidence Supply — corroborated agent-action verification, USDC on Base
   "https://x402.lagaceta.net", // Colombia TRM — official USD/COP Superfinanciera series, prepaid x402 GET on Base USDC
   "https://api.surplusintelligence.ai", // Surplus Intelligence — OpenAI-compatible inference market, x402 (Base USDC, exact + upto) and MPP (Tempo) on one 402; /.well-known/x402 manifest (verified 2026-08-26)
