@@ -194,6 +194,14 @@ const reject = (p) => p.then(() => null, (e) => e);
     __setMeasureForTest(async () => ({ undecodable: "x" }));
     e = await reject(assertWithinDurationCap(long, "audio.wav", "transcribe-pro"));
     ok(e?.statusCode === 422 && /up to 10 minutes/.test(e.message), "a file its header puts over the cap is still the over-cap 422");
+    // Bytes the sniffed demuxer (wav, on the upstream's list) did not read and
+    // a fallback demuxer (ogg, also on the list) did: what goes upstream is
+    // the FLAC cut at the cap, never the original bytes.
+    const sent = [];
+    __setMeasureForTest(async () => ({ seconds: 10, format: "ogg" }));
+    __setTranscodeForTest(async (b, o) => { sent.push(o); return { audio: Buffer.from("fLaC capped"), seconds: 10, format: o.format }; });
+    const fb = await prepareAudioWithinCap(short, "audio.wav", "transcribe");
+    ok(fb.buf !== short && fb.filename === "audio.flac" && fb.buf.toString() === "fLaC capped" && sent.length === 1 && sent[0].maxSeconds === 242 && sent[0].format === "ogg", `bytes only a fallback demuxer read are sent as the FLAC cut at the cap, not as they came (${fb.filename}, ${JSON.stringify(sent)})`);
     __setTranscodeForTest(null);
   }
   // Unmeasured and lossy: held to the shortest its bytes can play.
@@ -364,8 +372,9 @@ const reject = (p) => p.then(() => null, (e) => e);
         const gen = (name, args) => { const p = join(dir, name); execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=6", "-ac", "1", ...args, p], { stdio: "ignore" }); return readFileSync(p); };
         const adts = gen("p.aac", ["-c:a", "aac", "-f", "adts"]);
         const mp3 = gen("p.mp3", ["-c:a", "libmp3lame", "-f", "mp3"]);
+        const ogg = gen("p.ogg", ["-c:a", "libopus", "-f", "ogg"]);
         const id3 = (body, n = 1000) => { const h = Buffer.alloc(10 + n); h.write("ID3", 0); h[3] = 4; h[6] = (n >> 21) & 127; h[7] = (n >> 14) & 127; h[8] = (n >> 7) & 127; h[9] = n & 127; return Buffer.concat([h, body]); };
-        const cases = [["ADTS AAC behind an ID3 tag", id3(adts), "audio.aac", "flac"], ["an MP3 behind 3000 zero bytes", Buffer.concat([Buffer.alloc(3000), mp3]), "audio.mp3", "as-is"], ["ADTS AAC behind 3000 zero bytes (no sniff; a fallback demuxer reads it)", Buffer.concat([Buffer.alloc(3000), adts]), "audio.aac", "flac"]];
+        const cases = [["ADTS AAC behind an ID3 tag", id3(adts), "audio.aac", "flac"], ["an MP3 behind 3000 zero bytes", Buffer.concat([Buffer.alloc(3000), mp3]), "audio.mp3", "as-is"], ["ADTS AAC behind 3000 zero bytes (no sniff; a fallback demuxer reads it)", Buffer.concat([Buffer.alloc(3000), adts]), "audio.aac", "flac"], ["Ogg behind an ID3 tag and 3000 zero bytes (sniffed as mp3; only the ogg fallback reads it)", id3(Buffer.concat([Buffer.alloc(3000), ogg])), "audio.mp3", "flac"]];
         for (const [label, b, name, how] of cases) {
           for (const slug of ["transcribe", "transcribe-pro"]) {
             let p = null, err = null;
