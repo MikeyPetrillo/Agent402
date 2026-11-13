@@ -1703,7 +1703,7 @@ function resolveRefsTooLarge() {
 }
 
 function newResolveReport(budget) {
-  return { resolved: 0, circular: [], unresolved: [], external: [], has: { circular: new Set(), unresolved: new Set(), external: new Set() }, budget: budget || { bytes: 0, steps: 0, sliceStart: performance.now() }, memo: new Map() };
+  return { resolved: 0, circular: [], unresolved: [], external: [], has: { circular: new Set(), unresolved: new Set(), external: new Set() }, budget: budget || { bytes: 0, steps: 0, sliceStart: performance.now() }, memo: new Map(), pointers: new Map() };
 }
 
 // Approximate serialized size of one output value: a floor on its JSON length.
@@ -1775,7 +1775,18 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
       chargeResolved(report, ref.length + 11);
       return node;
     }
-    const target = jsonPointerLookup(root, ref);
+    // A pointer is walked once per call: the lookup splits and unescapes one
+    // segment per "/", a cost in the ref's length that neither the byte charge
+    // nor the node count sees, and a ref inside a cycle is met again on every
+    // pass round it (nothing in a cycle is reused). Its length is charged to
+    // the step budget on that one walk, and every later meeting reads the cache.
+    let target;
+    if (report.pointers.has(ref)) target = report.pointers.get(ref);
+    else {
+      target = jsonPointerLookup(root, ref);
+      report.pointers.set(ref, target);
+      await chargeReplay(budget, ref.length);
+    }
     if (target === undefined) {
       addRef(report, "unresolved", ref);
       chargeResolved(report, ref.length + 11);
@@ -1792,6 +1803,7 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
     }
     const sub = newResolveReport(report.budget);
     sub.memo = report.memo;
+    sub.pointers = report.pointers;
     const before = report.budget.bytes;
     // One path set for the whole walk: the ref is in it while its target is
     // walked and out of it after, so each step costs one add and one delete

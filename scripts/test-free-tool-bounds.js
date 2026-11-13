@@ -175,6 +175,28 @@ function rng(seed) {
   const rc = await loopHold(() => tool.handler({ spec: cyc }));
   ok(rc.err?.statusCode === 413, "resolve-refs: a doubling cycle is refused (" + rc.err?.statusCode + ")");
   ok(rc.turns >= 10 && rc.hold < BOUND_MS, "resolve-refs: the doubling cycle gave the event loop back " + rc.turns + " times (longest gap " + rc.hold.toFixed(0) + "ms)");
+  // A long pointer inside that cycle: met on every pass round it, walked once.
+  // 800 and 1,600 segments (a 47 KB and a 90 KB spec) cost what the bare
+  // cycle costs, inside the free tier's CPU bound, and the pointer's length
+  // is charged to the step budget.
+  for (const segs of [800, 1600]) {
+    const withPtr = doubling(24);
+    const ptr = "#/deep/" + Array(segs).fill("a").join("/");
+    for (let i = 0; i < 24; i++) withPtr.components.schemas["S" + i].properties.d = { $ref: ptr };
+    withPtr.components.schemas.S24 = { $ref: "#/components/schemas/S0" };
+    let node = { type: "string" }; for (let i = 0; i < segs; i++) node = { a: node };
+    withPtr.deep = node;
+    const parsed = JSON.parse(JSON.stringify(withPtr));
+    const rp = await bestOf(() => tool.handler({ spec: parsed }));
+    ok(rp.err?.statusCode === 413 && rp.ms < BOUND_MS, `resolve-refs: a ${JSON.stringify(parsed).length}-byte doubling cycle holding a ${segs}-segment pointer is refused in ${rp.ms.toFixed(0)}ms of CPU (${rp.err?.statusCode})`);
+  }
+  {
+    const { __resolveRefsBudgetForTest } = await import("../src/tools/api-kit.js");
+    const ptr = "#/deep/" + Array(400).fill("a").join("/");
+    let node = 1; for (let i = 0; i < 400; i++) node = { a: node };
+    const steps = (await __resolveRefsBudgetForTest({ deep: node, p: { $ref: ptr } })).steps - (await __resolveRefsBudgetForTest({ deep: node, p: 1 })).steps;
+    ok(steps >= ptr.length, `resolve-refs: a pointer's walk is charged to the step budget (${steps} steps for a ${ptr.length}-character pointer)`);
+  }
   const cycSmall = doubling(10); cycSmall.components.schemas.S10 = { $ref: "#/components/schemas/S0" };
   ok(JSON.stringify(await tool.handler({ spec: cycSmall })) === JSON.stringify(oldAnswer(cycSmall)), "resolve-refs: a ten-level doubling cycle answers as the full walk did");
   // One long string referenced many times.
