@@ -103,9 +103,14 @@ export function paymentReplayKey(req) {
     const p = decodePaymentHeader(cred);
     const auth = p?.payload?.authorization;
     const nonce = auth?.nonce;
-    if (typeof nonce === "string" && nonce) {
+    // An EIP-3009 nonce is an identity only on a network that settles one. A
+    // signed-transaction payment (Solana, Algorand, Stellar), or a header
+    // naming no network, keys on what its chain consumes below, so an
+    // authorization block beside it cannot give one payment a second key.
+    const authNetwork = p?.accepted?.network || p?.network || p?.payload?.network;
+    if (typeof nonce === "string" && nonce && isEvmNetworkName(authNetwork)) {
       const n = nonce.toLowerCase();
-      const network = p?.accepted?.network || p?.network || p?.payload?.network || "?";
+      const network = authNetwork;
       const rawFrom = typeof auth?.from === "string" ? auth.from.trim() : "";
       const from = /^0x[0-9a-fA-F]{40}$/.test(rawFrom) ? rawFrom.toLowerCase() : rawFrom;
       const id = createHash("sha256").update(`${network}\n${from}\n${n}`).digest("hex");

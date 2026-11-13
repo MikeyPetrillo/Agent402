@@ -293,5 +293,90 @@ try {
   } finally { s10.close(); local.stop(); }
 }
 
+// 11. A credits buyer that leaves AFTER the first byte: the response went out
+// in part, "finish" never comes, and the gate debits the 200 as the response
+// ends. Mounted as the server mounts it (hang-up hook, credits gate,
+// idempotency). The answer must be committed before the claim is let go, so a
+// retry with the same key replays it: one run, one debit.
+{
+  const DIR11 = mkdtempSync(join(tmpdir(), "test-idem-after-headers-"));
+  const debits11 = [];
+  const cr11 = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR11, onDebit: (d) => debits11.push(d), onLoad: () => {}, log: () => {} });
+  const KEY11 = (await cr11.claim("cs_paid")).key;
+  const { createHangupSettlementHook } = await import("../src/hangup-settlement.js");
+  let runs11 = 0;
+  const app11 = express();
+  app11.use(express.json());
+  app11.use(createHangupSettlementHook({ onUndelivered: () => {} }));
+  // /api/forgiven holds a granted hang-up ticket (src/hangup-forgiveness.js).
+  app11.use((req, _res, next) => { if (req.path === "/api/forgiven") Object.defineProperty(req, "__a402HangupTicket", { value: { granted: true }, configurable: true }); next(); });
+  const PATHS11 = new Set(["/api/big", "/api/cut", "/api/forgiven"]);
+  app11.use(cr11.gate((method, path) => (PATHS11.has(path) ? { priceUsd: PRICE, slug: "big" } : null)));
+  // The store's write takes a Redis-like round trip: the claim must outlast it.
+  const { createLocalIdempotencyStore } = await import("../src/idempotency-store.js");
+  const local11 = createLocalIdempotencyStore();
+  const slow11 = { ...local11, get: (k) => local11.get(k), claim: (k) => local11.claim(k), renew: (k) => local11.renew(k), release: (k) => local11.release(k),
+    set: (k, b, n) => new Promise((r) => setTimeout(() => r(local11.set(k, b, n)), 200)) };
+  app11.use(createIdempotency({ isCatalogRoute: (req) => PATHS11.has(req.path), freeMode: false, store: slow11 }));
+  // A buyer that leaves before the first byte with a granted ticket is not
+  // charged: that answer is no receipt and must not be replayed.
+  app11.post("/api/forgiven", (req, res) => { const n = ++runs11; res.once("close", () => setTimeout(() => res.json({ run: n }), 10)); });
+  // /api/cut: the answer is ended on a live socket, then the socket closes
+  // before its write completes (no "finish"), as a buyer that read the
+  // headers and left does.
+  app11.post("/api/cut", (req, res) => {
+    const n = ++runs11;
+    const emit = res.emit;
+    res.emit = function noFinish(ev, ...args) { return ev === "finish" ? true : emit.call(this, ev, ...args); };
+    res.json({ run: n });
+    setImmediate(() => req.socket.destroy());
+  });
+  // /api/big: a real client that reads the headers of a large answer and
+  // aborts while the body is still being written.
+  app11.post("/api/big", (req, res) => { const n = ++runs11; res.json({ run: n, pad: "x".repeat(900 * 1024) }); });
+  const s11 = app11.listen(0);
+  await new Promise((r) => s11.once("listening", r));
+  const base = `http://127.0.0.1:${s11.address().port}`;
+  const hdr = (k) => ({ "content-type": "application/json", authorization: `Bearer ${KEY11}`, "idempotency-key": k });
+  const settle = () => new Promise((r) => setTimeout(r, 60));
+  try {
+    const first = await fetch(`${base}/api/cut`, { method: "POST", headers: hdr("k-cut"), body: "{}" }).then((r) => r.text().then(() => "read", () => "cut"), () => "cut");
+    await waitFor(() => debits11.length >= 1); await settle();
+    ok(debits11.length === 1, `the first call is debited once though its client left after headers (debits ${debits11.length}, first ${first})`);
+    const soon = await fetch(`${base}/api/cut`, { method: "POST", headers: hdr("k-cut"), body: "{}" });
+    await soon.text();
+    ok(runs11 === 1 && (soon.status === 409 || soon.headers.get("x-idempotent-replay") === "true"), `a retry while the answer is still being written gets 409 or the answer, never a second run (status ${soon.status}, runs ${runs11})`);
+    await new Promise((r) => setTimeout(r, 300));
+    const retry = await fetch(`${base}/api/cut`, { method: "POST", headers: hdr("k-cut"), body: "{}" });
+    const rb = await retry.json().catch(() => ({}));
+    await settle();
+    ok(retry.status === 200 && retry.headers.get("x-idempotent-replay") === "true" && rb.run === 1, `the retry with the same key replays the answer (status ${retry.status}, replay ${retry.headers.get("x-idempotent-replay")}, run ${rb.run})`);
+    ok(runs11 === 1 && debits11.length === 1, `one run and one debit after a hang-up past the first byte (runs ${runs11}, debits ${debits11.length})`);
+
+    const runs0 = runs11, debits0 = debits11.length;
+    const ac = new AbortController();
+    const r1 = await fetch(`${base}/api/big`, { method: "POST", headers: hdr("k-big"), body: "{}", signal: ac.signal });
+    ac.abort();
+    await r1.text().catch(() => {});
+    await waitFor(() => debits11.length >= debits0 + 1); await new Promise((r) => setTimeout(r, 300));
+    const r2 = await fetch(`${base}/api/big`, { method: "POST", headers: hdr("k-big"), body: "{}" });
+    const b2 = await r2.json().catch(() => ({}));
+    await settle();
+    ok(r2.status === 200 && r2.headers.get("x-idempotent-replay") === "true" && b2.run === runs0 + 1 && runs11 === runs0 + 1 && debits11.length === debits0 + 1, `a real client aborting a large answer after its headers is debited once and its retry replays (status ${r2.status}, replay ${r2.headers.get("x-idempotent-replay")}, runs +${runs11 - runs0}, debits +${debits11.length - debits0})`);
+
+    const runsF = runs11, debitsF = debits11.length;
+    const acF = new AbortController();
+    const f1 = fetch(`${base}/api/forgiven`, { method: "POST", headers: hdr("k-forgiven"), body: "{}", signal: acF.signal }).catch(() => "aborted");
+    await waitFor(() => runs11 === runsF + 1);
+    acF.abort(); await f1;
+    await new Promise((r) => setTimeout(r, 300));
+    ok(debits11.length === debitsF, `a buyer gone before the first byte with a granted ticket is not debited (debits +${debits11.length - debitsF})`);
+    fetch(`${base}/api/forgiven`, { method: "POST", headers: hdr("k-forgiven"), body: "{}" }).catch(() => {});
+    await waitFor(() => runs11 === runsF + 2);
+    ok(runs11 === runsF + 2, `...and its retry runs fresh: the uncharged answer was not stored as a receipt (runs +${runs11 - runsF})`);
+    acF.abort();
+  } finally { s11.closeAllConnections?.(); s11.close(); local11.stop(); rmSync(DIR11, { recursive: true, force: true }); }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

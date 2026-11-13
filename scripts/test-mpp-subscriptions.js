@@ -139,6 +139,7 @@ const advance = (ms) => { clock += ms; };
 
 function makeEngine(opts = {}) {
   const calls = { activate: 0, charge: 0, sales: [] };
+  const usedCreds = new Set();
   let chargeBehaviour = () => ({ reference: `0xtx${calls.charge}` });
   let findBehaviour = { found: false };
   const engine = createMppSubscriptions({
@@ -151,6 +152,8 @@ function makeEngine(opts = {}) {
     activate: async (header, ctx) => {
       calls.activate++;
       if (opts.activateThrows) throw new Error("simulated settlement failure: node said no");
+      // mppx claims a credential once: a second activation of it is refused.
+      if (opts.oneUse) { const sig = ctx.binding.credential.payload.signature; if (usedCreds.has(sig)) throw new Error("subscription credential has already been used"); usedCreds.add(sig); }
       // What mppx's own activation persists after the first on-chain transfer.
       await engine._subStore.put({
         accessKey: { accessKeyAddress: ctx.accessKey.accessKeyAddress, keyType: ctx.accessKey.keyType },
@@ -384,6 +387,43 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   // subscription or a second charge.
   const again = await engine.activateFromCredential(liveHeader);
   ok(again.replay === true && again.subId === liveSubId && calls.activate === 1 && calls.sales.length === 1, "replaying the activation credential returns the existing subscription and charges nothing again");
+}
+
+// A first payment that settled (mppx wrote its record) but whose record of ours
+// was never written: the retry of the same credential is refused by mppx as
+// used, so the engine rebuilds its record from mppx's and hands the paid
+// subscription back, never "nothing was charged".
+{
+  const lost = makeEngine({ name: "lost-house-record", oneUse: true });
+  const { engine, calls } = lost;
+  const offer = await engine.mintOffer({ product: "domain-monitor", target: "example.org", email: "lost@example.com" });
+  const signed = await signCredential(Challenge.deserialize(offer.header));
+  const put = engine._store.put.bind(engine._store);
+  let failOnce = true;
+  engine._store.put = async (k, v) => { if (failOnce && String(k).startsWith("a402:sub:mpp_")) { failOnce = false; throw new Error("simulated store failure"); } return put(k, v); };
+  let firstErr = null;
+  try { await engine.activateFromCredential(signed.header); } catch (e) { firstErr = e; }
+  engine._store.put = put;
+  ok(firstErr && calls.activate === 1 && calls.sales.length === 0, `setup: the first payment settled and our record write failed (${firstErr?.message})`);
+  let again = null, againErr = null;
+  try { again = await engine.activateFromCredential(signed.header); } catch (e) { againErr = e; }
+  ok(!againErr && again?.status === "active" && again.replay === true && typeof again.manageToken === "string", `the retry hands back the paid subscription, rebuilt from mppx's record (${againErr ? `${againErr.statusCode} ${againErr.message}` : again?.status})`);
+  ok(calls.activate === 1 && calls.sales.length === 1 && calls.sales[0].tx === "0xactivation" && calls.sales[0].payer === signed.account.address.toLowerCase(), `nothing settles twice and the first payment is booked once (activations ${calls.activate}, sales ${calls.sales.length})`);
+  const rec = engine.get(again?.subId);
+  ok(rec && rec.product === "domain-monitor" && rec.target === "example.org" && rec.email === "lost@example.com" && rec.billingAnchor && rec.lastChargedPeriod === 0, "the rebuilt record carries the binding and mppx's billing anchor");
+  const third = await engine.activateFromCredential(signed.header);
+  ok(third.replay === true && third.subId === again.subId && calls.sales.length === 1, "a further retry finds the rebuilt record and books nothing");
+  // mppx's record says the subscription was canceled since: rebuilt as canceled.
+  const offer2 = await engine.mintOffer({ product: "domain-monitor", target: "example.net", email: "lost@example.com" });
+  const signed2 = await signCredential(Challenge.deserialize(offer2.header));
+  failOnce = true;
+  engine._store.put = async (k, v) => { if (failOnce && String(k).startsWith("a402:sub:mpp_")) { failOnce = false; throw new Error("simulated store failure"); } return put(k, v); };
+  try { await engine.activateFromCredential(signed2.header); } catch { /* setup */ }
+  engine._store.put = put;
+  const mrec = await engine._subStore.get(`sub-${calls.activate}`);
+  await engine._subStore.put({ ...mrec, canceledAt: new Date(clock).toISOString() });
+  const canceled = await engine.activateFromCredential(signed2.header);
+  ok(canceled.replay === true && canceled.status === "canceled" && engine.get(canceled.subId)?.status === "canceled", `a settled record mppx has since canceled is rebuilt canceled, not active (${canceled.status})`);
 }
 
 // ---------------------------------------------------------------------------

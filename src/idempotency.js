@@ -213,6 +213,20 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     maxTimer = setTimeout(releaseClaim, INFLIGHT_MAX_MS);
     maxTimer.unref?.();
     const socketGone = () => Boolean(res.destroyed || !res.socket || res.socket.destroyed);
+    // Whether the client left before any byte went out. That case is the
+    // undelivered path below (committed under its booked debt, if charged);
+    // a client that left once headers were out was answered in part, its
+    // 200 is charged as one, and it is committed as one (endedGone).
+    let goneBeforeHeaders = false;
+    res.once("close", () => { if (!res.headersSent) goneBeforeHeaders = true; });
+    // A 200 whose "finish" will not come (the socket closed after headers):
+    // the gates decided its charge on the same final status, so the answer is
+    // committed here, before the claim is let go, and a retry with the same
+    // key replays it instead of running and being charged again.
+    const endedGone = () => {
+      if (!goneBeforeHeaders) commit();
+      setImmediate(releaseClaim);
+    };
     const priorEnd = res.end;
     res.end = function idempotencyAwareEnd(...args) {
       const out = priorEnd.apply(this, args);
@@ -225,14 +239,16 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
         if (res.statusCode !== 200) releaseClaim();
         // Ended on a live socket: "finish" commits, then releases. Ended after
         // the client left (no "finish" comes): an undelivered commit ran inside
-        // the call above, so release once its write lands.
-        else if (socketGone()) setImmediate(releaseClaim);
+        // the call above; a client that left after headers is committed now.
+        // Either way the release waits for the write to land.
+        else if (socketGone()) endedGone();
       }
       return out;
     };
     // The socket closed after the response was ended (its "finish" may never
-    // come): the run is over. A close before the end leaves the claim held.
-    res.once("close", () => { if (ended) setImmediate(releaseClaim); });
+    // come): the run is over, and its 200 is committed as above. A close
+    // before the end leaves the claim held.
+    res.once("close", () => { if (ended) endedGone(); });
     // Settlement-aware caching (FR4-01). @x402/express (v2.16) runs the handler
     // FIRST, then settles, and ONLY on a <400 response; on settlement FAILURE it
     // replaces the buffered 200 with a 402. So committing to the cache at
