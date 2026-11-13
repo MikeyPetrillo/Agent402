@@ -144,7 +144,7 @@
     "src/tools/market-tick-kit.js": "2026-10-20",
     "src/tools/mcp-package-kit.js": "2026-11-13",
     "src/tools/media-kit.js": "2026-11-13",
-    "src/tools/memory.js": "2026-10-11",
+    "src/tools/memory.js": "2026-11-13",
     "src/tools/mev-and-l2-kit.js": "2026-11-04",
     "src/tools/moderate-kit.js": "2026-11-11",
     "src/tools/network-kit.js": "2026-11-04",
