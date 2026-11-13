@@ -39,20 +39,27 @@ export function applyObservationsSnapshot(rows) {
 }
 
 // The bodies our own readers built in place of the seller's (cut at our byte
-// limit, or unreadable). A WeakSet of the objects themselves: a seller's JSON
-// can carry `_truncated` or `relayError`, but never one of these identities.
-const NOT_SELLER_BODY = new WeakSet();
-// The stand-ins whose `value` key is our own wrapper around a cut JSON prefix
-// that was not an object (an array or a scalar). Known by identity, as above:
-// a seller's own top-level `value` key is never read as our wrapper.
-const WRAPPED_VALUE = new WeakSet();
+// limit, or unreadable), each with the kind of stand-in it is. A WeakMap keyed
+// on the objects themselves: a seller's JSON can carry `_truncated`,
+// `relayError`, `raw`, `text` or `value`, but never one of these identities,
+// so a stand-in's kind is read from the mark, never from its keys.
+//   json        a cut JSON object prefix plus our `_truncated` key (default)
+//   wrapped     our `{ value }` wrapper around a cut prefix that was not an
+//               object (an array or a scalar)
+//   unreadable  our `{ relayError }`: the body could not be read at all
+//   raw         the x402 reader's `{ raw[, _truncated] }` reading of bytes
+//               that were not JSON
+//   text        the Tempo reader's `{ text, truncated, contentType, sha256 }`
+//               reading of bytes that were not JSON
+const NOT_SELLER_BODY = new WeakMap();
+const STAND_IN_KINDS = new Set(["json", "wrapped", "unreadable", "raw", "text"]);
 /** Mark a body our reader cut or could not read, so delivery is not judged on
- *  it. `{ wrapped: true }` says its `value` key is our wrapper around a
- *  non-object prefix. Returns the body. */
-export function markNotSellerBody(body, { wrapped = false } = {}) {
+ *  it, with the kind of stand-in it is (above). `{ wrapped: true }` is the
+ *  same as `{ kind: "wrapped" }`. Returns the body. */
+export function markNotSellerBody(body, { kind, wrapped = false } = {}) {
   if (body && typeof body === "object") {
-    NOT_SELLER_BODY.add(body);
-    if (wrapped) WRAPPED_VALUE.add(body);
+    const k = wrapped ? "wrapped" : kind;
+    NOT_SELLER_BODY.set(body, STAND_IN_KINDS.has(k) ? k : "json");
   }
   return body;
 }
@@ -60,16 +67,17 @@ export function markNotSellerBody(body, { wrapped = false } = {}) {
 /** What the seller sent, read back from a stand-in our readers built:
  *  { unreadable }, { text, cut } (the Tempo reader's text reading, the x402
  *  reader's { raw }) or { json, cut } (a JSON prefix cut at our byte limit,
- *  our `_truncated` key taken off, and our `{ value }` wrapper only when the
- *  reader marked it as ours: never by the key's name). */
+ *  our `_truncated` key taken off, or the value inside our `{ value }`
+ *  wrapper). The branch is chosen by the mark our reader set, never by a
+ *  key's name, so a seller's cut prefix is always judged as its own JSON. */
 function standInSent(body) {
-  const keys = Object.keys(body);
-  const only = (...names) => keys.length === names.length && names.every((n) => keys.includes(n));
-  if (only("relayError")) return { unreadable: true };
-  if (only("text", "truncated", "contentType", "sha256") && typeof body.text === "string") return { text: body.text, cut: body.truncated === true };
-  if ((only("raw") || only("raw", "_truncated")) && typeof body.raw === "string") return { text: body.raw, cut: body._truncated === true };
-  const { _truncated, ...rest } = body;
-  return { json: WRAPPED_VALUE.has(body) ? body.value : rest, cut: _truncated === true };
+  switch (NOT_SELLER_BODY.get(body)) {
+    case "unreadable": return { unreadable: true };
+    case "text": return { text: String(body.text ?? ""), cut: body.truncated === true };
+    case "raw": return { text: String(body.raw ?? ""), cut: body._truncated === true };
+    case "wrapped": return { json: body.value, cut: body._truncated === true };
+    default: { const { _truncated, ...rest } = body; return { json: rest, cut: _truncated === true }; }
+  }
 }
 
 /** Is a dotted path present in a parsed JSON body?

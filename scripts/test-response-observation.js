@@ -203,7 +203,7 @@ ok(o.lastMissing.join(",") === "data.attributes",
   // a route that promised JSON paths and answered prose is a missed promise.
   observeDelivery({ origin: o, method: "POST", route: "/raw", guaranteedPaths: ["raw"], body: prose });
   ok(deliveryObservation(o, "POST", "/raw")?.calls === 1 && deliveryObservation(o, "POST", "/raw")?.kept === 0, "a whole non-JSON body on a JSON route is observed as a missed promise, never kept by our `raw` key");
-  const tempoTextForTest = (text, truncated) => markNotSellerBodyFor({ text, truncated, contentType: "text/plain", sha256: "0" });
+  const tempoTextForTest = (text, truncated) => markNotSellerBodyFor({ text, truncated, contentType: "text/plain", sha256: "0" }, { kind: "text" });
   observeDelivery({ origin: o, method: "POST", route: "/tt", guaranteedPaths: ["text"], body: tempoTextForTest("prose", false) });
   ok(deliveryObservation(o, "POST", "/tt")?.kept === 0, "and so is the Tempo reader's whole text reading, never kept by our `text` key");
   observeDelivery({ origin: o, method: "POST", route: "/tc", guaranteedPaths: ["text"], body: tempoTextForTest("prose", true) });
@@ -284,16 +284,16 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(unpaidNonAnswerReason({ ok: false, errors: ["bad checksum"] }, ["ok", "errors"]) === null, "keys the seller's contract guarantees are its answer");
   // Our readers' stand-ins are judged on the seller's bytes, never on our keys.
   const { markNotSellerBody } = await import("../src/response-observation.js");
-  const tempoText = (text, truncated = false) => markNotSellerBody({ text, truncated, contentType: "text/plain", sha256: "0" });
+  const tempoText = (text, truncated = false) => markNotSellerBody({ text, truncated, contentType: "text/plain", sha256: "0" }, { kind: "text" });
   for (const [label, body, paths, why] of [
     ["an empty body read as text", tempoText(""), [], "empty"],
     ["a blank body read as text", tempoText(" \n\t"), [], "empty"],
     ["an error envelope sent as text", tempoText('{"error":"down"}'), [], "error-shaped"],
     ["a challenge sent as text", tempoText(JSON.stringify(challenge)), [], "challenge"],
     ["text when the seller promised a path our key names", tempoText("hello"), ["text"], "missing-fields"],
-    ["an x402 reader's empty { raw }", markNotSellerBody({ raw: "" }), [], "empty"],
-    ["an x402 reader's { raw } error envelope", markNotSellerBody({ raw: '{"ok":false}' }), [], "error-shaped"],
-    ["a body our reader could not read", markNotSellerBody({ relayError: "upstream body unreadable" }), ["relayError"], "unreadable"],
+    ["an x402 reader's empty { raw }", markNotSellerBody({ raw: "" }, { kind: "raw" }), [], "empty"],
+    ["an x402 reader's { raw } error envelope", markNotSellerBody({ raw: '{"ok":false}' }, { kind: "raw" }), [], "error-shaped"],
+    ["a body our reader could not read", markNotSellerBody({ relayError: "upstream body unreadable" }, { kind: "unreadable" }), ["relayError"], "unreadable"],
     ["a cut JSON prefix holding only an error", markNotSellerBody({ error: "x", _truncated: true }), [], "error-shaped"],
     ["a cut JSON prefix where the seller promised our key", markNotSellerBody({ note: "n", _truncated: true }), ["_truncated"], "missing-fields"],
   ]) {
@@ -331,6 +331,35 @@ ok(o.lastMissing.join(",") === "data.attributes",
   ok(unpaidNonAnswerReason(markNotSellerBody({ value: [1, 2], _truncated: true }), ["data.price"]) === "missing-fields", "a cut prefix whose own key is `value` answers none of the promised paths");
   ok(unpaidNonAnswerReason(markNotSellerBody({ value: "text", _truncated: true }), ["data.price"]) === "missing-fields", "nor does one holding a string under `value`");
   ok(unpaidNonAnswerReason(markNotSellerBody({ value: { price: 1 }, _truncated: true }), ["value.price"]) === null, "control: a seller that promised `value.price` and sent it is answered");
+  // A seller's cut JSON prefix whose own keys share our stand-ins' names
+  // (`raw`, `text`, `value`, `truncated`, `relayError`) is still the seller's
+  // JSON: the reader's mark says what a stand-in is, never its keys.
+  {
+    const { readAfterSpend: readSeller } = await import("../src/x402-buyer.js");
+    const pad = " ".repeat(200);
+    const o2 = "https://keyshape.example";
+    const shapes = [
+      ["raw", { raw: JSON.stringify({ data: { price: 1 } }) }],
+      ["raw + _truncated", { raw: JSON.stringify({ data: { price: 1 } }), _truncated: false }],
+      ["text set", { text: JSON.stringify({ data: { price: 1 } }), truncated: false, contentType: "application/json", sha256: "0" }],
+      ["value", { value: { data: { price: 1 } } }],
+      ["relayError", { relayError: "upstream body unreadable" }],
+    ];
+    for (const [label, doc] of shapes) {
+      const cutDoc = await readSeller(new Response(JSON.stringify(doc) + pad), JSON.stringify(doc).length + 8);
+      ok(cutDoc?._truncated === true, `key shape ${label}: the seller's padded JSON is cut (setup)`);
+      const route = `/ks-${label.replace(/\W+/g, "-")}`;
+      observeDelivery({ origin: o2, method: "POST", route, guaranteedPaths: ["data.price"], body: cutDoc });
+      const rec = deliveryObservation(o2, "POST", route);
+      ok(rec?.calls === 1 && rec?.kept === 0 && rec?.unverifiable === 0, `key shape ${label}: a cut seller prefix is judged as the seller's own JSON, a missed promise (${JSON.stringify(rec)})`);
+      ok(unpaidNonAnswerReason(cutDoc, ["data.price"]) === "missing-fields", `key shape ${label}: an unpaid cut prefix answers none of the promised paths`);
+    }
+    // Controls: our own readings, marked by our readers, are read back.
+    const ours = await readSeller(new Response(JSON.stringify({ data: { price: 1 } }).slice(0, -1) + "x"), 4096);
+    ok(typeof ours?.raw === "string" && unpaidNonAnswerReason(ours, []) === null, "control: our own { raw } reading of non-JSON bytes is read as text");
+    const unreadable = await readSeller(new Response(new ReadableStream({ start(c) { c.error(new Error("reset")); } })), 64);
+    ok(unpaidNonAnswerReason(unreadable, ["data.price"]) === "unreadable", "control: our own unreadable stand-in is unreadable");
+  }
   const { readAfterSpend: readCut } = await import("../src/x402-buyer.js");
   const cutNumber = await readCut(new Response("7".repeat(500)), 64);
   ok(unpaidNonAnswerReason(cutNumber, ["value"]) === "missing-fields", "our own wrapper around a cut number never meets a promised `value` path");

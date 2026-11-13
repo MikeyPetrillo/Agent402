@@ -371,13 +371,13 @@ async function readCapped(res, maxBytes) {
 // The buyer gets a 200 (is charged, covering our spend) with a best-effort body.
 export async function readAfterSpend(res, maxBytes) {
   let read;
-  try { read = await readBytesCapped(res, byteCeilingFor(maxBytes)); } catch { return markNotSellerBody({ relayError: "upstream body unreadable" }); }
+  try { read = await readBytesCapped(res, byteCeilingFor(maxBytes)); } catch { return markNotSellerBody({ relayError: "upstream body unreadable" }, { kind: "unreadable" }); }
   const text = decodeUtf8(read.bytes);
   const truncated = read.truncated || text.length > maxBytes;
   const body = truncated ? text.slice(0, maxBytes) : text;
   try { const j = JSON.parse(body); return truncated ? (j && typeof j === "object" && !Array.isArray(j) ? markNotSellerBody({ ...j, _truncated: true }) : markNotSellerBody({ value: j, _truncated: true }, { wrapped: true })) : j; }
   // Not JSON: { raw } is our own reading of the bytes, never the seller's body.
-  catch { return markNotSellerBody(truncated ? { raw: body.slice(0, 4000), _truncated: true } : { raw: body.slice(0, 4000) }); }
+  catch { return markNotSellerBody(truncated ? { raw: body.slice(0, 4000), _truncated: true } : { raw: body.slice(0, 4000) }, { kind: "raw" }); }
 }
 
 // REFUSE-THEN-SETTLE-LATE (2026-09-03). A refused paid retry falls through to

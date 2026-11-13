@@ -626,7 +626,7 @@ export async function payTempo(url, {
     // A paid 200 is relayed even when its body cannot be read: the payment
     // went through, so this never throws (the x402 readAfterSpend rule).
     let result;
-    try { result = await readCapped(paid, maxBytes); } catch { result = markNotSellerBody({ relayError: "upstream body unreadable" }); }
+    try { result = await readCapped(paid, maxBytes); } catch { result = markNotSellerBody({ relayError: "upstream body unreadable" }, { kind: "unreadable" }); }
     return {
       result,
       quote: { atomic: String(quotedAtomic), usd: Number(quotedAtomic) / 1e6, network: TEMPO_CAIP2 },
@@ -673,5 +673,5 @@ async function readCapped(res, maxBytes) {
   }
   // Not JSON: this object is our own reading of the bytes, cut or whole, never
   // the seller's body, so no path the seller promised is met by its keys.
-  return markNotSellerBody({ text, truncated, contentType: ct, sha256: createHash("sha256").update(buf).digest("hex") });
+  return markNotSellerBody({ text, truncated, contentType: ct, sha256: createHash("sha256").update(buf).digest("hex") }, { kind: "text" });
 }
