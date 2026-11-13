@@ -312,7 +312,27 @@ function namesOf(key) {
 // (each header's own hash; for a nonce key, the network an unsigned field of
 // the header names, which a sender can spell any way).
 const localKeyOf = (key) => (/^(?:s2|p2|t2|n2):/.test(String(key)) ? namesOf(key).primary : key);
-const isLegacyEntry = (v) => v != null && !String(v).startsWith(LEGACY_TAG);
+// Whether an entry read at `names.legacy` holds the payment `names` keys.
+// A bare entry is an earlier build's and always does. A tagged entry names
+// the primary of the build that wrote it: one naming this key's own primary
+// adds nothing to the entry already read at the primary name. One naming
+// another primary of the same key family ("p2:", "t2:", "s2:"), at a legacy
+// name that is the hash of the credential itself ("c:"), was written for
+// this very header by a build that derives that family's identity another
+// way, so it holds this payment across a deploy that changes the derivation.
+// A nonce key's legacy name ("n:") is shared by every payer that signs the
+// nonce, so a tagged entry there under another primary is another payer's and
+// never holds this one; nor does an entry tagged by another family.
+const familyOf = (name) => /^(s2|p2|t2):[0-9a-f]{64}$/.exec(String(name))?.[1] ?? null;
+function isLegacyEntry(v, names) {
+  if (v == null) return false;
+  const entry = String(v);
+  if (!entry.startsWith(LEGACY_TAG)) return true;
+  if (!names || !String(names.legacy).startsWith("c:")) return false;
+  const holder = entry.slice(LEGACY_TAG.length).split("|")[0];
+  const family = familyOf(names.primary);
+  return family !== null && holder !== names.primary && familyOf(holder) === family;
+}
 
 // A settled payment's consumed mark is kept at least this long. /privacy and
 // the dataHandling list on /.well-known/x402 quote it.
@@ -677,14 +697,15 @@ export function createReplayGuard({
       const c = await getSharedRedisClient();
       if (!c && requireShared && sharedLimitEnabled()) return "unavailable";
       if (c) {
-        const { primary, legacy } = namesOf(key);
+        const names = namesOf(key);
+        const { primary, legacy } = names;
         const token = randomUUID();
         const legacyTag = LEGACY_TAG + primary + "|" + token;
         let claimedPrimary = false;
         let legacyHeld = false;
         try {
           if (await c.get(REDIS_PREFIX + "c:" + primary)) return "consumed";
-          if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy))) return "consumed";
+          if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy), names)) return "consumed";
           // SET NX is the atomic claim: two replicas racing this same key
           // cannot both receive a non-null reply, which is exactly the
           // property inFlight.add() gave for free within one process.
@@ -696,13 +717,13 @@ export function createReplayGuard({
             // An earlier build's claim on this credential is honored; another
             // payer's tagged claim there is not ours to wait on.
             legacyHeld = Boolean(await c.set(REDIS_PREFIX + "f:" + legacy, legacyTag, { NX: true, EX: inflightTtlSeconds }));
-            if (!legacyHeld && isLegacyEntry(await c.get(REDIS_PREFIX + "f:" + legacy))) return back("inflight");
+            if (!legacyHeld && isLegacyEntry(await c.get(REDIS_PREFIX + "f:" + legacy), names)) return back("inflight");
           }
           // Read the consumed mark again under the claim: a settle writes its
           // mark before it drops its claim, so a settle that finished between
           // the first read and the claim is seen here.
           if (await c.get(REDIS_PREFIX + "c:" + primary)) return back("consumed");
-          if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy))) return back("consumed");
+          if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy), names)) return back("consumed");
           inFlight.add(lk);
           claims.set(key, { token, legacyTag, legacyHeld, shared: true });
           startRenew(key);
@@ -753,14 +774,15 @@ export function createReplayGuard({
       try {
         // Every name in one round trip (MGET): this read runs before the
         // paywall on a gateway cache candidate.
-        const { primary, legacy } = namesOf(key);
+        const keyNames = namesOf(key);
+        const { primary, legacy } = keyNames;
         const names = [REDIS_PREFIX + "c:" + primary, REDIS_PREFIX + "f:" + primary];
         if (legacy) names.push(REDIS_PREFIX + "c:" + legacy, REDIS_PREFIX + "f:" + legacy);
         const vals = typeof c.mGet === "function" ? await c.mGet(names) : await Promise.all(names.map((n) => c.get(n)));
         if (!Array.isArray(vals) || vals.length !== names.length) return local() || "unavailable";
         const [cP, fP, cL, fL] = vals;
-        if (cP || (legacy && isLegacyEntry(cL))) return "consumed";
-        if (fP || (legacy && isLegacyEntry(fL))) return "inflight";
+        if (cP || (legacy && isLegacyEntry(cL, keyNames))) return "consumed";
+        if (fP || (legacy && isLegacyEntry(fL, keyNames))) return "inflight";
         return local();
       } catch {
         return local() || "unavailable";
