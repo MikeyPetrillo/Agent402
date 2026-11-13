@@ -16,6 +16,14 @@
 // run already holds (req.tempoPushRefunded) is answered by server.js with its
 // own refunded body and is never rewritten. It never throws: any failure
 // sends the original body.
+//
+// The route binder writes first (prepayment-refusal.js withPushExceptionText):
+// for any push credential, claimed or not, it adds the push exception to the
+// shared sentence, which is what a payer reads when the gate refused before
+// claiming a transfer. On a claimed transfer this wrapper then replaces that
+// whole sentence, exception included, with the note below, so the payer reads
+// one statement of what is owed.
+import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 
 /** The sentence a push payer reads in place of "not charged". */
 const NOTE_BODY = "The Tempo transfer this credential names was claimed before the call ran, so this failure is recorded as a refund owed to the sending wallet; a retry is a new payment";
@@ -35,17 +43,27 @@ const CLAUSE = [
 // A sentence already scoped to another rail stays as written.
 const SCOPED = /\b(?:on|over) (?:x402|evm|card|credits)\b/i;
 
+// The shared sentence as the route binder leaves it for a push credential.
+const WITH_EXCEPTION = `Nothing was charged${PUSH_EXCEPTION}`;
+
 /** The text with every "not charged" claim restated for a push payer.
  *  Unchanged text is returned as is. */
 export function rewriteNotChargedForPush(text) {
   if (typeof text !== "string" || !/charged?\b/i.test(text)) return text;
-  let out = text.replace(STANDALONE, (m, scope, term) => (scope ? m : `${NOTE_BODY}${term}`));
+  // The binder's exception form is the standalone sentence again here, so it
+  // is replaced whole and never rewritten as a clause.
+  let out = text.split(WITH_EXCEPTION).join("Nothing was charged");
+  out = out.replace(STANDALONE, (m, scope, term) => (scope ? m : `${NOTE_BODY}${term}`));
   // Clause forms are rewritten sentence by sentence, so a scoped sentence
   // ("not charged on x402") is left alone while an unscoped one changes.
   out = out.split(/(?<=[.;!?])\s+/).map((sentence) => {
-    if (SCOPED.test(sentence) || sentence.includes(PUSH_FAILURE_NOTE)) return sentence;
+    // A sentence that already states the push case (the note, or the
+    // exception clause after any other wording) stays as written.
+    if (SCOPED.test(sentence) || sentence.includes(PUSH_FAILURE_NOTE) || sentence.includes(PUSH_EXCEPTION)) return sentence;
     let s = sentence;
     for (const [re, to] of CLAUSE) s = s.replace(re, to);
+    // A clause restated at the head of a sentence keeps the capital.
+    if (s !== sentence && /^[A-Z]/.test(sentence) && /^[a-z]/.test(s)) s = s[0].toUpperCase() + s.slice(1);
     return s;
   }).join(" ");
   return out;

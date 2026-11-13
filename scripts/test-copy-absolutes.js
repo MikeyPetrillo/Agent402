@@ -810,5 +810,61 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   for (const rel of CONVERTED) ok(/from "(?:\.\.?\/)+not-charged\.js"/.test(read(rel) || ""), `${rel} imports the shared sentence`);
 }
 
+// --- the shared sentence composes with the push rewrite, in every refusal ----
+// The route binder adds the push exception to the shared sentence for a push
+// credential, and the Tempo gate's send wrapper then restates the body for a
+// claimed transfer. Two rewrites of one sentence, so every refusal that
+// prints it through notChargedOn is rendered here the way the server renders
+// it: a claimed push payer reads the sentence replaced whole by the owed
+// note, and every other payer reads the message as written.
+{
+  const { renderRefusal, expectedForPush, malformed } = await import("./lib/push-refusal-render.js");
+  // The template literal around each notChargedOn call, with the call printed
+  // as on a route call and every other interpolation as a plain word.
+  function sharedSentenceMessages(src) {
+    const out = [];
+    for (const line of src.split("\n")) {
+      if (/^\s*(?:\/\/|\*|\/\*)/.test(line)) continue;
+      const printed = line.replace(/\$\{notChargedOn\(\w+\)\}/g, " Nothing was charged.");
+      let at = -1;
+      while ((at = printed.indexOf("Nothing was charged.", at + 1)) !== -1) {
+        const open = printed.lastIndexOf("`", at), close = printed.indexOf("`", at);
+        const inner = printed.slice(open + 1, close === -1 ? printed.length : close);
+        let msg = inner;
+        for (let prev = ""; prev !== msg;) { prev = msg; msg = msg.replace(/\$\{[^{}]*\}/g, "X"); }
+        // An interpolation that holds a string of its own ends the literal
+        // early: what is left is still the text around the sentence.
+        out.push(msg.replace(/^[^A-Z"]*/, "").replace(/\$\{.*$/, "").trim());
+      }
+    }
+    return out;
+  }
+  const bad = [];
+  let rendered = 0;
+  // The changelog quotes the sentence in prose; it is never a refusal.
+  for (const rel of files.filter((f) => /^src\/.*\.js$/.test(f) && f !== "src/not-charged.js" && f !== "src/changelog.js")) {
+    for (const msg of sharedSentenceMessages(read(rel) || "")) {
+      rendered++;
+      const push = renderRefusal(msg, "push"), other = renderRefusal(msg, "other"), unclaimed = renderRefusal(msg, "push-unclaimed");
+      const lower = (t) => (t.match(/[.!?] [a-z]/g) || []).length;
+      const why = push !== expectedForPush(msg) ? "the push rendering is not the sentence replaced by the owed note"
+        : other !== msg ? "a non-push payer does not read it as written"
+        : /nothing was charged|not charged/i.test(push) ? "a claimed push payer is told nothing was charged"
+        : (push.match(/\bowed\b/g) || []).length !== (msg.match(/\bowed\b/g) || []).length + 1 ? "the push rendering does not say \"owed\" exactly once"
+        : (unclaimed.match(/\bowed\b/g) || []).length !== (msg.match(/\bowed\b/g) || []).length + 1 ? "the exception form does not say \"owed\" exactly once"
+        : lower(push) > lower(msg) || lower(unclaimed) > lower(msg) ? "a rewrite starts a sentence in lower case"
+        : null;
+      if (why) bad.push(`${rel}: ${why}: ${push.slice(0, 160)}`);
+    }
+  }
+  const sample = "The decision service did not answer in time. Nothing was charged. Retry shortly.";
+  ok(sharedSentenceMessages("    throw bad(`The decision service did not answer in time.${notChargedOn(req)} Retry shortly.`, 503);")[0] === sample
+     && malformed("The decision service did not answer in time. the transfer you sent is recorded as owed, except a Tempo transfer sent before the call, which is recorded as owed. Retry shortly.", "push") !== null
+     && malformed(renderRefusal(sample, "push"), "push") === null,
+     "control: a refusal's message is read from its template, a doubled clause is malformed, and the composed rendering is not");
+  ok(rendered >= 45, `rendered ${rendered} shared-sentence refusals for each payer class (a collapsed reader must fail)`);
+  ok(bad.length === 0, `every refusal that prints the shared sentence reads as one statement to each payer class${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
+}
+
 console.log(`test-copy-absolutes: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

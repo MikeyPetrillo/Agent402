@@ -556,6 +556,12 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
     const { PUSH_EXCEPTION } = await import("../src/tempo-push-debts.js");
     const routed = await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "x", depth: "plan" }, mkReq()), 503, "right now. Nothing was charged. Retry shortly.", "a route call's unjudged-plan refusal carries the shared sentence");
     ok(withPushExceptionText(routed?.message, true).includes(`Nothing was charged${PUSH_EXCEPTION}.`), "...which the binder restates for a Tempo push payer");
+    // Binder then the Tempo gate's send wrapper: the text each payer reads.
+    const { renderRefusal, malformed } = await import("./lib/push-refusal-render.js");
+    const { PUSH_FAILURE_NOTE } = await import("../src/push-refusal-body.js");
+    const forPush = renderRefusal(routed?.message, "push");
+    ok(forPush === `The decision could not be judged right now. ${PUSH_FAILURE_NOTE} Retry shortly.` && malformed(forPush, "push") === null, `a claimed Tempo push payer reads the owed note in place of the sentence (${forPush})`);
+    ok(renderRefusal(routed?.message, "other") === "The decision could not be judged right now. Nothing was charged. Retry shortly.", "...and a payer on any other rail reads it as written");
     const step = await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "x", depth: "plan" }), 503, "could not be judged", "the same refusal on a request-less step call");
     ok(step && !/charged/i.test(step.message), `...says nothing about a charge (${step?.message})`);
     globalThis.fetch = async () => { throw new TypeError("fetch failed"); };

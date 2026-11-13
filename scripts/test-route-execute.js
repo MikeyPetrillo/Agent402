@@ -716,6 +716,14 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
       const slow = (nets) => async () => { await new Promise((r) => setTimeout(r, 700)); return [cand("sv.example", nets)]; };
       const { e, calls } = await run({ list: [], resolve: slow([SOL]), pay: good, chains: ["solana"], network: SOL });
       ok(e?.statusCode === 504 && /Nothing was spent\. Nothing was charged\./.test(e.message) && calls.length === 0, `Solana payer: a slow resolve is refused 504 before any payment (status ${e?.statusCode}, paid ${calls.length}x)`);
+      // Binder then the Tempo gate's send wrapper: the text each payer reads.
+      {
+        const { renderRefusal, malformed } = await import("./lib/push-refusal-render.js");
+        const { PUSH_FAILURE_NOTE } = await import("../src/push-refusal-body.js");
+        const forPush = renderRefusal(e?.message, "push");
+        ok(forPush === `Resolving an external seller used this payment's time budget. Nothing was spent. ${PUSH_FAILURE_NOTE} Retry with a fresh payment, or pay this route over an EVM rail.` && malformed(forPush, "push") === null, `the refusal's shared sentence reaches a claimed Tempo push payer as the owed note (${forPush})`);
+        ok(renderRefusal(e?.message, "other") === "Resolving an external seller used this payment's time budget. Nothing was spent. Nothing was charged. Retry with a fresh payment, or pay this route over an EVM rail.", "...and a payer on any other rail reads it as written");
+      }
       ok(guard.walletDailySpentUsd("solana") === 0, "Solana payer: the refusal books nothing on the chain's day");
       const b = await run({ list: [], resolve: slow(["eip155:8453"]), pay: good });
       ok(b.r?.receipt?.external === true && b.calls.length === 1, "CONTROL: the same slow resolve on a Base payer still pays");

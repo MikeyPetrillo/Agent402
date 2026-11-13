@@ -164,6 +164,12 @@ for (const w of wires) {
     const { withPushExceptionText } = await import("../src/prepayment-refusal.js");
     const { PUSH_EXCEPTION } = await import("../src/tempo-push-debts.js");
     ok(/payment window\. Nothing was charged\. Retry with a fresh payment\./.test(err?.message || "") && withPushExceptionText(err?.message, true).includes(`Nothing was charged${PUSH_EXCEPTION}.`), `the window refusal is the shared sentence the binder restates (${err?.message})`);
+    // Binder then the Tempo gate's send wrapper: the text each payer reads.
+    const { renderRefusal, malformed } = await import("./lib/push-refusal-render.js");
+    const { PUSH_FAILURE_NOTE } = await import("../src/push-refusal-body.js");
+    const forPush = renderRefusal(err?.message, "push");
+    ok(forPush === `The call did not finish within the payment window. ${PUSH_FAILURE_NOTE} Retry with a fresh payment.` && malformed(forPush, "push") === null, `a claimed Tempo push payer reads the owed note in place of the sentence (${forPush})`);
+    ok(renderRefusal(err?.message, "other") === "The call did not finish within the payment window. Nothing was charged. Retry with a fresh payment.", "...and a payer on any other rail reads it as written");
   }
   const { err: none } = await settle(async () => paymentWindowTimeoutMs(evmReq(6 + PAYMENT_WINDOW_TAIL_MS / 1000 - 1), 90_000));
   ok(none?.statusCode === 504, "no usable window at all: a 504 before any attempt");
