@@ -513,7 +513,7 @@ export const JUDGE_TOOLS = [{
   slug: "judge",
   category: "ai",
   price: "$0.001",
-  description: "Ask a typed question about any content and get an answer your code can branch on, not prose to parse. Send state (the content, a string or object) and questions (your own ids mapped to question objects); get back answers keyed by those ids. Three question types: choice (pick one of your named options: returns choice, probabilities per option and confidence), score (a position on levels you describe, lowest first: returns score as a fractional level index, probabilities per level index, confidence and a legend naming each level), and noul (a yes/no: returns noul, the probability of yes from 0 to 1). Up to 8 questions per call, answered in parallel over one piece of state. Use it for routing, triage, classification and gating decisions. Served by jev-latest (over a second route when its first is down), with Microsoft Decision-1 (microsoft-decision-1), Gemini Decision-1 (gemini-decision-1) and gpt-6-luna as fallbacks (name any one first with model); the answer names the model that served, and fallbackFrom when the first was unavailable. Model-backed, not deterministic.",
+  description: "Ask a typed question about any content and get an answer your code can branch on, not prose to parse. Send state (the content, a string or object) and questions (your own ids mapped to question objects); get back answers keyed by those ids. Three question types: choice (pick one of your named options: returns choice, probabilities per option and confidence), score (a position on levels you describe, lowest first: returns score as a fractional level index, probabilities per level index, confidence and a legend naming each level), and noul (a yes/no: returns noul, the probability of yes from 0 to 1). Up to 8 questions per call, answered in parallel over one piece of state. Use it for routing, triage, classification and gating decisions. Served by jev-latest, with Microsoft Decision-1 (microsoft-decision-1), Gemini Decision-1 (gemini-decision-1) and gpt-6-luna as fallbacks (name any one first with model); the answer names the model that served, and fallbackFrom when the first was unavailable. Model-backed, not deterministic.",
   tags: ["ai", "classify", "judgment", "routing", "extraction"],
   discovery: {
     bodyType: "json",
@@ -525,7 +525,7 @@ export const JUDGE_TOOLS = [{
       required: ["state", "questions"],
       properties: {
         state: { type: ["string", "object", "array"], description: `The content to judge. Up to ${LIMITS.stateChars} characters.` },
-        model: { type: "string", enum: [...MODELS], description: "Which model answers first; the others are fallbacks. jev-latest is the Jev version we have tested (the answer names it); jev-preview is the newer Jev release, which its maker labels a preview. microsoft-decision-1 is Microsoft Decision-1 and gemini-decision-1 is Gemini Decision-1, each a model-backed judgment, not deterministic. Defaults to jev-latest." },
+        model: { type: "string", enum: [...MODELS], description: "Which model answers first; the others are fallbacks. jev-latest is the Jev version we have tested (the answer names it); jev-preview is the newer Jev release, which its maker labels a preview. The Decision-1 models are model-backed judgments, not deterministic. Defaults to jev-latest." },
         questions: { type: "object", description: "Your own ids mapped to question objects. Each has type (choice/score/noul), instructions, and criteria for choice/score." },
       },
     },
