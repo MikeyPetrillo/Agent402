@@ -469,8 +469,11 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   const pro = STT_TOOLS.find((t) => t.slug === "transcribe-pro");
   for (const [label, extra] of [["keyterms list", { keyterms: ["Agent402"] }], ["keyterms string", { keyterms: "Agent402" }], ["entities", { entities: true }], ["entities string", { entities: "true" }]]) {
     for (const tool of [transcribe, pro]) {
-      const x = await throwsWith(() => tool.handler({ url: "https://agent402.tools/fixtures/sample-speech.wav", ...extra }));
-      ok(x?.statusCode === 400 && /not supported/.test(x.message) && /nothing was charged/.test(x.message), `${tool.slug}: ${label} is a self-explaining 400`);
+      // The charge sentence prints on a route call only (src/not-charged.js).
+      const x = await throwsWith(() => tool.handler({ url: "https://agent402.tools/fixtures/sample-speech.wav", ...extra }, { headers: {} }));
+      ok(x?.statusCode === 400 && /not supported/.test(x.message) && /Nothing was charged\./.test(x.message), `${tool.slug}: ${label} is a self-explaining 400`);
+      const step = await throwsWith(() => tool.handler({ url: "https://agent402.tools/fixtures/sample-speech.wav", ...extra }));
+      ok(step?.statusCode === 400 && /not supported/.test(step.message) && !/charged/i.test(step.message), `${tool.slug}: ${label} in a request-less step is a 400 with no charge sentence`);
     }
   }
   const mp = (name, value) => Buffer.concat([

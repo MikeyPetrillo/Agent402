@@ -8,6 +8,7 @@
 // random from a seeded stream is the strictest: any difference in what is
 // compared, or when, changes every later answer. Offline, no imports from src
 // beyond the module.
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { timSortSteps } from "../src/timsort-steps.js";
 
