@@ -78,8 +78,12 @@ const flat = (s) => { let out = "", inTag = false; for (const ch of s) { if (inT
   ok(/Everything we keep, and for how long, is listed below/.test(p), "/privacy still says everything kept is listed");
   // The MPP subscription record holds wallet, email and a signing key together.
   const subs = read("src/mpp-subscriptions.js");
-  const recAt = subs.indexOf("const rec = {\n      subId,");
-  const rec = recAt >= 0 ? subs.slice(recAt, recAt + 900) : "";
+  // The record is built in houseRecordFrom (one object literal, `return {`
+  // then subId); read that literal only, up to the function's close.
+  const fnAt = subs.indexOf("function houseRecordFrom(");
+  const litAt = fnAt >= 0 ? subs.indexOf("return {\n      subId,", fnAt) : -1;
+  const litEnd = litAt >= 0 ? subs.indexOf("\n    };", litAt) : -1;
+  const rec = litAt >= 0 && litEnd > litAt ? subs.slice(litAt, litEnd) : "";
   ok(/email: b\.email/.test(rec) && /\bpayer, accessKeyAddress: b\.accessKeyAddress/.test(rec) && /typeof v\.privateKey === "string"/.test(subs),
     "an MPP subscription record holds the payer, the email and an access key");
   ok(!/For x402 and MPP payments there are no card numbers, names, or emails/.test(p), "/privacy no longer says MPP payments carry no email");
