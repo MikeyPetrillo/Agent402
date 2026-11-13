@@ -2639,7 +2639,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // (BAZAAR_DESCRIPTIONS, by slug); everyone else gets the catalog description
   // truncated at a SENTENCE boundary under 500, never mid-word with "...".
   const capDesc = (s) => bazaarCapDescription(s);
-  // X402_BINARY_LISTINGS=off returns every listing to application/json.
+  // X402_BINARY_LISTINGS=off (read once, here, when the middleware is built:
+  // a flip takes effect on restart) returns every listing to the shape it had
+  // before binary routes named their bytes: application/json, output type
+  // "json", and the tool's earlier sample (its def's legacyListingExample).
   const binaryListingsOn = binaryListingsEnabled();
   const binaryListed = (item) => binaryListingsOn && isBinaryListing(item);
   const slimDiscovery = (d, path, item) => {
@@ -2674,6 +2677,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // mimeType, src/tool-media-type.js) carries a string naming those bytes
       // and a string schema with their media type, never a JSON object a
       // buyer could take for the answer's shape.
+      if (!binaryListingsOn && item?.legacyListingExample !== undefined) slim.output = { ...slim.output, example: item.legacyListingExample };
       if (binaryListed(item)) {
         // output.type is set where the block is declared (declareFor below):
         // the extension's declare helper writes "json" whatever it is handed.

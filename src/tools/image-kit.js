@@ -24,7 +24,9 @@ import { runImageOffThread, LARGE_JOB_TIMEOUT_MS } from "./image-pool.js";
 // the route binder's __binary sentinel, chosen by `format`). Declared on each
 // def as `binaryTypes` so the tool page and /openapi.json describe bytes, not
 // a JSON object; `mimeType` is the one the published example answers with,
-// which the x402 listing carries (src/tool-media-type.js).
+// which the x402 listing carries (src/tool-media-type.js), and
+// `legacyListingExample` the sample that listing carried before it named its
+// bytes, listed again only when X402_BINARY_LISTINGS=off.
 const IMAGE_OUT_TYPES = [...new Set(Object.values(MIME))];
 
 // Re-exported for scripts/test-image.js, which imports the parser surface from
@@ -219,6 +221,7 @@ export const IMAGE_TOOLS = [
     tags: ["image", "resize", "scale", "thumbnail", "png", "jpeg"],
     binaryTypes: IMAGE_OUT_TYPES,
     mimeType: MIME.png, // the example sends no format: png
+    legacyListingExample: { __note: "returns the resized image as binary (Content-Type set accordingly)" },
     discovery: {
       bodyType: "json",
       input: { image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==", width: 256 },
@@ -243,6 +246,7 @@ export const IMAGE_TOOLS = [
     tags: ["image", "convert", "format", "png", "jpeg", "bmp"],
     binaryTypes: IMAGE_OUT_TYPES,
     mimeType: MIME.jpeg, // the example converts to jpeg
+    legacyListingExample: { __note: "returns the converted image as binary" },
     discovery: {
       bodyType: "json",
       input: { image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==", format: "jpeg", quality: 80 },
@@ -268,6 +272,7 @@ export const IMAGE_TOOLS = [
     tags: ["image", "thumbnail", "crop", "square", "preview"],
     binaryTypes: IMAGE_OUT_TYPES,
     mimeType: MIME.png, // the example sends no format: png
+    legacyListingExample: { __note: "returns the square thumbnail as binary" },
     discovery: {
       bodyType: "json",
       input: { image: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAJUlEQVR4AYXBAQEAIAyAMKSSnUxrJ99AtrXPfXxIkCBBggQJEgZ5JwJ01a+JcwAAAABJRU5ErkJggg==", size: 128 },

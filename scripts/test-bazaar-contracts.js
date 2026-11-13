@@ -426,9 +426,19 @@ try {
   console.log(`402 examples shortened by the byte budget (replayed from /openapi.json): ${shortenedExamples}`);
   console.log(`route-aware required schemas: ${requiredRoutes}; variable schemas without required: ${variableRoutes}; raw/array schemas: ${rawRoutes}`);
   console.log(`402 amount vs price list: ${fixedPriced} fixed routes at list price, ${quotedPriced} quoted routes inside their published range`);
-  // The rollout switch: X402_BINARY_LISTINGS=off lists a binary route as
-  // application/json with output type "json" again, still a valid declaration.
+  // The rollout switch: with X402_BINARY_LISTINGS=off every binary route
+  // lists what it listed before it named its bytes: application/json, output
+  // type "json" and the sample below (each tool's legacyListingExample), with
+  // the schema derived from that sample. A new binary tool adds its row here.
   {
+    const LEGACY_SAMPLES = {
+      "/api/screenshot": { contentType: "image/png", body: "(binary PNG image)" },
+      "/api/qr": { contentType: "image/png", body: "(binary PNG image)" },
+      "/api/image-resize": { __note: "returns the resized image as binary (Content-Type set accordingly)" },
+      "/api/image-convert": { __note: "returns the converted image as binary" },
+      "/api/image-thumbnail": { __note: "returns the square thumbnail as binary" },
+      "/v1/audio/speech": "(raw mp3 bytes - Content-Type: audio/mpeg)",
+    };
     try { child.kill("SIGKILL"); } catch { /* stopped */ }
     const [offPort] = await getFreePorts(1);
     const off = spawn(process.execPath, ["src/server.js"], { env: serverEnv(offPort, { X402_BINARY_LISTINGS: "off" }), stdio: "ignore" });
@@ -439,14 +449,22 @@ try {
         if (!offUp) await wait(250);
       }
       if (!offUp) fail("X402_BINARY_LISTINGS=off", "server did not boot");
-      else for (const offPath of ["/api/qr", "/api/hash"]) {
-        const res = await fetch(`http://127.0.0.1:${offPort}${offPath}`);
+      else for (const endpoint of endpoints.filter((e) => e.mimeType || e.path === "/api/hash")) {
+        const offRoute = `${String(endpoint.method || "GET").toUpperCase()} ${endpoint.path}`;
+        const res = await fetch(`http://127.0.0.1:${offPort}${endpoint.path}`, { method: endpoint.method || "GET", headers: { "content-type": "application/json" }, body: /^(POST|PUT|PATCH)$/i.test(endpoint.method || "") ? "{}" : undefined });
         await res.text();
         const pr = JSON.parse(Buffer.from(res.headers.get("payment-required") || "", "base64").toString("utf8") || "{}");
         const ext = pr.extensions?.bazaar;
-        if (res.status !== 402 || pr.resource?.mimeType !== "application/json") fail(`GET ${offPath}`, `switch off: ${res.status}, listed as ${pr.resource?.mimeType}`);
-        if (ext?.info?.output?.type !== "json" || ext?.info?.output?.example === undefined) fail(`GET ${offPath}`, `switch off: output is ${JSON.stringify(ext?.info?.output)}`);
-        if (!ext || !validateDiscoveryExtension(ext).valid || !validateDiscoveryExtensionSpec(ext).valid) fail(`GET ${offPath}`, "switch off: the declaration does not validate");
+        if (res.status !== 402 || pr.resource?.mimeType !== "application/json") fail(offRoute, `switch off: ${res.status}, listed as ${pr.resource?.mimeType}`);
+        if (ext?.info?.output?.type !== "json" || ext?.info?.output?.example === undefined) fail(offRoute, `switch off: output is ${JSON.stringify(ext?.info?.output)}`);
+        if (!ext || !validateDiscoveryExtension(ext).valid || !validateDiscoveryExtensionSpec(ext).valid) fail(offRoute, "switch off: the declaration does not validate");
+        if (!endpoint.mimeType) continue;
+        const legacy = LEGACY_SAMPLES[endpoint.path];
+        const offSchema = ext?.schema?.properties?.output?.properties?.example;
+        if (legacy === undefined) fail(offRoute, "a binary listing has no earlier sample recorded for the switch-off listing (LEGACY_SAMPLES)");
+        else if (!isDeepStrictEqual(ext?.info?.output?.example, legacy)) fail(offRoute, `switch off: sample is ${JSON.stringify(ext?.info?.output?.example)}, the earlier listing carried ${JSON.stringify(legacy)}`);
+        else if (offSchema?.type !== jsonType(legacy) || offSchema?.contentMediaType !== undefined) fail(offRoute, `switch off: output schema is ${JSON.stringify(offSchema)}`);
+        else if (!isDeepStrictEqual(pr.accepts?.[0]?.outputSchema, offSchema)) fail(offRoute, "switch off: accepts[0].outputSchema is not the extension's schema");
       }
     } finally { try { off.kill("SIGKILL"); } catch { /* stopped */ } }
   }

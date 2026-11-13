@@ -7,6 +7,8 @@
 //     (the route binder's { __binary, contentType } sentinel), when it depends
 //     on an input such as `format`. A tool that answers one binary type may
 //     declare `mimeType` alone.
+//   - `legacyListingExample`: the sample output the x402 listing carried
+//     before it named its bytes; listed only when X402_BINARY_LISTINGS=off.
 // A tool whose handler returns { __binary } declares one or both; the listing
 // sweep (scripts/test-bazaar-contracts.js) holds every 402 to them and the
 // strict example sweep (scripts/test-non-metered-examples.js) holds the live
@@ -45,10 +47,16 @@ export function binaryOutputExample(tool) {
   return `(raw ${mime} bytes, not JSON${others.length ? `; other formats answer ${others.join(", ")}` : ""})`;
 }
 
-/** Rollout switch for the x402 listing only: X402_BINARY_LISTINGS=off lists
- *  every route as application/json with output type "json" again (the shape
- *  every listing carried before binary routes named their bytes). The
- *  /openapi.json content types and /api/pricing rows are unaffected. */
+/** Rollout switch for the x402 listing only (the 402's PAYMENT-REQUIRED
+ *  header, its mirrored body and the discovery extension in them). Default
+ *  (unset, or any value but "off"): a binary route lists its content type,
+ *  output type "binary" and a string sample naming its bytes.
+ *  X402_BINARY_LISTINGS=off: every route lists exactly what it listed before
+ *  that, which is mimeType application/json, output type "json" and the
+ *  tool's earlier sample (its def's `legacyListingExample`) with the schema
+ *  derived from it. /openapi.json's content types, the /api/pricing rows and
+ *  the tool pages do not read the switch. src/payments.js reads it once, when
+ *  the payment middleware is built, so a flip takes effect on restart. */
 export function binaryListingsEnabled(env = process.env) {
   return String(env.X402_BINARY_LISTINGS || "").toLowerCase() !== "off";
 }

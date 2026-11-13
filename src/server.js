@@ -1044,6 +1044,9 @@ const CATALOG = {
       "Screenshot any public URL in headless Chromium. Returns a PNG image. Use when you need VISUAL evidence (layout, charts, a rendered receipt); when you need the text, extract or render are cheaper and machine-readable. Query params: ?url=https://…&fullPage=true (optional).",
     tags: ["browser", "screenshot", "png", "visual"],
     mimeType: "image/png",
+    // The sample the x402 listing carried before it named its bytes; listed
+    // again only when X402_BINARY_LISTINGS=off (src/tool-media-type.js).
+    legacyListingExample: { contentType: "image/png", body: "(binary PNG image)" },
     discovery: {
       input: { url: "https://agent402.tools", fullPage: "false" },
       inputSchema: {
