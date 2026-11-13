@@ -44,7 +44,7 @@ ok(!r.ok && /unreachable/.test(r.error), "network error -> unreadable");
   const row = (path, extra = {}) => ({ method: "GET", path, slug: path.slice(5), ...extra });
   const catalog = [row("/api/search"), row("/api/hash"), row("/api/other"), row("/api/bytes", { mimeType: "image/png" }), row("/api/json-typed", { mimeType: "application/json" })];
   const d = defaultEndpoints(catalog);
-  ok(d.chosen.map((e) => e.path).join() === "/api/search,/api/hash,/api/bytes", `default set = flagship rows in the catalog + the non-JSON listing (${d.chosen.map((e) => e.path).join()})`);
+  ok(d.chosen.map((e) => e.path).join() === "/api/bytes,/api/search,/api/hash", `default set = the non-JSON listing first, then the flagship rows in the catalog (${d.chosen.map((e) => e.path).join()})`);
   const many = Array.from({ length: NON_JSON_LISTING_MAX + 3 }, (_, i) => row(`/api/b${i}`, { mimeType: "image/png" }));
   const capped = defaultEndpoints(many);
   ok(capped.nonJson.length === NON_JSON_LISTING_MAX && capped.nonJsonSkipped === 3, `non-JSON listings are capped at ${NON_JSON_LISTING_MAX} and the remainder is counted (${capped.nonJsonSkipped})`);
@@ -54,7 +54,7 @@ ok(!r.ok && /unreachable/.test(r.error), "network error -> unreadable");
 // a stub catalog and a stub validator: a binary listing the validator calls
 // INVALID fails the run, and the same catalog passes when it is valid.
 {
-  const run = async (invalidPath, { throttled = false, env = {} } = {}) => {
+  const run = async (invalidPath, { throttled = false, answerAfterMs = 0, env = {} } = {}) => {
     const asked = [];
     const stub = createServer((req, res) => {
       let body = "";
@@ -72,6 +72,7 @@ ok(!r.ok && /unreachable/.test(r.error), "network error -> unreadable");
           const { resource } = JSON.parse(body || "{}");
           const path = new URL(resource).pathname;
           asked.push(path);
+          if (answerAfterMs) return void setTimeout(() => res.end(JSON.stringify({ valid: true, statusCode: 402, preflight: [], simulation: { outcome: "accepted" }, index: { active: true } })), answerAfterMs);
           if (throttled) { res.statusCode = 429; res.setHeader("retry-after", "60"); return res.end(""); }
           const bad = path === invalidPath;
           return res.end(JSON.stringify({ valid: !bad, statusCode: 402, preflight: bad ? [{ check: "resource.mimeType", passed: false, severity: "required", detail: "stub rejection" }] : [], simulation: { outcome: bad ? "rejected" : "accepted" }, index: { active: true } }));
@@ -107,6 +108,11 @@ ok(!r.ok && /unreachable/.test(r.error), "network error -> unreadable");
   const took = Date.now() - t0;
   ok(slow.code === 2 && took < 20_000, `a throttled validator ends the run at its deadline with exit 2 (exit ${slow.code}, ${took} ms)`);
   ok((slow.out.match(/^\?\? .*run deadline reached/gm) || []).length === 2 && !/BAZAAR VALIDATION OK/.test(slow.out), "every route the deadline cut is reported unreadable, never valid");
+  // A deadline that leaves room for one route: the validator answers slower
+  // than the whole run may take, so the first route asked is the only one.
+  // That route is the non-JSON listing, not the flagship row.
+  const cut = await run(null, { answerAfterMs: 4000, env: { BAZAAR_VALIDATE_DEADLINE_MS: "1500" } });
+  ok(cut.asked.join() === "/api/qr" && cut.code === 2, `a run cut by its deadline asked the non-JSON listing first (asked ${cut.asked.join() || "nothing"}, exit ${cut.code})`);
   ok(runDeadlineMs(false, {}) === 480_000 && runDeadlineMs(true, {}) === 0 && runDeadlineMs(false, { BAZAAR_VALIDATE_DEADLINE_MS: "90000" }) === 90_000 && runDeadlineMs(true, { BAZAAR_VALIDATE_DEADLINE_MS: "0" }) === 0 && runDeadlineMs(false, { BAZAAR_VALIDATE_DEADLINE_MS: "junk" }) === 480_000, "the deadline defaults to 8 minutes (none for --all) and BAZAAR_VALIDATE_DEADLINE_MS overrides it");
 }
 

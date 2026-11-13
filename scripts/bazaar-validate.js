@@ -66,15 +66,17 @@ export const FLAGSHIP_PATHS = [
 // One validator call each; capped so the default run never becomes a sweep.
 export const NON_JSON_LISTING_MAX = 12;
 
-/** The default run's endpoints: the flagship set, then every non-JSON listing
- *  not already in it (up to NON_JSON_LISTING_MAX). Exported for the test. */
+/** The default run's endpoints: every non-JSON listing not in the flagship
+ *  set (up to NON_JSON_LISTING_MAX) FIRST, then the flagship set, so a run
+ *  the validator throttles to its deadline has read the non-JSON listings
+ *  before it is cut. Exported for the test. */
 export function defaultEndpoints(all) {
   const byPath = new Map(all.map((e) => [e.path, e]));
   const flagship = FLAGSHIP_PATHS.map((p) => byPath.get(p)).filter(Boolean);
   const missingFlagship = FLAGSHIP_PATHS.filter((p) => !byPath.has(p));
   const nonJsonAll = all.filter((e) => e.mimeType && e.mimeType !== "application/json" && !FLAGSHIP_PATHS.includes(e.path));
   const nonJson = nonJsonAll.slice(0, NON_JSON_LISTING_MAX);
-  return { chosen: [...flagship, ...nonJson], flagship, nonJson, missingFlagship, nonJsonSkipped: nonJsonAll.length - nonJson.length };
+  return { chosen: [...nonJson, ...flagship], flagship, nonJson, missingFlagship, nonJsonSkipped: nonJsonAll.length - nonJson.length };
 }
 
 function args() {
