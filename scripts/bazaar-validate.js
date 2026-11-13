@@ -32,6 +32,22 @@ const CONCURRENCY = Math.max(1, Number(process.env.BAZAAR_VALIDATE_CONCURRENCY) 
 const PER_CALL_TIMEOUT_MS = Number(process.env.BAZAAR_VALIDATE_TIMEOUT_MS) || 45_000;
 const MAX_429_RETRIES = Math.max(0, Number(process.env.BAZAAR_VALIDATE_429_RETRIES ?? 4));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A whole run's deadline. A validator that answers 429 with a long Retry-After
+// to every call would otherwise hold a default run (about 20 routes, 5 calls
+// each) near half an hour. Past the deadline nothing waits or retries: every
+// route not yet read is reported unreadable (exit 2 when none is INVALID), so
+// the callers warn. Default 8 minutes for the default, --sample and --routes
+// runs: the heartbeat's one run stays inside its 75-minute job beside its
+// 48-minute loop, and the deploy step's three runs a minute apart take at most
+// 26 minutes of a 120-minute job. --all is rate-paced over the whole catalog
+// and has no deadline unless BAZAAR_VALIDATE_DEADLINE_MS sets one (0 = none).
+const DEFAULT_DEADLINE_MS = 8 * 60_000;
+export function runDeadlineMs(all = process.argv.includes("--all"), env = process.env) {
+  const raw = env.BAZAAR_VALIDATE_DEADLINE_MS;
+  if (raw !== undefined && raw !== "" && Number.isFinite(Number(raw)) && Number(raw) >= 0) return Number(raw);
+  return all ? 0 : DEFAULT_DEADLINE_MS;
+}
+const DEADLINE_ERROR = "run deadline reached before the validator answered for this route";
 
 // Flagship = the routes whose listing we most want visible: the search front
 // doors, the canary-proven federal-data pair, the router, the gateway, a
@@ -81,7 +97,9 @@ async function catalogEndpoints() {
 /** One validate call. Returns {ok:true, valid, failed[], index, quality} or
  *  {ok:false, error} when the validator itself could not be read. Exported
  *  for the test. */
-export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = VALIDATE_URL, base = TARGET } = {}) {
+export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = VALIDATE_URL, base = TARGET, deadlineAt = 0 } = {}) {
+  // Milliseconds left in the run (Infinity with no deadline).
+  const left = () => (deadlineAt > 0 ? deadlineAt - Date.now() : Infinity);
   const resource = `${base}${endpoint.path}`;
   const method = endpoint.method === "GET" ? "GET" : "POST";
   let res, body;
@@ -89,14 +107,17 @@ export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = V
   // calls in a full-catalog run). Honour Retry-After (capped) and retry a few
   // times before calling the route unreadable - a 429 is not a listing verdict.
   for (let attempt = 0; ; attempt++) {
+    if (left() <= 0) return { ok: false, error: DEADLINE_ERROR };
     try {
       res = await fetchImpl(validateUrl, {
         method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ resource, method }), signal: AbortSignal.timeout(PER_CALL_TIMEOUT_MS),
+        body: JSON.stringify({ resource, method }), signal: AbortSignal.timeout(Math.max(1, Math.min(PER_CALL_TIMEOUT_MS, left()))),
       });
       if (res.status === 429 && attempt < MAX_429_RETRIES) {
         const ra = Number(res.headers.get("retry-after"));
         const waitMs = Math.min(60_000, (Number.isFinite(ra) && ra > 0 ? ra * 1000 : 15_000 * (attempt + 1)));
+        // A wait that would pass the deadline is not taken.
+        if (waitMs >= left()) return { ok: false, error: `${DEADLINE_ERROR} (last answer HTTP 429)` };
         await sleep(waitMs);
         continue;
       }
@@ -104,6 +125,7 @@ export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = V
       try { body = JSON.parse(text); } catch { return { ok: false, error: `validator HTTP ${res.status} non-JSON: ${text.slice(0, 120)}` }; }
       break;
     } catch (e) {
+      if (left() <= 0) return { ok: false, error: DEADLINE_ERROR };
       return { ok: false, error: `validator unreachable: ${e?.message || e}` };
     }
   }
@@ -155,7 +177,9 @@ async function main() {
     }
   }
   console.log(`bazaar-validate: ${chosen.length} endpoint(s) against ${TARGET} via ${VALIDATE_URL} (concurrency ${CONCURRENCY})`);
-  const results = await mapLimit(chosen, CONCURRENCY, async (e) => ({ endpoint: e, r: await validateOne(e) }));
+  const deadlineMs = runDeadlineMs(opt.all);
+  const deadlineAt = deadlineMs > 0 ? Date.now() + deadlineMs : 0;
+  const results = await mapLimit(chosen, CONCURRENCY, async (e) => ({ endpoint: e, r: await validateOne(e, { deadlineAt }) }));
 
   let invalid = 0, unreadable = 0, valid = 0, notIndexed = 0;
   const rows = [];
