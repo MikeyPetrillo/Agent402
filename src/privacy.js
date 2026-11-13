@@ -83,7 +83,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-12.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-13.</p>
 </section>
 
 <section>
@@ -290,7 +290,10 @@ so every claim below is verifiable in code.</p>
   <li><code>/api/route</code>, <code>/api/route/execute</code> and <code>/api/decide</code> may send the
   task text you give them to a judgment model operated by TypeSafe to choose among candidate tools;
   <code>/api/decide</code> also sends it to AI models via OpenRouter and to an OpenAI embedding model to
-  build the plan. When route-and-execute or a decision's execution buys from an outside seller to resell
+  build the plan. That task text, and the text of a search or request recorded on the demand board
+  (a search that found nothing, or a <code>demand.request</code>), which we review to tell missing tools
+  from misranked ones and requests from advertisements, can also go to judgment models via OpenRouter,
+  sent without retention where the model's provider offers it. When route-and-execute or a decision's execution buys from an outside seller to resell
   the result to you, that seller receives the request it needs to answer, sent and paid for by us.
   A candidate seller may receive a request's inputs unpaid before we pay it, sometimes more than once:
   to check that it can serve the request and to read its price.</li>
