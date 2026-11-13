@@ -283,6 +283,34 @@ console.log("\n# /v1/images/generations - per-link bounds");
 }
 
 // ---------------------------------------------------------------------------
+// 4b. GPT Image tiers (src/tools/image-gen-kit.js) - billed per token from the
+//     model's OWN row in the private table (openai.<model>): text input at its
+//     prompt rate, image output at its completion rate. Size, quality, n=1 and
+//     the planning level are locked per tier; outputTokenBound is the tier's
+//     measured output (a render above it is logged, never refused). Asserted:
+//     the bound on the row within MARGIN x the tier price, and the prompt cap
+//     (counted at English density) plus the bound within the price.
+console.log("\n# GPT Image tiers - the model's row x the tier's output bound");
+{
+  const { TIERS: IMAGE_GEN_TIERS, IMAGE_GEN_TOOLS } = await import("../src/tools/image-gen-kit.js");
+  for (const [slug, t] of Object.entries(IMAGE_GEN_TIERS)) {
+    const price = Number(String(IMAGE_GEN_TOOLS.find((x) => x.slug === slug)?.price).replace("$", ""));
+    const row = upstreamCosts().openai?.[t.model];
+    if (!row) {
+      ok(!(process.env.CI && process.env.UPSTREAM_COSTS_OPTIONAL !== "1"), `${slug}: the private table has no openai row for ${t.model} (required under CI)`);
+      continue;
+    }
+    const outUsd = (t.outputTokenBound * row.completion) / 1e6;
+    const promptTokens = countTokens("the quick brown fox. ".repeat(Math.floor(t.maxPromptChars / 21)));
+    const worst = outUsd + (promptTokens * row.prompt) / 1e6;
+    ok(Number.isFinite(price) && price > 0 && Number.isFinite(worst) && outUsd > 0 && t.outputTokenBound > 0, `${slug}: a price, a bound and a priced row for ${t.model}`);
+    ok(outUsd <= MARGIN * price * (1 + 1e-9), `${slug}: ${t.outputTokenBound} output tokens on ${t.model}'s row are within ${MARGIN} x the tier price`);
+    ok(worst <= price, `${slug}: the prompt cap plus the output bound on ${t.model}'s row is within the tier price`);
+    table.push({ tier: slug, price, worst, model: t.model });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 5. STT — the duration cap is enforced from a LOCAL header probe before the
 //    file ever reaches OpenAI (upstream bills per audio minute). Over-cap and
 //    unreadable audio must throw with zero fetches.
