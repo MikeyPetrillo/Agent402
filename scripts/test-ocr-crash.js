@@ -371,6 +371,17 @@ async function call(input) {
         delete process.env.FREE_MODE;
         ok(callerKeyOf(withHeader("198.51.100.40")) === `payer:0x${"ab".repeat(20)}`, `control: on a paid deployment, where the gate verified it, the signed payer is the key (${callerKeyOf(withHeader("198.51.100.40"))})`);
       } finally { if (had === undefined) delete process.env.FREE_MODE; else process.env.FREE_MODE = had; }
+      // An IPv6 caller is its /64 (one host rotating addresses is one caller);
+      // an IPv4 caller is its full address.
+      const k = (ip) => callerKeyOf({ ip, headers: {} });
+      ok(k("2001:db8:1:2::a") === k("2001:db8:1:2:ffff:1:2:3") && k("2001:db8:1:2::a") === "ip:2001:db8:1:2::/64", `addresses in one IPv6 /64 share one caller key (${k("2001:db8:1:2::a")}, ${k("2001:db8:1:2:ffff:1:2:3")})`);
+      ok(k("2001:db8:1:3::a") !== k("2001:db8:1:2::a"), "a neighboring /64 is another caller");
+      ok(k("198.51.100.40") === "ip:198.51.100.40" && k("198.51.100.41") === "ip:198.51.100.41", "an IPv4 caller is keyed on its full address");
+      // The large-image place itself follows the fold.
+      seen = null;
+      __ocrTest.inject("tur", { recognize: async () => { seen = __ocrLargeTest.state().holder; return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+      await tool.handler({ image: big.toString("base64"), lang: "tur" }, { ip: "2001:db8:5:6::99", headers: {} }).catch(() => {});
+      ok(seen === "ip:2001:db8:5:6::/64", `a large image's place is held for the caller's /64 (held for ${seen})`);
     }
     // A skill pack runs its steps request-less too: each step's place is held
     // for the caller that bought the pack, never under the shared key.

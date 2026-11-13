@@ -5,12 +5,14 @@
 // large-image slot in src/tools/ocr-kit.js) still needs to know whose call it
 // is, so the executor runs the step inside runAsCallerOf(req, fn): an opaque
 // key (the verified signed payer, a credits key, a Tempo sender, else the client
-// address) is held in async context, never the request itself. The generic
+// address, an IPv6 one folded to its /64 as every per-address bound folds it)
+// is held in async context, never the request itself. The generic
 // dispatches (the HTTP tool route, the hosted MCP connector) and the skill
 // packs run every handler that way, so a tool that calls other tools'
 // handlers in-process passes its caller on.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { identityPayerOf } from "./payer.js";
+import { limiterKey } from "./rate-limit.js";
 
 const scope = new AsyncLocalStorage();
 /** The key every request-less call with no caller of its own shares, so its
@@ -26,7 +28,7 @@ export function callerKeyOf(req) {
   if (payer) return `payer:${payer}`;
   if (req.creditsKeyId) return `credits:${req.creditsKeyId}`;
   if (req.mppTempoSender) return `tempo:${String(req.mppTempoSender).toLowerCase()}`;
-  return req.ip ? `ip:${req.ip}` : null;
+  return req.ip ? `ip:${limiterKey(String(req.ip))}` : null;
 }
 
 /** The caller key the current request-less call runs for, or null. */
