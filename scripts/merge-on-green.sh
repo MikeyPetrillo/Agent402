@@ -18,10 +18,16 @@
 # and every SHA is shape-checked before it is used, so an API hiccup cannot
 # turn into a merge of "null".
 #
-#   scripts/merge-on-green.sh <pr-number> [branch]
+#   scripts/merge-on-green.sh <pr-number> [branch] [--no-strix]
 #
-# Needs gh (authenticated). Exits non-zero, merging nothing, on any doubt.
+# After CI is green it also waits for Strix's security review of the head SHA
+# (see "Strix" below); --no-strix is the owner's explicit override.
+#
+# Needs gh (authenticated) and jq. Exits non-zero, merging nothing, on any doubt.
 set -euo pipefail
+NO_STRIX=0; ARGS=()
+for a in "$@"; do case "$a" in --no-strix) NO_STRIX=1 ;; *) ARGS+=("$a") ;; esac; done
+set -- ${ARGS[@]+"${ARGS[@]}"}
 PR="${1:?pr number}"
 BRANCH="${2:-claude/sweet-brown-i99jl3}"
 WORKFLOW="${GATE_WORKFLOW:-Deploy to Railway}"
@@ -139,6 +145,64 @@ for i in $(seq 1 60); do
 done
 [ -z "$MISSING" ] || { echo "required check(s) never completed:$MISSING - not merging"; exit 1; }
 echo "every ruleset-required check is green on PR $PR"
+
+# STRIX. Strix posts its security review as the GitHub user strix-security[bot]
+# and publishes no check run, so no required check can hold a merge for it.
+# Wait (bounded) for its verdict on THIS head SHA, read two ways, the first
+# found wins: a PR review whose commit_id is the head SHA, or the pinned
+# summary comment (marker strix-pr-review:master) whose "Review N on this PR ·
+# `<sha>`" line names the head SHA (a clean review posts only that comment).
+# Refuse on CHANGES_REQUESTED, or on a Critical or High finding in the review
+# body, its review comments ("**Severity:** HIGH") or the summary ("**HIGH**").
+# A review of an older SHA does not count. No verdict in time, or Strix saying
+# it could not run, stops here for the owner: never merge without it silently.
+STRIX_BOT="strix-security[bot]"
+STRIX_WAIT_SECONDS="${STRIX_WAIT_SECONDS:-1800}"
+STRIX_POLL_SECONDS="${STRIX_POLL_SECONDS:-60}"
+strix_high() { grep -Eiq '\*\*Severity:\*\*[[:space:]]*(CRITICAL|HIGH)([^A-Za-z]|$)|\*\*(CRITICAL|HIGH)\*\*'; }
+if [ "$NO_STRIX" = "1" ]; then
+  echo "################################################################"
+  echo "## --no-strix: the OWNER chose to merge PR #$PR WITHOUT Strix's"
+  echo "## security review of $SHA. Nothing below checked it."
+  echo "################################################################"
+else
+  STRIX_OK=""; STRIX_WHY="no Strix review of $SHA arrived within ${STRIX_WAIT_SECONDS}s"
+  waited=0
+  while :; do
+    REVIEWS=$(gh api "repos/{owner}/{repo}/pulls/$PR/reviews" --paginate 2>/dev/null | jq -s --arg bot "$STRIX_BOT" --arg sha "$SHA" '[.[][] | select(.user.login == $bot and .commit_id == $sha)] | last // empty' 2>/dev/null || true)
+    if [ -n "$REVIEWS" ]; then
+      RID=$(printf '%s' "$REVIEWS" | jq -r '.id'); RSTATE=$(printf '%s' "$REVIEWS" | jq -r '.state')
+      [[ "$RID" =~ ^[0-9]+$ ]] || { echo "Strix review of $SHA has an unreadable id ('$RID') - not merging"; exit 1; }
+      if [ "$RSTATE" = "CHANGES_REQUESTED" ]; then echo "Strix requested changes on $SHA (review $RID) - not merging"; exit 1; fi
+      RCOMMENTS=$(gh api "repos/{owner}/{repo}/pulls/$PR/comments" --paginate 2>/dev/null | jq -s -r --argjson rid "$RID" '[.[][] | select(.pull_request_review_id == $rid) | .body] | join("\n")' 2>/dev/null) \
+        || { echo "could not read Strix's review comments on $SHA - not merging"; exit 1; }
+      if { printf '%s' "$REVIEWS" | jq -r '.body // ""'; printf '%s\n' "$RCOMMENTS"; } | strix_high; then
+        echo "Strix reports a Critical or High finding on $SHA (review $RID) - not merging"; exit 1
+      fi
+      STRIX_OK="Strix review $RID of $SHA: $RSTATE, no Critical or High finding"; break
+    fi
+    COMMENTS=$(gh api "repos/{owner}/{repo}/issues/$PR/comments" --paginate 2>/dev/null | jq -s --arg bot "$STRIX_BOT" '[.[][] | select(.user.login == $bot)]' 2>/dev/null || echo "[]")
+    SUMMARY=$(printf '%s' "$COMMENTS" | jq -r '[.[] | select(.body | contains("<!-- strix-pr-review:master -->"))] | last | .body // empty' 2>/dev/null || true)
+    SUMSHA=$(printf '%s' "$SUMMARY" | grep -Eo 'Review [0-9]+ on this PR · `[0-9a-f]{7,40}`' | tail -1 | grep -Eo '[0-9a-f]{7,40}' || true)
+    if [ -n "$SUMSHA" ] && [ "${SHA#"$SUMSHA"}" != "$SHA" ]; then
+      if printf '%s' "$SUMMARY" | strix_high; then echo "Strix's summary of $SHA lists a Critical or High finding - not merging"; exit 1; fi
+      STRIX_OK="Strix summary of $SHA: no Critical or High finding"; break
+    fi
+    if printf '%s' "$COMMENTS" | jq -e '[.[] | select(.body | contains("<!-- strix:pr-review-billing-required -->"))] | length > 0' >/dev/null 2>&1; then
+      STRIX_WHY="Strix says it could not review this PR (its workspace billing); no review of $SHA exists"; break
+    fi
+    [ "$waited" -ge "$STRIX_WAIT_SECONDS" ] && break
+    echo "waiting for Strix's review of $SHA (${waited}s of ${STRIX_WAIT_SECONDS}s)"
+    sleep "$STRIX_POLL_SECONDS"; waited=$((waited + STRIX_POLL_SECONDS))
+  done
+  if [ -z "$STRIX_OK" ]; then
+    echo "STRIX: $STRIX_WHY - not merging."
+    echo "The owner decides: get Strix to review $SHA (tag @strix-security in a PR comment, or re-run it),"
+    echo "then run this again; or merge without it on purpose: scripts/merge-on-green.sh $PR --no-strix"
+    exit 1
+  fi
+  echo "$STRIX_OK"
+fi
 
 # The markers job on MAIN rescans every subject in the push range, and a merge
 # whose range carries a subject it rejects leaves deploy and publish SKIPPED on
