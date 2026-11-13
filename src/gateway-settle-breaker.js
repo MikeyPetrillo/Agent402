@@ -700,8 +700,10 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
     while (authFails.size > AUTH_KEYS_MAX) authFails.delete(authFails.keys().next().value);
   }
   // THE SERVICE-WIDE BOUND counts a /v1 failure that is a verdict on its
-  // buyer's payment; one of unknown cause never raises it.
-  const wide = !!global && !!key && !withdrawn && walletCount && isBuyer;
+  // buyer's payment; one of unknown cause never raises it. Only a key that
+  // names a wallet raises it: an address or a credits key is not one buyer,
+  // and the bound never holds one (burstAwareVerdicts), so it never raises it.
+  const wide = !!global && !!key && !withdrawn && walletCount && isBuyer && !!payerOfKey(key);
   if (wide) noteWideFailure(key, now);
   if (SHARED) sharedRecordFailure(key, now, { global, withdrawn, walletCount: walletCount && isBuyer, unknown, blocklisted: blocklisted && isBuyer, authKey: authCounted ? authKey : null, wide });
   if (!isBuyer && key) noteUnprovenFailure(key, now);

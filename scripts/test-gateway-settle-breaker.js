@@ -1025,6 +1025,11 @@ delete process.env.OPENAI_API_KEY;
   for (let i = 0; i < 8; i++) b.recordGatewaySettleFailure(`0x${"c".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { walletCount: false });
   for (let i = 0; i < 8; i++) b.recordGatewaySettleFailure(`0x${"d".repeat(36)}${i.toString(16).padStart(4, "0")}`, Date.now(), { global: false });
   ok(b.gatewaySettleBreakerStatus().wideBound === false, "failures of ours, withdrawn sub-cent refusals, pending payments and catalog failures never raise the bound");
+  // Address- and credits-keyed buyer-fault failures never raise it either: the
+  // bound never holds those keys, so they cannot raise it for every wallet.
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure(`ip:198.51.100.${i + 1}`, Date.now(), { fault: "buyer" });
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure(`credits:key${i}`, Date.now(), { fault: "buyer" });
+  ok(b.gatewaySettleBreakerStatus().wideBound === false, "twelve address-keyed and twelve credits-keyed buyer-fault failures do not raise the bound");
   // Failures of unknown cause (a facilitator's bare 4xx, a bare
   // settlement_failed, a 402 with no receipt) never raise it either; twelve
   // distinct buyers' buyer verdicts do, and a never-paid wallet is then held
