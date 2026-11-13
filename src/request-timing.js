@@ -101,12 +101,22 @@ export function installRequestTimingFetch() {
 }
 
 // A short keyed hash of the client address, so a rule can count distinct
-// callers (src/unanswered-rule.js) without keeping an address. The key is
-// this process's own and never leaves it as anything but the hash.
-const CALLER_SALT = randomBytes(16);
+// callers (src/unanswered-rule.js) without keeping an address. The key is the
+// service's shared secret (HANGUP_FORGIVE_SALT, else POW_SECRET, else
+// MPP_SECRET_KEY, the hangup and discovery digests' order), so every replica
+// gives one caller the same key and a count merged across replicas still
+// counts callers, not replicas. Domain-separated from those digests by its
+// label. With none set, a per-process key (one replica is still right).
+let processCallerSalt = null;
+function callerSalt(env = process.env) {
+  const s = String(env.HANGUP_FORGIVE_SALT || env.POW_SECRET || env.MPP_SECRET_KEY || "").trim();
+  if (s) return s;
+  if (!processCallerSalt) processCallerSalt = randomBytes(16).toString("hex");
+  return processCallerSalt;
+}
 export function callerKeyOf(req) {
   const ip = String(req?.ip || req?.socket?.remoteAddress || "");
-  return ip ? createHmac("sha256", CALLER_SALT).update(ip).digest("hex").slice(0, 12) : null;
+  return ip ? createHmac("sha256", callerSalt()).update(`caller-key|${ip}`).digest("hex").slice(0, 12) : null;
 }
 /** The current request's caller key, or null outside a request. */
 export function currentCallerKey() { return als.getStore()?.callerKey ?? null; }
