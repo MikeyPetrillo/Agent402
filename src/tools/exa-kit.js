@@ -399,6 +399,25 @@ function shapeResult(r) {
   };
 }
 
+// Search response notes (2026-10-19): `warnings` name a request field that
+// had no effect, `notices` say how the results were produced. Each item is
+// {code, path, message}; codes are an open set. Passed through as those three
+// strings, bounded, and only when there are any.
+export const EXA_NOTE_MAX_ITEMS = 10;
+export const EXA_NOTE_MAX_CHARS = 500;
+export function exaNotes(list) {
+  if (!Array.isArray(list)) return [];
+  const str = (v) => (typeof v === "string" ? v.slice(0, EXA_NOTE_MAX_CHARS) : null);
+  return list.filter((n) => n && typeof n === "object" && typeof n.message === "string" && n.message)
+    .slice(0, EXA_NOTE_MAX_ITEMS)
+    .map((n) => ({ code: str(n.code), path: str(n.path), message: str(n.message) }));
+}
+
+// Search types the upstream marks legacy (search reference, x-exa-replacement;
+// changelog 2026-10-19): each still works, and each is sent as the type named
+// as its replacement. Every filter this tool takes is one `lite` accepts.
+export const LEGACY_SEARCH_TYPES = Object.freeze({ fast: "lite", instant: "lite" });
+
 // The example reads one of our own pages (scripts/test-example-hosts.js): a
 // buyer copying it, and the daily catalog buy, get a page that exists.
 const RESULT_EXAMPLE = {
@@ -426,7 +445,7 @@ export const EXA_TOOLS = [
         properties: {
           query: { type: "string", description: "What to search for, in natural language (max 1000 chars)." },
           numResults: { type: "number", description: `Results to return, 1 to ${MAX_RESULTS} (default ${MAX_RESULTS}).` },
-          type: { type: "string", description: "auto (default), neural, keyword, lite (cached pages only, lowest latency), or the older fast and instant." },
+          type: { type: "string", description: "auto (default), neural, keyword or lite (cached pages only, lowest latency). The legacy fast and instant are accepted and run as lite, their named replacement; the answer's warnings say so." },
           category: { type: "string", description: `Optional category filter: ${EXA_CATEGORIES.join(", ")} ("research paper" is accepted as an alias of "publication"; pdf, github and tweet were retired upstream on 2026-07-23 and are refused with this list).` },
           includeDomains: { type: "array", description: "Only return results from these domains." },
           excludeDomains: { type: "array", description: "Never return results from these domains." },
@@ -450,10 +469,12 @@ export const EXA_TOOLS = [
       const query = takeQuery(i.query);
       const numResults = takeNumResults(i.numResults);
       const body = { query, numResults };
+      const ours = [];
       if (i.type !== undefined && i.type !== null && i.type !== "") {
         const t = String(i.type);
         if (!["auto", "neural", "keyword", "lite", "fast", "instant"].includes(t)) throw bad('"type" must be auto, neural, keyword, lite, fast or instant');
-        body.type = t;
+        body.type = LEGACY_SEARCH_TYPES[t] || t;
+        if (body.type !== t) ours.push({ code: "LEGACY_TYPE", path: "/type", message: `type "${t}" is legacy upstream and ran as "${body.type}", its named replacement; send "${body.type}" to keep this search` });
       }
       const category = takeCategory(i.category);
       if (category) body.category = category;
@@ -472,13 +493,18 @@ export const EXA_TOOLS = [
       }
       const data = await exaPost("/search", body);
       const results = Array.isArray(data?.results) ? data.results.map(shapeResult) : [];
+      const warnings = [...ours, ...exaNotes(data?.warnings)];
+      const notices = exaNotes(data?.notices);
       return {
         source: "exa",
         fetchedAt: new Date().toISOString(),
         query,
-        searchType: data?.resolvedSearchType ?? null,
+        // The upstream's resolved type is deprecated and may be empty; the type sent stands in then.
+        searchType: (typeof data?.resolvedSearchType === "string" && data.resolvedSearchType) || body.type || null,
         count: results.length,
         results,
+        ...(warnings.length ? { warnings } : {}),
+        ...(notices.length ? { notices } : {}),
         ...(results.length ? {} : { note: "Exa returned no results for this query" }),
       };
     },

@@ -14,7 +14,7 @@
     ["openai/gpt-5-pro", { "prompt": 99, "completion": 999 }],
     ["openai/gpt-4o", { "prompt": 99, "completion": 999 }]
   ],
-  "speech": { "your/speech-model": 1 },
+  "speech": { "your/speech-model": 1, "mistralai/voxtral-mini-tts-3-0": 1 },
   "fees": { "webSearchPerUse": 1, "groundedPerCall": 1, "rerankPerUnit": 1, "settlementPerCall": 1 },
   "embeddings": { "text-embedding-3-small": 1 },
   "openai": { "gpt-4o-mini": { "prompt": 1, "cached": 1, "completion": 2 }, "gpt-image-2.6-flare": { "prompt": 1, "cached": 1, "completion": 2 }, "gpt-image-2.6-sunburst": { "prompt": 1, "cached": 1, "completion": 2 } },

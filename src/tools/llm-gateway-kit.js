@@ -3821,7 +3821,9 @@ const RERANK_MAX_CHUNKS = 100;     // one search unit
 export function validateRerankRequest(input) {
   if (!input || typeof input !== "object") throw bad("Body must be a JSON object: {query, documents[], top_n?}");
   // cohere/rerank-4-fast and rerank-4-pro exist upstream (live 2026-09-18) but
-  // are not offered on this route. Refused by name.
+  // are not offered on this route. Refused by name. cohere/rerank-5-fast (32k
+  // context, read 2026-11-12) lists no per-search-unit price on the public
+  // models or endpoints API, so no bound can be set for it; not a link yet.
   if (input.model !== undefined && canonicalModel(input.model) !== RERANK_MODEL && String(input.model) !== "rerank-v3.5") throw bad(`"model" must be ${RERANK_MODEL} (the only rerank model served on this route)`);
   const query = input.query;
   if (typeof query !== "string" || !query.trim()) throw bad('"query" (string) is required');

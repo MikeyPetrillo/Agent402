@@ -16,6 +16,7 @@
 export const AUDIO_ZDR_MODELS = new Set([
   "elevenlabs/scribe-v2",
   "mistralai/voxtral-mini-tts-2603",
+  "mistralai/voxtral-mini-tts-3-0",
   "hexgrad/kokoro-82m",
   "microsoft/mai-voice-2.1-flash",
   "microsoft/mai-voice-2.1",

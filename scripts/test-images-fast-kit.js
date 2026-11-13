@@ -80,6 +80,11 @@ ok(validateImageTierRequest({ prompt: "a fox", size: "1024x1024", quality: "hd",
 await throws(() => validateImageTierRequest({}, "v1-images-fast"), '"prompt" is required', "missing prompt -> 400");
 await throws(() => validateImageTierRequest({ prompt: "x".repeat(4001) }, "v1-images-fast"), "Prompt too long", "prompt cap -> 400");
 await throws(() => validateImageTierRequest({ prompt: "a fox", model: "dall-e-3" }, "v1-images-fast"), "fixed on this endpoint", "other model ids -> 400 naming the served model");
+{
+  const one = await throws(() => validateImageTierRequest({ prompt: "a fox", model: "dall-e-3", image: "x" }, "v1-images-edit"), "fixed on this endpoint", "edit tier: another model id -> 400");
+  ok(one && !/;\s+is the failover/.test(one.message) && one.message.includes(`${KLEIN3} (the one model served here)`), `a one-link tier names no empty failover (${one?.message})`);
+  const two = await throws(() => validateImageTierRequest({ prompt: "a fox", model: "dall-e-3" }, "v1-images-pro"), "is the failover", "control: a two-link tier still names its failover");
+}
 await throws(() => validateImageTierRequest({ prompt: "a fox", n: 2 }, "v1-images-pro"), "locked to 1", "n>1 -> 400 (price is per image)");
 await throws(() => validateImageTierRequest({ prompt: "a fox", response_format: "url" }, "v1-images-fast"), "b64_json", "url response_format -> 400");
 await throws(() => validateImageTierRequest({ prompt: "a fox", input_references: ["data:..."] }, "v1-images-fast"), "Reference images", "image-to-image refs -> 400 (billed extra upstream)");

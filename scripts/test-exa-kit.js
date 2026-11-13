@@ -13,6 +13,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import {
   EXA_TOOLS, exaEnabled, estimateExaUsd, actualExaUsd,
   exaSpendStatus, _exaSpendReset, _exaSpendBook, LITE_SEARCH_PARAMS, liteSearchBody,
+  LEGACY_SEARCH_TYPES, exaNotes, EXA_NOTE_MAX_ITEMS, EXA_NOTE_MAX_CHARS,
 } from "../src/tools/exa-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
@@ -135,20 +136,41 @@ const reset = () => { calls = []; _exaSpendReset(); process.env.EXA_API_KEY = "t
      "and a response with no cost field keeps the estimate instead of booking zero");
 }
 
-// --- type "instant" (2026-09-29): accepted, sent, and booked at its own rate --
+// --- legacy types (2026-10-19): fast and instant accepted, sent as lite -----
 {
-  reset(); stub(200, { results: [], resolvedSearchType: "instant" });
-  await tool("exa-search").handler({ query: "fast answer", type: "instant", numResults: 10 });
-  eq(JSON.parse(calls[0].opts.body).type, "instant", "type instant is sent to Exa as written");
-  ok(nearSpent(exaSpendStatus().spentUsd, R.instant), "an instant search with no costDollars books the instant estimate");
-  ok(near(estimateExaUsd("/search", { type: "instant", numResults: 10 }), R.instant) && near(estimateExaUsd("/search", { type: "instant", numResults: 3, contents: { text: true } }), R.instant + 3 * R.content), "instant estimate = the instant rate plus per-page content, like the other types");
+  for (const t of ["instant", "fast"]) {
+    reset(); stub(200, { results: [], resolvedSearchType: "" });
+    const out = await tool("exa-search").handler({ query: "fast answer", type: t, numResults: 10, category: "news" });
+    const sent = JSON.parse(calls[0].opts.body);
+    eq(sent.type, "lite", `type ${t} is sent as lite, the replacement the search reference names`);
+    ok(Object.keys(sent).every((k) => LITE_SEARCH_PARAMS.has(k)) && sent.category === "news", `a ${t} body keeps its filters, each one lite takes`);
+    ok(nearSpent(exaSpendStatus().spentUsd, R.lite), `a ${t} search with no costDollars books the lite estimate`);
+    ok(out.warnings?.length === 1 && out.warnings[0].code === "LEGACY_TYPE" && out.warnings[0].path === "/type" && new RegExp(`"${t}".*"lite"`).test(out.warnings[0].message), `the answer says ${t} ran as lite (${JSON.stringify(out.warnings)})`);
+    eq(out.searchType, "lite", `an empty resolved type reads as the type sent (${t})`);
+  }
+  eq(LEGACY_SEARCH_TYPES, { fast: "lite", instant: "lite" }, "the legacy map is the one the search reference publishes");
+  ok(near(estimateExaUsd("/search", { type: "instant", numResults: 10 }), R.instant) && near(estimateExaUsd("/search", { type: "instant", numResults: 3, contents: { text: true } }), R.instant + 3 * R.content), "an instant body (none is sent now) still estimates at the instant rate plus per-page content");
   ok(near(estimateExaUsd("/search", { numResults: 10 }), R.search) && near(estimateExaUsd("/search", { type: "auto", numResults: 10 }), R.search) && near(estimateExaUsd("/search", { type: "fast", numResults: 10 }), R.search), "control: auto, fast and no type keep their estimate");
   ok(near(estimateExaUsd("/findSimilar", { type: "instant", numResults: 10 }), R.search), "instant pricing applies to /search only");
-  reset(); stub(200, { results: [], costDollars: { total: R.instant * 1.3 } });
+  reset(); stub(200, { results: [], costDollars: { total: R.lite * 1.3 } });
   await tool("exa-search").handler({ query: "fast answer", type: "instant" });
-  ok(nearSpent(exaSpendStatus().spentUsd, R.instant * 1.3), "Exa's own costDollars still corrects the instant estimate upward");
+  ok(nearSpent(exaSpendStatus().spentUsd, R.lite * 1.3), "the upstream's own costDollars still corrects the estimate upward");
+  reset(); stub(200, { results: [] });
+  const plain = await tool("exa-search").handler({ query: "x", type: "auto" });
+  ok(plain.warnings === undefined && plain.notices === undefined && plain.searchType === "auto", "control: a current type carries no warning, and no notes field when the upstream sends none");
   await throws(() => tool("exa-search").handler({ query: "x", type: "deep" }), /auto, neural, keyword, lite, fast or instant/, "an unlisted type is still refused, naming every accepted type");
   eq(tool("exa-search").price, "$0.012", "the tool's price is unchanged");
+}
+
+// --- warnings and notices (2026-10-19) are passed through, bounded ----------
+{
+  reset();
+  const many = Array.from({ length: 15 }, (_, k) => ({ code: "RESTRICTIONS_RELAXED", path: "/query", message: `notice ${k}`, details: { x: 1 } }));
+  stub(200, { results: [{ title: "T", url: "https://e.example" }], warnings: [{ code: "IGNORED_FIELD", path: "/startCrawlDate", message: "m".repeat(900) }, null, { code: "X" }], notices: many });
+  const out = await tool("exa-search").handler({ query: "agent payments", type: "auto" });
+  ok(out.warnings?.length === 1 && out.warnings[0].code === "IGNORED_FIELD" && out.warnings[0].path === "/startCrawlDate" && out.warnings[0].message.length === EXA_NOTE_MAX_CHARS, "a warning passes through as code, path and message, the message bounded; an item without a message is dropped");
+  ok(out.notices?.length === EXA_NOTE_MAX_ITEMS && out.notices[0].message === "notice 0" && !("details" in out.notices[0]), `notices pass through, at most ${EXA_NOTE_MAX_ITEMS}, as code, path and message`);
+  eq(exaNotes("not a list"), [], "a notes field that is not a list reads as none");
 }
 
 // --- type "lite" (2026-10-19): its own rate, and only the parameters it takes --
