@@ -58,9 +58,13 @@ const plan = [
   { step: 2, purpose: "two", tool: tool("ext", { seller: "seller.example", firstParty: false, endpoint: "https://seller.example/x", priceUsd: 0.02 }), fallbacks: [tool("c")], dependsOn: [1] },
 ];
 const calls = [];
+// The caller each first-party step runs under (src/dispatch-caller.js), and
+// the request it was handed (none).
+const { currentDispatchCaller } = await import("../src/dispatch-caller.js");
+const stepCallers = [];
 let failA = false, routerMode = "ok";
 const catalog = {
-  a: { slug: "a", route: "POST /api/a", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["a", p]); if (failA) throw Object.assign(new Error("a broke"), { statusCode: 502 }); return { a: p.q }; } },
+  a: { slug: "a", route: "POST /api/a", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p, stepReq) => { calls.push(["a", p]); stepCallers.push([currentDispatchCaller(), stepReq]); if (failA) throw Object.assign(new Error("a broke"), { statusCode: 502 }); return { a: p.q }; } },
   b: { slug: "b", route: "POST /api/b", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["b", p]); return { b: p.q }; } },
   c: { slug: "c", route: "POST /api/c", price: "$0.01", discovery: { bodyType: "json" }, handler: async (p) => { calls.push(["c", p]); return { c: p.q }; } },
   rx: { slug: "route-execute-pro", route: "POST /api/route/execute-pro", handler: async (input) => {
@@ -101,6 +105,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const req = mkReq();
   const out = await exec({ decisionId: "d1", creditToken: globalThis.__credit1, params: { 2: { q: "given" } } }, req);
   ok(out.status === "complete" && out.steps.length === 2 && out.steps.every((s) => s.status === "ok"), "both steps ran");
+  ok(stepCallers.length === 1 && stepCallers[0][0] === "ip:0xabc" && stepCallers[0][1] === undefined, `a first-party step runs under the paying caller's key and is handed no request (${JSON.stringify(stepCallers.map(([k, r]) => [k, typeof r]))})`);
   const rcall = calls.find((c) => c[0] === "router")?.[1];
   ok(rcall && rcall.include === "external" && rcall.target === "https://seller.example/x" && rcall.params.q === "given", "the external step is pinned to the planned endpoint and gets the caller's params");
   ok(out.steps[1].costUsd === 0.0189 && out.steps[1].routingFeeUsd === 0.0009 && out.steps[0].costUsd === 0.01, "cost = seller's actual price + disclosed fee on third-party steps; list price, no fee, on first-party");

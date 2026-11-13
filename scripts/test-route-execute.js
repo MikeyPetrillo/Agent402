@@ -70,6 +70,17 @@ const expectErr = async (input, statusCode, name, contains) => {
   }
 };
 
+// 0. A local step runs with no request but under the dispatching caller's
+// key (src/dispatch-caller.js), so a per-caller admission rule can count it.
+{
+  const { currentDispatchCaller } = await import("../src/dispatch-caller.js");
+  let seenCaller = "unset", seenReq = "unset";
+  addTool({ route: "POST /api/caller-probe", slug: "caller-probe", name: "Caller probe", category: "misc", price: "$0.001", description: "Reports its caller", tags: [], discovery: { bodyType: "json", input: {} }, handler: async (_i, req) => { seenCaller = currentDispatchCaller(); seenReq = req; return { ok: true }; } });
+  await tool.handler({ slug: "caller-probe", params: {} }, { ip: "198.51.100.40", headers: {} });
+  ok(seenCaller === "ip:198.51.100.40" && seenReq === undefined, `a local step runs under the dispatching caller's key and sees no request (${seenCaller}, ${typeof seenReq})`);
+  delete CATALOG["POST /api/caller-probe"];
+}
+
 // 1. Direct slug dispatch — the discovery example's own path.
 {
   const r = await tool.handler({ slug: "hash", params: { text: "agent402" } });
@@ -620,9 +631,16 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     ok(hit.r?.receipt?.sellerPaid === false, "CONTROL: an unpaid 200 carrying a guaranteed path is sold");
     const errPromised = await run({ list: [{ ...cand("v.example"), guaranteedPaths: ["ok", "errors"] }], pay: async () => ({ result: { ok: false, errors: ["bad checksum"] }, quote: null, receipt: null }) });
     ok(errPromised.r?.receipt?.sellerPaid === false, "CONTROL: ok/errors the seller guarantees (a validator) are its answer");
-    for (const body of [[], 0, "text", { results: [] }]) {
+    for (const body of [0, "text", [1], { results: [] }]) {
       const c = await run({ list: [cand("ans.example")], pay: async () => ({ result: body, quote: null, receipt: null }) });
       ok(c.r?.receipt?.sellerPaid === false, `CONTROL: an unpaid ${JSON.stringify(body)} is the seller's answer and is sold`);
+    }
+    // A top-level array or scalar is judged by the promised shape: an array of
+    // nothing answers nothing, and on a route that guarantees object paths an
+    // array or a scalar answers none of them. Not sold, nothing booked.
+    for (const [label, body, paths, why] of [["[]", [], [], "empty"], ["[] on a promised route", [], ["data.price"], "missing-fields"], ["42 on a promised route", 42, ["data.price"], "missing-fields"], ["[1] on a promised route", [1], ["data.price"], "missing-fields"]]) {
+      const { e } = await run({ list: [{ ...cand("shape.example"), guaranteedPaths: paths }], pay: async () => ({ result: body, quote: null, receipt: null }) });
+      ok(e?.statusCode === 502 && new RegExp(`\\(${why}\\)`).test(e.message) && e.committed !== true, `an unpaid ${label} is a failed upstream: 502 (${why}) (got ${e?.statusCode} ${e?.message?.slice(0, 100)})`);
     }
     // The refused non-answer is still the seller's delivery: observed against
     // the paths it guaranteed (a missed promise), exactly as a paid delivery

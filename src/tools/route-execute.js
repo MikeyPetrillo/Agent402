@@ -38,6 +38,7 @@ import { EVM_BUYER_CHAINS, EVM_BUYER_CHAIN_BY_NETWORK, isEvmBuyerChain, evmBuyer
 import { recordRouterPurchase, retractRouterPurchase } from "../router-purchases.js";
 import { adaptParamsToExample } from "../mpp-input-examples.js";
 import { boundRequestUrl, isQueryMethod, BOUND_URL_MAX_CHARS } from "../bound-request-url.js";
+import { runAsCallerOf } from "../dispatch-caller.js";
 
 // The external leg's default budget for a Solana payer: the short end of a
 // recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
@@ -1057,7 +1058,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
       const underlying = toUsd(def.price);
       let result;
       try {
-        result = await def.handler(params);
+        result = await runAsCallerOf(req, () => def.handler(params));
         // Never relay an inner handler's meter sentinel (non-enumerable now,
         // but belt and braces: this object is nested into our own response).
         if (result && typeof result === "object") { try { delete result.__meterUpstreamUsd; } catch { /* frozen */ } }

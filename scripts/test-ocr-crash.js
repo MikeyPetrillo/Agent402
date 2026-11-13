@@ -325,6 +325,31 @@ async function call(input) {
     const tool = OCR_TOOLS.find((t) => t.slug === "image-ocr");
     await tool.handler({ image: big.toString("base64"), lang: "tur" }, { ip: D.slice(3), headers: {} }).catch(() => {});
     ok(seen === D, `a large image's place is held for the caller's address when no payer is signed (held for ${seen})`);
+    // An in-process executor calls the handler with no request: the place is
+    // held for the caller that dispatched the step (runAsCallerOf), and with
+    // no caller at all under one shared key, never uncounted.
+    const { runAsCallerOf, IN_PROCESS_CALLER } = await import("../src/dispatch-caller.js");
+    seen = null;
+    __ocrTest.inject("tur", { recognize: async () => { seen = __ocrLargeTest.state().holder; return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+    await runAsCallerOf({ ip: C.slice(3), headers: {} }, () => tool.handler({ image: big.toString("base64"), lang: "tur" })).catch(() => {});
+    ok(seen === C, `a step dispatched without a request holds its place for the dispatching caller (held for ${seen})`);
+    seen = null;
+    __ocrTest.inject("tur", { recognize: async () => { seen = __ocrLargeTest.state().holder; return { data: { text: "x", lines: [] } }; }, terminate: async () => {} });
+    await tool.handler({ image: big.toString("base64"), lang: "tur" }).catch(() => {});
+    ok(seen === IN_PROCESS_CALLER, `a call with no caller at all is held under the shared key (held for ${seen})`);
+    // Request-less places fill the slot and both queued places: they are
+    // counted, so a named newcomer still takes the last queued one.
+    const relU = await __ocrLargeTest.acquire(50);
+    const u2 = __ocrLargeTest.acquire(5_000).then((rel) => rel, (e) => e);
+    const u3 = __ocrLargeTest.acquire(5_000).then((rel) => rel, (e) => e);
+    const n1 = __ocrLargeTest.acquire(5_000, B).then((rel) => rel, (e) => e);
+    const shedU = await Promise.race([u3, new Promise((r) => setTimeout(() => r("still queued"), 300))]);
+    ok(shedU?.statusCode === 503 && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `a named newcomer takes the last queued place of request-less calls holding the slot and the queue (that one answered ${shedU?.statusCode || shedU})`);
+    relU();
+    const ru2 = await u2; ru2(); const rn1 = await n1;
+    ok(typeof rn1 === "function", "and its image is read in turn");
+    rn1();
+    ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every request-less place is released");
   }
 
   // --- engine-backed ---
