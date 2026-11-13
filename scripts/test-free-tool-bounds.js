@@ -252,6 +252,30 @@ function rng(seed) {
   ok(!rch.err && rch.out.resolved > 8_000 && rch.hold < 250, `resolve-refs: an 8,000-deep ref chain (${JSON.stringify(deepChain).length} bytes) answers with the loop held ${rch.hold.toFixed(0)}ms (${rch.err?.statusCode || rch.err?.message || rch.out?.resolved})`);
   const loopBack = chainOf(500); loopBack.c.s500 = { $ref: "#/c/s250" };
   ok(JSON.stringify(await tool.handler({ spec: loopBack })) === JSON.stringify(oldAnswer(loopBack)), "resolve-refs: a 500-deep chain that loops back answers as the full walk did");
+  // A ref cycle reached along many paths: a 2,000-ref cycle and 1,500 keys
+  // that reference its head (about 94 KB), and the same through one wrapper
+  // ref per key. Nothing inside a cycle is reusable from inside it, so the
+  // walk's steps are capped: refused with a 400 naming the cap, inside the
+  // free tier's CPU bound.
+  {
+    const { RESOLVE_REFS_MAX_STEPS } = await import("../src/tools/api-kit.js");
+    const cycleKeys = (L, N, wrap) => { const s = { c: {}, w: {} }; for (let i = 0; i < L; i++) s.c["s" + i] = { $ref: "#/c/s" + ((i + 1) % L) }; for (let i = 0; i < N; i++) { if (wrap) { s.w["w" + i] = { $ref: "#/c/s0" }; s["k" + i] = { $ref: "#/w/w" + i }; } else s["k" + i] = { $ref: "#/c/s0" }; } return s; };
+    for (const [label, spec] of [["1,500 keys", cycleKeys(2000, 1500, false)], ["1,000 wrapped keys", cycleKeys(2000, 1000, true)]]) {
+      const r = await bestOf(() => tool.handler({ spec }));
+      ok(Number.isFinite(RESOLVE_REFS_MAX_STEPS) && r.err?.statusCode === 400 && /steps/.test(r.err.message) && /in parts/.test(r.err.message) && r.ms < BOUND_MS, `resolve-refs: a ${JSON.stringify(spec).length}-byte spec of ${label} into a 2,000-ref cycle is refused with a 400 in ${r.ms.toFixed(0)}ms of CPU (${r.err?.statusCode || "answered"} ${String(r.err?.message || "").slice(0, 60)})`);
+    }
+    // A cycle met with no ref in progress resolves the same way each time, so
+    // it is resolved once and reused: 1,500 keys referencing the head of a
+    // small cycle with a large body answer as the full walk did, in steps
+    // linear in the spec.
+    const big = { c: { A: { type: "object", properties: { b: { $ref: "#/c/B" } } }, B: { type: "object", properties: Object.fromEntries(Array.from({ length: 200 }, (_, i) => ["p" + i, { type: "string" }])) } } };
+    big.c.B.properties.a = { $ref: "#/c/A" };
+    for (let i = 0; i < 1500; i++) big["k" + i] = { $ref: "#/c/A" };
+    const { __resolveRefsBudgetForTest } = await import("../src/tools/api-kit.js");
+    const steps = (await __resolveRefsBudgetForTest(JSON.parse(JSON.stringify(big)))).steps;
+    ok(steps < 20_000, `resolve-refs: a cycle reached from 1,500 top-level keys is walked once and reused (${steps} steps)`);
+    ok(JSON.stringify(await tool.handler({ spec: JSON.parse(JSON.stringify(big)) })) === JSON.stringify(oldAnswer(big)), "resolve-refs: and answers as the full walk did");
+  }
 }
 
 // ---------------------------------------------------------------------------
