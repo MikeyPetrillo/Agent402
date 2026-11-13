@@ -54,6 +54,7 @@ import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtim
 import { retryingLoad } from "./store-retry.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
 import { cleanSalePath, salePathGroup } from "./sale-path.js";
+import { enableWal } from "./sqlite-wal.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DB_PATH = process.env.SALES_LEDGER_DB || join(HAS_DATA_DIR ? "/data" : "/tmp", "agent402-sales.db");
@@ -73,9 +74,9 @@ const BURNERS = new Set([
 ]);
 
 const db = new Database(USE_PG ? ":memory:" : DB_PATH);
-if (!USE_PG) db.pragma("journal_mode = WAL");
+if (!USE_PG) enableWal(db);
 // Write-through handle (database mode, while the file's directory exists).
-const fileDb = USE_PG && existsSync(dirname(DB_PATH)) ? (() => { try { const f = new Database(DB_PATH); f.pragma("journal_mode = WAL"); return f; } catch { return null; } })() : null;
+const fileDb = USE_PG && existsSync(dirname(DB_PATH)) ? (() => { try { const f = new Database(DB_PATH); enableWal(f); return f; } catch { return null; } })() : null;
 for (const h of [db, fileDb]) if (h) h.exec(`
 CREATE TABLE IF NOT EXISTS sales (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,

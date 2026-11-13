@@ -51,6 +51,7 @@ import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, 
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, NEWER_FILE_GRACE_MS, ledgerFileMtime, sqliteFileRows, serialQueue, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
 import { registerSqliteStore } from "./memory-stores.js";
+import { enableWal } from "./sqlite-wal.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 const DATA_DIR = process.env.REFUND_DB_DIR || (HAS_DATA_DIR ? "/data" : "/tmp");
@@ -60,11 +61,11 @@ const USE_PG = stateDbEnabled();
 /** "pg" when the ledger lives in the state database, "file" when it is the SQLite file. */
 export const refundLedgerBackend = USE_PG ? "pg" : "file";
 const db = new Database(USE_PG ? ":memory:" : DB_FILE);
-if (!USE_PG) db.pragma("journal_mode = WAL");
+if (!USE_PG) enableWal(db);
 // Write-through (database mode): while the volume is still mounted, every
 // landed write is also applied to the file, so a rollback to the previous
 // build reads a current ledger. Best effort, never the verdict, logged once.
-const fileDb = USE_PG && existsSync(DATA_DIR) ? (() => { try { const f = new Database(DB_FILE); f.pragma("journal_mode = WAL"); return f; } catch { return null; } })() : null;
+const fileDb = USE_PG && existsSync(DATA_DIR) ? (() => { try { const f = new Database(DB_FILE); enableWal(f); return f; } catch { return null; } })() : null;
 
 for (const h of [db, fileDb]) if (h) h.exec(`
   CREATE TABLE IF NOT EXISTS refunds (

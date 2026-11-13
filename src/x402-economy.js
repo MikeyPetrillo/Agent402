@@ -27,6 +27,7 @@ import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady,
 import { retryingLoad } from "./store-retry.js";
 import { registerMemoryStore, registerSqliteStore } from "./memory-stores.js";
 import { OUR_EVM_WALLETS } from "./revenue-live.js";
+import { enableWal } from "./sqlite-wal.js";
 
 // Persistent daily history — the live query only reaches back 30 days, so
 // every snapshot upserts its daily rows into the economy table (the state
@@ -48,7 +49,7 @@ if (!PG) {
   try {
     mkdirSync(dirname(HISTORY_DB), { recursive: true });
     hdb = new Database(HISTORY_DB);
-    hdb.pragma("journal_mode = WAL");
+    enableWal(hdb);
   } catch (e) {
     console.warn(`x402-economy: history DB unavailable (${String(e?.message || e).slice(0, 120)}) - daily history disabled`);
     hdb = null;

@@ -181,6 +181,7 @@ function logEntry(r) {
 //      its whole chain removed; a later write starts a new chain at seq 1.
 // Actors (the paying wallets) are never rewritten: attribution stays as signed.
 import { AUDIT_RETENTION_DEFAULT_DAYS, auditRetentionDays, AUDIT_SWEEP_MS } from "../memory-retention.js";
+import { enableWal } from "../sqlite-wal.js";
 export { AUDIT_RETENTION_DEFAULT_DAYS, auditRetentionDays, AUDIT_SWEEP_MS };
 const KEY_ACTIONS = "('put','delete','incr','cas-set','cas-del')";
 const DOC_ACTIONS = "('remember','forget')";
@@ -399,7 +400,7 @@ function replayStored(row, fp) {
 /** Open the SQLite file read-write with the tables in place (older files migrated). */
 function openSqlite() {
   const db = new Database(DB_FILE);
-  db.pragma("journal_mode = WAL");
+  enableWal(db);
   db.exec(SQLITE_DDL);
 
   // Migrate older tables in place if needed.

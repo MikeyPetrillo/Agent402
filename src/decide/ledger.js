@@ -46,6 +46,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, imports, trackStoreReady, withSchemaLock } from "../state-db.js";
 import { retryingLoad } from "../store-retry.js";
 import { createDeadLetter, isRowError, everyMs } from "../ledger-mirror.js";
+import { enableWal } from "../sqlite-wal.js";
 
 const micro = (usd) => Math.round(Number(usd) * 1e6);
 const RUN_MAX_MS = 15 * 60_000;
@@ -90,7 +91,7 @@ function capRefusal(caps, budgetUsd, payer, ex) {
 }
 
 function ensureSqliteSchema(db) {
-  db.pragma("journal_mode = WAL");
+  enableWal(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS decisions (
       id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, depth TEXT NOT NULL,

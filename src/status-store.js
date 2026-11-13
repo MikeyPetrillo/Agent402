@@ -29,6 +29,7 @@ import { basename } from "node:path";
 import { stateDbEnabled, stateDbSchema, stateQuery, withStateTx, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 import { registerSqliteStore } from "./memory-stores.js";
+import { enableWal } from "./sqlite-wal.js";
 
 const HAS_DATA_DIR = existsSync("/data");
 // STATUS_DB_PATH lets the offline tests point at a scratch file. Production
@@ -47,7 +48,7 @@ function open() {
     const dir = DB_PATH.replace(/\/[^/]+$/, "");
     if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
     db = new Database(DB_PATH);
-    db.pragma("journal_mode = WAL");
+    enableWal(db);
     db.exec(`
       CREATE TABLE IF NOT EXISTS status_probes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

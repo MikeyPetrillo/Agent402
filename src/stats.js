@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { importOnce, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withStateTx, withSchemaLock } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
+import { enableWal } from "./sqlite-wal.js";
 
 // Counters + recent-calls + meta live in /data (persistent volume) so they
 // survive redeploys — recentCalls is the live activity feed on the landing
@@ -163,7 +164,8 @@ function chargedFailureWriter({ bumpCounter, insertChargedFailure, pruneChargedF
 // ---------------------------------------------------------------------------
 function openSqlite(file) {
   const db = new Database(file);
-  db.pragma("journal_mode = WAL");
+  // Retried on SQLITE_BUSY: processes opening one fresh file at once race here.
+  enableWal(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS counters (k TEXT PRIMARY KEY, n INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS tool_counts (slug TEXT PRIMARY KEY, n INTEGER NOT NULL);

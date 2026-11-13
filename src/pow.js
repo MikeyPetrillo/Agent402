@@ -23,6 +23,7 @@ import { join, basename } from "node:path";
 import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, trackStoreReady, withSchemaLock } from "./state-db.js";
 import { retryingLoad } from "./store-retry.js";
 import { registerSqliteStore } from "./memory-stores.js";
+import { enableWal } from "./sqlite-wal.js";
 
 // Replay-protection lives in /data (persistent volume) so used PoW tokens
 // stay used across restarts. Falling back to /tmp on prod is unsafe: a
@@ -51,7 +52,7 @@ const DATA_DIR = HAS_DATA_DIR ? "/data" : "/tmp";
 // POW_DB_PATH names the local file (tests give each simulated container its own).
 const POW_DB_PATH = process.env.POW_DB_PATH || join(DATA_DIR, "agent402-pow.db");
 const db = new Database(POW_DB_PATH);
-db.pragma("journal_mode = WAL");
+enableWal(db);
 db.exec("CREATE TABLE IF NOT EXISTS pow_used (challenge TEXT PRIMARY KEY, exp INTEGER NOT NULL)");
 db.exec("CREATE INDEX IF NOT EXISTS pow_used_exp ON pow_used (exp)");
 const markStmt = db.prepare("INSERT INTO pow_used (challenge, exp) VALUES (?, ?)");

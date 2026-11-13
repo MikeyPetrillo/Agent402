@@ -77,6 +77,7 @@ import { retryingLoad } from "./store-retry.js";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { logSafe } from "./log-safe.js";
+import { enableWal } from "./sqlite-wal.js";
 
 // The preview version that documents transaction_verification. Overridable
 // because a preview version WILL move, and a version bump must be an env
@@ -273,7 +274,7 @@ export function createShadowLedger(deps = {}) {
     try {
       if (!deps.dbFile) { try { mkdirSync(DEFAULT_DIR(), { recursive: true }); } catch { /* exists */ } }
       db = new Database(dbFile);
-      db.pragma("journal_mode = WAL");
+      enableWal(db);
       db.exec(`
         CREATE TABLE IF NOT EXISTS shadow (
           tx           TEXT PRIMARY KEY,      -- on-chain hash/signature = the idempotency key

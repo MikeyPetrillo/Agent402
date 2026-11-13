@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (161 scripts, one process each)
+# @step 1: Offline suites (162 scripts, one process each)
 # Paid scan budget (a public route must not spend without limit)
 t node scripts/test-paid-scan-budget.js
 # A registry listing is not a seller answering (origin-responded)
@@ -333,6 +333,8 @@ t node scripts/test-log-safe.js
 t node scripts/test-db-ssl.js
 # Local SQLite fallback contract: the stats and memory stores report persistence honestly and fail loud in prod without durable storage
 t node scripts/test-stats-persistence.js
+# Several processes opening one fresh SQLite store at once all boot (WAL switch retried on SQLITE_BUSY - offline)
+t node scripts/test-stats-concurrent-open.js
 # Buyer SDK response-size ceiling (refused before parsing; a paid oversize says it was paid - offline)
 t node scripts/test-client-response-cap.js
 # Long-running routes are EVM-exact-only by ONE definition (server and the AVM sweep agree - offline)
