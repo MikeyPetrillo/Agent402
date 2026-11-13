@@ -2103,19 +2103,31 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   }
   ok(validateRequest({ model: H4, messages: m1, temperature: 0.2 }, "v1-chat").temperature === 0.2, "Haiku 4.5 keeps temperature");
   ok(validateRequest({ model: H4, messages: [...m1, { role: "assistant", content: "Sure," }] }, "v1-chat").model === H4, "Haiku 4.5 keeps the assistant prefill");
-  ok(!tierAllows("v1-chat", "openai/gpt-6-luna") && tierFor("openai/gpt-6-luna") === "v1-chat-nano", "gpt-6-luna is not admitted on base (a buyer naming it keeps the nano price)");
+  ok(tierAllows("v1-chat", "openai/gpt-6-luna") && tierFor("openai/gpt-6-luna") === "v1-chat-nano", "gpt-6-luna is admitted on base as base's default, and its first home stays nano");
   // Base's default is gpt-6-luna: a call naming no model is served it on base,
-  // at base's price and caps, on every wire; a call NAMING it keeps nano's
-  // price (price by model), and a call naming another model is unaffected.
+  // at base's price and caps, on every wire; so is a call NAMING it on base
+  // (the id /v1/models lists as base's default), and a call naming another
+  // model is unaffected.
   {
     const { validateMessagesRequest } = await import("../src/tools/llm-messages-kit.js");
     const { validateResponsesRequest } = await import("../src/tools/llm-responses-kit.js");
     const dflt = validateRequest({ messages: m1, max_tokens: 64 }, "v1-chat");
     ok(dflt.model === "openai/gpt-6-luna" && dflt.__defaultedModel === "openai/gpt-6-luna" && K.crossTierHome("v1-chat", undefined) === null && K.flatTierQuoteUsd("v1-chat", undefined) === TIERS["v1-chat"].price, "base, no model: gpt-6-luna at base's own price");
     ok(validateRequest({ model: "default", messages: m1, max_tokens: 64 }, "v1-chat").model === "openai/gpt-6-luna", 'base, model "default": gpt-6-luna');
-    ok(K.flatTierQuoteUsd("v1-chat", "openai/gpt-6-luna") === TIERS["v1-chat-nano"].price && K.crossTierHome("v1-chat", "gpt-6-luna") === "v1-chat-nano", "base, gpt-6-luna named: quoted and served at its nano home");
-    ok(!tierAllows("v1-chat", "openai/gpt-6-luna", undefined) && !tierAllows("v1-chat", "openai/gpt-6-luna", "openai/gpt-6-luna", { defaulted: true }), "the default admission needs a call that named no model");
-    ok(!tierAllows("v1-chat-pro", "openai/gpt-6-luna", undefined, { defaulted: true }), "a default admits only the tier's own default");
+    // Base's default named on base: admitted and quoted at base on all three
+    // wires (it used to answer 400 "served by the v1-chat-nano tier").
+    const tryV = (f) => { try { return f(); } catch (e) { return { model: null, body: {}, err: e.message }; } };
+    for (const named of ["openai/gpt-6-luna", "gpt-6-luna"]) {
+      ok(K.flatTierQuoteUsd("v1-chat", named) === TIERS["v1-chat"].price && K.crossTierHome("v1-chat", named) === null, `base, ${named} named: quoted and served at base`);
+      const c = tryV(() => validateRequest({ model: named, messages: m1, max_tokens: 64 }, "v1-chat"));
+      ok(c.model === "openai/gpt-6-luna" && !c.__defaultedModel, `chat wire on base, ${named} named: admitted (${c.err || "ok"})`);
+      const mn = tryV(() => validateMessagesRequest({ model: named, max_tokens: 64, messages: m1 }, "v1-chat"));
+      ok(mn.body.model === "openai/gpt-6-luna" && !mn.defaultedModel, `Messages wire on base, ${named} named: admitted (${mn.err || "ok"})`);
+      const rn = tryV(() => validateResponsesRequest({ model: named, input: "hi", max_output_tokens: 64 }, "v1-chat"));
+      ok(rn.body.model === "openai/gpt-6-luna" && !rn.defaultedModel, `Responses wire on base, ${named} named: admitted (${rn.err || "ok"})`);
+    }
+    ok(K.flatTierQuoteUsd("v1-chat-nano", "openai/gpt-6-luna") === TIERS["v1-chat-nano"].price && K.flatTierQuoteUsd("v1-chat-pro", "openai/gpt-6-luna") === TIERS["v1-chat-nano"].price, "gpt-6-luna named on nano or pro keeps nano's price");
+    ok(!tierAllows("v1-chat", "openai/gpt-6-luna-pro") && !tierAllows("v1-chat-pro", "openai/gpt-6-luna"), "a tier admits only its own default ids, by exact id");
     const mm = validateMessagesRequest({ max_tokens: 64, messages: m1 }, "v1-chat");
     const rr = validateResponsesRequest({ input: "hi", max_output_tokens: 64 }, "v1-chat");
     ok(mm.body.model === "openai/gpt-6-luna" && rr.body.model === "openai/gpt-6-luna", `Messages and Responses on base, no model: gpt-6-luna (${mm.body.model}, ${rr.body.model})`);
@@ -2343,7 +2355,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const base = bySlug["v1-chat"].discovery;
   ok(!("model" in base.input) && base.output.example.model === TIERS["v1-chat"].defaultModel && TIERS["v1-chat"].defaultModel === "openai/gpt-6-luna", "base: the example omits model and is answered by the base default, gpt-6-luna");
   ok(flatTierQuoteUsd("v1-chat", base.input.model) === priceOf("v1-chat") && priceOf("v1-chat") !== priceOf("v1-chat-nano"), "base: the example is quoted at the base price, not the nano price");
-  ok(flatTierQuoteUsd("v1-chat", TIERS["v1-chat"].defaultModel) === priceOf("v1-chat-nano"), "control: naming gpt-6-luna on base quotes nano's price, which is why the example omits it");
+  ok(flatTierQuoteUsd("v1-chat", TIERS["v1-chat"].defaultModel) === priceOf("v1-chat"), "naming base's default on base quotes the base price too");
   ok(bySlug["v1-chat-pro"].discovery.input.model === "openai/gpt-6.1-terra" && flatTierQuoteUsd("v1-chat-pro", "openai/gpt-6.1-terra") === priceOf("v1-chat-pro"), "pro: the example names gpt-6.1-terra at the pro price");
 }
 

@@ -367,7 +367,8 @@ export const TIERS = {
     // gpt-6-luna: OpenAI's named replacement for gpt-4o-mini, which was the
     // default until its 2027-01-14 shutdown was scheduled. A call naming no
     // model is served it here at this tier's price and caps (tierAllows'
-    // `defaulted`); a caller NAMING it keeps its nano home and price.
+    // `defaulted`); a caller naming it on this route is served here too, at
+    // this tier's price (tierAllows admits a tier's own defaults by name).
     defaultModel: "openai/gpt-6-luna", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
     // A default call carrying temperature or top_p (which luna does not take)
     // is served by the Gemini wire's base default, which does (defaultModelFor).
@@ -1174,16 +1175,18 @@ function prefixesAdmit(tier, id) {
  *  gpt-5-nano would move to nano on 2026-12-11 (gpt-5.6-luna's only flat
  *  home), with nano's smaller input and output caps. A caller naming the
  *  successor itself keeps the successor's own home tier and price.
- *  `defaulted`: the caller named no model and the wire chose the tier's own
- *  default (defaultModelFor); a tier always serves its default to such a call,
- *  at its own price and caps, though a caller NAMING that model may have
- *  another home (gpt-6-luna is base's default and nano's model). */
-export function tierAllows(tierSlug, model, requested, { defaulted = false } = {}) {
+ *  A tier always serves its own default ids (defaultModel, defaultModelCompat)
+ *  at its own price and caps: to a call that named no model (defaultModelFor)
+ *  and to a caller who NAMES one on that tier (gpt-6-luna is base's default and nano's
+ *  model: named on base it is served at base's price, as /v1/models lists it),
+ *  while tierFor still reads the model's first home, so other routes keep
+ *  quoting it at nano. */
+export function tierAllows(tierSlug, model, requested) {
   const tier = TIERS[tierSlug];
   if (!tier) return false;
   const id = canonicalModel(model).toLowerCase();
   if (retiringModel(id)) return false;
-  if (defaulted && !canonicalModelRaw(requested) && [tier.defaultModel, tier.defaultModelCompat].some((d) => d && d.toLowerCase() === id)) return true;
+  if ([tier.defaultModel, tier.defaultModelCompat].some((d) => d && d.toLowerCase() === id)) return true;
   // Belt for refuseCostVariants: a "-contributor" listing is never admitted
   // by a family prefix (meta/muse-spark admits meta/muse-spark-1.3-...).
   if (/-contributor(?:$|:)/.test(id)) return false;
@@ -2236,7 +2239,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // ":batch" is the asynchronous batch
   // API (24h window), not a chat completion this path can serve.
   refuseCostVariants(model);
-  if (!tierAllows(tierSlug, model, input.model, { defaulted: defaultedModel === model })) {
+  if (!tierAllows(tierSlug, model, input.model)) {
     // "auto" reaches here only when the request was not gated at the auto
     // price (no request, or FREE_MODE): name the route that serves it.
     if (model === AUTO_MODEL && TIERS[AUTO_TIER]) {
