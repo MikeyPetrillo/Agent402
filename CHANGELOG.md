@@ -11,7 +11,8 @@ Tools:
 - Transcription measures each file's length by decoding it before any upstream
   call. WMA, raw AAC, AMR and CAF recordings are read and sent as FLAC, an MP4
   or MKV holding several audio tracks is sent as its first track, and AAC
-  behind an ID3 tag or an MP3 with leading padding is read too. A PCM WAV
+  behind an ID3 tag, an MP3 with leading padding and an Ogg file sent under
+  another format's name are read too. A PCM WAV
   whose size alone keeps it inside the cap is sent without a decode, and a
   call that finds the decoder busy waits its turn inside the time its payment
   allows.
@@ -32,8 +33,9 @@ Payments:
   released, so a retry with the same credential finds the debt.
 - While many /v1 payments fail to settle across the service, only a wallet
   that has never settled a payment is held after one unsettled run; a wallet
-  that has ever paid is served as before, and settlements that fail for an
-  unknown cause never start that bound.
+  that has ever paid is served as before, a caller with no proven wallet keeps
+  the usual count, and settlements that fail for an unknown cause never start
+  that bound.
 - One signed EVM authorization whose settlement keeps failing for the buyer's
   reason is refused on its own, and a new authorization from the same wallet
   is served at once.
