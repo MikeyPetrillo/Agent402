@@ -249,6 +249,14 @@ const ADDRESSEE = "(?:models?|llms?|ais?|agents?|assistants?|judges?|evaluators?
 // Whom a note is written to: the reader that selects, never the agent or
 // developer a usage note ("Note for agents: pass a url") is honestly for.
 const SELECTOR = "(?:models?|llms?|ais?|assistants?|judges?|evaluators?|graders?|raters?|rankers?|scorers?|selectors?|systems?|reviewers?)";
+// A role marker: a role word followed by the punctuation that ends a speaker
+// label. A colon or a closing bracket ends one as written ("System:",
+// "[judge]"); any other separator ("System;", "System -", "System)",
+// "System /", "System.") does once a space or the end of the text follows it,
+// so "AI-powered" and "System status" stay ordinary words. One definition,
+// read by the sentence-opening rule and the after-a-sentence rule below.
+const ROLE_SEPARATOR = "(?:\\s*[:\\]>]|\\s*[;)\\/.|=\\-\u2013\u2014](?=\\s|$))";
+const ROLE_WORD = "(?:system|assistant|judge|evaluator|grader|ranker|rater|scorer|selector|developer|admin|llm|ai|override|verdict|decision)";
 const READER_PATTERNS = [
   // "reads as an instruction to an AI" describes text a tool finds; it is
   // not addressed to anyone.
@@ -257,7 +265,7 @@ const READER_PATTERNS = [
   new RegExp(`\\bas\\s+(?:the|an?|our|this)\\s+(?:[a-z-]+\\s+)?(?:evaluator|judge|ranker|grader|rater|scorer|selector|reviewer|assistant|model|llm|ai)s?\\s*,?\\s*(?:you|please|always|rate|pick|choose|select|prefer|give|score|answer|must|should)\\b`),
   new RegExp(`\\b(?:you|the\\s+(?:[a-z-]+\\s+)?${ADDRESSEE})\\s+(?:must|should|shall|will|need\\s+to|have\\s+to|are\\s+(?:required|instructed|told)\\s+to|is\\s+(?:required|instructed|told)\\s+to)\\s+(?:always\\s+|now\\s+|only\\s+)?(?:rate|score|pick|choose|select|prefer|rank|mark|grade|recommend|ignore|disregard|forget|(?:answer|output|respond|return|treat|consider|give)\\s+(?:with\\s+)?(?:this|me|us|it|best|yes|1))\\b`),
   // A role marker opening the sentence, or a chat-template token anywhere.
-  /^\s*["'([{<]*\s*(?:system|assistant|judge|evaluator|grader|ranker|rater|scorer|selector|developer|admin|llm|ai|override|verdict|decision)\s*[:\]>]/,
+  new RegExp(`^\\s*["'([{<]*\\s*${ROLE_WORD}${ROLE_SEPARATOR}`),
   /<\|[^|<>\s]{1,40}\|>|\|(?:im_[a-z]+|endoftext|eot_id|[a-z]+_header_id|begin_of_text|end_of_text|[a-z]+_of_turn)\||\[\s*\/?\s*inst\s*\]|<<\/?sys>>|(?<!#)#{2,}\s*(?:system|instructions?|assistant|user)\b/,
   // Asking to be chosen, ranked or rated.
   // "us" followed by a hyphen or a dotted name is a region or a host (us-east-1).
@@ -280,7 +288,7 @@ const READER_PATTERNS = [
   /\b(?:ignore|disregard|forget)\s+(?:all\s+|any\s+|the\s+)?(?:what|everything|anything|previous|prior|above|earlier|other)\b/,
   // A role marker after a sentence end, for text read as one run (a joined
   // set of tags).
-  /[.!?]\s+(?:system|assistant)\s*:/,
+  new RegExp(`[.!?]\\s+(?:system|assistant)${ROLE_SEPARATOR}`),
   // Asking to be chosen, in the other languages seen on the index: the verb,
   // "always" and the listing itself as the object, so a usage note ("Wähle
   // immer die passende Sprache", "elige siempre el formato") is not read as one.
