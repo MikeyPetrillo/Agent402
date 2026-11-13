@@ -177,7 +177,11 @@ if (a[0] === "api" && /\\/pulls\\/\\d+\\/reviews$/.test(a[1])) {
   const seq = path.join(D, "reviews." + n + ".json"); out(fs.existsSync(seq) ? fs.readFileSync(seq, "utf8") : file("reviews.json"));
 }
 if (a[0] === "api" && /\\/pulls\\/\\d+\\/comments$/.test(a[1])) out(file("review-comments.json"));
-if (a[0] === "api" && /\\/issues\\/\\d+\\/comments$/.test(a[1])) out(file("issue-comments.json"));
+if (a[0] === "api" && /\\/issues\\/\\d+\\/comments$/.test(a[1])) {
+  const n = file("polls") === "[]" ? 0 : Number(file("polls")); const seq = path.join(D, "issue-comments." + n + ".json");
+  out(fs.existsSync(seq) ? fs.readFileSync(seq, "utf8") : file("issue-comments.json"));
+}
+if (a[0] === "api" && /\\/commits\\/[0-9a-f]{40}$/.test(a[1])) out(process.env.STUB_HEAD_DATE || "2026-11-12T10:00:00Z");
 process.stderr.write("stub gh: unexpected " + j + "\\n"); process.exit(2);
 `;
   const CURL = `#!/bin/sh
@@ -188,7 +192,7 @@ echo x >> "$STUB_DIR/sleeps"
 `;
   const review = (id, state, commit, body = "Strix flagged findings below.") => ({ id, state, commit_id: commit, body, user: { login: BOT } });
   const comment = (rid, body) => ({ pull_request_review_id: rid, body, user: { login: BOT } });
-  const issue = (body) => ({ body, user: { login: BOT } });
+  const issue = (body, created_at = "2026-11-12T11:00:00Z") => ({ body, created_at, user: { login: BOT } });
   const summary = (sha, lines) => `<!-- strix-pr-review:master -->\n## Strix Security Review\n\n${lines}\n\n<sub>Review 2 on this PR · \`${sha.slice(0, 7)}\` · requested</sub>`;
   const mog = (files, args = [], env = {}) => {
     const root = mkdtempSync(join(tmpdir(), "a402-mog-")), bin = join(root, "bin"), stubs = join(root, "stub"), cwd = join(root, "repo");
@@ -206,26 +210,39 @@ echo x >> "$STUB_DIR/sleeps"
     rmSync(root, { recursive: true, force: true });
     return { out, code, merged, sleeps };
   };
-  let r = mog({ "reviews.json": [review(9, "APPROVED", SHA, "Looks good.")] });
-  ok(r.code === 0 && r.merged && /Strix review 9 of a{40}: APPROVED/.test(r.out), `strix: an approved review of the head SHA merges (exit ${r.code})`);
-  r = mog({ "reviews.json": [review(9, "CHANGES_REQUESTED", SHA)] });
+  const CLEAN = issue(summary(SHA, "✅ **No open security findings.**"));
+  let r = mog({ "reviews.json": [review(9, "APPROVED", SHA, "Looks good.")], "issue-comments.json": [CLEAN] });
+  ok(r.code === 0 && r.merged && /Strix review 9 of a{40}: APPROVED, and its summary of a{40}/.test(r.out), `strix: an approved review and a clean summary of the head SHA merge (exit ${r.code})`);
+  r = mog({ "reviews.json": [review(9, "APPROVED", SHA, "Looks good.")] });
+  ok(r.code === 1 && !r.merged && r.sleeps === 3 && /pinned summary comment is missing/.test(r.out) && !/may not re-review/.test(r.out), `strix: a review of the head SHA with no summary waits, then refuses (${r.sleeps} waits)`);
+  r = mog({ "reviews.json": [review(9, "APPROVED", SHA, "Looks good.")], "issue-comments.json": [issue(summary(OLD, "✅ **No open security findings.**"))] });
+  ok(r.code === 1 && !r.merged && /summary comment is stale \(it names b{7}\)/.test(r.out), "strix: a review of the head SHA beside a summary of an older SHA refuses");
+  r = mog({ "reviews.json": [review(9, "APPROVED", SHA, "Looks good.")], "issue-comments.json": [issue(summary(SHA, "**To fix before merging** (1)\n\n- 🟠 **HIGH** [x](y)"))] });
+  ok(r.code === 1 && !r.merged && /summary of a{40} lists a Critical or High/.test(r.out), "strix: an approved review does not clear a High finding in the head SHA's summary");
+  r = mog({ "reviews.json": [review(9, "CHANGES_REQUESTED", SHA)], "issue-comments.json": [CLEAN] });
   ok(r.code === 1 && !r.merged && /requested changes/.test(r.out), "strix: changes requested on the head SHA refuses");
-  r = mog({ "reviews.json": [review(9, "COMMENTED", SHA, "Strix flagged a finding.\n- 🟠 **HIGH** forged fence")] });
-  ok(r.code === 1 && !r.merged && /Critical or High/.test(r.out), "strix: a High finding in the review body refuses");
-  r = mog({ "reviews.json": [review(9, "COMMENTED", SHA)], "review-comments.json": [comment(9, "### 🔴 Key leak\n\n**Severity:** CRITICAL · **CWE-200**")] });
+  r = mog({ "reviews.json": [review(9, "CHANGES_REQUESTED", SHA), review(10, "COMMENTED", SHA, "Looks good now.")], "issue-comments.json": [CLEAN] });
+  ok(r.code === 1 && !r.merged && /requested changes on a{40} \(review 9\)/.test(r.out), "strix: changes requested on the head SHA refuses even after a later COMMENTED review");
+  r = mog({ "reviews.json": [review(9, "COMMENTED", SHA, "Strix flagged a finding.\n- 🟠 **HIGH** forged fence"), review(10, "COMMENTED", SHA, "Looks good.")], "issue-comments.json": [CLEAN] });
+  ok(r.code === 1 && !r.merged && /Critical or High/.test(r.out), "strix: a High finding in an earlier review body of the head SHA refuses");
+  r = mog({ "reviews.json": [review(9, "COMMENTED", SHA)], "review-comments.json": [comment(9, "### 🔴 Key leak\n\n**Severity:** CRITICAL · **CWE-200**")], "issue-comments.json": [CLEAN] });
   ok(r.code === 1 && !r.merged, "strix: a Critical finding in the review's own comments refuses");
-  r = mog({ "reviews.json": [review(9, "COMMENTED", SHA)], "review-comments.json": [comment(8, "**Severity:** HIGH"), comment(9, "**Severity:** MEDIUM · **CWE-770**")] });
+  r = mog({ "reviews.json": [review(9, "COMMENTED", SHA)], "review-comments.json": [comment(8, "**Severity:** HIGH"), comment(9, "**Severity:** MEDIUM · **CWE-770**")], "issue-comments.json": [CLEAN] });
   ok(r.code === 0 && r.merged, "strix: Medium findings merge, and a High in an older review's comments is not this review's");
-  r = mog({ "reviews.json": [review(5, "APPROVED", OLD)], "reviews.3.json": [review(5, "APPROVED", OLD), review(9, "APPROVED", SHA)] });
+  r = mog({ "reviews.json": [review(5, "APPROVED", OLD)], "issue-comments.json": [issue(summary(OLD, "✅ **No open security findings.**"))], "reviews.3.json": [review(5, "APPROVED", OLD), review(9, "APPROVED", SHA)], "issue-comments.3.json": [CLEAN] });
   ok(r.code === 0 && r.merged && r.sleeps === 2, `strix: a review of an older SHA keeps it waiting until the head's arrives (${r.sleeps} waits)`);
   r = mog({ "reviews.json": [review(5, "APPROVED", OLD)], "issue-comments.json": [issue(summary(OLD, "✅ **No open security findings.**"))] });
-  ok(r.code === 1 && !r.merged && r.sleeps === 3 && /owner decides/i.test(r.out) && /--no-strix/.test(r.out), `strix: no review of the head SHA in time refuses and tells the owner (${r.sleeps} waits)`);
-  r = mog({ "issue-comments.json": [issue(summary(SHA, "✅ **No open security findings.**"))] });
+  ok(r.code === 1 && !r.merged && r.sleeps === 3 && /owner decides/i.test(r.out) && /--no-strix/.test(r.out) && /may not re-review commits pushed after the PR was opened/.test(r.out) && /re-request/.test(r.out), `strix: no review of the head SHA in time refuses, says Strix may not re-review a later push, and names re-request and --no-strix (${r.sleeps} waits)`);
+  r = mog({ "issue-comments.json": [CLEAN] });
   ok(r.code === 0 && r.merged && /Strix summary of a{40}/.test(r.out), "strix: a clean summary pinned to the head SHA (no review posted) merges");
   r = mog({ "issue-comments.json": [issue(summary(SHA, "**To fix before merging** (1)\n\n- 🟠 **HIGH** [x](y)"))] });
   ok(r.code === 1 && !r.merged, "strix: a summary of the head SHA listing a High finding refuses");
   r = mog({ "issue-comments.json": [issue("<!-- strix:pr-review-billing-required -->\nStrix could not run.")] });
-  ok(r.code === 1 && !r.merged && r.sleeps === 0 && /could not review/.test(r.out), "strix: Strix saying it could not run stops at once for the owner");
+  ok(r.code === 1 && !r.merged && r.sleeps === 0 && /could not review/.test(r.out), "strix: Strix saying it could not run (after the head commit) stops at once for the owner");
+  r = mog({ "issue-comments.json": [issue("<!-- strix:pr-review-billing-required -->\nStrix could not run.", "2026-11-12T09:00:00Z")] });
+  ok(r.code === 1 && !r.merged && r.sleeps === 3 && !/could not review/.test(r.out), `strix: a billing-required comment from before the head commit does not count; the wait runs its course (${r.sleeps} waits)`);
+  r = mog({ "issue-comments.json": [issue("<!-- strix:pr-review-billing-required -->\nStrix could not run.", "2026-11-12T09:00:00Z")], "issue-comments.2.json": [issue("<!-- strix:pr-review-billing-required -->\nStrix could not run.", "2026-11-12T09:00:00Z"), issue("<!-- strix:pr-review-billing-required -->\nStill no.", "2026-11-12T10:30:00Z")] });
+  ok(r.code === 1 && !r.merged && r.sleeps === 1 && /could not review/.test(r.out), `strix: a billing-required comment posted after the head commit stops the wait (${r.sleeps} waits)`);
   r = mog({}, ["--no-strix"]);
   ok(r.code === 0 && r.merged && /--no-strix: the OWNER chose to merge PR #77 WITHOUT/.test(r.out) && !/waiting for Strix/.test(r.out), "strix: --no-strix merges, and says so loudly");
   r = mog({}, ["dev", "--no-strix"]);
