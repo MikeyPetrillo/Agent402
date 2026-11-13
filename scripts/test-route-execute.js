@@ -284,13 +284,21 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
       ok(resolverSaid === NESTED && set?.statusCode === 400 && set.message === `${NESTED} Nothing was charged.`, `GET seller: the resolver's set-aside refusal on a route call is the builder's words and the charge sentence (${set?.message})`);
       const setStep = await thrown(dropsTool(resolverSaid), { task: "forecast", include: "external", params: { q: { x: 1 } } });
       ok(setStep?.statusCode === 400 && setStep.message === NESTED, `...and prints no claim on a request-less call (${setStep?.message})`);
-      // A param name long enough that the resolver's 300-character bound cuts
-      // the refusal inside it: the cut is closed before the sentence is added.
+      // A long param name is quoted at a bounded length where the refusal is
+      // built, so the resolver's 300-character bound keeps the whole sentence.
       const longName = "p".repeat(400);
-      const cut = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { [longName]: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e.message.slice(0, 300); } })();
-      const cutSet = await thrown(dropsTool(cut), { task: "forecast", include: "external", params: { [longName]: { x: 1 } } }, routeReq());
-      ok(cut.length === 300 && cut.endsWith("ppp") && cutSet?.message === 'External tool "wx" is a GET endpoint - param.... Nothing was charged.', `a refusal cut inside a long param name is closed at a whole word before the sentence (${cutSet?.message?.slice(0, 90)})`);
-      ok(closedSentence(NESTED) === NESTED && closedSentence("Too many (max 2048). ") === "Too many (max 2048)." && closedSentence("") === "" && closedSentence("ppp") === "ppp....", "a refusal that already ends as a sentence is left as written");
+      const LONG = `External tool "wx" is a GET endpoint - param "${"p".repeat(60)}..." must be a string, number, or boolean.`;
+      const kept = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { [longName]: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e.message.slice(0, 300); } })();
+      const keptSet = await thrown(dropsTool(kept), { task: "forecast", include: "external", params: { [longName]: { x: 1 } } }, routeReq());
+      ok(kept === LONG && keptSet?.message === `${LONG} Nothing was charged.`, `a long param name is quoted to 60 characters and the refusal keeps its whole sentence (${keptSet?.message})`);
+      const shortName = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { ["k".repeat(60)]: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e.message; } })();
+      ok(shortName === `External tool "wx" is a GET endpoint - param "${"k".repeat(60)}" must be a string, number, or boolean.`, "a name at the bound is quoted whole, with no ellipsis");
+      // The safety net: a refusal that still arrives cut (a long listing
+      // slug) is closed at a whole word, with exactly three dots.
+      const cutSet = await thrown(dropsTool(`External tool "${"s".repeat(300)}`), { task: "forecast", include: "external", params: { q: { x: 1 } } }, routeReq());
+      ok(cutSet?.message === "External tool... Nothing was charged.", `a refusal that arrives cut mid-word is closed at a whole word before the sentence (${cutSet?.message?.slice(0, 90)})`);
+      ok(closedSentence(NESTED) === NESTED && closedSentence("Too many (max 2048). ") === "Too many (max 2048)." && closedSentence("") === "" && closedSentence("ppp") === "ppp..." && closedSentence("a GET endpoint - param \"ppp") === "a GET endpoint - param..." && !/\.{4}/.test(closedSentence("One. Two thr")),
+        "a refusal that already ends as a sentence is left as written; a cut one ends with exactly three dots");
     }
     const long = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: "x".repeat(BOUND_URL_MAX_CHARS) } }); return null; } catch (e) { return e; } })();
     ok(long?.statusCode === 400 && BOUND_URL_MAX_CHARS === 2048 && /max 2048/.test(long.message), "a bound URL past the 2048-character bound is refused 400, nothing sent");

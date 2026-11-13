@@ -26,6 +26,11 @@ function refuse(message) {
   return e;
 }
 
+// The caller's param name as a refusal quotes it: a bounded length, so a long
+// name never pushes the sentence past a reader's own length bound.
+export const PARAM_NAME_QUOTE_MAX = 60;
+const quotedName = (k) => (String(k).length > PARAM_NAME_QUOTE_MAX ? `${String(k).slice(0, PARAM_NAME_QUOTE_MAX)}...` : String(k));
+
 // `req` is the paid call's request (route-execute passes it), so its refusal
 // prints the charge sentence on a route call only (src/not-charged.js).
 export function boundRequestUrl(listingUrl, { method = "POST", params = {}, slug = "", req = null } = {}) {
@@ -34,7 +39,7 @@ export function boundRequestUrl(listingUrl, { method = "POST", params = {}, slug
   const qp = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
     if (v == null) continue;
-    if (typeof v === "object" || typeof v === "function") throw refuse(`External tool "${slug}" is a ${m} endpoint - param "${k}" must be a string, number, or boolean.${notChargedOn(req)}`);
+    if (typeof v === "object" || typeof v === "function") throw refuse(`External tool "${slug}" is a ${m} endpoint - param "${quotedName(k)}" must be a string, number, or boolean.${notChargedOn(req)}`);
     qp.set(k, String(v));
   }
   const qs = qp.toString();

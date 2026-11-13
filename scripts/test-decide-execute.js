@@ -622,6 +622,20 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const { NOT_CHARGED, withoutChargeClaim } = await import("../src/not-charged.js");
   ok(withoutChargeClaim("A failed. Nothing was charged. Retry later.") === "A failed. Retry later." && withoutChargeClaim("A failed. Nothing was spent. Nothing was charged.") === "A failed. Nothing was spent." && withoutChargeClaim("Nothing was charged.") === "" && withoutChargeClaim("A failed.") === "A failed.",
     "the charge sentence is taken out mid-message and last, with no doubled space or orphan period");
+  // A first-party step is called request-less, so a kit prints no claim there;
+  // one that typed the sentence itself is still recorded without it.
+  {
+    const typed = { slug: "typed", route: "POST /api/typed", price: "$0.01", discovery: { bodyType: "json" }, handler: async () => { throw Object.assign(new Error("X failed. Nothing was charged."), { statusCode: 503 }); } };
+    ledger.saveDecision({ decisionId: "dClaim-first", depth: "plan", priceUsd: 0.02, plan: [{ step: 1, purpose: "x", tool: tool("typed"), fallbacks: [tool("b")], dependsOn: [] }], costViaUsd: 0.05, now: clock });
+    ledger.markDecisionSettled("dClaim-first");
+    const c = ledger.mintCredit({ decisionId: "dClaim-first", amountUsd: 0.05, ttlMs: 3600_000, now: clock });
+    ledger.activateCredit(c.hash);
+    const run = makeExecuteHandler({ ledger, getCatalog: () => ({ typed, b: catalog.b }), now, spendingWalletStatus: async () => ({ status: "ok" }) });
+    const out = await run({ decisionId: "dClaim-first", creditToken: c.token }, { ...mkReq("0xfirst"), __meteredQuoteUsd: 0.001 });
+    const a = out.steps[0].attempts?.[0];
+    ok(out.steps[0].status === "ok" && a?.id === "typed" && a.status === 503 && a.error === "X failed.", `first-party step: a handler's typed charge sentence is not recorded on the attempt (${JSON.stringify(a)})`);
+    ok(!JSON.stringify(out).includes(NOT_CHARGED), "...and nowhere else in the delivered run");
+  }
   const mkRouter = (over) => buildRouteExecuteTool({
     getCatalog: () => ({}), baseUrl: "https://agent402.tools", tier: EXEC_TIERS.find((t) => t.slug === "route-execute-pro"),
     externalEnabled: () => true, externalChains: () => ["base"], payExternal: async () => { throw new Error("no payment is expected"); },

@@ -324,16 +324,16 @@ export async function cachedSpendingWalletStatus(chain = "base") {
 export async function spendingWalletReadsLow(read = cachedSpendingWalletStatus, chain = "base") {
   try { return (await read(chain))?.status === "low"; } catch { return false; }
 }
-/** The refusal while the spending wallet reads low; the charge sentence on a
- *  route call only (src/not-charged.js). */
 /** `text` ending as a sentence: as written when it already does, else cut
- *  back to its last whole word and closed with an ellipsis and a period. */
+ *  back to its last whole word and closed with an ellipsis (three dots). */
 export function closedSentence(text) {
   const s = String(text ?? "").trim();
   if (!s || /[.!?]$/.test(s)) return s;
-  return `${s.replace(/\s*\S*$/, "").replace(/[\s,;:-]+$/, "") || s}....`;
+  return `${s.replace(/\s*\S*$/, "").replace(/[\s.,;:-]+$/, "") || s}...`;
 }
 
+/** The refusal while the spending wallet reads low; the charge sentence on a
+ *  route call only (src/not-charged.js). */
 export const walletLowMessage = (req) => `Paying outside sellers is temporarily unavailable.${notChargedOn(req)} Retry later.`;
 
 // Buyer payment network (CAIP-2) -> the external settlement chain it can fund.
@@ -659,8 +659,9 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // (a nested value, an oversized URL) was set aside before its probe:
           // the caller's input, said as the builder words it (the resolver
           // builds it request-less, so the charge sentence is added here).
-          // The resolver keeps a bounded length of it, so a refusal cut inside
-          // a long param name is closed at its last whole word first.
+          // The resolver keeps a bounded length of it (the builder bounds the
+          // param name it quotes), so a refusal that was still cut is closed
+          // at its last whole word first.
           if (!candidateList.length && Number(drops.byReason?.params_unbindable || 0) > 0 && drops.paramsRefusal) throw bad(`${closedSentence(drops.paramsRefusal)}${notChargedOn(req)}`, 400);
           if (!candidateList.length) throw bad(`No external ${chains.includes("tempo") && chains.length > 1 ? "x402 or MPP" : chains[0] === "tempo" ? "MPP" : "x402"} seller matched that task${chains[0] !== "base" || chains.length > 1 ? ` on ${chains.join("/")}` : ""}. Explore /api/route?q=<task>&include=external.`, 404);
           // Nothing is signed from an EVM wallet that reads low on the chain it
