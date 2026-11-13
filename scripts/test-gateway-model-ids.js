@@ -21,7 +21,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync } from "node:fs";
 import {
   TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, retirementPending, flexModelIds, reasoningRows, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
-  IMAGES_MODEL, AVAILABILITY_SUCCESSORS, MARGIN,
+  IMAGES_MODEL, AVAILABILITY_SUCCESSORS, MARGIN, PREFIX_CANONICAL,
 } from "../src/tools/llm-gateway-kit.js";
 import { meterMarkup } from "../src/gateway-meter.js";
 import { IMAGE_TIERS, IMAGES_FAST_TOOLS } from "../src/tools/llm-images-fast-kit.js";
@@ -710,6 +710,20 @@ for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(
   const watchedIds = [...new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(TIERS).flatMap((t) => t.fallbacks || [])])];
   const untabled = watchedIds.filter((id) => { const m = models.find((x) => x.id === id); const r = m?.reasoning; return r && (r.mandatory === true || r.default_enabled === true) && Array.isArray(r.supported_efforts) && !reasoningRows().some((row) => reasoningRowMatches(row, id)); });
   if (untabled.length) console.log(`note - ranked/fallback models that reason by default but have no REASONING_MODELS row: ${untabled.join(", ")}`);
+}
+// Every exact id the tiers name (a tier entry that is itself a live id, a
+// default, a fallback, a rung, a family name's concrete model) that reasons by
+// default with an effort list has a REASONING_MODELS row: without one a tier
+// injects no effort and a small budget can be spent reasoning.
+{
+  const liveIds = new Set(models.map((m) => m.id));
+  const exact = new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(PREFIX_CANONICAL)]);
+  for (const t of Object.values(TIERS)) {
+    for (const p of t.prefixes || []) if (liveIds.has(p)) exact.add(p);
+    for (const m of [t.defaultModel, t.defaultModelCompat, ...(t.fallbacks || [])]) if (m) exact.add(m);
+  }
+  const untabled = [...exact].filter((id) => { const r = models.find((x) => x.id === id)?.reasoning; return r && (r.mandatory === true || r.default_enabled === true) && Array.isArray(r.supported_efforts) && !reasoningRows().some((row) => reasoningRowMatches(row, id)); });
+  ok(exact.size > 10 && untabled.length === 0, `every exact admitted id that reasons by default has a REASONING_MODELS row (${exact.size} ids read)${untabled.length ? `; missing: ${untabled.join(", ")}` : ""}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
