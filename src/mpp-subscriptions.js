@@ -1664,6 +1664,20 @@ export function createMppSubscriptions({
       // gives the caller their existing subscription back instead of a second.
       const existing = await findBySubscriptionId(already.subscriptionId);
       if (existing) return { ...publicView(existing), replay: true };
+      // mppx records a subscription only once its first payment settled, so
+      // its record without ours is a paid activation whose own record was
+      // never written (a store failure or a restart in between). Activating
+      // again would be refused by mppx as a used credential and answered as
+      // "nothing was charged"; the buyer paid, so our record is rebuilt from
+      // mppx's and the subscription is handed back.
+      if (already.subscriptionId) {
+        const rebuilt = houseRecordFrom(already, { b, payer, lookupKey, receipt: null });
+        if (already.canceledAt) { rebuilt.status = "canceled"; rebuilt.canceledAt = String(already.canceledAt); }
+        await writeRec(rebuilt);
+        bookCharge(rebuilt, rebuilt.lastChargedPeriod, rebuilt.lastChargeTx);
+        log(`[mpp-subs] rebuilt ${rebuilt.subId} from its settled first payment (${rebuilt.product} -> ${rebuilt.target}) payer=${shortPayer(payer)} tx=${rebuilt.lastChargeTx || "?"}`);
+        return { ...publicView(rebuilt), manageToken: manageToken(rebuilt.subId), replay: true };
+      }
     }
 
     // The payer screen, before anything is sent. A refused wallet gets the
@@ -1697,8 +1711,20 @@ export function createMppSubscriptions({
     const mppxRec = await subStore.getByKey(lookupKey);
     if (!mppxRec) { const e = new Error("subscription did not persist after settlement"); e.statusCode = 500; throw e; }
 
+    const rec = houseRecordFrom(mppxRec, { b, payer, lookupKey, receipt });
+    const subId = rec.subId;
+    await writeRec(rec);
+    bookCharge(rec, rec.lastChargedPeriod, rec.lastChargeTx);
+    log(`[mpp-subs] activated ${subId} (${rec.product} -> ${rec.target}) payer=${shortPayer(payer)} tx=${rec.lastChargeTx || "?"}`);
+    return { ...publicView(rec), manageToken: manageToken(subId), receipt: receiptHeader(receipt), replay: false };
+  }
+
+  /** Our subscription record for a settled mppx record: the scheduler-facing
+   *  fields from the binding, the billing anchor and period counter from mppx
+   *  (the authority on what has been charged). */
+  function houseRecordFrom(mppxRec, { b, payer, lookupKey, receipt }) {
     const subId = `${SUB_PREFIX}${mppxRec.subscriptionId}`;
-    const rec = {
+    return {
       subId,
       // The scheduler-facing shape (same fields the Stripe records carry).
       status: "active", product: b.product, target: b.target, email: b.email,
@@ -1721,10 +1747,6 @@ export function createMppSubscriptions({
       // kind of subscription whose owner may drive refreshStatus on demand.
       canary: isCanaryProduct(b.product),
     };
-    await writeRec(rec);
-    bookCharge(rec, rec.lastChargedPeriod, rec.lastChargeTx);
-    log(`[mpp-subs] activated ${subId} (${rec.product} -> ${rec.target}) payer=${shortPayer(payer)} tx=${rec.lastChargeTx || "?"}`);
-    return { ...publicView(rec), manageToken: manageToken(subId), receipt: receiptHeader(receipt), replay: false };
   }
 
   function receiptHeader(receipt) {
