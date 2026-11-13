@@ -9,20 +9,25 @@ carries its own version on npm.
 ### 2026-11-13 (payment and input hardening)
 Tools:
 - Transcription measures each file's length by decoding it before any upstream
-  call. WMA, raw AAC, AMR and CAF recordings are read and sent as FLAC, an MP4
-  or MKV holding several audio tracks is sent as its first track, and AAC
-  behind an ID3 tag, an MP3 with leading padding and an Ogg file sent under
-  another format's name are read too. A PCM WAV
+  call. WMA, raw AAC, AMR and CAF recordings are read and sent as FLAC, an
+  MP4, MKV, WebM or Ogg file holding several audio tracks is measured and sent
+  as its first track, and AAC behind an ID3 tag, an MP3 with leading padding
+  and an Ogg file sent under another format's name are read too. A PCM WAV
   whose size alone keeps it inside the cap is sent without a decode, and a
   call that finds the decoder busy waits its turn inside the time its payment
-  allows.
+  allows, or is answered a retryable 503 at once when the queue for the
+  decoder is full. A refusal says nothing was charged on a call to the route
+  itself, in the wording that names the Tempo push exception, and not inside a
+  skill-pack step.
 - A file sent for transcription whose length cannot be confirmed is
   transcribed up to its tier's cap, and the answer says so in
   trimmedToCapSeconds and durationUnconfirmed; both fields are in the output
   schemas.
 - Large images sent to image-ocr wait their turn per caller, a step run by a
   decision, by route-execute or by a skill pack included, so one caller's run
-  of large images cannot hold every place in the queue.
+  of large images cannot hold every place in the queue. The caller is the
+  verified payer, else the client address. A refusal says nothing was charged
+  on a call to the route itself only.
 - Transcription measures and cuts each file by the audio samples it decodes,
   not by the timestamps its container writes, and a file sent as it came is
   uploaded under the name of the format it was measured as.
@@ -62,10 +67,12 @@ Payments:
 - A refused Tempo push transfer is recorded as owed before its credential is
   released, so a retry with the same credential finds the debt.
 - While many /v1 payments fail to settle across the service, only a wallet
-  that has never settled a payment is held after one unsettled run; a wallet
-  that has ever paid is served as before, a caller with no proven wallet keeps
-  the usual count, and settlements that fail for an unknown cause or are
-  counted against an address or a credits key never start that bound.
+  that has never settled a payment is held after one payment refused for its
+  own reason, and the 429 says why; a wallet that has ever paid is served as
+  before, a caller with no proven wallet keeps the usual count, a failure of
+  unknown cause keeps its usual count, and settlements that fail for an
+  unknown cause or are counted against an address or a credits key never
+  start that bound.
 - One signed EVM authorization whose settlement keeps failing for the buyer's
   reason is refused on its own, and a new authorization from the same wallet
   is served at once.
@@ -80,6 +87,8 @@ Packages:
 Surfaces:
 - MCP connector answers whose indented JSON would pass the size ceiling are
   sent as compact JSON.
+- /privacy lists the per-authorization settle-failure count, the list of
+  failing payer wallets and the sales-ledger read the settle refusals use.
 
 ### 2026-11-13 (model refresh)
 Gateway:
