@@ -110,7 +110,7 @@ ok(seen[0].b.reasoning === undefined, "premium + the tier default budget: the mo
 seen = [];
 globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); seen.push(b.model + (b.service_tier ? ":flex" : "")); return { ok: true, status: 200, text: async () => JSON.stringify(b.model === "openai/gpt-5-nano" ? reply(b.model, { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [{ type: "reasoning", summary: [] }] }) : reply(b.model)) }; };
 const pe = await bySlug("v1-chat-nano-responses").handler({ model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64 }, fakeReq);
-ok(pe.output[0].content[0].text === "Hello there." && seen.join(",") === "openai/gpt-5-nano:flex,deepseek/deepseek-chat", `incomplete-with-nothing-said is never served: chain walked on, same-model default retry skipped (${seen.join(" -> ")})`);
+ok(pe.output[0].content[0].text === "Hello there." && seen.join(",") === "openai/gpt-5-nano:flex,deepseek/deepseek-v4.1-flash", `incomplete-with-nothing-said is never served: chain walked on, same-model default retry skipped (${seen.join(" -> ")})`);
 globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); return { ok: true, status: 200, text: async () => JSON.stringify(reply(b.model, { status: "failed", error: { code: "server_error", message: "boom" } })) }; };
 await baseTool.handler({ model: "openai/gpt-4o-mini", input: "hi" }, fakeReq).then(() => ok(false, "failed status must not serve"), (e) => ok(e.statusCode === 502 && /boom/.test(e.message), "status failed -> 502 with the upstream message"));
 // stream: nested response.usage scrubbed end to end

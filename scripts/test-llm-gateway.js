@@ -38,12 +38,19 @@ ok(canonicalModel("claude-sonnet-5") === "anthropic/claude-sonnet-5" && canonica
 // A family prefix that is not an upstream id resolves to its concrete model
 // (2026-08-26: "anthropic/claude-opus" was advertised on /v1/models and
 // OpenRouter rejected it verbatim). Bare and OpenRouter forms, any case.
-ok(canonicalModel("anthropic/claude-opus") === "anthropic/claude-opus-5" && canonicalModel("claude-opus") === "anthropic/claude-opus-5" && canonicalModel("Anthropic/Claude-Opus") === "anthropic/claude-opus-5", "bare family prefix claude-opus resolves to the concrete claude-opus-5");
+ok(canonicalModel("anthropic/claude-opus") === "anthropic/claude-opus-5.5" && canonicalModel("claude-opus") === "anthropic/claude-opus-5.5" && canonicalModel("Anthropic/Claude-Opus") === "anthropic/claude-opus-5.5", "bare family prefix claude-opus resolves to the concrete claude-opus-5.5");
+ok(canonicalModel("x-ai/grok") === "x-ai/grok-4.7" && canonicalModel("grok") === "x-ai/grok-4.7" && canonicalModel("x-ai/grok-4.6") === "x-ai/grok-4.6" && tierAllows("v1-chat-pro", "x-ai/grok-4.6"), "bare x-ai/grok resolves to grok-4.7; grok-4.6 by name is still served on pro");
+ok(tierAllows("v1-chat-premium", "anthropic/claude-opus-5") && canonicalModel("anthropic/claude-opus-5") === "anthropic/claude-opus-5", "claude-opus-5 by name is still served on premium as itself");
+// 2026-11-12: ids that left a default, fallback or auto rung stay admitted
+// where they were, so a caller naming one keeps being served.
+for (const [slug, id] of [["v1-chat-nano", "deepseek/deepseek-chat"], ["v1-chat", "deepseek/deepseek-chat"], ["v1-chat-auto", "deepseek/deepseek-chat"], ["v1-chat-grounded", "deepseek/deepseek-chat"], ["v1-chat-auto", "qwen/qwen-2.5-coder-32b-instruct"], ["v1-chat-grounded", "qwen/qwen-2.5-coder-32b-instruct"], ["v1-chat", "anthropic/claude-haiku-4.5"], ["v1-chat-metered", "anthropic/claude-haiku-4.5"], ["v1-chat-pro", "x-ai/grok-4.6"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-premium", "anthropic/claude-fable-5.1"]]) {
+  ok(tierAllows(slug, id), `${id} stays admitted on ${slug}`);
+}
 ok(canonicalModel("anthropic/claude-opus-5-fast") === "anthropic/claude-opus-5-fast", "a concrete id under the family is left alone");
 ok(tierAllows("v1-chat-premium", "anthropic/claude-opus") && tierFor("anthropic/claude-opus") === "v1-chat-premium", "the resolved family id is still premium-allowlisted");
 {
   const listed = modelsList().data.map((m) => m.id);
-  ok(listed.includes("anthropic/claude-opus-5") && !listed.includes("anthropic/claude-opus"), "/v1/models advertises the concrete id, never the bare family prefix");
+  ok(listed.includes("anthropic/claude-opus-5.5") && !listed.includes("anthropic/claude-opus"), "/v1/models advertises the concrete id, never the bare family prefix");
   const bare = Object.keys(PREFIX_CANONICAL).filter((p) => listed.includes(p));
   ok(bare.length === 0, `no PREFIX_CANONICAL key is listed bare on /v1/models${bare.length ? ` (${bare.join(", ")})` : ""}`);
   ok(Object.values(PREFIX_CANONICAL).every((id) => tierFor(id) !== null), "every canonical target is allowlisted on some tier");
@@ -163,8 +170,8 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   // A NON-flex nano model: a flex-eligible one is tried twice (flex, then default) before the chain.
   const res = await nano.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
   ok(res.choices?.[0]?.message?.content === "OK", "failover serves the buyer despite the requested model's provider error");
-  ok(res.model === "deepseek/deepseek-chat", `response discloses the serving model (got ${res.model})`);
-  ok(calls.join(",") === "mistralai/ministral-8b-2512,deepseek/deepseek-chat", `tried requested model first, then the chain (got ${calls.join(",")})`);
+  ok(res.model === "deepseek/deepseek-v4.1-flash", `response discloses the serving model (got ${res.model})`);
+  ok(calls.join(",") === "mistralai/ministral-8b-2512,deepseek/deepseek-v4.1-flash", `tried requested model first, then the chain (got ${calls.join(",")})`);
 
   // Validation errors must NOT trigger the chain — the buyer's input is wrong.
   calls.length = 0;
@@ -184,20 +191,24 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const { clampToMargin } = await import("../src/tools/llm-gateway-kit.js");
   const tier = TIERS["v1-chat-nano"];
   const capOf = (model) => { const b = { model, messages: msg1("hi"), max_tokens: tier.maxTokens, n: 4 }; clampToMargin(b, tier, 0); return b.max_tokens; };
-  const capRequested = capOf("openai/gpt-5-nano"), capFallback = capOf("deepseek/deepseek-chat");
+  // The served link: the first nano fallback whose clamp at n=4 sits below the
+  // requested model's; every link before it fails.
+  const capRequested = capOf("openai/gpt-5-nano");
+  const LOWER = tier.fallbacks.find((m) => capOf(m) < capRequested);
+  const capFallback = LOWER ? capOf(LOWER) : capRequested;
   ok(capFallback < capRequested, `setup: at n=4 the fallback link clamps lower than the requested model (${capFallback} < ${capRequested})`);
   const budget = capFallback; // under the requested model's cap, at the fallback's
   const outbound = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body); outbound.push(body);
-    if (body.model === "openai/gpt-5-nano") return { ok: false, status: 502, text: async () => JSON.stringify({ error: { message: "Provider returned error" } }) };
+    if (body.model !== LOWER) return { ok: false, status: 502, text: async () => JSON.stringify({ error: { message: "Provider returned error" } }) };
     return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-fit", object: "chat.completion", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }) };
   };
   const nano = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-nano");
   const res = await nano.handler({ model: "openai/gpt-5-nano", messages: msg1("hi"), max_tokens: tier.maxTokens, n: 4, reasoning: { max_tokens: budget } });
-  const first = outbound[0], served = outbound.find((b) => b.model === "deepseek/deepseek-chat");
-  ok(res.model === "deepseek/deepseek-chat" && first?.model === "openai/gpt-5-nano" && first.reasoning?.max_tokens === budget && first.max_tokens === capRequested, `the requested link carries the buyer's budget under its own cap (${first?.reasoning?.max_tokens} under ${first?.max_tokens})`);
+  const first = outbound[0], served = outbound.find((b) => b.model === LOWER);
+  ok(res.model === LOWER && first?.model === "openai/gpt-5-nano" && first.reasoning?.max_tokens === budget && first.max_tokens === capRequested, `the requested link carries the buyer's budget under its own cap (${first?.reasoning?.max_tokens} under ${first?.max_tokens})`);
   // The served body's own cap (its normalized input estimate may land a token
   // off capOf's): lower than the requested link's, and at or under the budget,
   // so a budget sent unfitted would sit at or above it.
@@ -327,7 +338,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   };
   const res2 = fakeRes();
   await (await nano.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], stream: true })).__sse(res2);
-  ok(tried.join(",") === "mistralai/ministral-8b-2512,deepseek/deepseek-chat" && res2.ended, `pre-stream failover walks the chain (tried ${tried.join(",")})`);
+  ok(tried.join(",") === "mistralai/ministral-8b-2512,deepseek/deepseek-v4.1-flash" && res2.ended, `pre-stream failover walks the chain (tried ${tried.join(",")})`);
 
   // An upstream HTTP 200 whose body is an error with NO output (OpenRouter's
   // shape for a provider rate limit after the response line) is an upstream
@@ -737,7 +748,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-e", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: empty ? "" : "answer" }, finish_reason: empty ? "length" : "stop" }], usage: { prompt_tokens: 1, completion_tokens: 64, completion_tokens_details: { reasoning_tokens: empty ? 64 : 0 } } }) };
   };
   const outE = await nano.handler({ model: "openai/gpt-5-nano", messages: msg1(), max_tokens: 64 }, fakeReqC);
-  ok(outE.choices[0].message.content === "answer" && JSON.stringify(seenAll) === JSON.stringify(["openai/gpt-5-nano", "deepseek/deepseek-chat"]), `a length+empty answer is never served: the chain walked on, and the same model's default-tier retry was skipped (tried ${seenAll.join(" -> ")})`);
+  ok(outE.choices[0].message.content === "answer" && JSON.stringify(seenAll) === JSON.stringify(["openai/gpt-5-nano", "deepseek/deepseek-v4.1-flash"]), `a length+empty answer is never served: the chain walked on, and the same model's default-tier retry was skipped (tried ${seenAll.join(" -> ")})`);
   globalThis.fetch = async (url, init) => {
     const b = JSON.parse(init.body);
     return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-e2", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "length" }], usage: { prompt_tokens: 1, completion_tokens: 64 } }) };
@@ -1207,9 +1218,9 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   delete process.env.OPENROUTER_API_KEY;
   // Advertised on /v1/models the way the loop limits are.
   const list = modelsList().data;
-  const proRow = list.find((m) => m.x402.tier === "v1-chat-pro"), nanoRow = list.find((m) => m.id === "openai/gpt-5.6-luna" && m.x402.tier === "v1-chat-nano"), baseRow = list.find((m) => m.id === "anthropic/claude-haiku-4.5" && m.x402.tier === "v1-chat");
+  const proRow = list.find((m) => m.x402.tier === "v1-chat-pro"), nanoRow = list.find((m) => m.id === "openai/gpt-5.6-luna" && m.x402.tier === "v1-chat-nano"), baseRow = list.find((m) => m.id === "anthropic/claude-haiku-5.5" && m.x402.tier === "v1-chat");
   ok(proRow?.x402.serviceTiers?.priority && !("upstreamPriceFactor" in proRow.x402.serviceTiers.priority) && JSON.stringify(proRow.x402.serviceTiers.priority.values) === '["priority","fast"]' && proRow.x402.serviceTiers.priority.param === "service_tier", "/v1/models: pro rows advertise the priority knob with its spellings and no upstream price factor");
-  ok(nanoRow?.x402.serviceTiers?.priority === false && nanoRow.x402.serviceTiers.flexFirst === true && baseRow?.x402.serviceTiers?.flexFirst === false, "/v1/models: nano says priority false and flexFirst true on luna; base says flexFirst false on claude-haiku-4.5");
+  ok(nanoRow?.x402.serviceTiers?.priority === false && nanoRow.x402.serviceTiers.flexFirst === true && baseRow?.x402.serviceTiers?.flexFirst === false, "/v1/models: nano says priority false and flexFirst true on luna; base says flexFirst false on claude-haiku-5.5");
 }
 
 // /v1/rerank (2026-08-19) - Cohere wire over OpenRouter's /rerank, one locked
@@ -1517,7 +1528,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
 // ---- a missing model is served as the tier default, never refused (2026-08-28) ----
 {
   const { validateRequest: vr, TIERS: T } = await import("../src/tools/llm-gateway-kit.js");
-  for (const [slug, expect] of [["v1-chat-nano", "openai/gpt-6-luna"], ["v1-chat", "openai/gpt-6-luna"], ["v1-chat-pro", "openai/gpt-6.1-terra"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-metered", "anthropic/claude-haiku-5.5"]]) {
+  for (const [slug, expect] of [["v1-chat-nano", "openai/gpt-6-luna"], ["v1-chat", "openai/gpt-6-luna"], ["v1-chat-pro", "openai/gpt-6.1-terra"], ["v1-chat-premium", "anthropic/claude-opus-5.5"], ["v1-chat-metered", "anthropic/claude-haiku-5.5"]]) {
     const b = vr({ messages: [{ role: "user", content: "hi" }], max_tokens: 16 }, slug, { clamp: false });
     ok(b.model === expect && b.__defaultedModel === expect && !Object.keys(b).includes("__defaultedModel") && T[slug].defaultModel === expect, `${slug}: no model -> ${expect} (marker non-enumerable)`);
     // Inside the tier's own allowlist, or (base's gpt-6-luna) served to a call
@@ -1990,7 +2001,34 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   const K = await import("../src/tools/llm-gateway-kit.js");
   const H5 = "anthropic/claude-haiku-5.5", H4 = "anthropic/claude-haiku-4.5";
   const m1 = [{ role: "user", content: "hi" }];
-  ok(K.canonicalModel("anthropic/claude-haiku") === H4, "the bare haiku family name stays on Haiku 4.5");
+  ok(K.canonicalModel("anthropic/claude-haiku") === H5 && K.canonicalModel("claude-haiku") === H5, "the bare haiku family name serves Haiku 5.5 (2026-11-12)");
+  // A call naming the bare family name with something Haiku 5.5 does not take
+  // is served by Haiku 4.5, as before the move, never refused; the explicit
+  // ids keep their own rules. Every wire reads the same ctx.
+  {
+    const { validateMessagesRequest } = await import("../src/tools/llm-messages-kit.js");
+    const { validateResponsesRequest } = await import("../src/tools/llm-responses-kit.js");
+    for (const bare of ["anthropic/claude-haiku", "claude-haiku", "Anthropic/Claude-Haiku"]) {
+      for (const slug of ["v1-chat", "v1-chat-metered"]) {
+        ok(validateRequest({ model: bare, messages: m1 }, slug, { clamp: false }).model === H5, `${slug}: ${bare}, nothing 5.5 refuses -> ${H5}`);
+        for (const [name, extra] of [["temperature", { temperature: 0.2 }], ["top_p", { top_p: 0.5 }], ["top_k", { top_k: 5 }], ["prefill", { messages: [...m1, { role: "assistant", content: "Sure" }] }], ["reasoning budget", { reasoning: { max_tokens: 32 }, max_tokens: 64 }], ["effort none", { reasoning: { effort: "none" } }], ["reasoning_effort minimal", { reasoning_effort: "minimal" }]]) {
+          const v = validateRequest({ model: bare, messages: m1, ...extra }, slug, { clamp: false });
+          ok(v.model === H4, `${slug}: ${bare} + ${name} -> ${H4}, not a 400 (${v.model})`);
+        }
+        ok(validateRequest({ model: bare, messages: m1, reasoning: { effort: "high" } }, slug, { clamp: false }).model === H5, `${slug}: ${bare} + an effort 5.5 takes stays on ${H5}`);
+      }
+      ok(validateMessagesRequest({ model: bare, messages: m1, max_tokens: 64, temperature: 0.3 }, "v1-chat-metered").body.model === H4, `Messages wire: ${bare} + temperature -> ${H4}`);
+      ok(validateMessagesRequest({ model: bare, messages: m1, max_tokens: 4096, thinking: { type: "enabled", budget_tokens: 1024 } }, "v1-chat-metered").body.model === H4, `Messages wire: ${bare} + a thinking budget -> ${H4}`);
+      ok(validateMessagesRequest({ model: bare, messages: m1, max_tokens: 64 }, "v1-chat-metered").body.model === H5, `Messages wire: ${bare} plain -> ${H5}`);
+      ok(validateResponsesRequest({ model: bare, input: "hi", max_output_tokens: 64, top_p: 0.4 }, "v1-chat-metered").body.model === H4, `Responses wire: ${bare} + top_p -> ${H4}`);
+      ok(validateResponsesRequest({ model: bare, input: "hi", max_output_tokens: 64 }, "v1-chat-metered").body.model === H5, `Responses wire: ${bare} plain -> ${H5}`);
+    }
+    // The metered quote reads the model the call is served by.
+    const qCompat = K.meteredQuoteUsd({ model: "anthropic/claude-haiku", messages: m1, max_tokens: 512, temperature: 0.2 });
+    const q4 = K.meteredQuoteUsd({ model: H4, messages: m1, max_tokens: 512, temperature: 0.2 });
+    ok(qCompat.model === H4 && qCompat.usd === q4.usd, `the metered quote of a compat call prices ${H4} (${qCompat.model})`);
+    ok(K.aliasModelFor("anthropic/claude-opus", "anthropic/claude-opus-5.5", { sampling: { temperature: 0.2 } }) === "anthropic/claude-opus-5.5" && K.aliasModelFor(H5, H5, { sampling: { temperature: 0.2 } }) === H5, "aliasModelFor changes only a bare name with a compat entry");
+  }
   ok(TIERS["v1-chat-metered"].defaultModel === H5 && TIERS["v1-chat-metered"].defaultModelCompat === H4, "the metered default is Haiku 5.5, with Haiku 4.5 for default calls that send what 5.5 refuses (2026-11-01)");
   // A call that names no model never gets a 400 for a parameter the default
   // refuses: it is served by the compat model; one naming 5.5 still gets the 400.
@@ -2046,9 +2084,10 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     };
     for (const [where, text] of Object.entries(surfaces)) ok(typeof text === "string" && text.includes(note), `${where} carries the compat clause`);
   }
-  ok(tierFor(H5) === "v1-chat" && tierAllows("v1-chat-metered", H5), "Haiku 5.5 is served by its explicit id on base and metered");
+  ok(tierFor(H5) === "v1-chat-nano" && tierAllows("v1-chat", H5) && tierAllows("v1-chat-metered", H5), "Haiku 5.5 is served by its explicit id on nano, base and metered");
+  ok(!tierAllows("v1-chat-nano", H4) && tierFor(H4) === "v1-chat", "Haiku 4.5 keeps its base home (nano admits 5.5 by its exact id)");
   ok(K.costFor(H5) === ROW(H5) && K.costFor(H4) === ROW(H4), "Haiku 5.5 is priced by its own row, never by the 4.5 row or the family fallback");
-  ok(K.adaptiveOnlyClaude(H5) && !K.adaptiveOnlyClaude(H4) && !K.adaptiveOnlyClaude("anthropic/claude-sonnet-5.5") && !K.adaptiveOnlyClaude("anthropic/claude-haiku"), "the Haiku 5 parameter rules apply to Haiku 5 only");
+  ok(K.adaptiveOnlyClaude(H5) && !K.adaptiveOnlyClaude(H4) && !K.adaptiveOnlyClaude("anthropic/claude-sonnet-5.5") && K.adaptiveOnlyClaude("anthropic/claude-haiku"), "the Haiku 5 parameter rules apply to Haiku 5 only (the bare family name now serves 5.5)");
   ok(JSON.stringify(K.defaultReasoningFor(H5, "v1-chat")) === '{"effort":"low"}' && JSON.stringify(K.defaultReasoningFor(H5, "v1-chat-metered")) === '{"effort":"low"}', "Haiku 5.5: the budget tiers inject effort low (adaptive, default medium upstream)");
   for (const [k, v] of [["temperature", 0.2], ["temperature", 1], ["top_p", 0.99], ["top_k", 5]]) {
     throws(() => validateRequest({ model: H5, messages: m1, [k]: v }, "v1-chat"), `"${k}" is not supported by ${H5}`, `chat wire: ${k}=${v} on Haiku 5.5 is a 400 naming it (dropped silently upstream)`);

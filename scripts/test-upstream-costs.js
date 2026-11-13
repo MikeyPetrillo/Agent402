@@ -84,10 +84,18 @@ U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, ["acme/big-pro", {
 ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().join() === "models[acme/big-pro]", "a zero-rate model row (not stealth) is a gap, not a silent fallback to acme/big");
 // The pinned rows by name: dropping one from REQUIRED_MODEL_ROWS would stop
 // a table without it reading partial, so the list itself is pinned here.
-for (const id of ["openai/gpt-6.1-terra", "moonshotai/kimi-k3.1-pro"]) {
+for (const id of ["openai/gpt-6.1-terra", "moonshotai/kimi-k3.1-pro", "google/gemini-4-argon", "google/gemini-3.8-flash", "anthropic/claude-fable-5.2"]) {
   ok(U.REQUIRED_MODEL_ROWS.includes(id), `${id} is a required model row`);
   U.setUpstreamCostsForTest({ ...FULL, models: FULL.models.filter(([p]) => p !== id) });
   ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().includes(`models[${id}]`), `a table without ${id} reads partial and names it`);
+  // Without its own row a broader family row never prices it (that row may
+  // list below the model): it reads as unknown, so a flat tier prices it at
+  // its max_price bound.
+  const family = id.slice(0, id.indexOf("/") + 1);
+  U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models.filter(([p]) => p !== id), [family, { prompt: 0.5, completion: 0.5 }]] });
+  ok(G.costFor(id) === null && G.costFor(`${id}-pro`) === null, `without its own row, ${id} is not priced by the ${family} family row`);
+  U.setUpstreamCostsForTest({ ...FULL, models: [...FULL.models, [family, { prompt: 0.5, completion: 0.5 }]] });
+  ok(G.costFor(id) === U.upstreamCosts().models.find(([p]) => p === id)[1], `with its own row, ${id} is priced by it`);
 }
 U.setUpstreamCostsForTest({ ...FULL, models: FULL.models.filter(([p]) => p !== U.REQUIRED_MODEL_ROWS[0]) });
 ok(U.upstreamCostsStatus() === "partial" && U.upstreamCostsGaps().join() === `models[${U.REQUIRED_MODEL_ROWS[0]}]`, "a required model row that is absent is a named gap");

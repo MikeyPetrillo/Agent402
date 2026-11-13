@@ -26,7 +26,7 @@
 // cache hooks res.json only).
 
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
-import { upstreamCosts, upstreamCostsLoaded, rowRateAt } from "../upstream-costs.js";
+import { upstreamCosts, upstreamCostsLoaded, rowRateAt, REQUIRED_MODEL_ROWS } from "../upstream-costs.js";
 export { OPENROUTER_ATTRIBUTION };
 import { meterMarkup, METER_FLOOR_USD, METER_MIN_SETTLE_USD, setMeterSentinel, recordStreamedUsage } from "../gateway-meter.js";
 import { flattenNamespaceForChat } from "./tool-namespaces.js";
@@ -240,26 +240,32 @@ export async function probeOxAlphaAvailability({ fetchImpl } = {}) {
 // 2026-09-24: openai/gpt-6-luna leads the fast band. A live call at a
 // 64-token budget with reasoning effort "low" (what the auto tier injects)
 // answered in one sentence with zero reasoning tokens and finish "stop".
+//
+// 2026-11-12: deepseek-v4.1-flash takes every rung deepseek-chat held (1M
+// context against 164k, tools, listed below it), and qwen3.8-flash takes the
+// fast code rung from qwen-2.5-coder-32b-instruct (32k context, no tools).
+// Both replaced ids stay admitted on auto and grounded (AUTO_KEEP_ADMITTED).
 export const AUTO_QUALITIES = ["fast", "balanced", "best"];
 export const AUTO_RANKINGS = {
   // fast — cheapest/snappiest serving; right for high-frequency loop turns.
   fast: {
-    code: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "qwen/qwen-2.5-coder-32b-instruct", "deepseek/deepseek-chat"],
-    reasoning: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "deepseek/deepseek-chat", "openai/gpt-5.6-luna"],
-    long: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "deepseek/deepseek-chat", "openai/gpt-5.6-luna"],
-    general: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "deepseek/deepseek-chat", "openai/gpt-5.6-luna"],
+    code: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "qwen/qwen3.8-flash", "deepseek/deepseek-v4.1-flash"],
+    reasoning: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "deepseek/deepseek-v4.1-flash", "openai/gpt-5.6-luna"],
+    long: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "deepseek/deepseek-v4.1-flash", "openai/gpt-5.6-luna"],
+    general: ["openai/gpt-6-luna", "google/gemini-3.1-flash-lite", "deepseek/deepseek-v4.1-flash", "openai/gpt-5.6-luna"],
   },
-  // balanced — the default band. deepseek-chat keeps the code head (proven,
-  // cheap); gpt-5.6-luna leads the rest (1M ctx covers `long` natively).
+  // balanced — the default band. deepseek-v4.1-flash holds the code head
+  // (1M context, tools, listed below the deepseek-chat it replaced);
+  // gpt-5.6-luna leads the rest (1M ctx covers `long` natively).
   balanced: {
-    code: ["deepseek/deepseek-chat", "openai/gpt-5.6-luna", "openai/gpt-6-luna"],
-    reasoning: ["openai/gpt-5.6-luna", "deepseek/deepseek-chat", "openai/gpt-6-luna"],
+    code: ["deepseek/deepseek-v4.1-flash", "openai/gpt-5.6-luna", "openai/gpt-6-luna"],
+    reasoning: ["openai/gpt-5.6-luna", "deepseek/deepseek-v4.1-flash", "openai/gpt-6-luna"],
     long: ["openai/gpt-5.6-luna", "google/gemini-3.1-flash-lite", "openai/gpt-6-luna"],
-    general: ["openai/gpt-5.6-luna", "openai/gpt-6-luna", "deepseek/deepseek-chat"],
+    general: ["openai/gpt-5.6-luna", "openai/gpt-6-luna", "deepseek/deepseek-v4.1-flash"],
   },
   // best — strongest models that still fit the tier's price bound.
   best: {
-    code: ["openai/gpt-5.6-luna", "deepseek/deepseek-chat", "openai/gpt-6-luna"],
+    code: ["openai/gpt-5.6-luna", "deepseek/deepseek-v4.1-flash", "openai/gpt-6-luna"],
     reasoning: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-6-luna"],
     long: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-6-luna"],
     general: ["google/gemini-3.5-flash-lite", "openai/gpt-5.6-luna", "openai/gpt-6-luna"],
@@ -274,6 +280,10 @@ export const AUTO_RANKINGS = {
 const CODE_RE = /```|\bfunction\s*\(|\bdef\s+\w+\s*\(|\bimport\s+[\w{.]|\bconsole\.log\b|\bTraceback\b|\bstack trace\b|\bregex\b|\brefactor\b|\bunit test\b|\bcompile error\b|\btypescript\b|\bjavascript\b|\bpython\b|\bSELECT\b[\s\S]{0,120}\bFROM\b/i;
 const REASONING_RE = /[∑∫√π≠≤≥]|\bprove\b|\btheorem\b|\bderive\b|\bcalculate\b|\bsolve\b|\bequation\b|\bintegral\b|\bprobability\b|\bhow many\b|\bstep[ -]by[ -]step\b|\blogic puzzle\b|\briddle\b/i;
 const LONG_CHARS = 8000;
+/** Ids that left AUTO_RANKINGS but stay admitted on the routed tiers, so a
+ *  caller that names one keeps being served. */
+const AUTO_KEEP_ADMITTED = ["deepseek/deepseek-chat", "qwen/qwen-2.5-coder-32b-instruct"];
+const autoPrefixes = () => [...new Set([...Object.values(AUTO_RANKINGS).flatMap((byCategory) => Object.values(byCategory).flat()), ...AUTO_KEEP_ADMITTED])];
 
 /** Deterministic prompt classifier for the auto tier. Tolerates malformed
  *  messages (returns "general") - validateRequest raises the real 400 right
@@ -323,7 +333,7 @@ export const TIERS = {
     // caps under the clamp (gpt-4o-mini held it until its 2027-01-14 shutdown
     // was scheduled). Fallback models bypass
     // the tier allowlist (server-chosen, caps still enforced by the body).
-    fallbacks: ["deepseek/deepseek-chat", "google/gemini-3.1-flash-lite"],
+    fallbacks: ["deepseek/deepseek-v4.1-flash", "google/gemini-3.1-flash-lite"],
     prefixes: [
       // gpt-4.1-nano retired here 2026-09-02 ahead of OpenAI's 2026-10-23 removal; gpt-5.6-luna is its named successor and the tier default.
       // gpt-5-nano shuts down 2026-12-11: no longer listed here; RETIRING_MODELS keeps
@@ -346,6 +356,10 @@ export const TIERS = {
       "mistralai/ministral-3b-2512", "mistralai/ministral-8b-2512",
       // qwen-2.5-7b-instruct left 2026-11-11 (gone from the upstream catalog): served by ministral-8b-2512 via RETIRING_MODELS.
       "deepseek/deepseek-chat",
+      // deepseek-v4.1-flash (live 2026-09-10, 1M context, tools): the first
+      // fallback, listed far below deepseek-chat. Claude Haiku 5.5 (live
+      // 2026-10-07, 1M context, tools): exact id, inside this tier's max_price.
+      "deepseek/deepseek-v4.1-flash", "anthropic/claude-haiku-5.5",
       // poolside laguna-xs-2.1 / laguna-s-2.1 left 2026-10-03 (upstream expiration 2026-10-31): served by their successors via RETIRING_MODELS.
     ],
   },
@@ -369,7 +383,7 @@ export const TIERS = {
     // of these instead of an error. Each fallback is re-clamped at its own
     // price (clampToMargin runs per link), so a dearer one gets a smaller
     // output budget or is skipped, never served at a loss.
-    fallbacks: ["openai/gpt-6-luna", "deepseek/deepseek-chat"],
+    fallbacks: ["openai/gpt-6-luna", "deepseek/deepseek-v4.1-flash"],
     prefixes: [
       // gpt-5-nano stays admitted on base through RETIRING_MODELS' keepOn (a
       // nano model on a pricier tier is harmless), no longer listed here.
@@ -440,6 +454,9 @@ export const TIERS = {
       // bare gemini-pro left OpenRouter 2026-08-19; gemini-2.5-pro left 2026-09-29
       // ahead of its 2026-10-20 upstream expiration (RETIRING_MODELS).
       "google/gemini-3.1-pro", "google/gemini-3.5-flash", "google/gemini-3.6-flash",
+      // gemini-3.8-flash (GA 2026-09-02) and gemini-4-argon (GA 2026-10-13):
+      // both 1M context with tools, each inside this tier's bound.
+      "google/gemini-3.8-flash", "google/gemini-4-argon",
       "x-ai/grok",
       // gpt-6-sol (live 2026-09-24): fits this tier's bound at its dearest
       // endpoint; the prefix also admits gpt-6-sol-pro (same price and efforts).
@@ -462,7 +479,7 @@ export const TIERS = {
     ],
   },
   "v1-chat-premium": {
-    defaultModel: "anthropic/claude-opus-5", // served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
+    defaultModel: "anthropic/claude-opus-5.5", // 2026-11-12: Opus 5.5 (listed below Opus 5, which stays admitted by the claude-opus prefix); served when the caller names no model (2026-08-28: 82 refusals in 30 days for a missing "model")
     reasoningDefault: "model", // premium buyers bought depth; 8k cap leaves room for the model default
     route: "POST /v1/premium/chat/completions",
     price: 0.50,
@@ -528,10 +545,14 @@ export const TIERS = {
       // older model) out. With a 4k-char prompt the clamp still leaves a usable
       // output budget on either (pinned in test-llm-gateway).
       "openai/gpt-6-astra", "anthropic/claude-fable-5.1",
+      // Claude Fable 5.2 (live 2026-11-09, listed below 5.1): exact id too.
+      "anthropic/claude-fable-5.2",
       // Gemini's pro model, also on pro: the premium Gemini wire's default
       // (llm-gemini-kit.js), served here at this tier's caps and price. The
       // bare family id maps to the live -preview id (PREFIX_CANONICAL).
       "google/gemini-3.1-pro",
+      // Gemini 4 Argon (GA 2026-10-13), also on pro, listed below 3.1 Pro.
+      "google/gemini-4-argon",
     ],
   },
   // Auto tier - model chosen server-side (see AUTO_RANKINGS above). Listed
@@ -549,7 +570,7 @@ export const TIERS = {
     router: true,
     priceSort: true, // budget router: cheapest provider under the cap
     fallbacks: ["openai/gpt-6-luna"],
-    prefixes: [...new Set(Object.values(AUTO_RANKINGS).flatMap((byCategory) => Object.values(byCategory).flat()))],
+    prefixes: autoPrefixes(),
   },
   // Grounded tier - the auto router plus OpenRouter's web-search plugin on
   // every call (Exa, up to 5 results). The sanctioned home for "answer
@@ -574,7 +595,7 @@ export const TIERS = {
     router: true,
     priceSort: true,
     fallbacks: ["openai/gpt-6-luna"],
-    prefixes: [...new Set(Object.values(AUTO_RANKINGS).flatMap((byCategory) => Object.values(byCategory).flat()))],
+    prefixes: autoPrefixes(),
     web: { id: "web", engine: "exa", max_results: 5 },
     get fixedUpstreamUsd() { return feeOf("groundedPerCall"); },
     extraInputTokens: 4_500,
@@ -716,14 +737,39 @@ TIERS["v1-chat-metered"].prefixes = METERED_PREFIXES;
 export const PREFIX_CANONICAL = Object.freeze({
   // Live ids under each family read from openrouter.ai/api/v1/models on
   // 2026-08-26; the guard's exact-id check fails CI if one of these dies.
-  "anthropic/claude-opus": "anthropic/claude-opus-5",
+  // 2026-11-12: the bare family names serve Opus 5.5 and Haiku 5.5 (each
+  // listed below the model it replaces) and Grok 4.7 (same list price).
+  "anthropic/claude-opus": "anthropic/claude-opus-5.5",
   // 2026-10-06: the bare family name serves Sonnet 5.5 (live 2026-09-28, same
   // list price as Sonnet 5); an explicit claude-sonnet-5 is still served as asked.
   "anthropic/claude-sonnet": "anthropic/claude-sonnet-5.5",
-  "anthropic/claude-haiku": "anthropic/claude-haiku-4.5",
-  "x-ai/grok": "x-ai/grok-4.6",
+  "anthropic/claude-haiku": "anthropic/claude-haiku-5.5",
+  "x-ai/grok": "x-ai/grok-4.7",
   "google/gemini-3.1-pro": "google/gemini-3.1-pro-preview",
 });
+/** The model a bare family name served before PREFIX_CANONICAL moved it, kept
+ *  for the calls the newer model does not take: a parameter it refuses
+ *  (refuseUnsupportedParams) or an effort missing from its row. Such a call
+ *  is served by the earlier model, as before the move, never refused. */
+export const PREFIX_CANONICAL_COMPAT = Object.freeze({
+  "anthropic/claude-haiku": "anthropic/claude-haiku-4.5",
+});
+/** The model a request naming `requested` is served, given `model`
+ *  (canonicalModel of it) and the wire's refuseUnsupportedParams ctx plus the
+ *  buyer's `effort`. Unchanged unless `requested` is a bare family name with
+ *  a PREFIX_CANONICAL_COMPAT entry and the call needs that earlier model. */
+export function aliasModelFor(requested, model, ctx = {}) {
+  const raw = canonicalModelRaw(requested);
+  const key = (dottedListedId(raw) || raw).toLowerCase();
+  if (!Object.hasOwn(PREFIX_CANONICAL_COMPAT, key) || model !== PREFIX_CANONICAL[key]) return model;
+  const compat = PREFIX_CANONICAL_COMPAT[key];
+  try { refuseUnsupportedParams(model, ctx); } catch { return compat; }
+  if (ctx.effort !== undefined) {
+    const prof = reasoningProfile(model);
+    if (prof && !prof.efforts.includes(ctx.effort)) return compat;
+  }
+  return model;
+}
 
 // A hyphenated version ("deepseek-v4-1-flash" for "deepseek-v4.1-flash") is
 // read as its dotted form ONLY when that exact dotted id is on the fresh live
@@ -1283,6 +1329,11 @@ export function costFor(model, promptTokens) {
   for (const [prefix, cost] of modelCostRows()) {
     if (id.startsWith(prefix) && (!best || prefix.length > best.prefix.length)) best = { prefix, cost };
   }
+  // A model whose own row is required (REQUIRED_MODEL_ROWS) is never priced
+  // by a broader family row, which may list below it: without its row it
+  // reads as unknown (flat tiers price at their max_price bound, metered refuses).
+  const own = REQUIRED_MODEL_ROWS.find((p) => id === p || id.startsWith(`${p}-`) || id.startsWith(`${p}:`));
+  if (own && (!best || !best.prefix.startsWith(own))) return null;
   return best ? rowRateAt(best.cost, promptTokens) : null;
 }
 
@@ -2175,6 +2226,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     model = defaultModelFor(tier, paramCtx);
     defaultedModel = model;
   }
+  if (model) model = aliasModelFor(input.model, model, { ...paramCtx, effort: input.reasoning?.effort ?? input.reasoning_effort });
   if (!model) throw bad('"model" is required (e.g. "openai/gpt-4o-mini" or "gpt-4o-mini")');
   // Model-id variants that change what is BILLED, not just how it routes.
   // The allowlist's ":variant" match exists for cost-neutral routing hints
@@ -2389,6 +2441,9 @@ export const FLEX_MODELS = [
   "openai/gpt-6.1-sol",
   // openai/flex endpoint tag on gpt-6.1-terra and -pro (live endpoints 2026-11-01).
   "openai/gpt-6.1-terra",
+  // google-ai-studio/flex (and google-vertex/global/flex on 3.8-flash) endpoint
+  // tags on gemini-3.8-flash and gemini-4-argon (live endpoints 2026-11-12).
+  "google/gemini-3.8-flash", "google/gemini-4-argon",
 ];
 const FLEX_ENABLED = () => String(process.env.OPENROUTER_FLEX || "on").toLowerCase() !== "off";
 export const PROVIDER_SORT_ENABLED = () => String(process.env.OPENROUTER_PROVIDER_SORT || "on").toLowerCase() !== "off";
@@ -2535,6 +2590,10 @@ export const REASONING_MODELS = [
   { id: "google/gemini-3.5-flash-lite", efforts: ["minimal", "low", "medium", "high"] },
   { id: "google/gemini-3.5-flash", efforts: ["minimal", "low", "medium", "high"] },
   { id: "google/gemini-3.6-flash", efforts: ["minimal", "low", "medium", "high"] },
+  // Gemini 3.8 Flash and Gemini 4 Argon: reasoning MANDATORY, default effort
+  // medium, no "minimal" (live catalog 2026-11-12).
+  { id: "google/gemini-3.8-flash", efforts: ["low", "medium", "high"] },
+  { id: "google/gemini-4-argon", efforts: ["low", "medium", "high"] },
   // Gemini 3.1 Pro: reasoning MANDATORY, default effort medium, no "minimal"
   // (live catalog 2026-10-21). Pro injects "low"; premium leaves the model
   // default unless the call's budget is small (smallBudgetEffort).
@@ -2587,6 +2646,11 @@ export const REASONING_MODELS = [
   // nothing is injected; on metered ("lowest") they get "low".
   { prefix: "openai/gpt-6-astra", efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "anthropic/claude-fable-5.1", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // Claude Fable 5.2: the same mandatory reasoning and efforts (live catalog 2026-11-12).
+  { id: "anthropic/claude-fable-5.2", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  // DeepSeek V4.1 Flash: reasoning default-on at "high", efforts
+  // none/low/high/max (live catalog 2026-11-12). The budget tiers inject "low".
+  { id: "deepseek/deepseek-v4.1-flash", efforts: ["none", "low", "high", "max"] },
   // stealth/ox-alpha: reasoning.mandatory true, default_effort "max" (live
   // catalog 2026-08-22). Without this row defaultReasoningFor returns null,
   // the model reasons at "max" by default and a small budget comes back empty
@@ -4709,7 +4773,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.003",
     description:
-      "OpenAI-compatible chat completions, nano tier: gpt-6-luna (the default), gpt-5.6-luna, gemini flash-lite, small llama/ministral, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
+      "OpenAI-compatible chat completions, nano tier: gpt-6-luna (the default), gpt-5.6-luna, claude haiku 5.5, gemini flash-lite, small llama/ministral, deepseek v4.1 flash, deepseek-chat - $0.003 per call in USDC over x402, priced for high-frequency agent loops. Same wire format as /v1/chat/completions with loop-sized caps (12k chars in, 768 tokens out). Streaming supported (stream: true). No API key, no signup.",
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-5.6-luna" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-5.6-luna" } } },
     handler: makeHandler("v1-chat-nano"),
@@ -4805,7 +4869,7 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.10",
     description:
-      "OpenAI-compatible chat completions, pro tier: gpt-6.1 terra (the default when model is omitted), gpt-6 sol, claude sonnet, gemini pro, grok - paid per call in USDC over x402. Same wire format as /v1/chat/completions with higher input/output caps (48k chars in, 4096 tokens out). " + defaultModelCompatNote(TIERS["v1-chat-pro"]),
+      "OpenAI-compatible chat completions, pro tier: gpt-6.1 terra (the default when model is omitted), gpt-6 sol, claude sonnet, gemini pro and flash, gemini 4 argon, grok - paid per call in USDC over x402. Same wire format as /v1/chat/completions with higher input/output caps (48k chars in, 4096 tokens out). " + defaultModelCompatNote(TIERS["v1-chat-pro"]),
     tags: SHARED_TAGS,
     discovery: { bodyType: "json", input: { ...EXAMPLE, model: "openai/gpt-4o" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "openai/gpt-4o" } } },
     handler: makeHandler("v1-chat-pro"),
@@ -4817,9 +4881,9 @@ export const LLM_GATEWAY_TOOLS = [
     category: "llm",
     price: "$0.50",
     description:
-      "OpenAI-compatible chat completions, premium tier: gpt-5.6 sol and terra, gpt-6 astra, claude opus, claude fable 5.1 - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
+      "OpenAI-compatible chat completions, premium tier: claude opus 5.5 (the default), gpt-5.6 sol and terra, gpt-6 astra, claude fable 5.1 and 5.2, gemini 4 argon - paid per call in USDC over x402. Same wire format as /v1/chat/completions with the largest caps (85k chars in, 8192 tokens out).",
     tags: SHARED_TAGS,
-    discovery: { bodyType: "json", input: { ...EXAMPLE, model: "anthropic/claude-opus-5" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "anthropic/claude-opus-5" } } },
+    discovery: { bodyType: "json", input: { ...EXAMPLE, model: "anthropic/claude-opus-5.5" }, inputSchema: INPUT_SCHEMA, output: { example: { ...EXAMPLE_OUT, model: "anthropic/claude-opus-5.5" } } },
     handler: makeHandler("v1-chat-premium"),
   },
   {

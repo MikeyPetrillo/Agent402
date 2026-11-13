@@ -32,7 +32,7 @@ import {
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   validateReasoning, reasoningForLink, lowestEffortRetry, recoveryRunAffordable, retryEmptyAtLowestEffort,
   setReasoningAdjustedHeader, REASONING_ADJUSTED, LINK_PROBE,
-  refuseCostVariants, refuseUnsupportedParams, defaultModelFor, defaultModelCompatNote,
+  refuseCostVariants, refuseUnsupportedParams, defaultModelFor, aliasModelFor, defaultModelCompatNote,
   assertUpstreamBody,
   stripBilling,
 } from "./llm-gateway-kit.js";
@@ -207,6 +207,7 @@ export function validateResponsesRequest(input, tierSlug) {
       model = defaultModelFor(tier, paramCtx);
       defaultedModel = model;
     }
+    if (model) model = aliasModelFor(input.model, model, { ...paramCtx, effort: input.reasoning?.effort });
     if (!model) throw bad(`"model" is required (e.g. openai/gpt-4o-mini). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
     if (!tierAllows(tierSlug, model, input.model, { defaulted: defaultedModel === model })) {
       // "auto" when not gated at the auto price: name the auto route.
@@ -549,7 +550,7 @@ const EXAMPLE_MODEL_BY_TIER = {
   "v1-chat-nano": "openai/gpt-5.6-luna",
   "v1-chat": "openai/gpt-4o-mini",
   "v1-chat-pro": "openai/gpt-4o",
-  "v1-chat-premium": "anthropic/claude-opus-5",
+  "v1-chat-premium": "anthropic/claude-opus-5.5",
   "v1-chat-metered": "anthropic/claude-haiku-4.5",
 };
 const TIER_LABEL = { "v1-chat-nano": "nano", "v1-chat-auto": "auto", "v1-chat": "base", "v1-chat-pro": "pro", "v1-chat-premium": "premium", "v1-chat-metered": "metered" };

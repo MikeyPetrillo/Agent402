@@ -166,8 +166,11 @@ console.log("\n# failover chain — every candidate model re-clamped at its own 
   const nano = TIERS["v1-chat-nano"];
   // The inversion the re-clamp closes: gpt-4.1-nano clamp is a no-op at
   // n=4 × 768 out; that body priced at deepseek's bound busts the price.
-  const unclamped = { model: "deepseek/deepseek-chat", messages: [{ role: "user", content: "hi" }], max_tokens: 768, n: 4 };
-  const preFix = worstCaseUpstreamCost(unclamped, nano, 0);
+  // The fallback under test: the first nano fallback whose unclamped body
+  // would bill over the price; every link before it fails.
+  const unclampedOf = (model) => ({ model, messages: [{ role: "user", content: "hi" }], max_tokens: 768, n: 4 });
+  const PRICEY = nano.fallbacks.find((m) => worstCaseUpstreamCost(unclampedOf(m), nano, 0).totalUsd > nano.price) || nano.fallbacks[0];
+  const preFix = worstCaseUpstreamCost(unclampedOf(PRICEY), nano, 0);
   ok(preFix.totalUsd > nano.price, `documented: UNclamped fallback body would bill over the $${nano.price} price (why the re-clamp exists)`);
 
   // Behavioral: primary 502s, the fallback outbound body must be re-clamped.
@@ -177,15 +180,15 @@ console.log("\n# failover chain — every candidate model re-clamped at its own 
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body);
     outbounds.push(body);
-    if (body.model === "mistralai/ministral-8b-2512") return { ok: false, status: 502, text: async () => "provider down" };
+    if (body.model !== PRICEY) return { ok: false, status: 502, text: async () => "provider down" };
     return { ok: true, status: 200, text: async () => JSON.stringify({ id: "gen-m", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }) };
   };
   const nanoTool = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-nano");
   const res = await nanoTool.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], max_tokens: 768, n: 4 });
-  ok(res.model === "deepseek/deepseek-chat", `failover still serves the buyer (served ${res.model})`);
+  ok(res.model === PRICEY, `failover still serves the buyer (served ${res.model})`);
   ok(outbounds[0].model === "mistralai/ministral-8b-2512" && outbounds[0].max_tokens === 768, "primary model keeps its own clamp (768 out — no behavior change)");
-  const fb = outbounds[1];
-  ok(fb.model === "deepseek/deepseek-chat" && fb.max_tokens < 768, "fallback outbound is re-clamped at its own cost (max_tokens below 768)");
+  const fb = outbounds.find((b) => b.model === PRICEY);
+  ok(fb && fb.max_tokens < 768, "fallback outbound is re-clamped at its own cost (max_tokens below 768)");
   const fbWc = worstCaseUpstreamCost(fb, nano, 0);
   ok(fbWc.totalUsd < nano.price, `re-clamped fallback worst-case < price $${nano.price}`);
   globalThis.fetch = realFetch;
