@@ -72,6 +72,9 @@ COPY scripts/fetch-tessdata.js ./scripts/
 RUN node scripts/fetch-tessdata.js /app/tessdata
 
 COPY src ./src
+# The hosted MCP connector reports this package version in serverInfo
+# (src/mcp-http.js reads it at import).
+COPY mcp/package.json ./mcp/package.json
 # The decide service (a separate Railway service started with
 # `node services/decide/server.js`) ships in the same image.
 COPY services ./services

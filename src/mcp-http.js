@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { frontDoorJson } from "./front-door.js";
 import { stripHiddenCharacters, quotedCallerText } from "./hidden-chars.js";
 import { RAILS_PAREN, RAILS_OR, RAILS } from "./rails.js";
@@ -102,10 +103,13 @@ import {
   MAX_CALLS_PER_WINDOW,
 } from "./rate-limit.js";
 
-// The connector is the server, so it reports the server's build rather than
-// a hand-typed number ("0.3.0" sat here unchanged from 2026-06-12 to
-// 2026-09-22 beside the stdio package's 0.13.x on the same serverInfo text).
-const VERSION = `build-${(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || "dev").slice(0, 7)}`;
+// The connector reports the version the MCP Registry lists for it (the
+// agent402-mcp package version in mcp/server.json) with the server's build as
+// semver build metadata: "0.13.32+build.abc1234", "+build.dev" with no commit.
+// A client comparing serverInfo with the registry entry sees the same version,
+// and the build still names the deploy. The image copies mcp/package.json.
+const MCP_PACKAGE_VERSION = JSON.parse(readFileSync(new URL("../mcp/package.json", import.meta.url), "utf8")).version;
+const VERSION = `${MCP_PACKAGE_VERSION}+build.${(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || "dev").slice(0, 7)}`;
 
 // Mirrors server.js's FIND_WEAK_SCORE: an empty result set, or a top score
 // below this, reads as "the catalog probably doesn't have this" — the
