@@ -272,7 +272,7 @@ export function validateMessagesRequest(input, tierSlug) {
       defaultedModel = model;
     }
     if (!model) throw bad(`"model" is required (e.g. anthropic/claude-sonnet-5). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
-    if (!tierAllows(tierSlug, model, input.model)) {
+    if (!tierAllows(tierSlug, model, input.model, { defaulted: defaultedModel === model })) {
       // "auto" when not gated at the auto price: name the auto route.
       const home = model === AUTO_MODEL ? AUTO_TIER : tierFor(model);
       // Not every chat tier has a Messages twin (MESSAGES_PATH_BY_TIER is an

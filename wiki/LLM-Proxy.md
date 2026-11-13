@@ -7,17 +7,17 @@
 
 > **Looking for the OpenAI-compatible wire paths?** The [[LLM Gateway (OpenAI /v1)|LLM-Gateway]] serves standard `chat/completions`, `embeddings`, `rerank`, `images/generations`, `videos/generations` and `audio/speech` at `https://agent402.tools/v1` (plus the Anthropic Messages and OpenAI Responses wires) - flat chat tiers from $0.003 per call, a metered tier quoted per request, embeddings and rerank from $0.002, model-optional auto-routing, streaming, and response caching. Any OpenAI SDK adopts it by changing `base_url`. The `/api/llm*` tools below remain available as the simpler custom-JSON proxy.
 
-Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `chat/completions` request and pays per call over x402 (USDC on Base and the other rails its 402 lists, or USDG on Robinhood Chain) or over MPP. No model API key is needed on the caller's side needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier input and output caps bound what one call can ask for.
+Three tiers of OpenAI inference, paywalled via x402. An agent sends a standard `chat/completions` request and pays per call over x402 (USDC on Base and the other rails its 402 lists, or USDG on Robinhood Chain) or over MPP. No model API key is needed on the caller's side, no signup, no account. The operator's own `OPENAI_API_KEY` handles upstream auth; per-tier input and output caps bound what one call can ask for.
 
 ## Tiers
 
 | Endpoint | Price | Models | Input cap | Output cap |
 |---|---|---|---|---|
-| `POST /api/llm` | $0.01 | `gpt-4o-mini` | 16k chars | 4,096 tokens |
-| `POST /api/llm-pro` | $0.10 | `gpt-4o`, `gpt-4.1` | 16k chars | 2,048 tokens |
+| `POST /api/llm` | $0.01 | `gpt-6-luna` (default), `gpt-4o-mini` | 16k chars | 4,096 tokens |
+| `POST /api/llm-pro` | $0.10 | `gpt-6-luna` (default), `gpt-6.1-sol`, `gpt-4o`, `gpt-4.1` | 16k chars | 2,048 tokens |
 | `POST /api/llm-premium` | $0.50 | `gpt-5.6-terra` (default; the older `o3` ids are still accepted) | 32k chars | 2,048 tokens |
 
-GPT-4o, GPT-4o mini and GPT-4.1 are scheduled to be retired upstream on 2027-01-14; these routes will move to their successors before then.
+OpenAI shuts down GPT-4o, GPT-4o mini, GPT-4.1 and GPT-4.1 mini on 2027-01-14. Each is served as itself until then; from that day a call naming one is served by its successor (`gpt-6-luna` for the mini ids, `gpt-6.1-sol` for the others), and the answer names the swap in `agent402_model_substituted`.
 
 All three tiers are **wallet-only**: there is no proof-of-work free tier because every call burns real upstream inference credit. See [[Security Model]] for the wallet-only rationale.
 
@@ -27,7 +27,7 @@ Every tier accepts the same OpenAI-shaped JSON body:
 
 ```json
 {
-  "model": "gpt-4o-mini",
+  "model": "gpt-4o",
   "messages": [
     { "role": "system", "content": "You are a concise assistant." },
     { "role": "user", "content": "Summarize x402 in two sentences." }
@@ -41,10 +41,10 @@ Every tier accepts the same OpenAI-shaped JSON body:
 
 | Field | Required | Notes |
 |---|---|---|
-| `model` | no | Defaults to `gpt-4o-mini` on `/api/llm` and `/api/llm-pro`, and to `gpt-5.6-terra` on `/api/llm-premium`. Must match the tier's allowlist by prefix (`gpt-4o-mini` for `/api/llm`; `gpt-4o` / `gpt-4.1` for `/api/llm-pro`; `gpt-5.6-terra` for `/api/llm-premium`, which still accepts `o3` and `o3-pro` (served as themselves until OpenAI retires them on 2026-12-11, then by `gpt-5.6-terra`) and serves the retired `o3-mini` and `o4-mini` ids with `gpt-5.6-terra`) |
+| `model` | no | Defaults to `gpt-6-luna` on `/api/llm` and `/api/llm-pro`, and to `gpt-5.6-terra` on `/api/llm-premium`. Must match the tier's allowlist by prefix (`gpt-6-luna` / `gpt-4o-mini` for `/api/llm`; `gpt-6-luna` / `gpt-6.1-sol` / `gpt-4o` / `gpt-4.1` for `/api/llm-pro`; `gpt-5.6-terra` for `/api/llm-premium`, which still accepts `o3` and `o3-pro` (served as themselves until OpenAI retires them on 2026-12-11, then by `gpt-5.6-terra`) and serves the retired `o3-mini` and `o4-mini` ids with `gpt-5.6-terra`) |
 | `messages` | yes | Array of `{role, content}` objects; max 50 messages |
 | `max_tokens` | no | Default 1,024; silently clamped to the tier's output cap |
-| `temperature` | no | 0--2; controls randomness |
+| `temperature` | no | 0--2; controls randomness. The gpt-4o and gpt-4.1 families only: a call naming no model is served `gpt-6-luna` without it, and the answer names it in `agent402_params_not_sent` |
 | `top_p` | no | 0--1; nucleus sampling |
 | `stop` | no | Stop sequence(s) |
 
@@ -75,25 +75,24 @@ Every tier returns the same OpenAI-shaped envelope:
 
 ## Curl examples
 
-### Basic tier ($0.01: GPT-4o-mini)
+### Basic tier ($0.01: gpt-6-luna)
 
 ```bash
 curl -X POST https://agent402.tools/api/llm \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "gpt-4o-mini",
     "messages": [{"role": "user", "content": "Say hello in one sentence."}],
     "max_tokens": 64
   }'
 ```
 
-### Pro tier ($0.10: GPT-4o / GPT-4.1)
+### Pro tier ($0.10: gpt-6.1-sol, GPT-4o / GPT-4.1 by name)
 
 ```bash
 curl -X POST https://agent402.tools/api/llm-pro \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "gpt-4o",
+    "model": "gpt-6.1-sol",
     "messages": [{"role": "user", "content": "Explain proof-of-work in three sentences."}],
     "max_tokens": 256
   }'
