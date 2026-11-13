@@ -28,6 +28,7 @@ import { routerLanes, exampleUnprovenLane } from "../router-lanes.js";
 // The served display name is cleaned and capped like every agent-read seller
 // surface; the listing screen below reads the name as written.
 import { servedSellerName } from "../x402-index.js";
+import { notChargedOn } from "../not-charged.js";
 
 const PLAIN = (v) => (v === undefined ? null : v);
 
@@ -595,7 +596,7 @@ export function buildSellerDossierTool({
       // answer. Only the paid path refuses, because only the paid path charges.
       const readiness = !detail && typeof getIndexReadiness === "function" ? (getIndexReadiness() || {}) : {};
       if (readiness.ready === false && !operator) {
-        const e = new Error(`the seller index is still loading on this server (${readiness.state || "loading"}), so "we hold nothing for ${host}" would be a fact about us, not about that seller - not charged, retry in ${readiness.retryAfterSeconds || 30}s`);
+        const e = new Error(`the seller index is still loading on this server (${readiness.state || "loading"}), so "we hold nothing for ${host}" would be a fact about us, not about that seller.${notChargedOn(ctx)} Retry in ${readiness.retryAfterSeconds || 30}s.`);
         e.statusCode = 503;
         e.retryAfter = Number(readiness.retryAfterSeconds) || 30;
         throw e;

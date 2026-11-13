@@ -399,6 +399,19 @@ check("a still-loading index refuses the PAID path instead of selling never-craw
   assert.ok(!/never crawled/i.test(String(err.message)));
 });
 
+check("the loading refusal says nothing was charged on a route call only", () => {
+  // The HTTP route passes the request as the second argument; a decide or
+  // route-execute step runs the handler request-less inside a charged answer.
+  const t = build({ getIndexReadiness: () => ({ ready: false, state: "first-crawl", retryAfterSeconds: 60 }) });
+  let onRoute = null, step = null;
+  try { t.handler({ origin: "unknown.example" }, { headers: {} }); } catch (e) { onRoute = e; }
+  try { t.handler({ origin: "unknown.example" }); } catch (e) { step = e; }
+  assert.equal(onRoute?.statusCode, 503);
+  assert.match(String(onRoute.message), /Nothing was charged\. Retry in 60s\.$/);
+  assert.equal(step?.statusCode, 503);
+  assert.ok(!/charged/i.test(String(step.message)), step?.message);
+});
+
 check("a seller we DO hold is answered normally while the index loads", () => {
   // The refusal is scoped to the absence, not to the request: withholding a
   // record we already have would be its own overreach.
