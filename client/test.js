@@ -37,6 +37,32 @@ let pass = 0; const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); 
 const advisoryWarnings = [];
 { const warn = console.warn; console.warn = (...args) => { const line = args.join(" "); if (line.includes("[agent402-client] spending caps")) advisoryWarnings.push(line); warn(...args); }; }
 
+// Offline: a job-link poll never follows a redirect off the server's origin.
+// The poll is sent with redirect "manual"; a same-origin hop is followed by
+// hand, a hop to another host is refused before it is fetched.
+{
+  const { awaitJob, AsyncJobPendingError } = await import("./async-job.js");
+  const BASE = "https://srv.example";
+  const job202 = () => new Response(JSON.stringify({ statusUrl: "/api/jobs/j1", status: "working" }), { status: 202, headers: { "retry-after": "1" } });
+  const done = () => new Response(JSON.stringify({ state: "succeeded", result: { httpStatus: 200, body: { ok: 1 } } }), { status: 200 });
+  const hits = [];
+  // A fake clock the sleeps advance, so a poll loop on unfixed code ends.
+  const clock = () => { let t = 0; return { sleep: async (ms) => { t += ms; }, now: () => t, timeoutMs: 60_000 }; };
+  const redirecting = (to) => async (url, init = {}) => {
+    hits.push({ url: String(url), redirect: init.redirect });
+    if (String(url).startsWith("https://inner.example")) return done();
+    if (String(url).endsWith("/api/jobs/j1")) return new Response(null, { status: 302, headers: { location: to } });
+    return done();
+  };
+  let err = null;
+  try { await awaitJob(job202(), { baseUrl: BASE, fetchImpl: redirecting("https://inner.example/latest/meta-data"), ...clock() }); } catch (e) { err = e; }
+  ok(err instanceof AsyncJobPendingError && /another origin/.test(err.message) && !hits.some((h) => h.url.startsWith("https://inner.example")), `a job-link redirect to another origin is refused, never fetched (${hits.map((h) => h.url).join(" ")})`);
+  ok(hits.length > 0 && hits.every((h) => h.redirect === "manual"), "every job-link poll is sent with redirect: manual");
+  hits.length = 0;
+  const r = await awaitJob(job202(), { baseUrl: BASE, fetchImpl: redirecting("/api/jobs/j1/v2"), ...clock() });
+  ok(r.status === 200 && hits.some((h) => h.url === `${BASE}/api/jobs/j1/v2`), "a same-origin redirect on the job link is followed by hand");
+}
+
 // Offline: a connection reset before any answer is resent once with the same
 // request; an HTTP answer, a streamed body, a Request object and an aborted
 // call are not; the SDK's own fetch retries, a caller's payFetch does not.
