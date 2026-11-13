@@ -365,10 +365,10 @@ export const LLM_TOOLS = [
     price: "$0.010",
     description:
       "LLM inference proxy - send an OpenAI-format chat/completions request and get a response from gpt-6-luna (the default; gpt-4o-mini by its id). Supports vision (up to 2 image URLs, low detail) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 16k chars, output at 4096 tokens.",
-    tags: [...SHARED_TAGS, "gpt-4o-mini", "vision", "json-mode"],
+    tags: [...SHARED_TAGS, "gpt-6-luna", "vision", "json-mode"],
     discovery: {
       bodyType: "json",
-      input: { model: "gpt-4o-mini", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
+      input: { model: "gpt-6-luna", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
       inputSchema: {
         properties: {
           model: { type: "string", description: "Model ID - gpt-6-luna (default) or gpt-4o-mini" },
@@ -384,7 +384,7 @@ export const LLM_TOOLS = [
       },
       output: {
         example: {
-          model: "gpt-4o-mini",
+          model: "gpt-6-luna",
           provider: "openai",
           usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
           choices: [{ message: { role: "assistant", content: "Hello! How can I help you today?" }, finish_reason: "stop" }],
@@ -401,10 +401,10 @@ export const LLM_TOOLS = [
     price: "$0.100",
     description:
       "LLM inference proxy (Pro tier) - gpt-6-luna by default, or gpt-6.1-sol, GPT-4o or GPT-4.1 by its id. Supports vision (up to 2 image URLs) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 16k chars, output at 2048 tokens.",
-    tags: [...SHARED_TAGS, "gpt-4o", "gpt-4.1", "vision", "json-mode"],
+    tags: [...SHARED_TAGS, "gpt-6-luna", "gpt-6.1-sol", "vision", "json-mode"],
     discovery: {
       bodyType: "json",
-      input: { model: "gpt-4o", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
+      input: { model: "gpt-6-luna", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
       inputSchema: {
         properties: {
           model: { type: "string", description: "Model ID - gpt-6-luna (default), gpt-6.1-sol, gpt-4o or gpt-4.1" },
@@ -420,7 +420,7 @@ export const LLM_TOOLS = [
       },
       output: {
         example: {
-          model: "gpt-4o",
+          model: "gpt-6-luna",
           provider: "openai",
           usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
           choices: [{ message: { role: "assistant", content: "Hello! How can I help you today?" }, finish_reason: "stop" }],

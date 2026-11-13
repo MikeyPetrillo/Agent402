@@ -499,7 +499,7 @@ import { agent402Tools } from "agent402-openai-tools";
 
 const openai = new OpenAI();
 const { tools, execute } = await agent402Tools({ slugs: ["extract", "hash", "render"] });
-const res = await openai.chat.completions.create({ model: "gpt-4o-mini", tools, messages: [...] });
+const res = await openai.chat.completions.create({ model: "gpt-6-luna", tools, messages: [...] });
 // when the model returns a tool call: await execute(call.function.name, JSON.parse(call.function.arguments));
 ```
 

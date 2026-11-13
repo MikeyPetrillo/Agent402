@@ -37,7 +37,7 @@ const payFetch = wrapFetchWithPayment(fetch, payClient);
 // Web search, then a cited answer: both wallet-only, paid per call through payFetch.
 const { tools } = await agent402Tools({ slugs: ["search", "answer"], freeOnly: false, fetch: payFetch });
 
-const myAgent = agent({ tools, llm: openai({ model: "gpt-4o-mini" }) });
+const myAgent = agent({ tools, llm: openai({ model: "gpt-6-luna" }) });
 const res = await myAgent.run("Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?");
 ```
 

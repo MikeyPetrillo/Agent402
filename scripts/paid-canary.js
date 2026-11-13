@@ -237,12 +237,17 @@ export const TOOLS = [
     check: (r) => (typeof r.answer === "string" && r.answer.length > 0 && r.citationCount > 0) || `expected non-empty answer + citationCount>0, got ${JSON.stringify(r).slice(0, 80)}`,
   },
   {
+    // Base tier, NO model in the body: proves the tier's default (gpt-6-luna,
+    // named back in agent402_default_model) against a real completion daily.
+    // 64 output tokens because luna reasons before it answers (a budget of 5
+    // can end empty); the tier price is flat, so the budget does not change
+    // what the leg pays.
     kit: "llm-gateway",
     path: "/v1/chat/completions",
     method: "POST",
-    body: { model: "openai/gpt-4o-mini", messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 5 },
+    body: { messages: [{ role: "user", content: "Reply with exactly: OK" }], max_tokens: 64 },
     priceUsd: 0.02,
-    check: (r) => isExactOkReply(r.choices?.[0]?.message?.content) || `expected an exact "OK" reply, got ${JSON.stringify(r).slice(0, 100)}`,
+    check: (r) => (isExactOkReply(r.choices?.[0]?.message?.content) && r.agent402_default_model === "openai/gpt-6-luna") || `expected an exact "OK" reply served by the base default (agent402_default_model openai/gpt-6-luna), got ${JSON.stringify(r).slice(0, 120)}`,
   },
   {
     // Nano tier — the loop-priced gateway. Same upstream path as the base
@@ -330,8 +335,8 @@ export const TOOLS = [
   {
     // Auto tier — eval-ranked routing. NO model in the body: the gateway must
     // classify server-side, serve via the ranked chain, and disclose the
-    // decision. "Reply with exactly: OK" classifies general → gpt-4o-mini
-    // heads that ranking (canary-proven daily), so this leg proves the router
+    // decision. "Reply with exactly: OK" classifies general; the balanced
+    // general ranking's head serves it, so this leg proves the router
     // itself, orthogonal to the nano leg's failover-chain coverage.
     kit: "llm-auto",
     path: "/v1/auto/chat/completions",

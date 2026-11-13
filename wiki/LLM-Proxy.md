@@ -23,18 +23,15 @@ All three tiers are **wallet-only**: there is no proof-of-work free tier because
 
 ## Request format
 
-Every tier accepts the same OpenAI-shaped JSON body:
+Every tier accepts the same OpenAI-shaped JSON body. `model` is optional: with none, each tier serves its default (below). `temperature` and `top_p` apply only to the gpt-4o and gpt-4.1 families on `/api/llm` and `/api/llm-pro`, so a body carrying them names one of those models.
 
 ```json
 {
-  "model": "gpt-4o",
   "messages": [
     { "role": "system", "content": "You are a concise assistant." },
     { "role": "user", "content": "Summarize x402 in two sentences." }
   ],
   "max_tokens": 256,
-  "temperature": 0.7,
-  "top_p": 1,
   "stop": "\n"
 }
 ```
@@ -54,7 +51,7 @@ Every tier returns the same OpenAI-shaped envelope:
 
 ```json
 {
-  "model": "gpt-4o-mini-2025-07-18",
+  "model": "gpt-6-luna",
   "provider": "openai",
   "usage": {
     "prompt_tokens": 24,
@@ -118,7 +115,7 @@ Each tier bounds what a single call can ask for:
 
 - **Input cap** (chars) limits how much prompt text the caller can send, bounding prompt-token cost.
 - **Output cap** (tokens) hard-limits `max_completion_tokens` sent to OpenAI, bounding completion-token cost.
-- **Model allowlist** per tier keeps each endpoint to the models its tier serves (e.g. sending `gpt-4o` to `/api/llm` returns `400`).
+- **Model allowlist** per tier keeps each endpoint to the models its tier serves (e.g. sending `gpt-6.1-sol` to `/api/llm` returns `400`).
 - **Message count** is capped at 50 per request.
 
 These caps are enforced server-side before the upstream call is made.

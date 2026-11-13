@@ -548,14 +548,14 @@ export function makeResponsesHandler(routeTier) {
 
 const EXAMPLE_MODEL_BY_TIER = {
   "v1-chat-nano": "openai/gpt-5.6-luna",
-  "v1-chat": "openai/gpt-4o-mini",
-  "v1-chat-pro": "openai/gpt-4o",
+  "v1-chat": "openai/gpt-6-luna", // base's default, served at base's price when named
+  "v1-chat-pro": "openai/gpt-6.1-terra",
   "v1-chat-premium": "anthropic/claude-opus-5.5",
   "v1-chat-metered": "anthropic/claude-haiku-4.5",
 };
 const TIER_LABEL = { "v1-chat-nano": "nano", "v1-chat-auto": "auto", "v1-chat": "base", "v1-chat-pro": "pro", "v1-chat-premium": "premium", "v1-chat-metered": "metered" };
 const priceString = (tierSlug) => (tierSlug === "v1-chat-nano" ? "$0.003" : tierSlug === "v1-chat-metered" ? `$${METER_MIN_SETTLE_USD}` : `$${TIERS[tierSlug].price.toFixed(2)}`);
-const EXAMPLE_OUT = { id: "resp_…", object: "response", status: "completed", model: "openai/gpt-4o-mini", output: [{ id: "msg_…", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "x402 is an HTTP-native way for agents to pay per request with USDC.", annotations: [] }] }], usage: { input_tokens: 14, output_tokens: 18, total_tokens: 32 } };
+const EXAMPLE_OUT = { id: "resp_…", object: "response", status: "completed", model: "openai/gpt-6-luna", output: [{ id: "msg_…", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "x402 is an HTTP-native way for agents to pay per request with USDC.", annotations: [] }] }], usage: { input_tokens: 14, output_tokens: 18, total_tokens: 32 } };
 const INPUT_SCHEMA = {
   properties: {
     model: { type: "string", description: "Model id (OpenRouter naming) - allowlisted per tier; omit (or \"auto\") on the auto tier" },
