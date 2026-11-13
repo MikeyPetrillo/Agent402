@@ -544,10 +544,25 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   const minted = [];
   const ledger2 = { ...fakeLedger, mintCredit: (x) => { minted.push(x); return ledger.mintCredit(x); } };
   globalThis.fetch = async () => new Response(JSON.stringify({ decisionId: "de", plan: [], gaps: ["translate a paragraph"], estimatedCostViaAgent402Usd: 0 }), { status: 200 });
-  await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "translate", depth: "plan" }, mkReq()), 422, "not charged", "an empty plan is a 422, not a sale");
+  await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "translate", depth: "plan" }, mkReq()), 422, "Nothing was charged.", "an empty plan is a 422, not a sale");
   globalThis.fetch = async () => new Response(JSON.stringify({ decisionId: "dj", plan: [{ step: 1, tool: tool("a"), fallbacks: [] }], judged: false, gaps: [], estimatedCostViaAgent402Usd: 0.01 }), { status: 200 });
-  await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "x", depth: "plan" }, mkReq()), 503, "not charged", "a plan the model could not judge is a 503, not a sale");
+  await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "x", depth: "plan" }, mkReq()), 503, "Nothing was charged.", "a plan the model could not judge is a 503, not a sale");
   ok(!minted.length, "...and neither refusal mints a credit");
+  // The charge sentence is the shared one (src/not-charged.js), so the route
+  // binder can add the Tempo push exception to it; a request-less step call
+  // runs inside a charged answer and prints no claim.
+  {
+    const { withPushExceptionText } = await import("../src/prepayment-refusal.js");
+    const { PUSH_EXCEPTION } = await import("../src/tempo-push-debts.js");
+    const routed = await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "x", depth: "plan" }, mkReq()), 503, "right now. Nothing was charged. Retry shortly.", "a route call's unjudged-plan refusal carries the shared sentence");
+    ok(withPushExceptionText(routed?.message, true).includes(`Nothing was charged${PUSH_EXCEPTION}.`), "...which the binder restates for a Tempo push payer");
+    const step = await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "x", depth: "plan" }), 503, "could not be judged", "the same refusal on a request-less step call");
+    ok(step && !/charged/i.test(step.message), `...says nothing about a charge (${step?.message})`);
+    globalThis.fetch = async () => { throw new TypeError("fetch failed"); };
+    const down = await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "x", depth: "plan" }, mkReq()), 503, "The decision service is unreachable. Nothing was charged. Retry shortly.", "a service refusal from callService carries the sentence on a route call");
+    const downStep = await throwsWith(() => makeDecideHandler({ ledger: ledger2, now })({ task: "x", depth: "plan" }), 503, "unreachable", "...and the same refusal request-less");
+    ok(down && downStep && !/charged/i.test(downStep.message), `...prints no claim there (${downStep?.message})`);
+  }
   // A Tempo-paid decision is bounded inside the credential's settle window.
   let sentDeadline = 0;
   globalThis.fetch = async (_u, init) => { sentDeadline = JSON.parse(init.body).deadlineAt; return new Response(JSON.stringify({ decisionId: "dt", plan: [{ step: 1, tool: tool("a"), fallbacks: [] }], judged: true, gaps: [], estimatedCostViaAgent402Usd: 0.01 }), { status: 200 }); };
@@ -791,7 +806,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ledger.saveDecision({ decisionId: "rp_old", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock - 25 * 3600_000 });
   ledger.markDecisionSettled("rp_old");
   calls.length = 0;
-  await throwsWith(() => exr({ decisionId: "rp_old", replan: true }, mkReq("0xr4")), 503, "nothing was charged", "a failed re-plan on a decision past its credit window is refused, not charged");
+  await throwsWith(() => exr({ decisionId: "rp_old", replan: true }, mkReq("0xr4")), 503, "Nothing was charged.", "a failed re-plan on a decision past its credit window is refused, not charged");
   ok(calls.length === 0, "...before any step runs");
   replanMode = "gone";
   await throwsWith(() => exr({ decisionId: "rp_old", replan: true, runKey: "k-gone" }, mkReq("0xr5")), 503, "no longer held", "a task the planner no longer holds says so");
@@ -847,7 +862,7 @@ await throwsWith(() => exec({ decisionId: "nope" }, mkReq()), 404, "Unknown deci
   ledger.saveDecision({ decisionId: "rp_edge", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock - ttlMs + 5 * 60_000 });
   ledger.markDecisionSettled("rp_edge");
   calls.length = 0;
-  await throwsWith(() => exr({ decisionId: "rp_edge", replan: true }, mkReq("0xr11")), 503, "nothing was charged", "a failed re-plan whose credit window closes inside the run is refused (5 min left, run up to 4 min plus slack)");
+  await throwsWith(() => exr({ decisionId: "rp_edge", replan: true }, mkReq("0xr11")), 503, "Nothing was charged.", "a failed re-plan whose credit window closes inside the run is refused (5 min left, run up to 4 min plus slack)");
   ok(calls.length === 0, "...before any step runs");
   ledger.saveDecision({ decisionId: "rp_room", depth: "plan", priceUsd: planFee, payer: "0xr", plan: savedPlan, costViaUsd: 0.02, now: clock - ttlMs + 10 * 60_000 });
   ledger.markDecisionSettled("rp_room");

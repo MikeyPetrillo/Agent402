@@ -748,5 +748,67 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   ok(unhandled.length === 0, `every unscoped "not charged" a served module throws is one the push gate restates${unhandled.length ? ` - UNHANDLED: ${unhandled.join(" | ")}` : ""}`);
 }
 
+// --- a converted module says "not charged" through the shared sentence only ---
+// The route binder adds the Tempo push exception to one exact sentence
+// (src/not-charged.js NOT_CHARGED), and a handler called request-less (a
+// skill-pack, decide or route-execute step) runs inside a charged answer,
+// where the claim is false. So in a module converted to notChargedOn(req),
+// a refusal (bad, refuse, new Error, or a *MESSAGE constant) carries the
+// claim only through notChargedOn / NOT_CHARGED, never as typed words. The
+// span read is the whole call, so a message split across lines is read too.
+{
+  const CONVERTED = ["src/tools/decide-kit.js", "src/tools/route-execute.js", "src/tools/llm-gateway-kit.js", "src/bound-request-url.js", "src/tools/stt-kit.js", "src/tools/ocr-kit.js"];
+  // A typed claim kept on purpose, each with why it can never print request-less.
+  const KEEP = new Map([
+    ["src/tools/llm-gateway-kit.js:Input too large", "the claim is on the metered branch only, and a metered tier is never dispatched request-less (dispatchable refuses a def.quote tool); the same error is the pre-payment refusal server.js answers"],
+    ["src/tools/decide-kit.js:Unknown decisionId", "also the pre-payment 404 server.js answers before any gate, and decide-execute is never a step (it is long-running, which dispatchable refuses)"],
+  ]);
+  const CLAIM = /\b(?:not|never) charged\b|\bnothing (?:is|was|has been) charged\b|\bno charge\b|\b(?:run|spent) or charged\b|\bwere not charged\b/i;
+  // The text of each refusal call: from "bad(" (or refuse(, new Error() to its
+  // matching paren, read past string and template literals.
+  function refusalSpans(src) {
+    const out = [];
+    const starts = /\b(?:bad|refuse|new Error)\(|\bconst [A-Z_]*MESSAGE[A-Z_]* =/g;
+    let m;
+    while ((m = starts.exec(src))) {
+      let i = m.index + m[0].length, depth = m[0].endsWith("(") ? 1 : 0;
+      const stack = [];
+      for (; i < src.length; i++) {
+        const c = src[i], q = stack[stack.length - 1];
+        if (q === "'" || q === '"') { if (c === "\\") i++; else if (c === q) stack.pop(); continue; }
+        if (q === "`") { if (c === "\\") i++; else if (c === "`") stack.pop(); else if (c === "$" && src[i + 1] === "{") { stack.push("${"); i++; } continue; }
+        if (c === "'" || c === '"' || c === "`") { stack.push(c); continue; }
+        if (q === "${") { if (c === "{") stack.push("{"); else if (c === "}") stack.pop(); continue; }
+        if (q === "{") { if (c === "}") stack.pop(); else if (c === "{") stack.push("{"); continue; }
+        if (depth === 0 && (c === ";" || c === "\n")) break;
+        if (c === "(") depth++;
+        else if (c === ")" && --depth === 0) { i++; break; }
+      }
+      out.push(src.slice(m.index, i));
+    }
+    return out;
+  }
+  const typedClaims = (rel, src) => refusalSpans(src)
+    .filter((span) => CLAIM.test(span) && ![...KEEP.keys()].some((k) => k.startsWith(`${rel}:`) && span.includes(k.slice(rel.length + 1))))
+    .map((span) => `${rel}: ${span.replace(/\s+/g, " ").slice(0, 110)}`);
+  const found = [];
+  let spans = 0;
+  for (const rel of CONVERTED) {
+    const src = read(rel) || "";
+    spans += refusalSpans(src).length;
+    found.push(...typedClaims(rel, src));
+  }
+  ok(spans >= 150, `read ${spans} refusal spans across the converted modules (a collapsed reader must fail)`);
+  ok(typedClaims("<control>", 'throw bad("The service failed - not charged; retry shortly", 503);').length === 1
+     && typedClaims("<control>", "throw bad(cond\n  ? \"a - not charged\"\n  : \"b\", 504);").length === 1
+     && typedClaims("<control>", 'export const WALLET_LOW_MESSAGE = "Unavailable. Nothing was charged; retry later.";').length === 1
+     && typedClaims("<control>", "throw bad(`The service failed.${notChargedOn(req)} Retry shortly.`, 503);").length === 0,
+     "control: a typed claim in a one-line, a split and a constant refusal is caught; the shared sentence is not");
+  const unusedKeep = [...KEEP.keys()].filter((k) => { const rel = k.split(":")[0]; return !refusalSpans(read(rel) || "").some((sp) => CLAIM.test(sp) && sp.includes(k.slice(rel.length + 1))); });
+  ok(unusedKeep.length === 0, `every kept typed claim still exists (a stale entry would excuse a new one)${unusedKeep.length ? `: ${unusedKeep.join(" | ")}` : ""}`);
+  ok(found.length === 0, `converted modules type no "not charged" claim in a refusal${found.length ? ` - TYPED: ${found.join(" | ")}` : ""}`);
+  for (const rel of CONVERTED) ok(/from "(?:\.\.?\/)+not-charged\.js"/.test(read(rel) || ""), `${rel} imports the shared sentence`);
+}
+
 console.log(`test-copy-absolutes: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

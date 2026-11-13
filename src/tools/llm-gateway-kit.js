@@ -63,6 +63,7 @@ import { audioProviderPolicy, AUDIO_ZDR_MODELS } from "../openrouter-audio-polic
 import { cacheGet, cacheSet } from "../cache.js";
 import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
 import { stripControlChars } from "../prepayment-refusal.js";
+import { notChargedOn } from "../not-charged.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -1125,8 +1126,8 @@ export function paymentWindowTimeoutMs(req, defaultMs) {
   if (first) windowAttempted.add(req);
   if (left <= PAYMENT_WINDOW_TAIL_MS || (!first && left < PAYMENT_WINDOW_MIN_START_MS)) {
     throw bad(cdnBinds
-      ? "The call did not finish within the time this connection waits for an answer - not charged; retry, or ask for a streamed answer where the route offers one"
-      : "The call did not finish within the payment window - not charged; retry with a fresh payment", 504);
+      ? `The call did not finish within the time this connection waits for an answer.${notChargedOn(req)} Retry, or ask for a streamed answer where the route offers one.`
+      : `The call did not finish within the payment window.${notChargedOn(req)} Retry with a fresh payment.`, 504);
   }
   return Math.min(defaultMs, left - PAYMENT_WINDOW_TAIL_MS);
 }
@@ -3213,14 +3214,14 @@ export function assertUpstreamBody(data, { model } = {}) {
   throw bad(`Upstream error: ${msg}`, rateLimited ? 503 : 502);
 }
 
-async function callOpenRouter(body, { timeoutMs } = {}) {
+async function callOpenRouter(body, { timeoutMs, req = null } = {}) {
   const res = await fetchOpenRouter(body, { timeoutMs });
   if (!res.ok) await upstreamHttpError(res, body?.model);
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data, { model: body?.model });
-  if (!hasChatMessage(data)) throw bad("Upstream returned no answer (no message) - not charged", 502);
+  if (!hasChatMessage(data)) throw bad(`Upstream returned no answer (no message).${notChargedOn(req)}`, 502);
   // Full OpenAI wire shape passes through untouched (id, object, created,
   // model, choices incl. tool_calls, usage) — drop-in fidelity is the product.
   return data;
@@ -3378,7 +3379,9 @@ export const STREAM_TIMEOUT_MS = 180_000;
 /** The one SSE frame a committed stream ends with when upstream drops it
  *  mid-answer: an error object on the wire every SSE client parses. */
 export const STREAM_DROPPED_FRAME = 'data: {"error":{"message":"upstream stream dropped"}}\n\n';
-export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = STREAM_TIMEOUT_MS, fetchUpstream = fetchOpenRouter, vendorKeys = false, errorFrameFails = false, modelAs } = {}) {
+// `req` (the route call's request; Express's res.req by default) decides
+// whether a refusal prints the charge sentence (src/not-charged.js).
+export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = STREAM_TIMEOUT_MS, fetchUpstream = fetchOpenRouter, vendorKeys = false, errorFrameFails = false, modelAs, req = res?.req } = {}) {
   // One controller covers connect AND the whole body read; client disconnect
   // aborts the upstream so a closed tab never keeps burning tokens.
   // `timeoutMs` bounds the wait for the first data frame (it may be shorter
@@ -3475,7 +3478,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       scrub.finish();
       try { res.write(STREAM_DROPPED_FRAME); } catch { /* the buyer may be gone too */ }
     }
-    if (!committed) throw bad("Upstream stream ended before producing any data frame (no tokens) - nothing was charged", 502);
+    if (!committed) throw bad(`Upstream stream ended before producing any data frame (no tokens).${notChargedOn(req)}`, 502);
     res.end();
   } finally {
     clearTimeout(timer);
@@ -4234,7 +4237,7 @@ function makeHandler(routeTier) {
     if (typeof avail === "function" && !avail()) {
       throw bad(
         `"${TIERS[tierSlug].lockedModel || tierSlug}" is no longer served upstream. It was a stealth (cloaked) preview ` +
-        "listing and has been withdrawn by its provider; nothing was charged for this call. GET /v1/models lists every " +
+        `listing and has been withdrawn by its provider.${notChargedOn(req)} GET /v1/models lists every ` +
         "model the gateway currently serves.",
         503
       );
@@ -4248,7 +4251,7 @@ function makeHandler(routeTier) {
     if (TIERS[tierSlug].metered && Number.isFinite(req?.__meteredQuoteUsd)) {
       const q = meteredQuoteUsd(input);
       if (q.invalid || q.usd > req.__meteredQuoteUsd * (1 + 1e-6) + 1e-9) {
-        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}. Nothing was charged; resend the request exactly as it should be served (no query-string or wrapped fields).`, 400);
+        throw bad(`This request was quoted at $${req.__meteredQuoteUsd} but the body being served quotes $${q.usd}${q.invalid ? ` (${q.reason})` : ""}.${notChargedOn(req)} Resend the request exactly as it should be served (no query-string or wrapped fields).`, 400);
       }
     }
     // NB: @x402/express settles AFTER this handler and cancels settlement for a
@@ -4511,7 +4514,7 @@ function makeHandler(routeTier) {
         // attempt (the same model on OpenRouter) is the retry.
         let data = directBody
           ? await callDirectUpstream(directBody, { timeoutMs, servedModel: model, cfg: directCfg })
-          : await retryRateLimited(() => callOpenRouter({ ...outbound, usage: { include: true } }, { timeoutMs }), { delays: rateLimitDelaysFor(flex) });
+          : await retryRateLimited(() => callOpenRouter({ ...outbound, usage: { include: true } }, { timeoutMs, req }), { delays: rateLimitDelaysFor(flex) });
         let reasoningAdjusted = directBody ? null : (outbound[REASONING_ADJUSTED] || null);
         // An OpenRouter answer that spent its whole cap before any content
         // gets one more run of the same model at its lowest supported effort
@@ -4522,7 +4525,7 @@ function makeHandler(routeTier) {
           const again = await retryEmptyAtLowestEffort({
             once: recovery, plan, req, timeouts,
             affordable: () => recoveryRunAffordable(outbound[LINK_PROBE], TIERS[tierSlug], imageCount, data?.usage?.cost, req?.__meteredQuoteUsd),
-            run: (p, ms) => retryRateLimited(() => callOpenRouter({ ...outbound, reasoning: p.reasoning, usage: { include: true } }, { timeoutMs: ms }), { delays: rateLimitDelaysFor(flex) }),
+            run: (p, ms) => retryRateLimited(() => callOpenRouter({ ...outbound, reasoning: p.reasoning, usage: { include: true } }, { timeoutMs: ms, req }), { delays: rateLimitDelaysFor(flex) }),
             usable: (d) => !isEmptyLength(d) && !isEmptyRefusal(d),
           });
           if (again) { data = again; reasoningAdjusted = plan.note; }

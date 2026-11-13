@@ -10,6 +10,8 @@
 // ever change the query: the origin and path stay the listing's, and the SSRF
 // guard (assertPublicUrl and the pinned dispatcher) reads the bound URL.
 
+import { notChargedOn } from "./not-charged.js";
+
 // The same bound route-execute holds a caller's `target` URL to.
 export const BOUND_URL_MAX_CHARS = 2048;
 
@@ -24,13 +26,15 @@ function refuse(message) {
   return e;
 }
 
-export function boundRequestUrl(listingUrl, { method = "POST", params = {}, slug = "" } = {}) {
+// `req` is the paid call's request (route-execute passes it), so its refusal
+// prints the charge sentence on a route call only (src/not-charged.js).
+export function boundRequestUrl(listingUrl, { method = "POST", params = {}, slug = "", req = null } = {}) {
   const m = String(method || "POST").toUpperCase();
   if (!isQueryMethod(m)) return listingUrl;
   const qp = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
     if (v == null) continue;
-    if (typeof v === "object" || typeof v === "function") throw refuse(`External tool "${slug}" is a ${m} endpoint - param "${k}" must be a string, number, or boolean`);
+    if (typeof v === "object" || typeof v === "function") throw refuse(`External tool "${slug}" is a ${m} endpoint - param "${k}" must be a string, number, or boolean.${notChargedOn(req)}`);
     qp.set(k, String(v));
   }
   const qs = qp.toString();
@@ -43,6 +47,6 @@ export function boundRequestUrl(listingUrl, { method = "POST", params = {}, slug
   } catch {
     out = `${listingUrl}${String(listingUrl).includes("?") ? "&" : "?"}${qs}`;
   }
-  if (out.length > BOUND_URL_MAX_CHARS) throw refuse(`External tool "${slug}" is a ${m} endpoint - its params make a ${out.length}-character URL (max ${BOUND_URL_MAX_CHARS}). Nothing was spent and nothing is charged.`);
+  if (out.length > BOUND_URL_MAX_CHARS) throw refuse(`External tool "${slug}" is a ${m} endpoint - its params make a ${out.length}-character URL (max ${BOUND_URL_MAX_CHARS}). Nothing was spent.${notChargedOn(req)}`);
   return out;
 }

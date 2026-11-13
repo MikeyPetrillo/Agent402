@@ -27,6 +27,7 @@ import { planShape } from "../decide/plan-shape.js";
 import { attemptErrorCode } from "../decide/skip-codes.js";
 import { createReplanGuard } from "../decide/replan-guard.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
+import { notChargedOn } from "../not-charged.js";
 export { SKIP_CODES, attemptErrorCode, skipCodeOf } from "../decide/skip-codes.js";
 
 export const NEUTRALITY_NOTE = "Every candidate is scored by one formula with the same weights: fit to the step, observed reliability, price, schema quality and a freshness pass mark. It has no term for who sells the tool, and every tool carries firstParty. Fit is judged from the same bounded description for every tool; reliability counts one observation per payer per day. Outside tools are eligible when a live 402 was seen within the configured window and their input schema is known.";
@@ -45,9 +46,11 @@ function safeServiceUrl(u) {
   } catch { return false; }
 }
 
-export async function callService(path, body, { timeoutMs = 30_000, fetchImpl = fetch } = {}) {
+// `req` is the route call's request, passed so a refusal's charge sentence is
+// printed on a route call only (src/not-charged.js).
+export async function callService(path, body, { timeoutMs = 30_000, fetchImpl = fetch, req = null } = {}) {
   // The shared token is only ever sent over TLS or the private network.
-  if (!safeServiceUrl(serviceUrl())) throw bad("The decision service is misconfigured - not charged", 503);
+  if (!safeServiceUrl(serviceUrl())) throw bad(`The decision service is misconfigured.${notChargedOn(req)}`, 503);
   let res;
   try {
     res = await fetchImpl(`${serviceUrl()}${path}`, {
@@ -57,14 +60,14 @@ export async function callService(path, body, { timeoutMs = 30_000, fetchImpl = 
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
-    throw bad(e?.name === "TimeoutError" ? "The decision service did not answer in time - not charged; retry shortly" : "The decision service is unreachable - not charged; retry shortly", 503);
+    throw bad(`${e?.name === "TimeoutError" ? "The decision service did not answer in time." : "The decision service is unreachable."}${notChargedOn(req)} Retry shortly.`, 503);
   }
   let j = null;
   try { j = await res.json(); } catch { /* non-JSON */ }
   if (!res.ok) {
     // Relay only our own service's 4xx wording; anything else is a generic 5xx.
     if (res.status >= 400 && res.status < 500 && typeof j?.error === "string") throw bad(j.error.slice(0, 300), res.status);
-    throw bad("The decision service failed - not charged; retry shortly", res.status === 503 ? 503 : 502);
+    throw bad(`The decision service failed.${notChargedOn(req)} Retry shortly.`, res.status === 503 ? 503 : 502);
   }
   return j;
 }
@@ -169,7 +172,7 @@ export function makeDecideHandler({ ledger, now = () => Date.now(), isOwnTraffic
       task: input?.task, constraints: input?.constraints, depth,
       payer, rail: req?.mppTempoCredential ? "mpp" : "x402", priceUsd, synthetic,
       deadlineAt: Date.now() + budgetMs + 3000,
-    }, { timeoutMs: budgetMs + 4000 });
+    }, { timeoutMs: budgetMs + 4000, req });
     // The planner version and plan shape are kept with the decision for the
     // operator stats; neither is part of the answer.
     const { plannerVersion = null, shape = null, ...out } = answer || {};
@@ -177,8 +180,8 @@ export function makeDecideHandler({ ledger, now = () => Date.now(), isOwnTraffic
     // A 4xx/5xx is never charged. An empty plan is "nothing covers this", and
     // a plan whose fit judging failed is retrieval order, which /api/find gives
     // free: neither is sold as a decision.
-    if (!Array.isArray(out.plan) || !out.plan.length) throw Object.assign(bad("No indexed tool covers this task yet - not charged. The need was recorded.", 422), { gaps: out.gaps || [] });
-    if (out.judged === false) throw bad("The decision could not be judged right now - not charged; retry shortly", 503);
+    if (!Array.isArray(out.plan) || !out.plan.length) throw Object.assign(bad(`No indexed tool covers this task yet.${notChargedOn(req)} The need was recorded.`, 422), { gaps: out.gaps || [] });
+    if (out.judged === false) throw bad(`The decision could not be judged right now.${notChargedOn(req)} Retry shortly.`, 503);
     // The decision is kept here (money side) so execute can price from it;
     // its credit counts only once THIS payment settles.
     const feedbackToken = `fb_${randomBytes(18).toString("base64url")}`;
@@ -554,7 +557,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       // The payer that ran it gets that run's outcome back with the refusal
       // (still a 409, so nothing is charged again); anyone else gets the id only.
       const own = prior.status !== "running" && payer && prior.payer === payer;
-      throw Object.assign(bad(`This decision already has a run with that key (${prior.id}, ${prior.status}); nothing was charged`, 409), { runId: prior.id, ...(own ? { priorRun: { id: prior.id, status: prior.status, spentUsd: prior.spentUsd, steps: prior.steps } } : {}) });
+      throw Object.assign(bad(`This decision already has a run with that key (${prior.id}, ${prior.status}).${notChargedOn(req)}`, 409), { runId: prior.id, ...(own ? { priorRun: { id: prior.id, status: prior.status, spentUsd: prior.spentUsd, steps: prior.steps } } : {}) });
     }
 
     // Outside steps are paid from our spending wallet. When its balance reads
@@ -566,16 +569,16 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     // insert, so concurrent requests, in this process or in another
     // container, cannot all pass on the same reading.
     const payerDayCap = cfg.execute.globalDayUsd * cfg.execute.perPayerDayShare;
-    const capRefused = (reason) => reason === "payerHour" ? bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}); nothing was charged`, 429)
-      : reason === "global" ? bad("Outside steps are paused for everyone for up to 24 hours; nothing was charged", 429)
-      : bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}); nothing was charged`, 429);
+    const capRefused = (reason) => reason === "payerHour" ? bad(`This wallet has reached its hourly execution ceiling ($${cfg.execute.perWalletHourUsd}).${notChargedOn(req)}`, 429)
+      : reason === "global" ? bad(`Outside steps are paused for everyone for up to 24 hours.${notChargedOn(req)}`, 429)
+      : bad(`This wallet has reached its daily execution ceiling ($${roundUsd(payerDayCap)}).${notChargedOn(req)}`, 429);
     const refuseEarly = async (plan) => {
       const hasOutside = plan.some((p) => [p.tool, ...(p.fallbacks || [])].some((x) => x && !x.firstParty));
       let outsidePaused = false;
       if (hasOutside) {
         try { outsidePaused = (await spendingWalletStatus())?.status === "low"; } catch { outsidePaused = false; }
         if (outsidePaused && plan.every((p) => [p.tool, ...(p.fallbacks || [])].every((x) => x && !x.firstParty))) {
-          throw bad("Outside steps are paused while our spending wallet is topped up; nothing was charged - retry later", 503);
+          throw bad(`Outside steps are paused while our spending wallet is topped up.${notChargedOn(req)} Retry later.`, 503);
         }
       }
       if (payer && await ledger.payerExposureUsd(payer, t - 3_600_000) + budget > cfg.execute.perWalletHourUsd) throw capRefused("payerHour");
@@ -605,10 +608,10 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       // still refused there).
       await refuseEarly(saved.plan);
       if (await replanGuard.blocked(replanKey(req))) {
-        throw bad(`This wallet's recent re-plans (${replanGuard.limit} in the last hour) ended without a run that could be charged, so "replan" is paused for up to an hour; nothing was charged. Send the same body without "replan" to run the saved plan.`, 429);
+        throw bad(`This wallet's recent re-plans (${replanGuard.limit} in the last hour) ended without a run that could be charged, so "replan" is paused for up to an hour.${notChargedOn(req)} Send the same body without "replan" to run the saved plan.`, 429);
       }
       if (creditAssumed > 0 && await ledger.creditAvailableUsd(input.creditToken, d.id, t) + 1e-9 < creditAssumed) {
-        throw bad("The execution credit this price assumed is no longer available (already used or expired); nothing was charged - request a fresh quote", 409);
+        throw bad(`The execution credit this price assumed is no longer available (already used or expired).${notChargedOn(req)} Request a fresh quote.`, 409);
       }
       const creditMs = runBudgetMs(req);
       const planMs = Math.min(cfg.budgetMs[saved.depth] ?? cfg.budgetMs.plan, Number.isFinite(creditMs) && creditMs > 0 ? creditMs / 2 : Infinity);
@@ -638,7 +641,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
         // the window must outlast the whole run, not just this moment.
         replanned = { ran: false, reason: why, priceUsd: planCharge, returnedAsCredit: true };
       } else {
-        throw bad(`The re-plan could not run (${why}); nothing was charged. Retry, or send the same body without "replan" to run the saved plan.`, 503);
+        throw bad(`The re-plan could not run (${why}).${notChargedOn(req)} Retry, or send the same body without "replan" to run the saved plan.`, 503);
       }
     }
 
@@ -654,7 +657,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     const unbook = async (e) => {
       await finish({ runId, status: "failed", spentUsd: 0, steps: [], now: now() });
       if (input.creditToken) await restore(input.creditToken, runId);
-      return Object.assign(bad("The execution ledger is unavailable; nothing was charged - retry shortly", 503), { cause: e });
+      return Object.assign(bad(`The execution ledger is unavailable.${notChargedOn(req)} Retry shortly.`, 503), { cause: e });
     };
     if (creditAssumed > 0) {
       try { redeemed = await ledger.redeemCredit(input.creditToken, d.id, runId, t); }
@@ -663,7 +666,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       // expired), refuse before spending anything. Not charged.
       if (redeemed + 1e-9 < creditAssumed) {
         if (redeemed) await restore(input.creditToken, runId);
-        throw bad("The execution credit this price assumed is no longer available (already used or expired); nothing was charged - request a fresh quote", 409);
+        throw bad(`The execution credit this price assumed is no longer available (already used or expired).${notChargedOn(req)} Request a fresh quote.`, 409);
       }
     }
     const spendable = roundUsd(Math.min(budget, runPaid + redeemed));
@@ -678,7 +681,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       // Lost a race: a concurrent request carrying the same key, or one that
       // took the last of a ceiling's headroom. Nothing was booked.
       if (redeemed) await restore(input.creditToken, runId);
-      throw booked.reason === "key" ? bad("This decision already has a run with that key; nothing was charged", 409) : capRefused(booked.reason);
+      throw booked.reason === "key" ? bad(`This decision already has a run with that key.${notChargedOn(req)}`, 409) : capRefused(booked.reason);
     }
 
     // One deadline for the whole run, inside what the buyer's payment can
@@ -926,7 +929,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
     if (refusedBy && pool.spent === 0 && !mayHaveSpentOutside && okCount === 0) {
       await finish({ runId, status: "failed", spentUsd: 0, steps: [], now: now() });
       if (redeemed) await restore(input.creditToken, runId);
-      throw Object.assign(bad("The execution ledger is unavailable; nothing was charged - retry shortly", 503), { cause: refusedBy });
+      throw Object.assign(bad(`The execution ledger is unavailable.${notChargedOn(req)} Retry shortly.`, 503), { cause: refusedBy });
     }
     // A step the run never started (stopped, or refused) says so, in its place.
     const results = d.plan.map((p, i) => entries[i] || { step: p.step, status: "skipped", reason: `the run ${refusedBy ? "was refused" : `was stopped (${stopWhy()})`} before this step started`, code: "halt", attempts: [] });
@@ -950,7 +953,7 @@ export function makeExecuteHandler({ ledger, getCatalog, now = () => Date.now(),
       // breaker does not count. A tool-side failure or any spend: a 502. A
       // run stopped on our side (draining, or the buyer gone): a 503.
       const callerCaused = nothingSpent && results.every((r) => r.status === "skipped" || (r.attempts || []).every((a) => a.skipped || (a.status >= 400 && a.status < 500)));
-      throw Object.assign(bad(`No step of the plan could be run (${results.map((r) => `step ${r.step}: ${r.reason || (r.attempts || []).map((a) => a.error || a.skipped).join(" / ")}`).join("; ").slice(0, 600)}). Nothing was charged.`, stop?.aborted ? 503 : callerCaused ? 400 : 502), { steps: results });
+      throw Object.assign(bad(`No step of the plan could be run (${results.map((r) => `step ${r.step}: ${r.reason || (r.attempts || []).map((a) => a.error || a.skipped).join(" / ")}`).join("; ").slice(0, 600)}).${notChargedOn(req)}`, stop?.aborted ? 503 : callerCaused ? 400 : 502), { steps: results });
     }
     const finishedAt = now();
     const finalSteps = results.map(({ result, ...r }) => r);

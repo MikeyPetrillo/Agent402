@@ -260,7 +260,7 @@ function toolWith({ bare, pay, spendOk = true, bareDelayMs = 0, bareAdvanceMs = 
 {
   let paid = 0;
   const { tool, spent } = toolWith({ wallet: async () => ({ status: "low" }), pay: async () => { paid++; return { result: {}, quote: { usd: 0.01 } }; } });
-  let e = null; try { await tool.handler({ url: "https://seller.example/x" }, { ip: "192.0.2.5" }); } catch (x) { e = x; }
+  let e = null; try { await tool.handler({ url: "https://seller.example/x" }, { ip: "192.0.2.5", headers: {} }); } catch (x) { e = x; }
   ok(e?.statusCode === 503 && /temporarily unavailable/.test(e.message) && /Nothing was charged/.test(e.message) && paid === 0, `wallet low: 503 before signing (status ${e?.statusCode}, paid ${paid}x)`);
   ok(spent.adjust.length === 1 && spent.adjust[0] === 0, `wallet low: the day's booking is given back (${JSON.stringify(spent.adjust)})`);
   for (const st of [{ status: "ok" }, { status: "unknown" }, null]) {
