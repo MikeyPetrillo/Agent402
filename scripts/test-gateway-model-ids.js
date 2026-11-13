@@ -142,8 +142,15 @@ for (const [q, byCat] of Object.entries(AUTO_RANKINGS)) {
     ok(dead.length === 0, `AUTO_RANKINGS.${q}.${cat}: all ranked ids live${dead.length ? ` (dead: ${dead.join(", ")})` : ""}`);
   }
 }
-// 3. TTS chain: every link is in the live speech list.
+// 3. TTS chain: every link is in the live speech list, and so is every
+//    /api/tts backup that is not a chain link, with each voice its map sends.
+const { TTS_BACKUP_ENTRIES } = await import("../src/tools/tts-kit.js");
 for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link ${link.id} is live`);
+for (const e of TTS_BACKUP_ENTRIES) {
+  const m = speech.find((x) => x.id === e.id);
+  const gone = [...new Set(Object.values(e.map))].filter((v) => !(m?.supported_voices || []).includes(v));
+  ok(!!m && gone.length === 0, `tts backup ${e.id} is live and serves every mapped voice${gone.length ? ` (gone: ${gone.join(", ")})` : ""}`);
+}
 // 1b. Every speech link's private per-char row is at or above the DEAREST live endpoint
 //     for that model, not the catalog headline. TTS bills per INPUT char, so
 //     this row IS the worst-case bound the $0.06 chain and the $0.005 lite tier
@@ -153,7 +160,7 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
 //     until an audit did (tts-lite was loss-making at its old cap).
 {
   const under = [];
-  for (const link of SPEECH_MODELS) {
+  for (const link of [...SPEECH_MODELS, ...TTS_BACKUP_ENTRIES]) {
     let prices = [];
     try {
       const j = await (await fetch(`https://openrouter.ai/api/v1/models/${link.id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json();
