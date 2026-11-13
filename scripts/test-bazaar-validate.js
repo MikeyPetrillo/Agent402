@@ -1,5 +1,8 @@
 // Offline guard for scripts/bazaar-validate.js (stub validator, no network).
-import { validateOne, FLAGSHIP_PATHS } from "./bazaar-validate.js";
+import { createServer } from "node:http";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { validateOne, FLAGSHIP_PATHS, defaultEndpoints, NON_JSON_LISTING_MAX } from "./bazaar-validate.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -34,6 +37,63 @@ r = await validateOne(ep, { fetchImpl: fetchWith([resp(502, "<html>bad gateway</
 ok(!r.ok && /502/.test(r.error), "validator 5xx/non-JSON -> unreadable, never valid");
 r = await validateOne(ep, { fetchImpl: async () => { throw new Error("ECONNRESET"); } });
 ok(!r.ok && /unreachable/.test(r.error), "network error -> unreadable");
+
+// The default run covers every non-JSON listing on /api/pricing beside the
+// flagship set, derived from the rows (mimeType), capped.
+{
+  const row = (path, extra = {}) => ({ method: "GET", path, slug: path.slice(5), ...extra });
+  const catalog = [row("/api/search"), row("/api/hash"), row("/api/other"), row("/api/bytes", { mimeType: "image/png" }), row("/api/json-typed", { mimeType: "application/json" })];
+  const d = defaultEndpoints(catalog);
+  ok(d.chosen.map((e) => e.path).join() === "/api/search,/api/hash,/api/bytes", `default set = flagship rows in the catalog + the non-JSON listing (${d.chosen.map((e) => e.path).join()})`);
+  const many = Array.from({ length: NON_JSON_LISTING_MAX + 3 }, (_, i) => row(`/api/b${i}`, { mimeType: "image/png" }));
+  const capped = defaultEndpoints(many);
+  ok(capped.nonJson.length === NON_JSON_LISTING_MAX && capped.nonJsonSkipped === 3, `non-JSON listings are capped at ${NON_JSON_LISTING_MAX} and the remainder is counted (${capped.nonJsonSkipped})`);
+}
+
+// The guard as the deploy job and the heartbeat run it (no arguments), against
+// a stub catalog and a stub validator: a binary listing the validator calls
+// INVALID fails the run, and the same catalog passes when it is valid.
+{
+  const run = async (invalidPath) => {
+    const asked = [];
+    const stub = createServer((req, res) => {
+      let body = "";
+      req.on("data", (d) => { body += d; });
+      req.on("end", () => {
+        res.setHeader("content-type", "application/json");
+        if (req.url === "/api/pricing") {
+          return res.end(JSON.stringify({ endpoints: [
+            { method: "GET", path: "/api/hash", slug: "hash", price: "$0.001" },
+            { method: "GET", path: "/api/plain", slug: "plain", price: "$0.001" },
+            { method: "GET", path: "/api/qr", slug: "qr", price: "$0.001", mimeType: "image/png" },
+          ] }));
+        }
+        if (req.url === "/validate") {
+          const { resource } = JSON.parse(body || "{}");
+          const path = new URL(resource).pathname;
+          asked.push(path);
+          const bad = path === invalidPath;
+          return res.end(JSON.stringify({ valid: !bad, statusCode: 402, preflight: bad ? [{ check: "resource.mimeType", passed: false, severity: "required", detail: "stub rejection" }] : [], simulation: { outcome: bad ? "rejected" : "accepted" }, index: { active: true } }));
+        }
+        res.statusCode = 404; res.end("{}");
+      });
+    });
+    await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${stub.address().port}`;
+    let out = "";
+    const child = spawn(process.execPath, [fileURLToPath(new URL("./bazaar-validate.js", import.meta.url))], { env: { ...process.env, TARGET_URL: base, BAZAAR_VALIDATE_URL: `${base}/validate`, BAZAAR_VALIDATE_CONCURRENCY: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { out += d; });
+    const code = await new Promise((r) => child.on("exit", r));
+    await new Promise((r) => stub.close(r));
+    return { code, asked, out };
+  };
+  const bad = await run("/api/qr");
+  ok(bad.asked.includes("/api/qr") && !bad.asked.includes("/api/plain"), `a no-argument run validates the binary listing and no plain non-flagship row (asked ${bad.asked.join()})`);
+  ok(bad.code === 1 && /FAIL GET \/api\/qr/.test(bad.out), `an INVALID binary listing fails the run (exit ${bad.code})`);
+  const good = await run(null);
+  ok(good.code === 0 && good.asked.length === 2, `control: the same catalog passes when the validator accepts it (exit ${good.code}, ${good.asked.length} calls)`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

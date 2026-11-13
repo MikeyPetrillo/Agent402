@@ -10,7 +10,7 @@
 // we watch.
 //
 // Usage:
-//   node scripts/bazaar-validate.js                  # flagship set vs TARGET_URL (default prod)
+//   node scripts/bazaar-validate.js                  # flagship set + every non-JSON listing vs TARGET_URL (default prod)
 //   node scripts/bazaar-validate.js --all            # every catalog endpoint (500+ calls - rate-paced)
 //   node scripts/bazaar-validate.js --sample 40      # flagship + 40 random others
 //   node scripts/bazaar-validate.js --routes /api/hash,/api/search
@@ -44,6 +44,23 @@ export const FLAGSHIP_PATHS = [
   "/api/image-ocr", "/api/memory",
 ];
 
+// A listing whose content type is not JSON (a row on /api/pricing that
+// carries mimeType: the tools that answer raw bytes) is a shape of its own,
+// so the default run validates every one of them beside the flagship set.
+// One validator call each; capped so the default run never becomes a sweep.
+export const NON_JSON_LISTING_MAX = 12;
+
+/** The default run's endpoints: the flagship set, then every non-JSON listing
+ *  not already in it (up to NON_JSON_LISTING_MAX). Exported for the test. */
+export function defaultEndpoints(all) {
+  const byPath = new Map(all.map((e) => [e.path, e]));
+  const flagship = FLAGSHIP_PATHS.map((p) => byPath.get(p)).filter(Boolean);
+  const missingFlagship = FLAGSHIP_PATHS.filter((p) => !byPath.has(p));
+  const nonJsonAll = all.filter((e) => e.mimeType && e.mimeType !== "application/json" && !FLAGSHIP_PATHS.includes(e.path));
+  const nonJson = nonJsonAll.slice(0, NON_JSON_LISTING_MAX);
+  return { chosen: [...flagship, ...nonJson], flagship, nonJson, missingFlagship, nonJsonSkipped: nonJsonAll.length - nonJson.length };
+}
+
 function args() {
   const a = process.argv.slice(2);
   const out = { all: a.includes("--all"), sample: 0, routes: null, json: a.includes("--json") };
@@ -58,7 +75,7 @@ async function catalogEndpoints() {
   const j = await res.json();
   const list = Array.isArray(j.endpoints) ? j.endpoints : [];
   if (!list.length) throw new Error("/api/pricing carried no endpoints[]");
-  return list.map((e) => ({ method: String(e.method || "POST").toUpperCase(), path: String(e.path), slug: String(e.slug || e.path), price: e.price }));
+  return list.map((e) => ({ method: String(e.method || "POST").toUpperCase(), path: String(e.path), slug: String(e.slug || e.path), price: e.price, ...(typeof e.mimeType === "string" ? { mimeType: e.mimeType } : {}) }));
 }
 
 /** One validate call. Returns {ok:true, valid, failed[], index, quality} or
@@ -123,15 +140,18 @@ async function main() {
   } else if (opt.all) {
     chosen = all;
   } else {
-    const flagship = FLAGSHIP_PATHS.map((p) => byPath.get(p)).filter(Boolean);
-    const missingFlagship = FLAGSHIP_PATHS.filter((p) => !byPath.has(p));
+    const picked = defaultEndpoints(all);
+    const { missingFlagship } = picked;
     if (missingFlagship.length) console.log(`note - flagship paths not in the live catalog (skipped): ${missingFlagship.join(", ")}`);
-    chosen = flagship;
+    if (picked.nonJson.length) console.log(`note - ${picked.nonJson.length} non-JSON listing(s) validated beside the flagship set: ${picked.nonJson.map((e) => `${e.path} (${e.mimeType})`).join(", ")}`);
+    if (picked.nonJsonSkipped) console.log(`note - ${picked.nonJsonSkipped} further non-JSON listing(s) not validated (cap ${NON_JSON_LISTING_MAX}); run --routes for them`);
+    chosen = picked.chosen;
     if (opt.sample > 0) {
-      const rest = all.filter((e) => !FLAGSHIP_PATHS.includes(e.path));
+      const rest = all.filter((e) => !chosen.includes(e));
       // deterministic-ish spread: stride through the catalog instead of Math.random (reproducible runs)
       const stride = Math.max(1, Math.floor(rest.length / opt.sample));
-      for (let i = 0; i < rest.length && chosen.length < flagship.length + opt.sample; i += stride) chosen.push(rest[i]);
+      const want = chosen.length + opt.sample;
+      for (let i = 0; i < rest.length && chosen.length < want; i += stride) chosen.push(rest[i]);
     }
   }
   console.log(`bazaar-validate: ${chosen.length} endpoint(s) against ${TARGET} via ${VALIDATE_URL} (concurrency ${CONCURRENCY})`);
