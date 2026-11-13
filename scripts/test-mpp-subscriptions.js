@@ -413,6 +413,17 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   ok(rec && rec.product === "domain-monitor" && rec.target === "example.org" && rec.email === "lost@example.com" && rec.billingAnchor && rec.lastChargedPeriod === 0, "the rebuilt record carries the binding and mppx's billing anchor");
   const third = await engine.activateFromCredential(signed.header);
   ok(third.replay === true && third.subId === again.subId && calls.sales.length === 1, "a further retry finds the rebuilt record and books nothing");
+  // mppx's record says the subscription was canceled since: rebuilt as canceled.
+  const offer2 = await engine.mintOffer({ product: "domain-monitor", target: "example.net", email: "lost@example.com" });
+  const signed2 = await signCredential(Challenge.deserialize(offer2.header));
+  failOnce = true;
+  engine._store.put = async (k, v) => { if (failOnce && String(k).startsWith("a402:sub:mpp_")) { failOnce = false; throw new Error("simulated store failure"); } return put(k, v); };
+  try { await engine.activateFromCredential(signed2.header); } catch { /* setup */ }
+  engine._store.put = put;
+  const mrec = await engine._subStore.get(`sub-${calls.activate}`);
+  await engine._subStore.put({ ...mrec, canceledAt: new Date(clock).toISOString() });
+  const canceled = await engine.activateFromCredential(signed2.header);
+  ok(canceled.replay === true && canceled.status === "canceled" && engine.get(canceled.subId)?.status === "canceled", `a settled record mppx has since canceled is rebuilt canceled, not active (${canceled.status})`);
 }
 
 // ---------------------------------------------------------------------------
