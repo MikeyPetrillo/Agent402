@@ -386,27 +386,35 @@ export function webSourcesFrom(d) {
  *  close its own block nor open another: hidden characters go (a zero-width
  *  character between brackets), and every run of two or more opening or
  *  closing angle brackets, fullwidth and other lookalikes included, with or
- *  without spaces between them, is removed. A glyph that alone reads as two
+ *  without spaces, combining marks or blanks between them, is removed. A glyph that alone reads as two
  *  or three brackets (much-less-than, nested and double angle brackets) is
  *  removed even alone, except the guillemets and the CJK double brackets,
  *  which are ordinary quotation marks: alone they keep their place, in a run
  *  they go like any other bracket. */
 // One bracket each: ASCII, fullwidth, small form, single guillemet, angle
 // brackets (CJK, math, technical, ornamental), modifier letters, less-than
-// with dot. The Canadian syllabics that look like brackets are letters of
-// Inuktitut and Cree text, so they are not read as brackets.
-const OPEN_SINGLE = "<\uFF1C\uFE64\u2039\u3008\u27E8\u2329\u276C\u276E\u2770\u29FC\u02C2\u22D6\u2989";
-const CLOSE_SINGLE = ">\uFF1E\uFE65\u203A\u3009\u27E9\u232A\u276D\u276F\u2771\u29FD\u02C3\u22D7\u298A";
-// Quotation marks that read as two brackets: double guillemets, CJK double brackets.
-const OPEN_QUOTE = "\u00AB\u300A";
-const CLOSE_QUOTE = "\u00BB\u300B";
+// with dot, and every glyph whose compatibility decomposition holds one of
+// them (not-less-than, a bracket with a stroke through it; the vertical
+// presentation forms). The Canadian syllabics that look like brackets are
+// letters of Inuktitut and Cree text, so they are not read as brackets.
+const OPEN_SINGLE = "<\uFF1C\uFE64\u2039\u3008\u27E8\u2329\u276C\u276E\u2770\u29FC\u02C2\u22D6\u2989\u226E\uFE3F";
+const CLOSE_SINGLE = ">\uFF1E\uFE65\u203A\u3009\u27E9\u232A\u276D\u276F\u2771\u29FD\u02C3\u22D7\u298A\u226F\uFE40";
+// Quotation marks that read as two brackets: double guillemets, CJK double
+// brackets and their vertical presentation forms.
+const OPEN_QUOTE = "\u00AB\u300A\uFE3D";
+const CLOSE_QUOTE = "\u00BB\u300B\uFE3E";
 // Two or three brackets in one glyph: much-less-than, very-much-less-than,
 // math double angle brackets, nested and triple nested less-than.
 const OPEN_MULTI = "\u226A\u22D8\u27EA\u2AA1\u2AF7";
 const CLOSE_MULTI = "\u226B\u22D9\u27EB\u2AA2\u2AF8";
 const OPEN_ALL = OPEN_SINGLE + OPEN_QUOTE + OPEN_MULTI;
 const CLOSE_ALL = CLOSE_SINGLE + CLOSE_QUOTE + CLOSE_MULTI;
-const BRACKET_RUN_RE = new RegExp(`[${OPEN_ALL}](?:\\s{0,8}[${OPEN_ALL}])+|[${CLOSE_ALL}](?:\\s{0,8}[${CLOSE_ALL}])+|[${OPEN_MULTI}${CLOSE_MULTI}]`, "g");
+// What can sit between two brackets of one run: any whitespace, any combining
+// or enclosing mark (it draws on the bracket before it, so "<" with an accent
+// over it is still a bracket) and the braille blank, which renders as a space.
+// The classes share no character, so a run is matched in one pass.
+const RUN_GAP = "[\\s\\p{M}\\u2800]*";
+const BRACKET_RUN_RE = new RegExp(`[${OPEN_ALL}](?:${RUN_GAP}[${OPEN_ALL}])+|[${CLOSE_ALL}](?:${RUN_GAP}[${CLOSE_ALL}])+|[${OPEN_MULTI}${CLOSE_MULTI}]`, "gu");
 /** Every character neutralizeQuoteMarkers treats as an opening or closing bracket. */
 export const QUOTE_MARKER_BRACKETS = Object.freeze({ open: OPEN_ALL, close: CLOSE_ALL, multi: OPEN_MULTI + CLOSE_MULTI });
 // Removing one run can leave the brackets around it as a new run
@@ -414,7 +422,7 @@ export const QUOTE_MARKER_BRACKETS = Object.freeze({ open: OPEN_ALL, close: CLOS
 // that still changes after NEUTRALIZE_MAX_PASSES passes is built to nest, and
 // every bracket in it goes.
 const NEUTRALIZE_MAX_PASSES = 16;
-const ANY_BRACKET_RE = new RegExp(`[${OPEN_ALL}${CLOSE_ALL}]`, "g");
+const ANY_BRACKET_RE = new RegExp(`[${OPEN_ALL}${CLOSE_ALL}]`, "gu");
 // Every format or default-ignorable character renders as nothing between two
 // brackets (a direction mark, a hieroglyph or music format control), whether
 // or not the hidden-character scan names its kind, so each pass reads the
