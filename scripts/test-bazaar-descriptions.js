@@ -74,7 +74,7 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
 // The set of FRED routes is derived from code, not from which text already
 // carries the notice: the macro kit's functions that reach a FRED host,
 // closed over the calls between them, and every tool whose handler calls one.
-// Each must carry the usesFred marker, end its catalog text with the notice,
+// Each must carry attribution "fred", end its catalog text with the notice,
 // and keep it in its listing at the Bazaar cut and at the 402 budget's
 // shorter cut (the most any 402, with any upto networks on, cuts it to).
 {
@@ -99,15 +99,15 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   ok(["fredObservations", "fetchFredYields", "fetchLatestYieldCurve", "fetchFredYieldsViaKeyedApi"].every((n) => reached.has(n)), `FRED-reaching functions derived from the kit (${[...reached].join(", ")})`);
   const callsFred = (t) => { const h = String(t.handler); return FRED_HOST.test(h) || [...reached].some((r) => new RegExp(`\\b${r}\\b`).test(h)); };
   const derived = MACRO_TOOLS.filter(callsFred).map((t) => t.slug).sort();
-  const marked = MACRO_TOOLS.filter((t) => t.usesFred === true).map((t) => t.slug).sort();
-  ok(derived.length >= 12 && JSON.stringify(derived) === JSON.stringify(marked), `every tool whose handler reaches FRED carries usesFred, and only those (derived ${derived.join(",")}; marked ${marked.join(",")})`);
+  const marked = MACRO_TOOLS.filter((t) => t.attribution === "fred").map((t) => t.slug).sort();
+  ok(derived.length >= 12 && JSON.stringify(derived) === JSON.stringify(marked), `every tool whose handler reaches FRED carries attribution "fred", and only those (derived ${derived.join(",")}; marked ${marked.join(",")})`);
   const otherKits = [];
   for (const file of await readdir(new URL("../src/tools/", import.meta.url))) {
     if (!file.endsWith(".js") || file === "macro-kit.js") continue;
     if (FRED_HOST.test(await readFile(new URL(`../src/tools/${file}`, import.meta.url), "utf8"))) otherKits.push(file);
   }
   ok(otherKits.length === 0, `no other kit calls a FRED host directly (${otherKits.join(", ") || "none"})`);
-  for (const t of MACRO_TOOLS.filter((x) => x.usesFred === true)) {
+  for (const t of MACRO_TOOLS.filter((x) => x.attribution === "fred")) {
     ok(attributionTailOf(t.description) === FRED_NOTICE, `${t.slug}: the catalog text ends with the FRED notice`);
     const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS[t.slug] || t.description);
     const cut = bazaarCapDescription(listed, CHALLENGE_SHORT_DESCRIPTION_MAX);
@@ -121,6 +121,88 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   const kept = bazaarCapDescription(`${lead} ${FRED_NOTICE}`, 200);
   ok(kept === `A first sentence about the data that runs on for a while. ${FRED_NOTICE}`, `cut: a trailing attribution sentence stays whole and the text before it is cut at a sentence (got ${JSON.stringify(kept)})`);
   ok(bazaarCapDescription(`${lead} Not the notice.`, 200).endsWith("allows here.") === false, "cut: text without an attribution tail is cut as before");
+}
+// Every source whose terms require an attribution (src/data-attribution.js):
+// the set is read from code, the tools' `attribution` marks across every kit
+// and the tools each skill pack runs, never from which text already carries a
+// sentence. A marked tool's catalog text, its curated copy (if any) and its
+// listing at both cuts end with its sentence; a pack's do the same with the
+// sentences of every source its tools serve; and text that ends with a
+// sentence belongs to a tool marked with it.
+{
+  const { ATTRIBUTIONS, attributionTailOf } = await import("../src/data-attribution.js");
+  const { readdir } = await import("node:fs/promises");
+  const { buildSkillTools } = await import("../src/tools/skill-runner.js");
+  const { SKILL_PACKS } = await import("../src/skills.js");
+  const SENTENCES = Object.values(ATTRIBUTIONS);
+  const tools = new Map();
+  for (const file of (await readdir(new URL("../src/tools/", import.meta.url))).filter((f) => f.endsWith(".js") && !/-worker\.js$/.test(f)).sort()) {
+    const mod = await import(new URL(`../src/tools/${file}`, import.meta.url));
+    for (const v of Object.values(mod)) if (Array.isArray(v)) for (const t of v) if (t && typeof t === "object" && typeof t.slug === "string" && typeof t.route === "string" && typeof t.description === "string" && !tools.has(t.slug)) tools.set(t.slug, t);
+  }
+  const live = new Map((res?.endpoints || []).map((e) => [e.slug, e]));
+  const listingEnds = (slug, text, want) => {
+    const listed = bazaarCapDescription(BAZAAR_DESCRIPTIONS[slug] || text);
+    const cut = bazaarCapDescription(listed, CHALLENGE_SHORT_DESCRIPTION_MAX);
+    const keeps = (x) => { const tail = attributionTailOf(x) || ""; return want.every((w) => tail.includes(w)) && x.endsWith(want[want.length - 1]); };
+    return { ok: keeps(listed) && keeps(cut) && cut.length <= CHALLENGE_SHORT_DESCRIPTION_MAX, listed, cut };
+  };
+  const bySource = {};
+  const unknownKeys = [], unmarkedTails = [], midText = [];
+  for (const t of tools.values()) {
+    const tail = attributionTailOf(t.description);
+    for (const sentence of SENTENCES) if (t.description.includes(sentence) && !(tail || "").includes(sentence)) midText.push(t.slug);
+    if (t.attribution === undefined) { if (tail) unmarkedTails.push(t.slug); continue; }
+    const want = ATTRIBUTIONS[t.attribution];
+    if (!want) { unknownKeys.push(`${t.slug}=${t.attribution}`); continue; }
+    (bySource[t.attribution] ||= []).push(t.slug);
+    ok(tail === want, `${t.slug}: the catalog text ends with the ${t.attribution} attribution`);
+    if (BAZAAR_DESCRIPTIONS[t.slug]) ok(attributionTailOf(BAZAAR_DESCRIPTIONS[t.slug]) === want, `${t.slug}: the curated listing copy ends with the ${t.attribution} attribution`);
+    const r = listingEnds(t.slug, t.description, [want]);
+    ok(r.ok, `${t.slug}: the listing keeps the ${t.attribution} attribution at both cuts (${r.listed.length} / ${r.cut.length} chars)`);
+    const e = live.get(t.slug);
+    ok(!e || attributionTailOf(String(e.description || "")) === want, `${t.slug}: the live catalog text ends with the ${t.attribution} attribution`);
+  }
+  ok(unknownKeys.length === 0, `every tool attribution names a known source (${unknownKeys.join(", ") || "none unknown"})`);
+  ok(unmarkedTails.length === 0, `text that ends with an attribution belongs to a tool marked with that source (${unmarkedTails.join(", ") || "none unmarked"})`);
+  ok(midText.length === 0, `no attribution sentence sits anywhere but the end of a description (${midText.join(", ") || "none"})`);
+  const counts = Object.fromEntries(Object.keys(ATTRIBUTIONS).map((k) => [k, (bySource[k] || []).length]));
+  ok(Object.values(counts).every((n) => n > 0) && counts.fred >= 12 && counts.coingecko >= 24 && counts.jupiter >= 5, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
+  // Skill packs: the sources of the tools each pack runs, in pack order.
+  const catalog = Object.fromEntries([...tools.values()].map((t) => [t.route, t]));
+  const packTools = new Map(buildSkillTools({ getCatalog: () => catalog }).map((t) => [t.slug, t]));
+  let packsWithSources = 0;
+  for (const pack of SKILL_PACKS) {
+    const keys = [...new Set(pack.toolSlugs.map((s) => tools.get(s)?.attribution).filter(Boolean))];
+    const def = packTools.get(`skill-${pack.slug}`);
+    const tail = attributionTailOf(def?.description || "") || "";
+    if (!keys.length) { ok(!tail, `skill-${pack.slug}: no tool it runs needs an attribution, and its text carries none`); continue; }
+    packsWithSources++;
+    const want = keys.map((k) => ATTRIBUTIONS[k]);
+    ok(want.every((w) => tail.includes(w)) && tail.length === want.join(" ").length, `skill-${pack.slug}: the pack text ends with the ${keys.join(" + ")} attribution`);
+    const r = listingEnds(def.slug, def.description, want);
+    ok(r.ok, `skill-${pack.slug}: the listing keeps the ${keys.join(" + ")} attribution at both cuts (${r.listed.length} / ${r.cut.length} chars)`);
+    const e = live.get(def.slug);
+    ok(!e || attributionTailOf(String(e.description || "")) === tail, `skill-${pack.slug}: the live catalog text ends with the same attribution`);
+  }
+  ok(packsWithSources >= 10, `the packs whose tools need an attribution are read from their steps (${packsWithSources})`);
+  // The cut keeps a run of two sentences whole, as a two-source pack needs.
+  const two = `${ATTRIBUTIONS.fred} ${ATTRIBUTIONS.coingecko}`;
+  const kept2 = bazaarCapDescription(`${lead2()} ${two}`, CHALLENGE_SHORT_DESCRIPTION_MAX);
+  ok(kept2.endsWith(two) && kept2.length <= CHALLENGE_SHORT_DESCRIPTION_MAX && attributionTailOf(kept2) === two, `cut: a run of two attribution sentences stays whole (got ${JSON.stringify(kept2.slice(-80))})`);
+  function lead2() { return "A first sentence about the data that runs on for a while. ".repeat(8).trim(); }
+  // Over the 402 budget, a listing that ends with an attribution cuts its lead
+  // further before it gives up its sample output, and keeps the sentence.
+  const declare = (bl) => ({ bazaar: { info: { input: bl.input, output: bl.output } } });
+  const block = { input: { q: "x" }, output: { type: "json", example: { rows: [1, 2, 3, 4, 5, 6, 7, 8] } } };
+  const text = `${lead2()} ${ATTRIBUTIONS.openstreetmap}`;
+  const short = bazaarCapDescription(text, CHALLENGE_SHORT_DESCRIPTION_MAX);
+  const budget = JSON.stringify(declare(block)).length + short.length - 40;
+  const f = fitChallenge(block, text, declare, budget);
+  ok(f.trimmed.includes("description-lead") && !isExamplePointer(f.slim.output.example) && f.description.endsWith(ATTRIBUTIONS.openstreetmap) && f.bytes <= budget,
+    `budget: an attributed listing shortens its lead, keeps the sentence and its sample output (${f.trimmed.join()}; ${f.description.length} chars)`);
+  const tight = fitChallenge(block, text, declare, JSON.stringify(declare(block)).length + 60);
+  ok(isExamplePointer(tight.slim.output.example) && tight.description.endsWith(ATTRIBUTIONS.openstreetmap), "budget: with no room for a lead the sample output gives way and the sentence stays");
 }
 {
   const { bazaarTagsFor, BAZAAR_ICON_PATH } = await import("../src/payments.js");

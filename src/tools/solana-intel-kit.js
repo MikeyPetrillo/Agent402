@@ -40,6 +40,7 @@ import { rugcheckPause, rugcheckFailureKind, rugcheckInputKey } from "../rugchec
 export { RUGCHECK_SLUGS, rugcheckEnabled };
 const MAX_BODY_BYTES = 24 * 1024 * 1024;  // the hard ceiling on any one upstream document read here.
 import { readBytesCapped, readTextCapped, decodeUtf8 } from "../capped-body.js";
+import { JUPITER_ATTRIBUTION, attribute } from "../data-attribution.js";
 // Read a body under a byte cap: `res.text()` has no cap of its own, so a
 // broken or hostile upstream could push an unbounded buffer into memory once
 // per concurrent call. A declared Content-Length over the cap is refused before
@@ -1333,9 +1334,9 @@ export const SOLANA_INTEL_TOOLS = [
 // https://developers.jup.ag/docs/legal/sdk-api-license-agreement). The tools
 // that read Jupiter end their description with it; the vendor-name check in
 // scripts/test-no-third-party-names.js allows it there and nowhere else.
-export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
+export { JUPITER_ATTRIBUTION };
 const JUPITER_SLUGS = new Set(["sol-token-safety", "sol-price", "sol-swap-quote", "sol-token-lookup", "sol-token-search"]);
-for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) t.description = `${t.description} ${JUPITER_ATTRIBUTION}`;
+for (const t of SOLANA_INTEL_TOOLS) if (JUPITER_SLUGS.has(t.slug)) attribute(t, "jupiter");
 
 // Exported for offline unit tests (pure shaping, no network).
 export const __test = { takeMint, takeLimit, searchKeys, pairMatchesQuery, mergeFallbackRows, shapeHolders, shapeMarkets, shapePair, shapeJupToken, authorityState, riskCounts, BASE58_RE, budgetOf, topAccountsFromRpc,

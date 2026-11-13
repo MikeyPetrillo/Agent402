@@ -16,6 +16,7 @@
 // Rollout switch: MCP_SKILLS=on (exactly "on"); off by default.
 import { createHash } from "node:crypto";
 import { SKILL_PACKS } from "./skills.js";
+import { packAttributions } from "./data-attribution.js";
 import { META_MCP_NAMES } from "./mcp-flagship.js";
 import { CLIENT_CAPABILITIES_META } from "./mcp-tasks.js";
 
@@ -57,7 +58,7 @@ function yamlFrontmatter(fm) {
   return ["---", ...Object.entries(fm).map(([k, v]) => `${k}: ${JSON.stringify(String(v))}`), "---"].join("\n");
 }
 
-function skillBody(pack, { freeSlugs, priceOf }) {
+function skillBody(pack, { freeSlugs, priceOf, toolOf }) {
   const call = META_MCP_NAMES.call_tool;
   const find = META_MCP_NAMES.find_tool;
   const bundled = `skill-${pack.slug}`;
@@ -110,6 +111,10 @@ function skillBody(pack, { freeSlugs, priceOf }) {
   lines.push("", "## Access", "");
   if (free.length) lines.push(`- Free on this connector (proof-of-work, rate-limited): ${free.map((s) => `\`${s}\``).join(", ")}`);
   if (paid.length) lines.push(`- Paid per call (see ${META_MCP_NAMES.get_payment_info}): ${paid.map((s) => `\`${s}\``).join(", ")}`);
+  // The attribution sentences the sources of these tools require
+  // (src/data-attribution.js).
+  const attributions = packAttributions(pack.toolSlugs, toolOf);
+  if (attributions.length) lines.push("", "## Data sources", "", attributions.join(" "));
   lines.push("", "## Example request", "", ...String(pack.claudePrompt).split("\n").map((l) => `> ${l}`), "");
   return lines.join("\n");
 }
@@ -119,16 +124,18 @@ const digestOf = (buf) => `sha256:${createHash("sha256").update(buf).digest("hex
 /**
  * Builds the served skill set once per mount. `freeSlugs` is the connector's
  * free set; `priceOf(slug)` is the catalog price string or null (a bundled
- * route the catalog does not serve is not offered in the body).
+ * route the catalog does not serve is not offered in the body); `toolOf(slug)`
+ * is the catalog tool or null (its `attribution` names the sentence its
+ * source requires).
  * Returns { entries, entryByUri, fileByUri }.
  */
-export function buildSkillSet({ packs = SKILL_PACKS, freeSlugs = new Set(), priceOf = () => null } = {}) {
+export function buildSkillSet({ packs = SKILL_PACKS, freeSlugs = new Set(), priceOf = () => null, toolOf = () => null } = {}) {
   const entries = [];
   const entryByUri = new Map();
   const fileByUri = new Map();
   for (const pack of packs) {
     const frontmatter = { name: pack.slug, description: pack.tagline };
-    const text = `${yamlFrontmatter(frontmatter)}\n\n${skillBody(pack, { freeSlugs, priceOf })}`;
+    const text = `${yamlFrontmatter(frontmatter)}\n\n${skillBody(pack, { freeSlugs, priceOf, toolOf })}`;
     const bytes = Buffer.from(text, "utf8");
     const uri = skillUriOf(pack.slug);
     const entry = { uri, frontmatter, resources: [{ uri, digest: digestOf(bytes), size: bytes.length }] };
