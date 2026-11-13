@@ -296,7 +296,7 @@ console.log("\n# GPT Image tiers - the model's row x the tier's output bound");
 // bound, and the prompt cap plus the bound, never pass it. The output prints
 // one fixed line naming the exception, never a verdict or a figure.
 const IMAGE_BOUND_OWNER_EXCEPTIONS = new Map([
-  ["image-gen", { decided: "2026-11-13", reason: "owner 2026-11-13: keep the $0.03 entry price; thin margin accepted" }],
+  ["image-gen", { decided: "2026-11-13", reason: "owner 2026-11-13: entry price kept" }],
 ]);
 ok(IMAGE_BOUND_OWNER_EXCEPTIONS.size === 1 && IMAGE_BOUND_OWNER_EXCEPTIONS.has("image-gen"), "the image bound exception names exactly one tier, image-gen");
 {
@@ -315,8 +315,9 @@ ok(IMAGE_BOUND_OWNER_EXCEPTIONS.size === 1 && IMAGE_BOUND_OWNER_EXCEPTIONS.has("
     const imgException = IMAGE_BOUND_OWNER_EXCEPTIONS.get(slug);
     if (imgException) {
       console.log(`ok - ${slug}: owner exception applies (${imgException.decided})`);
-      // An exception the bound no longer needs is removed, not kept.
-      ok(outUsd > MARGIN * price * (1 + 1e-9), `${slug}: the owner exception is still needed (remove it once the bound fits the margin)`);
+      // An exception the bound no longer needs is removed, not kept: this
+      // fails once the bound fits MARGIN. The line names the slug and date only.
+      ok(outUsd > MARGIN * price * (1 + 1e-9), `${slug}: owner exception still current (${imgException.decided})`);
     } else {
       ok(outUsd <= MARGIN * price * (1 + 1e-9), `${slug}: ${t.outputTokenBound} output tokens on ${t.model}'s row are within ${MARGIN} x the tier price`);
     }
