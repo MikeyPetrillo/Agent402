@@ -22,6 +22,19 @@ Tools:
   schemas.
 - Large images sent to image-ocr wait their turn per caller, so one caller's
   run of large images cannot hold every place in the queue.
+- Transcription measures and cuts each file by the audio samples it decodes,
+  not by the timestamps its container writes, and a file sent as it came is
+  uploaded under the name of the format it was measured as.
+- openapi-resolve-refs resolves long chains of refs and deeply nested
+  documents in time proportional to their size.
+- route-execute does not resell a 200 a seller sent without taking payment
+  when its body is empty or blank, an error sent as text, or text where the
+  seller promised JSON fields; the next seller is tried.
+- Report kits remove bracket runs from quoted source text across combining
+  marks, blanks and the compatibility forms of each bracket.
+- The listing text a router judge reads drops a sentence opened by a role
+  marker behind markdown list, heading or emphasis marks, a closing brace, a
+  lookalike colon, a guillemet or an arrow.
 Payments:
 - A paid answer whose connection closed after its headers went out is kept
   under its idempotency key, so a retry with the same key, a prepaid credits
@@ -39,6 +52,8 @@ Payments:
 - One signed EVM authorization whose settlement keeps failing for the buyer's
   reason is refused on its own, and a new authorization from the same wallet
   is served at once.
+- One EVM authorization holds one claim on a server without a shared store,
+  whatever unsigned network fields a copy of its header carries.
 Packages:
 - The job-link poller follows a redirect only within the server's own origin
   and refuses a redirect to any other origin before reading it, saying so in
