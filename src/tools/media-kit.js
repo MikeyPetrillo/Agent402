@@ -388,17 +388,21 @@ export async function measureAudio(buffer, { cutSeconds = null, format = null, d
       // Output 0: the cut. Output 1: the whole stream at 100 one-byte samples
       // a second on stdout, so its byte count is the length (the progress
       // clock of a run with two outputs follows the shorter one).
-      return ["-t", String(cutSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath,
-        "-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "1", "-ar", String(COUNTER_RATE), "-c:a", "pcm_u8", "-f", "u8", "pipe:1"];
+      return [...SAMPLE_CLOCK, "-t", String(cutSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath,
+        "-map", "0:a:0", "-vn", "-sn", "-dn", ...SAMPLE_CLOCK, "-ac", "1", "-ar", String(COUNTER_RATE), "-c:a", "pcm_u8", "-f", "u8", "pipe:1"];
     }, async (seconds) => {
       const audio = await readFile(outPath);
       return audio.length > 0 ? { seconds, audio } : { seconds };
     }, { format, counter: true, deadlineAt });
   }
-  return decodeInMeasurePool(buffer, "a402-measure-", () => ["-f", "null", "-"], (seconds) => ({ seconds }), { format, deadlineAt });
+  return decodeInMeasurePool(buffer, "a402-measure-", () => [...SAMPLE_CLOCK, "-f", "null", "-"], (seconds) => ({ seconds }), { format, deadlineAt });
 }
 /** Samples a second of the length counter (one byte each): 10 ms resolution. */
 const COUNTER_RATE = 100;
+/** Restamps each decoded frame from the count of samples before it, so the
+ *  progress clock and a `-t` cut follow the audio the decoder produced, not the
+ *  timestamps the container wrote (a file can stamp an hour of audio as minutes). */
+const SAMPLE_CLOCK = Object.freeze(["-af", "asetpts=N/SR/TB"]);
 
 /** The first audio stream as 16 kHz mono FLAC, cut at `maxSeconds` (ffmpeg
  *  `-t`), for a speech upstream: FLAC is on its documented input list, and
@@ -414,7 +418,7 @@ export async function transcodeSpeech(buffer, { maxSeconds, format = null, deadl
   let outPath = null;
   return decodeInMeasurePool(buffer, "a402-speech-", (dir) => {
     outPath = join(dir, "out.flac");
-    return ["-t", String(maxSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath];
+    return [...SAMPLE_CLOCK, "-t", String(maxSeconds), "-ac", "1", "-ar", "16000", "-c:a", "flac", "-f", "flac", "-y", outPath];
   }, async (seconds) => {
     const audio = await readFile(outPath);
     return audio.length > 0 ? { audio, seconds } : { undecodable: "the decoder wrote no audio" };

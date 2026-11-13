@@ -264,6 +264,18 @@ export const sttUnmeasuredSinceBoot = () => unmeasured;
  *  converted to FLAC first, so the upstream is never handed a format it does
  *  not list. */
 const UPSTREAM_READY = new Set(["flac", "mp3", "mov", "ogg", "wav", "matroska"]);
+/** File-name extensions that name each container sent as it came, the first
+ *  being the one used when the buyer's name names another (or none): the
+ *  upstream then reads the bytes as the container that was measured. */
+const NAME_EXTS = { wav: ["wav"], mp3: ["mp3", "mpga", "mpeg"], flac: ["flac"], ogg: ["ogg", "oga", "opus"], matroska: ["webm", "mkv"], mov: ["m4a", "mp4", "mov"] };
+/** The upload name for bytes sent as they came: the buyer's own name when its
+ *  extension names the measured container, else audio.<that container>. Pure; exported for tests. */
+export function upstreamNameFor(filename, format) {
+  const exts = NAME_EXTS[format];
+  if (!exts) return filename;
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(filename ?? ""));
+  return m && exts.includes(m[1].toLowerCase()) ? filename : `audio.${exts[0]}`;
+}
 /** A cut that wrote at least this close to the cap may have dropped audio past it. */
 const CUT_REACHED_SLACK_SEC = 0.25;
 
@@ -339,7 +351,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   // A PCM WAV whose bytes alone cannot play past the cap goes as it came,
   // without a decode (the measurement pool's state does not matter to it).
   const bound = sniffed === "wav" && !multiTrack ? pcmWavMaxSeconds(buf) : null;
-  if (bound !== null && !overCap(bound)) return { buf, filename, durationSec: container.durationSec };
+  if (bound !== null && !overCap(bound)) return { buf, filename: upstreamNameFor(filename, "wav"), durationSec: container.durationSec };
   // A busy pool queues inside the call's budget, leaving the upstream its time.
   const deadlineAt = decodeDeadlineAt(req, diarize);
 
@@ -359,7 +371,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   if (Number.isFinite(measured) && measured > 0) {
     const durationSec = Math.max(container.durationSec, measured);
     if (overCap(durationSec)) throw overCapError(durationSec, tierSlug);
-    if (ready) return { buf, filename, durationSec };
+    if (ready) return { buf, filename: upstreamNameFor(filename, format), durationSec };
     if (cut) return { ...asFlac({ audio: cut }), durationSec };
     const t = await transcodeImpl(buf, { maxSeconds: capSec + 2, format, deadlineAt });
     if (t?.audio) return { ...asFlac(t), durationSec };
@@ -378,7 +390,7 @@ export async function prepareAudioWithinCap(buf, filename, tierSlug, req = null,
   if (t.seconds < capSec - CUT_REACHED_SLACK_SEC) {
     // The cut read the whole file: its length is measured after all.
     const durationSec = Math.max(container.durationSec, t.seconds);
-    return ready && (!t.format || t.format === sniffed) ? { buf, filename, durationSec } : { ...asFlac(t), durationSec };
+    return ready && (!t.format || t.format === sniffed) ? { buf, filename: upstreamNameFor(filename, sniffed), durationSec } : { ...asFlac(t), durationSec };
   }
   return { ...asFlac(t), durationSec: t.seconds, trimmedToCapSeconds: capSec, durationUnconfirmed: true };
 }

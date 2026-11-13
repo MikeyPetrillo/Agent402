@@ -353,6 +353,10 @@ const reject = (p) => p.then(() => null, (e) => e);
       const t0 = Date.now();
       const quick = await Promise.race([prepareAudioWithinCap(wav, "audio.wav", "transcribe", route).catch((e) => e), new Promise((r) => setTimeout(() => r("waited"), 1_500))]);
       ok(quick?.buf === wav && Math.abs(quick.durationSec - 10) < 0.5 && held.length === 2, `with the pool full, a byte-bounded WAV is sent as it came in ${Date.now() - t0} ms, no decode (${quick === "waited" ? "waited" : quick?.message ?? quick?.filename})`);
+      // Under another container's name it goes as a .wav, so the upstream reads it as the WAV that was bounded.
+      const renamed = await prepareAudioWithinCap(wav, "talk.webm", "transcribe", route);
+      ok(renamed?.buf === wav && renamed.filename === "audio.wav", `a byte-bounded WAV named .webm is uploaded as audio.wav (${renamed?.filename})`);
+      ok(sttKit.upstreamNameFor?.("Talk.WAV", "wav") === "Talk.WAV" && sttKit.upstreamNameFor?.("memo.m4a", "mov") === "memo.m4a" && sttKit.upstreamNameFor?.("x.ogg", "mp3") === "audio.mp3" && sttKit.upstreamNameFor?.("noext", "flac") === "audio.flac", "an upload name keeps the buyer's own when its extension names the measured container");
       // Bytes that do not bound it (the 4.5-minute WAV, a compressed codec) still wait for a decode.
       ok(sttKit.pcmWavMaxSeconds?.(justOver) > 242 && sttKit.pcmWavMaxSeconds?.(makeMp3(5)) === null, "a WAV too large to bound, and an MP3, are not byte-bounded");
       if (typeof sttKit.pcmWavMaxSeconds === "function") {
@@ -536,6 +540,25 @@ const reject = (p) => p.then(() => null, (e) => e);
         execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=3", "-c:a", "aac", single], { stdio: "ignore" });
         const sb = readFileSync(single);
         ok((await prepareAudioWithinCap(sb, "audio.m4a", "transcribe")).buf === sb, "control: a one-track MP4 is still sent as it came");
+      }
+
+      // A Matroska file whose block timestamps run at a tenth of its audio:
+      // 300 s of Opus stamped as 30. The measurement and the cut follow the
+      // decoded samples, not the container's clock, on both paths.
+      {
+        const stamped = join(dir, "stamped.mkv");
+        execFileSync("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=300:sample_rate=16000", "-ac", "1", "-c:a", "libopus", "-b:a", "8k", "-bsf:a", "setts=ts=PTS/10:duration=DURATION/10", stamped], { stdio: "ignore" });
+        const sb = readFileSync(stamped);
+        const len = await measureAudioSeconds(sb);
+        ok(Number.isFinite(len) && Math.abs(len - 300) < 1, `the decode measures the 300 s of audio, not the container's 30 s clock (${len}s)`);
+        const e1 = await reject(prepareAudioWithinCap(sb, "audio.mkv", "transcribe", { headers: {} }));
+        ok(e1?.statusCode === 422 && /Audio is 5\.0 minutes/.test(e1.message), `measured: the restamped file is refused at its decoded length (${e1 ? `${e1.statusCode}: ${e1.message}` : "passed"})`);
+        __setMeasureForTest(async () => ({ unavailable: "the decode outlasted its deadline" }));
+        try {
+          const p = await prepareAudioWithinCap(sb, "audio.mkv", "transcribe", { headers: {} });
+          const sentLen = p.buf !== sb ? await measureAudioSeconds(p.buf) : null;
+          ok(p.buf !== sb && p.trimmedToCapSeconds === 240 && Math.abs(sentLen - 240) < 1, `unmeasured: the restamped file is cut at 240 s of decoded audio (${p.buf === sb ? "sent as it came" : `${sentLen}s sent`}, ${p.durationSec}s)`);
+        } finally { __setMeasureForTest(null); }
       }
 
       // A measured file on the upstream's list goes byte for byte.
