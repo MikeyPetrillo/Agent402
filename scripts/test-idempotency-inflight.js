@@ -293,5 +293,63 @@ try {
   } finally { s10.close(); local.stop(); }
 }
 
+// 11. A credits buyer that leaves AFTER the first byte: the response went out
+// in part, "finish" never comes, and the gate debits the 200 as the response
+// ends. Mounted as the server mounts it (hang-up hook, credits gate,
+// idempotency). The answer must be committed before the claim is let go, so a
+// retry with the same key replays it: one run, one debit.
+{
+  const DIR11 = mkdtempSync(join(tmpdir(), "test-idem-after-headers-"));
+  const debits11 = [];
+  const cr11 = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: DIR11, onDebit: (d) => debits11.push(d), onLoad: () => {}, log: () => {} });
+  const KEY11 = (await cr11.claim("cs_paid")).key;
+  const { createHangupSettlementHook } = await import("../src/hangup-settlement.js");
+  let runs11 = 0;
+  const app11 = express();
+  app11.use(express.json());
+  app11.use(createHangupSettlementHook({ onUndelivered: () => {} }));
+  app11.use(cr11.gate((method, path) => (path === "/api/big" || path === "/api/cut" ? { priceUsd: PRICE, slug: "big" } : null)));
+  app11.use(createIdempotency({ isCatalogRoute: (req) => req.path === "/api/big" || req.path === "/api/cut", freeMode: false }));
+  // /api/cut: the answer is ended on a live socket, then the socket closes
+  // before its write completes (no "finish"), as a buyer that read the
+  // headers and left does.
+  app11.post("/api/cut", (req, res) => {
+    const n = ++runs11;
+    const emit = res.emit;
+    res.emit = function noFinish(ev, ...args) { return ev === "finish" ? true : emit.call(this, ev, ...args); };
+    res.json({ run: n });
+    setImmediate(() => req.socket.destroy());
+  });
+  // /api/big: a real client that reads the headers of a large answer and
+  // aborts while the body is still being written.
+  app11.post("/api/big", (req, res) => { const n = ++runs11; res.json({ run: n, pad: "x".repeat(900 * 1024) }); });
+  const s11 = app11.listen(0);
+  await new Promise((r) => s11.once("listening", r));
+  const base = `http://127.0.0.1:${s11.address().port}`;
+  const hdr = (k) => ({ "content-type": "application/json", authorization: `Bearer ${KEY11}`, "idempotency-key": k });
+  const settle = () => new Promise((r) => setTimeout(r, 60));
+  try {
+    const first = await fetch(`${base}/api/cut`, { method: "POST", headers: hdr("k-cut"), body: "{}" }).then((r) => r.text().then(() => "read", () => "cut"), () => "cut");
+    await waitFor(() => debits11.length >= 1); await settle();
+    ok(debits11.length === 1, `the first call is debited once though its client left after headers (debits ${debits11.length}, first ${first})`);
+    const retry = await fetch(`${base}/api/cut`, { method: "POST", headers: hdr("k-cut"), body: "{}" });
+    const rb = await retry.json().catch(() => ({}));
+    await settle();
+    ok(retry.status === 200 && retry.headers.get("x-idempotent-replay") === "true" && rb.run === 1, `the retry with the same key replays the answer (status ${retry.status}, replay ${retry.headers.get("x-idempotent-replay")}, run ${rb.run})`);
+    ok(runs11 === 1 && debits11.length === 1, `one run and one debit after a hang-up past the first byte (runs ${runs11}, debits ${debits11.length})`);
+
+    const runs0 = runs11, debits0 = debits11.length;
+    const ac = new AbortController();
+    const r1 = await fetch(`${base}/api/big`, { method: "POST", headers: hdr("k-big"), body: "{}", signal: ac.signal });
+    ac.abort();
+    await r1.text().catch(() => {});
+    await waitFor(() => debits11.length >= debits0 + 1); await settle();
+    const r2 = await fetch(`${base}/api/big`, { method: "POST", headers: hdr("k-big"), body: "{}" });
+    const b2 = await r2.json().catch(() => ({}));
+    await settle();
+    ok(r2.status === 200 && r2.headers.get("x-idempotent-replay") === "true" && b2.run === runs0 + 1 && runs11 === runs0 + 1 && debits11.length === debits0 + 1, `a real client aborting a large answer after its headers is debited once and its retry replays (status ${r2.status}, replay ${r2.headers.get("x-idempotent-replay")}, runs +${runs11 - runs0}, debits +${debits11.length - debits0})`);
+  } finally { s11.close(); rmSync(DIR11, { recursive: true, force: true }); }
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
