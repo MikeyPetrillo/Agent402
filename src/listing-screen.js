@@ -253,10 +253,20 @@ const SELECTOR = "(?:models?|llms?|ais?|assistants?|judges?|evaluators?|graders?
 // label. A colon or a closing bracket ends one as written ("System:",
 // "[judge]"); any other separator ("System;", "System -", "System)",
 // "System /", "System.") does once a space or the end of the text follows it,
-// so "AI-powered" and "System status" stay ordinary words. One definition,
-// read by the sentence-opening rule and the after-a-sentence rule below.
-const ROLE_SEPARATOR = "(?:\\s*[:\\]>]|\\s*[;)\\/.|=\\-\u2013\u2014](?=\\s|$))";
-const ROLE_WORD = "(?:system|assistant|judge|evaluator|grader|ranker|rater|scorer|selector|developer|admin|llm|ai|override|verdict|decision)";
+// so "AI-powered" and "System status" stay ordinary words. The colon's
+// lookalikes (modifier letter, ratio, presentation forms) and a closing brace
+// end one as the colon does; a guillemet or an arrow ("System »", "System ->")
+// as the other separators do. One definition, read by the sentence-opening
+// rule and the after-a-sentence rule below.
+const ROLE_SEPARATOR = "(?:\\s*[:\\]>}\uA789\u2236\uFE13\uFE30\u02D0\u05C3\u0589\u1361]|\\s*[;)\\/.|=\\-\u2013\u2014\u00BB\u203A\u2192\u21D2](?=\\s|$))";
+const ROLE_WORD = "(?:system|assistant|human|judge|evaluator|grader|ranker|rater|scorer|selector|reviewer|moderator|orchestrator|developer|admin|llm|ai|override|verdict|decision)";
+// What can open a line before its role marker: markdown list, heading, quote
+// and table marks, a numbered item, and emphasis or code marks around the
+// role word ("- System:", "# System:", "1) System:", "__System__:").
+// Each mark is one character (a heading's "##" is two marks), and no mark is
+// also an opening quote or bracket, so a line is split into marks one way only.
+const ROLE_LEAD = "(?:(?:[-+*#\u2022>|]|\\d{1,3}[.)])\\s*)*[\"'([{<_`~]*";
+const ROLE_TRAIL = "[*_`~]*";
 const READER_PATTERNS = [
   // "reads as an instruction to an AI" describes text a tool finds; it is
   // not addressed to anyone.
@@ -265,7 +275,7 @@ const READER_PATTERNS = [
   new RegExp(`\\bas\\s+(?:the|an?|our|this)\\s+(?:[a-z-]+\\s+)?(?:evaluator|judge|ranker|grader|rater|scorer|selector|reviewer|assistant|model|llm|ai)s?\\s*,?\\s*(?:you|please|always|rate|pick|choose|select|prefer|give|score|answer|must|should)\\b`),
   new RegExp(`\\b(?:you|the\\s+(?:[a-z-]+\\s+)?${ADDRESSEE})\\s+(?:must|should|shall|will|need\\s+to|have\\s+to|are\\s+(?:required|instructed|told)\\s+to|is\\s+(?:required|instructed|told)\\s+to)\\s+(?:always\\s+|now\\s+|only\\s+)?(?:rate|score|pick|choose|select|prefer|rank|mark|grade|recommend|ignore|disregard|forget|(?:answer|output|respond|return|treat|consider|give)\\s+(?:with\\s+)?(?:this|me|us|it|best|yes|1))\\b`),
   // A role marker opening the sentence, or a chat-template token anywhere.
-  new RegExp(`^\\s*["'([{<]*\\s*${ROLE_WORD}${ROLE_SEPARATOR}`),
+  new RegExp(`^\\s*${ROLE_LEAD}\\s*${ROLE_WORD}${ROLE_TRAIL}${ROLE_SEPARATOR}`),
   /<\|[^|<>\s]{1,40}\|>|\|(?:im_[a-z]+|endoftext|eot_id|[a-z]+_header_id|begin_of_text|end_of_text|[a-z]+_of_turn)\||\[\s*\/?\s*inst\s*\]|<<\/?sys>>|(?<!#)#{2,}\s*(?:system|instructions?|assistant|user)\b/,
   // Asking to be chosen, ranked or rated.
   // "us" followed by a hyphen or a dotted name is a region or a host (us-east-1).
