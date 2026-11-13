@@ -76,7 +76,7 @@ const f = installDrainAwareFetch({ fetchImpl: async (url, init) => { seen.push({
 // 6. source pins: the scope wraps composites at BOTH doors, shutdown aborts, the error maps to 503
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/EXPENSIVE_COMPOSITE_SLUGS\.has\(tool\.slug\)\s*\?\s*await runInAbortableScope\(\(\) => tool\.handler\(input, req\)(, \{ signal: clientGoneCtl\.signal \})?\)/.test(src), "the dispatcher runs a composite slug inside the abortable scope");
+  ok(/EXPENSIVE_COMPOSITE_SLUGS\.has\(tool\.slug\)\s*\?\s*await runInAbortableScope\(\(\) => runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\)(, \{ signal: clientGoneCtl\.signal \})?\)/.test(src), "the dispatcher runs a composite slug inside the abortable scope");
   ok(/runInAbortableScope\(\(\) => withCompositeContext\(\{ rail: ctx\?\.rail \|\| "card"/.test(src), "the card/monitor generator runs inside the abortable scope too");
   const sd = src.slice(src.indexOf("function shutdown("), src.indexOf("process.on(\"SIGTERM\""));
   ok(/abortInFlightComposites\(signal\)/.test(sd) && sd.indexOf("draining = true") < sd.indexOf("abortInFlightComposites(signal)"), "shutdown() aborts in-flight composites right after it starts draining");
