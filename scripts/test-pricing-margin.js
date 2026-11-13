@@ -291,6 +291,14 @@ console.log("\n# /v1/images/generations - per-link bounds");
 //     the bound on the row within MARGIN x the tier price, and the prompt cap
 //     (counted at English density) plus the bound within the price.
 console.log("\n# GPT Image tiers - the model's row x the tier's output bound");
+// Owner exceptions to the MARGIN rule on an image tier's bound, one entry per
+// reviewed tier. An excepted tier is still held to its price: the row x the
+// bound, and the prompt cap plus the bound, never pass it. The output prints
+// one fixed line naming the exception, never a verdict or a figure.
+const IMAGE_BOUND_OWNER_EXCEPTIONS = new Map([
+  ["image-gen", { decided: "2026-11-13", reason: "owner 2026-11-13: keep the $0.03 entry price; thin margin accepted" }],
+]);
+ok(IMAGE_BOUND_OWNER_EXCEPTIONS.size === 1 && IMAGE_BOUND_OWNER_EXCEPTIONS.has("image-gen"), "the image bound exception names exactly one tier, image-gen");
 {
   const { TIERS: IMAGE_GEN_TIERS, IMAGE_GEN_TOOLS } = await import("../src/tools/image-gen-kit.js");
   for (const [slug, t] of Object.entries(IMAGE_GEN_TIERS)) {
@@ -304,7 +312,15 @@ console.log("\n# GPT Image tiers - the model's row x the tier's output bound");
     const promptTokens = countTokens("the quick brown fox. ".repeat(Math.floor(t.maxPromptChars / 21)));
     const worst = outUsd + (promptTokens * row.prompt) / 1e6;
     ok(Number.isFinite(price) && price > 0 && Number.isFinite(worst) && outUsd > 0 && t.outputTokenBound > 0, `${slug}: a price, a bound and a priced row for ${t.model}`);
-    ok(outUsd <= MARGIN * price * (1 + 1e-9), `${slug}: ${t.outputTokenBound} output tokens on ${t.model}'s row are within ${MARGIN} x the tier price`);
+    const imgException = IMAGE_BOUND_OWNER_EXCEPTIONS.get(slug);
+    if (imgException) {
+      console.log(`ok - ${slug}: owner exception applies (${imgException.decided})`);
+      // An exception the bound no longer needs is removed, not kept.
+      ok(outUsd > MARGIN * price * (1 + 1e-9), `${slug}: the owner exception is still needed (remove it once the bound fits the margin)`);
+    } else {
+      ok(outUsd <= MARGIN * price * (1 + 1e-9), `${slug}: ${t.outputTokenBound} output tokens on ${t.model}'s row are within ${MARGIN} x the tier price`);
+    }
+    ok(outUsd <= price, `${slug}: ${t.outputTokenBound} output tokens on ${t.model}'s row are within the tier price`);
     ok(worst <= price, `${slug}: the prompt cap plus the output bound on ${t.model}'s row is within the tier price`);
     table.push({ tier: slug, price, worst, model: t.model });
   }

@@ -51,8 +51,10 @@ function bad(message, statusCode = 400) {
 // per-image token counts for the 2.6 models (the guide notes models can use
 // different counts at the same quality), so the bounds stay until renders on
 // the new models measure them; a render above one is logged, never refused.
+// image-gen's bound is the render measured on gpt-image-2.6-flare (2026-11-13),
+// rounded up.
 export const TIERS = {
-  "image-gen":         { model: "gpt-image-2.6-flare", quality: "low",    complexity: "low", sizes: { square: "1024x1024" }, maxPromptChars: 1000, timeoutMs: 60_000, outputTokenBound: 700 },
+  "image-gen":         { model: "gpt-image-2.6-flare", quality: "low",    complexity: "low", sizes: { square: "1024x1024" }, maxPromptChars: 1000, timeoutMs: 60_000, outputTokenBound: 850 },
   "image-gen-hd":      { model: "gpt-image-2.6-flare", quality: "medium", complexity: "low", sizes: { square: "1024x1024" }, maxPromptChars: 2000, timeoutMs: 60_000, outputTokenBound: 2300 },
   "image-gen-premium": { model: "gpt-image-2.6-sunburst", quality: "medium", complexity: "low", sizes: { landscape: "1536x1024", portrait: "1024x1536", square: "1024x1024" }, maxPromptChars: 4000, timeoutMs: 75_000, outputTokenBound: 3500 },
 };
