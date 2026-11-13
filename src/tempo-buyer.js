@@ -663,7 +663,14 @@ async function readCapped(res, maxBytes) {
   const { bytes: buf, truncated } = await readBytesCapped(res, maxBytes);
   const text = decodeUtf8(buf);
   const ct = res.headers.get("content-type") || "";
-  if (/json/i.test(ct)) { try { return JSON.parse(text); } catch { /* fall through */ } }
+  // A cut body is a prefix: one that still parses is not what the seller sent
+  // either, so it is marked like the x402 reader's (never read as a seller body).
+  if (/json/i.test(ct)) {
+    try {
+      const j = JSON.parse(text);
+      return truncated ? markNotSellerBody({ ...(j && typeof j === "object" && !Array.isArray(j) ? j : { value: j }), _truncated: true }) : j;
+    } catch { /* fall through */ }
+  }
   const out = { text, truncated, contentType: ct, sha256: createHash("sha256").update(buf).digest("hex") };
   return truncated ? markNotSellerBody(out) : out;
 }

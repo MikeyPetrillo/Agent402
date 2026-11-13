@@ -134,6 +134,10 @@ const seller = createServer((req, res) => {
       if (sellerMode === "fail-400") { res.writeHead(400, { "content-type": "application/json" }); return res.end("{}"); }
       // A paid 200 whose body breaks off mid-read.
       if (sellerMode === "broken-body") { res.writeHead(200, { "content-type": "application/json", "content-length": "5000" }); res.write('{"partial":'); return setTimeout(() => res.destroy(), 20); }
+      // Paid 200s longer than the caller's maxBytes: a JSON number (its cut
+      // prefix still parses), an object (its prefix does not) and plain text.
+      const longBody = { "long-number": ["application/json", "7".repeat(500)], "long-object": ["application/json", JSON.stringify({ data: "x".repeat(500) })], "long-text": ["text/plain", "t".repeat(500)] }[sellerMode];
+      if (longBody) { res.writeHead(200, { "content-type": longBody[0] }); return res.end(longBody[1]); }
       // Charge-first, the stock mppx shape: the receipt rides on every status.
       const charged = /^fail-(\d{3})-receipt$/.exec(sellerMode);
       if (charged) { res.writeHead(Number(charged[1]), { "content-type": "application/json", "payment-receipt": rcpt }); return res.end("{}"); }
@@ -270,6 +274,24 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
   // That body is ours, not the seller's: the delivery check skips it.
   const { observeDelivery } = await import("../src/response-observation.js");
   ok(observeDelivery({ origin: "https://tempo-broken.example", method: "POST", route: "/r", guaranteedPaths: ["data"], body: r?.result }) === null, "the unreadable-body stand-in is not judged as the seller's delivery");
+  sellerMode = "ok";
+}
+
+// ---- a paid body cut at our maxBytes is ours, not the seller's ----
+// Every cut body is marked (markNotSellerBody), including a JSON body whose
+// cut prefix still parses, so the delivery check never judges it; the same
+// body read whole is the seller's and is observed (control).
+{
+  const { observeDelivery } = await import("../src/response-observation.js");
+  for (const [i, mode] of ["long-number", "long-object", "long-text"].entries()) {
+    sellerMode = mode;
+    const cut = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, maxBytes: 64 });
+    ok(cut.result && typeof cut.result === "object", `${mode}: cut body relayed (setup: ${JSON.stringify(cut.result).slice(0, 60)})`);
+    ok(observeDelivery({ origin: `https://tempo-cut-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["data"], body: cut.result }) === null, `${mode}: a paid body cut at our byte limit is not judged as the seller's delivery`);
+    const whole = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, maxBytes: 4096 });
+    const wholeBody = whole.result && typeof whole.result === "object" ? whole.result : { value: whole.result };
+    ok(observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["data"], body: wholeBody }) !== null, `${mode}: control, the same body read whole is observed`);
+  }
   sellerMode = "ok";
 }
 
