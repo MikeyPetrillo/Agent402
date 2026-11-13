@@ -3,12 +3,21 @@
 // upstream cost. Env-gated: missing OPENAI_API_KEY → 503, not boot failure.
 //
 // Tiers:
-//   image-gen          gpt-image-2, low quality, 1024x1024
-//   image-gen-hd       gpt-image-2, medium quality, 1024x1024
-//   image-gen-premium  gpt-image-2, medium quality, 1536x1024 or 1024x1536
+//   image-gen          gpt-image-2.6-flare, low quality, 1024x1024
+//   image-gen-hd       gpt-image-2.6-flare, medium quality, 1024x1024
+//   image-gen-premium  gpt-image-2.6-sunburst, medium quality, 1536x1024 or 1024x1536
 //
-// All three tiers ride gpt-image-2 since 2026-08-04: OpenAI retires
-// gpt-image-1-mini (the old low/hd model) on 2026-12-01. Until 2026-09-29
+// OpenAI shuts down gpt-image-2 (and its gpt-image-2-2026-04-21 snapshot) on
+// 2027-02-10 (deprecations page, notice of 2026-11-10), naming
+// gpt-image-2.6-sunburst and gpt-image-2.6-flare as the replacements, at the
+// same per-token list prices. Flare (fast iteration) serves low and hd;
+// Sunburst (detailed visual work) serves premium. Both plan before rendering
+// at a `complexity` level that defaults to "high" upstream, which adds latency;
+// every tier sends "low", the level closest to gpt-image-2's single pass, so a
+// render stays inside the tier's timeout. A 400 naming `complexity` (a model
+// that does not take it) is retried once without it, as for `moderation`.
+// gpt-image-2 rode all three tiers from 2026-08-04 (gpt-image-1-mini retired
+// 2026-12-01). Until 2026-09-29
 // premium sent hd's exact request under a higher price; it now renders the
 // larger landscape or portrait frame. High quality was measured and declined:
 // a render ran about two minutes, longer than a Solana or default Algorand
@@ -38,11 +47,25 @@ function bad(message, statusCode = 400) {
 // sizes: orientation -> size; the first entry is the default. A render whose
 // billed image tokens pass outputTokenBound is logged (the answer is still
 // served, the work is already paid for).
+// outputTokenBound: the bounds measured on gpt-image-2. OpenAI publishes no
+// per-image token counts for the 2.6 models (the guide notes models can use
+// different counts at the same quality), so the bounds stay until renders on
+// the new models measure them; a render above one is logged, never refused.
+// image-gen's bound is the render measured on gpt-image-2.6-flare (2026-11-13),
+// rounded up.
 export const TIERS = {
-  "image-gen":         { model: "gpt-image-2", quality: "low",    sizes: { square: "1024x1024" }, maxPromptChars: 1000, timeoutMs: 60_000, outputTokenBound: 700 },
-  "image-gen-hd":      { model: "gpt-image-2", quality: "medium", sizes: { square: "1024x1024" }, maxPromptChars: 2000, timeoutMs: 60_000, outputTokenBound: 2300 },
-  "image-gen-premium": { model: "gpt-image-2", quality: "medium", sizes: { landscape: "1536x1024", portrait: "1024x1536", square: "1024x1024" }, maxPromptChars: 4000, timeoutMs: 75_000, outputTokenBound: 3500 },
+  "image-gen":         { model: "gpt-image-2.6-flare", quality: "low",    complexity: "low", sizes: { square: "1024x1024" }, maxPromptChars: 1000, timeoutMs: 60_000, outputTokenBound: 850 },
+  "image-gen-hd":      { model: "gpt-image-2.6-flare", quality: "medium", complexity: "low", sizes: { square: "1024x1024" }, maxPromptChars: 2000, timeoutMs: 60_000, outputTokenBound: 2300 },
+  "image-gen-premium": { model: "gpt-image-2.6-sunburst", quality: "medium", complexity: "low", sizes: { landscape: "1536x1024", portrait: "1024x1536", square: "1024x1024" }, maxPromptChars: 4000, timeoutMs: 75_000, outputTokenBound: 3500 },
 };
+
+/** Image models OpenAI is retiring, each with the model that replaced it on
+ *  these tiers (none is sent any more; the map records the move and lets a
+ *  stored or quoted id be read forward). */
+export const RETIRED_IMAGE_MODELS = Object.freeze({
+  "gpt-image-2": { until: "2027-02-10", use: "gpt-image-2.6-flare" },
+  "gpt-image-2-2026-04-21": { until: "2027-02-10", use: "gpt-image-2.6-flare" },
+});
 
 function sizeFor(input, tierSlug) {
   const sizes = TIERS[tierSlug].sizes;
@@ -110,12 +133,16 @@ function validateInput(input, tierSlug) {
  *  error object names the offending field in `error.param`; the message names
  *  it in quotes ("Unknown parameter: 'moderation'."). */
 export function isModerationParamError(status, error) {
+  return isParamError(status, error, "moderation");
+}
+/** The same test for any request field the images API refused by name. */
+export function isParamError(status, error, param) {
   if (status !== 400 || !error || typeof error !== "object") return false;
   if (error.code === "moderation_blocked") return false;
-  if (error.param === "moderation") return true;
+  if (error.param === param) return true;
   const code = String(error.code || "");
   return ["unknown_parameter", "unsupported_parameter", "invalid_value", "unsupported_value"].includes(code)
-    && typeof error.message === "string" && error.message.includes("'moderation'");
+    && typeof error.message === "string" && error.message.includes(`'${param}'`);
 }
 
 /** The provider's content check refused the prompt: code moderation_blocked,
@@ -170,6 +197,7 @@ async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATIO
     n: 1,
     size,
     quality: tier.quality,
+    ...(tier.complexity ? { complexity: tier.complexity } : {}),
     moderation,
   };
   // The level the request actually ran under: the provider's default ("auto")
@@ -196,6 +224,12 @@ async function callOpenAI(prompt, size, tierSlug, moderation = DEFAULT_MODERATIO
       res = await postImages(key, body, tier.timeoutMs);
       text = await res.text();
     }
+  }
+  if (res.status === 400 && "complexity" in body && isParamError(res.status, parseError(text).error, "complexity")) {
+    // Once: a model that does not take the planning level renders without it.
+    delete body.complexity;
+    res = await postImages(key, body, tier.timeoutMs);
+    text = await res.text();
   }
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) throw ourKeyRefusedError("Image generation", res.status);
@@ -280,8 +314,8 @@ export const IMAGE_GEN_TOOLS = [
     category: "ai",
     price: "$0.030",
     description:
-      "Generate an image from a text prompt using GPT Image 2 (low quality, 1024x1024). No API key needed; pay per call via x402. Returns base64 PNG. Prompt capped at 1000 chars. A render takes 10 to 30 s; use a client timeout of at least 60 s." + MODERATION_COPY,
-    tags: [...SHARED_TAGS, "gpt-image-2"],
+      "Generate an image from a text prompt using GPT Image 2.6 Flare (low quality, 1024x1024). No API key needed; pay per call via x402. Returns base64 PNG. Prompt capped at 1000 chars. A render takes 10 to 30 s; use a client timeout of at least 60 s." + MODERATION_COPY,
+    tags: [...SHARED_TAGS, "gpt-image-2.6-flare"],
     discovery: {
       bodyType: "json",
       input: { prompt: "A single red apple on a white background" },
@@ -294,7 +328,7 @@ export const IMAGE_GEN_TOOLS = [
       },
       output: {
         example: {
-          model: "gpt-image-2",
+          model: "gpt-image-2.6-flare",
           provider: "openai",
           quality: "low",
           size: "1024x1024",
@@ -312,8 +346,8 @@ export const IMAGE_GEN_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "Generate a higher-quality image from a text prompt using GPT Image 2 (medium quality, 1024x1024). No API key needed; pay per call via x402. Returns base64 PNG. Prompt capped at 2000 chars. A render takes 20 to 45 s; use a client timeout of at least 60 s." + MODERATION_COPY,
-    tags: [...SHARED_TAGS, "gpt-image-2", "hd"],
+      "Generate a higher-quality image from a text prompt using GPT Image 2.6 Flare (medium quality, 1024x1024). No API key needed; pay per call via x402. Returns base64 PNG. Prompt capped at 2000 chars. A render takes 20 to 45 s; use a client timeout of at least 60 s." + MODERATION_COPY,
+    tags: [...SHARED_TAGS, "gpt-image-2.6-flare", "hd"],
     discovery: {
       bodyType: "json",
       input: { prompt: "A single red apple on a white background" },
@@ -326,7 +360,7 @@ export const IMAGE_GEN_TOOLS = [
       },
       output: {
         example: {
-          model: "gpt-image-2",
+          model: "gpt-image-2.6-flare",
           provider: "openai",
           quality: "medium",
           size: "1024x1024",
@@ -344,8 +378,8 @@ export const IMAGE_GEN_TOOLS = [
     category: "ai",
     price: "$0.150",
     description:
-      "Generate a larger image from a text prompt using GPT Image 2 (medium quality): 1536x1024 landscape by default, 1024x1536 portrait or 1024x1024 square via orientation. No API key needed; pay per call via x402. Returns base64 PNG. Prompt capped at 4000 chars. A render takes 25 to 50 s; use a client timeout of at least 75 s." + MODERATION_COPY,
-    tags: [...SHARED_TAGS, "gpt-image-2", "premium"],
+      "Generate a larger image from a text prompt using GPT Image 2.6 Sunburst (medium quality): 1536x1024 landscape by default, 1024x1536 portrait or 1024x1024 square via orientation. No API key needed; pay per call via x402. Returns base64 PNG. Prompt capped at 4000 chars. A render takes 25 to 50 s; use a client timeout of at least 75 s." + MODERATION_COPY,
+    tags: [...SHARED_TAGS, "gpt-image-2.6-sunburst", "premium"],
     discovery: {
       bodyType: "json",
       input: { prompt: "A single red apple on a white background" },
@@ -359,7 +393,7 @@ export const IMAGE_GEN_TOOLS = [
       },
       output: {
         example: {
-          model: "gpt-image-2",
+          model: "gpt-image-2.6-sunburst",
           provider: "openai",
           quality: "medium",
           size: "1536x1024",

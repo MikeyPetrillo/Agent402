@@ -39,7 +39,7 @@ const { tools, execute } = await agent402Tools({ slugs: ["search", "answer"], fr
 
 const messages = [{ role: "user", content: "Search the web for x402 payment protocol adoption, then answer with citations: what is the x402 payment protocol?" }];
 for (let turn = 0; turn < 4; turn++) {
-  const res = await openai.chat.completions.create({ model: "gpt-4o-mini", messages, tools });
+  const res = await openai.chat.completions.create({ model: "gpt-6-luna", messages, tools });
   const msg = res.choices[0].message;
   messages.push(msg);
   if (!msg.tool_calls?.length) { console.log(msg.content); break; }

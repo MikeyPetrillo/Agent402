@@ -281,8 +281,19 @@ const elevenUnanswered = createUnansweredTracker();
 // distinct voices, so the ten names fold onto five; then MAI-Voice-2.1,
 // a distinct English voice for each name. Every backup serves all six formats (mp3 and pcm from the
 // wire, the rest encoded here), so a backup never loses a buyer a format,
-// only voice distinctness.
-export const TTS_BACKUP_MODELS = ["mistralai/voxtral-mini-tts-2603", "x-ai/grok-voice-tts-1.0", "microsoft/mai-voice-2.1"];
+// only voice distinctness. Voxtral TTS 3 (2026-10-20) sits right behind
+// Voxtral Mini TTS: the same named voices (it lists all thirty in OpenRouter's
+// supported_voices, read 2026-11-12), so the same map and the same voice
+// distinctness; every endpoint is ZDR. It is a backup here only, not a link
+// of the /v1/audio/speech chain.
+const VOXTRAL_MINI = SPEECH_MODELS.find((m) => m.id === "mistralai/voxtral-mini-tts-2603");
+/** Backups that are not links of the /v1/audio/speech chain, in its entry shape. */
+export const TTS_BACKUP_ENTRIES = Object.freeze([
+  Object.freeze({ id: "mistralai/voxtral-mini-tts-3-0", aliases: [], map: VOXTRAL_MINI.map, voices: VOXTRAL_MINI.voices }),
+]);
+export const TTS_BACKUP_MODELS = ["mistralai/voxtral-mini-tts-2603", "mistralai/voxtral-mini-tts-3-0", "x-ai/grok-voice-tts-1.0", "microsoft/mai-voice-2.1"];
+/** The speech entry (voice map) of a backup model. */
+export const ttsBackupEntry = (id) => SPEECH_MODELS.find((m) => m.id === id) || TTS_BACKUP_ENTRIES.find((m) => m.id === id) || null;
 
 /** Whether this call may use ElevenLabs, and if so whether it is the probe. */
 function elevenGate(now = Date.now()) {
@@ -428,7 +439,7 @@ async function callBackups(text, voice, format, deadline, first) {
   let last = first;
   const name = standardVoiceFor(voice);
   for (const id of TTS_BACKUP_MODELS) {
-    const entry = SPEECH_MODELS.find((m) => m.id === id);
+    const entry = ttsBackupEntry(id);
     const left = deadline - Date.now();
     if (!entry || left < 3_000) continue;
     try { return await callSpeechModel(id, entry.map?.[name] || entry.map?.alloy, text, format, Math.min(TTS_LINK_TIMEOUT_MS, left)); }

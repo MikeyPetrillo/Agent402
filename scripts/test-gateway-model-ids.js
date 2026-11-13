@@ -21,7 +21,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync } from "node:fs";
 import {
   TIERS, AUTO_RANKINGS, SPEECH_MODELS, RETIRING_MODELS, retirementPending, flexModelIds, reasoningRows, reasoningRowMatches, costFor, tierFor, tierAllows, STEALTH_MODEL_IDS, modelsList, PRIORITY_PRICE_FACTOR,
-  IMAGES_MODEL, AVAILABILITY_SUCCESSORS, MARGIN,
+  IMAGES_MODEL, AVAILABILITY_SUCCESSORS, MARGIN, PREFIX_CANONICAL,
 } from "../src/tools/llm-gateway-kit.js";
 import { meterMarkup } from "../src/gateway-meter.js";
 import { IMAGE_TIERS, IMAGES_FAST_TOOLS } from "../src/tools/llm-images-fast-kit.js";
@@ -142,8 +142,15 @@ for (const [q, byCat] of Object.entries(AUTO_RANKINGS)) {
     ok(dead.length === 0, `AUTO_RANKINGS.${q}.${cat}: all ranked ids live${dead.length ? ` (dead: ${dead.join(", ")})` : ""}`);
   }
 }
-// 3. TTS chain: every link is in the live speech list.
+// 3. TTS chain: every link is in the live speech list, and so is every
+//    /api/tts backup that is not a chain link, with each voice its map sends.
+const { TTS_BACKUP_ENTRIES } = await import("../src/tools/tts-kit.js");
 for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link ${link.id} is live`);
+for (const e of TTS_BACKUP_ENTRIES) {
+  const m = speech.find((x) => x.id === e.id);
+  const gone = [...new Set(Object.values(e.map))].filter((v) => !(m?.supported_voices || []).includes(v));
+  ok(!!m && gone.length === 0, `tts backup ${e.id} is live and serves every mapped voice${gone.length ? ` (gone: ${gone.join(", ")})` : ""}`);
+}
 // 1b. Every speech link's private per-char row is at or above the DEAREST live endpoint
 //     for that model, not the catalog headline. TTS bills per INPUT char, so
 //     this row IS the worst-case bound the $0.06 chain and the $0.005 lite tier
@@ -153,7 +160,7 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
 //     until an audit did (tts-lite was loss-making at its old cap).
 {
   const under = [];
-  for (const link of SPEECH_MODELS) {
+  for (const link of [...SPEECH_MODELS, ...TTS_BACKUP_ENTRIES]) {
     let prices = [];
     try {
       const j = await (await fetch(`https://openrouter.ai/api/v1/models/${link.id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json();
@@ -214,6 +221,20 @@ for (const link of SPEECH_MODELS) ok(speechIds.has(link.id), `speech chain link 
     const nonZdr = eps.filter((e) => !zdrNames.has(e.name)).map((e) => e.name);
     if (AUDIO_ZDR_MODELS.has(id)) ok(eps.length > 0 && nonZdr.length === 0, `${id}: every endpoint is ZDR, so zdr:true never narrows its routing${nonZdr.length ? ` (not ZDR: ${nonZdr.join(", ")})` : ""}`);
     else if (eps.length > 0 && nonZdr.length === 0) console.log(`note - ${id} is now ZDR on every endpoint; it can join AUDIO_ZDR_MODELS`);
+  }
+}
+// 1f. The Decisions data policy (src/decision-one.js) sends zdr:true to
+//     Decision-1 and the pinned Jev version over OpenRouter: the same rule,
+//     every endpoint each lists must be a ZDR endpoint.
+{
+  const { DECISION_ONE_MODEL, GEMINI_DECISION_MODEL, decisionsProviderPolicy, jevOpenRouterModel } = await import("../src/decision-one.js");
+  const { JEV_PINNED } = await import("../src/tools/judge-kit.js");
+  const zdrNames = new Set(((await (await fetch("https://openrouter.ai/api/v1/endpoints/zdr", { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null))?.data || []).map((e) => e.name));
+  for (const id of [DECISION_ONE_MODEL, jevOpenRouterModel(JEV_PINNED), GEMINI_DECISION_MODEL]) {
+    const eps = (await (await fetch(`https://openrouter.ai/api/v1/models/${id}/endpoints`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30_000) })).json().catch(() => null))?.data?.endpoints || [];
+    const nonZdr = eps.filter((e) => !zdrNames.has(e.name)).map((e) => e.name);
+    if (decisionsProviderPolicy(id).zdr) ok(eps.length > 0 && nonZdr.length === 0, `${id}: every Decisions endpoint is ZDR, so zdr:true never narrows its routing${nonZdr.length ? ` (not ZDR: ${nonZdr.join(", ")})` : ""}`);
+    else if (eps.length > 0 && nonZdr.length === 0) console.log(`note - ${id} is now ZDR on every endpoint; it can join DECISIONS_ZDR_MODELS`);
   }
 }
 // 4. Price floor: for every live model a tier admits, MODEL_COST must not price
@@ -710,6 +731,20 @@ for (const [requested, succ] of Object.entries(AVAILABILITY_SUCCESSORS).flatMap(
   const watchedIds = [...new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(TIERS).flatMap((t) => t.fallbacks || [])])];
   const untabled = watchedIds.filter((id) => { const m = models.find((x) => x.id === id); const r = m?.reasoning; return r && (r.mandatory === true || r.default_enabled === true) && Array.isArray(r.supported_efforts) && !reasoningRows().some((row) => reasoningRowMatches(row, id)); });
   if (untabled.length) console.log(`note - ranked/fallback models that reason by default but have no REASONING_MODELS row: ${untabled.join(", ")}`);
+}
+// Every exact id the tiers name (a tier entry that is itself a live id, a
+// default, a fallback, a rung, a family name's concrete model) that reasons by
+// default with an effort list has a REASONING_MODELS row: without one a tier
+// injects no effort and a small budget can be spent reasoning.
+{
+  const liveIds = new Set(models.map((m) => m.id));
+  const exact = new Set([...Object.values(AUTO_RANKINGS).flatMap((b) => Object.values(b).flat()), ...Object.values(PREFIX_CANONICAL)]);
+  for (const t of Object.values(TIERS)) {
+    for (const p of t.prefixes || []) if (liveIds.has(p)) exact.add(p);
+    for (const m of [t.defaultModel, t.defaultModelCompat, ...(t.fallbacks || [])]) if (m) exact.add(m);
+  }
+  const untabled = [...exact].filter((id) => { const r = models.find((x) => x.id === id)?.reasoning; return r && (r.mandatory === true || r.default_enabled === true) && Array.isArray(r.supported_efforts) && !reasoningRows().some((row) => reasoningRowMatches(row, id)); });
+  ok(exact.size > 10 && untabled.length === 0, `every exact admitted id that reasons by default has a REASONING_MODELS row (${exact.size} ids read)${untabled.length ? `; missing: ${untabled.join(", ")}` : ""}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

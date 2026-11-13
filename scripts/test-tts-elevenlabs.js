@@ -12,14 +12,15 @@
 //   - all six formats are served: mp3/pcm from the wire, wav/flac/opus/aac
 //     encoded from its PCM;
 //   - an ElevenLabs outage is served by the backup speech models on the same
-//     wire (TTS_BACKUP_MODELS, in order: Voxtral, then Grok voice, then
-//     MAI-Voice-2.1), named in the answer, with the voice asked for mapped to
+//     wire (TTS_BACKUP_MODELS, in order: Voxtral Mini, Voxtral TTS 3, then
+//     Grok voice, then MAI-Voice-2.1), named in the answer, with the voice asked for mapped to
 //     the backup's nearest and every format still served; the first backup
 //     gives nine of the ten names their own voice id (coral and sage share
 //     one); a bad request is a 400 and never reaches a backup.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { TTS_TOOLS, TTS_TIERS, ttsQuoteUsd, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, ELEVEN_MAX_IN_FLIGHT, __makeHandlerForTest, __resetTtsBreakerForTest, __ttsBreakerForTest, elevenLabsBreakerState } from "../src/tools/tts-kit.js";
+import { TTS_TOOLS, TTS_TIERS, ttsQuoteUsd, ELEVENLABS_VOICE_MAP, ELEVENLABS_VOICES, TTS_BACKUP_MODELS, TTS_BACKUP_ENTRIES, ttsBackupEntry, ELEVEN_MAX_IN_FLIGHT, __makeHandlerForTest, __resetTtsBreakerForTest, __ttsBreakerForTest, elevenLabsBreakerState } from "../src/tools/tts-kit.js";
 import { SPEECH_MODELS } from "../src/tools/llm-gateway-kit.js";
+import { AUDIO_ZDR_MODELS } from "../src/openrouter-audio-policy.js";
 import { STT_TIERS, STT_MARGIN, STT_TOOLS, upstreamUsdPerMinute } from "../src/tools/stt-kit.js";
 import { upstreamCosts } from "../src/upstream-costs.js";
 import { requireUpstreamCosts } from "./lib/require-upstream-costs.js";
@@ -127,7 +128,12 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
 
 // --- backups ---------------------------------------------------------------
 {
-  ok(TTS_BACKUP_MODELS.join() === "mistralai/voxtral-mini-tts-2603,x-ai/grok-voice-tts-1.0,microsoft/mai-voice-2.1" && TTS_BACKUP_MODELS.every((id) => SPEECH_MODELS.some((m) => m.id === id)), `the backups are Voxtral, then Grok voice, then MAI-Voice-2.1, each a model the speech wire serves (${TTS_BACKUP_MODELS.join(", ")})`);
+  ok(TTS_BACKUP_MODELS.join() === "mistralai/voxtral-mini-tts-2603,mistralai/voxtral-mini-tts-3-0,x-ai/grok-voice-tts-1.0,microsoft/mai-voice-2.1" && TTS_BACKUP_MODELS.every((id) => SPEECH_MODELS.some((m) => m.id === id) || TTS_BACKUP_ENTRIES.some((m) => m.id === id)), `the backups are Voxtral Mini, then Voxtral TTS 3, then Grok voice, then MAI-Voice-2.1, each with a speech entry (${TTS_BACKUP_MODELS.join(", ")})`);
+  {
+    const v3 = ttsBackupEntry("mistralai/voxtral-mini-tts-3-0");
+    ok(v3 && !SPEECH_MODELS.some((m) => m.id === v3.id) && Object.keys(ELEVENLABS_VOICE_MAP).every((v) => v3.map[v] === firstBackup.map[v] && v3.voices.has(v3.map[v])), "Voxtral TTS 3 is a backup only (not a /v1/audio/speech link) and maps the ten names to the same voices as Voxtral Mini");
+    ok(AUDIO_ZDR_MODELS.has(v3.id), "Voxtral TTS 3 goes out with zdr:true (every endpoint is ZDR)");
+  }
   ok(Object.keys(ELEVENLABS_VOICE_MAP).every((v) => firstBackup.map?.[v] && firstBackup.voices.has(firstBackup.map[v])), "the first backup maps every one of the ten voice names to a voice it serves");
   {
     const names = Object.keys(ELEVENLABS_VOICE_MAP);
@@ -192,6 +198,10 @@ for (const format of ["mp3", "pcm", "wav", "flac", "opus", "aac"]) {
   stub([["openrouter.ai", (_u, init) => (modelOf(init) === TTS_BACKUP_MODELS[1] ? backupAudio(init) : err(503))]]);
   const secondBackup = await run("tts", { text: "hi" });
   ok(secondBackup.model === TTS_BACKUP_MODELS[1] && backupCalls().join() === TTS_BACKUP_MODELS.slice(0, 2).join(), `the second backup serves after the first failed (${backupCalls().join(" > ")})`);
+  {
+    const v3Body = JSON.parse(calls.find((c) => modelOf(c.init) === "mistralai/voxtral-mini-tts-3-0").init.body);
+    ok(secondBackup.model === "mistralai/voxtral-mini-tts-3-0" && v3Body.voice === firstBackup.map.alloy && v3Body.provider?.zdr === true && v3Body.provider?.data_collection === "deny", `Voxtral TTS 3 is that second backup, sent the mapped voice under our data policy (${v3Body.voice})`);
+  }
   stub([["openrouter.ai", (_u, init) => (modelOf(init) === TTS_BACKUP_MODELS.at(-1) ? backupAudio(init) : err(503))]]);
   const last = await run("tts", { text: "hi" });
   ok(last.model === TTS_BACKUP_MODELS.at(-1) && backupCalls().join() === TTS_BACKUP_MODELS.join(), `the backups are walked in order to the last (${backupCalls().join(" > ")})`);

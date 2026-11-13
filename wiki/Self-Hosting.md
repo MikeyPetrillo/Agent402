@@ -89,6 +89,7 @@ Set these on your host. None are committed to the repo.
 | `INDEX_PULL_MS` | No | How often each replica pulls the seller index rows another wrote (default 30000) |
 | `TEMPO_RELAY` | No | `off` settles Tempo payments in the server itself (verify, simulate, broadcast over `TEMPO_RPC_URL`) and screens every party to a per-call payment against OFAC's SDN list; unset uses Tempo's hosted relay |
 | `JEV_MODEL` | No | The Jev version the judgment routes pin to (default `jev-1.14.0`); `TYPESAFE_MODEL` overrides it for the internal callers |
+| `DECISION_ONE`, `GEMINI_DECISION`, `JEV_OPENROUTER` | No | `off` turns off one judgment model reached over OpenRouter (Decision-1, Gemini Decision-1, the pinned Jev version); each is on whenever `OPENROUTER_API_KEY` is set |
 | `E2B_MAX_CONCURRENT` | No | Sandboxes running at once for the whole service (default 8), split across replicas |
 | `DATABENTO_SUMMARY` | No | `off` makes the stock tools read the three-venue feed instead of the end-of-day summary dataset |
 | `MARKET_TICK` | No | `on` lists `GET /api/market/tick`, a cached per-symbol read of the figures `crypto-price` and `stock-quote` already serve (no source of its own; `MARKET_TICK_CACHE_MS` sets the window, default 15000). Off by default |

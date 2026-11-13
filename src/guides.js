@@ -2100,7 +2100,7 @@ models:
     provider: openai
     apiBase: http://127.0.0.1:8412/v1   # the local wallet proxy (above)
     apiKey: unused                      # the proxy pays from your wallet
-    model: openai/gpt-4o-mini
+    model: openai/gpt-6-luna
     roles:
       - chat
 mcpServers:
@@ -2128,7 +2128,7 @@ changes. With the local wallet proxy running (above):
 OPENAI_BASE_URL=http://127.0.0.1:8412/v1
 OPENAI_API_KEY=unused
 OPENAI_LARGE_MODEL=anthropic/claude-sonnet-5.5
-OPENAI_MEDIUM_MODEL=openai/gpt-4o-mini
+OPENAI_MEDIUM_MODEL=openai/gpt-6-luna
 \`\`\`
 
 The proxy serves chat. Embeddings live at \`/v1/embeddings\`
@@ -2144,7 +2144,7 @@ pays each call from your wallet:
 \`\`\`python
 from openai import OpenAI
 client = OpenAI(base_url="http://127.0.0.1:8412/v1", api_key="unused")
-r = client.chat.completions.create(model="openai/gpt-4o-mini",
+r = client.chat.completions.create(model="openai/gpt-6-luna",
     messages=[{"role": "user", "content": "One sentence on x402."}], max_tokens=60)
 print(r.choices[0].message.content)
 \`\`\`
@@ -2156,7 +2156,7 @@ the metered route directly:
 import os
 from openai import OpenAI
 client = OpenAI(base_url="https://agent402.tools/v1/metered", api_key=os.environ["AGENT402_CREDITS_KEY"])
-r = client.chat.completions.create(model="openai/gpt-4o-mini",
+r = client.chat.completions.create(model="openai/gpt-6-luna",
     messages=[{"role": "user", "content": "One sentence on x402."}], max_tokens=60)
 print(r.choices[0].message.content)
 \`\`\`
@@ -2168,7 +2168,7 @@ const apiKey = process.env.AGENT402_CREDITS_KEY;
 // and send that key to this base URL.
 if (!apiKey) throw new Error("export AGENT402_CREDITS_KEY first");
 const client = new OpenAI({ baseURL: "https://agent402.tools/v1/metered", apiKey });
-const r = await client.chat.completions.create({ model: "openai/gpt-4o-mini",
+const r = await client.chat.completions.create({ model: "openai/gpt-6-luna",
   messages: [{ role: "user", content: "One sentence on x402." }], max_tokens: 60 });
 console.log(r.choices[0].message.content);
 \`\`\`

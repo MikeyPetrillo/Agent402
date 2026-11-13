@@ -132,7 +132,9 @@ export const IMAGE_TIERS = {
   },
   // Image edit: a prompt plus one to four reference images. One link; no other
   // listed edit model fits under this price's bound, so an outage is a 503
-  // (not charged).
+  // (not charged). Re-read 2026-11-12: black-forest-labs/flux-3-image takes
+  // reference images but lists above this bound at every resolution, so it
+  // is not a link at this price.
   "v1-images-edit": {
     path: IMAGES_EDIT_PATH,
     price: 0.02,
@@ -234,7 +236,8 @@ export function validateImageTierRequest(input, tierSlug) {
   if (input.model !== undefined) {
     const m = String(input.model).trim();
     if (!tier.chain.some((l) => l.model === m) && !(tier.retired || []).includes(m)) {
-      throw bad(`"model" is fixed on this endpoint - omit it, or send ${tier.chain[0].model} (served first; ${tier.chain.slice(1).map((l) => l.model).join(", ")} is the failover)`);
+      const failover = tier.chain.slice(1).map((l) => l.model).join(", ");
+      throw bad(`"model" is fixed on this endpoint - omit it, or send ${tier.chain[0].model}${failover ? ` (served first; ${failover} is the failover)` : " (the one model served here)"}`);
     }
   }
   if (input.n !== undefined && parseInt(input.n, 10) !== 1) {

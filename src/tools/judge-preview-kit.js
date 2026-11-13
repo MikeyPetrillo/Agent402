@@ -145,12 +145,20 @@ function textState(state, maxChars = LIMITS.stateChars) {
 
 // Answer checks: the shapes the upstream documents, so a changed preview
 // answer is a 502 that charges nothing instead of a paid malformed result.
+// A noul the model gave no probability for (null, as on /v1/judge) is kept,
+// marked noProbability, beside the other answers; when every answer is one,
+// there is nothing to branch on and the call is an uncharged 502.
 const prob = (x) => typeof x === "number" && x >= 0 && x <= 1;
+const NO_PROBABILITY = { type: "noul", noul: null, noProbability: true };
+const noProbabilityNoul = (a) => a.type === "noul" && (a.noul === null || a.probability === null) && !prob(a.noul);
+export const NO_PROBABILITY_NOTE = "A noul the model gave no probability for reads `noul: null` with `noProbability: true`; treat it as unknown.";
 function checkAnswers(answers, questions) {
   if (!answers || typeof answers !== "object") throw bad("Judgment upstream returned no answers.", 502);
+  const out = {};
   for (const [id, q] of Object.entries(questions)) {
     const a = answers[id];
     if (!a || a.type !== q.type) throw bad(`Judgment upstream returned no "${q.type}" answer for "${id}".`, 502);
+    if (q.type === "noul" && noProbabilityNoul(a)) { out[id] = { ...NO_PROBABILITY }; continue; }
     if (q.type === "noul" && !prob(a.noul)) throw bad(`Judgment upstream returned a malformed noul for "${id}".`, 502);
     if (q.type === "box") {
       const b = a.box || {};
@@ -159,9 +167,12 @@ function checkAnswers(answers, questions) {
       }
     }
     if ((q.type === "choice" || q.type === "score") && !prob(a.confidence)) throw bad(`Judgment upstream returned a malformed ${q.type} for "${id}".`, 502);
+    out[id] = a;
   }
-  return answers;
+  if (Object.values(out).every((a) => a.noProbability === true)) throw bad("Judgment upstream returned no probability for any question.", 502);
+  return out;
 }
+const anyNoProbability = (answers) => Object.values(answers).some((a) => a?.noProbability === true);
 
 const IMAGES_HEADER = { "TypeSafe-Danger-Zone-Images": "true" };
 const LONG_HEADER = { "TypeSafe-Danger-Zone-Long-Context": "true" };
@@ -195,12 +206,14 @@ export async function judgeVision(input, { fetchImpl = fetch } = {}) {
   const { body, worstTokens, hasBox } = validateVisionRequest(input);
   priceGuard(worstTokens, VISION_PRICE_USD);
   const j = await post(ENDPOINT, keyOf(), body, fetchImpl, hasAnswers, IMAGES_HEADER);
+  const answers = checkAnswers(j.answers, body.questions);
+  const notes = [hasBox ? "A box answer always returns a box, even when the thing is not in the image; pair it with a noul that asks whether it is there." : "", anyNoProbability(answers) ? NO_PROBABILITY_NOTE : ""].filter(Boolean);
   return {
     model: j.model || body.model,
     preview: true,
-    answers: checkAnswers(j.answers, body.questions),
+    answers,
     usage: usageOf(j.usage),
-    ...(hasBox ? { note: "A box answer always returns a box, even when the thing is not in the image; pair it with a noul that asks whether it is there." } : {}),
+    ...(notes.length ? { note: notes.join(" ") } : {}),
   };
 }
 
@@ -233,15 +246,20 @@ export async function locate(input, { fetchImpl = fetch } = {}) {
   priceGuard(worstTokens, LOCATE_PRICE_USD);
   const j = await post(ENDPOINT, keyOf(), body, fetchImpl, hasAnswers, IMAGES_HEADER);
   const a = checkAnswers(j.answers, body.questions);
+  // Presence is what a box is read by: with no presence probability for any
+  // target there is nothing to branch on, so the call is an uncharged 502.
+  if (targets.every((_, i) => a[`t${i}_present`].noProbability)) throw bad("Judgment upstream returned no presence probability for any target.", 502);
   return {
     model: j.model || body.model,
     preview: true,
     results: targets.map((target, i) => {
-      const box = a[`t${i}_box`], present = a[`t${i}_present`].noul;
-      return { target, present, found: present >= 0.5, box: box.box, boxConfidence: box.confidence };
+      const box = a[`t${i}_box`], p = a[`t${i}_present`];
+      // No probability for presence: found is unknown (null), never false.
+      if (p.noProbability) return { target, present: null, found: null, noProbability: true, box: box.box, boxConfidence: box.confidence };
+      return { target, present: p.noul, found: p.noul >= 0.5, box: box.box, boxConfidence: box.confidence };
     }),
     usage: usageOf(j.usage),
-    note: "box edges are fractions of the image (top and bottom of its height, left and right of its width). found is present >= 0.5; when it is false the box is the model's best guess and should not be used.",
+    note: `box edges are fractions of the image (top and bottom of its height, left and right of its width). found is present >= 0.5; when it is false the box is the model's best guess and should not be used.${anyNoProbability(a) ? " A target the model gave no presence probability for reads present: null and found: null with noProbability: true; treat it as unknown." : ""}`,
   };
 }
 
@@ -264,7 +282,8 @@ export async function judgeLong(input, { fetchImpl = fetch } = {}) {
   const { body, worstTokens } = validateLongRequest(input);
   priceGuard(worstTokens, LONG_PRICE_USD);
   const j = await post(ENDPOINT, keyOf(), body, fetchImpl, hasAnswers, LONG_HEADER);
-  return { model: j.model || body.model, preview: true, answers: checkAnswers(j.answers, body.questions), usage: usageOf(j.usage) };
+  const answers = checkAnswers(j.answers, body.questions);
+  return { model: j.model || body.model, preview: true, answers, usage: usageOf(j.usage), ...(anyNoProbability(answers) ? { note: NO_PROBABILITY_NOTE } : {}) };
 }
 
 // The published examples carry a real image: a 300x300 white PNG with a red

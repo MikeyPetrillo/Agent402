@@ -105,6 +105,31 @@ const stub = (answers, model = "jev-1.14.0", status = 200) => async (url, init) 
   }
 }
 {
+  // A noul the model gave no probability for (null) keeps the other answers and
+  // is marked noProbability, as on /v1/judge; when every answer is one there is
+  // nothing to branch on, and the call stays an uncharged 502.
+  const Q2 = { q: Q.q, c: { type: "choice", instructions: "Which colour is `pic`?", criteria: { grey: "grey", red: "red" } } };
+  const NULL = { type: "noul", noul: null };
+  const CH = { type: "choice", choice: "grey", confidence: 0.9 };
+  const v = await K.judgeVision({ images: { pic: IMG }, questions: Q2 }, { fetchImpl: stub({ q: NULL, c: CH }) });
+  ok(v.answers.q.noul === null && v.answers.q.noProbability === true && v.answers.c.choice === "grey" && /noProbability/.test(v.note || ""), "vision: a null noul is kept as noProbability beside the other answers, and the note says so");
+  const v2 = await K.judgeVision({ images: { pic: IMG }, questions: Q2 }, { fetchImpl: stub({ q: { type: "noul", probability: null }, c: CH }) });
+  ok(v2.answers.q.noProbability === true, "vision: the probability: null spelling is read the same way");
+  await refuses(() => K.judgeVision({ images: { pic: IMG }, questions: Q }, { fetchImpl: stub({ q: NULL }) }), 502, /no probability/, "vision: an all-null answer stays an uncharged 502");
+  await refuses(() => K.judgeVision({ images: { pic: IMG }, questions: Q }, { fetchImpl: stub({ q: { type: "noul", noul: 1.5 } }) }), 502, /malformed noul/, "vision: an out-of-range noul is still a 502");
+  const BOX = (n) => ({ type: "box", box: { top: 0.1, bottom: 0.5, left: 0.2 + n / 10, right: 0.6 + n / 10 }, confidence: 0.8 });
+  const L = await K.locate({ image: IMG, targets: ["the mug", "the cup"] }, { fetchImpl: stub({ t0_box: BOX(0), t0_present: NULL, t1_box: BOX(1), t1_present: { type: "noul", noul: 0.9 } }) });
+  ok(L.results[0].present === null && L.results[0].found === null && L.results[0].noProbability === true && L.results[0].box.left === 0.2
+    && L.results[1].present === 0.9 && L.results[1].found === true && !("noProbability" in L.results[1]) && /noProbability/.test(L.note), "locate: a null presence reads present and found null with noProbability, the other target answers");
+  await refuses(() => K.locate({ image: IMG, targets: ["the mug"] }, { fetchImpl: stub({ t0_box: BOX(0), t0_present: NULL }) }), 502, /no presence probability/, "locate: no presence probability for any target stays an uncharged 502");
+  const LQ = { q: { type: "noul", instructions: "Is it long?" }, r: { type: "noul", instructions: "Is it short?" } };
+  const g = await K.judgeLong({ state: "doc", questions: LQ }, { fetchImpl: stub({ q: NULL, r: { type: "noul", noul: 0.2 } }) });
+  ok(g.answers.q.noProbability === true && g.answers.q.noul === null && g.answers.r.noul === 0.2 && /noProbability/.test(g.note || ""), "long: a null noul is kept as noProbability beside the other answers");
+  await refuses(() => K.judgeLong({ state: "doc", questions: LQ }, { fetchImpl: stub({ q: NULL, r: NULL }) }), 502, /no probability/, "long: an all-null answer stays an uncharged 502");
+  const clean = await K.judgeLong({ state: "doc", questions: LQ }, { fetchImpl: stub({ q: { type: "noul", noul: 0.4 }, r: { type: "noul", noul: 0.2 } }) });
+  ok(!("note" in clean) && !("noProbability" in clean.answers.q), "long: an answer with every probability carries no note and no mark");
+}
+{
   // No rate in the table: the route refuses before the call and charges nothing.
   setUpstreamCostsForTest(table({ maxShare: 1 }));
   const before = calls.length;

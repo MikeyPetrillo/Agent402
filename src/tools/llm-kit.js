@@ -7,8 +7,8 @@
 //   - Structured output: response_format (json_object / json_schema)
 //
 // Tiers:
-//   llm          $0.01: gpt-4o-mini (default), gpt-6-luna            (16k input, 4096 output)
-//   llm-pro      $0.10: gpt-4o, gpt-4.1, gpt-6.1-sol, gpt-6-luna    (16k input, 2048 output)
+//   llm          $0.01: gpt-6-luna (default), gpt-4o-mini            (16k input, 4096 output)
+//   llm-pro      $0.10: gpt-6-luna (default), gpt-6.1-sol, gpt-4o, gpt-4.1 (16k input, 2048 output)
 //
 // OpenAI shuts down gpt-4o, gpt-4o-mini, gpt-4.1 and gpt-4.1-mini on
 // 2027-01-14. Each stays served as itself until then; from that day a
@@ -29,8 +29,10 @@ function bad(message, statusCode = 400) {
 // Tier → allowed model prefixes, input char budget, and output token cap.
 // Caps are set so worst-case upstream cost stays well below the x402 price.
 const TIERS = {
-  llm:           { defaultModel: "gpt-4o-mini", prefixes: ["gpt-6-luna", "gpt-4o-mini"], maxInputChars: 16_000, maxTokens: 4096 },
-  "llm-pro":     { defaultModel: "gpt-4o-mini", prefixes: ["gpt-6.1-sol", "gpt-6-luna", "gpt-4o", "gpt-4.1"], maxInputChars: 16_000, maxTokens: 2048 },
+  // gpt-6-luna is OpenAI's named replacement for gpt-4o-mini, the default on
+  // both tiers until its 2027-01-14 shutdown was scheduled.
+  llm:           { defaultModel: "gpt-6-luna", prefixes: ["gpt-6-luna", "gpt-4o-mini"], maxInputChars: 16_000, maxTokens: 4096 },
+  "llm-pro":     { defaultModel: "gpt-6-luna", prefixes: ["gpt-6.1-sol", "gpt-6-luna", "gpt-4o", "gpt-4.1"], maxInputChars: 16_000, maxTokens: 2048 },
   // o3-mini and o4-mini are still accepted by name: OpenAI retired both, and
   // RETIRING serves them as gpt-5.6-terra, so an agent with an older id is answered.
   // The o3 family left this list ahead of its 2026-12-11 shutdown; RETIRING's
@@ -102,6 +104,11 @@ export function retiredSuccessor(model, now = Date.now()) {
 // lowest effort both families take unless the buyer named one.
 const REASONING_FAMILY_RE = /^gpt-(5|6)/;
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/** The model a tier serves when the caller names none. */
+export function proxyDefaultModel(tierSlug) {
+  return Object.hasOwn(TIERS, tierSlug) ? TIERS[tierSlug].defaultModel : null;
+}
 
 /** Every model family a tier admits: its own prefixes, then each RETIRING id kept on it. */
 export function admittedFamilies(tierSlug) {
@@ -185,7 +192,7 @@ function validateResponseFormat(rf) {
 
 function validateInput(input, tierSlug) {
   // A missing model is served as the tier's default, never refused.
-  const requested = (typeof input.model === "string" && input.model.trim()) || TIERS[tierSlug]?.defaultModel || "gpt-4o-mini";
+  const requested = (typeof input.model === "string" && input.model.trim()) || TIERS[tierSlug]?.defaultModel || "gpt-6-luna";
   const successor = retiredSuccessor(requested);
   const model = successor || requested;
   if (!tierAdmits(model, tierSlug)) {
@@ -230,8 +237,19 @@ function validateInput(input, tierSlug) {
   const responseFormat = validateResponseFormat(input.response_format);
 
   const opts = {};
-  if (input.temperature != null) opts.temperature = Number(input.temperature);
-  if (input.top_p != null) opts.top_p = Number(input.top_p);
+  // The reasoning families refuse temperature and top_p upstream. A caller who
+  // named one gets that refusal as before; a caller who named no model (the
+  // default is gpt-6-luna since gpt-4o-mini's shutdown was scheduled) or a
+  // retired id (served by a reasoning successor) is served without them, and
+  // the answer names what was not sent (agent402_params_not_sent).
+  const namedModel = typeof input.model === "string" && input.model.trim() !== "" && !successor;
+  const skipSampling = !namedModel && REASONING_FAMILY_RE.test(model);
+  const notSent = [];
+  for (const k of ["temperature", "top_p"]) {
+    if (input[k] == null) continue;
+    if (skipSampling) notSent.push(k);
+    else opts[k] = Number(input[k]);
+  }
   if (input.stop != null) opts.stop = input.stop;
   if (input.reasoning_effort != null) {
     if (!REASONING_FAMILY_RE.test(model)) throw bad(`"reasoning_effort" is not supported by ${model}; omit it`);
@@ -239,7 +257,7 @@ function validateInput(input, tierSlug) {
     opts.reasoning_effort = input.reasoning_effort;
   } else if (REASONING_FAMILY_RE.test(model)) opts.reasoning_effort = "low";
 
-  return { model, messages: normMessages, maxTokens, responseFormat, opts, substitutedFrom: successor ? requested : null };
+  return { model, messages: normMessages, maxTokens, responseFormat, opts, substitutedFrom: successor ? requested : null, notSent };
 }
 
 async function callOpenAI(model, messages, maxTokens, responseFormat, opts, tierSlug) {
@@ -328,9 +346,10 @@ async function callOpenAI(model, messages, maxTokens, responseFormat, opts, tier
 
 function makeHandler(tierSlug) {
   return async (input) => {
-    const { model, messages, maxTokens, responseFormat, opts, substitutedFrom } = validateInput(input, tierSlug);
+    const { model, messages, maxTokens, responseFormat, opts, substitutedFrom, notSent } = validateInput(input, tierSlug);
     const out = await callOpenAI(model, messages, maxTokens, responseFormat, opts, tierSlug);
     if (substitutedFrom) out.agent402_model_substituted = { requested: substitutedFrom, served: model, reason: "the requested model is retired upstream; its named successor served instead" };
+    if (notSent.length) out.agent402_params_not_sent = { params: notSent, model, reason: `${model} takes no sampling parameters; steer it with reasoning_effort` };
     return out;
   };
 }
@@ -345,18 +364,18 @@ export const LLM_TOOLS = [
     category: "ai",
     price: "$0.010",
     description:
-      "LLM inference proxy - send an OpenAI-format chat/completions request and get a response from GPT-4o-mini (or gpt-6-luna by its id). Supports vision (up to 2 image URLs, low detail) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 16k chars, output at 4096 tokens.",
-    tags: [...SHARED_TAGS, "gpt-4o-mini", "vision", "json-mode"],
+      "LLM inference proxy - send an OpenAI-format chat/completions request and get a response from gpt-6-luna (the default; gpt-4o-mini by its id). Supports vision (up to 2 image URLs, low detail) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 16k chars, output at 4096 tokens.",
+    tags: [...SHARED_TAGS, "gpt-6-luna", "vision", "json-mode"],
     discovery: {
       bodyType: "json",
-      input: { model: "gpt-4o-mini", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
+      input: { model: "gpt-6-luna", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
       inputSchema: {
         properties: {
-          model: { type: "string", description: "Model ID - gpt-4o-mini (default) or gpt-6-luna" },
+          model: { type: "string", description: "Model ID - gpt-6-luna (default) or gpt-4o-mini" },
           messages: { type: "array", description: "Array of {role, content} objects. content can be a string or array of {type:'text',text} and {type:'image_url',image_url:{url,detail}} blocks" },
           max_tokens: { type: "number", description: "Max output tokens (default 1024, cap 4096)" },
           response_format: { type: "object", description: 'Optional: {type:"json_object"} or {type:"json_schema",json_schema:{name,schema}}' },
-          temperature: { type: "number", description: "Sampling temperature (0-2); the gpt-4o and gpt-4.1 families only (the reasoning models refuse it)" },
+          temperature: { type: "number", description: "Sampling temperature (0-2); the gpt-4o and gpt-4.1 families only (the reasoning models refuse it; a call naming no model is served gpt-6-luna without it, named in agent402_params_not_sent)" },
           top_p: { type: "number", description: "Nucleus sampling (0-1); the gpt-4o and gpt-4.1 families only" },
           reasoning_effort: { type: "string", description: "Optional, gpt-5 and gpt-6 families: none | minimal | low | medium | high | xhigh | max, as the model lists it (default low)" },
           stop: { type: "string", description: "Stop sequence(s)" },
@@ -365,7 +384,7 @@ export const LLM_TOOLS = [
       },
       output: {
         example: {
-          model: "gpt-4o-mini",
+          model: "gpt-6-luna",
           provider: "openai",
           usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
           choices: [{ message: { role: "assistant", content: "Hello! How can I help you today?" }, finish_reason: "stop" }],
@@ -381,18 +400,18 @@ export const LLM_TOOLS = [
     category: "ai",
     price: "$0.100",
     description:
-      "LLM inference proxy (Pro tier) - GPT-4o or GPT-4.1 (or gpt-6.1-sol by its id). Supports vision (up to 2 image URLs) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 16k chars, output at 2048 tokens.",
-    tags: [...SHARED_TAGS, "gpt-4o", "gpt-4.1", "vision", "json-mode"],
+      "LLM inference proxy (Pro tier) - gpt-6-luna by default, or gpt-6.1-sol, GPT-4o or GPT-4.1 by its id. Supports vision (up to 2 image URLs) and structured output (response_format: json_object or json_schema). No API key needed; pay per call via x402. Input capped at 16k chars, output at 2048 tokens.",
+    tags: [...SHARED_TAGS, "gpt-6-luna", "gpt-6.1-sol", "vision", "json-mode"],
     discovery: {
       bodyType: "json",
-      input: { model: "gpt-4o", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
+      input: { model: "gpt-6-luna", messages: [{ role: "user", content: "Say hello in one sentence." }], max_tokens: 64 },
       inputSchema: {
         properties: {
-          model: { type: "string", description: "Model ID - gpt-4o or gpt-4.1 (or gpt-6.1-sol)" },
+          model: { type: "string", description: "Model ID - gpt-6-luna (default), gpt-6.1-sol, gpt-4o or gpt-4.1" },
           messages: { type: "array", description: "Array of {role, content} objects. content can be a string or array of {type:'text',text} and {type:'image_url',image_url:{url,detail}} blocks" },
           max_tokens: { type: "number", description: "Max output tokens (default 1024, cap 2048)" },
           response_format: { type: "object", description: 'Optional: {type:"json_object"} or {type:"json_schema",json_schema:{name,schema}}' },
-          temperature: { type: "number", description: "Sampling temperature (0-2); the gpt-4o and gpt-4.1 families only (the reasoning models refuse it)" },
+          temperature: { type: "number", description: "Sampling temperature (0-2); the gpt-4o and gpt-4.1 families only (the reasoning models refuse it; a call naming no model is served gpt-6-luna without it, named in agent402_params_not_sent)" },
           top_p: { type: "number", description: "Nucleus sampling (0-1); the gpt-4o and gpt-4.1 families only" },
           reasoning_effort: { type: "string", description: "Optional, gpt-5 and gpt-6 families: none | minimal | low | medium | high | xhigh | max, as the model lists it (default low)" },
           stop: { type: "string", description: "Stop sequence(s)" },
@@ -401,7 +420,7 @@ export const LLM_TOOLS = [
       },
       output: {
         example: {
-          model: "gpt-4o",
+          model: "gpt-6-luna",
           provider: "openai",
           usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
           choices: [{ message: { role: "assistant", content: "Hello! How can I help you today?" }, finish_reason: "stop" }],

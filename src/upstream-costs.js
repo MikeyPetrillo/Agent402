@@ -18,7 +18,7 @@
 //     media: { model: { worstCaseUsd, listedMaxUsd } },
 //     meter: { markup },
 //     vendor: { exa: { search, instant, answer, content }, x: { postRead, userRead },
-//               decisions: { luna, decisionOne, jev, maxShare },      luna, decisionOne, jev: USD per 1M input tokens; maxShare: largest share of the price a call may cost
+//               decisions: { luna, decisionOne, gemini, jev, maxShare }, luna, decisionOne, gemini, jev: USD per 1M input tokens; maxShare: largest share of the price a call may cost
 //               cdp: { sqlQuery },                                    USD per query sent to the SQL query service
 //               direct: { minSaving? } } }                            optional: the price-guard margin, a fraction from 0
 //                                                                     to below 1, that the direct pricebook's per-call
@@ -49,12 +49,14 @@ const REQUIRED = [
   ["fees", "webSearchPerUse"], ["fees", "groundedPerCall"], ["fees", "rerankPerUnit"], ["meter", "markup"],
   ["vendor", "exa", "search"], ["vendor", "exa", "instant"], ["vendor", "exa", "lite"], ["vendor", "exa", "answer"], ["vendor", "exa", "content"],
   ["vendor", "x", "postRead"], ["vendor", "x", "userRead"], ["vendor", "decisions", "luna"], ["vendor", "decisions", "maxShare"],
-  ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "jev"],
-  // The direct image model (USD per 1M tokens: prompt for text input,
-  // completion for image output), which the spend meter prices from this row.
-  ["openai", "gpt-image-2"],
+  ["vendor", "decisions", "decisionOne"], ["vendor", "decisions", "gemini"], ["vendor", "decisions", "jev"],
+  // The direct image models (USD per 1M tokens: prompt for text input,
+  // completion for image output), which the spend meter prices from each row.
+  ["openai", "gpt-image-2.6-flare"], ["openai", "gpt-image-2.6-sunburst"],
   // The image edit route's only link (llm-images-fast-kit.js).
   ["media", "black-forest-labs/flux-3-image-klein"],
+  // The /api/tts backup that is not a /v1/audio/speech link (tts-kit.js).
+  ["speech", "mistralai/voxtral-mini-tts-3-0"],
   // The SQL query service, USD per query: every query cdp-kit.js's query run
   // sends for onchain-sql (the buyer's query and its recovery runs, at most
   // SQL_QUERY_BUDGET per call), which the margin test prices against the
@@ -73,7 +75,7 @@ const NONEMPTY = ["speech", "embeddings", "openai", "sttPerMinute", "media"];
 // tier whose price only a broader row (or none) would answer. Without its row
 // a flat tier prices it at the tier's max_price bound and the metered tier
 // refuses it, so a missing one is a gap.
-export const REQUIRED_MODEL_ROWS = ["openai/gpt-6.1-terra", "moonshotai/kimi-k3.1-pro"];
+export const REQUIRED_MODEL_ROWS = ["openai/gpt-6.1-terra", "moonshotai/kimi-k3.1-pro", "google/gemini-4-argon", "google/gemini-3.8-flash", "anthropic/claude-fable-5.2"];
 
 function parse(text) {
   const raw = String(text || "").trim();

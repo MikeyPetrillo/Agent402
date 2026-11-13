@@ -41,7 +41,7 @@ import {
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
-  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, defaultModelFor, defaultModelCompatNote, smallBudgetEffort,
+  assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, defaultModelFor, aliasModelFor, defaultModelCompatNote, smallBudgetEffort,
   stripBilling, fitEffortToBudget, fitBudgetForAnswer, lowestEffortFor, reasoningAdjustedNote, recoveryRunAffordable, retryEmptyAtLowestEffort,
   setReasoningAdjustedHeader, reasoningOutsideMaxTokens, REASONING_ADJUSTED, LINK_PROBE,
 } from "./llm-gateway-kit.js";
@@ -271,6 +271,7 @@ export function validateMessagesRequest(input, tierSlug) {
       model = defaultModelFor(tier, paramCtx);
       defaultedModel = model;
     }
+    if (model) model = aliasModelFor(input.model, model, { ...paramCtx, effort: input.effort });
     if (!model) throw bad(`"model" is required (e.g. anthropic/claude-sonnet-5). This tier serves: ${tier.prefixes?.slice(0, 6).join(", ") || "see /v1/models"}`);
     if (!tierAllows(tierSlug, model, input.model)) {
       // "auto" when not gated at the auto price: name the auto route.
@@ -714,7 +715,7 @@ const EXAMPLE_MODEL_BY_TIER = {
   "v1-chat-nano": "google/gemini-3.1-flash-lite",
   "v1-chat": "anthropic/claude-haiku-4.5",
   "v1-chat-pro": "anthropic/claude-sonnet-5",
-  "v1-chat-premium": "anthropic/claude-opus-5",
+  "v1-chat-premium": "anthropic/claude-opus-5.5",
 };
 const TIER_LABEL = { "v1-chat-nano": "nano", "v1-chat-auto": "auto", "v1-chat": "base", "v1-chat-pro": "pro", "v1-chat-premium": "premium", "v1-chat-metered": "metered" };
 const priceString = (tierSlug) => (tierSlug === "v1-chat-nano" ? "$0.003" : tierSlug === "v1-chat-metered" ? `$${METER_MIN_SETTLE_USD}` : `$${TIERS[tierSlug].price.toFixed(2)}`);

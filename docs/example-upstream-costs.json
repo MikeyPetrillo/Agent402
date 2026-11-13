@@ -4,6 +4,9 @@
     ["openai/", { "prompt": 1, "completion": 2 }],
     ["openai/gpt-6.1-terra", { "prompt": 1, "completion": 2 }],
     ["moonshotai/kimi-k3.1-pro", { "prompt": 1, "completion": 2 }],
+    ["google/gemini-4-argon", { "prompt": 1, "completion": 2 }],
+    ["google/gemini-3.8-flash", { "prompt": 1, "completion": 2 }],
+    ["anthropic/claude-fable-5.2", { "prompt": 99, "completion": 999 }],
     ["anthropic/", { "prompt": 1, "completion": 2, "tiers": [{ "aboveTokens": 100000, "prompt": 2, "completion": 4 }] }],
     ["google/", { "prompt": 1, "completion": 2 }],
     ["anthropic/claude-opus-5", { "prompt": 4.5, "completion": 9 }],
@@ -11,10 +14,10 @@
     ["openai/gpt-5-pro", { "prompt": 99, "completion": 999 }],
     ["openai/gpt-4o", { "prompt": 99, "completion": 999 }]
   ],
-  "speech": { "your/speech-model": 1 },
+  "speech": { "your/speech-model": 1, "mistralai/voxtral-mini-tts-3-0": 1 },
   "fees": { "webSearchPerUse": 1, "groundedPerCall": 1, "rerankPerUnit": 1, "settlementPerCall": 1 },
   "embeddings": { "text-embedding-3-small": 1 },
-  "openai": { "gpt-4o-mini": { "prompt": 1, "cached": 1, "completion": 2 }, "gpt-image-2": { "prompt": 1, "cached": 1, "completion": 2 } },
+  "openai": { "gpt-4o-mini": { "prompt": 1, "cached": 1, "completion": 2 }, "gpt-image-2.6-flare": { "prompt": 1, "cached": 1, "completion": 2 }, "gpt-image-2.6-sunburst": { "prompt": 1, "cached": 1, "completion": 2 } },
   "sttPerMinute": { "gpt-transcribe": 1 },
   "media": { "your/image-model": { "worstCaseUsd": 1, "listedMaxUsd": 1 }, "black-forest-labs/flux-3-image-klein": { "worstCaseUsd": 1, "listedMaxUsd": 1 }, "google/veo-3.1-lite": { "worstCaseUsd": 1, "listedMaxUsd": 1 } },
   "meter": { "markup": 2 },
@@ -22,7 +25,7 @@
     "exa": { "search": 1, "instant": 1, "lite": 1, "answer": 1, "content": 1 },
     "x": { "postRead": 1, "userRead": 1 },
     "decisions": { "luna": 1, "decisionOne": 1,
-      "jev": 1, "maxShare": 1 },
+      "gemini": 1, "jev": 1, "maxShare": 1 },
     "cdp": { "sqlQuery": 1 },
     "direct": { "minSaving": 0.5 }
   }

@@ -37,6 +37,14 @@
 // honors them live. Our data policy goes on every Scribe request
 // (src/openrouter-audio-policy.js: data_collection deny, zdr); the default
 // path calls OpenAI directly, outside OpenRouter's routing.
+//
+// RE-READ 2026-11-12: OpenRouter's published spec still says keyterms is
+// "only supported by some providers; 400 when the selected model cannot use
+// keyterms" and names none, and no model or endpoint listing carries a
+// keyterms flag (only supports_diarization), so nothing shows a model we send
+// honoring it: the refusal stays. x-ai/grok-stt-2.0 was read as a diarize
+// fallback and not added: its one endpoint lists supports_diarization false,
+// and it is not a ZDR endpoint, which Scribe is.
 
 // ONE MORE ATTEMPT (2026-11-10): an upstream failure that passes on its own (a
 // 5xx, a rate limit with a short Retry-After, a connection that failed) used

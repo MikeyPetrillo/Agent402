@@ -131,7 +131,8 @@ try {
   const during = [];
   for (let i = 0; i < 5; i++) during.push(await callTool());
   ok(during.every((s) => s === 200), `with Postgres unreachable the tool still answers 200 (${during.join(",")})`);
-  ok((await get("/health")).status === 200, "/health stays 200 during the outage");
+  const healthDuring = await get("/health");
+  ok(healthDuring.status === 200, `/health stays 200 during the outage (${healthDuring.status})`);
   ok(await until(async () => (await stateWord()) === "degraded", 30_000), "the status word turns degraded once a query fails");
   ok(exited === null, "the process is still alive");
   // Hold the outage past the write queue's retry interval: the bumps made
@@ -140,6 +141,8 @@ try {
   await sleep(7_000);
   ok((await hashCount()) === landedBeforeCut, "while cut, no bump reaches Postgres (the queue holds them)");
   ok(/write failed, kept for retry/.test(log), "the stats flush failed during the outage and kept its batch");
+  const healthAfterFail = await get("/health");
+  ok(healthAfterFail.status === 200, `/health stays 200 after a stats write failed during the outage (${healthAfterFail.status})`);
 
   // ---- recovery ---------------------------------------------------------------
   healRelay();

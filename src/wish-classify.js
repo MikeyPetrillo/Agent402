@@ -31,7 +31,7 @@
 import { logSafe } from "./log-safe.js";
 import { looksLikeListingInjection } from "./x402-index.js";
 import { stripFormattingCarriers } from "./hidden-chars.js";
-import { askDecisionOne, decisionOneEnabled } from "./decision-one.js";
+import { askOpenRouterJudge, openRouterJudgeModels } from "./decision-one.js";
 
 const ENDPOINT = (process.env.TYPESAFE_API_URL || "https://api.typesafe.ai/v1/systemone").trim();
 // Pinned to the tested Jev version (see JEV_PINNED in src/tools/judge-kit.js).
@@ -40,9 +40,10 @@ const keyOf = () => (process.env.TYPESAFE_API_KEY || "").trim();
 
 /** Unset key = the whole feature is absent, exactly like every other metered
  *  upstream in this tree. Nothing 503s and no row changes shape. */
-export const wishClassifyEnabled = () => !!keyOf() || decisionOneEnabled();
-// Microsoft Decision-1 answers when Jev fails, and alone when no TypeSafe key
-// is set: the board fails open per row, so a second backend only adds answers.
+export const wishClassifyEnabled = () => !!keyOf() || openRouterJudgeModels(MODEL).length > 0;
+// When TypeSafe fails, the same Jev version is asked over OpenRouter, then
+// Microsoft Decision-1 (src/decision-one.js); with no TypeSafe key those two
+// serve alone. The board fails open per row, so another backend only adds answers.
 // Note the CONFIDENT band below was measured on Jev, not on Decision-1.
 
 // Bounds, because this spends money per row and runs against a board that grows.
@@ -94,8 +95,9 @@ async function judge(text, fetchImpl = fetch) {
     };
     return { advertises: p("advertises") };
   };
-  // Jev first; Decision-1 with the same body when Jev fails or its answer has
-  // no readable probability.
+  // Jev first; then Jev over OpenRouter and Decision-1 with the same body,
+  // under one more timeout, when Jev fails or its answer has no readable
+  // probability.
   let jevError = null;
   if (keyOf()) {
     try {
@@ -107,13 +109,14 @@ async function judge(text, fetchImpl = fetch) {
       });
       if (!res.ok) throw new Error(`typesafe HTTP ${res.status}`);
       const out = read(await res.json());
-      if (out.advertises != null || !decisionOneEnabled()) return out;
+      if (out.advertises != null || !openRouterJudgeModels(MODEL).length) return out;
     } catch (e) {
       jevError = e;
     }
   }
-  if (!decisionOneEnabled()) throw jevError || new Error("no judgment backend");
-  return read(await askDecisionOne(request, { fetchImpl, timeoutMs: TIMEOUT_MS }));
+  if (!openRouterJudgeModels(MODEL).length) throw jevError || new Error("no judgment backend");
+  const { j } = await askOpenRouterJudge(request, { pinned: MODEL, deadline: Date.now() + TIMEOUT_MS, fetchImpl, usable: (b) => read(b).advertises != null });
+  return read(j);
 }
 
 /** A verdict the operator board can render. Never a number the reader has to
