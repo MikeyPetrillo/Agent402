@@ -294,9 +294,11 @@ ok(rej && /rejected the paid retry/.test(rej.message) && rej.statusCode === 502,
     const whole = await payTempo(URL_, { method: "POST", body: {}, maxAtomic: cap, createCredential: mint, proof: proofOk, maxBytes: 4096 });
     const wholeBody = whole.result && typeof whole.result === "object" ? whole.result : { value: whole.result };
     if (mode === "long-text") {
-      // Not JSON: the object is our reading of the bytes, whole or cut, so a
-      // promised path our own key happens to name is never met by it.
-      ok(whole.result?.truncated === false && observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["text"], body: whole.result }) === null, `${mode}: a whole body that is not JSON is not judged as the seller's delivery`);
+      // Not JSON: the object is our reading of the bytes, so a promised path
+      // our own key happens to name is never met by it. Read whole, it is the
+      // seller's delivery and is observed as a missed promise.
+      const rec = whole.result?.truncated === false ? observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["text"], body: whole.result }) : null;
+      ok(rec?.calls === 1 && rec.kept === 0, `${mode}: a whole body that is not JSON is observed as a missed promise, never kept by our \`text\` key (${JSON.stringify(rec)})`);
     } else ok(observeDelivery({ origin: `https://tempo-whole-${i}.example`, method: "POST", route: "/r", guaranteedPaths: ["data"], body: wholeBody }) !== null, `${mode}: control, the same body read whole is observed`);
   }
   sellerMode = "ok";
