@@ -75,6 +75,22 @@ for (const [label, read, wins] of readers) {
 const both = storedTool({ priceUsd: 9, price_usd: 0.001, amountUsd: "1", amount_usd: "2", maxAmountRequired: "10", max_amount_required: "20" });
 ok(both.priceUsd === 9 && both.price_usd === 0.001 && both.amountUsd === "1" && both.amount_usd === "2" && both.maxAmountRequired === "10" && both.max_amount_required === "20",
   `a stored tool with both spellings keeps every key as the seller wrote it (${JSON.stringify(both)})`);
+// Cleaning is idempotent: a warm start cleans stored rows again, and a second
+// pass changes nothing (same object back, same content).
+const reclean = [
+  { price_usd: "0.01" }, { amount_usd: 0.02, max_amount_required: "10000" },
+  { priceUsd: 9, price_usd: 0.001, amountUsd: "1", amount_usd: "2", maxAmountRequired: "10", max_amount_required: "20" },
+  { priceUsd: { toString: 1 }, price_usd: "0.002" }, { priceUsd: "  ", price_usd: 0.002 }, { amountUsd: NaN, amount_usd: "3" },
+  { maxAmountRequired: [], max_amount_required: { valueOf: 2 } }, { priceUsd: {}, price_usd: {} }, { price_usd: null, priceUsd: null },
+  { price: { amount_usd: "1" }, price_usd: Infinity }, { priceUsd: "0.01" }, {},
+];
+const notStable = [];
+for (const over of reclean) {
+  const once = clean({ tools: [{ route: "/a", name: "a", ...over }] });
+  const twice = clean(once);
+  if (twice !== once || JSON.stringify(twice) !== JSON.stringify(once)) notStable.push(JSON.stringify(over, (k, v) => (typeof v === "number" && !Number.isFinite(v) ? String(v) : v)));
+}
+ok(notStable.length === 0, `cleaning a cleaned tool changes nothing, for snake-only, both-keys and malformed camelCase rows (${notStable.length ? notStable.join("; ") : `${reclean.length} rows`})`);
 for (const [camelEntry, snakeEntry] of pairs) {
   const a = priceOf(camelEntry), b = priceOf(snakeEntry);
   ok(a != null && a === b, `a crawled manifest entry is priced the same in either spelling (${JSON.stringify(Object.keys(snakeEntry))}: ${a} vs ${b})`);

@@ -624,10 +624,13 @@ const usablePrice = (v) => (typeof v === "string" ? (v.trim() ? v : undefined) :
  *  usable snake_case key in place (a stored tool keeps what the seller wrote)
  *  and removes only an unusable one; without it every snake_case key is
  *  removed, so a reader takes one figure per key. */
-export function withCamelPriceKeys(o, { keepSnake = false } = {}) {
+export function withCamelPriceKeys(o, keepSnake = false) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return o;
+  // The common object carries no snake_case key: answered without a loop.
+  if (!("price_usd" in o) && !("amount_usd" in o) && !("max_amount_required" in o)) return o;
   let out = null;
-  for (const [snake, camel] of SELLER_PRICE_SNAKE_KEYS) {
+  for (let i = 0; i < SELLER_PRICE_SNAKE_KEYS.length; i++) {
+    const snake = SELLER_PRICE_SNAKE_KEYS[i][0], camel = SELLER_PRICE_SNAKE_KEYS[i][1];
     if (!(snake in o)) continue;
     const v = usablePrice(o[snake]);
     if (v !== undefined && usablePrice(o[camel]) === undefined) (out ||= { ...o })[camel] = v;
@@ -646,17 +649,18 @@ export function withCamelPriceKeys(o, { keepSnake = false } = {}) {
 // snake_case spellings so fill a gap and never move a price: beside an
 // `amount` in dollars, `max_amount_required` would otherwise turn the entry
 // into an accept quoting base units.
+const WIDE_OBJECT_KEYS = ["price", "payment"], WIDE_LIST_KEYS = ["accepts", "offers"];
 /** The entry with every snake_case price key folded, nested payment shapes
  *  included; the same object when there is none. */
 function widePriceView(o, depth = 0) {
   if (!o || typeof o !== "object" || Array.isArray(o)) return o;
   let out = withCamelPriceKeys(o);
   if (depth >= 2) return out;
-  for (const k of ["price", "payment"]) {
+  for (const k of WIDE_OBJECT_KEYS) {
     const w = widePriceView(o[k], depth + 1);
     if (w !== o[k]) { if (out === o) out = { ...o }; out[k] = w; }
   }
-  for (const k of ["accepts", "offers"]) {
+  for (const k of WIDE_LIST_KEYS) {
     if (!Array.isArray(o[k])) continue;
     let list = null;
     for (let i = 0; i < o[k].length && i < 64; i++) {
@@ -683,7 +687,7 @@ function cleanTextKeys(o, keys) {
 function cleanSellerTool(t) {
   if (!t || typeof t !== "object" || Array.isArray(t)) return null;
   let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
-  const camel = withCamelPriceKeys(out || t, { keepSnake: true });
+  const camel = withCamelPriceKeys(out || t, true);
   if (camel !== (out || t)) out = camel;
   for (const k of SELLER_PRICE_KEYS) {
     const v = (out || t)[k];

@@ -79,6 +79,24 @@ const ROWS = [
   ["openapi", { "x-x402": { accepts: [{ scheme: "exact", ...flat, amount: "5000000", max_amount_required: "1000" }] } }],
   ["openapi", { "x-payment-info": { amount: "0.05", max_amount_required: "1000" } }],
   ["openapi", { "x-price-usd": "0.02", "x-payment-info": { amount_usd: "0.001" } }],
+  // an empty or zero camelCase value beside a snake_case key: the reading of "" / 0 / "0" stands
+  ...["", 0, "0"].flatMap((z) => [
+    ["manifest", { resource: "https://snake.example/api/a", accepts: [{ scheme: "exact", ...flat, maxAmountRequired: z, max_amount_required: "1000" }] }],
+    ["manifest", { resource: "https://snake.example/api/a", accepts: [{ scheme: "exact", ...flat, amount: z, max_amount_required: "1000" }] }],
+    ["row", { ...flat, maxAmountRequired: z, max_amount_required: "1000" }],
+    ["row", { ...flat, amount: z, max_amount_required: "1000" }],
+    ["row", { accepts: [{ scheme: "exact", ...flat, maxAmountRequired: z, max_amount_required: "1000" }] }],
+    ["row", { payment: { ...flat, maxAmountRequired: z, max_amount_required: "1000" } }],
+    ["row", { priceUsd: z, price_usd: "0.001" }], ["row", { price_usd: z, priceUsd: "0.001" }], ["row", { price: z, price_usd: "0.001" }],
+    ["row", { price: z, amount_usd: "0.001" }], ["row", { amount: z, max_amount_required: "1000" }], ["row", { amount: z, amount_usd: "0.001" }],
+    ["row", { price: { amountUsd: z, amount_usd: "0.001" } }], ["row", { price: { priceUsd: z, price_usd: "0.001" } }],
+    ["row", { price: { amountUsd: z, price_usd: "0.001" } }],
+    ["manifest", { payment: { ...flat, amount: z, max_amount_required: "1000" }, resources: ["https://snake.example/api/a"] }],
+    ["openapi", { "x-payment-info": { amountUsd: z, amount_usd: "0.001" } }], ["openapi", { "x-payment-info": { priceUsd: z, price_usd: "0.001" } }],
+    ["openapi", { "x-payment-info": { price: z, amount_usd: "0.001" } }],
+    ["openapi", { "x-x402": { accepts: [{ scheme: "exact", ...flat, maxAmountRequired: z, max_amount_required: "1000" }] } }],
+    ["openapi", { "x-x402": { ...flat, amount: z, max_amount_required: "1000" } }],
+  ]),
 ];
 function priceWith(ix, row) {
   const p = rawPriceWith(ix, row);
@@ -94,10 +112,10 @@ function rawPriceWith(ix, [kind, v]) {
   } catch (e) { return `THREW ${e.message}`; }
 }
 
-const BEFORE = ["$5", "$0.02", "$0.01", null, "$0.05", "$5", "$5", "$0.01", "$0.01", "$0.01", "$5", "$5", "$0.001", "$0.001", "$0.01", "$0.01", null, null, null, null, null, "$0.003", null, null, null, null, "$0.001", "$0.001", "$9", "$0.002", null, "$0.01", "$5", "$5", "$5", "$5", "$0.001", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$0.05", "$5", "$5", "$5", "$0.05", "$5", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$70000", null, null, "$5", "$0.05", "$0.001", null, "$5", "$5", "$0.002", "$0.002", "$0.001", null, "$5", "$0.01", "$0.01", "$0.01", null, "$0.001", "$9", "$5", "$5", "$5", "$5", null, "free", "$0.001", null, null, "$5", "$0.001", null, "$5", "$0.05", "$0.02"];
-const NOW = ["$5", "$0.02", "$0.01", null, "$0.05", "$5", "$5", "$0.01", "$0.01", "$0.01", "$5", "$5", "$0.001", "$0.001", "$0.01", "$0.01", null, "$0.001", "$0.001", null, "$0.003", "$0.003", null, "$0.001", "$0.001", "$0.001", "$0.001", "$0.001", "$9", "$0.002", "$0.002", "$0.01", "$5", "$5", "$5", "$5", "$0.001", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$0.05", "$5", "$5", "$5", "$0.05", "$5", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$70000", null, "$5", "$5", "$0.05", "$0.001", "$0.001", "$5", "$5", "$0.002", "$0.002", "$0.001", "$0.001", "$5", "$0.01", "$0.01", "$0.01", "$0.01", "$0.001", "$9", "$5", "$5", "$5", "$5", null, "free", "$0.001", null, null, "$5", "$0.001", "$0.001", "$5", "$0.05", "$0.02"];
+const BEFORE = ["$5", "$0.02", "$0.01", null, "$0.05", "$5", "$5", "$0.01", "$0.01", "$0.01", "$5", "$5", "$0.001", "$0.001", "$0.01", "$0.01", null, null, null, null, null, "$0.003", null, null, null, null, "$0.001", "$0.001", "$9", "$0.002", null, "$0.01", "$5", "$5", "$5", "$5", "$0.001", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$0.05", "$5", "$5", "$5", "$0.05", "$5", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$70000", null, null, "$5", "$0.05", "$0.001", null, "$5", "$5", "$0.002", "$0.002", "$0.001", null, "$5", "$0.01", "$0.01", "$0.01", null, "$0.001", "$9", "$5", "$5", "$5", "$5", null, "free", "$0.001", null, null, "$5", "$0.001", null, "$5", "$0.05", "$0.02", "$0", "$0", "$0", "$0", "$0", "$0", "$0.001", null, "$0.001", null, null, null, null, null, null, "$0", null, "$0.001", null, "free", null, "$0", "$0", "$0", "$0", "$0", "$0", "$0.001", "$0", "$0.001", "$0", "$0", "$0", "$0", "$0", "$0", "$0", "free", "$0.001", "free", "free", "free", "$0", "$0", "$0", "$0", "$0", "$0", "$0.001", "$0", "$0.001", "$0", "$0", "$0", "$0", "$0", "$0", "$0", "free", "$0.001", "free", "free", "free"];
+const NOW = ["$5", "$0.02", "$0.01", null, "$0.05", "$5", "$5", "$0.01", "$0.01", "$0.01", "$5", "$5", "$0.001", "$0.001", "$0.01", "$0.01", null, "$0.001", "$0.001", null, "$0.003", "$0.003", null, "$0.001", "$0.001", "$0.001", "$0.001", "$0.001", "$9", "$0.002", "$0.002", "$0.01", "$5", "$5", "$5", "$5", "$0.001", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$0.05", "$5", "$5", "$5", "$0.05", "$5", "$5", "$5", "$5", "$5", "$5", "$5", "$0.05", "$70000", null, "$5", "$5", "$0.05", "$0.001", "$0.001", "$5", "$5", "$0.002", "$0.002", "$0.001", "$0.001", "$5", "$0.01", "$0.01", "$0.01", "$0.01", "$0.001", "$9", "$5", "$5", "$5", "$5", null, "free", "$0.001", null, null, "$5", "$0.001", "$0.001", "$5", "$0.05", "$0.02", "$0", "$0", "$0", "$0", "$0", "$0", "$0.001", "$0.001", "$0.001", null, null, null, "$0.001", "$0.001", null, "$0", "$0.001", "$0.001", "$0.001", "free", null, "$0", "$0", "$0", "$0", "$0", "$0", "$0.001", "$0", "$0.001", "$0", "$0", "$0", "$0", "$0", "$0", "$0", "free", "$0.001", "free", "free", "free", "$0", "$0", "$0", "$0", "$0", "$0", "$0.001", "$0", "$0.001", "$0", "$0", "$0", "$0", "$0", "$0", "$0", "free", "$0.001", "free", "free", "free"];
 
-ok(ROWS.length === BEFORE.length && ROWS.length === NOW.length && ROWS.length >= 90, `the table lines up (${ROWS.length} rows)`);
+ok(ROWS.length === BEFORE.length && ROWS.length === NOW.length && ROWS.length >= 150, `the table lines up (${ROWS.length} rows)`);
 let kept = 0, added = 0;
 ROWS.forEach((row, i) => {
   const got = priceWith(ix, row), label = `#${i} ${row[0]} ${JSON.stringify(row[1]).slice(0, 140)}`;
@@ -105,7 +123,7 @@ ROWS.forEach((row, i) => {
   if (BEFORE[i] != null) { kept++; ok(got === BEFORE[i], `${label}: was priced ${BEFORE[i]}, now ${got}`); }
   else if (got != null) added++;
 });
-ok(kept === BEFORE.filter((p) => p != null).length && kept >= 70 && added >= 10, `every entry that had a price is checked, and some gain one (${kept} kept, ${added} gained)`);
+ok(kept === BEFORE.filter((p) => p != null).length && kept >= 120 && added >= 10, `every entry that had a price is checked, and some gain one (${kept} kept, ${added} gained)`);
 
 console.log(`test-seller-price-keys-differential: ${pass} passed, ${fail} failed (${ROWS.length} rows, ${kept} kept, ${added} gained)`);
 process.exit(fail ? 1 : 0);
