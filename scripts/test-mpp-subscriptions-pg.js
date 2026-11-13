@@ -46,7 +46,11 @@ const PERIOD = periodMs();
 let clock = Date.parse("2026-10-09T12:00:00.000Z");
 const advance = (ms) => { clock += ms; };
 
+// Each engine's mppx ids are its own (as mppx's are in production): engines
+// here share one row, and an id two engines both minted would name one record.
+let engineSeq = 0;
 function makeEngine(storePath) {
+  const no = ++engineSeq;
   const calls = { activate: 0, charge: 0, find: 0, sales: [] };
   let chargeBehaviour = () => ({ reference: `0xtx${calls.charge}` });
   let findBehaviour = { found: false };
@@ -66,7 +70,7 @@ function makeEngine(storePath) {
         periodCount: String(PERIOD_COUNT), periodUnit: PERIOD_UNIT,
         recipient: RECIPIENT, reference: "0xactivation",
         subscriptionExpires: ctx.binding.challenge.request.subscriptionExpires,
-        subscriptionId: `sub-${calls.activate}`, timestamp: new Date(clock).toISOString(),
+        subscriptionId: `sub-${no}-${calls.activate}`, timestamp: new Date(clock).toISOString(),
       });
       return { receipt: { method: "tempo", status: "success", reference: "0xactivation", timestamp: new Date(clock).toISOString() } };
     },
@@ -80,7 +84,7 @@ function makeEngine(storePath) {
       return r;
     },
   });
-  return { engine, calls, setCharge: (fn) => { chargeBehaviour = fn; }, setFind: (v) => { findBehaviour = v; } };
+  return { no, engine, calls, setCharge: (fn) => { chargeBehaviour = fn; }, setFind: (v) => { findBehaviour = v; } };
 }
 async function signCredential(challenge) {
   const acct = privateKeyToAccount(generatePrivateKey());
@@ -412,6 +416,41 @@ try {
     ok(sweptK.closed >= 1 && rowK?.tombstone === true && rowK?.status === "canceled" && rowK?.email === undefined && rowK?.target === undefined && rowK?.payer === recK.payer, `the other container's sweep closes and reduces the record in the row (closed ${sweptK.closed}, reduced ${sweptK.reduced})`);
     ok(!inMap(K2) && !(await inRow()) && !JSON.stringify(await rowBody()).includes("kl@example.com"), "and its own map no longer holds the key; the email is gone from the row");
     ok((await sdb.leases.holder("mpp-subscription-ended-sweep")) === null, "the sweep released its lease");
+  }
+  // ---- rebuild across containers: created once, booked once ---------------------
+  // A first payment settled and our record was not written. The retry reaches
+  // both containers at once, and a third read falls back to a mirror that
+  // never saw the record: the row holds one record and one sale is booked.
+  {
+    const P = makeEngine(join(D1, "rb", "mpp-subscriptions.json"));
+    await P.engine.ready();
+    const offerR = await P.engine.mintOffer({ product: "domain-monitor", target: "rebuild.example.org", email: "rb@example.com" });
+    const headerR = await signCredential(Challenge.deserialize(offerR.header));
+    const cas = P.engine._store.compareAndSet.bind(P.engine._store), put = P.engine._store.put.bind(P.engine._store);
+    let failOnce = true;
+    const boom = (k) => { if (failOnce && String(k).startsWith("a402:sub:mpp_")) { failOnce = false; throw new Error("simulated store failure"); } };
+    P.engine._store.compareAndSet = async (k, d) => { boom(k); return cas(k, d); };
+    P.engine._store.put = async (k, v) => { boom(k); return put(k, v); };
+    try { await P.engine.activateFromCredential(headerR); } catch { /* setup */ }
+    P.engine._store.compareAndSet = cas; P.engine._store.put = put;
+    await P.engine.flush();
+    const subIdR = `mpp_sub-${P.no}-1`;
+    ok(P.calls.activate === 1 && P.calls.sales.length === 0 && !(await rowBody())?.[`a402:sub:${subIdR}`], "setup: the first payment settled and no house record reached the row");
+    const Q = makeEngine(join(D2, "rb", "mpp-subscriptions.json"));
+    const R = makeEngine(join(D2, "rb2", "mpp-subscriptions.json"));
+    await Q.engine.ready(); await R.engine.ready();
+    const [p1, q1] = await Promise.all([P.engine.activateFromCredential(headerR), Q.engine.activateFromCredential(headerR)]);
+    await P.engine.flush(); await Q.engine.flush();
+    const booked = () => P.calls.sales.length + Q.calls.sales.length + R.calls.sales.length;
+    ok(p1.subId === subIdR && q1.subId === subIdR && booked() === 1 && (await rowBody())?.[`a402:sub:${subIdR}`]?.status === "active", `two containers rebuilding one record at once book the first period once (${booked()})`);
+    // A cancel lands in the row; a container whose fresh read fails falls
+    // back to a mirror without the record and rebuilds: it books nothing and
+    // never overwrites the stored cancel.
+    await Q.engine._store.compareAndSet(`a402:sub:${subIdR}`, (cur) => ({ ...cur, status: "canceled", canceledAt: new Date(clock).toISOString(), canceledReason: "requested" }));
+    R.engine._store.getFresh = async () => { throw new Error("simulated read failure"); };
+    const r1 = await R.engine.activateFromCredential(headerR);
+    await R.engine.flush();
+    ok(r1.replay === true && booked() === 1 && (await rowBody())?.[`a402:sub:${subIdR}`]?.status === "canceled", `a rebuild from a stale mirror books nothing and keeps the stored cancel (${(await rowBody())?.[`a402:sub:${subIdR}`]?.status}, ${booked()})`);
   }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
