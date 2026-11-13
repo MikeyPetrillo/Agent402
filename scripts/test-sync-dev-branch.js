@@ -174,6 +174,8 @@ if (a[0] === "run" && a[1] === "view") out("test-unit=success");
 if (a[0] === "api" && a[1].endsWith("/rules/branches/main")) out("CodeQL");
 if (a[0] === "api" && /\\/pulls\\/\\d+\\/reviews$/.test(a[1])) {
   const n = Number(file("polls") === "[]" ? 0 : file("polls")) + 1; fs.writeFileSync(path.join(D, "polls"), String(n));
+  // A failed read: gh may have printed a first page before it failed.
+  if (fs.existsSync(path.join(D, "reviews." + n + ".fail")) || fs.existsSync(path.join(D, "reviews.fail"))) { process.stdout.write("[]\\n"); process.exit(1); }
   const seq = path.join(D, "reviews." + n + ".json"); out(fs.existsSync(seq) ? fs.readFileSync(seq, "utf8") : file("reviews.json"));
 }
 if (a[0] === "api" && /\\/pulls\\/\\d+\\/comments$/.test(a[1])) out(file("review-comments.json"));
@@ -243,6 +245,14 @@ echo x >> "$STUB_DIR/sleeps"
   ok(r.code === 1 && !r.merged && r.sleeps === 3 && !/could not review/.test(r.out), `strix: a billing-required comment from before the head commit does not count; the wait runs its course (${r.sleeps} waits)`);
   r = mog({ "issue-comments.json": [issue("<!-- strix:pr-review-billing-required -->\nStrix could not run.", "2026-11-12T09:00:00Z")], "issue-comments.2.json": [issue("<!-- strix:pr-review-billing-required -->\nStrix could not run.", "2026-11-12T09:00:00Z"), issue("<!-- strix:pr-review-billing-required -->\nStill no.", "2026-11-12T10:30:00Z")] });
   ok(r.code === 1 && !r.merged && r.sleeps === 1 && /could not review/.test(r.out), `strix: a billing-required comment posted after the head commit stops the wait (${r.sleeps} waits)`);
+  r = mog({ "reviews.1.fail": "", "issue-comments.json": [CLEAN] });
+  ok(r.code === 0 && r.merged && r.sleeps === 1 && /Strix summary of a{40}/.test(r.out), `strix: one failed reviews read keeps waiting, and the next good read merges (exit ${r.code}, ${r.sleeps} waits)`);
+  r = mog({ "reviews.fail": "", "issue-comments.json": [CLEAN] });
+  ok(r.code === 1 && !r.merged && r.sleeps === 3 && /read of Strix's reviews on PR 77 failed or could not be parsed/.test(r.out) && !/may not re-review/.test(r.out), `strix: reviews that never read refuse at the deadline and name the read failure (${r.sleeps} waits)`);
+  r = mog({ "reviews.1.json": [review(9, "COMMENTED", SHA, "Looks good.")], "reviews.2.json": [review(9, "COMMENTED", SHA, "Looks good."), review(10, "CHANGES_REQUESTED", SHA)], "issue-comments.json": [CLEAN] });
+  ok(r.code === 1 && !r.merged && /requested changes on a{40} \(review 10\)/.test(r.out), "strix: changes requested between the reviews read and the summary read refuses");
+  r = mog({ "reviews.2.json": [review(10, "COMMENTED", SHA, "- 🟠 **HIGH** late finding")], "issue-comments.json": [CLEAN] });
+  ok(r.code === 1 && !r.merged && /Critical or High finding on a{40} \(review 10\)/.test(r.out), "strix: a High review that lands between the reads refuses");
   r = mog({}, ["--no-strix"]);
   ok(r.code === 0 && r.merged && /--no-strix: the OWNER chose to merge PR #77 WITHOUT/.test(r.out) && !/waiting for Strix/.test(r.out), "strix: --no-strix merges, and says so loudly");
   r = mog({}, ["dev", "--no-strix"]);
