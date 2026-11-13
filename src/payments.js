@@ -12,7 +12,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
 import { attributionTailOf, COINGECKO_ATTRIBUTION, JUPITER_ATTRIBUTION } from "./data-attribution.js";
-import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema } from "./tool-media-type.js";
+import { isBinaryListing, listingMimeTypeOf, binaryOutputExample, binaryOutputSchema, binaryListingsEnabled, withBinaryOutputType, JSON_MIME } from "./tool-media-type.js";
 import { uptoNetworksWanted, uptoListedByName, gasSponsoringWanted, gasSponsoringKeys, gasSponsoringDeclarations, isMeteredGatewayRoute, uptoNetworkKept } from "./upto-gas-sponsoring.js";
 import { installSettlePreference, registerSettlePreference } from "./settle-preference.js";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
@@ -2639,6 +2639,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   // (BAZAAR_DESCRIPTIONS, by slug); everyone else gets the catalog description
   // truncated at a SENTENCE boundary under 500, never mid-word with "...".
   const capDesc = (s) => bazaarCapDescription(s);
+  // X402_BINARY_LISTINGS=off returns every listing to application/json.
+  const binaryListingsOn = binaryListingsEnabled();
+  const binaryListed = (item) => binaryListingsOn && isBinaryListing(item);
   const slimDiscovery = (d, path, item) => {
     if (!d) return d;
     const slim = { ...d };
@@ -2671,8 +2674,10 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       // mimeType, src/tool-media-type.js) carries a string naming those bytes
       // and a string schema with their media type, never a JSON object a
       // buyer could take for the answer's shape.
-      if (isBinaryListing(item)) {
-        slim.output = { type: slim.output.type || "json", example: binaryOutputExample(item), schema: binaryOutputSchema(item) };
+      if (binaryListed(item)) {
+        // output.type is set where the block is declared (declareFor below):
+        // the extension's declare helper writes "json" whatever it is handed.
+        slim.output = { example: binaryOutputExample(item), schema: binaryOutputSchema(item) };
         return boundDiscoveryBlock(slim, BAZAAR_DISCOVERY_MAX_BYTES);
       }
       const example = slim.output.example;
@@ -2711,15 +2716,18 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
       const uptoNets = acceptsFor(item).filter((a) => a.scheme === "upto").length;
       const declares = !!uptoGasDeclarations && isMeteredGatewayRoute(item) && uptoNets > 0;
       const uptoBytes = uptoChallengeBytes(uptoNets, declares ? uptoGasDeclarations : null);
-      let fitted = fitChallenge(slimmed, listingText, declareDiscoveryExtension, CHALLENGE_VARIABLE_MAX_BYTES - uptoBytes, fitOpts);
+      // A binary listing's declared block says output.type "binary"; the
+      // same declare measures the fit and builds the extension.
+      const declareFor = binaryListed(item) ? (b) => withBinaryOutputType(declareDiscoveryExtension(b)) : declareDiscoveryExtension;
+      let fitted = fitChallenge(slimmed, listingText, declareFor, CHALLENGE_VARIABLE_MAX_BYTES - uptoBytes, fitOpts);
       let declareGas = declares;
       if (uptoBytes > 0 && fitted.bytes + uptoBytes > CHALLENGE_VARIABLE_MAX_BYTES) {
         uptoWithheld.add(item);
         uptoWithheldRoutes.push(route);
         declareGas = false;
-        fitted = fitChallenge(slimmed, listingText, declareDiscoveryExtension, undefined, fitOpts);
+        fitted = fitChallenge(slimmed, listingText, declareFor, undefined, fitOpts);
       }
-      if (fitted.slim) Object.assign(ext, declareDiscoveryExtension(fitted.slim));
+      if (fitted.slim) Object.assign(ext, declareFor(fitted.slim));
       const listingDescription = fitted.description;
       if (builderCode) Object.assign(ext, { [BUILDER_CODE]: declareBuilderCodeExtension(builderCode) });
       // x402 payment-identifier (optional): a buyer MAY attach a payment id to
@@ -2768,7 +2776,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
           tags: bazaarTagsFor(item),
           // The content type the published example answers with: JSON, or
           // the raw bytes a binary tool sends (its def's mimeType).
-          mimeType: listingMimeTypeOf(item),
+          mimeType: binaryListed(item) ? listingMimeTypeOf(item) : JSON_MIME,
           resource: `${baseUrl}${route.split(" ")[1]}`,
           // Canonical brand icon on every Bazaar/discovery record. Without it,
           // downstream directories (OpenSea's x402 tools surface, etc.) scrape

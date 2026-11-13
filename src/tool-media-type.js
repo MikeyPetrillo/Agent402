@@ -45,6 +45,24 @@ export function binaryOutputExample(tool) {
   return `(raw ${mime} bytes, not JSON${others.length ? `; other formats answer ${others.join(", ")}` : ""})`;
 }
 
+/** Rollout switch for the x402 listing only: X402_BINARY_LISTINGS=off lists
+ *  every route as application/json with output type "json" again (the shape
+ *  every listing carried before binary routes named their bytes). The
+ *  /openapi.json content types and /api/pricing rows are unaffected. */
+export function binaryListingsEnabled(env = process.env) {
+  return String(env.X402_BINARY_LISTINGS || "").toLowerCase() !== "off";
+}
+
+/** The Bazaar declaration's output.type for a binary listing. The extension's
+ *  own schema types it as any string (no enum) and its declare helper writes
+ *  "json" whatever it is handed, so the value is set on the declared block. */
+export const BINARY_OUTPUT_TYPE = "binary";
+export function withBinaryOutputType(declared) {
+  const output = declared?.bazaar?.info?.output;
+  if (output) output.type = BINARY_OUTPUT_TYPE;
+  return declared;
+}
+
 /** The typed schema for that sample: a string carrying the media type. */
 export function binaryOutputSchema(tool) {
   return { type: "string", contentMediaType: listingMimeTypeOf(tool) };

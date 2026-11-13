@@ -79,10 +79,9 @@ const facilitator = createServer((req, res) => {
 await new Promise((resolve) => facilitator.listen(facPort, "127.0.0.1", resolve));
 
 let serverLog = "";
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: {
+const serverEnv = (listenPort, extra = {}) => ({
     ...process.env,
-    PORT: String(port), FREE_MODE: "", NODE_ENV: "test",
+    PORT: String(listenPort), FREE_MODE: "", NODE_ENV: "test",
     NETWORK: "base", PAYMENT_NETWORKS: "base",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     FACILITATOR_URL: `http://127.0.0.1:${facPort}`,
@@ -95,9 +94,9 @@ const child = spawn(process.execPath, ["src/server.js"], {
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
     MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     STATS_ALLOW_EPHEMERAL: "true",
-  },
-  stdio: ["ignore", "pipe", "pipe"],
+    ...extra,
 });
+const child = spawn(process.execPath, ["src/server.js"], { env: serverEnv(port), stdio: ["ignore", "pipe", "pipe"] });
 child.stdout.on("data", (d) => { serverLog += d; });
 child.stderr.on("data", (d) => { serverLog += d; });
 
@@ -360,7 +359,8 @@ try {
       // take as the answer's shape.
       if (typeof example !== "string" || !example.includes(listing.mimeType)) fail(route, `binary listing's sample output does not name its ${listing.mimeType} bytes: ${JSON.stringify(example)}`);
       if (outputSchema?.type !== "string" || outputSchema?.contentMediaType !== listing.mimeType) fail(route, `binary listing's output schema is not a ${listing.mimeType} string: ${JSON.stringify(outputSchema)}`);
-    }
+      if (extension.info?.output?.type !== "binary") fail(route, `binary listing's output.type is ${JSON.stringify(extension.info?.output?.type)}, not "binary"`);
+    } else if (extension.info?.output && extension.info.output.type !== "json") fail(route, `JSON listing's output.type is ${JSON.stringify(extension.info.output.type)}`);
     if (example === undefined || !outputSchema) continue;
     if (JSON.stringify(outputSchema).length > 500) fail(route, "output schema exceeds the 500-byte budget");
     if (TRIM_ROUTES.has(endpoint.path)) {
@@ -426,6 +426,30 @@ try {
   console.log(`402 examples shortened by the byte budget (replayed from /openapi.json): ${shortenedExamples}`);
   console.log(`route-aware required schemas: ${requiredRoutes}; variable schemas without required: ${variableRoutes}; raw/array schemas: ${rawRoutes}`);
   console.log(`402 amount vs price list: ${fixedPriced} fixed routes at list price, ${quotedPriced} quoted routes inside their published range`);
+  // The rollout switch: X402_BINARY_LISTINGS=off lists a binary route as
+  // application/json with output type "json" again, still a valid declaration.
+  {
+    try { child.kill("SIGKILL"); } catch { /* stopped */ }
+    const [offPort] = await getFreePorts(1);
+    const off = spawn(process.execPath, ["src/server.js"], { env: serverEnv(offPort, { X402_BINARY_LISTINGS: "off" }), stdio: "ignore" });
+    try {
+      let offUp = false;
+      for (let i = 0; i < 240 && !offUp; i++) {
+        try { offUp = (await fetch(`http://127.0.0.1:${offPort}/health`)).ok; } catch { /* booting */ }
+        if (!offUp) await wait(250);
+      }
+      if (!offUp) fail("X402_BINARY_LISTINGS=off", "server did not boot");
+      else for (const offPath of ["/api/qr", "/api/hash"]) {
+        const res = await fetch(`http://127.0.0.1:${offPort}${offPath}`);
+        await res.text();
+        const pr = JSON.parse(Buffer.from(res.headers.get("payment-required") || "", "base64").toString("utf8") || "{}");
+        const ext = pr.extensions?.bazaar;
+        if (res.status !== 402 || pr.resource?.mimeType !== "application/json") fail(`GET ${offPath}`, `switch off: ${res.status}, listed as ${pr.resource?.mimeType}`);
+        if (ext?.info?.output?.type !== "json" || ext?.info?.output?.example === undefined) fail(`GET ${offPath}`, `switch off: output is ${JSON.stringify(ext?.info?.output)}`);
+        if (!ext || !validateDiscoveryExtension(ext).valid || !validateDiscoveryExtensionSpec(ext).valid) fail(`GET ${offPath}`, "switch off: the declaration does not validate");
+      }
+    } finally { try { off.kill("SIGKILL"); } catch { /* stopped */ } }
+  }
   console.log(`largest challenge: ${largest.route} at ${largest.bytes} bytes`);
   console.log(`largest 402 body: ${largestBody.route} at ${largestBody.bytes} bytes; largest own fields: ${largestOwn.route} at ${largestOwn.bytes} bytes`);
   if (failures.length) {
