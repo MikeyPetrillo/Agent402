@@ -41,6 +41,11 @@ ok(canonicalModel("claude-sonnet-5") === "anthropic/claude-sonnet-5" && canonica
 ok(canonicalModel("anthropic/claude-opus") === "anthropic/claude-opus-5.5" && canonicalModel("claude-opus") === "anthropic/claude-opus-5.5" && canonicalModel("Anthropic/Claude-Opus") === "anthropic/claude-opus-5.5", "bare family prefix claude-opus resolves to the concrete claude-opus-5.5");
 ok(canonicalModel("x-ai/grok") === "x-ai/grok-4.7" && canonicalModel("grok") === "x-ai/grok-4.7" && canonicalModel("x-ai/grok-4.6") === "x-ai/grok-4.6" && tierAllows("v1-chat-pro", "x-ai/grok-4.6"), "bare x-ai/grok resolves to grok-4.7; grok-4.6 by name is still served on pro");
 ok(tierAllows("v1-chat-premium", "anthropic/claude-opus-5") && canonicalModel("anthropic/claude-opus-5") === "anthropic/claude-opus-5", "claude-opus-5 by name is still served on premium as itself");
+// 2026-11-12: ids that left a default, fallback or auto rung stay admitted
+// where they were, so a caller naming one keeps being served.
+for (const [slug, id] of [["v1-chat-nano", "deepseek/deepseek-chat"], ["v1-chat", "deepseek/deepseek-chat"], ["v1-chat-auto", "deepseek/deepseek-chat"], ["v1-chat-grounded", "deepseek/deepseek-chat"], ["v1-chat-auto", "qwen/qwen-2.5-coder-32b-instruct"], ["v1-chat-grounded", "qwen/qwen-2.5-coder-32b-instruct"], ["v1-chat", "anthropic/claude-haiku-4.5"], ["v1-chat-metered", "anthropic/claude-haiku-4.5"], ["v1-chat-pro", "x-ai/grok-4.6"], ["v1-chat-premium", "anthropic/claude-opus-5"], ["v1-chat-premium", "anthropic/claude-fable-5.1"]]) {
+  ok(tierAllows(slug, id), `${id} stays admitted on ${slug}`);
+}
 ok(canonicalModel("anthropic/claude-opus-5-fast") === "anthropic/claude-opus-5-fast", "a concrete id under the family is left alone");
 ok(tierAllows("v1-chat-premium", "anthropic/claude-opus") && tierFor("anthropic/claude-opus") === "v1-chat-premium", "the resolved family id is still premium-allowlisted");
 {
