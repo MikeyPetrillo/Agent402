@@ -452,6 +452,27 @@ try {
     await R.engine.flush();
     ok(r1.replay === true && booked() === 1 && (await rowBody())?.[`a402:sub:${subIdR}`]?.status === "canceled", `a rebuild from a stale mirror books nothing and keeps the stored cancel (${(await rowBody())?.[`a402:sub:${subIdR}`]?.status}, ${booked()})`);
   }
+  // ---- an activation that loses its create-if-absent write books nothing --------
+  // A retry of the credential rebuilt the record in the row while the first
+  // payment was settling: the activation's own write then loses, and the
+  // period is booked once.
+  {
+    const L = makeEngine(join(D1, "lose", "mpp-subscriptions.json"));
+    await L.engine.ready();
+    const offerL = await L.engine.mintOffer({ product: "domain-monitor", target: "lose.example.org", email: "lose@example.com" });
+    const headerL = await signCredential(Challenge.deserialize(offerL.header));
+    const cas = L.engine._store.compareAndSet.bind(L.engine._store);
+    let retried = null, stole = false;
+    L.engine._store.compareAndSet = async (k, d) => {
+      if (!stole && String(k).startsWith("a402:sub:mpp_")) { stole = true; retried = await L.engine.activateFromCredential(headerL); }
+      return cas(k, d);
+    };
+    const first = await L.engine.activateFromCredential(headerL);
+    L.engine._store.compareAndSet = cas;
+    await L.engine.flush();
+    ok(retried?.replay === true && retried.subId === first.subId && L.calls.activate === 1 && (await rowBody())?.[`a402:sub:${first.subId}`]?.status === "active", `setup: the retry rebuilt the record in the row before the activation wrote it (${retried?.subId})`);
+    ok(L.calls.sales.length === 1, `the activation that lost the write books nothing: the first period is booked once (${L.calls.sales.length})`);
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

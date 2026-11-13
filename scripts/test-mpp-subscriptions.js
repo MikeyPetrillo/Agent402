@@ -458,6 +458,28 @@ let liveSubId = null, liveHeader = null, liveToken = null, liveBuyer = null;
   ok(again.replay === true && after?.status === "canceled" && calls.sales.length === salesBefore + 1, `a retry after a stored cancel neither rewrites it nor books again (${after?.status}, sales ${calls.sales.length - salesBefore})`);
 }
 
+// An activation whose create-if-absent write loses books nothing: a retry of
+// the same credential that arrived while the first payment was settling
+// rebuilt the record and booked the period, so the activation hands back that
+// record and the period is booked once.
+{
+  const lose = makeEngine({ name: "activation-loses-write" });
+  const { engine, calls } = lose;
+  const offer = await engine.mintOffer({ product: "domain-monitor", target: "lose.example.org", email: "lose@example.com" });
+  const signed = await signCredential(Challenge.deserialize(offer.header));
+  const cas = engine._store.compareAndSet.bind(engine._store);
+  let retried = null, stole = false;
+  engine._store.compareAndSet = async (k, d) => {
+    if (!stole && String(k).startsWith("a402:sub:mpp_")) { stole = true; retried = await engine.activateFromCredential(signed.header); }
+    return cas(k, d);
+  };
+  const first = await engine.activateFromCredential(signed.header);
+  engine._store.compareAndSet = cas;
+  ok(retried?.replay === true && retried.subId === first.subId && calls.activate === 1, `setup: the retry rebuilt the record before the activation wrote it (${retried?.subId}, activations ${calls.activate})`);
+  ok(calls.sales.length === 1 && calls.sales[0].tx === "0xactivation", `the activation that lost the write books nothing: the first period is booked once (sales ${calls.sales.length})`);
+  ok(first.replay === false && first.status === "active" && typeof first.manageToken === "string", "the activation still hands back the stored subscription");
+}
+
 // ---------------------------------------------------------------------------
 // Group 4: period accounting. One authorized transfer per period, pulled by us.
 // ---------------------------------------------------------------------------
