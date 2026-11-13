@@ -74,6 +74,7 @@
 //     two runs against the same input produce byte-identical output.
 
 import { escapeRegex } from "./safe-regex.js";
+import { jsonLeafBytes, jsonStringBytes, jsonValueBytes } from "../json-bytes.js";
 
 function bad(message) {
   const err = new Error(message);
@@ -1719,10 +1720,14 @@ function chargeSteps(budget, n) {
 }
 
 function newResolveReport(budget) {
-  return { resolved: 0, circular: [], unresolved: [], external: [], has: { circular: new Set(), unresolved: new Set(), external: new Set() }, budget: budget || { bytes: 0, steps: 0, sliceStart: performance.now() }, memo: new Map(), rootMemo: new Map(), pointers: new Map() };
+  return { resolved: 0, circular: [], unresolved: [], external: [], has: { circular: new Set(), unresolved: new Set(), external: new Set() }, budget: budget || { bytes: 0, steps: 0, sliceStart: performance.now() }, memo: new Map(), rootMemo: new Map(), pointers: new Map(), sizes: new WeakMap() };
 }
 
-// Approximate serialized size of one output value: a floor on its JSON length.
+// Every value placed in the output is charged the bytes JSON.stringify writes
+// for it (src/json-bytes.js): a number its printed digits, a string its
+// escapes and multi-byte characters, a ref left in place ($ref and every
+// sibling key) its whole subtree. So the budget is the answer's size, never
+// a floor under it, and a reused target replays that size.
 function chargeResolved(report, bytes) {
   report.budget.bytes += bytes;
   if (report.budget.bytes > RESOLVE_REFS_MAX_BYTES) throw resolveRefsTooLarge();
@@ -1758,7 +1763,7 @@ export async function __resolveRefsBudgetForTest(spec) {
 
 async function deepResolveRefs(node, root, resolvingPath, report) {
   if (!isNode(node)) {
-    chargeResolved(report, typeof node === "string" ? node.length + 2 : 4);
+    chargeResolved(report, jsonLeafBytes(node));
     return node;
   }
   // The clock is read once per 256 nodes; a slice that has run its time ends
@@ -1777,19 +1782,19 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
   if (Array.isArray(node)) {
     chargeResolved(report, 2 + node.length);
     const out = new Array(node.length);
-    for (let i = 0; i < node.length; i++) out[i] = isNode(node[i]) ? await deepResolveRefs(node[i], root, resolvingPath, report) : (chargeResolved(report, typeof node[i] === "string" ? node[i].length + 2 : 4), node[i]);
+    for (let i = 0; i < node.length; i++) out[i] = isNode(node[i]) ? await deepResolveRefs(node[i], root, resolvingPath, report) : (chargeResolved(report, jsonLeafBytes(node[i])), node[i]);
     return out;
   }
   if (typeof node.$ref === "string") {
     const ref = node.$ref;
     if (!ref.startsWith("#/")) {
       addRef(report, "external", ref);
-      chargeResolved(report, ref.length + 11);
+      chargeResolved(report, jsonValueBytes(node, report.sizes));
       return node;
     }
     if (resolvingPath.has(ref)) {
       addRef(report, "circular", ref);
-      chargeResolved(report, ref.length + 11);
+      chargeResolved(report, jsonValueBytes(node, report.sizes));
       return node;
     }
     // A pointer is walked once per call: the lookup splits and unescapes one
@@ -1806,7 +1811,7 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
     }
     if (target === undefined) {
       addRef(report, "unresolved", ref);
-      chargeResolved(report, ref.length + 11);
+      chargeResolved(report, jsonValueBytes(node, report.sizes));
       return node;
     }
     // A target met with no ref in progress (a path's own ref, a top-level
@@ -1828,6 +1833,7 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
     sub.memo = report.memo;
     sub.rootMemo = report.rootMemo;
     sub.pointers = report.pointers;
+    sub.sizes = report.sizes;
     const before = report.budget.bytes;
     // One path set for the whole walk: the ref is in it while its target is
     // walked and out of it after, so each step costs one add and one delete
@@ -1849,8 +1855,8 @@ async function deepResolveRefs(node, root, resolvingPath, report) {
   const entries = Object.entries(node);
   chargeResolved(report, 2 + entries.length);
   for (const [k, v] of entries) {
-    chargeResolved(report, k.length + 3);
-    out[k] = isNode(v) ? await deepResolveRefs(v, root, resolvingPath, report) : (chargeResolved(report, typeof v === "string" ? v.length + 2 : 4), v);
+    chargeResolved(report, jsonStringBytes(k) + 1);
+    out[k] = isNode(v) ? await deepResolveRefs(v, root, resolvingPath, report) : (chargeResolved(report, jsonLeafBytes(v)), v);
   }
   return out;
 }

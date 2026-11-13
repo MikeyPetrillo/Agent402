@@ -24,6 +24,7 @@ import { renderMarkdown, MARKDOWN_INLINE_MAX_CHARS } from "./markdown-render.js"
 import { runMarkdown } from "./markdown-pool.js";
 import QRCode from "qrcode";
 import { assertPublicUrl, safeFetch, ssrfDispatcher, isSsrfBlock, UNRESOLVED_OR_PRIVATE, isTransientLookupError, lookupUnavailable, resolveHostAddress } from "./fetch-guard.js";
+import { jsonLeafBytes, jsonStringBytes } from "../json-bytes.js";
 
 const REGEX_WORKER = fileURLToPath(new URL("./regex-worker.js", import.meta.url));
 const REGEX_TIMEOUT_MS = 750;
@@ -84,7 +85,7 @@ function expandedJsonBytes(root, max) {
   const memo = new Map();
   const active = new Set();
   const size = (v) => {
-    if (v === null || typeof v !== "object") return v === undefined ? 4 : JSON.stringify(v).length;
+    if (v === null || typeof v !== "object") return jsonLeafBytes(v);
     if (memo.has(v)) return memo.get(v);
     if (active.has(v)) throw bad("YAML refers to itself through an alias; JSON cannot represent a cycle");
     active.add(v);
@@ -92,7 +93,7 @@ function expandedJsonBytes(root, max) {
     if (Array.isArray(v)) {
       for (const x of v) { n += size(x) + 1; if (n > max) break; }
     } else {
-      for (const k of Object.keys(v)) { n += JSON.stringify(k).length + 2 + size(v[k]); if (n > max) break; }
+      for (const k of Object.keys(v)) { n += jsonStringBytes(k) + 2 + size(v[k]); if (n > max) break; }
     }
     active.delete(v);
     memo.set(v, n);
@@ -710,10 +711,14 @@ const dataTools = [
       const split = "Send fewer rows per call, or convert rows that share columns together";
       if (data.length * columns.length > JSON_TO_CSV_MAX_CELLS) throw bad(`Max ${JSON_TO_CSV_MAX_CELLS} cells (rows times columns); ${shape}. ${split}`);
       const lines = [columns.map(csvEscape).join(delimiter)];
-      let bytes = lines[0].length + 1, sliceStart = performance.now(), sinceCheck = 0;
+      // Counted as the answer writes it: the CSV is a JSON string, so a
+      // control character (a one-character delimiter may be one) is a 6-byte
+      // escape, a multi-byte character its UTF-8 length, each newline 2.
+      const csvBytes = (line) => jsonStringBytes(line) - 2 + 2;
+      let bytes = csvBytes(lines[0]), sliceStart = performance.now(), sinceCheck = 0;
       for (const r of flat) {
         const line = columns.map((c) => csvEscape(r[c])).join(delimiter);
-        bytes += line.length + 1;
+        bytes += csvBytes(line);
         if (bytes > JSON_TO_CSV_MAX_BYTES) throw Object.assign(bad(`Max ${JSON_TO_CSV_MAX_BYTES / 1_000_000} MB of CSV per call; ${shape}. ${split}`), { statusCode: 413 });
         lines.push(line);
         // The clock is read every 20,000 cells; a slice that has run its time ends here.
