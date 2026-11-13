@@ -17,6 +17,8 @@ t node scripts/test-leaderboard-envelope.js
 t node scripts/test-payer-concentration.js
 # MCP call_tool contract (canonical + flattened + stringified + wallet-refusal + self-correction envelope)
 t node scripts/test-mcp-call-tool-contract.js
+# Hosted MCP serverInfo.version is the registry package version with the build as semver metadata; the image copies mcp/package.json (boots free mode on port 0)
+t node scripts/test-mcp-server-version.js
 # Exposure hardening (A402-11/12/13 no X-Powered-By; security.txt; health gates flags; credential-free MCP CORS — spawns child)
 t node scripts/test-security-headers.js
 # Document headers: pages always, JSON API paths never, an HTML answer under /api again (offline, in-process)

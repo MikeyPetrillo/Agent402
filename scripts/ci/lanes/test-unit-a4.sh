@@ -192,6 +192,8 @@ t node scripts/test-bazaar-quality.js
 t node scripts/test-seller-field-types.js
 # A stored index of sellers with non-text fields boots and serves every seller page and API; entries are cleaned as the cache stores them
 t node scripts/test-seller-field-types-serve.js
+# Seller price keys: every entry priced before the snake_case keys were read keeps its price; the keys only fill gaps (offline table)
+t node scripts/test-seller-price-keys-differential.js
 # A route's off-seller verdict is decided from its text and equals the parsed answer for every input
 t node scripts/test-off-seller-route.js
 # The index keeps at most INDEX_SELLER_TOOL_CAP tools per seller, described first, in one funnel
@@ -256,6 +258,8 @@ t node scripts/test-copy-absolutes.js
 # The router and decide execute are described as buying from sellers and reselling (copy, tags, terms; offline)
 t node scripts/test-resale-copy.js
 t node scripts/test-mcp-dockerfiles.js
+# Both images print npm's debug log when npm ci fails and keep its exit code (runs the install group under /bin/sh with a stub npm)
+t node scripts/test-dockerfile-npm-log.js
 # Every tracked Dockerfile's node base runs one Node patch, pinned by digest; the tollbooth image runs as node (offline)
 t node scripts/test-dockerfile-node-patch.js
 # Buyer packages price quotes from one known-asset table: copies identical, table matches the rails (offline)
