@@ -265,7 +265,12 @@ export async function normalizeAudio(buffer, { targetLufs = -16 } = {}) {
 // Returns seconds, or null when it cannot be measured here (no ffmpeg on this
 // server, an unrecognized container, a decode that fails or outlasts its
 // deadline). It never throws and never refuses: a full pool queues, and the
-// caller decides what an unmeasured file means.
+// caller decides what an unmeasured file means. measureAudio says which of
+// those it was: { seconds }, { undecodable } when the file itself cannot be
+// decoded here (a container the decoder is not given, or a decode that ran
+// and failed or reported no length), or { unavailable } when the measurement
+// did not run to an answer for a reason of this server's (no ffmpeg, no
+// free slot in time, the deadline, a temp-file error).
 const MEASURE_MAX_CONCURRENT = 2;
 const MEASURE_TIMEOUT_MS = 10_000;
 const MEASURE_WAIT_MS = 5_000;
@@ -283,29 +288,38 @@ const measureAcquire = () => {
 };
 const measureRelease = () => { const next = measureWaiters.shift(); if (next) next(); else measureActive--; };
 export async function measureAudioSeconds(buffer) {
+  const m = await measureAudio(buffer);
+  return Number.isFinite(m.seconds) ? m.seconds : null;
+}
+export async function measureAudio(buffer) {
   let input;
-  try { input = mediaInputArgs(buffer, "in"); } catch { return null; }
-  if (!(await measureAcquire())) return null;
+  try { input = mediaInputArgs(buffer, "in"); } catch { return { undecodable: "its container is not one the decoder here reads" }; }
+  if (!(await measureAcquire())) return { unavailable: "no decoder slot came free in time" };
   let dir = null;
   try {
     dir = await mkdtemp(join(tmpdir(), "a402-measure-"));
     const inPath = join(dir, "in");
     input[input.length - 1] = inPath;
     await writeFile(inPath, buffer);
-    const stdout = await new Promise((resolve) => {
+    const ran = await new Promise((resolve) => {
       execImpl("ffmpeg", ["-hide_banner", "-nostdin", "-v", "error", "-progress", "pipe:1", "-nostats", ...input, "-map", "0:a:0", "-vn", "-f", "null", "-"],
         { timeout: MEASURE_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env: childEnv() },
-        (err, out) => resolve(err ? null : String(out ?? "")));
+        (err, out) => resolve(err ? { err } : { stdout: String(out ?? "") }));
     });
-    if (stdout === null) return null;
+    if (ran.err) {
+      if (ran.err.code === "ENOENT") return { unavailable: "ffmpeg is not installed on this server" };
+      if (ran.err.killed || ran.err.signal) return { unavailable: "the decode outlasted its deadline" };
+      return { undecodable: "the decoder could not read its audio" };
+    }
+    const stdout = ran.stdout;
     // The progress stream repeats out_time_us; the last one is the total.
     let us = null;
     for (const line of stdout.split("\n")) {
       if (line.startsWith("out_time_us=")) { const n = Number(line.slice(12)); if (Number.isFinite(n) && n >= 0) us = n; }
     }
-    return us === null ? null : us / 1e6;
+    return us === null ? { undecodable: "the decoder reported no length for its audio" } : { seconds: us / 1e6 };
   } catch {
-    return null;
+    return { unavailable: "the file could not be staged for the decoder" };
   } finally {
     measureRelease();
     if (dir) rm(dir, { recursive: true, force: true }).catch(() => {});

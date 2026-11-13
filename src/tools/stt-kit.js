@@ -46,7 +46,7 @@
 import { parseMultipartFile } from "../multipart.js";
 import { loadMusicMetadata } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
-import { measureAudioSeconds } from "./media-kit.js";
+import { measureAudio } from "./media-kit.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { OPENROUTER_ATTRIBUTION } from "../openrouter-attribution.js";
@@ -196,9 +196,11 @@ export function byteFloorApplies(container) {
     && Number.isFinite(container.sampleRate) && container.sampleRate > 0 && container.sampleRate <= 48000;
 }
 
-let measureImpl = measureAudioSeconds;
-/** Test seam: replace the decode measurement (null restores it). */
-export function __setMeasureForTest(fn) { measureImpl = fn || measureAudioSeconds; }
+let measureImpl = measureAudio;
+/** Test seam: replace the decode measurement (null restores it). The stand-in
+ *  answers seconds (a number, or null when unmeasured) or measureAudio's own
+ *  shape ({ seconds } | { undecodable } | { unavailable }). */
+export function __setMeasureForTest(fn) { measureImpl = fn || measureAudio; }
 let unmeasured = 0;
 /** Files whose audio could not be measured by decoding since boot (the byte floor bounded the ones it applies to). */
 export const sttUnmeasuredSinceBoot = () => unmeasured;
@@ -215,7 +217,12 @@ export const sttUnmeasuredSinceBoot = () => unmeasured;
  *  file in one or two channels at up to 48 kHz is held to the shortest its byte count can
  *  play (byteFloorApplies); any other file keeps its declared length. A
  *  file inside the cap passes either way; the returned duration is the one
- *  the margin math uses. */
+ *  the margin math uses.
+ *
+ *  A file the decoder here cannot read at all (a container it is not given,
+ *  such as ASF/WMA, or a decode that ran and failed) is inside the cap only
+ *  by the length it declares about itself, which nothing here confirms: it is
+ *  refused with a 400 that says so, before any upstream call. */
 export async function assertWithinDurationCap(buf, filename, tierSlug) {
   const tier = TIERS[tierSlug];
   const container = await probeContainer(buf, filename);
@@ -225,10 +232,16 @@ export async function assertWithinDurationCap(buf, filename, tierSlug) {
   const capSec = tier.maxMinutes * 60;
   let durationSec = container.durationSec;
   if (durationSec <= capSec + 2) {
-    let measured = null;
-    try { measured = await measureImpl(buf); } catch { /* unmeasured: the byte floor below */ }
+    let measured = null, undecodable = null;
+    try {
+      const m = await measureImpl(buf);
+      if (m && typeof m === "object") { measured = m.seconds ?? null; undecodable = m.undecodable || null; } else measured = m;
+    } catch { /* unmeasured: the byte floor below */ }
     if (Number.isFinite(measured) && measured > 0) durationSec = Math.max(durationSec, measured);
-    else {
+    else if (undecodable && durationSec <= capSec + 2 && !(byteFloorApplies(container) && byteFloorSeconds(buf.length, container.pictureBytes) > capSec + 2)) {
+      unmeasured++;
+      throw Object.assign(bad(`This file's length could not be confirmed: its headers declare ${(container.durationSec / 60).toFixed(1)} minutes, but ${undecodable}, so the audio cannot be measured against this tier's ${tier.maxMinutes}-minute cap. Send a standard mp3, wav, m4a, ogg, flac, or webm file. You were not charged.`, 400), { hint: "duration-unconfirmed" });
+    } else {
       unmeasured++;
       if (byteFloorApplies(container)) durationSec = Math.max(durationSec, byteFloorSeconds(buf.length, container.pictureBytes));
     }

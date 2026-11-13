@@ -125,6 +125,37 @@ const reject = (p) => p.then(() => null, (e) => e);
     ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 10) < 0.5 && (await assertWithinDurationCap(honest, "audio.mp3", "transcribe")) > 170, `an unmeasured file inside the cap still passes on its declared length (measure gave ${label})`);
     ok(sttUnmeasuredSinceBoot() === before + 2, "and each unmeasured file is counted");
   }
+  // A file the decoder here cannot read is inside the cap only by what it
+  // declares: refused with a 400 that names why, before any upstream call.
+  {
+    const guid = (str) => { const b = Buffer.from(str.replace(/-/g, ""), "hex"); return Buffer.concat([Buffer.from(b.subarray(0, 4)).reverse(), Buffer.from(b.subarray(4, 6)).reverse(), Buffer.from(b.subarray(6, 8)).reverse(), b.subarray(8)]); };
+    // An ASF (WMA) header whose File Properties declare `seconds`, then filler.
+    const asf = (seconds, pad) => {
+      const fp = Buffer.alloc(104); guid("8CABDCA1-A947-11CF-8EE4-00C00C205365").copy(fp, 0); fp.writeBigUInt64LE(104n, 16);
+      fp.writeBigUInt64LE(BigInt(seconds) * 10_000_000n, 64); fp.writeUInt32LE(2, 88);
+      const head = Buffer.alloc(30); guid("75B22630-668E-11CF-A6D9-00AA0062CE6C").copy(head, 0); head.writeBigUInt64LE(134n, 16); head.writeUInt32LE(1, 24); head[28] = 1; head[29] = 2;
+      return Buffer.concat([head, fp, Buffer.alloc(pad)]);
+    };
+    __setMeasureForTest(null);
+    const wma = asf(60, 400_000);
+    ok((await probeDurationSeconds(wma, "audio.wma")) === 60, "the stub WMA declares 60 seconds");
+    const before = sttUnmeasuredSinceBoot();
+    for (const slug of ["transcribe", "transcribe-pro"]) {
+      const e = await reject(assertWithinDurationCap(wma, "audio.wma", slug));
+      ok(e?.statusCode === 400 && e.hint === "duration-unconfirmed" && /could not be confirmed/.test(e.message) && /declare 1\.0 minutes/.test(e.message) && /container/.test(e.message) && /You were not charged\./.test(e.message), `${slug}: a WMA the decoder cannot read is refused, not served on its declared length (${e?.statusCode}: ${e?.message ?? "passed"})`);
+    }
+    ok(sttUnmeasuredSinceBoot() === before + 2, "each refused unconfirmed file is counted as unmeasured");
+    __setMeasureForTest(async () => ({ undecodable: "the decoder could not read its audio" }));
+    let e = await reject(assertWithinDurationCap(short, "audio.wav", "transcribe"));
+    ok(e?.statusCode === 400 && /the decoder could not read its audio/.test(e.message), `a decode that ran and failed is refused with its reason (${e?.message ?? "passed"})`);
+    __setMeasureForTest(async () => ({ unavailable: "ffmpeg is not installed on this server" }));
+    ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 10) < 0.5, "a measurement that did not run for a reason of this server's keeps the declared length");
+    __setMeasureForTest(async () => ({ seconds: 30 }));
+    ok(Math.abs((await assertWithinDurationCap(short, "audio.wav", "transcribe")) - 30) < 0.01, "a measurement in the object shape is read as seconds");
+    __setMeasureForTest(async () => ({ undecodable: "x" }));
+    e = await reject(assertWithinDurationCap(long, "audio.wav", "transcribe-pro"));
+    ok(e?.statusCode === 422 && /up to 10 minutes/.test(e.message), "a file its header puts over the cap is still the over-cap 422");
+  }
   // Unmeasured and lossy: held to the shortest its bytes can play.
   __setMeasureForTest(async () => null);
   const heavy = makeMp3(1300, 100);         // about 20.8 MB declaring seconds
