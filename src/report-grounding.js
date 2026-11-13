@@ -415,10 +415,15 @@ export const QUOTE_MARKER_BRACKETS = Object.freeze({ open: OPEN_ALL, close: CLOS
 // every bracket in it goes.
 const NEUTRALIZE_MAX_PASSES = 16;
 const ANY_BRACKET_RE = new RegExp(`[${OPEN_ALL}${CLOSE_ALL}]`, "g");
+// Every format or default-ignorable character renders as nothing between two
+// brackets (a direction mark, a hieroglyph or music format control), whether
+// or not the hidden-character scan names its kind, so each pass reads the
+// text without any of them: no such character can keep two brackets apart.
+const FORMAT_CHAR_RE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 export function neutralizeQuoteMarkers(text) {
   let out = stripHiddenCharacters(String(text ?? ""));
   for (let pass = 0; pass < NEUTRALIZE_MAX_PASSES; pass++) {
-    const next = out.replace(BRACKET_RUN_RE, "");
+    const next = out.replace(FORMAT_CHAR_RE, "").replace(BRACKET_RUN_RE, "");
     if (next === out) return out;
     out = next;
   }
