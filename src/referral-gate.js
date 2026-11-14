@@ -190,16 +190,17 @@ export function sendCounted(res, body, chunkBytes = REFERRAL_SEND_CHUNK_BYTES) {
 }
 /**
  * How a send ended when the connection closed, from its counts:
+ * `{ how, atMost }`, `atMost` the most bytes the buyer can hold.
  *   delivered   every byte was confirmed taken by the socket
  *   not-served  nothing was handed to the socket: the buyer has no byte
  *   partial     anything between. A piece in flight may have reached the
  *               buyer without its confirmation (measured: a client had read
- *               about 64 KB more than was confirmed), so the buyer holds at
- *               most `dispatched` bytes and possibly none
+ *               about 64 KB more than was confirmed), so the bound is the
+ *               bytes handed over, not the bytes confirmed
  */
 export function sentOutcome({ total, dispatched, taken }) {
-  if (taken >= total) return "delivered";
-  return dispatched > 0 ? "partial" : "not-served";
+  if (taken >= total) return { how: "delivered", atMost: total };
+  return dispatched > 0 ? { how: "partial", atMost: Math.min(total, dispatched) } : { how: "not-served", atMost: 0 };
 }
 /** The hang-up reason a partly served answer's refund debt carries: one of
  *  the reasons scripts/refund-run.js holds for review (REPEAT_HANGUP_REASONS),
@@ -1254,8 +1255,8 @@ export function createReferralGate({
     const body = Buffer.from(text, "utf8");
     let sent = { total: body.length, dispatched: 0, taken: 0 };
     res.once("close", () => {
-      const how = sentOutcome(sent);
-      if (how === "partial") { partlyServed(sent.dispatched, sent.total); return; }
+      const { how, atMost } = sentOutcome(sent);
+      if (how === "partial") { partlyServed(atMost, sent.total); return; }
       if (how === "not-served") { notServed("the connection closed before any byte of the answer went out"); return; }
       // Delivered: nothing at rest, and nothing left open for this
       // authorization, except an unconfirmed payment, which keeps its entry
