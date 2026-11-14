@@ -2348,7 +2348,8 @@ try {
     const a = await charged();
     const unnamed = await app1.gate.resolveByHand(a.key, { note: "buyer wrote in" });
     const oldWord = await app1.gate.resolveByHand(a.key, { note: "buyer wrote in", outcome: "refunded" });
-    ok(unnamed.ok === false && /outcome/.test(unnamed.error) && oldWord.ok === false && app1.book.get(a.key)?.state === "charged-undelivered" && owed.length === 0 && recordOf(a.key).length === 0, `a charged, undelivered entry is never closed by hand without one of the three outcomes named (${unnamed.error})`);
+    const notAWord = await app1.gate.resolveByHand(a.key, { note: "buyer wrote in", outcome: 5 });
+    ok(unnamed.ok === false && /outcome/.test(unnamed.error) && oldWord.ok === false && notAWord.ok === false && app1.book.get(a.key)?.state === "charged-undelivered" && owed.length === 0 && recordOf(a.key).length === 0, `a charged, undelivered entry is never closed by hand without one of the three outcomes named (${unnamed.error})`);
     const refund = await app1.gate.resolveByHand(a.key, { note: "buyer wrote in: answer never arrived", outcome: "refund" });
     const rowsA = owed.filter((o) => o.tx === a.tx);
     ok(refund.ok === true && refund.debt === true && rowsA.length === 1 && rowsA[0].priceUsd === 0.03 && rowsA[0].wire === "referral" && rowsA[0].network === "eip155:8453" && rowsA[0].payer === a.payer && /resolved by an operator/.test(rowsA[0].note) && app1.book.get(a.key)?.state === "refund-owed", `the outcome refund writes the debt at the GROSS behind the receipt proof, and the entry stays as the refund-owed mark (${rowsA.length} row, ${rowsA[0]?.priceUsd}, ${app1.book.get(a.key)?.state})`);
@@ -2386,6 +2387,18 @@ try {
     const appD = await mount({}, { answers: store });
     const { isRepeatHangup } = await import("./refund-run.js");
     const BIG = 7_500_000;
+    // The counts and the three endings, on a scripted response: pieces 1 and 2 are taken, piece 3 fails.
+    {
+      const { sendCounted, sentOutcome } = gateMod;
+      const fake = (failAt) => { const r = { destroyed: false, parts: [], ended: 0, write(part, cb) { this.parts.push(part.length); if (this.parts.length === failAt) { this.destroyed = true; cb(new Error("reset")); } else cb(); return true; }, end() { this.ended++; } }; return r; };
+      const body = Buffer.alloc(2500, 0x61);
+      const all = fake(0), cut = fake(3), dead = fake(0);
+      dead.destroyed = true;
+      const [sAll, sCut, sDead] = [sendCounted(all, body, 1000), sendCounted(cut, body, 1000), sendCounted(dead, body, 1000)];
+      ok(JSON.stringify(all.parts) === "[1000,1000,500]" && all.ended === 1 && sAll.taken === 2500 && sAll.dispatched === 2500 && sentOutcome(sAll) === "delivered", `every piece confirmed: the pieces add up to the body, the response is ended once, and the send reads delivered (${JSON.stringify(sAll)})`);
+      ok(JSON.stringify(cut.parts) === "[1000,1000,500]" && cut.ended === 0 && sCut.taken === 2000 && sCut.dispatched === 2500 && sentOutcome(sCut) === "partial", `a piece whose write fails is handed over but never counted as taken, nothing follows it, and the send reads partial (${JSON.stringify(sCut)})`);
+      ok(dead.parts.length === 0 && sDead.dispatched === 0 && sentOutcome(sDead) === "not-served" && sentOutcome({ total: 10, dispatched: 10, taken: 0 }) === "partial" && sentOutcome({ total: 10, dispatched: 0, taken: 0 }) === "not-served" && sentOutcome({ total: 10, dispatched: 10, taken: 10 }) === "delivered", "nothing handed to a closed connection reads not served; a first piece in flight and unconfirmed reads partial, never not served");
+    }
     try {
       const pay = async () => { const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) }); return { p, key: gateMod.referralReplayKey(p.authorization) }; };
       const sending = (key) => async () => { for (let i = 0; i < 200 && appD.book.get(key)?.delivered !== true; i++) await wait(25); await wait(400); };
@@ -2393,7 +2406,7 @@ try {
       const whole = await pay();
       const full = await send(`${appD.url}/ref/big`, { body: { n: 300_000 }, headers: { "payment-signature": whole.p.header, "x-test-ip": freshIp() } });
       await wait(50);
-      ok(gateMod.REFERRAL_SEND_CHUNK_BYTES === 65536 && full.status === 200 && full.json?.blob?.length === 300_000 && /^0x[0-9a-f]{64}$/.test(full.json.transaction || "") && Number(full.headers.get("content-length")) === Buffer.byteLength(full.text) && /^application\/json/.test(full.headers.get("content-type") || "") && appD.book.get(whole.key) === null && appD.gate.stats().partlyServed === 0, `an answer of several chunks read to the end arrives whole (its length stated), and is delivered (${full.status}, ${full.json?.blob?.length} characters)`);
+      ok(gateMod.REFERRAL_SEND_CHUNK_BYTES === 16384 && full.status === 200 && full.json?.blob?.length === 300_000 && /^0x[0-9a-f]{64}$/.test(full.json.transaction || "") && Number(full.headers.get("content-length")) === Buffer.byteLength(full.text) && /^application\/json/.test(full.headers.get("content-type") || "") && appD.book.get(whole.key) === null && appD.gate.stats().partlyServed === 0, `an answer of several chunks read to the end arrives whole (its length stated), and is delivered (${full.status}, ${full.json?.blob?.length} characters)`);
       // A client that reads NOTHING of a large answer and resets: some bytes left this process, none were read.
       const none = await pay();
       const r0 = await rawPaid(`${appD.url}/ref/big`, { n: BIG }, { "payment-signature": none.p.header, "x-test-ip": freshIp() }, { readBytes: 0, when: sending(none.key) });
@@ -2405,7 +2418,7 @@ try {
       const r1 = await rawPaid(`${appD.url}/ref/big`, { n: BIG }, { "payment-signature": some.p.header, "x-test-ip": freshIp() }, { readBytes: 1_000_000 });
       await wait(300);
       const e1 = appD.book.get(some.key);
-      ok(r1.got >= 1_000_000 && e1?.state === "charged-undelivered" && e1.partial === true && e1.partialSent >= 1_000_000 && e1.partialSent < e1.partialOf && e1.delivered === false, `a buyer who read a megabyte of the answer and reset is partly served, never "not served" (${e1?.partialSent} of ${e1?.partialOf} bytes out, the client read ${r1.got})`);
+      ok(r1.got >= 900_000 && e1?.state === "charged-undelivered" && e1.partial === true && e1.partialSent >= r1.got && e1.partialSent < e1.partialOf && e1.delivered === false, `a buyer who read a megabyte of the answer and reset is partly served, never "not served", and the bytes recorded are no fewer than it read (at most ${e1?.partialSent} of ${e1?.partialOf} bytes out, the client read ${r1.got})`);
       const runsBig = settles();
       const fetched = await send(`${appD.url}/ref/big`, { body: { n: BIG }, headers: { "payment-signature": some.p.header, "x-test-ip": freshIp() } });
       await wait(100);
@@ -2416,7 +2429,7 @@ try {
       await appD.gate.sweepOnce();
       skew.ms = 0;
       const rows = owed.filter((o) => o.tx === e0?.tx);
-      ok(rows.length === 1 && rows[0].priceUsd === 0.03 && rows[0].httpStatus === 499 && rows[0].hangupReason === "payer budget" && isRepeatHangup(rows[0]) === true && /partly sent \(\d+ of \d+ bytes\)/.test(rows[0].note) && !owed.some((o) => o.tx === e1?.tx), `a partly served answer that is never collected is owed once at the gross with the reason the refund run HOLDS (never repaid on its own), its byte counts in the note; the one collected by a re-send is owed nothing (${rows.length} row: ${rows[0]?.httpStatus} ${rows[0]?.hangupReason}; ${rows[0]?.note})`);
+      ok(rows.length === 1 && rows[0].priceUsd === 0.03 && rows[0].httpStatus === 499 && rows[0].hangupReason === "payer budget" && isRepeatHangup(rows[0]) === true && /partly sent \(at most \d+ of \d+ bytes\)/.test(rows[0].note) && !owed.some((o) => o.tx === e1?.tx), `a partly served answer that is never collected is owed once at the gross with the reason the refund run HOLDS (never repaid on its own), its byte counts in the note; the one collected by a re-send is owed nothing (${rows.length} row: ${rows[0]?.httpStatus} ${rows[0]?.hangupReason}; ${rows[0]?.note})`);
     } finally { skew.ms = 0; await appD.close(); }
   }
 
@@ -2918,9 +2931,10 @@ try {
     const badAction = await post({ action: "delete-everything" });
     const noNote = await post({ action: "resolve", key: keyH });
     const badOutcome = await post({ action: "resolve", key: keyH, note: "checked on chain", outcome: "refunded" });
+    const emptyOutcome = await post({ action: "resolve", key: keyH, note: "checked on chain", outcome: "" });
     const noProof = await post({ action: "resolve", key: keyH, note: "checked on chain", outcome: "refund" });
     const before = (await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
-    ok(badOutcome.status === 400 && /refund.*delivered.*dismissed/.test(badOutcome.json?.error || "") && noProof.status === 400 && noProof.json?.ok === false && before.open.some((e) => e.key === keyH) && Array.isArray(before.closedUnrecognized), `the operator route takes the three outcomes only, and refund for an entry with no transaction to prove writes nothing and leaves it open (${badOutcome.status}, ${noProof.status} ${noProof.json?.error})`);
+    ok(badOutcome.status === 400 && /refund.*delivered.*dismissed/.test(badOutcome.json?.error || "") && emptyOutcome.status === 400 && noProof.status === 400 && noProof.json?.ok === false && before.open.some((e) => e.key === keyH) && Array.isArray(before.closedUnrecognized), `the operator route takes the three outcomes only, and refund for an entry with no transaction to prove writes nothing and leaves it open (${badOutcome.status}, ${noProof.status} ${noProof.json?.error})`);
     const done = await post({ action: "resolve", key: keyH, note: "checked on chain: never settled", outcome: "dismissed" });
     const after = (await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
     ok(stuck.status === 402 && noToken.status === 404 && badAction.status === 400 && noNote.status === 400 && before.open.some((e) => e.key === keyH) && done.status === 200 && done.json?.ok === true && !after.open.some((e) => e.key === keyH) && after.resolvedByHand.some((r) => r.key === keyH && /never settled/.test(r.note)) && /no-store/.test(done.headers.get("cache-control") || ""), `an operator resolves an open settlement by hand: 404 without the token, a note required, the entry recorded with the note and removed (${noToken.status}, ${badAction.status}, ${noNote.status}, ${done.status})`);

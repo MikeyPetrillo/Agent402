@@ -899,7 +899,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
-import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, refundRowCovers, REFERRAL_HAND_OUTCOMES } from "./referral-gate.js";
+import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, refundRowCovers } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
@@ -10786,9 +10786,8 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
   const { action, key, note, outcome } = req.body || {};
   const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}';
   if (action !== "resolve") return res.status(400).json({ error: usage });
-  // An outcome that is named must be one of the three; one left out reads
-  // dismissed, except on a charged, undelivered entry (the gate asks for it).
-  if (outcome !== undefined && outcome !== null && !REFERRAL_HAND_OUTCOMES.includes(outcome)) return res.status(400).json({ error: usage });
+  // The gate reads the outcome: one of the three, or left out (dismissed,
+  // except on a charged, undelivered entry, where it must be named).
   try {
     const r = await REFERRAL_GATE.resolveByHand(typeof key === "string" ? key : "", { note: typeof note === "string" ? note : "", outcome: outcome ?? null });
     return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });

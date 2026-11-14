@@ -60,9 +60,10 @@
 //     (REFERRAL_ANSWER_RETENTION_MS): a re-send of the same PAYMENT-SIGNATURE
 //     returns it when the payment landed, with no second run and no second
 //     sale. A delivered mark is written before any answer byte goes out. The
-//     answer goes out in chunks counted as the socket takes them: all taken
-//     is delivered; none taken is not served; some taken is partly served
-//     (not delivered, kept for the re-send, and its refund held for review).
+//     answer goes out in chunks confirmed as the socket takes them: all
+//     confirmed is delivered; none handed over is not served; anything
+//     between is partly served (not delivered, kept for the re-send, and its
+//     refund held for review).
 //   - A sale is booked once, at the NET amount (gross less the slug's
 //     commission and the fee); the gross is the quote.
 //   - Unsettled runs are bounded per signed payer and per client address in
@@ -164,7 +165,42 @@ export const REFERRAL_RESEND_SETTLES_MAX = 2;
 /** An unconfirmed payment whose receipt still cannot be read after this long is flagged (the word reads attention until it is resolved). */
 export const REFERRAL_UNCONFIRMED_FLAG_MS = 3 * 60_000;
 /** An answer goes out in pieces of this size, each counted when the socket has taken it. */
-export const REFERRAL_SEND_CHUNK_BYTES = 64 * 1024;
+export const REFERRAL_SEND_CHUNK_BYTES = 16 * 1024;
+/**
+ * Send `body` (a Buffer) on `res` in pieces of `chunkBytes`, one at a time,
+ * the next only once the socket has confirmed taking the last. Returns the
+ * live counts `{ total, dispatched, taken }`: `dispatched` bytes were handed
+ * to the socket, `taken` bytes were confirmed by a write callback with no
+ * error. The response is ended only when every byte is confirmed. Not
+ * awaited by its caller: a slow reader holds its own socket and nothing else.
+ */
+export function sendCounted(res, body, chunkBytes = REFERRAL_SEND_CHUNK_BYTES) {
+  const sent = { total: body.length, dispatched: 0, taken: 0 };
+  const next = () => {
+    try {
+      if (res.destroyed) return;
+      if (sent.dispatched >= sent.total) { res.end(); return; }
+      const part = body.subarray(sent.dispatched, Math.min(sent.total, sent.dispatched + chunkBytes));
+      sent.dispatched += part.length;
+      res.write(part, (err) => { if (err) return; sent.taken += part.length; next(); });
+    } catch { /* a write that throws ends here; the close reads the counts */ }
+  };
+  next();
+  return sent;
+}
+/**
+ * How a send ended when the connection closed, from its counts:
+ *   delivered   every byte was confirmed taken by the socket
+ *   not-served  nothing was handed to the socket: the buyer has no byte
+ *   partial     anything between. A piece in flight may have reached the
+ *               buyer without its confirmation (measured: a client had read
+ *               about 64 KB more than was confirmed), so the buyer holds at
+ *               most `dispatched` bytes and possibly none
+ */
+export function sentOutcome({ total, dispatched, taken }) {
+  if (taken >= total) return "delivered";
+  return dispatched > 0 ? "partial" : "not-served";
+}
 /** The hang-up reason a partly served answer's refund debt carries: one of
  *  the reasons scripts/refund-run.js holds for review (REPEAT_HANGUP_REASONS),
  *  so the debt is never repaid without one. The note on the row says how many
@@ -979,7 +1015,7 @@ export function createReferralGate({
     // carries the reason that run holds, and its byte counts in the note.
     const hangup = typeof cur.hangup === "string" && cur.hangup ? cur.hangup : null;
     const partial = cur.partial === true;
-    const note = partial ? `referral answer partly sent (${Number(cur.partialSent) || 0} of ${Number(cur.partialOf) || 0} bytes) before the connection closed, held for review: ${why}` : `referral answer not deliverable: ${why}`;
+    const note = partial ? `referral answer partly sent (at most ${Number(cur.partialSent) || 0} of ${Number(cur.partialOf) || 0} bytes) before the connection closed, held for review: ${why}` : `referral answer not deliverable: ${why}`;
     let owedRow = false;
     try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: gross, tx: e.tx, wire: "referral", httpStatus: hangup || partial ? 499 : 402, hangupReason: partial ? REFERRAL_PARTIAL_HOLD_REASON : hangup, note: note.slice(0, 300) })) === true; }
     catch { owedRow = false; }
@@ -1164,14 +1200,16 @@ export function createReferralGate({
    * HOW MUCH WENT OUT. One `res.end` of the whole body reads as finished
    * whatever the buyer read (measured: an answer of 5 MB to a client that
    * read nothing and reset still ends with `writableFinished` true), so the
-   * body goes out in REFERRAL_SEND_CHUNK_BYTES pieces, each counted when its
-   * write callback says the socket took it. That count is the most the buyer
-   * can have received (the kernel holds what it took; measured, up to a few
-   * megabytes more than a client had read). When the connection closes:
-   *   - every byte taken: delivered (the mark stands, the entry closes);
-   *   - no byte taken: not served. The mark is taken back and the answer is
-   *     kept for a re-send; if it is never delivered the gross is owed back;
-   *   - some bytes taken: PARTLY SERVED. The buyer may hold most of the
+   * body goes out in REFERRAL_SEND_CHUNK_BYTES pieces (sendCounted), each
+   * confirmed by its write callback. The bytes handed to the socket are the
+   * most the buyer can have received (the kernel holds what it took:
+   * measured, megabytes more than a client had read). When the connection
+   * closes (sentOutcome):
+   *   - every byte confirmed: delivered (the mark stands, the entry closes);
+   *   - nothing handed to the socket: not served. The mark is taken back and
+   *     the answer is kept for a re-send; if it is never delivered the gross
+   *     is owed back;
+   *   - anything between: PARTLY SERVED. The buyer may hold most of the
    *     answer, so the mark is taken back and the answer stays for a re-send,
    *     and the entry is marked partial: a refund debt for it carries the
    *     reason the refund run holds for review, never repaid on its own.
@@ -1200,7 +1238,7 @@ export function createReferralGate({
       entry.partial = true;
       entry.partialSent = Math.max(Number(entry.partialSent) || 0, sent);
       entry.hangup = REFERRAL_PARTIAL_HOLD_REASON;
-      line("error", `PARTLY SERVED: the connection closed after ${sent} of ${total} bytes of the answer went out (${entry.slug} payer=${shortPayer(entry.payer)} tx=${entry.charged}); the answer is kept for a re-send, and a refund for it is held for review`);
+      line("error", `PARTLY SERVED: the connection closed after at most ${sent} of ${total} bytes of the answer went out (${entry.slug} payer=${shortPayer(entry.payer)} tx=${entry.charged}); the answer is kept for a re-send, and a refund for it is held for review`);
       book.resolve(entry.key, { state: openState(), delivered: false, partial: true, partialSent: entry.partialSent, partialOf: total, hangup: entry.hangup, tx: entry.charged, saleBooked: entry.saleBooked === true, landedAt: now() }).catch(() => {});
     };
     if (res.destroyed || res.writableEnded) { notServed("the buyer's connection closed before the answer could be sent"); return false; }
@@ -1214,14 +1252,11 @@ export function createReferralGate({
     }
     if (res.destroyed || res.writableEnded) { notServed("the buyer's connection closed before the answer could be sent"); return false; }
     const body = Buffer.from(text, "utf8");
-    const total = body.length;
-    let taken = 0;
+    let sent = { total: body.length, dispatched: 0, taken: 0 };
     res.once("close", () => {
-      if (taken < total) {
-        if (taken > 0) partlyServed(taken, total);
-        else notServed("the connection closed before any byte of the answer went out");
-        return;
-      }
+      const how = sentOutcome(sent);
+      if (how === "partial") { partlyServed(sent.dispatched, sent.total); return; }
+      if (how === "not-served") { notServed("the connection closed before any byte of the answer went out"); return; }
       // Delivered: nothing at rest, and nothing left open for this
       // authorization, except an unconfirmed payment, which keeps its entry
       // (with the delivered mark) until the sweep confirms it.
@@ -1233,19 +1268,8 @@ export function createReferralGate({
     try {
       res.status(200);
       res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.setHeader("Content-Length", String(total));
-      let off = 0;
-      // Not awaited: a slow reader holds its own socket, never this run's slot.
-      const next = () => {
-        try {
-          if (res.destroyed) return;
-          if (off >= total) { res.end(); return; }
-          const part = body.subarray(off, Math.min(total, off + REFERRAL_SEND_CHUNK_BYTES));
-          off += part.length;
-          res.write(part, (err) => { if (err) return; taken += part.length; next(); });
-        } catch { /* a write that throws ends here; the close reads how much was taken */ }
-      };
-      next();
+      res.setHeader("Content-Length", String(body.length));
+      sent = sendCounted(res, body);
       if (redelivery) counters.redelivered++;
       return true;
     } catch (err) { notServed(`the answer could not be written: ${referralLogText(err?.message, 120)}`); return false; }
@@ -1959,7 +1983,7 @@ export function createReferralGate({
     if (settling.has(key)) return { ok: false, error: "this entry is being settled right now" };
     const e = book.get(key);
     if (!e) return { ok: false, error: "no such entry, or the book could not be written" };
-    if ((outcome === null || outcome === undefined || outcome === "") && e.state !== "charged-undelivered") outcome = "dismissed";
+    if ((outcome === null || outcome === undefined) && e.state !== "charged-undelivered") outcome = "dismissed";
     if (!REFERRAL_HAND_OUTCOMES.includes(outcome)) return { ok: false, error: `name the outcome: ${REFERRAL_HAND_OUTCOMES.join(", ")} (a charged, undelivered entry is never closed without one)` };
     const view = { slug: e.slug, payer: e.payer, amount: e.amount, state: e.state, tx: e.tx || null, delivered: e.delivered === true };
     let debt = false;
