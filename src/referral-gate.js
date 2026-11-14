@@ -37,25 +37,31 @@
 //     gate's own, so referral traffic never changes a direct buyer's outcome.
 //     Without a ticket the payment is settled and the answer is kept for the
 //     buyer's re-send.
-//   - Before /settle is called, the intent is written to a durable book
-//     (src/referral-book.js); with no intent stored, /settle is not called.
-//     One /settle is in flight per authorization. An answer that does not say
-//     whether the payment moved is decided by the chain
-//     (src/referral-chain.js): a payment has landed only when the receipt of
-//     the transaction that used the nonce shows success and a USDC transfer
-//     from the payer to the pay-to address of at least the amount. A nonce
-//     spent any other way (a cancel, a transfer elsewhere) delivers nothing
-//     and books nothing.
-//   - The tool's answer is kept, against the authorization, for the
-//     authorization's life: a re-send of the same PAYMENT-SIGNATURE returns
-//     it when the payment landed, with no second run and no second sale.
+//   - The chain head is read before /verify, and the intent (with that head)
+//     is written to a durable book (src/referral-book.js) before /settle;
+//     with no head or no intent stored, nothing runs or nothing is sent. One
+//     /settle is in flight per authorization.
+//   - PAID MEANS ROUTED TO US (src/referral-proof.js). The authorization
+//     names only the split contract, which pays whichever merchant its caller
+//     names. A payment is ours only when one receipt shows the
+//     authorization's own transfer into the contract AND the contract's
+//     routed-payment event naming this buyer, this amount and our merchant
+//     id, paid out to our payout wallet. Routed elsewhere, a cancel or a
+//     transfer elsewhere delivers nothing and books nothing; a receipt shape
+//     that is not recognized is unknown (held), never paid and never unpaid.
+//     The facilitator's own "success" is checked the same way first.
+//   - The tool's answer is kept, against the authorization, for a few minutes
+//     (REFERRAL_ANSWER_RETENTION_MS): a re-send of the same PAYMENT-SIGNATURE
+//     returns it when the payment landed, with no second run and no second
+//     sale. A delivered mark is written before any answer byte goes out.
 //   - A sale is booked once, at the NET amount (gross less the slug's
 //     commission and the fee); the gross is the quote.
 //   - Unsettled runs are bounded per signed payer and per client address in
 //     this gate's own lane; the direct routes' settle breaker, its status
 //     word and its counters neither see nor judge a referral run.
-//   - This rail has no refund path. A charge that could not be delivered is
-//     logged as CHARGED-BUT-NOT-SERVED, counted, and kept in the book.
+//   - A charge proven ours whose answer can no longer be delivered is owed
+//     back at the gross in the refund ledger (oweIfUndeliverable), only
+//     behind that proof and never for an entry carrying the delivered mark.
 //
 // TIME. deadline + settle reserve + verify wait must fit the 60 s window the
 // 402 asks a buyer to sign for (referralConfig refuses a configuration that
