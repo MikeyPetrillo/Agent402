@@ -148,9 +148,12 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
     const reason = safeReason(d?.errorReason ?? d?.invalidReason ?? d?.error, `facilitator_http_${r.status}`);
     // A 401, or a reason about our own request, is this server's fault, never the buyer's credential.
     if (r.status === 401 || OURS.has(reason)) return answer({ status: r.status, reason, retryable: true, side: "ours" });
-    // Any other 4xx is the facilitator's verdict on the request; anything else says nothing about the payment.
-    const verdict = r.status >= 400 && r.status < 500;
-    return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason) || r.status === 503, inDoubt: !verdict, side: verdict ? "buyer" : null });
+    // A verdict on the payment is only the documented one: a 200 with
+    // isValid false. Any other answer (an intermediary's 403 or 429, a 5xx, a
+    // page that is not JSON, an undocumented 4xx) says nothing about the
+    // buyer's payment: the service is unavailable, and nothing is counted
+    // against the buyer.
+    return answer({ status: r.status, reason: r.data ? reason : `facilitator_http_${r.status}`, retryable: true, inDoubt: true });
   }
 
   /** Settle the payment. `ok` only with a transaction hash. */
