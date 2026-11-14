@@ -42,7 +42,7 @@ ok(staleDays >= 7 && staleDays <= 16, `the scheduled pass buys a listing with no
 ok(/SLUGS:\s*\$\{\{\s*inputs\.slugs\s*\}\}/.test(wf), "a dispatch can name exact slugs");
 // The script's own money bounds and request shapes.
 {
-  const { examplesFromSpec, sweepRequest, atRiskFailures } = await import("./refresh-bazaar.js");
+  const { examplesFromSpec, sweepRequest, atRiskFailures, sweepVerdict } = await import("./refresh-bazaar.js");
   const src = await readFile(new URL("./refresh-bazaar.js", import.meta.url), "utf8");
   ok(/if \(estCost > MAX_SPEND_USD\) \{[\s\S]{0,200}return 2;/.test(src), "a pass whose estimate is over the spend cap refuses to start");
   ok(/Math\.min\(MAX_PRICE_USD \+ 0\.05, MAX_SPEND_USD\)/.test(src), "one signature pays at most the per-route ceiling plus five cents, never above the run's cap");
@@ -55,15 +55,18 @@ ok(/SLUGS:\s*\$\{\{\s*inputs\.slugs\s*\}\}/.test(wf), "a dispatch can name exact
   const clip = async () => new Uint8Array([82, 73, 70, 70]);
   const mp = await sweepRequest({ method: "POST", path: "/v1/audio/transcriptions" }, ex, { target: "http://t", headers: { "X-H": "1" }, clip });
   ok(mp.init.body instanceof FormData && mp.init.body.get("file") instanceof Blob && mp.init.body.get("file").size === 4 && mp.init.body.get("language") === "en" && !("Content-Type" in mp.init.headers) && mp.init.headers["X-H"] === "1", "a multipart route is paid with a file part and its text fields, with no JSON content type");
-  const js = await sweepRequest({ method: "POST", path: "/api/hash" }, ex, { target: "http://t", clip });
-  ok(js.init.body === '{"text":"hello"}' && js.init.headers["Content-Type"] === "application/json" && js.url === "http://t/api/hash", "a JSON route is paid with its JSON example");
-  const gt = await sweepRequest({ method: "GET", path: "/api/time" }, ex, { target: "http://t", clip });
-  ok(gt.url === "http://t/api/time?tz=UTC" && gt.init.body === undefined, "a GET route is paid with its query example");
+  const js = await sweepRequest({ method: "POST", path: "/api/hash" }, ex, { target: "http://t", headers: { "X-H": "1" }, clip });
+  ok(js.init.body === '{"text":"hello"}' && js.init.headers["Content-Type"] === "application/json" && js.init.headers["X-H"] === "1" && js.url === "http://t/api/hash", "a JSON route is paid with its JSON example and the caller's headers");
+  const gt = await sweepRequest({ method: "GET", path: "/api/time" }, ex, { target: "http://t", headers: { "X-H": "1" }, clip });
+  ok(gt.url === "http://t/api/time?tz=UTC" && gt.init.body === undefined && gt.init.headers["X-H"] === "1", "a GET route is paid with its query example and the caller's headers");
   const day = 86400000;
-  const fresh = new Map([["/a", 5 * day], ["/b", 23 * day], ["/c", 29 * day]]);
-  ok(JSON.stringify(atRiskFailures(["/a", "/b", "/c", "/unlisted"], fresh)) === JSON.stringify(["/b", "/c", "/unlisted"]), "a failed buy puts a listing at risk when it is unlisted or 23 days from its last settlement");
+  const fresh = new Map([["/a", 5 * day], ["/b", 20 * day], ["/c", 29 * day], ["/d", 19.9 * day]]);
+  ok(JSON.stringify(atRiskFailures(["/a", "/b", "/c", "/d", "/unlisted"], fresh)) === JSON.stringify(["/b", "/c", "/unlisted"]), "a failed buy puts a listing at risk when it is unlisted or 20 days from its last settlement");
+  ok(sweepVerdict({ ok: 9, fail: 1, failedPaths: ["/b"] }, fresh).exitCode === 1 && sweepVerdict({ ok: 9, fail: 1, failedPaths: ["/a"] }, fresh).exitCode === 0, "the pass fails on a failed buy at risk and passes on one that is not");
+  ok(sweepVerdict({ ok: 0, fail: 2, failedPaths: ["/a", "/d"] }, fresh).exitCode === 1 && sweepVerdict({ ok: 0, fail: 0, failedPaths: [] }, fresh).exitCode === 0 && sweepVerdict({ ok: 3, fail: 0, failedPaths: [] }, new Map()).exitCode === 0, "a wipeout fails; nothing to buy and a clean pass do not");
+  ok(/AT_RISK_DAYS \|\| "20"/.test(src), "the at-risk age defaults to 20 days");
   ok(atRiskFailures(["/a", "/c"], new Map()).length === 0 && atRiskFailures([], fresh).length === 0, "with no feed read, or no failed buy, nothing is at risk");
-  ok(/const atRisk = atRiskFailures\(results\.failedPaths, freshness, AT_RISK_DAYS\);[\s\S]{0,400}return 1;/.test(src) && /Failed buys \(/.test(src), "the sweep names every failed buy and fails on one at risk");
+  ok(/const verdict = sweepVerdict\(results, freshness, AT_RISK_DAYS\);[\s\S]{0,400}return verdict\.exitCode;/.test(src) && /Failed buys \(/.test(src), "the sweep names every failed buy and returns the verdict's exit code");
 }
 ok(/BATCH_COUNT/.test(wf) && /BATCH_INDEX/.test(wf), "batches the pass so one run cannot time out mid-catalog");
 ok(/max-parallel:\s*1/.test(wf), "batches run sequentially - one burner address, concurrent buys race their own nonces");

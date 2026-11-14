@@ -124,8 +124,9 @@ const SLUG_PREFIX = (process.env.SLUG_PREFIX || "").trim();
 // listed at all. Unset = the old behaviour, sweep everything selected.
 const STALE_DAYS = Number(process.env.STALE_DAYS || "0");
 // A failed sweep buy fails the pass when its listing is this old or unlisted
-// (AT_RISK_DAYS, default 23: one weekly pass before the 30-day removal).
-const AT_RISK_DAYS = Number(process.env.AT_RISK_DAYS || "23");
+// (AT_RISK_DAYS, default 20: a failure at the 21-day weekly pass is reported
+// with one more pass left before the 30-day removal).
+const AT_RISK_DAYS = Number(process.env.AT_RISK_DAYS || "20");
 const UPSTREAM_FREE_EXTRA = new Set((process.env.UPSTREAM_FREE_EXTRA || "memory-").split(",").map((x) => x.trim()).filter(Boolean));
 const costsNothingUpstream = (t) =>
   t.computePayable || [...UPSTREAM_FREE_EXTRA].some((p) => t.slug === p || t.slug.startsWith(p));
@@ -355,13 +356,21 @@ export async function sweepRequest(t, examples, { target = TARGET, headers = {},
 }
 
 /** The sweep's failed buys that put a listing at risk: the route is not listed
- *  at all, or its last settlement is `atRiskDays` old or more, so the next
- *  pass may come after the 30-day removal. `failed` is a list of paths,
+ *  at all, or its last settlement is `atRiskDays` old or more (20: a weekly
+ *  pass that fails at 21 days is reported then, with one more pass left
+ *  before the 30-day removal). `failed` is a list of paths,
  *  `freshness` the map freshnessOf builds (empty when no feed was read: then
  *  nothing is known to be at risk). */
-export function atRiskFailures(failed, freshness, atRiskDays = 23) {
+export function atRiskFailures(failed, freshness, atRiskDays = 20) {
   if (!freshness || freshness.size === 0) return [];
   return failed.filter((p) => { const age = freshness.get(p); return age === undefined || age >= atRiskDays * 86400000; });
+}
+
+/** The sweep's exit code: 1 on a wipeout (buys failed and none succeeded) and
+ *  on any failed buy that leaves a listing at risk, 0 otherwise. */
+export function sweepVerdict({ ok = 0, fail = 0, failedPaths = [] }, freshness, atRiskDays = 20) {
+  const atRisk = atRiskFailures(failedPaths, freshness, atRiskDays);
+  return { atRisk, exitCode: atRisk.length || (fail > 0 && ok === 0) ? 1 : 0 };
 }
 
 export async function runMissingMode({ sweep = false } = {}) {
@@ -482,12 +491,9 @@ export async function runMissingMode({ sweep = false } = {}) {
     // wipeout, and on a failed buy whose listing is at risk (not listed, or
     // last settled long enough ago that the next pass may come too late).
     if (results.failedPaths.length) console.warn(`Failed buys (${results.failedPaths.length}): ${results.failedPaths.join(", ")}`);
-    const atRisk = atRiskFailures(results.failedPaths, freshness, AT_RISK_DAYS);
-    if (atRisk.length) {
-      console.error(`${atRisk.length} failed buy(s) leave a listing at risk of removal (not listed, or no settlement in ${AT_RISK_DAYS} days): ${atRisk.join(", ")}`);
-      return 1;
-    }
-    return results.ok > 0 || results.fail === 0 ? 0 : 1;
+    const verdict = sweepVerdict(results, freshness, AT_RISK_DAYS);
+    if (verdict.atRisk.length) console.error(`${verdict.atRisk.length} failed buy(s) leave a listing at risk of removal (not listed, or no settlement in ${AT_RISK_DAYS} days): ${verdict.atRisk.join(", ")}`);
+    return verdict.exitCode;
   }
 
   // Bazaar harvester is not instant. Give it ~60s then re-verify.
