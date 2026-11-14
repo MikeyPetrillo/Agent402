@@ -2494,6 +2494,26 @@ try {
       const collected = await big(slowOne);
       await wait(100);
       ok(stalledEnd.status === "cut" && afterReset?.state === "charged-undelivered" && afterReset.partial === true && afterReset.delivered === false && collected.status === 200 && collected.json?.blob?.length === N && appD.book.get(slowOne.key) === null, `when that send ends cut off the entry is still there, partly served, and the re-send collects the whole answer (${afterReset?.state} then ${collected.status})`);
+      // The same for a success delivered before its receipt could be read: the receipt arriving mid-send does not close it.
+      {
+        fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + "ab12".repeat(16) } });
+        const un = await pay();
+        rig.stalled.length = 0;
+        const unCall = big(un, { "x-test-stall": "16384" });
+        for (let i = 0; i < 200 && rig.stalled.length === 0; i++) await wait(10);
+        fac.reset();
+        const asSent = appD.book.get(un.key);
+        fac.land(un.p.authorization, "0x" + "ab12".repeat(16));
+        await appD.gate.sweepOnce();
+        const confirmedMidSend = appD.book.get(un.key);
+        rig.stalled[0].destroy();
+        await unCall;
+        await wait(150);
+        const cutAfter = appD.book.get(un.key);
+        const got = await big(un);
+        await wait(100);
+        ok(asSent?.state === "unconfirmed" && asSent.delivered === true && confirmedMidSend?.state === "charged-undelivered" && confirmedMidSend.delivered === true && cutAfter?.state === "charged-undelivered" && cutAfter.partial === true && got.status === 200 && got.json?.blob?.length === N && appD.book.get(un.key) === null, `an unconfirmed payment whose receipt proves it while its answer is still going out keeps its entry (now charged); the cut-off send is then partly served and the re-send collects the answer (${asSent?.state} -> ${confirmedMidSend?.state} -> ${cutAfter?.state}; re-send ${got.status})`);
+      }
       // After the bound a delivered mark left by a process that died is closed as before.
       const dead = await pay();
       await appD.book.intent({ key: dead.key, slug: "big", payer: dead.p.authorization.from, nonce: dead.p.authorization.nonce, amount: "30000", validBefore: Number(dead.p.authorization.validBefore), fromBlock: fac.chainState.head });

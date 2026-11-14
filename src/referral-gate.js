@@ -1029,8 +1029,6 @@ export function createReferralGate({
     const e = snapshot ? book.get(snapshot.key) : null;
     if (!e || e.state !== "charged-undelivered" || !/^0x[0-9a-fA-F]{64}$/.test(String(e.tx || ""))) return false;
     const mem = kept.get(e.key);
-    // A send that may still be going out is left to its own end.
-    if (mem?.sending === true || (e.delivered === true && Number(e.sendingUntil) > now())) return false;
     if (e.delivered === true || mem?.delivered === true) { await closeEntry(e.key); return false; }
     if (settling.has(e.key)) return false;
     if (mem && now() < mem.expiresAt) return false;
