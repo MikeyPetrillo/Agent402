@@ -19,8 +19,8 @@
 // named, and the run exits 3 (exit 1 when something also failed): most likely
 // its source still carries an old price (or the run after the last deploy
 // did not complete). The remedy is a paid call to the route through the
-// importer's source (bazaar-keepalive.yml with slug_prefix, stale_days=0 and
-// max_price_usd at or above the route's price). A route priced per request (`quoted` or `pricedByModel`
+// importer's source (bazaar-keepalive.yml with slugs, stale_days=0 and
+// max_price_usd and max_spend_usd at or above the route's price). A route priced per request (`quoted` or `pricedByModel`
 // in /api/pricing) is corrected the same way and never flagged, since the
 // importer's source carries the amount of the last call sold.
 //
@@ -204,7 +204,7 @@ async function main() {
   }
   const rewritten = process.env.INDEX402_FLAG_REWRITTEN === "1" ? rewrittenByImporter(updates) : [];
   for (const u of rewritten) console.error(`  REWRITTEN ${plain(u.url)}: the index's own source carries $${u.from}, the catalog price is $${u.to}`);
-  if (rewritten.length) console.error(`${rewritten.length} imported listing(s) of a fixed-price route were off the catalog price on the daily run: most likely the importer's source still carries an old price for them (or the run after the last deploy did not complete). A paid call to the route through that source refreshes it (bazaar-keepalive.yml with slug_prefix, stale_days=0 and max_price_usd at or above the route's price).`);
+  if (rewritten.length) console.error(`${rewritten.length} imported listing(s) of a fixed-price route were off the catalog price on the daily run: most likely the importer's source still carries an old price for them (or the run after the last deploy did not complete). A paid call to the route through that source refreshes it (bazaar-keepalive.yml with slugs, stale_days=0 and max_price_usd and max_spend_usd at or above the route's price).`);
   if (failed) process.exit(1);
   if (rewritten.length) process.exit(3);
 }

@@ -327,7 +327,13 @@ else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
   // The job's own limits.
   const limitMin = Number((wf.match(/timeout-minutes:\s*(\d+)/) || [])[1]);
   ok(DEFAULT_RUN_BUDGET_MS <= 13 * 60_000 && limitMin * 60_000 >= DEFAULT_RUN_BUDGET_MS + 6 * 60_000, `the job limit (${limitMin} min) leaves six minutes past the run budget (${DEFAULT_RUN_BUDGET_MS} ms) for a write already started`);
-  ok(/node scripts\/index402-sync\.js\n\s+code=\$\?\n\s+echo "code=\$code" >> "\$GITHUB_OUTPUT"\n\s+exit "\$code"/.test(wf), "the sync step ends with the script's own exit code, so a failed run reads failed");
+  ok(/node scripts\/index402-sync\.js\n\s+code=\$\?\n\s+echo "code=\$code" >> "\$GITHUB_OUTPUT"\n[^\n]*\n\s+if \[ "\$code" = "3" \]; then exit 0; fi\n\s+exit "\$code"/.test(wf), "the sync step ends with the script's own exit code (3 reads as passed: its issue reports it), so a failed run reads failed");
+  ok(!/^concurrency:/m.test(wf) && /\n    concurrency:\n      group: index402-sync\n      cancel-in-progress: false/.test(wf), "the concurrency group is on the job, so a skipped run never replaces a waiting daily run");
+  ok(/slugs set to the route's slug, stale_days=0, and max_price_usd and max_spend_usd/.test(script), "the remedy names the exact-match input and both caps");
+  {
+    const ka = readFileSync(new URL("../.github/workflows/bazaar-keepalive.yml", import.meta.url), "utf8");
+    ok(/\n      slugs:\n/.test(ka) && /SLUGS: \$\{\{ inputs\.slugs \}\}/.test(ka) && /\n      stale_days:\n/.test(ka) && /\n      max_price_usd:\n/.test(ka) && /\n      max_spend_usd:\n/.test(ka), "every input the remedy names exists on the keep-alive workflow");
+  }
   rmSync(dir, { recursive: true, force: true });
 }
 { // A dry run writes and reads back nothing.

@@ -22,14 +22,16 @@ on:
     workflows: ["Deploy to Railway"]
     types: [completed]
 
-concurrency:
-  group: index402-sync
-  cancel-in-progress: false
-
 jobs:
   sync:
     # On workflow_run: only a successful push run of this repository's main.
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
+    # On the job, not the workflow: a run whose job is skipped (a deploy that
+    # is not a successful push of main) takes no place in the group, so it
+    # never replaces a daily run that is waiting.
+    concurrency:
+      group: index402-sync
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     # The script stops starting writes at 13 minutes and ends itself, so the
     # page step below still runs.
@@ -57,6 +59,8 @@ jobs:
           node scripts/index402-sync.js
           code=$?
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          # Exit 3 is reported by its issue, not by a failed run each day.
+          if [ "$code" = "3" ]; then exit 0; fi
           exit "$code"
 
       # Two issues, one per cause, so a failed sync is never hidden behind a
@@ -103,7 +107,7 @@ jobs:
           fi
           if [ "$CODE" = "3" ]; then
             if [ -z "$BACK_OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$BACK_TITLE" --body "On the daily run an imported 402 Index listing of a fixed-price route was off the catalog price and was corrected again (the REWRITTEN lines in the run name each one). The index imports these listings from its own source, which most likely still carries an old price, so it will write the old price back. Remedy: one paid call to each named route, which refreshes that source: dispatch the Bazaar keep-alive workflow with slug_prefix set to the route's slug, stale_days=0, and max_price_usd at or above its price. This closes after two clean daily runs in a row. $RUN_URL"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$BACK_TITLE" --body "On the daily run an imported 402 Index listing of a fixed-price route was off the catalog price and was corrected again (the REWRITTEN lines in the run name each one). The index imports these listings from its own source, which most likely still carries an old price, so it will write the old price back. Remedy: one paid call to each named route, which refreshes that source: dispatch the Bazaar keep-alive workflow with slugs set to the route's slug, stale_days=0, and max_price_usd and max_spend_usd at or above its price. This closes after two clean daily runs in a row. $RUN_URL"
             elif [ "${LAST_KIND:-}" = "clean" ]; then
               gh issue comment "$BACK_OPEN" --repo "$GITHUB_REPOSITORY" --body "Written back again at $NOW. $RUN_URL"
             fi
