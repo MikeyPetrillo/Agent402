@@ -53,9 +53,18 @@ export function referralRequestDigest(body, timestampSeconds) {
 // Reasons that say the payment did not move and the same authorization may be
 // sent again.
 const RETRYABLE = new Set(["lookup_unavailable", "merchant_unavailable", "retryable"]);
-// Definite refusals that are about this server's request, never the buyer's payment.
-const OURS = new Set([...RETRYABLE, "merchant_signature", "invalid_request", "signing_failed", "facilitator_http_400", "facilitator_http_401"]);
+// Definite refusals that are about this server's side, never the buyer's
+// payment (the buyer is answered 503 and nothing is counted against it).
+const OURS = new Set([...RETRYABLE, "merchant_signature", "signing_failed", "facilitator_http_401"]);
 const sideOf = (reason) => (OURS.has(reason) ? "ours" : "buyer");
+// The ONLY refusals that count toward the gate's own-fault hold: the
+// facilitator refusing this server's signature (a 401, or the documented
+// merchant-signature reason), and a request this server could not sign. A
+// 400 is about the payment the buyer sent, and a lookup the facilitator could
+// not make is its own: a buyer must not be able to close the route for
+// everyone by sending payments the facilitator rejects.
+const OWN_FAULT = new Set(["merchant_signature", "signing_failed", "facilitator_http_401"]);
+const ownFaultOf = (status, reason) => status === 401 || OWN_FAULT.has(reason);
 // Reasons that leave the outcome open: the facilitator may still land it.
 const PENDING = new Set(["settle_pending", "facilitator_timeout"]);
 
@@ -85,7 +94,7 @@ async function readJsonCapped(res) {
   } catch { return null; }
 }
 
-const answer = (o) => ({ ok: false, transaction: null, payer: null, reason: null, retryable: false, status: 0, inDoubt: false, side: null, ...o });
+const answer = (o) => ({ ok: false, transaction: null, payer: null, reason: null, retryable: false, status: 0, inDoubt: false, side: null, ownFault: false, ...o });
 
 /**
  * @param {object} o
@@ -144,14 +153,16 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
     if (r.failure) return answer({ status: r.status, reason: r.failure, retryable: r.sent, inDoubt: true });
     const d = r.data;
     if (r.status === 200 && d && d.isValid === true) return answer({ ok: true, status: 200, payer: ADDR.test(String(d.payer || "")) ? String(d.payer).toLowerCase() : null });
-    if (r.status === 200 && d && d.isValid === false) { const why = safeReason(d.invalidReason, "invalid_payment"); return answer({ status: 200, reason: why, side: OURS.has(why) ? "ours" : "buyer" }); }
+    if (r.status === 200 && d && d.isValid === false) { const why = safeReason(d.invalidReason, "invalid_payment"); return answer({ status: 200, reason: why, side: sideOf(why), ownFault: ownFaultOf(200, why) }); }
     const reason = safeReason(d?.errorReason ?? d?.invalidReason ?? d?.error, `facilitator_http_${r.status}`);
-    // A 401, or a reason about our own request, is this server's fault, never the buyer's credential.
-    if (r.status === 401 || OURS.has(reason)) return answer({ status: r.status, reason, retryable: true, side: "ours" });
-    // A verdict on the payment is only the documented one: a 200 with
-    // isValid false. Any other answer (an intermediary's 403 or 429, a 5xx, a
-    // page that is not JSON, an undocumented 4xx) says nothing about the
-    // buyer's payment: the service is unavailable, and nothing is counted
+    // A 401, or a reason about our own side, is never the buyer's credential.
+    if (r.status === 401 || OURS.has(reason)) return answer({ status: r.status, reason, retryable: true, side: "ours", ownFault: ownFaultOf(r.status, reason) });
+    // The documented 400 (a JSON answer) refuses the payment that was sent: the buyer's credential.
+    if (r.status === 400 && d) return answer({ status: 400, reason, side: "buyer" });
+    // A verdict on the payment is only a documented one: a 200 with isValid
+    // false, or that 400. Any other answer (an intermediary's 403 or 429, a
+    // 5xx, a page that is not JSON, an undocumented 4xx) says nothing about
+    // the buyer's payment: the service is unavailable, and nothing is counted
     // against the buyer.
     return answer({ status: r.status, reason: r.data ? reason : `facilitator_http_${r.status}`, retryable: true, inDoubt: true });
   }
@@ -160,7 +171,7 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
   async function settle(paymentPayload, paymentRequirements, { timeoutMs = settleTimeoutMs } = {}) {
     const r = await post("/settle", paymentPayload, paymentRequirements, { timeoutMs: Math.max(1_000, Math.min(settleTimeoutMs, Number(timeoutMs) || settleTimeoutMs)), signed: true });
     // Not sent at all: nothing can have moved.
-    if (r.failure && !r.sent) return answer({ reason: r.failure, side: "ours" });
+    if (r.failure && !r.sent) return answer({ reason: r.failure, side: "ours", ownFault: true });
     if (r.failure) return answer({ status: r.status, reason: r.failure, inDoubt: true });
     const d = r.data;
     if (r.status === 200 && d && d.success === true) {
@@ -174,8 +185,9 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
     // and the 503 that names a lookup it could not make. None of them moved
     // money. Any other status (an intermediary's 403, 408 or 429, a 5xx) says
     // nothing about the payment.
-    if (r.status === 200 && d && d.success === false) return answer({ status: 200, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason) });
-    if (r.status === 400 || r.status === 401 || r.status === 409) return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason) });
+    if (r.status === 200 && d && d.success === false) return answer({ status: 200, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason), ownFault: ownFaultOf(200, reason) });
+    if (r.status === 401) return answer({ status: 401, reason, side: "ours", ownFault: true });
+    if (r.status === 400 || r.status === 409) return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason), ownFault: ownFaultOf(r.status, reason) });
     if (r.status === 503 && RETRYABLE.has(reason)) return answer({ status: 503, reason, retryable: true, side: "ours" });
     return answer({ status: r.status, reason, inDoubt: true });
   }

@@ -35,6 +35,7 @@ import { chainVerdict } from "./referral-chain.js";
 
 export const REFERRAL_BOOK_DOC = "referral-settlements";
 export const MAX_ENTRIES = 2000;
+const RESOLVED_MAX = 200;
 /** An authorization is read as expired this long after its validBefore (host clock slack). */
 export const EXPIRY_SLACK_MS = 120_000;
 
@@ -51,9 +52,12 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   // The gate's own hang-up forgiveness records ([time, micro-dollars, key
   // digests]), kept here so a restart does not refill that budget.
   let forgiven = [];
+  // Entries an operator resolved by hand, with the note given (the last RESOLVED_MAX).
+  let resolved = [];
   const absorb = (b) => {
     entries = b && typeof b === "object" && b.entries && typeof b.entries === "object" ? { ...b.entries } : {};
     forgiven = b && typeof b === "object" && Array.isArray(b.forgiven) ? b.forgiven.filter((r) => Array.isArray(r) && r.length === 3) : [];
+    resolved = b && typeof b === "object" && Array.isArray(b.resolved) ? b.resolved.filter((r) => r && typeof r === "object") : [];
   };
   try { absorb(store.loadSync(null)); } catch { /* read below */ }
   const ready = Promise.resolve().then(() => store.load(null)).then((b) => { if (b) absorb(b); }).catch(() => {});
@@ -63,9 +67,10 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     const r = await store.update((body) => {
       const cur = body && typeof body === "object" && body.entries && typeof body.entries === "object" ? { ...body.entries } : {};
       const kept = body && typeof body === "object" && Array.isArray(body.forgiven) ? body.forgiven : [];
-      const out = fn(cur, kept);
-      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept };
-    }, { fallback: { entries: {}, forgiven: [] } });
+      const done = body && typeof body === "object" && Array.isArray(body.resolved) ? body.resolved.slice() : [];
+      const out = fn(cur, kept, done);
+      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept, resolved: done.slice(-RESOLVED_MAX) };
+    }, { fallback: { entries: {}, forgiven: [], resolved: [] } });
     if (r.ok && r.body) absorb(r.body);
     return !!r.ok;
   }
@@ -90,15 +95,38 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       if (full) say("error", `the settlement book is full (${maxEntries} open entries); a new settlement is refused before /settle until entries resolve`);
       return ok && !full;
     },
-    /** Change an entry (`patch` merged), or remove it (`patch` null). */
+    /** Change an entry (`patch` merged), or remove it (`patch` null).
+     *  Resolves true only when the store answered AND the change stands: a
+     *  patch on an entry that is not there is false; a removal of one that is
+     *  already gone is true. A caller that must know (the delivered mark, a
+     *  closing write) reads the result. */
     async resolve(key, patch) {
-      return change((cur) => {
+      let ran = false, found = false;
+      const ok = await change((cur) => {
+        ran = true;
         if (!cur[key]) return SKIP_UPDATE;
+        found = true;
         if (patch === null) delete cur[key];
         else cur[key] = { ...cur[key], ...patch, updatedAt: now() };
         return undefined;
       });
+      return ok && ran && (found || patch === null);
     },
+    /** An operator closes an entry by hand: removed, and recorded with the
+     *  note (who, why) before it goes. `{ ok, entry }`. */
+    async resolveByHand(key, { note = "", outcome = "dismissed" } = {}) {
+      let entry = null;
+      const ok = await change((cur, _kept, done) => {
+        if (!cur[key]) return SKIP_UPDATE;
+        entry = cur[key];
+        done.push({ key, slug: entry.slug, payer: entry.payer, amount: entry.amount, tx: entry.tx || null, state: entry.state, delivered: entry.delivered === true, outcome: String(outcome).slice(0, 40), note: String(note).slice(0, 300), at: now() });
+        delete cur[key];
+        return undefined;
+      });
+      if (ok && entry) say("error", `an operator resolved a settlement by hand (${entry.slug} payer=${String(entry.payer).slice(0, 6)} state=${entry.state} outcome=${String(outcome).slice(0, 40)})`);
+      return { ok: ok && !!entry, entry };
+    },
+    resolvedByHand: () => resolved.slice(),
     /** Record one forgiven hang-up; records older than `windowMs` are dropped, at most `max` kept. */
     async noteForgiven(record, { windowMs = 24 * 3600_000, max = 2000 } = {}) {
       const t = now();
@@ -111,7 +139,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     size: () => Object.keys(entries).length,
     full: () => Object.keys(entries).length >= maxEntries,
     counts: () => {
-      const c = { intent: 0, "in-doubt": 0, "charged-undelivered": 0, unconfirmed: 0, contradicted: 0, "refund-owed": 0 };
+      const c = { intent: 0, "in-doubt": 0, "charged-undelivered": 0, unconfirmed: 0, contradicted: 0, "refund-owed": 0, delivering: 0 };
       for (const e of Object.values(entries)) if (e.state in c) c[e.state]++;
       return c;
     },
@@ -124,7 +152,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      * in flight in this process. At most `max` entries are read a pass, the
      * ones read least recently first, so every open entry is reached in turn.
      */
-    async sweep({ chain, bookSale, payTo, onUnpaid = () => {}, onCharged = async () => {}, graceMs = 120_000, max = 50 } = {}) {
+    async sweep({ chain, bookSale, payTo, minNetOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, graceMs = 120_000, max = 50 } = {}) {
       const t = now();
       const out = { read: 0, landed: 0, unpaid: 0, expired: 0, unknown: 0, charged: 0 };
       try { const b = await store.load(null); if (b) absorb(b); } catch { /* the last body read */ }
@@ -132,10 +160,14 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         .filter((e) => (e.state === "in-doubt" || (e.state === "intent" && t - (e.intentAt || e.at || 0) >= graceMs)))
         .sort((a, b) => (a.checkedAt || 0) - (b.checkedAt || 0) || (a.at || 0) - (b.at || 0))
         .slice(0, max);
-      for (const e of due) {
+      for (const snapshot of due) {
+        // The entry as it stands NOW: an earlier step of this pass, or a
+        // request, may have changed or closed it since the list was made.
+        const e = entries[snapshot.key];
+        if (!e || (e.state !== "in-doubt" && e.state !== "intent")) continue;
         out.read++;
         let s;
-        try { s = await chain.state({ from: e.payer, nonce: e.nonce, payTo, amount: e.amount, fromBlock: e.fromBlock, validBefore: e.validBefore }); } catch { s = { used: null, paid: null, transaction: null, logsRead: false }; }
+        try { s = await chain.state({ from: e.payer, nonce: e.nonce, payTo, amount: e.amount, fromBlock: e.fromBlock, minNet: minNetOf(e) }); } catch { s = { used: null, paid: null, transaction: null, complete: false }; }
         const verdict = chainVerdict(s, { validBeforeMs: (Number(e.validBefore) || 0) * 1000, nowMs: t, slackMs: EXPIRY_SLACK_MS });
         if (verdict === "paid") {
           // The receipt proves the transfer: the only reading that books a sale.
@@ -159,13 +191,19 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         }
       }
       // A refund-owed mark is kept until its authorization can no longer be sent again.
-      for (const e of Object.values(entries)) {
-        if (e.state === "refund-owed" && t > (Number(e.validBefore) || 0) * 1000 + EXPIRY_SLACK_MS) await this.resolve(e.key, null);
+      for (const key of Object.keys(entries)) {
+        const e = entries[key];
+        if (e && e.state === "refund-owed" && t > (Number(e.validBefore) || 0) * 1000 + EXPIRY_SLACK_MS) await this.resolve(key, null);
       }
       // A charged entry is closed only by its delivery or by a refund owed
-      // the gate writes for it (onCharged); never dropped here.
-      for (const e of Object.values(entries)) {
-        if (e.state !== "charged-undelivered") continue;
+      // the gate writes for it (onCharged); never dropped here. Each is read
+      // again as it stands now. One that carries the delivered mark was
+      // served: its closing write did not land, and is made again here; it is
+      // never handed on as undelivered.
+      for (const key of Object.keys(entries)) {
+        const e = entries[key];
+        if (!e || e.state !== "charged-undelivered") continue;
+        if (e.delivered === true) { await this.resolve(key, null); continue; }
         out.charged++;
         try { await onCharged(e); } catch { /* the next pass asks again */ }
       }
