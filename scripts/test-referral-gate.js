@@ -104,6 +104,7 @@ function stubFacilitator() {
     data: `0x${[pad(buyer).slice(2), w32(merchantId), w32(0), w32(gross), w32(0), w32(0), w32(0), w32(0), w32(merchantAmt)].slice(0, words).join("")}`,
     logIndex: hex(i), blockNumber: hex(block),
   });
+  const seenSigned = new Set();
   const chainState = { head: 0x100000 };
   const rpcCalls = [];
   // Receipt-shaped landings, one authorization each.
@@ -165,7 +166,7 @@ function stubFacilitator() {
     verify: () => ({ status: 200, body: { isValid: true } }),
     // A facilitator that settles: the authorization lands, paid, in a real-shaped receipt.
     settle: (call) => ({ status: 200, body: { success: true, transaction: land(call.json.paymentPayload.payload.authorization, nextTx()), network: REFERRAL_NETWORK } }),
-    settleDelayMs: 0, verifyDelayMs: 0, rpcDown: false, receiptDown: false,
+    settleDelayMs: 0, verifyDelayMs: 0, rpcDown: false, receiptDown: false, acceptOnce: false, acceptOnceReason: null,
   });
   const mode = defaults();
   const server = createServer((req, res) => {
@@ -204,9 +205,16 @@ function stubFacilitator() {
         try {
           const digest = keccak256(concat([stringToHex(raw), numberToHex(Number(call.timestamp), { size: 8 })]));
           call.recovered = await recoverMessageAddress({ message: { raw: digest }, signature: call.signature });
+          call.digest = digest;
         } catch { call.recovered = null; }
       }
       calls.push(call);
+      // A facilitator that accepts a signed request ONCE (keyed on the signer and the signed payload hash).
+      if (mode.acceptOnce && (req.url === "/verify" || req.url === "/settle")) {
+        const once = `${String(call.recovered).toLowerCase()}:${call.digest}`;
+        if (!call.recovered || seenSigned.has(once)) { res.writeHead(401, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: mode.acceptOnceReason || "merchant_signature" })); }
+        seenSigned.add(once);
+      }
       const pick = req.url === "/verify" ? mode.verify : req.url === "/settle" ? mode.settle : null;
       if (!pick) { res.writeHead(404, { "content-type": "application/json" }); return res.end("{}"); }
       if (req.url === "/settle" && mode.settleDelayMs) await wait(mode.settleDelayMs);
@@ -1099,6 +1107,27 @@ try {
     ok(routed.othermerchant === "unpaid", `the same authorization and transfer, routed to ANOTHER merchant, is not paid to us (${routed.othermerchant})`);
     ok(["noevent", "nopayout", "badevent", "otherbuyer", "wronggross"].every((k) => routed[k] === "unknown"), `a shape that is not recognized (no event and no payout, our event without its payout, an event of another shape, of another buyer, of another gross) is UNKNOWN: never paid, never unpaid (${JSON.stringify(routed)})`);
     ok(prove(pair("paid"), { merchantId: "7" }) === "unpaid" && prove(pair("paid"), { payoutAddress: OUR_WALLET }) === "unknown" && prove(pair("paid"), { merchantId: null }) === "unknown" && prove(pair("payoutonly"), { minNet: "30001" }) === "unknown" && prove(pair("payoutonly"), { minNet: null }) === "unknown", "another merchant id configured reads not ours; another payout wallet, no merchant id, or a payout under the expected net reads unknown");
+    {
+      // Built by hand: each differs from a paid receipt in ONE thing.
+      const OTHER = "0x" + "7".repeat(40);
+      const net = 26298n;
+      const rc = (logs) => ({ transactionHash: tx, status: "0x1", to: PAY_TO, logs: logs.map((l, i) => ({ ...l, logIndex: `0x${i.toString(16)}` })) });
+      const pairOf = (a) => [fac.usedLog(a, 0, 1), fac.transferLog(a.from, PAY_TO, 30000n, 0, 1)];
+      const evOurs = (o = {}) => fac.routedLog({ router: PAY_TO, buyer: a1.from, merchantId: MERCHANT_ID, gross: 30000n, merchantAmt: net, ...o }, 0, 1);
+      const whole = rc([...pairOf(a1), fac.transferLog(PAY_TO, PAYOUT, net, 0, 1), evOurs()]);
+      const payoutFromElsewhere = rc([...pairOf(a1), fac.transferLog(OTHER, PAYOUT, net, 0, 1), evOurs()]);
+      const payoutOfAnotherAmount = rc([...pairOf(a1), fac.transferLog(PAY_TO, PAYOUT, net - 1n, 0, 1), evOurs()]);
+      const eventFromElsewhere = rc([...pairOf(a1), fac.transferLog(PAY_TO, PAYOUT, net, 0, 1), evOurs({ router: OTHER })]);
+      const noFloor = { minNet: null };
+      ok(prove(whole) === "paid" && prove(whole, noFloor) === "paid", "the hand-built whole receipt is paid, with or without a payout floor");
+      ok(prove(payoutFromElsewhere, noFloor) === "unknown", `a transfer to our payout wallet that does not come FROM the split contract is not its payout (${prove(payoutFromElsewhere, noFloor)})`);
+      ok(prove(payoutOfAnotherAmount, noFloor) === "unknown", `a payout that is not exactly the merchant amount the event states is not its payout (${prove(payoutOfAnotherAmount, noFloor)})`);
+      ok(prove(eventFromElsewhere, noFloor) === "unknown", `a routed event emitted by another address than the split contract is not read (${prove(eventFromElsewhere, noFloor)})`);
+      // Two authorizations of one buyer for one amount in one transaction: only the second is routed.
+      const a2 = { from: a1.from, to: PAY_TO, value: "30000", nonce: freshNonce() };
+      const two = rc([...pairOf(a1), ...pairOf(a2), fac.transferLog(PAY_TO, PAYOUT, net, 0, 1), evOurs()]);
+      ok(prove(two, noFloor) === "unknown" && prove(two, { ...noFloor, nonce: a2.nonce }) === "paid", `what the contract did with an authorization is read only up to the NEXT authorization: the routing after a later one does not prove an earlier one (${prove(two, noFloor)}, ${prove(two, { ...noFloor, nonce: a2.nonce })})`);
+    }
     const { ROUTED_EVENT_TOPIC, ROUTED_EVENT_SIGNATURE } = await import("../src/referral-proof.js");
     ok(ROUTED_EVENT_TOPIC === keccak256(stringToHex(ROUTED_EVENT_SIGNATURE)) && ROUTED_EVENT_TOPIC === ROUTED_TOPIC && prove(pair("othermerchant")) === "unpaid" && prove(pair("othermerchant"), { routedTopic: "0x" + "1".repeat(64) }) === "unknown", "the event topic is the keccak of the documented signature, and a configured topic replaces it (the documented event is then no longer read)");
     const verdicts = {};
@@ -1552,6 +1581,38 @@ try {
       fac.mode.settle = () => ({ status: 503, body: { errorReason: "lookup_unavailable" } });
       for (let i = 0; i < 4; i++) await send(`${app15.url}/ref/echo`, { body: { text: "s" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
       ok(app15.gate.stats().ownFaultStreak === 0 && app15.gate.stats().ownFaultHeld === 0, `nor do four 400s and four lookup failures at /settle (${app15.gate.stats().ownFaultStreak})`);
+      // At /verify too, only a refusal of our signature counts: a lookup the facilitator could not make is a 503 and no more.
+      fac.reset();
+      fac.mode.verify = () => ({ status: 503, body: { errorReason: "lookup_unavailable" } });
+      const lookups = [];
+      for (let i = 0; i < 4; i++) lookups.push(await send(`${app15.url}/ref/echo`, { body: { text: "v" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } }));
+      fac.reset();
+      ok(lookups.every((r) => r.status === 503 && r.json?.errorReason === "settlement_unavailable") && app15.gate.stats().ownFaultStreak === 0 && app15.gate.stats().ownFaultHeld === 0, `four lookup failures at /verify are answered 503 and do not count toward the hold (${app15.gate.stats().ownFaultStreak})`);
+      // No hand resolution while the entry's settle call is in flight.
+      fac.mode.settleDelayMs = 500;
+      const pBusy = await signPayment(accept, { account: newAccount() });
+      const kBusy = gateMod.referralReplayKey(pBusy.authorization);
+      const inFlight = send(`${app15.url}/ref/echo`, { body: { text: "settling" }, headers: { "payment-signature": pBusy.header, "x-test-ip": freshIp() } });
+      await wait(250);
+      const during = await app15.gate.resolveByHand(kBusy, { note: "resolving mid-settle" });
+      const settledCall = await inFlight;
+      fac.reset();
+      ok(app15.book.get(kBusy) === null && during.ok === false && /being settled/.test(during.error || "") && settledCall.status === 200, `an entry whose settle call is in flight cannot be resolved by hand (${during.error}); the call then settles as usual (${settledCall.status})`);
+      // F1. A facilitator that accepts each signed request once: /verify and /settle carry one body, and must not be one signed request.
+      fac.mode.acceptOnce = true;
+      const instant = await send(`${app15.url}/ref/echo`, { body: { text: "instant" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+      const vCall = fac.of("/verify")[0], sCall = fac.of("/settle")[0];
+      ok(instant.status === 200 && vCall.raw === sCall.raw && (vCall.timestamp !== sCall.timestamp) && vCall.signature !== sCall.signature && Math.abs(Number(sCall.timestamp) - Date.now() / 1000) < 60, `an instant tool's /verify and /settle, the same body, are signed with different timestamps: a facilitator that accepts a signed request once takes both (${instant.status}; ${vCall.timestamp} then ${sCall.timestamp})`);
+      // One locally valid, unfunded payment sent four times inside a second: four verifies of one body.
+      fac.mode.verify = () => ({ status: 200, body: { isValid: false, invalidReason: "insufficient_funds" } });
+      const same = await signPayment(accept, { account: newAccount() });
+      const sameIp = freshIp();
+      const four = [];
+      for (let i = 0; i < 4; i++) four.push(await send(`${app15.url}/ref/echo`, { body: { text: "again" }, headers: { "payment-signature": same.header, "x-test-ip": sameIp } }));
+      fac.mode.verify = () => ({ status: 200, body: { isValid: true } });
+      const next = await send(`${app15.url}/ref/echo`, { body: { text: "next" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+      ok(four.every((r) => r.status === 402 && r.json?.errorReason === "insufficient_funds") && app15.gate.stats().ownFaultStreak === 0 && app15.gate.stats().ownFaultHeld === 0 && next.status === 200, `one payment sent four times in a second is refused four times as the buyer's, never as a replay of our own signed request: the hold does not open and the next buyer is served (${four.map((r) => r.status).join(",")}; streak ${app15.gate.stats().ownFaultStreak}; ${next.status})`);
+      fac.reset();
       // One probe at a time after the cool-down.
       fac.mode.settle = () => ({ status: 401, body: { error: "merchant_signature" } });
       for (let i = 0; i < 3; i++) await send(`${app15.url}/ref/echo`, { body: { text: "s" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
@@ -1570,6 +1631,14 @@ try {
     const s503 = await mk(503, { errorReason: "lookup_unavailable" }).settle({}, {});
     const v400 = await mk(400, { errorReason: "invalid_request" }).verify({}, {});
     const v401 = await mk(401, {}).verify({}, {});
+    // A 401 that says the signed request was seen before is a replay, not a bad signature; and one body is never signed twice with one timestamp.
+    const sReplay = await mk(401, { error: "request_already_used" }).settle({}, {});
+    const vReplay = await mk(401, { error: "replayed_request" }).verify({}, {});
+    const stamps = [];
+    const frozen = createReferralSettler({ facilitatorUrl: "https://facilitator.example", signerKey: SIGNER_KEY, now: () => 1_800_000_000_000, fetchImpl: async (_u, init) => { stamps.push(`${init.headers["X-Agent-Timestamp"]}|${init.headers["X-Agent-Signature"]}`); return new Response(JSON.stringify({ isValid: true }), { status: 200 }); } });
+    for (let i = 0; i < 5; i++) await frozen.verify({ a: 1 }, { b: 2 });
+    await frozen.verify({ a: 2 }, { b: 2 });
+    ok(sReplay.side === "ours" && sReplay.ownFault === false && vReplay.ownFault === false && new Set(stamps.slice(0, 5)).size === 5 && stamps.slice(0, 5).map((x) => x.split("|")[0]).join(",") === "1800000000,1800000001,1800000002,1800000003,1800000004" && stamps[5].startsWith("1800000000|"), `a 401 whose reason says the request was already used does not count as our own fault; five requests with one body inside one second carry five timestamps, one second apart, and another body keeps the clock's (${stamps.slice(0, 5).map((x) => x.split("|")[0]).join(",")})`);
     ok(s400.side === "buyer" && s400.ownFault === false && s401.side === "ours" && s401.ownFault === true && sSig.side === "ours" && sSig.ownFault === true && s503.side === "ours" && s503.ownFault === false && v400.side === "buyer" && v400.inDoubt === false && v400.ownFault === false && v401.side === "ours" && v401.ownFault === true, "the settle client: a 400 is the buyer's refused payment; only a 401 or the merchant-signature reason is this server's own fault; a lookup failure is neither the buyer's nor a hold");
     // The facilitator is sent a payment rebuilt from validated fields, whatever else the buyer's object carries.
     fac.reset();
