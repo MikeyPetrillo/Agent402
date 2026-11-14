@@ -43,3 +43,24 @@ export function isPaidRail(rail) {
 
 /** The same set as a SQL list, so the queries cannot drift from the code. */
 export const PAYING_RAILS_SQL = `(${PAYING_RAILS.map((r) => `'${r}'`).join(",")})`;
+
+// Rails that are booked but never shown. A "referral" row (src/referral-gate.js)
+// is a sale settled through a referral network's split contract: its
+// price_usd is the NET that reached us and its quote_usd the gross the buyer
+// paid, so a reader that sums price_usd as revenue or as a buyer's spend
+// would misstate both, and the difference is the commission, which is
+// nobody's to read. Every reader of the sales table either filters on
+// PAYING_RAILS (which never holds a private rail), on a wire of its own, or
+// on PUBLIC_RAIL_SQL below; the buyer's own receipts and usage read these
+// rows at the gross (BUYER_AMOUNT_SQL). scripts/test-referral-gate.js reads every
+// SELECT in src/sales-ledger.js against this rule.
+export const PRIVATE_RAILS = Object.freeze(["referral"]);
+export function isPrivateRail(rail) {
+  return PRIVATE_RAILS.includes(String(rail || ""));
+}
+/** A WHERE clause term that leaves the private rails out. */
+export const PUBLIC_RAIL_SQL = `rail NOT IN (${PRIVATE_RAILS.map((r) => `'${r}'`).join(",")})`;
+/** The rails a buyer's own purchase history holds: the paying ones and the private ones. */
+export const BUYER_RAILS_SQL = `(${[...PAYING_RAILS, ...PRIVATE_RAILS].map((r) => `'${r}'`).join(",")})`;
+/** What the buyer paid on a row: the gross on a private rail, the price otherwise. */
+export const BUYER_AMOUNT_SQL = `(CASE WHEN rail IN (${PRIVATE_RAILS.map((r) => `'${r}'`).join(",")}) THEN COALESCE(quote_usd, price_usd) ELSE price_usd END)`;
