@@ -981,8 +981,9 @@ try {
     for (let i = 0; i < 205; i++) await call(R("echo"), { body: { text: `fill${i}` }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
     ok(app1.gate.stats().keptAnswers <= 200, `the kept answers stay inside their bound (${app1.gate.stats().keptAnswers})`);
     fac.land(doubted.authorization, "0x" + "0d".repeat(32));
+    const restoredBefore = app1.gate.stats().restoredAnswers;
     const got = await send(R("echo"), { body: { text: "owed" }, headers: { "payment-signature": doubted.header, "x-test-ip": dip } });
-    ok(got.status === 200 && got.json?.echo === "owed" && got.json.run === ran + 1, `an in-doubt answer is not pushed out by 205 settled calls: its buyer, once charged, collects it (${got.status})`);
+    ok(got.status === 200 && got.json?.echo === "owed" && got.json.run === ran + 1 && app1.gate.stats().restoredAnswers === restoredBefore, `an in-doubt answer is not pushed out by 205 settled calls: its buyer, once charged, collects it (${got.status})`);
   }
   fac.reset(); sales.length = 0;
 
