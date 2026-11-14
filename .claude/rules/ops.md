@@ -323,26 +323,35 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
 - **Referral settlement book:** `src/referral-book.js` keeps the referral gate's unfinished
   settlements in the `referral-settlements` state document (without a database the file
   `REFERRAL_BOOK_FILE`, else `/data/agent402-referral-settlements.json`, else the same name under
-  the temp directory): an `intent` written before `/settle` (with the chain head then, so the proof
-  is searched from there however late it is read), `in-doubt` when the call did not say whether the
-  payment moved, `unconfirmed` when the facilitator answered success and its receipt was not yet
-  readable, `contradicted` when the chain contradicts a success, `charged-undelivered` when the
-  payment is proven and the buyer has not received the answer, and a `refund-owed` mark (kept
-  until the authorization expires) once such a buyer is owed back. The document also holds the
-  gate's own forgiven hang-ups. The book holds no answer: owed answers are records of the
-  `referral-answers` collection, or files under `REFERRAL_ANSWER_DIR` (`src/referral-answers.js`),
-  deleted at their 10-minute expiry; a paid call writes the small index three times (about 4 ms each
-  on the file store with 300 open entries and 75 MB of answers at rest, measured). At most 2000
-  entries: a full book refuses a new intent (503 before `/settle`) and never drops one. The leased
-  sweep `referral-settle-sweep` (at boot and every `REFERRAL_SWEEP_MS`, default 60000; `contained`)
-  reads up to 50 open entries a pass, the ones read least recently first, so every one is reached
-  in turn: proven paid by its own transfer books the sale once; a nonce spent without paying, or an
-  authorization expired unused, closes the entry with nothing booked; unconfirmed ones are confirmed
-  or flagged; a `charged-undelivered` entry whose answer is gone becomes a refund owed at the gross
-  (`refundsOwed` covers it). Operator view: `/__operator/referral.json`. The word
-  `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads attention on
-  the conditions `.claude/rules/payments.md` lists; the status Worker and `heartbeat.yml` page on
-  it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
+  the temp directory): an `intent` written before `/settle` (with the chain head read before
+  `/verify`, so the proof is searched from there however late it is read), `in-doubt` when the
+  call did not say whether the payment moved, `unconfirmed` when the facilitator answered success
+  and its receipt was not yet readable (`flagged` after 3 minutes without one), `contradicted`
+  when the chain contradicts a success or a charged entry's transaction (kept until resolved by
+  hand), `charged-undelivered` when the payment is proven and the buyer has not received the
+  answer, and a `refund-owed` mark (kept until the authorization expires) once such a buyer is
+  owed back. An entry carries `delivered: true` from just before its answer is sent. The document
+  also holds the gate's own forgiven hang-ups and the last 200 hand resolutions (with their
+  notes). The book holds no answer: owed answers are files under `REFERRAL_ANSWER_DIR` (default
+  `agent402-referral-answer-cache` beside the book file), on this process's disk only, never a
+  database row (the nightly backup copies those, and the file backup leaves out a `cache` name),
+  deleted at their expiry (`IDEM_TTL_MS`, 10 minutes), at most 32 MB in all; a restart loses
+  them. A paid call writes the small index a few times (about 4 ms each on the file store with
+  300 open entries, measured). At most 2000 entries: a full book refuses a paid call (503 before
+  `/verify` and the handler) and never drops one. The leased sweep `referral-settle-sweep` (at
+  boot and every `REFERRAL_SWEEP_MS`, default 60000; `contained`) reads up to 50 open entries a
+  pass, the ones read least recently first, each as it stands at that moment: routed to this
+  merchant by its own receipt books the sale once; a nonce spent without paying us, an
+  authorization expired unused, or one expired with a complete search that found nothing closes
+  the entry with nothing booked; unconfirmed ones are confirmed or flagged; a delivered entry
+  whose closing write failed is closed; a `charged-undelivered` entry whose answer is gone becomes
+  a refund owed at the gross, only behind the receipt proof read again (`refundsOwed` covers
+  it). An operator closes an entry nothing can settle with
+  `POST /__operator/referral.json {"action":"resolve","key":"<entry key>","note":"what was checked"}`
+  (token-authed; recorded, then removed). Operator view: `GET /__operator/referral.json`. The
+  word `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads
+  attention on the conditions `.claude/rules/payments.md` lists; the status Worker and
+  `heartbeat.yml` page on it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
 - **Money-state sweeps and books (batch 2026-11-08a):** `TEMPO_PUSH_HELD_MAX_MINUTES` (default 30)
   is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
   `TEMPO_LATE_CONFIRM_DELAYS_MS` (comma list of delays, default 15000,45000,120000; at most 6, each
