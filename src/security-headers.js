@@ -10,8 +10,22 @@
 // document headers are set only when the answer turns out to be HTML (read
 // off Content-Type as the head is written), so a page added under /api later
 // is covered without anyone remembering this rule.
-// /ref/<slug> is the referral copy of an API route (src/referral-gate.js): JSON only.
-const DOCUMENT_HEADERS_SKIP = /^\/(api|v1|mcp|ref)(\/|$)/;
+const DOCUMENT_HEADERS_SKIP = /^\/(api|v1|mcp)(\/|$)/;
+// Path prefixes a deployment adds to the JSON API class at boot (the referral
+// gate's /ref, only while that gate is mounted: with it off, /ref is an
+// unknown path like any other and answers exactly as one).
+const EXTRA_API_PREFIXES = [];
+/** Treat `prefix` (for example "/ref") as a JSON API path from now on. */
+export function addApiHeaderPrefix(prefix) {
+  const p = String(prefix || "").toLowerCase().replace(/\/+$/, "");
+  if (/^\/[a-z0-9_-]+$/.test(p) && !EXTRA_API_PREFIXES.includes(p)) EXTRA_API_PREFIXES.push(p);
+}
+const isApiPath = (path) => {
+  if (DOCUMENT_HEADERS_SKIP.test(path)) return true;
+  if (!EXTRA_API_PREFIXES.length) return false;
+  const p = String(path || "").toLowerCase();
+  return EXTRA_API_PREFIXES.some((x) => p === x || p.startsWith(`${x}/`));
+};
 const HTML_TYPE_RE = /^\s*text\/html\b/i;
 function headIsHtml(res, headArgs) {
   if (HTML_TYPE_RE.test(String(res.getHeader("content-type") || ""))) return true;
@@ -102,7 +116,7 @@ export function securityHeaders() {
         return send.apply(this, arguments);
       };
     }
-    if (DOCUMENT_HEADERS_SKIP.test(req.path)) {
+    if (isApiPath(req.path)) {
       const writeHead = res.writeHead;
       res.writeHead = function (...args) {
         if (headIsHtml(res, args)) setDocumentHeaders(res);

@@ -2,7 +2,7 @@ import { siteOrgRef, mppOffered } from "./site-org.js";
 import { heapSamplingReport } from "./boot-profile.js"; // diagnostic boot CPU profile - must stay the FIRST import (see the file)
 import "./tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA, process-wide (see the file)
 import { mtaStsPolicy } from "./mta-sts.js";
-import { securityHeaders, answerClientError } from "./security-headers.js";
+import { securityHeaders, answerClientError, addApiHeaderPrefix } from "./security-headers.js";
 import { operatorRoutesOf } from "./operator-routes.js";
 import { createLargeBodyGate, largeBodyInflightMaxBytes, unlessBodyUnread, UNPAID_LIMITS as LARGE_BODY_UNPAID_LIMITS } from "./large-body-gate.js";
 import { carriesPaymentAttempt, registerOfferedNetworks } from "./payment-attempt.js";
@@ -676,7 +676,7 @@ import { USAGE_TOOLS } from "./tools/usage-kit.js";
 import { FEEDBACK_TOOLS } from "./tools/feedback-kit.js";
 import { CHAIN_RPC_TOOLS } from "./tools/chain-rpc-kit.js";
 import { chainNamespaceMiddleware, chainNamespaceMap, chainVerbAliasesByRoute } from "./chain-namespace.js";
-import { corsMiddleware } from "./cors.js";
+import { corsMiddleware, allowCorsPrefix } from "./cors.js";
 import { MODERATE_TOOLS } from "./tools/moderate-kit.js";
 import { CDP_TOOLS } from "./tools/cdp-kit.js";
 import { toolPage, openapiSpec, toolList, CATEGORIES, faqPage, categoryPage, relatedTools } from "./pages.js";
@@ -2572,11 +2572,12 @@ const REFERRAL_ROUTES = REFERRAL_CONFIG ? referralRoutes(REFERRAL_CONFIG, CATALO
   clamped: isChatTierDef(def) || def.handler?.__underBudget === true,
   // The tool's own upstream timeout where it is declared: a chat tier's
   // attempt timeout, an image tier's, a slow route's run budget.
-  ownTimeoutMs: Math.max(isChatTierDef(def) ? CHAT_UPSTREAM_TIMEOUT_MS : 0, Number(def.runSeconds) * 1000 || 0, Number(IMAGE_GEN_TIERS[def.slug]?.timeoutMs) || 0) || null,
+  ownTimeoutMs: Math.max(isChatTierDef(def) ? CHAT_UPSTREAM_TIMEOUT_MS : 0, Number(def.handler?.__budgetMs) || 0, Number(def.runSeconds) * 1000 || 0, Number(IMAGE_GEN_TIERS[def.slug]?.timeoutMs) || 0) || null,
   priceForNetwork,
 })) : null;
 if (REFERRAL_ROUTES) {
   for (const r of REFERRAL_ROUTES.refused) console.warn(`[referral] ${r.slug} is not served under /ref: ${r.reason}`);
+  for (const r of REFERRAL_ROUTES.served) console.log(`[referral] ${r.slug} is served under /ref: ${r.why}`);
   console.log(`Referral gate enabled for ${REFERRAL_ROUTES.defs.size} route(s): ${[...REFERRAL_ROUTES.defs.keys()].join(", ") || "none"}`);
 }
 /** The catalog definition a /ref/<slug> path serves, or null (gate off, or a slug it does not serve). */
@@ -10632,8 +10633,7 @@ app.use(async (req, res, next) => {
 // answer, as on a direct route). It calls the tool's handler itself, with
 // the same input object and caller scope as the dispatcher, and uses the
 // direct routes' own machinery where a rule is shared: the payer screen
-// before serving, the hang-up forgiveness tickets and budgets, the
-// refused-credential limiter, the paid-quote trust a settled call earns, the
+// before serving, the refused-credential limiter, the paid-quote trust a settled call earns, the
 // payment-window clamp and the handler-budget ceiling that end upstream work
 // at its deadline. What it keeps apart: its replay guard is its own
 // instance; a run is marked for the settle breaker's other lane, so the
@@ -10689,12 +10689,6 @@ if (REFERRAL_ROUTES) {
         res.once("close", refused);
         referralPayerScreen(req, res, () => { if (done) return; done = true; res.off("finish", refused); res.off("close", refused); resolve(true); });
       }),
-      // The direct routes' hang-up forgiveness: the same tickets, keys and budgets.
-      hangup: {
-        reserve: (req, { priceUsd, slug }) => reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd, slug }),
-        forgiven: (req) => hangupForgiven(req),
-        finish: (req, abandoned) => settleHangupTicket(req, { abandoned }),
-      },
       isolate: settleBreakerOtherLane,
       // The chat tiers end an attempt PAYMENT_WINDOW_TAIL_MS before the window
       // ends: the window is presented that much past the gate's deadline, less
@@ -10711,7 +10705,6 @@ if (REFERRAL_ROUTES) {
       draining: () => ({ active: draining === true, leftMs: drainStartedAt ? drainDeadlineMs - (Date.now() - drainStartedAt) : Infinity }),
       // A settled call earns this client address the paid-quote trust window, as a direct one does.
       onSettledSale: (req) => { QUOTE_TRUST.mark(quoteClientKeyOf(req)); },
-      directPaths: new Map([...REFERRAL_ROUTES.defs.values()].map((def) => [String(def.route || "").split(" ")[1] || "", `/ref/${def.slug}`]).filter(([p]) => p)),
       // The tool-call event a direct run sends, with the rail named. The
       // tool-call log, the failure monitor and the served-call counters are
       // read by public surfaces and are left alone.
@@ -10731,6 +10724,11 @@ if (REFERRAL_ROUTES) {
   }
 }
 if (REFERRAL_GATE) {
+  // Only while the gate is mounted is /ref an API path (JSON errors, the lean
+  // header set, the API routes' cross-origin answer). With the gate off /ref
+  // is an unknown path and answers exactly as one.
+  addApiHeaderPrefix("/ref");
+  allowCorsPrefix("/ref/");
   const referralRoute = (req, res) => REFERRAL_GATE.handler(req, res);
   app.get("/ref/:slug", referralRoute);
   app.post("/ref/:slug", referralRoute);
@@ -12881,7 +12879,7 @@ function operatorNotFound(_req, res) {
 }
 function isMachinePath(path) {
   const p = String(path || "").toLowerCase();
-  return p.startsWith("/api") || p.startsWith("/v1") || p.startsWith("/mcp") || p.startsWith("/__operator") || p === "/ref" || p.startsWith("/ref/");
+  return p.startsWith("/api") || p.startsWith("/v1") || p.startsWith("/mcp") || p.startsWith("/__operator") || (REFERRAL_GATE !== null && p.startsWith("/ref/"));
 }
 app.use((req, res) => {
   const wantsJson = isMachinePath(req.path) || req.accepts(["html", "json"]) === "json";
