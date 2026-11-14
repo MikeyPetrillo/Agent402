@@ -31,20 +31,18 @@ import express from "express";
 import { recoverMessageAddress, keccak256, concat, stringToHex, numberToHex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { bootPaidServer } from "./lib/paid-boot.js";
+import { bootServer } from "./lib/boot-server.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "a402-referral-"));
 process.env.SALES_LEDGER_DB = join(tmp, "sales.db");
 process.env.HANGUP_FORGIVE_FILE = join(tmp, "hangup.json");
-// One forgiven hang-up of the stub tools' price fits a payer's budget; a second does not.
-process.env.HANGUP_FORGIVE_KEY_USD = "0.05";
-process.env.HANGUP_FORGIVE_GLOBAL_USD = "1";
 process.on("exit", () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } });
 const ONLY_PART = process.env.REFERRAL_TEST_PART || "";
 
 const gateMod = await import("../src/referral-gate.js");
 const { referralConfig, referralConfigProblem, referralRoutes, referralIneligibility, referralSlugOfPath, isCanonicalReferralPath, createReferralGate, referralNet, baseUnitsOf, checkReferralPayment, parseCommissionBps, commissionBpsFor, isLocalReceiveSignature, createLineSampler, REFERRAL_ASSET, REFERRAL_NETWORK, REFERRAL_REASONS } = gateMod;
 const { createReferralSettler, referralRequestDigest } = await import("../src/referral-settle.js");
-const { createReferralChainReader } = await import("../src/referral-chain.js");
+const { createReferralChainReader, chainVerdict } = await import("../src/referral-chain.js");
 const { createReferralBook } = await import("../src/referral-book.js");
 const { createJsonDocument } = await import("../src/json-document.js");
 const { createReplayGuard } = await import("../src/replay-guard.js");
@@ -55,6 +53,8 @@ const hangupMod = await import("../src/hangup-forgiveness.js");
 const { presentRunWindow, evmCredentialSettleableMs } = await import("../src/evm-validity.js");
 const { withBudgetCeiling, underBudget, currentBudget } = await import("../src/upstream-deadline.js");
 const { settleBreakerOtherLane, gatewaySettleBreakerCheck } = await import("../src/gateway-settle-breaker.js");
+const { runAsCallerOf, currentDispatchCaller } = await import("../src/dispatch-caller.js");
+const { inReferralRun, routeHint, runAsReferral } = await import("../src/referral-run.js");
 
 let passed = 0, failed = 0;
 const ok = (c, m) => { if (c) { passed++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -77,10 +77,21 @@ function stubFacilitator() {
   const calls = [];
   let txSeq = 0;
   const nextTx = () => `0x${(++txSeq).toString(16).padStart(64, "0")}`;
-  const defaults = () => ({ verify: () => ({ status: 200, body: { isValid: true } }), settle: () => ({ status: 200, body: { success: true, transaction: nextTx(), network: REFERRAL_NETWORK } }), settleDelayMs: 0, verifyDelayMs: 0, rpcDown: false });
+  const defaults = () => ({ verify: () => ({ status: 200, body: { isValid: true } }), settle: () => ({ status: 200, body: { success: true, transaction: nextTx(), network: REFERRAL_NETWORK } }), settleDelayMs: 0, verifyDelayMs: 0, rpcDown: false, receiptDown: false });
   const mode = defaults();
-  const landed = new Map(); // "from|nonce" -> tx (or null: used, log not found)
+  // What the chain says of an authorization: "from|nonce" -> { tx, kind, from, to, value }.
+  //   paid       the receipt moves the amount from the payer to the pay-to address
+  //   elsewhere  the nonce was spent by a transfer to another address
+  //   short      the transfer to the pay-to address is one unit under the amount
+  //   reverted   the receipt's status is failure
+  //   otherpayer the transfer is from another wallet
+  //   cancel     the buyer canceled the authorization (AuthorizationCanceled)
+  //   nolog      spent, and no log of either kind is in the range read
+  const landed = new Map();
   const keyOf = (from, nonce) => `${String(from).toLowerCase()}|${String(nonce).toLowerCase()}`;
+  const USED_TOPIC = "0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5";
+  const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+  const pad = (a) => `0x${"0".repeat(24)}${String(a).slice(2).toLowerCase()}`;
   const rpcCalls = [];
   const server = createServer((req, res) => {
     const chunks = [];
@@ -100,8 +111,18 @@ function stubFacilitator() {
         else if (j.method === "eth_getLogs") {
           const t = j.params?.[0]?.topics || [];
           const from = `0x${String(t[1] || "").slice(26)}`;
-          const tx = landed.get(keyOf(from, t[2]));
-          result = tx ? [{ address: REFERRAL_ASSET, transactionHash: tx, topics: t }] : [];
+          const d = landed.get(keyOf(from, t[2]));
+          const wantsUsed = String(t[0]).toLowerCase() === USED_TOPIC;
+          const show = d && d.kind !== "nolog" && (wantsUsed ? d.kind !== "cancel" : d.kind === "cancel");
+          result = show ? [{ address: REFERRAL_ASSET, transactionHash: d.tx, topics: t }] : [];
+        } else if (j.method === "eth_getTransactionReceipt") {
+          const d = [...landed.values()].find((x) => x.tx === String(j.params?.[0] || "").toLowerCase());
+          if (d && !mode.receiptDown) {
+            const to = d.kind === "elsewhere" ? "0x" + "7".repeat(40) : d.to;
+            const from = d.kind === "otherpayer" ? "0x" + "6".repeat(40) : d.from;
+            const value = d.kind === "short" ? BigInt(d.value) - 1n : BigInt(d.value);
+            result = { status: d.kind === "reverted" ? "0x0" : "0x1", transactionHash: d.tx, logs: [{ address: REFERRAL_ASSET, topics: [TRANSFER_TOPIC, pad(from), pad(to)], data: `0x${value.toString(16).padStart(64, "0")}` }] };
+          }
         }
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(JSON.stringify({ jsonrpc: "2.0", id: j.id, result }));
@@ -128,7 +149,7 @@ function stubFacilitator() {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({
     url: `http://127.0.0.1:${server.address().port}`, calls, mode, landed, rpcCalls, nextTx,
     of: (path) => calls.filter((c) => c.path === path),
-    land: (auth, tx) => landed.set(keyOf(auth.from, auth.nonce), tx),
+    land: (auth, tx, kind = "paid") => landed.set(keyOf(auth.from, auth.nonce), { tx: tx ? String(tx).toLowerCase() : "0x" + createHash("sha256").update(keyOf(auth.from, auth.nonce)).digest("hex"), kind, from: auth.from, to: auth.to, value: auth.value }),
     reset: () => { calls.length = 0; rpcCalls.length = 0; Object.assign(mode, defaults()); },
     close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }),
   })));
@@ -176,10 +197,12 @@ const fac = await stubFacilitator();
 // Synthetic slugs and round placeholder figures: no real schedule is typed here.
 const ENV = {
   REFERRAL_PAY_TO: PAY_TO, REFERRAL_FACILITATOR_URL: fac.url, REFERRAL_SIGNER_KEY: SIGNER_KEY,
-  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
+  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
   REFERRAL_COMMISSION_BPS: "default:2000,busy:5000", REFERRAL_FEE_BPS: "0",
   REFERRAL_DEADLINE_MS: "1000", REFERRAL_SETTLE_RESERVE_MS: "1000", REFERRAL_SETTLE_MS: "2000", REFERRAL_VERIFY_MS: "1000",
   REFERRAL_UNSETTLED_MAX: "3",
+  // One forgiven hang-up of the stub tools' price fits a payer's budget; a second does not.
+  REFERRAL_HANGUP_KEY_USD: "0.05", REFERRAL_HANGUP_GLOBAL_USD: "1",
 };
 
 if (ONLY_PART !== "2") {
@@ -274,22 +297,37 @@ if (ONLY_PART !== "2") {
 }
 
 // --- the chain reader, against the stub RPC ------------------------------------------
+// "Used" is never "paid": only the receipt of the transaction that used the
+// nonce, showing success and the transfer from the payer to the pay-to address
+// of at least the amount, is a payment.
 {
   const chain = createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, tries: 2, budgetMs: 1500, pauseMs: 50, timeoutMs: 500 });
-  const a = { from: newAccount().address, nonce: freshNonce() };
-  const unused = await chain.state(a);
+  const mk = () => ({ from: newAccount().address, to: PAY_TO, value: "30000", nonce: freshNonce() });
+  const ask = (a, over = {}) => chain.state({ from: a.from, nonce: a.nonce, payTo: PAY_TO, amount: "30000", ...over });
+  const a = mk();
+  const unused = await ask(a);
   fac.land(a, "0x" + "5a".repeat(32));
-  const used = await chain.state(a);
-  const b = { from: newAccount().address, nonce: freshNonce() };
-  fac.land(b, null);
-  const noLog = await chain.state(b);
+  const paid = await ask(a);
+  ok(unused.used === false && chainVerdict(unused) === "unused" && paid.used === true && paid.paid === true && paid.transaction === "0x" + "5a".repeat(32) && chainVerdict(paid) === "paid", `an unused nonce reads unused; one used by a transaction whose receipt moves the amount from the payer to the pay-to address reads paid (${JSON.stringify(paid)})`);
+  const verdicts = {};
+  for (const kind of ["elsewhere", "short", "reverted", "otherpayer", "cancel"]) { const x = mk(); fac.land(x, null, kind); const r = await ask(x); verdicts[kind] = `${r.used}/${r.paid}/${chainVerdict(r)}`; }
+  ok(Object.values(verdicts).every((v) => v === "true/false/unpaid"), `a nonce spent by a transfer to another address, a short transfer, a reverted transaction, another wallet's transfer or a cancel is USED and NOT PAID (${JSON.stringify(verdicts)})`);
+  ok((await ask(a, { amount: "30001" })).paid === false && (await ask(a, { payTo: "0x" + "4".repeat(40) })).paid === false, "the same receipt does not pay a larger amount or another pay-to address");
+  const n = mk(); fac.land(n, null, "nolog");
+  const noLog = await ask(n);
+  ok(noLog.used === true && noLog.paid === null && noLog.logsRead === true && chainVerdict(noLog, { validBeforeMs: Date.now() + 60_000 }) === "unknown" && chainVerdict(noLog, { validBeforeMs: Date.now() - 600_000 }) === "unpaid", "a spent nonce with no log of ours is unknown while the authorization lives, and unpaid once it has expired: never paid");
+  fac.mode.receiptDown = true;
+  const noReceipt = await ask(a);
+  fac.mode.receiptDown = false;
+  ok(noReceipt.used === true && noReceipt.paid === null && chainVerdict(noReceipt) === "unknown", "a receipt that cannot be read proves nothing yet");
   fac.mode.rpcDown = true;
-  const down = await chain.state(a);
+  const down = await ask(a);
   fac.mode.rpcDown = false;
-  ok(unused.used === false && used.used === true && used.transaction === "0x" + "5a".repeat(32) && noLog.used === true && noLog.transaction === null && down.used === null, `authorizationState: unused, used with the AuthorizationUsed transaction, used with no log found, and unreadable as unknown (never unused) (${JSON.stringify([unused, used, noLog, down])})`);
-  ok((await chain.state({ from: "nope", nonce: "0x1" })).used === null, "an address that is not one reads as unknown");
+  ok(down.used === null && chainVerdict(down) === "unknown", "an unreadable chain is unknown (never unused, never paid)");
+  ok(chainVerdict({ used: true, paid: true, transaction: null }) === "unknown" && chainVerdict({ used: false }, { validBeforeMs: Date.now() - 600_000 }) === "expired-unused", "paid needs the transaction; an unspent nonce past its expiry is expired unused");
+  ok((await chain.state({ from: "nope", nonce: "0x1", payTo: PAY_TO, amount: "1" })).used === null, "an address that is not one reads as unknown");
   const t0 = Date.now();
-  const waited = await chain.state({ from: newAccount().address, nonce: freshNonce() }, { wait: true });
+  const waited = await chain.state({ from: newAccount().address, nonce: freshNonce(), payTo: PAY_TO, amount: "1" }, { wait: true });
   ok(waited.used === false && Date.now() - t0 < 1500, `a waiting read ends inside its budget (${Date.now() - t0} ms)`);
 }
 
@@ -322,16 +360,21 @@ if (ONLY_PART !== "2") {
 
 // --- the gate, mounted on a small app --------------------------------------------
 const runs = { echo: 0, slow: 0, boom: 0, busy: 0 };
-const seen = { chat: null, budgeted: null, breaker: null };
+const seen = { chat: null, budgeted: null, breaker: null, exa: null, chatx: null };
 const TOOLS = {
   echo: { slug: "echo", name: "Echo", category: "test", price: "$0.03", route: "POST /api/echo", handler: async (i) => { runs.echo++; return { echo: i.text ?? null, run: runs.echo }; } },
   busy: { slug: "busy", name: "Busy", category: "test", price: "$0.03", handler: async (i) => { runs.busy++; await wait(300); return { echo: i.text ?? null }; } },
   slow: { slug: "slow", name: "Slow", category: "test", price: "$0.03", handler: async () => { runs.slow++; await wait(2500); return { late: true }; } },
-  boom: { slug: "boom", name: "Boom", category: "test", price: "$0.03", route: "POST /api/boom", handler: async () => { runs.boom++; throw Object.assign(new Error("that input cannot be served; see POST /api/boom and /api/echo"), { statusCode: 422 }); } },
+  boom: { slug: "boom", name: "Boom", category: "test", price: "$0.03", route: "POST /api/boom", handler: async () => { runs.boom++; throw Object.assign(new Error(`that input cannot be served${routeHint("; see POST /api/boom")}`), { statusCode: 422 }); } },
   bytes: { slug: "bytes", name: "Bytes", category: "test", price: "$0.03", handler: async () => ({ __binary: Buffer.from("png"), contentType: "image/png" }) },
   list: { slug: "list", name: "List", category: "test", price: "$0.03", handler: async () => [1, 2, 3] },
   owntx: { slug: "owntx", name: "Own", category: "test", price: "$0.03", handler: async () => ({ transaction: "the tool's own field", rows: 1 }) },
   chat: { slug: "chat", name: "Chat", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), handler: async (i, req) => { seen.chat = { stream: i.stream, hasOptions: "stream_options" in i, stash: req.__meteredQuoteUsd }; return { id: "c1", choices: [] }; } },
+  // Tools with a published example: an empty request runs it.
+  exa: { slug: "exa", name: "Example", category: "test", price: "$0.03", discovery: { input: { text: "the published example", n: 2 } }, handler: async (i) => { seen.exa = { ...i }; return { got: i.text ?? null, n: i.n ?? null }; } },
+  chatx: { slug: "chatx", name: "Chat example", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), discovery: { input: { max_tokens: 3, messages: [{ role: "user", content: "example" }], stream: true } }, handler: async (i, req) => { seen.chatx = { max_tokens: i.max_tokens, stream: i.stream, content: i.messages?.[0]?.content, stash: req.__meteredQuoteUsd }; return { id: "cx", choices: [] }; } },
+  // Reports the scopes a run is served in: the caller key and the referral-run mark.
+  scopes: { slug: "scopes", name: "Scopes", category: "test", price: "$0.03", handler: async () => ({ caller: currentDispatchCaller(), referral: inReferralRun(), hint: routeHint("call POST /api/scopes", "") }) },
   // Reads the two mechanisms the gate presents its deadline through.
   budgeted: { slug: "budgeted", name: "Budgeted", category: "test", price: "$0.03", handler: underBudget(async (_i, req) => { seen.budgeted = { budgetLeft: currentBudget()?.remaining(), windowLeft: evmCredentialSettleableMs(req) }; return { ok: true }; }, 290_000) },
   // Consults the direct routes' settle breaker the way a chat handler does.
@@ -345,6 +388,8 @@ const trusted = [];
 const skew = { ms: 0 };
 const SCREENED = newAccount();
 const limiter = { limitedFor: new Set(), notes: 0 };
+const warmed = [];
+const knobs = { requireShared: false, draining: { active: false, leftMs: Infinity } };
 // The server's own per-request price rule (quotedPriceUsd), restated for the stub tools.
 const priceUsdOf = (def, req) => {
   const flat = Number(String(def.price).replace(/[^0-9.]/g, ""));
@@ -364,7 +409,7 @@ function mount(envOverride = {}, depOverride = {}) {
     chain: createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, tries: 2, budgetMs: 1200, pauseMs: 100, timeoutMs: 500 }),
     priceUsdOf, priceForNetwork,
     preValidate: (def, req) => (def.slug === "echo" && req.body && req.body.require ? { status: 400, body: { error: "Missing required parameter: text", tool: def.slug, howToCall: { method: "POST", url: "https://shop.example/api/echo" }, example: { see: "POST /api/echo" } } } : null),
-    prePaymentRefusal: (def, input) => (def.slug === "chat" && input && input.model === "no-such-model" ? { status: 400, body: { error: { message: "unknown model; see /api/echo", code: "unknown_model" }, tool: def.slug } } : null),
+    prePaymentRefusal: (def, input) => (def.slug === "chat" && input && input.model === "no-such-model" ? { status: 400, body: { error: { message: `unknown model${routeHint("; GET /v1/models lists them")}`, code: "unknown_model" }, tool: def.slug } } : null),
     sendToolError: (res, err, slug) => res.status(err?.statusCode || 502).json({ error: String(err?.message || "request failed"), tool: slug }),
     recordSale: (row) => { sales.push(row); return ledger.recordSale(row); },
     saleBooked: (tx) => !!ledger.privateRailSaleByTx(tx, "referral"),
@@ -374,18 +419,18 @@ function mount(envOverride = {}, depOverride = {}) {
       res.status(403).json({ error: "This server cannot accept a payment from this address (sanctions screening). Nothing was charged for this request.", reason: "payer-not-accepted", charged: false });
       return false;
     },
-    hangup: {
-      reserve: (req, { priceUsd, slug }) => hangupMod.reserveHangupForgiveness(req, { keys: [JSON.parse(Buffer.from(req.headers["payment-signature"], "base64").toString("utf8")).payload.authorization.from.toLowerCase(), `ip:${req.headers["x-test-ip"] || "local"}`], priceUsd, slug }),
-      forgiven: (req) => hangupMod.hangupForgiven(req),
-      finish: (req, abandoned) => hangupMod.settleHangupTicket(req, { abandoned }),
-    },
     isolate: settleBreakerOtherLane,
     presentWindow: (req, at) => presentRunWindow(req, at),
     withCeiling: withBudgetCeiling,
     credentialLimiter: { limited: (req) => limiter.limitedFor.has(req.headers["x-test-ip"] || "local"), note: () => { limiter.notes++; } },
     clientKey: (req) => String(req.headers["x-test-ip"] || "local"),
     onSettledSale: (req) => trusted.push(req.headers["x-test-ip"] || "local"),
-    directPaths: new Map([["/api/echo", "/ref/echo"], ["/api/boom", "/ref/boom"]]),
+    warmQuote: async (def) => { warmed.push(def.slug); },
+    runAsCaller: runAsCallerOf,
+    isSynthetic: () => false,
+    salePathOf: () => "http",
+    requireShared: () => knobs.requireShared,
+    draining: () => knobs.draining,
     log, now: () => Date.now() + skew.ms,
     ...depOverride,
   });
@@ -435,8 +480,41 @@ try {
   const unpriced = await send(R("chat"), { method: "GET" });
   ok(quoted.json?.accepts?.[0]?.amount === "7000" && unpriced.status === 402 && unpriced.json?.accepts?.[0]?.amount === "1000", `a per-request price reads the body (${quoted.json?.accepts?.[0]?.amount}); a probe with no body reads the list price (${unpriced.json?.accepts?.[0]?.amount})`);
   const badUnpaid = await send(R("chat"), { method: "POST", body: { max_tokens: 7, model: "no-such-model" } });
-  ok(badUnpaid.status === 400 && badUnpaid.json?.error?.code === "unknown_model" && !badUnpaid.text.includes("/api/echo") && badUnpaid.text.includes("/ref/echo"), `an unpaid body the direct route refuses before payment is refused the same way, with no pointer to a direct route (${badUnpaid.status} ${badUnpaid.text.slice(0, 100)})`);
+  ok(badUnpaid.status === 400 && badUnpaid.json?.error?.code === "unknown_model" && badUnpaid.json.error.message === "unknown model" && !/\/v1\/|\/api\//.test(badUnpaid.text), `an unpaid body the direct route refuses before payment is refused the same way, with no pointer to a direct route (${badUnpaid.status} ${badUnpaid.text.slice(0, 100)})`);
   ok(fac.calls.length === 0 && fac.rpcCalls.length === 0, "an unpaid request calls the facilitator and the chain for nothing");
+
+  // --- an empty request runs the tool's published example --------------------------
+  {
+    const exGet = await send(R("exa"), { method: "GET" });
+    const exEmpty = await send(R("exa"), { method: "POST", body: {} });
+    const exNoBody = await send(R("exa"), { method: "POST" });
+    ok(exGet.status === 402 && exEmpty.status === 402 && exNoBody.status === 402 && exGet.json.accepts[0].amount === "30000", "an empty request (a bare GET, a POST with no body, a POST of {}) to a fixed-price tool reads its price");
+    const acc = exGet.json.accepts[0];
+    const viaPost = await send(R("exa"), { method: "POST", body: {}, headers: { "payment-signature": (await signPayment(acc)).header } });
+    ok(viaPost.status === 200 && viaPost.json?.got === "the published example" && viaPost.json.n === 2 && /^0x/.test(viaPost.json.transaction || "") && seen.exa?.text === "the published example", `a paid POST of {} runs exactly the published example and settles (${viaPost.status} ${viaPost.text.slice(0, 90)})`);
+    const viaGet = await send(R("exa"), { method: "GET", headers: { "payment-signature": (await signPayment(acc)).header } });
+    ok(viaGet.status === 200 && viaGet.json?.got === "the published example", `a paid GET with no query runs it too (${viaGet.status})`);
+    // Any input at all is the buyer's own request: served as sent, never mixed with the example.
+    const own = await send(`${R("exa")}?text=mine`, { method: "GET", headers: { "payment-signature": (await signPayment(acc)).header } });
+    ok(own.status === 200 && own.json?.got === "mine" && own.json.n === null, `a GET with a query is served as sent (${own.text.slice(0, 80)})`);
+    const ownBody = await send(R("exa"), { method: "POST", body: { n: 9 }, headers: { "payment-signature": (await signPayment(acc)).header } });
+    ok(ownBody.status === 200 && ownBody.json?.got === null && ownBody.json.n === 9, `a body with one field is served as sent: the example fills nothing in (${ownBody.text.slice(0, 80)})`);
+    const wrapped = await send(R("exa"), { method: "POST", body: { params: {} }, headers: { "payment-signature": (await signPayment(acc)).header } });
+    ok(wrapped.status === 200 && wrapped.json?.got === null, "an empty wrapper is still an input of the buyer's own");
+    // A per-request priced chat tool: the empty request is quoted, and settled, at the example's price.
+    const cGet = await send(R("chatx"), { method: "GET" });
+    const cOwn = await send(R("chatx"), { method: "POST", body: { max_tokens: 8, messages: [] } });
+    ok(cGet.json?.accepts?.[0]?.amount === "3000" && cOwn.json?.accepts?.[0]?.amount === "8000", `an empty request to a per-request priced tool quotes its published example (${cGet.json?.accepts?.[0]?.amount}); a request with a body quotes that body (${cOwn.json?.accepts?.[0]?.amount})`);
+    const cPaid = await send(R("chatx"), { method: "POST", body: {}, headers: { "payment-signature": (await signPayment(cGet.json.accepts[0])).header } });
+    ok(cPaid.status === 200 && seen.chatx && seen.chatx.max_tokens === 3 && seen.chatx.content === "example" && seen.chatx.stream === false && Math.abs(seen.chatx.stash - 0.003) < 1e-12 && fac.of("/settle").at(-1).json.paymentRequirements.amount === "3000", `the paid empty call runs the example, not streamed, and settles the example's amount (${JSON.stringify(seen.chatx)})`);
+    const cWrong = await send(R("chatx"), { method: "POST", body: {}, headers: { "payment-signature": (await signPayment(cOwn.json.accepts[0])).header } });
+    ok(cWrong.status === 402 && cWrong.json?.errorReason === "invalid_exact_evm_payload_authorization_value_mismatch", "an authorization signed for another request's amount does not pay the example");
+    // A tool that publishes no example is unchanged: the list price, and its own validation.
+    const none = await send(R("echo"), { method: "POST", body: {} });
+    ok(none.status === 402 && none.json.accepts[0].amount === "30000", "a tool with no published example answers an empty request as before");
+    ok(app1.gate.stats().exampleRuns === 3, `the example runs are counted (${app1.gate.stats().exampleRuns})`);
+  }
+  fac.reset(); sales.length = 0; trusted.length = 0;
 
   // --- local refusals: nothing claimed, nothing sent ------------------------------
   const refusedWith = async (name, opts, reason) => {
@@ -496,7 +574,7 @@ try {
   {
     const p = await signPayment(accept);
     const r = await send(R("echo"), { body: { require: true }, headers: { "payment-signature": p.header } });
-    ok(r.status === 400 && r.json?.tool === "echo" && !("howToCall" in r.json) && !r.text.includes("/api/echo") && r.text.includes("/ref/echo"), `an input the pre-payment check refuses is the direct route's 400 without its ready-to-run call, and names no direct route (${r.status} ${r.text.slice(0, 120)})`);
+    ok(r.status === 400 && r.json?.tool === "echo" && !("howToCall" in r.json) && !r.text.includes("https://shop.example/api/echo"), `an input the pre-payment check refuses is the direct route's 400 without its ready-to-run call, and names no direct route (${r.status} ${r.text.slice(0, 120)})`);
     const again = await send(R("echo"), { body: { text: "now valid" }, headers: { "payment-signature": p.header } });
     ok(again.status === 200, `nothing was claimed: the same authorization then buys a valid call (${again.status})`);
   }
@@ -559,7 +637,7 @@ try {
     const p = await signPayment(accept);
     const r = await send(R("boom"), { body: {}, headers: { "payment-signature": p.header } });
     ok(r.status === 422 && r.json?.tool === "boom" && settles() === 0 && sales.length === 0, `a handler 4xx is answered as the tool's own error and not settled (${r.status}, ${settles()} settle)`);
-    ok(/that input cannot be served/.test(r.json?.error || "") && !r.text.includes("/api/boom") && !r.text.includes("/api/echo") && r.text.includes("/ref/boom") && r.text.includes("/ref/echo"), `a tool error names no direct route: a served tool's direct path reads as its /ref path (${r.json?.error})`);
+    ok(/that input cannot be served/.test(r.json?.error || "") && !("howToCall" in r.json), `a tool error is the tool's own, rendered as the direct route renders it (${r.json?.error})`);
     const again = await send(R("boom"), { body: {}, headers: { "payment-signature": p.header } });
     ok(again.status === 409 && runs.boom === 1, `its claim is HELD: the same authorization does not reach the handler again (${again.status}, ${runs.boom} run)`);
   }
@@ -732,19 +810,19 @@ try {
     fac.mode.settle = () => { fac.land(p.authorization, tx); return { status: 502, body: "bad gateway", type: "text/plain" }; };
     const r = await send(R("echo"), { body: { text: "landed" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
     ok(r.status === 200 && r.json?.echo === "landed" && r.json.transaction === tx && sales.length === 1 && sales[0].tx === tx && sales[0].priceUsd === 0.024, `a settle answer lost after the payment landed is read from the chain and the answer is delivered with the chain's transaction (${r.status} ${r.text.slice(0, 90)})`);
-    // Landed, but the log is not in the range read: delivered, and said so.
+    // The nonce is spent and nothing proves it paid us: no delivery, no sale.
     const q = await signPayment(accept, { account: newAccount() });
-    fac.mode.settle = () => { fac.land(q.authorization, null); return { hang: true }; };
+    fac.mode.settle = () => { fac.land(q.authorization, null, "nolog"); return { hang: true }; };
     const t0 = Date.now();
     const r2 = await send(R("echo"), { body: { text: "no log" }, headers: { "payment-signature": q.header, "x-test-ip": freshIp() } });
-    ok(r2.status === 200 && r2.json?.echo === "no log" && r2.json.transaction === null && r2.json.settlement === "charged-transaction-not-found" && Date.now() - t0 < 5000 && sales.length === 2 && sales[1].tx === null, `a /settle that never answers ends at the settle timeout; the chain says the payment landed and its log is not found: the answer is delivered with a marker field and the sale is booked (${r2.status} after ${Date.now() - t0} ms, ${r2.text.slice(0, 110)})`);
+    ok(r2.status === 402 && r2.json?.errorReason === "settle_outcome_unknown" && !("echo" in r2.json) && !("settlement" in r2.json) && Date.now() - t0 < 5000 && sales.length === 1, `a /settle that never answers ends at the settle timeout; a spent nonce with no proof of payment delivers nothing and books nothing (${r2.status} ${r2.json?.errorReason} after ${Date.now() - t0} ms)`);
     // The chain cannot be read: unknown, never "not charged".
     const u = await signPayment(accept, { account: newAccount() });
     fac.mode.settle = () => ({ status: 500, body: {} });
     fac.mode.rpcDown = true;
     const r3 = await send(R("echo"), { body: { text: "dark" }, headers: { "payment-signature": u.header, "x-test-ip": freshIp() } });
     fac.mode.rpcDown = false;
-    ok(r3.status === 402 && r3.json?.errorReason === "settle_outcome_unknown" && r3.json.retryable === true && sales.length === 2, `with the chain unreadable the outcome stays unknown (${r3.status} ${r3.json?.errorReason})`);
+    ok(r3.status === 402 && r3.json?.errorReason === "settle_outcome_unknown" && r3.json.retryable === true && sales.length === 1, `with the chain unreadable the outcome stays unknown (${r3.status} ${r3.json?.errorReason})`);
   }
   fac.reset(); sales.length = 0;
   {
@@ -763,16 +841,154 @@ try {
   }
   fac.reset(); sales.length = 0;
   {
-    // A refusal the facilitator documents is definite; an authorization already used is read on chain.
+    // The buyer lets the tool run and then spends the nonce some other way: nothing is delivered, nothing is booked.
+    for (const kind of ["cancel", "elsewhere", "short", "reverted", "otherpayer"]) {
+      fac.mode.settle = () => ({ status: 500, body: {} });
+      const acct = newAccount();
+      const ip = freshIp();
+      const p = await signPayment(accept, { account: acct });
+      const key = gateMod.referralReplayKey(p.authorization);
+      const ran = runs.echo, trustedBefore = trusted.length;
+      const r = await send(R("echo"), { body: { text: "burn" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+      fac.land(p.authorization, null, kind);
+      const again = await send(R("echo"), { body: { text: "burn" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+      const third = await send(R("echo"), { body: { text: "burn" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+      await app1.gate.sweepOnce();
+      await quietLedger();
+      ok(r.status === 402 && again.status === 402 && again.json?.errorReason === "authorization_used_unpaid" && /was not paid/.test(again.json.errorMessage) && !("echo" in again.json) && !("transaction" in again.json) && third.status === 402 && third.json?.errorReason === "authorization_used_unpaid" && sales.filter((x) => x.payer === acct.address.toLowerCase()).length === 0 && app1.book.get(key) === null && runs.echo === ran + 1 && trusted.length === trustedBefore,
+        `a nonce spent without paying us (${kind}): the answer is never delivered, no sale is booked by the request, the re-send or the sweep, no allowance is earned, and the book entry is closed as not paid (${again.status} ${again.json?.errorReason}, ${sales.filter((x) => x.payer === acct.address.toLowerCase()).length} sale)`);
+    }
+    ok(logLines.filter((l) => /spent on chain WITHOUT paying this route/.test(l)).length >= 5, "each is logged");
+    // Three such runs are three unsettled runs in the payer's lane.
+    {
+      const acct = newAccount(), ip = freshIp();
+      fac.mode.settle = () => ({ status: 500, body: {} });
+      const ran = runs.echo;
+      for (let i = 0; i < 3; i++) { const p = await signPayment(accept, { account: acct }); await send(R("echo"), { body: { text: "b" }, headers: { "payment-signature": p.header, "x-test-ip": ip } }); fac.land(p.authorization, null, "cancel"); await send(R("echo"), { body: { text: "b" }, headers: { "payment-signature": p.header, "x-test-ip": ip } }); }
+      const fourth = await send(R("echo"), { body: { text: "b" }, headers: { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": ip } });
+      ok(runs.echo === ran + 3 && fourth.status === 429 && fourth.json?.errorReason === "too_many_unsettled_runs", `and they count against the payer: the fourth call is refused before it runs (${fourth.status})`);
+    }
+    // The sweep alone meets a spent nonce: closed as not paid, nothing booked.
+    {
+      const book = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-burn`, log: () => {} }), log });
+      const burned = await signPayment(accept, { account: newAccount() });
+      const k = gateMod.referralReplayKey(burned.authorization);
+      await book.intent({ key: k, slug: "echo", payer: burned.authorization.from, nonce: burned.authorization.nonce, amount: "30000", validBefore: Number(burned.authorization.validBefore) });
+      fac.land(burned.authorization, null, "elsewhere");
+      const booked = [];
+      const out = await book.sweep({ chain: createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, tries: 1, budgetMs: 1000 }), payTo: PAY_TO, bookSale: async (e, t) => { booked.push(t); return true; }, graceMs: 0 });
+      ok(out.unpaid === 1 && out.landed === 0 && booked.length === 0 && book.get(k) === null, `the sweep books nothing for a nonce spent elsewhere and closes the entry as not paid (${JSON.stringify(out)})`);
+    }
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // In doubt first, then a refusal that says "already used": the record is kept and the chain decides.
+    const acct = newAccount(), ip = freshIp();
+    const p = await signPayment(accept, { account: acct });
+    const key = gateMod.referralReplayKey(p.authorization);
+    fac.mode.settle = () => ({ status: 500, body: {} });
+    const r1 = await send(R("echo"), { body: { text: "twice" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    fac.mode.settle = () => ({ status: 200, body: { success: false, errorReason: "authorization_already_used" } });
+    const r2 = await send(R("echo"), { body: { text: "twice" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    ok(r1.status === 402 && r2.status === 402 && r2.json?.errorReason === "settle_outcome_unknown" && !/Nothing was charged/.test(r2.json.errorMessage) && app1.book.get(key)?.state === "in-doubt", `a settle in doubt followed by an "already used" refusal: the buyer is not told nothing was charged, and the book entry stays (${r2.status} ${r2.json?.errorReason}, book ${app1.book.get(key)?.state})`);
+    // A later refusal of any kind does not clear an entry that was ever in doubt.
+    fac.mode.settle = () => ({ status: 200, body: { success: false, errorReason: "invalid_payment" } });
+    const r3 = await send(R("echo"), { body: { text: "twice" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    ok(r3.status === 402 && r3.json?.errorReason === "settle_outcome_unknown" && app1.book.get(key)?.state === "in-doubt", `nor does any later refusal clear it (${r3.json?.errorReason}, book ${app1.book.get(key)?.state})`);
+    // The first submission is mined after all: the sweep books it, and the buyer collects the answer.
+    const tx = "0x" + "a9".repeat(32);
+    fac.land(p.authorization, tx);
+    await app1.gate.sweepOnce();
+    await quietLedger();
+    const r4 = await send(R("echo"), { body: { text: "twice" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    ok(sales.filter((x) => x.tx === tx).length === 1 && r4.status === 200 && r4.json?.transaction === tx && r4.json.echo === "twice", `when the first transaction then lands the sale is booked, once, and the answer delivered (${sales.filter((x) => x.tx === tx).length} sale, ${r4.status})`);
+    // A used-style refusal on a payment never in doubt is read on chain too.
     fac.mode.settle = () => ({ status: 409, body: { success: false, errorReason: "authorization_used" } });
+    const u = await signPayment(accept, { account: newAccount() });
+    const uKey = gateMod.referralReplayKey(u.authorization);
+    const ru = await send(R("echo"), { body: { text: "used" }, headers: { "payment-signature": u.header, "x-test-ip": freshIp() } });
+    ok(ru.status === 402 && ru.json?.errorReason === "settle_outcome_unknown" && app1.book.get(uKey)?.state === "in-doubt", `an authorization the facilitator says is already used is read on chain and kept open, never closed on its word (${ru.status} ${ru.json?.errorReason})`);
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // A re-send that arrives while the first request is still settling sends no second /settle.
+    fac.mode.settleDelayMs = 500;
     const p = await signPayment(accept, { account: newAccount() });
-    const r = await send(R("echo"), { body: { text: "used" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
-    ok(r.status === 402 && r.json?.errorReason === "authorization_used", `an authorization the facilitator says is already used: 402 with that reason (${r.status} ${r.json?.errorReason})`);
+    const ip = freshIp();
+    const first = send(R("echo"), { body: { text: "slot" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    await wait(200);
+    const during = await send(R("echo"), { body: { text: "slot" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    const done = await first;
+    fac.mode.settleDelayMs = 0;
+    const after = await send(R("echo"), { body: { text: "slot" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    ok(during.status === 409 && during.json?.reason === "inflight" && during.headers.get("retry-after") && done.status === 200 && settles() === 1 && after.status === 200 && after.text === done.text && sales.length === 1, `a re-send during the original settle is told it is in flight: exactly one /settle for the authorization (${during.status}, ${settles()} settle), and the answer is there afterwards`);
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // The lane counts runs in flight at admission: a burst cannot all start before the first one ends.
+    fac.mode.settle = () => ({ status: 200, body: { success: false, errorReason: "invalid_payment" } });
+    const acct = newAccount(), ip = freshIp();
+    const ran = runs.busy;
+    const burst = await Promise.all(Array.from({ length: 8 }, async () => send(R("busy"), { body: { text: "burst" }, headers: { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": ip } })));
+    ok(runs.busy === ran + 3 && burst.filter((r) => r.status === 429 && r.json?.errorReason === "too_many_unsettled_runs").length === 5, `8 concurrent calls from one payer: 3 run, 5 are refused before they start (${runs.busy - ran} ran; ${burst.map((r) => r.status).join(",")})`);
+    // A settle whose outcome is not known is an unsettled run until it is proven paid.
+    fac.mode.settle = () => ({ status: 500, body: {} });
+    const acct2 = newAccount(), ip2 = freshIp();
+    const ran2 = runs.echo;
+    const held = [];
+    for (let i = 0; i < 3; i++) { const p = await signPayment(accept, { account: acct2 }); held.push(p); await send(R("echo"), { body: { text: `d${i}` }, headers: { "payment-signature": p.header, "x-test-ip": ip2 } }); }
+    const fourth = await send(R("echo"), { body: { text: "d4" }, headers: { "payment-signature": (await signPayment(accept, { account: acct2 })).header, "x-test-ip": ip2 } });
+    ok(runs.echo === ran2 + 3 && fourth.status === 429, `three runs whose settle is in doubt are three unsettled runs: the fourth is refused (${fourth.status}, ${runs.echo - ran2} ran)`);
+    fac.land(held[0].authorization, "0x" + "b4".repeat(32));
+    const collected = await send(R("echo"), { body: { text: "d0" }, headers: { "payment-signature": held[0].header, "x-test-ip": ip2 } });
+    fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: fac.nextTx() } });
+    const fifth = await send(R("echo"), { body: { text: "d5" }, headers: { "payment-signature": (await signPayment(accept, { account: acct2 })).header, "x-test-ip": ip2 } });
+    ok(collected.status === 200 && fifth.status === 200, `once one of them is proven paid its note is taken back and the payer is admitted again (${collected.status}, ${fifth.status})`);
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // No durable intent, no settle.
+    const real = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-nointent`, log: () => {} }), log });
+    let down = true;
+    const book = { ...real, sweep: real.sweep.bind(real), intent: async (...a) => (down ? false : real.intent(...a)) };
+    const app7 = await mount({}, { book });
+    try {
+      const p = await signPayment(accept, { account: newAccount() });
+      const ip = freshIp();
+      const ran = runs.echo;
+      const r = await send(`${app7.url}/ref/echo`, { body: { text: "nointent" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+      ok(r.status === 503 && r.json?.errorReason === "settlement_store_unavailable" && r.headers.get("retry-after") === "30" && /Nothing was charged/.test(r.json.errorMessage) && settles() === 0 && sales.length === 0 && runs.echo === ran + 1, `with the intent not stored /settle is not called: 503 with Retry-After, nothing charged (${r.status} ${r.json?.errorReason}, ${settles()} settle)`);
+      const thrower = await mount({}, { book: { ...real, sweep: real.sweep.bind(real), intent: async () => { throw new Error("store down"); } } });
+      try {
+        const t = await send(`${thrower.url}/ref/echo`, { body: { text: "throws" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+        ok(t.status === 503 && settles() === 0, `the same when the store throws (${t.status})`);
+      } finally { await thrower.close(); }
+      down = false;
+      const beforeAgain = runs.echo;
+      const again = await send(`${app7.url}/ref/echo`, { body: { text: "nointent" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+      ok(again.status === 200 && again.json?.echo === "nointent" && again.json.run === ran + 1 && runs.echo === beforeAgain && settles() === 1 && sales.length === 1, `the answer was kept: once the store is back the same payment settles and collects it, with no second run (${again.status}, ${settles()} settle)`);
+    } finally { await app7.close(); }
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // Kept answers: the ones nothing is owed on go first; one still owed outlives 200 ordinary calls.
+    fac.mode.settle = () => ({ status: 500, body: {} });
+    const doubted = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) });
+    const dip = freshIp();
+    const ran = runs.echo;
+    await send(R("echo"), { body: { text: "owed" }, headers: { "payment-signature": doubted.header, "x-test-ip": dip } });
+    fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: fac.nextTx() } });
+    for (let i = 0; i < 205; i++) await call(R("echo"), { body: { text: `fill${i}` }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+    ok(app1.gate.stats().keptAnswers <= 200, `the kept answers stay inside their bound (${app1.gate.stats().keptAnswers})`);
+    fac.land(doubted.authorization, "0x" + "0d".repeat(32));
+    const got = await send(R("echo"), { body: { text: "owed" }, headers: { "payment-signature": doubted.header, "x-test-ip": dip } });
+    ok(got.status === 200 && got.json?.echo === "owed" && got.json.run === ran + 1, `an in-doubt answer is not pushed out by 205 settled calls: its buyer, once charged, collects it (${got.status})`);
   }
   fac.reset(); sales.length = 0;
 
   // --- a buyer who leaves ---------------------------------------------------------
   hangupMod._resetHangupForgiveness();
+  const directBudgetBefore = JSON.stringify(hangupMod.hangupForgivenessStatus());
   {
     // With a forgiveness ticket: not settled, the authorization held.
     const acct = newAccount();
@@ -782,7 +998,7 @@ try {
     ok(outcome === "aborted" && settles() === 0 && sales.length === 0 && logLines.some((l) => /client gone before settlement \(busy/.test(l)), `a connection closed before settlement starts, inside the forgiveness budget, is not settled (${settles()} settle, ${sales.length} sale)`);
     const again = await send(R("echo"), { body: { text: "back" }, headers: { "payment-signature": p.header, "x-test-ip": "5.5.5.5" } });
     ok(again.status === 409, `its claim is HELD: the same authorization buys nothing more (${again.status})`);
-    ok(hangupMod.hangupForgivenessStatus().abandonedUsd >= 0.03 || JSON.stringify(hangupMod.hangupForgivenessStatus()).includes("0.03"), `the forgiven run is spent from the direct routes' own forgiveness budget (${JSON.stringify(hangupMod.hangupForgivenessStatus()).slice(0, 160)})`);
+    ok(app1.gate.stats().forgivenUsd === 0.03 && JSON.stringify(hangupMod.hangupForgivenessStatus()) === directBudgetBefore && app1.book.forgiven().length === 1, `the forgiven run is spent from this route's own budget and recorded in the book; the direct routes' forgiveness budget is untouched (${app1.gate.stats().forgivenUsd} forgiven here)`);
     // The budget is spent: the next hang-up by this payer is settled, and its answer kept.
     const q = await signPayment(accept, { account: acct });
     const key = gateMod.referralReplayKey(q.authorization);
@@ -809,6 +1025,132 @@ try {
   }
   fac.reset(); sales.length = 0;
 
+  {
+    // Ten hang-ups in a row by one payer on one address: the per-payer and per-address budget binds after the first.
+    const app8 = await mount();
+    try {
+      const acct = newAccount();
+      const before = settles();
+      for (let i = 0; i < 10; i++) { await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": "8.8.4.4" }, 120); await wait(450); }
+      const st = app8.gate.stats();
+      ok(st.forgivenHangups === 1 && settles() - before === 9 && st.forgivenUsd === 0.03, `10 hang-ups in a row by one payer and address: 1 forgiven, 9 settled (${st.forgivenHangups} forgiven, ${settles() - before} settled)`);
+      // Another payer on the same address is bound by the address's budget; another payer elsewhere has its own.
+      await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.4" }, 120); await wait(450);
+      await rawPost(`${app8.url}/ref/busy`, { text: "gone" }, { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": "8.8.4.5" }, 120); await wait(450);
+      ok(app8.gate.stats().forgivenHangups === 2 && settles() - before === 10, `the address's budget binds whatever wallet signs, and another payer on another address has its own (${app8.gate.stats().forgivenHangups} forgiven, ${settles() - before} settled)`);
+    } finally { await app8.close(); }
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // A run is served inside the caller's scope and the referral-run scope.
+    const r = await send(R("scopes"), { body: { x: 1 }, headers: { "payment-signature": (await signPayment(accept)).header } });
+    ok(r.status === 200 && r.json?.caller === `payer:${buyer.address.toLowerCase()}` && r.json.referral === true && r.json.hint === "", `the handler runs as its caller (${r.json?.caller?.slice(0, 16)}) and as a referral run, where a route hint is empty`);
+    ok(routeHint("x", "y") === "x" && runAsReferral(() => routeHint("x", "y")) === "y" && inReferralRun() === false, "outside a referral run a route hint is the direct one");
+    ok(warmed.length > 0, "the quote is warmed before it is read");
+    // The shared claim is asked for when the server says it must be.
+    const begun = [];
+    const spy = await mount({}, { replayGuard: { begin: async (k, n, o) => { begun.push(o?.requireShared); return "unavailable"; }, settle: async () => {}, release: async () => {} } });
+    try {
+      knobs.requireShared = true;
+      const vBefore = verifies();
+      const u = await send(`${spy.url}/ref/echo`, { body: { text: "x" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+      knobs.requireShared = false;
+      ok(u.status === 503 && u.json?.reason === "replay-store-unavailable" && u.headers.get("retry-after") === "30" && begun[0] === true && verifies() === vBefore, `a claim the shared store must hold and cannot: 503 with Retry-After, nothing sent (${u.status})`);
+    } finally { await spy.close(); }
+    // A drain: no new run starts, and a settle call in flight ends inside what the drain has left.
+    knobs.draining = { active: true, leftMs: 60_000 };
+    const ran = runs.echo, vBeforeDrain = verifies();
+    const d = await send(R("echo"), { body: { text: "x" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+    knobs.draining = { active: false, leftMs: Infinity };
+    ok(d.status === 503 && d.json?.errorReason === "draining" && runs.echo === ran && verifies() === vBeforeDrain, `during a drain no new run starts (${d.status} ${d.json?.errorReason})`);
+    const slowSettle = await mount({ REFERRAL_SETTLE_MS: "20000" });
+    try {
+      fac.mode.settle = () => { knobs.draining = { active: true, leftMs: 7_000 }; return { hang: true }; };
+      let first = true;
+      const realDraining = knobs.draining;
+      // The drain begins while the handler runs: the settle that follows gets what the drain has left, less 5 s.
+      const t0 = Date.now();
+      knobs.draining = { active: false, leftMs: Infinity };
+      const p = await signPayment(accept, { account: newAccount() });
+      const hook = setTimeout(() => { knobs.draining = { active: true, leftMs: 7_000 }; }, 150);
+      const r2 = await send(`${slowSettle.url}/ref/busy`, { body: { text: "x" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      clearTimeout(hook); void first; void realDraining;
+      knobs.draining = { active: false, leftMs: Infinity };
+      ok(r2.status === 402 && r2.json?.errorReason === "settle_outcome_unknown" && Date.now() - t0 < 6000, `a settle call that would wait 20 s ends inside the drain (${Date.now() - t0} ms)`);
+    } finally { await slowSettle.close(); }
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // The facilitator refuses OUR signature: this server's fault, never the buyer's.
+    const notes = limiter.notes;
+    fac.mode.verify = () => ({ status: 401, body: { error: "merchant_signature" } });
+    const acct = newAccount(), ip = freshIp();
+    const ran = runs.echo;
+    const v = [];
+    for (let i = 0; i < 5; i++) v.push(await send(R("echo"), { body: { text: "x" }, headers: { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": ip } }));
+    ok(v.every((r) => r.status === 503 && r.json?.errorReason === "settlement_unavailable" && r.headers.get("retry-after")) && runs.echo === ran && limiter.notes === notes && app1.gate.stats().signerRefused >= 5 && logLines.some((l) => /refused THIS SERVER's request at \/verify .*REFERRAL_SIGNER_KEY/.test(l)), `a /verify 401 about our signer: 503, an error line naming the setting, counted apart, and no refused credential counted against the buyer (${v[0].status} ${v[0].json?.errorReason})`);
+    fac.mode.verify = () => ({ status: 200, body: { isValid: true } });
+    fac.mode.settle = () => ({ status: 401, body: { error: "merchant_signature" } });
+    const s5 = [];
+    const kept5 = [];
+    for (let i = 0; i < 5; i++) { const p = await signPayment(accept, { account: acct }); kept5.push(p); s5.push(await send(R("echo"), { body: { text: `sig${i}` }, headers: { "payment-signature": p.header, "x-test-ip": ip } })); }
+    ok(s5.every((r) => r.status === 503 && r.json?.errorReason === "settlement_unavailable") && runs.echo === ran + 5 && logLines.some((l) => /refused THIS SERVER's request at \/settle/.test(l)), `a /settle 401 about our signer: 503 each time, and five such runs do not close the buyer's lane (${s5.map((r) => r.status).join(",")})`);
+    fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: fac.nextTx() } });
+    const fixed = await send(R("echo"), { body: { text: "sig0" }, headers: { "payment-signature": kept5[0].header, "x-test-ip": ip } });
+    ok(fixed.status === 200 && fixed.json?.echo === "sig0" && runs.echo === ran + 5, `once the signer is accepted the same payment settles and returns the kept answer (${fixed.status})`);
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // An open entry carries its answer through a restart: a book on a FILE, no database.
+    const file = join(tmp, "restart-book.json");
+    const a = await mount({}, { book: createReferralBook({ file, log }) });
+    fac.mode.settle = () => ({ status: 500, body: {} });
+    const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) });
+    const ip = freshIp();
+    const ran = runs.echo;
+    const r1 = await send(`${a.url}/ref/echo`, { body: { text: "survives" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    const delivered = await signPayment(accept, { account: newAccount() });
+    fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: fac.nextTx() } });
+    await send(`${a.url}/ref/echo`, { body: { text: "done" }, headers: { "payment-signature": delivered.header, "x-test-ip": freshIp() } });
+    await a.close();
+    const onDisk = JSON.parse(readFileSync(file, "utf8"));
+    const stored = Object.values(onDisk.entries || {});
+    ok(r1.status === 402 && stored.length === 1 && stored[0].state === "in-doubt" && stored[0].answer?.text?.includes("survives") && !JSON.stringify(onDisk).includes('"done"'), `the book is a file without a database, and holds the answer of the OPEN entry only; a delivered call leaves nothing (${stored.length} entry, ${stored[0]?.state})`);
+    // A new process on the same file: the chain shows the payment landed, the buyer re-sends.
+    const b = await mount({}, { book: createReferralBook({ file, log }) });
+    try {
+      const tx = "0x" + "5e".repeat(32);
+      fac.land(p.authorization, tx);
+      const r2 = await send(`${b.url}/ref/echo`, { body: { text: "survives" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+      await quietLedger();
+      ok(r2.status === 200 && r2.json?.echo === "survives" && r2.json.run === ran + 1 && r2.json.transaction === tx && runs.echo === ran + 2 && sales.filter((x) => x.tx === tx).length === 1 && b.gate.stats().restoredAnswers === 1, `after a restart the charged buyer's re-send returns the stored answer with its transaction: no second run, one sale (${r2.status} ${r2.text.slice(0, 80)})`);
+      await wait(50);
+      ok(Object.keys(JSON.parse(readFileSync(file, "utf8")).entries || {}).length === 0, "and the delivered entry, with its answer, is gone from the file");
+      // Another signature on the same payer and nonce does not get the stored answer.
+    } finally { await b.close(); }
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // The forgiveness budget is this route's own and outlives a restart: a new gate on the same book has it spent.
+    const acct = newAccount();
+    const first = await mount();
+    const p1 = await signPayment(accept, { account: acct });
+    await rawPost(`${first.url}/ref/busy`, { text: "gone" }, { "payment-signature": p1.header, "x-test-ip": "6.6.6.6" }, 120);
+    await wait(500);
+    const spent = first.gate.stats().forgivenUsd;
+    await first.close();
+    const second = await mount({}, { book: first.book });
+    try {
+      await wait(50);
+      const p2 = await signPayment(accept, { account: acct });
+      await rawPost(`${second.url}/ref/busy`, { text: "gone" }, { "payment-signature": p2.header, "x-test-ip": "6.6.6.6" }, 120);
+      await wait(600);
+      ok(spent === 0.03 && settles() === 1 && second.gate.stats().forgivenUsd === 0.03, `a restart does not refill the forgiveness budget: the same payer's next hang-up is settled (${settles()} settle; ${second.gate.stats().forgivenUsd} forgiven)`);
+      ok(JSON.stringify(hangupMod.hangupForgivenessStatus()) === directBudgetBefore, "and none of it touched the budget a direct buyer's hang-up is judged against");
+    } finally { await second.close(); }
+  }
+  fac.reset(); sales.length = 0;
+
   // --- a process that stopped in the middle of a settle ----------------------------------
   {
     const book = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-crash`, log: () => {} }), log });
@@ -822,9 +1164,9 @@ try {
     fac.land(gone.authorization, tx);
     const app4 = await mount({ REFERRAL_SETTLE_MS: "1000" }, { book });
     try {
-      const early = await book.sweep({ chain: { state: async () => { throw new Error("must not be read"); } }, bookSale: async () => true, graceMs: 60_000 });
+      const early = await book.sweep({ chain: { state: async () => { throw new Error("must not be read"); } }, payTo: PAY_TO, bookSale: async () => true, graceMs: 60_000 });
       ok(early.read === 0, "the sweep leaves an intent alone while its own request may still be settling");
-      const first = await book.sweep({ chain: createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, tries: 1, budgetMs: 1000 }), bookSale: (e, t) => app4.gate.sweepOnce && sales.push({ sweep: true, tx: t }) && true, graceMs: 0 });
+      const first = await book.sweep({ chain: createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, tries: 1, budgetMs: 1000 }), payTo: PAY_TO, bookSale: (e, t) => app4.gate.sweepOnce && sales.push({ sweep: true, tx: t }) && true, graceMs: 0 });
       ok(first.landed === 1 && first.expired === 1 && first.unknown === 1, `the sweep reads every open intent against the chain: one landed, one expired unused, one still open (${JSON.stringify(first)})`);
       // The gate's own sweep books the sale, once.
       await book.resolve(kGone, { state: "intent", saleBooked: false, intentAt: Date.now() - 600_000 });
@@ -967,7 +1309,16 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
     const b = await call(`${off.url}/ref/hash`, { body: { text: "a" } });
     const direct = await call(`${off.url}/api/hash`, { body: { text: "a" } });
     ok(a.status === 404 && b.status === 404 && direct.status === 402, `with the REFERRAL_* variables unset /ref/* is a 404 and the direct route is unchanged (${a.status}, ${b.status}, ${direct.status})`);
-    ok(/application\/json/.test(a.headers.get("content-type") || ""), "and that 404 is JSON: /ref is a machine path");
+    // Fully inert: /ref answers exactly what any unknown path answers (status, body, headers), on every method.
+    const same = [];
+    for (const [method, extra] of [["GET", {}], ["POST", { body: { text: "a" } }], ["OPTIONS", { headers: { origin: "https://client.example", "access-control-request-method": "POST" } }], ["HEAD", {}]]) {
+      const ref = await call(`${off.url}/ref/hash`, { method, ...extra });
+      const unknown = await call(`${off.url}/zzz/hash`, { method, ...extra });
+      const pick = (r) => JSON.stringify([...r.headers.entries()].filter(([k]) => !["date", "etag", "x-request-id", "x-response-time", "server-timing"].includes(k)).sort());
+      const norm = (t) => t.replaceAll("/ref/hash", "PATH").replaceAll("/zzz/hash", "PATH");
+      same.push(`${method}:${ref.status === unknown.status && norm(ref.text) === norm(unknown.text) && pick(ref) === pick(unknown) ? "same" : `DIFF ${ref.status}/${unknown.status} ${pick(ref) === pick(unknown) ? "" : "headers"}`}`);
+    }
+    ok(same.every((x) => x.endsWith(":same")), `with the gate off /ref answers exactly what an unknown path answers: status, body and headers (${same.join(", ")})`);
     ok(!/referral/i.test(off.log()), "and the boot log says nothing about it");
     const op = await call(`${off.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } });
     const noToken = await call(`${off.url}/__operator/referral.json`, { method: "GET" });
@@ -987,6 +1338,17 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
     const h = await call(`${zero.url}/health`, { method: "GET" });
     ok(h.status === 200 && a.status === 404 && (zero.log().match(/referral gate is off/g) || []).length === 1 && /not usable/.test(zero.log()), `an all-zero signer key: the server boots, the gate is off, one line says why (${h.status}, ${a.status})`);
   } finally { await zero.stop(); }
+}
+
+{
+  // FREE_MODE never builds the gate, whatever is set.
+  const free = await bootServer({ stores: "referral-free", env: { ...REF_ENV, FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", STATS_ALLOW_EPHEMERAL: "true", REDIS_URL: "" } });
+  try {
+    const ref = await call(`${free.url}/ref/hash`, { body: { text: "a" } });
+    const unknown = await call(`${free.url}/zzz/hash`, { body: { text: "a" } });
+    const directFree = await call(`${free.url}/api/hash`, { body: { text: "abc" } });
+    ok(directFree.status === 200 && ref.status === unknown.status && ref.status === 404 && ref.headers.get("content-type") === unknown.headers.get("content-type") && !/referral/i.test(free.log()), `in FREE_MODE the gate is never built, even fully configured: /ref is an unknown path (${ref.status}) and the log says nothing`);
+  } finally { await free.stop(); }
 }
 
 // --- the wiring of every limiter twin (a boot of its own: its ceilings are tiny) ----------
@@ -1102,12 +1464,14 @@ writeFileSync(screenFile, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDa
 fac.reset();
 const srv = await bootPaidServer({
   label: "referral-on",
-  args: ["--import", "./scripts/lib/openrouter-stub-preload.js"],
+  args: ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", "./scripts/lib/hang-fetch-preload.js"],
   env: {
     ...REF_ENV, ...COSTS,
     WALLET_ADDRESS: OUR_WALLET, TRUST_PROXY_HOPS: "1",
     FACILITATOR_URL: `http://127.0.0.1:${directFac.address().port}`, AGENT402_BASE_RPC: `${fac.url}/rpc`,
-    REFERRAL_SLUGS: "hash,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,image-gen,image-gen-premium,attest,qr,answer,no-such-tool",
+    REFERRAL_SLUGS: "hash,mime,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,stablecoin-peg,edgar-company-facts,image-gen,image-gen-premium,attest,qr,no-such-tool",
+    // The price feed stablecoin-peg reads never answers: its run has to be cut off at the deadline.
+    HANG_FETCH_HOSTS: "api.coingecko.com,pro-api.coingecko.com",
     // The handler deadline is short so a stalled upstream is cut off inside the test.
     REFERRAL_DEADLINE_MS: "4000", REFERRAL_SETTLE_RESERVE_MS: "1000", REFERRAL_VERIFY_MS: "1000", REFERRAL_SETTLE_MS: "3000",
     AGENT402_OPERATOR_TOKEN: TOKEN_OP,
@@ -1124,7 +1488,11 @@ try {
   const bootLog = srv.log();
   const servedLine = /Referral gate enabled for (\d+) route\(s\): ([^\n]*)/.exec(bootLog);
   const served = servedLine ? servedLine[2].split(",").map((s) => s.trim()) : [];
-  ok(servedLine && ["hash", "onchain-sql", "answer", "v1-chat-auto", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered", "v1-chat"].every((x) => served.includes(x)) && served.length === 8, `the boot serves the eligible slugs: the chat tiers (cut off at the deadline through their payment window), onchain-sql and answer (their handler budget capped), hash (${servedLine ? servedLine[2] : "no line"})`);
+  const SERVED = ["hash", "mime", "onchain-sql", "perp-funding", "perp-basis", "stablecoin-peg", "edgar-company-facts", "v1-chat-auto", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered", "v1-chat"];
+  ok(servedLine && SERVED.every((x) => served.includes(x)) && served.length === SERVED.length, `the boot serves the eligible slugs (${servedLine ? servedLine[2] : "no line"})`);
+  const whyServed = Object.fromEntries([...bootLog.matchAll(/\[referral\] (\S+) is served under \/ref: ([^\n]*)/g)].map((m) => [m[1], m[2]]));
+  console.log(`# boot verdicts: ${JSON.stringify(whyServed)}`);
+  ok(/no upstream work/.test(whyServed.hash || "") && ["v1-chat-auto", "v1-chat-pro", "v1-chat-premium"].every((x) => /ends at the deadline \(own timeout 90 s\)/.test(whyServed[x] || "")) && ["onchain-sql", "perp-funding", "perp-basis", "stablecoin-peg", "edgar-company-facts"].every((x) => /ends at the deadline \(own timeout 290 s\)/.test(whyServed[x] || "")), "each served slug says why its handler deadline can be kept: no upstream work, or upstream work the deadline ends (with the tool's own timeout named)");
   ok(/\[referral\] image-gen is not served under \/ref: its own upstream wait \(60 s\) is past the handler deadline \(4 s\)/.test(bootLog), "image-gen is left out at boot: its own upstream wait is past the handler deadline");
   ok(/\[referral\] image-gen-premium is not served under \/ref: long-running/.test(bootLog) && /\[referral\] no-such-tool is not served under \/ref: not in the catalog/.test(bootLog) && /\[referral\] attest is not served/.test(bootLog) && /\[referral\] qr is not served under \/ref: answers bytes/.test(bootLog), "a long-running, an identity-bound, a binary and a missing slug are left out with a reason");
   for (const slug of ["image-gen", "image-gen-premium", "attest", "qr", "no-such-tool"]) {
@@ -1204,8 +1572,47 @@ try {
   ok(fac.of("/settle").length === 1 && fac.of("/settle")[0].recovered?.toLowerCase() === signer.address.toLowerCase() && fac.of("/settle")[0].json?.paymentRequirements?.payTo === PAY_TO && fac.of("/settle")[0].json.paymentRequirements.amount === "1000", "the referral facilitator settled it once, on a request signed by the signer key, for the quoted requirement");
   const replay = await call(`${srv.url}/ref/hash`, { body: { text: "abc" }, headers: { ...xff(), "payment-signature": p.header } });
   ok(replay.status === 200 && replay.text === good.text && fac.of("/settle").length === 1, `the same payment again returns the kept answer, with no second settle (${replay.status})`);
-  const invalid = await call(`${srv.url}/ref/hash`, { body: {}, headers: { ...xff(), "payment-signature": (await signPayment(refAccept)).header } });
+  const invalidPay = await signPayment(refAccept);
+  const invalid = await call(`${srv.url}/ref/hash`, { body: { algo: "sha256" }, headers: { ...xff(), "payment-signature": invalidPay.header } });
   ok(invalid.status === 400 && invalid.json?.tool === "hash" && !("howToCall" in invalid.json) && !invalid.text.includes("/api/hash") && fac.of("/settle").length === 1, `a paid call with an invalid input is the direct route's 400, not settled, with no ready-to-run call and no pointer to the direct route (${invalid.status} ${invalid.text.slice(0, 120)})`);
+  {
+    // The pre-payment input check ran before the claim: the same authorization still buys a valid call.
+    const reuse = await call(`${srv.url}/ref/hash`, { body: { text: "abc" }, headers: { ...xff(), "payment-signature": invalidPay.header } });
+    ok(reuse.status === 200 && reuse.json?.hex === good.json.hex, `an input refused before payment claimed nothing: the same authorization then buys a valid call (${reuse.status})`);
+    // A metered body the direct route refuses before any payment is refused the same way, unpaid.
+    const tooBig = { model: "openai/gpt-6-luna", messages: [{ role: "user", content: "word ".repeat(120_000) }], max_tokens: 16 };
+    const dBig = await call(`${srv.url}/v1/metered/chat/completions`, { body: tooBig, headers: xff() });
+    const rBig = await call(`${srv.url}/ref/v1-chat-metered`, { body: tooBig, headers: xff() });
+    ok(dBig.status === 400 && rBig.status === 400 && rBig.json?.error?.code === dBig.json?.error?.code && !/\/v1\/|\/api\//.test(rBig.text) && !("howToCall" in rBig.json), `an unpaid metered body over the model's input cap is refused 400 before any payment, as on the direct route, with no route named (${rBig.status} ${rBig.json?.error?.code}; direct ${dBig.status}; ${rBig.text.slice(0, 300)})`);
+    // An empty request runs the tool's published example (the standard buyer flow sends no input).
+    const emptyPost = await call(`${srv.url}/ref/hash`, { body: {}, headers: xff() });
+    const emptyPaid = await call(`${srv.url}/ref/hash`, { body: {}, headers: { ...xff(), "payment-signature": (await signPayment(emptyPost.json.accepts[0])).header } });
+    const exampleHex = createHash("sha256").update("hello world").digest("hex");
+    ok(emptyPost.status === 402 && emptyPaid.status === 200 && emptyPaid.json?.hex === exampleHex && /^0x/.test(emptyPaid.json.transaction || ""), `a paid POST of {} to a fixed-price tool runs its published example and settles (${emptyPaid.status} ${emptyPaid.text.slice(0, 90)})`);
+    const mimeGet = await call(`${srv.url}/ref/mime`, { method: "GET", headers: xff() });
+    const mimePaid = await call(`${srv.url}/ref/mime`, { method: "GET", headers: { ...xff(), "payment-signature": (await signPayment(mimeGet.json.accepts[0])).header } });
+    const mimeOwn = await call(`${srv.url}/ref/mime?ext=png`, { method: "GET", headers: { ...xff(), "payment-signature": (await signPayment(mimeGet.json.accepts[0])).header } });
+    ok(mimeGet.status === 402 && mimePaid.status === 200 && mimePaid.json?.mime === "image/webp" && mimeOwn.status === 200 && mimeOwn.json?.mime === "image/png", `a GET tool: a paid GET with no query runs the published example (${mimePaid.json?.mime}); one with a query is served as sent (${mimeOwn.json?.mime})`);
+    const { LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
+    const proExample = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-pro").discovery.input;
+    const proDirect = baseAmountOf(await call(`${srv.url}/v1/pro/chat/completions`, { body: proExample, headers: xff() }));
+    const proEmpty = await call(`${srv.url}/ref/v1-chat-pro`, { method: "GET", headers: xff() });
+    const chatBefore = or.chat;
+    const proPaid = await call(`${srv.url}/ref/v1-chat-pro`, { body: {}, headers: { ...xff(), "payment-signature": (await signPayment(proEmpty.json.accepts[0])).header } });
+    const sentBody = or.bodies.at(-1) || {};
+    ok(proEmpty.status === 402 && proEmpty.json.accepts[0].amount === proDirect.amount && proPaid.status === 200 && or.chat === chatBefore + 1 && JSON.stringify(sentBody.messages) === JSON.stringify(proExample.messages) && sentBody.stream !== true && fac.of("/settle").at(-1).json.paymentRequirements.amount === proDirect.amount, `a model-priced chat tier: an empty request is quoted at its published example's price (${proEmpty.json?.accepts?.[0]?.amount}), and the paid empty call runs that example upstream and settles that amount (${proPaid.status})`);
+  }
+  {
+    // A tool under a handler budget whose upstream never answers: the budget ceiling cuts the call off at the deadline.
+    const q = await call(`${srv.url}/ref/stablecoin-peg`, { method: "GET", headers: xff() });
+    const settlesBefore = fac.of("/settle").length;
+    const t0 = Date.now();
+    const r = await call(`${srv.url}/ref/stablecoin-peg`, { method: "GET", headers: { ...xff(), "payment-signature": (await signPayment(q.json.accepts[0], { account: newAccount() })).header } });
+    const took = Date.now() - t0;
+    await wait(200);
+    const cut = [...srv.log().matchAll(/\[hang-fetch\] \S+ aborted after (\d+) ms/g)].map((m) => Number(m[1]));
+    ok(q.status === 402 && r.status >= 500 && took < 5500 && fac.of("/settle").length === settlesBefore && /\[hang-fetch\] \S+ called/.test(srv.log()) && cut.length >= 1 && Math.max(...cut) <= 4200, `a budgeted data tool whose upstream never answers is cut off at the deadline, not left running, and is not settled (${r.status} after ${took} ms; upstream aborted after ${cut.join(", ")} ms; ${r.text.slice(0, 200)})`);
+  }
   const garbage = await call(`${srv.url}/ref/hash`, { body: { text: "abc" }, headers: { ...xff(), "payment-signature": "!!!not-base64!!!" } });
   const garbageX = await call(`${srv.url}/ref/hash`, { body: { text: "abc" }, headers: { ...xff(), "x-payment": "!!!not-base64!!!" } });
   ok(garbage.status === 402 && garbage.json?.errorReason === "invalid_request" && garbageX.status === 402 && garbageX.json?.errorReason === "invalid_request" && !/PAYMENT-SIGNATURE/.test(garbageX.text), `a payment header that does not decode (either header) is a 402 invalid_request whose words name no header (${garbage.status}, ${garbageX.status})`);
@@ -1238,6 +1645,7 @@ try {
     const chatBefore = or.chat, settlesBefore = fac.of("/settle").length;
     const r = await call(`${srv.url}/ref/${slug}`, { body, headers: { ...xff(), "payment-signature": (await signPayment(acc)).header } });
     const sent = or.bodies.at(-1) || {};
+    if (/\/v1\/|\/api\//.test(r.text) || /\/v1\/|\/api\//.test(q.text)) ok(false, `${name}: an answer names a direct route (${(r.text.match(/.{0,40}\/(?:v1|api)\/.{0,40}/) || q.text.match(/.{0,40}\/(?:v1|api)\/.{0,40}/) || [""])[0]})`);
     ok(q.status === 402 && r.status === 200 && r.json?.choices?.[0]?.message?.content === "OK" && /^0x[0-9a-f]{64}$/.test(r.json?.transaction || "") && or.chat === chatBefore + 1 && sent.stream !== true && fac.of("/settle").length === settlesBefore + 1 && fac.of("/settle").at(-1).json.paymentRequirements.amount === acc.amount,
       `${name}: the real handler runs once against the upstream (not streamed), and the answer comes back with the settle transaction for the quoted amount (${r.status} ${r.text.slice(0, 100)})`);
     return { acc, r };
@@ -1246,6 +1654,32 @@ try {
   const proRun = await paidChat("a model-priced chat tier naming a dearer model", "v1-chat-pro", chatBody("anthropic/claude-opus-5.5"));
   ok(proRun.acc.amount === proDear.got, `settled at the dearer model's amount (${proRun.acc.amount})`);
   await paidChat("the metered chat tier", "v1-chat-metered", meteredBody);
+  await paidChat("the premium chat tier", "v1-chat-premium", chatBody());
+  await paidChat("the base chat tier (a flat tier a metered call would undercut)", "v1-chat", { messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
+  {
+    // No answer of an admitted chat tier, success or error, names a direct route or tells the buyer to call one.
+    const NAMES_ROUTE = /\/v1\/|\/api\/|base URL|chat\/completions/i;
+    const bad = [];
+    const errorOf = async (slug, body) => {
+      const q = await call(`${srv.url}/ref/${slug}`, { body, headers: xff() });
+      const acc = q.json?.accepts?.[0];
+      const r = acc ? await call(`${srv.url}/ref/${slug}`, { body, headers: { ...xff(), "payment-signature": (await signPayment(acc, { account: newAccount() })).header } }) : q;
+      for (const x of [q, r]) if (NAMES_ROUTE.test(x.text)) bad.push(`${slug} ${x.status}: ${(x.text.match(/.{0,50}(?:\/v1\/|\/api\/|base URL|chat\/completions).{0,50}/i) || [""])[0]}`);
+      return r;
+    };
+    const statuses = {};
+    for (const slug of ["v1-chat-auto", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered", "v1-chat"]) {
+      const a = await errorOf(slug, { model: "not-a-vendor/not-a-model", messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
+      const b = await errorOf(slug, { model: "openai/gpt-6-luna:online", messages: [{ role: "user", content: "hi" }], max_tokens: 5 });
+      const c = await errorOf(slug, { messages: [{ role: "user", content: "hi" }], max_tokens: 5, n: 99 });
+      const d = await errorOf(slug, { messages: "not a list" });
+      statuses[slug] = [a.status, b.status, c.status, d.status].join("/");
+    }
+    ok(bad.length === 0 && Object.values(statuses).every((s2) => /4\d\d/.test(s2)), `the real chat handler's refusals on every admitted tier name no direct route (${JSON.stringify(statuses)}${bad.length ? `; named: ${bad.slice(0, 4).join(" | ")}` : ""})`);
+    const dearer = await call(`${srv.url}/ref/v1-chat-pro`, { body: chatBody("anthropic/claude-opus-5.5"), headers: xff() });
+    const dearerPaid = await call(`${srv.url}/ref/v1-chat-pro`, { body: chatBody("anthropic/claude-opus-5.5"), headers: { ...xff(), "payment-signature": (await signPayment(dearer.json.accepts[0], { account: newAccount() })).header } });
+    ok(dearerPaid.status === 200 && dearerPaid.json?.agent402_tier && !("route" in dearerPaid.json.agent402_tier) && !NAMES_ROUTE.test(dearerPaid.text) && !("agent402_metered" in dearerPaid.json), `a call served under another tier's price says so without naming a route, and carries no pointer to the metered route (${JSON.stringify(dearerPaid.json?.agent402_tier)})`);
+  }
   {
     // The upstream stalls: the gate answers at its deadline AND the upstream call is cut off.
     or.delayMs = 9000;
@@ -1311,7 +1745,7 @@ try {
     ok(lane.status === 429 && lane.json?.errorReason === "too_many_unsettled_runs", `and is held by the referral route's own bound (${lane.status} ${lane.json?.errorReason})`);
   }
   const op = await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } });
-  ok(op.status === 200 && op.json?.enabled === true && op.json.sinceBoot?.settled >= 4 && op.json.sinceBoot.timeouts === 1 && op.json.sinceBoot.screened === 1 && op.json.routes.includes("hash") && Array.isArray(op.json.open) && Array.isArray(op.json.notServed), `the operator view carries the gate's counters, its open settlements and the slugs it does not serve (${JSON.stringify(op.json?.sinceBoot)})`);
+  ok(op.status === 200 && op.json?.enabled === true && op.json.sinceBoot?.settled >= 4 && op.json.sinceBoot.timeouts >= 1 && op.json.sinceBoot.screened === 1 && op.json.routes.includes("hash") && Array.isArray(op.json.open) && Array.isArray(op.json.notServed), `the operator view carries the gate's counters, its open settlements and the slugs it does not serve (${JSON.stringify(op.json?.sinceBoot)})`);
 
   const logText = srv.log();
   ok(/\[referral\] settled hash payer=0x[0-9a-fA-F]{4} tx=0x[0-9a-f]{64}/.test(logText) && !logText.toLowerCase().includes(KEY_HEX) && !logText.toLowerCase().includes(buyer.address.toLowerCase()), "the server log has the settle line with a shortened payer, and neither the signer key nor a full payer address");
@@ -1357,7 +1791,10 @@ try {
     }
     ok(open?.state === "charged-undelivered" && open.tx === tx && open.saleBooked === true && /CHARGED-BUT-NOT-SERVED: a settlement left open landed on chain \(hash .*sale booked/.test(b.log()), `after the restart the sweep reads the open intent against the chain, books the sale and keeps the case (${JSON.stringify(open).slice(0, 220)})`);
     const again = await call(`${b.url}/ref/hash`, { body: { text: "abc" }, headers: { "payment-signature": p.header } });
-    ok(again.status === 409 && again.json?.reason === "answer_unavailable", `the same payment sent to the new process runs nothing a second time (${again.status} ${again.json?.reason})`);
+    ok(again.status === 200 && again.json?.hex === createHash("sha256").update("abc").digest("hex") && again.json.transaction === tx, `the charged buyer's re-send to the new process returns the answer stored with the open entry, with its transaction: nothing runs a second time (${again.status} ${again.text.slice(0, 90)})`);
+    await wait(200);
+    const closed = (await call(`${b.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
+    ok(closed?.open?.length === 0 && closed.sinceBoot?.restoredAnswers === 1, "and the delivered entry is closed");
     const sales2 = await call(`${b.url}/api/sales`, { method: "GET" });
     ok(sales2.status === 200 && !/referral/.test(sales2.text), "and the sale the sweep booked is on no public surface");
   } catch (e) {
