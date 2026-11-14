@@ -2718,6 +2718,8 @@ try {
       const word = appS.gate.statusWord();
       const rec = bookS.shortSales().echo;
       ok(word.status === "attention" && word.reasons.some((x) => /^echo: .*expected at least 26295, received 22500, of a gross of 30000; 8 sale\(s\)\)$/.test(x)) && rec?.count === 8 && rec.deep === 0 && appS.gate.stats().shortNetSales === 8 && logLines.some((l) => /SHORT NET: .* for echo: expected at least 26295, received 22500/.test(l)), `the word reads attention from the first such sale, with a reason that names the slug and both amounts; a gap of this size never stops a buyer (${word.reasons.join("; ")})`);
+      await bookS.noteShort("echo", { expected: "26295", received: "22500", gross: "30000", tx: sales[0].tx });
+      ok(bookS.shortSales().echo.count === 8, `a transaction is counted once, however often it is noted (${bookS.shortSales().echo.count})`);
       // The reverse (the map above the contract's rate) raises nothing.
       chainPays(500);
       const generous = await paid("exa");
