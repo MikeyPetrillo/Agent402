@@ -10,7 +10,8 @@
 // document headers are set only when the answer turns out to be HTML (read
 // off Content-Type as the head is written), so a page added under /api later
 // is covered without anyone remembering this rule.
-const DOCUMENT_HEADERS_SKIP = /^\/(api|v1|mcp)(\/|$)/;
+// /ref/<slug> is the referral copy of an API route (src/referral-gate.js): JSON only.
+const DOCUMENT_HEADERS_SKIP = /^\/(api|v1|mcp|ref)(\/|$)/;
 const HTML_TYPE_RE = /^\s*text\/html\b/i;
 function headIsHtml(res, headArgs) {
   if (HTML_TYPE_RE.test(String(res.getHeader("content-type") || ""))) return true;
