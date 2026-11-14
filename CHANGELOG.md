@@ -12,9 +12,11 @@ Index:
   max_amount_required, beside price_usd, in a seller's manifest and OpenAPI
   document: amount_usd in a price object and an OpenAPI payment object,
   max_amount_required on an entry that names its asset, in a payment object and
-  in accepts items. They are read only where an entry would otherwise have no
-  price, so a listing that already had a price keeps it, one that writes both
-  priceUsd and price_usd included.
+  in accepts items. They are read only where the seller's own manifest or
+  OpenAPI document would otherwise give a route no price, so a price those
+  documents already gave is kept, one written as both priceUsd and price_usd
+  included. A price they give counts as the seller's declared price, as the
+  camelCase spelling does.
 Surfaces:
 - A tool that answers with bytes is listed under the content type its example
   returns: qr, screenshot, image-resize and image-thumbnail as image/png,
