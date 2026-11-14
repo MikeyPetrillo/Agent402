@@ -366,7 +366,13 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   closed by itself, and `resolve` works on it. An open entry marked `routedToUs` paid this
   merchant under settings this server does not hold (a payout wallet changed on chain first):
   correct `REFERRAL_PAYOUT_ADDRESS` and the sweep proves and books it, or resolve it by hand
-  (`refund` writes its debt). Operator view: `GET /__operator/referral.json`. The
+  (`refund` writes its debt). The view's `shortNet` lists slugs whose sales arrived under the
+  net `REFERRAL_COMMISSION_BPS` expects (attention from the first, with both amounts): correct
+  the map and redeploy (the sweep drops the record), or clear it with
+  `{"action":"clear-short","slug":"<slug>","note":"what was checked"}`; a slug paid under half the
+  expected net `REFERRAL_SHORT_NET_MAX` times answers 503 until then. With contradicted entries
+  from three payers the whole route answers 503 until they are resolved (check
+  `REFERRAL_MERCHANT_ID` first). Operator view: `GET /__operator/referral.json`. The
   word `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads
   attention on the conditions `.claude/rules/payments.md` lists; the status Worker and
   `heartbeat.yml` page on it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
