@@ -1146,6 +1146,13 @@ try {
     const store = createReferralAnswerStore({ now: () => Date.now() + skew.ms });
     const app9 = await mount({}, { answers: store });
     try {
+      // A delivered call's answer is kept in memory for a re-send, ten minutes at most.
+      const d = await send(`${app9.url}/ref/echo`, { body: { text: "delivered" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+      ok(d.status === 200 && app9.gate.stats().keptAnswers === 1, `a delivered answer is held for a re-send (${app9.gate.stats().keptAnswers})`);
+      skew.ms = 11 * 60_000;
+      await app9.gate.sweepOnce();
+      skew.ms = 0;
+      ok(app9.gate.stats().keptAnswers === 0, `and is dropped from memory by the next pass once ten minutes have passed (${app9.gate.stats().keptAnswers})`);
       fac.mode.settle = () => ({ status: 500, body: {} });
       const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) });
       const key = gateMod.referralReplayKey(p.authorization);
