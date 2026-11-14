@@ -98,7 +98,7 @@ function shaped(n) {
 const HEADERS = ["user-agent", "accept", "accept-language", "referer", "origin", "x-forwarded-for", "authorization", "x-payment", "payment-signature", "x-operator-token", "cookie", "if-none-match", "range", "idempotency-key"];
 // Further headers a gate, the connector or the edge code reads; each gets the
 // general shapes.
-const MORE_HEADERS = ["prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt"];
+const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt"];
 
 // --- the readers the surfaces do not reach, timed directly --------------------
 // Synchronous functions, so a reading is the time this thread had a core.
@@ -148,6 +148,8 @@ const srv = await bootPaidServer({
   env: {
     AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "1", MPP_SECRET_KEY: "redos-headers-local-secret",
     X402_PAYWALL_PROBES_PER_CYCLE: "0", AGENT402_MCP_MAX_PER_MIN: "999999", AGENT402_MCP_MAX_PER_HOUR: "9999999",
+    // The referral gate reads its own headers on its unpaid 402 (the facilitator is never reached).
+    REFERRAL_PAY_TO: "0x00000000000000000000000000000000000000a1", REFERRAL_FACILITATOR_URL: "http://127.0.0.1:9/", REFERRAL_SIGNER_KEY: "11".repeat(32), REFERRAL_SLUGS: "hash,v1-chat-metered", REFERRAL_SETUP_URL: "https://setup.example/referral",
   },
 });
 
@@ -191,6 +193,8 @@ const SURFACES = [
   { name: "unknown API path", method: "GET", path: "/api/no-such-tool-here", expect: [404] },
   { name: "model tier 402", method: "POST", path: "/v1/chat/completions", body: { model: "agent402/auto", messages: [{ role: "user", content: "hi" }] }, expect: [402] },
   { name: "metered quote", method: "POST", path: "/v1/metered/chat/completions", body: { model: "agent402/auto", messages: [{ role: "user", content: "hi" }] }, expect: [402] },
+  { name: "referral 402", method: "POST", path: "/ref/hash", body: { text: "a" }, expect: [402] },
+  { name: "referral metered quote", method: "POST", path: "/ref/v1-chat-metered", body: { model: "agent402/auto", messages: [{ role: "user", content: "hi" }] }, expect: [402] },
 ];
 
 try {
