@@ -31,7 +31,9 @@ jobs:
     # On workflow_run: only a successful push run of this repository's main.
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The script stops starting writes at 15 minutes and ends itself, so the
+    # page step below still runs.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -61,5 +63,5 @@ jobs:
           if [ "$OUTCOME" = "success" ]; then
             [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ). $RUN_URL" || true
           elif [ -z "$OPEN" ]; then
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The daily 402 Index price sync failed, so our listings there may quote a stale price. Check the run: a REWRITTEN line names an imported listing that was off the catalog price (most likely the index wrote it back from its own source, which still carries an old price), NOT HELD names a write the index did not keep, and a 403 points at the INDEX402_TOKEN secret. $RUN_URL"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The daily 402 Index price sync failed, so our listings there may quote a stale price. Check the run: a REWRITTEN line names an imported listing that was off the catalog price (most likely the index wrote it back from its own source, which still carries an old price; a paid call to that route from the Bazaar keep-alive workflow with slug_prefix refreshes it), NOT HELD names a write the index did not keep, and a 403 points at the INDEX402_TOKEN secret. $RUN_URL"
           fi

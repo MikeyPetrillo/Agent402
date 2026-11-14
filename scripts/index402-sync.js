@@ -17,18 +17,23 @@
 // changed, so with INDEX402_FLAG_REWRITTEN=1 (the daily run) an imported
 // listing of a fixed-price route that is off the catalog price is corrected,
 // named, and fails the run: most likely its source still carries an old
-// price (or the run after the last deploy did not complete). A route priced
-// per request (`quoted` in /api/pricing) is corrected the same way and never
-// flagged, since the importer's source carries the amount of the last quote
-// sold.
+// price (or the run after the last deploy did not complete). The remedy is a
+// paid call to the route through the importer's source (bazaar-keepalive.yml
+// with slug_prefix). A route priced per request (`quoted` or `pricedByModel`
+// in /api/pricing) is corrected the same way and never flagged, since the
+// importer's source carries the amount of the last call sold.
 //
 // Env: INDEX402_DOMAIN (default agent402.tools), INDEX402_TOKEN (the domain
 // claim's verification token; required unless DRY_RUN=1), PRICING_URL
 // (default https://<domain>/api/pricing), INDEX402_API (default
 // https://402index.io/api/v1), INDEX402_TIMEOUT_MS (per request, default
 // 40000; a request that times out, cannot connect or answers 429 or 5xx is
-// asked once more), INDEX402_FLAG_REWRITTEN (above). DRY_RUN=1 prints the
-// plan and writes nothing.
+// asked once more, a 429 after the wait its answer names, at most 65 s),
+// INDEX402_RUN_BUDGET_MS (default 900000: past it no further write is
+// started, the corrections left are counted and the run fails, so the run
+// ends itself inside the job's limit), INDEX402_FLAG_REWRITTEN (above),
+// INDEX402_WAIT_SCALE (tests only: multiplies a 429's named wait).
+// DRY_RUN=1 prints the plan and writes nothing.
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -50,12 +55,13 @@ export function livePrices(pricing) {
   return out;
 }
 
-/** Paths whose catalog price is the lowest of a per-request quote. */
+/** Paths whose charge is set per request: quoted from the input, or priced
+ *  by the model the request names. */
 export function quotedPaths(pricing) {
   const out = new Set();
   for (const e of pricing?.endpoints || []) {
     const path = e.path || e.route;
-    if (path && e.quoted === true) out.add(path);
+    if (path && (e.quoted === true || e.pricedByModel === true)) out.add(path);
   }
   return out;
 }
@@ -95,7 +101,21 @@ const timeoutMs = () => {
   const n = Number(process.env.INDEX402_TIMEOUT_MS);
   return Number.isFinite(n) && n > 0 ? n : 40_000;
 };
+const runBudgetMs = () => {
+  const n = Number(process.env.INDEX402_RUN_BUDGET_MS);
+  return Number.isFinite(n) && n > 0 ? n : 900_000;
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** How long a 429 asks us to wait, in ms: Retry-After, else the reset of the
+ *  rate-limit window, bounded; null when the answer names neither. */
+export function waitNamedBy(headers) {
+  const get = (k) => (typeof headers?.get === "function" ? headers.get(k) : headers?.[k]);
+  const after = Number(get("retry-after"));
+  const reset = Number((/reset=(\d+)/.exec(String(get("ratelimit") || "")) || [])[1] ?? get("ratelimit-reset"));
+  const s = Number.isFinite(after) && after > 0 ? after : Number.isFinite(reset) && reset > 0 ? reset : null;
+  return s === null ? null : Math.min(s, 65) * 1000;
+}
 
 /** The claim token never reaches a log, whatever an answer echoes back. */
 function withoutToken(text) {
@@ -116,7 +136,7 @@ async function askOnce(url, init) {
     throw Object.assign(new Error(withoutToken(`${method} ${url} -> ${why}`)), { again: true });
   }
   let body; try { body = JSON.parse(text); } catch { body = { raw: text.slice(0, 200) }; }
-  if (!res.ok) throw Object.assign(new Error(withoutToken(`${method} ${url} -> ${res.status} ${JSON.stringify(body).slice(0, 200)}`)), { status: res.status, again: res.status === 429 || res.status >= 500 });
+  if (!res.ok) throw Object.assign(new Error(withoutToken(`${method} ${url} -> ${res.status} ${JSON.stringify(body).slice(0, 200)}`)), { status: res.status, again: res.status === 429 || res.status >= 500, waitMs: res.status === 429 ? waitNamedBy(res.headers) : null });
   return body;
 }
 
@@ -126,7 +146,8 @@ async function getJson(url, init) {
   try { return await askOnce(url, init); } catch (e) {
     if (!e.again) throw e;
     console.error(`  retrying once: ${e.message}`);
-    await sleep(Math.min(2000, timeoutMs()));
+    const scale = Number(process.env.INDEX402_WAIT_SCALE);
+    await sleep(e.waitMs != null ? e.waitMs * (Number.isFinite(scale) && scale > 0 ? scale : 1) : Math.min(2000, timeoutMs()));
     return askOnce(url, init);
   }
 }
@@ -137,6 +158,7 @@ async function main() {
   const pricingUrl = process.env.PRICING_URL || `https://${domain}/api/pricing`;
   const token = process.env.INDEX402_TOKEN || "";
   const dry = process.env.DRY_RUN === "1";
+  const stopWritesAt = Date.now() + runBudgetMs();
   if (!token && !dry) { console.error("INDEX402_TOKEN is not set (DRY_RUN=1 to plan without it)"); process.exit(1); }
 
   const pricing = await getJson(pricingUrl);
@@ -154,7 +176,13 @@ async function main() {
   for (const l of unknown) console.log(`  not sold: ${l.protocol} ${l.url} (listed $${l.price_usd})`);
 
   let failed = 0;
-  for (const u of updates) {
+  for (const [i, u] of updates.entries()) {
+    if (!dry && Date.now() > stopWritesAt) {
+      const left = updates.length - i;
+      failed += left;
+      console.error(`  run budget of ${runBudgetMs()} ms spent: ${left} correction(s) left for the next run`);
+      break;
+    }
     console.log(`  ${dry ? "would set" : "set"} ${u.protocol} ${u.url}: $${u.from} -> $${u.to}`);
     if (dry) continue;
     try {
@@ -169,7 +197,7 @@ async function main() {
   }
   const rewritten = process.env.INDEX402_FLAG_REWRITTEN === "1" ? rewrittenByImporter(updates) : [];
   for (const u of rewritten) console.error(`  REWRITTEN ${u.url}: the index's own source carries $${u.from}, the catalog price is $${u.to}`);
-  if (rewritten.length) console.error(`${rewritten.length} imported listing(s) of a fixed-price route were off the catalog price on the daily run: most likely the importer's source still carries an old price for them (or the run after the last deploy did not complete).`);
+  if (rewritten.length) console.error(`${rewritten.length} imported listing(s) of a fixed-price route were off the catalog price on the daily run: most likely the importer's source still carries an old price for them (or the run after the last deploy did not complete). A paid call to the route through that source refreshes it (bazaar-keepalive.yml with slug_prefix).`);
   if (failed || rewritten.length) process.exit(1);
 }
 

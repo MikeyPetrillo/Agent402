@@ -7,7 +7,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { microUsd, livePrices, quotedPaths, planUpdates, rewrittenByImporter, holdsPrice } from "./index402-sync.js";
+import { microUsd, livePrices, quotedPaths, planUpdates, rewrittenByImporter, holdsPrice, waitNamedBy } from "./index402-sync.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -48,6 +48,8 @@ const pricingQ = { endpoints: [
   { path: "/v1/metered/messages", price: "$0.001", quoted: true },
   { path: "/api/x-user-tweets", price: "$0.09" },
 ] };
+ok(quotedPaths({ endpoints: [{ path: "/v1/chat/completions", price: "$0.1", pricedByModel: true }, { path: "/api/x", price: "$0.1", pricedByModel: false }] }).size === 1, "a route priced by the model its request names counts as priced per request");
+ok(waitNamedBy({ "retry-after": "7" }) === 7000 && waitNamedBy({ ratelimit: "limit=100, remaining=0, reset=31" }) === 31000 && waitNamedBy({ "retry-after": "600" }) === 65000 && waitNamedBy({}) === null && waitNamedBy(new Headers({ "retry-after": "3" })) === 3000, "a 429's wait is read from Retry-After or the window reset, bounded at 65 s");
 const quoted = quotedPaths(pricingQ);
 ok(quoted.size === 2 && quoted.has("/api/tts") && !quoted.has("/api/x-user-tweets"), "quotedPaths keeps only routes priced per request");
 const q = planUpdates([
@@ -86,7 +88,8 @@ async function stubIndex(opts = {}) {
       seen.lists++;
       if (opts.hangAllLists || (opts.hangFirstList && seen.lists === 1)) { seen.hung.push(res); return; }
       if (opts.stallFirstListBody && seen.lists === 1) { res.writeHead(200, { "content-type": "application/json" }); res.write('{"services":['); seen.hung.push(res); return; }
-      if (opts.failListOnce && seen.lists === 1) return json(opts.failListOnce, { error: "slow down" });
+      if (opts.failListOnce && seen.lists === 1) { seen.at429 = Date.now(); res.writeHead(opts.failListOnce, { "content-type": "application/json", ...(opts.retryAfter ? { "retry-after": String(opts.retryAfter) } : {}) }); return res.end('{"error":"slow down"}'); }
+      if (seen.at429 && !seen.afterWait) seen.afterWait = Date.now() - seen.at429;
       if (opts.failList) return json(opts.failList, { error: "nope" });
       return json(200, { services: [...store.values()] });
     }
@@ -164,6 +167,18 @@ function runSync(port, env = {}) {
   const s = await stubIndex({ failListOnce: 429 });
   const r = await runSync(s.port);
   ok(r.code === 0 && s.seen.lists === 2 && /retrying once: GET .* -> 429/.test(r.err), `a 429 is asked once more and the run goes on (${r.code}, ${s.seen.lists} asks)`);
+  await s.close();
+}
+{ // A 429 that names its wait is asked again only after it (scaled down here).
+  const s = await stubIndex({ failListOnce: 429, retryAfter: 10 });
+  const r = await runSync(s.port, { INDEX402_WAIT_SCALE: "0.1" });
+  ok(r.code === 0 && s.seen.lists === 2 && s.seen.afterWait >= 900 && s.seen.afterWait < 5000, `a 429 naming 10 s is asked again after that wait (scaled to 1 s; waited ${s.seen.afterWait} ms)`);
+  await s.close();
+}
+{ // Past the run budget no further write starts; what is left is counted and the run fails.
+  const s = await stubIndex();
+  const r = await runSync(s.port, { INDEX402_RUN_BUDGET_MS: "1" });
+  ok(r.code === 1 && s.seen.patches.length === 0 && /run budget of 1 ms spent: 3 correction\(s\) left for the next run/.test(r.err), `a spent run budget starts no write and fails naming what is left (${r.code}, ${s.seen.patches.length} writes)`);
   await s.close();
 }
 { // An answer that echoes the write back never puts the token in the log.
