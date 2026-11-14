@@ -105,6 +105,8 @@ function workerEnv() {
   delete env.STATE_DATABASE_URL;
   delete env.REDIS_URL;
   delete env.LEDGER_JOURNAL_REDIS;
+  // A signing key the worker never uses (the referral gate settles in the main process).
+  delete env.REFERRAL_SIGNER_KEY;
   env.X402_INDEX_CRAWL = "off";
   env.ROUTER_WORKERS = "0";
   env.AGENT402_ROUTER_WORKER = "1";
@@ -511,6 +513,8 @@ export function routerPoolLoaded() {
 // --- test hooks -----------------------------------------------------------------
 const statsWaiters = new Map();
 export const _routerPoolForTest = {
+  /** The environment a router worker is started with. */
+  workerEnv() { return workerEnv(); },
   setDeadlineMs(ms) { deadlineMs = ms; },
   /** Make the loaded worker throw an uncaught error (ROUTER_WORKER_TEST_HOOKS=1). */
   crashWorker() { const w = pickWorker(); if (w) w.worker.postMessage({ t: "__testCrash" }); return !!w; },

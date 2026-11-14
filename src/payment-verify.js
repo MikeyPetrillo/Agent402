@@ -30,8 +30,11 @@ const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a116
 export const TIP20_TRANSFER_WITH_MEMO_TOPIC = "0x57bc7354aa85aed339e000bccffabbc529466af35f0772c8f8ee1145927de7f0";
 /** Tempo mainnet: an EVM chain id, but its own verifier (TIP-20 tokens, more than one accepted currency). */
 export const TEMPO_NETWORK = "eip155:4217";
+/** Base USDC: the asset a referral-rail payment moves. */
+export const REFERRAL_USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 
 import { isGatewayWire } from "./gateway-wire.js";
+import { proveReceipt } from "./referral-proof.js";
 import { STELLAR_USDC_CODE, STELLAR_USDC_ISSUER } from "./stellar-confirm.js";
 
 /** Circle Gateway's API (the batched x402 option, src/gateway-nanopayments.js). */
@@ -320,12 +323,43 @@ export async function verifyInboundPayment({
   rpcFor = () => null,
   stellarConfirm = null,       // injected: (opts) => Promise<{transaction}|null>
   payToSetFor = null,          // (network) => iterable of every payTo WE control
+  referralPayTo = null,        // the split contract a "referral" row was paid to (src/referral-gate.js)
+  referralMerchantId = null,   // our merchant id on that contract (REFERRAL_MERCHANT_ID)
+  referralPayout = null,       // the wallet the contract pays our merchant amount to (REFERRAL_PAYOUT_ADDRESS)
+  referralRoutedTopic = null,  // the routed-payment event topic, when it differs from the documented one
   solanaRpcs = SOLANA_RPCS,
   algorandIndexers = ALGORAND_INDEXERS,
   fetchImpl = fetch,
   timeoutMs = 8_000,
 } = {}) {
   try {
+    // A sale on a referral copy (wire "referral") paid the referral network's
+    // split contract, not a wallet of ours, and that contract pays whichever
+    // merchant its caller names. Its proof is the gate's own rule
+    // (proveReceipt, src/referral-chain.js), on Base: in the recorded
+    // transaction, an authorization of this payer with its own transfer of
+    // at least the amount into THAT contract, routed by the contract to OUR
+    // merchant and paid out to our payout wallet. A transfer into the
+    // contract alone proves nothing about who was paid, and is not repaid.
+    if (wire === "referral") {
+      if (String(network || "") !== "eip155:8453") return fail(`referral debt on ${network || "an unknown network"} - the referral rail settles on Base only`);
+      if (!/^0x[0-9a-fA-F]{40}$/.test(String(referralPayTo || ""))) return fail("no referral pay-to address configured (REFERRAL_PAY_TO) - cannot prove where the money went");
+      const rpcUrl = rpcFor(network);
+      if (!rpcUrl) return fail(`no RPC configured for ${network}`);
+      if (!/^\d{1,78}$/.test(String(referralMerchantId ?? "")) || !/^0x[0-9a-fA-F]{40}$/.test(String(referralPayout || ""))) return fail("no referral merchant id or payout address configured (REFERRAL_MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS) - cannot prove the payment was routed to us");
+      if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
+      if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
+      const units = BigInt(Math.round(Number(amountUsd) * 1e6));
+      if (units <= 0n) return fail("expected amount is zero");
+      let receipt;
+      try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
+      catch (e) { return fail(`could not read the transaction: ${e.message}`); }
+      if (!receipt) return fail("transaction not found on chain");
+      // Any payout to our wallet stands in only when the routed event cannot be decoded (minNet 1).
+      const proof = proveReceipt(receipt, { tx, from: payer, nonce: null, payTo: referralPayTo, amount: units.toString(), merchantId: String(referralMerchantId), payoutAddress: referralPayout, minNet: "1", ...(referralRoutedTopic ? { routedTopic: referralRoutedTopic } : {}) });
+      if (proof.verdict !== "paid") return fail(`the transaction does not prove a payment routed to this merchant (${proof.verdict}: ${proof.why})`);
+      return pass({ movedAtomic: units.toString(), decimals: 6, tx });
+    }
     const accepts = acceptsFor(network);
     // payTo is per-SLUG: self-funding routes settle to the SPENDING wallet, not
     // the treasury. Verifying against a single address made every debt for

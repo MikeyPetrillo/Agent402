@@ -29,7 +29,7 @@ const exposed = (r) => (r.headers.get("access-control-expose-headers") || "").to
 
 const TOKEN = "header-surfaces-operator-token-0123456789";
 // The referral gate (/ref/<slug>) is on, against a facilitator this suite never reaches.
-const REFERRAL_ENV = { REFERRAL_PAY_TO: "0x00000000000000000000000000000000000000a1", REFERRAL_FACILITATOR_URL: "http://127.0.0.1:9/", REFERRAL_SIGNER_KEY: "11".repeat(32), REFERRAL_SLUGS: "hash", REFERRAL_SETUP_URL: "https://setup.example/referral", REFERRAL_COMMISSION_BPS: "default:2000" };
+const REFERRAL_ENV = { REFERRAL_PAY_TO: "0x00000000000000000000000000000000000000a1", REFERRAL_FACILITATOR_URL: "http://127.0.0.1:9/", REFERRAL_SIGNER_KEY: "11".repeat(32), REFERRAL_SLUGS: "hash", REFERRAL_SETUP_URL: "https://setup.example/referral", REFERRAL_COMMISSION_BPS: "default:1234", REFERRAL_MERCHANT_ID: "4242", REFERRAL_PAYOUT_ADDRESS: "0x00000000000000000000000000000000000000b2" };
 const srv = await bootPaidServer({ label: "header-surfaces", env: { AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "", ...REFERRAL_ENV } });
 const J = { "content-type": "application/json" };
 const get = async (path, init = {}) => {

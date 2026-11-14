@@ -36,5 +36,6 @@ export function ownStoreEnv(label = "server") {
     DISCOVERY_REFUSALS_FILE: join(dir, "discovery-refusals.json"),
     // The referral gate's open-settlement book (src/referral-book.js).
     REFERRAL_BOOK_FILE: join(dir, "referral-settlements.json"),
+    REFERRAL_ANSWER_DIR: join(dir, "referral-answers"),
   };
 }

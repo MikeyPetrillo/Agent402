@@ -120,4 +120,12 @@ jobs:
           # with payments.js.
           X402_UPSTREAM_BUYER_ADDRESS: ${{ vars.X402_UPSTREAM_BUYER_ADDRESS }}
           ALGORAND_UPSTREAM_BUYER_ADDRESS: ${{ vars.ALGORAND_UPSTREAM_BUYER_ADDRESS }}
+          # A referral-rail debt is proven against the referral network's split
+          # contract and this merchant's id and payout wallet on it
+          # (src/payment-verify.js). Repository VARIABLES: public on-chain
+          # identifiers, no key. Unset, such a row fails its proof and stays owed.
+          REFERRAL_PAY_TO: ${{ vars.REFERRAL_PAY_TO }}
+          REFERRAL_MERCHANT_ID: ${{ vars.REFERRAL_MERCHANT_ID }}
+          REFERRAL_PAYOUT_ADDRESS: ${{ vars.REFERRAL_PAYOUT_ADDRESS }}
+          REFERRAL_ROUTED_TOPIC: ${{ vars.REFERRAL_ROUTED_TOPIC }}
         run: node scripts/refund-run.js

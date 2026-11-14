@@ -1070,6 +1070,16 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "/api/gateway-status reports xSearchAuthors.status=alert: x-search-recent returned more expanded authors today than X_SEARCH_AUTHOR_DAILY_ALERT; X bills each expanded author as a user read. Every call is still served and nothing is refused. The day's count and the mark are on the operator view of /api/gateway-status (xSearchAuthors), the per-call histogram on /__operator/tool-failures.json; the daily X ceiling (X_DATA_DAILY_MAX_USD) still bounds the whole X spend. Auto-closes when the word reads ok (the next UTC day, or a raised mark).",
   },
   {
+    // The referral gate's settlements (referralSettlement, src/referral-gate.js):
+    // attention pages, ok clears; unknown and absent (the gate not mounted)
+    // do neither. The reasons are on the operator view only. Title and body
+    // match heartbeat.yml's.
+    title: "referralSettlement: referral settlements need attention",
+    verdict: ({ gateway: b }) => wordVerdict(b.referralSettlement?.status, ["attention"], ["ok"]),
+    body: () =>
+      "/api/gateway-status reports referralSettlement.status=attention: a settlement on the referral copies of paid routes needs an operator. One of these holds: a settlement in doubt, charged and not yet delivered, or unconfirmed for more than fifteen minutes; a settle success the chain contradicts, or one whose receipt still cannot be read (both stay until resolved by hand); the referral facilitator refused this server's own signature in the last fifteen minutes; the facilitator left two or more calls in a row unanswered over ten minutes; an intent to settle could not be stored; or the settlement book is full. The reasons and the open settlements are on the operator view (/__operator/referral.json, operator token), where an entry can be resolved by hand with a note. No payment on a referral copy is settled twice. While the book is full, or while this server's own signature keeps being refused, paid calls on the referral copies are answered as unavailable before anything runs. Auto-closes when the word reads ok.",
+  },
+  {
     // The MPP subscription engine (mppSubscriptions, server.js): failed pages
     // (it is configured but did not build at boot, so the recurring-monitor
     // routes are not mounted); on and off clear; unknown and absent do

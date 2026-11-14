@@ -149,9 +149,24 @@ const METERED_PACK_SLUGS = meteredPackSlugs(SKILL_PACKS);
 // set still calls them every run; production is watched by the tool alert.
 const RUNNER_BLOCKED_SLUGS = new Set(["kalshi-markets", "kalshi-event", "kalshi-live-data", "kalshi-weather-index"]);
 
+// A source that is down for everyone (not only for runners) is left out until a
+// date, then is in scope again with no edit: an entry cannot outlive its outage
+// unnoticed. 2026-11-14: api.fiscaldata.treasury.gov stopped resolving, then
+// answered 403 and 503, from every network tried. Remove the entry when the
+// source answers again.
+const SOURCE_OUTAGE_UNTIL = new Map([
+  ["treasury-debt", "2026-11-21"],
+  ["treasury-avg-rates", "2026-11-21"],
+]);
+export function sourceOutageExcluded(slug, now = new Date()) {
+  const until = SOURCE_OUTAGE_UNTIL.get(slug);
+  return Boolean(until) && now.toISOString().slice(0, 10) < until;
+}
+
 function excludeReason(slug, path) {
   if (METERED_SLUGS.has(slug)) return "metered_upstream_key_or_buyer";
   if (RUNNER_BLOCKED_SLUGS.has(slug)) return "upstream_blocks_github_runners";
+  if (sourceOutageExcluded(slug)) return "source_outage_until_date";
   const packName = slug.startsWith("skill-") ? slug.slice(6) : null;
   if (packName && METERED_PACK_SLUGS.has(packName)) return "skill_pack_reaches_metered";
   if (path.startsWith("/api/skill/")) {
@@ -493,6 +508,10 @@ function stop() {
 // lenient sweep can import this file's scope without running a sweep.
 function runControls() {
   // ── Offline controls (run before any live call) ─────────────────────────────
+  ok(sourceOutageExcluded("treasury-debt", new Date("2026-11-20T23:59:59Z")) === true
+    && sourceOutageExcluded("treasury-debt", new Date("2026-11-21T00:00:00Z")) === false
+    && sourceOutageExcluded("hash", new Date("2026-11-14T00:00:00Z")) === false,
+    "control: a source-outage exclusion ends on its date and covers only the named slugs");
   // Pin the NETWORK hole: a handler 502 MUST fail this suite.
   ok(isStrictFailure(502, { error: "data.gov is not returning results" }, null) === true,
     "control: HTTP 502 is a hard fail (the NETWORK-lenient hole that hid gov-data)");

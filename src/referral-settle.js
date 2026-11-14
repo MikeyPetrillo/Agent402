@@ -53,9 +53,27 @@ export function referralRequestDigest(body, timestampSeconds) {
 // Reasons that say the payment did not move and the same authorization may be
 // sent again.
 const RETRYABLE = new Set(["lookup_unavailable", "merchant_unavailable", "retryable"]);
-// Definite refusals that are about this server's request, never the buyer's payment.
-const OURS = new Set([...RETRYABLE, "merchant_signature", "invalid_request", "signing_failed", "facilitator_http_400", "facilitator_http_401"]);
+// Definite refusals that are about this server's side, never the buyer's
+// payment (the buyer is answered 503 and nothing is counted against it).
+const OURS = new Set([...RETRYABLE, "merchant_signature", "signing_failed", "facilitator_http_401"]);
 const sideOf = (reason) => (OURS.has(reason) ? "ours" : "buyer");
+// The ONLY refusals that count toward the gate's own-fault hold: the
+// facilitator refusing this server's signature (a 401, or the documented
+// merchant-signature reason), and a request this server could not sign. A
+// 400 is about the payment the buyer sent, and a lookup the facilitator could
+// not make is its own: a buyer must not be able to close the route for
+// everyone by sending payments the facilitator rejects.
+const OWN_FAULT = new Set(["merchant_signature", "signing_failed", "facilitator_http_401"]);
+const ownFaultOf = (status, reason) => status === 401 || OWN_FAULT.has(reason);
+// A refusal that says the signed request was seen before (the network accepts
+// a signed request once): a replay, not a bad signature.
+const REPLAY_STYLE = /(^|_)(used|replay|replayed|duplicate|already|seen|nonce)(_|$)/;
+// How far ahead of the clock a signed timestamp may be set, inside the
+// facilitator's allowed skew (60 s either way), and how long a signed
+// (body, timestamp) pair is remembered.
+const SIGN_AHEAD_MAX_S = 30;
+const SIGN_MEMORY_MS = 180_000;
+const sleep = (ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); });
 // Reasons that leave the outcome open: the facilitator may still land it.
 const PENDING = new Set(["settle_pending", "facilitator_timeout"]);
 
@@ -85,7 +103,7 @@ async function readJsonCapped(res) {
   } catch { return null; }
 }
 
-const answer = (o) => ({ ok: false, transaction: null, payer: null, reason: null, retryable: false, status: 0, inDoubt: false, side: null, ...o });
+const answer = (o) => ({ ok: false, transaction: null, payer: null, reason: null, retryable: false, status: 0, inDoubt: false, side: null, ownFault: false, ...o });
 
 /**
  * @param {object} o
@@ -106,18 +124,36 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
   catch { throw new Error("referral signer key is not a usable private key"); }
   const base = String(facilitatorUrl || "").replace(/\/+$/, "");
 
+  // The same body is never signed with the same timestamp twice: /verify and
+  // /settle carry one body, and a facilitator that accepts a signed request
+  // once would refuse the second as a replay. A body signed before gets the
+  // next second after its last one; past SIGN_AHEAD_MAX_S ahead of the clock
+  // the call waits for the clock instead.
+  const signedAt = new Map(); // body hash -> { ts: last timestamp signed, at }
   async function signedHeaders(body) {
-    const timestamp = Math.floor(now() / 1000);
+    const t = now();
+    if (signedAt.size > 2_000) { for (const [k, v] of signedAt) if (t - v.at > SIGN_MEMORY_MS) signedAt.delete(k); }
+    const hash = keccak256(stringToHex(body));
+    const prev = signedAt.get(hash);
+    const repeat = !!prev && t - prev.at <= SIGN_MEMORY_MS;
+    let timestamp = Math.floor(t / 1000);
+    if (repeat && prev.ts >= timestamp) timestamp = prev.ts + 1;
+    // True only if this exact pair was signed before (the line above prevents it).
+    const samePair = repeat && prev.ts === timestamp;
+    signedAt.set(hash, { ts: timestamp, at: t });
+    const ahead = timestamp - Math.floor(now() / 1000);
+    if (ahead > SIGN_AHEAD_MAX_S) await sleep((ahead - SIGN_AHEAD_MAX_S) * 1000);
     const signature = await account.signMessage({ message: { raw: referralRequestDigest(body, timestamp) } });
-    return { "X-Agent-Signature": signature, "X-Agent-Timestamp": String(timestamp) };
+    return { headers: { "X-Agent-Signature": signature, "X-Agent-Timestamp": String(timestamp) }, samePair };
   }
 
   async function post(path, paymentPayload, paymentRequirements, { timeoutMs, signed }) {
     // Serialized once: this string is what is signed and what is sent.
     const body = JSON.stringify({ x402Version: 2, paymentPayload, paymentRequirements });
     const headers = { Accept: "application/json", "Content-Type": "application/json" };
+    let samePair = false;
     try {
-      if (signed) Object.assign(headers, await signedHeaders(body));
+      if (signed) { const h = await signedHeaders(body); Object.assign(headers, h.headers); samePair = h.samePair; }
     } catch {
       // Nothing was sent.
       return { sent: false, status: 0, data: null, failure: "signing_failed" };
@@ -127,16 +163,22 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
       res = await fetchImpl(`${base}${path}`, { method: "POST", headers, body, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
     } catch (e) {
       const name = String(e?.name || "");
-      return { sent: true, status: 0, data: null, failure: name === "TimeoutError" || name === "AbortError" ? "facilitator_timeout" : "facilitator_unreachable" };
+      return { sent: true, status: 0, data: null, failure: name === "TimeoutError" || name === "AbortError" ? "facilitator_timeout" : "facilitator_unreachable", samePair };
     }
     if (res.status >= 300 && res.status < 400) {
       try { await res.body?.cancel?.(); } catch { /* nothing to release */ }
-      return { sent: true, status: res.status, data: null, failure: "redirect_refused" };
+      return { sent: true, status: res.status, data: null, failure: "redirect_refused", samePair };
     }
     let data = null;
     try { data = await readJsonCapped(res); } catch { data = null; }
-    return { sent: true, status: res.status, data, failure: null };
+    return { sent: true, status: res.status, data, failure: null, samePair };
   }
+  // A refusal counts as this server's own fault only when it can be about
+  // the signature: not when its reason says the request was seen before, and
+  // not on a (body, timestamp) pair this process had already sent (`samePair`;
+  // signedHeaders never repeats one, so this is a backstop). The buyer is
+  // answered 503 either way.
+  const ownFault401 = (r, status, reason) => ownFaultOf(status, reason) && !(r.samePair === true || REPLAY_STYLE.test(reason));
 
   /** Ask the facilitator whether the payment would settle. Never moves money. */
   async function verify(paymentPayload, paymentRequirements) {
@@ -144,20 +186,25 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
     if (r.failure) return answer({ status: r.status, reason: r.failure, retryable: r.sent, inDoubt: true });
     const d = r.data;
     if (r.status === 200 && d && d.isValid === true) return answer({ ok: true, status: 200, payer: ADDR.test(String(d.payer || "")) ? String(d.payer).toLowerCase() : null });
-    if (r.status === 200 && d && d.isValid === false) { const why = safeReason(d.invalidReason, "invalid_payment"); return answer({ status: 200, reason: why, side: OURS.has(why) ? "ours" : "buyer" }); }
+    if (r.status === 200 && d && d.isValid === false) { const why = safeReason(d.invalidReason, "invalid_payment"); return answer({ status: 200, reason: why, side: sideOf(why), ownFault: ownFault401(r, 200, why) }); }
     const reason = safeReason(d?.errorReason ?? d?.invalidReason ?? d?.error, `facilitator_http_${r.status}`);
-    // A 401, or a reason about our own request, is this server's fault, never the buyer's credential.
-    if (r.status === 401 || OURS.has(reason)) return answer({ status: r.status, reason, retryable: true, side: "ours" });
-    // Any other 4xx is the facilitator's verdict on the request; anything else says nothing about the payment.
-    const verdict = r.status >= 400 && r.status < 500;
-    return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason) || r.status === 503, inDoubt: !verdict, side: verdict ? "buyer" : null });
+    // A 401, or a reason about our own side, is never the buyer's credential.
+    if (r.status === 401 || OURS.has(reason)) return answer({ status: r.status, reason, retryable: true, side: "ours", ownFault: ownFault401(r, r.status, reason) });
+    // The documented 400 (a JSON answer) refuses the payment that was sent: the buyer's credential.
+    if (r.status === 400 && d) return answer({ status: 400, reason, side: "buyer" });
+    // A verdict on the payment is only a documented one: a 200 with isValid
+    // false, or that 400. Any other answer (an intermediary's 403 or 429, a
+    // 5xx, a page that is not JSON, an undocumented 4xx) says nothing about
+    // the buyer's payment: the service is unavailable, and nothing is counted
+    // against the buyer.
+    return answer({ status: r.status, reason: r.data ? reason : `facilitator_http_${r.status}`, retryable: true, inDoubt: true });
   }
 
   /** Settle the payment. `ok` only with a transaction hash. */
   async function settle(paymentPayload, paymentRequirements, { timeoutMs = settleTimeoutMs } = {}) {
     const r = await post("/settle", paymentPayload, paymentRequirements, { timeoutMs: Math.max(1_000, Math.min(settleTimeoutMs, Number(timeoutMs) || settleTimeoutMs)), signed: true });
     // Not sent at all: nothing can have moved.
-    if (r.failure && !r.sent) return answer({ reason: r.failure, side: "ours" });
+    if (r.failure && !r.sent) return answer({ reason: r.failure, side: "ours", ownFault: true });
     if (r.failure) return answer({ status: r.status, reason: r.failure, inDoubt: true });
     const d = r.data;
     if (r.status === 200 && d && d.success === true) {
@@ -171,8 +218,9 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
     // and the 503 that names a lookup it could not make. None of them moved
     // money. Any other status (an intermediary's 403, 408 or 429, a 5xx) says
     // nothing about the payment.
-    if (r.status === 200 && d && d.success === false) return answer({ status: 200, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason) });
-    if (r.status === 400 || r.status === 401 || r.status === 409) return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason) });
+    if (r.status === 200 && d && d.success === false) return answer({ status: 200, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason), ownFault: ownFault401(r, 200, reason) });
+    if (r.status === 401) return answer({ status: 401, reason, side: "ours", ownFault: ownFault401(r, 401, reason) });
+    if (r.status === 400 || r.status === 409) return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason), ownFault: ownFault401(r, r.status, reason) });
     if (r.status === 503 && RETRYABLE.has(reason)) return answer({ status: 503, reason, retryable: true, side: "ours" });
     return answer({ status: r.status, reason, inDoubt: true });
   }
