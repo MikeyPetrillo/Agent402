@@ -322,21 +322,27 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
 - **Referral settlement book:** `src/referral-book.js` keeps the referral gate's unfinished
   settlements in the `referral-settlements` state document (without a database the file
-  `REFERRAL_BOOK_FILE`, else `/data/referral-settlements.json`, else the same name under the
-  temp directory): an `intent` written before `/settle` is called, `in-doubt` when the call did
-  not say whether the payment moved, `charged-undelivered` when it moved and the buyer has not
-  received the answer; each open entry carries the tool's answer and the payment (up to 256 KB,
-  at most 300), and the document also holds the gate's own forgiven hang-ups. At most 2000
-  entries (closed ones dropped first, an open one only with an error line); a
-  `charged-undelivered` entry is kept 30 days. The leased sweep `referral-settle-sweep` (at boot
-  and every `REFERRAL_SWEEP_MS`, default 60000; `contained`) reads every in-doubt entry, and every
-  intent older than the settle timeout plus 15 s, against the chain (`src/referral-chain.js`): the
-  receipt of the transaction that used the nonce proving the transfer to the pay-to address books
-  the sale once and keeps the entry; a nonce spent without paying, or an authorization expired
-  unused, closes it with nothing booked; an unreadable chain leaves it for the next pass. Operator
-  view: `/__operator/referral.json`. No word on `/api/gateway-status` reads the book and nothing
-  pages on it yet; the log lines `CHARGED-BUT-NOT-SERVED`, `SETTLE-IN-DOUBT` and "refused THIS
-  SERVER's request" are the signals (`scripts/test-referral-gate.js`).
+  `REFERRAL_BOOK_FILE`, else `/data/agent402-referral-settlements.json`, else the same name under
+  the temp directory): an `intent` written before `/settle` (with the chain head then, so the proof
+  is searched from there however late it is read), `in-doubt` when the call did not say whether the
+  payment moved, `unconfirmed` when the facilitator answered success and its receipt was not yet
+  readable, `contradicted` when the chain contradicts a success, `charged-undelivered` when the
+  payment is proven and the buyer has not received the answer, and a `refund-owed` mark (kept
+  until the authorization expires) once such a buyer is owed back. The document also holds the
+  gate's own forgiven hang-ups. The book holds no answer: owed answers are records of the
+  `referral-answers` collection, or files under `REFERRAL_ANSWER_DIR` (`src/referral-answers.js`),
+  deleted at their 10-minute expiry; a paid call writes the small index three times (about 4 ms each
+  on the file store with 300 open entries and 75 MB of answers at rest, measured). At most 2000
+  entries: a full book refuses a new intent (503 before `/settle`) and never drops one. The leased
+  sweep `referral-settle-sweep` (at boot and every `REFERRAL_SWEEP_MS`, default 60000; `contained`)
+  reads up to 50 open entries a pass, the ones read least recently first, so every one is reached
+  in turn: proven paid by its own transfer books the sale once; a nonce spent without paying, or an
+  authorization expired unused, closes the entry with nothing booked; unconfirmed ones are confirmed
+  or flagged; a `charged-undelivered` entry whose answer is gone becomes a refund owed at the gross
+  (`refundsOwed` covers it). Operator view: `/__operator/referral.json`. The word
+  `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads attention on
+  the conditions `.claude/rules/payments.md` lists; the status Worker and `heartbeat.yml` page on
+  it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
 - **Money-state sweeps and books (batch 2026-11-08a):** `TEMPO_PUSH_HELD_MAX_MINUTES` (default 30)
   is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
   `TEMPO_LATE_CONFIRM_DELAYS_MS` (comma list of delays, default 15000,45000,120000; at most 6, each
