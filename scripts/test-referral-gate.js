@@ -711,6 +711,21 @@ try {
   }
   fac.reset(); sales.length = 0;
   {
+    // The sweep and a re-send both find the same landed payment: one sale between them.
+    fac.mode.settle = () => ({ status: 500, body: {} });
+    const p = await signPayment(accept, { account: newAccount() });
+    const ip = freshIp();
+    const r = await send(R("echo"), { body: { text: "both" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    const tx = "0x" + "7b".repeat(32);
+    fac.land(p.authorization, tx);
+    await app1.gate.sweepOnce();
+    const again = await send(R("echo"), { body: { text: "both" }, headers: { "payment-signature": p.header, "x-test-ip": ip } });
+    await app1.gate.sweepOnce();
+    await quietLedger();
+    ok(r.status === 402 && again.status === 200 && again.json?.transaction === tx && sales.filter((x) => x.tx === tx).length === 1, `a landed payment found by the sweep and then by the buyer's re-send is booked once (${sales.filter((x) => x.tx === tx).length} sale)`);
+  }
+  fac.reset(); sales.length = 0;
+  {
     // The answer was lost but the payment had already landed: read at once, delivered in the same response.
     const p = await signPayment(accept, { account: newAccount() });
     const tx = "0x" + "c1".repeat(32);
@@ -820,6 +835,18 @@ try {
       const rowAfter = ledger.privateRailSaleByTx(tx, "referral");
       ok(sales.length === 1 && sales[0].tx === tx && sales[0].priceUsd === 0.024 && sales[0].quoteUsd === 0.03 && rowAfter?.netUsd === 0.024 && book.get(kGone)?.state === "charged-undelivered" && book.get(kGone).saleBooked === true && book.get(kGone).tx === tx, `a payment that moved while its process died is booked by the sweep, once, at the net amount, and kept as charged-undelivered (${sales.length} sale, ${book.get(kGone)?.state})`);
       ok(book.get(kNever) === null && book.get(kOpen)?.state === "in-doubt", "an intent that expired unused is closed; one the chain has not used yet stays open");
+      // The dead process had booked the sale before it stopped: the ledger says so, and the sweep books no second one.
+      const known = await signPayment(accept, { account: newAccount() });
+      const kKnown = gateMod.referralReplayKey(known.authorization);
+      const txKnown = "0x" + "e3".repeat(32);
+      ledger.recordSale({ slug: "echo", priceUsd: 0.024, quoteUsd: 0.03, rail: "referral", wire: "referral", network: "base", payer: known.authorization.from, tx: txKnown });
+      await book.intent({ key: kKnown, slug: "echo", payer: known.authorization.from, nonce: known.authorization.nonce, amount: "30000", validBefore: Number(known.authorization.validBefore) });
+      await book.resolve(kKnown, { intentAt: Date.now() - 600_000 });
+      fac.land(known.authorization, txKnown);
+      const salesBefore = sales.length;
+      await quietLedger();
+      await app4.gate.sweepOnce();
+      ok(sales.length === salesBefore && book.get(kKnown)?.state === "charged-undelivered" && book.get(kKnown).saleBooked === true, `a settlement whose sale is already on the ledger is not booked again by the sweep (${sales.length - salesBefore} more)`);
       ok(logLines.some((l) => /CHARGED-BUT-NOT-SERVED: a settlement left open landed on chain \(echo .*sale booked/.test(l)), "and it is logged");
       // The same payment sent to the new process: it bought its run already.
       const ran = runs.echo;
