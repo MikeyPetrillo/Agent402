@@ -155,11 +155,19 @@ try {
   }
 
   // Static documents, whatever their type.
-  for (const path of ["/llms.txt", "/openapi.json", "/robots.txt", "/sitemap.xml", "/.well-known/x402", "/.well-known/security.txt", "/js/ga-loader.js", "/health", "/favicon.ico"]) {
+  for (const path of ["/llms.txt", "/openapi.json", "/robots.txt", "/sitemap.xml", "/.well-known/x402", "/.well-known/security.txt", "/js/ga-loader.js", "/health"]) {
     const { r } = await get(path);
     const h = (n) => r.headers.get(n);
     ok(r.status === 200 && missingAlways(h).length === 0, `${path}: 200 with the always-on headers (${r.status}; ${missingAlways(h).join(", ") || "all"})`);
     ok(!h("content-security-policy") || framing(h("content-security-policy")), `${path}: any CSP it carries has frame-ancestors`);
+  }
+
+  // The icon is the rasterized mark where the host can rasterize it and a
+  // redirect to the SVG where it cannot: either answer carries the set.
+  {
+    const { r } = await get("/favicon.ico");
+    const h = (n) => r.headers.get(n);
+    ok((r.status === 200 || (r.status >= 301 && r.status <= 308 && !!h("location"))) && missingAlways(h).length === 0, `/favicon.ico: the icon or a redirect to it, with the always-on headers (${r.status}; ${missingAlways(h).join(", ") || "all"})`);
   }
 
   // Redirects.
