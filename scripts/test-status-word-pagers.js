@@ -156,6 +156,8 @@ const NEW_WORDS = [
   // subscription engine that did not build at boot.
   ["X search author reads OVER the daily alert", "xSearchAuthors", ["alert"], ["ok"], ["unknown"]],
   ["MPP subscription engine FAILED to start", "mppSubscriptions", ["failed"], ["on", "off"], ["unknown"]],
+  // The referral gate's settlements (present only while the gate is mounted).
+  ["referralSettlement: referral settlements need attention", "referralSettlement", ["attention"], ["ok"], ["unknown"]],
 ];
 const j = (gateway) => judge({ gateway });
 
@@ -378,6 +380,7 @@ const HB = [
   ["First-call allowance check", NEW_WORDS[5][0], "firstCallAllowance", { status: "unavailable" }, [{ status: "off" }, { status: "unknown" }], [{ status: "on" }, { status: "spent" }]],
   ["X search author reads check", NEW_WORDS[6][0], "xSearchAuthors", { status: "alert" }, [{ status: "unknown" }], [{ status: "ok" }]],
   ["MPP subscription engine check", NEW_WORDS[7][0], "mppSubscriptions", { status: "failed" }, [{ status: "unknown" }], [{ status: "on" }, { status: "off" }]],
+  ["Referral settlement check", NEW_WORDS[8][0], "referralSettlement", { status: "attention" }, [{ status: "unknown" }], [{ status: "ok" }]],
 ];
 for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
   const step = steps.find((s) => String(s.name || "").startsWith(prefix));
@@ -764,7 +767,8 @@ await rm(dir, { recursive: true, force: true });
     srv = await bootServer({ stores: "status-word-pagers", env: { FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false", FIRST_CALL_ALLOWANCE: "on", REDIS_URL: "", SOR_EVM_CHAINS: "" } });
     const body = await (await fetch(`${srv.url}/api/gateway-status`)).json();
     const hasWord = (v) => v && typeof v === "object" && (typeof v.status === "string" || Object.values(v).some((x) => x && typeof x === "object" && typeof x.status === "string"));
-    const words = [...new Set([...Object.keys(body).filter((k) => hasWord(body[k])), "sanctionsScreen"])];
+    // referralSettlement appears only while the referral gate is mounted (paid mode with its settings), so it is named here.
+    const words = [...new Set([...Object.keys(body).filter((k) => hasWord(body[k])), "sanctionsScreen", "referralSettlement"])];
     const readers = ALARMS.map((a) => String(a.verdict));
     const unread = words.filter((k) => !readers.some((src) => new RegExp(`\\bb\\??\\.${k}\\b`).test(src)));
     await check(`every status word on /api/gateway-status is read by a status Worker alarm (${words.length} words)`, () => {
