@@ -33,8 +33,10 @@ LLC: credit the entity, never a personal name.
 - `src/tools/route-execute.js`: route-and-execute, buys from proven external sellers per chain
   (`src/x402-buyer.js`, `src/solana-buyer.js` whose external leg runs under `SOR_SVM_BUDGET_MS`,
   inside a recent blockhash's life, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
-- `src/referral-gate.js`, `src/referral-settle.js`: referral copies of allowlisted paid routes under
-  `/ref/<slug>` (own gate, off unless every `REFERRAL_*` switch is set; `.claude/rules/payments.md`).
+- `src/referral-gate.js`, `src/referral-settle.js`, `src/referral-chain.js`, `src/referral-book.js`:
+  referral copies of allowlisted paid routes under `/ref/<slug>` (own gate; off unless
+  `REFERRAL_PAY_TO`, `REFERRAL_FACILITATOR_URL`, `REFERRAL_SIGNER_KEY`, `REFERRAL_SLUGS`,
+  `REFERRAL_SETUP_URL` and `REFERRAL_COMMISSION_BPS` are all set; `.claude/rules/payments.md`).
 - `src/refund-ledger.js` + `scripts/refund-run.js`: charged-but-failed is recorded as a debt and
   repaid only after on-chain proof (`src/payment-verify.js`).
 - `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
