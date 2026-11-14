@@ -41,8 +41,9 @@
 //                     first facilitator, CDP on both chains (an untagged buy
 //                     never reaches PayAI: scripts/payai-listing-pass.js
 //                     settles there on purpose)
-//   MAX_PRICE_USD     sweep-mode per-tool ceiling (default 0.05 — skips the
-//                     LLM/image/audio proxies that bill real upstream credit)
+//   MAX_PRICE_USD     sweep-mode per-tool ceiling (default 0.05; the scheduled
+//                     keep-alive passes its own, which admits priced routes
+//                     that bill upstream credit per call)
 //   SLUGS             comma-separated slug filter for missing-mode (register only these)
 //   MISSING_CHAIN     missing-mode chain filter (alias or CAIP-2, e.g. "solana"),
 //     or --chain       a route is missing when no Bazaar row for it carries an
@@ -75,6 +76,7 @@ const heartbeatHeaders = () => {
 import { readFileSync, existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { chainOf, routeSellsOn, walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
+import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
@@ -90,9 +92,10 @@ const MAX_SPEND_USD = Number(process.env.MAX_SPEND_USD || "5");
 // 402 with the full multi-chain accepts. PayAI's registry sees only what PayAI
 // settles, which scripts/payai-listing-pass.js asks for per request.
 const PAY_NETWORK = (process.env.PAY_NETWORK || "base").toLowerCase();
-// Sweep-mode price ceiling per tool: skip anything above it. The LLM / image /
-// audio / code-run proxies bill real upstream credit per call — registering
-// them isn't worth actual money burn; they stay findable via the live 402.
+// Sweep-mode price ceiling per tool: skip anything above it. Routes that bill
+// real upstream credit per call sit on both sides of any ceiling, so the
+// caller chooses how far up to buy (the scheduled keep-alive sets its own);
+// what is skipped stays findable via the live 402.
 const MAX_PRICE_USD = Number(process.env.MAX_PRICE_USD || (MODE === "sweep" ? "0.05" : "Infinity"));
 // UPSTREAM_FREE_ONLY=1 sweeps only routes that cost us nothing per call at a
 // third party, so the pass can run daily instead of weekly. The price ceiling
@@ -120,6 +123,10 @@ const SLUG_PREFIX = (process.env.SLUG_PREFIX || "").trim();
 // only listings whose lastCalledAt is older than N days, plus anything not
 // listed at all. Unset = the old behaviour, sweep everything selected.
 const STALE_DAYS = Number(process.env.STALE_DAYS || "0");
+// A failed sweep buy fails the pass when its listing is this old or unlisted
+// (AT_RISK_DAYS, default 20: a failure at the 21-day weekly pass is reported
+// with one more pass left before the 30-day removal).
+const AT_RISK_DAYS = Number(process.env.AT_RISK_DAYS || "20");
 const UPSTREAM_FREE_EXTRA = new Set((process.env.UPSTREAM_FREE_EXTRA || "memory-").split(",").map((x) => x.trim()).filter(Boolean));
 const costsNothingUpstream = (t) =>
   t.computePayable || [...UPSTREAM_FREE_EXTRA].some((p) => t.slug === p || t.slug.startsWith(p));
@@ -282,15 +289,24 @@ export function freshnessOf(items, now = Date.now()) {
   return fresh;
 }
 
-async function loadOpenapiExamples() {
-  // Returns Map(`${METHOD} ${path}` → exampleInput object).
-  const r = await fetch(`${TARGET}/openapi.json`);
-  if (!r.ok) throw new Error(`/openapi.json HTTP ${r.status}`);
-  const spec = await r.json();
+/** Map(`${METHOD} ${path}` -> example input) from an OpenAPI document. An
+ *  operation whose published body is multipart/form-data is also listed in
+ *  the map's `multipart` (key -> its text fields): it is paid with a file
+ *  part, since a JSON body is refused 400 before any payment and the route
+ *  would never settle. */
+export function examplesFromSpec(spec) {
   const out = new Map();
-  for (const [p, methods] of Object.entries(spec.paths || {})) {
-    for (const [m, op] of Object.entries(methods)) {
+  out.multipart = new Map();
+  for (const [p, methods] of Object.entries(spec?.paths || {})) {
+    for (const [m, op] of Object.entries(methods || {})) {
       const key = `${m.toUpperCase()} ${p}`;
+      const published = requestExampleOf(op);
+      if (published?.contentType === MULTIPART_TYPE) {
+        const fields = published.example && typeof published.example === "object" ? published.example : {};
+        out.multipart.set(key, fields);
+        out.set(key, fields);
+        continue;
+      }
       const body = op.requestBody?.content?.["application/json"]?.example;
       if (body && typeof body === "object") {
         out.set(key, body);
@@ -303,10 +319,58 @@ async function loadOpenapiExamples() {
         out.set(key, obj);
         continue;
       }
-      out.set(key, {}); // no example — try an empty payload
+      out.set(key, {}); // no example - try an empty payload
     }
   }
   return out;
+}
+
+async function loadOpenapiExamples() {
+  const r = await fetch(`${TARGET}/openapi.json`);
+  if (!r.ok) throw new Error(`/openapi.json HTTP ${r.status}`);
+  return examplesFromSpec(await r.json());
+}
+
+// The clip a multipart route is paid with: the target's own speech fixture,
+// the one /api/transcribe's published example uses.
+let audioClip = null;
+async function speechClip() {
+  if (!audioClip) {
+    const r = await fetch(`${TARGET}/fixtures/sample-speech.wav`, { signal: AbortSignal.timeout(30000) });
+    if (!r.ok) throw new Error(`audio clip fetch HTTP ${r.status}`);
+    audioClip = new Uint8Array(await r.arrayBuffer());
+  }
+  return audioClip;
+}
+
+/** The url and fetch init one sweep buy sends: query parameters for a GET, a
+ *  file part for a multipart route, the JSON example otherwise. */
+export async function sweepRequest(t, examples, { target = TARGET, headers = {}, clip = speechClip } = {}) {
+  const key = `${t.method} ${t.path}`;
+  const example = examples.get(key) || {};
+  if (t.method === "GET") return { url: `${target}${t.path}${Object.keys(example).length ? "?" + new URLSearchParams(example).toString() : ""}`, init: { method: "GET", headers: { ...headers } } };
+  const fields = examples.multipart?.get(key);
+  // No Content-Type on a multipart body: fetch writes it with the boundary.
+  if (fields) return { url: `${target}${t.path}`, init: { method: t.method, headers: { ...headers }, body: multipartBodyFrom(fields, { bytes: await clip(), type: "audio/wav", filename: "sample-speech.wav" }) } };
+  return { url: `${target}${t.path}`, init: { method: t.method, headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(example) } };
+}
+
+/** The sweep's failed buys that put a listing at risk: the route is not listed
+ *  at all, or its last settlement is `atRiskDays` old or more (20: a weekly
+ *  pass that fails at 21 days is reported then, with one more pass left
+ *  before the 30-day removal). `failed` is a list of paths,
+ *  `freshness` the map freshnessOf builds (empty when no feed was read: then
+ *  nothing is known to be at risk). */
+export function atRiskFailures(failed, freshness, atRiskDays = 20) {
+  if (!freshness || freshness.size === 0) return [];
+  return failed.filter((p) => { const age = freshness.get(p); return age === undefined || age >= atRiskDays * 86400000; });
+}
+
+/** The sweep's exit code: 1 on a wipeout (buys failed and none succeeded) and
+ *  on any failed buy that leaves a listing at risk, 0 otherwise. */
+export function sweepVerdict({ ok = 0, fail = 0, failedPaths = [] }, freshness, atRiskDays = 20) {
+  const atRisk = atRiskFailures(failedPaths, freshness, atRiskDays);
+  return { atRisk, exitCode: atRisk.length || (fail > 0 && ok === 0) ? 1 : 0 };
 }
 
 export async function runMissingMode({ sweep = false } = {}) {
@@ -377,23 +441,15 @@ export async function runMissingMode({ sweep = false } = {}) {
   // `bought` records the paths whose settlement we actually observed, so the
   // post-check below can tell "the harvester hasn't ingested it yet" apart from
   // "this route never got paid for".
-  const results = { ok: 0, fail: 0, errors: [], bought: new Set() };
+  const results = { ok: 0, fail: 0, errors: [], bought: new Set(), failedPaths: [] };
   for (let i = 0; i < missing.length; i++) {
     const t = missing[i];
     const key = `${t.method} ${t.path}`;
-    const example = examples.get(key) || {};
-    const isGet = t.method === "GET";
-    const url = isGet
-      ? `${TARGET}${t.path}${Object.keys(example).length ? "?" + new URLSearchParams(example).toString() : ""}`
-      : `${TARGET}${t.path}`;
     let lastStatus = 0;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = await buyOnce(payFetch, url, {
-          method: t.method,
-          headers: { ...heartbeatHeaders(), ...(isGet ? {} : { "Content-Type": "application/json" }) },
-          body: isGet ? undefined : JSON.stringify(example),
-        });
+        const { url, init } = await sweepRequest(t, examples, { headers: heartbeatHeaders() });
+        const res = await buyOnce(payFetch, url, init);
         lastStatus = res.status;
         if (res.status === 200) {
           results.ok++;
@@ -410,6 +466,7 @@ export async function runMissingMode({ sweep = false } = {}) {
         console.warn(`  FAIL ${key} → HTTP ${res.status} ${res.note ? res.note + " " : ""}${body.slice(0, 120)}`);
         results.fail++;
         results.errors.push(`${t.path}: HTTP ${res.status}`);
+        results.failedPaths.push(t.path);
         break;
       } catch (e) {
         if (attempt < 2) {
@@ -421,6 +478,7 @@ export async function runMissingMode({ sweep = false } = {}) {
         console.warn(`  FAIL ${key} → ${msg}`);
         results.fail++;
         results.errors.push(`${t.path}: ${msg}`);
+        results.failedPaths.push(t.path);
         break;
       }
     }
@@ -428,9 +486,14 @@ export async function runMissingMode({ sweep = false } = {}) {
   console.log(`\n${sweep ? "Sweep" : "Registration"} pass complete: ${results.ok} ok, ${results.fail} failed.`);
 
   if (sweep) {
-    // Settlement-driven indexes (PayAI, x402scan) have no public recount
-    // endpoint — success = the settlements happened. Fail only on a wipeout.
-    return results.ok > 0 || results.fail === 0 ? 0 : 1;
+    // Settlement-driven indexes have no public recount endpoint: success = the
+    // settlements happened. Every failed buy is named. The pass fails on a
+    // wipeout, and on a failed buy whose listing is at risk (not listed, or
+    // last settled long enough ago that the next pass may come too late).
+    if (results.failedPaths.length) console.warn(`Failed buys (${results.failedPaths.length}): ${results.failedPaths.join(", ")}`);
+    const verdict = sweepVerdict(results, freshness, AT_RISK_DAYS);
+    if (verdict.atRisk.length) console.error(`${verdict.atRisk.length} failed buy(s) leave a listing at risk of removal (not listed, or no settlement in ${AT_RISK_DAYS} days): ${verdict.atRisk.join(", ")}`);
+    return verdict.exitCode;
   }
 
   // Bazaar harvester is not instant. Give it ~60s then re-verify.

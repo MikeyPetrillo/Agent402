@@ -22,16 +22,20 @@ on:
     workflows: ["Deploy to Railway"]
     types: [completed]
 
-concurrency:
-  group: index402-sync
-  cancel-in-progress: false
-
 jobs:
   sync:
     # On workflow_run: only a successful push run of this repository's main.
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository)
+    # On the job, not the workflow: a run whose job is skipped (a deploy that
+    # is not a successful push of main) takes no place in the group, so it
+    # never replaces a daily run that is waiting.
+    concurrency:
+      group: index402-sync
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The script stops starting writes at 13 minutes and ends itself, so the
+    # page step below still runs.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -41,20 +45,76 @@ jobs:
         env:
           INDEX402_TOKEN: ${{ secrets.INDEX402_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
-        run: node scripts/index402-sync.js
+          # A run after each deploy normally corrects what that deploy changed,
+          # so on the daily run an imported fixed-price listing that is off the
+          # catalog price was most likely written back by the index's importer:
+          # name it and exit 3.
+          INDEX402_FLAG_REWRITTEN: ${{ github.event_name == 'schedule' && '1' || '0' }}
+        # Exit 0: nothing left wrong. Exit 3: every read and write worked, and
+        # the daily run named a listing written back. Anything else: the sync
+        # itself failed.
+        id: sync
+        run: |
+          set +e
+          node scripts/index402-sync.js
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          # Exit 3 is reported by its issue, not by a failed run each day.
+          if [ "$code" = "3" ]; then exit 0; fi
+          exit "$code"
 
+      # Two issues, one per cause, so a failed sync is never hidden behind a
+      # listing that is waiting for its source to be refreshed.
       - name: Page on failure / recover on success
         if: always() && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OUTCOME: ${{ job.status }}
+          CODE: ${{ steps.sync.outputs.code }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          TITLE="402 Index price sync FAILING"
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number -q '.[0].number' || true)
-          if [ "$OUTCOME" = "success" ]; then
-            [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ). $RUN_URL" || true
-          elif [ -z "$OPEN" ]; then
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The daily 402 Index price sync failed, so our listings there may quote a stale price. Check the run, and the INDEX402_TOKEN secret if the API answered 403: $RUN_URL"
+          # No code means the step never finished (a job limit, a setup failure).
+          CODE="${CODE:-1}"
+          NOW="$(date -u +%FT%TZ)"
+          FAIL_TITLE="402 Index price sync FAILING"
+          BACK_TITLE="402 Index listing written back at an old price"
+          # Only this workflow's own issues and comments count: an issue or a
+          # marker comment written by anyone else is not read.
+          open_issue() {
+            gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$1\" in:title author:app/github-actions" --json number,title,author \
+              | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{let a=[];try{a=JSON.parse(s)}catch{}const ours=(x)=>/^(app\/)?github-actions(\[bot\])?$/.test((x&&x.author&&x.author.login)||"");const hit=a.find((i)=>i.title===process.argv[1]&&ours(i));process.stdout.write(hit?String(hit.number):"")})' "$1"
+          }
+          FAIL_OPEN="$(open_issue "$FAIL_TITLE" || true)"
+          BACK_OPEN="$(open_issue "$BACK_TITLE" || true)"
+
+          # The sync itself: with 0 and 3 every read and write worked.
+          if [ "$CODE" = "0" ] || [ "$CODE" = "3" ]; then
+            if [ -n "$FAIL_OPEN" ]; then
+              gh issue close "$FAIL_OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $NOW. $RUN_URL"
+            fi
+          elif [ -z "$FAIL_OPEN" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$FAIL_TITLE" --body "The daily 402 Index price sync failed, so our listings there may quote a stale price. Check the run: NOT HELD names a write the index did not keep, a spent run budget names the corrections left, and a 403 points at the INDEX402_TOKEN secret. $RUN_URL"
+          fi
+
+          # A listing written back. A deploy's own correction a few hours before
+          # the daily run can hide it for one run, so the issue closes only on
+          # the second clean daily run in a row (a marker comment holds the count).
+          if [ -n "$BACK_OPEN" ]; then
+            LAST="$(gh issue view "$BACK_OPEN" --repo "$GITHUB_REPOSITORY" --json comments \
+              | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{let c=[];try{c=JSON.parse(s).comments||[]}catch{}const ours=(x)=>/^(app\/)?github-actions(\[bot\])?$/.test((x&&x.author&&x.author.login)||"");const m=c.filter((x)=>ours(x)&&/^(Clean daily run|Written back again)/.test(x.body||"")).pop();if(!m)return;const age=Math.floor((Date.now()-Date.parse(m.createdAt))/1000);process.stdout.write((m.body.startsWith("Clean")?"clean":"back")+" "+age)})' || true)"
+            LAST_KIND="${LAST%% *}"
+            LAST_AGE="${LAST##* }"
+          fi
+          if [ "$CODE" = "3" ]; then
+            if [ -z "$BACK_OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$BACK_TITLE" --body "On the daily run an imported 402 Index listing of a fixed-price route was off the catalog price and was corrected again (the REWRITTEN lines in the run name each one). The index imports these listings from its own source, which most likely still carries an old price, so it will write the old price back. Remedy: one paid call to each named route, which refreshes that source: dispatch the Bazaar keep-alive workflow with slugs set to the route's slug, stale_days=0, and max_price_usd and max_spend_usd at or above its price. This closes after two clean daily runs in a row. $RUN_URL"
+            elif [ "${LAST_KIND:-}" = "clean" ]; then
+              gh issue comment "$BACK_OPEN" --repo "$GITHUB_REPOSITORY" --body "Written back again at $NOW. $RUN_URL"
+            fi
+          elif [ "$CODE" = "0" ] && [ -n "$BACK_OPEN" ]; then
+            if [ "${LAST_KIND:-}" = "clean" ] && [ "${LAST_AGE:-999999}" -lt 129600 ]; then
+              gh issue close "$BACK_OPEN" --repo "$GITHUB_REPOSITORY" --comment "Second clean daily run in a row at $NOW. $RUN_URL"
+            else
+              gh issue comment "$BACK_OPEN" --repo "$GITHUB_REPOSITORY" --body "Clean daily run at $NOW: one more in a row closes this. $RUN_URL"
+            fi
           fi

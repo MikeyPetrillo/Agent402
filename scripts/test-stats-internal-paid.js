@@ -40,7 +40,7 @@ ok(c.viaProofOfWork === b.viaProofOfWork + 1 && c.viaUSDCInternal === b.viaUSDCI
   const srv = rf(new URL("../src/server.js", import.meta.url), "utf8");
   ok(/internal: method === "usdc" && \(isSyntheticRequest\(req\) \|\| isOwnWallet\(payerFromRequest\(req\)\)\)/.test(srv), "the odometer books an own-wallet payer as internal even without the token");
   const rb = rf(new URL("./refresh-bazaar.js", import.meta.url), "utf8");
-  ok((rb.match(/headers: \{ \.\.\.heartbeatHeaders\(\)/g) || []).length === 2, "both keep-alive fetch sites send the heartbeat token");
+  ok((rb.match(/headers: \{ \.\.\.heartbeatHeaders\(\)/g) || []).length === 1 && (rb.match(/sweepRequest\(t, examples, \{ headers: heartbeatHeaders\(\) \}\)/g) || []).length === 1, "both keep-alive fetch sites send the heartbeat token");
   const wf = rf(new URL("../.github/workflows/bazaar-keepalive.yml", import.meta.url), "utf8");
   ok(/POW_SECRET: \$\{\{ secrets\.POW_SECRET \}\}/.test(wf), "the keep-alive job holds POW_SECRET to sign it");
 }

@@ -19,8 +19,13 @@
 # The CI burner pays OUR payTo, so most of the money is circular. The price
 # ceiling is a proxy for upstream cost, not an exclusion: some swept routes
 # bill a third party per call, which is why this runs weekly rather than daily.
-# Routes above the ceiling (report products, premium tiers) stay unlisted on
-# purpose and remain findable via the live 402.
+# The ceiling is $0.10 a route: a fixed-price route up to that price has no
+# other scheduled buyer, and at the earlier $0.05 one priced above it reached
+# the 30-day removal with only hand-run passes between. Routes above the
+# ceiling (report products, premium tiers) are not bought here and remain
+# findable via the live 402. The per-batch spend cap is $2: a batch refuses to
+# start when its estimate is over the cap, and with every selected route due
+# at once a batch at this ceiling comes to a little over $1.
 name: Bazaar keep-alive
 
 on:
@@ -41,7 +46,7 @@ on:
     inputs:
       max_price_usd:
         description: "Per-route price ceiling."
-        default: "0.05"
+        default: "0.10"
       batches:
         description: "Split the pass into N batches so no single run times out."
         default: "4"
@@ -55,14 +60,17 @@ on:
         description: "Price FLOOR. Set it with a high max_price_usd to sweep only the expensive tail."
         default: "0"
       stale_days:
-        description: "Only pay for listings older than N days (any settlement resets the clock, ours or a buyer's). Schedules use 21. 0 = sweep everything selected."
-        default: "21"
+        description: "Only pay for listings older than N days (any settlement resets the clock, ours or a buyer's). Schedules use 14. 0 = sweep everything selected."
+        default: "14"
+      slugs:
+        description: "Only these slugs, comma-separated, matched exactly (slug_prefix also buys every slug that starts with it)."
+        default: ""
       slug_prefix:
         description: "Only slugs starting with this (e.g. 'skill-' for the skill packs)."
         default: ""
       max_spend_usd:
         description: "PER-BATCH spend cap."
-        default: "1"
+        default: "2"
 
 permissions:
   contents: read
@@ -95,19 +103,21 @@ jobs:
           TARGET_URL: https://agent402.tools
           MODE: sweep
           PAY_NETWORK: base
-          MAX_PRICE_USD: ${{ inputs.max_price_usd || '0.05' }}
+          MAX_PRICE_USD: ${{ inputs.max_price_usd || '0.10' }}
           # The daily cron sweeps only what costs nothing upstream; the weekly
           # one leaves this empty and sweeps everything under the ceiling.
           UPSTREAM_FREE_ONLY: ${{ github.event.schedule == '37 5 * * *' && '1' || inputs.upstream_free_only }}
           SKIP_UPSTREAM_FREE: ${{ github.event.schedule == '17 4 * * 2' && '1' || inputs.skip_upstream_free }}
           MIN_PRICE_USD: ${{ inputs.min_price_usd || '0' }}
           SLUG_PREFIX: ${{ inputs.slug_prefix }}
-          # 21 days against a 30-day cull: nine days of headroom, and a route a
-          # customer is actually buying costs us nothing to keep listed.
-          STALE_DAYS: ${{ inputs.stale_days || '21' }}
+          # 14 days against a 30-day removal: a weekly pass reaches a listing
+          # at 14 to 21 days and again a week later if that buy fails, and a
+          # route a customer is actually buying costs us nothing to keep listed.
+          STALE_DAYS: ${{ inputs.stale_days || '14' }}
+          SLUGS: ${{ inputs.slugs }}
           # PER BATCH, not per pass: the estimate is checked inside each batch,
           # so a 4-batch tail pass needs roughly a quarter of its total here.
-          MAX_SPEND_USD: ${{ inputs.max_spend_usd || '1' }}
+          MAX_SPEND_USD: ${{ inputs.max_spend_usd || '2' }}
           BATCH_COUNT: ${{ inputs.batches || '4' }}
           BATCH_INDEX: ${{ matrix.batch }}
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
