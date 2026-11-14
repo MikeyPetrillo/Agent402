@@ -28,6 +28,13 @@ ok(cron !== "", `carries a cron (${cron})`);
 ok(dow !== "*" && dom === "*", "weekly, not monthly - four missed runs still leave the listings alive");
 
 ok(/MODE:\s*sweep/.test(wf), "uses the sweep mode that re-settles every affordable route");
+// The scheduled ceiling and the per-batch cap: a fixed-price route above the
+// ceiling has no scheduled buyer, and a batch whose estimate is over the cap
+// refuses to start.
+const ceiling = Number((wf.match(/MAX_PRICE_USD:\s*\$\{\{\s*inputs\.max_price_usd\s*\|\|\s*'([0-9.]+)'/) || [])[1]);
+const batchCap = Number((wf.match(/MAX_SPEND_USD:\s*\$\{\{\s*inputs\.max_spend_usd\s*\|\|\s*'([0-9.]+)'/) || [])[1]);
+ok(ceiling >= 0.1, `the scheduled pass buys routes priced up to at least $0.10 (${ceiling})`);
+ok(batchCap >= 2 && batchCap <= 5, `the per-batch cap leaves room for a batch with every route due and stays bounded (${batchCap})`);
 ok(/BATCH_COUNT/.test(wf) && /BATCH_INDEX/.test(wf), "batches the pass so one run cannot time out mid-catalog");
 ok(/max-parallel:\s*1/.test(wf), "batches run sequentially - one burner address, concurrent buys race their own nonces");
 

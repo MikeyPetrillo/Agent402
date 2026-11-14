@@ -41,8 +41,9 @@
 //                     first facilitator, CDP on both chains (an untagged buy
 //                     never reaches PayAI: scripts/payai-listing-pass.js
 //                     settles there on purpose)
-//   MAX_PRICE_USD     sweep-mode per-tool ceiling (default 0.05 — skips the
-//                     LLM/image/audio proxies that bill real upstream credit)
+//   MAX_PRICE_USD     sweep-mode per-tool ceiling (default 0.05; the scheduled
+//                     keep-alive passes its own, which admits priced routes
+//                     that bill upstream credit per call)
 //   SLUGS             comma-separated slug filter for missing-mode (register only these)
 //   MISSING_CHAIN     missing-mode chain filter (alias or CAIP-2, e.g. "solana"),
 //     or --chain       a route is missing when no Bazaar row for it carries an
@@ -90,9 +91,10 @@ const MAX_SPEND_USD = Number(process.env.MAX_SPEND_USD || "5");
 // 402 with the full multi-chain accepts. PayAI's registry sees only what PayAI
 // settles, which scripts/payai-listing-pass.js asks for per request.
 const PAY_NETWORK = (process.env.PAY_NETWORK || "base").toLowerCase();
-// Sweep-mode price ceiling per tool: skip anything above it. The LLM / image /
-// audio / code-run proxies bill real upstream credit per call — registering
-// them isn't worth actual money burn; they stay findable via the live 402.
+// Sweep-mode price ceiling per tool: skip anything above it. Routes that bill
+// real upstream credit per call sit on both sides of any ceiling, so the
+// caller chooses how far up to buy (the scheduled keep-alive sets its own);
+// what is skipped stays findable via the live 402.
 const MAX_PRICE_USD = Number(process.env.MAX_PRICE_USD || (MODE === "sweep" ? "0.05" : "Infinity"));
 // UPSTREAM_FREE_ONLY=1 sweeps only routes that cost us nothing per call at a
 // third party, so the pass can run daily instead of weekly. The price ceiling
