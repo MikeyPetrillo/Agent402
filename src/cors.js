@@ -34,7 +34,9 @@
 // preflight first with `GET, HEAD, POST, OPTIONS` - silently dropping DELETE
 // and breaking browser MCP session termination on prod for one deploy. Two
 // modules must not write the same headers; the connector owns its own.
-export const CORS_PREFIXES = ["/api/", "/v1/", "/.well-known/"];
+// /ref/ is the referral copy of a paid API route (src/referral-gate.js): the
+// same cross-origin answer, preflight included.
+export const CORS_PREFIXES = ["/api/", "/v1/", "/.well-known/", "/ref/"];
 
 /** Exact machine surfaces outside those prefixes (`/health` is read by
  *  monitors and dashboards like the rest; its public answer is `ok` and a

@@ -265,10 +265,14 @@ export function redisSharedSettled(now = Date.now) {
   };
 }
 
-export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn, replicas = null, sharedSettled = null, paidTrust = null } = {}) {
+export function createUnpaidQuoteBudget({ budget, isPriced, hintFor = null, isSynthetic = () => false, policyUrl = "/crawler", keyCap = UNPAID_QUOTE_BUDGET_KEY_CAP, now = Date.now, log = console.warn, replicas = null, sharedSettled = null, paidTrust = null } = {}) {
   // `published` is the configured, system-wide figure; `limit` is this
   // process's share of it (RATE_LIMIT_REPLICAS, or `replicas` when given).
   const published = Number(budget) || 0;
+  // A route whose 429 needs words of its own (one that is on no discovery
+  // document): `hintFor(req, { rule, paidCeiling, policyUrl })` returns the
+  // hint, or null for the default.
+  const routeHint = (req, parts) => { try { const h = typeof hintFor === "function" ? hintFor(req, parts) : null; return typeof h === "string" && h ? h : null; } catch { return null; } };
   const share = (n) => (replicas == null ? perReplica(n) : Math.max(1, Math.floor(n / Math.max(1, Number(replicas) || 1))));
   const limit = published > 0 ? share(published) : 0;
   const namedLimit = published > 0 ? share(published * NAMED_CLIENT_BUDGET_MULTIPLIER) : 0;
@@ -386,7 +390,7 @@ export function createUnpaidQuoteBudget({ budget, isPriced, isSynthetic = () => 
         ok: false,
         error: "rate-limited",
         reason: UNPAID_QUOTE_BUDGET_REASON,
-        hint: `${rule} Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment reads against ${paidCeiling} per hour for the rest of the hour. See ${policyUrl}`,
+        hint: routeHint(req, { rule, paidCeiling, policyUrl }) || `${rule} Every route and price is published at /.well-known/x402, /openapi.json and /api/pricing, and a request carrying a payment, a credits key or a proof-of-work solution is never counted. A client that settles a payment reads against ${paidCeiling} per hour for the rest of the hour. See ${policyUrl}`,
         retryAfterSeconds: verdict.retryAfterSeconds,
       });
     };
