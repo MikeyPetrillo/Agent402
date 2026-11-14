@@ -1061,6 +1061,11 @@ try {
     ok(real.logs[0].topics[0] === "0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5" && real.logs[1].topics[0] === "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef" && parseInt(real.logs[1].logIndex, 16) === parseInt(real.logs[0].logIndex, 16) + 1, "the receipt shape the rule reads: the token's AuthorizationUsed log followed directly by its Transfer");
     const swapped = { ...real, logs: [real.logs[1], real.logs[0]].map((l, i) => ({ ...l, logIndex: `0x${i}` })) };
     ok(prove(swapped) === "unpaid", "a Transfer that is not directly after this authorization's log proves nothing");
+    // A helper transaction: three authorizations, each followed by a zero self-transfer, then ONE transfer of the amount.
+    const three = [0, 1, 2].map(() => ({ from: a1.from, to: PAY_TO, value: "30000", nonce: freshNonce() }));
+    const htx = fac.landHelper(three, 30000n, PAY_TO);
+    const hv = three.map((x) => receiptProvesPayment(fac.receipts.get(htx), { tx: htx, from: x.from, nonce: x.nonce, payTo: PAY_TO, amount: "30000" }));
+    ok(hv.every((v) => v === "unpaid"), `one transfer after several authorizations proves none of them: each must be directly followed by its own (${hv.join(",")})`);
   }
   {
     // One transaction spends three authorizations (zero self-transfers) and moves the amount once: none is paid.
@@ -1148,6 +1153,10 @@ try {
       const atRestNow = await store.get(key);
       fac.land(p.authorization, "0x" + "6b".repeat(32));
       skew.ms = 11 * 60_000;
+      const atRestExpired = await store.get(key);
+      // Before any sweep, a re-send past the retention is not served the answer.
+      const late = await send(`${app9.url}/ref/echo`, { body: { text: "kept" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      ok(atRestExpired === null && late.status === 409 && late.json?.errorReason === "answer_unavailable_refund_owed" && !/kept/.test(late.json?.echo || ""), `past ten minutes the answer is not served from memory or rest, even before a sweep: the charged buyer is told it is owed back (${late.status} ${late.json?.errorReason})`);
       await app9.gate.sweepOnce();
       await quietLedger();
       const atRestAfter = await store.get(key);

@@ -1210,6 +1210,8 @@ export function createReferralGate({
     const key = referralReplayKey(auth);
     const digest = createHash("sha256").update(`${signature.toLowerCase()}\n${lc(auth.to)}\n${auth.value}\n${auth.validAfter}\n${auth.validBefore}`).digest("hex");
     // A payment whose answer is kept: the re-send path, never a second run.
+    // An answer past its retention is gone, whether or not a prune has run yet.
+    if (kept.has(key) && now() >= kept.get(key).expiresAt) dropKept(key);
     const held = kept.get(key);
     if (held) {
       if (held.digest !== digest || held.slug !== def.slug) { counters.replays++; res.setHeader("X-Payment-Replay", "consumed"); return res.status(409).json({ error: "Payment authorization already used. Each payment authorization (nonce) is single-use - sign a fresh authorization to make another paid call.", reason: "consumed" }); }
@@ -1231,10 +1233,20 @@ export function createReferralGate({
       counters.restoredAnswers++;
       return resend(req, res, restored);
     }
-    if (open) {
+    if (open && (open.state === "in-doubt" || open.state === "intent" || open.state === "unconfirmed")) {
+      // The answer is gone: whether the buyer was charged is the chain's to say.
+      let c = null;
+      try { c = await chain.state({ from: open.payer, nonce: open.nonce, payTo: config.payTo, amount: open.amount, fromBlock: open.fromBlock ?? null }); } catch { c = null; }
+      if (chainVerdict(c, { validBeforeMs: (Number(open.validBefore) || 0) * 1000, nowMs: now() }) === "paid") {
+        const booked = bookSale({ key, slug: open.slug, amount: open.amount, payer: open.payer, tx: c.transaction });
+        await book.resolve(key, { state: "charged-undelivered", tx: c.transaction, saleBooked: booked === true, landedAt: now() }).catch(() => {});
+      }
+    }
+    const openNow = open ? book.get(key) || open : null;
+    if (openNow) {
       counters.replays++;
       // A charged buyer whose answer is gone: the payment is owed back now.
-      if (open.state === "charged-undelivered") await oweIfUndeliverable(open, "its answer is no longer held");
+      if (openNow.state === "charged-undelivered") await oweIfUndeliverable(openNow, "its answer is no longer held");
       if (book.get(key)?.state === "refund-owed") return refusePayment(res, "answer_unavailable_refund_owed", { status: 409 });
       res.setHeader("X-Payment-Replay", "consumed");
       return res.status(409).json({ error: REFERRAL_REASONS.answer_unavailable, reason: "answer_unavailable" });
