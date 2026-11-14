@@ -331,8 +331,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   hand), `charged-undelivered` when the payment is proven and the buyer has not received the
   answer, and a `refund-owed` mark (kept until the authorization expires) once such a buyer is
   owed back. An entry carries `delivered: true` from just before its answer is sent. The document
-  also holds the gate's own forgiven hang-ups and the last 200 hand resolutions (with their
-  notes). The book holds no answer: owed answers are files under `REFERRAL_ANSWER_DIR` (default
+  also holds the gate's own forgiven hang-ups, the last 200 hand resolutions (with their
+  outcomes and notes) and the last 500 entries closed because their receipt is not recognized. The book holds no answer: owed answers are files under `REFERRAL_ANSWER_DIR` (default
   `agent402-referral-answer-cache` beside the book file), on this process's disk only, never a
   database row (the nightly backup copies those, and the file backup leaves out a `cache` name),
   deleted at their expiry (`IDEM_TTL_MS`, 10 minutes), at most 32 MB in all; a restart loses
@@ -344,12 +344,21 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   pass, the ones read least recently first, each as it stands at that moment: routed to this
   merchant by its own receipt books the sale once; a nonce spent without paying us, an
   authorization expired unused, or one expired with a complete search that found nothing closes
-  the entry with nothing booked; unconfirmed ones are confirmed or flagged; a delivered entry
+  the entry with nothing booked; a spent one whose transaction was found, with a receipt read in
+  full that the rule does not recognize, is closed to the operator record once it has expired and
+  been read so `REFERRAL_UNRECOGNIZED_READS` times (default 5: no sale, no refund, an error line,
+  attention for a day); unconfirmed ones are confirmed or flagged; a delivered entry
   whose closing write failed is closed; a `charged-undelivered` entry whose answer is gone becomes
   a refund owed at the gross, only behind the receipt proof read again (`refundsOwed` covers
-  it). An operator closes an entry nothing can settle with
-  `POST /__operator/referral.json {"action":"resolve","key":"<entry key>","note":"what was checked"}`
-  (token-authed; recorded, then removed). Operator view: `GET /__operator/referral.json`. The
+  it). An operator closes an entry by hand with
+  `POST /__operator/referral.json {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}`
+  (token-authed; recorded with the outcome and the note). `refund` writes the refund debt at the
+  gross behind the receipt proof and keeps the `refund-owed` mark; with no proof it answers 400
+  and changes nothing. `delivered` and `dismissed` write no debt and remove the entry. A
+  `charged-undelivered` entry needs the outcome named. While a `contradicted` entry or a flagged
+  `unconfirmed` one is open, new payments are answered 503 (`settlement_under_review`: every
+  payer, or only that entry's payer when it carries `scope: "payer"`) until it is resolved, so
+  resolving one is what reopens the route. Operator view: `GET /__operator/referral.json`. The
   word `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads
   attention on the conditions `.claude/rules/payments.md` lists; the status Worker and
   `heartbeat.yml` page on it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
