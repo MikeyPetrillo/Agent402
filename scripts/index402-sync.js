@@ -16,10 +16,10 @@
 // ours. A run after a deploy normally corrects every price that deploy
 // changed, so with INDEX402_FLAG_REWRITTEN=1 (the daily run) an imported
 // listing of a fixed-price route that is off the catalog price is corrected,
-// named, and fails the run: most likely its source still carries an old
-// price (or the run after the last deploy did not complete). The remedy is a
-// paid call to the route through the importer's source (bazaar-keepalive.yml
-// with slug_prefix). A route priced per request (`quoted` or `pricedByModel`
+// named, and the run exits 3 (exit 1 when something also failed): most likely
+// its source still carries an old price (or the run after the last deploy
+// did not complete). The remedy is a paid call to the route through the
+// importer's source (bazaar-keepalive.yml with slug_prefix and stale_days=0). A route priced per request (`quoted` or `pricedByModel`
 // in /api/pricing) is corrected the same way and never flagged, since the
 // importer's source carries the amount of the last call sold.
 //
@@ -29,7 +29,7 @@
 // https://402index.io/api/v1), INDEX402_TIMEOUT_MS (per request, default
 // 40000; a request that times out, cannot connect or answers 429 or 5xx is
 // asked once more, a 429 after the wait its answer names, at most 65 s),
-// INDEX402_RUN_BUDGET_MS (default 900000: past it no further write is
+// INDEX402_RUN_BUDGET_MS (default 780000: past it no further write is
 // started, the corrections left are counted and the run fails, so the run
 // ends itself inside the job's limit), INDEX402_FLAG_REWRITTEN (above),
 // INDEX402_WAIT_SCALE (tests only: multiplies a 429's named wait).
@@ -103,7 +103,7 @@ const timeoutMs = () => {
 };
 const runBudgetMs = () => {
   const n = Number(process.env.INDEX402_RUN_BUDGET_MS);
-  return Number.isFinite(n) && n > 0 ? n : 900_000;
+  return Number.isFinite(n) && n > 0 ? n : 780_000;
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -197,8 +197,9 @@ async function main() {
   }
   const rewritten = process.env.INDEX402_FLAG_REWRITTEN === "1" ? rewrittenByImporter(updates) : [];
   for (const u of rewritten) console.error(`  REWRITTEN ${u.url}: the index's own source carries $${u.from}, the catalog price is $${u.to}`);
-  if (rewritten.length) console.error(`${rewritten.length} imported listing(s) of a fixed-price route were off the catalog price on the daily run: most likely the importer's source still carries an old price for them (or the run after the last deploy did not complete). A paid call to the route through that source refreshes it (bazaar-keepalive.yml with slug_prefix).`);
-  if (failed || rewritten.length) process.exit(1);
+  if (rewritten.length) console.error(`${rewritten.length} imported listing(s) of a fixed-price route were off the catalog price on the daily run: most likely the importer's source still carries an old price for them (or the run after the last deploy did not complete). A paid call to the route through that source refreshes it (bazaar-keepalive.yml with slug_prefix and stale_days=0).`);
+  if (failed) process.exit(1);
+  if (rewritten.length) process.exit(3);
 }
 
 const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;

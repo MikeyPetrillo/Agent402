@@ -201,7 +201,7 @@ function runSync(port, env = {}) {
 { // The daily run: an imported fixed-price listing off the catalog price is corrected, named, and fails the run.
   const s = await stubIndex();
   const r = await runSync(s.port, { INDEX402_FLAG_REWRITTEN: "1" });
-  ok(r.code === 1 && s.seen.patches.length === 3 && s.store.get("a1").price_usd === 0.09, `the daily run corrects everything and still fails on a listing written back (${r.code})`);
+  ok(r.code === 3 && s.seen.patches.length === 3 && s.store.get("a1").price_usd === 0.09, `the daily run corrects everything and exits 3 on a listing written back (${r.code})`);
   ok(/REWRITTEN https:\/\/agent402\.tools\/api\/x-user-tweets: the index's own source carries \$0\.08, the catalog price is \$0\.09/.test(r.err), "the listing written back is named with both prices");
   ok(!/REWRITTEN .*\/api\/tts/.test(r.err) && !/REWRITTEN .*hold-me/.test(r.err) && /^1 imported listing/m.test(r.err), "a quoted route and a listing we registered are never flagged");
   await s.close();
@@ -211,6 +211,78 @@ function runSync(port, env = {}) {
   const r2 = await runSync(s2.port, { INDEX402_FLAG_REWRITTEN: "1" });
   ok(r2.code === 0 && s2.seen.patches.length === 2 && !/REWRITTEN/.test(r2.err), `the daily run passes when only quoted and self-registered listings drifted (${r2.code})`);
   await s2.close();
+}
+{ // A failed write outranks a listing written back: exit 1, both named.
+  const s = await stubIndex({ ignoreWriteFor: new Set(["a3"]) });
+  const r = await runSync(s.port, { INDEX402_FLAG_REWRITTEN: "1" });
+  ok(r.code === 1 && /NOT HELD .*hold-me/.test(r.err) && /REWRITTEN .*x-user-tweets/.test(r.err), `a write that does not hold beside a listing written back exits 1 with both named (${r.code})`);
+  await s.close();
+}
+
+// ---- the workflow's page step, run with a stub gh ----
+{
+  const { readFileSync, writeFileSync, mkdtempSync, chmodSync, rmSync } = await import("node:fs");
+  const { spawnSync } = await import("node:child_process");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const wf = readFileSync(new URL("../.github/workflows/index402-sync.yml", import.meta.url), "utf8");
+  ok(/id: sync\n/.test(wf) && /echo "code=\$code" >> "\$GITHUB_OUTPUT"/.test(wf) && /CODE: \$\{\{ steps\.sync\.outputs\.code \}\}/.test(wf), "the sync step hands its exit code to the page step");
+  ok(/INDEX402_FLAG_REWRITTEN: \$\{\{ github\.event_name == 'schedule' && '1' \|\| '0' \}\}/.test(wf), "only the daily run flags a listing written back");
+  const lines = wf.split("\n");
+  const at = lines.findIndex((l) => /- name: Page on failure \/ recover on success/.test(l));
+  const runAt = lines.findIndex((l, i) => i > at && /^\s+run: \|$/.test(l));
+  const indent = lines[runAt + 1].match(/^\s*/)[0].length;
+  const body = [];
+  for (let i = runAt + 1; i < lines.length && (lines[i].trim() === "" || lines[i].match(/^\s*/)[0].length >= indent); i++) body.push(lines[i].slice(indent));
+  const script = body.join("\n");
+  ok(at > 0 && script.includes("gh issue create") && script.length > 500, "the page step's script is read from the workflow");
+  const FAIL = "402 Index price sync FAILING", BACK = "402 Index listing written back at an old price";
+  const dir = mkdtempSync(join(tmpdir(), "idx-page-"));
+  // The stub answers list and view from STATE and appends every write to LOG.
+  writeFileSync(join(dir, "gh"), `#!/usr/bin/env node
+const fs = require("fs"); const a = process.argv.slice(2); const st = JSON.parse(process.env.GH_STUB_STATE);
+if (a[0] === "issue" && a[1] === "list") { const q = a[a.indexOf("--search") + 1]; process.stdout.write(JSON.stringify(st.open.filter((i) => q.includes(i.title)))); }
+else if (a[0] === "issue" && a[1] === "view") { process.stdout.write(JSON.stringify({ comments: st.comments || [] })); }
+else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
+`);
+  chmodSync(join(dir, "gh"), 0o755);
+  const page = (code, state) => {
+    const log = join(dir, `log-${Math.random().toString(36).slice(2)}`);
+    writeFileSync(log, "");
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", RUN_URL: "https://run.example/1", GH_TOKEN: "x", ...(code === null ? {} : { CODE: String(code) }), GH_STUB_STATE: JSON.stringify(state), GH_STUB_LOG: log } });
+    const calls = readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    return { status: r.status, err: r.stderr, calls, did: (verb, title) => calls.some((c) => c[1] === verb && (title === undefined || c.includes(title))) };
+  };
+  const ago = (h) => new Date(Date.now() - h * 3600e3).toISOString();
+  const none = { open: [] }, failOpen = { open: [{ number: 7, title: FAIL }] };
+  const backOpen = (comments = []) => ({ open: [{ number: 9, title: BACK }], comments });
+  let p = page(0, none);
+  ok(p.status === 0 && p.calls.length === 0, `a clean run with nothing open writes nothing (${p.status}) ${p.err.slice(0, 120)}`);
+  p = page(1, none);
+  ok(p.did("create", FAIL) && !p.did("create", BACK), "a failed sync opens the sync issue only");
+  p = page(null, none);
+  ok(p.did("create", FAIL), "a run that left no exit code opens the sync issue");
+  p = page(1, failOpen);
+  ok(p.calls.length === 0, "a failed sync with its issue open writes nothing more");
+  p = page(3, none);
+  ok(p.did("create", BACK) && !p.did("create", FAIL) && p.calls.some((c) => c.join(" ").includes("stale_days=0")), "a listing written back opens its own issue, naming stale_days=0 in the remedy");
+  p = page(3, failOpen);
+  ok(p.did("close") && p.calls.some((c) => c[1] === "close" && c[2] === "7") && p.did("create", BACK), "exit 3 means the sync worked: the sync issue closes and the written-back issue opens");
+  p = page(1, backOpen());
+  ok(p.did("create", FAIL) && !p.did("close"), "a failed sync beside an open written-back issue opens the sync issue and leaves the other");
+  p = page(0, backOpen());
+  ok(!p.did("close") && p.calls.some((c) => c[1] === "comment" && c.join(" ").includes("Clean daily run")), "the first clean daily run leaves the written-back issue open with a marker");
+  p = page(0, backOpen([{ body: "Clean daily run at x: one more in a row closes this.", createdAt: ago(24) }]));
+  ok(p.calls.some((c) => c[1] === "close" && c[2] === "9"), "the second clean daily run in a row closes it");
+  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(24 * 5) }]));
+  ok(!p.did("close") && p.did("comment"), "a clean marker older than a day and a half does not count as in a row");
+  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(48) }, { body: "Written back again at y", createdAt: ago(24) }]));
+  ok(!p.did("close") && p.calls.some((c) => c.join(" ").includes("Clean daily run")), "a written-back run between two clean ones starts the count again");
+  p = page(3, backOpen([{ body: "Clean daily run at x", createdAt: ago(24) }]));
+  ok(p.calls.length === 1 && p.calls[0][1] === "comment" && p.calls[0].join(" ").includes("Written back again"), "written back after a clean run is marked once");
+  p = page(3, backOpen([{ body: "Written back again at y", createdAt: ago(24) }]));
+  ok(p.calls.length === 0, "written back day after day adds no comment");
+  rmSync(dir, { recursive: true, force: true });
 }
 { // A dry run writes and reads back nothing.
   const s = await stubIndex();
