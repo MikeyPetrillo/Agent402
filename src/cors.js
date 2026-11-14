@@ -35,6 +35,15 @@
 // and breaking browser MCP session termination on prod for one deploy. Two
 // modules must not write the same headers; the connector owns its own.
 export const CORS_PREFIXES = ["/api/", "/v1/", "/.well-known/"];
+// A prefix a deployment adds at boot (the referral gate's /ref/, only while
+// that gate is mounted: with it off, /ref gets no cross-origin answer, as any
+// unknown path).
+const EXTRA_CORS_PREFIXES = [];
+/** Give `prefix` (for example "/ref/") the API routes' cross-origin answer from now on. */
+export function allowCorsPrefix(prefix) {
+  const p = String(prefix || "").toLowerCase();
+  if (/^\/[a-z0-9_-]+\/$/.test(p) && !EXTRA_CORS_PREFIXES.includes(p)) EXTRA_CORS_PREFIXES.push(p);
+}
 
 /** Exact machine surfaces outside those prefixes (`/health` is read by
  *  monitors and dashboards like the rest; its public answer is `ok` and a
@@ -129,7 +138,7 @@ export function corsAllowsPath(path) {
   const p = String(path || "").toLowerCase();
   for (const deny of CORS_DENY_PREFIXES) if (p === deny || p.startsWith(`${deny}/`) || p.startsWith(deny)) return false;
   if (CORS_EXACT.has(p)) return true;
-  return CORS_PREFIXES.some((prefix) => p.startsWith(prefix));
+  return CORS_PREFIXES.some((prefix) => p.startsWith(prefix)) || EXTRA_CORS_PREFIXES.some((prefix) => p.startsWith(prefix));
 }
 
 /**

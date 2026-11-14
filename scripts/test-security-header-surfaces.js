@@ -28,7 +28,9 @@ const framing = (csp) => /(?:^|;)\s*frame-ancestors\s+'(?:self|none)'\s*(?:;|$)/
 const exposed = (r) => (r.headers.get("access-control-expose-headers") || "").toLowerCase().split(",").map((s) => s.trim());
 
 const TOKEN = "header-surfaces-operator-token-0123456789";
-const srv = await bootPaidServer({ label: "header-surfaces", env: { AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "" } });
+// The referral gate (/ref/<slug>) is on, against a facilitator this suite never reaches.
+const REFERRAL_ENV = { REFERRAL_PAY_TO: "0x00000000000000000000000000000000000000a1", REFERRAL_FACILITATOR_URL: "http://127.0.0.1:9/", REFERRAL_SIGNER_KEY: "11".repeat(32), REFERRAL_SLUGS: "hash", REFERRAL_SETUP_URL: "https://setup.example/referral", REFERRAL_COMMISSION_BPS: "default:2000" };
+const srv = await bootPaidServer({ label: "header-surfaces", env: { AGENT402_OPERATOR_TOKEN: TOKEN, TRUST_PROXY_HOPS: "", ...REFERRAL_ENV } });
 const J = { "content-type": "application/json" };
 const get = async (path, init = {}) => {
   const r = await fetch(srv.url + path, { redirect: "manual", signal: AbortSignal.timeout(30_000), ...init });
@@ -96,6 +98,23 @@ try {
     ok(ex.includes("payment-required") && ex.every((n) => h(n) !== null) && h("access-control-allow-origin") === "*", `${path} 402: the challenge header is exposed to a browser client (${ex.join(", ")})`);
   }
 
+  // A referral copy (/ref/<slug>): its own 402 (JSON body, no challenge
+  // header), a refused payment and an unknown slug, each with the always-on
+  // set, never stored, never indexed, no document header.
+  for (const [name, path, init, want] of [
+    ["unpaid GET", "/ref/hash", {}, 402],
+    ["unpaid POST", "/ref/hash", { method: "POST", headers: J, body: JSON.stringify({ text: "a" }) }, 402],
+    ["refused payment", "/ref/hash", { method: "POST", headers: { ...J, "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, accepted: { network: "eip155:8453" }, payload: {} })).toString("base64") }, body: JSON.stringify({ text: "a" }) }, 402],
+    ["unknown slug", "/ref/no-such-tool", {}, 404],
+  ]) {
+    const { r, text } = await get(path, init);
+    const h = (n) => r.headers.get(n);
+    ok(r.status === want && /application\/json/.test(h("content-type") || ""), `referral ${name}: a JSON ${want} (${r.status})`);
+    ok(missingAlways(h).length === 0 && DOC.every((d) => !h(d)), `referral ${name}: always-on headers, no document header (${missingAlways(h).join(", ") || "all"})`);
+    ok(/no-store/.test(h("cache-control") || "") && h("x-robots-tag") === "noindex, nofollow", `referral ${name}: never stored, never indexed`);
+    ok(!h("payment-required") && !h("www-authenticate") && !text.includes("/api/hash"), `referral ${name}: no challenge header and no pointer to the direct route`);
+  }
+
   // 404: a page 404 is a document, an API 404 is JSON.
   {
     const page = await get("/no-such-page-here", { headers: { accept: "text/html" } });
@@ -143,8 +162,16 @@ try {
     ok(!h("content-security-policy") || framing(h("content-security-policy")), `${path}: any CSP it carries has frame-ancestors`);
   }
 
+  // The icon is the rasterized mark where the host can rasterize it and a
+  // redirect to the SVG where it cannot: either answer carries the set.
+  {
+    const { r } = await get("/favicon.ico");
+    const h = (n) => r.headers.get(n);
+    ok((r.status === 200 || (r.status >= 301 && r.status <= 308 && !!h("location"))) && missingAlways(h).length === 0, `/favicon.ico: the icon or a redirect to it, with the always-on headers (${r.status}; ${missingAlways(h).join(", ") || "all"})`);
+  }
+
   // Redirects.
-  for (const path of ["/tollbooth/waitlist", "/favicon.ico"]) {
+  for (const path of ["/tollbooth/waitlist"]) {
     const { r } = await get(path);
     const h = (n) => r.headers.get(n);
     ok(r.status >= 301 && r.status <= 308 && !!h("location") && missingAlways(h).length === 0, `${path}: a redirect with the always-on headers (${r.status}; ${missingAlways(h).join(", ") || "all"})`);

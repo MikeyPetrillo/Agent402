@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-14",
+    title: "Llama 3.2 successor",
+    items: [
+      "Gateway: the upstream lists an expiration of 2026-11-20 for meta-llama/llama-3.2-3b-instruct as well as meta-llama/llama-3.2-1b-instruct. A call naming either is served as itself until that day, then by mistralai/ministral-3b-2512 at the tier and price of the route called (nano, base or metered), the swap named in agent402_model_substituted.",
+    ],
+  },
+  {
     date: "2026-11-13",
     title: "Listing types, charge sentences and price keys",
     items: [

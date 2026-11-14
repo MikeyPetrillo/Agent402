@@ -48,7 +48,7 @@ import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { normalizePayerAddress } from "./payer.js";
-import { PAYING_RAILS_SQL, isPaidRail } from "./paid-rails.js";
+import { PAYING_RAILS_SQL, isPaidRail, PUBLIC_RAIL_SQL, BUYER_RAILS_SQL, BUYER_AMOUNT_SQL } from "./paid-rails.js";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, singleFlight, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
@@ -560,9 +560,28 @@ export function recordSale({ slug, priceUsd, rail, network, payer, tx, synthetic
   return USE_PG ? Promise.resolve(false) : undefined;
 }
 
+// A private-rail row (src/paid-rails.js) is not a sale this lookup returns:
+// the attest and feedback tools and the settlement books read it, and what
+// they would state (a price, a served settlement) is the direct routes'.
 const selectByTx = db.prepare(
-  "SELECT id, ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, attest_uid, attest_tx FROM sales WHERE tx = ? ORDER BY id DESC LIMIT 1"
+  `SELECT id, ts, slug, price_usd, rail, network, payer, tx, internal, wire, quote_usd, response_sha256, attest_uid, attest_tx FROM sales WHERE tx = ? AND ${PUBLIC_RAIL_SQL} ORDER BY id DESC LIMIT 1`
 );
+// The one reader of a private-rail row by its transaction: the gate that
+// booked it (has this settlement been booked?) and the operator.
+const selectPrivateByTx = db.prepare(
+  "SELECT id, ts, slug, price_usd, quote_usd, rail, network, payer, tx, internal, wire, response_sha256 FROM sales /* private-rail */ WHERE tx = ? AND rail = ? ORDER BY id DESC LIMIT 1"
+);
+/** The newest row booked on a private rail under this transaction, or null:
+ *  `{ id, ts, slug, netUsd, grossUsd, rail, network, payer, tx, internal, wire, responseSha256 }`.
+ *  Operator and gate use only; never a public or buyer-facing answer. */
+export function privateRailSaleByTx(tx, rail) {
+  const t = String(tx || "").trim();
+  if (!t || !rail) return null;
+  try {
+    const r = selectPrivateByTx.get(t, String(rail));
+    return r ? { id: r.id, ts: r.ts, slug: r.slug, netUsd: Number(r.price_usd) || 0, grossUsd: r.quote_usd == null ? null : Number(r.quote_usd), rail: r.rail, network: r.network || null, payer: r.payer || null, tx: r.tx, internal: !!r.internal, wire: r.wire || null, responseSha256: r.response_sha256 || null } : null;
+  } catch { return null; }
+}
 const updateAttestation = db.prepare("UPDATE sales SET attest_uid = ?, attest_tx = ? WHERE id = ? AND attest_uid IS NULL");
 
 /** The newest sale settled by this transaction (hash or signature, as the
@@ -609,7 +628,7 @@ export function saleByTx(tx) {
 }
 
 const selectAllByTx = db.prepare(
-  "SELECT id, ts, slug, price_usd, rail, network, payer, tx, internal, wire FROM sales WHERE tx = ? ORDER BY id ASC LIMIT ?"
+  `SELECT id, ts, slug, price_usd, rail, network, payer, tx, internal, wire FROM sales WHERE tx = ? AND ${PUBLIC_RAIL_SQL} ORDER BY id ASC LIMIT ?`
 );
 /** Every sale recorded under this settle transaction, oldest first, up to
  *  `limit` (the refund backfill for named sales needs to know that a
@@ -727,7 +746,7 @@ const qExtRecent = db.prepare(`
   ORDER BY ts DESC LIMIT 20`);
 const qIntRecent = db.prepare(`
   SELECT ts, slug, price_usd, rail, network, payer, tx
-  FROM sales WHERE internal = 1
+  FROM sales WHERE internal = 1 AND ${PUBLIC_RAIL_SQL}
   ORDER BY ts DESC LIMIT 20`);
 // Settlements whose credential arrived over an MPP wire — either "mpp"
 // (evm-translated, same on-chain USDC settlement as x402 via mpp-shim.js) or
@@ -873,7 +892,7 @@ const qExtBuyersBySlug = db.prepare(`
 const NANO_PER_USD = 1e9;
 const qTotalsPage = db.prepare(`
   SELECT internal, rail, COUNT(*) AS n, SUM(CAST(ROUND(price_usd * ${NANO_PER_USD}) AS INTEGER)) AS nano
-  ${WINDOW_PAGE} GROUP BY internal, rail`);
+  ${WINDOW_PAGE} AND ${PUBLIC_RAIL_SQL} GROUP BY internal, rail`);
 // Exact nano-dollars to dollars at 4 decimals, half up, in integers (no float
 // rounding of the total itself). Exact while |nano| < 2^53 ($9M).
 function nanoToUsd4(nano) {
@@ -882,7 +901,7 @@ function nanoToUsd4(nano) {
   if ((nano - q * unit) * 2 >= unit) q += 1;
   return q / 1e4;
 }
-const qFirstTs = db.prepare("SELECT MIN(ts) AS ts FROM sales");
+const qFirstTs = db.prepare(`SELECT MIN(ts) AS ts FROM sales WHERE ${PUBLIC_RAIL_SQL}`);
 // Per-slug external paid aggregation over a half-open window [since, until) —
 // the bestsellers tool's data feed. COUNT(DISTINCT payer) skips NULLs, so
 // `buyers` counts only attributable settlements (EVM exposes the signed payer;
@@ -897,21 +916,24 @@ const qExtSlugWindow = db.prepare(`
 
 // Payer-scoped view (the /api/my-usage tool). Money rails only — PoW rows
 // carry no payer, so they can never appear in a wallet-keyed report anyway.
+// A buyer's own rows on a private rail (src/paid-rails.js) are in its history
+// at what the buyer PAID (the gross, BUYER_AMOUNT_SQL): the net booked beside
+// it is ours, and the difference is never shown.
 const qPayerReceiptsTotal = db.prepare(
-  "SELECT COUNT(*) AS n FROM sales WHERE payer = ? AND internal = 0 AND ts >= ? AND ts <= ?"
+  "SELECT COUNT(*) AS n FROM sales /* buyer-view */ WHERE payer = ? AND internal = 0 AND ts >= ? AND ts <= ?"
 );
 const qPayerReceipts = db.prepare(`
-  SELECT ts, slug, price_usd, quote_usd, rail, network, wire, tx, response_sha256, attest_uid
-    FROM sales
+  SELECT ts, slug, ${BUYER_AMOUNT_SQL} AS price_usd, quote_usd, rail, network, wire, tx, response_sha256, attest_uid
+    FROM sales /* buyer-view */
    WHERE payer = ? AND internal = 0 AND ts >= ? AND ts <= ?
    ORDER BY ts DESC
    LIMIT ?`);
 const qPayerTotals = db.prepare(`
-  SELECT COUNT(*) AS n, SUM(price_usd) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
-  FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?`);
+  SELECT COUNT(*) AS n, SUM(${BUYER_AMOUNT_SQL}) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ?`);
 const qPayerBySlug = db.prepare(`
-  SELECT slug, COUNT(*) AS n, SUM(price_usd) AS usd, MAX(ts) AS last_ts
-  FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  SELECT slug, COUNT(*) AS n, SUM(${BUYER_AMOUNT_SQL}) AS usd, MAX(ts) AS last_ts
+  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ?
   GROUP BY slug ORDER BY n DESC, usd DESC LIMIT 50`);
 const qPayerAnySale = db.prepare(`SELECT 1 AS hit FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} LIMIT 1`);
 /** True when this payer has any paid sale on the books, at any time (the
@@ -969,8 +991,8 @@ export function firstPaidSaleAfterAsync(grants, { chunk = FIRST_PAID_AFTER_CHUNK
   return runStepsAsync(firstPaidSaleAfterSteps(grants, chunk));
 }
 const qPayerByNetwork = db.prepare(`
-  SELECT network, COUNT(*) AS n, SUM(price_usd) AS usd
-  FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  SELECT network, COUNT(*) AS n, SUM(${BUYER_AMOUNT_SQL}) AS usd
+  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL} AND ts >= ?
   GROUP BY network`);
 // External settlements and distinct external buyers per settlement network,
 // for the per-rail host entry on the chain marketplace pages (2026-08-28).
@@ -1052,8 +1074,8 @@ function* externalByNetworkSteps({ days = 30 } = {}) {
   return out;
 }
 const qPayerRecent = db.prepare(`
-  SELECT ts, slug, price_usd, network, tx
-  FROM sales WHERE payer = ? AND rail IN ${PAYING_RAILS_SQL}
+  SELECT ts, slug, ${BUYER_AMOUNT_SQL} AS price_usd, network, tx
+  FROM sales /* buyer-view */ WHERE payer = ? AND rail IN ${BUYER_RAILS_SQL}
   ORDER BY ts DESC LIMIT ?`);
 
 /**
@@ -1077,7 +1099,7 @@ export function externalSalesForSlugs(slugs, sinceMs, untilMs) {
     return db.prepare(
       `SELECT ts, slug, price_usd AS priceUsd, network, payer, tx, rail
          FROM sales
-        WHERE internal = 0 AND ts >= ? AND ts < ? AND slug IN (${holes})
+        WHERE internal = 0 AND ${PUBLIC_RAIL_SQL} AND ts >= ? AND ts < ? AND slug IN (${holes})
         ORDER BY ts ASC`
     ).all(Number(sinceMs) || 0, Number(untilMs) || Date.now(), ...list);
   } catch { return []; }

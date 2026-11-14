@@ -107,9 +107,24 @@ export function handlerBudgetMs(totalMs = null) {
  *  configured size rides on the wrapper as __budgetMs. */
 export function underBudget(handler, totalMs = null) {
   const budgeted = function budgeted(...args) {
-    return store.run(budgetOf(handlerBudgetMs(totalMs)), () => handler.apply(this, args));
+    const own = handlerBudgetMs(totalMs);
+    const ceiling = ceilingStore.getStore();
+    // Whole milliseconds: a read's cap becomes an AbortSignal.timeout, which takes an integer.
+    const left = ceiling ? ceiling.endsAt - Date.now() : Infinity;
+    return store.run(budgetOf(Math.max(1, Math.floor(Math.min(own, left)))), () => handler.apply(this, args));
   };
   return Object.assign(budgeted, { __underBudget: true, __budgetMs: Number(totalMs) > 0 ? Number(totalMs) : HANDLER_BUDGET_MS });
+}
+
+// A caller that must have a handler's upstream work ended by its own deadline
+// (the referral gate, which stops waiting then) runs the handler under a
+// ceiling: a budgeted handler started inside it gets the smaller of its own
+// budget and what the ceiling has left, so every upstreamFetch in it is cut
+// off by then. It only ever shortens a budget.
+const ceilingStore = new AsyncLocalStorage();
+/** Run `fn` with every budgeted handler started inside it capped at `ms` from now. */
+export function withBudgetCeiling(ms, fn) {
+  return ceilingStore.run({ endsAt: Date.now() + Math.max(1, Math.floor(Number(ms) || 1)) }, fn);
 }
 
 /** Wrap every handler in a kit's tool array, in place, and return the array:

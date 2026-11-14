@@ -859,7 +859,22 @@ export function armGatewaySettleBreaker(req, key, { global = true } = {}) {
  * Synchronous (returns undefined, throws at once) without a shared store; a
  * promise with one, so `await` covers both.
  */
+// A run another gate settles by its own rules (the referral gate,
+// src/referral-gate.js) is neither judged by this breaker nor counted in it:
+// its payment pays another contract through another facilitator, so its
+// outcomes say nothing about this server's own settlements, and its unsettled
+// runs are bounded in that gate's own lane. The mark is an own property the
+// gate sets before the handler; a consult for a marked request arms nothing.
+const OTHER_LANE = "__a402SettleBreakerOtherLane";
+/** Mark a request as settled in another lane: this breaker ignores it. */
+export function settleBreakerOtherLane(req) {
+  if (!req || typeof req !== "object") return false;
+  try { Object.defineProperty(req, OTHER_LANE, { value: true, enumerable: false, configurable: true }); return true; } catch { return false; }
+}
+const inOtherLane = (req) => !!req && typeof req === "object" && Object.hasOwn(req, OTHER_LANE) && req[OTHER_LANE] === true;
+
 export function gatewaySettleBreakerCheck(req, { now = Date.now(), global = true } = {}) {
+  if (inOtherLane(req)) return undefined;
   // A non-EVM payment's signer is read first (an async parse for Algorand and
   // Stellar); every other key is decided as before.
   if (signerReadPending(req)) return resolveGatewaySettleBreakerSigner(req).then(() => consultKey(req, now, global));

@@ -147,8 +147,27 @@ export const SETTLE_MARGIN_SECONDS = 4;
  */
 export function evmCredentialSettleableMs(req, { nowMs = Date.now() } = {}) {
   const exp = evmCredentialExpiry(paymentHeaderOf(req));
-  if (!exp) return null;
-  return exp.expiresAt * 1000 - nowMs - SETTLE_RULE_SECONDS * 1000;
+  const window = runWindowEndsAt(req);
+  if (!exp) return window == null ? null : window - nowMs;
+  const fromHeader = exp.expiresAt * 1000 - nowMs - SETTLE_RULE_SECONDS * 1000;
+  return window == null ? fromHeader : Math.min(fromHeader, window - nowMs);
+}
+
+// A gate that settles by its own clock (src/referral-gate.js) presents the
+// moment its run must have ended as the end of the request's settleable
+// window: every reader of that window (the chat tiers' attempt timeouts, a
+// handler's own budget) then ends its upstream work by it, exactly as it
+// would for an authorization expiring then. It can only shorten the window
+// the payment header gives, never extend it. Own property, set once.
+const RUN_WINDOW = "__a402RunWindowEndsAt";
+/** Present `endsAtMs` (epoch ms) as the end of this request's settleable window. */
+export function presentRunWindow(req, endsAtMs) {
+  if (!req || typeof req !== "object" || !Number.isFinite(endsAtMs)) return false;
+  try { Object.defineProperty(req, RUN_WINDOW, { value: Number(endsAtMs), enumerable: false, configurable: true }); return true; } catch { return false; }
+}
+/** The presented window end (epoch ms), or null. */
+export function runWindowEndsAt(req) {
+  return req && typeof req === "object" && Object.hasOwn(req, RUN_WINDOW) && Number.isFinite(req[RUN_WINDOW]) ? req[RUN_WINDOW] : null;
 }
 
 /** A handler that buys from an outside seller for a buyer's request SIGNS only while
