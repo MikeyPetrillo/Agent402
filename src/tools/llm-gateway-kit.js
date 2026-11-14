@@ -64,6 +64,7 @@ import { cacheGet, cacheSet } from "../cache.js";
 import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
 import { stripControlChars } from "../prepayment-refusal.js";
 import { notChargedOn } from "../not-charged.js";
+import { routeHint, inReferralRun } from "../referral-run.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -1278,7 +1279,8 @@ export const PRICED_BY_MODEL_NOTE = "Flat per call for the models this tier serv
 /** The additive `agent402_tier` field a cross-tier answer carries. */
 export function crossTierDisclosure(routeTier, servedTier) {
   return {
-    route: TIERS[routeTier].route.split(" ")[1],
+    // The direct route's path: left out on a referral copy, which never names one.
+    ...(inReferralRun() ? {} : { route: TIERS[routeTier].route.split(" ")[1] }),
     served: servedTier,
     priceUsd: TIERS[servedTier].price,
     note: servedTier === AUTO_TIER
@@ -1932,7 +1934,7 @@ export function clampToMargin(body, tier, imageCount) {
     if (inUsd + fixedUsd > budgetUsd) {
       throw bad(
         `Input is too large for "${body.model}" at this tier's price (est. ${inTokens} input tokens). ` +
-        `Shrink the input, lower "n", or use a cheaper model - GET /v1/models lists every model and its tier.`
+        `Shrink the input, lower "n", or use a cheaper model${routeHint(" - GET /v1/models lists every model and its tier")}.`
       );
     }
     return inTokens;
@@ -1942,7 +1944,7 @@ export function clampToMargin(body, tier, imageCount) {
     throw bad(
       `Input is too large for "${body.model}" at this tier's price (est. ${inTokens} input tokens` +
       `${turns > 1 ? `, across up to ${turns} server-tool loop turns` : ""}). ` +
-      `Shrink the input${turns > 1 ? ', drop the "tools" server-tool entries' : ""}, lower "n", or use a cheaper model - GET /v1/models lists every model and its tier.`
+      `Shrink the input${turns > 1 ? ', drop the "tools" server-tool entries' : ""}, lower "n", or use a cheaper model${routeHint(" - GET /v1/models lists every model and its tier")}.`
     );
   }
   if (body.max_tokens > affordableOut) body.max_tokens = affordableOut;
@@ -1962,7 +1964,7 @@ export function fitBudgetBelowCap(budget, cap, { floor = 1, field = "reasoning.m
   if (b < cap) return b;
   const fitted = cap - 1;
   if (fitted < floor) {
-    throw bad(`"${field}" (${b}) does not fit under the ${capField} this request's price affords (${cap}): shrink the input or the budget, or use a cheaper model - GET /v1/models lists every model and its tier`);
+    throw bad(`"${field}" (${b}) does not fit under the ${capField} this request's price affords (${cap}): shrink the input or the budget, or use a cheaper model${routeHint(" - GET /v1/models lists every model and its tier")}`);
   }
   return fitted;
 }
@@ -2021,7 +2023,7 @@ const PASSTHROUGH = [
  *  this and accepted "<model>:online" on nano (security review 2026-08-19). */
 export function refuseCostVariants(model) {
   const variant = String(model || "").includes(":") ? String(model).slice(String(model).indexOf(":") + 1).toLowerCase() : "";
-  if (variant === "online") throw bad(`Model variant ":online" is not offered on this tier. Use "${String(model).slice(0, String(model).indexOf(":"))}" instead (or POST /v1/grounded/chat/completions for grounded answers).`);
+  if (variant === "online") throw bad(`Model variant ":online" is not offered on this tier. Use "${String(model).slice(0, String(model).indexOf(":"))}" instead${routeHint(" (or POST /v1/grounded/chat/completions for grounded answers)")}.`);
   if (/-contributor(?:$|:)/i.test(String(model || ""))) throw bad(`Model "${String(model)}" is not offered - "contributor" listings are priced for the provider's use of the request data, and a buyer's prompt is never routed there. Use "${String(model).replace(/-contributor/i, "")}" instead.`);
   if (variant === "batch") throw bad(`Model variant ":batch" is not offered - batch ids are asynchronous (24h window) and not served on a synchronous path. Use "${String(model).slice(0, String(model).indexOf(":"))}" instead.`);
 }
@@ -2156,11 +2158,11 @@ export function inputTooLargeError(tierSlug, model, chars, pathByTier = null) {
   if (!tier.metered) {
     const m = TIERS["v1-chat-metered"];
     const e = bad(`Input too large (${chars} chars). The ${tierSlug} tier allows up to ${max} chars` +
-      (m ? `; ${pathOf("v1-chat-metered")} takes at least ${m.maxInputChars} chars (more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}) and is priced from the body` : ""));
+      (m && !inReferralRun() ? `; ${pathOf("v1-chat-metered")} takes at least ${m.maxInputChars} chars (more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}) and is priced from the body` : ""));
     return Object.assign(e, { maxInputChars: max, inputChars: chars, hint: "trim-input" });
   }
   const suggestions = largerWindowSuggestions(model, chars);
-  const e = bad(`Input too large (${chars} chars). ${model ? `"${stripControlChars(String(model).slice(0, 200))}" on ` : ""}${route} takes up to ${max} chars` +
+  const e = bad(`Input too large (${chars} chars). ${model ? `"${stripControlChars(String(model).slice(0, 200))}" on ` : ""}${routeHint(route, "this route")} takes up to ${max} chars` +
     ` (${tier.maxInputChars} on every model, more on a model with a larger context window, up to ${METERED_MAX_INPUT_CHARS_CEILING}).` +
     ` Trim older turns or long tool results` +
     (suggestions.length ? `, or name a model with a larger context window: ${suggestions.join(", ")}.` : ".") +
@@ -2205,8 +2207,8 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
       throw bad(
         `${tier.route.split(" ")[1]} serves only "${tier.lockedModel}" - the model is locked to this route. ` +
         (home && home !== tierSlug
-          ? `"${model}" is served by the ${home} tier: call ${TIERS[home].route.split(" ")[1]} (price $${tierPriceLabel(TIERS[home].price)}/call).`
-          : `Omit "model" (or send "${tier.lockedModel}"); GET /v1/models lists every model and its tier.`)
+          ? routeHint(`"${model}" is served by the ${home} tier: call ${TIERS[home].route.split(" ")[1]} (price $${tierPriceLabel(TIERS[home].price)}/call).`, `"${model}" is not served on this route.`)
+          : `Omit "model" (or send "${tier.lockedModel}")${routeHint("; GET /v1/models lists every model and its tier")}.`)
       );
     }
     model = tier.lockedModel;
@@ -2249,7 +2251,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     // "auto" reaches here only when the request was not gated at the auto
     // price (no request, or FREE_MODE): name the route that serves it.
     if (model === AUTO_MODEL && TIERS[AUTO_TIER]) {
-      throw bad(`Model "auto" is routed by the ${AUTO_TIER} tier - call ${TIERS[AUTO_TIER].route.split(" ")[1]} (price $${tierPriceLabel(TIERS[AUTO_TIER].price)}/call), or send the body here and pay the auto price the 402 quotes.`);
+      throw bad(routeHint(`Model "auto" is routed by the ${AUTO_TIER} tier - call ${TIERS[AUTO_TIER].route.split(" ")[1]} (price $${tierPriceLabel(TIERS[AUTO_TIER].price)}/call), or send the body here and pay the auto price the 402 quotes.`, 'Model "auto" is not served on this route at this price: send the body again and pay the price the 402 quotes.'));
     }
     const home = tierFor(model);
     throw bad(
@@ -2258,8 +2260,8 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
         // route, which serves the same model at a per-request quote (a client
         // looped on this 400 every 90 s for two hours on 2026-09-06 without a
         // cheaper option being named).
-        ? `Model "${model}" is served by the ${home} tier - call ${TIERS[home].route.split(" ")[1]} (price $${tierPriceLabel(TIERS[home].price)}/call), or ${TIERS["v1-chat-metered"] ? `${TIERS["v1-chat-metered"].route.split(" ")[1]} (the same model, quoted per request from $${tierPriceLabel(TIERS["v1-chat-metered"].price)})` : "the metered route"} instead.`
-        : `Model "${model}" is not in the gateway allowlist. GET /v1/models lists every supported model and its tier.`
+        ? routeHint(`Model "${model}" is served by the ${home} tier - call ${TIERS[home].route.split(" ")[1]} (price $${tierPriceLabel(TIERS[home].price)}/call), or ${TIERS["v1-chat-metered"] ? `${TIERS["v1-chat-metered"].route.split(" ")[1]} (the same model, quoted per request from $${tierPriceLabel(TIERS["v1-chat-metered"].price)})` : "the metered route"} instead.`, `Model "${model}" is not served on this route at the price paid: send the request again and pay the price the 402 quotes for it.`)
+        : `Model "${model}" is not in the gateway allowlist.${routeHint(" GET /v1/models lists every supported model and its tier.")}`
     );
   }
   // The metered route takes any id under its vendor prefixes; one the live
@@ -2359,7 +2361,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
   // this makes the answer explicit instead of silent.)
   for (const k of ["stop_server_tools_when", "max_tool_calls"]) {
     if (input[k] !== undefined) {
-      throw bad(`"${k}" is set by the gateway, not by the caller - the server-tool loop budget is what keeps this route's flat price honest. Remove it; the per-tool limits that apply are on GET /v1/models.`);
+      throw bad(`"${k}" is set by the gateway, not by the caller - the server-tool loop budget is what keeps this route's flat price honest. Remove it${routeHint("; the per-tool limits that apply are on GET /v1/models")}.`);
     }
   }
   // tool_choice mirrors the tools guard. Today it can only select a tool the
@@ -2420,7 +2422,7 @@ export function validateRequest(input, tierSlug, { clamp = true } = {}) {
     // answers this 400, and >= 400 cancels settlement, so nobody pays for it.
     const q = meteredQuoteFromNormalized(body, totalImages);
     if (q > tier.maxQuoteUsd) {
-      throw bad(`This request would cost $${q.toFixed(4)} metered, above the $${tier.maxQuoteUsd} per-call cap of ${tier.route.split(" ")[1]} - lower max_tokens or the input, or use a flat tier (GET /v1/models).`);
+      throw bad(`This request would cost $${q.toFixed(4)} metered, above the $${tier.maxQuoteUsd} per-call cap of ${routeHint(tier.route.split(" ")[1], "this route")} - lower max_tokens or the input${routeHint(", or use a flat tier (GET /v1/models)")}.`);
     }
   }
   if (defaultedModel) Object.defineProperty(body, "__defaultedModel", { value: defaultedModel, enumerable: false });
@@ -4242,8 +4244,7 @@ function makeHandler(routeTier) {
     if (typeof avail === "function" && !avail()) {
       throw bad(
         `"${TIERS[tierSlug].lockedModel || tierSlug}" is no longer served upstream. It was a stealth (cloaked) preview ` +
-        `listing and has been withdrawn by its provider.${notChargedOn(req)} GET /v1/models lists every ` +
-        "model the gateway currently serves.",
+        `listing and has been withdrawn by its provider.${notChargedOn(req)}${routeHint(" GET /v1/models lists every model the gateway currently serves.")}`,
         503
       );
     }
@@ -4596,7 +4597,8 @@ function makeHandler(routeTier) {
         // What this call would have cost metered, when that is materially
         // cheaper (see meteredHintFor). Additive, non-streaming only - a
         // stream has no envelope to carry it.
-        if (data && typeof data === "object" && !data.agent402_metered) {
+        // (Never on a referral copy: the hint names the direct metered route.)
+        if (data && typeof data === "object" && !data.agent402_metered && !inReferralRun()) {
           const hint = meteredHintFor(body, tierSlug, imageCount);
           if (hint) data.agent402_metered = hint;
         }

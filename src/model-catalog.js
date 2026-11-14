@@ -13,6 +13,7 @@
 // health lane (a flapping list must not read as chat failing).
 // Read in production only, where the route serves with a key
 // (modelCatalogWanted); MODEL_CATALOG_URL points it at a stub (tests).
+import { routeHint } from "./referral-run.js";
 import { OPENROUTER_ATTRIBUTION } from "./openrouter-attribution.js";
 
 const catalogUrl = () => process.env.MODEL_CATALOG_URL || "https://openrouter.ai/api/v1/models";
@@ -157,7 +158,7 @@ export function unknownModelVerdict(model, { now = Date.now(), suggest = () => t
   const shown = String(model).length > MAX_ECHO ? `${String(model).slice(0, MAX_ECHO)}…` : String(model);
   const message = `Model "${shown}" is not a chat model id the upstream serves, so this request cannot be served and was not priced.` +
     (list.length ? ` Ids this route serves from ${vendor.slice(0, -1)} include: ${list.join(", ")}.` : "") +
-    " GET /v1/models lists what this route serves. Nothing was charged.";
+    `${routeHint(" GET /v1/models lists what this route serves.")} Nothing was charged.`;
   return { message, suggestions: list.slice(0, MAX_SUGGESTIONS) };
 }
 
