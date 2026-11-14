@@ -54,7 +54,7 @@ ok(!r.ok && /unreachable/.test(r.error), "network error -> unreadable");
 // a stub catalog and a stub validator: a binary listing the validator calls
 // INVALID fails the run, and the same catalog passes when it is valid.
 {
-  const run = async (invalidPath, { throttled = false, answerAfterMs = 0, env = {} } = {}) => {
+  const run = async (invalidPath, { throttled = false, answerAfterMs = 0, notIndexed = [], crawled = undefined, env = {} } = {}) => {
     const asked = [];
     const stub = createServer((req, res) => {
       let body = "";
@@ -75,7 +75,7 @@ ok(!r.ok && /unreachable/.test(r.error), "network error -> unreadable");
           if (answerAfterMs) return void setTimeout(() => res.end(JSON.stringify({ valid: true, statusCode: 402, preflight: [], simulation: { outcome: "accepted" }, index: { active: true } })), answerAfterMs);
           if (throttled) { res.statusCode = 429; res.setHeader("retry-after", "60"); return res.end(""); }
           const bad = path === invalidPath;
-          return res.end(JSON.stringify({ valid: !bad, statusCode: 402, preflight: bad ? [{ check: "resource.mimeType", passed: false, severity: "required", detail: "stub rejection" }] : [], simulation: { outcome: bad ? "rejected" : "accepted" }, index: { active: true } }));
+          return res.end(JSON.stringify({ valid: !bad, statusCode: 402, preflight: bad ? [{ check: "resource.mimeType", passed: false, severity: "required", detail: "stub rejection" }] : [], simulation: { outcome: bad ? "rejected" : "accepted" }, index: { active: !notIndexed.includes(path), ...(crawled ? { lastCrawledAt: crawled } : {}) } }));
         }
         res.statusCode = 404; res.end("{}");
       });
@@ -96,7 +96,23 @@ ok(!r.ok && /unreachable/.test(r.error), "network error -> unreadable");
   const bad = await run("/api/qr");
   ok(bad.asked.includes("/api/qr") && !bad.asked.includes("/api/plain"), `a no-argument run validates the binary listing and no plain non-flagship row (asked ${bad.asked.join()})`);
   ok(bad.code === 1 && /FAIL GET \/api\/qr/.test(bad.out), `an INVALID binary listing fails the run (exit ${bad.code})`);
+  ok(/^NONJSON-INVALID GET \/api\/qr$/m.test(bad.out), "an INVALID non-JSON listing prints its NONJSON-INVALID line");
+  const badJson = await run("/api/hash");
+  ok(badJson.code === 1 && !/NONJSON-INVALID/.test(badJson.out), `control: an INVALID JSON route fails the run with no NONJSON-INVALID line (exit ${badJson.code})`);
+
+  // Valid but not in the index. A non-JSON listing prints a WARN line (with
+  // the validator's last crawl date, reduced to date characters) and the run
+  // still exits 0; a flagship JSON route reads as it always has.
+  const dropped = await run(null, { notIndexed: ["/api/qr"], crawled: "2026-11-01T00:00:00.000Z\n::error::x" });
+  ok(dropped.code === 0 && /^WARN not-indexed GET \/api\/qr \(last crawl 2026-11-01T00:00:00\.000Z::::\)$/m.test(dropped.out), `a valid, not-indexed binary listing prints its WARN line and exits 0 (exit ${dropped.code})`);
+  ok(!/^::/m.test(dropped.out), "a validator date never starts a log line of its own");
+  const unknown = await run(null, { notIndexed: ["/api/qr"] });
+  ok(/^WARN not-indexed GET \/api\/qr \(last crawl unknown\)$/m.test(unknown.out), "with no crawl date the WARN line says unknown");
+  const droppedJson = await run(null, { notIndexed: ["/api/hash"] });
+  ok(droppedJson.code === 0 && !/WARN not-indexed/.test(droppedJson.out) && /^ok {3}GET \/api\/hash - valid · NOT in index$/m.test(droppedJson.out) && /"notIndexed":1/.test(droppedJson.out), `control: a valid, not-indexed JSON route prints no WARN line (exit ${droppedJson.code})`);
+
   const good = await run(null);
+  ok(!/WARN not-indexed|NONJSON-INVALID/.test(good.out), "control: an indexed, valid run prints neither line");
   ok(good.code === 0 && good.asked.length === 2, `control: the same catalog passes when the validator accepts it (exit ${good.code}, ${good.asked.length} calls)`);
 
   // A validator that answers 429 with Retry-After 60 to every call: the run

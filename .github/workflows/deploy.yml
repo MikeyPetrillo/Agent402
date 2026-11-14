@@ -5316,6 +5316,9 @@ jobs:
       # every listing whose content type is not JSON (up to 12). Each run prints its
       # FAIL and unreadable rows first, so a long run's tail never hides one,
       # and ends at the script's own deadline (8 minutes) at the latest.
+      # A non-JSON listing that is valid but not in the index is a warning
+      # (the index lags the validator; no verdict changes), and an INVALID
+      # non-JSON listing adds the listing switch to the error.
       - name: Bazaar listing validation on the new build
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
@@ -5332,6 +5335,7 @@ jobs:
         run: |
           BEST=9
           INVALID=0
+          HINT=""
           for i in 1 2 3; do
             set +e
             OUT=$(TARGET_URL=https://agent402.tools node scripts/bazaar-validate.js 2>&1); CODE=$?
@@ -5341,11 +5345,13 @@ jobs:
             echo "$OUT" | tail -40
             if [ "$CODE" -lt "$BEST" ]; then BEST=$CODE; fi
             if [ "$CODE" = "1" ]; then INVALID=$((INVALID + 1)); fi
+            if echo "$OUT" | grep -q '^NONJSON-INVALID '; then HINT=" If the failing route is a binary listing, X402_BINARY_LISTINGS=off on the service returns every listing to its earlier shape."; fi
             if [ "$CODE" = "0" ]; then break; fi
             if [ "$i" -lt 3 ]; then sleep 60; fi
           done
+          echo "$OUT" | grep '^WARN not-indexed ' | while IFS= read -r LINE; do echo "::warning::Bazaar: $LINE"; done || true
           case "$BEST" in
             0) echo "Every checked route validates on the new build." ;;
             2) echo "::warning::The Bazaar validator could not be read on any run (CDP-side); no listing verdict for this build." ;;
-            *) echo "::error::No Bazaar validator run was clean against the new build: $INVALID of $i run(s) read a checked route INVALID, the rest could not be read."; exit 1 ;;
+            *) echo "::error::No Bazaar validator run was clean against the new build: $INVALID of $i run(s) read a checked route INVALID, the rest could not be read.$HINT"; exit 1 ;;
           esac

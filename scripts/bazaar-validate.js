@@ -142,7 +142,8 @@ export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = V
   return {
     ok: true, valid: body.valid === true, statusCode: body.statusCode ?? null, failed, advisory,
     simulation: body.simulation?.outcome || null, rejectionReason: body.simulation?.rejectionReason || null,
-    indexed: body.index?.active === true, lastCrawledAt: body.index?.lastCrawledAt || null, quality: body.index?.quality || null,
+    // A date from the validator, kept to date characters: it is printed into CI logs.
+    indexed: body.index?.active === true, lastCrawledAt: String(body.index?.lastCrawledAt || "").replace(/[^0-9TZ:.+-]/g, "").slice(0, 40) || null, quality: body.index?.quality || null,
   };
 }
 
@@ -185,14 +186,24 @@ async function main() {
 
   let invalid = 0, unreadable = 0, valid = 0, notIndexed = 0;
   const rows = [];
+  // A non-JSON listing (a row that carries a non-JSON mimeType) gets two
+  // lines of its own, which the deploy and heartbeat steps grep:
+  //   WARN not-indexed <route> (last crawl <date or unknown>)
+  //     valid but not in the index. The index lags the validator by days, so
+  //     this stays exit 0; it is the only sign of an indexer that dropped the
+  //     listing after a crawl.
+  //   NONJSON-INVALID <route>
+  //     beside its FAIL line, so the caller can name the listing switch.
+  const nonJson = (e) => typeof e.mimeType === "string" && e.mimeType !== "application/json";
   for (const { endpoint, r } of results) {
     const tag = `${endpoint.method} ${endpoint.path}`;
     if (!r.ok) { unreadable++; rows.push({ route: tag, status: "UNREADABLE", detail: r.error }); console.log(`??  ${tag} - ${r.error}`); continue; }
-    if (!r.valid) { invalid++; rows.push({ route: tag, status: "INVALID", detail: r.failed.join("; ") || r.rejectionReason || `statusCode ${r.statusCode}` }); console.log(`FAIL ${tag} - ${r.failed.join("; ") || r.rejectionReason || `HTTP ${r.statusCode}`}`); continue; }
+    if (!r.valid) { invalid++; rows.push({ route: tag, status: "INVALID", detail: r.failed.join("; ") || r.rejectionReason || `statusCode ${r.statusCode}` }); console.log(`FAIL ${tag} - ${r.failed.join("; ") || r.rejectionReason || `HTTP ${r.statusCode}`}`); if (nonJson(endpoint)) console.log(`NONJSON-INVALID ${tag}`); continue; }
     valid++;
     if (!r.indexed) notIndexed++;
     rows.push({ route: tag, status: "valid", indexed: r.indexed, lastCrawledAt: r.lastCrawledAt, quality: r.quality, advisory: r.advisory });
     console.log(`ok   ${tag} - valid${r.indexed ? ` · indexed (crawled ${r.lastCrawledAt || "?"})` : " · NOT in index"}${r.advisory.length ? ` · advisory: ${r.advisory.join(", ")}` : ""}${r.quality ? ` · quality ${JSON.stringify(r.quality)}` : ""}`);
+    if (!r.indexed && nonJson(endpoint)) console.log(`WARN not-indexed ${tag} (last crawl ${r.lastCrawledAt || "unknown"})`);
   }
   const summary = { target: TARGET, probed: chosen.length, valid, invalid, unreadable, notIndexed };
   console.log(`\nsummary: ${JSON.stringify(summary)}`);

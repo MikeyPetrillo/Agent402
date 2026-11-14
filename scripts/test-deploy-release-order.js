@@ -62,6 +62,21 @@ ok(triggerAt > upsertAt && upsertAt >= 0, "the deploy trigger runs after the ups
     ok(!/flagship/i.test(`${step.name || ""} ${run}`), `the ${label} step names what it checked as checked routes`);
   }
   ok(/TITLE="Bazaar listing validation FAILED"/.test(String(hbStep.run || "")), "the heartbeat's issue title is unchanged");
+  // A non-JSON listing that is valid but not indexed is a warning in both
+  // steps (and a job-summary line on the heartbeat), never an issue; an
+  // INVALID one adds the listing switch to the deploy error and to the
+  // heartbeat's issue body. The two lines are scripts/bazaar-validate.js's.
+  const validator = readFileSync(new URL("./bazaar-validate.js", import.meta.url), "utf8");
+  ok(validator.includes("`WARN not-indexed ${tag} (last crawl ") && validator.includes("`NONJSON-INVALID ${tag}`"), "the validator prints the two lines the steps grep");
+  const LEVER = "If the failing route is a binary listing, X402_BINARY_LISTINGS=off on the service returns every listing to its earlier shape.";
+  for (const [label, step] of [["deploy", bazaar], ["heartbeat", hbStep]]) {
+    const run = String(step.run || "");
+    ok(/grep '\^WARN not-indexed ' \| while IFS= read -r LINE; do echo "::warning::Bazaar: \$LINE"/.test(run), `the ${label} step turns each WARN not-indexed line into a warning`);
+    ok(run.includes(`if echo "$OUT" | grep -q '^NONJSON-INVALID '; then HINT=" ${LEVER}"; fi`), `the ${label} step names the listing switch when a non-JSON listing is INVALID`);
+  }
+  ok(/could not be read\.\$HINT"; exit 1/.test(String(bazaar.run || "")), "the deploy step's error ends with the switch");
+  ok(/>> "\$GITHUB_STEP_SUMMARY"/.test(String(hbStep.run || "")) && /A green run closes this\.%s' "\$DETAIL" "\$HINT"\)/.test(String(hbStep.run || "")), "the heartbeat writes the WARN lines to the job summary and ends its issue body with the switch");
+  ok(!/gh issue (create|close|comment)[^\n]*not-indexed/.test(String(hbStep.run || "")), "no issue is opened or closed on a not-indexed listing");
 }
 
 // The jobs a commit-subject marker starts read the markers job's outputs, so
