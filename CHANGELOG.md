@@ -16,7 +16,8 @@ Index:
   OpenAPI document would otherwise give a route no price, so a price those
   documents already gave is kept, one written as both priceUsd and price_usd
   included. A price they give counts as the seller's declared price, as the
-  camelCase spelling does.
+  camelCase spelling does: it is listed in place of a price read from the
+  Bazaar or learned from the seller's 402.
 Surfaces:
 - A tool that answers with bytes is listed under the content type its example
   returns: qr, screenshot, image-resize and image-thumbnail as image/png,
