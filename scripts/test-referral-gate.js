@@ -1187,6 +1187,11 @@ try {
       const two = rc([...pairOf(a1), ...pairOf(a2), fac.transferLog(PAY_TO, PAYOUT, net, 0, 1), evOurs()]);
       ok(prove(two, noFloor) === "unknown" && prove(two, { ...noFloor, nonce: a2.nonce }) === "paid", `what the contract did with an authorization is read only up to the NEXT authorization: the routing after a later one does not prove an earlier one (${prove(two, noFloor)}, ${prove(two, { ...noFloor, nonce: a2.nonce })})`);
     }
+    {
+      const detail = (kind) => proveReceipt(pair(kind), { tx, from: a1.from, nonce: a1.nonce, payTo: PAY_TO, amount: "30000", merchantId: MERCHANT_ID, payoutAddress: PAYOUT, minNet: "26298" });
+      const toUs = Object.fromEntries(["paid", "nopayout", "otherbuyer", "wronggross", "othermerchant", "noevent", "badevent", "payoutonly", "elsewhere"].map((k) => [k, detail(k).routedToUs]));
+      ok(toUs.paid === true && toUs.nopayout === true && toUs.otherbuyer === true && toUs.wronggross === true && toUs.othermerchant === false && toUs.noevent === false && toUs.badevent === false && toUs.payoutonly === false && toUs.elsewhere === false && detail("paid").net === "26298" && detail("nopayout").net === null, `the proof says whether the contract's routed event names OUR merchant id, whatever else fails: true with no payout, another buyer or another gross; false for another merchant, no event, an event of another shape, or no transfer into the contract (${JSON.stringify(toUs)})`);
+    }
     const { ROUTED_EVENT_TOPIC, ROUTED_EVENT_SIGNATURE } = await import("../src/referral-proof.js");
     ok(ROUTED_EVENT_TOPIC === keccak256(stringToHex(ROUTED_EVENT_SIGNATURE)) && ROUTED_EVENT_TOPIC === ROUTED_TOPIC && prove(pair("othermerchant")) === "unpaid" && prove(pair("othermerchant"), { routedTopic: "0x" + "1".repeat(64) }) === "unknown", "the event topic is the keccak of the documented signature, and a configured topic replaces it (the documented event is then no longer read)");
     const verdicts = {};
@@ -2636,6 +2641,12 @@ try {
       ok(bookP.get(notOurs.key) === null && bookP.closedUnrecognized().some((r) => r.key === notOurs.key) && bookP.get(elsewhere.key) === null && !bookP.closedUnrecognized().some((r) => r.key === elsewhere.key), "a receipt with no routed event for our merchant still ends: closed to the record at the bound, or closed as not paid when it was routed to another merchant");
       const word = appP.gate.statusWord();
       ok(word.status === "attention" && word.reasons.some((x) => /routed to this merchant/.test(x)) && sales.length === 0 && owed.length === 0, `the word reads attention for it, and nothing is booked or owed by itself (${word.reasons.join("; ")})`);
+      // The automatic path never takes the operator's proof: a charged entry whose receipt now fails on the payout waits.
+      const chargedDrift = await open("paid");
+      await bookP.resolve(chargedDrift.key, { state: "charged-undelivered", tx: chargedDrift.tx, saleBooked: true });
+      await appP.gate.sweepOnce();
+      ok(owed.length === 0 && bookP.get(chargedDrift.key)?.state === "charged-undelivered", `by itself the sweep writes no debt on that weaker proof: only an operator's refund does (${owed.length} debts, ${bookP.get(chargedDrift.key)?.state})`);
+      await appP.gate.resolveByHand(chargedDrift.key, { note: "test cleanup", outcome: "dismissed" });
       // The operator's three outcomes work on it.
       const refund = await appP.gate.resolveByHand(ours[0].key, { note: "the payout wallet was changed on chain; this buyer was not served", outcome: "refund" });
       const rowsR = owed.filter((o) => o.tx === ours[0].tx);

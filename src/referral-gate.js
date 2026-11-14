@@ -204,7 +204,7 @@ export function sendCounted(res, body, { chunkBytes = REFERRAL_SEND_CHUNK_BYTES,
       const part = body.subarray(sent.dispatched, Math.min(sent.total, sent.dispatched + chunkBytes));
       sent.dispatched += part.length;
       arm();
-      res.write(part, (err) => { if (err || done) return; sent.taken += part.length; next(); });
+      res.write(part, (err) => { if (err) return; sent.taken += part.length; next(); });
     } catch { /* a write that throws ends here; the close reads the counts */ }
   };
   next();
