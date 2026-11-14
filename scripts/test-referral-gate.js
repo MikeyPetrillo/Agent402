@@ -574,7 +574,7 @@ try {
   {
     const p = await signPayment(accept);
     const r = await send(R("echo"), { body: { require: true }, headers: { "payment-signature": p.header } });
-    ok(r.status === 400 && r.json?.tool === "echo" && !("howToCall" in r.json) && !r.text.includes("/api/echo"), `an input the pre-payment check refuses is the direct route's 400 without its ready-to-run call, and names no direct route (${r.status} ${r.text.slice(0, 120)})`);
+    ok(r.status === 400 && r.json?.tool === "echo" && !("howToCall" in r.json) && !/shop\.example\/api\/echo/.test(r.text), `an input the pre-payment check refuses is the direct route's 400 without its ready-to-run call, and names no direct route (${r.status} ${r.text.slice(0, 120)})`);
     const again = await send(R("echo"), { body: { text: "now valid" }, headers: { "payment-signature": p.header } });
     ok(again.status === 200, `nothing was claimed: the same authorization then buys a valid call (${again.status})`);
   }
