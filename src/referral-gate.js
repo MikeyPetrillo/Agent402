@@ -975,6 +975,9 @@ export function createReferralGate({
     if ([reach.verify, reach.settle].some((r) => r.since && r.calls >= 2 && t - r.since >= 10 * 60_000)) reasons.push("the facilitator has not answered for 10 minutes");
     if (reach.intentFailedAt && t - reach.intentFailedAt < 15 * 60_000) reasons.push("an intent to settle could not be stored");
     if (book.full()) reasons.push("the settlement book is full");
+    // An entry retired at capacity is an operator's to read: the word says so for a day.
+    const gone = typeof book.retiredAtCapacity === "function" ? book.retiredAtCapacity() : [];
+    if (gone.some((r) => t - (Number(r.at) || 0) < 24 * 3600_000)) reasons.push("a settlement was retired at capacity");
     return { status: reasons.length ? "attention" : "ok", reasons };
   }
 
@@ -1474,9 +1477,11 @@ export function createReferralGate({
       return refusePayment(res, "payer_screen_unavailable", { status: 503, retryable: true, retryAfter: 30 });
     }
     if (!screened) { counters.screened++; return undefined; }
-    // A book that cannot take one more settlement: refused here, before
-    // anything runs (never after the tool has run).
-    if (book.full()) {
+    // A book that cannot take one more settlement FOR THIS PAYER (its own
+    // share spent, or the book at capacity with nothing to retire): refused
+    // here, before anything runs (never after the tool has run). Another
+    // payer's open settlements do not spend this payer's share.
+    if (!(typeof book.roomFor === "function" ? book.roomFor(payer) : !book.full())) {
       counters.bookFullRefused++;
       return refusePayment(res, "settlement_book_full", { status: 503, retryable: true, retryAfter: 60 });
     }

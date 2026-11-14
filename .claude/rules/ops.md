@@ -337,8 +337,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   database row (the nightly backup copies those, and the file backup leaves out a `cache` name),
   deleted at their expiry (`IDEM_TTL_MS`, 10 minutes), at most 32 MB in all; a restart loses
   them. A paid call writes the small index a few times (about 4 ms each on the file store with
-  300 open entries, measured). At most 2000 entries: a full book refuses a paid call (503 before
-  `/verify` and the handler) and never drops one. The leased sweep `referral-settle-sweep` (at
+  300 open entries, measured). At most 2000 entries, 40 for one payer: a payer past its share, or a
+  book at capacity with nothing to retire, refuses a paid call (503 before `/verify` and the
+  handler); at capacity the oldest expired in-doubt entry is retired to the operator record. The leased sweep `referral-settle-sweep` (at
   boot and every `REFERRAL_SWEEP_MS`, default 60000; `contained`) reads up to 50 open entries a
   pass, the ones read least recently first, each as it stands at that moment: routed to this
   merchant by its own receipt books the sale once; a nonce spent without paying us, an

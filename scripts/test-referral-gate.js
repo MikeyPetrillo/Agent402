@@ -1269,6 +1269,48 @@ try {
     } finally { await app9.close(); }
   }
   {
+    // One payer's open settlements are its own share; at capacity only an
+    // in-doubt entry whose authorization has expired is retired, on record.
+    const clock = { t: 1_800_000_000_000 };
+    const lines = [];
+    const bk = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-share`, log: () => {} }), log: { error: (m) => lines.push(m), log: () => {} }, now: () => clock.t, maxEntries: 4, maxPerPayer: 2 });
+    const soon = Math.floor(clock.t / 1000) + 600;
+    const A = "0x" + "a1".repeat(20), B = "0x" + "b2".repeat(20), C = "0x" + "c3".repeat(20), D = "0x" + "d4".repeat(20);
+    const put = (key, payer) => bk.intent({ key, slug: "echo", payer, nonce: "0x" + key.padStart(64, "0"), amount: "30000", validBefore: soon });
+    const a1 = await put("a1", A), a2 = await put("a2", A), a3 = await put("a3", A.toUpperCase().replace("0X", "0x"));
+    ok(a1 && a2 && a3 === false && bk.roomFor(A) === false && bk.roomFor(B) === true && bk.full() === false && bk.size() === 2, `a payer at its own share is refused a new entry in any letter case while another payer has room (${a1} ${a2} ${a3})`);
+    ok((await put("a1", A)) === true && bk.size() === 2, "a payer at its share still rewrites an entry it already holds (a retry of the same payment)");
+    const b1 = await put("b1", B), c1 = await put("c1", C);
+    await bk.resolve("a1", { state: "in-doubt" }); await bk.resolve("a2", { state: "charged-undelivered", tx: "0x" + "77".repeat(32) }); await bk.resolve("b1", { state: "in-doubt" });
+    ok(b1 && c1 && bk.full() === true && bk.roomFor(D) === false && (await put("d1", D)) === false && bk.size() === 4 && bk.retiredAtCapacity().length === 0, "at capacity with every authorization still sendable nothing is retired and a new entry is refused");
+    clock.t += 600_000 + 120_000 + 1;
+    await bk.resolve("c1", { state: "refund-owed" });
+    ok(bk.full() === false && bk.roomFor(D) === true, "once an in-doubt entry's authorization has expired the book reads as having room");
+    const d1 = await bk.intent({ key: "d1", slug: "echo", payer: D, nonce: "0x" + "d1".padStart(64, "0"), amount: "30000", validBefore: Math.floor(clock.t / 1000) + 600 });
+    const gone = bk.retiredAtCapacity();
+    ok(d1 === true && bk.get("a1") === null && gone.length === 1 && gone[0].key === "a1" && gone[0].payer === A && gone[0].state === "in-doubt" && bk.size() === 4 && lines.some((m) => /retired to the operator record/.test(m)), `at capacity the OLDEST expired in-doubt entry is retired to the record with an error line (${gone.map((g) => g.key)})`);
+    const e1 = await bk.intent({ key: "e1", slug: "echo", payer: "0x" + "e5".repeat(20), nonce: "0x" + "e1".padStart(64, "0"), amount: "30000", validBefore: Math.floor(clock.t / 1000) + 600 });
+    ok(e1 === true && bk.get("b1") === null && bk.retiredAtCapacity().length === 2, "the next expired in-doubt entry is retired in turn");
+    const f1 = await bk.intent({ key: "f1", slug: "echo", payer: "0x" + "f6".repeat(20), nonce: "0x" + "f1".padStart(64, "0"), amount: "30000", validBefore: Math.floor(clock.t / 1000) + 600 });
+    ok(f1 === false && bk.get("a2")?.state === "charged-undelivered" && bk.get("c1")?.state === "refund-owed" && bk.retiredAtCapacity().length === 2 && bk.full() === true, "a charged or owed entry is never retired: with only those and live intents left the book refuses");
+  }
+  {
+    // The gate refuses a payer whose own share is spent, and serves another payer.
+    const shared = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-payershare`, log: () => {} }), log, maxEntries: 10, maxPerPayer: 1 });
+    const appS = await mount({}, { book: shared });
+    try {
+      const heavy = newAccount();
+      fac.mode.settle = () => ({ status: 500, body: {} });
+      await send(`${appS.url}/ref/echo`, { body: { text: "first" }, headers: { "payment-signature": (await signPayment(accept, { account: heavy })).header, "x-test-ip": freshIp() } });
+      const ranBefore = runs.echo, verifiesBefore = verifies();
+      const again = await send(`${appS.url}/ref/echo`, { body: { text: "second" }, headers: { "payment-signature": (await signPayment(accept, { account: heavy })).header, "x-test-ip": freshIp() } });
+      ok(again.status === 503 && again.json?.errorReason === "settlement_book_full" && runs.echo === ranBefore && verifies() === verifiesBefore && shared.size() === 1, `a payer holding its whole share is refused before /verify and the handler (${again.status} ${again.json?.errorReason})`);
+      fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()) } });
+      const other = await send(`${appS.url}/ref/echo`, { body: { text: "other" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+      ok(other.status === 200 && runs.echo === ranBefore + 1, `another payer is served while the first payer's share is spent (${other.status})`);
+    } finally { await appS.close(); }
+  }
+  {
     // A full book refuses a new settlement before /settle; it never drops an owed one.
     const small = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-full`, log: () => {} }), log, maxEntries: 1 });
     const app10 = await mount({}, { book: small });
