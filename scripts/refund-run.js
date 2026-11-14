@@ -871,7 +871,11 @@ async function main() {
         acceptsFor: (n) => accepts[n],
         payToSetFor: (n) => payToSets.get(n) || [],
         // A referral-rail row paid the referral network's split contract.
+        // and counts only when that contract routed it to our merchant.
         referralPayTo: (process.env.REFERRAL_PAY_TO || "").trim() || null,
+        referralMerchantId: (process.env.REFERRAL_MERCHANT_ID || "").trim() || null,
+        referralPayout: (process.env.REFERRAL_PAYOUT_ADDRESS || "").trim() || null,
+        referralRoutedTopic: (process.env.REFERRAL_ROUTED_TOPIC || "").trim() || null,
         rpcFor,
         stellarConfirm: confirmStellarTransfer,
       }),

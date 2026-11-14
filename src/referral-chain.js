@@ -1,22 +1,37 @@
 // Chain truth for a referral settlement (src/referral-gate.js): did the
-// buyer's authorization PAY us?
+// buyer's authorization PAY US?
 //
 // `authorizationState(authorizer, nonce)` on Base USDC says only that the
 // nonce is spent, and EIP-3009 spends one nonce space from three calls: the
 // receive this route asks for, a transfer the buyer signs to anyone, and a
-// cancel. So "used" is never "paid". An authorization is paid only by ITS OWN
-// transfer: in the receipt of the transaction that used the nonce, the
-// token's AuthorizationUsed(from, nonce) log followed directly by a Transfer
-// from the payer to the pay-to address of at least the amount, in a
-// successful transaction sent to the pay-to contract (receiptProvesPayment).
+// cancel. So "used" is never "paid". And the authorization names only the
+// referral network's split contract, which pays whichever merchant its
+// caller names: money that reached the contract is not yet money routed to
+// this merchant. A payment is OURS only when one receipt shows all of it
+// (receiptProvesPayment):
+//   1. the token's AuthorizationUsed(from, nonce) log, followed directly by
+//      a Transfer from the payer to the split contract of at least the amount;
+//   2. before the next authorization in that transaction, the split
+//      contract's own routed-payment event naming this buyer, this gross
+//      amount and OUR merchant id, with a token Transfer from the contract to
+//      our payout wallet of the merchant amount that event states. When no
+//      decodable event is there, a Transfer from the contract to our payout
+//      wallet of at least the expected net stands in for it.
+// The event routed to another merchant is "unpaid" (not ours). A shape this
+// module does not recognize (an event it cannot decode and no payout
+// transfer, an event of ours without its payout transfer) is "unknown":
+// held for an operator, never paid and never unpaid.
 // The facilitator's own "success" is checked the same way before an answer
 // is delivered.
 //
 // The transaction is found by its AuthorizationUsed log, searched page by
-// page from the chain head recorded when the intent was written (so a read
-// made long after still covers it) to the head now; an AuthorizationCanceled
-// log for the same pair proves it was not paid. A spent nonce whose log is
-// not found in what could be read stays UNKNOWN: absence is never proof.
+// page from the chain head recorded BEFORE the payment was verified (nothing
+// can have spent the nonce earlier, and a read made long after still covers
+// it) to the head now; an AuthorizationCanceled log for the same pair proves
+// it was not paid. A spent nonce whose log is not found stays UNKNOWN while
+// the authorization lives or the search was partial; once it has expired, a
+// COMPLETE search from that recorded head that found neither log closes it
+// as not paid (it was spent outside anything this route started).
 //
 // Bounded: a few tries inside a budget, each read with its own timeout, over
 // the configured Base RPCs then public ones (rpcCall; public log lanes first
@@ -29,6 +44,9 @@ import { evmLogsRead } from "./evm-logs-rpc.js";
 import { authorizationStateCalldata } from "./evm-authorization-state.js";
 import { AUTHORIZATION_USED_TOPIC } from "./pending-settle.js";
 import { USDC_DOMAIN_BY_NETWORK } from "./evm-usdc-domain.js";
+import { receiptProvesPayment, proveReceipt, ROUTED_EVENT_TOPIC, ROUTED_EVENT_SIGNATURE } from "./referral-proof.js";
+
+export { receiptProvesPayment, proveReceipt, ROUTED_EVENT_TOPIC, ROUTED_EVENT_SIGNATURE };
 
 const TOKEN = USDC_DOMAIN_BY_NETWORK["eip155:8453"].asset;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -52,49 +70,7 @@ export function baseRpcUrls(env = process.env) {
   return [...new Set(list)];
 }
 
-const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const lc = (v) => String(v ?? "").toLowerCase();
-const blockOf = (l) => { const n = parseInt(String(l?.logIndex ?? ""), 16); return Number.isFinite(n) ? n : null; };
-
-/**
- * Whether a receipt proves that THIS authorization paid `amount` from `from`
- * to `payTo`. Pure. "paid" | "unpaid" | "unknown".
- *
- * The token's receive path (FiatToken `_receiveWithAuthorization`: it requires
- * the caller to be the payee, marks the nonce used, then transfers) emits
- * AuthorizationUsed(from, nonce) and, as the very next log, Transfer(from,
- * payTo, value). So an authorization is proven paid only by ITS OWN pair:
- * the AuthorizationUsed log for this nonce, followed directly by a Transfer
- * of the token from the payer to the pay-to address of at least the amount.
- * A Transfer elsewhere in the transaction proves nothing about this nonce,
- * and one Transfer log can only ever follow one AuthorizationUsed log.
- * The receipt must also be the transaction asked about, have succeeded, and
- * have been sent to the pay-to contract (whose receive path is the only one
- * that pays it on behalf of a ReceiveWithAuthorization).
- */
-export function receiptProvesPayment(receipt, { tx, from, nonce, payTo, amount }) {
-  if (!receipt || typeof receipt !== "object") return "unknown";
-  if (tx && lc(receipt.transactionHash) !== lc(tx)) return "unpaid";
-  if (lc(receipt.status) !== "0x1") return "unpaid";
-  if (lc(receipt.to) !== lc(payTo)) return "unpaid";
-  let need;
-  try { need = BigInt(amount); } catch { return "unpaid"; }
-  if (!(need > 0n) || !ADDR.test(String(payTo || "")) || !ADDR.test(String(from || ""))) return "unpaid";
-  const logs = Array.isArray(receipt.logs) ? [...receipt.logs].sort((a, b) => (blockOf(a) ?? 0) - (blockOf(b) ?? 0)) : [];
-  for (let i = 0; i < logs.length; i++) {
-    const l = logs[i];
-    if (lc(l.address) !== lc(TOKEN) || lc(l.topics?.[0]) !== AUTHORIZATION_USED_TOPIC) continue;
-    if (lc(l.topics?.[1]) !== topicOf(from) || lc(l.topics?.[2]) !== lc(nonce)) continue;
-    const t = logs[i + 1];
-    if (!t || lc(t.address) !== lc(TOKEN) || lc(t.topics?.[0]) !== TRANSFER_TOPIC) return "unpaid";
-    if (blockOf(l) !== null && blockOf(t) !== null && blockOf(t) !== blockOf(l) + 1) return "unpaid";
-    if (lc(t.topics?.[1]) !== topicOf(from) || lc(t.topics?.[2]) !== topicOf(payTo)) return "unpaid";
-    let value;
-    try { value = BigInt(t.data); } catch { return "unpaid"; }
-    return value >= need ? "paid" : "unpaid";
-  }
-  return "unpaid";
-}
 
 /**
  * @param {object} o
@@ -107,14 +83,27 @@ export function receiptProvesPayment(receipt, { tx, from, nonce, payTo, amount }
  * @param {number} [o.lookbackBlocks]  the range read when no starting block is known
  * @param {number} [o.pageBlocks]      blocks per getLogs page
  * @param {number} [o.maxPages]        pages per search
+ * @param {string} [o.merchantId]      our merchant id on the split contract (decimal)
+ * @param {string} [o.payoutAddress]   the wallet the contract pays our merchant amount to
+ * @param {string} [o.routedTopic]     the routed-payment event topic (the documented one by default)
  */
-export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publicLanes = undefined, tries = 3, budgetMs = 15_000, timeoutMs = 3_000, pauseMs = 1_000, lookbackBlocks = 900, pageBlocks = 2_000, maxPages = 30, now = Date.now } = {}) {
+export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publicLanes = undefined, tries = 3, budgetMs = 15_000, timeoutMs = 3_000, pauseMs = 1_000, lookbackBlocks = 900, pageBlocks = 2_000, maxPages = 30, merchantId = null, payoutAddress = null, routedTopic = ROUTED_EVENT_TOPIC, headMaxAgeMs = 5_000, now = Date.now } = {}) {
   const rpcs = rpcUrls && rpcUrls.length ? rpcUrls : rpcUrl ? [rpcUrl] : baseRpcUrls();
   const read = (method, params, left) => rpcCall(rpcs, method, params, Math.max(250, Math.min(timeoutMs, left)));
+  const routing = { merchantId, payoutAddress, routedTopic };
 
-  /** The chain head, or null when no RPC answers. */
-  async function head({ budget = 3_000 } = {}) {
-    try { const h = Number(BigInt(await read("eth_blockNumber", [], budget))); return Number.isSafeInteger(h) && h > 0 ? h : null; } catch { return null; }
+  /** The chain head, or null when no RPC answers. A reading up to
+   *  `headMaxAgeMs` old is reused: a search that starts a few blocks early
+   *  covers more, never less. */
+  let lastHead = { at: 0, h: null };
+  async function head({ budget = 3_000, fresh = false } = {}) {
+    if (!fresh && lastHead.h !== null && now() - lastHead.at < headMaxAgeMs) return lastHead.h;
+    try {
+      const h = Number(BigInt(await read("eth_blockNumber", [], budget)));
+      if (!Number.isSafeInteger(h) || h <= 0) return null;
+      lastHead = { at: now(), h };
+      return h;
+    } catch { return null; }
   }
 
   /** The first transaction carrying the log `topic` for (authorizer, nonce),
@@ -141,14 +130,20 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
     return { complete: true, tx: null };
   }
 
-  /** Whether transaction `tx` paid this authorization (receiptProvesPayment):
-   *  "paid" | "unpaid" | "unknown" (no receipt readable yet). */
-  async function proveTransaction(tx, { from, nonce, payTo, amount }, { budget = 4_000 } = {}) {
+  /** Whether transaction `tx` paid this authorization to OUR merchant
+   *  (receiptProvesPayment): "paid" | "unpaid" | "unknown" (no receipt
+   *  readable, or a shape not recognized). `waitMs`: keep asking for a
+   *  receipt that is not there yet for this long. */
+  async function proveTransaction(tx, { from, nonce = null, payTo, amount, minNet = null }, { budget = 4_000, waitMs = 0 } = {}) {
     if (!TX.test(String(tx || ""))) return "unpaid";
-    let receipt;
-    try { receipt = await read("eth_getTransactionReceipt", [tx], budget); } catch { return "unknown"; }
-    if (!receipt) return "unknown";
-    return receiptProvesPayment(receipt, { tx, from, nonce, payTo, amount });
+    const until = now() + Math.max(0, waitMs);
+    for (;;) {
+      let receipt = null;
+      try { receipt = await read("eth_getTransactionReceipt", [tx], budget); } catch { receipt = null; }
+      if (receipt) return receiptProvesPayment(receipt, { tx, from, nonce, payTo, amount, minNet, ...routing });
+      if (now() + 400 >= until) return "unknown";
+      await sleep(400);
+    }
   }
 
   /**
@@ -161,14 +156,18 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
    *                              transaction that used it did not pay this
    *                              authorization (receiptProvesPayment)
    *   used true, paid null       spent, proof not read (the log not found in
-   *                              what could be read, or the receipt unreadable):
-   *                              NEVER read as not paid
+   *                              what could be read, the receipt unreadable or
+   *                              of an unrecognized shape). `complete` true
+   *                              says both log searches covered every block
+   *                              from the recorded head and found nothing
    * `fromBlock`: the head when the intent was written; the search runs from
    * there to the head, so a late read still finds an early payment.
    * `wait`: keep reading for a spent nonce until the budget ends.
    */
-  async function state({ from, nonce, payTo, amount, fromBlock = null }, { wait = false } = {}) {
-    const none = { used: null, paid: null, transaction: null };
+  async function state({ from, nonce, payTo, amount, fromBlock = null, minNet = null }, { wait = false } = {}) {
+    const none = { used: null, paid: null, transaction: null, complete: false };
+    // A search is complete only from a head recorded before the payment could be spent.
+    const anchored = Number.isSafeInteger(fromBlock) && fromBlock > 0;
     let data;
     try { data = authorizationStateCalldata(from, nonce); } catch { return none; }
     const started = now();
@@ -184,14 +183,14 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
           if (last) {
             const used = await findLog(AUTHORIZATION_USED_TOPIC, from, nonce, fromBlock, deadline);
             if (used.tx) {
-              const v = await proveTransaction(used.tx, { from, nonce, payTo, amount }, { budget: Math.max(250, deadline - now()) });
-              return { used: true, paid: v === "paid" ? true : v === "unpaid" ? false : null, transaction: used.tx };
+              const v = await proveTransaction(used.tx, { from, nonce, payTo, amount, minNet }, { budget: Math.max(250, deadline - now()) });
+              return { used: true, paid: v === "paid" ? true : v === "unpaid" ? false : null, transaction: used.tx, complete: false };
             }
             const canceled = await findLog(AUTHORIZATION_CANCELED_TOPIC, from, nonce, fromBlock, deadline);
-            if (canceled.tx) return { used: true, paid: false, transaction: canceled.tx };
-            return { used: true, paid: null, transaction: null };
+            if (canceled.tx) return { used: true, paid: false, transaction: canceled.tx, complete: false };
+            return { used: true, paid: null, transaction: null, complete: anchored && used.complete === true && canceled.complete === true };
           }
-          if (!wait) return { used: false, paid: null, transaction: null };
+          if (!wait) return { used: false, paid: null, transaction: null, complete: false };
         }
       } catch { /* the next try reads again */ }
       if (i < tries - 1) await sleep(Math.min(pauseMs, Math.max(0, deadline - now())));
@@ -199,7 +198,7 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
     return { ...none, used: last };
   }
 
-  return { state, head, proveTransaction };
+  return { state, head, proveTransaction, routing: () => ({ ...routing }) };
 }
 
 /**
@@ -212,12 +211,16 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
  *   expired-unused  not spent, and past its validBefore: it never will be
  *   unused          not spent yet (it still can be)
  *   unknown         nothing readable, or spent with the proof not read yet
+ * A spent nonce with no log of either kind is "unpaid" only once the
+ * authorization has expired AND the search from the head recorded before it
+ * was verified was complete (`s.complete`): it was spent outside this route.
  */
 export function chainVerdict(s, { validBeforeMs = 0, nowMs = Date.now(), slackMs = 120_000 } = {}) {
   const expired = validBeforeMs > 0 && nowMs > validBeforeMs + slackMs;
   if (s?.used === true) {
     if (s.paid === true && TX.test(String(s.transaction || ""))) return "paid";
     if (s.paid === false) return "unpaid";
+    if (s.paid === null && s.transaction == null && s.complete === true && expired) return "unpaid";
     return "unknown";
   }
   if (s?.used === false) return expired ? "expired-unused" : "unused";
