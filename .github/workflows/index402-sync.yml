@@ -41,6 +41,11 @@ jobs:
         env:
           INDEX402_TOKEN: ${{ secrets.INDEX402_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          # A run after each deploy normally corrects what that deploy changed,
+          # so on the daily run an imported fixed-price listing that is off the
+          # catalog price was most likely written back by the index's importer:
+          # name it and fail.
+          INDEX402_FLAG_REWRITTEN: ${{ github.event_name == 'schedule' && '1' || '0' }}
         run: node scripts/index402-sync.js
 
       - name: Page on failure / recover on success
@@ -56,5 +61,5 @@ jobs:
           if [ "$OUTCOME" = "success" ]; then
             [ -n "$OPEN" ] && gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered at $(date -u +%FT%TZ). $RUN_URL" || true
           elif [ -z "$OPEN" ]; then
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The daily 402 Index price sync failed, so our listings there may quote a stale price. Check the run, and the INDEX402_TOKEN secret if the API answered 403: $RUN_URL"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The daily 402 Index price sync failed, so our listings there may quote a stale price. Check the run: a REWRITTEN line names an imported listing that was off the catalog price (most likely the index wrote it back from its own source, which still carries an old price), NOT HELD names a write the index did not keep, and a 403 points at the INDEX402_TOKEN secret. $RUN_URL"
           fi
