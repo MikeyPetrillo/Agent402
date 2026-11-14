@@ -278,6 +278,8 @@ else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
   ok(!p.did("close") && p.did("comment"), "a clean marker older than a day and a half does not count as in a row");
   p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(48) }, { body: "Written back again at y", createdAt: ago(24) }]));
   ok(!p.did("close") && p.calls.some((c) => c.join(" ").includes("Clean daily run")), "a written-back run between two clean ones starts the count again");
+  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(30) }, { body: "Written back again at y", createdAt: ago(10) }]));
+  ok(!p.did("close") && p.did("comment"), "a recent clean marker with a written-back one after it does not close");
   p = page(3, backOpen([{ body: "Clean daily run at x", createdAt: ago(24) }]));
   ok(p.calls.length === 1 && p.calls[0][1] === "comment" && p.calls[0].join(" ").includes("Written back again"), "written back after a clean run is marked once");
   p = page(3, backOpen([{ body: "Written back again at y", createdAt: ago(24) }]));
