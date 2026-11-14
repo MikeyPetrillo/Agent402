@@ -3612,7 +3612,11 @@ const LARGE_BODY_ROUTES = [
 ];
 // A referral copy takes the body its direct route takes: the same limit, the
 // same gate, and (below) a parser of the same size on its own path.
-const REFERRAL_LARGE_BODY_ROUTES = LARGE_BODY_ROUTES.flatMap(([path, limit]) => referralTwinsOf((p) => p === path).map((twin) => [twin, limit]));
+// Only a copy whose price does not read the body: no servable route today
+// is both large-bodied and priced from its body, and one that were would keep
+// the global 100 KB parser (its direct route reads the body unpaid to quote it,
+// which the gate below decides per catalog route).
+const REFERRAL_LARGE_BODY_ROUTES = LARGE_BODY_ROUTES.flatMap(([path, limit]) => referralTwinsOf((p) => p === path).filter((twin) => !priceFnOf(referralDefOfPath(twin))).map((twin) => [twin, limit]));
 LARGE_BODY_ROUTES.push(...REFERRAL_LARGE_BODY_ROUTES);
 // The metered tier's copies: priced from the body, so they take its 1 MB parser and its quote limiter.
 const REFERRAL_METERED_PATHS = referralTwinsOf((p) => p.startsWith("/v1/metered/"));
@@ -3620,7 +3624,7 @@ const largeBodyUnpaidLimiter = createRateLimiter("large-body-unpaid", { perMin: 
 app.use(createLargeBodyGate({
   routes: LARGE_BODY_ROUTES,
   isPaid: (req) => looksLikePayment(req.headers),
-  bodyQuoted: (req) => Boolean(priceFnOf(CATALOG[`POST ${String(req.path).toLowerCase().replace(/\/+$/, "")}`] || referralDefOfPath(req.path))),
+  bodyQuoted: (req) => Boolean(priceFnOf(CATALOG[`POST ${String(req.path).toLowerCase().replace(/\/+$/, "")}`])),
   freeMode: FREE_MODE,
   unpaidLimiter: largeBodyUnpaidLimiter,
   clientKey: clientIp,
