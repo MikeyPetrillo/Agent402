@@ -7,7 +7,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { microUsd, livePrices, quotedPaths, planUpdates, rewrittenByImporter, holdsPrice, waitNamedBy } from "./index402-sync.js";
+import { microUsd, livePrices, quotedPaths, planUpdates, rewrittenByImporter, holdsPrice, waitNamedBy, plain, DEFAULT_RUN_BUDGET_MS } from "./index402-sync.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.log("FAIL -", m); } };
@@ -50,6 +50,7 @@ const pricingQ = { endpoints: [
 ] };
 ok(quotedPaths({ endpoints: [{ path: "/v1/chat/completions", price: "$0.1", pricedByModel: true }, { path: "/api/x", price: "$0.1", pricedByModel: false }] }).size === 1, "a route priced by the model its request names counts as priced per request");
 ok(waitNamedBy({ "retry-after": "7" }) === 7000 && waitNamedBy({ ratelimit: "limit=100, remaining=0, reset=31" }) === 31000 && waitNamedBy({ "retry-after": "600" }) === 65000 && waitNamedBy({}) === null && waitNamedBy(new Headers({ "retry-after": "3" })) === 3000, "a 429's wait is read from Retry-After or the window reset, bounded at 65 s");
+ok(plain("x402\n::error::boom\r\u2028y") === "x402 ::error::boom y" && plain(null) === "" && plain("a".repeat(900)).length === 300, "a listing field prints as one bounded line");
 const quoted = quotedPaths(pricingQ);
 ok(quoted.size === 2 && quoted.has("/api/tts") && !quoted.has("/api/x-user-tweets"), "quotedPaths keeps only routes priced per request");
 const q = planUpdates([
@@ -72,7 +73,7 @@ const endpoints = [];
 for (let i = 0; i < 120; i++) endpoints.push({ path: `/api/t${i}`, price: "$0.001" });
 endpoints.push({ path: "/api/tts", price: "$0.005", quoted: true }, { path: "/api/x-user-tweets", price: "$0.09" }, { path: "/api/hold-me", price: "$0.02" });
 
-/** opts: { hangFirstList, hangAllLists, stallFirstListBody, ignoreWriteFor: Set<id>, failList: status, failListOnce: status, echoWriteAs: status } */
+/** opts (also: echoPad, redirectWriteTo, pages): { hangFirstList, hangAllLists, stallFirstListBody, ignoreWriteFor: Set<id>, failList: status, failListOnce: status, echoWriteAs: status } */
 async function stubIndex(opts = {}) {
   const store = new Map([
     ["a1", { id: "a1", url: "https://agent402.tools/api/x-user-tweets", protocol: "x402", source: "bazaar", price_usd: 0.08 }],
@@ -80,6 +81,7 @@ async function stubIndex(opts = {}) {
     ["a3", { id: "a3", url: "https://agent402.tools/api/hold-me", protocol: "MPP", source: "self-registered", price_usd: 0.03 }],
   ]);
   const seen = { lists: 0, patches: [], reads: [], hung: [] };
+  const api = {};
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, "http://stub");
     const json = (code, body) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
@@ -91,6 +93,7 @@ async function stubIndex(opts = {}) {
       if (opts.failListOnce && seen.lists === 1) { seen.at429 = Date.now(); res.writeHead(opts.failListOnce, { "content-type": "application/json", ...(opts.retryAfter ? { "retry-after": String(opts.retryAfter) } : {}) }); return res.end('{"error":"slow down"}'); }
       if (seen.at429 && !seen.afterWait) seen.afterWait = Date.now() - seen.at429;
       if (opts.failList) return json(opts.failList, { error: "nope" });
+      if (opts.pages && seen.lists < opts.pages) return json(200, { services: Array.from({ length: 200 }, (_, i) => ({ id: `f${seen.lists}x${i}`, url: `https://agent402.tools/api/t${i % 120}`, protocol: "x402", source: "bazaar", price_usd: 0.001 })) });
       return json(200, { services: [...store.values()] });
     }
     const m = /^\/v1\/services\/([a-z0-9]+)$/.exec(u.pathname);
@@ -98,7 +101,9 @@ async function stubIndex(opts = {}) {
       let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
         const body = JSON.parse(b);
         seen.patches.push({ id: m[1], ...body });
-        if (opts.echoWriteAs) return json(opts.echoWriteAs, { error: "refused", received: body });
+        if (api.slowFirstPatchMs && seen.patches.length === 1) { setTimeout(() => { store.get(m[1]).price_usd = body.price_usd; json(200, { ok: true }); }, api.slowFirstPatchMs); return; }
+        if (opts.redirectWriteTo) { res.writeHead(307, { location: opts.redirectWriteTo }); return res.end(); }
+        if (opts.echoWriteAs) return json(opts.echoWriteAs, { error: "refused", pad: "p".repeat(opts.echoPad || 0), received: body });
         if (!opts.ignoreWriteFor?.has(m[1])) store.get(m[1]).price_usd = body.price_usd;
         json(200, { ok: true });
       });
@@ -110,7 +115,8 @@ async function stubIndex(opts = {}) {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const port = server.address().port;
   const close = () => new Promise((r) => { for (const h of seen.hung) h.destroy(); server.closeAllConnections?.(); server.close(r); });
-  return { port, seen, store, close };
+  api.port = port; api.seen = seen; api.store = store; api.close = close;
+  return api;
 }
 
 function runSync(port, env = {}) {
@@ -177,8 +183,9 @@ function runSync(port, env = {}) {
 }
 { // Past the run budget no further write starts; what is left is counted and the run fails.
   const s = await stubIndex();
-  const r = await runSync(s.port, { INDEX402_RUN_BUDGET_MS: "1" });
-  ok(r.code === 1 && s.seen.patches.length === 0 && /run budget of 1 ms spent: 3 correction\(s\) left for the next run/.test(r.err), `a spent run budget starts no write and fails naming what is left (${r.code}, ${s.seen.patches.length} writes)`);
+  s.slowFirstPatchMs = 700;
+  const r = await runSync(s.port, { INDEX402_RUN_BUDGET_MS: "500", INDEX402_TIMEOUT_MS: "3000" });
+  ok(r.code === 1 && s.seen.patches.length === 1 && /run budget of 500 ms spent: 2 correction\(s\) left for the next run/.test(r.err), `past the run budget no further write starts and what is left is named (${r.code}, ${s.seen.patches.length} writes) ${r.err.trim().slice(0, 160)}`);
   await s.close();
 }
 { // An answer that echoes the write back never puts the token in the log.
@@ -186,6 +193,31 @@ function runSync(port, env = {}) {
   const r = await runSync(s.port);
   ok(r.code === 1 && /FAILED .* -> 500 /.test(r.err) && /\[token\]/.test(r.err), `a refused write that echoes its body fails the run (${r.code})`);
   ok(!(r.out + r.err).includes("test-token-value"), "the echoed token is not printed");
+  await s.close();
+}
+{ // The token is removed before the echoed body is cut: no cut leaves part of it in the log.
+  let leaked = 0;
+  for (let pad = 100; pad <= 190; pad += 3) {
+    const s = await stubIndex({ echoWriteAs: 400, echoPad: pad });
+    const r = await runSync(s.port, { INDEX402_TOKEN: "tok-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789" });
+    if (/tok-ABCD|WXYZ-0123|[A-Z]{6,}/.test((r.out + r.err).replace(/NOT HELD|FAILED|PATCH|REWRITTEN/g, ""))) leaked++;
+    await s.close();
+  }
+  ok(leaked === 0, `an echoed token that straddles the cut is never printed in part (${leaked} of 31 paddings leaked)`);
+}
+{ // A redirected write is refused: the body is never sent on to another host.
+  let reached = 0;
+  const other = http.createServer((req, res) => { reached++; res.end("{}"); });
+  await new Promise((r) => other.listen(0, "127.0.0.1", r));
+  const s = await stubIndex({ redirectWriteTo: `http://127.0.0.1:${other.address().port}/take` });
+  const r = await runSync(s.port);
+  ok(r.code === 1 && reached === 0 && /FAILED /.test(r.err), `a write answered with a redirect fails and is not followed (${r.code}, other host reached ${reached} times)`);
+  await s.close(); await new Promise((r) => other.close(r));
+}
+{ // The run budget covers the listing reads too.
+  const s = await stubIndex({ pages: 5 });
+  const r = await runSync(s.port, { INDEX402_RUN_BUDGET_MS: "1" });
+  ok(r.code === 1 && s.seen.lists <= 1 && s.seen.patches.length === 0 && /run budget of 1 ms spent while reading listings/.test(r.err), `a spent budget stops the listing reads (${r.code}, ${s.seen.lists} page reads)`);
   await s.close();
 }
 { // A refusal is not asked again; a 5xx is.
@@ -241,8 +273,8 @@ function runSync(port, env = {}) {
   // The stub answers list and view from STATE and appends every write to LOG.
   writeFileSync(join(dir, "gh"), `#!/usr/bin/env node
 const fs = require("fs"); const a = process.argv.slice(2); const st = JSON.parse(process.env.GH_STUB_STATE);
-if (a[0] === "issue" && a[1] === "list") { const q = a[a.indexOf("--search") + 1]; process.stdout.write(JSON.stringify(st.open.filter((i) => q.includes(i.title)))); }
-else if (a[0] === "issue" && a[1] === "view") { process.stdout.write(JSON.stringify({ comments: st.comments || [] })); }
+if (a[0] === "issue" && a[1] === "list") { const q = a[a.indexOf("--search") + 1]; fs.appendFileSync(process.env.GH_STUB_LOG + ".q", q + "\\n"); process.stdout.write(JSON.stringify(st.open.filter((i) => q.includes(i.title)).map((i) => ({ author: { login: "app/github-actions" }, ...i })))); }
+else if (a[0] === "issue" && a[1] === "view") { process.stdout.write(JSON.stringify({ comments: (st.comments || []).map((c) => ({ author: { login: "github-actions" }, ...c })) })); }
 else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
 `);
   chmodSync(join(dir, "gh"), 0o755);
@@ -284,6 +316,18 @@ else fs.appendFileSync(process.env.GH_STUB_LOG, JSON.stringify(a) + "\\n");
   ok(p.calls.length === 1 && p.calls[0][1] === "comment" && p.calls[0].join(" ").includes("Written back again"), "written back after a clean run is marked once");
   p = page(3, backOpen([{ body: "Written back again at y", createdAt: ago(24) }]));
   ok(p.calls.length === 0, "written back day after day adds no comment");
+  // Only this workflow's own issues and comments count.
+  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(24), author: { login: "someone-else" } }]));
+  ok(!p.did("close") && p.did("comment"), "a clean marker written by another account does not count toward the close");
+  p = page(0, backOpen([{ body: "Clean daily run at x", createdAt: ago(24) }, { body: "Written back again at y", createdAt: ago(2), author: { login: "someone-else" } }]));
+  ok(p.calls.some((c) => c[1] === "close" && c[2] === "9"), "a written-back marker from another account does not hold the issue open");
+  p = page(3, { open: [{ number: 4, title: BACK, author: { login: "someone-else" } }] });
+  ok(p.did("create", BACK), "an issue with the same title opened by another account is not taken for ours");
+  ok(/author:app\/github-actions/.test(script), "the issue search asks for this workflow's own issues");
+  // The job's own limits.
+  const limitMin = Number((wf.match(/timeout-minutes:\s*(\d+)/) || [])[1]);
+  ok(DEFAULT_RUN_BUDGET_MS <= 13 * 60_000 && limitMin * 60_000 >= DEFAULT_RUN_BUDGET_MS + 6 * 60_000, `the job limit (${limitMin} min) leaves six minutes past the run budget (${DEFAULT_RUN_BUDGET_MS} ms) for a write already started`);
+  ok(/node scripts\/index402-sync\.js\n\s+code=\$\?\n\s+echo "code=\$code" >> "\$GITHUB_OUTPUT"\n\s+exit "\$code"/.test(wf), "the sync step ends with the script's own exit code, so a failed run reads failed");
   rmSync(dir, { recursive: true, force: true });
 }
 { // A dry run writes and reads back nothing.

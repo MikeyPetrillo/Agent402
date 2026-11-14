@@ -74,9 +74,11 @@ jobs:
           NOW="$(date -u +%FT%TZ)"
           FAIL_TITLE="402 Index price sync FAILING"
           BACK_TITLE="402 Index listing written back at an old price"
+          # Only this workflow's own issues and comments count: an issue or a
+          # marker comment written by anyone else is not read.
           open_issue() {
-            gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$1\" in:title" --json number,title \
-              | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{let a=[];try{a=JSON.parse(s)}catch{}const hit=a.find((i)=>i.title===process.argv[1]);process.stdout.write(hit?String(hit.number):"")})' "$1"
+            gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$1\" in:title author:app/github-actions" --json number,title,author \
+              | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{let a=[];try{a=JSON.parse(s)}catch{}const ours=(x)=>/^(app\/)?github-actions(\[bot\])?$/.test((x&&x.author&&x.author.login)||"");const hit=a.find((i)=>i.title===process.argv[1]&&ours(i));process.stdout.write(hit?String(hit.number):"")})' "$1"
           }
           FAIL_OPEN="$(open_issue "$FAIL_TITLE" || true)"
           BACK_OPEN="$(open_issue "$BACK_TITLE" || true)"
@@ -95,7 +97,7 @@ jobs:
           # the second clean daily run in a row (a marker comment holds the count).
           if [ -n "$BACK_OPEN" ]; then
             LAST="$(gh issue view "$BACK_OPEN" --repo "$GITHUB_REPOSITORY" --json comments \
-              | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{let c=[];try{c=JSON.parse(s).comments||[]}catch{}const m=c.filter((x)=>/^(Clean daily run|Written back again)/.test(x.body||"")).pop();if(!m)return;const age=Math.floor((Date.now()-Date.parse(m.createdAt))/1000);process.stdout.write((m.body.startsWith("Clean")?"clean":"back")+" "+age)})' || true)"
+              | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{let c=[];try{c=JSON.parse(s).comments||[]}catch{}const ours=(x)=>/^(app\/)?github-actions(\[bot\])?$/.test((x&&x.author&&x.author.login)||"");const m=c.filter((x)=>ours(x)&&/^(Clean daily run|Written back again)/.test(x.body||"")).pop();if(!m)return;const age=Math.floor((Date.now()-Date.parse(m.createdAt))/1000);process.stdout.write((m.body.startsWith("Clean")?"clean":"back")+" "+age)})' || true)"
             LAST_KIND="${LAST%% *}"
             LAST_AGE="${LAST##* }"
           fi

@@ -19,7 +19,8 @@
 // named, and the run exits 3 (exit 1 when something also failed): most likely
 // its source still carries an old price (or the run after the last deploy
 // did not complete). The remedy is a paid call to the route through the
-// importer's source (bazaar-keepalive.yml with slug_prefix and stale_days=0). A route priced per request (`quoted` or `pricedByModel`
+// importer's source (bazaar-keepalive.yml with slug_prefix, stale_days=0 and
+// max_price_usd at or above the route's price). A route priced per request (`quoted` or `pricedByModel`
 // in /api/pricing) is corrected the same way and never flagged, since the
 // importer's source carries the amount of the last call sold.
 //
@@ -29,9 +30,9 @@
 // https://402index.io/api/v1), INDEX402_TIMEOUT_MS (per request, default
 // 40000; a request that times out, cannot connect or answers 429 or 5xx is
 // asked once more, a 429 after the wait its answer names, at most 65 s),
-// INDEX402_RUN_BUDGET_MS (default 780000: past it no further write is
-// started, the corrections left are counted and the run fails, so the run
-// ends itself inside the job's limit), INDEX402_FLAG_REWRITTEN (above),
+// INDEX402_RUN_BUDGET_MS (default 780000: past it no further listing page is
+// read and no further write is started, what is left is named and the run
+// fails, so the run ends itself inside the job's limit), INDEX402_FLAG_REWRITTEN (above),
 // INDEX402_WAIT_SCALE (tests only: multiplies a 429's named wait).
 // DRY_RUN=1 prints the plan and writes nothing.
 import { realpathSync } from "node:fs";
@@ -101,10 +102,13 @@ const timeoutMs = () => {
   const n = Number(process.env.INDEX402_TIMEOUT_MS);
   return Number.isFinite(n) && n > 0 ? n : 40_000;
 };
+export const DEFAULT_RUN_BUDGET_MS = 780_000;
 const runBudgetMs = () => {
   const n = Number(process.env.INDEX402_RUN_BUDGET_MS);
-  return Number.isFinite(n) && n > 0 ? n : 780_000;
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_RUN_BUDGET_MS;
 };
+/** A listing field as one printable line: the index's text never starts a log line of its own. */
+export const plain = (v) => String(v ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").slice(0, 300);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** How long a 429 asks us to wait, in ms: Retry-After, else the reset of the
@@ -129,14 +133,16 @@ async function askOnce(url, init) {
   try {
     // One limit covers the headers and the body: an answer that starts and
     // then stalls is no answer.
-    res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs()) });
+    // A redirect is refused: a write's body goes to the host we named, or nowhere.
+    res = await fetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(timeoutMs()) });
     text = await res.text();
   } catch (e) {
     const why = e?.name === "TimeoutError" ? `no answer within ${timeoutMs()} ms` : (e?.cause?.code || e?.message || "request failed");
     throw Object.assign(new Error(withoutToken(`${method} ${url} -> ${why}`)), { again: true });
   }
-  let body; try { body = JSON.parse(text); } catch { body = { raw: text.slice(0, 200) }; }
-  if (!res.ok) throw Object.assign(new Error(withoutToken(`${method} ${url} -> ${res.status} ${JSON.stringify(body).slice(0, 200)}`)), { status: res.status, again: res.status === 429 || res.status >= 500, waitMs: res.status === 429 ? waitNamedBy(res.headers) : null });
+  let body; try { body = JSON.parse(text); } catch { body = { raw: withoutToken(text).slice(0, 200) }; }
+  // Redacted before it is cut, so a cut never leaves part of the token.
+  if (!res.ok) throw Object.assign(new Error(`${method} ${url} -> ${res.status} ${plain(withoutToken(JSON.stringify(body))).slice(0, 200)}`), { status: res.status, again: res.status === 429 || res.status >= 500, waitMs: res.status === 429 ? waitNamedBy(res.headers) : null });
   return body;
 }
 
@@ -167,13 +173,14 @@ async function main() {
 
   const listings = [];
   for (let offset = 0; offset < 20_000; offset += 200) {
+    if (Date.now() > stopWritesAt) throw new Error(`run budget of ${runBudgetMs()} ms spent while reading listings (offset ${offset}); nothing was written`);
     const page = (await getJson(`${api}/services?q=${encodeURIComponent(domain)}&limit=200&offset=${offset}`)).services || [];
     listings.push(...page);
     if (page.length < 200) break;
   }
   const { updates, unknown } = planUpdates(listings, prices, domain, quotedPaths(pricing));
   console.log(`${listings.length} listings read, ${prices.size} live prices, ${updates.length} to correct, ${unknown.length} priced listing(s) on routes we no longer sell`);
-  for (const l of unknown) console.log(`  not sold: ${l.protocol} ${l.url} (listed $${l.price_usd})`);
+  for (const l of unknown) console.log(`  not sold: ${plain(l.protocol)} ${plain(l.url)} (listed $${plain(l.price_usd)})`);
 
   let failed = 0;
   for (const [i, u] of updates.entries()) {
@@ -183,7 +190,7 @@ async function main() {
       console.error(`  run budget of ${runBudgetMs()} ms spent: ${left} correction(s) left for the next run`);
       break;
     }
-    console.log(`  ${dry ? "would set" : "set"} ${u.protocol} ${u.url}: $${u.from} -> $${u.to}`);
+    console.log(`  ${dry ? "would set" : "set"} ${plain(u.protocol)} ${plain(u.url)}: $${u.from} -> $${u.to}`);
     if (dry) continue;
     try {
       await getJson(`${api}/services/${u.id}`, {
@@ -192,12 +199,12 @@ async function main() {
         body: JSON.stringify({ domain, verification_token: token, price_usd: u.to }),
       });
       const after = await getJson(`${api}/services/${u.id}`);
-      if (!holdsPrice(after, u.to)) { failed++; console.error(`  NOT HELD ${u.url}: set $${u.to}, the index reads $${after?.price_usd}`); }
-    } catch (e) { failed++; console.error(`  FAILED ${u.url}: ${e.message}`); }
+      if (!holdsPrice(after, u.to)) { failed++; console.error(`  NOT HELD ${plain(u.url)}: set $${u.to}, the index reads $${plain(after?.price_usd)}`); }
+    } catch (e) { failed++; console.error(`  FAILED ${plain(u.url)}: ${e.message}`); }
   }
   const rewritten = process.env.INDEX402_FLAG_REWRITTEN === "1" ? rewrittenByImporter(updates) : [];
-  for (const u of rewritten) console.error(`  REWRITTEN ${u.url}: the index's own source carries $${u.from}, the catalog price is $${u.to}`);
-  if (rewritten.length) console.error(`${rewritten.length} imported listing(s) of a fixed-price route were off the catalog price on the daily run: most likely the importer's source still carries an old price for them (or the run after the last deploy did not complete). A paid call to the route through that source refreshes it (bazaar-keepalive.yml with slug_prefix and stale_days=0).`);
+  for (const u of rewritten) console.error(`  REWRITTEN ${plain(u.url)}: the index's own source carries $${u.from}, the catalog price is $${u.to}`);
+  if (rewritten.length) console.error(`${rewritten.length} imported listing(s) of a fixed-price route were off the catalog price on the daily run: most likely the importer's source still carries an old price for them (or the run after the last deploy did not complete). A paid call to the route through that source refreshes it (bazaar-keepalive.yml with slug_prefix, stale_days=0 and max_price_usd at or above the route's price).`);
   if (failed) process.exit(1);
   if (rewritten.length) process.exit(3);
 }
