@@ -35,6 +35,36 @@ const ceiling = Number((wf.match(/MAX_PRICE_USD:\s*\$\{\{\s*inputs\.max_price_us
 const batchCap = Number((wf.match(/MAX_SPEND_USD:\s*\$\{\{\s*inputs\.max_spend_usd\s*\|\|\s*'([0-9.]+)'/) || [])[1]);
 ok(ceiling >= 0.1, `the scheduled pass buys routes priced up to at least $0.10 (${ceiling})`);
 ok(batchCap >= 2 && batchCap <= 5, `the per-batch cap leaves room for a batch with every route due and stays bounded (${batchCap})`);
+// A weekly pass with a 21-day threshold reaches a listing once before the
+// 30-day removal (at 21 to 28 days); at 14 it reaches it twice.
+const staleDays = Number((wf.match(/STALE_DAYS:\s*\$\{\{\s*inputs\.stale_days\s*\|\|\s*'([0-9]+)'/) || [])[1]);
+ok(staleDays >= 7 && staleDays <= 16, `the scheduled pass buys a listing with no settlement in ${staleDays} days, early enough for a second weekly attempt`);
+ok(/SLUGS:\s*\$\{\{\s*inputs\.slugs\s*\}\}/.test(wf), "a dispatch can name exact slugs");
+// The script's own money bounds and request shapes.
+{
+  const { examplesFromSpec, sweepRequest, atRiskFailures } = await import("./refresh-bazaar.js");
+  const src = await readFile(new URL("./refresh-bazaar.js", import.meta.url), "utf8");
+  ok(/if \(estCost > MAX_SPEND_USD\) \{[\s\S]{0,200}return 2;/.test(src), "a pass whose estimate is over the spend cap refuses to start");
+  ok(/Math\.min\(MAX_PRICE_USD \+ 0\.05, MAX_SPEND_USD\)/.test(src), "one signature pays at most the per-route ceiling plus five cents, never above the run's cap");
+  const ex = examplesFromSpec({ paths: {
+    "/v1/audio/transcriptions": { post: { requestBody: { content: { "multipart/form-data": { example: { file: "<audio bytes, multipart part named file>", language: "en" } } } } } },
+    "/api/hash": { post: { requestBody: { content: { "application/json": { example: { text: "hello" } } } } } },
+    "/api/time": { get: { parameters: [{ name: "tz", example: "UTC" }] } },
+  } });
+  ok(ex.multipart.has("POST /v1/audio/transcriptions") && !ex.multipart.has("POST /api/hash") && ex.get("POST /api/hash").text === "hello", "a multipart operation is told apart from a JSON one");
+  const clip = async () => new Uint8Array([82, 73, 70, 70]);
+  const mp = await sweepRequest({ method: "POST", path: "/v1/audio/transcriptions" }, ex, { target: "http://t", headers: { "X-H": "1" }, clip });
+  ok(mp.init.body instanceof FormData && mp.init.body.get("file") instanceof Blob && mp.init.body.get("file").size === 4 && mp.init.body.get("language") === "en" && !("Content-Type" in mp.init.headers) && mp.init.headers["X-H"] === "1", "a multipart route is paid with a file part and its text fields, with no JSON content type");
+  const js = await sweepRequest({ method: "POST", path: "/api/hash" }, ex, { target: "http://t", clip });
+  ok(js.init.body === '{"text":"hello"}' && js.init.headers["Content-Type"] === "application/json" && js.url === "http://t/api/hash", "a JSON route is paid with its JSON example");
+  const gt = await sweepRequest({ method: "GET", path: "/api/time" }, ex, { target: "http://t", clip });
+  ok(gt.url === "http://t/api/time?tz=UTC" && gt.init.body === undefined, "a GET route is paid with its query example");
+  const day = 86400000;
+  const fresh = new Map([["/a", 5 * day], ["/b", 23 * day], ["/c", 29 * day]]);
+  ok(JSON.stringify(atRiskFailures(["/a", "/b", "/c", "/unlisted"], fresh)) === JSON.stringify(["/b", "/c", "/unlisted"]), "a failed buy puts a listing at risk when it is unlisted or 23 days from its last settlement");
+  ok(atRiskFailures(["/a", "/c"], new Map()).length === 0 && atRiskFailures([], fresh).length === 0, "with no feed read, or no failed buy, nothing is at risk");
+  ok(/const atRisk = atRiskFailures\(results\.failedPaths, freshness, AT_RISK_DAYS\);[\s\S]{0,400}return 1;/.test(src) && /Failed buys \(/.test(src), "the sweep names every failed buy and fails on one at risk");
+}
 ok(/BATCH_COUNT/.test(wf) && /BATCH_INDEX/.test(wf), "batches the pass so one run cannot time out mid-catalog");
 ok(/max-parallel:\s*1/.test(wf), "batches run sequentially - one burner address, concurrent buys race their own nonces");
 
