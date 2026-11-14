@@ -14,13 +14,12 @@
 //   2. before the next authorization in that transaction, the split
 //      contract's own routed-payment event naming this buyer, this gross
 //      amount and OUR merchant id, with a token Transfer from the contract to
-//      our payout wallet of the merchant amount that event states. When no
-//      decodable event is there, a Transfer from the contract to our payout
-//      wallet of at least the expected net stands in for it.
+//      our payout wallet of the merchant amount that event states, which is
+//      at least the expected net. Nothing stands in for the event.
 // The event routed to another merchant is "unpaid" (not ours). A shape this
-// module does not recognize (an event it cannot decode and no payout
-// transfer, an event of ours without its payout transfer) is "unknown":
-// held for an operator, never paid and never unpaid.
+// module does not recognize (no event it can decode, an event of ours
+// without its payout transfer or under the expected net, a transaction not
+// sent to the contract) is "unknown": never paid and never unpaid.
 // The facilitator's own "success" is checked the same way before an answer
 // is delivered.
 //
@@ -31,7 +30,11 @@
 // it was not paid. A spent nonce whose log is not found stays UNKNOWN while
 // the authorization lives or the search was partial; once it has expired, a
 // COMPLETE search from that recorded head that found neither log closes it
-// as not paid (it was spent outside anything this route started).
+// as not paid (it was spent outside anything this route started). A spent
+// nonce whose transaction WAS found, with a receipt read in full that the
+// rule does not recognize, is reported so (`receiptRead`): the book closes
+// it to an operator record after enough such reads (src/referral-book.js),
+// never as paid and never as a refund.
 //
 // Bounded: a few tries inside a budget, each read with its own timeout, over
 // the configured Base RPCs then public ones (rpcCall; public log lanes first
@@ -134,14 +137,19 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
    *  (receiptProvesPayment): "paid" | "unpaid" | "unknown" (no receipt
    *  readable, or a shape not recognized). `waitMs`: keep asking for a
    *  receipt that is not there yet for this long. */
-  async function proveTransaction(tx, { from, nonce = null, payTo, amount, minNet = null }, { budget = 4_000, waitMs = 0 } = {}) {
-    if (!TX.test(String(tx || ""))) return "unpaid";
+  async function proveTransaction(tx, args, opts) {
+    return (await proveDetail(tx, args, opts)).verdict;
+  }
+  /** The same reading with its detail: `{ verdict, why, moved, read }`
+   *  (proveReceipt). `read` false: no receipt could be read. */
+  async function proveDetail(tx, { from, nonce = null, payTo, amount, minNet = null }, { budget = 4_000, waitMs = 0 } = {}) {
+    if (!TX.test(String(tx || ""))) return { verdict: "unpaid", why: "no transaction hash", moved: false, read: false };
     const until = now() + Math.max(0, waitMs);
     for (;;) {
       let receipt = null;
       try { receipt = await read("eth_getTransactionReceipt", [tx], budget); } catch { receipt = null; }
-      if (receipt) return receiptProvesPayment(receipt, { tx, from, nonce, payTo, amount, minNet, ...routing });
-      if (now() + 400 >= until) return "unknown";
+      if (receipt) return proveReceipt(receipt, { tx, from, nonce, payTo, amount, minNet, ...routing });
+      if (now() + 400 >= until) return { verdict: "unknown", why: "no receipt readable", moved: false, read: false };
       await sleep(400);
     }
   }
@@ -159,7 +167,10 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
    *                              what could be read, the receipt unreadable or
    *                              of an unrecognized shape). `complete` true
    *                              says both log searches covered every block
-   *                              from the recorded head and found nothing
+   *                              from the recorded head and found nothing;
+   *                              `receiptRead` true says the transaction's
+   *                              receipt WAS read in full and is not a shape
+   *                              the rule recognizes
    * `fromBlock`: the head when the intent was written; the search runs from
    * there to the head, so a late read still finds an early payment.
    * `wait`: keep reading for a spent nonce until the budget ends.
@@ -183,8 +194,9 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
           if (last) {
             const used = await findLog(AUTHORIZATION_USED_TOPIC, from, nonce, fromBlock, deadline);
             if (used.tx) {
-              const v = await proveTransaction(used.tx, { from, nonce, payTo, amount, minNet }, { budget: Math.max(250, deadline - now()) });
-              return { used: true, paid: v === "paid" ? true : v === "unpaid" ? false : null, transaction: used.tx, complete: false };
+              const d = await proveDetail(used.tx, { from, nonce, payTo, amount, minNet }, { budget: Math.max(250, deadline - now()) });
+              const v = d.verdict;
+              return { used: true, paid: v === "paid" ? true : v === "unpaid" ? false : null, transaction: used.tx, complete: false, receiptRead: d.read === true, why: d.why };
             }
             const canceled = await findLog(AUTHORIZATION_CANCELED_TOPIC, from, nonce, fromBlock, deadline);
             if (canceled.tx) return { used: true, paid: false, transaction: canceled.tx, complete: false };
@@ -198,7 +210,7 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
     return { ...none, used: last };
   }
 
-  return { state, head, proveTransaction, routing: () => ({ ...routing }) };
+  return { state, head, proveTransaction, proveDetail, routing: () => ({ ...routing }) };
 }
 
 /**

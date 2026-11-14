@@ -899,7 +899,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
-import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, refundRowCovers } from "./referral-gate.js";
+import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, refundRowCovers, REFERRAL_HAND_OUTCOMES } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
@@ -10770,20 +10770,27 @@ if (REFERRAL_GATE) {
 app.get("/__operator/referral.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store").json(REFERRAL_GATE
-    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50) }
+    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50) }
     : { enabled: false });
 });
 // An operator closes one open referral settlement by hand (a contradicted or
-// flagged one, or one nothing on chain can settle), with a note saying what
-// was checked; the entry is recorded with that note before it is removed.
+// flagged one, one nothing on chain can settle, a charged one whose answer the
+// buyer does or does not have), with a note saying what was checked and an
+// outcome: `refund` writes the refund debt at the gross behind the receipt
+// proof (the automatic path's own writer, once), `delivered` and `dismissed`
+// write none. Each is recorded with the outcome and the note.
 app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store");
   if (!REFERRAL_GATE) return res.status(409).json({ error: "the referral gate is off" });
   const { action, key, note, outcome } = req.body || {};
-  if (action !== "resolve") return res.status(400).json({ error: 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"dismissed"|"refunded"|"paid"}' });
+  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}';
+  if (action !== "resolve") return res.status(400).json({ error: usage });
+  // An outcome that is named must be one of the three; one left out reads
+  // dismissed, except on a charged, undelivered entry (the gate asks for it).
+  if (outcome !== undefined && outcome !== null && !REFERRAL_HAND_OUTCOMES.includes(outcome)) return res.status(400).json({ error: usage });
   try {
-    const r = await REFERRAL_GATE.resolveByHand(typeof key === "string" ? key : "", { note: typeof note === "string" ? note : "", outcome: ["dismissed", "refunded", "paid"].includes(outcome) ? outcome : "dismissed" });
+    const r = await REFERRAL_GATE.resolveByHand(typeof key === "string" ? key : "", { note: typeof note === "string" ? note : "", outcome: outcome ?? null });
     return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
   } catch { return res.status(503).json({ error: "the settlement book could not be written" }); }
 });

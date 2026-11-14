@@ -355,7 +355,8 @@ export async function verifyInboundPayment({
       try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
       catch (e) { return fail(`could not read the transaction: ${e.message}`); }
       if (!receipt) return fail("transaction not found on chain");
-      // Any payout to our wallet stands in only when the routed event cannot be decoded (minNet 1).
+      // The routed event and the payout of the amount it states decide; the
+      // refund row carries no commission, so the least net asked here is 1.
       const proof = proveReceipt(receipt, { tx, from: payer, nonce: null, payTo: referralPayTo, amount: units.toString(), merchantId: String(referralMerchantId), payoutAddress: referralPayout, minNet: "1", ...(referralRoutedTopic ? { routedTopic: referralRoutedTopic } : {}) });
       if (proof.verdict !== "paid") return fail(`the transaction does not prove a payment routed to this merchant (${proof.verdict}: ${proof.why})`);
       return pass({ movedAtomic: units.toString(), decimals: 6, tx });
