@@ -1493,6 +1493,16 @@ try {
   }
   fac.reset(); sales.length = 0; owed.length = 0;
   {
+    // The book's own sweep: a charged entry that carries the delivered mark is closed, never handed on as undelivered.
+    {
+      const bare = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-bare`, log: () => {} }), log });
+      const mk = async (n, patch) => { const k = `referral:${String(n).repeat(64).slice(0, 64)}`; await bare.intent({ key: k, slug: "echo", payer: "0x" + "1".repeat(40), nonce: "0x" + String(n).repeat(64).slice(0, 64), amount: "30000", validBefore: Math.floor(Date.now() / 1000) + 600, fromBlock: 1 }); await bare.resolve(k, { state: "charged-undelivered", tx: "0x" + "e".repeat(64), ...patch }); return k; };
+      const kDelivered = await mk("a", { delivered: true });
+      const kOpen = await mk("b", {});
+      const asked = [];
+      const outSweep = await bare.sweep({ chain: { state: async () => ({ used: null }) }, payTo: PAY_TO, bookSale: async () => true, onCharged: async (e) => { asked.push(e.key); } });
+      ok(asked.length === 1 && asked[0] === kOpen && bare.get(kDelivered) === null && bare.get(kOpen)?.state === "charged-undelivered" && outSweep.charged === 1, `the book's sweep closes a charged entry carrying the delivered mark and asks the gate only about the one without it (${asked.length} asked)`);
+    }
     // R3c/d. The delivered mark is durable, written before the bytes, and a failed closing write is never read as undelivered.
     const fail = { close: 0, mark: 0 };
     const real = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-flaky`, log: () => {} }), log, now: () => Date.now() + skew.ms });
@@ -1597,7 +1607,7 @@ try {
       skew.ms = 16 * 60_000;
       const aged = app17.gate.statusWord();
       skew.ms = 0;
-      ok(app17.book.list().filter((e) => e.state === "unconfirmed").length === 2 && aged.status === "attention" && aged.reasons.some((x) => /open past 15 minutes/.test(x)), `an unconfirmed entry open past fifteen minutes reads attention (${aged.reasons.join("; ")})`);
+      ok(app17.book.list().filter((e) => e.state === "unconfirmed").length === 2 && aged.status === "attention" && aged.reasons.some((x) => /^5 settlement\(s\) open past 15 minutes/.test(x)), `an unconfirmed entry open past fifteen minutes reads attention, counted with the ones in doubt: 2 unconfirmed and 3 held (${aged.reasons.join("; ")})`);
       // The sweep flags an unconfirmed entry with no receipt after a few minutes, and the flag stays.
       await app17.gate.sweepOnce();
       const young = app17.book.list().filter((e) => e.state === "unconfirmed" && e.flagged === true).length;
@@ -1869,6 +1879,8 @@ try {
     const app5 = await mount({ REFERRAL_MAX_INFLIGHT: "2" });
     try {
       fac.mode.verifyDelayMs = 500;
+      // The settle call holds each run's slot long enough for the other calls to meet the bound.
+      fac.mode.settleDelayMs = 400;
       const before = runs.echo;
       const rs = await Promise.all([0, 1, 2, 3].map(async () => send(`${app5.url}/ref/echo`, { body: { text: "q" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } })));
       const busy = rs.filter((r) => r.status === 503 && r.json?.errorReason === "busy" && r.headers.get("retry-after"));
