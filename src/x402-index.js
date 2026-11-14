@@ -3449,6 +3449,27 @@ function manifestDeclaresPrefixedOrigin(manifest, originUrl) {
   } catch { return false; }
 }
 function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
+  // The first pass is the whole reading as it has always been: every entry,
+  // the merge of entries on one route, the path-level fill from a sibling and
+  // the service-wide block. Only a ROW that whole pass leaves unpriced takes a
+  // price from the second, which reads the snake_case price keys too (see
+  // widePriceView); the second pass runs only when some unpriced entry or the
+  // service-wide block carries such a key.
+  const seen = { snakeKeys: false };
+  const rows = manifestRowsPass(manifest, originUrl, exampleOf, false, seen);
+  if (!seen.snakeKeys || !rows.some((t) => t.price == null)) return rows;
+  const wideByKey = new Map();
+  for (const w of manifestRowsPass(manifest, originUrl, null, true, seen)) if (w.price != null) wideByKey.set(`${w.method} ${w.route}`, w);
+  for (const t of rows) {
+    if (t.price != null) continue;
+    const w = wideByKey.get(`${t.method} ${t.route}`);
+    if (!w) continue;
+    t.price = w.price;
+    if (w.originDeclaredPrice != null && !isPricedAboveZero(t.originDeclaredPrice)) t.originDeclaredPrice = w.originDeclaredPrice;
+  }
+  return rows;
+}
+function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   if (!manifest || typeof manifest !== "object") return [];
   let origin;
   // Relative entries resolve against where the manifest is served: a path
@@ -3535,10 +3556,12 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
           }
         }
       }
-      // Second pass (see widePriceView): only an entry with no price yet.
+      // An entry with no price yet: note a snake_case key it (or the
+      // service-wide block) carries, and read it only in the second pass.
       if (price == null && !(pay && pay.price != null)) {
         const wide = typeof raw === "string" ? raw : widePriceView(raw);
-        if (wide !== raw || manifestAcceptsWide !== manifestAccepts) {
+        if (wide !== raw || manifestAcceptsWide !== manifestAccepts) seen.snakeKeys = true;
+        if (wideKeys && (wide !== raw || manifestAcceptsWide !== manifestAccepts)) {
           const wideAccepts = typeof wide === "string" ? manifestAcceptsWide : catalogueEntryAccepts(wide, manifestAcceptsWide);
           const widePay = wideAccepts.length ? paymentFieldsFromAccepts(wideAccepts) : null;
           let widePrice = wide !== raw ? parseManifestPrice(wide) : null;
