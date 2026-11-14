@@ -613,6 +613,64 @@ const SELLER_LIST_KEYS = ["tags", "aliases", "networks"];
 const SELLER_PRICE_KEYS = ["price", "maxAmountRequired", "amount", "priceUsd", "amountUsd"];
 /** A seller value as a price reader may take it: text or a finite number, else undefined. */
 export const sellerNumText = (v) => (typeof v === "string" || (typeof v === "number" && Number.isFinite(v)) ? v : undefined);
+// The snake_case spellings of the price keys, each beside its camelCase twin.
+// Folding an object puts a usable snake_case value (non-blank text or a
+// finite number) into the camelCase key when that key is absent or unusable;
+// a usable camelCase value is kept.
+const SELLER_PRICE_SNAKE_KEYS = [["price_usd", "priceUsd"], ["amount_usd", "amountUsd"], ["max_amount_required", "maxAmountRequired"]];
+const usablePrice = (v) => (typeof v === "string" ? (v.trim() ? v : undefined) : sellerNumText(v));
+/** The object with its snake_case price keys folded into the camelCase ones
+ *  (see above); the same object when nothing changes. `keepSnake` leaves a
+ *  usable snake_case key in place (a stored tool keeps what the seller wrote)
+ *  and removes only an unusable one; without it every snake_case key is
+ *  removed, so a reader takes one figure per key. */
+export function withCamelPriceKeys(o, keepSnake = false) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return o;
+  // The common object carries no snake_case key: answered without a loop.
+  if (!("price_usd" in o) && !("amount_usd" in o) && !("max_amount_required" in o)) return o;
+  let out = null;
+  for (let i = 0; i < SELLER_PRICE_SNAKE_KEYS.length; i++) {
+    const snake = SELLER_PRICE_SNAKE_KEYS[i][0], camel = SELLER_PRICE_SNAKE_KEYS[i][1];
+    if (!(snake in o)) continue;
+    const v = usablePrice(o[snake]);
+    if (v !== undefined && usablePrice(o[camel]) === undefined) (out ||= { ...o })[camel] = v;
+    if (!(keepSnake && (v !== undefined || o[snake] == null))) delete (out ||= { ...o })[snake];
+  }
+  return out || o;
+}
+// The manifest and OpenAPI readers price an entry in two passes. The first is
+// the reading they have always done, unchanged: the row reader takes
+// `price_usd` before `priceUsd` and `price`, a price object takes `amountUsd`,
+// `priceUsd`, then `price_usd`, and `amount_usd` and `max_amount_required`
+// are not read. An entry that pass prices keeps that price exactly. Only an
+// entry it leaves unpriced is read again through widePriceView, where each
+// snake_case key stands in for its camelCase twin on the entry itself, its
+// `price` and `payment` objects and each `accepts` or `offers` item. The
+// snake_case spellings so fill a gap and never move a price: beside an
+// `amount` in dollars, `max_amount_required` would otherwise turn the entry
+// into an accept quoting base units.
+const WIDE_OBJECT_KEYS = ["price", "payment"], WIDE_LIST_KEYS = ["accepts", "offers"];
+/** The entry with every snake_case price key folded, nested payment shapes
+ *  included; the same object when there is none. */
+function widePriceView(o, depth = 0) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return o;
+  let out = withCamelPriceKeys(o);
+  if (depth >= 2) return out;
+  for (const k of WIDE_OBJECT_KEYS) {
+    const w = widePriceView(o[k], depth + 1);
+    if (w !== o[k]) { if (out === o) out = { ...o }; out[k] = w; }
+  }
+  for (const k of WIDE_LIST_KEYS) {
+    if (!Array.isArray(o[k])) continue;
+    let list = null;
+    for (let i = 0; i < o[k].length && i < 64; i++) {
+      const w = widePriceView(o[k][i], depth + 1);
+      if (w !== o[k][i]) (list ||= o[k].slice())[i] = w;
+    }
+    if (list) { if (out === o) out = { ...o }; out[k] = list; }
+  }
+  return out;
+}
 const MANIFEST_TEXT_KEYS = ["name", "description", "homepage", "title", "network", "payTo"];
 const asSellerText = (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : undefined);
 function cleanTextKeys(o, keys) {
@@ -629,6 +687,8 @@ function cleanTextKeys(o, keys) {
 function cleanSellerTool(t) {
   if (!t || typeof t !== "object" || Array.isArray(t)) return null;
   let out = cleanTextKeys(t, SELLER_TEXT_KEYS);
+  const camel = withCamelPriceKeys(out || t, true);
+  if (camel !== (out || t)) out = camel;
   for (const k of SELLER_PRICE_KEYS) {
     const v = (out || t)[k];
     if (v === undefined || v === null || sellerNumText(v) !== undefined) continue;
@@ -3151,15 +3211,22 @@ export function singleResourceManifestTool(manifest, originUrl) {
   if (!url) return null;
   if (!Array.isArray(manifest?.accepts) || !manifest.accepts.length) return null;
   const meta = (r && typeof r === "object") ? r : {};
-  const tool = bazaarItemToTool({
+  const toolOf = (accepts) => bazaarItemToTool({
     resource: url,
-    accepts: manifest.accepts,
+    accepts,
     serviceName: meta.serviceName || manifest.serviceName || "",
     description: meta.description || manifest.description || "",
     tags: Array.isArray(meta.tags) ? meta.tags : [],
     method: meta.method || manifest.method,
   }, originUrl);
+  let tool = toolOf(manifest.accepts);
   if (!tool) return null;
+  // Second pass (see widePriceView): only when the accepts gave no price.
+  if (tool.price == null) {
+    const wide = widePriceView({ accepts: manifest.accepts }).accepts;
+    const again = wide !== manifest.accepts ? toolOf(wide) : null;
+    if (again && again.price != null) tool = again;
+  }
   // Provenance is the seller's own manifest, not a registry that observed them.
   return { ...tool, provenance: "manifest" };
 }
@@ -3382,6 +3449,27 @@ function manifestDeclaresPrefixedOrigin(manifest, originUrl) {
   } catch { return false; }
 }
 function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
+  // The first pass is the whole reading as it has always been: every entry,
+  // the merge of entries on one route, the path-level fill from a sibling and
+  // the service-wide block. Only a ROW that whole pass leaves unpriced takes a
+  // price from the second, which reads the snake_case price keys too (see
+  // widePriceView); the second pass runs only when some unpriced entry or the
+  // service-wide block carries such a key.
+  const seen = { snakeKeys: false };
+  const rows = manifestRowsPass(manifest, originUrl, exampleOf, false, seen);
+  if (!seen.snakeKeys || !rows.some((t) => t.price == null)) return rows;
+  const wideByKey = new Map();
+  for (const w of manifestRowsPass(manifest, originUrl, null, true, seen)) if (w.price != null) wideByKey.set(`${w.method} ${w.route}`, w);
+  for (const t of rows) {
+    if (t.price != null) continue;
+    const w = wideByKey.get(`${t.method} ${t.route}`);
+    if (!w) continue;
+    t.price = w.price;
+    if (w.originDeclaredPrice != null && !isPricedAboveZero(t.originDeclaredPrice)) t.originDeclaredPrice = w.originDeclaredPrice;
+  }
+  return rows;
+}
+function manifestRowsPass(manifest, originUrl, exampleOf, wideKeys, seen) {
   if (!manifest || typeof manifest !== "object") return [];
   let origin;
   // Relative entries resolve against where the manifest is served: a path
@@ -3410,6 +3498,8 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
   const exampleByKey = exampleOf ? new Map() : null;
   // Manifest-level default, applied only to rows that declare nothing.
   const manifestAccepts = manifestPaymentAccepts(manifest);
+  const widePayment = widePriceView(manifest.payment);
+  const manifestAcceptsWide = widePayment !== manifest.payment ? manifestPaymentAccepts({ payment: widePayment }) : manifestAccepts;
   // A catalogue row that carries only a bare `amount` under a manifest whose
   // own accepts name an asset by identifier is quoting that accept's base
   // units, as the x402 field means; read alone it is a dollar figure a million
@@ -3443,7 +3533,7 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
       const entryAccepts = typeof raw === "string"
         ? manifestAccepts
         : catalogueEntryAccepts(raw, manifestAccepts);
-      const pay = entryAccepts.length ? paymentFieldsFromAccepts(entryAccepts) : null;
+      let pay = entryAccepts.length ? paymentFieldsFromAccepts(entryAccepts) : null;
       if (typeof raw === "string") {
         ref = raw.trim();
       } else if (raw && typeof raw === "object") {
@@ -3464,6 +3554,22 @@ function normaliseManifestToolsUnscoped(manifest, originUrl, exampleOf = null) {
           for (const m of raw.methods) {
             if (MANIFEST_HTTP_METHODS.has(String(m).toUpperCase())) methodList.push(String(m).toUpperCase());
           }
+        }
+      }
+      // An entry with no price yet: note a snake_case key it (or the
+      // service-wide block) carries, and read it only in the second pass.
+      if (price == null && !(pay && pay.price != null)) {
+        const wide = typeof raw === "string" ? raw : widePriceView(raw);
+        if (wide !== raw || manifestAcceptsWide !== manifestAccepts) seen.snakeKeys = true;
+        if (wideKeys && (wide !== raw || manifestAcceptsWide !== manifestAccepts)) {
+          const wideAccepts = typeof wide === "string" ? manifestAcceptsWide : catalogueEntryAccepts(wide, manifestAcceptsWide);
+          const widePay = wideAccepts.length ? paymentFieldsFromAccepts(wideAccepts) : null;
+          let widePrice = wide !== raw ? parseManifestPrice(wide) : null;
+          if (wide !== raw && manifestAtomic && bareAmountEntry(wide)) {
+            const usd = baseUnitReading(manifestAtomic, wide.amount);
+            if (usd != null) widePrice = `$${usd}`;
+          }
+          if (widePrice != null || (widePay && widePay.price != null)) { price = widePrice; pay = widePay; }
         }
       }
       if (!ref) continue;
@@ -3949,6 +4055,20 @@ const SCALAR_PRICE_KEYS = ["x-price", "x-x402-price", "x-x402-price-usdc", "x-pr
 const OBJECT_PAYMENT_KEYS = ["x-payment-info", "x-x402", "x-402", "x-payment", "x-x402-payment", "x-pricing", "x-payment-protocol"];
 const isScalar = (v) => typeof v === "number" || typeof v === "string";
 export function openapiOperationPayment(op) {
+  const first = openapiOperationPaymentOnce(op);
+  if (first.price != null || first.paid === false || !op || typeof op !== "object") return first;
+  // Second pass (see widePriceView): only an operation with no price yet.
+  let wide = null;
+  for (const k of Object.keys(op)) {
+    if (!OBJECT_PAYMENT_KEYS.includes(k.toLowerCase())) continue;
+    const w = widePriceView(op[k]);
+    if (w !== op[k]) (wide ||= { ...op })[k] = w;
+  }
+  if (!wide) return first;
+  const again = openapiOperationPaymentOnce(wide);
+  return again.price != null ? again : first;
+}
+function openapiOperationPaymentOnce(op) {
   const out = { paid: null, price: null, networks: [], payToByNetwork: {} };
   if (!op || typeof op !== "object") return out;
   const lower = new Map(Object.keys(op).map((k) => [k.toLowerCase(), op[k]]));

@@ -94,7 +94,8 @@ The simplest home for a pure-CPU tool is `AGENT_TOOLS` in
 - **Input:** `handler(input, ctx)` - `input` is the merged query + JSON body.
   `ctx` carries `{ headers, query, body, ip }` if you need it; most tools don't.
 - **Success:** return any JSON-serializable value. For binary output, return
-  `{ __binary: Buffer, contentType: "image/png" }`.
+  `{ __binary: Buffer, contentType: "image/png" }` and declare `mimeType` on the
+  tool (the content type its example returns).
 - **Client error:** `throw` an `Error` with `.statusCode = 400` (or another 4xx).
   Anything else surfaces as a 500.
 

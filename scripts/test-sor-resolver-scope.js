@@ -62,7 +62,7 @@ ok(/let probe = await probeAt\(r\.url\);\n\s*if \(isQueryMethod\(probeMethod\) &
   "the resolver probes the bare listing URL first, and only a bare 400 or 422 earns one probe at the bound URL (both through probePublicUrl)");
 ok(/probe = await probeAt\(boundUrl, BOUND_PROBE_TIMEOUT_MS\)/.test(fn) && /const BOUND_PROBE_TIMEOUT_MS = 3000;/.test(src) && /timeoutMs = 6000\) => probePublicUrl/.test(fn),
   "the bound probe runs on its own 3 s timeout, half the bare probe's, so a 400 candidate adds at most 3 s before any payment");
-ok(/extUrl = boundRequestUrl\(ext\.url, \{ method: extMethod, params, slug: ext\.slug \}\)/.test(rx) && !/new URLSearchParams\(\)/.test(rx),
+ok(/extUrl = boundRequestUrl\(ext\.url, \{ method: extMethod, params, slug: ext\.slug, req \}\)/.test(rx) && !/new URLSearchParams\(\)/.test(rx),
   "route-execute pays a GET seller at the URL the same builder makes (no second query builder)");
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

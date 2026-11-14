@@ -57,6 +57,8 @@ LLC: credit the entity, never a personal name.
 - A tool is `{ route, name, slug, category, price, description, tags, discovery:{inputSchema,
   input/example}, handler }`. `handler(input)` returns JSON or throws an `Error` with
   `.statusCode`.
+- A tool whose answer is bytes (the `{ __binary, contentType }` sentinel) declares `mimeType`, the type its published example
+  returns; listings, `/openapi.json` and `/api/pricing` read it (`src/tool-media-type.js`, `scripts/test-bazaar-contracts.js`).
 - **Honest claims.** Most tools are deterministic code; model-backed ones (the `/v1` LLM tiers,
   report products, media/embedding/answer tools) are marked `modelBacked` and public copy must
   say so. Never write an unscoped "no model in the serving path" or "every tool is

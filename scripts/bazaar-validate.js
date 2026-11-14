@@ -10,7 +10,7 @@
 // we watch.
 //
 // Usage:
-//   node scripts/bazaar-validate.js                  # flagship set vs TARGET_URL (default prod)
+//   node scripts/bazaar-validate.js                  # flagship set + every non-JSON listing vs TARGET_URL (default prod)
 //   node scripts/bazaar-validate.js --all            # every catalog endpoint (500+ calls - rate-paced)
 //   node scripts/bazaar-validate.js --sample 40      # flagship + 40 random others
 //   node scripts/bazaar-validate.js --routes /api/hash,/api/search
@@ -32,6 +32,22 @@ const CONCURRENCY = Math.max(1, Number(process.env.BAZAAR_VALIDATE_CONCURRENCY) 
 const PER_CALL_TIMEOUT_MS = Number(process.env.BAZAAR_VALIDATE_TIMEOUT_MS) || 45_000;
 const MAX_429_RETRIES = Math.max(0, Number(process.env.BAZAAR_VALIDATE_429_RETRIES ?? 4));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A whole run's deadline. A validator that answers 429 with a long Retry-After
+// to every call would otherwise hold a default run (about 20 routes, 5 calls
+// each) near half an hour. Past the deadline nothing waits or retries: every
+// route not yet read is reported unreadable (exit 2 when none is INVALID), so
+// the callers warn. Default 8 minutes for the default, --sample and --routes
+// runs: the heartbeat's one run stays inside its 75-minute job beside its
+// 48-minute loop, and the deploy step's three runs a minute apart take at most
+// 26 minutes of a 120-minute job. --all is rate-paced over the whole catalog
+// and has no deadline unless BAZAAR_VALIDATE_DEADLINE_MS sets one (0 = none).
+const DEFAULT_DEADLINE_MS = 8 * 60_000;
+export function runDeadlineMs(all = process.argv.includes("--all"), env = process.env) {
+  const raw = env.BAZAAR_VALIDATE_DEADLINE_MS;
+  if (raw !== undefined && raw !== "" && Number.isFinite(Number(raw)) && Number(raw) >= 0) return Number(raw);
+  return all ? 0 : DEFAULT_DEADLINE_MS;
+}
+const DEADLINE_ERROR = "run deadline reached before the validator answered for this route";
 
 // Flagship = the routes whose listing we most want visible: the search front
 // doors, the canary-proven federal-data pair, the router, the gateway, a
@@ -43,6 +59,25 @@ export const FLAGSHIP_PATHS = [
   "/api/route/execute", "/v1/auto/chat/completions", "/v1/embeddings",
   "/api/image-ocr", "/api/memory",
 ];
+
+// A listing whose content type is not JSON (a row on /api/pricing that
+// carries mimeType: the tools that answer raw bytes) is a shape of its own,
+// so the default run validates every one of them beside the flagship set.
+// One validator call each; capped so the default run never becomes a sweep.
+export const NON_JSON_LISTING_MAX = 12;
+
+/** The default run's endpoints: every non-JSON listing not in the flagship
+ *  set (up to NON_JSON_LISTING_MAX) FIRST, then the flagship set, so a run
+ *  the validator throttles to its deadline has read the non-JSON listings
+ *  before it is cut. Exported for the test. */
+export function defaultEndpoints(all) {
+  const byPath = new Map(all.map((e) => [e.path, e]));
+  const flagship = FLAGSHIP_PATHS.map((p) => byPath.get(p)).filter(Boolean);
+  const missingFlagship = FLAGSHIP_PATHS.filter((p) => !byPath.has(p));
+  const nonJsonAll = all.filter((e) => e.mimeType && e.mimeType !== "application/json" && !FLAGSHIP_PATHS.includes(e.path));
+  const nonJson = nonJsonAll.slice(0, NON_JSON_LISTING_MAX);
+  return { chosen: [...nonJson, ...flagship], flagship, nonJson, missingFlagship, nonJsonSkipped: nonJsonAll.length - nonJson.length };
+}
 
 function args() {
   const a = process.argv.slice(2);
@@ -58,13 +93,15 @@ async function catalogEndpoints() {
   const j = await res.json();
   const list = Array.isArray(j.endpoints) ? j.endpoints : [];
   if (!list.length) throw new Error("/api/pricing carried no endpoints[]");
-  return list.map((e) => ({ method: String(e.method || "POST").toUpperCase(), path: String(e.path), slug: String(e.slug || e.path), price: e.price }));
+  return list.map((e) => ({ method: String(e.method || "POST").toUpperCase(), path: String(e.path), slug: String(e.slug || e.path), price: e.price, ...(typeof e.mimeType === "string" ? { mimeType: e.mimeType } : {}) }));
 }
 
 /** One validate call. Returns {ok:true, valid, failed[], index, quality} or
  *  {ok:false, error} when the validator itself could not be read. Exported
  *  for the test. */
-export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = VALIDATE_URL, base = TARGET } = {}) {
+export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = VALIDATE_URL, base = TARGET, deadlineAt = 0 } = {}) {
+  // Milliseconds left in the run (Infinity with no deadline).
+  const left = () => (deadlineAt > 0 ? deadlineAt - Date.now() : Infinity);
   const resource = `${base}${endpoint.path}`;
   const method = endpoint.method === "GET" ? "GET" : "POST";
   let res, body;
@@ -72,14 +109,17 @@ export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = V
   // calls in a full-catalog run). Honour Retry-After (capped) and retry a few
   // times before calling the route unreadable - a 429 is not a listing verdict.
   for (let attempt = 0; ; attempt++) {
+    if (left() <= 0) return { ok: false, error: DEADLINE_ERROR };
     try {
       res = await fetchImpl(validateUrl, {
         method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ resource, method }), signal: AbortSignal.timeout(PER_CALL_TIMEOUT_MS),
+        body: JSON.stringify({ resource, method }), signal: AbortSignal.timeout(Math.max(1, Math.min(PER_CALL_TIMEOUT_MS, left()))),
       });
       if (res.status === 429 && attempt < MAX_429_RETRIES) {
         const ra = Number(res.headers.get("retry-after"));
         const waitMs = Math.min(60_000, (Number.isFinite(ra) && ra > 0 ? ra * 1000 : 15_000 * (attempt + 1)));
+        // A wait that would pass the deadline is not taken.
+        if (waitMs >= left()) return { ok: false, error: `${DEADLINE_ERROR} (last answer HTTP 429)` };
         await sleep(waitMs);
         continue;
       }
@@ -87,6 +127,7 @@ export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = V
       try { body = JSON.parse(text); } catch { return { ok: false, error: `validator HTTP ${res.status} non-JSON: ${text.slice(0, 120)}` }; }
       break;
     } catch (e) {
+      if (left() <= 0) return { ok: false, error: DEADLINE_ERROR };
       return { ok: false, error: `validator unreachable: ${e?.message || e}` };
     }
   }
@@ -101,7 +142,8 @@ export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = V
   return {
     ok: true, valid: body.valid === true, statusCode: body.statusCode ?? null, failed, advisory,
     simulation: body.simulation?.outcome || null, rejectionReason: body.simulation?.rejectionReason || null,
-    indexed: body.index?.active === true, lastCrawledAt: body.index?.lastCrawledAt || null, quality: body.index?.quality || null,
+    // A date from the validator, kept to date characters: it is printed into CI logs.
+    indexed: body.index?.active === true, lastCrawledAt: String(body.index?.lastCrawledAt || "").replace(/[^0-9TZ:.+-]/g, "").slice(0, 40) || null, quality: body.index?.quality || null,
   };
 }
 
@@ -123,30 +165,45 @@ async function main() {
   } else if (opt.all) {
     chosen = all;
   } else {
-    const flagship = FLAGSHIP_PATHS.map((p) => byPath.get(p)).filter(Boolean);
-    const missingFlagship = FLAGSHIP_PATHS.filter((p) => !byPath.has(p));
+    const picked = defaultEndpoints(all);
+    const { missingFlagship } = picked;
     if (missingFlagship.length) console.log(`note - flagship paths not in the live catalog (skipped): ${missingFlagship.join(", ")}`);
-    chosen = flagship;
+    if (picked.nonJson.length) console.log(`note - ${picked.nonJson.length} non-JSON listing(s) validated beside the flagship set: ${picked.nonJson.map((e) => `${e.path} (${e.mimeType})`).join(", ")}`);
+    if (picked.nonJsonSkipped) console.log(`note - ${picked.nonJsonSkipped} further non-JSON listing(s) not validated (cap ${NON_JSON_LISTING_MAX}); run --routes for them`);
+    chosen = picked.chosen;
     if (opt.sample > 0) {
-      const rest = all.filter((e) => !FLAGSHIP_PATHS.includes(e.path));
+      const rest = all.filter((e) => !chosen.includes(e));
       // deterministic-ish spread: stride through the catalog instead of Math.random (reproducible runs)
       const stride = Math.max(1, Math.floor(rest.length / opt.sample));
-      for (let i = 0; i < rest.length && chosen.length < flagship.length + opt.sample; i += stride) chosen.push(rest[i]);
+      const want = chosen.length + opt.sample;
+      for (let i = 0; i < rest.length && chosen.length < want; i += stride) chosen.push(rest[i]);
     }
   }
   console.log(`bazaar-validate: ${chosen.length} endpoint(s) against ${TARGET} via ${VALIDATE_URL} (concurrency ${CONCURRENCY})`);
-  const results = await mapLimit(chosen, CONCURRENCY, async (e) => ({ endpoint: e, r: await validateOne(e) }));
+  const deadlineMs = runDeadlineMs(opt.all);
+  const deadlineAt = deadlineMs > 0 ? Date.now() + deadlineMs : 0;
+  const results = await mapLimit(chosen, CONCURRENCY, async (e) => ({ endpoint: e, r: await validateOne(e, { deadlineAt }) }));
 
   let invalid = 0, unreadable = 0, valid = 0, notIndexed = 0;
   const rows = [];
+  // A non-JSON listing (a row that carries a non-JSON mimeType) gets two
+  // lines of its own, which the deploy and heartbeat steps grep:
+  //   WARN not-indexed <route> (last crawl <date or unknown>)
+  //     valid but not in the index. The index lags the validator by days, so
+  //     this stays exit 0; it is the only sign of an indexer that dropped the
+  //     listing after a crawl.
+  //   NONJSON-INVALID <route>
+  //     beside its FAIL line, so the caller can name the listing switch.
+  const nonJson = (e) => typeof e.mimeType === "string" && e.mimeType !== "application/json";
   for (const { endpoint, r } of results) {
     const tag = `${endpoint.method} ${endpoint.path}`;
     if (!r.ok) { unreadable++; rows.push({ route: tag, status: "UNREADABLE", detail: r.error }); console.log(`??  ${tag} - ${r.error}`); continue; }
-    if (!r.valid) { invalid++; rows.push({ route: tag, status: "INVALID", detail: r.failed.join("; ") || r.rejectionReason || `statusCode ${r.statusCode}` }); console.log(`FAIL ${tag} - ${r.failed.join("; ") || r.rejectionReason || `HTTP ${r.statusCode}`}`); continue; }
+    if (!r.valid) { invalid++; rows.push({ route: tag, status: "INVALID", detail: r.failed.join("; ") || r.rejectionReason || `statusCode ${r.statusCode}` }); console.log(`FAIL ${tag} - ${r.failed.join("; ") || r.rejectionReason || `HTTP ${r.statusCode}`}`); if (nonJson(endpoint)) console.log(`NONJSON-INVALID ${tag}`); continue; }
     valid++;
     if (!r.indexed) notIndexed++;
     rows.push({ route: tag, status: "valid", indexed: r.indexed, lastCrawledAt: r.lastCrawledAt, quality: r.quality, advisory: r.advisory });
     console.log(`ok   ${tag} - valid${r.indexed ? ` · indexed (crawled ${r.lastCrawledAt || "?"})` : " · NOT in index"}${r.advisory.length ? ` · advisory: ${r.advisory.join(", ")}` : ""}${r.quality ? ` · quality ${JSON.stringify(r.quality)}` : ""}`);
+    if (!r.indexed && nonJson(endpoint)) console.log(`WARN not-indexed ${tag} (last crawl ${r.lastCrawledAt || "unknown"})`);
   }
   const summary = { target: TARGET, probed: chosen.length, valid, invalid, unreadable, notIndexed };
   console.log(`\nsummary: ${JSON.stringify(summary)}`);

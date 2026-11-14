@@ -31,6 +31,71 @@ ok(!("name" in c.manifest) && c.manifest.homepage === "7", `manifest text fields
 const good = { manifest: { name: "Good" }, tools: [{ route: "/a", name: "a", slug: "a", tags: ["x"] }] };
 ok(clean(good) === good, "a clean entry is stored as it came (same object)");
 
+// Snake_case price keys are read through their camelCase twins: what the cache
+// stores and what the manifest reader prices match the camelCase spelling.
+const { normaliseManifestTools } = await import("../src/x402-index.js");
+const storedTool = (over) => clean({ tools: [{ route: "/a", name: "a", ...over }] }).tools[0];
+const sCamel = storedTool({ priceUsd: "0.01", amountUsd: 0.02, maxAmountRequired: "10000" });
+const sSnake = storedTool({ price_usd: "0.01", amount_usd: 0.02, max_amount_required: "10000" });
+ok(sSnake.priceUsd === sCamel.priceUsd && sSnake.amountUsd === sCamel.amountUsd && sSnake.maxAmountRequired === sCamel.maxAmountRequired,
+  `a stored tool's snake_case price keys fill the camelCase keys (${JSON.stringify({ priceUsd: sSnake.priceUsd, amountUsd: sSnake.amountUsd, maxAmountRequired: sSnake.maxAmountRequired })})`);
+ok(storedTool({ priceUsd: "0.02", price_usd: "0.01" }).priceUsd === "0.02", "a camelCase price key the seller wrote wins over its snake_case twin");
+const hostile = storedTool({ price_usd: { toString: 1, valueOf: 2 }, max_amount_required: { toString: "x" }, amount_usd: Infinity });
+ok(!("priceUsd" in hostile) && !("price_usd" in hostile) && !("maxAmountRequired" in hostile) && !("max_amount_required" in hostile) && !("amountUsd" in hostile) && !("amount_usd" in hostile),
+  `a snake_case price that is not text or a finite number is dropped, not carried over (${JSON.stringify(Object.keys(hostile))})`);
+const priceOf = (entry) => normaliseManifestTools({ resources: [{ resource: "https://snake.example/api/a", name: "a", ...entry }] }, "https://snake.example")[0]?.price ?? null;
+const pairs = [
+  [{ price: { amountUsd: "0.01" } }, { price: { amount_usd: "0.01" } }],
+  [{ priceUsd: "0.01" }, { price_usd: "0.01" }],
+  [{ network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x1111111111111111111111111111111111111111", maxAmountRequired: "10000" },
+    { network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x1111111111111111111111111111111111111111", max_amount_required: "10000" }],
+];
+// A seller who writes both spellings of one key is read as before the
+// snake_case keys were supported: a manifest row and an OpenAPI payment object
+// take price_usd (the row reader's order), a price object takes priceUsd, and
+// a stored tool keeps both keys as written. The snake_case spelling stands in
+// only where no price was read: beside an unusable camelCase value.
+const { normaliseOpenapiTools } = await import("../src/x402-index.js");
+const openapiPriceOf = (payment) => normaliseOpenapiTools({ openapi: "3.1.0", info: { title: "s" }, paths: { "/api/a": { post: { summary: "a", "x-payment-info": payment } } } }, "https://snake.example")[0]?.price ?? null;
+const usd = (v) => (v == null ? null : Number(String(v).replace(/[^0-9.]/g, "")));
+const readers = [
+  ["stored tool", (o) => storedTool(o).priceUsd, "camel"],
+  ["manifest row", (o) => priceOf(o), "snake"],
+  ["price object", (o) => priceOf({ price: o }), "camel"],
+  ["OpenAPI payment object", (o) => openapiPriceOf(o), "snake"],
+];
+for (const [label, read, wins] of readers) {
+  const want = (camel, snake) => (wins === "camel" ? camel : snake);
+  const got = [read({ priceUsd: 0.001, price_usd: 9 }), read({ price_usd: 9, priceUsd: 0.001 }), read({ priceUsd: 9, price_usd: 0.001 }), read({ price_usd: 0.001, priceUsd: 9 })].map(usd);
+  ok(got[0] === want(0.001, 9) && got[1] === want(0.001, 9) && got[2] === want(9, 0.001) && got[3] === want(9, 0.001),
+    `${label}: both spellings of one key read the ${wins === "camel" ? "camelCase" : "snake_case"} value, as before, in either key order (${JSON.stringify(got)})`);
+  const unusable = [{ toString: 1, valueOf: 2 }, {}, "  ", NaN, null].map((bad) => usd(read({ priceUsd: bad, price_usd: 0.002 })));
+  ok(unusable.every((v) => v === 0.002), `${label}: an unusable camelCase price gives way to a usable snake_case one (${JSON.stringify(unusable)})`);
+}
+const both = storedTool({ priceUsd: 9, price_usd: 0.001, amountUsd: "1", amount_usd: "2", maxAmountRequired: "10", max_amount_required: "20" });
+ok(both.priceUsd === 9 && both.price_usd === 0.001 && both.amountUsd === "1" && both.amount_usd === "2" && both.maxAmountRequired === "10" && both.max_amount_required === "20",
+  `a stored tool with both spellings keeps every key as the seller wrote it (${JSON.stringify(both)})`);
+// Cleaning is idempotent: a warm start cleans stored rows again, and a second
+// pass changes nothing (same object back, same content).
+const reclean = [
+  { price_usd: "0.01" }, { amount_usd: 0.02, max_amount_required: "10000" },
+  { priceUsd: 9, price_usd: 0.001, amountUsd: "1", amount_usd: "2", maxAmountRequired: "10", max_amount_required: "20" },
+  { priceUsd: { toString: 1 }, price_usd: "0.002" }, { priceUsd: "  ", price_usd: 0.002 }, { amountUsd: NaN, amount_usd: "3" },
+  { maxAmountRequired: [], max_amount_required: { valueOf: 2 } }, { priceUsd: {}, price_usd: {} }, { price_usd: null, priceUsd: null },
+  { price: { amount_usd: "1" }, price_usd: Infinity }, { priceUsd: "0.01" }, {},
+];
+const notStable = [];
+for (const over of reclean) {
+  const once = clean({ tools: [{ route: "/a", name: "a", ...over }] });
+  const twice = clean(once);
+  if (twice !== once || JSON.stringify(twice) !== JSON.stringify(once)) notStable.push(JSON.stringify(over, (k, v) => (typeof v === "number" && !Number.isFinite(v) ? String(v) : v)));
+}
+ok(notStable.length === 0, `cleaning a cleaned tool changes nothing, for snake-only, both-keys and malformed camelCase rows (${notStable.length ? notStable.join("; ") : `${reclean.length} rows`})`);
+for (const [camelEntry, snakeEntry] of pairs) {
+  const a = priceOf(camelEntry), b = priceOf(snakeEntry);
+  ok(a != null && a === b, `a crawled manifest entry is priced the same in either spelling (${JSON.stringify(Object.keys(snakeEntry))}: ${a} vs ${b})`);
+}
+
 // The server: odd sellers beside a well-formed one, read from a stored index.
 const dir = mkdtempSync(join(tmpdir(), "a402-field-types-"));
 const now = Date.now();

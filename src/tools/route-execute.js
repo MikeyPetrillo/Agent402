@@ -39,6 +39,7 @@ import { recordRouterPurchase, retractRouterPurchase } from "../router-purchases
 import { adaptParamsToExample } from "../mpp-input-examples.js";
 import { boundRequestUrl, isQueryMethod, BOUND_URL_MAX_CHARS } from "../bound-request-url.js";
 import { runAsCallerOf } from "../dispatch-caller.js";
+import { notChargedOn } from "../not-charged.js";
 
 // The external leg's default budget for a Solana payer: the short end of a
 // recent blockhash's life (about 60 s, the figure src/solana-buyer.js waits
@@ -323,7 +324,22 @@ export async function cachedSpendingWalletStatus(chain = "base") {
 export async function spendingWalletReadsLow(read = cachedSpendingWalletStatus, chain = "base") {
   try { return (await read(chain))?.status === "low"; } catch { return false; }
 }
-export const WALLET_LOW_MESSAGE = "Paying outside sellers is temporarily unavailable. Nothing was charged; retry later.";
+/** `text` ending as a sentence: as written when it already does, else cut
+ *  back to its last whole word and closed with an ellipsis (three dots).
+ *  One pass from the end, so its time is linear in the text's length. */
+export function closedSentence(text) {
+  const s = String(text ?? "").trim();
+  if (!s || ".!?".includes(s[s.length - 1])) return s;
+  const isSpace = (c) => c.trim() === "";
+  let end = s.length;
+  while (end > 0 && !isSpace(s[end - 1])) end--; // the cut word
+  while (end > 0 && (isSpace(s[end - 1]) || ".,;:-".includes(s[end - 1]))) end--; // what joined it
+  return `${end > 0 ? s.slice(0, end) : s}...`;
+}
+
+/** The refusal while the spending wallet reads low; the charge sentence on a
+ *  route call only (src/not-charged.js). */
+export const walletLowMessage = (req) => `Paying outside sellers is temporarily unavailable.${notChargedOn(req)} Retry later.`;
 
 // Buyer payment network (CAIP-2) -> the external settlement chain it can fund.
 // External routing is SELF-FUNDING per chain: the buyer's settlement lands on
@@ -619,10 +635,10 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
             if (list.length) { candidateList = list; chain = c; break; }
           }
           if ((avmBudgetMs != null || svmBudgetMs != null) && remainingMs() < 4000) {
-            throw bad(`Resolving an external seller used this payment's time budget; nothing was spent and nothing is charged. Retry with a fresh payment, or pay this route over an EVM rail.`, 504);
+            throw bad(`Resolving an external seller used this payment's time budget. Nothing was spent.${notChargedOn(req)} Retry with a fresh payment, or pay this route over an EVM rail.`, 504);
           }
           if (tempoBudgetMs != null && remainingMs() < 4000) {
-            throw bad(`Resolving an external seller used the Tempo time budget (${tempoBudgetMs}ms); nothing was spent and nothing is charged. Tempo credentials expire about 25s after signing, so retry with a fresh credential or pay this route over an EVM rail.`, 504);
+            throw bad(`Resolving an external seller used the Tempo time budget (${tempoBudgetMs}ms). Nothing was spent.${notChargedOn(req)} Tempo credentials expire about 25s after signing, so retry with a fresh credential or pay this route over an EVM rail.`, 504);
           }
           const chainCaip2 = EXTERNAL_CHAIN_CAIP2[chain];
           traceStep(req, "candidates", { chain, list: candidateList.map((c) => ({ origin: c.seller, url: c.url, lane: c.unproven ? "unproven" : "proven", price: c.price })) });
@@ -634,24 +650,28 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const drops = candidateList.__gateDrops || lastDrops || { total: 0, byReason: {} };
           const gatedOut = Number(drops.byReason?.settlement_required || 0);
           if (!candidateList.length && Number(drops.byReason?.judged_no_match || 0) > 0) {
-            throw bad(`${drops.byReason.judged_no_match} outside seller(s) matched those words on ${chain}, and none of them does that task (judged). Nothing was spent and nothing is charged. Try /api/route?q=<task>&include=external to see them.`, 404);
+            throw bad(`${drops.byReason.judged_no_match} outside seller(s) matched those words on ${chain}, and none of them does that task (judged). Nothing was spent.${notChargedOn(req)} Try /api/route?q=<task>&include=external to see them.`, 404);
           }
           if (!candidateList.length && gatedOut > 0) {
-            throw bad(`No external seller is eligible for this task on ${chain} right now: ${gatedOut} matched it and all of them are below our settlement gate. Nothing was spent and nothing is charged.`, 409);
+            throw bad(`No external seller is eligible for this task on ${chain} right now: ${gatedOut} matched it and all of them are below our settlement gate. Nothing was spent.${notChargedOn(req)}`, 409);
           }
           // Routes the router lists but never buys (src/route-category.js).
           const excludedOut = Number(drops.byReason?.category_excluded || 0);
           if (!candidateList.length && excludedOut > 0) {
-            throw bad(`${excludedOut} outside route(s) matched that task on ${chain}, and the router does not buy them: routes that sell personal data about individuals are listed but not bought by the router. Nothing was spent and nothing is charged.`, 404);
+            throw bad(`${excludedOut} outside route(s) matched that task on ${chain}, and the router does not buy them: routes that sell personal data about individuals are listed but not bought by the router. Nothing was spent.${notChargedOn(req)}`, 404);
           }
           // Every GET candidate the caller's params cannot ride a query to
           // (a nested value, an oversized URL) was set aside before its probe:
-          // the caller's input, said as the builder words it.
-          if (!candidateList.length && Number(drops.byReason?.params_unbindable || 0) > 0 && drops.paramsRefusal) throw bad(drops.paramsRefusal, 400);
+          // the caller's input, said as the builder words it (the resolver
+          // builds it request-less, so the charge sentence is added here).
+          // The resolver keeps a bounded length of it (the builder bounds the
+          // param name it quotes), so a refusal that was still cut is closed
+          // at its last whole word first.
+          if (!candidateList.length && Number(drops.byReason?.params_unbindable || 0) > 0 && drops.paramsRefusal) throw bad(`${closedSentence(drops.paramsRefusal)}${notChargedOn(req)}`, 400);
           if (!candidateList.length) throw bad(`No external ${chains.includes("tempo") && chains.length > 1 ? "x402 or MPP" : chains[0] === "tempo" ? "MPP" : "x402"} seller matched that task${chains[0] !== "base" || chains.length > 1 ? ` on ${chains.join("/")}` : ""}. Explore /api/route?q=<task>&include=external.`, 404);
           // Nothing is signed from an EVM wallet that reads low on the chain it
           // would pay from (a cached reading, never awaited on the network).
-          if (isEvmBuyerChain(chain) && await spendingWalletReadsLow(spendingWalletStatus, chain)) throw bad(WALLET_LOW_MESSAGE, 503);
+          if (isEvmBuyerChain(chain) && await spendingWalletReadsLow(spendingWalletStatus, chain)) throw bad(walletLowMessage(req), 503);
           // Try candidates in order; keep the last error so an all-fail run
           // reports something real. A 5xx from a seller's paid leg -> next
           // candidate; anything else stops (return on success, throw otherwise).
@@ -663,7 +683,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // No seller is started with less of the call's budget left than one
           // seller request needs: refused before any booking or signature.
           if (callBudgetLeftMs() != null && callBudgetLeftMs() < PAY_X402_MIN_LEG_MS) {
-            throw lastErr || bad(`Finding an external seller used this request's time budget; nothing was spent and nothing is charged. Retry${windowBudgetMs != null ? " with a fresh payment, or pay this route over an EVM rail" : ""}.`, 504);
+            throw lastErr || bad(`Finding an external seller used this request's time budget. Nothing was spent.${notChargedOn(req)} Retry${windowBudgetMs != null ? " with a fresh payment, or pay this route over an EVM rail" : ""}.`, 504);
           }
           const extUsd = toUsd(ext.price);
           if (!(extUsd > 0 && extUsd <= cap)) {
@@ -684,7 +704,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           if (ownPayout) {
             console.warn(`[sor] refusing ${chain} candidate ${ext.seller}: it is paid at this host's own wallet ${ownPayout.slice(0, 10)}…`);
             traceStep(req, "skip", { origin: ext.seller, reason: "own_wallet" });
-            lastErr = bad(`External seller "${ext.seller}" is paid at one of this host's own wallets; the router never pays itself. Nothing was spent and nothing is charged.`, 409);
+            lastErr = bad(`External seller "${ext.seller}" is paid at one of this host's own wallets; the router never pays itself. Nothing was spent.${notChargedOn(req)}`, 409);
             if (hasNext) continue; throw lastErr;
           }
           const extWire = ext.wire || "x402";
@@ -709,7 +729,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // the seller that answered 402 to the caller's query is the one paid
           // at it.
           if (isQueryMethod(extMethod)) {
-            extUrl = boundRequestUrl(ext.url, { method: extMethod, params, slug: ext.slug });
+            extUrl = boundRequestUrl(ext.url, { method: extMethod, params, slug: ext.slug, req });
             extBody = undefined;
           }
           // AN EVM BUYER'S AUTHORIZATION MUST STILL SETTLE AFTER THE SELLER
@@ -726,7 +746,7 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           if (tempoBudgetMs == null) {
             const settleableMs = evmCredentialSettleableMs(req);
             if (settleableMs != null && settleableMs < EVM_SELLER_ALLOWANCE_MS) {
-              throw bad(`Too little of your payment authorization's life is left for a seller to answer and this payment to settle (EVM credentials expire at their validBefore, and must still be valid 6 s after the answer). Nothing was spent and nothing is charged. Retry with a fresh authorization: a stock client signs 300 s ahead.`, 504);
+              throw bad(`Too little of your payment authorization's life is left for a seller to answer and this payment to settle (EVM credentials expire at their validBefore, and must still be valid 6 s after the answer). Nothing was spent.${notChargedOn(req)} Retry with a fresh authorization: a stock client signs 300 s ahead.`, 504);
             }
           }
           // PER-PAYER DEBT CEILING. Everything above bounds WHAT we pay (the
@@ -771,8 +791,8 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           // cannot both pass a ceiling that has room for one.
           const allowed = await reserveSpend(spendPayer, cap, { chain });
           if (!allowed.ok) {
-            if (allowed.code === "global_unsettled_ceiling") throw bad(`External routing is paused for everyone right now, not for this wallet in particular: ${allowed.reason} Nothing was charged.`, 429);
-            if (allowed.code === "wallet_daily_ceiling" || allowed.code === "spend_ledger_unreadable") throw bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason} Nothing was charged.`, 429);
+            if (allowed.code === "global_unsettled_ceiling") throw bad(`External routing is paused for everyone right now, not for this wallet in particular: ${allowed.reason}${notChargedOn(req)}`, 429);
+            if (allowed.code === "wallet_daily_ceiling" || allowed.code === "spend_ledger_unreadable") throw bad(`External routing on ${chain} is paused for everyone right now, not for this wallet in particular: ${allowed.reason}${notChargedOn(req)}`, 429);
             throw bad(`External routing is paused for this wallet: ${allowed.reason}`, 429);
           }
           const spendHandle = allowed.handle;
@@ -1046,11 +1066,11 @@ export function buildRouteExecuteTool({ getCatalog, baseUrl = "", tier = EXEC_TI
           const alt = pricier.length ? decide(pricier, await judgeTool(input.task, pricier)) : null;
           if (alt?.action === "run" && (alt.selection.method === "judged" || alt.selection.method === "judged-tie") && alt.def) {
             const up = routeExecuteHint(toUsd(alt.def.price));
-            throw bad(`No tool under this endpoint's $${cap} cap does that task; ${alt.def.slug} does, listed at $${toUsd(alt.def.price)} (judged, confidence ${alt.selection.confidence}).${up && up.tool !== tier.slug ? ` Use ${up.tool} (${up.price}) to run it through the router, or call` : " Call"} it directly: ${alt.def.route}${baseUrl ? ` on ${baseUrl}` : ""}. Nothing was run or charged.`, 409);
+            throw bad(`No tool under this endpoint's $${cap} cap does that task; ${alt.def.slug} does, listed at $${toUsd(alt.def.price)} (judged, confidence ${alt.selection.confidence}).${up && up.tool !== tier.slug ? ` Use ${up.tool} (${up.price}) to run it through the router, or call` : " Call"} it directly: ${alt.def.route}${baseUrl ? ` on ${baseUrl}` : ""}. Nothing was run.${notChargedOn(req)}`, 409);
           }
           const hasExternal = externalEnabled() && !!resolveExternal;
           throw bad(
-            `No tool in this catalog does that task (judged, confidence ${selection.confidence}); nothing was run or charged.${hasExternal ? ' Retry with include:"external" to route to an outside x402 seller,' : ""} or try /api/find?q=<task>.`,
+            `No tool in this catalog does that task (judged, confidence ${selection.confidence}). Nothing was run.${notChargedOn(req)} ${hasExternal ? 'Retry with include:"external" to route to an outside x402 seller, or try' : "Try"} /api/find?q=<task>.`,
             404
           );
         }

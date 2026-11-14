@@ -5,6 +5,7 @@ import { frontDoorOneLine } from "./front-door.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
 import { leaderboardCadence } from "./refresh-cadence.js";
+import { binaryTypesOf, responseTypesOf, JSON_MIME } from "./tool-media-type.js";
 import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { REPO_URL } from "./repo-link.js";
 import { isComputePayable } from "./pow.js";
@@ -257,13 +258,10 @@ export function exampleQueryString(tool) {
   return qs ? `?${qs}` : "";
 }
 
-/** Content types a tool answers with as raw bytes (the route binder's
- *  { __binary, contentType } sentinel), or null for a JSON tool. */
-export function binaryTypesOf(tool) {
-  if (Array.isArray(tool?.binaryTypes) && tool.binaryTypes.length) return tool.binaryTypes;
-  if (tool?.mimeType && tool.mimeType !== "application/json") return [tool.mimeType];
-  return null;
-}
+// Content types a tool answers with as raw bytes (the route binder's
+// { __binary, contentType } sentinel): src/tool-media-type.js, shared with the
+// x402 listing and /api/pricing.
+export { binaryTypesOf };
 
 const listWords = (xs, joiner = "or") => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} ${joiner} ${xs.at(-1)}`);
 
@@ -842,9 +840,12 @@ export function openapiSpec(baseUrl, catalog) {
           ...(binaryTypesOf(tool) ? {} : { headers: { "X-Idempotent-Replay": { $ref: "#/components/headers/IdempotentReplay" }, "X-Replayed-Answer": { $ref: "#/components/headers/ReplayedAnswer" } } }),
           // A binary tool answers raw bytes (one content type per format it
           // can produce), never the JSON note its discovery example carries.
-          content: binaryTypesOf(tool)
-            ? Object.fromEntries(binaryTypesOf(tool).map((t) => [t, { schema: { type: "string", format: "binary" } }]))
-            : { "application/json": { schema: responseSchemaFor(path, discovery?.output?.example, discovery?.output?.optional), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) } },
+          // The listing's type (the one the published example answers with)
+          // comes first; a tool that can also answer JSON (dub's json mode)
+          // lists it with its schema.
+          content: Object.fromEntries(responseTypesOf(tool).map((t) => [t, t === JSON_MIME
+            ? { schema: responseSchemaFor(path, discovery?.output?.example, discovery?.output?.optional), example: discovery?.output?.example ?? {}, ...(discovery?.output?.captured ? { "x-example-source": { kind: "captured-paid-answer", capturedAt: discovery.output.captured.capturedAt, modelBacked: discovery.output.captured.modelBacked === true } } : {}) }
+            : { schema: { type: "string", format: "binary" } }])),
         },
         402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment). A first-contact body also carries payment: this request's price in dollars on the named network, how to pay, the proof-of-work path on a free-tier tool (noWallet), the caller's own inputs on a route quoted from its body (quote), and links to /llms.txt, the pay section of /agents.md and the MCP connector" },
         400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, and a JSON body, or form parts for a multipart tool), with the other method under alternate where it is served; a call over 1024 bytes carries only method and url" },

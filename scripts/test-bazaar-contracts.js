@@ -79,10 +79,9 @@ const facilitator = createServer((req, res) => {
 await new Promise((resolve) => facilitator.listen(facPort, "127.0.0.1", resolve));
 
 let serverLog = "";
-const child = spawn(process.execPath, ["src/server.js"], {
-  env: {
+const serverEnv = (listenPort, extra = {}) => ({
     ...process.env,
-    PORT: String(port), FREE_MODE: "", NODE_ENV: "test",
+    PORT: String(listenPort), FREE_MODE: "", NODE_ENV: "test",
     NETWORK: "base", PAYMENT_NETWORKS: "base",
     WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     FACILITATOR_URL: `http://127.0.0.1:${facPort}`,
@@ -95,9 +94,9 @@ const child = spawn(process.execPath, ["src/server.js"], {
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
     MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
     STATS_ALLOW_EPHEMERAL: "true",
-  },
-  stdio: ["ignore", "pipe", "pipe"],
+    ...extra,
 });
+const child = spawn(process.execPath, ["src/server.js"], { env: serverEnv(port), stdio: ["ignore", "pipe", "pipe"] });
 child.stdout.on("data", (d) => { serverLog += d; });
 child.stderr.on("data", (d) => { serverLog += d; });
 
@@ -168,6 +167,9 @@ try {
   let largestBody = { route: "", bytes: 0 };
   let largestOwn = { route: "", bytes: 0 };
   let speechSeen = false;
+  // path -> listing mimeType, for every tool whose example answers raw bytes.
+  const binaryListings = new Map();
+  const method0 = (route) => route.split(" ")[0];
   let specificTagSeen = false;
   // Fields the Bazaar ranks on (description, output schema, service metadata):
   // routes that carry each one, printed and required of every route.
@@ -249,6 +251,18 @@ try {
       const ident = [listing.serviceName, ...(listing.tags || [])].find((x) => x && addressesReader(x));
       if (finding || sentence || ident) fail(route, `listing trips the listing screen (${finding || "reader"}): ${sentence || ident || desc.slice(0, 80)}`);
       else has.screened++;
+    }
+    // The listing's content type is the one the published example answers
+    // with, read from the tool def (its mimeType, which the /api/pricing row
+    // carries when it is not JSON). A binary tool's listing names its bytes,
+    // and its /openapi.json 200 lists the same type first.
+    {
+      const want = endpoint.mimeType || "application/json";
+      if (listing.mimeType !== want) fail(route, `listing mimeType is ${listing.mimeType}, the tool answers its example with ${want}`);
+      if (endpoint.mimeType) binaryListings.set(endpoint.path, listing.mimeType);
+      const types = Object.keys(openapiOperation(openapi, method0(route), endpoint.path)?.responses?.["200"]?.content || {});
+      const wantTypes = endpoint.responseTypes || [want];
+      if (!isDeepStrictEqual(types, wantTypes)) fail(route, `/openapi.json 200 content types ${JSON.stringify(types)} are not ${JSON.stringify(wantTypes)}`);
     }
     const resource = ResourceInfoSchema.safeParse(paymentRequired.resource);
     if (!resource.success) fail(route, `ResourceInfoSchema: ${resource.error.issues[0]?.message || "invalid"}`);
@@ -339,6 +353,14 @@ try {
         else if (!isDeepStrictEqual(modelEnum, published)) fail(route, `listing input lost the model enum (${JSON.stringify(modelEnum)})`);
       }
     }
+    if (binaryListings.has(endpoint.path)) {
+      // A binary listing carries a string naming its bytes and a string
+      // schema with their media type, never a JSON object for a buyer to
+      // take as the answer's shape.
+      if (typeof example !== "string" || !example.includes(listing.mimeType)) fail(route, `binary listing's sample output does not name its ${listing.mimeType} bytes: ${JSON.stringify(example)}`);
+      if (outputSchema?.type !== "string" || outputSchema?.contentMediaType !== listing.mimeType) fail(route, `binary listing's output schema is not a ${listing.mimeType} string: ${JSON.stringify(outputSchema)}`);
+      if (extension.info?.output?.type !== "binary") fail(route, `binary listing's output.type is ${JSON.stringify(extension.info?.output?.type)}, not "binary"`);
+    } else if (extension.info?.output && extension.info.output.type !== "json") fail(route, `JSON listing's output.type is ${JSON.stringify(extension.info.output.type)}`);
     if (example === undefined || !outputSchema) continue;
     if (JSON.stringify(outputSchema).length > 500) fail(route, "output schema exceeds the 500-byte budget");
     if (TRIM_ROUTES.has(endpoint.path)) {
@@ -391,12 +413,61 @@ try {
   if (wholeListingSeen !== WHOLE_LISTING_ROUTES.size) fail("catalog", `checked ${wholeListingSeen} of ${WHOLE_LISTING_ROUTES.size} typed-judgment listings`);
   if (!quotedPriced) fail("catalog", "no quoted route was checked against its published range (the metered tiers and decide are quoted)");
   if (!speechSeen) fail("POST /v1/audio/speech", "route was not validated as a raw output");
+  // Derived from the catalog, so these name the floor, not the list: QR,
+  // screenshot, the three image transforms and speech answer raw bytes.
+  if (binaryListings.size < 6) fail("catalog", `only ${binaryListings.size} binary listings (${[...binaryListings.keys()].join(", ")}); expected 6 or more`);
+  if (binaryListings.get("/api/qr") !== "image/png") fail("GET /api/qr", `listed as ${binaryListings.get("/api/qr") || "JSON"}, answers image/png`);
+  if (binaryListings.get("/api/image-convert") !== "image/jpeg") fail("POST /api/image-convert", `listed as ${binaryListings.get("/api/image-convert") || "JSON"}, its example answers image/jpeg`);
+  if (binaryListings.has("/api/hash")) fail("GET /api/hash", "a JSON tool is listed as binary");
+  console.log(`binary listings: ${[...binaryListings].map(([p, t]) => `${p} ${t}`).join(", ")}`);
   if (!specificTagSeen) fail("POST /api/extract", "representative route-specific tag did not survive sanitization");
 
   console.log(`catalog routes: ${endpoints.length}`);
   console.log(`402 examples shortened by the byte budget (replayed from /openapi.json): ${shortenedExamples}`);
   console.log(`route-aware required schemas: ${requiredRoutes}; variable schemas without required: ${variableRoutes}; raw/array schemas: ${rawRoutes}`);
   console.log(`402 amount vs price list: ${fixedPriced} fixed routes at list price, ${quotedPriced} quoted routes inside their published range`);
+  // The rollout switch: with X402_BINARY_LISTINGS=off every binary route
+  // lists what it listed before it named its bytes: application/json, output
+  // type "json" and the sample below (each tool's legacyListingExample), with
+  // the schema derived from that sample. A new binary tool adds its row here.
+  {
+    const LEGACY_SAMPLES = {
+      "/api/screenshot": { contentType: "image/png", body: "(binary PNG image)" },
+      "/api/qr": { contentType: "image/png", body: "(binary PNG image)" },
+      "/api/image-resize": { __note: "returns the resized image as binary (Content-Type set accordingly)" },
+      "/api/image-convert": { __note: "returns the converted image as binary" },
+      "/api/image-thumbnail": { __note: "returns the square thumbnail as binary" },
+      "/v1/audio/speech": "(raw mp3 bytes - Content-Type: audio/mpeg)",
+    };
+    try { child.kill("SIGKILL"); } catch { /* stopped */ }
+    const [offPort] = await getFreePorts(1);
+    const off = spawn(process.execPath, ["src/server.js"], { env: serverEnv(offPort, { X402_BINARY_LISTINGS: "off" }), stdio: "ignore" });
+    try {
+      let offUp = false;
+      for (let i = 0; i < 240 && !offUp; i++) {
+        try { offUp = (await fetch(`http://127.0.0.1:${offPort}/health`)).ok; } catch { /* booting */ }
+        if (!offUp) await wait(250);
+      }
+      if (!offUp) fail("X402_BINARY_LISTINGS=off", "server did not boot");
+      else for (const endpoint of endpoints.filter((e) => e.mimeType || e.path === "/api/hash")) {
+        const offRoute = `${String(endpoint.method || "GET").toUpperCase()} ${endpoint.path}`;
+        const res = await fetch(`http://127.0.0.1:${offPort}${endpoint.path}`, { method: endpoint.method || "GET", headers: { "content-type": "application/json" }, body: /^(POST|PUT|PATCH)$/i.test(endpoint.method || "") ? "{}" : undefined });
+        await res.text();
+        const pr = JSON.parse(Buffer.from(res.headers.get("payment-required") || "", "base64").toString("utf8") || "{}");
+        const ext = pr.extensions?.bazaar;
+        if (res.status !== 402 || pr.resource?.mimeType !== "application/json") fail(offRoute, `switch off: ${res.status}, listed as ${pr.resource?.mimeType}`);
+        if (ext?.info?.output?.type !== "json" || ext?.info?.output?.example === undefined) fail(offRoute, `switch off: output is ${JSON.stringify(ext?.info?.output)}`);
+        if (!ext || !validateDiscoveryExtension(ext).valid || !validateDiscoveryExtensionSpec(ext).valid) fail(offRoute, "switch off: the declaration does not validate");
+        if (!endpoint.mimeType) continue;
+        const legacy = LEGACY_SAMPLES[endpoint.path];
+        const offSchema = ext?.schema?.properties?.output?.properties?.example;
+        if (legacy === undefined) fail(offRoute, "a binary listing has no earlier sample recorded for the switch-off listing (LEGACY_SAMPLES)");
+        else if (!isDeepStrictEqual(ext?.info?.output?.example, legacy)) fail(offRoute, `switch off: sample is ${JSON.stringify(ext?.info?.output?.example)}, the earlier listing carried ${JSON.stringify(legacy)}`);
+        else if (offSchema?.type !== jsonType(legacy) || offSchema?.contentMediaType !== undefined) fail(offRoute, `switch off: output schema is ${JSON.stringify(offSchema)}`);
+        else if (!isDeepStrictEqual(pr.accepts?.[0]?.outputSchema, offSchema)) fail(offRoute, "switch off: accepts[0].outputSchema is not the extension's schema");
+      }
+    } finally { try { off.kill("SIGKILL"); } catch { /* stopped */ } }
+  }
   console.log(`largest challenge: ${largest.route} at ${largest.bytes} bytes`);
   console.log(`largest 402 body: ${largestBody.route} at ${largestBody.bytes} bytes; largest own fields: ${largestOwn.route} at ${largestOwn.bytes} bytes`);
   if (failures.length) {

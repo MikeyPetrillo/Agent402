@@ -52,7 +52,7 @@ import { usdcDomainVerdict, usdcDomainMismatchDetail } from "../evm-usdc-domain.
 import { payerFromRequest } from "../payer.js";
 import { acceptsFromLive402, quoteFromAccepts } from "../x402-live-quote.js";
 import { readTextCapped } from "../capped-body.js";
-import { cachedSpendingWalletStatus, spendingWalletReadsLow, WALLET_LOW_MESSAGE } from "./route-execute.js";
+import { cachedSpendingWalletStatus, spendingWalletReadsLow, walletLowMessage } from "./route-execute.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -286,7 +286,7 @@ export function buildSellerPayabilityTool({
       // Nothing is signed from a wallet that reads low (a cached reading).
       if (spendChain === "base" && await spendingWalletReadsLow(spendingWalletStatus)) {
         adjustSpend(spendHandle, 0);
-        throw bad(WALLET_LOW_MESSAGE, 503);
+        throw bad(walletLowMessage(req), 503);
       }
       const t1 = now();
       try {

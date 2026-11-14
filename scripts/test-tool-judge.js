@@ -64,8 +64,8 @@ ok(out.receipt.slug === "html-to-json" && out.receipt.selection?.method === "jud
 _jevReset(); globalThis.fetch = answer(NONE, 0.97);
 ran.length = 0;
 let refused = null;
-try { await tool.handler({ task: "extract a web page into structured json", params: {} }, {}); } catch (e) { refused = e; }
-ok(refused?.statusCode === 404 && /nothing was run or charged/.test(refused.message) && ran.length === 0, "a confident no-match is a 404 before anything runs");
+try { await tool.handler({ task: "extract a web page into structured json", params: {} }, { headers: {} }); } catch (e) { refused = e; }
+ok(refused?.statusCode === 404 && /Nothing was run\. Nothing was charged\./.test(refused.message) && ran.length === 0, "a confident no-match is a 404 before anything runs");
 _jevReset(); globalThis.fetch = async () => { throw new Error("down"); };
 const open = await tool.handler({ task: "extract a web page into structured json", params: {} }, {});
 ok(open.receipt.selection?.method === "lexical", "judge down: find's pick runs, receipt says lexical");

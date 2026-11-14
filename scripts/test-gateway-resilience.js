@@ -138,6 +138,29 @@ for (const w of wires) {
   ok(calls.filter((c) => c === "flex").length === 1 && calls.filter((c) => c === "default").length === 3 && s.err?.statusCode === 503, `${w.name} stream: same retry shape (${calls.join(",")})`);
 }
 
+// ---- 4b. an upstream 200 with no message: the claim on a route call only ----
+{
+  globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ id: "g", choices: [] }) });
+  const routed = await settle(() => wires[0].run({ ...ONE }, { headers: {}, ip: "203.0.113.9" }));
+  ok(routed.err?.statusCode === 502 && /no message\)\. Nothing was charged\.$/.test(routed.err.message), `a route call's no-message refusal carries the shared sentence (${routed.err?.message})`);
+  const step = await settle(() => wires[0].run({ ...ONE }));
+  // The streamed path reads the request off the response it writes to: a
+  // stream that ends with no data frame is the same claim, on a route call only.
+  const emptyStream = () => ({ ok: true, status: 200, body: (async function* () { yield Buffer.from(": keep-alive\n\n"); })() });
+  for (const w of wires) {
+    const routeReq = { headers: {}, ip: "203.0.113.9" };
+    globalThis.fetch = async () => emptyStream();
+    const onRoute = fakeRes(); onRoute.req = routeReq;
+    const sr = await settle(async () => (await w.run({ stream: true, ...ONE }, routeReq)).__sse(onRoute));
+    ok(sr.err?.statusCode === 502 && /\(no tokens\)\. Nothing was charged\.$/.test(sr.err.message) && onRoute.writes === 0, `${w.name} stream: a route call's empty-stream refusal carries the shared sentence (${sr.err?.statusCode} ${sr.err?.message})`);
+    globalThis.fetch = async () => emptyStream();
+    const bare = fakeRes();
+    const ss = await settle(async () => (await w.run({ stream: true, ...ONE })).__sse(bare));
+    ok(ss.err?.statusCode === 502 && /\(no tokens\)\.$/.test(ss.err.message) && !/charged/i.test(ss.err.message), `${w.name} stream: the same refusal with no request prints no claim (${ss.err?.message})`);
+  }
+  ok(step.err?.statusCode === 502 && /no message/.test(step.err.message) && !/charged/i.test(step.err.message), `the same refusal on a request-less step call prints no claim (${step.err?.message})`);
+}
+
 // ---- 5. the buyer's EVM authorization bounds every attempt -----------------
 {
   ok(paymentWindowTimeoutMs(null, 90_000) === 90_000 && paymentWindowTimeoutMs({ header: () => undefined }, 90_000) === 90_000, "no EVM authorization: the per-attempt timeout is unchanged");
@@ -148,7 +171,20 @@ for (const w of wires) {
   const first = paymentWindowTimeoutMs(shortReq, 90_000);
   ok(first > 0 && first < PAYMENT_WINDOW_MIN_START_MS, `a short window still lets the first attempt start (${first} ms)`);
   const { err } = await settle(async () => paymentWindowTimeoutMs(shortReq, 90_000));
-  ok(err?.statusCode === 504 && /payment window/.test(err.message) && /not charged/.test(err.message), "a further attempt in a short window: a 504 that says it was not charged");
+  ok(err?.statusCode === 504 && /payment window/.test(err.message) && /Nothing was charged\./.test(err.message), "a further attempt in a short window: a 504 that says it was not charged");
+  // The shared sentence (src/not-charged.js), which the route binder restates
+  // for a Tempo push payer.
+  {
+    const { withPushExceptionText } = await import("../src/prepayment-refusal.js");
+    const { PUSH_EXCEPTION } = await import("../src/tempo-push-debts.js");
+    ok(/payment window\. Nothing was charged\. Retry with a fresh payment\./.test(err?.message || "") && withPushExceptionText(err?.message, true).includes(`Nothing was charged${PUSH_EXCEPTION}.`), `the window refusal is the shared sentence the binder restates (${err?.message})`);
+    // Binder then the Tempo gate's send wrapper: the text each payer reads.
+    const { renderRefusal, malformed } = await import("./lib/push-refusal-render.js");
+    const { PUSH_FAILURE_NOTE } = await import("../src/push-refusal-body.js");
+    const forPush = renderRefusal(err?.message, "push");
+    ok(forPush === `The call did not finish within the payment window. ${PUSH_FAILURE_NOTE} Retry with a fresh payment.` && malformed(forPush, "push") === null, `a claimed Tempo push payer reads the owed note in place of the sentence (${forPush})`);
+    ok(renderRefusal(err?.message, "other") === "The call did not finish within the payment window. Nothing was charged. Retry with a fresh payment.", "...and a payer on any other rail reads it as written");
+  }
   const { err: none } = await settle(async () => paymentWindowTimeoutMs(evmReq(6 + PAYMENT_WINDOW_TAIL_MS / 1000 - 1), 90_000));
   ok(none?.statusCode === 504, "no usable window at all: a 504 before any attempt");
 }

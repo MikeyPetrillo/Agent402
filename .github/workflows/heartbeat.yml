@@ -235,33 +235,44 @@ jobs:
       # gateway-status leg below under a second issue title; removed 2026-10-02.)
 
       # Bazaar listing validation - Coinbase's keyless, read-only
-      # POST /platform/v2/x402/validate probes our flagship routes the way the
+      # POST /platform/v2/x402/validate probes our checked routes (the flagship
+      # set and every listing whose content type is not JSON, up to 12) the way the
       # Bazaar crawler does (402 shape, PAYMENT-REQUIRED, accepts, bazaar
       # extension, simulated accept, index membership). Never called before
       # 2026-08-19; a broken 402 on one route could silently drop its listing
       # for weeks. Exit 1 = a route is INVALID (our defect) -> issue; exit 2 =
       # the validator itself unreadable (CDP-side) -> loud warning, no issue.
-      - name: Bazaar listing validation (flagship routes vs CDP validate)
+      # The FAIL and unreadable rows print first, so the tail never hides one;
+      # the run ends at the script's own deadline (8 minutes) at the latest.
+      # A non-JSON listing that is valid but not in the index is a warning and
+      # a job-summary line on every run (no issue: the index lags the
+      # validator); an INVALID non-JSON listing adds the listing switch to the
+      # issue body.
+      - name: Bazaar listing validation (checked routes vs CDP validate)
         if: always()
         continue-on-error: true
         run: |
           set +e
           OUT=$(TARGET_URL="$PROD" node scripts/bazaar-validate.js 2>&1); CODE=$?
           set -e
-          echo "$OUT" | tail -20
+          echo "$OUT" | grep -E '^(FAIL|\?\?) |INVALID|UNREADABLE' || true
+          echo "$OUT" | tail -40
+          echo "$OUT" | grep '^WARN not-indexed ' | while IFS= read -r LINE; do echo "::warning::Bazaar: $LINE"; echo "- Bazaar: $LINE" >> "$GITHUB_STEP_SUMMARY"; done || true
+          HINT=""
+          if echo "$OUT" | grep -q '^NONJSON-INVALID '; then HINT=" If the failing route is a binary listing, X402_BINARY_LISTINGS=off on the service returns every listing to its earlier shape."; fi
           TITLE="Bazaar listing validation FAILED"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           DETAIL=$(echo "$OUT" | grep -E '^(FAIL|\?\?) ' | head -20 || true)
           if [ "$CODE" = "1" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$(printf 'Coinbase CDP'"'"'s x402 validate endpoint reports at least one flagship route INVALID - its 402 no longer passes the Bazaar crawler'"'"'s preflight (shape, PAYMENT-REQUIRED header, accepts, bazaar extension) or the index dropped it. Buyers discovering through the Bazaar / AgentCore will not see that route until it validates again.\n\n```\n%s\n```\n\nReproduce: `node scripts/bazaar-validate.js` (read-only, keyless). A green run closes this.' "$DETAIL")"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$(printf 'Coinbase CDP'"'"'s x402 validate endpoint reports at least one checked route INVALID - its 402 no longer passes the Bazaar crawler'"'"'s preflight (shape, PAYMENT-REQUIRED header, accepts, bazaar extension) or the index dropped it. Buyers discovering through the Bazaar / AgentCore will not see that route until it validates again.\n\n```\n%s\n```\n\nReproduce: `node scripts/bazaar-validate.js` (read-only, keyless). A green run closes this.%s' "$DETAIL" "$HINT")"
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "$(printf 'Still failing at %s\n\n```\n%s\n```' "$(date -u +%FT%TZ)" "$DETAIL")"
             fi
           elif [ "$CODE" = "2" ]; then
-            echo "::warning::CDP validate endpoint UNREADABLE for every flagship route - not silently skipping; the listing check is blind this run"
+            echo "::warning::CDP validate endpoint UNREADABLE for at least one checked route - not silently skipping; the listing check is blind this run"
           elif [ "$CODE" = "0" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every flagship route validates again at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: every checked route validates again at $(date -u +%FT%TZ)."
           fi
 
       # Security advisories waiting in triage: a private report waits on a

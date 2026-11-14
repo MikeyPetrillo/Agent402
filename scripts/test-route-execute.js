@@ -260,6 +260,54 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     ok(boundRequestUrl(GET_EXT.url, { method: "POST", params }) === GET_EXT.url && boundRequestUrl(GET_EXT.url, { method: "GET", params: { n: null } }) === GET_EXT.url, "a body seller, and a GET with no params, keep the listing URL");
     const nested = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e; } })();
     ok(nested?.statusCode === 400 && /param "q" must be a string, number, or boolean/.test(nested.message), "a nested param against a GET seller is the caller's 400, as before");
+    // The charge sentence on these refusals is printed on a route call only
+    // (src/not-charged.js): through the router with the paid call's request,
+    // and never on a request-less step call.
+    {
+      const { closedSentence } = await import("../src/tools/route-execute.js");
+      const routeReq = () => ({ ip: "198.51.100.61", headers: {} });
+      const thrown = async (t, input, req) => { try { await t.handler(input, req); return null; } catch (e) { return e; } };
+      const NESTED = 'External tool "wx" is a GET endpoint - param "q" must be a string, number, or boolean.';
+      // a. The chosen seller's URL is bound by the router itself.
+      const before = paidWith;
+      const routed = await thrown(tool, { task: "forecast", include: "external", params: { q: { x: 1 } } }, routeReq());
+      ok(routed?.statusCode === 400 && routed.message === `${NESTED} Nothing was charged.`, `GET seller: the router's own bind refusal on a route call ends with the charge sentence (${routed?.message})`);
+      const stepCall = await thrown(tool, { task: "forecast", include: "external", params: { q: { x: 1 } } });
+      ok(stepCall?.statusCode === 400 && stepCall.message === NESTED, `...and prints no claim on a request-less call (${stepCall?.message})`);
+      ok(paidWith === before, "...and neither call paid the seller");
+      // b. Every candidate was set aside by the resolver, which builds the
+      // refusal request-less and keeps a bounded length of it.
+      const dropsTool = (paramsRefusal) => buildRouteExecuteTool({ getCatalog: () => CATALOG, tier: { slug: "route-execute-max", execPriceUsd: 0.55, underlyingMaxUsd: 0.5 }, payExternal, externalEnabled: () => true,
+        resolveExternal: async () => Object.assign([], { __gateDrops: { total: 1, byReason: { params_unbindable: 1 }, paramsRefusal } }) });
+      const resolverSaid = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e.message; } })();
+      const set = await thrown(dropsTool(resolverSaid), { task: "forecast", include: "external", params: { q: { x: 1 } } }, routeReq());
+      ok(resolverSaid === NESTED && set?.statusCode === 400 && set.message === `${NESTED} Nothing was charged.`, `GET seller: the resolver's set-aside refusal on a route call is the builder's words and the charge sentence (${set?.message})`);
+      const setStep = await thrown(dropsTool(resolverSaid), { task: "forecast", include: "external", params: { q: { x: 1 } } });
+      ok(setStep?.statusCode === 400 && setStep.message === NESTED, `...and prints no claim on a request-less call (${setStep?.message})`);
+      // A long param name is quoted at a bounded length where the refusal is
+      // built, so the resolver's 300-character bound keeps the whole sentence.
+      const longName = "p".repeat(400);
+      const LONG = `External tool "wx" is a GET endpoint - param "${"p".repeat(60)}..." must be a string, number, or boolean.`;
+      const kept = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { [longName]: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e.message.slice(0, 300); } })();
+      const keptSet = await thrown(dropsTool(kept), { task: "forecast", include: "external", params: { [longName]: { x: 1 } } }, routeReq());
+      ok(kept === LONG && keptSet?.message === `${LONG} Nothing was charged.`, `a long param name is quoted to 60 characters and the refusal keeps its whole sentence (${keptSet?.message})`);
+      const shortName = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { ["k".repeat(60)]: { x: 1 } }, slug: "wx" }); return null; } catch (e) { return e.message; } })();
+      ok(shortName === `External tool "wx" is a GET endpoint - param "${"k".repeat(60)}" must be a string, number, or boolean.`, "a name at the bound is quoted whole, with no ellipsis");
+      // The safety net: a refusal that still arrives cut (a long listing
+      // slug) is closed at a whole word, with exactly three dots.
+      const cutSet = await thrown(dropsTool(`External tool "${"s".repeat(300)}`), { task: "forecast", include: "external", params: { q: { x: 1 } } }, routeReq());
+      ok(cutSet?.message === "External tool... Nothing was charged.", `a refusal that arrives cut mid-word is closed at a whole word before the sentence (${cutSet?.message?.slice(0, 90)})`);
+      ok(closedSentence(NESTED) === NESTED && closedSentence("Too many (max 2048). ") === "Too many (max 2048)." && closedSentence("") === "" && closedSentence("ppp") === "ppp..." && closedSentence("a GET endpoint - param \"ppp") === "a GET endpoint - param..." && !/\.{4}/.test(closedSentence("One. Two thr")),
+        "a refusal that already ends as a sentence is left as written; a cut one ends with exactly three dots");
+      ok(closedSentence("One. Two thr") === "One. Two..." && closedSentence("One. thr") === "One..." && closedSentence("a - b") === "a..." && closedSentence("  cut here,  mid") === "cut here..." && closedSentence("word\ttab") === "word..." && closedSentence(null) === "" && closedSentence("Done!") === "Done!" && closedSentence("Why?") === "Why?",
+        "the cut word and what joined it are dropped, whatever the joiner");
+      // Linear in the text: 100,000 characters of each hostile shape, timed
+      // with a bound far above a linear pass and one retry under load.
+      const HOSTILE = ["a".repeat(100_000) + " b", " ".repeat(100_000) + "b", "a ".repeat(50_000) + "b", ("a" + " ".repeat(300)).repeat(330) + "b", "-".repeat(100_000) + " b"];
+      const timeAll = () => { const t0 = performance.now(); for (const h of HOSTILE) closedSentence(h); return performance.now() - t0; };
+      let ms = timeAll(); if (ms >= 50) ms = timeAll();
+      ok(ms < 50 && closedSentence(HOSTILE[0]) === `${"a".repeat(100_000)}...` && closedSentence(HOSTILE[4]) === `${"-".repeat(100_000)} b...`, `closing a 100,000-character text is a linear pass (${ms.toFixed(1)} ms for ${HOSTILE.length} shapes)`);
+    }
     const long = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: "x".repeat(BOUND_URL_MAX_CHARS) } }); return null; } catch (e) { return e; } })();
     ok(long?.statusCode === 400 && BOUND_URL_MAX_CHARS === 2048 && /max 2048/.test(long.message), "a bound URL past the 2048-character bound is refused 400, nothing sent");
     // The SSRF guard reads the bound URL: a private listing host stays refused
@@ -571,7 +619,7 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
   const guard = await import("../src/external-spend-guard.js");
   const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
   const cand = (host, networks = ["eip155:8453"]) => ({ seller: `https://${host}`, slug: host, url: `https://${host}/x`, method: "POST", price: "$0.001", networks });
-  const reqOn = (network) => ({ ip: "198.51.100.77", header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ network, payload: {} })).toString("base64") : undefined) });
+  const reqOn = (network) => ({ ip: "198.51.100.77", headers: {}, header: (n) => (n === "payment-signature" ? Buffer.from(JSON.stringify({ network, payload: {} })).toString("base64") : undefined) });
   const run = async ({ list, pay, chains = ["base"], network = "eip155:8453", wallet = () => null, resolve = null }) => {
     guard.__reset();
     const calls = [];
@@ -715,7 +763,15 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
     try {
       const slow = (nets) => async () => { await new Promise((r) => setTimeout(r, 700)); return [cand("sv.example", nets)]; };
       const { e, calls } = await run({ list: [], resolve: slow([SOL]), pay: good, chains: ["solana"], network: SOL });
-      ok(e?.statusCode === 504 && /nothing is charged/.test(e.message) && calls.length === 0, `Solana payer: a slow resolve is refused 504 before any payment (status ${e?.statusCode}, paid ${calls.length}x)`);
+      ok(e?.statusCode === 504 && /Nothing was spent\. Nothing was charged\./.test(e.message) && calls.length === 0, `Solana payer: a slow resolve is refused 504 before any payment (status ${e?.statusCode}, paid ${calls.length}x)`);
+      // Binder then the Tempo gate's send wrapper: the text each payer reads.
+      {
+        const { renderRefusal, malformed } = await import("./lib/push-refusal-render.js");
+        const { PUSH_FAILURE_NOTE } = await import("../src/push-refusal-body.js");
+        const forPush = renderRefusal(e?.message, "push");
+        ok(forPush === `Resolving an external seller used this payment's time budget. Nothing was spent. ${PUSH_FAILURE_NOTE} Retry with a fresh payment, or pay this route over an EVM rail.` && malformed(forPush, "push") === null, `the refusal's shared sentence reaches a claimed Tempo push payer as the owed note (${forPush})`);
+        ok(renderRefusal(e?.message, "other") === "Resolving an external seller used this payment's time budget. Nothing was spent. Nothing was charged. Retry with a fresh payment, or pay this route over an EVM rail.", "...and a payer on any other rail reads it as written");
+      }
       ok(guard.walletDailySpentUsd("solana") === 0, "Solana payer: the refusal books nothing on the chain's day");
       const b = await run({ list: [], resolve: slow(["eip155:8453"]), pay: good });
       ok(b.r?.receipt?.external === true && b.calls.length === 1, "CONTROL: the same slow resolve on a Base payer still pays");

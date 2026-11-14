@@ -40,6 +40,8 @@ const { EVM_RUN_SECONDS } = await import("../src/evm-validity.js");
 const { SLOW_ADVISE_SECONDS } = await import("../src/slow-routes.js");
 const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
 const { createTempoPushDebts, createHeldClaimSweep, PULL_LANDED_AFTER_402_NOTE, PUSH_FINALIZE_UNANSWERED_NOTE, PUSH_RUN_UNFINISHED_NOTE, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
+const { withPushExceptionText } = await import("../src/prepayment-refusal.js");
+const { renderRefusal, expectedForPush, malformed } = await import("./lib/push-refusal-render.js");
 const { slowSyncWindowMiddleware, SYNC_WINDOW_RETRY } = await import("../src/slow-sync-window.js");
 const { cdnSyncWindowMiddleware } = await import("../src/cdn-sync-window.js");
 const { wantsAsync } = await import("../src/async-jobs.js");
@@ -141,6 +143,9 @@ const handler = (req, res) => {
   if (req.body?.text === "slow") return setTimeout(() => res.json({ ok: true }), 400);
   // A handler refusal written for the settle-after rails, as the kits write them.
   if (req.body?.text === "refuse") return res.status(422).json({ error: "The text is over the cap. Nothing was charged.", hint: "Send a shorter text; you were not charged.", problem: { detail: "Refused before any upstream call, so nothing was charged." } });
+  // A route refusal as the binder answers it for a push credential (server.js
+  // withPushException), so the gate's send wrapper composes with it here.
+  if (typeof req.body?.refuseWith === "string") return res.status(503).json({ error: withPushExceptionText(req.body.refuseWith, isTempoPushCredential(req.headers.authorization)), tool: "paid" });
   return res.json({ ok: true, note: "Nothing was charged for the free part." });
 };
 app.post("/paid", handler);
@@ -428,6 +433,34 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   const served = await post(pushCred(hashFor(41)), { text: "x" });
   ok(served.status === 200 && served.body.note === "Nothing was charged for the free part." && served.body.refundOwed === undefined, "a served push answer goes out as written (only a refusal is restated)");
   ok(rewriteNotChargedForPush("This call is not charged on x402.") === "This call is not charged on x402." && rewriteNotChargedForPush("Bad input - not charged; retry") === "Bad input - a refund is owed; retry", "a sentence scoped to another rail is kept; an unscoped clause is restated in place");
+  // The binder's exception form and the send wrapper compose: the shared
+  // sentence, mid-message or last, reaches a claimed push payer as the owed
+  // note, once, and reaches every other payer as written.
+  const NOTE = PUSH_FAILURE_NOTE;
+  const MID = "The decision service did not answer in time. Nothing was charged. Retry shortly.";
+  const END = "Upstream returned no answer (no message). Nothing was charged.";
+  let n = 43;
+  for (const [msg, want] of [
+    [MID, `The decision service did not answer in time. ${NOTE} Retry shortly.`],
+    [END, `Upstream returned no answer (no message). ${NOTE}`],
+    ["Resolving an external seller used this payment's time budget. Nothing was spent. Nothing was charged. Retry with a fresh payment, or pay this route over an EVM rail.", `Resolving an external seller used this payment's time budget. Nothing was spent. ${NOTE} Retry with a fresh payment, or pay this route over an EVM rail.`],
+  ]) {
+    const hh = hashFor(n++);
+    const sent = await post(pushCred(hh), { text: "x", refuseWith: msg });
+    ok(sent.status === 503 && sent.body.error === want && sent.body.refundOwed === true, `claimed push payer, through the gate: the shared sentence is the owed note, whole (${sent.body.error})`);
+    ok(malformed(sent.body.error, "push") === null, `...well formed: ${malformed(sent.body.error, "push")}`);
+    ok(renderRefusal(msg, "push") === want && want === expectedForPush(msg), "...and the offline composition renders the same text");
+    ok(renderRefusal(msg, "other") === msg && malformed(msg, "other") === null, "a payer on any other rail reads the sentence as written");
+    ok(renderRefusal(msg, "push-unclaimed") === msg.replace("Nothing was charged.", `Nothing was charged${PUSH_EXCEPTION}.`) && malformed(renderRefusal(msg, "push-unclaimed"), "push-unclaimed") === null, "a push credential refused before its claim reads the exception form, once");
+    ok(rowsFor(hh).length === 1 && rowsFor(hh)[0].status === "owed", "...and the claimed transfer is booked as owed");
+  }
+  ok(rewriteNotChargedForPush(`Refused before any payment was taken${PUSH_EXCEPTION}.`) === `Refused before any payment was taken${PUSH_EXCEPTION}.`, "a sentence that already holds the push exception after other wording stays as written");
+  ok(rewriteNotChargedForPush("A failed. Nothing was charged. B was skipped. Nothing was charged. Retry later.") === `A failed. ${NOTE} B was skipped. Retry later.`
+     && rewriteNotChargedForPush(`A failed. Nothing was charged${PUSH_EXCEPTION}. Nothing was charged.`) === `A failed. ${NOTE}`
+     && rewriteNotChargedForPush("Nothing was charged. You were not charged; resend it.") === `${NOTE} resend it.`,
+     "a message that makes the claim twice states the owed note once");
+  ok(rewriteNotChargedForPush("Nothing was charged because the input was refused. Retry.") === "The transfer you sent is recorded as owed because the input was refused. Retry.", "a clause restated at the head of a sentence keeps its capital");
+  ok(malformed("A. the transfer you sent is recorded as owed, except a Tempo transfer sent before the call, which is recorded as owed. B.", "push") !== null && malformed("A. Nothing was charged.", "push") !== null, "control: the malformed check catches a doubled clause and a standing claim");
   // The refund run holds the claim: server.js answers its own refunded 402, untouched.
   const h2 = hashFor(42);
   const cred2 = pushCred(h2);

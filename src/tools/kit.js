@@ -2446,6 +2446,9 @@ const networkTools = [
     description: "Generate a QR code PNG from any text or URL. ?text=…&size=256 (128-1024).",
     tags: ["qr", "qrcode", "png", "generator"],
     mimeType: "image/png",
+    // The sample the x402 listing carried before it named its bytes; listed
+    // again only when X402_BINARY_LISTINGS=off (src/tool-media-type.js).
+    legacyListingExample: { contentType: "image/png", body: "(binary PNG image)" },
     discovery: {
       input: { text: "https://agent402.tools", size: "256" },
       inputSchema: {
@@ -2455,7 +2458,7 @@ const networkTools = [
         },
         required: ["text"],
       },
-      output: { example: { contentType: "image/png", body: "(binary PNG image)" } },
+      output: { example: "(raw image/png bytes, not JSON)" },
     },
     handler: async (input) => {
       // Accept any reasonable "encode this" alias.

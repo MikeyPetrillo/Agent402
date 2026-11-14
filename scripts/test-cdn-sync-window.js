@@ -68,7 +68,7 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
   const late = { headers: {}, cdnSyncDeadlineMs: Date.now() + 8_000 };
   paymentWindowTimeoutMs(late, 90_000);
   try { paymentWindowTimeoutMs(late, 90_000); } catch (e) { threw = e; }
-  ok(threw?.statusCode === 504 && /connection waits/.test(threw.message) && /not charged/.test(threw.message), "a further LLM attempt that cannot finish in the CDN wait is a 504, not charged");
+  ok(threw?.statusCode === 504 && /connection waits/.test(threw.message) && /Nothing was charged\./.test(threw.message), "a further LLM attempt that cannot finish in the CDN wait is a 504, not charged");
 
   // Image tiers: first link always starts, a fallback link only with time left.
   ok(cdnLinkTimeoutMs({}, 45_000, 1) === 45_000, "image link timeout unchanged off the CDN");

@@ -45,6 +45,38 @@ ok(triggerAt > upsertAt && upsertAt >= 0, "the deploy trigger runs after the ups
   ok(blanked.every((k) => k in env && String(env[k] ?? "") === ""), `the Bazaar validation step blanks the upstream keys (${blanked.filter((k) => !(k in env) || String(env[k] ?? "") !== "").join(", ") || "all blank"})`);
   ok(/TARGET_URL=https:\/\/agent402\.tools/.test(String(bazaar.run || "")), "the validator reads production's 402s");
   ok(/exit 1/.test(String(bazaar.run || "")) && !bazaar["continue-on-error"], "an INVALID verdict with no clean run fails the job");
+  // The run's FAIL and unreadable rows are printed on their own before the
+  // tail (a default run prints more lines than a short tail keeps), here and
+  // in the heartbeat's step; neither says "flagship" of what it checked, and
+  // the heartbeat's issue title is the one an open issue is found by.
+  const heartbeat = load(readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"));
+  const hbStep = Object.values(heartbeat.jobs || {}).flatMap((j) => j.steps || []).find((s) => /node scripts\/bazaar-validate\.js/.test(String(s.run || ""))) || {};
+  const ROWS_LINE = String.raw`echo "$OUT" | grep -E '^(FAIL|\?\?) |INVALID|UNREADABLE' || true`;
+  for (const [label, step] of [["deploy", bazaar], ["heartbeat", hbStep]]) {
+    const run = String(step.run || "");
+    const rowsAt = run.indexOf(ROWS_LINE);
+    const tailAt = run.search(/echo "\$OUT" \| tail -\d+/);
+    const tail = Number((run.match(/echo "\$OUT" \| tail -(\d+)/) || [])[1] || 0);
+    ok(rowsAt >= 0 && tailAt > rowsAt, `the ${label} step prints the validator's FAIL and unreadable rows before its tail`);
+    ok(tail >= 40, `the ${label} step's tail keeps a whole default run (${tail} lines)`);
+    ok(!/flagship/i.test(`${step.name || ""} ${run}`), `the ${label} step names what it checked as checked routes`);
+  }
+  ok(/TITLE="Bazaar listing validation FAILED"/.test(String(hbStep.run || "")), "the heartbeat's issue title is unchanged");
+  // A non-JSON listing that is valid but not indexed is a warning in both
+  // steps (and a job-summary line on the heartbeat), never an issue; an
+  // INVALID one adds the listing switch to the deploy error and to the
+  // heartbeat's issue body. The two lines are scripts/bazaar-validate.js's.
+  const validator = readFileSync(new URL("./bazaar-validate.js", import.meta.url), "utf8");
+  ok(validator.includes("`WARN not-indexed ${tag} (last crawl ") && validator.includes("`NONJSON-INVALID ${tag}`"), "the validator prints the two lines the steps grep");
+  const LEVER = "If the failing route is a binary listing, X402_BINARY_LISTINGS=off on the service returns every listing to its earlier shape.";
+  for (const [label, step] of [["deploy", bazaar], ["heartbeat", hbStep]]) {
+    const run = String(step.run || "");
+    ok(/grep '\^WARN not-indexed ' \| while IFS= read -r LINE; do echo "::warning::Bazaar: \$LINE"/.test(run), `the ${label} step turns each WARN not-indexed line into a warning`);
+    ok(run.includes(`if echo "$OUT" | grep -q '^NONJSON-INVALID '; then HINT=" ${LEVER}"; fi`), `the ${label} step names the listing switch when a non-JSON listing is INVALID`);
+  }
+  ok(/could not be read\.\$HINT"; exit 1/.test(String(bazaar.run || "")), "the deploy step's error ends with the switch");
+  ok(/>> "\$GITHUB_STEP_SUMMARY"/.test(String(hbStep.run || "")) && /A green run closes this\.%s' "\$DETAIL" "\$HINT"\)/.test(String(hbStep.run || "")), "the heartbeat writes the WARN lines to the job summary and ends its issue body with the switch");
+  ok(!/gh issue (create|close|comment)[^\n]*not-indexed/.test(String(hbStep.run || "")), "no issue is opened or closed on a not-indexed listing");
 }
 
 // The jobs a commit-subject marker starts read the markers job's outputs, so

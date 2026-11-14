@@ -3,6 +3,19 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-13",
+    title: "Listing types, charge sentences and price keys",
+    items: [
+      "Index: the seller index also reads the price spellings amount_usd and max_amount_required, beside price_usd, in a seller's manifest and OpenAPI document: amount_usd in a price object and an OpenAPI payment object, max_amount_required on an entry that names its asset, in a payment object and in accepts items. They are read only where the seller's own manifest or OpenAPI document would otherwise give a route no price, so a price those documents already gave is kept, one written as both priceUsd and price_usd included. A price they give counts as the seller's declared price, as the camelCase spelling does: it is listed in place of a price read from the Bazaar or learned from the seller's 402.",
+      "Surfaces: a tool that answers with bytes is listed under the content type its example returns: qr, screenshot, image-resize and image-thumbnail as image/png, image-convert as image/jpeg and /v1/audio/speech as audio/mpeg. The x402 listing, /openapi.json and /api/pricing read the type from one field on the tool, /openapi.json lists a route's other answer types after it, and a binary listing names its output type as binary with a sample string that names its bytes.",
+      "Surfaces: the hosted /mcp connector reports serverInfo.version as the agent402-mcp package version in the deployed build followed by that build, in the form <package version>+build.<sha>.",
+      "Tools: refusals from /api/decide, the route-execute tiers and the /v1 chat completions tiers that say a call was not charged use one sentence, \"Nothing was charged.\", on a call to the route itself. A step error recorded inside a decision run no longer carries that sentence.",
+      "Payments: a refusal sent to a Tempo payer whose transfer was claimed before the call ran says in one sentence that the failure is recorded as a refund owed to the sending wallet, in place of the sentence that nothing was charged.",
+      "Payments: across a deploy, a payment whose credential is held under an earlier key of the same payment family is refused as the same payment; a different payment in that family is served.",
+      "Server: the server and worker image builds print the end of npm's debug log when the install step fails, and fail with npm's exit code.",
+    ],
+  },
+  {
+    date: "2026-11-13",
     title: "Payment and input hardening",
     items: [
       "Tools: transcription measures each file's length by decoding it before any upstream call. WMA, raw AAC, AMR and CAF recordings are read and sent as FLAC, an MP4, MKV, WebM or Ogg file holding several audio tracks is measured and sent as its first track, and AAC behind an ID3 tag, an MP3 with leading padding and an Ogg file sent under another format's name are read too. A PCM WAV whose size alone keeps it inside the cap is sent without a decode, and a call that finds the decoder busy waits its turn inside the time its payment allows, or is answered a retryable 503 at once when the queue for the decoder is full, by its count or by the bytes its waiting files hold. A refusal says nothing was charged on a call to the route itself, in the wording that names the Tempo push exception, and not inside a skill-pack step.",

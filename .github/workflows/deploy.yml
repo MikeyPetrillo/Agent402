@@ -5308,11 +5308,17 @@ jobs:
       # The new build's 402s against Coinbase's Bazaar validator, read-only and
       # keyless (the heartbeat repeats it on a schedule). Up to three runs a
       # minute apart, stopping at the first clean one (exit 0), which passes.
-      # With no clean run, one run that read a flagship route INVALID (exit 1)
+      # With no clean run, one run that read a checked route INVALID (exit 1)
       # fails this job whatever the other runs did, so a release that breaks a
       # listing is red on its own run. Only when every run could not read the
       # validator (exit 2, CDP-side) does the step warn instead: it then has
-      # no verdict on our build.
+      # no verdict on our build. The checked routes are the flagship set and
+      # every listing whose content type is not JSON (up to 12). Each run prints its
+      # FAIL and unreadable rows first, so a long run's tail never hides one,
+      # and ends at the script's own deadline (8 minutes) at the latest.
+      # A non-JSON listing that is valid but not in the index is a warning
+      # (the index lags the validator; no verdict changes), and an INVALID
+      # non-JSON listing adds the listing switch to the error.
       - name: Bazaar listing validation on the new build
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env:
@@ -5329,19 +5335,23 @@ jobs:
         run: |
           BEST=9
           INVALID=0
+          HINT=""
           for i in 1 2 3; do
             set +e
             OUT=$(TARGET_URL=https://agent402.tools node scripts/bazaar-validate.js 2>&1); CODE=$?
             set -e
             echo "--- run $i: exit $CODE"
-            echo "$OUT" | tail -20
+            echo "$OUT" | grep -E '^(FAIL|\?\?) |INVALID|UNREADABLE' || true
+            echo "$OUT" | tail -40
             if [ "$CODE" -lt "$BEST" ]; then BEST=$CODE; fi
             if [ "$CODE" = "1" ]; then INVALID=$((INVALID + 1)); fi
+            if echo "$OUT" | grep -q '^NONJSON-INVALID '; then HINT=" If the failing route is a binary listing, X402_BINARY_LISTINGS=off on the service returns every listing to its earlier shape."; fi
             if [ "$CODE" = "0" ]; then break; fi
             if [ "$i" -lt 3 ]; then sleep 60; fi
           done
+          echo "$OUT" | grep '^WARN not-indexed ' | while IFS= read -r LINE; do echo "::warning::Bazaar: $LINE"; done || true
           case "$BEST" in
-            0) echo "Every flagship route validates on the new build." ;;
+            0) echo "Every checked route validates on the new build." ;;
             2) echo "::warning::The Bazaar validator could not be read on any run (CDP-side); no listing verdict for this build." ;;
-            *) echo "::error::No Bazaar validator run was clean against the new build: $INVALID of $i run(s) read a flagship route INVALID, the rest could not be read."; exit 1 ;;
+            *) echo "::error::No Bazaar validator run was clean against the new build: $INVALID of $i run(s) read a checked route INVALID, the rest could not be read.$HINT"; exit 1 ;;
           esac
