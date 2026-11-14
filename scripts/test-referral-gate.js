@@ -1039,6 +1039,11 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
     const bigSql = await call(`${w.url}/ref/onchain-sql`, { body: sqlBody, headers: at("203.0.113.91", paidShape) });
     const bigSqlDirect = await call(`${w.url}/api/onchain-sql`, { body: sqlBody, headers: at("203.0.113.92", paidShape) });
     ok(bigSql.status === 402 && bigSql.json?.errorReason === "invalid_payload" && bigSqlDirect.status !== 413, `a 150 KB body reaches the onchain-sql copy through the large-body twin, as it reaches the direct route (${bigSql.status} ${bigSql.json?.errorReason || bigSql.text.slice(0, 60)}; direct ${bigSqlDirect.status})`);
+    // The large-body gate itself covers the copy: an unpaid oversized body is answered without being read (so
+    // even one that is not JSON gets the 402), exactly as on the direct route.
+    const unreadRef = await call(`${w.url}/ref/onchain-sql`, { rawBody: "{not json " + "x".repeat(150_000), headers: at("203.0.113.96") });
+    const unreadDirect = await call(`${w.url}/api/onchain-sql`, { rawBody: "{not json " + "x".repeat(150_000), headers: at("203.0.113.97") });
+    ok(unreadRef.status === 402 && unreadDirect.status === 402 && Array.isArray(unreadRef.json?.accepts), `an unpaid oversized body on the onchain-sql copy is answered its 402 without being read, as on the direct route (${unreadRef.status}, direct ${unreadDirect.status})`);
     const bigHash = await call(`${w.url}/ref/hash`, { body: { text: "x".repeat(150_000) }, headers: at("203.0.113.93", paidShape) });
     ok(bigHash.status === 413, `a copy of a route with no large-body allowance keeps the 100 KB limit (${bigHash.status})`);
     // A non-canonical spelling reaches none of the path-mounted limiters, so it is given nothing.
@@ -1183,6 +1188,14 @@ try {
   const probe = await call(`${srv.url}/ref/v1-chat-metered`, { method: "GET", headers: xff() });
   const floor = await call(`${srv.url}/ref/v1-chat-metered`, { body: { nonsense: true }, headers: xff() });
   ok(probe.status === 402 && floor.status === 402 && probe.json.accepts[0].amount === floor.json.accepts[0].amount && BigInt(probe.json.accepts[0].amount) > 0n, `a bare GET and an unpriceable body both answer 402 at the route's list price (${probe.json?.accepts?.[0]?.amount})`);
+
+  {
+    // The metered quote limiter covers the metered copy: past 60 unpaid quotes a minute from one address, 429.
+    const texts = [];
+    for (let i = 0; i < 66; i++) { const r = await call(`${srv.url}/ref/v1-chat-metered`, { body: meteredBody, headers: { "x-forwarded-for": "192.0.2.240" } }); texts.push(`${r.status}:${r.json?.error || ""}`); }
+    const limited = texts.filter((t) => /^429:Too many unpaid quote requests/.test(t)).length;
+    ok(texts[0].startsWith("402") && limited >= 1 && limited <= 10, `the metered quote limiter bounds unpaid quotes on the metered copy (${limited} of 66 answered 429 by it)`);
+  }
 
   // A paid call end to end on a flat tool.
   const p = await signPayment(refAccept);
