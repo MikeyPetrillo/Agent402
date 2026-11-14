@@ -1265,6 +1265,21 @@ try {
   }
   fac.reset(); sales.length = 0;
 
+  {
+    // The refund path's proof (src/payment-verify.js) for a referral row: a transfer from the payer to the split contract.
+    const { verifyInboundPayment } = await import("../src/payment-verify.js");
+    const payer = newAccount().address.toLowerCase();
+    const pad = (x) => `0x${"0".repeat(24)}${x.slice(2).toLowerCase()}`;
+    const receiptTo = (to) => ({ status: "0x1", logs: [{ address: REFERRAL_ASSET, topics: ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", pad(payer), pad(to)], data: `0x${(30000).toString(16).padStart(64, "0")}` }] });
+    const run = (receipt, over = {}) => verifyInboundPayment({ network: "eip155:8453", payer, amountUsd: 0.03, tx: "0x" + "a".repeat(64), wire: "referral", referralPayTo: PAY_TO, rpcFor: () => "http://rpc.invalid", fetchImpl: async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: j.method === "eth_getTransactionReceipt" ? receipt : "0x6" }), { status: 200 }); }, ...over });
+    const good = await run(receiptTo(PAY_TO));
+    const self = await run(receiptTo(payer));
+    const ours = await run(receiptTo(OUR_WALLET), { payToSetFor: () => [OUR_WALLET] });
+    const noPayTo = await run(receiptTo(PAY_TO), { referralPayTo: null });
+    const otherNet = await run(receiptTo(PAY_TO), { network: "eip155:137" });
+    ok(good.verified === true && self.verified === false && ours.verified === false && noPayTo.verified === false && otherNet.verified === false, `a refund of a referral row is proven only by a transfer from the payer to the split contract on Base (to it: ${good.verified}; to the payer, to our own wallet, with no pay-to set, on another chain: ${[self, ours, noPayTo, otherNet].map((x) => x.verified).join("/")})`);
+  }
+
   // --- a buyer who leaves ---------------------------------------------------------
   hangupMod._resetHangupForgiveness();
   const directBudgetBefore = JSON.stringify(hangupMod.hangupForgivenessStatus());
