@@ -34,5 +34,7 @@ export function ownStoreEnv(label = "server") {
     SQL_QUERY_STATS_FILE: join(dir, "onchain-sql-query-stats.json"),
     X_SEARCH_STATS_FILE: join(dir, "x-search-author-stats.json"),
     DISCOVERY_REFUSALS_FILE: join(dir, "discovery-refusals.json"),
+    // The referral gate's open-settlement book (src/referral-book.js).
+    REFERRAL_BOOK_FILE: join(dir, "referral-settlements.json"),
   };
 }

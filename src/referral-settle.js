@@ -1,7 +1,7 @@
 // The client for a referral network's settlement facilitator
 // (src/referral-gate.js is the only caller).
 //
-// A referred sale pays the network's split contract, and only the network's
+// A sale on a referral route pays the network's split contract, and only the network's
 // facilitator can settle it. Every request to it is signed by a hot key of
 // ours (REFERRAL_SIGNER_KEY): the body is serialized ONCE, and that exact
 // string is both signed and sent, so the bytes the facilitator hashes are the
@@ -13,13 +13,17 @@
 //   headers   = X-Agent-Signature (65-byte hex), X-Agent-Timestamp (unix seconds)
 //
 // Every upstream answer is reduced to
-//   { ok, transaction, payer, reason, retryable, status, inDoubt }
+//   { ok, transaction, payer, reason, retryable, status, inDoubt, side }
 // and nothing else of it is kept: `reason` is a short code (the facilitator's
 // own when it is one, else a status-derived one), never its message text.
-// `inDoubt` is true when the answer does not say whether the payment moved (a
-// timeout, a dropped connection, a 5xx, an answer that is not the documented
-// shape, a settlement the facilitator calls pending): the caller must not
-// treat that as "not charged".
+// `inDoubt` is true when the answer does not say whether the payment moved:
+// a timeout, a dropped connection, a 5xx, a 4xx the facilitator's documents
+// do not name (an intermediary's 403, 408 or 429), an answer that is not the
+// documented shape, a settlement the facilitator calls pending. The caller
+// must not treat that as "not charged"; it reads the chain
+// (src/referral-chain.js). A definite refusal carries `side`: "buyer" when
+// it is a verdict on the payment, "ours" when it is about this server's own
+// request, key or registration.
 //
 // The key is read once, never logged and never part of an error: a failure is
 // reported as a code, and any text that reaches a log goes through
@@ -30,7 +34,7 @@ import { redactSecrets } from "./tools/redact.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 export const REFERRAL_VERIFY_TIMEOUT_MS = 10_000;
-export const REFERRAL_SETTLE_TIMEOUT_MS = 30_000;
+export const REFERRAL_SETTLE_TIMEOUT_MS = 50_000;
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const REASON = /^[a-z][a-z0-9_]{0,63}$/;
@@ -49,6 +53,9 @@ export function referralRequestDigest(body, timestampSeconds) {
 // Reasons that say the payment did not move and the same authorization may be
 // sent again.
 const RETRYABLE = new Set(["lookup_unavailable", "merchant_unavailable", "retryable"]);
+// Definite refusals that are about this server's request, never the buyer's payment.
+const OURS = new Set([...RETRYABLE, "merchant_signature", "invalid_request", "signing_failed", "facilitator_http_400", "facilitator_http_401"]);
+const sideOf = (reason) => (OURS.has(reason) ? "ours" : "buyer");
 // Reasons that leave the outcome open: the facilitator may still land it.
 const PENDING = new Set(["settle_pending", "facilitator_timeout"]);
 
@@ -78,7 +85,7 @@ async function readJsonCapped(res) {
   } catch { return null; }
 }
 
-const answer = (o) => ({ ok: false, transaction: null, payer: null, reason: null, retryable: false, status: 0, inDoubt: false, ...o });
+const answer = (o) => ({ ok: false, transaction: null, payer: null, reason: null, retryable: false, status: 0, inDoubt: false, side: null, ...o });
 
 /**
  * @param {object} o
@@ -93,7 +100,10 @@ const answer = (o) => ({ ok: false, transaction: null, payer: null, reason: null
 export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeoutMs = REFERRAL_VERIFY_TIMEOUT_MS, settleTimeoutMs = REFERRAL_SETTLE_TIMEOUT_MS, signVerify = true, fetchImpl = fetch, now = Date.now } = {}) {
   const key = String(signerKey || "").trim();
   if (!/^(0x)?[0-9a-fA-F]{64}$/.test(key)) throw new Error("referral signer key is not a 32-byte hex key");
-  const account = privateKeyToAccount(key.startsWith("0x") ? key : `0x${key}`);
+  let account;
+  // The library's own error would quote the key: this one names only the setting.
+  try { account = privateKeyToAccount(key.startsWith("0x") ? key : `0x${key}`); }
+  catch { throw new Error("referral signer key is not a usable private key"); }
   const base = String(facilitatorUrl || "").replace(/\/+$/, "");
 
   async function signedHeaders(body) {
@@ -142,10 +152,10 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
   }
 
   /** Settle the payment. `ok` only with a transaction hash. */
-  async function settle(paymentPayload, paymentRequirements) {
-    const r = await post("/settle", paymentPayload, paymentRequirements, { timeoutMs: settleTimeoutMs, signed: true });
+  async function settle(paymentPayload, paymentRequirements, { timeoutMs = settleTimeoutMs } = {}) {
+    const r = await post("/settle", paymentPayload, paymentRequirements, { timeoutMs: Math.max(1_000, Math.min(settleTimeoutMs, Number(timeoutMs) || settleTimeoutMs)), signed: true });
     // Not sent at all: nothing can have moved.
-    if (r.failure && !r.sent) return answer({ reason: r.failure });
+    if (r.failure && !r.sent) return answer({ reason: r.failure, side: "ours" });
     if (r.failure) return answer({ status: r.status, reason: r.failure, inDoubt: true });
     const d = r.data;
     if (r.status === 200 && d && d.success === true) {
@@ -155,11 +165,13 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
     }
     const reason = safeReason(d?.errorReason ?? d?.error, r.status === 200 ? "settle_failed" : `facilitator_http_${r.status}`);
     if (PENDING.has(reason)) return answer({ status: r.status, reason, inDoubt: true });
-    // The documented refusals: a 200 with success false, a 4xx, and the 503
-    // that names a lookup it could not make. None of them moved money.
-    if (r.status === 200 && d && d.success === false) return answer({ status: 200, reason, retryable: RETRYABLE.has(reason) });
-    if (r.status >= 400 && r.status < 500) return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason) });
-    if (r.status === 503 && RETRYABLE.has(reason)) return answer({ status: 503, reason, retryable: true });
+    // The documented refusals: a 200 with success false, a 400, a 401, a 409,
+    // and the 503 that names a lookup it could not make. None of them moved
+    // money. Any other status (an intermediary's 403, 408 or 429, a 5xx) says
+    // nothing about the payment.
+    if (r.status === 200 && d && d.success === false) return answer({ status: 200, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason) });
+    if (r.status === 400 || r.status === 401 || r.status === 409) return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason), side: sideOf(reason) });
+    if (r.status === 503 && RETRYABLE.has(reason)) return answer({ status: 503, reason, retryable: true, side: "ours" });
     return answer({ status: r.status, reason, inDoubt: true });
   }
 

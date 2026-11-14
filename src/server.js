@@ -594,7 +594,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD, warmQuoteTokenCounts, QUOTE_WARM_MIN_CHARS } from "./tools/llm-gateway-kit.js";
+import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD, warmQuoteTokenCounts, QUOTE_WARM_MIN_CHARS, PAYMENT_WINDOW_TAIL_MS, UPSTREAM_TIMEOUT_MS as CHAT_UPSTREAM_TIMEOUT_MS } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -738,7 +738,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, privateRailSaleByTx } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -901,6 +901,12 @@ import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllo
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
+import { createReferralChainReader } from "./referral-chain.js";
+import { createReferralBook, startReferralBookSweep } from "./referral-book.js";
+import { presentRunWindow } from "./evm-validity.js";
+import { withBudgetCeiling } from "./upstream-deadline.js";
+import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
+import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
@@ -2539,21 +2545,34 @@ setIdentityBoundSlugs(new Set(Object.values(CATALOG).filter((d) => d.identityBou
 // Referral copies of paid routes under /ref/<slug> (src/referral-gate.js): a
 // standalone gate whose 402 pays a referral network's split contract and
 // which settles through that network's facilitator. Paid mode only, and only
-// with every REFERRAL_* switch set; otherwise nothing below is built and
-// /ref/* answers the ordinary 404. Each allowlisted slug passes the boot
-// checks here (in the catalog, not identity-bound, no lasting effect, no
-// outside seller, not long-running, a JSON answer, an upstream wait inside
-// the handler deadline) or is left out with one log line.
-const REFERRAL_CONFIG = FREE_MODE ? null : referralConfig(process.env);
+// with every required REFERRAL_* setting present and usable (the pay-to
+// address, the facilitator URL, the signer key, the slug list, the setup URL
+// and the commission map); otherwise nothing below is built and /ref/*
+// answers the ordinary 404. A setting that is not usable never fails the
+// boot: the gate stays off with one line. Each allowlisted slug passes the
+// boot checks here or is left out with one log line: in the catalog with a
+// handler, not identity-bound, no lasting effect, no outside seller, not
+// long-running, a JSON answer, and upstream work the handler deadline can
+// end (a pure-CPU tool; a chat tier, which reads the payment window the gate
+// presents; a handler under a budget the gate's ceiling caps) or an own
+// upstream timeout that fits the deadline.
+let REFERRAL_CONFIG = null;
+try { REFERRAL_CONFIG = FREE_MODE ? null : referralConfig(process.env); } catch { REFERRAL_CONFIG = null; }
 if (!FREE_MODE && !REFERRAL_CONFIG) { const why = referralConfigProblem(process.env); if (why) console.warn(`WARNING: referral gate is off: ${why}`); }
+const isChatTierDef = (def) => def?.category === "llm" && /\/chat\/completions$/.test(String(def.route || ""));
 const REFERRAL_ROUTES = REFERRAL_CONFIG ? referralRoutes(REFERRAL_CONFIG, CATALOG, (def) => ({
   identityBound: isIdentityBoundRoute(def),
   lastingEffect: defHasLastingEffect(def),
   paysThirdParty: paysThirdParty(def),
   longRunning: isLongRunningSlug(def.slug),
-  // The longest the tool's own upstream wait can take, where it is declared:
-  // a slow route's run budget, an image tier's upstream timeout.
-  runBoundMs: Math.max(Number(def.runSeconds) * 1000 || 0, Number(IMAGE_GEN_TIERS[def.slug]?.timeoutMs) || 0) || null,
+  compute: isComputePayable(def),
+  // A chat tier ends each upstream attempt at the payment window
+  // (paymentWindowTimeoutMs), which the gate presents as its deadline; a
+  // handler wrapped by underBudget runs under the gate's budget ceiling.
+  clamped: isChatTierDef(def) || def.handler?.__underBudget === true,
+  // The tool's own upstream timeout where it is declared: a chat tier's
+  // attempt timeout, an image tier's, a slow route's run budget.
+  ownTimeoutMs: Math.max(isChatTierDef(def) ? CHAT_UPSTREAM_TIMEOUT_MS : 0, Number(def.runSeconds) * 1000 || 0, Number(IMAGE_GEN_TIERS[def.slug]?.timeoutMs) || 0) || null,
   priceForNetwork,
 })) : null;
 if (REFERRAL_ROUTES) {
@@ -3170,7 +3189,7 @@ app.get("/__operator/tool-failures.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const onchainSqlQueries = await sqlQueryStatsReport().catch(() => null);
   const xSearchAuthors = await xSearchStatsReport().catch(() => null);
-  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors, transcriptionUnmeasured: { sinceBoot: sttUnmeasuredSinceBoot() }, imageGenModeration: imageModerationStats(), ...(REFERRAL_GATE ? { referralGate: { routes: REFERRAL_GATE.slugs(), sinceBoot: REFERRAL_GATE.stats() } } : {}) });
+  res.set("Cache-Control", "private, no-store").json({ ...(await toolFailureMonitor().report()), robinhoodOrder: robinhoodOrderView(), chainRefusalHolds: chainRefusalHolds(), onchainSqlQueries, xSearchAuthors, transcriptionUnmeasured: { sinceBoot: sttUnmeasuredSinceBoot() }, imageGenModeration: imageModerationStats() });
 });
 // Upstream queries per onchain-sql call (src/sql-query-stats.js): per UTC day,
 // calls by the queries each sent (0 to the call budget) and by how the call
@@ -3562,6 +3581,11 @@ const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   budget: UNPAID_QUOTE_BUDGET,
   // A /ref/<slug> copy is priced like the route it copies (either verb).
   isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]) || Boolean(referralDefOfPath(path)),
+  // A /ref copy is on no discovery document, and its paid-client allowance
+  // is the paid-quote trust window a settled call opens: its 429 says so.
+  hintFor: (req, { rule, paidCeiling, policyUrl }) => (referralDefOfPath(req.path)
+    ? `${rule} A request carrying a payment is never counted, and an address that settled a paid call in the last ${PAID_QUOTE_TRUST_MINUTES} minutes reads against ${paidCeiling} per hour. See ${policyUrl}`
+    : null),
   isSynthetic: isSyntheticRequest,
   policyUrl: `${BASE_URL.replace(/\/$/, "")}/crawler`,
   // A client that paid on one replica is exempt on every replica (Redis).
@@ -3709,6 +3733,7 @@ app.use(["/v1/metered", ...REFERRAL_METERED_PATHS], (req, res, next) => {
       res.set("Retry-After", "60");
       return res.status(429).json({ error: "Too many refused payment credentials from this address; send a payment that verifies, or slow down.", retryAfterSeconds: 60 });
     }
+    req.__a402RefusedCredentialWatched = true;
     res.once("finish", () => { if (res.statusCode === 401 || res.statusCode === 402) meteredUnverifiedLimiter.check(ip); });
   }
   next();
@@ -10598,54 +10623,123 @@ app.use(async (req, res, next) => {
 });
 
 // The referral gate (src/referral-gate.js), mounted ahead of every payment
-// gate: it is its own paywall for /ref/<slug>, any method (an unpaid GET of a
-// POST tool answers the 402 too). It calls the tool's handler itself, with
-// the same input object and caller scope as the dispatcher, renders a tool
-// error through sendToolError, and writes the call-log row for a run that
-// reached the handler. Its replay guard is its own instance. Settled calls
-// are booked in the sales ledger on the rail "referral", which is not one of
-// PAYING_RAILS and is not counted by recordServedCall: revenue readers and
-// the public counters are unchanged by it. Counters:
-// /__operator/tool-failures.json (referralGate).
-const REFERRAL_GATE = REFERRAL_ROUTES ? createReferralGate({
-  config: REFERRAL_CONFIG,
-  defs: REFERRAL_ROUTES.defs,
-  settler: createReferralSettler({ facilitatorUrl: REFERRAL_CONFIG.facilitatorUrl, signerKey: REFERRAL_CONFIG.signerKey, verifyTimeoutMs: REFERRAL_CONFIG.verifyMs, settleTimeoutMs: REFERRAL_CONFIG.settleMs, signVerify: REFERRAL_CONFIG.verifySigned }),
-  replayGuard: createReplayGuard(),
-  baseUrl: BASE_URL,
-  priceUsdOf: quotedPriceUsd,
-  priceForNetwork,
-  preValidate: (def, req) => preValidateInput(def, req),
-  prePaymentRefusal: (def, input) => {
-    if (!Object.hasOwn(PRE_PAYMENT_WIRES, def.slug)) return null;
-    let refusal = null;
-    try { refusal = meteredPrePaymentRefusal(def.slug, input); } catch { return null; }
-    return refusal ? { status: refusal.status, body: { ...refusal.body, tool: def.slug, ...refusal.fields } } : null;
-  },
-  warmQuote: async (def, req) => {
-    const quoteFn = typeof def.quote === "function" ? def.quote : null;
-    const declared = Number(req.headers["content-length"]);
-    if (!quoteFn || !(Number.isFinite(declared) && declared >= QUOTE_WARM_MIN_CHARS)) return;
-    await warmQuoteTokenCounts(() => quoteFn(handlerInputOf(req, def)));
-  },
-  runAsCaller: runAsCallerOf,
-  sendToolError,
-  recordSale,
-  isSynthetic: isSyntheticRequest,
-  salePathOf,
-  requireShared: (def) => sharedClaimRequired({ longRunning: isLongRunningSlug(def.slug), draining: drainSignal().aborted }),
-  onRun: (req, res, def) => {
-    const startedAt = Date.now();
-    noteToolOutcomeOnClose(req, res, def.slug, def);
-    res.once("close", () => {
-      try {
-        const status = res.headersSent ? res.statusCode : 499;
-        recordToolCall({ slug: def.slug, latencyMs: Date.now() - startedAt, cached: false, errored: status >= 400, status, synthetic: isSyntheticRequest(req), probe: false }).catch(() => {});
-      } catch { /* the call log never affects a call */ }
+// gate: it is its own paywall for /ref/<slug>, on GET, HEAD and POST (an
+// unpaid GET of a POST tool answers the 402 too; OPTIONS is the router's own
+// answer, as on a direct route). It calls the tool's handler itself, with
+// the same input object and caller scope as the dispatcher, and uses the
+// direct routes' own machinery where a rule is shared: the payer screen
+// before serving, the hang-up forgiveness tickets and budgets, the
+// refused-credential limiter, the paid-quote trust a settled call earns, the
+// payment-window clamp and the handler-budget ceiling that end upstream work
+// at its deadline. What it keeps apart: its replay guard is its own
+// instance; a run is marked for the settle breaker's other lane, so the
+// direct routes' breaker, its status word and its counters neither judge nor
+// count it; a settled call is booked on the rail "referral", a private rail
+// (src/paid-rails.js) no public reader of the ledger returns, and is not
+// counted by recordServedCall or the tool-call log. Settlements that are not
+// finished live in a durable book (src/referral-book.js) a leased sweep reads
+// against the chain; nothing pages on it yet. Operator view:
+// /__operator/referral.json.
+const referralPayerScreen = createX402PayerScreen();
+let REFERRAL_GATE = null;
+let REFERRAL_BOOK = null;
+if (REFERRAL_ROUTES) {
+  try {
+    REFERRAL_BOOK = createReferralBook();
+    REFERRAL_GATE = createReferralGate({
+      config: REFERRAL_CONFIG,
+      defs: REFERRAL_ROUTES.defs,
+      settler: createReferralSettler({ facilitatorUrl: REFERRAL_CONFIG.facilitatorUrl, signerKey: REFERRAL_CONFIG.signerKey, verifyTimeoutMs: REFERRAL_CONFIG.verifyMs, settleTimeoutMs: REFERRAL_CONFIG.settleMs, signVerify: REFERRAL_CONFIG.verifySigned }),
+      // The furthest back a used authorization's log can sit: its longest life, at Base's block time, with room.
+      chain: createReferralChainReader({ lookbackBlocks: Math.min(5000, Math.ceil((REFERRAL_CONFIG.maxValidityMs + 15 * 60_000) / 2000)) }),
+      book: REFERRAL_BOOK,
+      replayGuard: createReplayGuard(),
+      baseUrl: BASE_URL,
+      priceUsdOf: quotedPriceUsd,
+      priceForNetwork,
+      preValidate: (def, req) => preValidateInput(def, req),
+      prePaymentRefusal: (def, input) => {
+        if (!Object.hasOwn(PRE_PAYMENT_WIRES, def.slug)) return null;
+        let refusal = null;
+        try { refusal = meteredPrePaymentRefusal(def.slug, input); } catch { return null; }
+        return refusal ? { status: refusal.status, body: { ...refusal.body, tool: def.slug, ...refusal.fields } } : null;
+      },
+      warmQuote: async (def, req) => {
+        const quoteFn = typeof def.quote === "function" ? def.quote : null;
+        const declared = Number(req.headers["content-length"]);
+        if (!quoteFn || !(Number.isFinite(declared) && declared >= QUOTE_WARM_MIN_CHARS)) return;
+        await warmQuoteTokenCounts(() => quoteFn(handlerInputOf(req, def)));
+      },
+      runAsCaller: runAsCallerOf,
+      sendToolError,
+      recordSale,
+      saleBooked: (tx) => !!privateRailSaleByTx(tx, "referral"),
+      isSynthetic: isSyntheticRequest,
+      salePathOf,
+      requireShared: (def) => sharedClaimRequired({ longRunning: isLongRunningSlug(def.slug), draining: drainSignal().aborted }),
+      // The payer screen of the direct route: false when it answered its own 403.
+      payerScreen: (req, res) => new Promise((resolve) => {
+        let done = false;
+        const refused = () => { if (!done) { done = true; resolve(false); } };
+        res.once("finish", refused);
+        res.once("close", refused);
+        referralPayerScreen(req, res, () => { if (done) return; done = true; res.off("finish", refused); res.off("close", refused); resolve(true); });
+      }),
+      // The direct routes' hang-up forgiveness: the same tickets, keys and budgets.
+      hangup: {
+        reserve: (req, { priceUsd, slug }) => reserveHangupForgiveness(req, { keys: hangupForgivenessKeys(req), priceUsd, slug }),
+        forgiven: (req) => hangupForgiven(req),
+        finish: (req, abandoned) => settleHangupTicket(req, { abandoned }),
+      },
+      isolate: settleBreakerOtherLane,
+      // The chat tiers end an attempt PAYMENT_WINDOW_TAIL_MS before the window
+      // ends: the window is presented that much past the gate's deadline, less
+      // a second, so the upstream call is cut off just before the gate stops waiting.
+      presentWindow: (req, deadlineAtMs) => presentRunWindow(req, deadlineAtMs + PAYMENT_WINDOW_TAIL_MS - 1000),
+      withCeiling: withBudgetCeiling,
+      // The refused-credential limiter of the direct metered route, for every
+      // /ref route. A metered copy is already watched by the path-mounted one.
+      credentialLimiter: {
+        limited: (req) => meteredUnverifiedLimiter.peek(clientIp(req)).limited,
+        note: (req) => { if (req.__a402RefusedCredentialWatched !== true) meteredUnverifiedLimiter.check(clientIp(req)); },
+      },
+      clientKey: clientIp,
+      draining: () => ({ active: draining === true, leftMs: drainStartedAt ? drainDeadlineMs - (Date.now() - drainStartedAt) : Infinity }),
+      // A settled call earns this client address the paid-quote trust window, as a direct one does.
+      onSettledSale: (req) => { QUOTE_TRUST.mark(quoteClientKeyOf(req)); },
+      directPaths: new Map([...REFERRAL_ROUTES.defs.values()].map((def) => [String(def.route || "").split(" ")[1] || "", `/ref/${def.slug}`]).filter(([p]) => p)),
+      // The tool-call event a direct run sends, with the rail named. The
+      // tool-call log, the failure monitor and the served-call counters are
+      // read by public surfaces and are left alone.
+      onRun: (req, res, def) => {
+        const startedAt = Date.now();
+        res.once("close", () => {
+          try {
+            const status = res.headersSent ? res.statusCode : 499;
+            capturePostHogToolCall({ slug: def.slug, latencyMs: Date.now() - startedAt, cached: false, errored: status >= 400, status, synthetic: isSyntheticRequest(req), probe: false, rail: "referral" });
+          } catch { /* telemetry never affects a call */ }
+        });
+      },
     });
-  },
-}) : null;
-if (REFERRAL_GATE) app.all("/ref/:slug", (req, res) => REFERRAL_GATE.handler(req, res));
+  } catch (err) {
+    REFERRAL_GATE = null;
+    console.warn(`WARNING: referral gate is off: it could not be built (${redactSecrets(String(err?.message || err)).slice(0, 120)})`);
+  }
+}
+if (REFERRAL_GATE) {
+  const referralRoute = (req, res) => REFERRAL_GATE.handler(req, res);
+  app.get("/ref/:slug", referralRoute);
+  app.post("/ref/:slug", referralRoute);
+  // Open settlements are read against the chain at boot and every minute, under a lease.
+  void startReferralBookSweep({ sweepOnce: () => REFERRAL_GATE.sweepOnce(), intervalMs: Math.max(1000, Number(process.env.REFERRAL_SWEEP_MS) || 60_000) });
+}
+// The referral gate's counters and its open settlements (operator only).
+app.get("/__operator/referral.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store").json(REFERRAL_GATE
+    ? { enabled: true, routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), open: REFERRAL_BOOK.list().slice(0, 500) }
+    : { enabled: false });
+});
 
 // Tempo push-transfer debts (src/tempo-push-debts.js), built with the Tempo
 // gate below; read again at finish to void a debt whose transfer was served.
@@ -12783,7 +12877,7 @@ function operatorNotFound(_req, res) {
 }
 function isMachinePath(path) {
   const p = String(path || "").toLowerCase();
-  return p.startsWith("/api") || p.startsWith("/v1") || p.startsWith("/mcp") || p.startsWith("/__operator");
+  return p.startsWith("/api") || p.startsWith("/v1") || p.startsWith("/mcp") || p.startsWith("/__operator") || p === "/ref" || p.startsWith("/ref/");
 }
 app.use((req, res) => {
   const wantsJson = isMachinePath(req.path) || req.accepts(["html", "json"]) === "json";
@@ -13222,6 +13316,10 @@ bootStep("warmEconomySnapshot", () => warmEconomySnapshot());
 // SIGKILL never lands mid-drain.
 const DRAIN_DEADLINE_MS = 75_000;
 let shuttingDown = false;
+// When the drain began and how long it has (read by the referral gate, whose
+// settle call must end inside it).
+let drainStartedAt = 0;
+let drainDeadlineMs = DRAIN_DEADLINE_MS;
 // `code`/`deadlineMs` default to the graceful-redeploy values. The fatal path
 // below reuses this with a non-zero code and a short deadline - same drain
 // machinery, different exit semantics.
@@ -13239,6 +13337,8 @@ function shutdown(signal, { code = 0, deadlineMs = DRAIN_DEADLINE_MS } = {}) {
   if (shuttingDown) return;
   shuttingDown = true;
   draining = true;
+  drainStartedAt = Date.now();
+  drainDeadlineMs = deadlineMs;
   // Drain the PostHog paywall_402 rollup + client queue so a redeploy doesn't
   // drop up to a flush window of funnel counts. Fire-and-forget (no-op when
   // PostHog is disabled); the drain deadline below still governs exit.
