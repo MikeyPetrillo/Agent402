@@ -982,6 +982,16 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
     ok(last.json?.hint && !/published at/.test(last.json.hint) && !/openapi|well-known|api\/pricing/.test(last.json.hint) && /settled a paid call in the last \d+ minutes reads against/.test(last.json.hint), `and its text claims no discovery listing and states the allowance a settled call earns (${String(last.json?.hint).slice(0, 200)})`);
     const directHint = (await (async () => { let r = null; for (let i = 0; i < 7; i++) r = await call(`${w.url}/api/hash`, { body: { text: "a" }, headers: at("198.51.100.3") }); return r; })()).json?.hint || "";
     ok(/published at \/\.well-known\/x402/.test(directHint), "the direct route's 429 keeps its own text");
+    // A settled referral call earns its address the paid-client allowance: its price checks read against the raised ceiling.
+    {
+      fac.reset();
+      const payIp = "198.51.100.9";
+      const acc = (await call(`${w.url}/ref/hash`, { method: "GET", headers: at(payIp) })).json.accepts[0];
+      const paidCall = await call(`${w.url}/ref/hash`, { body: { text: "abc" }, headers: at(payIp, { "payment-signature": (await signPayment(acc, { account: newAccount() })).header }) });
+      const checks = [];
+      for (let i = 0; i < 9; i++) checks.push((await call(`${w.url}/ref/hash`, { method: "GET", headers: at(payIp) })).status);
+      ok(paidCall.status === 200 && checks.every((c) => c === 402), `an address that settled a referral call is not held to the unpaid ceiling of 5 an hour (${paidCall.status}; ${[...new Set(checks)].join(",")})`);
+    }
     // The metered quote limiter covers the metered copy: 60 a minute, then 429.
     const body = { model: "openai/gpt-6-luna", messages: [{ role: "user", content: "hi" }], max_tokens: 5 };
     const statuses = [];
