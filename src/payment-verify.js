@@ -30,6 +30,8 @@ const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a116
 export const TIP20_TRANSFER_WITH_MEMO_TOPIC = "0x57bc7354aa85aed339e000bccffabbc529466af35f0772c8f8ee1145927de7f0";
 /** Tempo mainnet: an EVM chain id, but its own verifier (TIP-20 tokens, more than one accepted currency). */
 export const TEMPO_NETWORK = "eip155:4217";
+/** Base USDC: the asset a referral-rail payment moves. */
+export const REFERRAL_USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 
 import { isGatewayWire } from "./gateway-wire.js";
 import { STELLAR_USDC_CODE, STELLAR_USDC_ISSUER } from "./stellar-confirm.js";
@@ -320,12 +322,24 @@ export async function verifyInboundPayment({
   rpcFor = () => null,
   stellarConfirm = null,       // injected: (opts) => Promise<{transaction}|null>
   payToSetFor = null,          // (network) => iterable of every payTo WE control
+  referralPayTo = null,        // the split contract a "referral" row was paid to (src/referral-gate.js)
   solanaRpcs = SOLANA_RPCS,
   algorandIndexers = ALGORAND_INDEXERS,
   fetchImpl = fetch,
   timeoutMs = 8_000,
 } = {}) {
   try {
+    // A sale on a referral copy (wire "referral") paid the referral network's
+    // split contract, not a wallet of ours: its proof is a USDC transfer from
+    // the payer to THAT contract in the recorded transaction, on Base. Only
+    // that contract is accepted, and only for such a row.
+    if (wire === "referral") {
+      if (String(network || "") !== "eip155:8453") return fail(`referral debt on ${network || "an unknown network"} - the referral rail settles on Base only`);
+      if (!/^0x[0-9a-fA-F]{40}$/.test(String(referralPayTo || ""))) return fail("no referral pay-to address configured (REFERRAL_PAY_TO) - cannot prove where the money went");
+      const rpcUrl = rpcFor(network);
+      if (!rpcUrl) return fail(`no RPC configured for ${network}`);
+      return await verifyEvm({ tx, payer, payToSet: new Set([String(referralPayTo)]), amountUsd, asset: REFERRAL_USDC_BASE, rpcUrl, fetchImpl, timeoutMs });
+    }
     const accepts = acceptsFor(network);
     // payTo is per-SLUG: self-funding routes settle to the SPENDING wallet, not
     // the treasury. Verifying against a single address made every debt for

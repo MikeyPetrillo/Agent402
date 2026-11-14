@@ -870,6 +870,8 @@ async function main() {
         wire: row.wire,
         acceptsFor: (n) => accepts[n],
         payToSetFor: (n) => payToSets.get(n) || [],
+        // A referral-rail row paid the referral network's split contract.
+        referralPayTo: (process.env.REFERRAL_PAY_TO || "").trim() || null,
         rpcFor,
         stellarConfirm: confirmStellarTransfer,
       }),
