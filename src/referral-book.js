@@ -42,7 +42,16 @@
 // entry is closed to an operator record (`closedUnrecognized`, the last
 // CLOSED_MAX, an error line each): no sale is booked and no refund is written
 // for it. A receipt the rule proves is booked the moment it is read, so one
-// that IS ours never reaches this end.
+// that IS ours never reaches this end. And a receipt whose routed event
+// names OUR merchant id is never counted or closed, whatever else the rule
+// finds wrong with it (a payout address or an amount that differs from this
+// server's settings): the buyer paid our merchant, so the entry stays open
+// for an operator. A close is recoverable: `reopenClosed` puts a record back
+// as an open entry that is never closed by itself again.
+//
+// A SEND IN FLIGHT. The delivered mark carries `sendingUntil`: while that
+// time has not passed the answer may still be going out, and the sweep does
+// not close the entry (the send's own end closes it, or takes the mark back).
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -191,16 +200,37 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     retiredAtCapacity: () => retired.slice(),
     /** Entries closed because their receipt, read in full, is not ours, oldest first. */
     closedUnrecognized: () => closed.slice(),
+    /** An operator puts a closed record back as an open in-doubt entry (a
+     *  close that was wrong): removed from the record, recorded with the
+     *  note, and never closed by itself again (`noAutoClose`). `{ ok, entry }`. */
+    async reopenClosed(key, { note = "" } = {}) {
+      let entry = null, taken = false;
+      const ok = await change((cur, _kept, done, _gone, list) => {
+        entry = null; taken = false;
+        const i = list.findIndex((r) => r && r.key === key);
+        if (i < 0) return SKIP_UPDATE;
+        if (cur[key]) { taken = true; return SKIP_UPDATE; }
+        const r = list[i];
+        entry = { key, slug: String(r.slug), payer: String(r.payer).toLowerCase(), nonce: String(r.nonce || "").toLowerCase(), amount: String(r.amount), validBefore: Number(r.validBefore) || 0, at: r.openedAt || now(), state: "in-doubt", attempts: 1, tx: null, seenTx: r.tx || null, saleBooked: false, fromBlock: r.fromBlock ?? null, ...(r.hangup ? { hangup: r.hangup } : {}), noAutoClose: true, reopenedAt: now(), why: r.why || null };
+        cur[key] = entry;
+        list.splice(i, 1);
+        done.push({ key, slug: entry.slug, payer: entry.payer, amount: entry.amount, tx: entry.seenTx, state: "closed-unrecognized", delivered: false, outcome: "reopened", debt: false, note: String(note).slice(0, 300), at: now() });
+        return undefined;
+      });
+      if (ok && entry) say("error", `an operator reopened a settlement closed as unrecognized (${entry.slug} payer=${String(entry.payer).slice(0, 6)} tx=${entry.seenTx || "none"})`);
+      return { ok: ok && !!entry && !taken, entry };
+    },
     /** The open entries that say this server's own bookkeeping is wrong: a
      *  contradicted one, or an unconfirmed one flagged because its receipt
-     *  cannot be read. `[{ key, payer, state, scope }]` (`scope` as the gate
-     *  wrote it on a contradicted entry: "payer" or "route"). */
+     *  cannot be read. `[{ key, payer, state, scope }]`: a flagged
+     *  unconfirmed entry is "route"; a contradicted one is "route" only when
+     *  the gate wrote that scope on it, "payer" otherwise. */
     faults() {
       const out = [];
       for (const k in entries) {
         const e = entries[k];
         if (!e) continue;
-        if (e.state === "contradicted" || (e.state === "unconfirmed" && e.flagged === true)) out.push({ key: k, payer: e.payer, state: e.state, scope: e.state === "contradicted" && e.scope === "payer" ? "payer" : "route" });
+        if (e.state === "contradicted" || (e.state === "unconfirmed" && e.flagged === true)) out.push({ key: k, payer: e.payer, state: e.state, scope: e.state === "unconfirmed" || e.scope === "route" ? "route" : "payer" });
       }
       return out;
     },
@@ -256,7 +286,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         if (verdict === "paid") {
           // The receipt proves the transfer: the only reading that books a sale.
           let booked = e.saleBooked === true;
-          if (!booked) { try { booked = (await bookSale(e, s.transaction)) === true; } catch { booked = false; } }
+          if (!booked) { try { booked = (await bookSale(e, s.transaction, s.net ?? null)) === true; } catch { booked = false; } }
           out.landed++;
           say("error", `CHARGED-BUT-NOT-SERVED: a settlement left open landed on chain (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${s.transaction})${booked ? ", sale booked" : ", sale NOT booked"}`);
           await this.resolve(e.key, { state: "charged-undelivered", tx: s.transaction, saleBooked: booked, landedAt: t });
@@ -275,7 +305,16 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
           // read in full, and it is not a shape the rule recognizes: counted,
           // and past the bound (with the authorization no longer sendable)
           // closed to the operator record. Never a sale, never a refund.
-          const full = s?.used === true && s.paid === null && TX.test(String(s.transaction || "")) && s.receiptRead === true;
+          const read = s?.used === true && s.paid === null && TX.test(String(s.transaction || "")) && s.receiptRead === true;
+          // Routed to OUR merchant by the contract's own event, or put back by
+          // an operator: never counted, never closed here.
+          const keep = read && (s.routedToUs === true || e.noAutoClose === true);
+          if (keep) {
+            if (e.routedToUs !== true && s.routedToUs === true) say("error", `a spent authorization's transaction was routed to THIS merchant by the split contract, and the receipt is not one the proof rule accepts (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${String(s.transaction).toLowerCase()}: ${String(s.why || "").slice(0, 120)}); kept open for an operator, never closed by itself`);
+            await this.resolve(e.key, { state: e.state === "intent" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, seenTx: String(s.transaction).toLowerCase(), ...(s.routedToUs === true ? { routedToUs: true } : {}), why: String(s.why || "").slice(0, 160) });
+            continue;
+          }
+          const full = read;
           const reads = (e.unrecognizedReads || 0) + (full ? 1 : 0);
           const unsendable = t > (Number(e.validBefore) || 0) * 1000 + EXPIRY_SLACK_MS;
           if (full && unsendable && reads >= Math.max(1, unrecognizedMax)) {
@@ -286,7 +325,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
               const now_ = cur[e.key];
               shut = false;
               if (!now_ || (now_.state !== "in-doubt" && now_.state !== "intent")) return SKIP_UPDATE;
-              list.push({ key: e.key, slug: now_.slug, payer: now_.payer, amount: now_.amount, tx, state: now_.state, reads, why, openedAt: now_.at || null, at: t });
+              list.push({ key: e.key, slug: now_.slug, payer: now_.payer, nonce: now_.nonce, amount: now_.amount, validBefore: now_.validBefore, fromBlock: now_.fromBlock ?? null, hangup: now_.hangup || null, tx, state: now_.state, reads, why, openedAt: now_.at || null, at: t });
               delete cur[e.key];
               shut = true;
               return undefined;
@@ -314,6 +353,8 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       for (const key of Object.keys(entries)) {
         const e = entries[key];
         if (!e || e.state !== "charged-undelivered") continue;
+        // A send that may still be going out is left to its own end.
+        if (e.delivered === true && Number(e.sendingUntil) > t) continue;
         if (e.delivered === true) { await this.resolve(key, null); continue; }
         out.charged++;
         try { await onCharged(e); } catch { /* the next pass asks again */ }

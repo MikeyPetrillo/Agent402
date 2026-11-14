@@ -3477,6 +3477,10 @@ app.use(llmsLinkMiddleware());
 app.use(compression({
   filter: (req, res) => {
     if (req.path.startsWith("/v1") || req.path.startsWith("/mcp")) return false;
+    // A referral copy counts the bytes of its answer as the socket takes them
+    // (src/referral-gate.js sendCounted): nothing may sit between that send
+    // and the socket, and a compressor drops the write callback it reads.
+    if (REFERRAL_GATE !== null && req.path.startsWith("/ref/")) return false;
     const contentType = res.getHeader("Content-Type");
     if (typeof contentType === "string" && /^(image|audio|video)\//.test(contentType)) return false;
     return compression.filter(req, res);
@@ -10784,7 +10788,14 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
   res.set("Cache-Control", "private, no-store");
   if (!REFERRAL_GATE) return res.status(409).json({ error: "the referral gate is off" });
   const { action, key, note, outcome } = req.body || {};
-  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}';
+  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}';
+  // A record closed as unrecognized goes back to the open entries, where resolve works on it.
+  if (action === "reopen") {
+    try {
+      const r = await REFERRAL_GATE.reopenByHand(typeof key === "string" ? key : "", { note: typeof note === "string" ? note : "" });
+      return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
+    } catch { return res.status(503).json({ error: "the settlement book could not be written" }); }
+  }
   if (action !== "resolve") return res.status(400).json({ error: usage });
   // The gate reads the outcome: one of the three, or left out (dismissed,
   // except on a charged, undelivered entry, where it must be named).

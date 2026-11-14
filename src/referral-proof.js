@@ -43,10 +43,15 @@ const valueOf = (log) => { try { return BigInt(log.data); } catch { return null;
 /**
  * Whether a receipt proves that THIS authorization paid `amount` from `from`
  * to the split contract `payTo` AND that the contract routed it to OUR
- * merchant. Pure. `{ verdict: "paid" | "unpaid" | "unknown", why, moved, read }`.
- * `read` is true when the receipt was there with its log list (a verdict made
- * on a complete reading); `moved` is true when the authorization's own
- * transfer into the contract is in it (whatever the contract did next).
+ * merchant. Pure. `{ verdict: "paid" | "unpaid" | "unknown", why, moved, read,
+ * routedToUs, net }`. `read` is true when the receipt was there with its log
+ * list (a verdict made on a complete reading); `moved` is true when the
+ * authorization's own transfer into the contract is in it (whatever the
+ * contract did next); `routedToUs` is true when, after that transfer, the
+ * contract's routed event names OUR merchant id, whatever the payout
+ * address, the amounts or the verdict (a payment that reached our merchant
+ * and that this rule may still not prove: never closed by itself); `net` is
+ * the merchant amount the receipt shows (a decimal string), on "paid" only.
  *
  * The token's receive path (FiatToken `_receiveWithAuthorization`: it requires
  * the caller to be the payee, marks the nonce used, then transfers) emits
@@ -70,7 +75,7 @@ const valueOf = (log) => { try { return BigInt(log.data); } catch { return null;
  * `routedTopic` overrides the event topic.
  */
 export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, amount, merchantId = null, payoutAddress = null, minNet = null, routedTopic = ROUTED_EVENT_TOPIC } = {}) {
-  const out = (verdict, why, moved = false, read = true) => ({ verdict, why, moved, read });
+  const out = (verdict, why, moved = false, read = true, routedToUs = false, net = null) => ({ verdict, why, moved, read, routedToUs, net });
   if (!receipt || typeof receipt !== "object") return out("unknown", "no receipt", false, false);
   if (tx && lc(receipt.transactionHash) !== lc(tx)) return out("unpaid", "the receipt is for another transaction");
   if (lc(receipt.status) !== "0x1") return out("unpaid", "the transaction did not succeed");
@@ -107,13 +112,15 @@ export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, am
     const routed = segment.filter((l) => lc(l.address) === lc(payTo) && lc(l.topics?.[0]) === topic).map(decodeRouted);
     const decoded = routed.filter(Boolean);
     if (!decoded.length) return out("unknown", routed.length ? "a routed event of an unrecognized shape" : "no routed event", true);
+    // The contract's event names our merchant id for this payment, whatever else holds.
+    const toUs = decoded.some((e) => e.merchantId === ours);
     const mine = decoded.filter((e) => e.buyer === lc(from) && e.gross === value);
-    if (mine.length !== 1) return out("unknown", "the routed event does not name this buyer and amount exactly once", true);
-    if (mine[0].merchantId !== ours) return out("unpaid", "the payment was routed to another merchant", true);
-    if (!(mine[0].merchantAmt > 0n) || !paidOut(mine[0].merchantAmt)) return out("unknown", "routed to this merchant, with no transfer of the merchant amount to the payout wallet", true);
-    if (mine[0].merchantAmt < floor) return out("unknown", "routed to this merchant, with a merchant amount under the minimum net", true);
-    if (sentElsewhere) return out("unknown", "the transaction was not sent to the pay-to contract", true);
-    return out("paid", "routed to this merchant and paid out", true);
+    if (mine.length !== 1) return out("unknown", "the routed event does not name this buyer and amount exactly once", true, true, toUs);
+    if (mine[0].merchantId !== ours) return out("unpaid", "the payment was routed to another merchant", true, true, toUs);
+    if (!(mine[0].merchantAmt > 0n) || !paidOut(mine[0].merchantAmt)) return out("unknown", "routed to this merchant, with no transfer of the merchant amount to the payout wallet", true, true, true);
+    if (mine[0].merchantAmt < floor) return out("unknown", "routed to this merchant, with a merchant amount under the minimum net", true, true, true);
+    if (sentElsewhere) return out("unknown", "the transaction was not sent to the pay-to contract", true, true, true);
+    return out("paid", "routed to this merchant and paid out", true, true, true, mine[0].merchantAmt.toString());
   };
 
   const candidates = [];

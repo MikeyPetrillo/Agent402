@@ -143,13 +143,13 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
   /** The same reading with its detail: `{ verdict, why, moved, read }`
    *  (proveReceipt). `read` false: no receipt could be read. */
   async function proveDetail(tx, { from, nonce = null, payTo, amount, minNet = null }, { budget = 4_000, waitMs = 0 } = {}) {
-    if (!TX.test(String(tx || ""))) return { verdict: "unpaid", why: "no transaction hash", moved: false, read: false };
+    if (!TX.test(String(tx || ""))) return { verdict: "unpaid", why: "no transaction hash", moved: false, read: false, routedToUs: false, net: null };
     const until = now() + Math.max(0, waitMs);
     for (;;) {
       let receipt = null;
       try { receipt = await read("eth_getTransactionReceipt", [tx], budget); } catch { receipt = null; }
       if (receipt) return proveReceipt(receipt, { tx, from, nonce, payTo, amount, minNet, ...routing });
-      if (now() + 400 >= until) return { verdict: "unknown", why: "no receipt readable", moved: false, read: false };
+      if (now() + 400 >= until) return { verdict: "unknown", why: "no receipt readable", moved: false, read: false, routedToUs: false, net: null };
       await sleep(400);
     }
   }
@@ -170,7 +170,10 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
    *                              from the recorded head and found nothing;
    *                              `receiptRead` true says the transaction's
    *                              receipt WAS read in full and is not a shape
-   *                              the rule recognizes
+   *                              the rule recognizes; `routedToUs` true says
+   *                              that receipt's routed event names our
+   *                              merchant id all the same
+   * `net`: on paid, the merchant amount the receipt shows (base units).
    * `fromBlock`: the head when the intent was written; the search runs from
    * there to the head, so a late read still finds an early payment.
    * `wait`: keep reading for a spent nonce until the budget ends.
@@ -196,7 +199,7 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
             if (used.tx) {
               const d = await proveDetail(used.tx, { from, nonce, payTo, amount, minNet }, { budget: Math.max(250, deadline - now()) });
               const v = d.verdict;
-              return { used: true, paid: v === "paid" ? true : v === "unpaid" ? false : null, transaction: used.tx, complete: false, receiptRead: d.read === true, why: d.why };
+              return { used: true, paid: v === "paid" ? true : v === "unpaid" ? false : null, transaction: used.tx, complete: false, receiptRead: d.read === true, why: d.why, routedToUs: d.routedToUs === true, net: v === "paid" ? d.net ?? null : null };
             }
             const canceled = await findLog(AUTHORIZATION_CANCELED_TOPIC, from, nonce, fromBlock, deadline);
             if (canceled.tx) return { used: true, paid: false, transaction: canceled.tx, complete: false };
