@@ -33,12 +33,19 @@
 //     not only abandoned. An error, a timeout, a stream or a binary answer is
 //     answered as it is and never settled.
 //   - A buyer gone before settlement is not settled while the run holds a
-//     hang-up forgiveness ticket (the direct routes' own budgets,
-//     src/hangup-forgiveness.js). Without a ticket the payment is settled and
-//     the answer is kept for the buyer's re-send.
+//     hang-up forgiveness ticket: the direct routes' rule, on budgets of this
+//     gate's own, so referral traffic never changes a direct buyer's outcome.
+//     Without a ticket the payment is settled and the answer is kept for the
+//     buyer's re-send.
 //   - Before /settle is called, the intent is written to a durable book
-//     (src/referral-book.js). An answer that does not say whether the payment
-//     moved is settled by the chain (src/referral-chain.js), not by a guess.
+//     (src/referral-book.js); with no intent stored, /settle is not called.
+//     One /settle is in flight per authorization. An answer that does not say
+//     whether the payment moved is decided by the chain
+//     (src/referral-chain.js): a payment has landed only when the receipt of
+//     the transaction that used the nonce shows success and a USDC transfer
+//     from the payer to the pay-to address of at least the amount. A nonce
+//     spent any other way (a cancel, a transfer elsewhere) delivers nothing
+//     and books nothing.
 //   - The tool's answer is kept, against the authorization, for the
 //     authorization's life: a re-send of the same PAYMENT-SIGNATURE returns
 //     it when the payment landed, with no second run and no second sale.
@@ -67,6 +74,9 @@ import { handlerInputOf, withIgnoredParams } from "./handler-input.js";
 import { withLoopTimeout } from "./loop-deadline.js";
 import { binaryTypesOf } from "./tool-media-type.js";
 import { referralLogText } from "./referral-settle.js";
+import { chainVerdict } from "./referral-chain.js";
+import { runAsReferral } from "./referral-run.js";
+import { DEFAULT_KEY_BUDGET_USD, DEFAULT_GLOBAL_BUDGET_USD } from "./hangup-forgiveness.js";
 
 export const REFERRAL_NETWORK = "eip155:8453";
 export const REFERRAL_CHAIN_ID = 8453;
@@ -101,6 +111,8 @@ export const REFERRAL_ANSWER_MAX_BYTES = 8 * 1024 * 1024;
 /** Answers kept for a re-send: this many, this many bytes. */
 export const REFERRAL_KEPT_ANSWERS_MAX = 200;
 export const REFERRAL_KEPT_BYTES_MAX = 48 * 1024 * 1024;
+/** An answer up to this size is stored with its open book entry, so a restart keeps it. */
+export const REFERRAL_PERSISTED_ANSWER_MAX_BYTES = 256 * 1024;
 /** Settle attempts a kept answer may make after its first. */
 export const REFERRAL_RESEND_SETTLES_MAX = 2;
 
@@ -146,6 +158,12 @@ function intKnob(env, name, dflt, { min = 1, max = 10_000 } = {}) {
   if (!raw) return dflt;
   const n = Number(raw);
   return Number.isInteger(n) && n >= min && n <= max ? n : dflt;
+}
+function usdKnob(env, name, dflt) {
+  const raw = String(env?.[name] ?? "").trim();
+  if (!raw) return dflt;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 1000 ? n : dflt;
 }
 /**
  * The commission map, `default:<bps>,<slug>:<bps>`: what each slug's sale is
@@ -205,6 +223,9 @@ const REQUIRED_VARS = ["REFERRAL_PAY_TO", "REFERRAL_FACILITATOR_URL", "REFERRAL_
  *   REFERRAL_UNSETTLED_MAX      (3) unsettled runs per payer and per client address in the window
  *   REFERRAL_UNSETTLED_WINDOW_MS (900000)
  *   REFERRAL_MAX_INFLIGHT       (24) paid calls in flight
+ *   REFERRAL_HANGUP_KEY_USD, REFERRAL_HANGUP_GLOBAL_USD, REFERRAL_HANGUP_WINDOW_MS
+ *                               this route's own hang-up forgiveness budgets (the direct routes'
+ *                               sizes: per payer and per address, route-wide, one day)
  * deadline + settle reserve + verify must not exceed the 60 s the 402 asks a
  * buyer to sign for, or the gate stays off.
  */
@@ -238,6 +259,11 @@ export function referralConfig(env = process.env) {
       unsettledMax: intKnob(env, "REFERRAL_UNSETTLED_MAX", REFERRAL_DEFAULTS.unsettledMax, { min: 1, max: 1000 }),
       unsettledWindowMs: msKnob(env, "REFERRAL_UNSETTLED_WINDOW_MS", REFERRAL_DEFAULTS.unsettledWindowMs),
       maxInflight: intKnob(env, "REFERRAL_MAX_INFLIGHT", REFERRAL_DEFAULTS.maxInflight, { min: 1, max: 1000 }),
+      // This route's own hang-up forgiveness budgets (USD, as micro-dollars):
+      // the sizes the direct routes use, counted apart from them.
+      hangupKeyMicro: Math.round(usdKnob(env, "REFERRAL_HANGUP_KEY_USD", DEFAULT_KEY_BUDGET_USD) * 1e6),
+      hangupGlobalMicro: Math.round(usdKnob(env, "REFERRAL_HANGUP_GLOBAL_USD", DEFAULT_GLOBAL_BUDGET_USD) * 1e6),
+      hangupWindowMs: msKnob(env, "REFERRAL_HANGUP_WINDOW_MS", 24 * 3600_000, { max: 30 * 24 * 3600_000 }),
       commission: Object.freeze(commission), feeBps,
     });
   } catch { return null; }
@@ -314,16 +340,21 @@ export function referralIneligibility(def, { identityBound = false, lastingEffec
 export function referralRoutes(config, catalog, flagsOf = () => ({})) {
   const defs = new Map();
   const refused = [];
+  const served = [];
   const bySlug = new Map(Object.values(catalog || {}).filter((d) => d && typeof d.slug === "string").map((d) => [d.slug, d]));
   for (const slug of config?.slugs || []) {
     const def = bySlug.get(slug);
     let reason;
     try { reason = referralIneligibility(def, { deadlineMs: config.deadlineMs, ...(def ? flagsOf(def) : {}) }); }
     catch { reason = "could not be checked"; }
-    if (reason) refused.push({ slug, reason });
-    else defs.set(slug, def);
+    if (reason) { refused.push({ slug, reason }); continue; }
+    defs.set(slug, def);
+    // Why the handler deadline can be kept, for the boot line.
+    let f = {};
+    try { f = flagsOf(def) || {}; } catch { f = {}; }
+    served.push({ slug, why: f.compute ? "no upstream work" : f.clamped ? `upstream work ends at the deadline${Number.isFinite(f.ownTimeoutMs) && f.ownTimeoutMs > 0 ? ` (own timeout ${Math.round(f.ownTimeoutMs / 1000)} s)` : ""}` : `own upstream timeout ${Math.round(f.ownTimeoutMs / 1000)} s fits` });
   }
-  return { defs, refused };
+  return { defs, refused, served };
 }
 
 /** The slug a request path names under /ref/, or null. Case, a trailing slash
@@ -438,6 +469,9 @@ export const REFERRAL_REASONS = Object.freeze({
   settle_refused: "The call ran, but the payment was not settled. Nothing was charged.",
   authorization_expired_unused: "This authorization expired without being used. Nothing was charged. Sign a new one to make the call again.",
   answer_unavailable: "This authorization was already used for a call whose answer is no longer held here.",
+  authorization_used_unpaid: "This authorization was spent on chain without paying this route (canceled, or used for another transfer), so the answer is not delivered. This route was not paid. Sign a new authorization to make the call again.",
+  settlement_unavailable: "The payment could not be settled because of a fault on this server's side. Nothing was charged. If the call ran, its answer is kept: send the same PAYMENT-SIGNATURE again later.",
+  settlement_store_unavailable: "The call ran, but the settlement could not be recorded, so the payment was not submitted. Nothing was charged. Send the same PAYMENT-SIGNATURE again shortly: the answer is kept and nothing runs twice.",
   too_many_unsettled_runs: "Too many calls from this payer or address ran without their payment settling. Nothing was charged for this request. Retry later.",
   busy: "Too many paid calls are in flight on this route. Nothing ran and nothing was charged. Retry shortly.",
   draining: "This host is restarting. Nothing ran and nothing was charged. Retry in a minute.",
@@ -478,7 +512,6 @@ export function createLineSampler({ perMinute = 20, now = Date.now, print = () =
  * @param {(def, req) => ({status, body}|null)} [o.preValidate]        the pre-payment input check
  * @param {(def, input) => ({status, body}|null)} [o.prePaymentRefusal] the metered pre-payment refusal
  * @param {(req, res) => Promise<boolean>} [o.payerScreen]  the payer screen: false when it answered the refusal itself
- * @param {{reserve, forgiven, finish}} [o.hangup]     the direct routes' hang-up forgiveness
  * @param {(req) => void} [o.isolate]          keep this run out of the direct routes' money guards
  * @param {(req, endsAtMs) => void} [o.presentWindow]  present the run's deadline as its payment window
  * @param {(ms, fn) => any} [o.withCeiling]    run fn with handler budgets capped at ms
@@ -486,70 +519,145 @@ export function createLineSampler({ perMinute = 20, now = Date.now, print = () =
  * @param {() => ({active: boolean, leftMs: number})} [o.draining]
  * @param {(tx) => boolean} [o.saleBooked]     whether a sale stands for this transaction
  * @param {(req) => void} [o.onSettledSale]    a settled sale by this client (paid-client allowance)
- * @param {Map<string,string>} [o.directPaths] direct route path -> its /ref path, for answers
  */
 export function createReferralGate({
   config, defs, settler, chain, book, replayGuard, baseUrl, priceUsdOf, priceForNetwork,
-  preValidate = () => null, prePaymentRefusal = () => null, warmQuote = null, runAsCaller = (_req, fn) => fn(),
-  sendToolError, recordSale, saleBooked = () => false, isSynthetic = () => false, salePathOf = () => null, requireShared = () => false, onRun = null,
-  payerScreen = async () => true, hangup = null, isolate = () => {}, presentWindow = () => {}, withCeiling = (_ms, fn) => fn(),
-  credentialLimiter = null, clientKey = (req) => String(req.ip || ""), draining = () => ({ active: false, leftMs: Infinity }), onSettledSale = () => {},
-  directPaths = new Map(), log = console, now = Date.now,
+  preValidate, prePaymentRefusal, warmQuote, runAsCaller, sendToolError, recordSale, saleBooked, isSynthetic, salePathOf, requireShared, onRun = null,
+  payerScreen, isolate, presentWindow, withCeiling, credentialLimiter, clientKey, draining, onSettledSale,
+  log = console, now = Date.now,
 } = {}) {
   if (!config || !(defs instanceof Map) || !settler || !chain || !book || !replayGuard) throw new Error("referral gate: config, defs, settler, chain, book and replayGuard are required");
-  if (typeof priceUsdOf !== "function" || typeof priceForNetwork !== "function" || typeof sendToolError !== "function" || typeof recordSale !== "function") throw new Error("referral gate: priceUsdOf, priceForNetwork, sendToolError and recordSale are required");
+  // Every dependency on the server is REQUIRED: a gate built without one of
+  // them would run with a rule silently missing (no payer screen, no
+  // deadline on upstream work, no drain check), so it is not built at all.
+  const required = { priceUsdOf, priceForNetwork, preValidate, prePaymentRefusal, warmQuote, runAsCaller, sendToolError, recordSale, saleBooked, isSynthetic, salePathOf, requireShared, payerScreen, isolate, presentWindow, withCeiling, clientKey, draining, onSettledSale };
+  const missing = Object.entries(required).filter(([, v]) => typeof v !== "function").map(([k]) => k);
+  if (!credentialLimiter || typeof credentialLimiter.limited !== "function" || typeof credentialLimiter.note !== "function") missing.push("credentialLimiter");
+  if (missing.length) throw new Error(`referral gate: missing ${missing.join(", ")}`);
   const origin = String(baseUrl || "").replace(/\/+$/, "");
   const counters = {
     challenges: 0, refused: 0, signatureRefused: 0, replays: 0, verifyRefused: 0, screened: 0, laneRefused: 0, busy: 0,
-    runs: 0, handlerErrors: 0, timeouts: 0, forgivenHangups: 0, settleRefused: 0, settleInDoubt: 0, landedAfterDoubt: 0,
+    signerRefused: 0, restoredAnswers: 0, runs: 0, exampleRuns: 0, handlerErrors: 0, timeouts: 0, forgivenHangups: 0, settleRefused: 0, settleInDoubt: 0, landedAfterDoubt: 0, usedUnpaid: 0, intentFailed: 0,
     settled: 0, resent: 0, redelivered: 0, chargedNotServed: 0,
   };
   const line = (level, text) => { try { (log[level] || log.log).call(log, `[referral] ${text}`); } catch { /* a log never breaks a call */ } };
   const refusalLog = createLineSampler({ now, print: (text) => line("warn", text) });
+  // Faults of this server's own (the signer refused): error lines an operator sees, sampled the same way.
+  const faultLog = createLineSampler({ now, print: (text) => line("error", text) });
   const shortPayer = (from) => `${String(from).slice(0, 6)}`;
   const needMs = config.deadlineMs + config.settleReserveMs + config.verifyMs;
 
   // ---- the unsettled-run lane (per signed payer, per client address) --------------
-  const lane = new Map(); // key -> timestamps
+  // A key holds the runs it has in flight (counted at admission, so a burst
+  // cannot all start before the first one ends) and its unsettled outcomes
+  // inside the window: a settle the facilitator refused for the payment, a
+  // run that timed out, a nonce spent without paying, and a settle whose
+  // outcome is not known yet. An outcome is tagged with its authorization, so
+  // the note is taken back when that payment is later proven paid.
+  const lane = new Map(); // key -> { inflight, notes: [[t, tag]] }
   const LANE_MAX_KEYS = 20_000;
-  const laneCount = (key, t) => {
-    const list = lane.get(key);
-    if (!list) return 0;
-    while (list.length && t - list[0] >= config.unsettledWindowMs) list.shift();
-    if (!list.length) lane.delete(key);
-    return list.length;
-  };
-  const laneKeys = (req, payer) => [`payer:${payer}`, `addr:${clientKey(req)}`];
-  const laneNote = (req, payer) => {
-    const t = now();
-    for (const key of laneKeys(req, payer)) {
-      if (!lane.has(key) && lane.size >= LANE_MAX_KEYS) lane.delete(lane.keys().next().value);
-      const list = lane.get(key) || [];
-      list.push(t);
-      lane.set(key, list);
+  const laneOf = (key, create) => {
+    let l = lane.get(key);
+    if (!l && create) {
+      if (lane.size >= LANE_MAX_KEYS) { for (const [k, v] of lane) { if (v.inflight === 0) { lane.delete(k); break; } } }
+      l = { inflight: 0, notes: [] };
+      lane.set(key, l);
     }
+    return l || null;
   };
-  const laneBlocked = (req, payer) => { const t = now(); return laneKeys(req, payer).some((key) => laneCount(key, t) >= config.unsettledMax); };
+  const laneLoad = (key, t) => {
+    const l = lane.get(key);
+    if (!l) return 0;
+    while (l.notes.length && t - l.notes[0][0] >= config.unsettledWindowMs) l.notes.shift();
+    if (!l.notes.length && l.inflight === 0) { lane.delete(key); return 0; }
+    return l.notes.length + l.inflight;
+  };
+  const laneKeysOf = (req, payer) => [`payer:${payer}`, `addr:${clientKey(req)}`];
+  /** Admit a run: false when a key is at its bound, else the run is counted in flight under each key. */
+  const laneAdmit = (keys) => {
+    const t = now();
+    if (keys.some((key) => laneLoad(key, t) >= config.unsettledMax)) return false;
+    for (const key of keys) laneOf(key, true).inflight++;
+    return true;
+  };
+  const laneLeave = (keys) => { for (const key of keys) { const l = lane.get(key); if (l && l.inflight > 0) l.inflight--; } };
+  const laneNote = (keys, tag = null) => { const t = now(); for (const key of keys) { const l = laneOf(key, true); if (tag && l.notes.some((n) => n[1] === tag)) continue; l.notes.push([t, tag]); } };
+  const laneClear = (keys, tag) => { if (!tag) return; for (const key of keys) { const l = lane.get(key); if (l) l.notes = l.notes.filter((n) => n[1] !== tag); } };
+
+  // ---- hang-up forgiveness: this route's own budget ---------------------------------
+  // The direct routes' rule (a buyer gone before settlement is not charged
+  // while the run holds a ticket priced at its charge, against a per-payer,
+  // a per-address and a route-wide budget that a paid success never refills),
+  // on budgets of this gate's own: a referral run never holds or spends a
+  // cent of the budget a direct buyer's hang-up is judged against. Abandoned
+  // records are kept in the book, so a restart does not refill them.
+  const MICRO = 1e6;
+  const forgive = { inflight: new Map(), globalInflight: 0, abandoned: [] };
+  const digestKey = (k) => createHash("sha256").update(String(k)).digest("hex").slice(0, 24);
+  let forgivenLoaded = false;
+  const loadForgiven = () => { if (forgivenLoaded) return; forgivenLoaded = true; try { forgive.abandoned = book.forgiven().map((r) => [Number(r[0]), Number(r[1]), Array.isArray(r[2]) ? r[2] : []]); } catch { forgive.abandoned = []; } };
+  Promise.resolve(book.ready).then(() => { forgivenLoaded = false; loadForgiven(); }).catch(() => {});
+  function reserveForgiveness(keys, micro) {
+    loadForgiven();
+    const t = now();
+    forgive.abandoned = forgive.abandoned.filter((r) => t - r[0] < config.hangupWindowMs);
+    const ids = keys.map(digestKey);
+    const ticket = { granted: false, ids, micro, open: false };
+    if (!(micro > 0)) return ticket;
+    const spentBy = (id) => forgive.abandoned.reduce((a, r) => a + (r[2].includes(id) ? r[1] : 0), 0) + (forgive.inflight.get(id) || 0);
+    const spentAll = forgive.abandoned.reduce((a, r) => a + r[1], 0) + forgive.globalInflight;
+    if (ids.some((id) => spentBy(id) + micro > config.hangupKeyMicro) || spentAll + micro > config.hangupGlobalMicro) return ticket;
+    for (const id of ids) forgive.inflight.set(id, (forgive.inflight.get(id) || 0) + micro);
+    forgive.globalInflight += micro;
+    ticket.granted = true;
+    ticket.open = true;
+    return ticket;
+  }
+  function finishForgiveness(ticket, abandoned) {
+    if (!ticket || !ticket.open) return;
+    ticket.open = false;
+    for (const id of ticket.ids) { const left = (forgive.inflight.get(id) || 0) - ticket.micro; if (left > 0) forgive.inflight.set(id, left); else forgive.inflight.delete(id); }
+    forgive.globalInflight = Math.max(0, forgive.globalInflight - ticket.micro);
+    if (!abandoned) return;
+    const record = [now(), ticket.micro, ticket.ids];
+    forgive.abandoned.push(record);
+    book.noteForgiven(record, { windowMs: config.hangupWindowMs }).catch(() => {});
+  }
 
   // ---- answers kept for a re-send, by replay key ------------------------------------
   const kept = new Map(); // key -> entry (insertion order = age)
   let keptBytes = 0;
-  const resending = new Set();
+  // One /settle in flight per authorization: the request that is settling
+  // holds the slot, and a re-send that arrives meanwhile is told so.
+  const settling = new Set();
   let inflight = 0;
   const dropKept = (key) => { const e = kept.get(key); if (e) { keptBytes -= e.bytes; kept.delete(key); } };
+  // What an entry still owes its buyer: an answer whose payment landed and was
+  // not delivered, or whose settle outcome is not known, is the last to go.
+  const owed = (e) => (e.landed && !e.delivered) || e.everInDoubt === true && !e.unpaid && !e.delivered;
   const pruneKept = () => {
     const t = now();
-    for (const [key, e] of kept) { if (t > e.validBeforeMs + 10 * 60_000) dropKept(key); else break; }
+    // Ten minutes past its authorization an answer nothing is owed on goes;
+    // an hour past it any answer goes (the book and its sweep hold the case).
+    for (const [key, e] of kept) { if ((t > e.validBeforeMs + 10 * 60_000 && !owed(e)) || t > e.validBeforeMs + 60 * 60_000) dropKept(key); }
   };
   const keep = (entry) => {
     pruneKept();
     if (entry.bytes > REFERRAL_ANSWER_MAX_BYTES) return false;
     dropKept(entry.key);
     while (kept.size >= REFERRAL_KEPT_ANSWERS_MAX || keptBytes + entry.bytes > REFERRAL_KEPT_BYTES_MAX) {
-      const oldest = kept.keys().next().value;
-      if (oldest === undefined) break;
-      line("warn", `kept answers are full; dropping the oldest (${kept.get(oldest)?.slug})`);
-      dropKept(oldest);
+      // Delivered and definitively refused answers go first, oldest first.
+      let victim = null;
+      for (const [key, e] of kept) { if (!owed(e)) { victim = key; break; } }
+      if (victim === null) {
+        victim = kept.keys().next().value;
+        if (victim === undefined) break;
+        const e = kept.get(victim);
+        // An answer still owed is dropped only when nothing else is left, and the book says so.
+        line("error", `kept answers are full of answers still owed; dropping the oldest (${e.slug} payer=${shortPayer(e.payer)} ${e.landed ? "charged, undelivered" : "settle in doubt"}); recorded in the book`);
+        book.resolve(victim, { answerEvicted: true }).catch(() => {});
+      }
+      dropKept(victim);
     }
     kept.set(entry.key, entry);
     keptBytes += entry.bytes;
@@ -597,23 +705,14 @@ export function createReferralGate({
     };
   }
 
-  // No answer of this route points at a direct route: a path of a served
-  // tool's direct route is written as its /ref path, and the ready-to-run
-  // call (built for the direct route) is dropped.
-  const pathPairs = [...directPaths].sort((a, b) => b[0].length - a[0].length);
+  // The ready-to-run call a refusal carries is built for the direct route: it
+  // is dropped here. Every other hint that would name a route is left out
+  // where it is written (routeHint, src/referral-run.js), not rewritten.
   function scrub(body) {
-    if (!body || typeof body !== "object") return body;
-    let copy = body;
-    if (Object.hasOwn(body, "howToCall")) { copy = { ...body }; delete copy.howToCall; }
-    if (!pathPairs.length) return copy;
-    let text;
-    try { text = JSON.stringify(copy); } catch { return copy; }
-    let changed = false;
-    for (const [direct, ref] of pathPairs) {
-      if (text.includes(direct)) { text = text.split(direct).join(ref); changed = true; }
-    }
-    if (!changed) return copy;
-    try { return JSON.parse(text); } catch { return copy; }
+    if (!body || typeof body !== "object" || !Object.hasOwn(body, "howToCall")) return body;
+    const copy = { ...body };
+    delete copy.howToCall;
+    return copy;
   }
 
   const refusePayment = (res, reason, { status = 402, retryable = false, retryAfter = null, message = null } = {}) => {
@@ -622,19 +721,22 @@ export function createReferralGate({
     return res.status(status).json({ success: false, errorReason: reason, ...(text ? { errorMessage: text } : {}), ...(retryable ? { retryable: true } : {}) });
   };
 
-  /** Book the sale for a settled authorization, once. */
+  /** Book the sale for a settled authorization, once. Only ever called with
+   *  the transaction that paid: the facilitator's own, or the one whose
+   *  receipt proved the transfer. */
   function bookSale({ key, slug, amount, payer, tx, sha = null, req = null }) {
+    if (!tx) return false;
     const entry = kept.get(key);
     if (entry?.saleBooked) return true;
     if (book.get(key)?.saleBooked === true) { if (entry) entry.saleBooked = true; return true; }
-    try { if (tx && saleBooked(tx)) { if (entry) entry.saleBooked = true; return true; } } catch { /* booked below */ }
+    try { if (saleBooked(tx)) { if (entry) entry.saleBooked = true; return true; } } catch { /* booked below */ }
     const commissionBps = commissionBpsFor(config, slug);
-    if (commissionBps === null) { line("error", `sale NOT booked: no commission is configured for ${slug} (tx=${tx || "not found"})`); return false; }
+    if (commissionBps === null) { line("error", `sale NOT booked: no commission is configured for ${slug} (tx=${tx})`); return false; }
     const money = referralNet(amount, { commissionBps, feeBps: config.feeBps });
     try {
       recordSale({
         slug, priceUsd: money.netUsd, quoteUsd: money.grossUsd, rail: "referral", wire: "referral", network: "base",
-        payer, tx: tx || null, synthetic: req ? !!isSynthetic(req) : false, responseSha256: sha, via: req ? salePathOf(req) : null,
+        payer, tx, synthetic: req ? !!isSynthetic(req) : false, responseSha256: sha, via: req ? salePathOf(req) : null,
       });
     } catch { return false; }
     if (entry) entry.saleBooked = true;
@@ -643,15 +745,15 @@ export function createReferralGate({
 
   /** The 200: the tool's answer with the settle transaction at the top level. */
   function bodyText(entry) {
-    const tx = entry.charged ? JSON.stringify(entry.charged) : "null";
-    // The payment landed on chain and its transaction could not be found: said in a field.
-    const tail = entry.charged ? `"transaction":${tx}` : `"transaction":null,"settlement":"charged-transaction-not-found"`;
+    const tail = `"transaction":${JSON.stringify(entry.charged)}`;
     if (entry.wrap) return `{"result":${entry.text},${tail}}`;
     return entry.text === "{}" ? `{${tail}}` : `${entry.text.slice(0, -1)},${tail}}`;
   }
   function deliver(res, entry, { redelivery = false } = {}) {
+    // No proof of payment, no delivery.
+    if (!entry.landed || !entry.charged) return false;
     const text = bodyText(entry);
-    const notServed = (why) => { counters.chargedNotServed++; line("error", `CHARGED-BUT-NOT-SERVED: ${why} (${entry.slug} payer=${shortPayer(entry.payer)} tx=${entry.charged || "not found"}); the answer is kept for a re-send of the same payment`); book.resolve(entry.key, { state: "charged-undelivered", tx: entry.charged || null, saleBooked: entry.saleBooked === true, landedAt: now() }).catch(() => {}); };
+    const notServed = (why) => { counters.chargedNotServed++; line("error", `CHARGED-BUT-NOT-SERVED: ${why} (${entry.slug} payer=${shortPayer(entry.payer)} tx=${entry.charged}); the answer is kept for a re-send of the same payment`); book.resolve(entry.key, { state: "charged-undelivered", tx: entry.charged, saleBooked: entry.saleBooked === true, landedAt: now() }).catch(() => {}); };
     if (res.destroyed || res.writableEnded) { notServed("the buyer's connection closed before the answer could be sent"); return false; }
     res.once("close", () => {
       if (!res.writableFinished) { notServed("the connection closed before the answer was fully sent"); return; }
@@ -663,16 +765,82 @@ export function createReferralGate({
     catch (err) { notServed(`the answer could not be written: ${referralLogText(err?.message, 120)}`); return false; }
   }
 
+  /** The payment is proven: book it, keep the case until delivered, take back its lane note. */
+  async function markPaid(entry, tx, req, sha = null) {
+    entry.charged = tx;
+    entry.landed = true;
+    entry.unpaid = false;
+    bookSale({ key: entry.key, slug: entry.slug, amount: entry.amount, payer: entry.payer, tx, sha: sha || createHash("sha256").update(bodyText(entry), "utf8").digest("hex"), req });
+    await book.resolve(entry.key, { state: "charged-undelivered", tx, saleBooked: entry.saleBooked === true, landedAt: now() }).catch(() => {});
+    laneClear(entry.laneKeys || [], entry.key);
+    try { if (req) onSettledSale(req); } catch { /* a convenience, never a reason to fail */ }
+  }
+
+  /**
+   * Read the chain for a kept answer and act on its one-word verdict
+   * (chainVerdict, src/referral-chain.js). Returns "charged" (the receipt
+   * proves the payment), "unpaid" (the nonce was spent without paying us:
+   * never delivered, never booked), "expired-unused", "unused" or "unknown".
+   */
+  async function readChain(entry, req, { wait = false, why = "re-send" } = {}) {
+    let c;
+    try { c = await chain.state({ from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount }, { wait }); }
+    catch { c = { used: null, paid: null, transaction: null, logsRead: false }; }
+    const verdict = chainVerdict(c, { validBeforeMs: entry.validBeforeMs, nowMs: now(), slackMs: 30_000 });
+    if (verdict === "paid") {
+      await markPaid(entry, c.transaction, req);
+      counters.landedAfterDoubt++;
+      line("error", `SETTLE-IN-DOUBT resolved by the chain: the payment landed (${entry.slug} payer=${shortPayer(entry.payer)} tx=${c.transaction}; ${why})`);
+      return "charged";
+    }
+    if (verdict === "unpaid") {
+      // Spent without paying this route (a cancel, a transfer elsewhere, a
+      // short or reverted transaction): no delivery, no sale, and it counts
+      // as an unsettled run in the payer's lane.
+      entry.unpaid = true;
+      entry.inDoubt = false;
+      counters.usedUnpaid++;
+      laneClear(entry.laneKeys || [], entry.key);
+      laneNote(entry.laneKeys || [], null);
+      await book.resolve(entry.key, null).catch(() => {});
+      line("error", `authorization spent on chain WITHOUT paying this route (${entry.slug} payer=${shortPayer(entry.payer)} tx=${c.transaction || "none of ours"}; ${why}) - nothing delivered, nothing booked`);
+      return "unpaid";
+    }
+    entry.chainUnused = verdict === "unused" || verdict === "expired-unused";
+    if (verdict === "expired-unused") return "expired-unused";
+    if (entry.inDoubt) {
+      await book.resolve(entry.key, { state: "in-doubt", reason: entry.lastReason || null }).catch(() => {});
+      line("error", `SETTLE-IN-DOUBT (${entry.slug} payer=${shortPayer(entry.payer)} ${why}; chain reads ${verdict === "unused" ? "unused so far" : "no proof yet"}) - answer kept, authorization held, buyer answered 402`);
+    }
+    return verdict;
+  }
+
+  // Refusals that say the authorization is already spent: the chain decides what that means.
+  const USED_STYLE = /(^|_)(used|nonce|replay|replayed|duplicate)(_|$)/;
+
   /**
    * Ask the facilitator to settle a kept answer's payment and read the
-   * outcome to its end. Returns "charged" (entry.charged holds the
-   * transaction, or null when the chain says it landed and the log was not
-   * found), "refused" (definite; entry.lastReason, entry.lastSide) or
-   * "unknown". The intent is in the book before the call leaves.
+   * outcome to its end. Returns "charged", "refused" (definite, nothing
+   * moved; entry.lastReason, entry.lastSide), "unpaid", "expired-unused",
+   * "unknown", or "no-intent" (the durable intent could not be written, so
+   * nothing was sent). The caller holds the authorization's settle slot.
    */
   async function settleEntry(entry, req) {
+    // No durable intent, no settle: a payment that moved with no record of
+    // the attempt is the one case nothing could ever reconcile.
+    let stored = false;
+    // The answer rides in the entry while it is open (a restart must not
+    // leave a charged buyer without it); one past the bound is kept in memory only.
+    const answer = entry.bytes <= REFERRAL_PERSISTED_ANSWER_MAX_BYTES ? { text: entry.text, wrap: entry.wrap, digest: entry.digest, payment: entry.payment, requirement: entry.requirement } : null;
+    if (!answer) line("warn", `an answer of ${entry.bytes} bytes is kept in memory only (${entry.slug}); a restart before it is delivered loses it`);
+    try { stored = (await book.intent({ key: entry.key, slug: entry.slug, payer: entry.payer, nonce: entry.auth.nonce, amount: entry.amount, validBefore: Math.floor(entry.validBeforeMs / 1000), answer })) === true; }
+    catch { stored = false; }
+    if (!stored) {
+      counters.intentFailed++;
+      line("error", `the intent to settle could not be stored (${entry.slug} payer=${shortPayer(entry.payer)}); /settle NOT called, nothing charged, answer kept`);
+      return "no-intent";
+    }
     entry.settleAttempts++;
-    await book.intent({ key: entry.key, slug: entry.slug, payer: entry.payer, nonce: entry.auth.nonce, amount: entry.amount, validBefore: Math.floor(entry.validBeforeMs / 1000) }).catch(() => false);
     const d = draining();
     // During a drain the call ends inside what the drain has left; the intent
     // above stands for it if the process stops first.
@@ -684,82 +852,77 @@ export function createReferralGate({
     // A settle that names another payer than the one who signed is not an answer about this payment.
     if (s.ok && s.payer && s.payer !== entry.payer) { line("error", `settle answered for another payer than the signer (${entry.slug} payer=${shortPayer(entry.payer)}); reading the chain`); s = { ok: false, inDoubt: true, reason: "settle_payer_mismatch", status: s.status }; }
     if (s.ok) {
-      entry.charged = s.transaction;
-      entry.landed = true;
-      bookSale({ key: entry.key, slug: entry.slug, amount: entry.amount, payer: entry.payer, tx: s.transaction, sha: createHash("sha256").update(bodyText(entry), "utf8").digest("hex"), req });
-      await book.resolve(entry.key, { state: "charged-undelivered", tx: s.transaction, saleBooked: entry.saleBooked === true, landedAt: now() }).catch(() => {});
+      await markPaid(entry, s.transaction, req);
       counters.settled++;
-      try { if (req) onSettledSale(req); } catch { /* a convenience, never a reason to fail */ }
       line("log", `settled ${entry.slug} payer=${shortPayer(entry.payer)} tx=${s.transaction}`);
       return "charged";
     }
     entry.lastReason = s.reason || "settle_failed";
     entry.lastSide = s.side || null;
     entry.lastRetryable = s.retryable === true;
-    if (!s.inDoubt) {
-      // A definite refusal: nothing moved. Nothing is left open in the book.
+    const usedStyle = USED_STYLE.test(entry.lastReason);
+    if (!s.inDoubt && !entry.everInDoubt && !usedStyle) {
+      // A definite refusal of a payment that was never in doubt: nothing
+      // moved, and nothing is left open in the book.
       entry.inDoubt = false;
       await book.resolve(entry.key, null).catch(() => {});
-      counters.settleRefused++;
-      line("warn", `settle refused after a successful handler (${entry.slug} payer=${shortPayer(entry.payer)} reason=${entry.lastReason} status=${s.status}) - not charged, authorization held`);
+      if (entry.lastSide === "ours") {
+        counters.signerRefused++;
+        faultLog.line(`the facilitator refused THIS SERVER's request at /settle (${entry.slug} reason=${entry.lastReason} status=${s.status}): check REFERRAL_SIGNER_KEY and the signer's role; not charged, answer kept, buyer answered 503`);
+      } else {
+        counters.settleRefused++;
+        line("warn", `settle refused after a successful handler (${entry.slug} payer=${shortPayer(entry.payer)} reason=${entry.lastReason} status=${s.status}) - not charged, authorization held`);
+      }
       return "refused";
     }
-    // In doubt: the chain says whether the authorization was used.
-    counters.settleInDoubt++;
+    // In doubt now, in doubt before, or refused as already spent: the chain
+    // says what happened. An entry that was ever in doubt stays in the book
+    // until the chain proves it paid, spent elsewhere, or expired unused.
+    if (s.inDoubt) counters.settleInDoubt++;
     entry.inDoubt = true;
-    return readChain(entry, req, { wait: true, why: `${entry.lastReason} status=${s.status}` });
+    entry.everInDoubt = true;
+    laneNote(entry.laneKeys || [], entry.key);
+    return readChain(entry, req, { wait: s.inDoubt, why: `${entry.lastReason} status=${s.status}` });
   }
 
-  /** Read the chain for a kept answer whose payment may have moved. */
-  async function readChain(entry, req, { wait = false, why = "re-send" } = {}) {
-    let c;
-    try { c = await chain.state({ from: entry.payer, nonce: entry.auth.nonce }, { wait }); } catch { c = { used: null, transaction: null }; }
-    if (c.used === true) {
-      entry.charged = c.transaction || null;
-      entry.landed = true;
-      bookSale({ key: entry.key, slug: entry.slug, amount: entry.amount, payer: entry.payer, tx: c.transaction || null, req });
-      await book.resolve(entry.key, { state: "charged-undelivered", tx: c.transaction || null, saleBooked: entry.saleBooked === true, landedAt: now() }).catch(() => {});
-      counters.landedAfterDoubt++;
-      try { if (req) onSettledSale(req); } catch { /* a convenience */ }
-      line("error", `SETTLE-IN-DOUBT resolved by the chain: the payment landed (${entry.slug} payer=${shortPayer(entry.payer)} tx=${c.transaction || "not found"}; ${why})`);
-      return "charged";
-    }
-    entry.chainUnused = c.used === false;
-    // Only a settle that left the outcome open is in doubt; a refused one whose
-    // re-send reads the chain is simply still unpaid.
-    if (entry.inDoubt) {
-      await book.resolve(entry.key, { state: "in-doubt", reason: entry.lastReason || null }).catch(() => {});
-      line("error", `SETTLE-IN-DOUBT (${entry.slug} payer=${shortPayer(entry.payer)} ${why}; chain reads ${c.used === false ? "unused so far" : "unreadable"}) - answer kept, authorization held, buyer answered 402`);
-    }
-    return "unknown";
+  /** The answer for an outcome that is not "charged". */
+  function refuseOutcome(res, entry, outcome) {
+    if (res.headersSent || res.destroyed) return undefined;
+    if (outcome === "unpaid") return refusePayment(res, "authorization_used_unpaid");
+    if (outcome === "expired-unused") return refusePayment(res, "authorization_expired_unused");
+    if (outcome === "no-intent") return refusePayment(res, "settlement_store_unavailable", { status: 503, retryable: true, retryAfter: 30 });
+    // A refusal of OUR request (the signer, a lookup the facilitator could not make) is this server's to fix.
+    if (outcome === "refused" && entry.lastSide === "ours") return refusePayment(res, "settlement_unavailable", { status: 503, retryable: true, retryAfter: 60 });
+    if (outcome === "refused") return refusePayment(res, entry.lastReason || "settle_refused", { retryable: entry.lastRetryable, message: REFERRAL_REASONS[entry.lastReason] || REFERRAL_REASONS.settle_refused });
+    if (entry.everInDoubt) return refusePayment(res, "settle_outcome_unknown", { retryable: true });
+    return refusePayment(res, entry.lastReason || "settle_refused", { retryable: entry.lastRetryable, message: REFERRAL_REASONS[entry.lastReason] || REFERRAL_REASONS.settle_refused });
   }
 
   /** A re-send of a payment whose answer is kept: never a second run. */
   async function resend(req, res, entry) {
     counters.resent++;
-    if (resending.has(entry.key)) { res.setHeader("X-Payment-Replay", "inflight"); return res.status(409).json({ error: "This payment is being settled by another request. Retry in a few seconds.", reason: "inflight" }); }
-    resending.add(entry.key);
+    if (settling.has(entry.key)) { res.setHeader("X-Payment-Replay", "inflight"); res.setHeader("Retry-After", "5"); return res.status(409).json({ error: "This payment is being settled by another request. Send it again in a few seconds; nothing runs or is charged twice.", reason: "inflight" }); }
+    if (entry.unpaid) return refusePayment(res, "authorization_used_unpaid");
+    settling.add(entry.key);
     try {
       let outcome = entry.landed ? "charged" : await readChain(entry, req, { why: "re-send" });
-      if (outcome !== "charged") {
-        const t = now();
-        if (entry.chainUnused && t > entry.validBeforeMs + 30_000) {
-          // Expired without being used: nothing was charged, and nothing can be.
-          dropKept(entry.key);
-          await book.resolve(entry.key, null).catch(() => {});
-          return refusePayment(res, "authorization_expired_unused");
-        }
-        if (entry.chainUnused && t < entry.validBeforeMs - 2_000 && entry.settleAttempts <= REFERRAL_RESEND_SETTLES_MAX) {
-          outcome = await settleEntry(entry, req);
-        }
+      if (outcome === "expired-unused") {
+        // Expired without being used: nothing was charged, and nothing can be.
+        dropKept(entry.key);
+        await book.resolve(entry.key, null).catch(() => {});
+      } else if (outcome === "unused" && now() < entry.validBeforeMs - 2_000 && entry.settleAttempts <= REFERRAL_RESEND_SETTLES_MAX) {
+        outcome = await settleEntry(entry, req);
       }
       if (outcome === "charged") return deliver(res, entry, { redelivery: true });
-      if (outcome === "refused" || !entry.inDoubt) return refusePayment(res, entry.lastReason || "settle_refused", { retryable: entry.lastRetryable, message: REFERRAL_REASONS[entry.lastReason] || REFERRAL_REASONS.settle_refused });
-      return refusePayment(res, "settle_outcome_unknown", { retryable: true });
-    } finally { resending.delete(entry.key); }
+      return refuseOutcome(res, entry, outcome);
+    } finally { settling.delete(entry.key); }
   }
 
-  async function handler(req, res) {
+  // Every step that can write an answer runs as a referral run, so no hint in
+  // it names a route of this server (src/referral-run.js).
+  const handler = (req, res) => runAsReferral(() => serve(req, res));
+
+  async function serve(req, res) {
     res.set("X-Robots-Tag", "noindex, nofollow").set("Cache-Control", "no-store");
     const slug = referralSlugOfPath(req.path);
     const def = slug ? defs.get(slug) : null;
@@ -769,12 +932,23 @@ export function createReferralGate({
     // PAYMENT-SIGNATURE is the only payment evidence this route reads.
     delete req.headers["x-payment"];
 
-    // A chat body is always answered as one JSON object here (the answer has
-    // to carry the settlement's transaction), so streaming is turned off
-    // BEFORE the request is priced: the quote and the run read one input.
     let input = null;
     try {
       input = handlerInputOf(req, def);
+      // An EMPTY request (no body or `{}`, and no query) runs the tool's
+      // published example: the standard buyer flow probes and pays with no
+      // input, and the one paid call it makes has to show the product. The
+      // unpaid 402 then quotes that example, and the paid call runs exactly
+      // it. A request that carries any input at all is served as sent.
+      const example = def.discovery?.input;
+      if (input && typeof input === "object" && Object.keys(input).length === 0 && example && typeof example === "object" && !Array.isArray(example) && Object.keys(example).length > 0) {
+        req.__handlerInput = structuredClone(example);
+        input = handlerInputOf(req, def);
+        req.__a402ReferralExample = true;
+      }
+      // A chat body is always answered as one JSON object here (the answer has
+      // to carry the settlement's transaction), so streaming is turned off
+      // BEFORE the request is priced: the quote and the run read one input.
       if (def.category === "llm" && input && typeof input === "object") {
         if ("stream" in input) input.stream = false;
         delete input.stream_options;
@@ -792,7 +966,7 @@ export function createReferralGate({
       // A header that did not decode was removed at intake.
       if (req.__droppedPaymentAttempt === true) { counters.refused++; credentialLimiter?.note(req); return refusePayment(res, "invalid_request"); }
       // A body the direct route refuses before any payment is refused here
-      // the same way; a bare probe (no input at all) still reads the price.
+      // the same way; a probe with no input reads the example's price.
       if (hasInput) {
         let bad = null;
         try { bad = prePaymentRefusal(def, input); } catch { bad = null; }
@@ -829,8 +1003,18 @@ export function createReferralGate({
       return resend(req, res, held);
     }
     // An authorization the book still holds open with no answer here (the
-    // process that ran it is gone): it bought its run, and it runs no second.
+    // process that ran it is gone, or its answer was dropped): it bought its
+    // run, and it runs no second.
     const open = book.get(key);
+    if (open && open.answer && open.answer.digest === digest && open.slug === def.slug && typeof open.answer.text === "string") {
+      // The answer was stored with the open entry (this process restarted, or
+      // dropped it from memory): restored, and served by the re-send path.
+      const charged = open.state === "charged-undelivered" && typeof open.tx === "string" && open.tx ? open.tx : null;
+      const restored = { key, digest, slug: def.slug, text: open.answer.text, wrap: open.answer.wrap === true, bytes: Buffer.byteLength(open.answer.text), amount: String(open.amount), requirement: open.answer.requirement, payment: open.answer.payment, auth, payer, validBeforeMs: (Number(open.validBefore) || 0) * 1000, laneKeys: laneKeysOf(req, payer), charged, landed: !!charged, unpaid: false, saleBooked: open.saleBooked === true, delivered: false, settleAttempts: Number(open.attempts) || 1, lastReason: open.reason || null, lastSide: null, lastRetryable: false, chainUnused: false, inDoubt: !charged, everInDoubt: true, at: now() };
+      keep(restored);
+      counters.restoredAnswers++;
+      return resend(req, res, restored);
+    }
     if (open) {
       counters.replays++;
       res.setHeader("X-Payment-Replay", "consumed");
@@ -844,12 +1028,6 @@ export function createReferralGate({
     try { screened = await payerScreen(req, res); } catch { screened = true; }
     if (!screened) { counters.screened++; return undefined; }
 
-    // Unsettled runs by this payer or address, bounded before anything runs.
-    if (laneBlocked(req, payer)) {
-      counters.laneRefused++;
-      res.setHeader("Retry-After", String(Math.ceil(config.unsettledWindowMs / 1000)));
-      return res.status(429).json({ success: false, errorReason: "too_many_unsettled_runs", errorMessage: REFERRAL_REASONS.too_many_unsettled_runs, retryAfterSeconds: Math.ceil(config.unsettledWindowMs / 1000) });
-    }
     if (draining().active) return refusePayment(res, "draining", { status: 503, retryable: true, retryAfter: 60 });
 
     // The input, checked the way the direct route checks it before payment: a
@@ -866,6 +1044,14 @@ export function createReferralGate({
 
     // A bounded number of paid calls in flight: past it nothing runs.
     if (inflight >= config.maxInflight) { counters.busy++; return refusePayment(res, "busy", { status: 503, retryable: true, retryAfter: 5 }); }
+    // Unsettled runs by this payer or address, with the runs they have in
+    // flight right now: bounded at admission, before anything runs or is sent.
+    const laneKeys = laneKeysOf(req, payer);
+    if (!laneAdmit(laneKeys)) {
+      counters.laneRefused++;
+      res.setHeader("Retry-After", String(Math.ceil(config.unsettledWindowMs / 1000)));
+      return res.status(429).json({ success: false, errorReason: "too_many_unsettled_runs", errorMessage: REFERRAL_REASONS.too_many_unsettled_runs, retryAfterSeconds: Math.ceil(config.unsettledWindowMs / 1000) });
+    }
     inflight++;
     let claimed = false;
     const release = () => { if (!claimed) return; claimed = false; replayGuard.release(key).catch(() => {}); };
@@ -875,11 +1061,11 @@ export function createReferralGate({
     // written only for a settled call): each runs once with the outcome.
     const settledHooks = (ok) => { for (const fn of Array.isArray(req.__onSettled) ? req.__onSettled.splice(0) : []) { try { fn(ok); } catch { /* never break a response */ } } };
     let gone = false;
-    let ticket = false;
+    let ticket = null;
     let settleSent = false;
+    let holdsSlot = false;
     res.once("close", () => { if (!res.writableFinished) gone = true; });
     const clientGone = () => gone || res.destroyed === true || req.socket?.destroyed === true;
-    const finishTicket = (abandoned) => { if (!ticket) return; ticket = false; try { hangup.finish(req, abandoned); } catch { /* the budget is bookkeeping */ } };
 
     try {
       // One authorization, one run.
@@ -901,6 +1087,13 @@ export function createReferralGate({
       const v = await settler.verify(payment, requirement);
       if (!v.ok || (v.payer && v.payer !== payer)) {
         release(); // nothing ran
+        // The facilitator refused OUR request (the signer, the registration):
+        // not the buyer's credential, not the buyer's lane.
+        if (!v.ok && v.side === "ours") {
+          counters.signerRefused++;
+          faultLog.line(`the facilitator refused THIS SERVER's request at /verify (${def.slug} reason=${v.reason} status=${v.status}): check REFERRAL_SIGNER_KEY and the signer's role; nothing ran, buyer answered 503`);
+          return refusePayment(res, "settlement_unavailable", { status: 503, retryable: true, retryAfter: 60 });
+        }
         counters.verifyRefused++;
         refusalLog.line(`verify refused ${def.slug} payer=${shortPayer(payer)} reason=${v.ok ? "payer_mismatch" : v.reason} status=${v.status}`);
         // No verdict on the payment (the facilitator did not answer): retry later.
@@ -916,10 +1109,11 @@ export function createReferralGate({
 
       // ---- the handler starts: from here the authorization is spent -------------
       counters.runs++;
+      if (req.__a402ReferralExample === true) counters.exampleRuns++;
       const budget = config.deadlineMs;
       try { isolate(req); } catch { /* the lane mark is best effort */ }
       try { presentWindow(req, now() + budget); } catch { /* the handler keeps its own timeouts */ }
-      if (hangup) { try { await hangup.reserve(req, { priceUsd: Number(amount) / 1e6, slug: def.slug }); ticket = true; } catch { ticket = false; } }
+      ticket = reserveForgiveness(laneKeys, Number(amount));
       if (onRun) { try { onRun(req, res, def); } catch { /* bookkeeping only */ } }
       let result;
       try {
@@ -933,7 +1127,7 @@ export function createReferralGate({
         hold(false);
         settledHooks(false);
         const timedOut = err?.referralTimeout === true || Number(err?.statusCode) === 504;
-        if (timedOut) { counters.timeouts++; laneNote(req, payer); } else counters.handlerErrors++;
+        if (timedOut) { counters.timeouts++; laneNote(laneKeys, null); } else counters.handlerErrors++;
         // A provider refused the buyer's request and no other model took it: a 400, as on the direct route.
         if (err?.upstreamRejected === true && (err.statusCode || 502) === 502) err.statusCode = 400;
         if (!(Number(err?.statusCode) >= 400)) { try { err.statusCode = 500; } catch { /* a frozen error keeps the renderer's default */ } }
@@ -967,37 +1161,33 @@ export function createReferralGate({
         counters.handlerErrors++;
         return res.status(500).json({ error: text === null ? "This tool's answer could not be serialized; nothing was charged." : "This tool's answer is too large for this route; nothing was charged.", tool: def.slug });
       }
-      const entry = { key, digest, slug: def.slug, text, wrap, bytes, amount, requirement, payment, auth, payer, validBeforeMs, charged: null, landed: false, saleBooked: false, delivered: false, settleAttempts: 0, lastReason: null, lastSide: null, lastRetryable: false, chainUnused: false, inDoubt: false, at: now() };
+      const entry = { key, digest, slug: def.slug, text, wrap, bytes, amount, requirement, payment, auth, payer, validBeforeMs, laneKeys, charged: null, landed: false, unpaid: false, saleBooked: false, delivered: false, settleAttempts: 0, lastReason: null, lastSide: null, lastRetryable: false, chainUnused: false, inDoubt: false, everInDoubt: false, at: now() };
 
       // The buyer left before settlement starts. With a forgiveness ticket the
-      // payment is not settled (the direct routes' rule and budgets). Without
-      // one it is settled as for any other run, and the answer is kept.
-      if (clientGone()) {
-        let forgiven = false;
-        try { forgiven = !!hangup && hangup.forgiven(req) === true; } catch { forgiven = false; }
-        if (forgiven || !hangup) {
-          hold(false);
-          settledHooks(false);
-          counters.forgivenHangups++;
-          line("warn", `client gone before settlement (${def.slug} payer=${shortPayer(payer)}) - not settled, not charged, authorization held`);
-          return undefined;
-        }
+      // payment is not settled (the direct routes' rule, on this route's own
+      // budgets). Without one it is settled as for any other run, and the
+      // answer is kept.
+      if (clientGone() && ticket && ticket.granted) {
+        hold(false);
+        settledHooks(false);
+        counters.forgivenHangups++;
+        line("warn", `client gone before settlement (${def.slug} payer=${shortPayer(payer)}) - not settled, not charged, authorization held`);
+        return undefined;
       }
 
-      // From here the answer is kept against the authorization for its life.
+      // From here the answer is kept against the authorization for its life,
+      // and this request holds the authorization's one settle slot.
       hold(true);
       keep(entry);
+      settling.add(key);
+      holdsSlot = true;
       settleSent = true;
       const outcome = await settleEntry(entry, req);
       settledHooks(outcome === "charged");
       if (outcome === "charged") { deliver(res, entry); return undefined; }
-      if (outcome === "refused") {
-        // A verdict on the payment after a served run counts in this route's own lane.
-        if (entry.lastSide === "buyer") laneNote(req, payer);
-        if (!res.headersSent && !clientGone()) refusePayment(res, entry.lastReason || "settle_refused", { retryable: entry.lastRetryable, message: REFERRAL_REASONS[entry.lastReason] || REFERRAL_REASONS.settle_refused });
-        return undefined;
-      }
-      if (!res.headersSent && !clientGone()) refusePayment(res, "settle_outcome_unknown", { retryable: true });
+      // A verdict on the payment after a served run counts in this route's own lane.
+      if (outcome === "refused" && entry.lastSide === "buyer") laneNote(laneKeys, entry.key);
+      if (!clientGone()) refuseOutcome(res, entry, outcome);
       return undefined;
     } catch (err) {
       // Nothing above is expected to throw. A claim still held here is given
@@ -1008,21 +1198,31 @@ export function createReferralGate({
       return undefined;
     } finally {
       inflight--;
+      laneLeave(laneKeys);
+      if (holdsSlot) settling.delete(key);
       // The ticket's end, as on the direct routes: abandoned (its price spent
       // from the forgiveness budgets) when the buyer left and no settlement
       // was sent; returned otherwise.
-      finishTicket(clientGone() && !settleSent);
+      finishForgiveness(ticket, clientGone() && !settleSent);
     }
   }
 
-  /** The sweep's booking: a sale for an open book entry the chain says landed. */
-  const bookFromSweep = async (e, transaction) => bookSale({ key: e.key, slug: e.slug, amount: e.amount, payer: e.payer, tx: transaction || null });
+  /** The sweep's booking: a sale for an open book entry whose receipt proves the payment. */
+  const bookFromSweep = async (e, transaction) => {
+    const booked = bookSale({ key: e.key, slug: e.slug, amount: e.amount, payer: e.payer, tx: transaction });
+    const entry = kept.get(e.key);
+    if (entry && !entry.landed) { entry.charged = transaction; entry.landed = true; laneClear(entry.laneKeys || [], entry.key); }
+    return booked;
+  };
   // An intent is left to its own request for the settle timeout and the chain read after it.
-  const sweepOnce = () => book.sweep({ chain, bookSale: bookFromSweep, graceMs: config.settleMs + 15_000 });
+  const sweepOnce = () => book.sweep({
+    chain, bookSale: bookFromSweep, payTo: config.payTo, graceMs: config.settleMs + 15_000,
+    onUnpaid: (e) => { counters.usedUnpaid++; laneNote([`payer:${String(e.payer).toLowerCase()}`], null); const entry = kept.get(e.key); if (entry) { entry.unpaid = true; entry.inDoubt = false; } },
+  });
 
   return {
     handler, sweepOnce,
-    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, laneKeys: lane.size, book: book.counts() }),
+    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, laneKeys: lane.size, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
     slugs: () => [...defs.keys()],
   };
 }

@@ -13,32 +13,52 @@
 //   charged-undelivered the payment moved and the buyer has not received the answer
 //
 // and the entry is removed when the call ends settled and delivered, or
-// refused. What stays is exactly what still needs an answer. A sweep (at boot
+// refused. What stays is exactly what still needs an answer. While an entry is
+// open it also carries the tool's answer and the payment (bounded in size and
+// count), so a restart can still deliver to a buyer who was charged; they go
+// with the entry. A sweep (at boot
 // and on a leased timer, startReferralBookSweep) reads every open entry
 // against the chain (src/referral-chain.js): an authorization the chain has
-// used is booked as a sale, once, and kept as charged-undelivered; one that
-// expired unused is closed; one that cannot be read stays for the next pass.
+// PAID (the receipt proves the transfer, chainVerdict) is booked as a sale,
+// once, and kept as charged-undelivered; one whose nonce was spent without
+// paying us, or that expired unused, is closed with nothing booked; one that
+// cannot be read stays for the next pass.
 //
 // Bounded: at most MAX_ENTRIES; past it the oldest closed-out entry is
 // dropped first, and an open one only with an error line. Nothing here is
 // public: the operator route reads it, and no status word does.
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
+import { chainVerdict } from "./referral-chain.js";
 
 export const REFERRAL_BOOK_DOC = "referral-settlements";
 export const MAX_ENTRIES = 2000;
+/** Open entries that may carry their answer (each at most the gate's stored-answer size). */
+export const MAX_STORED_ANSWERS = 300;
 /** A charged-undelivered entry is kept this long for the operator, then dropped. */
 export const KEEP_CHARGED_MS = 30 * 24 * 3600_000;
 /** An authorization is read as expired this long after its validBefore (host clock slack). */
 export const EXPIRY_SLACK_MS = 120_000;
 const OPEN = new Set(["intent", "in-doubt"]);
 
-const defaultFile = () => (process.env.REFERRAL_BOOK_FILE || (existsSync("/data") ? "/data/referral-settlements.json" : null));
+// With a state database the document is a row. Without one it is a file:
+// REFERRAL_BOOK_FILE, else under /data when that volume exists, else under the
+// system temp directory (as the other file stores do), so the book survives a
+// restart in every mode.
+const defaultFile = () => (process.env.REFERRAL_BOOK_FILE || join(existsSync("/data") ? "/data" : tmpdir(), "agent402-referral-settlements.json"));
 
 export function createReferralBook({ doc = null, file = defaultFile(), now = Date.now, log = console, maxEntries = MAX_ENTRIES } = {}) {
   const store = doc || createJsonDocument({ name: REFERRAL_BOOK_DOC, file, log: () => {} });
   let entries = {};
-  const absorb = (b) => { entries = b && typeof b === "object" && b.entries && typeof b.entries === "object" ? { ...b.entries } : {}; };
+  // The gate's own hang-up forgiveness records ([time, micro-dollars, key
+  // digests]), kept here so a restart does not refill that budget.
+  let forgiven = [];
+  const absorb = (b) => {
+    entries = b && typeof b === "object" && b.entries && typeof b.entries === "object" ? { ...b.entries } : {};
+    forgiven = b && typeof b === "object" && Array.isArray(b.forgiven) ? b.forgiven.filter((r) => Array.isArray(r) && r.length === 3) : [];
+  };
   try { absorb(store.loadSync(null)); } catch { /* read below */ }
   const ready = Promise.resolve().then(() => store.load(null)).then((b) => { if (b) absorb(b); }).catch(() => {});
   const say = (level, text) => { try { (log[level] || log.log).call(log, `[referral] ${text}`); } catch { /* a log never breaks a call */ } };
@@ -46,9 +66,10 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   async function change(fn) {
     const r = await store.update((body) => {
       const cur = body && typeof body === "object" && body.entries && typeof body.entries === "object" ? { ...body.entries } : {};
-      const out = fn(cur);
-      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur };
-    }, { fallback: { entries: {} } });
+      const kept = body && typeof body === "object" && Array.isArray(body.forgiven) ? body.forgiven : [];
+      const out = fn(cur, kept);
+      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept };
+    }, { fallback: { entries: {}, forgiven: [] } });
     if (r.ok && r.body) absorb(r.body);
     return !!r.ok;
   }
@@ -70,11 +91,15 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   return {
     ready,
     /** Write the intent to settle. Resolves true once it is stored. */
-    async intent({ key, slug, payer, nonce, amount, validBefore }) {
+    async intent({ key, slug, payer, nonce, amount, validBefore, answer = undefined }) {
       const t = now();
       return change((cur) => {
         const prev = cur[key];
-        cur[key] = { ...(prev || {}), key, slug: String(slug), payer: String(payer).toLowerCase(), nonce: String(nonce).toLowerCase(), amount: String(amount), validBefore: Number(validBefore) || 0, at: prev?.at || t, state: "intent", intentAt: t, attempts: (prev?.attempts || 0) + 1, tx: prev?.tx || null, saleBooked: prev?.saleBooked === true };
+        // The answer rides with the open entry (see the header); at most
+        // MAX_STORED_ANSWERS are stored, the rest stay in the gate's memory.
+        const stored = Object.values(cur).filter((e) => e.answer && e.key !== key).length;
+        const keepAnswer = answer && stored < MAX_STORED_ANSWERS ? answer : (prev?.answer || null);
+        cur[key] = { ...(prev || {}), answer: keepAnswer, key, slug: String(slug), payer: String(payer).toLowerCase(), nonce: String(nonce).toLowerCase(), amount: String(amount), validBefore: Number(validBefore) || 0, at: prev?.at || t, state: "intent", intentAt: t, attempts: (prev?.attempts || 0) + 1, tx: prev?.tx || null, saleBooked: prev?.saleBooked === true };
         trim(cur);
       });
     },
@@ -87,8 +112,15 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         return undefined;
       });
     },
+    /** Record one forgiven hang-up; records older than `windowMs` are dropped, at most `max` kept. */
+    async noteForgiven(record, { windowMs = 24 * 3600_000, max = 2000 } = {}) {
+      const t = now();
+      return change((_cur, kept) => [...kept.filter((r) => Array.isArray(r) && t - Number(r[0]) < windowMs), record].slice(-max));
+    },
+    forgiven: () => forgiven.slice(),
     get: (key) => entries[key] || null,
-    list: () => Object.values(entries).sort((a, b) => (b.at || 0) - (a.at || 0)),
+    /** The entries, newest first, without the stored answers and payments (the operator view). */
+    list: () => Object.values(entries).sort((a, b) => (b.at || 0) - (a.at || 0)).map(({ answer, ...e }) => ({ ...e, answerStored: !!answer })),
     counts: () => {
       const c = { intent: 0, "in-doubt": 0, "charged-undelivered": 0 };
       for (const e of Object.values(entries)) if (e.state in c) c[e.state]++;
@@ -100,22 +132,30 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      * resolves true when a row stands for it. `graceMs` keeps the sweep off an
      * intent whose settle call may still be in flight in this process.
      */
-    async sweep({ chain, bookSale, graceMs = 120_000, max = 50 } = {}) {
+    async sweep({ chain, bookSale, payTo, onUnpaid = () => {}, graceMs = 120_000, max = 50 } = {}) {
       const t = now();
-      const out = { read: 0, landed: 0, expired: 0, unknown: 0, dropped: 0 };
+      const out = { read: 0, landed: 0, unpaid: 0, expired: 0, unknown: 0, dropped: 0 };
       try { const b = await store.load(null); if (b) absorb(b); } catch { /* the last body read */ }
       const due = Object.values(entries).filter((e) => (e.state === "in-doubt" || (e.state === "intent" && t - (e.intentAt || e.at || 0) >= graceMs))).slice(0, max);
       for (const e of due) {
         out.read++;
         let s;
-        try { s = await chain.state({ from: e.payer, nonce: e.nonce }); } catch { s = { used: null, transaction: null }; }
-        if (s.used === true) {
+        try { s = await chain.state({ from: e.payer, nonce: e.nonce, payTo, amount: e.amount }); } catch { s = { used: null, paid: null, transaction: null, logsRead: false }; }
+        const verdict = chainVerdict(s, { validBeforeMs: (Number(e.validBefore) || 0) * 1000, nowMs: t, slackMs: EXPIRY_SLACK_MS });
+        if (verdict === "paid") {
+          // The receipt proves the transfer: the only reading that books a sale.
           let booked = e.saleBooked === true;
           if (!booked) { try { booked = (await bookSale(e, s.transaction)) === true; } catch { booked = false; } }
           out.landed++;
-          say("error", `CHARGED-BUT-NOT-SERVED: a settlement left open landed on chain (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${s.transaction || "not found"})${booked ? ", sale booked" : ", sale NOT booked"}`);
-          await this.resolve(e.key, { state: "charged-undelivered", tx: s.transaction || e.tx || null, saleBooked: booked, landedAt: t });
-        } else if (s.used === false && e.validBefore > 0 && t > e.validBefore * 1000 + EXPIRY_SLACK_MS) {
+          say("error", `CHARGED-BUT-NOT-SERVED: a settlement left open landed on chain (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${s.transaction})${booked ? ", sale booked" : ", sale NOT booked"}`);
+          await this.resolve(e.key, { state: "charged-undelivered", tx: s.transaction, saleBooked: booked, landedAt: t });
+        } else if (verdict === "unpaid") {
+          // The nonce was spent without paying us: closed as not paid, nothing booked.
+          out.unpaid++;
+          say("error", `an authorization left open was spent on chain WITHOUT paying this route (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${s.transaction || "none of ours"}); closed as not paid, nothing booked`);
+          try { onUnpaid(e); } catch { /* counting only */ }
+          await this.resolve(e.key, null);
+        } else if (verdict === "expired-unused") {
           out.expired++;
           await this.resolve(e.key, null);
         } else {

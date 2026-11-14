@@ -144,11 +144,13 @@ export function createReferralSettler({ facilitatorUrl, signerKey, verifyTimeout
     if (r.failure) return answer({ status: r.status, reason: r.failure, retryable: r.sent, inDoubt: true });
     const d = r.data;
     if (r.status === 200 && d && d.isValid === true) return answer({ ok: true, status: 200, payer: ADDR.test(String(d.payer || "")) ? String(d.payer).toLowerCase() : null });
-    if (r.status === 200 && d && d.isValid === false) return answer({ status: 200, reason: safeReason(d.invalidReason, "invalid_payment") });
+    if (r.status === 200 && d && d.isValid === false) { const why = safeReason(d.invalidReason, "invalid_payment"); return answer({ status: 200, reason: why, side: OURS.has(why) ? "ours" : "buyer" }); }
     const reason = safeReason(d?.errorReason ?? d?.invalidReason ?? d?.error, `facilitator_http_${r.status}`);
-    // A 4xx is the facilitator's verdict on the request; anything else says nothing about the payment.
+    // A 401, or a reason about our own request, is this server's fault, never the buyer's credential.
+    if (r.status === 401 || OURS.has(reason)) return answer({ status: r.status, reason, retryable: true, side: "ours" });
+    // Any other 4xx is the facilitator's verdict on the request; anything else says nothing about the payment.
     const verdict = r.status >= 400 && r.status < 500;
-    return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason) || r.status === 503, inDoubt: !verdict });
+    return answer({ status: r.status, reason, retryable: RETRYABLE.has(reason) || r.status === 503, inDoubt: !verdict, side: verdict ? "buyer" : null });
   }
 
   /** Settle the payment. `ok` only with a transaction hash. */

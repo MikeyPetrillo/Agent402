@@ -109,8 +109,9 @@ export function underBudget(handler, totalMs = null) {
   const budgeted = function budgeted(...args) {
     const own = handlerBudgetMs(totalMs);
     const ceiling = ceilingStore.getStore();
-    const left = ceiling ? ceiling.endsAt - performance.now() : Infinity;
-    return store.run(budgetOf(Math.max(1, Math.min(own, left))), () => handler.apply(this, args));
+    // Whole milliseconds: a read's cap becomes an AbortSignal.timeout, which takes an integer.
+    const left = ceiling ? ceiling.endsAt - Date.now() : Infinity;
+    return store.run(budgetOf(Math.max(1, Math.floor(Math.min(own, left)))), () => handler.apply(this, args));
   };
   return Object.assign(budgeted, { __underBudget: true, __budgetMs: Number(totalMs) > 0 ? Number(totalMs) : HANDLER_BUDGET_MS });
 }
@@ -123,7 +124,7 @@ export function underBudget(handler, totalMs = null) {
 const ceilingStore = new AsyncLocalStorage();
 /** Run `fn` with every budgeted handler started inside it capped at `ms` from now. */
 export function withBudgetCeiling(ms, fn) {
-  return ceilingStore.run({ endsAt: performance.now() + Math.max(1, Number(ms) || 1) }, fn);
+  return ceilingStore.run({ endsAt: Date.now() + Math.max(1, Math.floor(Number(ms) || 1)) }, fn);
 }
 
 /** Wrap every handler in a kit's tool array, in place, and return the array:
