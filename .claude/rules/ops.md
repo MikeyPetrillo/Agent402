@@ -347,7 +347,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   the entry with nothing booked; a spent one whose transaction was found, with a receipt read in
   full that the rule does not recognize, is closed to the operator record once it has expired and
   been read so `REFERRAL_UNRECOGNIZED_READS` times (default 5: no sale, no refund, an error line,
-  attention for a day); unconfirmed ones are confirmed or flagged; a delivered entry
+  attention for a day), except one whose receipt the contract routed to this merchant, which stays
+  open for an operator (attention); unconfirmed ones are confirmed or flagged; an entry whose
+  answer is still being sent (`sendingUntil`) is left to that send; a delivered entry
   whose closing write failed is closed; a `charged-undelivered` entry whose answer is gone becomes
   a refund owed at the gross, only behind the receipt proof read again (`refundsOwed` covers
   it). An operator closes an entry by hand with
@@ -357,8 +359,14 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   and changes nothing. `delivered` and `dismissed` write no debt and remove the entry. A
   `charged-undelivered` entry needs the outcome named. While a `contradicted` entry or a flagged
   `unconfirmed` one is open, new payments are answered 503 (`settlement_under_review`: every
-  payer, or only that entry's payer when it carries `scope: "payer"`) until it is resolved, so
-  resolving one is what reopens the route. Operator view: `GET /__operator/referral.json`. The
+  payer for a flagged unconfirmed entry or one carrying `scope: "route"`, otherwise only that
+  entry's payer) until it is resolved, so
+  resolving one is what reopens the route. A record in `closedUnrecognized` goes back to the open
+  entries with `{"action":"reopen","key":"<its key>","note":"what was checked"}`; it is then never
+  closed by itself, and `resolve` works on it. An open entry marked `routedToUs` paid this
+  merchant under settings this server does not hold (a payout wallet changed on chain first):
+  correct `REFERRAL_PAYOUT_ADDRESS` and the sweep proves and books it, or resolve it by hand
+  (`refund` writes its debt). Operator view: `GET /__operator/referral.json`. The
   word `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads
   attention on the conditions `.claude/rules/payments.md` lists; the status Worker and
   `heartbeat.yml` page on it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
