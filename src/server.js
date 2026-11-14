@@ -899,11 +899,11 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
-import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate } from "./referral-gate.js";
+import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, refundRowCovers } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
-import { createReferralAnswerStore } from "./referral-answers.js";
+import { createReferralAnswerStore, ANSWER_DIR_NAME as REFERRAL_ANSWER_DIR_NAME } from "./referral-answers.js";
 import { join as joinPath, dirname as dirnamePath } from "node:path";
 import { presentRunWindow } from "./evm-validity.js";
 import { withBudgetCeiling } from "./upstream-deadline.js";
@@ -10658,21 +10658,34 @@ let REFERRAL_BOOK = null;
 if (REFERRAL_ROUTES) {
   try {
     REFERRAL_BOOK = createReferralBook();
-    // The owed answers, one record (or file) each, apart from the book's index.
-    const referralAnswers = createReferralAnswerStore({ dir: process.env.REFERRAL_ANSWER_DIR || joinPath(dirnamePath(referralBookFile()), "referral-answers") });
+    // The owed answers, a file each on this process's disk, apart from the
+    // book's index and never in the state database (the nightly backup copies
+    // that; the directory's name is one the file backup leaves out).
+    const referralAnswers = createReferralAnswerStore({ dir: process.env.REFERRAL_ANSWER_DIR || joinPath(dirnamePath(referralBookFile()), REFERRAL_ANSWER_DIR_NAME) });
     REFERRAL_GATE = createReferralGate({
       config: REFERRAL_CONFIG,
       defs: REFERRAL_ROUTES.defs,
       settler: createReferralSettler({ facilitatorUrl: REFERRAL_CONFIG.facilitatorUrl, signerKey: REFERRAL_CONFIG.signerKey, verifyTimeoutMs: REFERRAL_CONFIG.verifyMs, settleTimeoutMs: REFERRAL_CONFIG.settleMs, signVerify: REFERRAL_CONFIG.verifySigned }),
       // The furthest back a used authorization's log can sit: its longest life, at Base's block time, with room.
       // The configured Base RPCs, then public ones; logs from the head recorded with each intent.
-      chain: createReferralChainReader({ lookbackBlocks: Math.min(5000, Math.ceil((REFERRAL_CONFIG.maxValidityMs + 15 * 60_000) / 2000)) }),
+      // A payment counts only when the split contract routed it to this merchant and its payout wallet.
+      chain: createReferralChainReader({
+        lookbackBlocks: Math.min(5000, Math.ceil((REFERRAL_CONFIG.maxValidityMs + 15 * 60_000) / 2000)),
+        merchantId: REFERRAL_CONFIG.merchantId, payoutAddress: REFERRAL_CONFIG.payoutAddress,
+        ...(REFERRAL_CONFIG.routedTopic ? { routedTopic: REFERRAL_CONFIG.routedTopic } : {}),
+      }),
       answers: referralAnswers,
       // A paid sale on the books (any paying rail): a payer the service-wide bound does not tighten.
       payerHasPaid: (payer) => { try { return payerHasPaidSale(payer) === true; } catch { return true; } },
       // A charged call whose answer can no longer be delivered: a refund of the
-      // gross owed in the refund ledger (true when a row stands for it).
-      oweRefund: async (row) => { const r = await recordRefundOwed(row); return r === true || !!refundByEvidence(row.tx); },
+      // gross owed in the refund ledger. True when a row stands for THIS debt:
+      // the one just written, or one already there for the same transaction
+      // AND the same payer on this wire (another payer's row is not this debt).
+      oweRefund: async (row) => {
+        const r = await recordRefundOwed(row);
+        if (r === true) return true;
+        return refundRowCovers(refundByEvidence(row.tx), row);
+      },
       book: REFERRAL_BOOK,
       replayGuard: createReplayGuard(),
       baseUrl: BASE_URL,
@@ -10757,8 +10770,22 @@ if (REFERRAL_GATE) {
 app.get("/__operator/referral.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store").json(REFERRAL_GATE
-    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), open: REFERRAL_BOOK.list().slice(0, 500) }
+    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50) }
     : { enabled: false });
+});
+// An operator closes one open referral settlement by hand (a contradicted or
+// flagged one, or one nothing on chain can settle), with a note saying what
+// was checked; the entry is recorded with that note before it is removed.
+app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store");
+  if (!REFERRAL_GATE) return res.status(409).json({ error: "the referral gate is off" });
+  const { action, key, note, outcome } = req.body || {};
+  if (action !== "resolve") return res.status(400).json({ error: 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"dismissed"|"refunded"|"paid"}' });
+  try {
+    const r = await REFERRAL_GATE.resolveByHand(typeof key === "string" ? key : "", { note: typeof note === "string" ? note : "", outcome: ["dismissed", "refunded", "paid"].includes(outcome) ? outcome : "dismissed" });
+    return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
+  } catch { return res.status(503).json({ error: "the settlement book could not be written" }); }
 });
 
 // Tempo push-transfer debts (src/tempo-push-debts.js), built with the Tempo
