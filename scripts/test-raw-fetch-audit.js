@@ -146,6 +146,7 @@ const DEFAULTS = {
   "src/ofac-sdn.js": { n: 1, cls: "fixed" },
   "src/payment-verify.js": { n: 1, cls: "fixed" },
   "src/request-timing.js": { n: 1, cls: "wrapper" },
+  "src/referral-settle.js": { n: 1, cls: "fixed", note: "the configured referral facilitator (REFERRAL_FACILITATOR_URL, https), /verify and /settle only; redirect refused, byte cap, AbortSignal timeout" },
   "src/robinhood-outage.js": { n: 1, cls: "fixed", note: "the configured eip155:4663 RPC, through rpc() with its timeout" },
   "src/sanctions-screen.js": { n: 2, cls: "fixed" },
   "src/search-data.js": { n: 1, cls: "fixed" },
