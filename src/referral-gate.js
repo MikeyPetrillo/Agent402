@@ -1237,11 +1237,13 @@ export function createReferralGate({
       let off = 0;
       // Not awaited: a slow reader holds its own socket, never this run's slot.
       const next = () => {
-        if (res.destroyed) return;
-        if (off >= total) { res.end(); return; }
-        const part = body.subarray(off, Math.min(total, off + REFERRAL_SEND_CHUNK_BYTES));
-        off += part.length;
-        res.write(part, (err) => { if (err) return; taken += part.length; next(); });
+        try {
+          if (res.destroyed) return;
+          if (off >= total) { res.end(); return; }
+          const part = body.subarray(off, Math.min(total, off + REFERRAL_SEND_CHUNK_BYTES));
+          off += part.length;
+          res.write(part, (err) => { if (err) return; taken += part.length; next(); });
+        } catch { /* a write that throws ends here; the close reads how much was taken */ }
       };
       next();
       if (redelivery) counters.redelivered++;
