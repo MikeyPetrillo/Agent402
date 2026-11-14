@@ -299,6 +299,14 @@ await expectErr({ slug: "broken-tool", params: {} }, 422, "underlying tool 422 p
       ok(cutSet?.message === "External tool... Nothing was charged.", `a refusal that arrives cut mid-word is closed at a whole word before the sentence (${cutSet?.message?.slice(0, 90)})`);
       ok(closedSentence(NESTED) === NESTED && closedSentence("Too many (max 2048). ") === "Too many (max 2048)." && closedSentence("") === "" && closedSentence("ppp") === "ppp..." && closedSentence("a GET endpoint - param \"ppp") === "a GET endpoint - param..." && !/\.{4}/.test(closedSentence("One. Two thr")),
         "a refusal that already ends as a sentence is left as written; a cut one ends with exactly three dots");
+      ok(closedSentence("One. Two thr") === "One. Two..." && closedSentence("One. thr") === "One..." && closedSentence("a - b") === "a..." && closedSentence("  cut here,  mid") === "cut here..." && closedSentence("word\ttab") === "word..." && closedSentence(null) === "" && closedSentence("Done!") === "Done!" && closedSentence("Why?") === "Why?",
+        "the cut word and what joined it are dropped, whatever the joiner");
+      // Linear in the text: 100,000 characters of each hostile shape, timed
+      // with a bound far above a linear pass and one retry under load.
+      const HOSTILE = ["a".repeat(100_000) + " b", " ".repeat(100_000) + "b", "a ".repeat(50_000) + "b", ("a" + " ".repeat(300)).repeat(330) + "b", "-".repeat(100_000) + " b"];
+      const timeAll = () => { const t0 = performance.now(); for (const h of HOSTILE) closedSentence(h); return performance.now() - t0; };
+      let ms = timeAll(); if (ms >= 50) ms = timeAll();
+      ok(ms < 50 && closedSentence(HOSTILE[0]) === `${"a".repeat(100_000)}...` && closedSentence(HOSTILE[4]) === `${"-".repeat(100_000)} b...`, `closing a 100,000-character text is a linear pass (${ms.toFixed(1)} ms for ${HOSTILE.length} shapes)`);
     }
     const long = (() => { try { boundRequestUrl(GET_EXT.url, { method: "GET", params: { q: "x".repeat(BOUND_URL_MAX_CHARS) } }); return null; } catch (e) { return e; } })();
     ok(long?.statusCode === 400 && BOUND_URL_MAX_CHARS === 2048 && /max 2048/.test(long.message), "a bound URL past the 2048-character bound is refused 400, nothing sent");

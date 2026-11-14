@@ -66,6 +66,13 @@ export function rewriteNotChargedForPush(text) {
     if (s !== sentence && /^[A-Z]/.test(sentence) && /^[a-z]/.test(s)) s = s[0].toUpperCase() + s.slice(1);
     return s;
   }).join(" ");
+  // A message that made the claim twice states the note once: a later copy
+  // is dropped with its terminator.
+  const parts = out.split(NOTE_BODY);
+  if (parts.length > 2) {
+    out = `${parts[0]}${NOTE_BODY}${parts[1]}`;
+    for (const rest of parts.slice(2)) out = `${out.trimEnd()}${".;!".includes(rest[0] || " ") ? rest.slice(1) : rest}`;
+  }
   return out;
 }
 

@@ -325,11 +325,16 @@ export async function spendingWalletReadsLow(read = cachedSpendingWalletStatus, 
   try { return (await read(chain))?.status === "low"; } catch { return false; }
 }
 /** `text` ending as a sentence: as written when it already does, else cut
- *  back to its last whole word and closed with an ellipsis (three dots). */
+ *  back to its last whole word and closed with an ellipsis (three dots).
+ *  One pass from the end, so its time is linear in the text's length. */
 export function closedSentence(text) {
   const s = String(text ?? "").trim();
-  if (!s || /[.!?]$/.test(s)) return s;
-  return `${s.replace(/\s*\S*$/, "").replace(/[\s.,;:-]+$/, "") || s}...`;
+  if (!s || ".!?".includes(s[s.length - 1])) return s;
+  const isSpace = (c) => c.trim() === "";
+  let end = s.length;
+  while (end > 0 && !isSpace(s[end - 1])) end--; // the cut word
+  while (end > 0 && (isSpace(s[end - 1]) || ".,;:-".includes(s[end - 1]))) end--; // what joined it
+  return `${end > 0 ? s.slice(0, end) : s}...`;
 }
 
 /** The refusal while the spending wallet reads low; the charge sentence on a

@@ -455,6 +455,10 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
     ok(rowsFor(hh).length === 1 && rowsFor(hh)[0].status === "owed", "...and the claimed transfer is booked as owed");
   }
   ok(rewriteNotChargedForPush(`Refused before any payment was taken${PUSH_EXCEPTION}.`) === `Refused before any payment was taken${PUSH_EXCEPTION}.`, "a sentence that already holds the push exception after other wording stays as written");
+  ok(rewriteNotChargedForPush("A failed. Nothing was charged. B was skipped. Nothing was charged. Retry later.") === `A failed. ${NOTE} B was skipped. Retry later.`
+     && rewriteNotChargedForPush(`A failed. Nothing was charged${PUSH_EXCEPTION}. Nothing was charged.`) === `A failed. ${NOTE}`
+     && rewriteNotChargedForPush("Nothing was charged. You were not charged; resend it.") === `${NOTE} resend it.`,
+     "a message that makes the claim twice states the owed note once");
   ok(rewriteNotChargedForPush("Nothing was charged because the input was refused. Retry.") === "The transfer you sent is recorded as owed because the input was refused. Retry.", "a clause restated at the head of a sentence keeps its capital");
   ok(malformed("A. the transfer you sent is recorded as owed, except a Tempo transfer sent before the call, which is recorded as owed. B.", "push") !== null && malformed("A. Nothing was charged.", "push") !== null, "control: the malformed check catches a doubled clause and a standing claim");
   // The refund run holds the claim: server.js answers its own refunded 402, untouched.
