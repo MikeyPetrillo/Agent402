@@ -89,6 +89,8 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   let retired = [];
   // Entries closed because their receipt, read in full, is not ours (the last CLOSED_MAX).
   let closed = [];
+  // Sales whose receipt paid this merchant less than the rate map expects, by slug (the gate's record).
+  let short = {};
   const lcPayer = (p) => String(p).toLowerCase();
   const heldBy = (cur, payer) => { const who = lcPayer(payer); let n = 0; for (const k in cur) if (cur[k] && cur[k].payer === who) n++; return n; };
   /** The oldest entry that may be retired at capacity: in doubt, and its
@@ -110,6 +112,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     resolved = b && typeof b === "object" && Array.isArray(b.resolved) ? b.resolved.filter((r) => r && typeof r === "object") : [];
     retired = b && typeof b === "object" && Array.isArray(b.retired) ? b.retired.filter((r) => r && typeof r === "object") : [];
     closed = b && typeof b === "object" && Array.isArray(b.closed) ? b.closed.filter((r) => r && typeof r === "object") : [];
+    short = b && typeof b === "object" && b.short && typeof b.short === "object" && !Array.isArray(b.short) ? { ...b.short } : {};
   };
   try { absorb(store.loadSync(null)); } catch { /* read below */ }
   const ready = Promise.resolve().then(() => store.load(null)).then((b) => { if (b) absorb(b); }).catch(() => {});
@@ -122,9 +125,10 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       const done = body && typeof body === "object" && Array.isArray(body.resolved) ? body.resolved.slice() : [];
       const gone = body && typeof body === "object" && Array.isArray(body.retired) ? body.retired.slice() : [];
       const shut = body && typeof body === "object" && Array.isArray(body.closed) ? body.closed.slice() : [];
-      const out = fn(cur, kept, done, gone, shut);
-      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX) };
-    }, { fallback: { entries: {}, forgiven: [], resolved: [], retired: [], closed: [] } });
+      const under = body && typeof body === "object" && body.short && typeof body.short === "object" && !Array.isArray(body.short) ? { ...body.short } : {};
+      const out = fn(cur, kept, done, gone, shut, under);
+      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX), short: under };
+    }, { fallback: { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {} } });
     if (r.ok && r.body) absorb(r.body);
     return !!r.ok;
   }
@@ -198,6 +202,36 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     resolvedByHand: () => resolved.slice(),
     /** Entries retired at capacity, oldest first. */
     retiredAtCapacity: () => retired.slice(),
+    /** One sale whose receipt paid this merchant less than the rate map
+     *  expects, counted once per transaction under its slug:
+     *  `{ count, deep, expected, received, gross, tx, firstAt, at }` (`deep`
+     *  counts the ones the gate calls far under). Kept until the map admits
+     *  the amount or an operator clears it (clearShort). */
+    async noteShort(slug, { expected, received, gross, tx, deep = false } = {}) {
+      const t = now();
+      return change((_cur, _kept, _done, _gone, _shut, under) => {
+        const prev = under[slug] && typeof under[slug] === "object" ? under[slug] : null;
+        const txs = Array.isArray(prev?.txs) ? prev.txs : [];
+        if (txs.includes(tx)) return SKIP_UPDATE;
+        under[slug] = { count: (prev?.count || 0) + 1, deep: (prev?.deep || 0) + (deep ? 1 : 0), expected: String(expected), received: String(received), gross: String(gross), tx: String(tx), txs: [...txs, String(tx)].slice(-50), firstAt: prev?.firstAt || t, at: t };
+        return undefined;
+      });
+    },
+    /** The short-net record, by slug. */
+    shortSales: () => ({ ...short }),
+    /** Remove a slug's short-net record (the map admits the amount now, or an
+     *  operator cleared it: then recorded with the note). */
+    async clearShort(slug, { note = null } = {}) {
+      let had = null;
+      const ok = await change((_cur, _kept, done, _gone, _shut, under) => {
+        had = under[slug] || null;
+        if (!had) return SKIP_UPDATE;
+        delete under[slug];
+        if (note !== null) done.push({ key: `short:${slug}`, slug, payer: null, amount: had.gross, tx: had.tx, state: "short-net", delivered: true, outcome: "short-net-cleared", debt: false, note: String(note).slice(0, 300), at: now() });
+        return undefined;
+      });
+      return ok && !!had;
+    },
     /** Entries closed because their receipt, read in full, is not ours, oldest first. */
     closedUnrecognized: () => closed.slice(),
     /** An operator puts a closed record back as an open in-doubt entry (a
@@ -230,7 +264,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       for (const k in entries) {
         const e = entries[k];
         if (!e) continue;
-        if (e.state === "contradicted" || (e.state === "unconfirmed" && e.flagged === true)) out.push({ key: k, payer: e.payer, state: e.state, scope: e.state === "unconfirmed" || e.scope === "route" ? "route" : "payer" });
+        if (e.state === "contradicted" || (e.state === "unconfirmed" && e.flagged === true)) out.push({ key: k, payer: e.payer, state: e.state, scope: e.state === "unconfirmed" || e.scope === "route" ? "route" : "payer", moved: e.state === "contradicted" && e.moved === true, at: Number(e.contradictedAt) || 0 });
       }
       return out;
     },

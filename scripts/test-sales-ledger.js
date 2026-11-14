@@ -419,6 +419,22 @@ rmSync(dir, { recursive: true, force: true });
     ok(got.net === "net-0=1/1,net-1=1/1,net-2=1/1" && got.netAsync === got.net, `externalByNetwork reads the last page too (${got.net}; async ${got.netAsync})`);
   }
 }
+// --- a private-rail sale's net is corrected in place ---------------------------------
+{
+  const { amendPrivateRailSaleNet, privateRailSaleByTx, payerReceipts, saleByTx } = await import("../src/sales-ledger.js");
+  const P = "0x" + "c4".repeat(20);
+  recordSale({ slug: "hash", priceUsd: 0.0009, quoteUsd: 0.001, rail: "referral", wire: "referral", network: "base", payer: P, tx: "0xamend1", synthetic: false });
+  recordSale({ slug: "hash", priceUsd: 0.001, quoteUsd: 0.001, rail: "usdc", network: "base", payer: P, tx: "0xamend2", synthetic: false });
+  const before = privateRailSaleByTx("0xamend1", "referral");
+  const external = salesSummary({ detailed: true }).totals.external;
+  const changed = amendPrivateRailSaleNet("0xamend1", "referral", 0.00075);
+  const again = amendPrivateRailSaleNet("0xamend1", "referral", 0.00075);
+  const after = privateRailSaleByTx("0xamend1", "referral");
+  ok(changed === true && again === false && before.netUsd === 0.0009 && after.netUsd === 0.00075 && after.id === before.id && after.grossUsd === 0.001 && payerReceipts(P.toLowerCase()).rows.filter((r) => r.settlementTx === "0xamend1").length === 1, `a private-rail sale's net is corrected in place: the same row, once, and the buyer's receipts list one row (${before.netUsd} -> ${after.netUsd})`);
+  ok(amendPrivateRailSaleNet("0xamend1", "referral", 0.002) === false && amendPrivateRailSaleNet("0xamend1", "referral", 0) === false && amendPrivateRailSaleNet("0xamend2", "usdc", 0.0005) === false && amendPrivateRailSaleNet("0xamend2", "referral", 0.0005) === false && amendPrivateRailSaleNet("0xnone", "referral", 0.0005) === false && privateRailSaleByTx("0xamend1", "referral").netUsd === 0.00075 && saleByTx("0xamend2").priceUsd === 0.001, "never above the quoted gross, never zero, never a paying rail's row, never a row that is not there");
+  const externalAfter = salesSummary({ detailed: true }).totals.external;
+  ok(externalAfter.sales === external.sales && externalAfter.revenueUsd === external.revenueUsd, "and no public total moves: the private rail is in none of them");
+}
 function isDeepStrictEqualJson(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);

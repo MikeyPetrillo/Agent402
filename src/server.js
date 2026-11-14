@@ -738,7 +738,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, privateRailSaleByTx } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, privateRailSaleByTx, amendPrivateRailSaleNet } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -10685,6 +10685,8 @@ if (REFERRAL_ROUTES) {
       // gross owed in the refund ledger. True when a row stands for THIS debt:
       // the one just written, or one already there for the same transaction
       // AND the same payer on this wire (another payer's row is not this debt).
+      // A sale booked before its receipt could be read is corrected in place to the amount received.
+      amendSaleNet: ({ tx, netUsd }) => amendPrivateRailSaleNet(tx, "referral", netUsd),
       oweRefund: async (row) => {
         const r = await recordRefundOwed(row);
         if (r === true) return true;
@@ -10774,7 +10776,7 @@ if (REFERRAL_GATE) {
 app.get("/__operator/referral.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store").json(REFERRAL_GATE
-    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50) }
+    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50), shortNet: REFERRAL_GATE.shortSales() }
     : { enabled: false });
 });
 // An operator closes one open referral settlement by hand (a contradicted or
@@ -10788,8 +10790,15 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
   res.set("Cache-Control", "private, no-store");
   if (!REFERRAL_GATE) return res.status(409).json({ error: "the referral gate is off" });
   const { action, key, note, outcome } = req.body || {};
-  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}';
+  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}, or {"action":"clear-short","slug":"<slug>","note":"what was checked"}';
   // A record closed as unrecognized goes back to the open entries, where resolve works on it.
+  // A slug's short-net record (and the stop it may carry) is cleared by hand.
+  if (action === "clear-short") {
+    try {
+      const r = await REFERRAL_GATE.clearShortByHand(typeof req.body?.slug === "string" ? req.body.slug : "", { note: typeof note === "string" ? note : "" });
+      return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
+    } catch { return res.status(503).json({ error: "the settlement book could not be written" }); }
+  }
   if (action === "reopen") {
     try {
       const r = await REFERRAL_GATE.reopenByHand(typeof key === "string" ? key : "", { note: typeof note === "string" ? note : "" });

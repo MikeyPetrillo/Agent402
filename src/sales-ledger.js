@@ -48,7 +48,7 @@ import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { normalizePayerAddress } from "./payer.js";
-import { PAYING_RAILS_SQL, isPaidRail, PUBLIC_RAIL_SQL, BUYER_RAILS_SQL, BUYER_AMOUNT_SQL } from "./paid-rails.js";
+import { PAYING_RAILS_SQL, isPaidRail, PUBLIC_RAIL_SQL, BUYER_RAILS_SQL, BUYER_AMOUNT_SQL, PRIVATE_RAILS } from "./paid-rails.js";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, singleFlight, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
@@ -583,6 +583,35 @@ export function privateRailSaleByTx(tx, rail) {
   } catch { return null; }
 }
 const updateAttestation = db.prepare("UPDATE sales SET attest_uid = ?, attest_tx = ? WHERE id = ? AND attest_uid IS NULL");
+const updatePrivateNet = db.prepare("UPDATE sales /* private-rail */ SET price_usd = ? WHERE tx = ? AND rail = ? AND price_usd != ? AND (quote_usd IS NULL OR quote_usd >= ?)");
+
+/**
+ * Correct the net amount of the sale booked on a PRIVATE rail under this
+ * transaction to `netUsd`: the amount its receipt shows, for a sale that was
+ * booked before the receipt could be read. The one row is UPDATED IN PLACE
+ * (no second row, so no reader counts the sale twice; every reader of the
+ * table sees the corrected amount from then on). Never a paying rail, never
+ * above the row's quoted gross. True when a row changed; false when none
+ * stands, it already carries that amount, or the amount is not usable.
+ * Database mode: a Promise of the verdict.
+ */
+export function amendPrivateRailSaleNet(tx, rail, netUsd) {
+  const t = String(tx || "").trim();
+  const n = Number(netUsd);
+  if (!t || !PRIVATE_RAILS.includes(String(rail)) || !Number.isFinite(n) || !(n > 0)) return false;
+  if (USE_PG) {
+    return pgWrite("amend-private-net", async () => {
+      await queuedSaleLanded(t);
+      const r = await stateQuery(
+        `UPDATE ${T("sales")} SET price_usd = $1, updated_at = ${PG_NOW_MS} WHERE tx = $2 AND rail = $3 AND price_usd <> $1 AND (quote_usd IS NULL OR quote_usd >= $1) RETURNING *`,
+        [n, t, String(rail)]);
+      for (const row of r.rows) { applySale(row); writeThrough(fileSale, saleRowOf(row)); }
+      return r.rows.length > 0;
+    });
+  }
+  try { return updatePrivateNet.run(n, t, String(rail), n, n).changes > 0; }
+  catch { return false; }
+}
 
 /** The newest sale settled by this transaction (hash or signature, as the
  *  receipt carried it), or null. Read by the attest tool: a settlement we did

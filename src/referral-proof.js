@@ -62,17 +62,21 @@ const valueOf = (log) => { try { return BigInt(log.data); } catch { return null;
  * pair and the next authorization in the transaction.
  *
  * PAID needs all of: that pair; the contract's routed event naming this
- * buyer, this gross and `merchantId`; a Transfer from the contract to
- * `payoutAddress` of the merchant amount the event states; and that amount
- * at least `minNet` (base units). There is no other way to "paid": a payout
- * transfer with no decodable event is unknown. A receipt whose `to` is not
+ * buyer, this gross and `merchantId`; and a Transfer from the contract to
+ * `payoutAddress` of the merchant amount the event states (above zero).
+ * There is no other way to "paid": a payout transfer with no decodable event
+ * is unknown. The SIZE of the merchant amount does not decide it: the buyer
+ * paid the whole amount and the contract routed it to us, so a share under
+ * `minNet` (the contract's rate above the one this server expects) is still
+ * paid, reported as `underFloor` with the amount in `net` for the caller to
+ * raise. A receipt whose `to` is not
  * the contract is unknown too (the settlement this rule is pinned to is sent
  * to the contract).
  *
  * `nonce` null reads every authorization of `from` in the receipt (the refund
  * path knows the payer and the transaction, not the nonce). `merchantId`
- * (decimal string), `payoutAddress` and `minNet` are required for "paid";
- * `routedTopic` overrides the event topic.
+ * (decimal string) and `payoutAddress` are required for "paid"; `minNet`
+ * (base units) only sets `underFloor`; `routedTopic` overrides the event topic.
  */
 export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, amount, merchantId = null, payoutAddress = null, minNet = null, routedTopic = ROUTED_EVENT_TOPIC } = {}) {
   const out = (verdict, why, moved = false, read = true, routedToUs = false, net = null) => ({ verdict, why, moved, read, routedToUs, net });
@@ -107,7 +111,6 @@ export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, am
     for (let k = i + 2; k < logs.length; k++) { if (isUsed(logs[k])) { end = k; break; } }
     const segment = logs.slice(i + 2, end);
     if (ours === null || payout === null) return out("unknown", "no merchant id or payout wallet configured to check the routing against", true);
-    if (floor === null) return out("unknown", "no minimum net to check the payout against", true);
     const paidOut = (amt) => segment.some((l) => lc(l.address) === lc(TOKEN) && lc(l.topics?.[0]) === TRANSFER_TOPIC && lc(l.topics?.[1]) === topicOf(payTo) && lc(l.topics?.[2]) === topicOf(payout) && valueOf(l) === amt);
     const routed = segment.filter((l) => lc(l.address) === lc(payTo) && lc(l.topics?.[0]) === topic).map(decodeRouted);
     const decoded = routed.filter(Boolean);
@@ -118,9 +121,9 @@ export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, am
     if (mine.length !== 1) return out("unknown", "the routed event does not name this buyer and amount exactly once", true, true, toUs);
     if (mine[0].merchantId !== ours) return out("unpaid", "the payment was routed to another merchant", true, true, toUs);
     if (!(mine[0].merchantAmt > 0n) || !paidOut(mine[0].merchantAmt)) return out("unknown", "routed to this merchant, with no transfer of the merchant amount to the payout wallet", true, true, true);
-    if (mine[0].merchantAmt < floor) return out("unknown", "routed to this merchant, with a merchant amount under the minimum net", true, true, true);
     if (sentElsewhere) return out("unknown", "the transaction was not sent to the pay-to contract", true, true, true);
-    return out("paid", "routed to this merchant and paid out", true, true, true, mine[0].merchantAmt.toString());
+    const under = floor !== null && mine[0].merchantAmt < floor;
+    return { ...out("paid", under ? "routed to this merchant and paid out, under the minimum net" : "routed to this merchant and paid out", true, true, true, mine[0].merchantAmt.toString()), underFloor: under };
   };
 
   const candidates = [];

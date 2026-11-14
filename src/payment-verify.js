@@ -341,6 +341,29 @@ export async function verifyInboundPayment({
     // at least the amount into THAT contract, routed by the contract to OUR
     // merchant and paid out to our payout wallet. A transfer into the
     // contract alone proves nothing about who was paid, and is not repaid.
+    // An OPERATOR's refund of a referral payment whose routing the rule does
+    // not accept (wire "referral-operator", written only by the operator's
+    // `refund` in src/referral-gate.js): what a refund needs is proof that
+    // the buyer paid, so it is proven by this payer's own authorization in
+    // the recorded transaction with its transfer of at least the amount into
+    // the split contract, whatever the contract did next.
+    if (wire === "referral-operator") {
+      if (String(network || "") !== "eip155:8453") return fail(`referral debt on ${network || "an unknown network"} - the referral rail settles on Base only`);
+      if (!/^0x[0-9a-fA-F]{40}$/.test(String(referralPayTo || ""))) return fail("no referral pay-to address configured (REFERRAL_PAY_TO) - cannot prove where the money went");
+      const rpcUrl = rpcFor(network);
+      if (!rpcUrl) return fail(`no RPC configured for ${network}`);
+      if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
+      if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
+      const units = BigInt(Math.round(Number(amountUsd) * 1e6));
+      if (units <= 0n) return fail("expected amount is zero");
+      let receipt;
+      try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
+      catch (e) { return fail(`could not read the transaction: ${e.message}`); }
+      if (!receipt) return fail("transaction not found on chain");
+      const proof = proveReceipt(receipt, { tx, from: payer, nonce: null, payTo: referralPayTo, amount: units.toString() });
+      if (proof.moved !== true) return fail(`the transaction does not show this payer's own transfer of the amount into the split contract (${proof.why})`);
+      return pass({ movedAtomic: units.toString(), decimals: 6, tx });
+    }
     if (wire === "referral") {
       if (String(network || "") !== "eip155:8453") return fail(`referral debt on ${network || "an unknown network"} - the referral rail settles on Base only`);
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(referralPayTo || ""))) return fail("no referral pay-to address configured (REFERRAL_PAY_TO) - cannot prove where the money went");
