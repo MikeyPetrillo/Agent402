@@ -1,8 +1,9 @@
 // The machine-readable fields a tool error carries into its JSON answer,
 // shared by every writer of a catalog error so none drops one.
+import { coverReasonOf } from "./refusal-reason.js";
 const HINT_RE = /^[a-z][a-z0-9-]{0,39}$/;
 
-/** { upstreamStatus?, attribution?, retryAfterSeconds?, hint?, retry?, refusedNetwork?, otherNetworksFrom? } from a thrown error. */
+/** { upstreamStatus?, attribution?, retryAfterSeconds?, hint?, reason?, retry?, refusedNetwork?, otherNetworksFrom?, fix? } from a thrown error. */
 export function toolErrorFields(err) {
   const upstreamStatus = Number.isInteger(err?.upstreamStatus) ? err.upstreamStatus : null;
   const attribution = typeof err?.attribution === "string" ? err.attribution : upstreamStatus ? "upstream" : null;
@@ -29,6 +30,9 @@ export function toolErrorFields(err) {
       refusedNetwork: err.refusedNetwork,
       ...(typeof err?.otherNetworksFrom === "string" && FIX_RE.test(err.otherNetworksFrom) ? { otherNetworksFrom: err.otherNetworksFrom } : {}),
     } : {}),
+    // The in-flight coverage refusal's class (src/inflight-cover.js), as a
+    // fixed reason code a caller can branch on.
+    ...(coverReasonOf(err) ? { reason: coverReasonOf(err) } : {}),
     // One plain sentence or two on how to recover (bounded, printable text).
     ...(typeof err?.fix === "string" && FIX_RE.test(err.fix) ? { fix: err.fix } : {}),
   };

@@ -70,6 +70,12 @@ export const REFUSAL_REASONS = Object.freeze([
 // Gemini path alias. Forty characters is far past any real field name.
 // `err.coverRefusal` (src/inflight-cover.js) -> its class.
 const COVER_REASONS = Object.freeze({ short: "cover_short", settling: "cover_settling", beside: "cover_beside", unread: "cover_unread", kept: "cover_kept" });
+/** The coverage refusal's reason code (`cover_short` ...) from the error's own
+ *  `coverRefusal`, else null: a fixed word of ours, never the error's text. */
+export function coverReasonOf(err) {
+  const c = err && typeof err.coverRefusal === "string" ? err.coverRefusal : null;
+  return c && Object.hasOwn(COVER_REASONS, c) ? COVER_REASONS[c] : null;
+}
 
 const RULES = [
   // Coverage refusals first: sentences from src/inflight-cover.js, for a

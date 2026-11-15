@@ -986,17 +986,26 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // Retry-After they always had.
       const undecided = block === "settling" && !asBefore;
       const e = new Error(block === "unread"
-        ? `This wallet already has ${cur.count} paid runs in progress here, and its balance could not be read to confirm it also covers this one. Retry when one of them finishes. You have not been charged.`
+        ? `This wallet already has ${cur.count} paid runs in progress here, and its balance could not be read to confirm it also covers this one. Your input is fine: retry the same call after Retry-After, once one of them has settled. You have not been charged.`
         : block === "kept" && !asBefore
-        ? `This wallet's balance could not be read just now, and the last balance read for it, less what its payments here have taken and its calls in progress hold, does not cover this one. Retry in a few seconds. You have not been charged.`
+        ? `This wallet's balance could not be read just now, and the last balance read for it, less what its payments here have taken and its calls in progress hold, does not cover this one. Your input is fine: retry the same call after Retry-After. You have not been charged.`
         : undecided
-        ? `Another call from this wallet is still settling, and until it has, the wallet's balance cannot be confirmed to cover this one as well. Retry in a few seconds. You have not been charged.`
+        ? `Another call from this wallet is still settling, and until it has, the wallet's balance cannot be confirmed to cover this one as well. Your input is fine: retry the same call after Retry-After, once that call has settled. You have not been charged.`
         : cur.count <= 0
-          ? `This wallet's balance no longer covers this run: another paid run from this wallet settled after this payment was checked, and the balance left does not cover this one too. Add funds and retry. You have not been charged.`
-          : `This wallet already has ${cur.count} paid runs in progress here, and its balance does not cover this one as well. Each payment is checked on its own, but settling them all needs the sum. Retry when one of them finishes, or add funds. You have not been charged.`);
+          ? `This wallet's balance no longer covers this run: another paid run from this wallet settled after this payment was checked, and the balance left does not cover this one too. Your input is fine: add funds and retry the same call. You have not been charged.`
+          : `This wallet already has ${cur.count} paid runs in progress here, and its balance does not cover this one as well. Each payment is checked on its own, but settling them all needs the sum. Your input is fine: retry the same call after Retry-After, once one of them has settled, or add funds. You have not been charged.`);
       e.statusCode = 429;
       // The refusal's class, for the tool log (src/refusal-reason.js).
       e.coverRefusal = block;
+      // Not the caller's input: this server's own admission limit, so the
+      // answer carries no input schema (src/tool-error-fields.js
+      // notCallersInput). The hint names the class (`reason` is derived from
+      // coverRefusal there), and `fix` is the next step for a payer that can pay.
+      e.attribution = "ours";
+      e.hint = `cover-${block}`;
+      e.fix = block === "short" && cur.count <= 0
+        ? "Your input is fine. Add funds to this wallet, then retry the same call."
+        : "Your input is fine. Retry the same call after Retry-After, when a paid call this wallet has in flight has settled.";
       e.retryAfter = asBefore ? 30 : block === "short" || block === "beside" ? 30 : 5;
       throw e;
     }
