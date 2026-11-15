@@ -57,8 +57,9 @@ const BUYER_DROP_READS = Number(process.env.UPSTREAM_BUYER_DROP_READS || 3);
 // small document shared across replicas and deploys), in the file named by
 // UPSTREAM_BUYER_TREND_FILE without one, and in process memory otherwise. So
 // a restart neither forgets a real drain (the count carries on) nor reopens
-// an explained one (an acknowledged baseline carries on). The process copy is
-// what a read falls back to when the store does not answer in time.
+// an explained one (an acknowledged baseline carries on). Once the store has
+// answered in this process, the process copy is what a read answers from (see
+// trendSynced below).
 const EMPTY_TREND = Object.freeze({ highWater: null, belowReads: 0, acknowledgedAt: null });
 const shapeTrend = (b) => ({
   highWater: b && Number.isFinite(b.highWater) ? b.highWater : null,
@@ -66,15 +67,59 @@ const shapeTrend = (b) => ({
   acknowledgedAt: b && typeof b.acknowledgedAt === "string" ? b.acknowledgedAt : null,
 });
 let memTrend = { ...EMPTY_TREND };
+const sameTrend = (a, b) => a.highWater === b.highWater && a.belowReads === b.belowReads && a.acknowledgedAt === b.acknowledgedAt;
 export const TREND_STORE_MS = 2_000;
 let trendDocument = null;
+let skipUpdate = null;
 async function trendDoc() {
   if (!trendDocument) {
     const { createJsonDocument } = await import("./json-document.js");
     const file = String(process.env.UPSTREAM_BUYER_TREND_FILE || "").trim() || null;
     trendDocument = createJsonDocument({ name: "upstream-buyer-trend", file, log: () => {}, importFromFile: false });
   }
+  if (!skipUpdate) skipUpdate = (await import("./json-document.js")).SKIP_UPDATE;
   return trendDocument;
+}
+// Whether this process has had one good answer from the store. Until it has,
+// the process copy is empty, not the stored mark: a read that used it would
+// set a drained balance as the new high-water mark and read "ok" through the
+// drain. So the first read waits for the store, and reads "unknown" when it
+// does not answer. After that the process copy is the store's, a read answers
+// from it at once, and the store takes the same step in the background.
+let trendSynced = false;
+// Background saves, one after another, each bounded by TREND_STORE_MS so a
+// hung store never holds the next one. Bumped on every local step, so a save
+// that lands after a newer step does not overwrite the process copy with an
+// older state.
+let trendSaveChain = Promise.resolve();
+let trendStepSeq = 0;
+// The store's own log is quiet; a store that does not take the trend is named
+// once per process.
+let trendStoreWarned = false;
+function warnTrendStore(d, why) {
+  if (trendStoreWarned) return;
+  trendStoreWarned = true;
+  try {
+    console.warn(`[upstream-buyer] the trend store (${d.backend}) did not take a read (${String(why || "no answer in time").slice(0, 160)}); the trend is held in process memory until it does`);
+  } catch { /* logging never throws */ }
+}
+function queueTrendWrite(d, mutate) {
+  const run = () => withinStoreDeadline(d.update(mutate, { fallback: null }));
+  const p = trendSaveChain.then(run, run);
+  trendSaveChain = p.catch(() => {});
+  return p;
+}
+// One read stepped on the stored body. A read that changes nothing (the same
+// mark, the same count) leaves the document alone instead of rewriting it.
+function storeStep(d, balance) {
+  const out = { word: null };
+  const p = queueTrendWrite(d, (b) => {
+    const s = shapeTrend(b);
+    const o = stepTrend(s, balance);
+    out.word = o.word;
+    return b != null && sameTrend(s, o.next) ? skipUpdate : o.next;
+  });
+  return p.then((r) => ({ r, word: out.word }));
 }
 // A store wait bounded in time: undefined when it did not answer.
 async function withinStoreDeadline(p) {
@@ -111,16 +156,28 @@ export function noteBuyerBalance(balance, { reset = false } = {}) {
   return word;
 }
 
-/** The same read against the stored trend state (see the note above). */
+/** The same read against the stored trend state (see the note above):
+ *  "unknown" while the store has not answered once in this process. */
 export async function noteBuyerBalanceStored(balance) {
   if (!Number.isFinite(balance)) return "unknown";
   const d = await trendDoc();
   if (d.backend === "memory") return noteBuyerBalance(balance);
-  let word = null;
-  const r = await withinStoreDeadline(d.update((b) => { const o = stepTrend(b, balance); word = o.word; return o.next; }, { fallback: null }));
-  if (r?.ok && word) { memTrend = shapeTrend(r.body); return word; }
-  return noteBuyerBalance(balance);
+  if (!trendSynced) {
+    const { r, word } = await storeStep(d, balance);
+    if (r?.ok && word) { trendSynced = true; trendStepSeq++; memTrend = shapeTrend(r.body); return word; }
+    warnTrendStore(d, r?.error);
+    return "unknown";
+  }
+  const word = noteBuyerBalance(balance);
+  const seq = ++trendStepSeq;
+  storeStep(d, balance).then(({ r }) => {
+    if (!r?.ok) { warnTrendStore(d, r?.error); return; }
+    if (seq === trendStepSeq) memTrend = shapeTrend(r.body);
+  });
+  return word;
 }
+/** Resolves once every background trend save queued so far has ended. */
+export function flushBuyerTrend() { return trendSaveChain; }
 
 /** An operator's "that fall was mine": re-baseline the high-water mark to the
  *  current balance (or, when it cannot be read now, to the next readable
@@ -134,18 +191,28 @@ export async function acknowledgeBuyerTrend({ now = Date.now() } = {}) {
   const balance = await readBaseBuyerBalance(pk);
   const next = { highWater: Number.isFinite(balance) ? balance : null, belowReads: 0, acknowledgedAt: new Date(now).toISOString() };
   memTrend = { ...next };
+  trendStepSeq++;
   trendGeneration++;
   buyerStatusCache = null;
   buyerStatusPending = null;
   const d = await trendDoc();
   let stored = "memory";
   if (d.backend !== "memory") {
-    const r = await withinStoreDeadline(d.update(() => ({ ...next }), { fallback: null }));
+    // Queued behind any background save, so an older read cannot land over it.
+    const r = await queueTrendWrite(d, () => ({ ...next }));
     stored = r?.ok ? d.backend : false;
+    // The store now holds exactly the process copy.
+    if (r?.ok) trendSynced = true;
+    else warnTrendStore(d, r?.error);
   }
   return { configured: true, acknowledgedAt: next.acknowledgedAt, baseline: next.highWater == null ? "next-read" : "current", stored };
 }
-export function __resetBuyerTrendForTest() { memTrend = { ...EMPTY_TREND }; trendDocument = null; buyerStatusCache = null; buyerStatusPending = null; }
+export function __resetBuyerTrendForTest() {
+  memTrend = { ...EMPTY_TREND }; trendDocument = null; buyerStatusCache = null; buyerStatusPending = null;
+  trendSynced = false; trendSaveChain = Promise.resolve(); trendStepSeq = 0; trendStoreWarned = false;
+}
+/** Test seam: the trend store (an object with `backend` and `update`), or null for the real one. */
+export function __setTrendDocumentForTest(doc) { __resetBuyerTrendForTest(); trendDocument = doc; }
 const BUYER_LOW_USD = () => Number(process.env.UPSTREAM_BUYER_LOW_USD || String(BUYER_LOW_DEFAULT_USD));
 const BUYER_STATUS_CACHE_MS = 5 * 60_000;
 let buyerStatusCache = null;
