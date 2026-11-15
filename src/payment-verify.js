@@ -347,6 +347,16 @@ export async function verifyInboundPayment({
     // the buyer paid, so it is proven by this payer's own authorization in
     // the recorded transaction with its transfer of at least the amount into
     // the split contract, whatever the contract did next.
+    // A referral row's evidence is the transaction, or the transaction and
+    // the authorization's nonce ("<tx>#<nonce>": one row per payment where a
+    // transaction settled several): the nonce, when there, is the one proven.
+    let referralNonce = null;
+    if ((wire === "referral" || wire === "referral-operator") && typeof tx === "string" && tx.includes("#")) {
+      const [hash, nonce] = tx.split("#");
+      tx = hash;
+      referralNonce = /^0x[0-9a-fA-F]{64}$/.test(String(nonce || "")) ? nonce : null;
+      if (referralNonce === null) return fail("the recorded evidence names no usable authorization nonce");
+    }
     if (wire === "referral-operator") {
       if (String(network || "") !== "eip155:8453") return fail(`referral debt on ${network || "an unknown network"} - the referral rail settles on Base only`);
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(referralPayTo || ""))) return fail("no referral pay-to address configured (REFERRAL_PAY_TO) - cannot prove where the money went");
@@ -360,7 +370,7 @@ export async function verifyInboundPayment({
       try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
       catch (e) { return fail(`could not read the transaction: ${e.message}`); }
       if (!receipt) return fail("transaction not found on chain");
-      const proof = proveReceipt(receipt, { tx, from: payer, nonce: null, payTo: referralPayTo, amount: units.toString() });
+      const proof = proveReceipt(receipt, { tx, from: payer, nonce: referralNonce, payTo: referralPayTo, amount: units.toString() });
       if (proof.moved !== true) return fail(`the transaction does not show this payer's own transfer of the amount into the split contract (${proof.why})`);
       return pass({ movedAtomic: units.toString(), decimals: 6, tx });
     }
@@ -380,7 +390,7 @@ export async function verifyInboundPayment({
       if (!receipt) return fail("transaction not found on chain");
       // The routed event and the payout of the amount it states decide; the
       // refund row carries no commission, so the least net asked here is 1.
-      const proof = proveReceipt(receipt, { tx, from: payer, nonce: null, payTo: referralPayTo, amount: units.toString(), merchantId: String(referralMerchantId), payoutAddress: referralPayout, minNet: "1", ...(referralRoutedTopic ? { routedTopic: referralRoutedTopic } : {}) });
+      const proof = proveReceipt(receipt, { tx, from: payer, nonce: referralNonce, payTo: referralPayTo, amount: units.toString(), merchantId: String(referralMerchantId), payoutAddress: referralPayout, minNet: "1", ...(referralRoutedTopic ? { routedTopic: referralRoutedTopic } : {}) });
       if (proof.verdict !== "paid") return fail(`the transaction does not prove a payment routed to this merchant (${proof.verdict}: ${proof.why})`);
       return pass({ movedAtomic: units.toString(), decimals: 6, tx });
     }

@@ -244,9 +244,28 @@ export const REFERRAL_ADDRESS_FACTOR = 4;
  *  the same transaction under another payer or wire is another debt. */
 export function refundRowCovers(have, row) {
   if (!have || !row) return false;
-  return lc(String(have.evidence ?? have.tx ?? "")) === lc(String(row.tx ?? "")) && lc(String(have.payer ?? "")) === lc(String(row.payer ?? "")) && (have.wire === "referral" || have.wire === "referral-operator");
+  return lc(String(have.evidence ?? have.tx ?? "")) === lc(String(row.evidenceKey ?? row.tx ?? "")) && lc(String(have.payer ?? "")) === lc(String(row.payer ?? "")) && (have.wire === "referral" || have.wire === "referral-operator");
 }
 
+/** The refund ledger's evidence for one referral payment: the transaction
+ *  and the authorization's nonce, so two payments settled in one transaction
+ *  are two rows (src/payment-verify.js reads the pair back). */
+export const referralRefundEvidence = (tx, nonce) => (/^0x[0-9a-fA-F]{64}$/.test(String(nonce || "")) ? `${String(tx).toLowerCase()}#${String(nonce).toLowerCase()}` : String(tx).toLowerCase());
+/**
+ * The gate's `oweRefund`, as the server wires it over the refund ledger
+ * (src/refund-ledger.js): the row is written under the PAYMENT's evidence
+ * (`evidenceKey`), and true means a row stands for THIS debt: the one just
+ * written, or one already there for the same evidence and payer on this wire.
+ */
+export function referralRefundWriter({ recordRefundOwed, refundByEvidence }) {
+  return async (row) => {
+    const evidence = row.evidenceKey || row.tx;
+    const { evidenceKey, ...rest } = row;
+    const r = await recordRefundOwed({ ...rest, tx: evidence });
+    if (r === true) return true;
+    return refundRowCovers(refundByEvidence(evidence), row);
+  };
+}
 /**
  * The payment the facilitator is sent: built from the fields this server
  * validated, never the buyer's decoded object passed through. `accepted` is
@@ -708,6 +727,7 @@ export const REFERRAL_REASONS = Object.freeze({
   settlement_unavailable: "The payment could not be settled because of a fault on this server's side. Nothing was charged. If the call ran, its answer is kept: send the same PAYMENT-SIGNATURE again later.",
   chain_unavailable: "The chain could not be read right now, so the payment could not be followed to its settlement. Nothing ran and nothing was charged. Retry shortly.",
   settlement_under_review: "This route is not taking this payment while an earlier settlement is being checked. Nothing ran and nothing was charged. Retry later.",
+  settlement_unproven_refund_owed: "The payment was taken, but its settlement is not one this route can prove as its own, so the answer is not delivered. The amount is recorded as owed back to the paying wallet and will be repaid on Base.",
   settled_for_another_product: "This payment was settled for another product than the one this route sells, so the answer is not delivered. The amount is recorded as owed back to the paying wallet and will be repaid on Base.",
   rate_under_review: "This tool is not taking payments on this route while its settlement terms are being checked. Nothing ran and nothing was charged. Retry later.",
   settlement_book_full: "This route cannot record a new settlement right now. Nothing ran and nothing was charged. Retry in a minute.",
@@ -779,7 +799,7 @@ export function createLineSampler({ perMinute = 20, now = Date.now, print = () =
  * @param {number|null} [o.modelNetFloorBps]  the stop floor of a model-backed tool as a share of its price, where
  *                                             REFERRAL_MIN_NET_BPS names neither the slug nor a default (the server passes
  *                                             the gateway's own margin bound, src/tools/llm-gateway-kit.js MARGIN)
- * @param {({tx, netUsd, payer, slug}) => boolean|Promise<boolean>} o.amendSaleNet  correct this payer's booked sale's net for that slug in place (true when a row changed)
+ * @param {({tx, netUsd, payer, slug, grossUsd}) => boolean|Promise<boolean>} o.amendSaleNet  correct THIS payment's booked net in place: the row of that payer, slug and gross under the transaction (true when a row changed)
  */
 export function createReferralGate({
   config, defs, settler, chain, book, replayGuard, baseUrl, priceUsdOf, priceForNetwork,
@@ -798,7 +818,7 @@ export function createReferralGate({
   if (missing.length) throw new Error(`referral gate: missing ${missing.join(", ")}`);
   const origin = String(baseUrl || "").replace(/\/+$/, "");
   const counters = {
-    deliveryMarkFailed: 0, bookFaultHeld: 0, shortNetSales: 0, shortNetHeld: 0, netsCorrected: 0, settleUnproven: 0, productMismatches: 0, ceilingCuts: 0, partlyServed: 0, unrecognizedClosed: 0, sendsEndedIdle: 0, sendInflightRefused: 0, reopenedByHand: 0, unconfirmedHeld: 0, unconfirmedFlagged: 0, headUnavailable: 0, bookFullRefused: 0, resolvedByHand: 0, alreadyDelivered: 0,
+    deliveryMarkFailed: 0, bookFaultHeld: 0, newPayerShareRefused: 0, shortNetSales: 0, shortNetHeld: 0, netsCorrected: 0, settleUnproven: 0, productMismatches: 0, ceilingCuts: 0, partlyServed: 0, unrecognizedClosed: 0, sendsEndedIdle: 0, sendInflightRefused: 0, reopenedByHand: 0, unconfirmedHeld: 0, unconfirmedFlagged: 0, headUnavailable: 0, bookFullRefused: 0, resolvedByHand: 0, alreadyDelivered: 0,
     challenges: 0, refused: 0, signatureRefused: 0, replays: 0, verifyRefused: 0, screened: 0, laneRefused: 0, busy: 0,
     signerRefused: 0, ownFaultHeld: 0, screenErrors: 0, verifyUnavailable: 0, settleContradicted: 0, unconfirmed: 0, refundsOwed: 0, restoredAnswers: 0, runs: 0, exampleRuns: 0, handlerErrors: 0, timeouts: 0, forgivenHangups: 0, settleRefused: 0, settleInDoubt: 0, landedAfterDoubt: 0, usedUnpaid: 0, intentFailed: 0,
     settled: 0, resent: 0, redelivered: 0, chargedNotServed: 0,
@@ -859,6 +879,16 @@ export function createReferralGate({
     for (const [k, l] of lane) { if (!k.startsWith("payer:")) continue; trimLane(l, t); if (l.fails.length) n++; }
     return n;
   };
+  /** THE SERVICE-WIDE RULE, on the run slots too. While `globalMax` distinct
+   *  payers have unsettled runs in the window (a stream of payments that run
+   *  a tool and then do not settle), payers with no paid sale on the books
+   *  share at most a QUARTER of the run slots (at least one): the rest stay
+   *  free for returning buyers, and new buyers still have a share. A payer
+   *  with a paid sale is never refused by it. Not a wait: a new payer past
+   *  the share is answered 503 busy at once. */
+  const serviceWideFailing = () => failingPayers(now()) >= config.globalMax;
+  const newPayerSlots = () => Math.max(1, Math.floor(config.maxInflight / 4));
+  let inflightNew = 0;
   /** Admit a run, or `{ retryAfterSeconds }` when the payer is held. */
   const laneAdmit = (keys) => {
     const t = now();
@@ -1069,13 +1099,20 @@ export function createReferralGate({
   const routeHeld = (faults = book.faults()) => manyContradicted(faults.filter((f) => f.moved === true));
   /** For a new payment while the route may be held: null (not held), "hold"
    *  (503), or "probe" (this payment goes through as the one probe; with
-   *  `take` the probe slot is taken, to be given back by routeProbeEnd). */
+   *  `take` the probe slot is taken, to be given back by routeProbeEnd).
+   *  When the hold stands on UNPROVEN successes that moved money from three
+   *  payers (every buyer is being charged with no answer: this server's
+   *  settings, or the contract's shape), a payer that has never paid here is
+   *  never the probe: only a payer with a paid sale on the books probes, and
+   *  the hold ends only on a receipt-proven sale or by the operator. */
   const routeGate = (payer, take, faults = book.faults()) => {
     if (!routeHeld(faults)) return null;
     const t = now();
     if (t < route.probeUntil) return "hold";
     let paidBefore = false;
     try { paidBefore = payerHasPaid(payer) === true; } catch { paidBefore = false; }
+    const unprovenPayers = new Set(faults.filter((f) => f.unproven === true && f.moved === true && f.at > route.healedAt).map((f) => f.payer));
+    if (unprovenPayers.size >= REFERRAL_CONTRADICTED_PAYERS && !paidBefore) return "hold";
     if (t < route.blockedUntil && !paidBefore) return "hold";
     if (take) route.probeUntil = t + OWN_PROBE_MS;
     return "probe";
@@ -1263,6 +1300,33 @@ export function createReferralGate({
    *   - no debt stands for that transaction and payer (the ledger's own key).
    * Resolves true when the entry was closed with a debt.
    */
+  /**
+   * AN UNPROVEN SUCCESS THAT MOVED MONEY IS OWED BACK. The facilitator
+   * answered success, the receipt was read in full, it shows the buyer's own
+   * transfer into the split contract, and it does not prove a sale of this
+   * route: the buyer paid and (the answer not delivered) got nothing. The
+   * gross is written as owed, once, on the operator wire (proven by that
+   * transfer; no sale is booked), and the entry STAYS: in doubt, unproven,
+   * for the operator and for the hold, never closed by itself.
+   */
+  async function oweUnproven(key, why) {
+    const e = book.get(key);
+    if (!e || e.unproven !== true || e.moved !== true || e.delivered === true || e.debtAt || kept.get(key)?.delivered === true) return false;
+    const tx = txOf(e);
+    if (!tx) return false;
+    let gross;
+    try { gross = Number(BigInt(e.amount)) / 1e6; } catch { return false; }
+    let owedRow = false;
+    try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: gross, tx, evidenceKey: referralRefundEvidence(tx, e.nonce), wire: "referral-operator", httpStatus: 402, hangupReason: null, note: `referral settle not proven as this route's sale: the buyer's transfer into the split contract is proven, no sale was booked: ${why}`.slice(0, 300) })) === true; }
+    catch { owedRow = false; }
+    if (!owedRow) { line("error", `a refund owed could NOT be recorded for an unproven settle (${e.slug} payer=${shortPayer(e.payer)} tx=${tx}); the next sweep tries again`); return false; }
+    counters.refundsOwed++;
+    dropKept(key);
+    restDrop(key);
+    await book.resolve(key, { debtAt: now() }).catch(() => {});
+    line("error", `CHARGED-BUT-NOT-SERVED: a settle success that does not prove this route's sale moved the buyer's money (${e.slug} payer=${shortPayer(e.payer)} tx=${tx}: ${why}); a refund of the gross is recorded as owed; the entry stays open for an operator`);
+    return true;
+  }
   /** The transaction an entry names: the one that paid, else the one the sweep found spending its nonce. */
   const txOf = (e) => { const t = String(e?.tx || e?.seenTx || ""); return /^0x[0-9a-fA-F]{64}$/.test(t) ? t : null; };
   async function oweIfUndeliverable(snapshot, why) {
@@ -1282,8 +1346,8 @@ export function createReferralGate({
    * operator's `refund` (resolveByHand). Behind the proof, read now; never
    * for an entry carrying the delivered mark; at the gross; once (the
    * ledger's own key, and the entry leaves the state it was read in). `e` is
-   * the entry as the book has it. For an OPERATOR (`byHand`) the proof may
-   * also be a receipt, read in full, that shows this authorization's own
+   * the entry as the book has it. The proof may also be a receipt, read in
+   * full, that shows this authorization's own
    * transfer of the amount into the split contract where the rule does not
    * recognize what the contract did next (an event of another shape, a
    * payout address that differs): proof that the BUYER PAID, which is what a
@@ -1312,7 +1376,10 @@ export function createReferralGate({
       return "contradicted";
     }
     const byTransfer = proof.verdict !== "paid";
-    if (byTransfer && !(byHand && proof.verdict === "unknown" && proof.moved === true)) return "unproven";
+    // Read in full, the buyer's own transfer into the contract shown, and not
+    // a proof of this route's sale: the buyer paid, which is what a refund
+    // needs (the automatic path and the operator alike).
+    if (byTransfer && !(proof.verdict === "unknown" && proof.moved === true)) return "unproven";
     // The entry again, after the awaits: delivered or closed meanwhile is no debt.
     const cur = book.get(e.key);
     if (!cur || cur.state !== was || cur.delivered === true || kept.get(e.key)?.delivered === true) return "changed";
@@ -1325,7 +1392,7 @@ export function createReferralGate({
     const partial = cur.partial === true;
     const note = byTransfer ? `operator refund: the buyer's transfer into the split contract is proven, its routing is not recognized; no sale was booked: ${why}` : partial ? `referral answer partly sent (at most ${Number(cur.partialSent) || 0} of ${Number(cur.partialOf) || 0} bytes) before the connection closed, held for review: ${why}` : `referral answer not deliverable: ${why}`;
     let owedRow = false;
-    try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: gross, tx, wire: byTransfer ? "referral-operator" : "referral", httpStatus: hangup || partial ? 499 : 402, hangupReason: partial ? REFERRAL_PARTIAL_HOLD_REASON : hangup, note: note.slice(0, 300) })) === true; }
+    try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: gross, tx, evidenceKey: referralRefundEvidence(tx, e.nonce), wire: byTransfer ? "referral-operator" : "referral", httpStatus: hangup || partial ? 499 : 402, hangupReason: partial ? REFERRAL_PARTIAL_HOLD_REASON : hangup, note: note.slice(0, 300) })) === true; }
     catch { owedRow = false; }
     if (!owedRow) { line("error", `a refund owed could NOT be recorded for a charged, undelivered call (${e.slug} payer=${shortPayer(e.payer)} tx=${tx}); kept in the book`); return "failed"; }
     counters.refundsOwed++;
@@ -1402,6 +1469,7 @@ export function createReferralGate({
     if (old.length) reasons.push(`${old.length} settlement(s) open past 15 minutes`);
     if (all.some((e) => e.state === "contradicted")) reasons.push("a settle the chain contradicted is open");
     if (all.some((e) => e.state === "unconfirmed" && e.flagged === true)) reasons.push("a settle success whose receipt cannot be read is open");
+    { const n = failingPayers(t); if (n >= config.globalMax) reasons.push(`unsettled runs came from ${n} payers in the window: payers with no paid sale share ${newPayerSlots()} of ${config.maxInflight} run slots`); }
     if (all.some((e) => e.state === "in-doubt" && e.unproven === true)) reasons.push("a settle success whose receipt, read in full, does not prove the sale is open");
     for (const p of productStops()) reasons.push(`${p.slug}: product id differs: configured ${p.configured}, receipt ${p.received}; new calls on it are held`);
     // A slug held by this process's own count where the book holds no record of it (its write did not land).
@@ -1494,7 +1562,7 @@ export function createReferralGate({
       if (!known) return;
       // The net is known now: raised (once per transaction) whatever the ledger write returns.
       noteShortSale(slug, amount, tx, net);
-      Promise.resolve().then(() => amendSaleNet({ tx, netUsd: Number(BigInt(net)) / 1e6, payer, slug })).then((changed) => {
+      Promise.resolve().then(() => amendSaleNet({ tx, netUsd: Number(BigInt(net)) / 1e6, payer, slug, grossUsd: Number(BigInt(amount)) / 1e6 })).then((changed) => {
         if (changed !== true) return;
         counters.netsCorrected++;
         line("warn", `a sale booked before its receipt could be read is corrected to the amount received (${slug} tx=${tx}: ${net} of ${amount})`);
@@ -1502,6 +1570,9 @@ export function createReferralGate({
     };
     if (entry?.saleBooked) { correct(); return true; }
     if (book.get(key)?.saleBooked === true) { if (entry) entry.saleBooked = true; correct(); return true; }
+    // The durable mark of THIS payment (it outlives the entry and the process).
+    const marks = typeof book.soldMarks === "function" ? book.soldMarks() : {};
+    if (marks[key]) { if (entry) entry.saleBooked = true; correct(); return true; }
     // The ledger's own word, for a sale recorded just before this process
     // lost its note of it. ONE PAYMENT, ONE ROW: a transaction can settle
     // several payments of one payer, so the rows the ledger holds for this
@@ -1509,9 +1580,11 @@ export function createReferralGate({
     // of that payer this gate has booked there; a row beyond those is this
     // payment's own.
     try {
-      let others = 0;
-      for (const [k, o] of kept) if (k !== key && o.saleBooked === true && o.charged === tx && o.payer === lc(payer) && o.slug === slug) others++;
-      for (const o of book.list()) if (o.key !== key && !kept.has(o.key) && o.saleBooked === true && o.tx === tx && o.payer === lc(payer) && o.slug === slug) others++;
+      const seen = new Set();
+      for (const [k, o] of kept) if (k !== key && o.saleBooked === true && o.charged === tx && o.payer === lc(payer) && o.slug === slug) seen.add(k);
+      for (const o of book.list()) if (o.key !== key && o.saleBooked === true && o.tx === tx && o.payer === lc(payer) && o.slug === slug) seen.add(o.key);
+      for (const k of Object.keys(marks)) if (k !== key && marks[k].tx === tx && marks[k].payer === lc(payer) && marks[k].slug === slug) seen.add(k);
+      const others = seen.size;
       if (Number(saleBooked(tx, payer, slug)) > others) { if (entry) entry.saleBooked = true; correct(); return true; }
     } catch { /* booked below */ }
     const commissionBps = commissionBpsFor(config, slug);
@@ -1528,6 +1601,7 @@ export function createReferralGate({
       });
     } catch { return false; }
     if (entry) entry.saleBooked = true;
+    if (typeof book.noteSold === "function") book.noteSold(key, { tx, payer, slug }).catch(() => {});
     if (known) noteShortSale(slug, amount, tx, net);
     return true;
   }
@@ -1792,7 +1866,7 @@ export function createReferralGate({
           noteProductMismatch(entry.slug, entry.amount, tx, detail.product);
           entry.lastReason = "settled_for_another_product";
           let owedRow = false;
-          try { owedRow = (await oweRefund({ slug: entry.slug, network: REFERRAL_NETWORK, payer: entry.payer, priceUsd: Number(BigInt(entry.amount)) / 1e6, tx, wire: "referral", httpStatus: 402, hangupReason: null, note: `referral payment settled for another product: product id differs: configured ${detail.product.configured}, receipt ${detail.product.received}`.slice(0, 300) })) === true; } catch { owedRow = false; }
+          try { owedRow = (await oweRefund({ slug: entry.slug, network: REFERRAL_NETWORK, payer: entry.payer, priceUsd: Number(BigInt(entry.amount)) / 1e6, tx, evidenceKey: referralRefundEvidence(tx, entry.auth.nonce), wire: "referral", httpStatus: 402, hangupReason: null, note: `referral payment settled for another product: product id differs: configured ${detail.product.configured}, receipt ${detail.product.received}`.slice(0, 300) })) === true; } catch { owedRow = false; }
           if (owedRow) {
             counters.refundsOwed++;
             dropKept(entry.key);
@@ -1808,6 +1882,8 @@ export function createReferralGate({
         entry.lastReason = entry.lastReason || "receipt_not_this_sale";
         await book.resolve(entry.key, { state: "in-doubt", reason: "receipt_not_this_sale", unproven: true, unprovenAt: now(), moved, seenTx: tx, why: String(detail.why || "").slice(0, 160), ...(detail.routedToUs ? { routedToUs: true } : {}) }).catch(() => {});
         line("error", `SETTLE UNPROVEN: the facilitator answered success and its receipt, read in full, does not prove this sale (${entry.slug} payer=${shortPayer(entry.payer)} tx=${tx}: ${detail.why}): nothing delivered, nothing booked; held for an operator`);
+        // The buyer's money moved and no answer goes out: owed back now.
+        if (moved && (await oweUnproven(entry.key, String(detail.why || "")))) { entry.lastReason = "settlement_unproven_refund_owed"; return "refund-owed"; }
         return "unknown";
       }
       if (proof !== "paid") {
@@ -1871,7 +1947,7 @@ export function createReferralGate({
     if (outcome === "unpaid") return refusePayment(res, "authorization_used_unpaid");
     if (outcome === "expired-unused") return refusePayment(res, "authorization_expired_unused");
     if (outcome === "no-intent") return refusePayment(res, "settlement_store_unavailable", { status: 503, retryable: true, retryAfter: 30 });
-    if (outcome === "refund-owed") return refusePayment(res, entry.lastReason === "settled_for_another_product" ? "settled_for_another_product" : "answer_unavailable_refund_owed", { status: 409 });
+    if (outcome === "refund-owed") return refusePayment(res, ["settled_for_another_product", "settlement_unproven_refund_owed"].includes(entry.lastReason) ? entry.lastReason : "answer_unavailable_refund_owed", { status: 409 });
     // A refusal of OUR request (the signer, a lookup the facilitator could not make) is this server's to fix.
     if (outcome === "refused" && entry.lastSide === "ours") return refusePayment(res, "settlement_unavailable", { status: 503, retryable: true, retryAfter: 60 });
     if (outcome === "refused") return refusePayment(res, entry.lastReason || "settle_refused", { retryable: entry.lastRetryable, message: REFERRAL_REASONS[entry.lastReason] || REFERRAL_REASONS.settle_refused });
@@ -2027,7 +2103,7 @@ export function createReferralGate({
       counters.replays++;
       // A charged buyer whose answer is gone: the payment is owed back now.
       if (openNow.state === "charged-undelivered") await oweIfUndeliverable(openNow, "its answer is no longer held");
-      if (book.get(key)?.state === "refund-owed") return refusePayment(res, "answer_unavailable_refund_owed", { status: 409 });
+      if (book.get(key)?.state === "refund-owed" || book.get(key)?.debtAt) return refusePayment(res, "answer_unavailable_refund_owed", { status: 409 });
       res.setHeader("X-Payment-Replay", "consumed");
       return res.status(409).json({ error: REFERRAL_REASONS.answer_unavailable, reason: "answer_unavailable" });
     }
@@ -2112,6 +2188,7 @@ export function createReferralGate({
     let answerSent = false;
     let holdsSlot = false;
     let routeProbe = false;
+    let newSlot = false;
     let ratePlace = false;
     let ranEntry = null;
     res.once("close", () => { if (!res.writableFinished) gone = true; });
@@ -2201,9 +2278,14 @@ export function createReferralGate({
       // payment (a credential that does not verify never holds a cold slug
       // closed), in one turn with the run slot, and given back when the call ends.
       if (slugHeld(def.slug) || rateGate(def.slug, false, payer) === "hold") { release(); counters.shortNetHeld++; return refusePayment(res, "rate_under_review", { status: 503, retryable: true, retryAfter: slugHeld(def.slug) ? 300 : 5 }); }
+      // While the service-wide rule is on, a payer with no paid sale takes one of the new payers' share of the slots.
+      let paidPayer = false;
+      try { paidPayer = payerHasPaid(payer) === true; } catch { paidPayer = false; }
+      if (!paidPayer && serviceWideFailing() && inflightNew >= newPayerSlots()) { release(); counters.busy++; counters.newPayerShareRefused++; return refusePayment(res, "busy", { status: 503, retryable: true, retryAfter: 5 }); }
       ratePlace = rateGate(def.slug, true, payer) === "taken";
       inflight++;
       slot = true;
+      if (!paidPayer) { inflightNew++; newSlot = true; }
       // The whole deadline must still fit before the settle reserve: a run is
       // never started on a shortened budget.
       const left = validBeforeMs - now() - config.settleReserveMs;
@@ -2327,6 +2409,7 @@ export function createReferralGate({
     } finally {
       pending--;
       if (slot) inflight--;
+      if (newSlot) inflightNew--;
       // A probe that ended without a verdict on our signature: the next call probes.
       if (probing && own.streak >= config.ownFaultMax && now() >= own.blockedUntil) own.probeUntil = 0;
       laneLeave(laneKeys);
@@ -2402,7 +2485,19 @@ export function createReferralGate({
     await book.resolve(e.key, { checks: (cur.checks || 0) + 1, checkedAt: now(), ...(flag ? { flagged: true } : {}) }).catch(() => {});
   }
   // An intent is left to its own request for the settle timeout and the chain read after it.
+  const heldMoved = [];
   const sweepOnce = async () => {
+    const out = await sweepBook();
+    // What the pass found held with the buyer's money moved, and any unproven
+    // entry whose debt did not land before: marked, and owed back.
+    for (const h of heldMoved.splice(0)) {
+      const e = book.get(h.key);
+      if (e && e.state === "in-doubt" && e.unproven !== true) await book.resolve(h.key, { unproven: true, unprovenAt: now(), moved: true, why: h.why.slice(0, 160) }).catch(() => {});
+    }
+    for (const e of book.list()) if (e.state === "in-doubt" && e.unproven === true && e.moved === true && !e.debtAt && e.delivered !== true && !settling.has(e.key)) await oweUnproven(e.key, String(e.why || ""));
+    return out;
+  };
+  const sweepBook = async () => {
     // A short-net record the current map admits (the map was corrected) is dropped.
     try { const live = new Set(shortNow().map((r) => r.slug)); for (const p of productStops()) live.add(p.slug); for (const slug of Object.keys(book.shortSales())) if (!live.has(slug)) { await book.clearShort(slug); rate.deep.delete(slug); rate.product.delete(slug); } } catch { /* the next pass */ }
     pruneKept();
@@ -2413,7 +2508,12 @@ export function createReferralGate({
       chain, bookSale: bookFromSweep, payTo: config.payTo, graceMs: config.settleMs + 15_000,
       minNetOf: (e) => minNetOf(e.slug, e.amount),
       productIdOf: (e) => productOf(e.slug),
-      onHeld: (e, st) => { if (st?.product) noteProductMismatch(e.slug, e.amount, String(st.transaction || ""), st.product); },
+      onHeld: (e, st) => {
+        if (st?.product) noteProductMismatch(e.slug, e.amount, String(st.transaction || ""), st.product);
+        // A receipt read in full that shows the buyer's transfer and is no
+        // proof: the entry is unproven from now, and its buyer is owed back.
+        if (st?.moved === true) heldMoved.push({ key: e.key, why: String(st.why || "") });
+      },
       onUnpaid: (e) => { counters.usedUnpaid++; restDrop(e.key); laneNote([`payer:${String(e.payer).toLowerCase()}`], null); const entry = kept.get(e.key); if (entry) { entry.unpaid = true; entry.inDoubt = false; } },
       onCharged: (e) => oweIfUndeliverable(e, "its answer expired or was not stored"),
       unrecognizedMax: config.unrecognizedReads,
@@ -2449,7 +2549,7 @@ export function createReferralGate({
     let debt = false;
     if (outcome === "refund") {
       if (e.delivered === true || kept.get(key)?.delivered === true) return { ok: false, error: "this entry carries the delivered mark: no refund is owed for it" };
-      if (e.state !== "refund-owed") {
+      if (e.state !== "refund-owed" && !e.debtAt) {
         if (!txOf(e)) return { ok: false, error: "no transaction is recorded for this entry: there is nothing a refund could be proven against" };
         // The settle slot, so no re-send delivers the answer while the debt is written.
         settling.add(key);
@@ -2459,7 +2559,8 @@ export function createReferralGate({
       }
       debt = true;
       // A refund already recorded by hand for this entry is not recorded again.
-      if (e.state === "refund-owed" && e.byHand === true) return { ok: true, entry: view, debt };
+      if ((e.state === "refund-owed" || e.debtAt) && e.byHand === true) return { ok: true, entry: view, debt };
+      // An unproven entry whose debt was written by itself stays as it is (open, for the hold): the operator's refund records the note.
       const r = await book.resolveByHand(key, { note: note.trim(), outcome, debt: true, was: e.state, patch: { byHand: true } });
       if (!r.ok) return { ok: false, error: "the debt is written, but the resolution could not be recorded; send it again" };
       counters.resolvedByHand++;

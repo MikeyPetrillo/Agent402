@@ -66,6 +66,9 @@ const RETIRED_MAX = 500;
 const CLOSED_MAX = 500;
 /** Slugs the proven record holds at most (one small entry each). */
 export const PROVEN_MAX = 500;
+/** Booked-payment marks: kept this long, at most this many. */
+export const SOLD_KEEP_MS = 3600_000;
+export const SOLD_MAX = 2000;
 /** Full readings of an unrecognized receipt before the entry is closed to the operator record. */
 export const UNRECOGNIZED_READS_MAX = 5;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -96,6 +99,9 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   // Slugs with a receipt-proven sale at or above their floor, each with the
   // fingerprint of the settings it was judged against (the gate's record).
   let proven = {};
+  // The payments whose sale this gate has booked, by authorization key (the
+  // per-payment mark that outlives the entry and the process): { key: { tx, payer, slug, at } }.
+  let sold = {};
   const lcPayer = (p) => String(p).toLowerCase();
   const heldBy = (cur, payer) => { const who = lcPayer(payer); let n = 0; for (const k in cur) if (cur[k] && cur[k].payer === who) n++; return n; };
   /** The oldest entry that may be retired at capacity: in doubt, and its
@@ -119,6 +125,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     closed = b && typeof b === "object" && Array.isArray(b.closed) ? b.closed.filter((r) => r && typeof r === "object") : [];
     short = b && typeof b === "object" && b.short && typeof b.short === "object" && !Array.isArray(b.short) ? { ...b.short } : {};
     proven = b && typeof b === "object" && b.proven && typeof b.proven === "object" && !Array.isArray(b.proven) ? { ...b.proven } : {};
+    sold = b && typeof b === "object" && b.sold && typeof b.sold === "object" && !Array.isArray(b.sold) ? { ...b.sold } : {};
   };
   try { absorb(store.loadSync(null)); } catch { /* read below */ }
   const ready = Promise.resolve().then(() => store.load(null)).then((b) => { if (b) absorb(b); }).catch(() => {});
@@ -133,9 +140,10 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       const shut = body && typeof body === "object" && Array.isArray(body.closed) ? body.closed.slice() : [];
       const under = body && typeof body === "object" && body.short && typeof body.short === "object" && !Array.isArray(body.short) ? { ...body.short } : {};
       const warm = body && typeof body === "object" && body.proven && typeof body.proven === "object" && !Array.isArray(body.proven) ? { ...body.proven } : {};
-      const out = fn(cur, kept, done, gone, shut, under, warm);
-      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX), short: under, proven: warm };
-    }, { fallback: { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {}, proven: {} } });
+      const marks = body && typeof body === "object" && body.sold && typeof body.sold === "object" && !Array.isArray(body.sold) ? { ...body.sold } : {};
+      const out = fn(cur, kept, done, gone, shut, under, warm, marks);
+      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX), short: under, proven: warm, sold: marks };
+    }, { fallback: { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {}, proven: {}, sold: {} } });
     if (r.ok && r.body) absorb(r.body);
     return !!r.ok;
   }
@@ -248,6 +256,22 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         return undefined;
       });
     },
+    /** This payment's sale is booked: the mark that outlives its entry and
+     *  this process, so a second payment settled in the same transaction is
+     *  told apart from it after a restart. Kept SOLD_KEEP_MS (a transaction
+     *  that settles two payments does so within minutes), at most SOLD_MAX. */
+    async noteSold(key, { tx, payer, slug } = {}) {
+      const t = now();
+      return change((_cur, _kept, _done, _gone, _shut, _under, _warm, marks) => {
+        for (const k of Object.keys(marks)) if (t - (Number(marks[k]?.at) || 0) > SOLD_KEEP_MS) delete marks[k];
+        const keys = Object.keys(marks);
+        if (keys.length >= SOLD_MAX) for (const k of keys.sort((a, b) => (marks[a].at || 0) - (marks[b].at || 0)).slice(0, keys.length - SOLD_MAX + 1)) delete marks[k];
+        marks[key] = { tx: String(tx), payer: String(payer).toLowerCase(), slug: String(slug), at: t };
+        return undefined;
+      });
+    },
+    /** The booked-payment marks: `{ key: { tx, payer, slug, at } }`. */
+    soldMarks: () => ({ ...sold }),
     /** The proven record, by slug: `{ slug: { fp, at } }`. */
     provenSlugs: () => ({ ...proven }),
     /** A slug is cold again (its own stop, or an operator's clear). */
@@ -385,7 +409,11 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
           const read = s?.used === true && s.paid === null && TX.test(String(s.transaction || "")) && s.receiptRead === true;
           // Routed to OUR merchant by the contract's own event, or put back by
           // an operator: never counted, never closed here.
-          const keep = read && (s.routedToUs === true || e.noAutoClose === true);
+          // And a receipt that shows the BUYER'S OWN TRANSFER into the split
+          // contract (`moved`): that buyer paid, so the entry is never closed
+          // by itself; it stays for the operator and for the refund the gate
+          // writes for it (onHeld).
+          const keep = read && (s.routedToUs === true || e.noAutoClose === true || s.moved === true || (e.unproven === true && e.moved === true));
           if (keep) {
             if (e.routedToUs !== true && s.routedToUs === true) say("error", `a spent authorization's transaction was routed to THIS merchant by the split contract, and the receipt is not one the proof rule accepts (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${String(s.transaction).toLowerCase()}: ${String(s.why || "").slice(0, 120)}); kept open for an operator, never closed by itself`);
             await this.resolve(e.key, { state: e.state === "intent" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, seenTx: String(s.transaction).toLowerCase(), ...(s.routedToUs === true ? { routedToUs: true } : {}), why: String(s.why || "").slice(0, 160) });

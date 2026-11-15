@@ -905,7 +905,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
-import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, refundRowCovers } from "./referral-gate.js";
+import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
@@ -10733,14 +10733,10 @@ if (REFERRAL_ROUTES) {
       // the one just written, or one already there for the same transaction
       // AND the same payer on this wire (another payer's row is not this debt).
       // A sale booked before its receipt could be read is corrected in place to the amount received.
-      amendSaleNet: ({ tx, netUsd, payer, slug }) => amendPrivateRailSaleNet(tx, "referral", netUsd, payer, slug),
+      amendSaleNet: ({ tx, netUsd, payer, slug, grossUsd }) => amendPrivateRailSaleNet(tx, "referral", netUsd, payer, slug, grossUsd),
       // The share of its price a model-backed tool's upstream cost is kept within (the gateway's own bound).
       modelNetFloorBps: Math.round(LLM_MARGIN * 10_000),
-      oweRefund: async (row) => {
-        const r = await recordRefundOwed(row);
-        if (r === true) return true;
-        return refundRowCovers(refundByEvidence(row.tx), row);
-      },
+      oweRefund: referralRefundWriter({ recordRefundOwed, refundByEvidence }),
       book: REFERRAL_BOOK,
       replayGuard: createReplayGuard(),
       baseUrl: BASE_URL,

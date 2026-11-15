@@ -150,9 +150,10 @@ try {
     const failing = () => { calls++; return Promise.reject(Object.assign(new Error("upstream 502"), { statusCode: 502 })); };
     const t0 = Date.now();
     const retried = await withRunCeiling(100, () => retryTransient(failing, { retries: 3, backoffMs: 150 })).then(() => null, (e) => e);
+    const noWaitMs = Date.now() - t0;
     let free = 0;
     await retryTransient(() => { free++; return Promise.reject(Object.assign(new Error("upstream 502"), { statusCode: 502 })); }, { retries: 2, backoffMs: 10 }).catch(() => null);
-    ok(retried?.statusCode === 502 && calls === 1 && Date.now() - t0 < 400 && free === 3, `a retry whose wait ends after the ceiling is not made (the ceiling is checked again after the wait); with no ceiling every retry is made (${calls} call under the ceiling, ${free} with none)`);
+    ok(retried?.statusCode === 502 && calls === 1 && noWaitMs < 100 && free === 3, `a retry whose wait would end after the ceiling is not waited for at all (it comes back at once, where the wait is 150 ms); with no ceiling every retry is made (${calls} call in ${noWaitMs} ms under the ceiling, ${free} with none)`);
     // A wait that fit before the ceiling but ended after it (this process was busy): checked again, no retry.
     let busyCalls = 0;
     const busyRetry = withRunCeiling(200, () => retryTransient(() => { busyCalls++; return Promise.reject(Object.assign(new Error("upstream 502"), { statusCode: 502 })); }, { retries: 3, backoffMs: 50 })).then(() => null, (e) => e);
