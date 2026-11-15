@@ -2494,7 +2494,7 @@ export function createReferralGate({
       const e = book.get(h.key);
       if (e && e.state === "in-doubt" && e.unproven !== true) await book.resolve(h.key, { unproven: true, unprovenAt: now(), moved: true, why: h.why.slice(0, 160) }).catch(() => {});
     }
-    for (const e of book.list()) if (e.state === "in-doubt" && e.unproven === true && e.moved === true && !e.debtAt && e.delivered !== true && !settling.has(e.key)) await oweUnproven(e.key, String(e.why || ""));
+    for (const e of book.list()) if (e.state === "in-doubt" && e.unproven === true && e.moved === true && !settling.has(e.key)) await oweUnproven(e.key, String(e.why || "")); // (once, and never for a delivered answer: oweUnproven's own checks)
     return out;
   };
   const sweepBook = async () => {
