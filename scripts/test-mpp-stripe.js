@@ -288,12 +288,18 @@ for (const seam of [true, false]) {
   const post = (auth) => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: auth } }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
   const w0 = console.warn; console.warn = () => {};
   try {
-    const ten = await Promise.all(Array.from({ length: 10 }, () => tokenCred("spt_burst")).map(post));
+    const tenCreds = Array.from({ length: 10 }, () => tokenCred("spt_burst"));
+    const ten = await Promise.all(tenCreds.map(post));
     const ok200 = ten.filter((r) => r.status === 200).length;
     const refused = ten.filter((r) => r.status === 402 && r.body?.details?.reason === "token-inflight" && r.body?.details?.charged === false).length;
     ok(runs.get("spt_burst") === 1 && captures.get("spt_burst") === 1 && ok200 === 1 && refused === 9, `gate H: ten credentials at once carrying one token ran ONE handler and made ONE capture; nine refused 402 before the handler, uncharged (runs ${runs.get("spt_burst")}, captures ${captures.get("spt_burst")}, ${ok200} x 200, ${refused} refused)`);
     const after = await post(tokenCred("spt_burst"));
     ok(after.status === 402 && after.body?.details?.reason === "token-consumed" && runs.get("spt_burst") === 1 && captures.get("spt_burst") === 1, `gate H: a captured token pays for nothing more (${after.status}, ${after.body?.details?.reason})`);
+    // A credential refused for its token left its own challenge unclaimed:
+    // sent again, it is judged on the token, not refused as a used challenge.
+    const loser = tenCreds[ten.findIndex((r) => r.body?.details?.reason === "token-inflight")];
+    const again = await post(loser);
+    ok(again.status === 402 && again.body?.details?.reason === "token-consumed", `gate H: a credential refused for its token kept its challenge unclaimed (${again.status}, ${again.body?.details?.reason || String(again.body?.detail).slice(0, 60)})`);
 
     failNext = 1;
     const failedCred = tokenCred("spt_retry");
