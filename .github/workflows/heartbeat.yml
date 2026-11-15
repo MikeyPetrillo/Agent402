@@ -879,17 +879,17 @@ jobs:
             # reasons hold; what is posted is that tag keyed with the operator
             # token (HMAC-SHA256, 12 hex), which nobody without the token can
             # map back to reasons. A mark the issue has not carried yet gets one
-            # comment; the tag itself goes to this job's log only.
+            # comment. The tag itself is printed nowhere: not on the issue and
+            # not in this job's log, which is as public as the issue is.
             EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
             if [ -n "$EXISTING" ] && [ -n "$OP_TOKEN" ]; then
               TAG=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/referral.json" | jq -r '.status.tag // ""' 2>/dev/null || echo "")
               if printf '%s' "$TAG" | grep -Eq '^[0-9a-f]{8}$'; then
                 MARK=$(printf '%s' "$TAG" | openssl dgst -sha256 -hmac "$OP_TOKEN" 2>/dev/null | sed 's/^.*= *//' | cut -c1-12)
-                echo "referralSettlement reasons tag: $TAG"
                 if printf '%s' "$MARK" | grep -Eq '^[0-9a-f]{12}$'; then
                   SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable reasons mark $MARK")
                   if ! printf '%s' "$SEEN" | grep -q "reasons mark $MARK"; then
-                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "The set of reasons changed since the last note here (reasons mark $MARK, read at $(date -u +%FT%TZ)): a reason was added or cleared. Read /__operator/referral.json." >/dev/null 2>&1 || true
+                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Reasons mark $MARK (read at $(date -u +%FT%TZ)). A mark that differs from the one in the comment before it means a reason was added or cleared. Read /__operator/referral.json." >/dev/null 2>&1 || true
                   fi
                 fi
               fi

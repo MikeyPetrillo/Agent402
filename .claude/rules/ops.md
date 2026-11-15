@@ -417,7 +417,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   every open entry of one state and recorded reason, each recorded (never a refund, and never a charged, undelivered or unconfirmed entry: those are resolved one at a time). One issue
   covers every reason: the heartbeat comments on it when the operator view's `status.tag` (a digest
   of which reasons hold), keyed with the operator token, is a mark the issue has not carried; the
-  tag itself goes to the job log only. A listed slug that is not served is a standing reason.
+  tag itself is printed nowhere (not on the issue, not in the job log). A listed slug that is not served is a standing reason.
 - **Money-state sweeps and books (batch 2026-11-08a):** `TEMPO_PUSH_HELD_MAX_MINUTES` (default 30)
   is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
   `TEMPO_LATE_CONFIRM_DELAYS_MS` (comma list of delays, default 15000,45000,120000; at most 6, each
