@@ -718,17 +718,19 @@ export const REFERRAL_REASONS = Object.freeze({
   authorization_validity_too_long: "The authorization expires too far ahead for this route. Nothing was charged. Sign one that expires within the time the 402 asks.",
   facilitator_unavailable: "The payment could not be checked right now. Nothing ran and nothing was charged. Retry shortly.",
   settle_outcome_unknown: "The call ran, but whether the payment settled is not known yet. Send the same PAYMENT-SIGNATURE again: if the payment was charged, the answer is returned with its transaction and nothing runs or is charged twice; if it was not, nothing is owed.",
-  settle_refused: "The call ran, but the payment was not settled. Nothing was charged.",
+  settle_refused: "The call ran, but the payment network refused to settle the payment. No charge is recorded; if one lands after all, the full price is recorded as owed to the paying wallet.",
   authorization_expired_unused: "This authorization expired without being used. Nothing was charged. Sign a new one to make the call again.",
-  answer_unavailable: "This authorization was already used for a call whose answer is no longer held here.",
-  answer_unavailable_refund_owed: "This payment was charged, and its answer is no longer held here, so the amount is recorded as owed back to the paying wallet and will be repaid on Base. Sign a new authorization to make the call again.",
-  authorization_used_unpaid: "This authorization was spent on chain without paying this route (canceled, or used for another transfer), so the answer is not delivered. This route was not paid. Sign a new authorization to make the call again.",
+  answer_unavailable: "This authorization was already used for a call whose answer is no longer held here. No charge is recorded for it here; whether one landed is still being read from the chain, and if one did, the full price is recorded as owed to the paying wallet.",
+  answer_unavailable_charged: "This payment was charged and its answer is no longer held here. The full price is owed to the paying wallet; recording that did not succeed just now and is tried again. Send the same PAYMENT-SIGNATURE again shortly to read where it stands.",
+  answer_unavailable_refund_owed: "This payment was charged, and its answer is no longer held here, so the full price is recorded as owed to the paying wallet. It is repaid on Base after the payment is reviewed; `transaction` and `refundStatusUrl` in this answer show where it stands. Sign a new authorization to make the call again.",
+  authorization_used_unpaid: "This authorization was used on chain without a payment to this route being found (it was canceled, or used for another transfer), so the answer is not delivered. This route was not paid. If that was not your doing, check the paying wallet's transfers before signing again.",
+  settled_to_another_merchant: "The payment network settled this payment to another merchant, not to this route: the amount left the paying wallet in the transaction named in this answer, we did not receive it, and nothing was delivered. We cannot return money we did not receive. Take the transaction to the referral network whose link was used; this server has recorded it for its operator. Signing again would be a second payment.",
   payer_screen_unavailable: "The payment could not be checked right now. Nothing ran and nothing was charged. Retry shortly.",
   settlement_unavailable: "The payment could not be settled because of a fault on this server's side. Nothing was charged. If the call ran, its answer is kept: send the same PAYMENT-SIGNATURE again later.",
   chain_unavailable: "The chain could not be read right now, so the payment could not be followed to its settlement. Nothing ran and nothing was charged. Retry shortly.",
   settlement_under_review: "This route is not taking this payment while an earlier settlement is being checked. Nothing ran and nothing was charged. Retry later.",
-  settlement_unproven_refund_owed: "The payment was taken, but its settlement is not one this route can prove as its own, so the answer is not delivered. The amount is recorded as owed back to the paying wallet and will be repaid on Base.",
-  settled_for_another_product: "This payment was settled for another product than the one this route sells, so the answer is not delivered. The amount is recorded as owed back to the paying wallet and will be repaid on Base.",
+  settlement_unproven_refund_owed: "The payment was taken, but its settlement is not one this route can prove as its own, so the answer is not delivered. The full price is recorded as owed to the paying wallet. It is repaid on Base after the payment is reviewed; `transaction` and `refundStatusUrl` in this answer show where it stands.",
+  settled_for_another_product: "This payment was settled for another product than the one this route sells, so the answer is not delivered. The full price is recorded as owed to the paying wallet. It is repaid on Base after the payment is reviewed; `transaction` and `refundStatusUrl` in this answer show where it stands.",
   rate_under_review: "This tool is not taking payments on this route while its settlement terms are being checked. Nothing ran and nothing was charged. Retry later.",
   settlement_book_full: "This route cannot record a new settlement right now. Nothing ran and nothing was charged. Retry in a minute.",
   delivery_store_unavailable: "The payment settled, but the delivery could not be recorded, so the answer was not sent. Send the same PAYMENT-SIGNATURE again shortly: the answer is kept and nothing runs or is charged twice.",
@@ -818,7 +820,7 @@ export function createReferralGate({
   if (missing.length) throw new Error(`referral gate: missing ${missing.join(", ")}`);
   const origin = String(baseUrl || "").replace(/\/+$/, "");
   const counters = {
-    deliveryMarkFailed: 0, bookFaultHeld: 0, newPayerShareRefused: 0, shortNetSales: 0, shortNetHeld: 0, netsCorrected: 0, settleUnproven: 0, productMismatches: 0, ceilingCuts: 0, partlyServed: 0, unrecognizedClosed: 0, sendsEndedIdle: 0, sendInflightRefused: 0, reopenedByHand: 0, unconfirmedHeld: 0, unconfirmedFlagged: 0, headUnavailable: 0, bookFullRefused: 0, resolvedByHand: 0, alreadyDelivered: 0,
+    deliveryMarkFailed: 0, bookFaultHeld: 0, newPayerShareRefused: 0, shortNetSales: 0, shortNetHeld: 0, netsCorrected: 0, settleUnproven: 0, refusedUnread: 0, productMismatches: 0, ceilingCuts: 0, partlyServed: 0, unrecognizedClosed: 0, sendsEndedIdle: 0, sendInflightRefused: 0, reopenedByHand: 0, unconfirmedHeld: 0, unconfirmedFlagged: 0, headUnavailable: 0, bookFullRefused: 0, resolvedByHand: 0, alreadyDelivered: 0,
     challenges: 0, refused: 0, signatureRefused: 0, replays: 0, verifyRefused: 0, screened: 0, laneRefused: 0, busy: 0,
     signerRefused: 0, ownFaultHeld: 0, screenErrors: 0, verifyUnavailable: 0, settleContradicted: 0, unconfirmed: 0, refundsOwed: 0, restoredAnswers: 0, runs: 0, exampleRuns: 0, handlerErrors: 0, timeouts: 0, forgivenHangups: 0, settleRefused: 0, settleInDoubt: 0, landedAfterDoubt: 0, usedUnpaid: 0, intentFailed: 0,
     settled: 0, resent: 0, redelivered: 0, chargedNotServed: 0,
@@ -1373,13 +1375,17 @@ export function createReferralGate({
         // A payment booked on a proof that no longer holds: no settle can be trusted.
         await book.resolve(e.key, { state: "contradicted", scope: "route", contradictedAt: now() }).catch(() => {});
       }
-      return "contradicted";
+      // An operator, on an entry ALREADY kept as contradicted whose receipt
+      // shows the buyer's own transfer into the contract (routed to another
+      // merchant): the debt can be recorded, with the reason. Never by itself.
+      if (!(byHand && was === "contradicted" && proof.moved === true)) return "contradicted";
     }
+    const elsewhere = proof.verdict === "unpaid";
     const byTransfer = proof.verdict !== "paid";
     // Read in full, the buyer's own transfer into the contract shown, and not
     // a proof of this route's sale: the buyer paid, which is what a refund
     // needs (the automatic path and the operator alike).
-    if (byTransfer && !(proof.verdict === "unknown" && proof.moved === true)) return "unproven";
+    if (byTransfer && !elsewhere && !(proof.verdict === "unknown" && proof.moved === true)) return "unproven";
     // The entry again, after the awaits: delivered or closed meanwhile is no debt.
     const cur = book.get(e.key);
     if (!cur || cur.state !== was || cur.delivered === true || kept.get(e.key)?.delivered === true) return "changed";
@@ -1390,7 +1396,7 @@ export function createReferralGate({
     // carries the reason that run holds, and its byte counts in the note.
     const hangup = typeof cur.hangup === "string" && cur.hangup ? cur.hangup : null;
     const partial = cur.partial === true;
-    const note = byTransfer ? `operator refund: the buyer's transfer into the split contract is proven, its routing is not recognized; no sale was booked: ${why}` : partial ? `referral answer partly sent (at most ${Number(cur.partialSent) || 0} of ${Number(cur.partialOf) || 0} bytes) before the connection closed, held for review: ${why}` : `referral answer not deliverable: ${why}`;
+    const note = elsewhere ? `operator refund: the buyer's transfer into the split contract is proven; the network routed it to another merchant and it was not received here; no sale was booked: ${why}` : byTransfer ? `operator refund: the buyer's transfer into the split contract is proven, its routing is not recognized; no sale was booked: ${why}` : partial ? `referral answer partly sent (at most ${Number(cur.partialSent) || 0} of ${Number(cur.partialOf) || 0} bytes) before the connection closed, held for review: ${why}` : `referral answer not deliverable: ${why}`;
     let owedRow = false;
     try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: gross, tx, evidenceKey: referralRefundEvidence(tx, e.nonce), wire: byTransfer ? "referral-operator" : "referral", httpStatus: hangup || partial ? 499 : 402, hangupReason: partial ? REFERRAL_PARTIAL_HOLD_REASON : hangup, note: note.slice(0, 300) })) === true; }
     catch { owedRow = false; }
@@ -1542,10 +1548,24 @@ export function createReferralGate({
     return copy;
   }
 
-  const refusePayment = (res, reason, { status = 402, retryable = false, retryAfter = null, message = null } = {}) => {
+  const refusePayment = (res, reason, { status = 402, retryable = false, retryAfter = null, message = null, extra = null } = {}) => {
     if (retryAfter) res.setHeader("Retry-After", String(retryAfter));
     const text = message || REFERRAL_REASONS[reason] || (status === 402 ? "The payment was not accepted. Nothing was charged." : null);
-    return res.status(status).json({ success: false, errorReason: reason, ...(text ? { errorMessage: text } : {}), ...(retryable ? { retryable: true } : {}) });
+    return res.status(status).json({ success: false, errorReason: reason, ...(text ? { errorMessage: text } : {}), ...(retryable ? { retryable: true } : {}), ...(extra || {}) });
+  };
+  // What a buyer told "owed back" can check: the settlement transaction (on
+  // chain already) and the free refund lookup for it (src/refund-lookup.js),
+  // which lists every refund recorded under that transaction.
+  const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
+  const txFields = (key) => { const b = book.get(key); const t = String(b?.tx || b?.seenTx || kept.get(key)?.tx || "").toLowerCase(); return TX_HASH.test(t) ? t : null; };
+  const owedBack = (res, reason, key) => { const t = txFields(key); return refusePayment(res, reason, { status: 409, extra: t ? { transaction: t, refundStatusUrl: `${origin}/api/refunds?tx=${t}` } : null }); };
+  // A payment the network settled to another merchant (a success whose
+  // receipt shows the buyer's transfer into the contract, routed elsewhere):
+  // the transaction, or null when this payment is not one.
+  const settledElsewhereTx = (key) => { const b = book.get(key); return b && b.state === "contradicted" && b.moved === true ? txFields(key) : null; };
+  const unpaidAnswer = (res, key) => {
+    const t = settledElsewhereTx(key);
+    return t ? refusePayment(res, "settled_to_another_merchant", { status: 409, extra: { transaction: t } }) : refusePayment(res, "authorization_used_unpaid");
   };
 
   /** Book the sale for a settled authorization, once. Only ever called with
@@ -1914,10 +1934,25 @@ export function createReferralGate({
     entry.lastRetryable = s.retryable === true;
     const usedStyle = USED_STYLE.test(entry.lastReason);
     if (!s.inDoubt && !entry.everInDoubt && !usedStyle) {
-      // A definite refusal of a payment that was never in doubt: nothing
-      // moved, and nothing is left open in the book.
+      // A definite refusal of a payment that was never in doubt. The refusal
+      // is the facilitator's word; the entry closes on ONE chain read that
+      // shows the authorization unused. A read that shows it used is acted on
+      // as any other, and while the chain cannot be read the entry stays, in
+      // doubt, for the sweep: it closes once the authorization can no longer
+      // be sent, and a payment that lands late is found and owed back.
       entry.inDoubt = false;
-      await closeEntry(entry.key);
+      const seen = await readChain(entry, req, { wait: false, why: `settle refused (${entry.lastReason})` });
+      if (seen === "charged" || seen === "unpaid") return seen;
+      if (seen === "unused" || seen === "expired-unused") await closeEntry(entry.key);
+      else {
+        counters.refusedUnread++;
+        entry.inDoubt = true;
+        entry.everInDoubt = true;
+        entry.refusedUnread = true;
+        laneNote(entry.laneKeys || [], entry.key);
+        await book.resolve(entry.key, { state: "in-doubt", reason: entry.lastReason || null }).catch(() => {});
+        line("error", `settle refused and the chain could not be read (${entry.slug} payer=${shortPayer(entry.payer)} reason=${entry.lastReason}): the entry stays open, in doubt, until the chain shows the authorization unused and expired, or used`);
+      }
       if (entry.lastSide === "ours") {
         // Only a refusal of our signature counts toward the hold.
         if (s.ownFault === true) noteOwnFault("settle");
@@ -1925,7 +1960,8 @@ export function createReferralGate({
         faultLog.line(`the facilitator refused THIS SERVER's request at /settle (${entry.slug} reason=${entry.lastReason} status=${s.status}): check REFERRAL_SIGNER_KEY and the signer's role; not charged, answer kept, buyer answered 503`);
       } else {
         clearOwnFault();
-        restDrop(entry.key);
+        // (Kept while the entry is open: a payment that lands late can still be answered.)
+        if (!entry.refusedUnread) restDrop(entry.key);
         counters.settleRefused++;
         line("warn", `settle refused after a successful handler (${entry.slug} payer=${shortPayer(entry.payer)} reason=${entry.lastReason} status=${s.status}) - not charged, authorization held`);
       }
@@ -1944,10 +1980,10 @@ export function createReferralGate({
   /** The answer for an outcome that is not "charged". */
   function refuseOutcome(res, entry, outcome) {
     if (res.headersSent || res.destroyed) return undefined;
-    if (outcome === "unpaid") return refusePayment(res, "authorization_used_unpaid");
+    if (outcome === "unpaid") return unpaidAnswer(res, entry.key);
     if (outcome === "expired-unused") return refusePayment(res, "authorization_expired_unused");
     if (outcome === "no-intent") return refusePayment(res, "settlement_store_unavailable", { status: 503, retryable: true, retryAfter: 30 });
-    if (outcome === "refund-owed") return refusePayment(res, ["settled_for_another_product", "settlement_unproven_refund_owed"].includes(entry.lastReason) ? entry.lastReason : "answer_unavailable_refund_owed", { status: 409 });
+    if (outcome === "refund-owed") return owedBack(res, ["settled_for_another_product", "settlement_unproven_refund_owed"].includes(entry.lastReason) ? entry.lastReason : "answer_unavailable_refund_owed", entry.key);
     // A refusal of OUR request (the signer, a lookup the facilitator could not make) is this server's to fix.
     if (outcome === "refused" && entry.lastSide === "ours") return refusePayment(res, "settlement_unavailable", { status: 503, retryable: true, retryAfter: 60 });
     if (outcome === "refused") return refusePayment(res, entry.lastReason || "settle_refused", { retryable: entry.lastRetryable, message: REFERRAL_REASONS[entry.lastReason] || REFERRAL_REASONS.settle_refused });
@@ -1959,7 +1995,7 @@ export function createReferralGate({
   async function resend(req, res, entry) {
     counters.resent++;
     if (settling.has(entry.key)) { res.setHeader("X-Payment-Replay", "inflight"); res.setHeader("Retry-After", "5"); return res.status(409).json({ error: "This payment is being settled by another request. Send it again in a few seconds; nothing runs or is charged twice.", reason: "inflight" }); }
-    if (entry.unpaid) return refusePayment(res, "authorization_used_unpaid");
+    if (entry.unpaid) return unpaidAnswer(res, entry.key);
     settling.add(entry.key);
     try {
       let outcome = entry.landed ? "charged" : await readChain(entry, req, { why: "re-send" });
@@ -2103,9 +2139,12 @@ export function createReferralGate({
       counters.replays++;
       // A charged buyer whose answer is gone: the payment is owed back now.
       if (openNow.state === "charged-undelivered") await oweIfUndeliverable(openNow, "its answer is no longer held");
-      if (book.get(key)?.state === "refund-owed" || book.get(key)?.debtAt) return refusePayment(res, "answer_unavailable_refund_owed", { status: 409 });
+      if (book.get(key)?.state === "refund-owed" || book.get(key)?.debtAt) return owedBack(res, "answer_unavailable_refund_owed", key);
+      if (settledElsewhereTx(key)) return unpaidAnswer(res, key);
       res.setHeader("X-Payment-Replay", "consumed");
-      return res.status(409).json({ error: REFERRAL_REASONS.answer_unavailable, reason: "answer_unavailable" });
+      // Charged (the chain proved it) with the debt not yet written, or not known to be charged.
+      const chargedNow = book.get(key)?.state === "charged-undelivered";
+      return res.status(409).json({ error: chargedNow ? REFERRAL_REASONS.answer_unavailable_charged : REFERRAL_REASONS.answer_unavailable, reason: "answer_unavailable", charged: chargedNow ? true : null });
     }
     // The clock: valid now, for the whole run and its settlement, and not too far ahead.
     if (timeReason) return refuseCredential(timeReason);
@@ -2555,7 +2594,7 @@ export function createReferralGate({
         settling.add(key);
         let wrote;
         try { wrote = await writeDebt(e, `resolved by an operator (${note.trim().slice(0, 120)})`, { byHand: true }); } finally { settling.delete(key); }
-        if (wrote !== "owed") return { ok: false, error: wrote === "unproven" ? "the receipt could not be read or is not a recognized shape: no debt written, the entry is unchanged" : wrote === "contradicted" ? "the receipt does not prove a payment routed to this merchant: no debt written" : wrote === "changed" ? "the entry changed meanwhile (delivered or closed): no debt written" : "the refund ledger did not take the row: no debt written" };
+        if (wrote !== "owed") return { ok: false, error: wrote === "unproven" ? "the receipt could not be read or is not a recognized shape: no debt written, the entry is unchanged" : wrote === "contradicted" ? "the receipt does not prove a payment routed to this merchant: no debt written, and the entry is kept as contradicted (where its receipt shows the buyer's own transfer into the contract, routed to another merchant, sending refund again records the debt for a payment this server did not receive)" : wrote === "changed" ? "the entry changed meanwhile (delivered or closed): no debt written" : "the refund ledger did not take the row: no debt written" };
       }
       debt = true;
       // A refund already recorded by hand for this entry is not recorded again.
