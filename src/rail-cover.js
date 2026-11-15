@@ -7,8 +7,9 @@
 // draws on, the token, and the base units it moves. Read only after the gate
 // verified the payment:
 //   - Tempo pull: the sender the gate VERIFIED (the signature or the chain
-//     proved it; never the credential's client-written source), the
-//     challenge's currency and amount (src/mpp-tempo.js sets them on the
+//     proved it; never the credential's client-written source; for a pull
+//     signed by an access key, the account the key signs for, which is the
+//     account that pays), the challenge's currency and amount (src/mpp-tempo.js sets them on the
 //     request). A push credential is final before the handler and has none.
 //   - Solana: the SOURCE token account of the transfer (the balance that
 //     moves is that account's, whoever its authority is), the mint, and the

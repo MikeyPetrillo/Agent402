@@ -19,7 +19,9 @@
 //     verified it (coverTermsOfRequest): an x402 EVM payment (an EIP-3009
 //     authorization or a Permit2 authorization, the two shapes the exact
 //     scheme's verify accepts; the MPP evm wire arrives as one through the
-//     shim), a Tempo pull credential from a sender the gate verified, and a
+//     shim), a Tempo pull credential from a sender the gate verified
+//     (signed by an access key: judged on the account that pays, the one the
+//     key signs for), and a
 //     Solana, Algorand or Stellar x402 payment (src/rail-cover.js; a Solana
 //     transfer that names an account through a lookup table is keyed on the
 //     paying wallet and judged on all it holds of the mint). Not
