@@ -339,8 +339,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `agent402-referral-answer-cache` beside the book file), on this process's disk only, never a
   database row (the nightly backup copies those, and the file backup leaves out a `cache` name),
   deleted at their expiry (`IDEM_TTL_MS`, 10 minutes), at most 32 MB in all; a restart loses
-  them. A paid call writes the small index a few times (about 4 ms each on the file store with
-  300 open entries, measured). At most 2000 entries, 40 for one payer: a payer past its share, or a
+  them. A paid call writes the book four times (the intent, the charge, the delivered mark, the close;
+  measured against a database at 2 ms round trip: 4.0 writes and 4.0 attempts a call, the gate adds
+  about 27 ms). At most 2000 entries, 40 for one payer: a payer past its share, or a
   book at capacity with nothing to retire, refuses a paid call (503 before `/verify` and the
   handler); at capacity the oldest expired in-doubt entry is retired to the operator record. The leased sweep `referral-settle-sweep` (at
   boot and every `REFERRAL_SWEEP_MS`, default 60000; `contained`) reads up to 50 open entries a
@@ -385,6 +386,33 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   word `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads
   attention on the conditions `.claude/rules/payments.md` lists; the status Worker and
   `heartbeat.yml` page on it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
+- **Referral gate, standing facts (measured 2026-11-14, stubs for the facilitator and the chain):**
+  one paid `/ref` call makes 1 `/verify`, 1 `/settle`, 1 receipt read, 4 book writes, and writes and
+  removes one answer file. The book is ONE document rewritten whole by each write, so a write costs
+  the document's size (about 0.5 MB at 1000 open entries); changes queue per process and those
+  waiting are written together (`src/referral-book.js` `change`), so under load writes per call fall
+  (24 calls at once on a 1000-entry book: 34 writes for 96 calls, 1.00 attempts a write, no call
+  refused for the store), and two of this process's writers never collide; compare-and-swap is left
+  to arbitrate between processes. The sweep writes its "read, nothing changed" marks once a pass,
+  hands on at most 50 charged, undelivered entries a pass (oldest first) and its answer-file pass
+  reads one file a turn. Sweep RPC volume: no chain read with an empty book; from 50 open entries up
+  about 3,000 reads an hour (50 entries a pass, a pass a minute). Kept answers live under the
+  container's temp directory: a deploy loses them, and each charged, undelivered one then becomes a
+  refund at the gross. A deploy overlap is two processes on one book: an answer is delivered or
+  owed back, never both (the store decides; `.claude/rules/payments.md`), and an answer whose
+  sender ended mid-send gets a refund held for review. During a drain a settle call ends 10 s
+  before the drain's deadline (`REFERRAL_DRAIN_SETTLE_MARGIN_MS`), 4 s before the state database's
+  pool starts closing, so its book write lands. Store outage: an intent write is given up at 3 s,
+  and after one the store did not take, paid calls are refused before the tool runs until a small
+  write stands (`REFERRAL_STORE_WRITE_MS`, `REFERRAL_STORE_COOLDOWN_MS`). The status word also
+  reads attention while the chain head could not be read for 5 minutes (every paid call is then
+  refused) and while the store takes no writes; "not answering" reasons age out 30 minutes after
+  the last unanswered call; the retired and closed reasons clear when an operator acknowledges them
+  (`POST /__operator/referral.json {"action":"acknowledge","what":"retired"|"closed","note"}`);
+  `{"action":"resolve-many","state","reason","outcome":"dismissed"|"delivered","note"}` resolves
+  every open entry of one state and recorded reason, each recorded (never a refund). One issue
+  covers every reason: the heartbeat comments on it when the operator view's `status.tag` (a digest
+  of which reasons hold) is one the issue has not carried.
 - **Money-state sweeps and books (batch 2026-11-08a):** `TEMPO_PUSH_HELD_MAX_MINUTES` (default 30)
   is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
   `TEMPO_LATE_CONFIRM_DELAYS_MS` (comma list of delays, default 15000,45000,120000; at most 6, each

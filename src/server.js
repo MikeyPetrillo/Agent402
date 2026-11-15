@@ -2547,9 +2547,10 @@ setIdentityBoundSlugs(new Set(Object.values(CATALOG).filter((d) => d.identityBou
 // Referral copies of paid routes under /ref/<slug> (src/referral-gate.js): a
 // standalone gate whose 402 pays a referral network's split contract and
 // which settles through that network's facilitator. Paid mode only, and only
-// with every required REFERRAL_* setting present and usable (the pay-to
-// address, the facilitator URL, the signer key, the slug list, the setup URL
-// and the commission map); otherwise nothing below is built and /ref/*
+// with every required REFERRAL_* setting present and usable (eight: the
+// pay-to address, the facilitator URL, the signer key, the slug list, the
+// setup URL, the commission map, the merchant id and the payout address;
+// REQUIRED_VARS in the gate); otherwise nothing below is built and /ref/*
 // answers the ordinary 404. A setting that is not usable never fails the
 // boot: the gate stays off with one line. Each allowlisted slug passes the
 // boot checks here or is left out with one log line: in the catalog with a
@@ -10678,7 +10679,8 @@ app.use(async (req, res, next) => {
 // (src/paid-rails.js) no public reader of the ledger returns, and is not
 // counted by recordServedCall or the tool-call log. Settlements that are not
 // finished live in a durable book (src/referral-book.js) a leased sweep reads
-// against the chain; nothing pages on it yet. Operator view:
+// against the chain; its status word (referralSettlement on
+// /api/gateway-status) is paged on by the heartbeat and the status Worker. Operator view:
 // /__operator/referral.json.
 const referralPayerScreen = createX402PayerScreen();
 let REFERRAL_GATE = null;
