@@ -3842,15 +3842,18 @@ try {
         const step = Object.values(wf.jobs).flatMap((j) => j.steps || []).find((x) => /^Referral settlement check/.test(x.name || ""));
         const bin = join(tmp, "hb-bin"); mkdirSync(bin, { recursive: true });
         const comments = join(tmp, "hb-comments.txt"); writeFileSync(comments, "");
+        // Every file a step can publish through (the job summary, its outputs, the job's env) is read back too.
+        const stepSummary = join(tmp, "hb-step-summary.md"), stepOutput = join(tmp, "hb-step-output.txt"), stepEnvFile = join(tmp, "hb-step-env.txt");
+        for (const f of [stepSummary, stepOutput, stepEnvFile]) writeFileSync(f, "");
         writeFileSync(join(bin, "curl"), `#!/bin/bash\ncase "$*" in *gateway-status*) echo '{"referralSettlement":{"status":"attention"}}';; *referral.json*) echo "{\\"status\\":{\\"tag\\":\\"$STUB_TAG\\"}}";; esac\n`);
         writeFileSync(join(bin, "gh"), `#!/bin/bash\nif [ "$1 $2" = "issue list" ]; then echo 7; exit 0; fi\nif [ "$1 $2" = "issue view" ]; then tr '\\n' ' ' < "$HB_COMMENTS"; exit 0; fi\nif [ "$1 $2" = "issue comment" ]; then while [ $# -gt 0 ]; do if [ "$1" = "--body" ]; then echo "$2" >> "$HB_COMMENTS"; fi; shift; done; exit 0; fi\nexit 0\n`);
         chmodSync(join(bin, "curl"), 0o755); chmodSync(join(bin, "gh"), 0o755);
-        const cycle = (tag) => spawnSync("bash", ["-c", step.run], { env: { PATH: `${bin}:${process.env.PATH}`, PROD: "https://prod.invalid", GITHUB_REPOSITORY: "o/r", OP_TOKEN: "operator-token-for-the-test", GH_TOKEN: "x", STUB_TAG: tag, HB_COMMENTS: comments }, encoding: "utf8" });
+        const cycle = (tag) => spawnSync("bash", ["-c", step.run], { env: { PATH: `${bin}:${process.env.PATH}`, PROD: "https://prod.invalid", GITHUB_REPOSITORY: "o/r", OP_TOKEN: "operator-token-for-the-test", GH_TOKEN: "x", STUB_TAG: tag, HB_COMMENTS: comments, GITHUB_STEP_SUMMARY: stepSummary, GITHUB_OUTPUT: stepOutput, GITHUB_ENV: stepEnvFile }, encoding: "utf8" });
         const runs3 = [cycle("aaaaaaaa"), cycle("aaaaaaaa"), cycle("aaaaaaaa")];
         const afterSame = readFileSync(comments, "utf8").split("\n").filter(Boolean);
         const changed = cycle("bbbbbbbb");
         const afterNew = readFileSync(comments, "utf8").split("\n").filter(Boolean);
-        const printed = [...runs3, changed].map((r) => `${r.stdout}${r.stderr}`).join("\n") + afterNew.join("\n");
+        const printed = [...runs3, changed].map((r) => `${r.stdout}${r.stderr}`).join("\n") + afterNew.join("\n") + [stepSummary, stepOutput, stepEnvFile].map((f) => readFileSync(f, "utf8")).join("\n");
         ok(step && existsSync(comments) && runs3.every((r) => r.status === 0) && afterSame.length === 1 && /reasons mark [0-9a-f]{12} /.test(afterSame[0]) && afterNew.length === 2 && afterNew[0] !== afterNew[1] && !/aaaaaaaa|bbbbbbbb/.test(printed), `the heartbeat step, run for three cycles on one reasons tag against an open issue, comments once; a new tag adds one more comment; the raw tag is in no output (${afterSame.length} then ${afterNew.length} comments)`);
       }
       ok(raised === 19 && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && /openssl dgst -sha256 -hmac "\$OP_TOKEN"/.test(heartbeat) && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with the operator token, never the tag itself (${missing.join("; ") || "all named"})`);
@@ -4136,6 +4139,112 @@ try {
           const t2 = tiny.droppedRefused();
           ok(t2.count === 2 && t2.evictedEarly === 2 && t2.records.map((r) => r.key).sort().join() === "referral:r13-2,referral:r13-3" && logLines.some((l) => /record\(s\) of refused settles dropped at capacity were themselves dropped before their authorization expired/.test(l)), `at most the bound of such records is kept: an older one dropped before its authorization expired is counted for the operator and logged (${t2.count} kept, ${t2.evictedEarly} dropped early)`);
         } finally { skew.ms = skew0; await app.close(); }
+      }
+      // G1. A dropped entry's record is forgotten only on a CONCLUSIVE read; the ones nearest their expiry are read first.
+      {
+        const tb = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r14-graves`, log: () => {} }), log, maxEntries: 1, maxDropped: 100, now: () => Date.now() + skew.ms });
+        const skew0 = skew.ms;
+        const nowS = Math.floor(Date.now() / 1000);
+        const mk = (i, validBefore) => ({ key: `referral:r14-${i}`, slug: "echo", payer: `0x${String(i).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore });
+        // 40 records: validBefore falls as i rises, so the LAST dropped expire FIRST.
+        for (let i = 0; i < 41; i++) { await tb.intent(mk(i, nowS + 900 - i * 10)); await tb.resolve(`referral:r14-${i}`, { state: "refused", at: 100 + i }); }
+        const asked = [];
+        let mode = "inconclusive";
+        const chain = { state: async ({ from }) => { asked.push(Number(String(from).slice(2))); if (mode === "throw") throw new Error("rpc down"); if (mode === "unused-complete") return { used: false, paid: false, transaction: null, complete: true }; return { used: null, paid: null, transaction: null, complete: false }; } };
+        const sweepIt = () => tb.sweep({ chain, bookSale: async () => true, payTo: PAY_TO });
+        const before = tb.droppedRefused().count;
+        await sweepIt();
+        const firstPass = asked.splice(0).filter((i) => i < 40); // (record 40 is still an entry, read as one)
+        ok(before === 40 && bookMod.SWEEP_DROPPED_MAX === 25 && firstPass.length >= 25 && firstPass.slice(0, 25).every((i) => i >= 15) && firstPass[0] === 39, `the sweep reads the dropped records nearest their expiry first (${bookMod.SWEEP_DROPPED_MAX} a pass; first read: record ${firstPass[0]}, the earliest to expire)`);
+        // Past expiry, reads that settle nothing (no answer, an error, an incomplete search) forget nothing...
+        skew.ms = skew0 + 20 * 60_000;
+        mode = "throw";
+        await sweepIt(); await sweepIt();
+        mode = "inconclusive";
+        await sweepIt();
+        const keptAfter3 = tb.droppedRefused();
+        // ...until the bound of further reads, then one line and a count for the operator.
+        for (let i = 0; i < 12; i++) await sweepIt();
+        const unresolved = tb.droppedRefused();
+        ok(keptAfter3.count === 40 && bookMod.DROPPED_LATE_READS_MAX === 5 && unresolved.count < 40 && unresolved.unresolved >= 25 && logLines.filter((l) => /dropped refused settle\(s\) could not be read to a verdict/.test(l)).length >= 1, `an expired record is kept through reads that reach no verdict (an error, no answer, an incomplete search), and only after ${bookMod.DROPPED_LATE_READS_MAX} such reads is it given up, logged and counted for the operator (${keptAfter3.count} kept after three; ${unresolved.unresolved} given up later)`);
+        // A conclusive read (unused, and the search complete) forgets at once, with no count.
+        mode = "unused-complete";
+        const unresolvedBefore = tb.droppedRefused().unresolved;
+        for (let i = 0; i < 3; i++) await sweepIt();
+        ok(tb.droppedRefused().count === 0 && tb.droppedRefused().unresolved === unresolvedBefore, `a read that shows the authorization expired unused forgets the record, and is not counted as unresolved (${tb.droppedRefused().count} left)`);
+        skew.ms = skew0;
+      }
+      // G3. A record is kept when its own intent is refused for a full book; an intent that is stored clears it; a write-back skips a record already gone.
+      {
+        const tb = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r14-order`, log: () => {} }), log, maxEntries: 2, maxDropped: 10 });
+        const nowS = Math.floor(Date.now() / 1000);
+        const mk = (i) => ({ key: `referral:r14o-${i}`, slug: "echo", payer: `0x${String(i + 1).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore: nowS + 600 });
+        const a = mk(0);
+        await tb.intent(a); await tb.resolve(a.key, { state: "refused" });
+        await tb.intent(mk(1)); await tb.intent(mk(2)); // a is dropped for 2: a record
+        const recorded = tb.droppedRefused().records.some((r) => r.key === a.key);
+        // The book now holds two open entries and no refused one: a's own intent is refused as full, and its record stays.
+        const [refusedFull] = await Promise.all([tb.intent(a), tb.resolve("referral:r14o-2", { note: "written in the same write" })]);
+        const stillRecorded = tb.droppedRefused().records.some((r) => r.key === a.key);
+        // Room is made; a's intent is stored: the record is gone with it.
+        await tb.resolve("referral:r14o-1", null);
+        const storedNow = await tb.intent(a);
+        const cleared = !tb.droppedRefused().records.some((r) => r.key === a.key);
+        ok(recorded && refusedFull === false && stillRecorded && storedNow === true && cleared, `a dropped entry's record survives its own intent being refused for a full book, and is cleared when that intent is stored (${recorded}, ${refusedFull}, ${stillRecorded}, ${storedNow}, ${cleared})`);
+        // A write-back for a record that went away during the pass (its payment was handled meanwhile) writes nothing.
+        const tb2 = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r14-back`, log: () => {} }), log, maxEntries: 1, maxDropped: 10 });
+        const b0 = mk(10), b1 = mk(11);
+        await tb2.intent(b0); await tb2.resolve(b0.key, { state: "refused" });
+        await tb2.intent(b1);
+        const had = tb2.droppedRefused().records.some((r) => r.key === b0.key);
+        const pass = await tb2.sweep({ chain: { state: async ({ nonce }) => { if (nonce === b0.nonce.toLowerCase()) { await tb2.resolve(b1.key, null); await tb2.intent(b0); await tb2.resolve(b0.key, null); return { used: true, paid: true, transaction: "0x" + "77".repeat(32), complete: true, net: "26298" }; } return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO });
+        ok(had && tb2.get(b0.key) === null && tb2.droppedRefused().count === 0, `a record that was cleared while the sweep read it (its payment was handled by a request meanwhile) is not written back as an entry (${tb2.get(b0.key) ? tb2.get(b0.key).state : "no entry"}; landed ${pass.landed})`);
+      }
+      // G2. A missed intent deadline is a failure, counted once per write: a store whose every other write outlives the deadline holds after two.
+      for (const spacingMs of [0, 61_000]) {
+        const doc = casDoc();
+        const b = createReferralBook({ doc, log, now: () => Date.now() + skew.ms });
+        const app = await mount({ REFERRAL_STORE_COOLDOWN_MS: "600000", REFERRAL_STORE_WRITE_MS: "200" }, { book: b });
+        const skew0 = skew.ms;
+        try {
+          fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
+          const realUpdate = doc.update.bind(doc);
+          let n = 0;
+          // (300 ms against a 200 ms deadline: the intent misses it, and the small write queued behind it still lands in time.)
+          doc.update = async (m, o) => { if (n++ % 2 === 0) await wait(300); return realUpdate(m, o); };
+          const ran0 = runs.echo;
+          const calls = [];
+          for (let i = 0; i < 6; i++) { const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor((Date.now() + skew.ms) / 1000) + 60) }); calls.push(await payOn(app, { header: p.header })); await wait(500); skew.ms += spacingMs; }
+          const w = app.gate.statusWord();
+          ok(runs.echo - ran0 === 2 && calls.slice(2).every((c) => c.status === 503 && c.reason === "settlement_store_down") && w.reasons.some((x) => /store is not taking writes/.test(x)) && w.reasons.some((x) => /intent to settle could not be stored/.test(x)) && b.writeStats().timedOut === 2, `a store whose every other write outlives the intent deadline, one call every ${spacingMs ? "61 s" : "half second"}: two tool runs, then held, and the word reads attention (${runs.echo - ran0} runs for 6 calls; ${calls.map((c) => c.status).join(" ")}; ${b.writeStats().timedOut} deadlines missed)`);
+        } finally { skew.ms = skew0; await app.close(); }
+      }
+      // One slow write that carried two intents past their deadline is ONE missed deadline.
+      {
+        const doc = casDoc();
+        const b = createReferralBook({ doc, log });
+        const realUpdate = doc.update.bind(doc);
+        let n = 0;
+        doc.update = async (m, o) => { const k = ++n; if (k <= 2) await wait(300); return realUpdate(m, o); };
+        const nowS = Math.floor(Date.now() / 1000);
+        const mk = (i) => ({ key: `referral:r14t-${i}`, slug: "echo", payer: `0x${String(i + 1).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore: nowS + 600, deadlineMs: 100 });
+        const first = b.resolveNote({ slug: "echo", outcome: "noted", note: "a slow write the two intents wait behind" });
+        const pair = await Promise.all([b.intent(mk(1)), b.intent(mk(2))]);
+        await first; await wait(700);
+        ok(pair.join() === "false,false" && b.writeStats().timedOut === 1, `two intents that miss their deadline in one write are one missed deadline (${b.writeStats().timedOut})`);
+      }
+      // G4. With no chain answering, the dropped-record reads of one pass stop at their time budget; the rest wait for the next pass.
+      {
+        const tb = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r14-budget`, log: () => {} }), log, maxEntries: 1, maxDropped: 100 });
+        const nowS = Math.floor(Date.now() / 1000);
+        for (let i = 0; i < 13; i++) { await tb.intent({ key: `referral:r14b-${i}`, slug: "echo", payer: `0x${String(i + 1).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore: nowS + 600 }); await tb.resolve(`referral:r14b-${i}`, { state: "refused", at: 100 + i }); }
+        await tb.resolve("referral:r14b-12", null);
+        let reads = 0, after = 0;
+        const t0 = Date.now();
+        const pass = await tb.sweep({ chain: { state: async () => { reads++; await wait(200); return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO, droppedBudgetMs: 500 });
+        const tookMs = Date.now() - t0;
+        const pass2 = await tb.sweep({ chain: { state: async () => { after++; return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO, droppedBudgetMs: 500 });
+        ok(tb.droppedRefused().count === 12 && reads >= 2 && reads <= 4 && tookMs < 1500 && pass.droppedUnread === 12 - reads && after === 12 && pass2.droppedUnread === 0, `the dropped-record reads of one pass stop at their time budget when the chain is slow, so the pass is not held up; the rest are read on the next pass (${reads} of 12 read in ${tookMs} ms, ${pass.droppedUnread} left for later; then ${after})`);
       }
       // The refund run prints a review hold with why, apart from a repeat hang-up, and releases it only by its own switch.
       {
