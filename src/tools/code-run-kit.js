@@ -45,7 +45,8 @@ let e2bInFlight = 0;
 // The service-wide figure the public copy quotes (src/guides.js, the wiki).
 export const CODE_RUN_PER_PAYER_MAX = 2;
 const PER_PAYER_MAX_CONCURRENT = perReplica(CODE_RUN_PER_PAYER_MAX);
-const PER_IP_MAX_CONCURRENT = perReplica(4);
+export const CODE_RUN_PER_IP_MAX = 4;
+const PER_IP_MAX_CONCURRENT = perReplica(CODE_RUN_PER_IP_MAX);
 const payerInFlight = new Map();
 // The caller a run counts against: the route's own request, else the caller
 // a request-less step runs for (route-execute, decide and skill packs call
