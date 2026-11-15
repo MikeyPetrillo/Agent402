@@ -3024,6 +3024,60 @@ try {
     }
   }
 
+  // ===========================================================================
+  // A run's ceiling ends a read that carries a fixed timeout of its own (src/run-ceiling.js)
+  // ===========================================================================
+  {
+    const { withRunCeiling, capByCeiling, ceilingLeftMs, ceilingPassed, atCeiling, markEndsAtCeiling } = await import("../src/run-ceiling.js");
+    const { safeFetch, retryTransient } = await import("../src/tools/fetch-guard.js");
+    const { KIT } = await import("../src/tools/kit.js");
+    const kitTool = (slug) => KIT.find((t) => t.slug === slug);
+    // An upstream that never answers: it ends only when its own signal aborts.
+    const realFetch = globalThis.fetch;
+    const hung = [];
+    globalThis.fetch = (input, init) => new Promise((_res, rej) => {
+      const started = Date.now();
+      const signal = init?.signal;
+      const end = () => { hung.push(Date.now() - started); rej(signal.reason ?? Object.assign(new Error("aborted"), { name: "AbortError" })); };
+      if (signal?.aborted) return end();
+      signal?.addEventListener("abort", end, { once: true });
+    });
+    try {
+      // A literal public address: no name lookup, so the read itself is what is timed.
+      const URL_IP = "http://93.184.216.34/sitemap.xml";
+      ok(capByCeiling(15_000) === 15_000 && ceilingLeftMs() === Infinity && ceilingPassed() === false && typeof atCeiling(() => {}) === "function", "with no ceiling a read keeps its own timeout: the direct routes are untouched");
+      const t0 = Date.now();
+      const own = await safeFetch(URL_IP, { timeoutMs: 150 }).then(() => null, (e) => e);
+      const ownMs = Date.now() - t0;
+      const t1 = Date.now();
+      const capped = await withBudgetCeiling(300, () => safeFetch(URL_IP, { timeoutMs: 15_000 }).then(() => null, (e) => e));
+      const cappedMs = Date.now() - t1;
+      ok(own?.statusCode === 504 && ownMs < 1000 && capped?.statusCode === 504 && cappedMs >= 250 && cappedMs < 1500 && hung.length === 2 && hung[1] < 1500, `a guarded fetch with a 15 s timeout of its own is ended by a 300 ms ceiling: the upstream call is aborted then, not left running (${cappedMs} ms; aborted after ${hung.join(", ")} ms)`);
+      // No retry starts once the ceiling has passed.
+      let attempts = 0;
+      const t2 = Date.now();
+      const retried = await withRunCeiling(250, () => retryTransient(() => { attempts++; return safeFetch(URL_IP, { timeoutMs: 15_000 }); }, { retries: 3, backoffMs: 50 }).then(() => null, (e) => e));
+      ok(retried?.statusCode === 504 && attempts === 1 && Date.now() - t2 < 1500 && withRunCeiling(5000, () => withRunCeiling(100, () => ceilingLeftMs())) <= 100 && withRunCeiling(100, () => withRunCeiling(5000, () => ceilingLeftMs())) <= 100, `a read's retries do not outlive the ceiling, and a nested ceiling only shortens (${attempts} attempt in ${Date.now() - t2} ms)`);
+      // Real kit handlers, as the gate runs them: one that reads through the guarded fetch, one with a timer of its own.
+      hung.length = 0;
+      const t3 = Date.now();
+      const sitemapErr = await withBudgetCeiling(300, () => kitTool("sitemap").handler({ url: URL_IP })).then(() => null, (e) => e);
+      const sitemapMs = Date.now() - t3;
+      const t4 = Date.now();
+      const check = await withBudgetCeiling(300, () => kitTool("http-check").handler({ url: "http://93.184.216.34/" }));
+      const checkMs = Date.now() - t4;
+      ok(kitTool("sitemap").endsAtCeiling === true && kitTool("http-check").endsAtCeiling === true && Number(sitemapErr?.statusCode) >= 500 && sitemapMs < 1500 && check?.up === false && checkMs < 1500 && hung.length === 2 && hung.every((ms) => ms < 1500), `a kit handler whose upstream never answers is ended at the ceiling, where its own timeout is 15 s: its upstream call is aborted (sitemap ${sitemapMs} ms, http-check ${checkMs} ms; aborted after ${hung.join(", ")} ms)`);
+      const marked = KIT.filter((t) => t.endsAtCeiling === true).map((t) => t.slug).sort();
+      ok(JSON.stringify(marked) === JSON.stringify(["http-check", "ip-info", "robots-check", "sitemap", "tls-cert", "whois"]) && JSON.stringify(markEndsAtCeiling([{ slug: "a" }], ["a", "b"])) === "[\"b\"]", `the mark is set slug by slug, on the handlers audited and no other (${marked.join(", ")})`);
+    } finally { globalThis.fetch = realFetch; }
+    // The eligibility rule reads the mark.
+    const marked = { slug: "m1", price: "$0.01", handler: async () => ({}), endsAtCeiling: true }, plain = { slug: "m2", price: "$0.01", handler: async () => ({}) };
+    const cfgE = referralConfig({ ...ENV, REFERRAL_SLUGS: "m1,m2", REFERRAL_COMMISSION_BPS: "default:1000" });
+    const flagsLikeServer = (def) => ({ clamped: def.endsAtCeiling === true, ownTimeoutMs: null });
+    const routesE = referralRoutes(cfgE, { a: marked, b: plain }, flagsLikeServer);
+    ok(routesE.served.some((x) => x.slug === "m1" && /upstream work ends at the deadline/.test(x.why)) && routesE.refused.some((x) => x.slug === "m2" && /declares no upstream timeout/.test(x.reason)), "a definition that declares its upstream work ends at the ceiling is served; one that declares nothing is refused");
+  }
+
   // --- the key stays where it is ----------------------------------------------------
   const haystack = [...logLines, ...responses, ...fac.calls.map((c) => c.raw + JSON.stringify(c.signature))].join("\n").toLowerCase();
   ok(logLines.length > 30 && responses.length > 100 && !haystack.includes(KEY_HEX), `the signer key is in no log line, no response and no facilitator request (${logLines.length} lines, ${responses.length} responses)`);
@@ -3218,6 +3272,8 @@ const screenFile = join(tmp, "screen.json");
 writeFileSync(screenFile, JSON.stringify({ v: 1, loadedAt: Date.now(), publishDate: "01/01/2026", perAsset: { ETH: 1 }, addresses: [LISTED.address.toLowerCase()] }));
 
 fac.reset();
+// Paid data tools whose reads carry fixed timeouts of their own, each ended by a run's ceiling (src/run-ceiling.js).
+const DATA_SLUGS = "device-510k,device-adverse-events,device-recalls,drug-adverse-events,drug-label,drug-ndc,drug-recalls,earthquakes,fec-candidates,federal-awards,fema-disasters,food-recalls,fx-rate,geo-lookup,geocode,http-check,ip-info,public-holidays,robots-check,sitemap,tls-cert,treasury-avg-rates,treasury-debt,treasury-yield-curve,treasury-yield-history,vehicle-recalls,vin-decode,weather-air-quality,weather-alerts,weather-current,weather-daily,weather-forecast,weather-history,weather-hourly,whois,yield-curve-spread".split(",");
 const srv = await bootPaidServer({
   label: "referral-on",
   args: ["--import", "./scripts/lib/openrouter-stub-preload.js", "--import", "./scripts/lib/hang-fetch-preload.js"],
@@ -3225,7 +3281,7 @@ const srv = await bootPaidServer({
     ...REF_ENV, ...COSTS,
     WALLET_ADDRESS: OUR_WALLET, TRUST_PROXY_HOPS: "1",
     FACILITATOR_URL: `http://127.0.0.1:${directFac.address().port}`, AGENT402_BASE_RPC: `${fac.url}/rpc`,
-    REFERRAL_SLUGS: "hash,mime,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,stablecoin-peg,edgar-company-facts,image-gen,image-gen-premium,attest,qr,no-such-tool",
+    REFERRAL_SLUGS: "hash,mime,v1-chat-metered,v1-chat,v1-chat-auto,v1-chat-pro,v1-chat-premium,onchain-sql,perp-funding,perp-basis,stablecoin-peg,edgar-company-facts,image-gen,image-gen-premium,attest,qr,no-such-tool,dns," + DATA_SLUGS.join(","),
     // The price feed stablecoin-peg reads never answers: its run has to be cut off at the deadline.
     HANG_FETCH_HOSTS: "api.coingecko.com,pro-api.coingecko.com",
     // The handler deadline is short so a stalled upstream is cut off inside the test.
@@ -3245,10 +3301,26 @@ try {
   const servedLine = /Referral gate enabled for (\d+) route\(s\): ([^\n]*)/.exec(bootLog);
   const served = servedLine ? servedLine[2].split(",").map((s) => s.trim()) : [];
   const SERVED = ["hash", "mime", "onchain-sql", "perp-funding", "perp-basis", "stablecoin-peg", "edgar-company-facts", "v1-chat-auto", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered", "v1-chat"];
-  ok(servedLine && SERVED.every((x) => served.includes(x)) && served.length === SERVED.length, `the boot serves the eligible slugs (${servedLine ? servedLine[2] : "no line"})`);
+  ok(servedLine && SERVED.every((x) => served.includes(x)) && DATA_SLUGS.every((x) => served.includes(x)) && served.length === SERVED.length + DATA_SLUGS.length, `the boot serves the eligible slugs (${servedLine ? servedLine[2] : "no line"})`);
   const whyServed = Object.fromEntries([...bootLog.matchAll(/\[referral\] (\S+) is served under \/ref: ([^\n]*)/g)].map((m) => [m[1], m[2]]));
   console.log(`# boot verdicts: ${JSON.stringify(whyServed)}`);
   ok(/no upstream work/.test(whyServed.hash || "") && ["v1-chat-auto", "v1-chat-pro", "v1-chat-premium"].every((x) => /ends at the deadline \(own timeout 90 s\)/.test(whyServed[x] || "")) && ["onchain-sql", "perp-funding", "perp-basis", "stablecoin-peg", "edgar-company-facts"].every((x) => /ends at the deadline \(own timeout 290 s\)/.test(whyServed[x] || "")), "each served slug says why its handler deadline can be kept: no upstream work, or upstream work the deadline ends (with the tool's own timeout named)");
+  {
+    // The data tools: served because the gate's deadline really ends their upstream reads, at the direct price.
+    const notByCeiling = DATA_SLUGS.filter((x) => !/^upstream work ends at the deadline$/.test(whyServed[x] || ""));
+    const refusedData = DATA_SLUGS.filter((x) => new RegExp(`\\[referral\\] ${x} is not served`).test(bootLog));
+    ok(DATA_SLUGS.length === 36 && notByCeiling.length === 0 && refusedData.length === 0 && /\[referral\] dns is not served under \/ref: in the catalog but has no handler/.test(bootLog), `each of the 36 paid data tools is served under /ref because its upstream work ends at the deadline, none is refused, and dns (a route with no handler of its own) stays out (${notByCeiling.join(",") || "all 36 by the ceiling"})`);
+    const pricing = (await call(`${srv.url}/api/pricing`, { method: "GET", headers: xff() })).json;
+    const rowsP = Array.isArray(pricing?.endpoints) ? pricing.endpoints : [];
+    const priceOf = new Map(rowsP.filter((r) => r && r.slug).map((r) => [r.slug, r.price]));
+    const wrongPrice = [];
+    for (const slug of DATA_SLUGS) {
+      const q = await call(`${srv.url}/ref/${slug}`, { method: "GET", headers: xff() });
+      const want = baseUnitsOf(priceOf.get(slug));
+      if (q.status !== 402 || want === null || q.json?.accepts?.[0]?.amount !== want.toString() || q.json.accepts[0].payTo !== PAY_TO) wrongPrice.push(`${slug}: ${q.status} ${q.json?.accepts?.[0]?.amount} want ${want}`);
+    }
+    ok(priceOf.size > 400 && wrongPrice.length === 0, `each one's 402 pays the split contract the tool's direct list price (${wrongPrice.join("; ") || "36 of 36"})`);
+  }
   ok(/\[referral\] image-gen is not served under \/ref: its own upstream wait \(60 s\) is past the handler deadline \(4 s\)/.test(bootLog), "image-gen is left out at boot: its own upstream wait is past the handler deadline");
   ok(/\[referral\] image-gen-premium is not served under \/ref: long-running/.test(bootLog) && /\[referral\] no-such-tool is not served under \/ref: not in the catalog/.test(bootLog) && /\[referral\] attest is not served/.test(bootLog) && /\[referral\] qr is not served under \/ref: answers bytes/.test(bootLog), "a long-running, an identity-bound, a binary and a missing slug are left out with a reason");
   for (const slug of ["image-gen", "image-gen-premium", "attest", "qr", "no-such-tool"]) {

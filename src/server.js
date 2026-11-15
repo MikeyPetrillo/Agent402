@@ -2577,7 +2577,9 @@ const REFERRAL_ROUTES = REFERRAL_CONFIG ? referralRoutes(REFERRAL_CONFIG, CATALO
   // A chat tier ends each upstream attempt at the payment window
   // (paymentWindowTimeoutMs), which the gate presents as its deadline; a
   // handler wrapped by underBudget runs under the gate's budget ceiling.
-  clamped: isChatTierDef(def) || def.handler?.__underBudget === true,
+  // A definition marked endsAtCeiling (src/run-ceiling.js) reads with fixed
+  // timeouts of its own, each of which the gate's ceiling cuts short.
+  clamped: isChatTierDef(def) || def.handler?.__underBudget === true || def.endsAtCeiling === true,
   // The tool's own upstream timeout where it is declared: a chat tier's
   // attempt timeout, an image tier's, a slow route's run budget.
   ownTimeoutMs: Math.max(isChatTierDef(def) ? CHAT_UPSTREAM_TIMEOUT_MS : 0, Number(def.handler?.__budgetMs) || 0, Number(def.runSeconds) * 1000 || 0, Number(IMAGE_GEN_TIERS[def.slug]?.timeoutMs) || 0) || null,
