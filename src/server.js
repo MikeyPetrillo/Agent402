@@ -916,7 +916,7 @@ import { withBudgetCeiling } from "./upstream-deadline.js";
 import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
-import { recordRefundOwed, refundByEvidence, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
+import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
 import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
@@ -10736,6 +10736,8 @@ if (REFERRAL_ROUTES) {
     REFERRAL_GATE = createReferralGate({
       config: REFERRAL_CONFIG,
       defs: REFERRAL_ROUTES.defs,
+      // Listed and not served: the status word names each, with why.
+      notServed: REFERRAL_ROUTES.refused,
       settler: createReferralSettler({ facilitatorUrl: REFERRAL_CONFIG.facilitatorUrl, signerKey: REFERRAL_CONFIG.signerKey, verifyTimeoutMs: REFERRAL_CONFIG.verifyMs, settleTimeoutMs: REFERRAL_CONFIG.settleMs, signVerify: REFERRAL_CONFIG.verifySigned }),
       // The furthest back a used authorization's log can sit: its longest life, at Base's block time, with room.
       // The configured Base RPCs, then public ones; logs from the head recorded with each intent.
@@ -10757,7 +10759,7 @@ if (REFERRAL_ROUTES) {
       amendSaleNet: ({ tx, netUsd, payer, slug, grossUsd }) => amendPrivateRailSaleNet(tx, "referral", netUsd, payer, slug, grossUsd),
       // The share of its price a model-backed tool's upstream cost is kept within (the gateway's own bound).
       modelNetFloorBps: Math.round(LLM_MARGIN * 10_000),
-      oweRefund: referralRefundWriter({ recordRefundOwed, refundByEvidence }),
+      oweRefund: referralRefundWriter({ recordRefundOwed, refundByEvidence, refundsByTransaction }),
       book: REFERRAL_BOOK,
       replayGuard: createReplayGuard(),
       baseUrl: BASE_URL,

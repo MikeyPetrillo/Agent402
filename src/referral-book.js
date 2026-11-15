@@ -105,7 +105,17 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   // per-payment mark that outlives the entry and the process): { key: { tx, payer, slug, at } }.
   let sold = {};
   const lcPayer = (p) => String(p).toLowerCase();
-  const heldBy = (cur, payer) => { const who = lcPayer(payer); let n = 0; for (const k in cur) if (cur[k] && cur[k].payer === who) n++; return n; };
+  // (A "refused" entry, kept only so a payment that lands after the
+  // facilitator refused it is found, is not the payer's open settlement: it
+  // does not count toward the payer's share.)
+  const heldBy = (cur, payer) => { const who = lcPayer(payer); let n = 0; for (const k in cur) if (cur[k] && cur[k].payer === who && cur[k].state !== "refused") n++; return n; };
+  /** At capacity the oldest "refused" entry goes first, with no record: it
+   *  says only that a settle was refused. Null when there is none. */
+  const droppable = (cur) => {
+    let pick = null;
+    for (const k in cur) { const e = cur[k]; if (e && e.state === "refused" && (!pick || (e.at || 0) < (pick.at || 0))) pick = e; }
+    return pick;
+  };
   /** The oldest entry that may be retired at capacity: in doubt, and its
    *  authorization past its expiry (plus the clock slack), so no settle of it
    *  can still be sent. Null when there is none. */
@@ -223,6 +233,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         const prev = cur[key];
         dropped = null;
         if (!prev && heldBy(cur, payer) >= maxPerPayer) { payerFull = true; return SKIP_UPDATE; }
+        if (!prev && Object.keys(cur).length >= maxEntries) { const spare = droppable(cur); if (spare) delete cur[spare.key]; }
         if (!prev && Object.keys(cur).length >= maxEntries) {
           const stuck = retirable(cur, t);
           if (!stuck) { full = true; return SKIP_UPDATE; }
@@ -463,14 +474,14 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       const out = { read: 0, landed: 0, unpaid: 0, expired: 0, unknown: 0, charged: 0, unrecognized: 0 };
       try { const b = await store.load(null); if (b) absorb(b); } catch { /* the last body read */ }
       const due = Object.values(entries)
-        .filter((e) => (e.state === "in-doubt" || (e.state === "intent" && t - (e.intentAt || e.at || 0) >= graceMs)))
+        .filter((e) => (e.state === "in-doubt" || e.state === "refused" || (e.state === "intent" && t - (e.intentAt || e.at || 0) >= graceMs)))
         .sort((a, b) => (a.checkedAt || 0) - (b.checkedAt || 0) || (a.at || 0) - (b.at || 0))
         .slice(0, max);
       for (const snapshot of due) {
         // The entry as it stands NOW: an earlier step of this pass, or a
         // request, may have changed or closed it since the list was made.
         const e = entries[snapshot.key];
-        if (!e || (e.state !== "in-doubt" && e.state !== "intent")) continue;
+        if (!e || (e.state !== "in-doubt" && e.state !== "intent" && e.state !== "refused")) continue;
         out.read++;
         let s;
         try { s = await chain.state({ from: e.payer, nonce: e.nonce, payTo, amount: e.amount, fromBlock: e.fromBlock, minNet: minNetOf(e), productId: productIdOf(e) }); } catch { s = { used: null, paid: null, transaction: null, complete: false }; }
@@ -507,7 +518,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
           const keep = read && (s.routedToUs === true || e.noAutoClose === true || s.moved === true || (e.unproven === true && e.moved === true));
           if (keep) {
             if (e.routedToUs !== true && s.routedToUs === true) say("error", `a spent authorization's transaction was routed to THIS merchant by the split contract, and the receipt is not one the proof rule accepts (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${String(s.transaction).toLowerCase()}: ${String(s.why || "").slice(0, 120)}); kept open for an operator, never closed by itself`);
-            mark(e.key, { state: e.state === "intent" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, seenTx: String(s.transaction).toLowerCase(), ...(s.routedToUs === true ? { routedToUs: true } : {}), why: String(s.why || "").slice(0, 160) });
+            mark(e.key, { state: e.state === "intent" || e.state === "refused" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, seenTx: String(s.transaction).toLowerCase(), ...(s.routedToUs === true ? { routedToUs: true } : {}), why: String(s.why || "").slice(0, 160) });
             try { onHeld(e, s); } catch { /* the caller's note only */ }
             continue;
           }
@@ -521,7 +532,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             const done = await change((cur, _kept, _done, _gone, list) => {
               const now_ = cur[e.key];
               shut = false;
-              if (!now_ || (now_.state !== "in-doubt" && now_.state !== "intent")) return SKIP_UPDATE;
+              if (!now_ || (now_.state !== "in-doubt" && now_.state !== "intent" && now_.state !== "refused")) return SKIP_UPDATE;
               list.push({ key: e.key, slug: now_.slug, payer: now_.payer, nonce: now_.nonce, amount: now_.amount, validBefore: now_.validBefore, fromBlock: now_.fromBlock ?? null, hangup: now_.hangup || null, tx, state: now_.state, reads, why, openedAt: now_.at || null, at: t });
               delete cur[e.key];
               shut = true;
@@ -534,7 +545,9 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
               continue;
             }
           }
-          mark(e.key, { state: e.state === "intent" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, ...(full ? { unrecognizedReads: reads, seenTx: String(s.transaction).toLowerCase() } : {}) });
+          // (A refused entry whose authorization can no longer be sent and
+          // that the chain still cannot settle either way is in doubt from here.)
+          mark(e.key, { state: e.state === "intent" || (e.state === "refused" && unsendable) ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, ...(full ? { unrecognizedReads: reads, seenTx: String(s.transaction).toLowerCase() } : {}) });
         }
       }
       if (marks.length) {
@@ -543,7 +556,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
           for (const { key, patch } of marks) {
             const c = cur[key];
             // Only an entry still open as it was read: a request may have changed or closed it meanwhile.
-            if (!c || (c.state !== "in-doubt" && c.state !== "intent")) continue;
+            if (!c || (c.state !== "in-doubt" && c.state !== "intent" && c.state !== "refused")) continue;
             cur[key] = { ...c, ...patch, updatedAt: t };
             any = true;
           }
