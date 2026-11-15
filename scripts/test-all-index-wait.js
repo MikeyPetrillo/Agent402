@@ -69,5 +69,47 @@ function sweep(port, env = {}) {
   s.close();
   ok(r.code === 0 && !/waiting for the seller index/.test(r.out) && Date.now() - t0 < 20_000, "control: a ready index costs no wait");
 }
+// ---- a load-shed answer on a free route is admission control, not a wrong example ----
+// The server pauses free requests briefly under load: 503 with Retry-After and
+// the same figure in the body's retryAfterSeconds (src/load-shed.js). The
+// sweep waits and asks again, a bounded number of times, and says how many
+// answers were shed; any other 503, or a shed past the bound, still fails.
+function shedStub({ shedTimes, plain503 = false }) {
+  const hits = { n: 0 };
+  const spec = { openapi: "3.1.0", info: { title: "stub", version: "0" }, paths: { "/api/thing": { get: { tags: ["things"], parameters: [{ name: "q", in: "query", example: "x" }], responses: { 200: { description: "ok" } } } } } };
+  const s = createServer((req, res) => {
+    const u = new URL(req.url, "http://x");
+    const json = (code, body, headers = {}) => { res.writeHead(code, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+    if (u.pathname === "/api/index/tools") return json(200, { indexing: false, indexState: "ready", tools: [] });
+    if (u.pathname === "/openapi.json") return json(200, spec);
+    if (u.pathname === "/api/thing") {
+      hits.n++;
+      if (plain503) return json(503, { error: "the tool's own upstream is unavailable" });
+      if (hits.n <= shedTimes) return json(503, { error: "The server is busy; free and discovery requests are paused briefly so paid calls keep flowing.", retryAfterSeconds: 1 }, { "retry-after": "1" });
+      return json(200, { thing: "x" });
+    }
+    json(404, { error: "not found" });
+  });
+  return new Promise((r) => s.listen(0, "127.0.0.1", () => r({ s, hits })));
+}
+{
+  const { s, hits } = await shedStub({ shedTimes: 2 });
+  const t0 = Date.now();
+  const r = await sweep(s.address().port);
+  s.close();
+  ok(r.code === 0 && /strict \(pure-CPU\): 1 passed, 0 failed/.test(r.out) && hits.n === 3 && Date.now() - t0 >= 2000 && /load-shed answers retried: 2 \(on 1 route/.test(r.out), `a route shed twice is asked again after each Retry-After and passes, and the summary says how many answers were shed (exit ${r.code}, ${hits.n} asks)`);
+}
+{
+  const { s, hits } = await shedStub({ shedTimes: 99 });
+  const r = await sweep(s.address().port);
+  s.close();
+  ok(r.code === 1 && hits.n === 3 && /get \/api\/thing → HTTP 503/i.test(r.out) && /still shed at the bound/.test(r.out), `a shed that persists past the bound (three asks) still fails the route, and says it was still shed (exit ${r.code}, ${hits.n} asks)`);
+}
+{
+  const { s, hits } = await shedStub({ shedTimes: 0, plain503: true });
+  const r = await sweep(s.address().port);
+  s.close();
+  ok(r.code === 1 && hits.n === 1 && /get \/api\/thing → HTTP 503/i.test(r.out) && !/load-shed answers retried: [1-9]/.test(r.out), `any other 503 fails at once, with no retry (exit ${r.code}, ${hits.n} ask)`);
+}
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
 console.log("\nall test-all index-wait checks passed");

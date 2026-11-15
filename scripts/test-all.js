@@ -520,8 +520,17 @@ for (const [path, methods] of paths) {
 // (correctly) read as a failure.
 const CONCURRENCY = Math.max(1, Number(process.env.TEST_ALL_CONCURRENCY) || 8);
 let speechFixture = null;
+const SHED_MAX_ASKS = 3, SHED_MAX_WAIT_MS = 10_000;
+/** How long a load-shed answer asks the caller to wait (ms), or null when the
+ *  answer is not one: read from its fields, never from its sentence. */
+function shedWaitMs(status, retryAfterHeader, body) {
+  if (status !== 503 || !body || typeof body !== "object") return null;
+  const header = Number(retryAfterHeader);
+  if (!Number.isFinite(header) || header <= 0 || typeof body.retryAfterSeconds !== "number" || body.retryAfterSeconds !== header) return null;
+  return Math.min(SHED_MAX_WAIT_MS, Math.ceil(header * 1000));
+}
 async function runTask(t) {
-  let status = 0, body = null, threw = null;
+  let status = 0, body = null, threw = null, shed = 0, stillShed = false;
   const _t0 = Date.now();
   try {
     let init = t.init;
@@ -529,14 +538,30 @@ async function runTask(t) {
       speechFixture ??= new Uint8Array(await (await fetch(`${TARGET}/fixtures/sample-speech.wav`, { signal: AbortSignal.timeout(20000) })).arrayBuffer());
       init = { method: "POST", body: multipartBodyFrom(init.multipartFields, { bytes: speechFixture, type: "audio/wav", filename: "sample-speech.wav" }) };
     }
-    const res = await fetch(t.url, { ...init, signal: AbortSignal.timeout(20000) });
-    status = res.status;
-    const ct = res.headers.get("content-type") || "";
-    body = ct.includes("application/json") ? await res.json() : (await res.arrayBuffer()).byteLength;
+    // A LOAD-SHED answer is admission control, not a wrong example: the
+    // server pauses free requests briefly while it is busy (src/load-shed.js:
+    // 503, Retry-After, and the same figure in the body's retryAfterSeconds).
+    // The sweep waits that long and asks again, at most SHED_MAX_ASKS asks and
+    // SHED_MAX_WAIT_MS of waiting for one route. Any other 503, and a shed
+    // that is still there at the bound, is judged as before.
+    let waited = 0;
+    for (let ask = 1; ; ask++) {
+      const res = await fetch(t.url, { ...init, signal: AbortSignal.timeout(20000) });
+      status = res.status;
+      const ct = res.headers.get("content-type") || "";
+      body = ct.includes("application/json") ? await res.json() : (await res.arrayBuffer()).byteLength;
+      const waitMs = shedWaitMs(status, res.headers.get("retry-after"), body);
+      if (waitMs === null) { stillShed = false; break; }
+      stillShed = true;
+      if (ask >= SHED_MAX_ASKS || waited + waitMs > SHED_MAX_WAIT_MS) break;
+      shed++;
+      waited += waitMs;
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
   } catch (e) {
     threw = e.message;
   }
-  return { ...t, status, body, threw, ms: Date.now() - _t0 };
+  return { ...t, status, body, threw, shed, stillShed, ms: Date.now() - _t0 };
 }
 const results = new Array(tasks.length);
 {
@@ -568,7 +593,7 @@ for (const r of results) {
       if (threw || (status >= 500)) { serverErr++; failures.push(`${method} ${path} → ${threw || status}`); }
     } else {
       if (okStrict) { strictPass++; cats[cat].pass++; }
-      else { strictFail++; failures.push(`${method} ${path} → ${threw || `HTTP ${status}`}${body && body.error ? " " + JSON.stringify(body.error).slice(0, 60) : ""}`); }
+      else { strictFail++; failures.push(`${method} ${path} → ${threw || `HTTP ${status}`}${r.stillShed ? ` (still shed at the bound of ${SHED_MAX_ASKS} asks)` : ""}${body && body.error ? " " + JSON.stringify(body.error).slice(0, 60) : ""}`); }
     }
   }
 }
@@ -587,6 +612,10 @@ console.log(`\nExercised ${totalOps - braveSkipped - e2bSkipped - strictSkipped 
 for (const [cat, c] of Object.entries(cats).sort()) console.log(`  ${cat.padEnd(12)} ${c.pass}/${c.total} pure-CPU strict-pass`);
 console.log(`\n  strict (pure-CPU): ${strictPass} passed, ${strictFail} failed`);
 console.log(`  lenient (network/memory): ${lenient} exercised, ${serverErr} server errors`);
+{
+  const shedRoutes = results.filter((r) => r.shed > 0 || r.stillShed);
+  console.log(`  load-shed answers retried: ${results.reduce((a, r) => a + (r.shed || 0), 0)} (on ${shedRoutes.length} route(s); ${results.filter((r) => r.stillShed).length} still shed at the bound)`);
+}
 if (failures.length) {
   console.error(`\nFAILURES (${failures.length}):\n  ` + failures.slice(0, 40).join("\n  ") + (failures.length > 40 ? `\n  …and ${failures.length - 40} more` : ""));
 }
