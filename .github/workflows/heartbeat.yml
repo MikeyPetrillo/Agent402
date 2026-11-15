@@ -877,6 +877,33 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "referralSettlement is ok; closing." || true
           fi
 
+      # Balance reads behind the in-flight coverage check (coverageReads,
+      # src/inflight-cover.js): status reads degraded for ten minutes after any
+      # one paid call judged without a balance read, so this pages on the
+      # second word, alert=sustained (such calls in three or more separate
+      # minutes of the last ten, for three or more wallets). ok and off close;
+      # degraded with alert=ok, unknown and absent do neither.
+      # The status Worker runs the same check under the same title.
+      - name: Coverage balance reads check (alarm on sustained calls judged without a balance read)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ROW=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '(.coverageReads.status // "unknown") + " " + (.coverageReads.alert // "unknown")' 2>/dev/null || echo "unknown unknown")
+          STATUS=${ROW%% *}; ALERT=${ROW##* }
+          echo "coverageReads: $STATUS (alert $ALERT)"
+          TITLE="Coverage balance reads DEGRADED (calls in flight)"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$ALERT" = "sustained" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports coverageReads.alert=sustained: in three or more separate minutes of the last ten, paid calls from three or more wallets were started or refused without a balance read made for them (the read failed or took too long), so the check that a wallet's paid calls in flight are covered together (src/inflight-cover.js) judged them on each wallet's last good read, or on the fixed allowance of calls at once for a wallet with no recent read. A call a kept read covers is still served. One wallet's unread balance, however many calls it sends, reads coverageReads.status=degraded and opens nothing. Check the RPC endpoints the balance reads use and the server log; the counts are on the operator view of /api/gateway-status (inflightCover). Auto-closes when coverageReads.status reads ok or off." || true
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "coverageReads is ${STATUS}; closing." || true
+          fi
+
       # The MPP subscription engine (mppSubscriptions, server.js): failed
       # pages (configured, but it did not build at boot); on and off clear;
       # unknown and absent do neither.

@@ -6,6 +6,7 @@
 // the shape is top-level key names only. server.js builds the recorder with
 // its own helpers, so the two paths share one log line and one row writer.
 import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
+import { shortPayer } from "./verify-failure-log.js";
 
 //
 // A refusal is free to send, so its writes are bounded per caller:
@@ -70,6 +71,52 @@ export function createPrePaymentLogSampler({ perMinute = 20, now = Date.now, log
     return false;
   }
   // Prints a finished minute's summary when no refusal has arrived since.
+  function tick() {
+    const m = Math.floor(now() / 60_000);
+    if (minute !== -1 && m !== minute) { flush(); minute = m; }
+  }
+  return { allow, flush, tick };
+}
+
+// The in-flight coverage check's 429s (src/inflight-cover.js, an error with
+// `coverRefusal`) are answered before anything runs, so one wallet can send
+// hundreds a second. Their "[tool-error]" lines are bounded per wallet: the
+// first in a clock minute prints as usual (inside `perMinute` such lines for
+// all wallets together), the rest are counted, and one summary line per
+// wallet per minute names how many were refused and in which classes. The
+// wallet is printed by its first characters (shortPayer). Past `maxWallets`
+// wallets in a minute the rest share one line. PostHog and the failure
+// monitor still see every refusal.
+const COVER_CLASSES = new Set(["short", "settling", "beside", "unread", "kept"]);
+/** Returns `{ allow(wallet, klass), flush(), tick() }`; allow() answers whether to print. */
+export function createCoverRefusalLogSampler({ perMinute = 20, maxWallets = 200, now = Date.now, log = (line) => console.error(line), short = shortPayer } = {}) {
+  let minute = -1, printed = 0, rows = new Map(), rest = null;
+  const classesOf = (row) => [...row.classes].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([c, n]) => `${c}=${n}`).join(",");
+  function flush() {
+    for (const [who, row] of rows) {
+      // A wallet whose one refusal printed in full has nothing to add.
+      if (row.refused <= row.printed) continue;
+      try { log(`[tool-error] 4xx cover=true summary wallet=${short(who)} refused=${row.refused} classes=[${classesOf(row)}]`); } catch { /* logging never throws */ }
+    }
+    if (rest) { try { log(`[tool-error] 4xx cover=true summary wallet=others refused=${rest.refused} classes=[${classesOf(rest)}]`); } catch { /* logging never throws */ } }
+    printed = 0; rows = new Map(); rest = null;
+  }
+  function allow(wallet, klass) {
+    const m = Math.floor(now() / 60_000);
+    if (m !== minute) { flush(); minute = m; }
+    const who = typeof wallet === "string" && wallet ? wallet : "?";
+    const c = COVER_CLASSES.has(klass) ? klass : "other";
+    let row = rows.get(who);
+    if (!row) {
+      if (rows.size < maxWallets) { row = { refused: 0, printed: 0, classes: new Map() }; rows.set(who, row); }
+      else row = rest || (rest = { refused: 0, printed: 0, classes: new Map() });
+    }
+    row.refused++;
+    row.classes.set(c, (row.classes.get(c) || 0) + 1);
+    if (row !== rest && row.refused === 1 && printed < perMinute) { printed++; row.printed = 1; return true; }
+    return false;
+  }
+  // Prints a finished minute's summaries when no refusal has arrived since.
   function tick() {
     const m = Math.floor(now() / 60_000);
     if (minute !== -1 && m !== minute) { flush(); minute = m; }

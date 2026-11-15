@@ -116,6 +116,14 @@ const CALLER_INPUT = new Set(CALLER_INPUT_STATUSES);
 const ATTRIBUTION_RE = /^[a-z][a-z-]{0,23}$/;
 const isFailure = (status, attribution = null) => !(Number.isInteger(status) && status >= 200 && status < 300)
   && !(CALLER_INPUT.has(status) && (attribution == null || attribution === "caller"));
+// The in-flight coverage check's 429 (src/inflight-cover.js, the error's
+// `coverRefusal`) for a payer that started more than its own balance covers
+// (short), or whose other call is still settling (settling): answered before
+// anything ran, never settled, and decided by what the payer sent, so it is
+// not a failed answer of ours. The other classes (beside, unread, kept) are
+// decided without a balance read made for the call and stay failures.
+export const BUYER_COVER_REFUSALS = Object.freeze(["short", "settling"]);
+const isBuyerCoverRefusal = (status, coverRefusal) => status === 429 && typeof coverRefusal === "string" && BUYER_COVER_REFUSALS.includes(coverRefusal);
 /** The attribution field of a JSON error answer (src/tool-error-fields.js),
  *  or null. */
 export function attributionTextOf(body) {
@@ -128,11 +136,13 @@ export function attributionTextOf(body) {
 /**
  * Records one final answer to a verified paid request. Only a non-2xx that
  * is not the caller's own input refused (CALLER_INPUT_STATUSES attributed to
- * the caller or to no one) is kept; a 2xx costs one comparison. Never
+ * the caller or to no one) is kept; a 2xx costs one comparison. A 429 whose
+ * `coverRefusal` is one of BUYER_COVER_REFUSALS is not kept. Never
  * throws, never awaits on the caller.
  */
-export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, attribution = null, kind = null, at = Date.now() } = {}, env = process.env) {
+export function noteVerifiedPaidOutcome({ payer, slug, status, error = null, attribution = null, kind = null, coverRefusal = null, at = Date.now() } = {}, env = process.env) {
   try {
+    if (isBuyerCoverRefusal(status, coverRefusal)) return false;
     if (!isFailure(status, typeof attribution === "string" ? attribution : null) || !okPayer(payer)) return false;
     const ev = { id: `${PROC}-${++seq}`, at: Number(at) || Date.now(), slug: String(slug || "unknown").slice(0, 80), status: Number.isInteger(status) ? status : 0, error: typeof error === "string" ? error.slice(0, ERROR_CHARS) : null, kind: okKind(kind) };
     const cutoff = ev.at - keepSpan(env);
