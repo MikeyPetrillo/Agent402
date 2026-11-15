@@ -371,7 +371,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   the map and redeploy (the sweep drops the record), or clear it with
   `{"action":"clear-short","slug":"<slug>","note":"what was checked"}`; a slug paid under its stop
   floor (`REFERRAL_MIN_NET_BPS`, else half the expected net) once for a model-backed tool,
-  `REFERRAL_SHORT_NET_MAX` times for another, answers 503 until then. With contradicted entries
+  `REFERRAL_SHORT_NET_MAX` times for another, answers 503 until then; so does a slug whose
+  receipt named another product id than `REFERRAL_PRODUCT_IDS` holds for it (the word names both
+  ids; correct the id and redeploy, or `clear-short`). With contradicted entries
   from three payers and no proven sale since, the route lets one payment at a time through as a
   probe and answers 503 to the rest: a probe that proves reopens it by itself; if probes keep
   being contradicted, check `REFERRAL_MERCHANT_ID` and resolve the entries. The word's
