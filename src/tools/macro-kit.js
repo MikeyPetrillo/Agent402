@@ -374,7 +374,7 @@ export const MACRO_TOOLS = [
   {
     route: "GET /api/fx-historical", name: "Historical FX rate by date", slug: "fx-historical", category: "data", attribution: "ecb", price: "$0.002",
     description:
-      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date. ?from=USD&to=EUR&date=2024-01-02 Source: European Central Bank.",
+      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date. ?from=USD&to=EUR&date=2024-01-02. Source: European Central Bank.",
     tags: ["forex", "fx", "currency", "historical", "exchange-rate", "ecb", "macro"],
     discovery: {
       input: { from: "USD", to: "EUR", date: "2024-01-02" },
@@ -414,7 +414,7 @@ export const MACRO_TOOLS = [
   {
     route: "GET /api/fx-timeseries", name: "FX rate time series", slug: "fx-timeseries", category: "data", attribution: "ecb", price: "$0.005",
     description:
-      "Daily FX rates between two currencies across a date window using European Central Bank reference rates. ?from=USD&to=EUR&startDate=2024-01-02&endDate=2024-01-31 Source: European Central Bank.",
+      "Daily FX rates between two currencies across a date window using European Central Bank reference rates. ?from=USD&to=EUR&startDate=2024-01-02&endDate=2024-01-31. Source: European Central Bank.",
     tags: ["forex", "fx", "currency", "time-series", "exchange-rate", "ecb", "macro", "history"],
     discovery: {
       input: { from: "USD", to: "EUR", startDate: "2024-01-02", endDate: "2024-01-31" },
