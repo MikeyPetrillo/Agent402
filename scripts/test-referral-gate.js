@@ -3982,7 +3982,7 @@ try {
           const hit = await payOn(app);
           const next = await payOn(app);
           const wordOne = app.gate.statusWord();
-          ok(hit.status === 503 && hit.reason === "settlement_store_unavailable" && next.status === 200 && !wordOne.reasons.some((x) => /store is not taking writes/.test(x)) && app.gate.stats().storeHeld === 0, `one failed intent write on a store that takes the next write holds nobody: the next call is served (${hit.status} then ${next.status})`);
+          ok(hit.status === 503 && hit.reason === "settlement_store_unavailable" && next.status === 200 && !wordOne.reasons.some((x) => /store is not taking writes|intent to settle could not be stored/.test(x)) && wordOne.status === "ok" && app.gate.stats().storeHeld === 0, `one failed intent write on a store that takes the next write holds nobody and pages nobody: the next call is served and the word reads ok (${hit.status} then ${next.status})`);
           // A store that is really down holds; with no traffic at all the sweep's own write clears the hold once the store is back.
           doc.st.down = true;
           const lost = await payOn(app), held = await payOn(app);
@@ -3993,7 +3993,7 @@ try {
           await app.gate.sweepOnce();
           const wordBack = app.gate.statusWord();
           const served = await payOn(app);
-          ok(lost.status === 503 && held.status === 503 && held.reason === "settlement_store_down" && wordDown.reasons.some((x) => /store is not taking writes/.test(x)) && stillDown === true && !wordBack.reasons.some((x) => /store is not taking writes/.test(x)) && served.status === 200, `a store that is down holds paid calls and the word says so; once it is back the sweep's own small write ends the hold with no paid call needed (${held.reason}; after the sweep: ${wordBack.reasons.filter((x) => /store/.test(x)).length} store reasons; then ${served.status})`);
+          ok(lost.status === 503 && held.status === 503 && held.reason === "settlement_store_down" && wordDown.reasons.some((x) => /intent to settle could not be stored/.test(x)) && wordDown.reasons.some((x) => /store is not taking writes/.test(x)) && stillDown === true && !wordBack.reasons.some((x) => /store is not taking writes/.test(x)) && served.status === 200, `a store that is down holds paid calls and the word says so; once it is back the sweep's own small write ends the hold with no paid call needed (${held.reason}; after the sweep: ${wordBack.reasons.filter((x) => /store/.test(x)).length} store reasons; then ${served.status})`);
         } finally { doc.st.down = false; await app.close(); }
       }
       fac.reset(); sales.length = 0; owed.length = 0;

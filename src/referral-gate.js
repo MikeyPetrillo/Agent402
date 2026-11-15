@@ -2039,7 +2039,11 @@ export function createReferralGate({
     catch { stored = false; }
     if (!stored) {
       counters.intentFailed++;
-      reach.intentFailedAt = now();
+      // The word reads attention for this only when the store is really not
+      // taking writes (the small write below fails too), or when the intent
+      // was refused for another reason (a full book, the payer's share).
+      const storeFault = typeof book.intentFault !== "function" || book.intentFault() === "store";
+      if (!storeFault) reach.intentFailedAt = now();
       // The STORE did not take it (not a full book, not this payer's share):
       // no further tool runs until a write stands (storeHeld).
       // One failed write is not an outage: one small write is tried at once,
@@ -2051,7 +2055,7 @@ export function createReferralGate({
         storeHold.lastIntentFailAt = now();
         let took = false;
         if (!again) { try { took = typeof book.ping === "function" && (await book.ping({ deadlineMs: config.storeWriteMs })) === true; } catch { took = false; } }
-        if (!took) { storeHold.blockedUntil = now() + config.storeCooldownMs; storeHold.since = storeHold.since || now(); }
+        if (!took) { reach.intentFailedAt = now(); storeHold.blockedUntil = now() + config.storeCooldownMs; storeHold.since = storeHold.since || now(); }
       }
       line("error", `the intent to settle could not be stored (${entry.slug} payer=${shortPayer(entry.payer)}${book.full() ? ", the book is full" : ""}); /settle NOT called, nothing charged, answer kept`);
       return "no-intent";
