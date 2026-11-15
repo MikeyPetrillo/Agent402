@@ -756,6 +756,9 @@ ${ledgerFooterCompact()}`;
 // or boolean `example` - an example that does not validate against the type the
 // same operation declares, on the surface a code generator reads.
 const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
+// The 429 every catalog operation can answer: the unpaid-request limits, and
+// the in-flight coverage check on paid calls (src/inflight-cover.js).
+const OPENAPI_429 = Object.freeze({ description: "Refused before anything runs and not charged: a rate limit on unpaid requests, or a wallet whose balance does not cover its paid calls in flight. Retry after Retry-After when present." });
 
 // Inlined, not a $ref: naive dereferencers that crawl this document resolve
 // every pointer from the root (see the components note below).
@@ -864,6 +867,8 @@ export function openapiSpec(baseUrl, catalog) {
         },
         402: { description: "Payment Required - x402 payment requirements in the PAYMENT-REQUIRED header, mirrored in the JSON body, and MPP challenges (WWW-Authenticate: Payment). A first-contact body also carries payment: this request's price in dollars on the named network, how to pay, the proof-of-work path on a free-tier tool (noWallet), the caller's own inputs on a route quoted from its body (quote), and links to /llms.txt, the pay section of /agents.md and the MCP connector" },
         400: { description: "Invalid input - the JSON body names the tool's input schema (expected, required), its example, and howToCall: the same example as a ready-to-run request (method, url, and a JSON body, or form parts for a multipart tool), with the other method under alternate where it is served; a call over 1024 bytes carries only method and url" },
+        // One shared object (the description is the same on every route).
+        429: OPENAPI_429,
       },
       "x-price": tool.price,
       ...(mppFlagshipBySlug.has(tool.slug) ? { "x-mpp-flagship": { order: mppFlagshipBySlug.get(tool.slug).order, why: mppFlagshipBySlug.get(tool.slug).why } } : {}),
