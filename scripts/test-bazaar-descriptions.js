@@ -96,11 +96,11 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
       if (FRED_HOST.test(body) || [...reached].some((r) => new RegExp(`\\b${r}\\b`).test(body.slice(body.indexOf("{"))))) { reached.add(name); grew = true; }
     }
   }
-  ok(["fredObservations", "fetchFredYields", "fetchLatestYieldCurve", "fetchFredYieldsViaKeyedApi"].every((n) => reached.has(n)), `FRED-reaching functions derived from the kit (${[...reached].join(", ")})`);
+  ok(reached.has("fredObservations") && ["fetchTreasuryYields", "fetchLatestYieldCurve", "treasuryYieldYear"].every((n) => !reached.has(n)), `FRED-reaching functions derived from the kit, and the yield-curve reads (U.S. Treasury) are not among them (${[...reached].join(", ")})`);
   const callsFred = (t) => { const h = String(t.handler); return FRED_HOST.test(h) || [...reached].some((r) => new RegExp(`\\b${r}\\b`).test(h)); };
   const derived = MACRO_TOOLS.filter(callsFred).map((t) => t.slug).sort();
   const marked = MACRO_TOOLS.filter((t) => t.attribution === "fred").map((t) => t.slug).sort();
-  ok(derived.length >= 12 && JSON.stringify(derived) === JSON.stringify(marked), `every tool whose handler reaches FRED carries attribution "fred", and only those (derived ${derived.join(",")}; marked ${marked.join(",")})`);
+  ok(derived.length >= 9 && JSON.stringify(derived) === JSON.stringify(marked), `every tool whose handler reaches FRED carries attribution "fred", and only those (derived ${derived.join(",")}; marked ${marked.join(",")})`);
   const otherKits = [];
   for (const file of await readdir(new URL("../src/tools/", import.meta.url))) {
     if (!file.endsWith(".js") || file === "macro-kit.js") continue;
@@ -167,7 +167,7 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   ok(unmarkedTails.length === 0, `text that ends with an attribution belongs to a tool marked with that source (${unmarkedTails.join(", ") || "none unmarked"})`);
   ok(midText.length === 0, `no attribution sentence sits anywhere but the end of a description (${midText.join(", ") || "none"})`);
   const counts = Object.fromEntries(Object.keys(ATTRIBUTIONS).map((k) => [k, (bySource[k] || []).length]));
-  ok(Object.values(counts).every((n) => n > 0) && counts.fred >= 12 && counts.coingecko >= 24 && counts.jupiter >= 5, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
+  ok(Object.values(counts).every((n) => n > 0) && counts.fred >= 9 && counts["us-treasury"] >= 3 && counts.ecb >= 4 && counts.coingecko >= 24 && counts.jupiter >= 5, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
   // Skill packs: the sources of the tools each pack runs, in pack order.
   const catalog = Object.fromEntries([...tools.values()].map((t) => [t.route, t]));
   const packTools = new Map(buildSkillTools({ getCatalog: () => catalog }).map((t) => [t.slug, t]));

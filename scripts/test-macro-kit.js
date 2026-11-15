@@ -5,7 +5,7 @@
 // integration is broken, not one upstream).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
-import { MACRO_TOOLS, retryTransient, withStaleFallback } from "../src/tools/macro-kit.js";
+import { MACRO_TOOLS, retryTransient, withStaleFallback, parseTreasuryYieldCsv, treasuryYieldCsvUrl, TREASURY_YIELD_SOURCE, _resetTreasuryYieldCacheForTest } from "../src/tools/macro-kit.js";
 
 const h = (slug) => MACRO_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
@@ -64,15 +64,79 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
   const page = '<!doctype html>\n<html lang="en">\n<head>\n    <title>Site Maintenance | St. Louis Fed</title>';
   try {
     globalThis.fetch = async () => new Response(page, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
-    for (const slug of ["fred-series", "treasury-yield-curve"]) {
+    for (const slug of ["fred-series"]) {
       let e = null;
-      try { await h(slug)(slug === "fred-series" ? { seriesId: "UNRATE" } : {}); } catch (x) { e = x; }
+      try { await h(slug)({ seriesId: "UNRATE" }); } catch (x) { e = x; }
       ok(e?.statusCode === 503 && /scheduled maintenance/.test(e.message) && e.retryAfter === 900 && e.attribution === "upstream", `${slug}: FRED maintenance page -> 503 with retryAfter (got ${e?.statusCode} ${e?.message})`);
     }
   } finally {
     globalThis.fetch = realFetch;
     undoDns();
     if (realKey === undefined) delete process.env.FRED_API_KEY; else process.env.FRED_API_KEY = realKey;
+  }
+}
+
+// --- the yield-curve tools read the U.S. Treasury's par yield curve CSV
+// (offline: parser and a stubbed fetch) ---
+{
+  // Columns by header name, extra Treasury tenors ignored, MM/DD/YYYY to ISO,
+  // oldest first, an empty cell is null, a row with no yield is dropped.
+  const csv = [
+    `Date,"1 Mo","1.5 Month","2 Mo","3 Mo","4 Mo","6 Mo","1 Yr","2 Yr","3 Yr","5 Yr","7 Yr","10 Yr","20 Yr","30 Yr"`,
+    "11/13/2026,4.10,4.18,4.26,4.32,4.34,4.42,4.65,4.88,4.92,4.98,5.05,5.15,5.52,5.47",
+    "11/12/2026,4.12,4.18,4.26,4.32,4.35,4.42,4.65,4.86,4.90,4.95,5.02,5.10,5.48,",
+    "11/11/2026,,,,,,,,,,,,,,",
+  ].join("\r\n");
+  const rows = parseTreasuryYieldCsv(csv);
+  ok(rows.length === 2 && rows[0].recordDate === "2026-11-12" && rows[1].recordDate === "2026-11-13", `Treasury rows are ISO-dated, oldest first, empty days dropped (${rows.map((r) => r.recordDate).join(", ")})`);
+  ok(JSON.stringify(rows[1]) === JSON.stringify({ recordDate: "2026-11-13", mo1: 4.10, mo3: 4.32, mo6: 4.42, yr1: 4.65, yr2: 4.88, yr3: 4.92, yr5: 4.98, yr7: 5.05, yr10: 5.15, yr20: 5.52, yr30: 5.47 }),
+    `the eleven published tenors map by column name and the 1.5, 2 and 4 month columns are not read (${JSON.stringify(rows[1])})`);
+  ok(rows[0].yr30 === null, "an empty tenor cell is null");
+  const older = `Date,"1 Mo","2 Mo","3 Mo","4 Mo","6 Mo","1 Yr","2 Yr","3 Yr","5 Yr","7 Yr","10 Yr","20 Yr","30 Yr"\n01/02/2024,5.55,5.54,5.46,5.41,5.24,4.80,4.33,4.09,3.93,3.95,3.95,4.25,4.08`;
+  ok(parseTreasuryYieldCsv(older)[0].yr10 === 3.95, "a year file without the newer columns parses by name");
+  ok(parseTreasuryYieldCsv(csv.split("\r\n")[0]).length === 0, "a year file with a header and no rows is an empty year, not an error");
+  for (const [bad, label] of [["<!doctype html><html><title>Down</title>", "a web page"], ["Date,1 Mo\n11/13/2026,4.1", "missing tenor columns"], ["", "an empty body"]]) {
+    let e = null; try { parseTreasuryYieldCsv(bad); } catch (x) { e = x; }
+    ok(e?.statusCode === 502, `${label} in place of the CSV is a 502 (got ${e?.statusCode})`);
+  }
+  ok(new URL(treasuryYieldCsvUrl(2026)).host === "home.treasury.gov" && /\/2026\//.test(treasuryYieldCsvUrl(2026)), "the CSV is read from home.treasury.gov, one file per year");
+
+  // Handlers on a stubbed fetch: the current year first, an earlier year only
+  // when the window needs more rows; each year read once (cached).
+  const realFetch = globalThis.fetch;
+  const undoDns = stubGuardResolver(offlineGuardAnswer);
+  const Y = new Date().getUTCFullYear();
+  const header = `Date,"1 Mo","1.5 Month","2 Mo","3 Mo","4 Mo","6 Mo","1 Yr","2 Yr","3 Yr","5 Yr","7 Yr","10 Yr","20 Yr","30 Yr"`;
+  const line = (mmdd, y, ten) => `${mmdd}/${y},4.1,4.1,4.1,4.3,4.3,4.4,4.6,4.8,4.9,4.9,5.0,${ten},5.5,5.4`;
+  const files = {
+    [Y]: [header, line("01/06", Y, "5.10"), line("01/05", Y, "5.05"), line("01/02", Y, "5.00")].join("\n"),
+    [Y - 1]: [header, line("12/31", Y - 1, "4.90"), line("12/30", Y - 1, "4.80"), line("12/29", Y - 1, "4.70")].join("\n"),
+  };
+  const reads = [];
+  try {
+    _resetTreasuryYieldCacheForTest();
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url?.url || url));
+      const y = Number(u.pathname.split("/").find((p) => /^\d{4}$/.test(p)));
+      reads.push(`${u.host}:${y}`);
+      return new Response(files[y] ?? header, { status: 200, headers: { "content-type": "text/csv" } });
+    };
+    const curve = await h("treasury-yield-curve")({});
+    ok(curve.recordDate === `${Y}-01-06` && curve.yr10 === 5.1 && curve.source === TREASURY_YIELD_SOURCE && curve.unit === "percent", `curve: the latest row of the current year, with unit and source (${JSON.stringify(curve)})`);
+    ok(JSON.stringify(reads) === JSON.stringify([`home.treasury.gov:${Y}`]), `curve: one read, the current year only (${reads.join(", ")})`);
+    const two = await h("treasury-yield-history")({ days: 2 });
+    ok(two.days === 2 && two.count === 2 && two.history[0].recordDate === `${Y}-01-05` && reads.length === 1, `history inside the current year reads nothing more (${reads.length} reads)`);
+    const five = await h("treasury-yield-history")({ days: 5 });
+    ok(five.count === 5 && five.history[0].recordDate === `${Y - 1}-12-30` && five.history[4].recordDate === `${Y}-01-06`, `history across New Year joins the earlier year, oldest first (${five.history.map((r) => r.recordDate).join(", ")})`);
+    ok(JSON.stringify(reads) === JSON.stringify([`home.treasury.gov:${Y}`, `home.treasury.gov:${Y - 1}`]), `history reads the earlier year only when the window needs it (${reads.join(", ")})`);
+    const all = await h("treasury-yield-history")({ days: 250 });
+    ok(all.count === 6 && reads.length === 3 && reads[2] === `home.treasury.gov:${Y - 2}`, `a window longer than the files stops after three years (${all.count} rows, ${reads.join(", ")})`);
+    const spread = await h("yield-curve-spread")({});
+    ok(spread.spread2s10sBps === 30 && spread.spread3m10yBps === 80 && spread.inverted2s10s === false && spread.asOf === TREASURY_YIELD_SOURCE, `spread: computed from the latest row (${JSON.stringify(spread)})`);
+  } finally {
+    globalThis.fetch = realFetch;
+    undoDns();
+    _resetTreasuryYieldCacheForTest();
   }
 }
 
