@@ -21,7 +21,7 @@
 // ecosystem (yield curves, FX time series, GDP/inflation indicators, CPI YoY,
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
 import { safeFetch, assertPublicUrl, retryTransient } from "./fetch-guard.js";
-import { markEndsAtCeiling, capByCeiling, assertBeforeCeiling, ceilingLeftMs, atCeiling, ceilingCutError } from "../run-ceiling.js";
+import { markEndsAtCeiling, capByCeiling, assertBeforeCeiling, ceilingLeftMs } from "../run-ceiling.js";
 import { redactSecrets } from "./redact.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 
@@ -176,64 +176,180 @@ export function parseTreasuryYieldCsv(csv) {
 }
 
 // The Treasury host takes 15-20 s to build each file (measured 2026-11-15,
-// the same for a month or a year), so one attempt gets the whole budget the
-// old read had across two (2 x 15 s): one 30 s attempt, no retry. Each year's
-// rows are kept: the current year's for 30 minutes (the curve is published
-// once per business day), an earlier year's for a day. Concurrent calls for
-// a year share one read, and a caller with a run ceiling stops waiting on a
-// shared read at its ceiling (src/run-ceiling.js). At most three years are held.
-const TREASURY_YIELD_FETCH = { retries: 0, timeoutMs: 30_000 };
-const TREASURY_YIELD_CURRENT_TTL_MS = 30 * 60 * 1000;
+// the same for a month or a year), longer than a buyer can wait on a paid
+// call. So the files are read in the background and served from memory:
+//   - The current year's file is refreshed on a timer (every 30 minutes, and
+//     shortly after boot in production; startTreasuryYieldRefresh), one read
+//     at a time, never awaited by a request. A request that finds it older
+//     than 30 minutes serves what is held and starts the same single read
+//     without waiting for it.
+//   - An earlier year's file is kept a day; the timer reads last year's too.
+//   - When the latest refresh failed, or the held copy is past two refresh
+//     periods, the answer is served marked stale (stale, staleAsOf), the
+//     fx-dashboard convention, never a 502 or 504.
+//   - A request that finds a year it needs not held at all (a cold process)
+//     reads every needed year at once and waits at most its budget
+//     (TREASURY_YIELD_BUDGET_MS, inside the hosted connector's wait and the
+//     payment window); past it, it answers 503 with Retry-After, and nothing
+//     is charged (a status of 400 or more is never settled). The read it
+//     started runs on, up to TREASURY_YIELD_READ_MS, and fills the cache.
+// The cache is this process's memory only, so each replica keeps its own and
+// no lease orders the timer: there is no shared state for two to race on.
+const TREASURY_YIELD_READ_MS = 45_000;
+const TREASURY_YIELD_BUDGET_MS = 20_000;
+const TREASURY_YIELD_REFRESH_MS = 30 * 60 * 1000;
 const TREASURY_YIELD_PAST_TTL_MS = 24 * 3600 * 1000;
-const treasuryYieldYears = new Map(); // year -> { at, rows } | { pending }
-export function _resetTreasuryYieldCacheForTest() { treasuryYieldYears.clear(); }
+const TREASURY_YIELD_STALE_MS = 2 * TREASURY_YIELD_REFRESH_MS + 5 * 60 * 1000;
+const TREASURY_YIELD_RETRY_AFTER_S = 30;
+const treasuryYieldYears = new Map(); // year -> { at, rows, failedAt }
+const treasuryYieldReads = new Map(); // year -> in-flight read (single flight)
+const treasuryYieldTimer = { interval: null, boot: null };
+export function _resetTreasuryYieldCacheForTest() { stopTreasuryYieldRefresh(); treasuryYieldYears.clear(); treasuryYieldReads.clear(); }
 
-async function treasuryYieldYear(year, currentYear) {
-  const ttl = year === currentYear ? TREASURY_YIELD_CURRENT_TTL_MS : TREASURY_YIELD_PAST_TTL_MS;
-  const hit = treasuryYieldYears.get(year);
-  if (hit?.rows && Date.now() - hit.at < ttl) return hit.rows;
-  if (hit?.pending) return untilCeiling(hit.pending);
-  const pending = (async () => {
-    const { html } = await safeFetchRetry(treasuryYieldCsvUrl(year), { maxBytes: 5 * 1024 * 1024, ...TREASURY_YIELD_FETCH });
-    return parseTreasuryYieldCsv(html);
+const treasuryYieldBudgetMs = () => {
+  const n = Number(process.env.TREASURY_YIELD_BUDGET_MS);
+  return Number.isFinite(n) && n > 0 ? n : TREASURY_YIELD_BUDGET_MS;
+};
+
+// One read of one year's file, shared by everyone who asks while it runs. It
+// holds no request's deadline: it ends at its own cap and fills the cache.
+function readTreasuryYear(year) {
+  const running = treasuryYieldReads.get(year);
+  if (running) return running;
+  const read = (async () => {
+    try {
+      const { html } = await safeFetchRetry(treasuryYieldCsvUrl(year), { maxBytes: 5 * 1024 * 1024, retries: 0, timeoutMs: TREASURY_YIELD_READ_MS });
+      const rows = parseTreasuryYieldCsv(html);
+      treasuryYieldYears.set(year, { at: Date.now(), rows, failedAt: 0 });
+      const keep = new Date().getUTCFullYear() - 2;
+      for (const y of [...treasuryYieldYears.keys()]) if (y < keep) treasuryYieldYears.delete(y);
+      return rows;
+    } catch (e) {
+      const held = treasuryYieldYears.get(year);
+      if (held) held.failedAt = Date.now();
+      console.warn(`[treasury-yield] ${year} file read failed (${String(e?.message || e).slice(0, 120)})`);
+      throw e;
+    } finally {
+      treasuryYieldReads.delete(year);
+    }
   })();
-  treasuryYieldYears.set(year, { ...(hit?.rows ? hit : {}), pending });
-  try {
-    const rows = await pending;
-    treasuryYieldYears.set(year, { at: Date.now(), rows });
-    for (const y of [...treasuryYieldYears.keys()]) if (y < currentYear - 2) treasuryYieldYears.delete(y);
-    return rows;
-  } catch (e) {
-    if (hit?.rows) treasuryYieldYears.set(year, hit); else treasuryYieldYears.delete(year);
-    throw e;
-  }
+  treasuryYieldReads.set(year, read);
+  read.catch(() => {}); // a background read's failure is logged above, never unhandled
+  return read;
 }
 
-function untilCeiling(p) {
-  if (ceilingLeftMs() === Infinity) return p;
-  return new Promise((resolve, reject) => {
-    const clear = atCeiling(() => reject(ceilingCutError()));
-    p.then((v) => { clear(); resolve(v); }, (e) => { clear(); reject(e); });
-  });
+/** One refresh pass: the current year's file when older than the refresh
+ *  period, last year's when older than a day. Never throws. */
+export async function refreshTreasuryYields(now = Date.now()) {
+  const year = new Date(now).getUTCFullYear();
+  const due = [];
+  const cur = treasuryYieldYears.get(year);
+  if (!cur || now - cur.at >= TREASURY_YIELD_REFRESH_MS - 60_000) due.push(year);
+  const prev = treasuryYieldYears.get(year - 1);
+  if (!prev || now - prev.at >= TREASURY_YIELD_PAST_TTL_MS) due.push(year - 1);
+  const results = await Promise.allSettled(due.map(readTreasuryYear));
+  return { read: due, failed: results.filter((r) => r.status === "rejected").length };
 }
 
-// The last `count` published days, oldest first: the current year's file,
-// then an earlier year's only while the rows so far are fewer than `count`
-// (early in a year, or a 250-day window). `count` is at most 250, about one
-// year of business days, so at most three files are ever read.
+/** Start the background refresh (idempotent): a first pass shortly after
+ *  boot, then every 30 minutes. Timers are unref'd. */
+export function startTreasuryYieldRefresh({ firstDelayMs = 5_000 } = {}) {
+  if (treasuryYieldTimer.interval) return false;
+  const tick = () => { refreshTreasuryYields().catch(() => {}); };
+  treasuryYieldTimer.boot = setTimeout(tick, firstDelayMs);
+  treasuryYieldTimer.boot.unref?.();
+  treasuryYieldTimer.interval = setInterval(tick, TREASURY_YIELD_REFRESH_MS);
+  treasuryYieldTimer.interval.unref?.();
+  return true;
+}
+export function stopTreasuryYieldRefresh() {
+  if (treasuryYieldTimer.boot) clearTimeout(treasuryYieldTimer.boot);
+  if (treasuryYieldTimer.interval) clearInterval(treasuryYieldTimer.interval);
+  treasuryYieldTimer.boot = treasuryYieldTimer.interval = null;
+}
+// Production starts it at import (the image sets NODE_ENV=production; Railway
+// sets RAILWAY_ENVIRONMENT_NAME). A FREE_MODE boot and every test leave it off
+// unless they ask (TREASURY_YIELD_REFRESH=on, or startTreasuryYieldRefresh());
+// TREASURY_YIELD_REFRESH=off disarms it anywhere.
+{
+  const sw = String(process.env.TREASURY_YIELD_REFRESH || "").toLowerCase();
+  const production = process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT_NAME;
+  if (sw === "on" || (sw !== "off" && production && process.env.FREE_MODE !== "true")) startTreasuryYieldRefresh();
+}
+
+function treasuryYieldUnavailable(cause) {
+  console.warn(`[treasury-yield] answered 503 (${String(cause?.message || cause).slice(0, 120)})`);
+  return Object.assign(
+    bad(`The U.S. Treasury yield curve file could not be read in time; nothing was charged - retry in ${TREASURY_YIELD_RETRY_AFTER_S} s`, 503),
+    { retryAfter: TREASURY_YIELD_RETRY_AFTER_S, attribution: "upstream", upstreamFailure: "deadline" },
+  );
+}
+
+// Business days of `year` up to `now`, less a margin for holidays: how many
+// rows the current year's file can hold, before it is read.
+function rowsSoFar(now) {
+  const d = new Date(now), start = Date.UTC(d.getUTCFullYear(), 0, 1);
+  const days = Math.floor((now - start) / 86400_000) + 1;
+  return Math.max(0, Math.floor((days * 5) / 7) - 12);
+}
+
+// The last `count` published days, oldest first, with the stale marks of the
+// years they came from. Held years answer at once. The years not held are
+// read together, all under one budget: the current year, plus earlier ones
+// while the rows held (or, for a year not held, the rows it can hold) fall
+// short of `count`; if a file holds fewer rows than that, the next earlier
+// year is read under what is left of the same budget. `count` is at most
+// 250, so at most three years are ever needed.
 async function fetchTreasuryYields(count = 1) {
-  const currentYear = new Date().getUTCFullYear();
-  let rows = [];
-  for (let year = currentYear; year >= currentYear - 2 && rows.length < count; year--) {
-    rows = (await treasuryYieldYear(year, currentYear)).concat(rows);
+  const now = Date.now();
+  const year = new Date(now).getUTCFullYear();
+  const cur = treasuryYieldYears.get(year);
+  if (cur && now - cur.at >= TREASURY_YIELD_REFRESH_MS) readTreasuryYear(year); // refresh, not awaited
+  const budget = Math.max(1, Math.min(treasuryYieldBudgetMs(), ceilingLeftMs()));
+  let timer = null, deadline = null;
+  try {
+    for (;;) {
+      const years = [];
+      let expect = 0;
+      for (let y = year; y >= year - 2 && expect < count; y--) {
+        years.push(y);
+        const e = treasuryYieldYears.get(y);
+        expect += e ? e.rows.length : y === year ? rowsSoFar(now) : 245;
+      }
+      // Done once every year counted is held: then the held rows cover
+      // `count`, or all three years are held.
+      const missing = years.filter((y) => !treasuryYieldYears.get(y));
+      if (!missing.length) break;
+      if (!deadline) {
+        deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${budget} ms`)), budget); timer.unref?.(); });
+      }
+      try {
+        await Promise.race([Promise.all(missing.map(readTreasuryYear)), deadline]);
+      } catch (e) {
+        throw treasuryYieldUnavailable(e);
+      }
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  if (!rows.length) throw bad("U.S. Treasury returned no usable yield rows", 502);
-  return rows.slice(-count);
+  // Newest year first, until `count` rows: the years the answer is built
+  // from, and the stale mark of any of them.
+  let rows = [], staleAt = 0;
+  for (let y = year; y >= year - 2 && rows.length < count; y--) {
+    const e = treasuryYieldYears.get(y);
+    if (!e) break;
+    if (!e.rows.length) continue;
+    rows = e.rows.concat(rows);
+    const stale = e.failedAt > e.at || now - e.at >= (y === year ? TREASURY_YIELD_STALE_MS : TREASURY_YIELD_PAST_TTL_MS + TREASURY_YIELD_STALE_MS);
+    if (stale) staleAt = staleAt ? Math.min(staleAt, e.at) : e.at;
+  }
+  if (!rows.length) throw treasuryYieldUnavailable(new Error("no usable yield rows"));
+  return { rows: rows.slice(-count), stale: staleAt ? { stale: true, staleAsOf: new Date(staleAt).toISOString() } : {} };
 }
 
 async function fetchLatestYieldCurve() {
-  const rows = await fetchTreasuryYields(1);
-  return rows[rows.length - 1];
+  const { rows, stale } = await fetchTreasuryYields(1);
+  return { curve: rows[rows.length - 1], stale };
 }
 
 // FRED answers a scheduled maintenance window with an HTML page (HTTP 200) in
@@ -269,7 +385,10 @@ export const MACRO_TOOLS = [
     },
     // unit + source were absent: a bare object of numbers did not say what it
     // measured or where it came from.
-    handler: async () => ({ ...(await fetchLatestYieldCurve()), unit: "percent", source: TREASURY_YIELD_SOURCE }),
+    handler: async () => {
+      const { curve, stale } = await fetchLatestYieldCurve();
+      return { ...curve, unit: "percent", source: TREASURY_YIELD_SOURCE, ...stale };
+    },
   },
   {
     route: "GET /api/treasury-yield-history", name: "US Treasury yield history", slug: "treasury-yield-history", category: "data", attribution: "us-treasury", price: "$0.005",
@@ -281,13 +400,13 @@ export const MACRO_TOOLS = [
       inputSchema: {
         properties: { days: { type: "number", description: "Number of business days, 1-250 (default 30)" } },
       },
-      output: { example: { days: 30, count: 30, history: [{ recordDate: "2026-05-01", yr2: 4.71, yr10: 4.46 }] } },
+      output: { example: { days: 30, count: 30, history: [{ recordDate: "2026-05-01", yr2: 3.88, yr10: 4.39 }] } },
     },
     handler: async (i) => {
       const days = Math.min(Math.max(parseInt(i.days, 10) || 30, 1), 250);
       // The last N published days, reading only the years they span.
-      const tail = await fetchTreasuryYields(days);
-      return { days, count: tail.length, history: tail };
+      const { rows: tail, stale } = await fetchTreasuryYields(days);
+      return { days, count: tail.length, history: tail, ...stale };
     },
   },
   {
@@ -298,10 +417,10 @@ export const MACRO_TOOLS = [
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { recordDate: "2026-06-12", spread2s10sBps: -27, spread3m10yBps: -88, inverted2s10s: true, inverted3m10y: true, asOf: "U.S. Treasury Daily Treasury Par Yield Curve Rates" } },
+      output: { example: { recordDate: "2026-06-12", spread2s10sBps: 39, spread3m10yBps: 70, inverted2s10s: false, inverted3m10y: false, asOf: "U.S. Treasury Daily Treasury Par Yield Curve Rates" } },
     },
     handler: async () => {
-      const curve = await fetchLatestYieldCurve();
+      const { curve, stale } = await fetchLatestYieldCurve();
       const { yr2, yr10, mo3 } = curve;
       if (yr2 == null || yr10 == null || mo3 == null) throw bad("Required tenors missing from latest yield curve row", 502);
       const spread2s10sBps = Math.round((yr10 - yr2) * 100);
@@ -312,6 +431,7 @@ export const MACRO_TOOLS = [
         inverted2s10s: spread2s10sBps < 0,
         inverted3m10y: spread3m10yBps < 0,
         asOf: TREASURY_YIELD_SOURCE,
+        ...stale,
       };
     },
   },

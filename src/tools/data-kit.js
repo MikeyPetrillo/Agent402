@@ -182,11 +182,11 @@ export const DATA_TOOLS = [
         // meaning: an unknown code (v2 answers 422, v1 answered 404) is named
         // as the input, since fetch-guard relabels the upstream refusal as a
         // 422 "check the URL" that blames a URL the buyer never saw (corpus,
-        // 2026-09-06). An upstream failure (502/504 after getJson's retry)
-        // answers 503 with a retry hint.
+        // 2026-09-06). Every other failure of the read (a 5xx, a timeout, a
+        // host refusing this server with a 403 or a 429) is the source being
+        // unavailable: fxSourceUnavailable answers 503 with Retry-After.
         if (isUnknownCurrency(e)) throw unknownPair();
         if (e.statusCode === 400) throw e;
-        if (e.statusCode !== 502 && e.statusCode !== 504) throw e;
         console.warn(`[fx-rate] ECB reference rates read failed (${e.message})`);
         throw fxSourceUnavailable(e);
       }

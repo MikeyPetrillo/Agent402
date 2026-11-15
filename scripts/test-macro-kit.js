@@ -5,7 +5,7 @@
 // integration is broken, not one upstream).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
-import { MACRO_TOOLS, retryTransient, withStaleFallback, parseTreasuryYieldCsv, treasuryYieldCsvUrl, TREASURY_YIELD_SOURCE, _resetTreasuryYieldCacheForTest } from "../src/tools/macro-kit.js";
+import { MACRO_TOOLS, retryTransient, withStaleFallback, parseTreasuryYieldCsv, treasuryYieldCsvUrl, TREASURY_YIELD_SOURCE, _resetTreasuryYieldCacheForTest, refreshTreasuryYields, startTreasuryYieldRefresh, stopTreasuryYieldRefresh } from "../src/tools/macro-kit.js";
 
 const h = (slug) => MACRO_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
@@ -133,6 +133,64 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
     ok(all.count === 6 && reads.length === 3 && reads[2] === `home.treasury.gov:${Y - 2}`, `a window longer than the files stops after three years (${all.count} rows, ${reads.join(", ")})`);
     const spread = await h("yield-curve-spread")({});
     ok(spread.spread2s10sBps === 30 && spread.spread3m10yBps === 80 && spread.inverted2s10s === false && spread.asOf === TREASURY_YIELD_SOURCE, `spread: computed from the latest row (${JSON.stringify(spread)})`);
+
+    // A slow upstream: every file answers after `delay` ms, under a short
+    // budget (TREASURY_YIELD_BUDGET_MS) so the bound is measured, not waited out.
+    const fullYear = (y, n) => [header, ...Array.from({ length: n }, (_, k) => {
+      const d = new Date(Date.UTC(y, 0, 2 + k)); return line(`${String(d.getUTCMonth() + 1).padStart(2, "0")}/${String(d.getUTCDate()).padStart(2, "0")}`, y, "4.50");
+    }).reverse()].join("\n");
+    const big = { [Y]: fullYear(Y, 230), [Y - 1]: fullYear(Y - 1, 250) };
+    let delay = 0, failWith = 0;
+    const slowReads = [];
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url?.url || url));
+      const y = Number(u.pathname.split("/").find((p) => /^\d{4}$/.test(p)));
+      slowReads.push(y);
+      await new Promise((r) => setTimeout(r, delay));
+      if (failWith) return new Response("down", { status: failWith, headers: { "content-type": "text/plain" } });
+      return new Response(big[y] ?? header, { status: 200, headers: { "content-type": "text/csv" } });
+    };
+    const realBudget = process.env.TREASURY_YIELD_BUDGET_MS;
+    process.env.TREASURY_YIELD_BUDGET_MS = "700";
+    try {
+      // 1. Cold, two years needed: read together, so 2 x 400 ms fits a 700 ms bound.
+      _resetTreasuryYieldCacheForTest(); delay = 400;
+      let t0 = Date.now(), r = null, err = null;
+      try { r = await h("treasury-yield-history")({ days: 250 }); } catch (x) { err = x; }
+      const coldMs = Date.now() - t0;
+      ok(r?.count === 250 && coldMs < 700 && slowReads.slice(-2).sort().join() === [Y - 1, Y].sort().join(), `cold multi-year history reads both years at once and answers inside the bound (${coldMs} ms, ${r?.count ?? err?.message})`);
+      // 2. Past the bound: 503 with Retry-After, before any answer (so nothing is
+      //    settled); the read runs on and fills the cache for the next call.
+      _resetTreasuryYieldCacheForTest(); delay = 1_200;
+      t0 = Date.now(); err = null; r = null;
+      try { r = await h("treasury-yield-curve")({}); } catch (x) { err = x; }
+      const capMs = Date.now() - t0;
+      ok(!r && err?.statusCode === 503 && err.retryAfter > 0 && /nothing was charged/.test(err.message) && capMs < 1_000, `a slow upstream past the bound answers 503 with Retry-After at the bound (${capMs} ms, ${err?.statusCode} retryAfter=${err?.retryAfter})`);
+      await new Promise((res) => setTimeout(res, 800));
+      t0 = Date.now(); r = await h("treasury-yield-curve")({});
+      const warmMs = Date.now() - t0;
+      ok(r.recordDate && warmMs < 50 && !r.stale, `the read it started filled the cache: the next call answers warm (${warmMs} ms)`);
+      // 3. A refresh that fails: the held rows are served, marked stale.
+      delay = 0; failWith = 502;
+      const pass = await refreshTreasuryYields(Date.now() + 31 * 60_000);
+      r = await h("yield-curve-spread")({});
+      ok(pass.failed >= 1 && r.stale === true && typeof r.staleAsOf === "string" && typeof r.spread2s10sBps === "number", `a failed refresh serves the held rows marked stale (${JSON.stringify(r)})`);
+      r = await h("treasury-yield-history")({ days: 5 });
+      ok(r.count === 5 && r.stale === true, "history from a held year whose refresh failed is marked stale too");
+      // 4. The background refresh reads with no request: boot pass, single flight.
+      _resetTreasuryYieldCacheForTest(); failWith = 0; delay = 50;
+      const before = slowReads.length;
+      startTreasuryYieldRefresh({ firstDelayMs: 0 });
+      ok(startTreasuryYieldRefresh() === false, "starting the refresh twice keeps one timer");
+      await new Promise((res) => setTimeout(res, 300));
+      stopTreasuryYieldRefresh();
+      const bg = slowReads.slice(before).sort();
+      ok(bg.join() === [Y - 1, Y].sort().join(), `the boot pass reads this year and last year once each, with no request (${bg.join(", ")})`);
+      t0 = Date.now(); r = await h("treasury-yield-history")({ days: 250 });
+      ok(r.count === 250 && Date.now() - t0 < 50 && slowReads.length === before + 2, "after the boot pass a 250-day window is served from memory");
+    } finally {
+      if (realBudget === undefined) delete process.env.TREASURY_YIELD_BUDGET_MS; else process.env.TREASURY_YIELD_BUDGET_MS = realBudget;
+    }
   } finally {
     globalThis.fetch = realFetch;
     undoDns();

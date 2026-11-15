@@ -5,11 +5,9 @@
 //
 //   node scripts/test-fx-failover.js          (offline, stubbed fetch)
 //
-// WHY: fx-rate and fx-dashboard used to fall back to a second publisher whose
-// license bars redistribution in a product that offers programmatic access.
-// The fallback is gone; this pins that it stays gone (no FX handler reads any
-// host but the ECB adapter's), that every answer carries `source`, and that a
-// failed read is a 503 with Retry-After, never a 502 or another source's rates.
+// WHAT IT PINS: no FX handler reads any host but the ECB adapter's, every
+// answer carries `source`, and every failed read (a 5xx, a 403 or a 429 from
+// the host) is a 503 with Retry-After, never a 502, a 422 or other rates.
 //
 // It also keeps the timing invariant from 2026-08-03: the ECB host answered in
 // ~0.06s warm but 7.8s and 11.6s cold, and prod's self-check (12s budget)
@@ -62,12 +60,12 @@ ok(/European Central Bank/.test(ECB_FX_SOURCE), `the source field names the Euro
 const realFetch = globalThis.fetch;
 const undoDns = stubGuardResolver(offlineGuardAnswer);
 const hosts = new Set();
-let mode = "fail";
+let mode = "fail", failStatus = 502;
 const rows = (base, quotes) => quotes.map((q, i) => ({ date: "2026-11-13", base, quote: q, rate: 0.5 + i / 10 }));
 globalThis.fetch = async (url) => {
   const u = new URL(String(url?.url || url));
   hosts.add(u.host);
-  if (mode === "fail") return new Response("upstream down", { status: 502, headers: { "content-type": "text/plain" } });
+  if (mode === "fail") return new Response("upstream down", { status: failStatus, headers: { "content-type": "text/plain" } });
   const base = u.searchParams.get("base"), quotes = (u.searchParams.get("quotes") || "").split(",").filter(Boolean);
   return new Response(JSON.stringify(rows(base, quotes)), { status: 200, headers: { "content-type": "application/json" } });
 };
@@ -76,6 +74,11 @@ try {
   const is503 = (x) => x.e?.statusCode === 503 && x.e?.retryAfter > 0 && /European Central Bank reference rates could not be read/.test(x.e.message) && /Retry/.test(x.e.message);
   let x = await run("fx-rate", { from: "USD", to: "EUR", amount: 100 });
   ok(is503(x), `fx-rate: a failed ECB read answers 503 with a retry hint (got ${x.e?.statusCode} ${x.e?.message || JSON.stringify(x.r)})`);
+  for (failStatus of [403, 429]) {
+    x = await run("fx-rate", { from: "USD", to: "EUR", amount: 100 });
+    ok(is503(x), `fx-rate: an upstream ${failStatus} answers 503 with Retry-After (got ${x.e?.statusCode} retryAfter=${x.e?.retryAfter} ${x.e?.message || JSON.stringify(x.r)})`);
+  }
+  failStatus = 502;
   x = await run("fx-dashboard", {});
   ok(is503(x), `fx-dashboard: a failed ECB read with no snapshot answers 503 with a retry hint (got ${x.e?.statusCode} ${x.e?.message || JSON.stringify(x.r)})`);
   mode = "ok";

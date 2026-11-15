@@ -5,7 +5,7 @@ const ENTRIES = [
     date: "2026-11-15",
     title: "Yield curve and FX answers name their source",
     items: [
-      "Data: the treasury-yield-curve, treasury-yield-history and yield-curve-spread tools read the U.S. Treasury's Daily Treasury Par Yield Curve Rates, with the same tenors, inputs and answer shape, and name it in source or asOf; their descriptions end with \"Source: U.S. Treasury.\"",
+      "Data: the treasury-yield-curve, treasury-yield-history and yield-curve-spread tools read the U.S. Treasury's Daily Treasury Par Yield Curve Rates, with the same tenors, inputs and answer shape, and name it in source or asOf; their descriptions end with \"Source: U.S. Treasury.\" The server keeps the curve in memory and refreshes it in the background every 30 minutes; when a refresh fails, answers carry stale: true and staleAsOf. A call that finds a year it needs not yet held waits at most 20 seconds, then answers 503 with Retry-After.",
       "Data: answers from fx-rate carry source, naming the European Central Bank reference rates, as fx-dashboard answers do. Both read those rates only: when they cannot be read, fx-rate answers 503 with Retry-After, and fx-dashboard serves its marked snapshot of up to a day or answers 503 the same way. The FX tools' descriptions end with \"Source: European Central Bank.\"",
     ],
   },
