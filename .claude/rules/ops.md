@@ -412,7 +412,7 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   reads attention while the chain head could not be read for 5 minutes (every paid call is then
   refused) and while the store takes no writes; "not answering" reasons age out 30 minutes after
   the last unanswered call; the retired and closed reasons clear when an operator acknowledges them
-  (`POST /__operator/referral.json {"action":"acknowledge","what":"retired"|"closed","note"}`);
+  (`POST /__operator/referral.json {"action":"acknowledge","what":"retired"|"closed"|"dropped","note"}`);
   `{"action":"resolve-many","state","reason","outcome":"dismissed"|"delivered","note"}` resolves
   every open entry of one state and recorded reason, each recorded (never a refund, and never a charged, undelivered or unconfirmed entry: those are resolved one at a time). One issue
   covers every reason: the heartbeat comments on it when the operator view's `status.tag` (a digest
