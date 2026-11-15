@@ -70,9 +70,10 @@ LLC: credit the entity, never a personal name.
 - A sale on `/ref` is booked on the private rail `referral` (`src/paid-rails.js`): no public reader
   of the ledger returns it, and the direct routes' breakers, counters and status words do not count it.
 - Nothing a `/ref` route answers points a buyer at this server's own surfaces (catalog, prices, docs,
-  a direct route), and a `/ref` copy never costs more than the same call on the public route: a
-  slug whose published example names this host, or that the public route gives for less (proof of
-  work, the trial parameter, the first-call allowance), is refused at boot with the reason.
+  a direct route), and a `/ref` copy is sold at the price listed for the same call on the public
+  route: a slug whose published example names this host, or that the public route gives for less
+  (proof of work, the trial parameter, the first-call allowance), is refused at boot with the
+  reason, and a listed slug that is not served reads attention on the status word.
 - A tool is `{ route, name, slug, category, price, description, tags, discovery:{inputSchema,
   input/example}, handler }`. `handler(input)` returns JSON or throws an `Error` with
   `.statusCode`.
