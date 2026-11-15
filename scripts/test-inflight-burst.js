@@ -107,6 +107,41 @@ try {
     await ok(rig.outcomesOf(a).attempts === 1 && tallyOf(ra)[429] === 19, `${wire}: the short wallet beside it still ran one handler (${JSON.stringify(rig.outcomesOf(a))})`);
   }
 
+  // A Tempo pull credential signed by an ACCESS KEY of an account (a keychain
+  // signature; the chain read of the key does not answer here) draws on the
+  // account's balance, and is judged on it, together with the account's own
+  // key: one price held, five at once, one run.
+  {
+    const N = 5;
+    for (const [label, via] of [["an access key", true], ["the account key", false]]) {
+      const acct = await rig.wallet("tempo");
+      const price = await rig.priceOf(acct, SQL);
+      rig.fund(acct, price);
+      const w = via ? await rig.wallet("tempo", { accessKeyOf: acct }) : acct;
+      const rs = await rig.burst(w, SQL, N);
+      const t = tallyOf(rs), o = rig.outcomesOf(acct);
+      await ok(o.attempts === 1 && o.settled === 1 && o.refused === 0 && t[200] === 1 && t[429] === N - 1, `tempo through ${label}: ${N} pull calls at once from an account holding one call's price ran ONE handler and it settled; the rest 429 before the handler (${JSON.stringify(t)}, ${JSON.stringify(o)})`);
+      const refusal = rs.find((r) => r.status === 429);
+      await ok(/You have not been charged\./.test(refusal?.json?.error || "") && refusal?.json?.reason === "cover_short", `tempo through ${label}: the 429 says nothing was charged (${refusal?.json?.reason})`);
+      // Funded for N: all N served, none refused.
+      const rich = await rig.wallet("tempo");
+      rig.fund(rich, price * BigInt(N));
+      const rw = via ? await rig.wallet("tempo", { accessKeyOf: rich }) : rich;
+      const rr = await rig.burst(rw, SQL, N);
+      await ok(tallyOf(rr)[200] === N && rig.outcomesOf(rich).settled === N, `tempo through ${label}: an account holding ${N} calls' price is served all ${N} at once (${JSON.stringify(tallyOf(rr))})`);
+    }
+    // The account key and an access key at once draw on one balance: one run.
+    const acct = await rig.wallet("tempo");
+    const price = await rig.priceOf(acct, SQL);
+    rig.fund(acct, price);
+    const key = await rig.wallet("tempo", { accessKeyOf: acct });
+    const creds = [];
+    for (let i = 0; i < 6; i++) creds.push(await rig.credentialFor(i % 2 ? key : acct, SQL));
+    const rs = await Promise.all(creds.map((c) => rig.send(SQL, c)));
+    const o = rig.outcomesOf(acct);
+    await ok(o.attempts === 1 && o.settled === 1 && tallyOf(rs)[429] === 5, `tempo: the account key and an access key sending at once are judged on the account's one balance (${JSON.stringify(tallyOf(rs))}, ${JSON.stringify(o)})`);
+  }
+
   // A model-backed route: the upstream is called once per run that can be paid for.
   for (const wire of ["evm", "tempo", "svm"]) {
     const w = await rig.wallet(wire);

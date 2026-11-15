@@ -1722,11 +1722,20 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       req.tempoSettling = true;
       // A pull credential is settled AFTER the handler, from the sender's
       // balance: what it draws on, for the check that a wallet's runs in
-      // flight are covered together (src/inflight-cover.js). Only a sender
-      // the gate verified; a push credential is final already and has none.
+      // flight are covered together (src/inflight-cover.js). The account it
+      // draws on: the sender the gate verified, or, for a transaction signed
+      // by an access key, the account that key signs for (whether or not the
+      // chain read of the key has answered yet). The transaction moves that
+      // account's balance whoever signed it, and the relay just simulated it
+      // against the chain, so its runs are judged on that balance together
+      // with the account's own; keyed on the access key, or left unjudged,
+      // a burst through one key could start runs the account cannot pay for.
+      // The per-buyer bounds still key on mppTempoSender (verified only). A
+      // push credential is final already and has none.
       if (binding.payloadType === "transaction") presentChallengeWindow(req, binding.expiresAtMs);
-      if (binding.payloadType === "transaction" && req.mppTempoSender) {
-        req.mppTempoPull = { sender: req.mppTempoSender, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
+      const drawsOn = binding.payloadType === "transaction" ? (req.mppTempoSender || lcAddress(senderInfo?.keychain?.account) || null) : null;
+      if (drawsOn) {
+        req.mppTempoPull = { sender: drawsOn, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
       }
       // The tempo credential is the ONLY payment evidence on this request.
       // Drop any x402 payment header that rode alongside it: the dispatcher

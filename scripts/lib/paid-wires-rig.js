@@ -26,6 +26,7 @@ const algosdk = (await import("algosdk")).default;
 const { Challenge, Credential } = await import("mppx");
 const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
 const viemTempo = await import("viem/tempo");
+const TempoAccount = viemTempo.Account;
 const { keccak256 } = await import("viem");
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -224,10 +225,14 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   // tempoSeq: a Tempo credential is claimed by its challenge, so each one minted
   // here gets an expiry of its own (two with one expiry are one challenge).
   let solSeq = 1, avmSeq = 0, xlmNonce = 9_000_000, tempoNonce = 0, tempoSeq = 0;
-  async function wallet(wire, { signer = null } = {}) {
+  // `signer`: another token account of the same Solana wallet (authority).
+  // `accessKeyOf`: a Tempo wallet whose transactions are signed by a new
+  // access key of that wallet's account (a keychain signature): the same
+  // account, the same balance, another key.
+  async function wallet(wire, { signer = null, accessKeyOf = null } = {}) {
     if (wire === "evm" || wire === "mpp-evm") { const a = privateKeyToAccount(generatePrivateKey()); return { wire, id: `evm:${a.address.toLowerCase()}`, address: a.address }; }
-    if (wire === "tempo") { const a = privateKeyToAccount(generatePrivateKey()); return { wire, id: `tempo:${a.address.toLowerCase()}`, address: a.address, account: a }; }
-    // `signer`: another token account of the same Solana wallet (authority).
+    if (wire === "tempo" && accessKeyOf) { const a = TempoAccount.fromSecp256k1(generatePrivateKey(), { access: accessKeyOf.root }); return { wire, id: accessKeyOf.id, address: accessKeyOf.address, account: a, keychain: true }; }
+    if (wire === "tempo") { const k = generatePrivateKey(); const a = privateKeyToAccount(k); return { wire, id: `tempo:${a.address.toLowerCase()}`, address: a.address, account: a, root: TempoAccount.fromSecp256k1(k) }; }
     if (wire === "svm") { const s = signer || await kit.generateKeyPairSigner(); const source = (await kit.generateKeyPairSigner()).address; return { wire, id: `svm:${source}`, address: s.address, signer: s, source }; }
     if (wire === "avm") { const a = algosdk.generateAccount(); return { wire, id: `avm:${a.addr.toString()}`, address: a.addr.toString(), account: a }; }
     if (wire === "stellar") { const g = sdk.Keypair.random().publicKey(); return { wire, id: `stellar:${g}`, address: g }; }
@@ -261,7 +266,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       const seen = o.challenges.find((c) => c.method === "tempo" && c.intent === "charge");
       const ch = Challenge.from({ realm: seen.realm, method: "tempo", intent: "charge", expires: new Date(Date.now() + (ttlMs ?? 60_000) + (tempoSeq++ % 20_000)), request: { amount: seen.request.amount, currency: TEMPO_CUR, decimals: 6, recipient: TREASURY, methodDetails: { chainId: 4217 } }, secretKey: secret });
       // As the stock client signs it: valid for TEMPO_TX_LIFE_MS from now, and the stub relay holds it to that.
-      const tx = await w.account.signTransaction({ chainId: 4217, type: "tempo", calls: [{ to: TEMPO_CUR, data: "0x" }], nonce: tempoNonce++, gas: 100000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, validBefore: Math.floor((Date.now() + TEMPO_TX_LIFE_MS) / 1000) }, { serializer: viemTempo.Transaction.serialize });
+      const fields = { chainId: 4217, type: "tempo", calls: [{ to: TEMPO_CUR, data: "0x" }], nonce: tempoNonce++, gas: 100000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, validBefore: Math.floor((Date.now() + TEMPO_TX_LIFE_MS) / 1000) };
+      const tx = w.keychain ? await w.account.signTransaction(fields) : await w.account.signTransaction(fields, { serializer: viemTempo.Transaction.serialize });
       payments.set(tx, { id: w.id, amount: BigInt(seen.request.amount), signedAt: Date.now(), lifeMs: TEMPO_TX_LIFE_MS });
       return { Authorization: Credential.serialize({ challenge: ch, payload: { signature: tx, type: "transaction" } }) };
     }
