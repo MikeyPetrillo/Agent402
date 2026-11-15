@@ -349,7 +349,10 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   book at capacity with nothing to retire, refuses a paid call (503 before `/verify` and the
   handler); at capacity the oldest expired in-doubt entry is retired to the operator record. The leased sweep `referral-settle-sweep` (at
   boot and every `REFERRAL_SWEEP_MS`, default 60000; `contained`) reads up to 50 open entries a
-  pass, the ones read least recently first, each as it stands at that moment: routed to this
+  pass (in-doubt and intent entries first, a reserved fifth of the reads for refused entries, each
+  group least recently read first; no read starts after the pass's 40 s chain budget, of which the
+  last fifth is kept for dropped records, and at least one dropped record is read every pass), each
+  as it stands at that moment: routed to this
   merchant by its own receipt books the sale once; a nonce spent without paying us, an
   authorization expired unused, or one expired with a complete search that found nothing closes
   the entry with nothing booked; a spent one whose transaction was found, with a receipt read in
@@ -406,18 +409,20 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   owed back, never both (the store decides; `.claude/rules/payments.md`), and an answer whose
   sender ended mid-send gets a refund held for review. During a drain a settle call ends 10 s
   before the drain's deadline (`REFERRAL_DRAIN_SETTLE_MARGIN_MS`), 4 s before the state database's
-  pool starts closing, so its book write lands. Store outage: an intent write is given up at 3 s,
-  and after one the store did not take, paid calls are refused before the tool runs until a small
-  write stands (`REFERRAL_STORE_WRITE_MS`, `REFERRAL_STORE_COOLDOWN_MS`). The status word also
+  pool starts closing, so its book write lands. Store outage: an intent write is given up at 3 s; the hold that follows is the store rule in
+  `.claude/rules/payments.md` (`REFERRAL_STORE_WRITE_MS`, `REFERRAL_STORE_WINDOW_MS`,
+  `REFERRAL_STORE_COOLDOWN_MS`). The status word also
   reads attention while the chain head could not be read for 5 minutes (every paid call is then
   refused) and while the store takes no writes; "not answering" reasons age out 30 minutes after
   the last unanswered call; the retired and closed reasons clear when an operator acknowledges them
-  (`POST /__operator/referral.json {"action":"acknowledge","what":"retired"|"closed","note"}`);
+  (`POST /__operator/referral.json {"action":"acknowledge","what":"retired"|"closed"|"dropped","note"}`);
   `{"action":"resolve-many","state","reason","outcome":"dismissed"|"delivered","note"}` resolves
   every open entry of one state and recorded reason, each recorded (never a refund, and never a charged, undelivered or unconfirmed entry: those are resolved one at a time). One issue
   covers every reason: the heartbeat comments on it when the operator view's `status.tag` (a digest
-  of which reasons hold), keyed with the operator token, is a mark the issue has not carried; the
-  tag itself is printed nowhere (not on the issue, not in the job log). A listed slug that is not served is a standing reason.
+  of which reasons hold), keyed with a dedicated key that has no other role (the Actions secret
+  `REFERRAL_MARK_KEY`, HMAC-SHA256, 24 hex; never the operator token, which only reads the operator
+  view), is a mark the issue has not carried; with no key set, one fixed comment is posted per
+  issue with no mark; the tag itself is printed nowhere (not on the issue, not in the job log). A listed slug that is not served is a standing reason.
 - **Money-state sweeps and books (batch 2026-11-08a):** `TEMPO_PUSH_HELD_MAX_MINUTES` (default 30)
   is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
   `TEMPO_LATE_CONFIRM_DELAYS_MS` (comma list of delays, default 15000,45000,120000; at most 6, each

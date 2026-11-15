@@ -131,13 +131,14 @@ export const REFERRAL_DEFAULTS = Object.freeze({
   // before the handler for the cool-down, then one call probes again.
   ownFaultMax: 3,
   ownFaultCooldownMs: 60_000,
-  // The settlement store: an intent write that has not answered by this
-  // deadline is given up (the call is answered 503, nothing settled), and
-  // after an intent the store did not take, paid calls are answered 503
-  // BEFORE the handler for the cool-down; then one call at a time first
-  // makes one small write, and a write that stands ends the hold.
+  // The settlement store (the rule is stated at storeHold in the gate): an
+  // intent write that has not answered by `storeWriteMs` is given up (the
+  // call is answered 503, nothing settled) and is a failure; two failures in
+  // `storeWindowMs` hold paid calls before the handler for `storeCooldownMs`,
+  // which doubles while they stay in the window.
   storeWriteMs: 3_000,
   storeCooldownMs: 15_000,
+  storeWindowMs: 300_000,
   // A settle success whose receipt cannot be read yet: how long the read is
   // retried before deciding, and how many such answers may be delivered and
   // still open (unconfirmed) at once; past it the answer is held as in doubt.
@@ -511,6 +512,7 @@ export function referralConfig(env = process.env) {
       parityGrandfathered: [...new Set(String(env?.REFERRAL_PARITY_GRANDFATHERED || "").split(",").map((x) => x.trim().toLowerCase()).filter((x) => SLUG.test(x)))],
       storeWriteMs: msKnob(env, "REFERRAL_STORE_WRITE_MS", REFERRAL_DEFAULTS.storeWriteMs, { min: 200, max: 60_000 }),
       storeCooldownMs: msKnob(env, "REFERRAL_STORE_COOLDOWN_MS", REFERRAL_DEFAULTS.storeCooldownMs, { min: 200, max: 600_000 }),
+      storeWindowMs: msKnob(env, "REFERRAL_STORE_WINDOW_MS", REFERRAL_DEFAULTS.storeWindowMs, { min: 1_000, max: 3_600_000 }),
       // This route's own hang-up forgiveness budgets (USD, as micro-dollars):
       // the sizes the direct routes use, counted apart from them.
       hangupKeyMicro: Math.round(usdKnob(env, "REFERRAL_HANGUP_KEY_USD", DEFAULT_KEY_BUDGET_USD) * 1e6),
@@ -576,6 +578,8 @@ export function referralMinNet(grossUnits, { commissionBps = 0, feeBps = 0 } = {
   return least > 0n ? least : 0n;
 }
 
+/** The longest a store hold's cool-down grows to by doubling (see storeHold in the gate). */
+export const REFERRAL_STORE_COOLDOWN_MAX_MS = 600_000;
 /** During a drain a settle call ends this long before the drain's deadline:
  *  the state database's pool starts closing 6 s before that deadline
  *  (shutdown, src/server.js), and the book write that records the settle's
@@ -1528,14 +1532,74 @@ export function createReferralGate({
   // hold (verifyAccepted, and a /settle answered for the payment); another
   // refusal of our signature starts the cool-down again.
   // ---- the settlement store ------------------------------------------------------
-  // An intent the store did not take means the next call's tool run would be
-  // given away too (the intent is written after the handler). So from then
-  // paid calls are answered 503 before anything is claimed or run, for
-  // `storeCooldownMs`; after it ONE call at a time first makes one small
-  // write (bounded by `storeWriteMs`): a write that stands ends the hold, one
-  // that does not starts the cool-down again. Returns the seconds to wait,
-  // or 0 when the call may go on.
-  const storeHold = { blockedUntil: 0, probing: false, since: 0, refusedInRow: 0, countedFailedWrites: -1 };
+  // The intent is written after the handler, so an intent the store does not
+  // take means the next call's tool run would be given away too. THE RULE:
+  //  1. A sliding window (`storeWindowMs`, 5 minutes) holds the FAILURES of
+  //     intent writes: a write the store refused, or one that missed its
+  //     deadline (`storeWriteMs`; a late write that later stands is still a
+  //     late one), each counted once per write however many intents it
+  //     carried (the book's own counts of failed and late writes).
+  //  2. Paid calls are HELD (503 before anything is claimed or run) when the
+  //     window holds two or more failures, whatever was stored in between.
+  //     A stored intent erases nothing; failures leave only by aging out.
+  //  3. One failure alone is followed at once by one small write: when that
+  //     stands nobody is held (one failed write a healthy store recovers
+  //     from); when it does not, the hold starts.
+  //  4. A hold lasts its cool-down and ends only when the cool-down has
+  //     passed AND a probe write stands (one small write, or two in a row
+  //     while the window still holds two or more failures, so a store that
+  //     takes every other write does not pass it). A probe that fails starts
+  //     the hold again. Each hold entered while the window holds two or more
+  //     failures doubles the cool-down (`storeCooldownMs`, 15 s, up to
+  //     REFERRAL_STORE_COOLDOWN_MAX_MS); it is the default again once the
+  //     window holds no failure.
+  //  5. A full book or the payer's own share refusing an intent is not a
+  //     store failure. No timer: the window is read when a call or the sweep
+  //     asks, and the sweep makes the probe too, so a hold ends with no traffic.
+  const storeHold = { blockedUntil: 0, probing: false, since: 0, level: 0, cooldownMs: config.storeCooldownMs, fails: [], seenFailed: 0, seenLate: 0 };
+  const storeFailsIn = (t) => { const from = t - config.storeWindowMs; if (storeHold.fails.length && storeHold.fails[0].at <= from) storeHold.fails = storeHold.fails.filter((f) => f.at > from); return storeHold.fails; };
+  /** An intent the store did not take: its write is counted as a failure once (refused, or late). */
+  /** The cool-down is the default again once the window holds no failure and no hold is active:
+   *  a later incident starts from the default, never from where an earlier one ended. */
+  function relaxStoreHold(t) {
+    if (!storeFailsIn(t).length && !(storeHold.blockedUntil > t)) { storeHold.level = 0; storeHold.cooldownMs = config.storeCooldownMs; }
+  }
+  function noteStoreFailure(t) {
+    relaxStoreHold(t);
+    const ws = typeof book.writeStats === "function" ? book.writeStats() : null;
+    if (!ws) { storeHold.fails.push({ at: t, late: false }); return; }
+    const failed = Number(ws.failed) || 0, late = Number(ws.timedOut) || 0;
+    const moreFailed = failed > storeHold.seenFailed, moreLate = late > storeHold.seenLate;
+    storeHold.seenFailed = failed; storeHold.seenLate = late;
+    if (moreFailed || moreLate) storeHold.fails.push({ at: t, late: moreLate });
+    if (storeHold.fails.length > 200) storeHold.fails.splice(0, storeHold.fails.length - 200);
+  }
+  /** Start (or start again) the hold at `t`. */
+  function enterStoreHold(t) {
+    const many = storeFailsIn(t).length >= 2;
+    if (!storeFailsIn(t).length) storeHold.level = 0;
+    if (many) storeHold.level = Math.min(storeHold.level + 1, 30);
+    storeHold.cooldownMs = many ? Math.min(config.storeCooldownMs * 2 ** (storeHold.level - 1), Math.max(config.storeCooldownMs, REFERRAL_STORE_COOLDOWN_MAX_MS)) : config.storeCooldownMs;
+    storeHold.blockedUntil = t + storeHold.cooldownMs;
+    storeHold.since = storeHold.since || t;
+  }
+  /** The probe: one small write, or two in a row while the window holds two or more failures. */
+  async function storeProbe() {
+    if (typeof book.ping !== "function") return true;
+    const writes = storeFailsIn(now()).length >= 2 ? 2 : 1;
+    for (let i = 0; i < writes; i++) { let took = false; try { took = (await book.ping({ deadlineMs: config.storeWriteMs })) === true; } catch { took = false; } if (!took) return false; }
+    return true;
+  }
+  /** The cool-down has passed: probe, and end the hold or start it again. True when the hold ended. */
+  async function endStoreHoldIfReady() {
+    if (!storeHold.blockedUntil || now() < storeHold.blockedUntil || storeHold.probing) return false;
+    storeHold.probing = true;
+    let took = false;
+    try { took = await storeProbe(); } finally { storeHold.probing = false; }
+    if (took) { storeHold.blockedUntil = 0; storeHold.since = 0; if (!storeFailsIn(now()).length) { storeHold.level = 0; storeHold.cooldownMs = config.storeCooldownMs; } line("warn", "the settlement store takes writes again: paid calls are served"); return true; }
+    enterStoreHold(now());
+    return false;
+  }
   // How long a debt claim on an entry stands without its row (a process that
   // stopped between the two): after it the entry can be claimed or delivered again.
   const DEBT_CLAIM_MS = 60_000;
@@ -1547,17 +1611,14 @@ export function createReferralGate({
   const noteSent = (key) => { sentHere.set(key, now()); if (sentHere.size > 5_000) for (const k of [...sentHere.keys()].slice(0, 1_000)) sentHere.delete(k); };
   // A write that must never put an entry recorded as owed back into another state.
   const NOT_OWED = { unless: (c) => c.state === "refund-owed" };
+  /** Seconds a paid call must wait for the store, or 0 when it may go on. */
   async function storeHeld() {
     if (!storeHold.blockedUntil) return 0;
     const left = storeHold.blockedUntil - now();
     if (left > 0) return Math.max(1, Math.ceil(left / 1000));
     if (storeHold.probing) return 5;
-    storeHold.probing = true;
-    let took = false;
-    try { took = typeof book.ping === "function" ? (await book.ping({ deadlineMs: config.storeWriteMs })) === true : true; } catch { took = false; } finally { storeHold.probing = false; }
-    if (took) { storeHold.blockedUntil = 0; storeHold.since = 0; line("warn", "the settlement store takes writes again: paid calls are served"); return 0; }
-    storeHold.blockedUntil = now() + config.storeCooldownMs;
-    return Math.max(1, Math.ceil(config.storeCooldownMs / 1000));
+    if (await endStoreHoldIfReady()) return 0;
+    return Math.max(1, Math.ceil((storeHold.blockedUntil - now()) / 1000));
   }
 
   const OWN_PROBE_MS = config.verifyMs + config.deadlineMs + config.settleMs + 5_000;
@@ -1632,6 +1693,11 @@ export function createReferralGate({
     // The route is down while the chain head cannot be read: every paid call is refused before /verify.
     if (unreachable(reach.chain, t, CHAIN_DOWN_MS)) reasons.push("the chain head could not be read for 5 minutes: paid calls are refused before anything runs");
     if (storeHold.blockedUntil) reasons.push("the settlement store is not taking writes: paid calls are refused before anything runs");
+    { // Slow or failing intent writes are never silent: two or more failures in the window, or any late write in it.
+      const fails = storeFailsIn(t);
+      if (fails.length >= 2) reasons.push(`${fails.length} intent writes to the settlement store failed or were late in the last ${Math.round(config.storeWindowMs / 60_000)} minutes`);
+      else if (fails.some((f) => f.late)) reasons.push(`an intent write to the settlement store missed its deadline in the last ${Math.round(config.storeWindowMs / 60_000)} minutes`);
+    }
     if (reach.intentFailedAt && t - reach.intentFailedAt < 15 * 60_000) reasons.push("an intent to settle could not be stored");
     if (book.full()) reasons.push("the settlement book is full");
     // A slug the operator listed that this server does not serve: its /ref
@@ -1645,6 +1711,10 @@ export function createReferralGate({
     // So is one closed because its receipt, read in full, is not a payment this route recognizes.
     const shut = typeof book.closedUnrecognized === "function" ? book.closedUnrecognized() : [];
     if (shut.some((r) => t - (Number(r.at) || 0) < 24 * 3600_000 && (Number(r.at) || 0) > ackOf("closed"))) reasons.push("a settlement whose receipt is not recognized was closed to the operator record");
+    // Records of refused settles dropped at capacity that went without a
+    // verdict (given up after hours of reads that reached none, or pushed
+    // out at the cap): a payment that landed for one of them was not found.
+    { const notes = typeof book.resolvedByHand === "function" ? book.resolvedByHand() : []; if (notes.some((r) => r && typeof r.key === "string" && r.key.startsWith("dropped:") && t - (Number(r.at) || 0) < 24 * 3600_000 && (Number(r.at) || 0) > ackOf("dropped"))) reasons.push("records of refused settles dropped at capacity went without a verdict in the last day: a payment that landed for one of them would not have been found"); }
     // Not a reason: the slugs whose payments are not bound to a product id (the operator view lists them).
     // `tag`: a short digest of WHICH reasons hold (their wording with every
     // figure and slug-specific part left out), so a pager that keeps one
@@ -1658,7 +1728,7 @@ export function createReferralGate({
   /** An operator acknowledges having read the retired or closed records:
    *  the status word stops naming the ones there now. `{ ok }`. */
   async function acknowledge(kind, { note = "" } = {}) {
-    if (!["retired", "closed"].includes(kind)) return { ok: false, error: 'name what was read: "retired" or "closed"' };
+    if (!["retired", "closed", "dropped"].includes(kind)) return { ok: false, error: 'name what was read: "retired", "closed" or "dropped"' };
     if (typeof note !== "string" || note.trim().length < 3) return { ok: false, error: "a note saying what was checked is required" };
     let ok = false;
     try { ok = (await book.noteAck(kind, note.trim())) === true; } catch { ok = false; }
@@ -2037,31 +2107,21 @@ export function createReferralGate({
     // (serve): the proof of this payment is looked for from there.
     try { stored = (await book.intent({ key: entry.key, slug: entry.slug, payer: entry.payer, nonce: entry.auth.nonce, amount: entry.amount, validBefore: Math.floor(entry.validBeforeMs / 1000), fromBlock: entry.fromBlock, deadlineMs: config.storeWriteMs })) === true; }
     catch { stored = false; }
-    if (stored) storeHold.refusedInRow = 0;
     if (!stored) {
       counters.intentFailed++;
-      // The word reads attention for this only when the store is really not
-      // taking writes (the small write below fails too), or when the intent
-      // was refused for another reason (a full book, the payer's share).
+      // A full book or the payer's own share is not a store failure: the
+      // word names it as an intent that could not be stored, as before.
       const storeFault = typeof book.intentFault !== "function" || book.intentFault() === "store";
       if (!storeFault) reach.intentFailedAt = now();
-      // The STORE did not take it (not a full book, not this payer's share):
-      // no further tool runs until a write stands (storeHeld).
-      // One failed write is not an outage: one small write is tried at once,
-      // and only when that fails too do paid calls wait.
-      if (typeof book.intentFault !== "function" || book.intentFault() === "store") {
-        // (And a second FAILED WRITE of an intent in a row, however far
-        // apart, holds whatever that small write says: a store that fails
-        // every other write is not healthy. One failed write that carried
-        // several intents is one failure: it is counted once, by the book's
-        // own count of failed writes; an intent that is stored ends the row.)
-        // (A missed intent deadline is a failure too, counted once per write by the book.)
-        const failedWrites = typeof book.writeStats === "function" ? ((ws) => (Number(ws.failed) || 0) + (Number(ws.timedOut) || 0))(book.writeStats()) : null;
-        if (failedWrites === null || failedWrites !== storeHold.countedFailedWrites) { storeHold.countedFailedWrites = failedWrites; storeHold.refusedInRow++; }
-        const again = storeHold.refusedInRow >= 2;
-        let took = false;
-        if (!again) { try { took = typeof book.ping === "function" && (await book.ping({ deadlineMs: config.storeWriteMs })) === true; } catch { took = false; } }
-        if (!took) { reach.intentFailedAt = now(); storeHold.blockedUntil = now() + config.storeCooldownMs; storeHold.since = storeHold.since || now(); }
+      if (storeFault) {
+        // The store rule (see storeHold): count the write once; two failures
+        // in the window hold; one alone is probed at once.
+        const t = now();
+        noteStoreFailure(t);
+        if (!(storeHold.blockedUntil > t)) {
+          if (storeFailsIn(t).length >= 2) enterStoreHold(t);
+          else if (!(await storeProbe())) { if (!(storeHold.blockedUntil > now())) enterStoreHold(now()); }
+        }
       }
       line("error", `the intent to settle could not be stored (${entry.slug} payer=${shortPayer(entry.payer)}${book.full() ? ", the book is full" : ""}); /settle NOT called, nothing charged, answer kept`);
       return "no-intent";
@@ -2799,13 +2859,8 @@ export function createReferralGate({
   // An intent is left to its own request for the settle timeout and the chain read after it.
   const heldMoved = [];
   const sweepOnce = async () => {
-    // A store hold ends without a paid call: each pass makes the one small write itself.
-    if (storeHold.blockedUntil && !storeHold.probing) {
-      storeHold.probing = true;
-      let took = false;
-      try { took = typeof book.ping === "function" && (await book.ping({ deadlineMs: config.storeWriteMs })) === true; } catch { took = false; } finally { storeHold.probing = false; }
-      if (took) { storeHold.blockedUntil = 0; storeHold.since = 0; line("warn", "the settlement store takes writes again: paid calls are served"); }
-    }
+    // A store hold ends without a paid call: once its cool-down has passed, each pass makes the probe itself.
+    await endStoreHoldIfReady();
     const out = await sweepBook();
     // What the pass found held with the buyer's money moved, and any unproven
     // entry whose debt did not land before: marked, and owed back.
@@ -2925,7 +2980,7 @@ export function createReferralGate({
 
   return {
     handler, sweepOnce, statusWord, resolveByHand, resolveManyByHand, acknowledge, reopenByHand, clearShortByHand, shortSales: () => shortNow(),
-    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, coldInflight: Object.fromEntries(rate.inflight), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
+    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: (relaxStoreHold(now()), storeHold.blockedUntil > now()), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
     slugs: () => [...defs.keys()],
   };
 }

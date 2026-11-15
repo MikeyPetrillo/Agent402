@@ -864,6 +864,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          # Keys the public reasons mark below; it has no other role.
+          MARK_KEY: ${{ secrets.REFERRAL_MARK_KEY }}
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.referralSettlement.status // "unknown"' 2>/dev/null || echo unknown)
           echo "referralSettlement: $STATUS"
@@ -872,24 +874,35 @@ jobs:
           if [ "$STATUS" = "attention" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports referralSettlement.status=attention: the referral copies of paid routes need an operator. The word reads attention while any of these holds: a settlement open past fifteen minutes (in doubt, charged and not yet delivered, or unconfirmed); a settlement kept for an operator (a settle success the chain contradicts, one whose receipt cannot be read, one whose receipt read in full does not prove the sale, or one the split contract routed to this merchant that the proof rule does not accept); a tool's sales arriving under the amount the commission map expects, or a tool stopped (its product id differs from the receipt's, or its sales arrive under its stop floor); a tool listed for the referral copies that this server does not serve (refused at boot, for as long as it is listed); new payments held because contradicted successes came from several payers; unsettled runs from many payers, with payers that have no paid sale limited to a share of the run slots; the referral facilitator refused this server's own request in the last fifteen minutes; the facilitator left two or more calls in a row unanswered over ten minutes, or the chain head could not be read for five (both age out thirty minutes after the last such call); an intent to settle could not be stored, or the settlement store is not taking writes; the settlement book is full; or a settlement was retired at capacity or closed as unrecognized in the last day and has not been acknowledged. The reasons and the open settlements are on the operator view (/__operator/referral.json, operator token), where an entry is resolved by hand with a note, entries of one state are resolved together, and the retired and closed records are acknowledged. No payment on a referral copy is settled twice. While the book is full, the store is not taking writes, the chain head cannot be read, or this server's own request keeps being refused, paid calls on the referral copies are answered as unavailable before anything runs. Auto-closes when the word reads ok." || true
+                --body "/api/gateway-status reports referralSettlement.status=attention: the referral copies of paid routes need an operator. The word reads attention while any of these holds: a settlement open past fifteen minutes (in doubt, charged and not yet delivered, or unconfirmed); a settlement kept for an operator (a settle success the chain contradicts, one whose receipt cannot be read, one whose receipt read in full does not prove the sale, or one the split contract routed to this merchant that the proof rule does not accept); a tool's sales arriving under the amount the commission map expects, or a tool stopped (its product id differs from the receipt's, or its sales arrive under its stop floor); a tool listed for the referral copies that this server does not serve (refused at boot, for as long as it is listed); new payments held because contradicted successes came from several payers; unsettled runs from many payers, with payers that have no paid sale limited to a share of the run slots; the referral facilitator refused this server's own request in the last fifteen minutes; the facilitator left two or more calls in a row unanswered over ten minutes, or the chain head could not be read for five (both age out thirty minutes after the last such call); an intent to settle could not be stored, the settlement store is not taking writes, or intent writes to it failed or were late in the last five minutes; the settlement book is full; a settlement was retired at capacity or closed as unrecognized in the last day and has not been acknowledged; or records of refused settles dropped at capacity went without a verdict in the last day (given up, or pushed out), so a payment that landed for one of them would not have been found, and that has not been acknowledged. The reasons and the open settlements are on the operator view (/__operator/referral.json, operator token), where an entry is resolved by hand with a note, entries of one state are resolved together, and the retired, closed and dropped records are acknowledged. No payment on a referral copy is settled twice. While the book is full, the store is not taking writes, the chain head cannot be read, or this server's own request keeps being refused, paid calls on the referral copies are answered as unavailable before anything runs. Auto-closes when the word reads ok." || true
             fi
             # One issue covers every reason, so a NEW reason arriving while it is
             # open is said on it. The operator view's tag is a digest of which
-            # reasons hold; what is posted is that tag keyed with the operator
-            # token (HMAC-SHA256, 12 hex), which nobody without the token can
-            # map back to reasons. A mark the issue has not carried yet gets one
-            # comment. The tag itself is printed nowhere: not on the issue and
+            # reasons hold; what is posted is that tag keyed with a DEDICATED
+            # key that has no other role (MARK_KEY, HMAC-SHA256, 24 hex), so
+            # nobody without that key can map a mark back to reasons, and the
+            # mark verifies nothing about any credential. The operator token
+            # reads the operator view and is never given to the hashing
+            # command. A mark the issue has not carried yet gets one comment.
+            # With no mark key set, one fixed comment is posted per issue, with
+            # no mark. The tag itself is printed nowhere: not on the issue and
             # not in this job's log, which is as public as the issue is.
             EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
             if [ -n "$EXISTING" ] && [ -n "$OP_TOKEN" ]; then
               TAG=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/referral.json" | jq -r '.status.tag // ""' 2>/dev/null || echo "")
               if printf '%s' "$TAG" | grep -Eq '^[0-9a-f]{8}$'; then
-                MARK=$(printf '%s' "$TAG" | openssl dgst -sha256 -hmac "$OP_TOKEN" 2>/dev/null | sed 's/^.*= *//' | cut -c1-12)
-                if printf '%s' "$MARK" | grep -Eq '^[0-9a-f]{12}$'; then
-                  SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable reasons mark $MARK")
-                  if ! printf '%s' "$SEEN" | grep -q "reasons mark $MARK"; then
-                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "The reasons mark is now: reasons mark $MARK (read at $(date -u +%FT%TZ)). A mark that differs from the one in the comment before it means a reason was added or cleared. Read /__operator/referral.json." >/dev/null 2>&1 || true
+                if [ -n "$MARK_KEY" ]; then
+                  MARK=$(printf '%s' "$TAG" | openssl dgst -sha256 -hmac "$MARK_KEY" 2>/dev/null | sed 's/^.*= *//' | cut -c1-24)
+                  if printf '%s' "$MARK" | grep -Eq '^[0-9a-f]{24}$'; then
+                    SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable reasons mark $MARK")
+                    if ! printf '%s' "$SEEN" | grep -q "reasons mark $MARK"; then
+                      gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "The reasons mark is now: reasons mark $MARK (read at $(date -u +%FT%TZ)). A mark that differs from the one in the comment before it means a reason was added or cleared. Read /__operator/referral.json." >/dev/null 2>&1 || true
+                    fi
+                  fi
+                else
+                  SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable: the reasons on this issue can change while it is open")
+                  if ! printf '%s' "$SEEN" | grep -q "the reasons on this issue can change while it is open"; then
+                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Note: the reasons on this issue can change while it is open (one may be added or cleared). Read /__operator/referral.json for the current ones." >/dev/null 2>&1 || true
                   fi
                 fi
               fi
@@ -1459,7 +1472,7 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           case "$WORD" in
             owed|aging|stuck)
-              BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ). The counts are on /__operator/refunds.json, never in this public issue. owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for hang-up debts held for review; void a debt that should not be paid, with a note). A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard. aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
+              BODY="/api/gateway-status reports refundsOwed.status=$WORD at $(date -u +%FT%TZ). The counts are on /__operator/refunds.json, never in this public issue. owed: a buyer's debt is in the refund ledger - read /__operator/refunds.json, then run the refund workflow ($WF): dry run first, then live (include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review; void a debt that should not be paid, with a note). A card report whose refund Stripe refused is listed on /__operator/human-checkout.json (refundOwed): refund it in the Stripe dashboard. aging: a debt has been owed longer than REFUND_OWED_ALARM_HOURS (default 48). stuck: a row has been in sending for over 30 minutes - check the refund wallet on chain, then mark it paid with the tx or release it back to owed. Auto-closes when nothing is owed."
               # A debt can stay owed for days (held for review), so an open
               # issue is updated in place rather than commented every run.
               if [ -z "$OPEN" ]; then
