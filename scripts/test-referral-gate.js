@@ -23,7 +23,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer, request as httpRequest } from "node:http";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, copyFileSync } from "node:fs";
 import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -516,7 +516,7 @@ const TOOLS = {
   exa: { slug: "exa", name: "Example", category: "test", price: "$0.03", discovery: { input: { text: "the published example", n: 2 } }, handler: async (i) => { seen.exa = { ...i }; return { got: i.text ?? null, n: i.n ?? null }; } },
   chatx: { slug: "chatx", name: "Chat example", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), discovery: { input: { max_tokens: 3, messages: [{ role: "user", content: "example" }], stream: true } }, handler: async (i, req) => { seen.chatx = { max_tokens: i.max_tokens, stream: i.stream, content: i.messages?.[0]?.content, stash: req.__meteredQuoteUsd }; return { id: "cx", choices: [] }; } },
   // A tool the catalog marks model-backed: each call has upstream cost.
-  mb: { slug: "mb", name: "Model", category: "test", price: "$0.03", modelBacked: true, handler: async (i) => { await wait(Number(i.ms) || 0); return { said: "ok" }; } },
+  mb: { slug: "mb", name: "Model", category: "test", price: "$0.03", modelBacked: true, handler: async (i) => { await wait(Number(i.ms) || 0); if (i.fail) throw Object.assign(new Error("that input cannot be served"), { statusCode: 422 }); return { said: "ok" }; } },
   // Comes back with an answer after the run's ceiling (the deadline less 500 ms) and before the deadline itself.
   late: { slug: "late", name: "Late", category: "test", price: "$0.03", handler: async () => { await wait(750); return { finished: "after the ceiling" }; } },
   // An answer of the size asked (for the delivery checks).
@@ -3291,6 +3291,95 @@ try {
         const again = await send(`${app.url}/ref/exa`, { body: { text: "r7" }, headers: { "payment-signature": one.p.header, "x-test-ip": freshIp() } });
         await quietLedger();
         ok(again.status === 200 && sales.filter((x) => x.tx === TXB).length === 2, "and a re-send of either payment books no third row");
+      } finally { await app.close(); }
+    }
+  }
+
+  // ===========================================================================
+  // "Proven at its floor" survives a restart; a cold slug's place is given back on every exit
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    const pays = (bps) => (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "paid", { bps: BigInt(bps) }), network: REFERRAL_NETWORK } });
+    const one = async (app, slug, { account = newAccount(), body = { text: "w" } } = {}) => { const p = await signPayment(accept, { account }); const r = await send(`${app.url}/ref/${slug}`, { body, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } }); return { status: r.status, reason: r.json?.errorReason || null }; };
+    const burst = async (app, slug, n = 6) => { fac.mode.settleDelayMs = 200; try { return (await Promise.all(Array.from({ length: n }, () => one(app, slug)))).filter((c) => c.status === 200).length; } finally { fac.mode.settleDelayMs = 0; } };
+    // A real book FILE, read by one process after another.
+    const base = join(tmp, "proven-book.json");
+    const bookAt = (file) => createReferralBook({ file, log, now: () => Date.now() + skew.ms });
+    const variant = (name) => { const f = join(tmp, `proven-${name}.json`); copyFileSync(base, f); return f; };
+    fac.mode.settle = pays(1234);
+    {
+      const b = bookAt(base);
+      const app = await mount({}, { book: b });
+      try {
+        const coldBurst = await burst(app, "mb");
+        await wait(80);
+        const rec = b.provenSlugs().mb;
+        ok(coldBurst === 1 && rec && /^[0-9a-f]{32}$/.test(rec.fp) && Object.keys(b.provenSlugs()).length === 1 && JSON.parse(readFileSync(base, "utf8")).proven?.mb?.fp === rec.fp, `a cold model-backed slug serves one of a burst; its first proven sale is recorded in the book file with a fingerprint of the settings it was judged against (${coldBurst} served; ${JSON.stringify(rec)})`);
+      } finally { await app.close(); }
+    }
+    {
+      // The next process, same settings: warm from its first call.
+      const app = await mount({}, { book: bookAt(variant("same")) });
+      try { const n = await burst(app, "mb"); ok(n === 6, `after a restart with the same settings the slug is warm: a burst is served whole (${n} of 6)`); } finally { await app.close(); }
+    }
+    const coldAfter = {};
+    for (const [name, env] of [["rate", { REFERRAL_COMMISSION_BPS: "default:1300,busy:4321" }], ["floor", { REFERRAL_MIN_NET_BPS: "mb:6000" }], ["product", { REFERRAL_PRODUCT_IDS: `mb:0x${"0".repeat(64)}` }], ["merchant", { REFERRAL_MERCHANT_ID: "4243" }], ["payout", { REFERRAL_PAYOUT_ADDRESS: newAccount().address }]]) {
+      const app = await mount(env, { book: bookAt(variant(name)) });
+      // (The merchant id and payout wallet variants are judged cold at admission; their settles then read as not ours.)
+      try { fac.mode.settleDelayMs = 200; const rs = await Promise.all(Array.from({ length: 6 }, () => one(app, "mb"))); coldAfter[name] = rs.filter((c) => c.status === 503 && c.reason === "rate_under_review").length; } finally { fac.mode.settleDelayMs = 0; await app.close(); }
+    }
+    ok(Object.values(coldAfter).every((n) => n === 5), `a changed commission rate, floor, product id, merchant id or payout wallet makes the slug cold again: one of a burst is admitted, five wait (${JSON.stringify(coldAfter)})`);
+    {
+      // Its own stop, and an operator's clear, make it cold again in the record itself.
+      const f = variant("stop");
+      const b = bookAt(f);
+      const app = await mount({}, { book: b });
+      try {
+        fac.mode.settle = pays(9000);
+        const short = await one(app, "mb");
+        await wait(80);
+        const afterStop = b.provenSlugs().mb;
+        fac.mode.settle = pays(1234);
+        const cleared = await app.gate.clearShortByHand("mb", { note: "the map is being corrected" });
+        ok(short.status === 200 && afterStop === undefined && cleared.ok === true && JSON.parse(readFileSync(f, "utf8")).proven?.mb === undefined, `a sale under the floor stops the slug and removes its proven record (${JSON.stringify(afterStop)})`);
+      } finally { await app.close(); }
+      const g = variant("clear");
+      const b2 = bookAt(g);
+      const app2 = await mount({}, { book: b2 });
+      try {
+        await app2.gate.clearShortByHand("mb", { note: "start this slug cold again" });
+        await wait(60);
+        const n = await burst(app2, "mb");
+        ok(n === 1, `an operator's clear-short makes a warm slug cold again (${n} of 6 served)`);
+      } finally { await app2.close(); }
+    }
+    // A COLD slug's one place is given back on EVERY exit: nothing keeps it longer than its own run.
+    fac.reset();
+    {
+      const app = await mount({}, { book: createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-place`, log: () => {} }), log }) });
+      try {
+        const held = () => app.gate.stats().coldInflight.mb || 0;
+        const seen = {};
+        fac.mode.verify = () => ({ status: 200, body: { isValid: false, invalidReason: "insufficient_funds" } });
+        await one(app, "mb"); seen.verifyRefused = held();
+        fac.mode.verify = () => ({ status: 200, body: { isValid: true } });
+        fac.mode.settle = () => ({ status: 200, body: { success: false, errorReason: "insufficient_funds" } });
+        const during = one(app, "mb", { body: { ms: 300 } });
+        await wait(150);
+        seen.whileRunning = held();
+        const waiting = await one(app, "mb");
+        const refused = await during; seen.settleRefused = held();
+        const failed = await one(app, "mb", { body: { fail: true } }); seen.handlerError = held();
+        const timedOut = await one(app, "mb", { body: { ms: 1500 } }); seen.timeout = held();
+        fac.mode.settle = () => ({ status: 500, body: {} });
+        const doubt = await one(app, "mb"); seen.settleInDoubt = held();
+        const pH = await signPayment(accept, { account: newAccount() });
+        const hung = await rawPost(`${app.url}/ref/mb`, { ms: 400 }, { "payment-signature": pH.header, "x-test-ip": freshIp() }, 120);
+        await wait(700); seen.hangUp = held();
+        fac.mode.settle = pays(1234);
+        const honest = await one(app, "mb");
+        ok(seen.verifyRefused === 0 && seen.whileRunning === 1 && waiting.status === 503 && waiting.reason === "rate_under_review" && refused.status === 402 && seen.settleRefused === 0 && failed.status === 422 && seen.handlerError === 0 && timedOut.status === 504 && seen.timeout === 0 && doubt.status === 402 && seen.settleInDoubt === 0 && hung === "aborted" && seen.hangUp === 0 && honest.status === 200, `a cold slug's place is held only while a verified call runs (another payer waits then) and is given back when it ends: a settle refused or in doubt, a handler error, a timeout, a hang-up; the next buyer is served (${JSON.stringify(seen)}; then ${honest.status})`);
       } finally { await app.close(); }
     }
   }

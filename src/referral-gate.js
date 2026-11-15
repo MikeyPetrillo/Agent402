@@ -1123,6 +1123,33 @@ export function createReferralGate({
   // short sale is seen), the slugs with a sale that arrived at or above the
   // floor (their rate is proven), and the calls in flight per slug.
   const rate = { deep: new Map(), proven: new Set(), inflight: new Map(), product: new Map() };
+  // PROVEN SURVIVES A RESTART. A slug with a receipt-proven sale at or above
+  // its floor is recorded in the book with a fingerprint of everything that
+  // proof was judged against: the slug's commission and the fee, its stop
+  // floor, its product id, the merchant id, the pay-to contract and the
+  // payout wallet. A process that starts with the same settings reads the
+  // slug as proven (warm); any change to one of them makes it cold again,
+  // and so do the slug's own stop and an operator's clear.
+  const stopFloorSpec = (slug) => {
+    const m = config.minNetBps;
+    const bps = m ? (Object.hasOwn(m.bySlug, slug) ? m.bySlug[slug] : m.default) : null;
+    if (bps !== null && bps !== undefined) return `bps:${bps}`;
+    return defs.get(slug)?.modelBacked === true && Number.isInteger(modelNetFloorBps) && modelNetFloorBps > 0 ? `model:${modelNetFloorBps}` : "half";
+  };
+  const rateFingerprint = (slug) => createHash("sha256").update(JSON.stringify([commissionBpsFor(config, slug), config.feeBps, stopFloorSpec(slug), productOf(slug), config.merchantId, lc(config.payTo), lc(config.payoutAddress), defs.get(slug)?.modelBacked === true])).digest("hex").slice(0, 32);
+  const isProven = (slug) => {
+    if (rate.proven.has(slug)) return true;
+    const rec = typeof book.provenSlugs === "function" ? book.provenSlugs()[slug] : null;
+    return !!rec && rec.fp === rateFingerprint(slug);
+  };
+  const markProven = (slug) => {
+    rate.proven.add(slug);
+    if (typeof book.noteProven === "function") Promise.resolve().then(() => book.noteProven(slug, rateFingerprint(slug))).catch(() => {});
+  };
+  const markCold = (slug) => {
+    rate.proven.delete(slug);
+    if (typeof book.clearProven === "function") Promise.resolve().then(() => book.clearProven(slug)).catch(() => {});
+  };
   /** A receipt, read in full, names ANOTHER product id than the one
    *  configured for its slug: the slug stops at once (this process's own
    *  note, ahead of the book's), the book keeps the record, and the word
@@ -1131,6 +1158,7 @@ export function createReferralGate({
     if (!product || !product.configured || !product.received) return;
     if (!rate.product.has(slug)) { counters.productMismatches++; line("error", `PRODUCT ID DIFFERS for ${slug}: configured ${product.configured}, receipt ${product.received} (tx=${tx}); nothing delivered or booked as this slug's sale, new calls on it are held; correct REFERRAL_PRODUCT_IDS`); }
     rate.product.set(slug, { configured: product.configured, received: product.received });
+    markCold(slug);
     book.noteShort(slug, { expected: "0", received: "0", gross: String(amount), tx, deep: false, product: { configured: product.configured, received: product.received } }).catch(() => {});
   };
   /** The product stops that still stand: `[{ slug, configured, received }]`
@@ -1152,7 +1180,7 @@ export function createReferralGate({
       const floor = BigInt(minNetOf(slug, amount));
       const got = BigInt(net);
       const deep = underStopFloor(slug, amount, got);
-      if (deep) { const seen = rate.deep.get(slug) || new Set(); seen.add(String(tx)); rate.deep.set(slug, seen); } else rate.proven.add(slug);
+      if (deep) { const seen = rate.deep.get(slug) || new Set(); seen.add(String(tx)); rate.deep.set(slug, seen); markCold(slug); } else markProven(slug);
       if (!(got < floor) && !deep) return;
       counters.shortNetSales++;
       line("error", `SHORT NET: the split contract paid this merchant less than the commission map expects for ${slug}: expected at least ${floor}, received ${got}, of a gross of ${amount} (tx=${tx}); the call is paid and served; correct REFERRAL_COMMISSION_BPS`);
@@ -1194,7 +1222,7 @@ export function createReferralGate({
    *  or "taken" (with `take`: one in-flight place, given back by rateLeave). */
   const rateGate = (slug, take, payer = null) => {
     const bound = stopAfter(slug);
-    if (!bound || rate.proven.has(slug)) return null;
+    if (!bound || isProven(slug)) return null;
     // A payer with a paid sale on the books is not held to a cold slug's bound.
     if (payer) { try { if (payerHasPaid(payer) === true) return null; } catch { /* held to the bound */ } }
     const n = rate.inflight.get(slug) || 0;
@@ -2468,13 +2496,15 @@ export function createReferralGate({
     const inProcess = (rate.deep.get(slug)?.size || 0) > 0 || rate.product.has(slug);
     let ok = await book.clearShort(slug, { note: note.trim() });
     if (!ok && inProcess) { try { await book.resolveNote({ slug, outcome: "short-net-cleared", note: note.trim() }); } catch { /* cleared all the same */ } ok = true; }
-    if (ok) { rate.deep.delete(slug); rate.proven.delete(slug); rate.product.delete(slug); }
+    // An operator's clear makes the slug cold again, whether or not a stop stood.
+    markCold(slug);
+    if (ok) { rate.deep.delete(slug); rate.product.delete(slug); }
     return ok ? { ok: true, slug } : { ok: false, error: "no short-net record stands for that slug, or the book could not be written" };
   }
 
   return {
     handler, sweepOnce, statusWord, resolveByHand, reopenByHand, clearShortByHand, shortSales: () => shortNow(),
-    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
+    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, coldInflight: Object.fromEntries(rate.inflight), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
     slugs: () => [...defs.keys()],
   };
 }

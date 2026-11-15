@@ -336,7 +336,10 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   answer, and a `refund-owed` mark (kept until the authorization expires) once such a buyer is
   owed back. An entry carries `delivered: true` from just before its answer is sent. The document
   also holds the gate's own forgiven hang-ups, the last 200 hand resolutions (with their
-  outcomes and notes) and the last 500 entries closed because their receipt is not recognized. The book holds no answer: owed answers are files under `REFERRAL_ANSWER_DIR` (default
+  outcomes and notes), the last 500 entries closed because their receipt is not recognized, the
+  short-net records by slug, and which slugs have a proven sale at their floor (`proven`, one
+  small record a slug with a fingerprint of the settings, so a deploy does not make every slug
+  cold; an older build drops the field on its next write and the slugs are cold once). The book holds no answer: owed answers are files under `REFERRAL_ANSWER_DIR` (default
   `agent402-referral-answer-cache` beside the book file), on this process's disk only, never a
   database row (the nightly backup copies those, and the file backup leaves out a `cache` name),
   deleted at their expiry (`IDEM_TTL_MS`, 10 minutes), at most 32 MB in all; a restart loses
