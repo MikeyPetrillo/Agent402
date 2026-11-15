@@ -139,6 +139,22 @@ try {
     ok(robots?.allowed === true && /No readable robots\.txt/.test(robots.note || ""), "with no ceiling a failed robots.txt read is still the direct route's own answer");
   }
 
+  // 7b. A timer set to what the ceiling had left can fire a millisecond before the ceiling by the
+  //     wall clock. A read it ended there was ended by the ceiling: one millisecond short of it the
+  //     ceiling reads as passed, so the read is a 504 and never a "down" answer.
+  {
+    const { ceilingPassed, assertBeforeCeiling } = await import("../src/run-ceiling.js");
+    const atLastMs = await withRunCeiling(60, async () => {
+      while (ceilingLeftMs() > 1) await new Promise((r) => setImmediate(r));
+      const left = ceilingLeftMs();
+      let refused = null;
+      try { assertBeforeCeiling(); } catch (e) { refused = e; }
+      return { left, passed: ceilingPassed(), refused };
+    });
+    const early = await withRunCeiling(5000, async () => ({ passed: ceilingPassed(), left: ceilingLeftMs() }));
+    ok(atLastMs.passed === true && atLastMs.refused?.statusCode === 504 && early.passed === false, `in its last millisecond the ceiling reads as passed and nothing starts (left ${atLastMs.left} ms: passed ${atLastMs.passed}, start ${atLastMs.refused?.statusCode || "allowed"}); with seconds left it has not (${early.passed})`);
+  }
+
   // 8. Once the ceiling has passed NOTHING starts: not a guarded fetch, not a retry, not a connection.
   {
     const { safeFetch, retryTransient } = await import("../src/tools/fetch-guard.js");

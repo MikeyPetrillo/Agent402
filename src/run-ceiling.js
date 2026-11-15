@@ -46,8 +46,13 @@ export function ceilingLeftMs() {
   return c ? c.endsAt - Date.now() : Infinity;
 }
 
-/** True once the current run's ceiling has passed (never, with no ceiling). */
-export const ceilingPassed = () => ceilingLeftMs() <= 0;
+/** True once the current run's ceiling has passed (never, with no ceiling).
+ *  A timer set to what the ceiling had left (capByCeiling, atCeiling) can fire
+ *  a millisecond or two before the ceiling by the wall clock, and the read it
+ *  ended was ended by the ceiling all the same: the last CEILING_TIMER_SLACK_MS
+ *  count as passed, so that read is a 504 and never an answer. */
+export const CEILING_TIMER_SLACK_MS = 2;
+export const ceilingPassed = () => ceilingLeftMs() <= CEILING_TIMER_SLACK_MS;
 
 /** The error of a read that the run's ceiling ended, or that could not start
  *  because the ceiling had passed: a 504, never an answer. Only ever thrown
