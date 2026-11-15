@@ -3094,6 +3094,8 @@ try {
         await appR.gate.sweepOnce();
         skew.ms = 0;
         const eY2 = bookR.get(gateMod.referralReplayKey(notYet.p.authorization));
+        await appR.gate.sweepOnce();
+        ok(!owed.some((o) => o.tx === "0x" + "9a".repeat(32)) && !bookR.get(gateMod.referralReplayKey(notYet.p.authorization))?.debtAt, "its answer was delivered, so nothing is owed back for it, however often the sweep reads it");
         ok(eY2?.state === "in-doubt" && eY2.unproven === true && eY2.flagged !== true && bookR.faults().every((f) => f.scope !== "route") && appR.gate.statusWord().reasons.some((x) => /read in full, does not prove the sale/.test(x)), `an unconfirmed entry whose receipt then reads as not a proof is held as unproven, with a reason of its own, and is never the route-wide flag (${eY2?.state}, flagged ${eY2?.flagged})`);
         await appR.gate.resolveByHand(gateMod.referralReplayKey(notYet.p.authorization), { note: "test cleanup", outcome: "dismissed" });
         // An unproven entry is this server's fault: it never holds its own payer.
@@ -3428,9 +3430,11 @@ try {
         for (let i = 0; i < 3; i++) await pay8(app, "busy");
         fac.mode.settle = fine();
         const word = app.gate.statusWord();
-        const strangers = await atOnce(Array.from({ length: 6 }, () => newAccount()));
+        // Six new payers and six payers with a paid sale, all at once, on eight run slots.
         const regulars = Array.from({ length: 6 }, () => { const a = newAccount(); paidPayers.add(a.address.toLowerCase()); return a; });
-        const returning = await atOnce(regulars);
+        const newcomers = Array.from({ length: 6 }, () => newAccount());
+        const both = await atOnce([...newcomers, ...regulars]);
+        const strangers = both.slice(0, 6), returning = both.slice(6);
         const served = (rs) => rs.filter((c) => c.status === 200).length;
         ok(served(before) === 6 && !wordBefore.reasons.some((x) => /unsettled runs came from/.test(x)) && word.status === "attention" && word.reasons.some((x) => x === "unsettled runs came from 3 payers in the window: payers with no paid sale share 2 of 8 run slots"), `while unsettled runs stand from REFERRAL_UNSETTLED_GLOBAL_MAX payers the word reads attention and names the rule (${word.reasons.join("; ")})`);
         ok(served(strangers) === 2 && strangers.filter((c) => c.status === 503 && c.reason === "busy").length === 4 && served(returning) === 6 && app.gate.stats().newPayerShareRefused === 4, `under it, payers with no paid sale share a quarter of the run slots (2 of 8: 2 of 6 at once run, 4 are answered busy with nothing run) and payers with a paid sale are never refused by it (${served(returning)} of 6) (${strangers.map((c) => c.status).join(" ")})`);
