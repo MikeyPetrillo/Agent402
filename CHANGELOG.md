@@ -8,11 +8,12 @@ carries its own version on npm.
 
 ### 2026-11-15 (refund lookup lists every refund of a transaction)
 Refunds:
-- GET /api/refunds?tx=<hash> also returns refunds: every refund recorded for
-  that transaction, oldest first, each with its own status, priceUsd and
-  refundTx. Where more than one payment settled in one transaction, each has
-  its own entry, and the top-level fields describe the one furthest from
-  repaid. A transaction with one refund answers as before, with one entry.
+- The refund lookup, GET /api/refunds?tx=<hash>, also returns refunds: every
+  refund recorded for that transaction, oldest first, each with its own status,
+  priceUsd and refundTx. Where more than one payment settled in one
+  transaction, each has its own entry, and the top-level fields describe the
+  one furthest from repaid. A transaction with one refund answers as before,
+  with one entry.
 
 ### 2026-11-14 (calls in flight are covered together)
 Payments:
