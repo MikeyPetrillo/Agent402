@@ -5,7 +5,11 @@
 //   - off by default: no request ever reaches the direct stub;
 //   - a listed model goes there first, with provider.zdr true, max_tokens set,
 //     the mapped id, and no OpenRouter-only field; an unlisted model never does;
-//   - a request with tools, response_format, an image or reasoning stays on OpenRouter;
+//   - a request with tools, response_format or an image stays on OpenRouter; a
+//     reasoning effort goes direct as { effort } (the tiers' default for
+//     deepseek included), any other reasoning shape stays on OpenRouter;
+//   - qwen3.8-27b gets a bounded effort on every tier that serves it, so a
+//     stub that reasons by default still leaves room for the answer;
 //   - each failure (429, 402, 503, 500, timeout, a 200 with a late error after
 //     leading whitespace, a 200 without a cost, non-JSON, an error first stream
 //     frame) falls back to OpenRouter exactly once and meters exactly once;
@@ -185,12 +189,93 @@ for (const [label, extra] of [
   ok(direct.hits.length === 0 && (threw || or.hits.length === 1), `a request with ${label} stays off the direct upstream${threw ? ` (refused before any call: ${threw.statusCode})` : ""}`);
 }
 {
-  const plan = D.directBodyFrom({ model: MODEL, messages: msgs, max_tokens: 10, reasoning: { effort: "low" } }, MAPPED);
-  ok(!plan.body && /reasoning/.test(plan.reason), "a reasoning object is not forwarded (the attempt stays on OpenRouter)");
+  // Reasoning: an effort alone is the shape the upstream accepts and is
+  // forwarded; any other shape keeps the attempt on OpenRouter. zdr is forced
+  // whatever the attempt carried under provider.
+  const plan = D.directBodyFrom({ model: MODEL, messages: msgs, max_tokens: 10, reasoning: { effort: "low" }, provider: { zdr: false, max_price: { prompt: 1, completion: 1 } } }, MAPPED);
+  ok(JSON.stringify(plan.body?.reasoning) === '{"effort":"low"}' && JSON.stringify(plan.body?.provider) === '{"zdr":true}', `a reasoning effort is forwarded as { effort } and zdr stays forced (${JSON.stringify(plan.body?.reasoning)}, ${JSON.stringify(plan.body?.provider)})`);
+  for (const r of [{ max_tokens: 5 }, { effort: "low", exclude: true }, { effort: "low", enabled: true }, { enabled: false }, { effort: "turbo" }, {}, "low", null]) {
+    const refused = D.directBodyFrom({ model: MODEL, messages: msgs, max_tokens: 10, reasoning: r }, MAPPED);
+    ok(!refused.body && refused.reason === "param:reasoning", `a reasoning shape the upstream does not take stays on OpenRouter (${JSON.stringify(r)}: ${refused.reason})`);
+  }
+  const streamed = D.directBodyFrom({ model: MODEL, messages: msgs, max_tokens: 10, reasoning: { effort: "high" } }, MAPPED, { stream: true });
+  ok(streamed.body?.reasoning?.effort === "high" && streamed.body?.provider?.zdr === true && streamed.body?.stream === true, "a streamed direct body carries the effort and zdr too");
   const tool = D.directBodyFrom({ model: MODEL, messages: [{ role: "tool", content: "x", tool_call_id: "1" }], max_tokens: 10 }, MAPPED);
   ok(!tool.body, "a tool-role message is not forwarded");
   const nomax = D.directBodyFrom({ model: MODEL, messages: msgs }, MAPPED);
   ok(!nomax.body, "an attempt without max_tokens is not forwarded");
+}
+
+// ---- the tiers' reasoning default reaches the direct upstream -------------------
+// Every tier that admits deepseek-v4.1-flash injects a low effort when the
+// buyer sets none (REASONING_MODELS); that request must still go direct, with
+// the effort and zdr on the body. A buyer budget (reasoning.max_tokens) is a
+// shape the upstream does not take and stays on OpenRouter. (The grounded
+// tier's web plugin keeps it on OpenRouter whatever its reasoning.)
+{
+  const REAL = "deepseek/deepseek-v4.1-flash";
+  const env = { ...ON, DIRECT_UPSTREAM_MODELS: `${MODEL}=${MAPPED},${REAL}=${MAPPED},qwen/qwen3.8-27b=qwen3.8-27b` };
+  const seedReal = () => PB._seedDirectPriceBookForTest({ [REAL]: { direct: cheapDirect, endpoints: [endpoint] }, [MODEL]: { direct: cheapDirect, endpoints: [endpoint] }, "qwen/qwen3.8-27b": { direct: cheapDirect, endpoints: [endpoint] } });
+  setEnv(env);
+  for (const tool of K.LLM_GATEWAY_TOOLS.filter((t) => K.tierAllows(t.slug, REAL) && K.TIERS[t.slug].reasoningDefault !== "model" && !K.TIERS[t.slug].web)) {
+    reset(); seedReal();
+    direct.plan = (req, res, b) => json(res, 200, answer(b.model, { x_vendor: { charged_micro: DIRECT_MICRO } }));
+    let out = null, err = null;
+    try { out = await tool.handler({ model: REAL, messages: msgs, max_tokens: 64 }); } catch (e) { err = e; }
+    const h = direct.hits[0]?.body;
+    ok(!err && direct.hits.length === 1 && or.hits.length === 0 && out?.choices?.[0]?.message?.content === "hello", `${tool.slug}: a deepseek request with the tier's reasoning default is served direct${err ? ` (threw ${err.statusCode} ${err.message})` : ""} (skips ${JSON.stringify(D.directUpstreamReport().skipped)})`);
+    ok(JSON.stringify(h?.reasoning) === JSON.stringify(K.defaultReasoningFor(REAL, tool.slug, h?.max_tokens)) && h?.reasoning?.effort === "low" && JSON.stringify(h?.provider) === '{"zdr":true}', `${tool.slug}: the direct body carries the tier's effort and provider { zdr: true } (${JSON.stringify(h?.reasoning)}, ${JSON.stringify(h?.provider)})`);
+  }
+  reset(); seedReal();
+  await base.handler({ model: REAL, messages: msgs, max_tokens: 64, reasoning: { effort: "high" } });
+  ok(direct.hits.length === 1 && direct.hits[0].body?.reasoning?.effort && direct.hits[0].body.provider?.zdr === true, `a buyer effort goes direct as an effort (${JSON.stringify(direct.hits[0]?.body?.reasoning)})`);
+  reset(); seedReal();
+  await base.handler({ model: REAL, messages: msgs, max_tokens: 64, reasoning: { max_tokens: 16 } });
+  ok(direct.hits.length === 0 && or.hits.length === 1 && D.directUpstreamReport().skipped["param:reasoning"] === 1, "a buyer reasoning budget stays on OpenRouter (skip bucket param:reasoning)");
+  setEnv(ON);
+}
+
+// ---- qwen3.8-27b keeps room for an answer ----------------------------------------
+// The model reasons by default at its own top effort and, with no reasoning
+// setting from the gateway, spent the whole cap thinking on both upstreams.
+// The stubs model that: without an effort (or at the model's default) every
+// output token is reasoning and the content is empty; at a bounded effort a
+// share of the cap is reasoning and the rest answers. The tiers that serve it
+// must send a bounded effort on both upstreams, and an answer that still comes
+// back empty gets the one same-model retry at "none".
+{
+  const QWEN = "qwen/qwen3.8-27b";
+  const share = { none: 0, low: 0.25, medium: 0.5 };
+  const thinker = (charge) => (req, res, b) => {
+    const cap = b.max_tokens;
+    const f = share[b.reasoning?.effort];
+    const reasoningTokens = f === undefined ? cap : Math.floor(cap * f);
+    const content = f === undefined ? "" : "answer";
+    json(res, 200, { id: "q", object: "chat.completion", model: b.model, choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: f === undefined ? "length" : "stop" }], usage: { prompt_tokens: 3, completion_tokens: reasoningTokens + (content ? 1 : 0), total_tokens: 3 + reasoningTokens + (content ? 1 : 0), completion_tokens_details: { reasoning_tokens: reasoningTokens }, ...(charge ? {} : { cost: OR_COST }) }, ...(charge ? { x_vendor: { charged_micro: DIRECT_MICRO } } : {}) });
+  };
+  const qwenTools = K.LLM_GATEWAY_TOOLS.filter((t) => K.tierAllows(t.slug, QWEN));
+  ok(qwenTools.length >= 2 && qwenTools.every((t) => K.defaultReasoningFor(QWEN, t.slug, 1024)?.effort === "low"), `every tier that serves ${QWEN} gives it a bounded default effort (${qwenTools.map((t) => `${t.slug}=${JSON.stringify(K.defaultReasoningFor(QWEN, t.slug, 1024))}`).join(", ")})`);
+  for (const [label, env] of [["OpenRouter", {}], ["direct", ON]]) {
+    for (const tool of qwenTools) {
+      setEnv(env);
+      reset();
+      direct.plan = thinker(true);
+      or.plan = thinker(false);
+      let out = null, err = null;
+      try { out = await tool.handler({ model: QWEN, messages: msgs, max_tokens: 1024 }); } catch (e) { err = e; }
+      const sent = (label === "direct" ? direct.hits : or.hits)[0]?.body;
+      const used = out?.usage?.completion_tokens_details?.reasoning_tokens;
+      ok(!err && sent?.reasoning?.effort === "low" && (label === "direct" ? or.hits.length === 0 : direct.hits.length === 0), `${tool.slug} via ${label}: the outbound body carries a bounded effort (${JSON.stringify(sent?.reasoning)})${err ? ` (threw ${err.statusCode} ${err.message})` : ""}`);
+      ok(out?.choices?.[0]?.message?.content === "answer" && Number.isFinite(used) && used < sent?.max_tokens, `${tool.slug} via ${label}: the answer keeps its budget (reasoning ${used} of ${sent?.max_tokens})`);
+    }
+  }
+  // Still empty at the default effort: one retry of the same model at "none".
+  setEnv({});
+  reset();
+  or.plan = (req, res, b) => (b.reasoning?.effort === "none" ? thinker(false) : (rq, rs, bb) => thinker(false)(rq, rs, { ...bb, reasoning: undefined }))(req, res, b);
+  const out = await base.handler({ model: QWEN, messages: msgs, max_tokens: 512 });
+  ok(or.hits.length === 2 && or.hits[1].body?.reasoning?.effort === "none" && out?.choices?.[0]?.message?.content === "answer" && out?.agent402_reasoning_adjusted?.used === "none", `an empty answer at the default effort is retried once on the same model at "none" (efforts sent ${or.hits.map((h) => h.body?.reasoning?.effort).join(",")})`);
+  setEnv(ON);
 }
 
 // ---- each failure falls back once and bills once --------------------------------
