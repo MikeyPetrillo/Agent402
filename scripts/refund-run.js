@@ -33,6 +33,11 @@
 //     (a repeat hang-up: payer, IP or service budget), or one recorded before
 //     the reason was stored, is held the same way; REFUND_INCLUDE_REPEAT_HANGUPS
 //     =true releases them.
+//   * a row whose note says "held for review" (a referral payment whose
+//     settle is not proven as ours, one routed to another merchant, an answer
+//     partly sent or whose send was not confirmed) is held in its own bucket,
+//     printed with why, and released only by REFUND_INCLUDE_REVIEW_HOLDS=true
+//     (the repeat hang-up switch does not release it).
 //   * a chain without an implemented sender or a configured key HOLDS its
 //     rows and says so. The debt stays on the ledger; nothing is written off.
 //   * marking paid requires the outbound tx hash, enforced server-side too.
@@ -196,6 +201,21 @@ export const REPEAT_HANGUP_REASONS = Object.freeze(["payer budget", "ip budget",
 export const REPEAT_HANGUP_HOLD =
   "disconnected past the hang-up forgiveness budget (or before the reason was recorded) - review, then set include_repeat_hangups to repay";
 
+export const REVIEW_HOLD =
+  "held for review by the route that recorded it (the note says why) - review each, then set REFUND_INCLUDE_REVIEW_HOLDS=true to repay";
+/** A row whose own note says it is held for review (see planRefunds). */
+export function isReviewHold(row) {
+  return /held for review/.test(typeof row?.note === "string" ? row.note : "");
+}
+/** Why a review hold is held, as a fixed phrase (the note's own text stays on the ledger). */
+export function reviewHoldKind(row) {
+  const n = typeof row?.note === "string" ? row.note : "";
+  if (/routed it to another merchant/.test(n)) return "the payment was routed to another merchant";
+  if (/not proven as this route's sale/.test(n)) return "the settle is not proven as this route's sale";
+  if (/partly sent/.test(n)) return "the answer was partly sent";
+  if (/send was not confirmed/.test(n)) return "the answer's send was not confirmed";
+  return "see the row's note";
+}
 /** A disconnect booked because a forgiveness budget was spent, or one whose
  *  reason predates the column (see planRefunds). */
 export function isRepeatHangup(row) {
@@ -223,6 +243,7 @@ export function planRefunds(rawRows, {
   includeSynthetic = false,
   includeLastingHangups = false,
   includeRepeatHangups = false,
+  includeReviewHolds = false,
   senders = {},              // family -> truthy when a key+implementation exists
 } = {}) {
   // Normalized ONCE at intake so familyOf, the accepts lookup and the row the
@@ -250,7 +271,10 @@ export function planRefunds(rawRows, {
     // A repeat hang-up (the forgiveness budget was spent) is held the same
     // way and for the same reason: each refund would turn the next abandoned
     // run into a free one. Also before the caps.
-    if (!includeRepeatHangups && !isLastingEffectHangup(row) && isRepeatHangup(row)) { hold(REPEAT_HANGUP_HOLD, row); continue; }
+    // A row its writer marked "held for review" (the note says so and why):
+    // never released by the repeat hang-up switch; its own switch, or held.
+    if (!includeReviewHolds && isReviewHold(row)) { hold(REVIEW_HOLD, row); continue; }
+    if (!includeRepeatHangups && !isLastingEffectHangup(row) && isRepeatHangup(row) && !(includeReviewHolds && isReviewHold(row))) { hold(REPEAT_HANGUP_HOLD, row); continue; }
     if (!row.payer) { hold("no payer recorded - resolve manually (void with a note)", row); continue; }
     const usd = Number(row.priceUsd) || 0;
     if (usd <= 0) { hold("zero amount - void with a note", row); continue; }
@@ -785,7 +809,7 @@ export async function refundRun({ rows, totals = {}, live = false, planOptions =
   // Each line names the response status the debt was recorded on, so a
   // reviewer reading the dry run can tell a failed answer from a buyer who
   // disconnected (499) before approving a live run.
-  const what = (r) => `${r.slug}${r.httpStatus ? `, http ${r.httpStatus}` : ""}${r.hangupReason ? `, ${r.hangupReason}` : ""}`;
+  const what = (r) => `${r.slug}${r.httpStatus ? `, http ${r.httpStatus}` : ""}${isReviewHold(r) ? `, review: ${reviewHoldKind(r)}` : r.hangupReason ? `, ${r.hangupReason}` : ""}`;
   for (const [reason, held] of Object.entries(plan.held)) {
     log.log(`\nHELD (${reason}): ${held.length}`);
     for (const r of held) log.log(`   #${r.id} ${r.network} $${r.priceUsd} -> ${tag(r.payer)} (${what(r)})`);
@@ -917,6 +941,7 @@ async function main() {
       includeSynthetic: /^(1|true|yes)$/i.test(process.env.REFUND_INCLUDE_SYNTHETIC || ""),
       includeLastingHangups: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_LASTING_HANGUPS || "").trim()),
       includeRepeatHangups: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_REPEAT_HANGUPS || "").trim()),
+      includeReviewHolds: /^(1|true|yes)$/i.test((process.env.REFUND_INCLUDE_REVIEW_HOLDS || "").trim()),
       senders,
     },
   });
