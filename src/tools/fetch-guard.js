@@ -463,6 +463,8 @@ export async function hostIsPublic(hostname) {
  * Returns the parsed URL. Shared by the plain fetcher and the browser renderer.
  */
 export async function assertPublicUrl(rawUrl) {
+  // Inside a run whose ceiling has passed (src/run-ceiling.js) no lookup starts.
+  assertBeforeCeiling();
   let url;
   try {
     url = new URL(rawUrl);
@@ -579,9 +581,9 @@ export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"])
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
 export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false } = {}) {
-  // Inside a run whose ceiling has passed (src/run-ceiling.js) nothing starts: no lookup, no request.
-  assertBeforeCeiling();
   const url = await assertPublicUrl(rawUrl);
+  // Inside a run whose ceiling has passed (src/run-ceiling.js) nothing starts:
+  // no lookup (assertPublicUrl refuses first) and no request.
   assertBeforeCeiling();
 
   // timeoutMs bounds the whole exchange: connect, headers AND body. The timer
