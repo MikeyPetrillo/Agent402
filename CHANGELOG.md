@@ -6,6 +6,16 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-15 (coverage refusals name their class)
+Payments:
+- A 429 from the check that a wallet's balance covers its paid calls in flight
+  carries attribution "ours", a hint and a reason naming its class
+  (cover-short and cover_short, and so on) and a fix saying what to do next,
+  in place of the tool's input schema and example. The privacy page and
+  payment.dataHandling in /.well-known/x402 say that each paid call reads the
+  paying wallet's public balance, and that a reservation per call in flight
+  and the last balance read are kept for at most 15 minutes.
+
 ### 2026-11-15 (refund lookup lists every refund of a transaction)
 Refunds:
 - The refund lookup, GET /api/refunds?tx=<hash>, also returns refunds: every
@@ -26,12 +36,13 @@ Payments:
   method, to a Tempo pull credential and to a Circle Gateway batched payment,
   which is judged on the payer's Gateway balance.
 - On routes other than the report and media routes the balance is read inside
-  about a second, and a wallet whose balance covers its calls can send any
-  number at once: all are started at once, and no call waits for another call's
-  payment to settle. A call the balance does not cover answers 429 with
+  about a second, and a wallet whose balance covers its calls can send as many
+  at once as that balance covers: the coverage check sets no other limit on
+  calls at once, and a route's own limit still applies (the code-run tools: 2
+  runs at once per payer). A call the balance does not cover answers 429 with
   Retry-After 30. A call that arrives while another call from the same wallet
   is still settling, and whose cover cannot be confirmed yet, answers 429 with
-  Retry-After 5 and says so.
+  Retry-After 5 within about a second and says so.
 - When the balance cannot be read right now on those routes, the call is
   started if the last balance this server read for that wallet within the past
   15 minutes, less what the wallet's payments have taken and its calls in
