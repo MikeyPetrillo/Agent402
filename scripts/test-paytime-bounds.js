@@ -592,11 +592,35 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   ok(/onSettleOutcome\(req, res, \(\) => \{/.test(breaker) && !/res\.once\("finish"/.test(breaker), "the gateway and catalog breakers hear settlement through onSettleOutcome, not finish");
   const avm = server.indexOf("await assertAvmValidityCovers(req, tool.slug);");
   const evm = server.indexOf("assertEvmValidityCovers(req, tool.slug);");
-  const cover = server.indexOf("coverRelease = await admitCoveredRun(req);");
+  const cover = server.indexOf("const coverRelease = await admitPaidRun(req, res, tool);");
   const belt = server.indexOf("if (clientGoneBeforeFirstByte(req)) throw clientGoneError(");
   const handler = server.indexOf("? await runInAbortableScope(() => runAsCallerOf(req, () => tool.handler(input, req))");
   ok(avm > 0 && evm > avm && cover > evm && belt > cover && handler > belt, "the dispatcher runs the EVM floor, then the concurrency cover, then the client-gone belt, then the handler");
-  ok(/if \(!FREE_MODE && EXPENSIVE_COMPOSITE_SLUGS\.has\(tool\.slug\)\) \{\s*\n\s*coverRelease = await admitCoveredRun\(req\);\s*\n\s*if \(coverRelease && !onResponseEnd\(req, res, coverRelease\)\) coverRelease\(\);/.test(server), "the cover covers the expensive routes and releases when the response ends, however it ends");
+  ok(/const coverRelease = await admitPaidRun\(req, res, tool\);/.test(server)
+    && /async function admitPaidRun\(req, res, def\) \{\s*\n\s*if \(FREE_MODE \|\| !def \|\| isComputePayable\(def\) \|\| !ownTrue\(req, "__a402Dispatched"\)\) return null;\s*\n\s*const release = await admitCoveredRun\(req, \{ expensive: EXPENSIVE_COMPOSITE_SLUGS\.has\(def\.slug\), arrivedAt: req\.__a402ArrivedAt \}\);\s*\n\s*if \(release && !onResponseEnd\(req, res, release\)\) release\(\);\s*\n\s*await gatewaySettleBreakerCheck\(req, \{ global: false \}\);/.test(server),
+    "the cover covers every paid route that is not proof-of-work payable (the expensive routes among them), releases when the response ends however it ends, and the settle breaker's consult follows it");
+  ok([...server.matchAll(/admitCoveredRun\(req/g)].length === 1 && [...server.matchAll(/await gatewaySettleBreakerCheck\(req, \{ global: false \}\)/g)].length === 1 && [...server.matchAll(/await admitPaidRun\(req, res, /g)].length === 2, "one admission and one catalog consult, in one function both mounts call");
+  // Every mount of a paid handler takes that admission. A catalog entry is
+  // either pushed onto ALL_KIT (bound by the kit dispatcher's loop) or written
+  // inline in server.js, and every inline one is mounted through
+  // withToolCallLog (directly, or through memHandler, which wraps it).
+  {
+    // A key in either quote style, at any indent, and with any HTTP method.
+    const inline = [...server.matchAll(/^\s*["'`]([A-Z]+) (\/[^"'`]+)["'`]: \{/gm)].map((m) => ({ method: m[1].toLowerCase(), path: m[2] }));
+    // Plain text searches: the route is read as text, never built into a pattern.
+    const unwrapped = inline.filter(({ method, path }) => !["withToolCallLog(", "memHandler("].some((wrap) => server.includes(`\napp.${method}("${path}", ${wrap}`)));
+    ok(inline.length >= 17 && unwrapped.length === 0, `every catalog route written inline in server.js is mounted through withToolCallLog or memHandler (${inline.length} routes; not wrapped: ${unwrapped.map((r) => r.path).join(", ") || "none"})`);
+    ok(/const memHandler = \(fn\) => withToolCallLog\(/.test(server), "memHandler wraps withToolCallLog");
+    const wrapper = server.slice(server.indexOf("function withToolCallLog(slugOf, handler) {"), server.indexOf("async function admitPaidRun(req, res, def) {"));
+    ok(wrapper.indexOf("coverRelease = await admitPaidRun(req, res, CATALOG[`${req.method} ${req.path}`]);") > 0 && wrapper.indexOf("coverRelease = await admitPaidRun(") < wrapper.indexOf("return await handler(req, res, ...rest);"), "withToolCallLog takes the admission before the handler");
+    // The only assignment into the catalog is the loops' `CATALOG[tool.route] = tool;`.
+    const assigned = [...server.matchAll(/CATALOG\s*\[([^\]]*)\]\s*=(?!=)/g)].map((m) => m[1].trim());
+    const others = [...server.matchAll(/Object\.assign\(\s*CATALOG\b/g)].length + [...server.matchAll(/(?<![A-Za-z0-9_.])CATALOG\s*=(?!=)/g)].length - [...server.matchAll(/\nconst CATALOG = \{\n/g)].length;
+    ok(assigned.length >= 7 && assigned.every((k) => k === "tool.route") && others === 0, `no catalog entry is assigned by a literal key or merged in (${assigned.filter((k) => k !== "tool.route").join(", ") || "none"}; other writes ${others})`);
+    const added = [...server.matchAll(/\n\s*CATALOG\[tool\.route\] = tool;\n(\s*ALL_KIT\.push\(tool\);)?/g)];
+    ok(added.length >= 7 && added.filter((m) => !m[1]).length === 1 && /for \(const tool of ALL_KIT\) \{\n  if \(CATALOG\[tool\.route\]\) throw new Error\(`Duplicate route in kit/.test(server), `every other catalog entry is added from ALL_KIT or pushed onto it, so the kit dispatcher binds it (${added.length} places, ${added.filter((m) => !m[1]).length} of them the ALL_KIT loop itself)`);
+    ok([...server.matchAll(/\nfor \(const tool of ALL_KIT\) \{\n  const \[method, path\] = tool\.route\.split\(" "\);/g)].length === 1, "one loop binds every ALL_KIT route to the kit dispatcher");
+  }
   ok(/: await runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\);\s*\n\s*coverRelease\?\.settling\?\.\(\);/.test(server), "the covered run counts as settling from the moment its handler returns");
 }
 

@@ -1,6 +1,6 @@
 // Words on /api/gateway-status and their two observers: gatewayBalance
-// (withdraw), topBuyerFailures (alert), onchainSqlBusy (alert), sharedLimits (degraded) and
-// replayStore (pending). Also the spend words (xDataSpend, exaSpend,
+// (withdraw), topBuyerFailures (alert), onchainSqlBusy (alert), sharedLimits (degraded),
+// replayStore (pending) and coverageReads (degraded). Also the spend words (xDataSpend, exaSpend,
 // routerSpendWindow: over and capped), and upstreamHealth and facilitatorFunds
 // driven end to end from the monitor (our own timeouts, DNS failures and
 // unread balances page nothing), and upstreamHealth=unanswered (a hung
@@ -13,6 +13,10 @@
 // missed consumed mark reads pending until the next retry pass), so the
 // server publishes a second word, alert, that reads sustained only once the
 // word has held ten minutes without a break, and the pagers read that.
+// coverageReads reads degraded after one paid call judged without a balance
+// read, which one wallet can cause: its alert reads sustained only for such
+// calls in three or more separate minutes of the last ten, for three or more
+// wallets (coverageReadsVerdict), and the pagers read that.
 //
 // Checks: the second word on the server (injected clock, in-memory client);
 // the status Worker's verdicts and its open and close against a stubbed
@@ -144,6 +148,8 @@ const RS = "Replay store marks PENDING (Redis)";
 const RSW = "Router spend per minute OVER its ceiling";
 const TBF = "topBuyerFailures: a top paying buyer is getting failed answers";
 const OSB = "onchainSqlBusy: a top paying buyer was told the query service is busy";
+// Balance reads behind the in-flight coverage check (src/inflight-cover.js).
+const CRT = "Coverage balance reads DEGRADED (calls in flight)";
 // The six words wired in batch 2026-11-12b and the two of 2026-11-12c: [title, field, alert words, healthy words, words that do neither].
 const NEW_WORDS = [
   ["Route judgment token ceiling CAPPED for the day", "jevSpend", ["capped"], ["ok"], ["unknown"]],
@@ -211,6 +217,22 @@ await check("Worker: sharedLimits pages only on alert=sustained, clears on on an
   assert.equal(j({ sharedLimits: { status: "unknown" } })[SLT], "quiet");
   assert.equal(j({})[SLT], "quiet");
 });
+await check("Worker: coverageReads pages only on alert=sustained, never on degraded alone, clears on ok and off", () => {
+  assert.equal(j({ coverageReads: { status: "degraded", alert: "sustained" } })[CRT], "bad");
+  assert.equal(j({ coverageReads: { status: "degraded", alert: "ok" } })[CRT], "quiet", "degraded without the sustained verdict (one wallet, one minute) neither pages nor closes");
+  assert.equal(j({ coverageReads: { status: "degraded" } })[CRT], "quiet", "a build without the second word never pages on the first");
+  for (const w of ["ok", "off"]) assert.equal(j({ coverageReads: { status: w, alert: "ok" } })[CRT], "good", w);
+  for (const w of ["unknown", "something-new"]) assert.equal(j({ coverageReads: { status: w } })[CRT], "quiet", w);
+  assert.equal(j({})[CRT], "quiet");
+  for (const [, f, ob] of NEW_WORDS) assert.equal(j({ [f]: { status: ob[0] } })[CRT], "quiet", `${f}=${ob[0]} is another alarm's`);
+  assert.match(ALARMS.find((x) => x.title === CRT).body({}), /coverageReads\.alert=sustained/, "the body names the word it pages on");
+});
+await check("server: coverageReads publishes status and alert from the verdict, sustained only when the verdict is", async () => {
+  const server = await readFile(new URL("../src/server.js", import.meta.url), "utf8");
+  const line = server.split("\n").find((l) => /^\s*coverageReads: /.test(l)) || "";
+  assert.match(line, /const v = coverageReadsVerdict\(\); return \{ status: v\.status, alert: v\.sustained === true \? "sustained" : "ok" \};/, line);
+  assert.doesNotMatch(server, /coverageReadsWord/, "the server reads the verdict, not the one word");
+});
 await check("Worker: replayStore pages only on alert=sustained, clears on ok", () => {
   assert.equal(j({ replayStore: { status: "pending", alert: "sustained" } })[RS], "bad");
   assert.equal(j({ replayStore: { status: "pending", alert: "ok" } })[RS], "quiet");
@@ -235,10 +257,10 @@ for (const [T, field, bad, good, neither] of NEW_WORDS) {
 }
 
 await check("Worker: the three bodies are fixed text with no figure", () => {
-  for (const T of [GB, SLT, RS, TBF]) {
+  for (const T of [GB, SLT, RS, TBF, CRT]) {
     const a = ALARMS.find((x) => x.title === T);
     assert.ok(a, `the Worker has "${T}"`);
-    const b = a.body({ gateway: { gatewayBalance: { status: "<x>", usd: 77 }, sharedLimits: { failures: 77 }, replayStore: { pending: 77 } } });
+    const b = a.body({ gateway: { gatewayBalance: { status: "<x>", usd: 77 }, sharedLimits: { failures: 77 }, replayStore: { pending: 77 }, coverageReads: { status: "<x>", admittedOnKeptRead: 77 } } });
     assert.equal(b, a.body({ gateway: {} }), "the body does not read the response");
     assert.doesNotMatch(b, /[0-9]|<x>|`|"|\$/, `${T}: no figure, and nothing a shell would expand`);
   }
@@ -268,6 +290,7 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
     [RSW, { routerSpendWindow: { status: "capped" } }, { routerSpendWindow: { status: "off" } }, null],
     [SLT, { sharedLimits: { status: "degraded", alert: "sustained" } }, { sharedLimits: { status: "on", alert: "ok" } }, { sharedLimits: { status: "degraded", alert: "ok" } }],
     [RS, { replayStore: { status: "pending", alert: "sustained" } }, { replayStore: { status: "ok", alert: "ok" } }, { replayStore: { status: "pending", alert: "ok" } }],
+    [CRT, { coverageReads: { status: "degraded", alert: "sustained" } }, { coverageReads: { status: "ok", alert: "ok" } }, { coverageReads: { status: "degraded", alert: "ok" } }],
     ...NEW_WORDS.map(([T, field, bad, good, neither]) => [T, { [field]: { status: bad[0] } }, { [field]: { status: good[0] } }, { [field]: { status: neither[0] } }]),
   ];
   try {
@@ -381,6 +404,7 @@ const HB = [
   ["X search author reads check", NEW_WORDS[6][0], "xSearchAuthors", { status: "alert" }, [{ status: "unknown" }], [{ status: "ok" }]],
   ["MPP subscription engine check", NEW_WORDS[7][0], "mppSubscriptions", { status: "failed" }, [{ status: "unknown" }], [{ status: "on" }, { status: "off" }]],
   ["Referral settlement check", NEW_WORDS[8][0], "referralSettlement", { status: "attention" }, [{ status: "unknown" }], [{ status: "ok" }]],
+  ["Coverage balance reads check", CRT, "coverageReads", { status: "degraded", alert: "sustained" }, [{ status: "degraded", alert: "ok" }, { status: "degraded" }, { status: "unknown" }], [{ status: "ok", alert: "ok" }, { status: "off", alert: "ok" }]],
 ];
 for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
   const step = steps.find((s) => String(s.name || "").startsWith(prefix));
@@ -773,8 +797,13 @@ await rm(dir, { recursive: true, force: true });
     const unread = words.filter((k) => !readers.some((src) => new RegExp(`\\bb\\??\\.${k}\\b`).test(src)));
     await check(`every status word on /api/gateway-status is read by a status Worker alarm (${words.length} words)`, () => {
       assert.ok(words.length >= 50, `the boot published its words (${words.length})`);
-      for (const k of ["firstCallAllowance", "jevSpend", "externalSpendGlobal", "solanaHistory", "evmLogs", "speechUpstream"]) assert.ok(words.includes(k), `${k} is among them`);
+      for (const k of ["firstCallAllowance", "jevSpend", "externalSpendGlobal", "solanaHistory", "evmLogs", "speechUpstream", "coverageReads"]) assert.ok(words.includes(k), `${k} is among them`);
       assert.deepEqual(unread, [], `words no alarm reads: ${unread.join(", ")}`);
+    });
+    await check("coverageReads publishes its two words on a quiet boot: alert reads ok", () => {
+      assert.deepEqual(Object.keys(body.coverageReads || {}), ["status", "alert"]);
+      assert.ok(["ok", "off"].includes(body.coverageReads.status), body.coverageReads.status);
+      assert.equal(body.coverageReads.alert, "ok");
     });
     await check("loopLag and mppEvmDomainFallback publish a flag, not a status word", () => {
       assert.deepEqual(Object.keys(body.loopLag || {}), ["watching"]);

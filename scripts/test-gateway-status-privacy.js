@@ -87,6 +87,9 @@ for (const w of ["settleFailures", "unsettledReports"]) {
   ok(pubBody?.[w]?.status === "ok" && Object.keys(pubBody[w]).join(",") === "status", `${w} publishes its word only (${JSON.stringify(pubBody?.[w])})`);
   ok(opBody?.[w]?.status === "ok" && typeof opBody[w].threshold === "number" && typeof opBody[w].trips === "number", `the operator view of ${w} carries the counts (${JSON.stringify(opBody?.[w])})`);
 }
+// --- balance reads behind the in-flight coverage check: its word and the pagers' second word publicly; the counts are the operator's inflightCover ---
+ok(["ok", "off"].includes(pubBody?.coverageReads?.status) && Object.keys(pubBody.coverageReads).join(",") === "status,alert" && pubBody.coverageReads.alert === "ok" && !("inflightCover" in pubBody), `coverageReads publishes its two words only, and no counts (${JSON.stringify(pubBody?.coverageReads)})`);
+ok(opBody?.coverageReads?.status === pubBody?.coverageReads?.status && Object.keys(opBody.coverageReads).join(",") === "status,alert" && typeof opBody?.inflightCover?.runsInFlight === "number", `the operator view reads the same words, with the counts under inflightCover (${JSON.stringify(opBody?.coverageReads)})`);
 
 // --- the late-settlement book: one word publicly, on both views ---
 ok(["ok", "near_capacity", "full", "unresolved"].includes(pubBody?.lateSettlements?.status) && Object.keys(pubBody.lateSettlements).join(",") === "status" && Object.keys(opBody?.lateSettlements || {}).join(",") === "status", `lateSettlements publishes its word only (${JSON.stringify(pubBody?.lateSettlements)})`);

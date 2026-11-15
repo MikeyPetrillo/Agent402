@@ -605,7 +605,7 @@ const hangUp = (url, { method = "GET", headers = {}, body = null, abortAfterMs =
   }
   ok(/\} else if \(req\.creditsSettled && Number\(req\.creditsChargedOnClose\) > 0\) \{/.test(server), "the debt recorder books a credits hold settled on an abandoned run");
   ok(/const denied = hangupTicketDenial\(req\);[\s\S]{0,1400}\$\{denied \? `; not forgiven: \$\{denied\}` : ""\}/.test(server), "the owed line names why the run was not forgiven");
-  ok(/priceFor: \(method, path, req\) => \{[\s\S]{0,700}longRunning: isLongRunningSlug\(def\.slug\) \} : null;\s*\n\s*\},\s*\n\s*\/\/ Input check before the relay round trip/.test(server), "the Tempo GATE's priceFor carries longRunning (not only the challenge appender)");
+  ok(/priceFor: \(method, path, req\) => \{[\s\S]{0,700}longRunning: isLongRunningSlug\(def\.slug\), runSeconds: routeRunSeconds\(def\.slug\) \} : null;\s*\n\s*\},\s*\n\s*\/\/ Input check before the relay round trip/.test(server), "the Tempo GATE's priceFor carries longRunning and the route's run seconds (not only the challenge appender)");
   // The composite's client-gone signal aborts only when the charge is cancelled.
   ok(/\? await runInAbortableScope\(\(\) => runAsCallerOf\(req, \(\) => tool\.handler\(input, req\)\), \{ signal: clientGoneCtl\.signal \}\)/.test(server), "the dispatcher runs a composite with the client-gone signal ({ signal })");
   ok(/res\.once\("close", \(\) => \{ if \(chargeCancelledForClientGone\(req\)\) ctl\.abort\(clientGoneError\(\)\); \}\);/.test(server), "the dispatcher aborts the composite's signal only when the charge is cancelled");
@@ -1087,6 +1087,12 @@ try {
   // $0.10, and the other five are settled and owed.
   {
     const WC = wallet(0x61c);
+    // The wallet has settled a payment here before: while a balance cannot
+    // be read, a wallet with no payment on record runs fewer calls at once
+    // than one with a record (src/inflight-cover.js), and this case is about
+    // ten in flight together.
+    const known = await pay(FAST, WC, "10.0.3.200");
+    ok(known.status === 200, `g. the wallet's first call is served and settles (status ${known.status})`);
     or.imagesDelayMs = 2_000;
     const i0 = or.images, e0 = or.imagesClosedEarly, s0 = fac.settle, owed0 = (await refunds()).length;
     const heads = await Promise.all(Array.from({ length: 10 }, (_, i) => headersFor(FAST, WC, `10.0.3.${i}`)));

@@ -132,6 +132,29 @@ const SPEND_EVM = [...OUR_EVM_WALLETS].find((w) => w.startsWith("0x7706"));
     ok(kept2.every((k) => k === true) && T._localSizes().events === 3, `a 422 attributed to a third party's access, an upstream or us is kept (${kept2.join(",")})`);
     ok((await T.topBuyerFailuresStatus({ now: t0 + 2000, env })).status === "alert", "three such 422s inside the window raise the alert");
   }
+  // The in-flight coverage check's 429 for the payer's own balance (short,
+  // settling) is the payer sending more than it holds, not a failed answer of
+  // ours; the classes decided without a balance read are kept.
+  {
+    T._resetTopBuyerFailures();
+    T.setTopBuyers([TOP], t0);
+    const own = [];
+    for (let i = 0; i < 200; i++) own.push(T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 429, coverRefusal: i % 2 ? "short" : "settling", at: t0 + i }, env));
+    ok(own.every((k) => k === false) && T._localSizes().events === 0 && (await T.topBuyerFailuresStatus({ now: t0 + 1000, env })).status === "ok", "200 coverage refusals for the top payer's own balance (short, settling) keep nothing and leave ok");
+    ok(T.BUYER_COVER_REFUSALS.join() === "short,settling", `those two classes only (${T.BUYER_COVER_REFUSALS.join()})`);
+    const kept3 = [];
+    for (const c of ["beside", "unread", "kept"]) kept3.push(T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 429, coverRefusal: c, at: t0 + 2000 }, env));
+    ok(kept3.every((k) => k === true) && (await T.topBuyerFailuresStatus({ now: t0 + 3000, env })).status === "alert", `control: a refusal decided without a balance read (beside, unread, kept) is kept, and three raise the alert (${kept3.join(",")})`);
+    T._resetTopBuyerFailures();
+    T.setTopBuyers([TOP], t0);
+    const kept4 = [T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 429, at: t0 }, env), T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 429, coverRefusal: "", at: t0 }, env), T.noteVerifiedPaidOutcome({ payer: TOP, slug: "x", status: 502, coverRefusal: "short", at: t0 }, env)];
+    ok(kept4.every((k) => k === true), `control: any other 429, and a 5xx whatever the request carried, are kept (${kept4.join(",")})`);
+    // The server hands the class the admission's error carried to the alarm.
+    const { readFileSync } = await import("node:fs");
+    const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    ok(/noteVerifiedPaidOutcome\(\{ payer, slug, status, error, attribution, kind: sqlBusy \? SQL_BUSY_KIND : null, coverRefusal: Object\.hasOwn\(req, "__a402CoverRefusal"\) \? req\.__a402CoverRefusal : null, at \}\)/.test(server)
+      && /req\.__a402CoverRefusal = typeof err\?\.coverRefusal === "string" \? err\.coverRefusal : "";/.test(server), "server.js keeps the refusal's class on the request and passes it to the alarm");
+  }
   // Env: threshold, window, hold.
   T._resetTopBuyerFailures();
   T.setTopBuyers([TOP], t0);

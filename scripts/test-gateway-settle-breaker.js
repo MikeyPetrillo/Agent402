@@ -712,10 +712,36 @@ delete process.env.OPENAI_API_KEY;
 // booted paid server, is in scripts/test-paid-settle-breaker.js.)
 {
   await b._gatewaySettleBreakerReset();
-  for (let i = 0; i < 20; i++) b.recordGatewaySettleFailure("0xoneburstwallet");
+  // One buyer's failures up to its own count, and the runs that were already
+  // in flight beside them (fewer than OVERRUN_ALARM_FAILS past the count),
+  // count once and raise nothing.
+  const quiet = b.MAX_FAILS + b.OVERRUN_ALARM_FAILS - 1;
+  for (let i = 0; i < quiet; i++) b.recordGatewaySettleFailure("0xoneburstwallet");
   const st = b.gatewaySettleBreakerStatus();
-  ok(!st.globalAlarm && st.globalFailsInWindow === 1, `twenty failures from ONE buyer count once toward the burst alarm and never trip it (distinct ${st.globalFailsInWindow}, GLOBAL_MAX 6)`);
+  ok(!st.globalAlarm && st.globalFailsInWindow === 1 && st.overrunTrips === 0, `${quiet} failures from ONE buyer count once toward the burst alarm and do not trip it (distinct ${st.globalFailsInWindow}, GLOBAL_MAX 6)`);
   ok(b.gatewaySettleBreakerBlocked("0xoneburstwallet").blocked, "...that buyer is the per-key bound's job, and it is blocked");
+  // ONE KEY PAST ITS COUNT: OVERRUN_ALARM_FAILS verdict failures recorded
+  // after the key already read refusing are runs served past the per-key
+  // bound, and raise the alarm once, whichever consult recorded them.
+  b.recordGatewaySettleFailure("0xoneburstwallet");
+  const over = b.gatewaySettleBreakerStatus();
+  ok(over.globalAlarm && over.overrunTrips === 1 && over.globalFailsInWindow === 1, `one more failure past that buyer's count (${b.OVERRUN_ALARM_FAILS} past it) raises the alarm (trips ${over.overrunTrips})`);
+  for (let i = 0; i < 20; i++) b.recordGatewaySettleFailure("0xoneburstwallet");
+  ok(b.gatewaySettleBreakerStatus().overrunTrips === 1, "a longer run from the same buyer raises it once per window");
+  await b._gatewaySettleBreakerReset();
+  ok(!b.gatewaySettleBreakerGlobalAlarm().alarm && b.gatewaySettleBreakerStatus().overrunTrips === 0, "the reset clears it");
+  for (let i = 0; i < b.MAX_FAILS + b.OVERRUN_ALARM_FAILS + 2; i++) b.recordGatewaySettleFailure("0xcatalogburst", Date.now(), { global: false });
+  ok(b.gatewaySettleBreakerGlobalAlarm().alarm && b.gatewaySettleBreakerStatus().overrunTrips === 1, "failures recorded by the catalog consult (global:false) past a key's count raise it too");
+  await b._gatewaySettleBreakerReset();
+  // A buyer that settles most of its calls is never read as refusing, so its
+  // failures are never past its count.
+  for (let i = 0; i < 30; i++) b.recordGatewaySettleSuccess("0xmostlypaying");
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure("0xmostlypaying");
+  ok(!b.gatewaySettleBreakerGlobalAlarm().alarm && b.gatewaySettleBreakerStatus().overrunTrips === 0, "a buyer settling most of its calls raises nothing with 12 failures");
+  for (let i = 0; i < 12; i++) b.recordGatewaySettleFailure("0xunknowncause", Date.now(), { fault: "unknown", global: false });
+  ok(b.gatewaySettleBreakerStatus().overrunTrips === 0, "failures of unknown cause are not counted here (their own alarm covers them)");
+  await b._gatewaySettleBreakerReset();
+  b.recordGatewaySettleFailure("0xoneburstwallet");
   for (let i = 1; i <= 4; i++) b.recordGatewaySettleFailure(`0xotherbuyer${i}`);
   ok(!b.gatewaySettleBreakerGlobalAlarm().alarm && b.gatewaySettleBreakerStatus().globalFailsInWindow === 5, "five different buyers: still below the threshold of six");
   b.recordGatewaySettleFailure("0xotherbuyer5");
@@ -1244,9 +1270,10 @@ if (process.env.REDIS_URL) {
   const failOn = (payer, net, n = 3, opts = {}) => { for (let i = 0; i < n; i++) b.recordGatewaySettleFailure(`${payer}@${net}`, Date.now(), opts); };
   ok(b.MULTI_NETWORK_MIN === 3, `the default: three networks (${b.MULTI_NETWORK_MIN})`);
 
-  // One network, however many failures there: the per-key bound's job, no alarm.
-  failOn(P, NETS[0], 10);
-  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 0, "ten failures from one payer on ONE network raise no alarm");
+  // One network at its count, and the runs in flight beside them (fewer than
+  // OVERRUN_ALARM_FAILS past it): the per-key bound's job, no alarm.
+  failOn(P, NETS[0], b.MAX_FAILS + b.OVERRUN_ALARM_FAILS - 1);
+  ok((await word()) === "ok" && b.gatewaySettleBreakerStatus().multiNetworkTrips === 0, `${b.MAX_FAILS + b.OVERRUN_ALARM_FAILS - 1} failures from one payer on ONE network raise no alarm`);
   // Two networks at the limit, and a third below it: still ok.
   failOn(P, NETS[1], 3);
   failOn(P, NETS[2], 2);
@@ -1399,6 +1426,76 @@ if (process.env.REDIS_URL) {
   await b.gatewaySettleBreakerCheck(evm);
   ok(b.gatewaySettleBreakerCountKey(evm) === `${ADDR.toLowerCase()}@eip155:8453` && !Object.hasOwn(evm, "__a402BreakerNonEvmSigner"), "an EVM payment keeps its signed payer key and reads no non-EVM signer");
   await b._gatewaySettleBreakerReset();
+}
+
+// --- RUNS IN FLIGHT: counted only for a payer with no paid record ----------------
+// The count exists for calls that arrive together from a wallet nobody has
+// been paid by; it must never hold a payer that has paid, a card buyer, a key
+// that names no wallet, or anyone while the coverage check is switched off.
+{
+  const paid = await import("../src/paid-record.js");
+  await b._gatewaySettleBreakerReset();
+  paid._resetPaidRecordForTest();
+  const consult = async (req) => { try { await b.gatewaySettleBreakerCheck(req, { global: false }); return null; } catch (e) { return e; } };
+  const end = (req, status = 200) => { req.res.statusCode = status; req.res.emit("finish"); };
+  const inflightNow = () => b.gatewaySettleBreakerStatus().runsInFlightCounted;
+  const NEW = "0x" + "71".repeat(20), PAID = "0x" + "72".repeat(20), SETTLED = "0x" + "73".repeat(20);
+  // A wallet with no paid record: its uncovered runs in flight are counted, and the hard count holds.
+  const held = [];
+  let refusedAt = 0, refusal = null;
+  for (let i = 1; i <= b.HARD_MAX_FAILS + 5 && !refusal; i++) {
+    const req = fakeReq({ from: NEW, network: "eip155:8453" });
+    const e = await consult(req);
+    if (e) { refusal = e; refusedAt = i; } else held.push(req);
+  }
+  ok(refusedAt === b.HARD_MAX_FAILS + 1 && inflightNow() === b.HARD_MAX_FAILS, `a wallet with no paid record: ${b.HARD_MAX_FAILS} uncovered runs in flight are served and the next is refused (refused at ${refusedAt}, counted ${inflightNow()})`);
+  ok(refusal?.statusCode === 429 && refusal.retryAfter === 5 && /This wallet has \d+ paid calls in progress here on eip155:8453/.test(refusal.message) && /Nothing was charged for this request\./.test(refusal.message), `the refusal names the calls in progress and is short (${String(refusal?.message).slice(0, 80)}...)`);
+  // Another wallet is not held by it.
+  ok((await consult(fakeReq({ from: "0x" + "74".repeat(20), network: "eip155:8453" }))) === null, "another wallet is served beside it");
+  for (const req of held) end(req, 500);
+  ok(inflightNow() === 1, `the runs leave the count when their responses end (${inflightNow()} left: the other wallet's)`);
+  // A wallet with a paid record is never counted.
+  paid._setPaidRecordForTest((p) => p === PAID);
+  let refusedPaid = 0;
+  for (let i = 0; i < b.HARD_MAX_FAILS + 20; i++) if (await consult(fakeReq({ from: PAID, network: "eip155:8453" }))) refusedPaid++;
+  ok(refusedPaid === 0 && inflightNow() === 1, `a wallet with a paid record: ${b.HARD_MAX_FAILS + 20} uncovered runs at once, none refused and none counted`);
+  paid._setPaidRecordForTest(null);
+  // A settled call in the window is a paid record too (and is noted as one).
+  b.recordGatewaySettleSuccess(`${SETTLED}@eip155:8453`);
+  let refusedSettled = 0;
+  for (let i = 0; i < b.HARD_MAX_FAILS + 20; i++) if (await consult(fakeReq({ from: SETTLED, network: "eip155:8453" }))) refusedSettled++;
+  ok(refusedSettled === 0 && paid.hasPaidRecord(SETTLED), "a wallet with a settled call in the window is not counted, and the settlement is its paid record");
+  // A card buyer and an address key are never counted.
+  let refusedCard = 0, refusedIp = 0;
+  for (let i = 0; i < b.HARD_MAX_FAILS + 20; i++) {
+    const card = fakeReq({ ip: "198.51.100.44" }); card.mppStripeCredential = true; card.stripeSettling = true;
+    if (await consult(card)) refusedCard++;
+    const tempoUnverified = fakeReq({ ip: "198.51.100.45" }); tempoUnverified.tempoSettling = true;
+    if (await consult(tempoUnverified)) refusedIp++;
+  }
+  ok(refusedCard === 0 && refusedIp === 0 && inflightNow() === 1, `${b.HARD_MAX_FAILS + 20} card runs from one address and as many payments keyed by an address: none refused, none counted`);
+  // INFLIGHT_COVER=off: the consult is exactly as before this count existed.
+  process.env.INFLIGHT_COVER = "off";
+  let refusedOff = 0;
+  for (let i = 0; i < b.HARD_MAX_FAILS + 20; i++) if (await consult(fakeReq({ from: "0x" + "75".repeat(20), network: "eip155:8453" }))) refusedOff++;
+  delete process.env.INFLIGHT_COVER;
+  ok(refusedOff === 0 && inflightNow() === 1, `with INFLIGHT_COVER=off a wallet with no paid record is not counted either (${refusedOff} refused)`);
+  process.env.INFLIGHT_COVER = "composite";
+  let refusedComposite = 0;
+  for (let i = 0; i < b.HARD_MAX_FAILS + 20; i++) if (await consult(fakeReq({ from: "0x" + "76".repeat(20), network: "eip155:8453" }))) refusedComposite++;
+  delete process.env.INFLIGHT_COVER;
+  ok(refusedComposite === 0 && inflightNow() === 1, `nor with INFLIGHT_COVER=composite (${refusedComposite} refused)`);
+  // A card buyer at its own count is not told about a wallet or a balance.
+  await b._gatewaySettleBreakerReset();
+  let cardRefusal = null;
+  for (let i = 0; i < b.UNKNOWN_MAX_FAILS + 1 && !cardRefusal; i++) {
+    const card = fakeReq({ ip: "198.51.100.46" }); card.mppStripeCredential = true;
+    cardRefusal = await consult(card);
+    if (!cardRefusal) end(card, 402);
+  }
+  ok(cardRefusal?.statusCode === 429 && !/wallet|balance/i.test(cardRefusal.message) && /recent card payments from this client address/.test(cardRefusal.message), `a card buyer refused at its count reads no "wallet" and no "balance" (${String(cardRefusal?.message).slice(0, 90)}...)`);
+  await b._gatewaySettleBreakerReset();
+  paid._resetPaidRecordForTest();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

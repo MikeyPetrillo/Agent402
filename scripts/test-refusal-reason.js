@@ -78,10 +78,34 @@ ok(Object.isFrozen(REFUSAL_REASONS), "the vocabulary is frozen, so a caller cann
 {
   const { readFileSync } = await import("node:fs");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/refusalClass = refusalReason\(err\?\.message, status\)/.test(server), "the dispatcher classifies the error it caught (source pin)");
+  ok(/refusalClass = refusalReason\(err\?\.message, status, err\)/.test(server), "the dispatcher classifies the error it caught (source pin)");
   ok(/capturePostHogToolCall\([^)]*refusalReason: refusalClass/.test(server), "and passes the CLASS to telemetry, never err.message (source pin)");
   const ph = readFileSync(new URL("../src/posthog.js", import.meta.url), "utf8");
   ok(/\.\.\.\(refusalReason \? \{ refusalReason \} : \{\}\)/.test(ph), "tool_call carries the reason only when there is one (source pin)");
+}
+
+// --- in-flight coverage refusals -----------------------------------------------
+// The admission's 429 (src/inflight-cover.js) names its class on the error
+// (`coverRefusal`); a caller holding the message only reads it from our text.
+// The messages are read from the source, so a reword there fails here.
+{
+  const coverSrc = readFileSync(new URL("../src/inflight-cover.js", import.meta.url), "utf8");
+  const WORDS = { short: "cover_short", settling: "cover_settling", beside: "cover_beside", unread: "cover_unread", kept: "cover_kept" };
+  for (const [word, want] of Object.entries(WORDS)) {
+    ok(REFUSAL_REASONS.includes(want), `${want} is a declared member of REFUSAL_REASONS`);
+    ok(refusalReason("words this module has never seen", 429, { coverRefusal: word }) === want, `an error with coverRefusal=${word} classifies as ${want}, whatever its message`);
+  }
+  ok(refusalReason("words this module has never seen", 429, { coverRefusal: "sk-live-4f9a" }) === "other", "a coverRefusal outside the fixed words is never passed on");
+  ok(refusalReason("words this module has never seen", 429, { coverRefusal: "constructor" }) === "other" && refusalReason("x", 429, { coverRefusal: {} }) === "other", "an inherited name or a non-string is not a class");
+  ok(refusalReason("x", 400, { coverRefusal: "short" }) === "other" && refusalReason("x", 502, { coverRefusal: "short" }) === null, "only the 429 reads the error's class");
+  ok(/e\.coverRefusal = block;/.test(coverSrc), "the admission puts its class on the error (source pin)");
+  // The four sentences the admission throws today, with their counts filled in.
+  const sentences = [...coverSrc.matchAll(/`(This wallet[^`]*You have not been charged\.|Another call from this wallet[^`]*You have not been charged\.)`/g)].map((m) => m[1].replace(/\$\{[^}]*\}/g, "3"));
+  ok(sentences.length >= 4, `found the admission's refusal sentences (${sentences.length})`);
+  const got = sentences.map((t) => refusalReason(t, 429));
+  // (A sentence added later classifies through the error's own class above.)
+  ok(got.filter((r) => r && r.startsWith("cover_")).length >= 4, `they classify as coverage refusals from their text alone (${got.join(", ")})`);
+  ok(got.includes("cover_unread") && got.includes("cover_settling") && got.includes("cover_short"), "the unread, settling and short sentences are told apart");
 }
 
 // --- routing refusals (2026-09-21) --------------------------------------------

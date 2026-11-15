@@ -11,7 +11,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getFreePorts } from "./lib/free-port.js";
 import { refreshModelCatalog, unknownModelRefusal, isListedModel, contextTokensOf, _setModelCatalogForTest, modelCatalogWanted } from "../src/model-catalog.js";
-import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, stripControlChars, withPushExceptionText } from "../src/prepayment-refusal.js";
+import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, createCoverRefusalLogSampler, stripControlChars, withPushExceptionText } from "../src/prepayment-refusal.js";
 import { PUSH_EXCEPTION } from "../src/tempo-push-debts.js";
 import { upstreamCostsLoaded } from "../src/upstream-costs.js";
 import { METERED_UNPAID_QUOTES_PER_MIN } from "../src/unpaid-quote-budget.js";
@@ -207,6 +207,51 @@ process.env.MODEL_CATALOG_URL = "http://127.0.0.1:9/api/v1/models";
     s.tick();
     ok(lines.length === 1 && /prepay=true summary suppressed=7 slugs=\[v1-chat-metered=5,x forged=2\]/.test(lines[0]), `a finished minute prints one summary line (${lines[0]})`);
     ok(s.allow("v1-chat-metered") === true, "the next minute prints again");
+  }
+  // Coverage refusals (an error with coverRefusal): per wallet, the first in a
+  // minute prints and the rest are one summary line, the wallet shortened.
+  {
+    let t = 10 * 60_000;
+    const lines = [];
+    const A = "0x" + "a1".repeat(20), B = "0x" + "B2".repeat(20), C = "0x" + "c3".repeat(20);
+    const s = createCoverRefusalLogSampler({ perMinute: 2, maxWallets: 3, now: () => t, log: (l) => lines.push(l) });
+    const printedA = Array.from({ length: 300 }, (_, i) => s.allow(A, i < 290 ? "short" : "settling")).filter(Boolean).length;
+    ok(printedA === 1 && lines.length === 0, `one wallet's burst prints its first refusal only (${printedA})`);
+    ok(s.allow(B, "unread") === true && s.allow(B, "x\nforged") === false, "a second wallet's first refusal prints too");
+    ok(s.allow(C, "kept") === false, "past perMinute lines a new wallet's first refusal is counted, not printed");
+    ok(s.allow("", "short") === false && s.allow("D".repeat(44), "short") === false && s.allow("E".repeat(44), "beside") === false, "a wallet past maxWallets is counted with the rest");
+    s.tick();
+    ok(lines.length === 0, "no summary inside the minute");
+    t += 60_000;
+    s.tick();
+    ok(lines.length === 4, `a finished minute prints one summary line per wallet, and one for the rest (${lines.length})`);
+    ok(lines[0] === `[tool-error] 4xx cover=true summary wallet=${A.slice(0, 6)} refused=300 classes=[short=290,settling=10]`, `the summary names the count and the classes (${lines[0]})`);
+    ok(/wallet=0xB2B2 refused=2 classes=\[other=1,unread=1\]/.test(lines[1]) && !/forged/.test(lines.join("")), `a class outside the fixed words reads other (${lines[1]})`);
+    ok(/wallet=0xc3c3 refused=1 classes=\[kept=1\]/.test(lines[2]), `a refusal whose own line was left out is in a summary (${lines[2]})`);
+    ok(lines[3] === "[tool-error] 4xx cover=true summary wallet=others refused=3 classes=[short=2,beside=1]", `the wallets past the bound, and a call with no wallet read, share one line (${lines[3]})`);
+    ok(!lines.some((l) => l.includes(A) || l.includes(B) || l.includes(C)), "no line carries a whole address");
+    ok(s.allow(A, "short") === true, "the next minute prints again");
+    s.flush();
+    ok(lines.length === 4, "a wallet whose one refusal printed in full gets no summary line");
+  }
+  // The sampler's wiring in server.js: both mounts of a paid handler (the kit
+  // dispatcher, and withToolCallLog for the page-content and memory routes)
+  // log a coverage refusal through logToolError with the sampler's answer, the
+  // console line obeys it, and the "[paid-timing]" line follows the same answer.
+  {
+    const server = (await import("node:fs")).readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+    const fnBody = (name) => { const i = server.indexOf(`\nfunction ${name}(`); return i < 0 ? "" : server.slice(i, server.indexOf("\n}\n", i)); };
+    const note = fnBody("noteCoverRefusalLog");
+    ok(/print = coverRefusalLogSampler\.allow\(paidCallPayer\(req\) \|\| "", err\?\.coverRefusal\) === true;/.test(note) && /markCoverRefusalLine\(req, print\)/.test(note) && /return print;/.test(note), "noteCoverRefusalLog asks the per-wallet sampler, marks the timing line with its answer and returns it");
+    ok(/setInterval\(contained\("cover-refusal-log-sampler", \(\) => coverRefusalLogSampler\.tick\(\)\), 15_000\)\.unref\(\);/.test(server), "the sampler's summary lines are printed on a timer");
+    const QUIET = '{ quiet: !noteCoverRefusalLog(req, err) }';
+    const kit = server.split("\n").filter((l) => l.includes("logToolError(tool.slug, status, errorMessage, shape, synthetic, probe"));
+    ok(kit.length === 1 && kit[0].includes(`err?.coverRefusal && status === 429 ? ${QUIET} : undefined);`), `the kit dispatcher's error line is quiet past a wallet's first coverage refusal in the minute (${kit.length})`);
+    const mount = fnBody("withToolCallLog");
+    ok(mount.includes(`if (err?.coverRefusal && status === 429) logToolError(def?.slug || "unknown", status, redactSecrets(err?.message), undefined, isSyntheticRequest(req), false, ${QUIET});`), "the page-content and memory routes log a coverage refusal the same way: the first per wallet per minute prints");
+    ok(server.split("noteCoverRefusalLog(req, err)").length - 1 === 3, "each mount counts a refusal once (the definition and two calls)");
+    const log = fnBody("logToolError");
+    ok(/\{ prePayment = false, capture = true, quiet = false \} = \{\}/.test(log) && /const skipConsole = quiet \|\| /.test(log) && /if \(!skipConsole\) console\.error\(`\[tool-error\] /.test(log), "logToolError prints no console line for a quiet call");
   }
   // A Tempo push credential's refusal names its exception to "Nothing was charged.".
   ok(withPushExceptionText("Too big. Nothing was charged.", true) === `Too big. Nothing was charged${PUSH_EXCEPTION}.` && withPushExceptionText("Too big. Nothing was charged.", false) === "Too big. Nothing was charged.",

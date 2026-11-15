@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (11 scripts, one process each)
+# @step 1: Offline suites (15 scripts, one process each)
 # Native MPP on /mcp (stock MCP SDK client + mppx McpClient pays a wallet-only tool via the real gates; stub facilitator; -32042 wire; RFC 9457 problem on tamper - offline)
 t node scripts/test-mcp-mpp.js
 # A binary tool answer through a real MCP tools/call on both result paths
@@ -19,6 +19,14 @@ t node scripts/test-gateway-withdraw.js
 t node scripts/test-paid-phase-timing.js
 # A paid run that never gets paid meets a bound
 t node scripts/test-paytime-bounds.js
+# A wallet's runs in flight are covered by its balance together on every wire that settles after the handler, and the breaker's hard count holds for calls that arrive together (boots paid servers against chain-like stubs - offline)
+t node scripts/test-inflight-burst.js
+# The admission's rules: a balance that covers a wallet's calls in flight starts every one, a balance that cannot be read is judged on the wallet's last good read or the allowance of calls at once, Gateway batched terms (offline)
+t node scripts/test-inflight-admission.js
+# A header a handler set for its answer is not sent on a refusal: dub on Tempo pull, MPP evm and x402 (boots a paid server - offline)
+t node scripts/test-answer-headers.js
+# A card or Tempo challenge must outlive the run it pays for, and the breaker keys an address by its IPv6 /64 (boots a paid server - offline)
+t node scripts/test-challenge-life.js
 # Golden trajectories: 56 fixed route-execute tasks through the real paid server, resolver and payer against a stub seller ecosystem, each graded step by step (candidates, order
 t node scripts/test-golden-trajectories.js
 # One-product MCP endpoint (/mcp/sec): profile lists only the SEC tools, hides the catalog meta tools, /mcp unchanged (boots a free server)

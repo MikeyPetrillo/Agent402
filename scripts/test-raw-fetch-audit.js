@@ -114,6 +114,10 @@ const CALLS = {
   ],
   "src/transparency.js": [F("code host traffic API"), F("code host traffic API")],
   "src/upstream-buyer-status.js": [F("Base RPC list"), F("EVM buyer chain RPC from src/evm-rpcs.js")],
+  "src/rail-cover.js": [
+    F("payer balance read (GET): algod and Horizon bases from configuration; the payer and asset ride the path, percent-encoded; AbortSignal timeout"),
+    F("payer balance read (JSON-RPC POST): the configured Tempo and Solana RPCs; the payer rides the body; AbortSignal timeout"),
+  ],
   "src/worker-client.js": [F("render worker from configuration")],
   "src/x402-buyer.js": [
     I("seller bare leg: reqInit carries the pinned dispatcher, redirect manual and the timeout", { t: "init", g: "init" }),

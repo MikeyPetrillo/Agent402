@@ -85,6 +85,37 @@ const waitFor = async (cond, ms = 8000) => { const t0 = Date.now(); while (Date.
   ok(T.hangupWaitOf(d.req)?.during === "handler", "control: a departure before the handler's end reads handler");
   d.res.end();
   ok(listed("test:handler")?.byPhase?.handler === 1 && listed("test:handler").recent[0].waitedMs >= 0, "control: and is listed under handler once the handler ends");
+
+  // The in-flight coverage check's 429s: the "[paid-timing]" line follows the
+  // per-wallet sampler's answer (markCoverRefusalLine), so a burst of refused
+  // calls prints one line per wallet per minute. A call that ran prints as before.
+  {
+    const realLog = console.log;
+    const lines = [];
+    console.log = (l) => { if (typeof l === "string" && l.startsWith("[paid-timing]")) lines.push(l); };
+    process.env.PAID_TIMING_LOG = "";
+    try {
+      const refused = (print, status = 429) => {
+        const x = call("test:cover");
+        if (print !== undefined) T.markCoverRefusalLine(x.req, print);
+        x.res.statusCode = status; x.res.writableFinished = true;
+        x.res.end(); x.res.emit("close");
+      };
+      const before = T.paidPhaseSummary().rails.x402?.calls ?? 0;
+      refused(true);
+      ok(lines.length === 1 && /status=429/.test(lines[0]), `a wallet's first coverage refusal in the minute prints its timing line (${lines.length})`);
+      for (let i = 0; i < 200; i++) refused(false);
+      ok(lines.length === 1, `the 200 after it print none (${lines.length - 1})`);
+      ok((T.paidPhaseSummary().rails.x402?.calls ?? 0) > before, "the refused calls are still in the rolling window");
+      refused(undefined);
+      ok(lines.length === 2, "control: a 429 that is not a coverage refusal prints as before");
+      refused(false, 200); refused(false, 502);
+      ok(lines.length === 4 && /status=200/.test(lines[2]) && /status=502/.test(lines[3]), `control: a marked call whose final status is not 429 prints as before (${lines.length})`);
+      const noPhases = {};
+      T.markCoverRefusalLine(noPhases, false); T.markCoverRefusalLine(null, false);
+      ok(Object.keys(noPhases).length === 0, "a request with no timing record is left alone");
+    } finally { console.log = realLog; process.env.PAID_TIMING_LOG = "off"; }
+  }
 }
 
 const [PORT, FAC_PORT, DB_PORT] = await getFreePorts(3);
