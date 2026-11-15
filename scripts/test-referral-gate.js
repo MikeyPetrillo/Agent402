@@ -3067,6 +3067,12 @@ try {
       const check = await withBudgetCeiling(300, () => kitTool("http-check").handler({ url: "http://93.184.216.34/" }));
       const checkMs = Date.now() - t4;
       ok(kitTool("sitemap").endsAtCeiling === true && kitTool("http-check").endsAtCeiling === true && Number(sitemapErr?.statusCode) >= 500 && sitemapMs < 1500 && check?.up === false && checkMs < 1500 && hung.length === 2 && hung.every((ms) => ms < 1500), `a kit handler whose upstream never answers is ended at the ceiling, where its own timeout is 15 s: its upstream call is aborted (sitemap ${sitemapMs} ms, http-check ${checkMs} ms; aborted after ${hung.join(", ")} ms)`);
+      // A handler of several reads in a row (the registry list, then two lookups, 10 s and 12 s each of their own): all ended at the ceiling.
+      hung.length = 0;
+      const t5 = Date.now();
+      const whoisErr = await withBudgetCeiling(300, () => kitTool("whois").handler({ domain: "example.com" })).then(() => null, (e) => e);
+      const whoisMs = Date.now() - t5;
+      ok(whoisErr && whoisMs < 1500 && hung.length >= 2 && hung.every((ms) => ms < 1500), `a handler of several reads in a row ends at the ceiling too: every one of its upstream calls is aborted by then (whois ${whoisMs} ms; ${hung.length} calls aborted after ${hung.join(", ")} ms)`);
       const marked = KIT.filter((t) => t.endsAtCeiling === true).map((t) => t.slug).sort();
       ok(JSON.stringify(marked) === JSON.stringify(["http-check", "ip-info", "robots-check", "sitemap", "tls-cert", "whois"]) && JSON.stringify(markEndsAtCeiling([{ slug: "a" }], ["a", "b"])) === "[\"b\"]", `the mark is set slug by slug, on the handlers audited and no other (${marked.join(", ")})`);
     } finally { globalThis.fetch = realFetch; }
