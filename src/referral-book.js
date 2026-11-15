@@ -442,12 +442,13 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     list: () => Object.values(entries).sort((a, b) => (b.at || 0) - (a.at || 0)).map(({ answer, payment, ...e }) => ({ ...e })),
     size: () => Object.keys(entries).length,
     /** At capacity with no entry that may be retired: nobody's new settlement can be recorded. */
-    full: () => Object.keys(entries).length >= maxEntries && !retirable(entries, now()),
+    // (A refused entry is room: the next intent drops the oldest one first.)
+    full: () => Object.keys(entries).length >= maxEntries && !droppable(entries) && !retirable(entries, now()),
     /** True when a new settlement for this payer can be recorded: its own
      *  share is not spent, and the book has (or can make) room. */
     roomFor(payer) {
       if (heldBy(entries, payer) >= maxPerPayer) return false;
-      return Object.keys(entries).length < maxEntries || !!retirable(entries, now());
+      return Object.keys(entries).length < maxEntries || !!droppable(entries) || !!retirable(entries, now());
     },
     counts: () => {
       const c = { intent: 0, "in-doubt": 0, "charged-undelivered": 0, unconfirmed: 0, contradicted: 0, "refund-owed": 0, delivering: 0 };
@@ -560,6 +561,15 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             cur[key] = { ...c, ...patch, updatedAt: t };
             any = true;
           }
+          return any ? undefined : SKIP_UPDATE;
+        });
+      }
+      // A booked-payment mark is kept SOLD_KEEP_MS: removed here once older,
+      // so it does not wait for the next sale to be pruned.
+      if (Object.values(sold).some((m) => t - (Number(m?.at) || 0) > SOLD_KEEP_MS)) {
+        await change((_cur, _kept, _done, _gone, _shut, _under, _warm, marksNow) => {
+          let any = false;
+          for (const k of Object.keys(marksNow)) if (t - (Number(marksNow[k]?.at) || 0) > SOLD_KEEP_MS) { delete marksNow[k]; any = true; }
           return any ? undefined : SKIP_UPDATE;
         });
       }

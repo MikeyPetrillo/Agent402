@@ -628,10 +628,10 @@ export function referralIneligibility(def, { identityBound = false, lastingEffec
   // whose published example or input hints name this host is left out (an
   // empty request runs that example, and a refused input quotes it).
   if (namesOwnHost(def, ownHosts)) return "its published example or input hints name this server's own host";
-  // Price parity: the referral copy never costs more than the same call on
-  // the public route. A tool the public route gives for less by a path this
-  // route lacks (`cheaperDirect` names it) is left out; the slugs served
-  // before the rule are served still, with a line at every boot.
+  // Price parity: the referral copy is sold at the price listed for the same
+  // call on the public route. A tool the public route gives for less by a
+  // path this route lacks (`cheaperDirect` names it) is left out, unless the
+  // operator names it in REFERRAL_PARITY_GRANDFATHERED (a line at every boot).
   if (cheaperDirect && !(Array.isArray(parityGrandfathered) && parityGrandfathered.includes(def.slug))) return `the public route can be had for less than the listed price (${cheaperDirect})`;
   if (!compute && !clamped) {
     if (!Number.isFinite(ownTimeoutMs) || !(ownTimeoutMs > 0)) return "declares no upstream timeout the handler deadline can be checked against";
@@ -1380,7 +1380,7 @@ export function createReferralGate({
     let gross;
     try { gross = Number(BigInt(e.amount)) / 1e6; } catch { return false; }
     let owedRow = false;
-    try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: gross, tx, evidenceKey: referralRefundEvidence(tx, e.nonce), wire: "referral-operator", httpStatus: 402, hangupReason: REFERRAL_PARTIAL_HOLD_REASON, note: `held for review: referral settle not proven as this route's sale: the buyer's transfer into the split contract is proven, no sale was booked: ${why}`.slice(0, 300) })) === true; }
+    try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: gross, tx, evidenceKey: referralRefundEvidence(tx, e.nonce), wire: "referral-operator", httpStatus: 499, hangupReason: REFERRAL_PARTIAL_HOLD_REASON, note: `held for review: referral settle not proven as this route's sale: the buyer's transfer into the split contract is proven, no sale was booked: ${why}`.slice(0, 300) })) === true; }
     catch { owedRow = false; }
     if (!owedRow) { line("error", `a refund owed could NOT be recorded for an unproven settle (${e.slug} payer=${shortPayer(e.payer)} tx=${tx}); the next sweep tries again`); return false; }
     counters.refundsOwed++;
@@ -1502,7 +1502,7 @@ export function createReferralGate({
     try { claimed = (await book.resolve(e.key, { debtPendingAt: t0 }, { unless: (c) => c.state !== was || c.delivered === true || Number(c.sendingUntil) > t0 || (!byHand && Number(c.inCallUntil) > t0) || Number(c.debtPendingAt) > t0 - DEBT_CLAIM_MS })) === true; } catch { claimed = false; }
     if (!claimed) { counters.debtClaimLost++; return "changed"; }
     let owedRow = false;
-    try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: gross, tx, evidenceKey: referralRefundEvidence(tx, e.nonce), wire: byTransfer ? "referral-operator" : "referral", httpStatus: hangup || partial ? 499 : 402, hangupReason: partial || elsewhere ? REFERRAL_PARTIAL_HOLD_REASON : hangup, note: note.slice(0, 300) })) === true; }
+    try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: gross, tx, evidenceKey: referralRefundEvidence(tx, e.nonce), wire: byTransfer ? "referral-operator" : "referral", httpStatus: hangup || partial || elsewhere ? 499 : 402, hangupReason: partial || elsewhere ? REFERRAL_PARTIAL_HOLD_REASON : hangup, note: note.slice(0, 300) })) === true; }
     catch { owedRow = false; }
     if (!owedRow) { await book.resolve(e.key, { debtPendingAt: 0 }).catch(() => {}); line("error", `a refund owed could NOT be recorded for a charged, undelivered call (${e.slug} payer=${shortPayer(e.payer)} tx=${tx}); kept in the book`); return "failed"; }
     counters.refundsOwed++;
@@ -1535,7 +1535,7 @@ export function createReferralGate({
   // write (bounded by `storeWriteMs`): a write that stands ends the hold, one
   // that does not starts the cool-down again. Returns the seconds to wait,
   // or 0 when the call may go on.
-  const storeHold = { blockedUntil: 0, probing: false, since: 0 };
+  const storeHold = { blockedUntil: 0, probing: false, since: 0, lastIntentFailAt: 0 };
   // How long a debt claim on an entry stands without its row (a process that
   // stopped between the two): after it the entry can be claimed or delivered again.
   const DEBT_CLAIM_MS = 60_000;
@@ -2045,8 +2045,12 @@ export function createReferralGate({
       // One failed write is not an outage: one small write is tried at once,
       // and only when that fails too do paid calls wait.
       if (typeof book.intentFault !== "function" || book.intentFault() === "store") {
+        // (And a second intent the store does not take inside a minute holds
+        // whatever that write says: a store that fails every other write is not healthy.)
+        const again = storeHold.lastIntentFailAt && now() - storeHold.lastIntentFailAt < 60_000;
+        storeHold.lastIntentFailAt = now();
         let took = false;
-        try { took = typeof book.ping === "function" && (await book.ping({ deadlineMs: config.storeWriteMs })) === true; } catch { took = false; }
+        if (!again) { try { took = typeof book.ping === "function" && (await book.ping({ deadlineMs: config.storeWriteMs })) === true; } catch { took = false; } }
         if (!took) { storeHold.blockedUntil = now() + config.storeCooldownMs; storeHold.since = storeHold.since || now(); }
       }
       line("error", `the intent to settle could not be stored (${entry.slug} payer=${shortPayer(entry.payer)}${book.full() ? ", the book is full" : ""}); /settle NOT called, nothing charged, answer kept`);
