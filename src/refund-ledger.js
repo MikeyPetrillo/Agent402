@@ -686,6 +686,18 @@ export function markRefundVoid(id, note) {
 export function refundByEvidence(evidence) {
   try { return (typeof evidence === "string" && evidence.trim() && selectByEvidence.get(evidence.trim())) || null; } catch { return null; }
 }
+// Every debt of one settlement transaction: the row keyed on the transaction
+// itself, and the rows keyed `<tx>#<authorization nonce>` (one per payment,
+// where several payments settled in one transaction: src/referral-gate.js
+// referralRefundEvidence). An exact key and one bounded index range ("#" to
+// the character after it), never a pattern: `tx` is one whole hash.
+const selectByTransaction = db.prepare("SELECT * FROM refunds WHERE evidence = ? OR (evidence >= ? AND evidence < ?) ORDER BY id ASC LIMIT 50");
+// Database mode: reads the in-memory mirror, as refundByEvidence does.
+export function refundsByTransaction(tx) {
+  const t = typeof tx === "string" ? tx.trim() : "";
+  if (!t || t.includes("#")) return [];
+  try { return selectByTransaction.all(t, `${t}#`, `${t}$`); } catch { return []; }
+}
 
 /**
  * refundByEvidence for a decision another container may have just changed (a

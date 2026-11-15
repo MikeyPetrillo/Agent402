@@ -797,6 +797,21 @@ const REFUND_LOOKUP_SCHEMA = {
     refundTxUrl: { type: ["string", "null"] },
     refundedAt: { type: ["string", "null"], format: "date-time" },
     note: { type: "string" },
+    refunds: {
+      type: "array",
+      description: "Every refund recorded for this transaction, oldest first: one, except where several payments settled in the same transaction. The fields above describe the one furthest from repaid.",
+      items: {
+        type: "object",
+        properties: {
+          status: { type: "string", enum: ["owed", "sending", "paid", "void"] },
+          priceUsd: { type: "number" },
+          amountUsd: { type: "number" },
+          refundTx: { type: ["string", "null"] },
+          refundTxUrl: { type: ["string", "null"] },
+          refundedAt: { type: ["string", "null"], format: "date-time" },
+        },
+      },
+    },
   },
 };
 
