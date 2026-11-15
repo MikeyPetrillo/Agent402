@@ -24,7 +24,7 @@ export const SELFCHECK_SLUGS = [
   "stock-quote",           // wedge star (Databento; 503s without DATABENTO_API_KEY)
   "treasury-debt",         // Treasury Fiscal Data
   "treasury-avg-rates",    // Treasury Fiscal Data
-  "treasury-yield-curve",  // FRED CSV (keyless — also proves FRED CSV is reachable)
+  "treasury-yield-curve",  // U.S. Treasury par yield curve CSV (keyless)
   "fx-dashboard",          // ECB / Frankfurter
   "stock-history",         // wedge — the second Databento endpoint beyond the quote
   "crypto-market",         // crypto prices

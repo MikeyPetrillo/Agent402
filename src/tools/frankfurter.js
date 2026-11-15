@@ -20,8 +20,11 @@
 //     caller at full precision (v1 rounded the converted figure to about five
 //     significant digits, so 12345.678 USD read as 11028 EUR).
 //
-// Terms: the ECB's reference rates are free to reuse with the source named;
-// every FX answer names "ECB via Frankfurter". Frankfurter's own code is MIT.
+// Terms: the ECB's reference rates are free to reuse with the ECB cited as
+// the source: every FX answer names it in `source`, and every FX tool's
+// description ends with the "ecb" sentence (src/data-attribution.js).
+// Frankfurter's own code is MIT.
+export const ECB_FX_SOURCE = "European Central Bank euro foreign exchange reference rates (via Frankfurter)";
 export const FRANKFURTER_V2 = "https://api.frankfurter.dev/v2";
 
 const CODE_RE = /^[A-Z]{3}$/;
@@ -81,4 +84,16 @@ export function isUnknownCurrency(e) {
   const s = Number(e?.upstreamStatus);
   if (s === 422 || s === 404) return true;
   return e?.statusCode === 422 && /HTTP (422|404)/.test(String(e?.message || ""));
+}
+
+/** The ECB reference rates are the FX tools' one source. When a read fails
+ *  upstream (a 5xx, a timeout, an unusable answer, a host refusing us), the
+ *  call answers 503 with a retry hint; a caller's own 4xx passes unchanged. */
+export function fxSourceUnavailable(cause) {
+  const sc = cause?.statusCode;
+  if (sc && sc < 500 && cause?.upstreamStatus === undefined) return cause;
+  return Object.assign(
+    new Error("The European Central Bank reference rates could not be read right now. Retry in a few minutes; you were not charged."),
+    { statusCode: 503, retryAfter: 300, attribution: "upstream" },
+  );
 }
