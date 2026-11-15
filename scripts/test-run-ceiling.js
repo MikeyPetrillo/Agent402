@@ -33,6 +33,8 @@ const world = { dnsMs: 0, upstream: "stall", t0: 0, starts: [], aborts: [] };
 const note = (kind, what) => { const e = { kind, what, at: Date.now() - world.t0, endedAt: null }; world.starts.push(e); return e; };
 stubGuardResolver((host, family) => {
   world.lookups = (world.lookups || 0) + 1;
+  // A lookup that answers in the ceiling's last millisecond (it holds the turn until then).
+  if (host === "edge-name.example") { while (ceilingLeftMs() > 1) { /* spin */ } note("lookup", host).endedAt = Date.now() - world.t0; return Promise.resolve(offlineGuardAnswer(host, family)); }
   const e = note("lookup", host);
   return new Promise((res, rej) => setTimeout(() => { e.endedAt = Date.now() - world.t0; try { Promise.resolve(offlineGuardAnswer(host, family)).then(res, rej); } catch (err) { rej(err); } }, world.dnsMs));
 });
@@ -167,6 +169,11 @@ try {
     ok(lateName?.statusCode === 504 && lateName.ceilingCut === true && (world.lookups || 0) === lookupsBefore, `a guarded fetch of a NAME asked for after the ceiling starts no lookup (${lateName?.statusCode}; ${(world.lookups || 0) - lookupsBefore} lookups)`);
     const lateTls = await withRunCeiling(40, async () => { await wait(80); return MARKED.find((d) => d.slug === "tls-cert").handler({ host: "93.184.216.34" }); }).then(() => null, (e) => e);
     ok(lateFetch?.statusCode === 504 && lateFetch.ceilingCut === true && lateTls?.statusCode === 504 && world.starts.length === 0, `a guarded fetch and a TLS connection asked for after the ceiling are refused before anything is opened (${world.starts.length} started; ${lateFetch?.statusCode}, ${lateTls?.statusCode})`);
+    // The ceiling passes WHILE the name is looked up: the lookup answers, and no request follows it.
+    Object.assign(world, { dnsMs: 0, upstream: "stall", t0: Date.now(), starts: [] });
+    const edge = await withRunCeiling(40, () => safeFetch("http://edge-name.example/x")).then(() => null, (e) => e);
+    const edgeStarts = world.starts.filter((x) => x.kind !== "lookup").length;
+    ok(edge?.statusCode === 504 && edge.ceilingCut === true && world.starts.some((x) => x.kind === "lookup") && edgeStarts === 0, `a guarded fetch whose name lookup answers as the ceiling passes starts no request (${edge?.statusCode}; ${edgeStarts} requests started)`);
     let calls = 0;
     const failing = () => { calls++; return Promise.reject(Object.assign(new Error("upstream 502"), { statusCode: 502 })); };
     const t0 = Date.now();
