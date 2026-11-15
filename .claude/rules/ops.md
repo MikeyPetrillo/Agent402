@@ -416,8 +416,10 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `{"action":"resolve-many","state","reason","outcome":"dismissed"|"delivered","note"}` resolves
   every open entry of one state and recorded reason, each recorded (never a refund, and never a charged, undelivered or unconfirmed entry: those are resolved one at a time). One issue
   covers every reason: the heartbeat comments on it when the operator view's `status.tag` (a digest
-  of which reasons hold), keyed with the operator token, is a mark the issue has not carried; the
-  tag itself is printed nowhere (not on the issue, not in the job log). A listed slug that is not served is a standing reason.
+  of which reasons hold), keyed with a dedicated key that has no other role (the Actions secret
+  `REFERRAL_MARK_KEY`, HMAC-SHA256, 24 hex; never the operator token, which only reads the operator
+  view), is a mark the issue has not carried; with no key set, one fixed comment is posted per
+  issue with no mark; the tag itself is printed nowhere (not on the issue, not in the job log). A listed slug that is not served is a standing reason.
 - **Money-state sweeps and books (batch 2026-11-08a):** `TEMPO_PUSH_HELD_MAX_MINUTES` (default 30)
   is the age past which a leased sweep reopens a held Tempo push debt whose run never finished;
   `TEMPO_LATE_CONFIRM_DELAYS_MS` (comma list of delays, default 15000,45000,120000; at most 6, each

@@ -22,7 +22,7 @@
 // this machine: every key is made here and every upstream is local.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer, request as httpRequest } from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, copyFileSync } from "node:fs";
 import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
@@ -3830,8 +3830,12 @@ try {
       const EXPECTED_TAG_LINES = [
         `TAG=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/referral.json" | jq -r '.status.tag // ""' 2>/dev/null || echo "")`,
         `if printf '%s' "$TAG" | grep -Eq '^[0-9a-f]{8}$'; then`,
-        `MARK=$(printf '%s' "$TAG" | openssl dgst -sha256 -hmac "$OP_TOKEN" 2>/dev/null | sed 's/^.*= *//' | cut -c1-12)`,
+        `MARK=$(printf '%s' "$TAG" | openssl dgst -sha256 -hmac "$MARK_KEY" 2>/dev/null | sed 's/^.*= *//' | cut -c1-24)`,
       ];
+      // The operator token reads the operator view and nothing else: it is never given to the hashing command.
+      const refStep = heartbeat.slice(heartbeat.indexOf("- name: Referral settlement check"), heartbeat.indexOf("# The MPP subscription engine (mppSubscriptions"));
+      const tokenLines = refStep.split("\n").map((l) => l.trim()).filter((l) => /OP_TOKEN/.test(l) && !l.startsWith("#"));
+      const tokenHashed = tokenLines.length !== 3 || tokenLines[0] !== "OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}" || tokenLines[1] !== `if [ -n "$EXISTING" ] && [ -n "$OP_TOKEN" ]; then` || tokenLines[2] !== EXPECTED_TAG_LINES[0] || /openssl[^\n]*OP_TOKEN/.test(heartbeat) || !/MARK_KEY: \$\{\{ secrets\.REFERRAL_MARK_KEY \}\}/.test(refStep);
       const tagPosted = JSON.stringify(tagLines) !== JSON.stringify(EXPECTED_TAG_LINES) || /changed since the last note/.test(heartbeat);
       // THE STEP ITSELF, run against stand-ins for gh and curl: one open issue, the word at attention.
       {
@@ -3848,16 +3852,24 @@ try {
         writeFileSync(join(bin, "curl"), `#!/bin/bash\ncase "$*" in *gateway-status*) echo '{"referralSettlement":{"status":"attention"}}';; *referral.json*) echo "{\\"status\\":{\\"tag\\":\\"$STUB_TAG\\"}}";; esac\n`);
         writeFileSync(join(bin, "gh"), `#!/bin/bash\nif [ "$1 $2" = "issue list" ]; then echo 7; exit 0; fi\nif [ "$1 $2" = "issue view" ]; then tr '\\n' ' ' < "$HB_COMMENTS"; exit 0; fi\nif [ "$1 $2" = "issue comment" ]; then while [ $# -gt 0 ]; do if [ "$1" = "--body" ]; then echo "$2" >> "$HB_COMMENTS"; fi; shift; done; exit 0; fi\nexit 0\n`);
         chmodSync(join(bin, "curl"), 0o755); chmodSync(join(bin, "gh"), 0o755);
-        const cycle = (tag) => spawnSync("bash", ["-c", step.run], { env: { PATH: `${bin}:${process.env.PATH}`, PROD: "https://prod.invalid", GITHUB_REPOSITORY: "o/r", OP_TOKEN: "operator-token-for-the-test", GH_TOKEN: "x", STUB_TAG: tag, HB_COMMENTS: comments, GITHUB_STEP_SUMMARY: stepSummary, GITHUB_OUTPUT: stepOutput, GITHUB_ENV: stepEnvFile }, encoding: "utf8" });
+        const cycle = (tag, markKey = "a-dedicated-mark-key") => spawnSync("bash", ["-c", step.run], { env: { PATH: `${bin}:${process.env.PATH}`, PROD: "https://prod.invalid", GITHUB_REPOSITORY: "o/r", OP_TOKEN: "operator-token-for-the-test", GH_TOKEN: "x", STUB_TAG: tag, HB_COMMENTS: comments, MARK_KEY: markKey, GITHUB_STEP_SUMMARY: stepSummary, GITHUB_OUTPUT: stepOutput, GITHUB_ENV: stepEnvFile }, encoding: "utf8" });
         const runs3 = [cycle("aaaaaaaa"), cycle("aaaaaaaa"), cycle("aaaaaaaa")];
         const afterSame = readFileSync(comments, "utf8").split("\n").filter(Boolean);
         const changed = cycle("bbbbbbbb");
         const afterNew = readFileSync(comments, "utf8").split("\n").filter(Boolean);
         const printed = [...runs3, changed].map((r) => `${r.stdout}${r.stderr}`).join("\n") + afterNew.join("\n") + [stepSummary, stepOutput, stepEnvFile].map((f) => readFileSync(f, "utf8")).join("\n");
-        ok(step && existsSync(comments) && runs3.every((r) => r.status === 0) && afterSame.length === 1 && /reasons mark [0-9a-f]{12} /.test(afterSame[0]) && afterNew.length === 2 && afterNew[0] !== afterNew[1] && !/aaaaaaaa|bbbbbbbb/.test(printed), `the heartbeat step, run for three cycles on one reasons tag against an open issue, comments once; a new tag adds one more comment; the raw tag is in no output (${afterSame.length} then ${afterNew.length} comments)`);
+        const markOf = (key, tag) => createHmac("sha256", key).update(tag).digest("hex").slice(0, 24);
+        // With no mark key: one fixed comment for the issue, whatever the tag does, and no mark at all.
+        writeFileSync(comments, "");
+        const noKey = [cycle("aaaaaaaa", ""), cycle("aaaaaaaa", ""), cycle("bbbbbbbb", ""), cycle("cccccccc", "")];
+        const noKeyComments = readFileSync(comments, "utf8").split("\n").filter(Boolean);
+        const noKeyPrinted = noKey.map((r) => `${r.stdout}${r.stderr}`).join("\n") + noKeyComments.join("\n");
+        ok(noKey.every((r) => r.status === 0) && noKeyComments.length === 1 && !/reasons mark|[0-9a-f]{12,}|aaaaaaaa|bbbbbbbb|cccccccc/.test(noKeyPrinted) && /the reasons on this issue can change while it is open/.test(noKeyComments[0]), `with no mark key set the step posts one fixed comment per issue, with no mark, however the reasons change (${noKeyComments.length} comment in four cycles)`);
+        ok(afterSame[0].includes(`reasons mark ${markOf("a-dedicated-mark-key", "aaaaaaaa")} `) && !printed.includes(markOf("operator-token-for-the-test", "aaaaaaaa")) && !printed.includes(markOf("operator-token-for-the-test", "aaaaaaaa").slice(0, 12)), "the mark is the tag keyed with the dedicated mark key, 24 hex, and is not what the operator token would give");
+        ok(step && existsSync(comments) && runs3.every((r) => r.status === 0) && afterSame.length === 1 && /reasons mark [0-9a-f]{24} /.test(afterSame[0]) && afterNew.length === 2 && afterNew[0] !== afterNew[1] && !/aaaaaaaa|bbbbbbbb/.test(printed), `the heartbeat step, run for three cycles on one reasons tag against an open issue, comments once; a new tag adds one more comment; the raw tag is in no output (${afterSame.length} then ${afterNew.length} comments)`);
       }
       const owedWording = "include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review";
-      ok(raised === 22 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && /openssl dgst -sha256 -hmac "\$OP_TOKEN"/.test(heartbeat) && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with the operator token, never the tag itself (${missing.join("; ") || "all named"})`);
+      ok(raised === 22 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && tokenHashed === false && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with a dedicated mark key (never the operator token, which only reads the operator view), never the tag itself (${missing.join("; ") || "all named"})`);
     }
     // P7. During a drain a settle ends before the database pool starts closing, with room for its book write.
     {

@@ -864,6 +864,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
+          # Keys the public reasons mark below; it has no other role.
+          MARK_KEY: ${{ secrets.REFERRAL_MARK_KEY }}
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.referralSettlement.status // "unknown"' 2>/dev/null || echo unknown)
           echo "referralSettlement: $STATUS"
@@ -876,20 +878,31 @@ jobs:
             fi
             # One issue covers every reason, so a NEW reason arriving while it is
             # open is said on it. The operator view's tag is a digest of which
-            # reasons hold; what is posted is that tag keyed with the operator
-            # token (HMAC-SHA256, 12 hex), which nobody without the token can
-            # map back to reasons. A mark the issue has not carried yet gets one
-            # comment. The tag itself is printed nowhere: not on the issue and
+            # reasons hold; what is posted is that tag keyed with a DEDICATED
+            # key that has no other role (MARK_KEY, HMAC-SHA256, 24 hex), so
+            # nobody without that key can map a mark back to reasons, and the
+            # mark verifies nothing about any credential. The operator token
+            # reads the operator view and is never given to the hashing
+            # command. A mark the issue has not carried yet gets one comment.
+            # With no mark key set, one fixed comment is posted per issue, with
+            # no mark. The tag itself is printed nowhere: not on the issue and
             # not in this job's log, which is as public as the issue is.
             EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
             if [ -n "$EXISTING" ] && [ -n "$OP_TOKEN" ]; then
               TAG=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/referral.json" | jq -r '.status.tag // ""' 2>/dev/null || echo "")
               if printf '%s' "$TAG" | grep -Eq '^[0-9a-f]{8}$'; then
-                MARK=$(printf '%s' "$TAG" | openssl dgst -sha256 -hmac "$OP_TOKEN" 2>/dev/null | sed 's/^.*= *//' | cut -c1-12)
-                if printf '%s' "$MARK" | grep -Eq '^[0-9a-f]{12}$'; then
-                  SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable reasons mark $MARK")
-                  if ! printf '%s' "$SEEN" | grep -q "reasons mark $MARK"; then
-                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "The reasons mark is now: reasons mark $MARK (read at $(date -u +%FT%TZ)). A mark that differs from the one in the comment before it means a reason was added or cleared. Read /__operator/referral.json." >/dev/null 2>&1 || true
+                if [ -n "$MARK_KEY" ]; then
+                  MARK=$(printf '%s' "$TAG" | openssl dgst -sha256 -hmac "$MARK_KEY" 2>/dev/null | sed 's/^.*= *//' | cut -c1-24)
+                  if printf '%s' "$MARK" | grep -Eq '^[0-9a-f]{24}$'; then
+                    SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable reasons mark $MARK")
+                    if ! printf '%s' "$SEEN" | grep -q "reasons mark $MARK"; then
+                      gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "The reasons mark is now: reasons mark $MARK (read at $(date -u +%FT%TZ)). A mark that differs from the one in the comment before it means a reason was added or cleared. Read /__operator/referral.json." >/dev/null 2>&1 || true
+                    fi
+                  fi
+                else
+                  SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable: the reasons on this issue can change while it is open")
+                  if ! printf '%s' "$SEEN" | grep -q "the reasons on this issue can change while it is open"; then
+                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Note: the reasons on this issue can change while it is open (one may be added or cleared). Read /__operator/referral.json for the current ones." >/dev/null 2>&1 || true
                   fi
                 fi
               fi
