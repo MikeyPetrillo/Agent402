@@ -153,6 +153,12 @@ try {
     let free = 0;
     await retryTransient(() => { free++; return Promise.reject(Object.assign(new Error("upstream 502"), { statusCode: 502 })); }, { retries: 2, backoffMs: 10 }).catch(() => null);
     ok(retried?.statusCode === 502 && calls === 1 && Date.now() - t0 < 400 && free === 3, `a retry whose wait ends after the ceiling is not made (the ceiling is checked again after the wait); with no ceiling every retry is made (${calls} call under the ceiling, ${free} with none)`);
+    // A wait that fit before the ceiling but ended after it (this process was busy): checked again, no retry.
+    let busyCalls = 0;
+    const busyRetry = withRunCeiling(200, () => retryTransient(() => { busyCalls++; return Promise.reject(Object.assign(new Error("upstream 502"), { statusCode: 502 })); }, { retries: 3, backoffMs: 50 })).then(() => null, (e) => e);
+    setTimeout(() => { const until = Date.now() + 260; while (Date.now() < until) { /* hold the loop past the ceiling */ } }, 10);
+    const busyErr = await busyRetry;
+    ok(busyErr?.statusCode === 502 && busyCalls === 1, `a retry whose wait ended after the ceiling, because the process was busy, is not made (${busyCalls} call)`);
     // A kit's own second attempt is not made either: the error is the read's own, not a second read refused at the door.
     const quake = await drive(MARKED.find((d) => d.slug === "earthquakes"), MARKED.find((d) => d.slug === "earthquakes").discovery.input, { ceilingMs: CEILING, dnsMs: 0, upstream: "stall" });
     const holiday = await drive(MARKED.find((d) => d.slug === "public-holidays"), MARKED.find((d) => d.slug === "public-holidays").discovery.input, { ceilingMs: CEILING, dnsMs: 0, upstream: "stall" });
