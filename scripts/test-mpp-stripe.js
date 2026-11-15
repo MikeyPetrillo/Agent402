@@ -251,6 +251,67 @@ for (const seam of [true, false]) {
   } finally { __setTestClient(null); s.close(); }
 }
 
+// H) one payment token, many challenges: the token is claimed before the
+// handler. Ten credentials at once that carry one token run ONE handler and
+// make ONE capture; a run that fails (or whose capture fails) releases the
+// token, and the same token then runs once; two tokens run independently; a
+// captured token pays for nothing more. The real validate reads the token.
+{
+  let seq = 0;
+  const tokenCred = (spt) => {
+    const challenge = Challenge.fromMethod(testMethod, {
+      realm: REALM, expires: new Date(Date.now() + 60_000 + (seq++)),
+      request: { amount: "0.50", currency: "usd", decimals: 2, networkId: PROFILE, paymentMethodTypes: ["card"] },
+      secretKey: SECRET,
+    });
+    return Credential.serialize({ challenge, payload: { spt } });
+  };
+  const runs = new Map(), captures = new Map();
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  let failNext = 0, declineNext = 0;
+  const app = express();
+  app.use(createStripeGate({ ...GATE, replayGuard: createReplayGuard(),
+    settle: async (auth) => {
+      const spt = Credential.deserialize(auth).payload.spt;
+      await new Promise((r) => setTimeout(r, 50));
+      if (declineNext > 0) { declineNext--; return { ok: false, error: "declined", reason: "declined" }; }
+      bump(captures, spt);
+      return { ok: true, receipt: { method: "stripe", status: "success", reference: `pi_${spt}_${captures.get(spt)}`, timestamp: new Date().toISOString() } };
+    } }));
+  app.post("/paid", (req, res) => {
+    const spt = Credential.deserialize(req.headers.authorization).payload.spt;
+    bump(runs, spt);
+    if (failNext > 0) { failNext--; return res.status(502).json({ error: "upstream failed" }); }
+    setTimeout(() => res.status(200).json({ ok: true }), 150);
+  });
+  const { s, url } = await listen(app);
+  const post = (auth) => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: auth } }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+  const w0 = console.warn; console.warn = () => {};
+  try {
+    const ten = await Promise.all(Array.from({ length: 10 }, () => tokenCred("spt_burst")).map(post));
+    const ok200 = ten.filter((r) => r.status === 200).length;
+    const refused = ten.filter((r) => r.status === 402 && r.body?.details?.reason === "token-inflight" && r.body?.details?.charged === false).length;
+    ok(runs.get("spt_burst") === 1 && captures.get("spt_burst") === 1 && ok200 === 1 && refused === 9, `gate H: ten credentials at once carrying one token ran ONE handler and made ONE capture; nine refused 402 before the handler, uncharged (runs ${runs.get("spt_burst")}, captures ${captures.get("spt_burst")}, ${ok200} x 200, ${refused} refused)`);
+    const after = await post(tokenCred("spt_burst"));
+    ok(after.status === 402 && after.body?.details?.reason === "token-consumed" && runs.get("spt_burst") === 1 && captures.get("spt_burst") === 1, `gate H: a captured token pays for nothing more (${after.status}, ${after.body?.details?.reason})`);
+
+    failNext = 1;
+    const failedCred = tokenCred("spt_retry");
+    const f1 = await post(failedCred);
+    ok(f1.status === 502 && runs.get("spt_retry") === 1 && !captures.get("spt_retry"), `gate H: a failed run is not captured (${f1.status})`);
+    const f2 = await post(failedCred);
+    ok(f2.status === 200 && runs.get("spt_retry") === 2 && captures.get("spt_retry") === 1, `gate H: after a failed run the same token (and credential) runs once more and is captured once (${f2.status}, runs ${runs.get("spt_retry")}, captures ${captures.get("spt_retry")})`);
+
+    declineNext = 1;
+    const d1 = await post(tokenCred("spt_decline"));
+    const d2 = await post(tokenCred("spt_decline"));
+    ok(d1.status === 402 && d2.status === 200 && runs.get("spt_decline") === 2 && captures.get("spt_decline") === 1, `gate H: a capture that fails releases the token; the next credential with it runs and is captured (${d1.status}, ${d2.status})`);
+
+    const two = await Promise.all([post(tokenCred("spt_a")), post(tokenCred("spt_b"))]);
+    ok(two.every((r) => r.status === 200) && runs.get("spt_a") === 1 && runs.get("spt_b") === 1 && captures.get("spt_a") === 1 && captures.get("spt_b") === 1, `gate H: two tokens at once run independently (${two.map((r) => r.status)})`);
+  } finally { console.warn = w0; s.close(); }
+}
+
 // ---- wiring pin: server.js MUST bypass the x402 paywall for a validated
 // stripe request, exactly like req.tempoSettling. Without it a real card
 // payment is 402'd by the paywall and never served (the gate here runs with
