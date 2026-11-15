@@ -88,7 +88,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-14.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-15.</p>
 </section>
 
 <section>
@@ -253,13 +253,14 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   request arrives through a referral link we read two more fields: the referral token the link carries, which
   identifies the reviewer, and the buyer agent id when one is sent. We return both in the payment request and
   send them, with the paying wallet address and the signed payment, to the referral network's payment service
-  so that it can verify and settle the payment. The referral network is a separate company established in the
-  European Union. It decides for itself how it uses the data it receives and publishes its own privacy notice.
+  so that it can verify and settle the payment. The referral network is a separate company. It decides for
+  itself how it uses the data it receives and publishes its own privacy notice.
   For a referral payment we keep the paying wallet address, the payment's nonce, amount, tool and settlement
   transaction in our settlement record until the payment is confirmed delivered or resolved; a payment that
   needs a person to resolve it (for example one the chain does not confirm as ours) stays in that record until
   an operator closes it, with no fixed time limit, and a short operator record of a payment that was retired,
-  closed or resolved by hand is kept after that (the most recent few hundred). We keep the signed payment
+  closed or resolved by hand is kept after that (the most recent few hundred). A mark that a payment's sale was
+  recorded (the paying wallet, the tool and the transaction) is kept for one hour. We keep the signed payment
   together with the tool's answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes, so that a re-sent payment gets its answer without
   running or charging twice, and then delete them. A sale, and a refund we owe, are recorded as for any other payment.</li>
 ` : ""}  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our

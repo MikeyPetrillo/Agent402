@@ -56,7 +56,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-14.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-15.</p>
 </section>
 
 <section>
@@ -157,12 +157,13 @@ hold your private key.${publicIndex ? ` ${publicIndex}` : ""}</p>${gatewayBatche
 If Gateway settles one after its request was answered pending and the request is never served, we record
 the amount as owed and repay it on chain after confirming it in Gateway's records.</p>` : ""}
 ${referralOn ? `<p id="referral-links"><b>Referral links.</b> A tool bought through a referral link is sold by Agent402 under these terms,
-at no more than the price of the same call on our own route. The payment is made to the referral network's
+at the price listed for the same call on our own route. The payment is made to the referral network's
 payment contract, which pays part to us and part to the reviewer. The network's own terms apply to its links,
 reviews and rewards. A referral payment is settled after the call has run and before its answer is sent. If a
-referral payment is charged and the answer cannot be delivered, we record the full
-price you paid as owed to the paying wallet and repay it on Base as described under refunds below; the answer
-to such a call then says so and names the payment's transaction. Reviews on a referral network are written by
+referral payment reaches us and the answer cannot be delivered, we record the full price you paid as owed to
+the paying wallet and repay it on Base as described under refunds below; the answer to such a call then says
+so and names the payment's transaction. A payment the network's contract pays to another merchant does not
+reach us and is not recorded as owed; the answer names its transaction. Reviews on a referral network are written by
 its reviewers, who can earn a commission. We do not write, edit, select or pay for reviews beyond that
 commission. Market, filing and price data is information from the named source at the time of the call. It is
 not investment, trading, legal or tax advice.</p>
