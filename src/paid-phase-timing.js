@@ -23,7 +23,9 @@
 //
 // Output: one log line per paid call (slug, rail, network, status, the phases,
 // whether the buyer left, the payer's first six characters and whether the
-// call is our own synthetic traffic) and a rolling per-rail p50/p95 over the
+// call is our own synthetic traffic; a call the in-flight coverage check
+// refused before it ran prints its line only when its wallet's sampled
+// "[tool-error]" line prints, markCoverRefusalLine) and a rolling per-rail p50/p95 over the
 // last PAID_TIMING_WINDOW calls for the operator surface. Never a full payer
 // address, a transaction hash, an input or an IP. In memory, reset by a deploy.
 import { performance } from "node:perf_hooks";
@@ -105,6 +107,21 @@ export function markPaidHandlerStart(req, res, slug, { describe = null } = {}) {
 }
 const HANDLER_WAIT_MS = 120_000;
 
+/**
+ * A call the in-flight coverage check refused before it ran (its 429,
+ * src/inflight-cover.js). `print` is the answer of the per-wallet sampler
+ * its "[tool-error]" line takes (createCoverRefusalLogSampler in
+ * src/prepayment-refusal.js): the wallet's first such refusal in a minute
+ * prints its "[paid-timing]" line too, and the rest print none (they are
+ * counted in the wallet's summary line). The row is still kept in the rolling
+ * window. A call that ran is never marked, and a marked call whose final
+ * status is not 429 prints as usual.
+ */
+export function markCoverRefusalLine(req, print) {
+  const s = phasesOf(req, false);
+  if (s) s.coverLine = print === true;
+}
+
 const ms = (a, b) => (a != null && b != null && b >= a ? Math.round(b - a) : null);
 
 // Which phase a buyer who left was waiting on: the handler (the answer was not
@@ -182,7 +199,7 @@ function recordPaidCall(req, res, s) {
     const endPerf = s.handlerEnd ?? now();
     noteSlowPaidCall({ slug: row.slug, handlerMs: row.handlerMs, elapsedMs: ms(s.handlerStart, endPerf), endEpochMs: Math.round(performance.timeOrigin + endPerf), status: row.status, synthetic: row.synthetic });
   } catch { /* the alarm must never touch a payment */ }
-  if (logOn()) {
+  if (logOn() && !(s.coverLine === false && row.status === 429)) {
     const f = (v) => (v == null ? "-" : `${v}ms`);
     console.log(`[paid-timing] ${row.slug} rail=${row.rail} net=${row.network || "-"} payer=${row.payer || "-"} synthetic=${row.synthetic} status=${row.status} verify=${f(row.verifyMs)} handler=${f(row.handlerMs)} settle=${f(row.settleMs)} gate=${f(row.gateMs)} after=${f(row.afterMs)} total=${f(row.totalMs)} gone=${row.gone}`);
   }

@@ -50,6 +50,15 @@ export const REFUSAL_REASONS = Object.freeze([
   "routing_paused",       // a spend ceiling paused routing for now
   "routing_budget_spent", // resolution used the request's time budget
   "judged_no_match",      // candidates matched the words; the judgment found none does the task
+  // In-flight coverage refusals (src/inflight-cover.js): a 429 before the run
+  // starts, because the wallet's balance was not shown to cover its paid
+  // calls in flight plus this one. The class is the error's own
+  // `coverRefusal` where the caller has the error, else read from our text.
+  "cover_short",          // the balance read does not cover the calls in flight plus this one
+  "cover_settling",       // another call of the wallet is still settling; cover not confirmed yet
+  "cover_beside",         // not covered beside a run another container holds
+  "cover_unread",         // balance unreadable and never read lately: past the allowance of calls at once
+  "cover_kept",           // balance unreadable: judged on the wallet's last good read, not covered
   "other",
 ]);
 
@@ -59,7 +68,15 @@ export const REFUSAL_REASONS = Object.freeze([
 // 400 can quote the caller's own input, so an unbounded [a-z_ ]* next to a
 // literal is the same polynomial-backtracking shape CodeQL flagged in the
 // Gemini path alias. Forty characters is far past any real field name.
+// `err.coverRefusal` (src/inflight-cover.js) -> its class.
+const COVER_REASONS = Object.freeze({ short: "cover_short", settling: "cover_settling", beside: "cover_beside", unread: "cover_unread", kept: "cover_kept" });
+
 const RULES = [
+  // Coverage refusals first: sentences from src/inflight-cover.js, for a
+  // caller that holds the message only.
+  [/\bits balance could not be read to confirm it also covers this one\b/i, "cover_unread"],
+  [/\bis still settling, and until it has, the wallet's balance cannot be confirmed\b/i, "cover_settling"],
+  [/\bbalance no longer covers this run\b|\bits balance does not cover this one as well\b/i, "cover_short"],
   // Routing first: these are specific sentences from route-execute, and the
   // generic rules below would otherwise claim them (an "above this endpoint's
   // $X underlying cap" message matches the over_cap rule).
@@ -104,10 +121,15 @@ const RULES = [
 
 /** Classify one refusal. Returns a member of REFUSAL_REASONS, always.
  *  @param message our own error text (never the caller's input)
- *  @param status  the HTTP status we answered with */
-export function refusalReason(message, status) {
+ *  @param status  the HTTP status we answered with
+ *  @param err     the error itself, when the caller has it (read for `coverRefusal` only) */
+export function refusalReason(message, status, err = null) {
   const code = Number(status) || 0;
   if (code < 400 || code >= 500) return null; // only a refusal has a reason
+  // The coverage check names its own class on the error (a fixed word of
+  // ours; anything else falls through to the text).
+  const cover = code === 429 && err && typeof err.coverRefusal === "string" && Object.hasOwn(COVER_REASONS, err.coverRefusal) ? COVER_REASONS[err.coverRefusal] : null;
+  if (cover) return cover;
   if (code === 413) return "too_large";
   if (code === 404) return "not_found";
   const text = typeof message === "string" ? message : "";

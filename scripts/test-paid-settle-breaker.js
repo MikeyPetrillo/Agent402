@@ -244,7 +244,11 @@ try {
     const before = settles;
     const burst = await Promise.all(Array.from({ length: 10 }, (_, k) => pay(V1(100 + k), wallet(0x90))));
     const ran = settles - before;
-    ok(ran >= GLOBAL_MAX && burst.every((r) => r.status === 402 || r.status === 429), `one wallet's burst of 10 concurrent /v1 calls: ${ran} handlers ran and failed to settle (>= GLOBAL_MAX ${GLOBAL_MAX}; statuses ${burst.map((r) => r.status).join(",")})`);
+    // The wallet's balance reads zero here (the stub RPC), so the coverage
+    // admission (src/inflight-cover.js) lets no second run start beside one
+    // in flight, and the per-wallet count stops the ones that start after it:
+    // the burst runs at most MAX handlers, never one per call.
+    ok(ran >= 1 && ran <= MAX && burst.every((r) => r.status === 402 || r.status === 429), `one wallet's burst of 10 concurrent /v1 calls: ${ran} handlers ran and failed to settle (at most MAX ${MAX}; statuses ${burst.map((r) => r.status).join(",")})`);
     const b0 = settles;
     const r = await pay(V1(200), wallet(0x91));
     ok(r.status === 402 && settles === b0 + 1, `...and a DIFFERENT wallet's /v1 call still reaches its handler (status ${r.status}, settles ${settles})`);

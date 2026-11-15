@@ -758,12 +758,13 @@ Auto-closes when nothing is owed.`,
   },
   {
     // Distinct buyers whose /v1 payments verified and then failed to settle
-    // reached the breaker's count inside one window (settleFailures,
+    // reached the breaker's count inside one window, or one buyer's runs were
+    // served and then refused at settlement past its own count (settleFailures,
     // src/gateway-settle-breaker.js): burst pages, ok clears, unknown does
     // neither. No request is refused for it. Title matches heartbeat.yml's.
     title: "settleFailures: a burst of buyers' payments verified and then failed to settle",
     verdict: ({ gateway: b }) => wordVerdict(b.settleFailures?.status, ["burst"], ["ok"]),
-    body: () => "/api/gateway-status reports settleFailures.status=burst. The detail is on the operator read of /api/gateway-status (operator token). Auto-closes when the word is ok. burst means the number of distinct buyers whose /v1 payments verified, were served and then failed to settle reached GATEWAY_SETTLE_BREAKER_GLOBAL_MAX inside one breaker window; the word holds for one window after that. No request is refused for it. The server log has the [gateway-breaker] line.",
+    body: () => "/api/gateway-status reports settleFailures.status=burst. The detail is on the operator read of /api/gateway-status (operator token). Auto-closes when the word is ok. burst means one of these happened inside one breaker window: the number of distinct buyers whose /v1 payments verified, were served and then failed to settle reached GATEWAY_SETTLE_BREAKER_GLOBAL_MAX; one buyer's /v1 failures read refusing on GATEWAY_SETTLE_BREAKER_MULTI_NETWORK_MIN networks; or one buyer's paid calls, on any paid route, were served and then refused at settlement past that buyer's refusing count (GATEWAY_SETTLE_BREAKER_OVERRUN_ALARM runs beyond it). The word holds for one window after that. No request is refused for it. The server log has the [gateway-breaker] line, which says which.",
   },
   {
     // Report and media runs that spent upstream and then did not settle
@@ -1078,6 +1079,19 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     verdict: ({ gateway: b }) => wordVerdict(b.referralSettlement?.status, ["attention"], ["ok"]),
     body: () =>
       "/api/gateway-status reports referralSettlement.status=attention: a settlement on the referral copies of paid routes needs an operator. One of these holds: a settlement in doubt, charged and not yet delivered, or unconfirmed for more than fifteen minutes; a settle success the chain contradicts, or one whose receipt still cannot be read (both stay until resolved by hand); the referral facilitator refused this server's own signature in the last fifteen minutes; the facilitator left two or more calls in a row unanswered over ten minutes; an intent to settle could not be stored; or the settlement book is full. The reasons and the open settlements are on the operator view (/__operator/referral.json, operator token), where an entry can be resolved by hand with a note. No payment on a referral copy is settled twice. While the book is full, or while this server's own signature keeps being refused, paid calls on the referral copies are answered as unavailable before anything runs. Auto-closes when the word reads ok.",
+  },
+  {
+    // Balance reads behind the in-flight coverage check (coverageReads,
+    // src/inflight-cover.js). status reads degraded for ten minutes after
+    // any one paid call judged without a balance read, which one wallet can
+    // cause, so the page reads the second word: alert=sustained (such calls
+    // in three or more separate minutes of the last ten, for three or more
+    // wallets). ok and off clear; degraded with alert=ok, unknown and a build
+    // without the second word do neither. Title and body match heartbeat.yml's.
+    title: "Coverage balance reads DEGRADED (calls in flight)",
+    verdict: ({ gateway: b }) => sustainedVerdict(b.coverageReads, ["ok", "off"]),
+    body: () =>
+      "/api/gateway-status reports coverageReads.alert=sustained: in three or more separate minutes of the last ten, paid calls from three or more wallets were started or refused without a balance read made for them (the read failed or took too long), so the check that a wallet's paid calls in flight are covered together (src/inflight-cover.js) judged them on each wallet's last good read, or on the fixed allowance of calls at once for a wallet with no recent read. A call a kept read covers is still served. One wallet's unread balance, however many calls it sends, reads coverageReads.status=degraded and opens nothing. Check the RPC endpoints the balance reads use and the server log; the counts are on the operator view of /api/gateway-status (inflightCover). Auto-closes when coverageReads.status reads ok or off.",
   },
   {
     // The MPP subscription engine (mppSubscriptions, server.js): failed pages

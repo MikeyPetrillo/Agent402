@@ -103,7 +103,7 @@ import { gatewayCacheGate, commitGatewayCacheWrites } from "./gateway-cache-scop
 import { startModelCatalogRefresh, modelCatalogWanted } from "./model-catalog.js";
 import { toolErrorFields, notCallersInput } from "./tool-error-fields.js";
 import { PRE_PAYMENT_WIRES, meteredPrePaymentRefusal } from "./gateway-prepayment.js";
-import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, stripControlChars, withPushExceptionText } from "./prepayment-refusal.js";
+import { createPrePaymentRefusalRecorder, createPrePaymentLogSampler, createCoverRefusalLogSampler, stripControlChars, withPushExceptionText } from "./prepayment-refusal.js";
 import { shapeRefusal } from "./input-aliases.js";
 import { setSettlementOverrides } from "@x402/express";
 // Metered settlement ships DARK, like the upto scheme it rides on: it changes
@@ -374,7 +374,7 @@ import { createSearchData } from "./search-data.js";
 import { operatorSearchPage } from "./operator-search.js";
 import { datasetStatus, datasetRecorded, runDatasetSnapshot, startDatasetScheduler } from "./dataset-snapshot.js";
 import { startQuoteWarmer, quoteWarmerStatus } from "./tools/databento.js";
-import { phaseArrivalMiddleware, markPaidHandlerStart, paidPhaseSummary, hangupWaitOf } from "./paid-phase-timing.js";
+import { phaseArrivalMiddleware, markPaidHandlerStart, markCoverRefusalLine, paidPhaseSummary, hangupWaitOf } from "./paid-phase-timing.js";
 import { slowPaidMsFromEnv, slowPaidVerdict, recentSlowPaidCalls } from "./slow-paid-calls.js";
 import { assertAvmValidityCovers } from "./avm-validity.js";
 import { assertEvmValidityCovers, EVM_RUN_SECONDS, runTimeNote } from "./evm-validity.js";
@@ -388,7 +388,10 @@ import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
 import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddleware } from "./slow-routes.js";
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
 import { createTaskStore, taskDataDir } from "./mcp-tasks.js";
-import { admitCoveredRun } from "./inflight-cover.js";
+import { admitCoveredRun, inflightCoverStatus, coverageReadsVerdict } from "./inflight-cover.js";
+import { answerHeadersGuard, setAnswerHeader } from "./answer-headers.js";
+import { routeRunSeconds } from "./challenge-life.js";
+import { setPaidRecordLedger } from "./paid-record.js";
 import { paymentReplayKeyAsync, consumedHoldFor, createReplayGuard, replayGuardStoreStatus } from "./replay-guard.js";
 import { statusPage, statusSnapshot } from "./status.js";
 import { recordProbes, statusStoreFlush } from "./status-store.js";
@@ -752,6 +755,9 @@ import { creditsSalesEnabled, creditsTopupFields } from "./credits-sales.js";
 // The /v1 settle breaker reads whether a wallet has ever paid from the sales
 // ledger, handed in here so the breaker never imports it (see the module).
 setGatewaySettleBreakerSalesLedger({ payerHasPaidSale, salesLedgerLoaded });
+// The same read answers "has this payer a paid record?" for the coverage
+// admission and the breaker's count of runs in flight (src/paid-record.js).
+setPaidRecordLedger({ payerHasPaidSale, salesLedgerLoaded });
 
 // Listed only with a key, like every other env-gated kit: a tool we cannot serve
 // must not appear in the catalog, on /api/pricing, or in a 402's offer.
@@ -2899,6 +2905,9 @@ setStallContext(({ fromMs } = {}) => requestsDuring(fromMs, 3));
 // replay, the Stripe webhook, every priced catalog route and the /v1
 // gateway (paid or not: the unpaid 402 is the first step of a purchase).
 app.use((req, res, next) => {
+  // When the request arrived, before any gate looked at its payment (the
+  // coverage admission compares it with the wallet's last settlement).
+  if (!req.__a402ArrivedAt) req.__a402ArrivedAt = Date.now();
   const path = String(req.path || "/");
   if (path === "/health" || path === "/health/ready" || path.startsWith("/__operator") || path === "/api/stripe/webhook") return next();
   const why = shouldShedFree({ inFlight: inFlightCount() });
@@ -4365,7 +4374,22 @@ app.get("/api/gateway-status", async (req, res) => {
     // (src/gateway-settle-breaker.js); burst holds for one
     // window after the count trips. An alarm only: no request is refused for
     // it. One word publicly; the counts for the operator.
+    // Also burst when one key's verdict failures were recorded past its
+    // refusing count (GATEWAY_SETTLE_BREAKER_OVERRUN_ALARM runs served unpaid
+    // beyond the per-key bound, on any paid route).
     settleFailures: await gatewaySettleFailuresStatus({ full }).catch(() => ({ status: "unknown" })),
+    // coverageReads reads ok / degraded / off (src/inflight-cover.js):
+    // degraded when, inside the last ten minutes, a paid call was started or
+    // refused without a balance read made for it (judged on the wallet's last
+    // good read or on the allowance of calls at once); off with the check
+    // off. One wallet can make it read degraded, so the pagers read the
+    // second word: alert is sustained only when such calls fell in three or
+    // more separate minutes of the last ten, for three or more wallets
+    // (coverageReadsVerdict), else ok. Two words publicly; the counts are the
+    // operator's inflightCover.
+    coverageReads: (() => { try { const v = coverageReadsVerdict(); return { status: v.status, alert: v.sustained === true ? "sustained" : "ok" }; } catch { return { status: "unknown" }; } })(),
+    // Operator only: the in-flight coverage ledger's counts (src/inflight-cover.js). Never a wallet.
+    ...(full ? { inflightCover: inflightCoverStatus() } : {}),
     // unsettledReports reads ok / burst: COMPOSITE_GUARD_GLOBAL_MAX_FAILS
     // report or media runs spent upstream and then did not settle inside one
     // guard window (src/composite-spend-guard.js); burst holds for
@@ -7679,11 +7703,26 @@ const findCachePolicy = CACHEABLE_ROUTES[findCachePath];
 // minute with one summary line for the rest (src/prepayment-refusal.js).
 const prePaymentLogSampler = createPrePaymentLogSampler({ perMinute: 20 });
 setInterval(contained("prepayment-log-sampler", () => prePaymentLogSampler.tick()), 15_000).unref();
+// The in-flight coverage check's 429s (an error with `coverRefusal`,
+// src/inflight-cover.js) are answered before anything runs: per wallet, the
+// first in a minute prints its line and the rest are one summary line.
+const coverRefusalLogSampler = createCoverRefusalLogSampler({ perMinute: 20 });
+setInterval(contained("cover-refusal-log-sampler", () => coverRefusalLogSampler.tick()), 15_000).unref();
+/** Counts one coverage refusal for its wallet; true when its own line prints.
+ *  The call's "[paid-timing]" line follows the same answer
+ *  (markCoverRefusalLine), and the request keeps the refusal's class for the
+ *  top-buyer failure alarm (noteTopBuyerFailure). Called once per refusal. */
+function noteCoverRefusalLog(req, err) {
+  let print = true;
+  try { print = coverRefusalLogSampler.allow(paidCallPayer(req) || "", err?.coverRefusal) === true; } catch { print = true; }
+  try { req.__a402CoverRefusal = typeof err?.coverRefusal === "string" ? err.coverRefusal : ""; markCoverRefusalLine(req, print); } catch { /* logging never touches a call */ }
+  return print;
+}
 // Diagnostic log for tool errors. Lets us spot patterns like "100% of /api/whois
 // calls fail in 1ms" without leaking PII — only slug + HTTP status + the error
 // message we already serialize to the response body. No body, no IP, no UA.
 // 4xx = caller sent bad input; 5xx = our tool or its upstream broke.
-function logToolError(slug, status, message, shape, synthetic, probe, { prePayment = false, capture = true } = {}) {
+function logToolError(slug, status, message, shape, synthetic, probe, { prePayment = false, capture = true, quiet = false } = {}) {
   // Every caller's message is scrubbed of configured secrets and credential-
   // bearing URLs before the log line, PostHog and the failure monitor read it.
   message = redactSecrets(message || "");
@@ -7696,7 +7735,9 @@ function logToolError(slug, status, message, shape, synthetic, probe, { prePayme
   // line for those (PostHog still captures the probe-tagged event for
   // dashboards); probe 5xx still logs — a server bug is our bug no matter who
   // triggered it.
-  const skipConsole = (probe && status < 500) || (prePayment && status < 500 && !prePaymentLogSampler.allow(slug));
+  // `quiet`: a coverage refusal past its wallet's first in the minute (counted
+  // in that wallet's summary line by the caller).
+  const skipConsole = quiet || (probe && status < 500) || (prePayment && status < 500 && !prePaymentLogSampler.allow(slug));
   // Log the request's TOP-LEVEL KEYS (no values, no IPs, no payment info) on
   // 4xx so we can spot shape-mismatch patterns the schema didn't anticipate.
   // Keys are bounded — privacy-safe and small.
@@ -10837,6 +10878,10 @@ if (!FREE_MODE) {
   // message to the buyer; the facilitator's own text goes to this log
   // (src/facilitator-diagnostics.js). Before every payment gate.
   app.use(settleReceiptHeaderGuard());
+  // A header a handler set for its answer is never sent on a final status of
+  // 400 or above (src/answer-headers.js). Before every payment gate: a gate
+  // that buffers writeHead restores the function it found.
+  app.use(answerHeadersGuard());
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
 
   // Tempo support for MPP (src/mpp-tempo.js) — a SECOND, independent
@@ -10962,7 +11007,7 @@ if (!FREE_MODE) {
       // for: checkTempoCredentialBinding refuses a long-running route over
       // Tempo (its run outlives the credential), whatever challenge it answers.
       // verifiedSenderRequired: see spendsBeforeSettlement.
-      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), verifiedSenderRequired: spendsBeforeSettlement(def), longRunning: isLongRunningSlug(def.slug) } : null;
+      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), verifiedSenderRequired: spendsBeforeSettlement(def), longRunning: isLongRunningSlug(def.slug), runSeconds: routeRunSeconds(def.slug) } : null;
     },
     // Input check before the relay round trip (see createTempoGate). Same
     // envelope the dispatcher's 400 carries, so the caller corrects itself.
@@ -11026,7 +11071,7 @@ if (!FREE_MODE) {
       const def = CATALOG[`${method} ${path}`];
       if (!def) return null;
       const priceUsd = cardPriceUsd(def, req);
-      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def), longRunning: isLongRunningSlug(def.slug) } : null;
+      return priceUsd ? { priceUsd, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def), longRunning: isLongRunningSlug(def.slug), runSeconds: routeRunSeconds(def.slug) } : null;
     },
   });
   if (stripeGate) {
@@ -12146,6 +12191,9 @@ if (!FREE_MODE) {
     // Abandoned (budget spent) only when the charge is withheld: a buyer who
     // left after a settlement point already sent the charge (the residual
     // window) is the refund ledger's, and its ticket is released.
+    // ... and only for a call that reached its handler: one that was refused
+    // or left while still waiting to be admitted ran nothing, so its ticket
+    // is released and nothing is booked.
     const settle = () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) && !settleSentWhileConnected(req) });
     res.once("close", () => { closed = true; if (reserved) settle(); });
     // Priced at what this chain charges (the signed amount, or the gated
@@ -12246,7 +12294,9 @@ function noteTopBuyerFailure(req, res, slug, status, answer, sqlBusy = false) {
   const at = Date.now();
   verifiedPayerOf(req, res).then((payer) => {
     const outside = !!payer && !isOwnWallet(payer);
-    if (outside) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, kind: sqlBusy ? SQL_BUSY_KIND : null, at });
+    // A coverage refusal for the payer's own balance (short, settling) is not
+    // a failed answer of ours (BUYER_COVER_REFUSALS, src/top-buyer-failures.js).
+    if (outside) noteVerifiedPaidOutcome({ payer, slug, status, error, attribution, kind: sqlBusy ? SQL_BUSY_KIND : null, coverRefusal: Object.hasOwn(req, "__a402CoverRefusal") ? req.__a402CoverRefusal : null, at });
     if (sqlBusy) noteSqlBusy({ topBuyer: outside && isWatchedTopBuyer(payer), now: at });
   }, () => { if (sqlBusy) noteSqlBusy({ now: at }); });
 }
@@ -12313,9 +12363,47 @@ function withToolCallLog(slugOf, handler) {
         } catch { /* the call log never affects a call */ }
       });
     } catch { /* the call log never affects a call */ }
+    // The routes mounted through this wrapper (the bespoke content routes and
+    // the memory family) take the same admission the kit dispatcher takes
+    // (admitPaidRun): coverage of the payer's runs in flight, then the settle
+    // breaker's consult.
+    let coverRelease = null;
+    try {
+      coverRelease = await admitPaidRun(req, res, CATALOG[`${req.method} ${req.path}`]);
+    } catch (err) {
+      latencyMs = Date.now() - startedAt;
+      const status = Number(err?.statusCode) >= 400 ? Number(err.statusCode) : 500;
+      if (Number.isInteger(err?.retryAfter)) res.set("Retry-After", String(err.retryAfter));
+      const def = CATALOG[`${req.method} ${req.path}`];
+      // A coverage refusal logs as on the kit dispatcher: the wallet's first
+      // in a minute prints its "[tool-error]" line, the rest are counted in
+      // its summary line.
+      if (err?.coverRefusal && status === 429) logToolError(def?.slug || "unknown", status, redactSecrets(err?.message), undefined, isSyntheticRequest(req), false, { quiet: !noteCoverRefusalLog(req, err) });
+      // (A buyer who left while the call waited to start: the 499 goes to a closed socket.)
+      try { return res.status(status).json({ error: redactSecrets(err?.message), tool: def?.slug, ...(status === 499 ? { charged: false } : {}), ...toolErrorFields(err) }); } catch { return undefined; }
+    }
     try { return await handler(req, res, ...rest); }
-    finally { latencyMs = Date.now() - startedAt; }
+    finally { latencyMs = Date.now() - startedAt; coverRelease?.settling?.(); }
   };
+}
+
+/**
+ * The admission every paid run takes before its handler, on every mount of a
+ * paid handler (the kit dispatcher, and withToolCallLog for the bespoke
+ * content routes and the memory family): on a paid catalog route that is not
+ * proof-of-work payable, a run the payer's balance cannot cover on top of its
+ * runs in flight is refused 429 (src/inflight-cover.js), then the settle
+ * breaker is consulted (src/gateway-settle-breaker.js; it reads how the run
+ * was admitted). Resolves to the coverage release (registered to run when the
+ * response ends) or null; throws the refusal. A free call (FREE_MODE,
+ * proof-of-work, a trial) and a route that is not in the catalog take none.
+ */
+async function admitPaidRun(req, res, def) {
+  if (FREE_MODE || !def || isComputePayable(def) || !ownTrue(req, "__a402Dispatched")) return null;
+  const release = await admitCoveredRun(req, { expensive: EXPENSIVE_COMPOSITE_SLUGS.has(def.slug), arrivedAt: req.__a402ArrivedAt });
+  if (release && !onResponseEnd(req, res, release)) release();
+  await gatewaySettleBreakerCheck(req, { global: false });
+  return release;
 }
 
 function sendToolError(res, err, slug) {
@@ -12591,7 +12679,7 @@ for (const tool of ALL_KIT) {
         // then), the
         // credits key, or the client IP (card/SPT buyers and any rail whose
         // payer is only known post-settlement) - nobody is unkeyed.
-        const guardKey = payer || (req.mppTempoSender ? `tempo:${req.mppTempoSender}` : req.creditsKeyId ? `credits:${req.creditsKeyId}` : `ip:${clientIp(req)}`);
+        const guardKey = payer || (req.mppTempoSender ? `tempo:${req.mppTempoSender}` : req.creditsKeyId ? `credits:${req.creditsKeyId}` : `ip:${limiterKey(clientIp(req))}`);
         // ownGlobalBound: this slug's failures do not feed the burst alarm
         // (unsettledReports on /api/gateway-status). The alarm is reported,
         // never consulted here: no buyer is refused a run for other buyers'
@@ -12680,19 +12768,23 @@ for (const tool of ALL_KIT) {
       // other buyers' settle failures.
       // Keyed on "paid" (not PoW-eligible), not on WALLET_ONLY_SLUGS: the free tier is an
       // allowlist, so a new tool on neither list is paid and must be covered here too.
-      if (!FREE_MODE && !isComputePayable(tool)) await gatewaySettleBreakerCheck(req, { global: false });
-
-      // A wallet's concurrent runs on the expensive routes must be covered by
-      // its balance together (verify checks each authorization alone). A run
-      // the balance cannot also cover is refused 429 before it starts
-      // (src/inflight-cover.js); it leaves the ledger when its response ends,
-      // and counts as settling once its handler has returned.
+      // The consult itself runs below, after the coverage admission: it reads
+      // whether this run was admitted as covered.
+      //
+      // A wallet's concurrent runs must be covered by its balance together
+      // (each payment is verified alone, and settled after its handler). On
+      // every route the breaker consults (paid, not proof-of-work payable:
+      // each run costs an upstream read, a model call or a vendor call), a
+      // run the paying wallet's balance cannot cover on top of its runs in
+      // flight is refused 429 before it starts (src/inflight-cover.js), on
+      // every wire settled after the handler: x402 EVM (the MPP evm wire
+      // arrives as one), a Tempo pull credential, Solana, Algorand, Stellar.
+      // A wallet whose balance covers what it starts is never refused, however
+      // many calls it runs at once. The run leaves the ledger when its
+      // settlement succeeds or its response ends, and counts as settling once
+      // its handler has returned.
       // Before the client-gone belt, because the balance read can wait.
-      let coverRelease = null;
-      if (!FREE_MODE && EXPENSIVE_COMPOSITE_SLUGS.has(tool.slug)) {
-        coverRelease = await admitCoveredRun(req);
-        if (coverRelease && !onResponseEnd(req, res, coverRelease)) coverRelease();
-      }
+      const coverRelease = await admitPaidRun(req, res, tool);
 
       // The buyer's connection is already gone (it closed while the payment
       // was being verified): nothing could be delivered, so nothing runs and
@@ -12764,7 +12856,9 @@ for (const tool of ALL_KIT) {
       if (result && result.__binary) {
         // A binary answer may carry headers of its own (the dub tool's
         // translation rides beside the audio); the content type is set last.
-        if (result.headers && typeof result.headers === "object") for (const [k, v] of Object.entries(result.headers)) if (typeof v === "string") res.setHeader(k, v);
+        // Each is recorded as part of the answer (src/answer-headers.js): a
+        // payment gate that then refuses the call sends none of them.
+        if (result.headers && typeof result.headers === "object") for (const [k, v] of Object.entries(result.headers)) if (typeof v === "string") setAnswerHeader(req, res, k, v);
         return res.type(result.contentType).send(result.__binary);
       }
       // SSE escape hatch (LLM gateway streaming): the handler returns a
@@ -12810,7 +12904,7 @@ for (const tool of ALL_KIT) {
       // here and never sent on: the vocabulary is closed and an unrecognised
       // message becomes "other", so a buyer's own words cannot reach an
       // analytics service through a new error string.
-      refusalClass = refusalReason(err?.message, status);
+      refusalClass = refusalReason(err?.message, status, err);
       // A composite cut off by the drain is a 503 with the reason, whatever
       // shape the aborted upstream call surfaced it in (>= 400: not charged).
       if (isDrainAbort(err)) { status = 503; err = Object.assign(new Error("This host is redeploying and stopped the run before it finished; nothing was charged. Retry in a minute."), { statusCode: 503 }); }
@@ -12841,7 +12935,9 @@ for (const tool of ALL_KIT) {
       // or a credential-bearing URL an error quotes (an upstream echo, a
       // database driver's connection string) is scrubbed first, on every status.
       const errorMessage = withPushException(req, redactSecrets(err?.message));
-      logToolError(tool.slug, status, errorMessage, shape, synthetic, probe);
+      // A coverage refusal (src/inflight-cover.js) is one line per wallet per
+      // minute and a summary for the rest; every other error logs as before.
+      logToolError(tool.slug, status, errorMessage, shape, synthetic, probe, err?.coverRefusal && status === 429 ? { quiet: !noteCoverRefusalLog(req, err) } : undefined);
       // WHOSE FAILURE IS THIS? Every 4xx carried the self-correction envelope -
       // the tool's input schema, its required keys and a working example - which
       // says one thing to a machine: your input was wrong, here is the shape.

@@ -75,6 +75,33 @@
 // MULTI_NETWORK_MIN networks inside the window. Reported only: the wallet is
 // refused per network exactly as before, and nobody else is refused.
 //
+// RUNS IN FLIGHT. The counts above are of RECORDED outcomes, and an outcome
+// is recorded when a run ends: calls that arrive together are all consulted
+// before the first of them fails. So, for a payer with NO paid record only,
+// the consult also counts the key's runs in flight whose payment is taken
+// from the payer's own balance after the handler (an x402 payment header, a
+// Tempo pull credential) and that the coverage admission
+// (src/inflight-cover.js) did not admit as covered or trusted: a run it
+// admitted with the balance unread inside the new-wallet allowance, and a
+// payment it could not read terms from. Such a call is refused (429, a few
+// seconds' Retry-After, nothing charged) when the key's recorded failures
+// plus its counted runs in flight reach HARD_MAX_FAILS. Never counted, and
+// never refused for it: a covered or trusted run; any run of a payer with a
+// paid record (src/paid-record.js; a settled call recorded here is one); a card
+// (its own token check and challenge life bound it); credits; a Tempo push
+// credential; a key that names no wallet (an address, shared by buyers who
+// are not one buyer); and everything while INFLIGHT_COVER is `off` or
+// `composite`, which leave the consult exactly as it was before this count
+// existed.
+// Counted in this process (each replica holds its own).
+//
+// ONE KEY PAST ITS COUNT. A verdict failure recorded for a key whose count
+// already read refusing is a run that was served past the per-key bound
+// (calls in flight together, or a wallet whose balance covered its runs when
+// they were admitted and no longer did when they settled). OVERRUN_ALARM_FAILS
+// of them for one key inside the window raise the burst alarm, on the /v1
+// tiers and the catalog consult alike: reported only, nobody is refused.
+//
 // The listener rides onSettleOutcome (src/hangup-settlement.js), which reports
 // the final outcome whether or not the buyer stayed connected: a settlement
 // sent while the buyer was connected that fails after the buyer left counts
@@ -141,9 +168,15 @@ import { shared, sharedLimitsEnabled, sharedWrite, noteSharedLimitsDegraded } fr
 import { settleFailureFault, isBlocklistSettleVerdict, SETTLE_FAULT, RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { isWithdrawnSubcentRefusal } from "./avm-sponsorship.js";
 import { isGatewayPendingAnswer } from "./gateway-wire.js";
-import { onSettleOutcome } from "./hangup-settlement.js";
+import { onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
+// The mark and the switch only (src/inflight-cover-state.js), never the check
+// itself: the decide service reaches this module through the gateway kit, and
+// src/inflight-cover.js would bring the revenue and sales ledgers with it.
+import { coveredRunStateOf, inflightCoverMode } from "./inflight-cover-state.js";
+import { hasPaidRecord, notePaidSettlement } from "./paid-record.js";
 import { toolFailureMonitor } from "./tool-failure-monitor.js";
 import { positiveNum as num } from "./env-num.js";
+import { limiterKey } from "./rate-limit.js";
 
 /** Settle failures a wallet may accumulate inside the window before it is refused. */
 export const MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_MAX, 3);
@@ -186,6 +219,21 @@ export const GLOBAL_MAX_FAILS = num(process.env.GATEWAY_SETTLE_BREAKER_GLOBAL_MA
  *  doing its job. */
 export const MULTI_NETWORK_MIN = Math.max(2, Math.floor(num(process.env.GATEWAY_SETTLE_BREAKER_MULTI_NETWORK_MIN, 3)));
 
+/** Verdict failures recorded for one key while its count already read
+ *  refusing (ONE KEY PAST ITS COUNT) that raise the burst alarm. */
+export const OVERRUN_ALARM_FAILS = Math.max(1, Math.floor(num(process.env.GATEWAY_SETTLE_BREAKER_OVERRUN_ALARM, MAX_FAILS)));
+/** The Retry-After of a refusal for runs in flight: they end in seconds. */
+const INFLIGHT_RETRY_MS = 5_000;
+
+// key -> runs in flight that settle after the handler and are not known to
+// be covered (RUNS IN FLIGHT). This process only.
+const inflight = new Map();
+const INFLIGHT_COUNTED = "__a402BreakerInflightCounted";
+// key -> number[]: verdict failures recorded past the key's refusing count,
+// and until when a key's run of them has raised the alarm.
+const overrunFails = new Map();
+const overrunAlarmed = new Map();
+let overrunTrips = 0;
 const fails = new Map(); // key -> number[] (failure timestamps inside the window)
 const oks = new Map();   // key -> number[] (settled-call timestamps inside the window)
 // key -> number[]: failures inside the window that proved nothing about the
@@ -390,8 +438,12 @@ export function gatewaySettleBreakerKey(req) {
   if (req.creditsKeyId) return `credits:${req.creditsKeyId}`;
   const signer = Object.hasOwn(req, NON_EVM_SIGNER) ? req[NON_EVM_SIGNER] : null;
   if (signer) return signer;
+  // An IPv6 address is keyed by its /64 (src/rate-limit.js limiterKey, the
+  // fold every other per-address guard uses): one host is routinely assigned
+  // a whole /64, so the address alone would give each of its addresses a
+  // count of its own.
   const ip = typeof req.ip === "string" && req.ip.trim() ? req.ip.trim() : req.socket?.remoteAddress;
-  return ip ? `ip:${String(ip).trim()}` : null;
+  return ip ? `ip:${limiterKey(String(ip).trim())}` : null;
 }
 // The non-EVM signer read for this request: a rail-prefixed address, or ""
 // once read and none was found (the IP fallback). Own, non-enumerable, read
@@ -680,6 +732,77 @@ function noteUnprovenFailure(key, now) {
   console.warn(`[gateway-breaker] ${arr.length} paid calls from one buyer${networkOf(key) ? ` on ${networkOf(key)}` : ""} were served and could not be settled inside ${Math.round(WINDOW_MS / 1000)} s, none of them a verdict on the buyer's payment - settleFailures reads burst until ${new Date(globalAlarmUntil).toISOString()}`);
 }
 
+/** Is this request's payment taken from the payer's own balance after its
+ *  handler? An x402 payment header or a Tempo pull credential. Not a card
+ *  (it carries neither, and its own gate bounds it), credits (held at
+ *  authorize) or a Tempo push credential (final already). */
+function settlesAfterHandler(req) {
+  if (!req || typeof req !== "object") return false;
+  if (req.creditsKeyId) return false;
+  if (req.tempoSettling === true) return !req.mppTempoPushHash;
+  try { return !!paymentHeaderOf(req); } catch { return false; }
+}
+/** A run the consult counts while it is in flight (RUNS IN FLIGHT): taken
+ *  after the handler, not admitted as covered or trusted, under a key that
+ *  names a wallet with no paid record. */
+function countedInFlight(req, key) {
+  if (inflightCoverMode() !== "on" || !settlesAfterHandler(req)) return false;
+  const state = coveredRunStateOf(req);
+  if (state === "covered" || state === "trusted") return false;
+  const payer = payerOfKey(key);
+  if (!payer) return false;
+  // A settled call recorded here is a paid record too (recordGatewaySettleSuccess notes it).
+  return !hasPaidRecord(payer);
+}
+/** This key's counted runs in flight, without this request's own. */
+function inflightOthers(req, key) {
+  if (!key) return 0;
+  const own = req && typeof req === "object" && Object.hasOwn(req, INFLIGHT_COUNTED) ? 1 : 0;
+  return Math.max(0, (inflight.get(key) || 0) - own);
+}
+/** Count this request's run in flight under `key` until its response ends,
+ *  however it ends. Once per request. */
+function countInFlight(req, key) {
+  if (!key || !countedInFlight(req, key) || Object.hasOwn(req, INFLIGHT_COUNTED)) return;
+  try { Object.defineProperty(req, INFLIGHT_COUNTED, { value: true, enumerable: false, configurable: true }); } catch { return; }
+  inflight.set(key, (inflight.get(key) || 0) + 1);
+  let left = false;
+  const leave = () => {
+    if (left) return;
+    left = true;
+    const n = (inflight.get(key) || 0) - 1;
+    if (n > 0) inflight.set(key, n); else inflight.delete(key);
+  };
+  if (!onResponseEnd(req, req.res, leave)) leave();
+}
+/** The key's state with its runs in flight read in (RUNS IN FLIGHT): a call
+ *  that is not covered is refused once recorded failures and counted runs in
+ *  flight together reach HARD_MAX_FAILS. */
+function withInflight(b, req, key, now) {
+  if (b.blocked || !key || !countedInFlight(req, key)) return b;
+  const pending = inflightOthers(req, key);
+  if (!(pending > 0) || b.fails + b.unknownFails + pending < HARD_MAX_FAILS) return b;
+  return { ...b, blocked: true, kind: "in-flight", inflight: pending, until: now + INFLIGHT_RETRY_MS };
+}
+/** A verdict failure recorded for a key whose count already read refusing
+ *  (ONE KEY PAST ITS COUNT): at OVERRUN_ALARM_FAILS inside the window the
+ *  burst alarm, once per window per key. Refuses nothing. */
+function noteOverrunFailure(key, now) {
+  const arr = inWindow(overrunFails.get(key) || [], now);
+  arr.push(now);
+  if (arr.length > MAX_OKS_KEPT) arr.splice(0, arr.length - MAX_OKS_KEPT);
+  overrunFails.set(key, arr);
+  if (overrunFails.size > NETWORKS_AT_LIMIT_MAX_BUYERS) { for (const [k, a] of overrunFails) if (!inWindow(a, now).length) overrunFails.delete(k); }
+  if (arr.length < OVERRUN_ALARM_FAILS || (overrunAlarmed.get(key) || 0) > now) return;
+  overrunAlarmed.set(key, now + WINDOW_MS);
+  if (overrunAlarmed.size > NETWORKS_AT_LIMIT_MAX_BUYERS) { for (const [k, t] of overrunAlarmed) if (t <= now) overrunAlarmed.delete(k); }
+  overrunTrips++;
+  if (globalAlarmUntil <= now) globalTrips++;
+  globalAlarmUntil = now + WINDOW_MS;
+  if (SHARED) void write(shared.flagSet("gwb-alarm", "all", now + WINDOW_MS, { now }));
+  console.warn(`[gateway-breaker] ${arr.length} paid calls from one buyer${networkOf(key) ? ` on ${networkOf(key)}` : ""} were served and refused at settlement after its count already read refusing inside ${Math.round(WINDOW_MS / 1000)} s - settleFailures reads burst until ${new Date(globalAlarmUntil).toISOString()}; no request is refused for it`);
+}
+
 /** A payment was presented, the handler served, and settlement FAILED.
  *  `fault` (WHO IS COUNTED): "buyer" counts at MAX_FAILS, "unknown" at
  *  UNKNOWN_MAX_FAILS, "not-buyer" never; both of the latter feed the one-key
@@ -738,6 +861,9 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
   // failure that is not a verdict: nothing more against the wallet here.
   if (!key || !walletCount || !isBuyer) return;
   const arr = inWindow(fails.get(key) || [], now);
+  // Served although the key's count already read refusing: one run past the
+  // per-key bound (ONE KEY PAST ITS COUNT).
+  if (verdict(arr, arr.length, inWindow(oks.get(key) || [], now).length).blocked) noteOverrunFailure(key, now);
   arr.push(now);
   fails.set(key, arr);
   if (blocklisted) {
@@ -758,6 +884,8 @@ export function recordGatewaySettleFailure(key, now = Date.now(), { global = tru
  *  failures under the share that refuses it. */
 export function recordGatewaySettleSuccess(key, now = Date.now()) {
   if (!key) return;
+  // A settled call is this wallet's paid record (src/paid-record.js).
+  try { const p = payerOfKey(key); if (p) notePaidSettlement(p, now); } catch { /* bookkeeping only */ }
   const ok = inWindow(oks.get(key) || [], now);
   ok.push(now);
   oks.set(key, ok.length > MAX_OKS_KEPT ? ok.slice(-MAX_OKS_KEPT) : ok);
@@ -898,7 +1026,10 @@ function consultKey(req, now, global) {
     decide(req, key, now, global, await sharedBlocked(key, now, { burstUntilP, authKey }));
   })();
 }
-function decide(req, key, now, global, b) {
+function decide(req, key, now, global, b0) {
+  // Read and counted in one synchronous turn (the count is taken just before
+  // the listener is armed, below), so calls that arrive together see each other.
+  const b = withInflight(b0, req, key, now);
   if (b.blocked) {
     // A key that settled a call inside the window is a paying buyer: its
     // refusal is noted on the failure monitor (a count per bucket, shared
@@ -918,13 +1049,24 @@ function decide(req, key, now, global, b) {
     // A wallet whose strikes include our blocklist's verdict is told only
     // that settlement did not proceed for it (each receipt carries the reason
     // code): no balance or signature story the receipt does not tell.
-    const e = new Error(b.kind === "authorization"
+    const e = new Error(b.kind === "in-flight"
+      ? `This wallet has ${b.inflight} paid calls in progress here${on} whose payments have not settled yet and are not confirmed as covered by its balance${b.fails + b.unknownFails > 0 ? `, beside ${b.fails + b.unknownFails} recent payments that did not settle` : ""}; a further call is refused until some of them finish (about ${secs} s). Nothing was charged for this request. Retry when they have settled.`
+      : b.kind === "authorization"
       ? `This payment authorization${on} was served ${b.authFails} times in the last ${mins} min and its settlement did not complete; this one authorization is refused until ${new Date(b.until).toISOString()} (about ${secs} s). Sign a new authorization (a new nonce) and the call is served at once. Nothing was charged for this request.`
       : b.kind === "unknown"
       ? `Settlement of this wallet's recent payments${on} did not complete (${b.unknownFails} in the last ${mins} min: each verified and was served, and its settlement did not complete); ${until}`
       : b.blocklisted
       ? `Recent payments from this wallet${on} were not settled (${b.fails} in the last ${mins} min: each verified and was served, and settlement did not proceed for this wallet; each refused settlement's PAYMENT-RESPONSE receipt carries its reason code); ${until}`
       : `Recent payments from this wallet${on} failed to settle (${b.fails} in the last ${mins} min: they verified, the call was served, and the settlement then refused the payment itself, for its balance, its signature, or an authorization already used or expired)${b.wideBound ? `; while payments from many wallets are failing to settle here, a wallet that has never settled a payment is held after ${BURST_MAX_FAILS === 1 ? "its first such failure" : `${BURST_MAX_FAILS} such failures`}` : ""}; ${until} ${network ? `Before paying on ${network} again, check the wallet's balance of the payment token there and sign a new authorization.` : "Check the wallet's USDC balance on the paying chain and sign a new authorization before retrying."}`);
+    // A card buyer (keyed by client address) is not told about a wallet or
+    // its balance.
+    if (!payerOfKey(key) && (req?.mppStripeCredential === true || req?.stripeSettling === true)) {
+      e.message = e.message
+        .replace("Recent payments from this wallet", "Recent card payments from this client address")
+        .replace("this wallet's recent payments", "recent card payments from this client address")
+        .replace("settlement did not proceed for this wallet", "settlement did not proceed for them")
+        .replace(" Check the wallet's USDC balance on the paying chain and sign a new authorization before retrying.", " Check the payment method before retrying.");
+    }
     e.statusCode = 429;
     e.retryAfterMs = b.until - now;
     // Machine-readable, beside the message (src/tool-error-fields.js):
@@ -934,10 +1076,12 @@ function decide(req, key, now, global, b) {
     // here, so the fields name its 402 instead of repeating a list.
     e.retryAfter = secs;
     if (b.kind === "authorization") e.hint = "sign-new-authorization";
+    else if (b.kind === "in-flight") e.retry = "after-runs-in-flight";
     else if (network) { e.retry = "other-network"; e.refusedNetwork = network; e.otherNetworksFrom = "accepts[].network in this route's 402"; }
     try { req?.res?.setHeader?.("Retry-After", String(secs)); } catch { /* headers are best-effort */ }
     throw e;
   }
+  countInFlight(req, key);
   armGatewaySettleBreaker(req, key, { global });
 }
 
@@ -963,6 +1107,9 @@ export function gatewaySettleBreakerStatus(now = Date.now()) {
     // Times one key's failures that proved nothing about the wallet reached
     // the refusing count and raised the alarm instead.
     unprovenTrips,
+    // Times one key's verdict failures recorded past its refusing count
+    // raised the alarm, and the counted runs in flight on this process.
+    overrunTrips, overrunAlarmFails: OVERRUN_ALARM_FAILS, runsInFlightCounted: [...inflight.values()].reduce((a, n) => a + n, 0),
     globalAlarm: g.alarm, globalAlarmUntil: g.alarm ? new Date(g.until).toISOString() : null, globalTrips,
     // THE SERVICE-WIDE BOUND on this process: whether it is up, and how often it was raised.
     wideBound: wideBoundUntil(now) > 0, wideTrips,
@@ -980,7 +1127,7 @@ export async function gatewaySettleFailuresStatus({ full = false, now = Date.now
   const status = g.alarm ? "burst" : "ok";
   if (!full) return { status };
   const s = gatewaySettleBreakerStatus(now);
-  return { status, until: g.alarm ? new Date(g.until).toISOString() : null, buyersInWindow: s.globalFailsInWindow, threshold: GLOBAL_MAX_FAILS, windowMinutes: WINDOW_MS / 60_000, trips: s.globalTrips, blockedKeys: s.blockedKeys, trackedKeys: s.trackedKeys, multiNetworkThreshold: MULTI_NETWORK_MIN, multiNetworkTrips: s.multiNetworkTrips, payersWithNetworkAtLimit: s.payersWithNetworkAtLimit, unprovenTrips: s.unprovenTrips, wideBound: s.wideBound, wideTrips: s.wideTrips, burstMaxFails: BURST_MAX_FAILS };
+  return { status, until: g.alarm ? new Date(g.until).toISOString() : null, buyersInWindow: s.globalFailsInWindow, threshold: GLOBAL_MAX_FAILS, windowMinutes: WINDOW_MS / 60_000, trips: s.globalTrips, blockedKeys: s.blockedKeys, trackedKeys: s.trackedKeys, multiNetworkThreshold: MULTI_NETWORK_MIN, multiNetworkTrips: s.multiNetworkTrips, payersWithNetworkAtLimit: s.payersWithNetworkAtLimit, unprovenTrips: s.unprovenTrips, overrunTrips: s.overrunTrips, runsInFlightCounted: s.runsInFlightCounted, wideBound: s.wideBound, wideTrips: s.wideTrips, burstMaxFails: BURST_MAX_FAILS };
 }
 
 /** Test-only. With a shared store it returns a promise that settles once
@@ -993,6 +1140,7 @@ export function _gatewaySettleBreakerReset() {
   fails.clear(); unknownFails.clear(); blocklistFails.clear(); unprovenFails.clear(); unprovenAlarmed.clear(); unprovenTrips = 0; oks.clear(); globalFailKeys = new Map(); globalAlarmUntil = 0; globalTrips = 0;
   wideFailKeys = new Map(); wideUntil = 0; wideTrips = 0;
   networksAtLimit.clear(); multiNetworkTrips = 0;
+  inflight.clear(); overrunFails.clear(); overrunAlarmed.clear(); overrunTrips = 0;
   if (!SHARED) return undefined;
   return (async () => {
     while (pendingWrites.size) await Promise.allSettled([...pendingWrites]);

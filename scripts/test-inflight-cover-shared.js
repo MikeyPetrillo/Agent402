@@ -32,14 +32,14 @@
 //      (at once, or one run after another) shares one read at a time and
 //      nobody in it is refused or admitted unread. At the production
 //      default, a run beside another container's run that stays is refused
-//      after about five seconds, a run that leaves before the wait runs out is
+//      after about one second, a run that leaves before the wait runs out is
 //      seen by a last look, and a waiting run's reservation is out of the
 //      window while it waits and back in it before it is judged.
 // Under CI a missing REDIS_URL fails (a skipped integration test is not
 // coverage); a local run says the Redis half was skipped. The two-process
 // case is scripts/test-shared-limits-crossprocess.js.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROLE = process.argv[2] || "main";
@@ -62,6 +62,16 @@ const turn = () => new Promise((r) => setImmediate(r));
 // regression fails here and never hangs the suite.
 const until = async (cond, what, ms = 15_000) => { const end = performance.now() + ms; while (!cond()) { if (performance.now() > end) { fail(`timed out waiting for ${what}`); return false; } await turn(); } return true; };
 
+if (ROLE === "holder") {
+  // A container that admits one run for the wallet named in HOLD_WALLET and
+  // holds it until it is killed (the Redis half kills it with SIGKILL).
+  const C = await import("../src/inflight-cover.js");
+  C._setBalanceReaderForTest(async () => PRICE);
+  const r = await attempt(C, process.env.HOLD_WALLET);
+  console.log(typeof r.release === "function" ? "HOLDING" : `NOT-HOLDING ${r.err?.message}`);
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+}
 if (ROLE === "degraded") {
   // A shared store is configured (REDIS_URL, closed port) and never answers.
   const C = await import("../src/inflight-cover.js");
@@ -104,9 +114,10 @@ if (ROLE === "memory") {
   ok(typeof c.release === "function", "memory: once the run leaves, the next is admitted");
   c.release();
   {
-    // The read lane (8 at once across wallets), as it always was: a ninth
-    // and tenth wallet's reads find it full and read as unknown at once,
-    // inside the unread allowance; nothing waits for a place.
+    // The read lane (8 at once across wallets) is a queue: a ninth and tenth
+    // wallet's reads find it full and wait for a place inside the admission
+    // wait (about a second); with none, they are admitted inside the unread
+    // allowance. A full lane never reads as unknown at once.
     C._resetInflightCoverForTest();
     const gated = [];
     C._setBalanceReaderForTest(() => new Promise((res) => gated.push(res)));
@@ -114,11 +125,13 @@ if (ROLE === "memory") {
     const firsts = [];
     for (const w of wallets) firsts.push(await attempt(C, w));
     const t0 = performance.now();
-    const seconds = wallets.map((w) => attempt(C, w));
+    // The first eight take the lane and wait the long way; the ninth and
+    // tenth are given the suite's short admission wait.
+    const seconds = wallets.map((w, i) => attempt(C, w, i < 8 ? { settleWaitMs: 5_000 } : QUICK));
     const late = await Promise.all(seconds.slice(8));
     const lateMs = performance.now() - t0;
-    ok(firsts.every((x) => typeof x.release === "function") && gated.length === 8 && late.every((x) => typeof x.release === "function") && C.inflightCoverStatus().admittedUnread === 2 && lateMs < 1_000,
-      `memory: with eight reads under way, a ninth and tenth wallet's second runs read as unknown at once and are admitted inside the unread allowance (under way ${gated.length}, unread ${C.inflightCoverStatus().admittedUnread}, ${Math.round(lateMs)} ms)`);
+    ok(firsts.every((x) => typeof x.release === "function") && gated.length === 8 && late.every((x) => typeof x.release === "function") && C.inflightCoverStatus().admittedUnread === 2 && C.inflightCoverStatus().readsQueued === 2 && lateMs >= 100 && lateMs < 1_000,
+      `memory: with eight reads under way, a ninth and tenth wallet's second runs wait for a place in the lane and, with none inside their admission wait, are admitted inside the unread allowance (under way ${gated.length}, unread ${C.inflightCoverStatus().admittedUnread}, ${Math.round(lateMs)} ms)`);
     for (const g of gated) g(2n * PRICE);
     await Promise.all(seconds);
     // A run waiting on a settling one is woken when that run leaves, not
@@ -146,14 +159,24 @@ if (ROLE === "model") {
   // the last-view memory, and the read that follows the read under way.
   const C = await import("../src/inflight-cover.js");
   const { shared } = await import("../src/shared-limits.js");
+  // Every wallet here has a paid record: these cases are about coverage across
+  // containers, not a new wallet's first calls (scripts/test-inflight-admission.js).
+  (await import("../src/paid-record.js"))._setPaidRecordForTest(() => true);
   ok(C._inflightCoverShared === true, "model: the shared half is on");
   const wins = new Map(); // coverKey -> Map(member -> weight)
+  const scores = new Map(); // member -> when it was written (0: long ago)
   let unlisted = false, beforeRead = null;
   const winOf = (k) => { if (!wins.has(k)) wins.set(k, new Map()); return wins.get(k); };
-  const snap = (k) => { const w = winOf(k); const sum = [...w.values()].reduce((x, y) => x + y, 0); return { ok: true, count: w.size, sum, entries: unlisted ? null : [...w].map(([member, weight]) => ({ member, weight, score: 0 })) }; };
+  const snap = (k) => { const w = winOf(k); const sum = [...w.values()].reduce((x, y) => x + y, 0); return { ok: true, count: w.size, sum, entries: unlisted ? null : [...w].map(([member, weight]) => ({ member, weight, score: scores.get(member) || 0 })) }; };
   shared.windowAdd = async (n, k, { member, weight }) => { winOf(k).set(String(member), weight); return snap(k); };
   shared.windowRead = async (n, k) => { const step = beforeRead; beforeRead = null; if (step) step(k); return snap(k); };
   shared.windowRemove = async (n, k, { member }) => { winOf(k).delete(String(member)); return { ok: true }; };
+  // Liveness keys, in the model: "otherproc-1" is a live container; a process
+  // named nowhere here has none.
+  const live = new Set(["otherproc-1"]);
+  const marks = new Map(); // wallet -> the `until` of its last-settlement mark
+  shared.flagSet = async (n, k, until) => { if (n === "inflight-cover-live") live.add(String(k)); if (n === "inflight-cover-settled") marks.set(String(k), until); return { ok: true }; };
+  shared.flagGet = async (n, k) => ({ ok: true, until: n === "inflight-cover-live" ? (live.has(String(k)) ? Date.now() + 60_000 : 0) : n === "inflight-cover-settled" ? (marks.get(String(k)) || 0) : 0 });
   const P = Number(PRICE);
   let reads = 0, balance = 0n;
   {
@@ -253,6 +276,95 @@ if (ROLE === "model") {
       `model: one read under way at a time across three runs whose views land one read apart (under way ${besideFirst}, then ${besideSecond}; reads ${gated.length}, want 1, 2, 3)`);
     out.forEach((x) => x.release?.());
   }
+  {
+    // A process that died mid-run left its reservation in the window. It has
+    // no liveness key, so it is not counted: a wallet holding exactly this
+    // call's price is admitted, on a read taken after the drop (the process
+    // may have settled the run before it went), and the reservation is
+    // taken out of the window. The same reservation from a live process counts.
+    C._resetInflightCoverForTest();
+    unlisted = false; reads = 0; balance = PRICE;
+    C._setBalanceReaderForTest(async () => { reads++; return balance; });
+    const D = "0x" + "d7".repeat(20), kD = coverKeyOf(D);
+    winOf(kD).set("live~deadproc-9:r1", P);
+    live.add("live~liveproc-2");
+    const a = await attempt(C, D);
+    ok(typeof a.release === "function" && reads === 1 && !winOf(kD).has("live~deadproc-9:r1") && C.inflightCoverStatus().deadReservationsIgnored === 1, `model: a reservation whose process has no liveness key is ignored and removed; the drop is a departure, so the wallet's call is judged on a read and admitted (${a.err?.statusCode || "admitted"}, reads ${reads})`);
+    a.release();
+    const L = "0x" + "d8".repeat(20), kL = coverKeyOf(L);
+    winOf(kL).set("live~liveproc-2:r1", P);
+    const b2 = await attempt(C, L);
+    ok(b2.err?.statusCode === 429 && winOf(kL).has("live~liveproc-2:r1"), `model control: the same reservation from a live process is counted, and the call the balance cannot also cover is refused (${b2.err?.statusCode || "admitted"})`);
+    // A reservation written a moment ago is counted whether or not its
+    // process's key is there yet (a key can lag its first reservation).
+    const Y = "0x" + "d9".repeat(20), kY = coverKeyOf(Y);
+    winOf(kY).set("live~startingproc-3:r1", P); scores.set("live~startingproc-3:r1", Date.now());
+    const y1 = await attempt(C, Y);
+    ok(y1.err?.statusCode === 429 && winOf(kY).has("live~startingproc-3:r1"), `model: a reservation younger than a liveness key's life is counted without one (${y1.err?.statusCode || "admitted"})`);
+    // The owner dies: its key lapses, and from then on its reservation is ignored.
+    live.delete("live~liveproc-2");
+    await new Promise((res) => setTimeout(res, 2100)); // past the liveness cache
+    const c2 = await attempt(C, L);
+    ok(typeof c2.release === "function" && !winOf(kL).has("live~liveproc-2:r1"), `model: once the owner's liveness key is gone its reservation no longer refuses the wallet (${c2.err?.statusCode || "admitted"})`);
+    c2.release();
+    ok([...live].some((k) => /^live~\d+-[a-z0-9]+$/.test(k)), `model: this process keeps a liveness key of its own, under an id that says so (${[...live].join(", ")})`);
+    // A build that keeps no liveness key (the one this build replaces, still
+    // serving while a deploy overlaps) writes ids without the mark. Its
+    // reservation is counted until it ages out of the window, however old it
+    // is and with no key anywhere: never dropped early.
+    const O = "0x" + "da".repeat(20), kO = coverKeyOf(O);
+    const ignoredBefore = C.inflightCoverStatus().deadReservationsIgnored;
+    winOf(kO).set("4242-ab12cd:r1", P); // score 0: written long ago
+    const o1 = await attempt(C, O);
+    ok(o1.err?.statusCode === 429 && winOf(kO).has("4242-ab12cd:r1") && C.inflightCoverStatus().deadReservationsIgnored === ignoredBefore, `model: a reservation of a build that keeps no liveness key counts, however old, and stays in the window (${o1.err?.statusCode || "admitted"})`);
+    // The wallet's last-settlement mark is shared. A run of the wallet settled
+    // on ANOTHER container after this call arrived: verify may predate that
+    // payment, so the call is judged on a read here too, not on verify alone.
+    const M = "0x" + "dc".repeat(20), kM = coverKeyOf(M);
+    reads = 0; balance = 0n;
+    marks.set(kM, Date.now() - 50 + 120_000); // settled there 50 ms ago
+    const late = await attempt(C, M, { arrivedAt: Date.now() - 500 });
+    ok(late.err?.statusCode === 429 && reads === 1 && C.inflightCoverStatus().foreignSettlementsSeen >= 1, `model: a call that arrived before another container's settlement of the wallet is judged on a read (${late.err?.statusCode || "admitted"}, reads ${reads})`);
+    const after = await attempt(C, M, { arrivedAt: Date.now() });
+    ok(typeof after.release === "function" && reads === 1, `model control: a call that arrived after it is admitted on verify's proof, with no read (${after.err?.statusCode || "admitted"}, reads ${reads})`);
+    marks.delete(kM);
+    after.release.settled();
+    await new Promise((res) => setTimeout(res, 30));
+    ok(marks.get(kM) > Date.now() + 100_000, "model: a settlement here writes the wallet's mark for the other containers");
+    // A settlement another container made was never taken off this process's
+    // reads of the wallet: its last good read here is forgotten, so with the
+    // balance unreadable the wallet is judged as one never read (the
+    // allowance), not as covered by that read.
+    const G = "0x" + "dd".repeat(20), kG = coverKeyOf(G);
+    balance = PRICE * 10n; reads = 0;
+    const g0 = await attempt(C, G); g0.release.settled(); // leaves a last good read of ten prices here
+    await new Promise((res) => setTimeout(res, 30));
+    const onKeptBefore = C.inflightCoverStatus().admittedOnKeptRead;
+    marks.set(kG, Date.now() + 5_000 + 120_000); // another container settles a run of the wallet after that read
+    C._setBalanceReaderForTest(async () => { throw new Error("rpc down"); });
+    C._ageKeptReadsForTest(60_000);
+    const g1 = await attempt(C, G, { arrivedAt: Date.now() + 10_000 });
+    const g2 = await attempt(C, G, { arrivedAt: Date.now() + 10_000 });
+    ok(typeof g1.release === "function" && typeof g2.release === "function" && C.coveredRunStateOf(g2.req) !== "covered" && C.inflightCoverStatus().admittedOnKeptRead === onKeptBefore, `model: after another container's settlement the wallet's last good read here is not judged on (${C.coveredRunStateOf(g2.req)})`);
+    g1.release(); g2.release();
+    C._setBalanceReaderForTest(async () => { reads++; return balance; });
+    // A process stalled for longer than its liveness key lasts: another
+    // container dropped its reservation meanwhile. At its next renewal it
+    // writes back every reservation it still holds.
+    const R = "0x" + "db".repeat(20), kR = coverKeyOf(R);
+    balance = PRICE * 10n;
+    const r1 = await attempt(C, R);
+    const mine = [...winOf(kR).keys()].filter((m) => m.startsWith("live~"));
+    await C._liveBeatForTest(Date.now());
+    for (const m of mine) winOf(kR).delete(m); // dropped by another container while this one was stalled
+    const written = await C._liveBeatForTest(Date.now() + 10 * 60_000);
+    await new Promise((res) => setTimeout(res, 20));
+    ok(typeof r1.release === "function" && mine.length === 1 && written >= 1 && winOf(kR).has(mine[0]) && C.inflightCoverStatus().reservationsWrittenBack >= 1, `model: a process that renews its liveness key later than the key lasts writes its reservations back (${written} written)`);
+    r1.release();
+    await new Promise((res) => setTimeout(res, 20));
+    const none = await C._liveBeatForTest(Date.now() + 20 * 60_000);
+    ok(none === 0 || !winOf(kR).has(mine[0]), "model: a reservation already removed is not written back");
+  }
   console.log(`CHILD_PASS ${pass}`);
   process.exit(0);
 }
@@ -282,8 +394,14 @@ if (!process.env.REDIS_URL) {
 }
 process.env.SHARED_LIMITS_PREFIX ||= `icx${process.pid}${Date.now().toString(36)}`;
 process.env.SHARED_LIMITS = "on";
+// A short liveness key, so the case that kills a container does not wait 30 s.
+const LIVE_TTL = 1_500;
+process.env.INFLIGHT_COVER_LIVE_TTL_MS = String(LIVE_TTL);
 const C = await import("../src/inflight-cover.js");
 const { shared } = await import("../src/shared-limits.js");
+// "otherproc-1" stands for a live container throughout this half.
+await shared.flagSet("inflight-cover-live", "otherproc-1", Date.now() + 30 * 60_000);
+(await import("../src/paid-record.js"))._setPaidRecordForTest(() => true);
 const WIN = 15 * 60_000;
 const NAME = "inflight-cover";
 const windowOf = async (from) => (await shared.windowRead(NAME, coverKeyOf(from), { windowMs: WIN }));
@@ -298,7 +416,7 @@ C._setBalanceReaderForTest(async () => { reads++; return balance; });
   const W = "0x" + "b8".repeat(20);
   ok((await foreign(W, "r1")).ok, "redis: another container's run is in the shared window");
   const r = await attempt(C, W);
-  ok(r.err?.statusCode === 429 && reads === 1 && /does not cover this one as well/.test(r.err.message), `redis: this container's first run is judged with the other's and refused on a read (${r.err?.statusCode}, reads ${reads})`);
+  ok(r.err?.statusCode === 429 && reads === 1 && /does not cover this one as well/.test(r.err.message), `redis: this container's first run is judged with the other's and refused on a read (${r.err?.statusCode}, reads ${reads}: ${String(r.err?.message).slice(0, 80)})`);
   const w = await windowOf(W);
   ok(w.ok && w.count === 1, `redis: the refused run's reservation left the window (count ${w.count})`);
   ok(C.inflightCoverStatus().foreignReads >= 1, "redis: the judgment was counted as one taken on a foreign run");
@@ -604,7 +722,9 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   const ap = attempt(C, W);
   await until(() => gated.length === 1, "run a's read");
   const t0 = Date.now();
-  const bp = C.admitCoveredRun(reqFor(W), QUICK).then((release) => ({ release }), (err) => ({ err }));
+  // (Run b is still waiting when the read ahead's bound ends: a queued read
+  // nobody waits for any more is not made.)
+  const bp = C.admitCoveredRun(reqFor(W), { settleWaitMs: 3_000 }).then((release) => ({ release }), (err) => ({ err }));
   await until(() => gated.length === 2, "run b's own read, begun although the read ahead has not answered");
   const waited = Date.now() - t0;
   gated[1](3n * PRICE);
@@ -633,7 +753,12 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   const waited = !done;
   await unforeign(W, "d7");
   const y = await yp;
-  ok(typeof x.release === "function" && waited && typeof y.release === "function" && C.inflightCoverStatus().refused === 0, `a local run leaves during the window read while another container's settled run is still in the window: the run waits for it to leave and is admitted (${y.err?.statusCode || "admitted"}, waited ${waited})`);
+  // The read (3 prices) predates both settlements. The local run's amount is
+  // taken off it (2 prices left as a lower bound) and the other container's
+  // run is still counted in what must be covered (2 prices): y fits, with or
+  // without a wait, and is never refused.
+  void waited;
+  ok(typeof x.release === "function" && typeof y.release === "function" && C.inflightCoverStatus().refused === 0, `a local run leaves during the window read while another container's settled run is still in the window: the run is admitted, not refused (${y.err?.statusCode || "admitted"}, waited ${waited})`);
   y.release?.();
   // The same with nothing local: the other container's run has settled on
   // chain and is still in the window when this wallet's next run arrives.
@@ -702,11 +827,12 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   gate.get(B3)();
   await until(() => C.inflightCoverStatus().withdrawals >= 3, "all three runs to wait");
   const heldWhileWaiting = await ownIn(B3);
-  setTimeout(() => { void unforeign(B2, "p8"); }, 4_750 - 50);
-  setTimeout(() => { void unforeign(B3, "p8"); }, 1_000);
+  // (The whole admission wait is about a second: looks at 100, 300 and 700 ms, and one at the end.)
+  setTimeout(() => { void unforeign(B2, "p8"); }, 850);
+  setTimeout(() => { void unforeign(B3, "p8"); }, 250);
   const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
-  ok(r1.err?.statusCode === 429 && r1.ms >= 4_900 && r1.ms < 6_500, `production default: beside another container's run that stays, an uncovered run is refused when the wait runs out, about five seconds (${r1.err?.statusCode || "admitted"}, ${Math.round(r1.ms)} ms)`);
-  ok(typeof r2.release === "function" && r2.ms >= 4_500 && r2.ms < 6_500, `production default: a run that leaves after the last timed look and before the wait runs out is seen by the look taken at the end, and the run is admitted (${r2.err?.statusCode || "admitted"}, ${Math.round(r2.ms)} ms)`);
+  ok(r1.err?.statusCode === 429 && r1.ms >= 950 && r1.ms < 2_500, `production default: beside another container's run that stays, an uncovered run is refused when the wait runs out, about one second (${r1.err?.statusCode || "admitted"}, ${Math.round(r1.ms)} ms)`);
+  ok(typeof r2.release === "function" && r2.ms >= 800 && r2.ms < 2_500, `production default: a run that leaves after the last timed look and before the wait runs out is seen by the look taken at the end, and the run is admitted (${r2.err?.statusCode || "admitted"}, ${Math.round(r2.ms)} ms)`);
   const heldAdmitted = await ownIn(B3);
   ok(heldWhileJudged && !heldWhileWaiting && typeof r3.release === "function" && heldAdmitted, `a run's reservation is in the window while it is judged (${heldWhileJudged}), out while it waits (${!heldWhileWaiting}), and back once it is admitted (${heldAdmitted})`);
   ok(heldAtRejudge.length >= 1 && heldAtRejudge.every(Boolean), `a run judged again after its wait has its reservation back in the window before its balance read (${JSON.stringify(heldAtRejudge)})`);
@@ -740,6 +866,32 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   }
 }
 shared.windowAdd = realAdd; shared.windowRead = realRead;
+{
+  // A container KILLED with a run in flight: its reservation stays in the
+  // window, and is counted only while its liveness key lasts. A wallet
+  // holding exactly the next call's price is refused while the owner lives
+  // and served once the dead owner's key has lapsed.
+  C._resetInflightCoverForTest();
+  C._setBalanceReaderForTest(async () => PRICE);
+  const K = "0x" + "e1".repeat(20);
+  const child = spawn(process.execPath, [here, "holder"], { env: { ...process.env, HOLD_WALLET: K }, stdio: ["ignore", "pipe", "inherit"] });
+  let said = "";
+  child.stdout.on("data", (d) => { said += d; });
+  await until(() => /HOLDING/.test(said), "the other container to hold a run", 30_000);
+  ok(/^HOLDING/m.test(said) && (await windowOf(K)).count === 1, "redis: another container holds a run of the wallet");
+  const alive = await attempt(C, K);
+  ok(alive.err?.statusCode === 429, `redis: while that container lives its run is counted: a call the balance cannot also cover is refused (${alive.err?.statusCode || "admitted"})`);
+  child.kill("SIGKILL");
+  await new Promise((res) => child.once("exit", res));
+  ok((await windowOf(K)).count === 1, "redis: the killed container's reservation is still in the window");
+  await new Promise((res) => setTimeout(res, LIVE_TTL + 2_300)); // its liveness key lapses; this process's view of it is 2 s old at most
+  const after = await attempt(C, K);
+  ok(typeof after.release === "function", `redis: once the killed container's liveness key has lapsed, the wallet's call is served (${after.err?.statusCode || "admitted"})`);
+  await new Promise((res) => setTimeout(res, 100));
+  const w = await windowOf(K);
+  ok(w.count === 1 && C.inflightCoverStatus().deadReservationsIgnored >= 1, `redis: the dead reservation was taken out of the window (${w.count} left: this run's own)`);
+  after.release();
+}
 // Clean up this run's keys.
 try {
   const { getSharedRedisClient } = await import("../src/shared-limit.js");

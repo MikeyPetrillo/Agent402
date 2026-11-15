@@ -3162,7 +3162,11 @@ export function registerInflightCoverSettleHook(server) {
  */
 export function releaseCoverOnSettled(ctx, result) {
   if (result?.success !== true) return false;
-  try { return markCoveredRunSettled(ctx?.transportContext?.request?.adapter?.req); } catch { return false; /* never break a settlement */ }
+  // What the settlement took, when the result says (a settle under a ceiling
+  // takes less than the ceiling); the coverage ledger falls back to the
+  // payment's own amount.
+  const took = typeof result?.amount === "string" && /^\d{1,78}$/.test(result.amount) ? result.amount : null;
+  try { return markCoveredRunSettled(ctx?.transportContext?.request?.adapter?.req, took); } catch { return false; /* never break a settlement */ }
 }
 
 /**

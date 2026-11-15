@@ -25,7 +25,16 @@ ok(isComputePayable({ slug: PROBE_POW_SLUG }), `the PoW probe slug (${PROBE_POW_
 // and a WALLET_ONLY_SLUGS-keyed breaker would leave it uncovered.
 import("node:fs").then(({ readFileSync }) => {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/!FREE_MODE && !isComputePayable\(tool\)\) (await )?gatewaySettleBreakerCheck\(req, \{ global: false \}\)/.test(src), "the catalog settle breaker is keyed on !isComputePayable(tool)");
+  // The consult lives in admitPaidRun, the one admission every paid handler
+  // takes: it returns before the consult for FREE_MODE and for a tool that is
+  // proof-of-work payable, and server.js consults the catalog breaker nowhere
+  // else, so the breaker still applies to exactly the tools that are not
+  // isComputePayable.
+  const admit = /async function admitPaidRun\(req, res, def\) \{\n([\s\S]*?)\n\}\n/.exec(src)?.[1] || "";
+  const guardAt = admit.search(/if \(FREE_MODE \|\| !def \|\| isComputePayable\(def\) \|\|[^\n]*\) return null;/);
+  const consultAt = admit.indexOf("await gatewaySettleBreakerCheck(req, { global: false });");
+  ok(guardAt >= 0 && consultAt > guardAt && src.split("gatewaySettleBreakerCheck(req, { global: false })").length === 2,
+    "the catalog settle breaker is keyed on !isComputePayable(tool): admitPaidRun returns for a proof-of-work payable tool before its consult, the only one in server.js");
   ok(!/WALLET_ONLY_SLUGS\.has\(tool\.slug\)\) gatewaySettleBreakerCheck/.test(src), "the catalog settle breaker is not keyed on WALLET_ONLY_SLUGS");
   ok(!/walletOnlySet: WALLET_ONLY_SLUGS/.test(src), "the operator breakdown is not keyed on WALLET_ONLY_SLUGS");
   ok(/const PAID_SLUGS = \{ has: \(slug\) => Object\.hasOwn\(TOOL_PRICES, slug\) && !isComputePayable\(\{ slug \}\) \}/.test(src), "PAID_SLUGS is the catalog complement of isComputePayable");
