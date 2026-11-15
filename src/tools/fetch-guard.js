@@ -2,7 +2,7 @@ import dnsPromises, { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import { Agent, buildConnector } from "undici";
 import { checkServerIdentity } from "../tls-distrust.js";
-import { capByCeiling, ceilingPassed, assertBeforeCeiling } from "../run-ceiling.js";
+import { capByCeiling, ceilingPassed, ceilingLeftMs, assertBeforeCeiling } from "../run-ceiling.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
@@ -553,8 +553,9 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
       // 503 family keeps its retry.
       const throttled = e?.upstreamStatus === 429;
       // noRetry: a deterministic refusal wearing a 503 (e.g. our own key rejected).
-      // Inside a run with a ceiling (src/run-ceiling.js) no retry starts once it has passed.
-      if (attempt < retries && !throttled && !e?.noRetry && !ceilingPassed() && (sc === 504 || sc === 502 || sc === 503)) {
+      // Inside a run with a ceiling (src/run-ceiling.js) no retry is waited for
+      // that could only start after it: the wait itself must fit before the ceiling.
+      if (attempt < retries && !throttled && !e?.noRetry && ceilingLeftMs() > backoffMs && (sc === 504 || sc === 502 || sc === 503)) {
         await new Promise((r) => setTimeout(r, backoffMs));
         // Checked again after the wait: the ceiling may have passed during it.
         if (ceilingPassed()) throw e;

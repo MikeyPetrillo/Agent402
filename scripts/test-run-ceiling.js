@@ -139,14 +139,43 @@ try {
     ok(robots?.allowed === true && /No readable robots\.txt/.test(robots.note || ""), "with no ceiling a failed robots.txt read is still the direct route's own answer");
   }
 
-  // 8. whois: a registry-list refresh the ceiling cut is not remembered as a failed refresh.
+  // 8. Once the ceiling has passed NOTHING starts: not a guarded fetch, not a retry, not a connection.
+  {
+    const { safeFetch, retryTransient } = await import("../src/tools/fetch-guard.js");
+    Object.assign(world, { dnsMs: 0, upstream: "stall", t0: Date.now(), starts: [] });
+    const lateFetch = await withRunCeiling(40, async () => { await wait(80); return safeFetch("http://93.184.216.34/late"); }).then(() => null, (e) => e);
+    const lateTls = await withRunCeiling(40, async () => { await wait(80); return MARKED.find((d) => d.slug === "tls-cert").handler({ host: "93.184.216.34" }); }).then(() => null, (e) => e);
+    ok(lateFetch?.statusCode === 504 && lateFetch.ceilingCut === true && lateTls?.statusCode === 504 && world.starts.length === 0, `a guarded fetch and a TLS connection asked for after the ceiling are refused before anything is opened (${world.starts.length} started; ${lateFetch?.statusCode}, ${lateTls?.statusCode})`);
+    let calls = 0;
+    const failing = () => { calls++; return Promise.reject(Object.assign(new Error("upstream 502"), { statusCode: 502 })); };
+    const t0 = Date.now();
+    const retried = await withRunCeiling(100, () => retryTransient(failing, { retries: 3, backoffMs: 150 })).then(() => null, (e) => e);
+    let free = 0;
+    await retryTransient(() => { free++; return Promise.reject(Object.assign(new Error("upstream 502"), { statusCode: 502 })); }, { retries: 2, backoffMs: 10 }).catch(() => null);
+    ok(retried?.statusCode === 502 && calls === 1 && Date.now() - t0 < 400 && free === 3, `a retry whose wait ends after the ceiling is not made (the ceiling is checked again after the wait); with no ceiling every retry is made (${calls} call under the ceiling, ${free} with none)`);
+    // A kit's own second attempt is not made either: the error is the read's own, not a second read refused at the door.
+    const quake = await drive(MARKED.find((d) => d.slug === "earthquakes"), MARKED.find((d) => d.slug === "earthquakes").discovery.input, { ceilingMs: CEILING, dnsMs: 0, upstream: "stall" });
+    const holiday = await drive(MARKED.find((d) => d.slug === "public-holidays"), MARKED.find((d) => d.slug === "public-holidays").discovery.input, { ceilingMs: CEILING, dnsMs: 0, upstream: "stall" });
+    ok(quake.out.error?.statusCode === 504 && quake.out.error.ceilingCut !== true && holiday.out.error?.statusCode === 504 && holiday.out.error.ceilingCut !== true && quake.started.filter((e) => e.kind === "fetch").length === 1, `a kit's read loop stops at the ceiling with the error of the read that was cut, and asks for no second attempt (${describe(quake)})`);
+  }
+
+  // 9. whois: a registry-list refresh the ceiling cut is not remembered as a failed refresh.
   {
     const whois = MARKED.find((d) => d.slug === "whois");
     const cut = await drive(whois, { domain: "example.com" }, { ceilingMs: CEILING, dnsMs: 0, upstream: "stall" });
+    ok(cut.started.some((e) => e.what === "data.iana.org") && cut.started.filter((e) => e.kind === "fetch").length === 1, "a whois run cut during the registry-list refresh starts no further read");
+    // With a list already held and gone stale (a day on): the cut refresh must not start the ten-minute back-off.
     Object.assign(world, { dnsMs: 0, upstream: "ok", t0: Date.now(), starts: [] });
-    await whois.handler({ domain: "example.com" }).catch(() => null);
-    const asked = world.starts.filter((e) => e.kind === "fetch" && e.what === "data.iana.org").length;
-    ok(cut.started.some((e) => e.what === "data.iana.org") && cut.started.filter((e) => e.kind === "fetch").length === 1 && asked === 1, `a whois run cut during the registry-list refresh starts no further read, and the next run asks for the list again instead of backing off for ten minutes (${asked} request after the cut)`);
+    await whois.handler({ domain: "example.com" }).catch(() => null); // the list is loaded
+    const realNow = Date.now;
+    Date.now = () => realNow() + 25 * 3600_000;
+    try {
+      const staleCut = await drive(whois, { domain: "example.com" }, { ceilingMs: CEILING, dnsMs: 0, upstream: "stall" });
+      Object.assign(world, { dnsMs: 0, upstream: "ok", t0: Date.now(), starts: [] });
+      await whois.handler({ domain: "example.com" }).catch(() => null);
+      const asked = world.starts.filter((e) => e.kind === "fetch" && e.what === "data.iana.org").length;
+      ok(staleCut.started.some((e) => e.what === "data.iana.org") && asked === 1, `the next run asks for the list again instead of backing off for ten minutes (${asked} request after the cut)`);
+    } finally { Date.now = realNow; }
   }
 } finally {
   globalThis.fetch = realFetch;
