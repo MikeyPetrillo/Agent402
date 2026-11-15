@@ -564,6 +564,11 @@ export function referralMinNet(grossUnits, { commissionBps = 0, feeBps = 0 } = {
   return least > 0n ? least : 0n;
 }
 
+/** During a drain a settle call ends this long before the drain's deadline:
+ *  the state database's pool starts closing 6 s before that deadline
+ *  (shutdown, src/server.js), and the book write that records the settle's
+ *  outcome has to land first. */
+export const REFERRAL_DRAIN_SETTLE_MARGIN_MS = 10_000;
 /** Slugs served under /ref before the price-parity rule (referralIneligibility):
  *  still served, and named in a warning at every boot until the owner decides. */
 export const REFERRAL_PARITY_GRANDFATHERED = Object.freeze(["hash"]);
@@ -854,7 +859,7 @@ export function createReferralGate({
   if (missing.length) throw new Error(`referral gate: missing ${missing.join(", ")}`);
   const origin = String(baseUrl || "").replace(/\/+$/, "");
   const counters = {
-    deliveryMarkFailed: 0, bookFaultHeld: 0, newPayerShareRefused: 0, shortNetSales: 0, shortNetHeld: 0, netsCorrected: 0, settleUnproven: 0, refusedUnread: 0, storeHeld: 0, debtClaimLost: 0, deliveryLostToDebt: 0, productMismatches: 0, ceilingCuts: 0, partlyServed: 0, unrecognizedClosed: 0, sendsEndedIdle: 0, sendInflightRefused: 0, reopenedByHand: 0, unconfirmedHeld: 0, unconfirmedFlagged: 0, headUnavailable: 0, bookFullRefused: 0, resolvedByHand: 0, alreadyDelivered: 0,
+    deliveryMarkFailed: 0, bookFaultHeld: 0, newPayerShareRefused: 0, shortNetSales: 0, shortNetHeld: 0, netsCorrected: 0, settleUnproven: 0, refusedUnread: 0, storeHeld: 0, sendsUnconfirmed: 0, debtClaimLost: 0, deliveryLostToDebt: 0, productMismatches: 0, ceilingCuts: 0, partlyServed: 0, unrecognizedClosed: 0, sendsEndedIdle: 0, sendInflightRefused: 0, reopenedByHand: 0, unconfirmedHeld: 0, unconfirmedFlagged: 0, headUnavailable: 0, bookFullRefused: 0, resolvedByHand: 0, alreadyDelivered: 0,
     challenges: 0, refused: 0, signatureRefused: 0, replays: 0, verifyRefused: 0, screened: 0, laneRefused: 0, busy: 0,
     signerRefused: 0, ownFaultHeld: 0, screenErrors: 0, verifyUnavailable: 0, settleContradicted: 0, unconfirmed: 0, refundsOwed: 0, restoredAnswers: 0, runs: 0, exampleRuns: 0, handlerErrors: 0, timeouts: 0, forgivenHangups: 0, settleRefused: 0, settleInDoubt: 0, landedAfterDoubt: 0, usedUnpaid: 0, intentFailed: 0,
     settled: 0, resent: 0, redelivered: 0, chargedNotServed: 0,
@@ -1378,6 +1383,41 @@ export function createReferralGate({
     return (await writeDebt(e, why)) === "owed";
   }
   /**
+   * An entry that carries the delivered mark, whose send bound has passed,
+   * and that is still in the book. Where THIS process sent it (its memory
+   * says delivered, or still holds the send), the closing write did not land:
+   * false, and the sweep closes it as served. Where this process has no
+   * memory of it, the process that was sending it ended mid-send (a restart,
+   * a deploy): the buyer may hold all, part or none of the answer, so a debt
+   * at the gross is recorded with the reason the refund run HOLDS FOR REVIEW
+   * (never repaid by itself), behind the receipt proof, once. True = handled.
+   */
+  async function oweUnconfirmedSend(snapshot) {
+    const e = snapshot ? book.get(snapshot.key) : null;
+    if (!e || e.delivered !== true || e.state !== "charged-undelivered") return false;
+    const mem = kept.get(e.key);
+    if ((mem && (mem.delivered === true || mem.sending === true)) || sentHere.has(e.key)) return false;
+    const tx = txOf(e);
+    if (!tx) return false;
+    let proof = { verdict: "unknown" };
+    try { proof = await proveWithDetail(tx, { from: e.payer, nonce: e.nonce, payTo: config.payTo, amount: e.amount, minNet: minNetOf(e.slug, e.amount), productId: productOf(e.slug) }); } catch { proof = { verdict: "unknown" }; }
+    // Not provable now: left in the book for the next pass (true = do not close it).
+    if (proof.verdict !== "paid") return true;
+    const t0 = now();
+    let claimed = false;
+    try { claimed = (await book.resolve(e.key, { debtPendingAt: t0 }, { unless: (c) => c.state !== "charged-undelivered" || c.delivered !== true || Number(c.sendingUntil) > t0 || Number(c.debtPendingAt) > t0 - DEBT_CLAIM_MS })) === true; } catch { claimed = false; }
+    if (!claimed) return true;
+    let owedRow = false;
+    try { owedRow = (await oweRefund({ slug: e.slug, network: REFERRAL_NETWORK, payer: e.payer, priceUsd: Number(BigInt(e.amount)) / 1e6, tx, evidenceKey: referralRefundEvidence(tx, e.nonce), wire: "referral", httpStatus: 499, hangupReason: REFERRAL_PARTIAL_HOLD_REASON, note: "referral answer's send was not confirmed: the process sending it ended first; the buyer may hold all, part or none of it; held for review" })) === true; } catch { owedRow = false; }
+    if (!owedRow) { await book.resolve(e.key, { debtPendingAt: 0 }).catch(() => {}); return true; }
+    counters.refundsOwed++;
+    counters.sendsUnconfirmed++;
+    line("error", `SEND NOT CONFIRMED: an answer carries the delivered mark and the process that was sending it ended first (${e.slug} payer=${shortPayer(e.payer)} tx=${tx}); a refund of the gross is recorded, held for review`);
+    restDrop(e.key);
+    await book.resolve(e.key, { state: "refund-owed", tx, refundAt: now(), debtPendingAt: 0, delivered: false, sendUnconfirmed: true }).catch(() => {});
+    return true;
+  }
+  /**
    * THE ONE WRITER of a refund debt, for the automatic path above and for an
    * operator's `refund` (resolveByHand). Behind the proof, read now; never
    * for an entry carrying the delivered mark; at the gross; once (the
@@ -1477,6 +1517,12 @@ export function createReferralGate({
   // How long a debt claim on an entry stands without its row (a process that
   // stopped between the two): after it the entry can be claimed or delivered again.
   const DEBT_CLAIM_MS = 60_000;
+  // The answers THIS process sent to their end (key -> time), kept after the
+  // answer itself is dropped: an entry left in the book with the delivered
+  // mark is then known to be a closing write that did not land, not a send
+  // another process never finished (oweUnconfirmedSend). Bounded.
+  const sentHere = new Map();
+  const noteSent = (key) => { sentHere.set(key, now()); if (sentHere.size > 5_000) for (const k of [...sentHere.keys()].slice(0, 1_000)) sentHere.delete(k); };
   // A write that must never put an entry recorded as owed back into another state.
   const NOT_OWED = { unless: (c) => c.state === "refund-owed" };
   async function storeHeld() {
@@ -1870,6 +1916,7 @@ export function createReferralGate({
       // (with the delivered mark) until the sweep confirms it.
       if (again) return;
       entry.delivered = true;
+      noteSent(entry.key);
       restDrop(entry.key);
       if (!entry.unconfirmed) closeEntry(entry.key).catch(() => {});
       else book.resolve(entry.key, { sendingUntil: 0 }).catch(() => {});
@@ -1986,7 +2033,7 @@ export function createReferralGate({
     const d = draining();
     // During a drain the call ends inside what the drain has left; the intent
     // above stands for it if the process stops first.
-    const timeoutMs = d.active ? Math.max(2_000, Math.min(config.settleMs, d.leftMs - 5_000)) : config.settleMs;
+    const timeoutMs = d.active ? Math.max(2_000, Math.min(config.settleMs, d.leftMs - REFERRAL_DRAIN_SETTLE_MARGIN_MS)) : config.settleMs;
     let s;
     try { s = await settler.settle(entry.payment, entry.requirement, { timeoutMs }); }
     catch { s = { ok: false, inDoubt: true, reason: "settle_error", status: 0, retryable: false }; }
@@ -2720,6 +2767,7 @@ export function createReferralGate({
       },
       onUnpaid: (e) => { counters.usedUnpaid++; restDrop(e.key); laneNote([`payer:${String(e.payer).toLowerCase()}`], null); const entry = kept.get(e.key); if (entry) { entry.unpaid = true; entry.inDoubt = false; } },
       onCharged: (e) => oweIfUndeliverable(e, "its answer expired or was not stored"),
+      onSendUnconfirmed: (e) => oweUnconfirmedSend(e),
       unrecognizedMax: config.unrecognizedReads,
       onUnrecognized: (e) => { counters.unrecognizedClosed++; restDrop(e.key); },
     });

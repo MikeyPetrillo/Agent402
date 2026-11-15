@@ -2597,7 +2597,19 @@ try {
       skew.ms = 2 * 60_000;
       await appD.gate.sweepOnce();
       skew.ms = 0;
-      ok(kept1 === true && appD.book.get(dead.key) === null && !owed.some((o) => o.tx === "0x" + "de".repeat(32)), "a delivered mark with no send behind it (the process that set it is gone) is kept until its bound has passed and then closed, never refunded");
+      // Its send was never confirmed to this book, and this process did not make it. With no
+      // readable receipt the entry is kept; once the receipt proves the payment, a refund at the
+      // gross is recorded with the reason the refund run HOLDS FOR REVIEW (the buyer may hold all,
+      // part or none of the answer), once, and the entry reads refund-owed.
+      const keptUnproven = appD.book.get(dead.key)?.state === "charged-undelivered" && !owed.some((o) => o.payer === dead.p.authorization.from.toLowerCase());
+      const txDead = fac.land(dead.p.authorization, fac.nextTx());
+      await appD.book.resolve(dead.key, { tx: txDead });
+      skew.ms = 2 * 60_000;
+      await appD.gate.sweepOnce();
+      await appD.gate.sweepOnce();
+      skew.ms = 0;
+      const rowsDead = owed.filter((o) => o.tx === txDead);
+      ok(kept1 === true && keptUnproven && rowsDead.length === 1 && rowsDead[0].hangupReason === gateMod.REFERRAL_PARTIAL_HOLD_REASON && rowsDead[0].httpStatus === 499 && rowsDead[0].priceUsd === 0.03 && /send was not confirmed/.test(rowsDead[0].note) && appD.book.get(dead.key)?.state === "refund-owed" && appD.gate.stats().sendsUnconfirmed === 1, `a delivered mark whose send this process did not make (the process that set it ended) is kept until its bound has passed; then, behind the receipt, a refund is recorded ONCE with the reason the refund run holds for review, never closed as served (${rowsDead.length} row, ${rowsDead[0]?.hangupReason})`);
       // Never collected: the debt is written at the gross, and HELD for review.
       skew.ms = 11 * 60_000;
       await appD.gate.sweepOnce();
@@ -3768,6 +3780,25 @@ try {
         doc.st.stall = false;
         ok(stalled.status === 503 && stalled.ms < 2_000 && fac.of("/settle").length === 2, `an intent write that does not answer is given up at its deadline (${stalled.ms} ms), with no settle sent`);
       } finally { doc.st.down = false; doc.st.stall = false; await app.close(); }
+    }
+    // P6. The answer store's sweep gives the event loop a turn between files.
+    {
+      const dirA = join(tmp, "answers-yield");
+      const storeA = createReferralAnswerStore({ dir: dirA });
+      for (let i = 0; i < 12; i++) await storeA.put(`referral:${createHash("sha256").update(`y${i}`).digest("hex")}`, { text: "x".repeat(2000), expiresAt: Date.now() + (i % 2 ? 60_000 : -1) });
+      let turns = 0, going = true;
+      const spin = () => { if (!going) return; turns++; setImmediate(spin); };
+      setImmediate(spin);
+      const removed = await storeA.sweep();
+      going = false;
+      ok(removed === 6 && turns >= 12, `the sweep of the answers at rest reads one file a turn of the event loop (${turns} turns for 12 files; ${removed} expired removed)`);
+    }
+    // P7. During a drain a settle ends before the database pool starts closing, with room for its book write.
+    {
+      const serverText = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+      const poolClose = /if \(stateDbEnabled\(\)\) setTimeout\(finish, Math\.max\(0, deadlineMs - ([0-9_]+)\)\)/.exec(serverText);
+      const poolMs = poolClose ? Number(poolClose[1].replace(/_/g, "")) : NaN;
+      ok(Number.isFinite(poolMs) && gateMod.REFERRAL_DRAIN_SETTLE_MARGIN_MS >= poolMs + 3_000, `a settle call in a drain ends ${gateMod.REFERRAL_DRAIN_SETTLE_MARGIN_MS} ms before the drain's deadline, at least 3 s before the state database's pool starts closing (${poolMs} ms before it)`);
     }
     fac.reset(); sales.length = 0; owed.length = 0;
     // P4. The status word: a route that is down says so; a reason with no fresh evidence ages out; an operator can acknowledge.

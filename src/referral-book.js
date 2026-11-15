@@ -452,7 +452,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      * in flight in this process. At most `max` entries are read a pass, the
      * ones read least recently first, so every open entry is reached in turn.
      */
-    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, onHeld = () => {}, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50, maxCharged = SWEEP_CHARGED_MAX } = {}) {
+    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, onHeld = () => {}, onSendUnconfirmed = null, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50, maxCharged = SWEEP_CHARGED_MAX } = {}) {
       const t = now();
       // "Read and nothing changed" marks (the check count and time of each
       // entry read this pass) are written ONCE, at the end of the pass, not
@@ -567,7 +567,17 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         if (!e || e.state !== "charged-undelivered") continue;
         // A send that may still be going out is left to its own end.
         if (e.delivered === true && Number(e.sendingUntil) > t) continue;
-        if (e.delivered === true) { await this.resolve(key, null); continue; }
+        // The delivered mark with its send bound past and the entry still here:
+        // the send was never confirmed to this book (the process that made it
+        // ended, or its closing write did not land). The caller says which
+        // (onSendUnconfirmed: true = it handled the entry); with no caller the
+        // entry is closed as served, as before.
+        if (e.delivered === true) {
+          let handled = false;
+          if (typeof onSendUnconfirmed === "function") { try { handled = (await onSendUnconfirmed(e)) === true; } catch { handled = true; } }
+          if (!handled) await this.resolve(key, null);
+          continue;
+        }
         // A request (in this process or another one on the same book) settled
         // it moments ago and is about to send its answer: left to that request.
         if (Number(e.inCallUntil) > t) continue;

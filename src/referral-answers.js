@@ -51,6 +51,9 @@ export function createReferralAnswerStore({ dir = null, now = Date.now } = {}) {
           let b = null;
           try { b = JSON.parse(readFileSync(join(dir, f), "utf8")); } catch { b = null; }
           if (!(Number(b?.expiresAt) > now())) { try { rmSync(join(dir, f), { force: true }); n++; } catch { /* the next pass */ } }
+          // One file a turn: a full store (its bound is tens of megabytes) is
+          // never parsed in one stretch of the event loop.
+          await new Promise((r) => setImmediate(r));
         }
         return n;
       },
