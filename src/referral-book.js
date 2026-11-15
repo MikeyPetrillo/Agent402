@@ -300,7 +300,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      * in flight in this process. At most `max` entries are read a pass, the
      * ones read least recently first, so every open entry is reached in turn.
      */
-    async sweep({ chain, bookSale, payTo, minNetOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50 } = {}) {
+    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50 } = {}) {
       const t = now();
       const out = { read: 0, landed: 0, unpaid: 0, expired: 0, unknown: 0, charged: 0, unrecognized: 0 };
       try { const b = await store.load(null); if (b) absorb(b); } catch { /* the last body read */ }
@@ -315,7 +315,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         if (!e || (e.state !== "in-doubt" && e.state !== "intent")) continue;
         out.read++;
         let s;
-        try { s = await chain.state({ from: e.payer, nonce: e.nonce, payTo, amount: e.amount, fromBlock: e.fromBlock, minNet: minNetOf(e) }); } catch { s = { used: null, paid: null, transaction: null, complete: false }; }
+        try { s = await chain.state({ from: e.payer, nonce: e.nonce, payTo, amount: e.amount, fromBlock: e.fromBlock, minNet: minNetOf(e), productId: productIdOf(e) }); } catch { s = { used: null, paid: null, transaction: null, complete: false }; }
         const verdict = chainVerdict(s, { validBeforeMs: (Number(e.validBefore) || 0) * 1000, nowMs: t, slackMs: EXPIRY_SLACK_MS });
         if (verdict === "paid") {
           // The receipt proves the transfer: the only reading that books a sale.

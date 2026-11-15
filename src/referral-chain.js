@@ -142,13 +142,13 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
   }
   /** The same reading with its detail: `{ verdict, why, moved, read }`
    *  (proveReceipt). `read` false: no receipt could be read. */
-  async function proveDetail(tx, { from, nonce = null, payTo, amount, minNet = null }, { budget = 4_000, waitMs = 0 } = {}) {
+  async function proveDetail(tx, { from, nonce = null, payTo, amount, minNet = null, productId = null }, { budget = 4_000, waitMs = 0 } = {}) {
     if (!TX.test(String(tx || ""))) return { verdict: "unpaid", why: "no transaction hash", moved: false, read: false, routedToUs: false, net: null };
     const until = now() + Math.max(0, waitMs);
     for (;;) {
       let receipt = null;
       try { receipt = await read("eth_getTransactionReceipt", [tx], budget); } catch { receipt = null; }
-      if (receipt) return proveReceipt(receipt, { tx, from, nonce, payTo, amount, minNet, ...routing });
+      if (receipt) return proveReceipt(receipt, { tx, from, nonce, payTo, amount, minNet, productId, ...routing });
       if (now() + 400 >= until) return { verdict: "unknown", why: "no receipt readable", moved: false, read: false, routedToUs: false, net: null };
       await sleep(400);
     }
@@ -178,7 +178,7 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
    * there to the head, so a late read still finds an early payment.
    * `wait`: keep reading for a spent nonce until the budget ends.
    */
-  async function state({ from, nonce, payTo, amount, fromBlock = null, minNet = null }, { wait = false } = {}) {
+  async function state({ from, nonce, payTo, amount, fromBlock = null, minNet = null, productId = null }, { wait = false } = {}) {
     const none = { used: null, paid: null, transaction: null, complete: false };
     // A search is complete only from a head recorded before the payment could be spent.
     const anchored = Number.isSafeInteger(fromBlock) && fromBlock > 0;
@@ -197,7 +197,7 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
           if (last) {
             const used = await findLog(AUTHORIZATION_USED_TOPIC, from, nonce, fromBlock, deadline);
             if (used.tx) {
-              const d = await proveDetail(used.tx, { from, nonce, payTo, amount, minNet }, { budget: Math.max(250, deadline - now()) });
+              const d = await proveDetail(used.tx, { from, nonce, payTo, amount, minNet, productId }, { budget: Math.max(250, deadline - now()) });
               const v = d.verdict;
               return { used: true, paid: v === "paid" ? true : v === "unpaid" ? false : null, transaction: used.tx, complete: false, receiptRead: d.read === true, why: d.why, routedToUs: d.routedToUs === true, net: v === "paid" ? d.net ?? null : null };
             }
