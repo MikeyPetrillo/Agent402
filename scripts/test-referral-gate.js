@@ -4401,6 +4401,37 @@ try {
             ok(during.held === true && during.cooldownMs === 30_000 && during.level === 2 && served.status === 200 && after.held === false && after.cooldownMs === 15_000 && after.level === 0 && after.failuresInWindow === 0 && app.gate.statusWord().status === "ok", `f. a store healthy for longer than the window after a hold: the call is served, the cool-down is back to its default and the word reads ok (during: ${during.cooldownMs / 1000} s, level ${during.level}; after: ${after.cooldownMs / 1000} s, level ${after.level})`);
           } finally { skew.ms = skew0; await app.close(); }
         }
+        // B1. Separate incidents never compound: two failed writes one second apart, healthy after, every 11 minutes, nine times.
+        {
+          const { doc, app, real } = await storeApp();
+          try {
+            let failNext = 0;
+            doc.update = async (m, o) => (failNext-- > 0 ? { ok: false, error: "a blip" } : real(m, o));
+            const holds = [], refusedFor = [];
+            for (let blip = 0; blip < 9; blip++) {
+              failNext = 1; await payS(app); // the first failure: its probe stands
+              skew.ms += 1_000;
+              failNext = 1; await payS(app); // the second: held
+              holds.push(app.gate.stats().storeHold.cooldownMs);
+              skew.ms += 16_000;
+              const back = await payS(app);
+              refusedFor.push(back.status);
+              skew.ms += 11 * 60_000;
+            }
+            const st = app.gate.stats().storeHold;
+            ok(holds.join() === Array(9).fill(15_000).join() && refusedFor.every((x) => x === 200) && st.level === 0 && app.gate.statusWord().status === "ok", `B1. two failed writes one second apart, healthy afterwards, repeated every 11 minutes: every one of nine holds lasts the default 15 s and a payer is served 16 s after each (${holds.map((x) => x / 1000).join(", ")} s; ${refusedFor.join(" ")})`);
+            // A hold that ended inside the window, then an hour healthy: the level reads 0 again with no new failure.
+            failNext = 1; await payS(app); skew.ms += 1_000; failNext = 1; await payS(app);
+            skew.ms += 16_000; failNext = 1; await payS(app); // the probe's first write fails: held again, doubled
+            const doubled = app.gate.stats().storeHold;
+            skew.ms += 31_000;
+            const served = await payS(app); // the hold ends inside the window (failures still in it)
+            const inside = app.gate.stats().storeHold;
+            skew.ms += 3600_000;
+            const anHourOn = app.gate.stats().storeHold;
+            ok(doubled.cooldownMs === 30_000 && doubled.level === 2 && served.status === 200 && inside.held === false && inside.failuresInWindow >= 2 && anHourOn.level === 0 && anHourOn.cooldownMs === 15_000 && anHourOn.failuresInWindow === 0, `after a hold that ended while its failures were still in the window, an hour healthy returns the level to 0 and the cool-down to its default (level ${doubled.level} at ${doubled.cooldownMs / 1000} s; served ${served.status} ${served.reason || ""}; inside ${JSON.stringify(inside)}; then level ${anHourOn.level} at ${anHourOn.cooldownMs / 1000} s)`);
+          } finally { skew.ms = skew0; await app.close(); }
+        }
         // g. No timer, and nothing outside the gate's own handler and sweep reads the rule.
         {
           const gateText = readFileSync(new URL("../src/referral-gate.js", import.meta.url), "utf8");
@@ -4421,6 +4452,63 @@ try {
         const pass = await tb.sweep({ chain: { state: async ({ from }) => { order.push(Number(String(from).slice(2)) - 1); await wait(250); return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO, onCharged: async () => { chargedAt = Date.now() - t0; }, chainBudgetMs: 600 });
         const took = Date.now() - t0;
         ok(chargedAt !== null && chargedAt < 200 && order.length >= 2 && order.length <= 4 && order.every((i) => i < 10) && took < 1_600 && pass.unread === 20 - order.length && bookMod.SWEEP_CHAIN_BUDGET_MS === 40_000, `with every chain read hung, a charged entry is handed on before any read (${chargedAt} ms into the pass), the reads stop at the pass's budget, and in-doubt entries are read before refused ones (${order.length} of 20 read in ${took} ms; ${pass.unread} left for the next pass)`);
+      }
+      // B2. A refused entry is read though fifty or more in-doubt entries stand: a share of each pass's reads is theirs.
+      {
+        const tb = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r16-share`, log: () => {} }), log, maxEntries: 500 });
+        const nowS = Math.floor(Date.now() / 1000);
+        const mk = (i) => ({ key: `referral:r16s-${i}`, slug: "echo", payer: `0x${String(i + 1).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore: nowS + 600 });
+        for (let i = 0; i < 60; i++) { await tb.intent(mk(i)); await tb.resolve(`referral:r16s-${i}`, { state: "in-doubt" }); }
+        for (let i = 100; i < 115; i++) { await tb.intent(mk(i)); await tb.resolve(`referral:r16s-${i}`, { state: "refused" }); }
+        const passes = [];
+        for (let p = 0; p < 2; p++) { const read = []; await tb.sweep({ chain: { state: async ({ from }) => { read.push(Number(String(from).slice(2)) - 1); return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO }); passes.push(read); }
+        const refusedRead = passes.map((r) => r.filter((i) => i >= 100).length);
+        const seenRefused = new Set(passes.flat().filter((i) => i >= 100));
+        ok(passes[0].length === 50 && refusedRead[0] === 10 && refusedRead[1] === 10 && seenRefused.size === 15 && passes[0].filter((i) => i < 100).length === 40, `with sixty in-doubt entries standing, a fifth of each pass's fifty reads go to refused entries, the least recently read first (${refusedRead.join(" and ")} refused reads in two passes; ${seenRefused.size} of 15 refused entries read)`);
+      }
+      // B3. Dropped records are read every pass, even when the open entries spend the pass's read budget.
+      {
+        const tb = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r16-dropread`, log: () => {} }), log, maxEntries: 12, maxDropped: 100 });
+        const nowS = Math.floor(Date.now() / 1000);
+        const mk = (i) => ({ key: `referral:r16d-${i}`, slug: "echo", payer: `0x${String(i + 1).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore: nowS + 600 });
+        // Twelve refused entries, then twelve in-doubt ones that drop them: twelve records, twelve open entries.
+        for (let i = 0; i < 12; i++) { await tb.intent(mk(i)); await tb.resolve(`referral:r16d-${i}`, { state: "refused", at: 100 + i }); }
+        for (let i = 20; i < 32; i++) { await tb.intent(mk(i)); await tb.resolve(`referral:r16d-${i}`, { state: "in-doubt" }); }
+        const landedKey = "referral:r16d-0";
+        const landedNonce = tb.droppedRefused().records.find((r) => r.key === landedKey)?.nonce;
+        const perPass = []; let found = 0;
+        for (let p = 0; p < 12 && !found; p++) {
+          let dropped = 0;
+          await tb.sweep({ chain: { state: async ({ from, nonce }) => { const i = Number(String(from).slice(2)) - 1; if (i < 12) { dropped++; return nonce === landedNonce ? { used: true, paid: true, transaction: "0x" + "d7".repeat(32), complete: true, net: "26298" } : { used: null, paid: null, transaction: null, complete: false }; } await wait(150); return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => { found++; return true; }, payTo: PAY_TO, chainBudgetMs: 300 });
+          perPass.push(dropped);
+        }
+        ok(tb.droppedRefused().count >= 11 && perPass.every((n) => n >= 1) && found === 1 && tb.get(landedKey)?.state === "charged-undelivered", `though the open entries' reads spend the pass's budget, at least one dropped record is read every pass, so the payment that landed on one is found (${perPass.join(",")} dropped reads a pass; found on pass ${perPass.length})`);
+      }
+      // B4. Records given up after an acknowledgement raise the word again, even minutes later.
+      {
+        const docN = casDoc();
+        const tn = createReferralBook({ doc: docN, log, maxEntries: 1, maxDropped: 50, now: () => Date.now() + skew.ms });
+        const appN = await mount({}, { book: tn });
+        const skew0 = skew.ms;
+        try {
+          const nowS = Math.floor(Date.now() / 1000);
+          const mk = (i, vb) => ({ key: `referral:r16n-${i}`, slug: "echo", payer: `0x${String(i + 1).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore: vb });
+          // Two records expire now, two more a minute later.
+          for (let i = 0; i < 5; i++) { await tn.intent(mk(i, nowS + (i < 2 ? 60 : 120))); await tn.resolve(`referral:r16n-${i}`, { state: "refused", at: 100 + i }); }
+          await tn.resolve("referral:r16n-4", null);
+          const sweepN = () => tn.sweep({ chain: { state: async () => ({ used: null, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
+          skew.ms = skew0 + 10 * 60_000;
+          for (let i = 0; i < 5; i++) await sweepN();
+          skew.ms = skew0 + bookMod.DROPPED_GIVE_UP_MS + 90_000; // six hours past the first two only
+          await sweepN();
+          const first = { n: tn.droppedRefused().unresolved, word: appN.gate.statusWord().reasons.some((x) => /went without a verdict/.test(x)) };
+          await appN.gate.acknowledge("dropped", { note: "looked the first two up: neither landed" });
+          const acked = appN.gate.statusWord().reasons.some((x) => /went without a verdict/.test(x));
+          skew.ms += 60_000; // one minute later the other two are six hours past as well
+          await sweepN();
+          const second = { n: tn.droppedRefused().unresolved, word: appN.gate.statusWord().reasons.some((x) => /went without a verdict/.test(x)) };
+          ok(first.n === 2 && first.word === true && acked === false && second.n === 4 && second.word === true && tn.resolvedByHand().filter((r) => r.key === "dropped:unresolved").length === 2, `records given up a minute after an acknowledgement raise the word again (${first.n} given up, acknowledged, then ${second.n}; word ${second.word ? "attention" : "ok"})`);
+        } finally { skew.ms = skew0; await appN.close(); }
       }
       // M4. Charged, undelivered entries are never resolved in bulk.
       {
