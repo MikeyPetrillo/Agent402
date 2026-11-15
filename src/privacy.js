@@ -190,7 +190,7 @@ so every claim below is verifiable in code.</p>
   audio you upload) and other AI-proxy tools are <b>forwarded to the upstream model
   provider</b> (OpenAI, or the model operator serving the request via OpenRouter) to generate the
   response, subject to that provider's own privacy terms. We don't store gateway inputs or outputs
-  beyond short-lived caches (minutes) that make repeated identical calls cheaper. For requests served
+  beyond short-lived caches (minutes) that make repeated identical calls cheaper${referralOn ? ", and the answer to a call bought through a referral link, kept with its payment for up to " + Math.round(IDEM_TTL_MS / 60000) + " minutes (see referral links below)" : ""}. For requests served
   via OpenRouter, our account keeps its optional prompt and completion logging off, routes only to
   endpoints that do not train on or publish request data, and does not let OpenRouter use inputs or
   outputs to improve its product. Request metadata such as the model, token counts and cost is still

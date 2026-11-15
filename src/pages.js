@@ -1005,7 +1005,7 @@ export function openapiSpec(baseUrl, catalog) {
     operationId,
     security: [],
     summary: "Refund status of one payment, by its payment transaction",
-    description: "Free. Answers whether a payment that was charged and not delivered is refunded: found, status (owed, sending, paid, void, or none for a transaction with no refund recorded, which is also the answer for one never seen), priceUsd of the call it paid for, network, chain, the payment's and the refund's explorer links, and refundTx once sent. One payment per ask, keyed by its own on-chain transaction; never a list, never a wallet address, never the payer or the tool bought. Rate limited per client address (429 with Retry-After).",
+    description: "Free. Answers whether a payment that was charged and not delivered is refunded: found, status (owed, sending, paid, void, or none for a transaction with no refund recorded, which is also the answer for one never seen), priceUsd of the call it paid for, network, chain, the payment's and the refund's explorer links, refundTx once sent, and refunds (every refund recorded for that transaction). One transaction per ask; never a wallet's list, never a wallet address, the payer or the tool bought. Rate limited per client address (429 with Retry-After).",
     tags: ["refunds"],
     parameters: [{ name: "tx", in: "query", required: true, description: "The payment's transaction: 0x plus 64 hex on EVM chains, 64 hex on Stellar, a base58 signature on Solana, a 52-character id on Algorand.", schema: { type: "string", maxLength: 100 }, example: REFUND_LOOKUP_EXAMPLE_TX }],
     responses: {
