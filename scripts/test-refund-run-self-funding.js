@@ -190,6 +190,23 @@ ok(stepEnvFor({ include_repeat_hangups: true }).REFUND_INCLUDE_REPEAT_HANGUPS ==
    && stepEnvFor({}).REFUND_INCLUDE_REPEAT_HANGUPS === "false",
   "the step passes that input to the job as REFUND_INCLUDE_REPEAT_HANGUPS");
 
+const reviewInput = declaredInputs.include_review_holds;
+ok(reviewInput?.type === "boolean" && reviewInput?.default === false,
+  "refund.yml declares include_review_holds as a boolean that defaults to false");
+ok(stepEnvFor({ include_review_holds: true }).REFUND_INCLUDE_REVIEW_HOLDS === "true"
+   && stepEnvFor({}).REFUND_INCLUDE_REVIEW_HOLDS === "false"
+   && stepEnvFor({ include_repeat_hangups: true }).REFUND_INCLUDE_REVIEW_HOLDS === "false",
+  "the step passes that input to the job as REFUND_INCLUDE_REVIEW_HOLDS, and the repeat hang-up input does not set it");
+{
+  // With the input on, a row held for review is released by the plan the job builds; with only the repeat hang-up input on, it is not.
+  const rr = await import("./refund-run.js");
+  const reviewRow = { id: 91, evidence: "0x" + "9".repeat(64), status: "owed", createdAt: Date.now() - 3600_000, slug: "echo", network: "eip155:8453", payer: "0x" + "a".repeat(40), priceUsd: 0.001, wire: "referral", httpStatus: 499, hangupReason: "payer budget", note: "referral answer partly sent (at most 10 of 20 bytes) before the connection closed, held for review: x" };
+  const flag = (env, name) => /^(1|true|yes)$/i.test(String(env[name] || "").trim());
+  const planFor = (inputs) => { const env = stepEnvFor(inputs); return rr.planRefunds([reviewRow], { senders: { evm: true }, includeRepeatHangups: flag(env, "REFUND_INCLUDE_REPEAT_HANGUPS"), includeReviewHolds: flag(env, "REFUND_INCLUDE_REVIEW_HOLDS") }); };
+  ok(planFor({ include_review_holds: true }).send.length === 1 && planFor({ include_repeat_hangups: true }).send.length === 0 && (planFor({}).held[rr.REVIEW_HOLD] || []).length === 1 && /include_review_holds/.test(rr.REVIEW_HOLD),
+    "a row held for review is repaid only when the dispatch sets include_review_holds, which the hold's own label names");
+}
+
 // The spending wallets the server settles to, as payments.js reads them; the
 // ones the refund job knows how to use, as refund-run.js reads them; and what
 // the workflow passes. All three must be the same set, so a spending wallet

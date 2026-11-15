@@ -202,7 +202,7 @@ export const REPEAT_HANGUP_HOLD =
   "disconnected past the hang-up forgiveness budget (or before the reason was recorded) - review, then set include_repeat_hangups to repay";
 
 export const REVIEW_HOLD =
-  "held for review by the route that recorded it (the note says why) - review each, then set REFUND_INCLUDE_REVIEW_HOLDS=true to repay";
+  "held for review by the route that recorded it (the note says why) - review each, then set include_review_holds (REFUND_INCLUDE_REVIEW_HOLDS=true) to repay";
 /** A row whose own note says it is held for review (see planRefunds). */
 export function isReviewHold(row) {
   return /held for review/.test(typeof row?.note === "string" ? row.note : "");
