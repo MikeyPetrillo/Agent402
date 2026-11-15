@@ -45,6 +45,7 @@
 // each kit: those differ per upstream and are not this module's concern.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { withRunCeiling, ceilingLeftMs } from "./run-ceiling.js";
 import { DEFAULT_MAX_TIMEOUT_SECONDS, SETTLE_RULE_SECONDS, SETTLE_MARGIN_SECONDS } from "./evm-validity.js";
 
 /** The whole handler, every read included, answers inside this: the budget of
@@ -108,9 +109,8 @@ export function handlerBudgetMs(totalMs = null) {
 export function underBudget(handler, totalMs = null) {
   const budgeted = function budgeted(...args) {
     const own = handlerBudgetMs(totalMs);
-    const ceiling = ceilingStore.getStore();
     // Whole milliseconds: a read's cap becomes an AbortSignal.timeout, which takes an integer.
-    const left = ceiling ? ceiling.endsAt - Date.now() : Infinity;
+    const left = ceilingLeftMs();
     return store.run(budgetOf(Math.max(1, Math.floor(Math.min(own, left)))), () => handler.apply(this, args));
   };
   return Object.assign(budgeted, { __underBudget: true, __budgetMs: Number(totalMs) > 0 ? Number(totalMs) : HANDLER_BUDGET_MS });
@@ -121,10 +121,11 @@ export function underBudget(handler, totalMs = null) {
 // ceiling: a budgeted handler started inside it gets the smaller of its own
 // budget and what the ceiling has left, so every upstreamFetch in it is cut
 // off by then. It only ever shortens a budget.
-const ceilingStore = new AsyncLocalStorage();
+// The ceiling itself lives in src/run-ceiling.js, where reads with a fixed
+// timeout of their own (the fetch guard's) see it too.
 /** Run `fn` with every budgeted handler started inside it capped at `ms` from now. */
 export function withBudgetCeiling(ms, fn) {
-  return ceilingStore.run({ endsAt: Date.now() + Math.max(1, Math.floor(Number(ms) || 1)) }, fn);
+  return withRunCeiling(ms, fn);
 }
 
 /** Wrap every handler in a kit's tool array, in place, and return the array:

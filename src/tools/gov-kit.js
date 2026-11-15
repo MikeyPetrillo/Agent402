@@ -23,6 +23,7 @@
 // fallback); the rest are keyless. (Treasury debt/rates live in macro-kit; don't
 // dup here.)
 import { safeFetch } from "./fetch-guard.js";
+import { markEndsAtCeiling } from "../run-ceiling.js";
 import { partialFields, clampFields } from "../partial-answer.js";
 
 function bad(message, statusCode = 400) {
@@ -1208,3 +1209,9 @@ export const GOV_TOOLS = [
     },
   },
 ];
+
+// These handlers' every upstream wait is a safeFetch (through this kit's own
+// read helper and its retry), which ends at a run's ceiling when one is set
+// (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
+// can serve them. A handler that gains another kind of wait leaves this list.
+markEndsAtCeiling(GOV_TOOLS, ["device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "earthquakes", "fec-candidates", "federal-awards", "fema-disasters", "food-recalls", "geo-lookup", "vehicle-recalls", "vin-decode", "weather-alerts"]);

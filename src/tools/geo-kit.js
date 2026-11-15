@@ -9,6 +9,7 @@
 // photon.komoot.io (Komoot's keyless OSM geocoder — same ODbL data, GeoJSON
 // wire) as an automatic fallback when Nominatim itself fails (see below).
 import { safeFetch } from "./fetch-guard.js";
+import { markEndsAtCeiling } from "../run-ceiling.js";
 import { nominatimSlot } from "./nominatim-pace.js";
 import { OSM_ATTRIBUTION } from "../data-attribution.js";
 
@@ -397,3 +398,9 @@ export const GEO_TOOLS = [
     },
   },
 ];
+
+// These handlers' every upstream wait is a safeFetch (through this kit's own
+// read helper and its retry), which ends at a run's ceiling when one is set
+// (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
+// can serve them. A handler that gains another kind of wait leaves this list.
+markEndsAtCeiling(GEO_TOOLS, ["geocode"]);

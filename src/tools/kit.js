@@ -4,7 +4,8 @@
 // Handlers receive merged { ...query, ...body } and throw { statusCode: 400 }
 // (via bad()) for invalid input.
 import { createHash, createHmac, randomBytes, randomUUID, randomInt } from "node:crypto";
-import { resolveMx, reverse } from "node:dns/promises";
+import { resolveMx, Resolver } from "node:dns/promises";
+import { markEndsAtCeiling, capByCeiling, atCeiling } from "../run-ceiling.js";
 import { isIP } from "node:net";
 import tls from "node:tls";
 import { assertQueryableName } from "./dns-name-filter.js";
@@ -1753,11 +1754,15 @@ const validationTools = [
       }
       let ptr = [];
       if (scope === "public") {
+        // The system resolver, on an instance of its own so that a run's
+        // ceiling (src/run-ceiling.js; none on a direct route) can end the query.
+        const resolver = new Resolver();
+        const off = atCeiling(() => resolver.cancel());
         try {
-          ptr = await reverse(ip);
+          ptr = await resolver.reverse(ip);
         } catch {
           ptr = [];
-        }
+        } finally { off(); }
       }
       const out = { ip, version, scope, ptr: ptr.slice(0, 5) };
       if (version === 4) out.integer = ip.split(".").reduce((acc, o) => acc * 256 + Number(o), 0);
@@ -2094,7 +2099,7 @@ async function rdapAuthoritativeBase(tld) {
   if (!rdapBootstrap.map || now - rdapBootstrap.at >= RDAP_BOOTSTRAP_TTL_MS) {
     try {
       const res = await fetch("https://data.iana.org/rdap/dns.json", {
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(capByCeiling(10_000)),
         dispatcher: ssrfDispatcher,
         headers: { Accept: "application/json" },
       });
@@ -2138,7 +2143,7 @@ const networkTools = [
       const url = await assertPublicUrl(need(input, "url"));
       const method = String(input.method || "GET").toUpperCase() === "HEAD" ? "HEAD" : "GET";
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15_000);
+      const timer = setTimeout(() => controller.abort(), capByCeiling(15_000));
       const started = Date.now();
       try {
         const res = await fetch(url, {
@@ -2247,6 +2252,9 @@ const networkTools = [
           reject(Object.assign(new Error("TLS connection timed out"), { statusCode: 504 }));
         });
         socket.on("error", (e) => reject(Object.assign(new Error(`TLS error: ${e.message}`), { statusCode: 502 })));
+        // A run's ceiling (none on a direct route) ends the connection as its own timeout does.
+        const off = atCeiling(() => { socket.destroy(); reject(Object.assign(new Error("TLS connection timed out"), { statusCode: 504 })); });
+        socket.on("close", off);
       });
       const { c, authorized, authorizationError, protocol, cipher } = cert;
       if (!c || !c.valid_to) throw Object.assign(new Error("No certificate presented"), { statusCode: 502 });
@@ -2314,7 +2322,7 @@ const networkTools = [
       ];
       async function rdapFetch(url) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 12_000);
+        const timer = setTimeout(() => controller.abort(), capByCeiling(12_000));
         try {
           const res = await fetch(url, {
             signal: controller.signal,
@@ -2474,4 +2482,12 @@ const networkTools = [
   },
 ];
 
+// Every upstream wait of these six ends at a run's ceiling when one is set
+// (src/run-ceiling.js): robots-check and sitemap read through safeFetch;
+// http-check, whois (with its registry list) and tls-cert cap their own
+// timers by it, tls-cert ends its socket at it, and ip-info's reverse lookup
+// is canceled at it. Their name lookups run under the address guard's own
+// short deadline. A caller that stops waiting at a deadline can serve them.
+markEndsAtCeiling(networkTools, ["http-check", "tls-cert", "whois", "robots-check", "sitemap"]);
+markEndsAtCeiling(validationTools, ["ip-info"]);
 export const KIT = [...encodingTools, ...dataTools, ...textTools, ...timeTools, ...validationTools, ...networkTools];

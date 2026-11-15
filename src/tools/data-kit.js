@@ -15,6 +15,7 @@
 // PoW-eligible); covered by scripts/test-data-kit.js.
 import { readFileSync } from "node:fs";
 import { safeFetch } from "./fetch-guard.js";
+import { markEndsAtCeiling } from "../run-ceiling.js";
 import { ratesUrl, latestShape, isUnknownCurrency } from "./frankfurter.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
@@ -363,3 +364,9 @@ export const DATA_TOOLS = [
     },
   },
 ];
+
+// These handlers' every upstream wait is a safeFetch (through this kit's own
+// read helper and its retry), which ends at a run's ceiling when one is set
+// (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
+// can serve them. A handler that gains another kind of wait leaves this list.
+markEndsAtCeiling(DATA_TOOLS, ["fx-rate", "public-holidays", "weather-forecast"]);
