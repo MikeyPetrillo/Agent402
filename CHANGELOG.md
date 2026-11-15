@@ -14,8 +14,10 @@ Payments:
   is refused 429 before it runs, and nothing is charged. A card payment token
   pays for one run at a time: while a request it pays for is in flight,
   another credential carrying the same token is refused 402 before its
-  handler, uncharged; a run that fails or is not captured frees the token for
-  a retry, and a captured token is not accepted again for an hour.
+  handler, uncharged; the token is free again once that run ends, captured or
+  not, so a token with limit left pays for a later request under a new
+  challenge, while a credential that was captured is refused if it is sent
+  again.
 
 ### 2026-11-15 (coverage refusals name their class)
 Payments:

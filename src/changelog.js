@@ -5,7 +5,7 @@ const ENTRIES = [
     date: "2026-11-15",
     title: "Access keys and card tokens are judged per payer",
     items: [
-      "Payments: A Tempo pull credential signed by an access key is judged on the paying account's balance, together with that account's other calls in flight, as one signed by the account's own key is: a call the balance cannot also cover is refused 429 before it runs, and nothing is charged. A card payment token pays for one run at a time: while a request it pays for is in flight, another credential carrying the same token is refused 402 before its handler, uncharged; a run that fails or is not captured frees the token for a retry, and a captured token is not accepted again for an hour.",
+      "Payments: A Tempo pull credential signed by an access key is judged on the paying account's balance, together with that account's other calls in flight, as one signed by the account's own key is: a call the balance cannot also cover is refused 429 before it runs, and nothing is charged. A card payment token pays for one run at a time: while a request it pays for is in flight, another credential carrying the same token is refused 402 before its handler, uncharged; the token is free again once that run ends, captured or not, so a token with limit left pays for a later request under a new challenge, while a credential that was captured is refused if it is sent again.",
     ],
   },
   {
