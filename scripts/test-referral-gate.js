@@ -568,7 +568,7 @@ function mount(envOverride = {}, depOverride = {}) {
     sendToolError: (res, err, slug) => res.status(err?.statusCode || 502).json({ error: String(err?.message || "request failed"), tool: slug }),
     recordSale: (row) => { sales.push(row); return ledger.recordSale(row); },
     saleBooked: (tx, payer, slug) => ledger.privateRailSaleCount(tx, "referral", payer, slug),
-    amendSaleNet: ({ tx, netUsd, payer, slug }) => ledger.amendPrivateRailSaleNet(tx, "referral", netUsd, payer, slug),
+    amendSaleNet: ({ tx, netUsd, payer, slug, grossUsd }) => ledger.amendPrivateRailSaleNet(tx, "referral", netUsd, payer, slug, grossUsd),
     payerScreen: async (req, res) => {
       const from = JSON.parse(Buffer.from(req.headers["payment-signature"], "base64").toString("utf8")).payload.authorization.from;
       if (from !== SCREENED.address) return true;
@@ -1608,7 +1608,8 @@ try {
     await app1.gate.sweepOnce();
     const word = app1.gate.statusWord();
     skew.ms = 0;
-    ok(r2.status === 402 && r2.json?.errorReason === "settle_outcome_unknown" && app1.book.get(ku)?.state === "in-doubt" && sales.length === 0 && owed.length === 0 && word.status === "attention", `a payment into the split contract with no routing this server recognizes is UNKNOWN: held in the book past its expiry, not delivered, not booked, not closed, the word at attention (${r2.status}, ${app1.book.get(ku)?.state}, ${word.status})`);
+    const heldU = app1.book.get(ku);
+    ok(r2.status === 402 && r2.json?.errorReason === "settle_outcome_unknown" && heldU?.state === "in-doubt" && heldU.unproven === true && heldU.moved === true && sales.length === 0 && owed.length === 1 && owed[0].priceUsd === 0.03 && owed[0].wire === "referral-operator" && word.status === "attention", `a payment into the split contract with no routing this server recognizes is UNKNOWN: held in the book past its expiry, not delivered, not booked, not closed, the word at attention, and the buyer, whose transfer is on chain, is owed the gross back (${r2.status}, ${app1.book.get(ku)?.state}, ${word.status})`);
     const done = await app1.gate.resolveByHand(ku, { note: "read the transaction: funds not routed to us" });
     ok(done.ok && app1.book.get(ku) === null, "and an operator can close it by hand");
     // The settings are required: without the merchant id or the payout wallet the gate is off.
@@ -1704,7 +1705,8 @@ try {
     const rows = owed.filter((o) => o.tx === txg2);
     const { isRepeatHangup } = await import("./refund-run.js");
     ok(rows.length === 1 && rows[0].priceUsd === 0.03 && rows[0].httpStatus === 499 && rows[0].hangupReason === "payer budget" && isRepeatHangup(rows[0]) === true && isRepeatHangup({ ...rows[0], hangupReason: "settle in flight" }) === false && app1.book.get(kg2)?.state === "refund-owed", `a proven, undelivered payment is owed once, at gross, with the fields a direct hang-up debt carries: a hang-up past a spent forgiveness budget is HELD by the refund run like a direct one (${rows.length} row, ${rows[0]?.httpStatus} ${rows[0]?.hangupReason})`);
-    ok(gateMod.refundRowCovers({ evidence: txg2, payer: g2.authorization.from.toUpperCase().replace("0X", "0x"), wire: "referral" }, rows[0]) === true && gateMod.refundRowCovers({ evidence: txg2, payer: "0x" + "9".repeat(40), wire: "referral" }, rows[0]) === false && gateMod.refundRowCovers({ evidence: txg2, payer: g2.authorization.from, wire: "evm" }, rows[0]) === false && gateMod.refundRowCovers(null, rows[0]) === false, "a refund row already on the books covers this debt only for the same transaction AND payer on this wire");
+    const evG = `${txg2}#${g2.authorization.nonce.toLowerCase()}`;
+    ok(rows[0].evidenceKey === evG && gateMod.referralRefundEvidence(txg2, g2.authorization.nonce) === evG && gateMod.refundRowCovers({ evidence: evG, payer: g2.authorization.from.toUpperCase().replace("0X", "0x"), wire: "referral" }, rows[0]) === true && gateMod.refundRowCovers({ evidence: txg2, payer: g2.authorization.from, wire: "referral" }, rows[0]) === false && gateMod.refundRowCovers({ evidence: evG, payer: "0x" + "9".repeat(40), wire: "referral" }, rows[0]) === false && gateMod.refundRowCovers({ evidence: evG, payer: g2.authorization.from, wire: "evm" }, rows[0]) === false && gateMod.refundRowCovers(null, rows[0]) === false, "a refund row carries the PAYMENT's evidence (the transaction and the authorization's nonce), and a row on the books covers this debt only for that evidence AND payer on this wire");
   }
   fac.reset(); sales.length = 0; owed.length = 0;
   {
@@ -2353,7 +2355,7 @@ try {
   }
 
   // ===========================================================================
-  // A spent authorization whose transaction is found and is NOT a payment of ours: an end
+  // A spent authorization whose transaction is found and is NOT a proof of our sale: owed back, never closed
   // ===========================================================================
   fac.reset(); sales.length = 0; owed.length = 0;
   {
@@ -2366,7 +2368,7 @@ try {
         const key = gateMod.referralReplayKey(p.authorization);
         await bookU.intent({ key, slug: "echo", payer: p.authorization.from, nonce: p.authorization.nonce, amount: "30000", validBefore: Number(p.authorization.validBefore), fromBlock: fac.chainState.head });
         await bookU.resolve(key, { state: "in-doubt" });
-        return { key, tx: fac.land(p.authorization, null, kind) };
+        return { key, tx: fac.land(p.authorization, null, kind), nonce: p.authorization.nonce.toLowerCase(), payer: p.authorization.from.toLowerCase() };
       };
       const stuck = await open(-600, "noevent");   // expired; the money sits in the contract, no event
       const live = await open(600, "noevent");     // the same, still sendable
@@ -2374,28 +2376,50 @@ try {
       const ours = await open(-600, "paid");       // a receipt that IS ours
       fac.receipts.delete(dark.tx);
       ok(appU.config.unrecognizedReads === 3 && referralConfig(ENV).unrecognizedReads === 5 && referralConfig({ ...ENV, REFERRAL_UNRECOGNIZED_READS: "0" }).unrecognizedReads === 5, "REFERRAL_UNRECOGNIZED_READS is read (default 5; a malformed one reads as the default)");
-      const passes = [];
-      for (let i = 0; i < 2; i++) { passes.push(await appU.gate.sweepOnce()); }
-      const mid = { stuck: bookU.get(stuck.key), closed: closedU().length };
-      ok(mid.stuck?.state === "in-doubt" && mid.stuck.unrecognizedReads === 2 && mid.stuck.seenTx === stuck.tx && mid.closed === 0, `a spent authorization whose transaction was found, with a receipt read in full that the rule does not recognize, stays open while it has been read fewer than the bound (${mid.stuck?.state}, ${mid.stuck?.unrecognizedReads} readings)`);
-      passes.push(await appU.gate.sweepOnce());
+      for (let i = 0; i < 5; i++) await appU.gate.sweepOnce();
       await quietLedger();
-      const record = closedU().find((r) => r.key === stuck.key);
-      ok(bookU.get(stuck.key) === null && record && record.tx === stuck.tx && record.reads === 3 && /no routed event/.test(record.why) && record.slug === "echo" && passes[2].unrecognized === 1 && appU.gate.stats().unrecognizedClosed === 1 && logLines.some((l) => l.includes(stuck.tx) && /closed to the operator record, nothing booked, no refund written/.test(l)), `at the bound, with the authorization no longer sendable, it is closed to the operator record with its transaction and an error line (${JSON.stringify(record)})`);
-      ok(!sales.some((x) => x.tx === stuck.tx) && !owed.some((o) => o.tx === stuck.tx), "no sale is booked and no refund is written for it");
-      ok(bookU.get(live.key)?.state === "in-doubt" && bookU.get(live.key).unrecognizedReads === 3 && bookU.get(dark.key)?.state === "in-doubt" && !bookU.get(dark.key).unrecognizedReads && closedU().length === 1, `one whose authorization can still be sent is not closed whatever the count, and a receipt that cannot be READ is never counted (${bookU.get(live.key)?.unrecognizedReads} readings live, ${bookU.get(dark.key)?.unrecognizedReads ?? 0} dark)`);
-      ok(sales.filter((x) => x.tx === ours.tx).length === 1 && !closedU().some((r) => r.key === ours.key) && owed.filter((o) => o.tx === ours.tx).length === 1, `a receipt that IS ours is booked the first time it is read and never closed this way: it took the paid path (its answer was never stored, so the gross is owed back) (${sales.filter((x) => x.tx === ours.tx).length} sale, ${owed.filter((o) => o.tx === ours.tx).length} debt)`);
+      const eS = bookU.get(stuck.key), eL = bookU.get(live.key), eD = bookU.get(dark.key);
+      const rowS = owed.filter((o) => o.tx === stuck.tx), rowL = owed.filter((o) => o.tx === live.tx);
+      ok(eS?.state === "in-doubt" && eS.unproven === true && eS.moved === true && eS.debtAt > 0 && eL?.state === "in-doubt" && eL.unproven === true && closedU().length === 0, `a spent authorization whose receipt, read in full, shows the buyer's transfer into the split contract and is no proof of our sale is NEVER closed by itself, however often it is read and whether or not it can still be sent (${eS?.state}/${eS?.unproven}; ${closedU().length} closed)`);
+      ok(rowS.length === 1 && rowS[0].priceUsd === 0.03 && rowS[0].wire === "referral-operator" && rowS[0].payer === stuck.payer && rowS[0].evidenceKey === `${stuck.tx}#${stuck.nonce}` && /buyer's transfer into the split contract is proven, no sale was booked/.test(rowS[0].note) && rowL.length === 1 && !sales.some((x) => x.tx === stuck.tx || x.tx === live.tx), `its buyer paid and got nothing: the gross is owed back, once, behind the buyer's own transfer, and no sale is booked (${rowS.length} row at ${rowS[0]?.priceUsd} on ${rowS[0]?.wire})`);
+      ok(eD?.state === "in-doubt" && eD.unproven !== true && !owed.some((o) => o.tx === dark.tx), "a receipt that cannot be READ proves nothing either way: no debt, not marked unproven");
+      ok(sales.filter((x) => x.tx === ours.tx).length === 1 && owed.filter((o) => o.tx === ours.tx).length === 1 && owed.find((o) => o.tx === ours.tx).wire === "referral", `a receipt that IS ours takes the paid path: booked once, and (its answer never stored) owed back on the ordinary wire (${sales.filter((x) => x.tx === ours.tx).length} sale)`);
       const word = appU.gate.statusWord();
       skew.ms = 25 * 3600_000;
+      for (let i = 0; i < 4; i++) await appU.gate.sweepOnce();
       const nextDay = appU.gate.statusWord();
       skew.ms = 0;
-      ok(word.status === "attention" && word.reasons.some((x) => /not recognized was closed/.test(x)) && !nextDay.reasons.some((x) => /not recognized was closed/.test(x)), `the word reads attention for it for a day (${word.reasons.join("; ")})`);
-      // Once the live one can no longer be sent, it ends the same way.
-      skew.ms = 20 * 60_000;
-      await appU.gate.sweepOnce();
-      skew.ms = 0;
-      ok(bookU.get(live.key) === null && closedU().some((r) => r.key === live.key && r.tx === live.tx) && !sales.some((x) => x.tx === live.tx) && !owed.some((o) => o.tx === live.tx), "and the still-sendable one is closed the same way once its authorization has expired");
+      ok(word.status === "attention" && word.reasons.some((x) => /read in full, does not prove the sale/.test(x)) && nextDay.status === "attention" && bookU.get(stuck.key)?.state === "in-doubt" && bookU.get(live.key)?.state === "in-doubt" && closedU().length === 0 && owed.filter((o) => o.tx === stuck.tx || o.tx === live.tx).length === 2, `the word reads attention for it until an operator resolves it: a day later it is still open, still one debt each, nothing closed (${word.reasons.join("; ")})`);
+      // The operator's outcomes work on it; a refund asked for by hand writes no second debt.
+      const byHand = await appU.gate.resolveByHand(stuck.key, { note: "buyer wrote in; already owed", outcome: "refund" });
+      const closedByHand = await appU.gate.resolveByHand(live.key, { note: "checked: refunded", outcome: "dismissed" });
+      ok(byHand.ok === true && byHand.debt === true && owed.filter((o) => o.tx === stuck.tx).length === 1 && closedByHand.ok === true && bookU.get(live.key) === null, `the operator's refund on it records the note and writes no second debt; dismissed closes it (${owed.filter((o) => o.tx === stuck.tx).length} row)`);
+      // The refund run proves such a row by the payer's own transfer, for this payment's nonce.
+      const { verifyInboundPayment } = await import("../src/payment-verify.js");
+      const verifyRow = (row, over = {}) => verifyInboundPayment({ network: "eip155:8453", payer: row.payer, amountUsd: row.priceUsd, tx: row.evidenceKey, wire: row.wire, referralPayTo: PAY_TO, referralMerchantId: MERCHANT_ID, referralPayout: PAYOUT, rpcFor: () => "http://rpc.invalid", fetchImpl: async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: j.method === "eth_getTransactionReceipt" ? fac.receipts.get(row.tx) : null }), { status: 200, headers: { "content-type": "application/json" } }); }, ...over });
+      const vOk = await verifyRow(rowS[0]), vPlain = await verifyRow({ ...rowS[0], wire: "referral" }), vOther = await verifyRow({ ...rowS[0], payer: "0x" + "9".repeat(40) }), vMore = await verifyRow({ ...rowS[0], priceUsd: 0.04 }), vNonce = await verifyRow({ ...rowS[0], evidenceKey: `${stuck.tx}#0x${"7".repeat(64)}` }), vBad = await verifyRow({ ...rowS[0], evidenceKey: `${stuck.tx}#nope` });
+      ok(vOk.verified === true && vPlain.verified === false && vOther.verified === false && vMore.verified === false && vNonce.verified === false && vBad.verified === false, `the refund run proves that row by the payer's own transfer of the amount under THIS payment's nonce (not as an ordinary referral row, another payer, a larger amount or another nonce) (${vOk.verified}, ${vPlain.verified}, ${vOther.verified}, ${vMore.verified}, ${vNonce.verified}, ${vBad.verified})`);
     } finally { skew.ms = 0; await appU.close(); }
+    // A record closed by an earlier build can still be put back, and is then owed back like any other.
+    {
+      const docR = createJsonDocument({ name: `referral-test-${process.pid}-reopen`, log: () => {} });
+      const pR = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) - 600) });
+      const keyR = gateMod.referralReplayKey(pR.authorization);
+      const txR = fac.land(pR.authorization, null, "noevent");
+      await docR.update(() => ({ entries: {}, closed: [{ key: keyR, slug: "echo", payer: pR.authorization.from.toLowerCase(), nonce: pR.authorization.nonce.toLowerCase(), amount: "30000", validBefore: Number(pR.authorization.validBefore), fromBlock: fac.chainState.head, tx: txR, state: "in-doubt", reads: 5, why: "no routed event", at: Date.now() }] }), { fallback: {} });
+      const bookR = createReferralBook({ doc: docR, log, now: () => Date.now() + skew.ms });
+      await bookR.ready;
+      const appRe = await mount({}, { book: bookR });
+      try {
+        const noNote = await appRe.gate.reopenByHand(keyR, { note: "" });
+        const reopened = await appRe.gate.reopenByHand(keyR, { note: "closed too early: checking it by hand" });
+        const back = bookR.get(keyR);
+        ok(noNote.ok === false && reopened.ok === true && back?.state === "in-doubt" && back.noAutoClose === true && back.seenTx === txR && bookR.closedUnrecognized().length === 0 && bookR.resolvedByHand().some((r) => r.key === keyR && r.outcome === "reopened" && /closed too early/.test(r.note)) && (await appRe.gate.reopenByHand(keyR, { note: "twice over" })).ok === false && appRe.gate.stats().reopenedByHand === 1, `an operator can put a closed record back as an open entry (recorded with the note, removed from the record, once) (${JSON.stringify(back && { state: back.state, noAutoClose: back.noAutoClose })})`);
+        for (let i = 0; i < 3; i++) await appRe.gate.sweepOnce();
+        const afterR = bookR.get(keyR);
+        ok(afterR?.state === "in-doubt" && afterR.unproven === true && afterR.debtAt > 0 && owed.filter((o) => o.tx === txR).length === 1 && owed.find((o) => o.tx === txR).wire === "referral-operator", `a reopened entry is read again, stays open, and its buyer is owed back once (${afterR?.state}; ${owed.filter((o) => o.tx === txR).length} row)`);
+      } finally { await appRe.close(); }
+    }
   }
 
   // ===========================================================================
@@ -2639,7 +2663,7 @@ try {
   }
 
   // ===========================================================================
-  // A receipt the split contract routed to OUR merchant is never closed by itself
+  // A receipt the split contract routed to OUR merchant, paid to a wallet this server does not hold
   // ===========================================================================
   fac.reset(); sales.length = 0; owed.length = 0;
   {
@@ -2655,57 +2679,33 @@ try {
         return { key, tx: fac.land(p.authorization, null, kind), payer: p.authorization.from.toLowerCase() };
       };
       const ours = [await open("paid"), await open("paid"), await open("paid")];
-      const notOurs = await open("noevent");
       const elsewhere = await open("othermerchant");
       for (let i = 0; i < 6; i++) await appP.gate.sweepOnce();
       await quietLedger();
-      const kept = ours.map((o) => bookP.get(o.key));
-      ok(kept.every((e) => e?.state === "in-doubt" && e.routedToUs === true && !e.unrecognizedReads) && kept[0].seenTx === ours[0].tx && !bookP.closedUnrecognized().some((r) => ours.some((o) => o.key === r.key)), `an expired entry whose receipt carries the split contract's routed event naming OUR merchant id is never counted and never closed, however often it is read (${kept.map((e) => `${e?.state}/${e?.routedToUs}`).join(", ")})`);
-      ok(bookP.get(notOurs.key) === null && bookP.closedUnrecognized().some((r) => r.key === notOurs.key) && bookP.get(elsewhere.key) === null && !bookP.closedUnrecognized().some((r) => r.key === elsewhere.key), "a receipt with no routed event for our merchant still ends: closed to the record at the bound, or closed as not paid when it was routed to another merchant");
+      const keptP = ours.map((o) => bookP.get(o.key));
+      ok(keptP.every((e) => e?.state === "in-doubt" && e.routedToUs === true && e.unproven === true && e.debtAt > 0) && keptP[0].seenTx === ours[0].tx && bookP.closedUnrecognized().length === 0, `an entry whose receipt carries the split contract's routed event naming OUR merchant id, and pays a wallet this server does not hold, is never closed, however often it is read (${keptP.map((e) => `${e?.state}/${e?.routedToUs}`).join(", ")})`);
+      ok(ours.every((o) => owed.filter((r) => r.tx === o.tx).length === 1) && owed.every((r) => r.priceUsd === 0.03 && r.wire === "referral-operator") && sales.length === 0 && bookP.get(elsewhere.key) === null && !owed.some((r) => r.tx === elsewhere.tx), `each buyer is owed the gross back once, no sale is booked on that reading; a payment routed to another merchant is closed as not paid with no debt (${owed.length} rows)`);
       const word = appP.gate.statusWord();
-      ok(word.status === "attention" && word.reasons.some((x) => /routed to this merchant/.test(x)) && sales.length === 0 && owed.length === 0, `the word reads attention for it, and nothing is booked or owed by itself (${word.reasons.join("; ")})`);
-      // The automatic path never takes the operator's proof: a charged entry whose receipt now fails on the payout waits.
+      ok(word.status === "attention" && word.reasons.some((x) => /routed to this merchant/.test(x)) && word.reasons.some((x) => /came from 3 or more payers/.test(x)), `the word reads attention for them, and three such payers hold the route (${word.reasons.join("; ")})`);
+      // A charged entry (proven once) whose receipt now fails on the payout: owed back by the same rule.
       const chargedDrift = await open("paid");
       await bookP.resolve(chargedDrift.key, { state: "charged-undelivered", tx: chargedDrift.tx, saleBooked: true });
       await appP.gate.sweepOnce();
-      ok(owed.length === 0 && bookP.get(chargedDrift.key)?.state === "charged-undelivered", `by itself the sweep writes no debt on that weaker proof: only an operator's refund does (${owed.length} debts, ${bookP.get(chargedDrift.key)?.state})`);
-      await appP.gate.resolveByHand(chargedDrift.key, { note: "test cleanup", outcome: "dismissed" });
-      // The operator's three outcomes work on it.
+      ok(owed.filter((r) => r.tx === chargedDrift.tx).length === 1 && bookP.get(chargedDrift.key)?.state === "refund-owed", `a charged, undelivered entry whose receipt reads that way is owed back too (${owed.filter((r) => r.tx === chargedDrift.tx).length} row, ${bookP.get(chargedDrift.key)?.state})`);
+      // The operator's three outcomes work on them; a refund by hand adds no second debt.
       const refund = await appP.gate.resolveByHand(ours[0].key, { note: "the payout wallet was changed on chain; this buyer was not served", outcome: "refund" });
-      const rowsR = owed.filter((o) => o.tx === ours[0].tx);
+      const refundAgain = await appP.gate.resolveByHand(ours[0].key, { note: "asked twice", outcome: "refund" });
       const delivered = await appP.gate.resolveByHand(ours[1].key, { note: "the buyer confirmed the answer", outcome: "delivered" });
       const dismissed = await appP.gate.resolveByHand(ours[2].key, { note: "our own test payment", outcome: "dismissed" });
-      ok(refund.ok === true && refund.debt === true && rowsR.length === 1 && rowsR[0].priceUsd === 0.03 && rowsR[0].payer === ours[0].payer && rowsR[0].wire === "referral-operator" && /operator refund: the buyer's transfer into the split contract is proven/.test(rowsR[0].note) && sales.length === 0 && bookP.get(ours[0].key)?.state === "refund-owed" && bookP.get(ours[0].key).tx === ours[0].tx && delivered.ok === true && dismissed.ok === true && bookP.get(ours[1].key) === null && bookP.get(ours[2].key) === null && owed.length === 1, `an operator's refund on it writes the debt at the gross against the transaction the sweep found (the receipt shows the buyer's transfer and our merchant id); delivered and dismissed close it with no debt (${refund.ok} ${refund.error || ""}; ${rowsR.length} row)`);
-      // Not for a receipt that does not name our merchant: no operator proof there.
-      const reopened = await appP.gate.reopenByHand(notOurs.key, { note: "closed too early: checking it by hand" });
-      const noNote = await appP.gate.reopenByHand(notOurs.key, { note: "" });
-      const back = bookP.get(notOurs.key);
-      ok(reopened.ok === true && noNote.ok === false && back?.state === "in-doubt" && back.noAutoClose === true && back.seenTx === notOurs.tx && back.payer === notOurs.payer && back.amount === "30000" && !bookP.closedUnrecognized().some((r) => r.key === notOurs.key) && bookP.resolvedByHand().some((r) => r.key === notOurs.key && r.outcome === "reopened" && /closed too early/.test(r.note)) && (await appP.gate.reopenByHand(notOurs.key, { note: "twice over" })).ok === false && appP.gate.stats().reopenedByHand === 1, `an operator can put a closed record back as an open entry (recorded with the note, removed from the record, once) (${JSON.stringify(back && { state: back.state, noAutoClose: back.noAutoClose })})`);
-      for (let i = 0; i < 5; i++) await appP.gate.sweepOnce();
-      // AN EVENT THE RULE DOES NOT RECOGNIZE: the operator can still refund, on the buyer's own transfer.
-      const stillOpen = bookP.get(notOurs.key)?.state;
-      const handRefund = await appP.gate.resolveByHand(notOurs.key, { note: "the buyer paid; the routing is not one we read", outcome: "refund" });
-      const handAgain = await appP.gate.resolveByHand(notOurs.key, { note: "asked twice", outcome: "refund" });
-      const rowsN = owed.filter((o) => o.tx === notOurs.tx);
-      ok(stillOpen === "in-doubt" && handRefund.ok === true && handRefund.debt === true && rowsN.length === 1 && rowsN[0].priceUsd === 0.03 && rowsN[0].wire === "referral-operator" && rowsN[0].payer === notOurs.payer && /operator refund: the buyer's transfer into the split contract is proven, its routing is not recognized; no sale was booked/.test(rowsN[0].note) && sales.length === 0 && bookP.get(notOurs.key)?.state === "refund-owed", `a reopened entry is never closed by itself again, and an operator's refund on it is written on the buyer's own transfer into the split contract, as an operator refund with the reason, with NO sale booked (${handRefund.ok} ${handRefund.error || ""}; ${rowsN.length} row on ${rowsN[0]?.wire})`);
-      ok(handAgain.ok === true && owed.filter((o) => o.tx === notOurs.tx).length === 1 && bookP.resolvedByHand().filter((r) => r.key === notOurs.key && r.outcome === "refund").length === 1, `a second refund on the same entry writes no second debt and no second hand record (${bookP.resolvedByHand().filter((r) => r.key === notOurs.key && r.outcome === "refund").length})`);
-      // Never for money the contract routed to ANOTHER merchant, and never with no receipt.
-      const theirs = await open("othermerchant");
-      await bookP.resolve(theirs.key, { state: "in-doubt", seenTx: theirs.tx, noAutoClose: true });
-      const notOurSale = await appP.gate.resolveByHand(theirs.key, { note: "asked for a refund", outcome: "refund" });
+      ok(refund.ok === true && refund.debt === true && refundAgain.ok === true && owed.filter((r) => r.tx === ours[0].tx).length === 1 && bookP.resolvedByHand().filter((r) => r.key === ours[0].key && r.outcome === "refund").length === 1 && delivered.ok === true && dismissed.ok === true && bookP.get(ours[1].key) === null && bookP.get(ours[2].key) === null, `the operator's refund records the note with no second debt and no second hand record; delivered and dismissed close an entry (${owed.filter((r) => r.tx === ours[0].tx).length} row, ${bookP.resolvedByHand().filter((r) => r.key === ours[0].key).length} record)`);
+      // Never for a receipt that cannot be read.
       const unreadable = await open("noevent");
       await bookP.resolve(unreadable.key, { seenTx: unreadable.tx });
       fac.mode.receiptDown = true;
       const noReceipt = await appP.gate.resolveByHand(unreadable.key, { note: "asked for a refund", outcome: "refund" });
       fac.mode.receiptDown = false;
-      ok(notOurSale.ok === false && /does not prove/.test(notOurSale.error) && noReceipt.ok === false && /could not be read/.test(noReceipt.error) && !owed.some((o) => o.tx === theirs.tx || o.tx === unreadable.tx), `the operator's refund is refused for a payment routed to another merchant and for a receipt that cannot be read (${notOurSale.error}; ${noReceipt.error})`);
-      for (const e of bookP.list().filter((x) => x.state === "contradicted" || x.state === "in-doubt")) await appP.gate.resolveByHand(e.key, { note: "test cleanup", outcome: "dismissed" });
-      // The refund run proves such a row by that transfer, and no other row.
-      const { verifyInboundPayment } = await import("../src/payment-verify.js");
-      const verifyRow = (row, receipt) => verifyInboundPayment({ network: "eip155:8453", payer: row.payer, amountUsd: row.priceUsd, tx: row.tx, wire: row.wire, referralPayTo: PAY_TO, referralMerchantId: MERCHANT_ID, referralPayout: PAYOUT, rpcFor: () => "http://rpc.invalid", fetchImpl: async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: j.method === "eth_getTransactionReceipt" ? receipt : null }), { status: 200, headers: { "content-type": "application/json" } }); } });
-      const rcN = fac.receipts.get(notOurs.tx);
-      const vOperator = await verifyRow(rowsN[0], rcN), vPlain = await verifyRow({ ...rowsN[0], wire: "referral" }, rcN), vOtherPayer = await verifyRow({ ...rowsN[0], payer: "0x" + "9".repeat(40) }, rcN), vMore = await verifyRow({ ...rowsN[0], priceUsd: 0.04 }, rcN);
-      ok(vOperator.verified === true && vPlain.verified === false && vOtherPayer.verified === false && vMore.verified === false && gateMod.refundRowCovers({ evidence: notOurs.tx, payer: notOurs.payer, wire: "referral-operator" }, rowsN[0]) === true, `the refund run proves an operator row by the payer's own transfer of the amount into the split contract (not for another payer or a larger amount); the same receipt does not prove an ordinary referral row (${vOperator.verified}, ${vPlain.verified}, ${vOtherPayer.verified}, ${vMore.verified})`);
+      ok(noReceipt.ok === false && /could not be read/.test(noReceipt.error) && !owed.some((r) => r.tx === unreadable.tx), `the operator's refund is refused for a receipt that cannot be read (${noReceipt.error})`);
+      for (const e of bookP.list()) await appP.gate.resolveByHand(e.key, { note: "test cleanup", outcome: "dismissed" });
     } finally { skew.ms = 0; await appP.close(); }
   }
 
@@ -3082,7 +3082,7 @@ try {
           shapes[kind] = `${c.status}:${c.reason}/${e?.state}/${e?.unproven === true}/${e?.delivered === true}`;
           await appR.gate.resolveByHand(gateMod.referralReplayKey(c.p.authorization), { note: "test cleanup", outcome: "dismissed" });
         }
-        ok(Object.values(shapes).every((v) => v === "402:settle_outcome_unknown/in-doubt/true/false") && sales.length === 0 && appR.gate.stats().unconfirmed === 0 && appR.gate.stats().settleUnproven === 6 && logLines.some((l) => /SETTLE UNPROVEN: .*read in full, does not prove this sale/.test(l)), `a success whose receipt was read in full and is not a proof (no payout, another buyer or gross, no event or one of another shape, sent to another contract) is not delivered, not booked and not counted as unconfirmed: the buyer gets the unproven outcome and the entry is held for the operator (${JSON.stringify(shapes)})`);
+        ok(Object.values(shapes).every((v) => v === "409:settlement_unproven_refund_owed/in-doubt/true/false") && sales.length === 0 && owed.length === 6 && owed.every((o) => o.priceUsd === 0.03 && o.wire === "referral-operator") && appR.gate.stats().unconfirmed === 0 && appR.gate.stats().settleUnproven === 6 && logLines.some((l) => /SETTLE UNPROVEN: .*read in full, does not prove this sale/.test(l)), `a success whose receipt was read in full and is not a proof (no payout, another buyer or gross, no event or one of another shape, sent to another contract) is not delivered, not booked and not counted as unconfirmed: the buyer, whose transfer is on chain, is told the gross is owed back, and the entry is held for the operator (${JSON.stringify(shapes)})`);
         // A receipt that is NOT THERE yet is still the unconfirmed path, unchanged.
         fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + "9a".repeat(32) } });
         const notYet = await payOn(appR, "exa");
@@ -3103,15 +3103,38 @@ try {
           const firstU = await payOn(appR, "exa", { account: unlucky });
           chainPays(1234);
           const secondU = await payOn(appR, "exa", { account: unlucky });
-          ok(firstU.status === 402 && secondU.status === 200 && bookR.faults().some((f) => f.unproven && f.own === false), `a payer whose settle came back unproven is served on its next payment: the entry holds no payer (${firstU.status} then ${secondU.status})`);
+          ok(firstU.status === 409 && secondU.status === 200 && bookR.faults().some((f) => f.unproven && f.own === false), `a payer whose settle came back unproven is served on its next payment: the entry holds no payer (${firstU.status} then ${secondU.status})`);
+          owed.length = 0;
           for (const e of bookR.list().filter((x) => x.unproven)) await appR.gate.resolveByHand(e.key, { note: "test cleanup", outcome: "dismissed" });
         }
-        // A setting that makes EVERY success unproven: three payers, then the route probes (no buyer after them is charged but the probe).
-        fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "nopayout"), network: REFERRAL_NETWORK } });
+        // A setting that makes EVERY success unproven: three payers are charged and owed back, then the route holds
+        // and STAYS held; a payer that has never paid here is not a probe.
+        const unprovenSettle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "nopayout"), network: REFERRAL_NETWORK } });
+        chainPays(1234);
+        const regularU = newAccount();
+        const earlierU = await payOn(appR, "exa", { account: regularU });
+        fac.mode.settle = unprovenSettle;
+        const settles0 = settles();
         const many = [];
-        for (let i = 0; i < 8; i++) many.push(await payOn(appR, "exa"));
-        const sameAgain = await payOn(appR, "echo", { account: undefined });
-        ok(many.slice(0, 4).every((c) => c.status === 402) && many.slice(4).every((c) => c.status === 503 && c.reason === "settlement_under_review") && bookR.faults().filter((f) => f.unproven).every((f) => f.own === false), `unproven successes from three payers hold the route as contradicted ones do (three, one probe, then 503), and an unproven entry never holds its own payer (${many.map((c) => c.status).join(" ")}; then ${sameAgain.status})`);
+        for (let i = 0; i < 12; i++) many.push(await payOn(appR, "exa"));
+        skew.ms = 5 * 60_000;
+        for (let i = 0; i < 3; i++) await appR.gate.sweepOnce();
+        const laterU = [];
+        for (let i = 0; i < 4; i++) { const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor((Date.now() + skew.ms) / 1000) + 60) }); laterU.push((await send(`${appR.url}/ref/exa`, { body: { text: "later" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } })).status); }
+        skew.ms = 0;
+        const openU = bookR.list().filter((e) => e.unproven === true);
+        ok(earlierU.status === 200 && many.slice(0, 3).every((c) => c.status === 409 && c.reason === "settlement_unproven_refund_owed") && many.slice(3).every((c) => c.status === 503 && c.reason === "settlement_under_review") && settles() - settles0 === 3 && laterU.every((x) => x === 503) && openU.length === 3 && openU.every((e) => e.state === "in-doubt" && e.debtAt > 0) && owed.length === 3 && owed.every((o) => o.priceUsd === 0.03) && bookR.closedUnrecognized().length === 0 && bookR.faults().filter((f) => f.unproven).every((f) => f.own === false), `unproven successes that moved money from three payers hold the route, and it STAYS held: three buyers charged, each owed back, nobody charged after (not one probe by a never-paid payer, not minutes later), nothing closed by itself (${many.map((c) => c.status).join(" ")}; later ${laterU.join(" ")}; ${settles() - settles0} settles, ${owed.length} debts, ${openU.length} open)`);
+        // A payer with a paid sale on the books is the probe: contradicted again, it is owed back and the hold stands...
+        const probeBad = await payOn(appR, "exa", { account: regularU });
+        const stillHeld = await payOn(appR, "exa");
+        // ...and when a probe's receipt PROVES the sale, the hold is over.
+        chainPays(1234);
+        const regular2 = newAccount();
+        paidPayers.add(regular2.address.toLowerCase());
+        const probeGood = await payOn(appR, "exa", { account: regular2 });
+        const reopenedU = await payOn(appR, "exa");
+        ok(probeBad.status === 409 && owed.length === 4 && stillHeld.status === 503 && probeGood.status === 200 && reopenedU.status === 200, `only a payer with a paid sale probes: one whose settle is unproven again is owed back and the hold stands; one whose receipt proves the sale ends it (${probeBad.status}, ${stillHeld.status}, ${probeGood.status}, ${reopenedU.status})`);
+        for (const e of bookR.list()) await appR.gate.resolveByHand(e.key, { note: "test cleanup", outcome: "dismissed" });
       } finally { skew.ms = 0; await appR.close(); }
     }
   }
@@ -3381,6 +3404,121 @@ try {
         const honest = await one(app, "mb");
         ok(seen.verifyRefused === 0 && seen.whileRunning === 1 && waiting.status === 503 && waiting.reason === "rate_under_review" && refused.status === 402 && seen.settleRefused === 0 && failed.status === 422 && seen.handlerError === 0 && timedOut.status === 504 && seen.timeout === 0 && doubt.status === 402 && seen.settleInDoubt === 0 && hung === "aborted" && seen.hangUp === 0 && honest.status === 200, `a cold slug's place is held only while a verified call runs (another payer waits then) and is given back when it ends: a settle refused or in doubt, a handler error, a timeout, a hang-up; the next buyer is served (${JSON.stringify(seen)}; then ${honest.status})`);
       } finally { await app.close(); }
+    }
+  }
+
+  // ===========================================================================
+  // Round 8: the service-wide rule on the run slots; one refund row and one sale row per payment
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    const book8 = (tag) => createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r8-${tag}`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+    const fine = (bps = 1234) => (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "paid", { bps: BigInt(bps) }), network: REFERRAL_NETWORK } });
+    const pay8 = async (app, slug, { account = newAccount(), body = { text: "r8" }, acc = accept } = {}) => { const p = await signPayment(acc, { account }); const r = await send(`${app.url}/ref/${slug}`, { body, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } }); return { status: r.status, reason: r.json?.errorReason || null, p, json: r.json }; };
+    // 2. A stream of payments that run a tool and do not settle, from many payers.
+    {
+      const app = await mount({ REFERRAL_UNSETTLED_GLOBAL_MAX: "3", REFERRAL_MAX_INFLIGHT: "8" }, { book: book8("share") });
+      try {
+        fac.mode.settle = fine();
+        await pay8(app, "busy"); // the slug's rate has proven: its own cold bound is out of the way
+        const atOnce = async (accounts) => { fac.mode.settleDelayMs = 300; try { return await Promise.all(accounts.map((account) => pay8(app, "busy", { account }))); } finally { fac.mode.settleDelayMs = 0; } };
+        const before = await atOnce(Array.from({ length: 6 }, () => newAccount()));
+        const wordBefore = app.gate.statusWord();
+        fac.mode.settle = () => ({ status: 200, body: { success: false, errorReason: "insufficient_funds" } });
+        for (let i = 0; i < 3; i++) await pay8(app, "busy");
+        fac.mode.settle = fine();
+        const word = app.gate.statusWord();
+        const strangers = await atOnce(Array.from({ length: 6 }, () => newAccount()));
+        const regulars = Array.from({ length: 6 }, () => { const a = newAccount(); paidPayers.add(a.address.toLowerCase()); return a; });
+        const returning = await atOnce(regulars);
+        const served = (rs) => rs.filter((c) => c.status === 200).length;
+        ok(served(before) === 6 && !wordBefore.reasons.some((x) => /unsettled runs came from/.test(x)) && word.status === "attention" && word.reasons.some((x) => x === "unsettled runs came from 3 payers in the window: payers with no paid sale share 2 of 8 run slots"), `while unsettled runs stand from REFERRAL_UNSETTLED_GLOBAL_MAX payers the word reads attention and names the rule (${word.reasons.join("; ")})`);
+        ok(served(strangers) === 2 && strangers.filter((c) => c.status === 503 && c.reason === "busy").length === 4 && served(returning) === 6 && app.gate.stats().newPayerShareRefused === 4, `under it, payers with no paid sale share a quarter of the run slots (2 of 8: 2 of 6 at once run, 4 are answered busy with nothing run) and payers with a paid sale are never refused by it (${served(returning)} of 6) (${strangers.map((c) => c.status).join(" ")})`);
+      } finally { fac.mode.settleDelayMs = 0; await app.close(); }
+    }
+    fac.reset();
+    // 3. Two payments of one payer in ONE transaction, both owed back: two refund rows, in the REAL refund ledger.
+    {
+      process.env.REFUND_DB_DIR = join(tmp, "refunds-r8");
+      (await import("node:fs")).mkdirSync(process.env.REFUND_DB_DIR, { recursive: true });
+      const refunds = await import("../src/refund-ledger.js");
+      const app = await mount({ REFERRAL_PRODUCT_IDS: `exa:0x${"1".repeat(64)},list:0x${"1".repeat(64)}` }, { book: book8("refunds"), oweRefund: gateMod.referralRefundWriter({ recordRefundOwed: refunds.recordRefundOwed, refundByEvidence: refunds.refundByEvidence }) });
+      try {
+        const payer = newAccount();
+        const TXR = "0x" + "bb".repeat(32);
+        const built = [];
+        fac.mode.settle = (c) => {
+          const auth = c.json.paymentPayload.payload.authorization;
+          const t = fac.land(auth, fac.nextTx(), "paid");
+          built.push(...fac.receipts.get(t).logs);
+          fac.receipts.set(TXR, { transactionHash: TXR, status: "0x1", to: PAY_TO, logs: built.map((l, i) => ({ ...l, logIndex: `0x${i.toString(16)}` })) });
+          fac.used.set(`${String(auth.from).toLowerCase()}|${String(auth.nonce).toLowerCase()}`, { tx: TXR, block: fac.chainState.head });
+          return { status: 200, body: { success: true, transaction: TXR, network: REFERRAL_NETWORK } };
+        };
+        // (Two slugs, so the first one's stop does not refuse the second payment before it settles.)
+        const one = await pay8(app, "exa", { account: payer }), two = await pay8(app, "list", { account: payer });
+        const ev = (c) => gateMod.referralRefundEvidence(TXR, c.p.authorization.nonce);
+        const rows = [refunds.refundByEvidence(ev(one)), refunds.refundByEvidence(ev(two))];
+        ok(one.status === 409 && two.status === 409 && rows.every((r) => r && Number(r.priceUsd) === 0.03 && String(r.payer).toLowerCase() === payer.address.toLowerCase() && r.wire === "referral") && rows[0].id !== rows[1].id && refunds.refundByEvidence(TXR) === null, `two payments of one payer settled in one transaction and both owed back are TWO rows in the refund ledger, each under its own payment's evidence (${rows.map((r) => r?.id).join(", ")})`);
+        const { verifyInboundPayment } = await import("../src/payment-verify.js");
+        const v = await Promise.all([one, two].map((c) => verifyInboundPayment({ network: "eip155:8453", payer: payer.address.toLowerCase(), amountUsd: 0.03, tx: ev(c), wire: "referral", referralPayTo: PAY_TO, referralMerchantId: MERCHANT_ID, referralPayout: PAYOUT, rpcFor: () => "http://rpc.invalid", fetchImpl: async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: j.method === "eth_getTransactionReceipt" ? fac.receipts.get(TXR) : null }), { status: 200, headers: { "content-type": "application/json" } }); } })));
+        ok(v.every((x) => x.verified === true), "and the refund run proves each of them against the one receipt, by its own nonce");
+      } finally { await app.close(); }
+    }
+    fac.reset(); sales.length = 0;
+    // 4. Three payments of different amounts by one payer in one transaction, booked before the receipt, then corrected.
+    {
+      const app = await mount({}, { book: book8("amounts") });
+      try {
+        const payer = newAccount();
+        const TXA = "0x" + "a7e3".repeat(16);
+        fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: TXA } });
+        const auths = [];
+        for (const n of [10, 20, 30]) {
+          const body = { max_tokens: n, messages: [] };
+          const acc = (await send(`${app.url}/ref/chat`, { body })).json.accepts[0];
+          const c = await pay8(app, "chat", { account: payer, body, acc });
+          auths.push({ auth: c.p.authorization, status: c.status, amount: acc.amount });
+        }
+        await quietLedger();
+        const net = () => sales.filter((x) => x.tx === TXA);
+        const rowsOf = async () => ledger.privateRailSalesByTx(TXA, "referral").map((r) => ({ gross: r.grossUsd, net: r.netUsd })).sort((x, y) => x.gross - y.gross);
+        const early = await rowsOf();
+        // The receipt arrives: the contract took 2000 bps of each.
+        const logs = [];
+        for (const { auth } of auths) { const t = fac.land(auth, fac.nextTx(), "paid", { bps: 2000n }); logs.push(...fac.receipts.get(t).logs); fac.used.set(`${String(auth.from).toLowerCase()}|${String(auth.nonce).toLowerCase()}`, { tx: TXA, block: fac.chainState.head }); }
+        fac.receipts.set(TXA, { transactionHash: TXA, status: "0x1", to: PAY_TO, logs: logs.map((l, i) => ({ ...l, logIndex: `0x${i.toString(16)}` })) });
+        await app.gate.sweepOnce();
+        await wait(120);
+        const late = await rowsOf();
+        ok(auths.every((a) => a.status === 200) && net().length === 3 && JSON.stringify(early) === JSON.stringify([{ gross: 0.01, net: 0.008766 }, { gross: 0.02, net: 0.017532 }, { gross: 0.03, net: 0.026298 }]) && JSON.stringify(late) === JSON.stringify([{ gross: 0.01, net: 0.008 }, { gross: 0.02, net: 0.016 }, { gross: 0.03, net: 0.024 }]), `three payments of different amounts by one payer in one transaction, booked before the receipt: each row is corrected to ITS OWN payment's amount, none rewrites a sibling (${JSON.stringify(late)}; before ${JSON.stringify(early)}; answers ${auths.map((x) => `${x.status}/${x.amount}`).join(" ")}; ${net().length} booked)`);
+      } finally { await app.close(); }
+    }
+    fac.reset(); sales.length = 0;
+    // 5. A restart between two payments of one transaction: still one row each.
+    {
+      const file = join(tmp, "restart-book.json");
+      const payer = newAccount();
+      const TXS = "0x" + "cc".repeat(32);
+      const built = [];
+      fac.mode.settle = (c) => {
+        const auth = c.json.paymentPayload.payload.authorization;
+        const t = fac.land(auth, fac.nextTx(), "paid");
+        built.push(...fac.receipts.get(t).logs);
+        fac.receipts.set(TXS, { transactionHash: TXS, status: "0x1", to: PAY_TO, logs: built.map((l, i) => ({ ...l, logIndex: `0x${i.toString(16)}` })) });
+        fac.used.set(`${String(auth.from).toLowerCase()}|${String(auth.nonce).toLowerCase()}`, { tx: TXS, block: fac.chainState.head });
+        return { status: 200, body: { success: true, transaction: TXS, network: REFERRAL_NETWORK } };
+      };
+      const first = await mount({}, { book: createReferralBook({ file, log }) });
+      let one;
+      try { one = await pay8(first, "exa", { account: payer }); await wait(80); } finally { await first.close(); }
+      const marks = Object.values(JSON.parse(readFileSync(file, "utf8")).sold || {});
+      const second = await mount({}, { book: createReferralBook({ file, log }) });
+      try {
+        const two = await pay8(second, "exa", { account: payer });
+        await quietLedger();
+        ok(one.status === 200 && two.status === 200 && marks.some((m) => m.tx === TXS && m.slug === "exa") && ledger.privateRailSaleCount(TXS, "referral", payer.address, "exa") === 2, `a restart between two payments of one payer in one transaction: the first payment's mark is in the book file, and the second is booked as a row of its own (${ledger.privateRailSaleCount(TXS, "referral", payer.address, "exa")} rows; marks ${JSON.stringify(marks)})`);
+      } finally { await second.close(); }
     }
   }
 
@@ -3934,6 +4072,28 @@ try {
       ok(chatM.join(" ") === "200 503 503" && or.chat === chat0 + 1 && hashM.join(" ") === "200 200 200 503 503" && v3.status.reasons.some((x) => /^v1-chat: .*new calls on it are held/.test(x)) && Array.isArray(v3.status.noProductId) && v3.status.noProductId.includes("v1-chat"), `on the real catalog a model-backed tool stops after ONE sale far under the floor (one model call run), a tool that is not after three; the operator's word lists the slugs with no product id (${chatM.join(" ")} | ${hashM.join(" ")})`);
       for (const slug of ["v1-chat", "hash"]) await call(`${srv.url}/__operator/referral.json`, { body: { action: "clear-short", slug, note: "test cleanup" }, headers: { "x-operator-token": TOKEN_OP } });
       fac.reset();
+      // THE SERVER'S OWN WIRING of the model floor (the gateway's margin, src/tools/llm-gateway-kit.js): a model-backed
+      // tool that brings 60% of its price stops after one sale; without that floor the half-of-expected rule would let it run.
+      fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "paid", { bps: 4000n }), network: REFERRAL_NETWORK } });
+      const accPro = (await call(`${srv.url}/ref/v1-chat-pro`, { body: bodyL, headers: xff() })).json.accepts[0];
+      const proM = [];
+      for (let i = 0; i < 3; i++) { const payM = await signPayment(accPro, { account: newAccount() }); proM.push((await call(`${srv.url}/ref/v1-chat-pro`, { body: bodyL, headers: { ...xff(), "payment-signature": payM.header } })).status); }
+      ok(proM.join(" ") === "200 503 503", `the server passes the gateway's margin as the model floor: a model-backed tool at an on-chain rate of 40% stops after one sale (${proM.join(" ")})`);
+      await call(`${srv.url}/__operator/referral.json`, { body: { action: "clear-short", slug: "v1-chat-pro", note: "test cleanup" }, headers: { "x-operator-token": TOKEN_OP } });
+      fac.reset();
+      // THE SERVER'S OWN WIRING of "a paid sale on the books": a sale on this gate's rail makes its payer a returning
+      // buyer. A cold model-backed slug's one place is taken by a slow call; a new payer waits, the returning one is served.
+      const returningR = newAccount();
+      const firstR = await call(`${srv.url}/ref/hash`, { body: { text: "returning" }, headers: { ...xff(), "payment-signature": (await signPayment(accH2, { account: returningR })).header } });
+      await wait(200);
+      or.delayMs = 1500;
+      const slowR = call(`${srv.url}/ref/v1-chat-pro`, { body: bodyL, headers: { ...xff(), "payment-signature": (await signPayment(accPro, { account: newAccount() })).header } });
+      await wait(400);
+      const strangerR = await call(`${srv.url}/ref/v1-chat-pro`, { body: bodyL, headers: { ...xff(), "payment-signature": (await signPayment(accPro, { account: newAccount() })).header } });
+      const backR = await call(`${srv.url}/ref/v1-chat-pro`, { body: bodyL, headers: { ...xff(), "payment-signature": (await signPayment(accPro, { account: returningR })).header } });
+      const slowDone = await slowR;
+      or.delayMs = 0;
+      ok(firstR.status === 200 && slowDone.status === 200 && strangerR.status === 503 && strangerR.json?.errorReason === "rate_under_review" && backR.status === 200, `the server counts a sale on this gate's own rail as a paid sale: on a cold model-backed slug whose place is taken, a new payer waits and the returning buyer is served (${strangerR.status}, returning ${backR.status})`);
     }
     const reopenNone = await call(`${srv.url}/__operator/referral.json`, { body: { action: "reopen", key: "referral:" + "0".repeat(64), note: "no such record" }, headers: { "x-operator-token": TOKEN_OP } });
     const reopenNoToken = await call(`${srv.url}/__operator/referral.json`, { body: { action: "reopen", key: "referral:" + "0".repeat(64), note: "no such record" } });

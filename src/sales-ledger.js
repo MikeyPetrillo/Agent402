@@ -583,7 +583,7 @@ export function privateRailSaleByTx(tx, rail) {
   } catch { return null; }
 }
 const updateAttestation = db.prepare("UPDATE sales SET attest_uid = ?, attest_tx = ? WHERE id = ? AND attest_uid IS NULL");
-const updatePrivateNet = db.prepare("UPDATE sales /* private-rail */ SET price_usd = ? WHERE tx = ? AND rail = ? AND lower(payer) = ? AND (? IS NULL OR slug = ?) AND price_usd != ? AND (quote_usd IS NULL OR quote_usd >= ?)");
+const updatePrivateNet = db.prepare("UPDATE sales /* private-rail */ SET price_usd = ? WHERE tx = ? AND rail = ? AND lower(payer) = ? AND (? IS NULL OR slug = ?) AND (? IS NULL OR quote_usd = ?) AND price_usd != ? AND (quote_usd IS NULL OR quote_usd >= ?)");
 const selectPrivateByTxPayer = db.prepare(
   "SELECT COUNT(*) AS n FROM sales /* private-rail */ WHERE tx = ? AND rail = ? AND lower(payer) = ? AND (? IS NULL OR slug = ?)"
 );
@@ -595,6 +595,14 @@ export function payerHasPrivateRailSale(payer, rail) {
   const p = normalizePayerAddress(payer);
   if (!p || !PRIVATE_RAILS.includes(String(rail))) return false;
   try { return Boolean(qPayerPrivateSale.get(p, String(rail))); } catch { return false; }
+}
+const selectPrivateAllByTx = db.prepare("SELECT id, slug, price_usd, quote_usd, payer FROM sales /* private-rail */ WHERE tx = ? AND rail = ? ORDER BY id");
+/** Every row booked on a private rail under this transaction, oldest first:
+ *  `[{ id, slug, netUsd, grossUsd, payer }]`. Operator and gate use only. */
+export function privateRailSalesByTx(tx, rail) {
+  const t = String(tx || "").trim();
+  if (!t || !PRIVATE_RAILS.includes(String(rail))) return [];
+  try { return selectPrivateAllByTx.all(t, String(rail)).map((r) => ({ id: r.id, slug: r.slug, netUsd: Number(r.price_usd) || 0, grossUsd: r.quote_usd == null ? null : Number(r.quote_usd), payer: r.payer || null })); } catch { return []; }
 }
 /** How many sales stand on a private rail under this transaction for this
  *  payer (and this slug, when given). */
@@ -618,14 +626,16 @@ export function privateRailSaleStands(tx, rail, payer) {
  * transaction to `netUsd`: the amount its receipt shows, for a sale that was
  * booked before the receipt could be read. `payer` is required: the row is
  * this payer's under this transaction, never another payment settled in the
- * same transaction. The one row is UPDATED IN PLACE
+ * same transaction: `slug` and `grossUsd` (the row's quoted gross), when
+ * given, pick THIS payment's row among several of one payer in one
+ * transaction. The one row is UPDATED IN PLACE
  * (no second row, so no reader counts the sale twice; every reader of the
  * table sees the corrected amount from then on). Never a paying rail, never
  * above the row's quoted gross. True when a row changed; false when none
  * stands, it already carries that amount, or the amount is not usable.
  * Database mode: a Promise of the verdict.
  */
-export function amendPrivateRailSaleNet(tx, rail, netUsd, payer, slug = null) {
+export function amendPrivateRailSaleNet(tx, rail, netUsd, payer, slug = null, grossUsd = null) {
   const t = String(tx || "").trim(), who = String(payer || "").trim().toLowerCase();
   const n = Number(netUsd);
   if (!t || !who || !PRIVATE_RAILS.includes(String(rail)) || !Number.isFinite(n) || !(n > 0)) return false;
@@ -633,13 +643,14 @@ export function amendPrivateRailSaleNet(tx, rail, netUsd, payer, slug = null) {
     return pgWrite("amend-private-net", async () => {
       await queuedSaleLanded(t);
       const r = await stateQuery(
-        `UPDATE ${T("sales")} SET price_usd = $1, updated_at = ${PG_NOW_MS} WHERE tx = $2 AND rail = $3 AND lower(payer) = $4 AND ($5::text IS NULL OR slug = $5::text) AND price_usd <> $1 AND (quote_usd IS NULL OR quote_usd >= $1) RETURNING *`,
-        [n, t, String(rail), who, slug ? String(slug) : null]);
+        `UPDATE ${T("sales")} SET price_usd = $1, updated_at = ${PG_NOW_MS} WHERE tx = $2 AND rail = $3 AND lower(payer) = $4 AND ($5::text IS NULL OR slug = $5::text) AND ($6::double precision IS NULL OR quote_usd = $6::double precision) AND price_usd <> $1 AND (quote_usd IS NULL OR quote_usd >= $1) RETURNING *`,
+        [n, t, String(rail), who, slug ? String(slug) : null, Number.isFinite(Number(grossUsd)) && Number(grossUsd) > 0 ? Number(grossUsd) : null]);
       for (const row of r.rows) { applySale(row); writeThrough(fileSale, saleRowOf(row)); }
       return r.rows.length > 0;
     });
   }
-  try { const s = slug ? String(slug) : null; return updatePrivateNet.run(n, t, String(rail), who, s, s, n, n).changes > 0; }
+  const g = Number.isFinite(Number(grossUsd)) && Number(grossUsd) > 0 ? Number(grossUsd) : null;
+  try { const s = slug ? String(slug) : null; return updatePrivateNet.run(n, t, String(rail), who, s, s, g, g, n, n).changes > 0; }
   catch { return false; }
 }
 
