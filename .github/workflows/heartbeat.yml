@@ -889,7 +889,7 @@ jobs:
                 if printf '%s' "$MARK" | grep -Eq '^[0-9a-f]{12}$'; then
                   SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable reasons mark $MARK")
                   if ! printf '%s' "$SEEN" | grep -q "reasons mark $MARK"; then
-                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Reasons mark $MARK (read at $(date -u +%FT%TZ)). A mark that differs from the one in the comment before it means a reason was added or cleared. Read /__operator/referral.json." >/dev/null 2>&1 || true
+                    gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "The reasons mark is now: reasons mark $MARK (read at $(date -u +%FT%TZ)). A mark that differs from the one in the comment before it means a reason was added or cleared. Read /__operator/referral.json." >/dev/null 2>&1 || true
                   fi
                 fi
               fi
