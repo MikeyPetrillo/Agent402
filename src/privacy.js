@@ -24,10 +24,12 @@ import { oneHopPublicBounds } from "./sanctions-screen.js";
 import { endedRecordRetentionPublic } from "./mpp-subscription-retention.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 import { referralOffered } from "./referral-gate.js";
-import { GOOD_READ_MAX_MS } from "./inflight-cover.js";
+import { GOOD_READ_MAX_MS, SETTLED_MARK_MS } from "./inflight-cover.js";
 
-// How long a coverage reservation and a kept balance read last (src/inflight-cover.js).
+// How long a kept balance read is used, and how long a wallet's settled mark
+// lasts in the shared store (src/inflight-cover.js).
 const COVER_KEEP_MINUTES = Math.round(GOOD_READ_MAX_MS / 60_000);
+const COVER_SETTLED_MARK_MINUTES = Math.round(SETTLED_MARK_MS / 60_000);
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
@@ -292,8 +294,10 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   <li><b>Balance checks.</b> Before a paid call runs, we read the paying wallet's public balance of the paying token
   from a node of its chain${gatewayBatched ? " (for a batched payment, from the payment network's balance service)" : ""}, which receives the
   wallet address, to check that the balance covers every paid call the wallet has in flight. A reservation for each
-  of those calls (the wallet address and the amount) is kept in our shared store until the call ends, and the last
-  balance read for the wallet is kept in the server's memory; neither is kept longer than ${COVER_KEEP_MINUTES} minutes.</li>
+  of those calls (the wallet address and the amount) is kept in our shared store for the life of the call, with a
+  mark of when the wallet's last paid call settled, kept there for ${COVER_SETTLED_MARK_MINUTES} minutes. The last balance read for the
+  wallet is held in the server's memory, used for at most ${COVER_KEEP_MINUTES} minutes, and dropped at the next paid call after
+  that or on restart.</li>
   <li><b>Sanctions screening.</b> The paying address of an x402 payment, each address party to a Tempo
   per-call payment our server settles itself, and the paying wallet of an MPP monitor subscription (before its
   first payment and before each renewal) are checked against the US Treasury OFAC SDN list, which we download and
