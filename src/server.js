@@ -538,7 +538,7 @@ import { GEO_TOOLS } from "./tools/geo-kit.js";
 import { OCR_TOOLS } from "./tools/ocr-kit.js";
 import { AGENT_TOOLS } from "./tools/agent-kit.js";
 import { SAMPLE_AGENT_CARD, A2A_WELL_KNOWN_PATHS, buildOurAgentCard, buildAgentRegistration, erc8004AgentId } from "./tools/a2a-card.js";
-import { upstreamBuyerStatus, upstreamBuyerEvmStatus } from "./upstream-buyer-status.js";
+import { upstreamBuyerStatus, upstreamBuyerEvmStatus, acknowledgeBuyerTrend } from "./upstream-buyer-status.js";
 import { enabledEvmBuyerChains, evmBuyerChain, isEvmBuyerChain, evmAcceptDomainCheck } from "./evm-buyer-chains.js";
 import { CAPTCHA_TOOLS } from "./tools/captcha-kit.js";
 import { SQL_GUARD_TOOLS } from "./tools/sql-guard-kit.js";
@@ -6829,6 +6829,22 @@ app.post("/__operator/dataset/run", (req, res) => {
     (r) => res.json(r),
     (e) => res.status(500).json({ error: redactSecrets(String(e.message)) })
   );
+});
+// "That fall was mine": re-baselines the Base spending wallet's high-water
+// mark to its current balance and records when (src/upstream-buyer-status.js),
+// so upstreamBuyer.trend reads ok on the next read and stays ok across a
+// restart. Header token only. 503 when the state store did not take it (the
+// process copy is re-baselined; send it again).
+app.post("/__operator/upstream-buyer/acknowledge", async (req, res) => {
+  if (!operatorAuthed(req, { headerOnly: true })) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const r = await acknowledgeBuyerTrend();
+    if (!r.configured) return res.status(409).json({ error: "no upstream buyer wallet is configured", status: r.status });
+    res.status(r.stored === false ? 503 : 200).json(r);
+  } catch (e) {
+    res.status(500).json({ error: redactSecrets(String(e?.message || e)) });
+  }
 });
 app.post("/__operator/backup/run", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);

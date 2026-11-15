@@ -50,28 +50,102 @@ export const BUYER_LOW_DEFAULT_USD = 6;
 // before it is called draining.
 const BUYER_DROP_TOLERANCE_USD = Number(process.env.UPSTREAM_BUYER_DROP_TOLERANCE_USD || 0.5);
 const BUYER_DROP_READS = Number(process.env.UPSTREAM_BUYER_DROP_READS || 3);
-let buyerHighWater = null;
-let buyerBelowReads = 0;
 
-/** Bucketed trend for the spending wallet: "ok" | "draining". Never a number -
- *  /api/gateway-status is public and balances stay off it. Exported for tests. */
-export function noteBuyerBalance(balance, { reset = false } = {}) {
-  if (reset) { buyerHighWater = null; buyerBelowReads = 0; }
-  if (!Number.isFinite(balance)) return "unknown";
-  if (buyerHighWater == null || balance >= buyerHighWater) {
-    // A new high (or the first read) is the healthy case: re-baseline and clear.
-    buyerHighWater = balance;
-    buyerBelowReads = 0;
-    return "ok";
+// The trend state: the high-water mark, the count of consecutive reads below
+// it past the tolerance, and when an operator last acknowledged a fall. Kept
+// in the state database when one is configured (src/json-document.js, one
+// small document shared across replicas and deploys), in the file named by
+// UPSTREAM_BUYER_TREND_FILE without one, and in process memory otherwise. So
+// a restart neither forgets a real drain (the count carries on) nor reopens
+// an explained one (an acknowledged baseline carries on). The process copy is
+// what a read falls back to when the store does not answer in time.
+const EMPTY_TREND = Object.freeze({ highWater: null, belowReads: 0, acknowledgedAt: null });
+const shapeTrend = (b) => ({
+  highWater: b && Number.isFinite(b.highWater) ? b.highWater : null,
+  belowReads: b && Number.isInteger(b.belowReads) && b.belowReads >= 0 ? b.belowReads : 0,
+  acknowledgedAt: b && typeof b.acknowledgedAt === "string" ? b.acknowledgedAt : null,
+});
+let memTrend = { ...EMPTY_TREND };
+export const TREND_STORE_MS = 2_000;
+let trendDocument = null;
+async function trendDoc() {
+  if (!trendDocument) {
+    const { createJsonDocument } = await import("./json-document.js");
+    const file = String(process.env.UPSTREAM_BUYER_TREND_FILE || "").trim() || null;
+    trendDocument = createJsonDocument({ name: "upstream-buyer-trend", file, log: () => {}, importFromFile: false });
   }
-  if (buyerHighWater - balance <= BUYER_DROP_TOLERANCE_USD) {
+  return trendDocument;
+}
+// A store wait bounded in time: undefined when it did not answer.
+async function withinStoreDeadline(p) {
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), TREND_STORE_MS); timer.unref?.(); });
+  try { return await Promise.race([p, deadline]); } catch { return undefined; } finally { clearTimeout(timer); }
+}
+
+// One read applied to a trend state: the next state and the word. Pure, so a
+// store update that is retried on a conflict applies it to the fresh body.
+function stepTrend(state, balance) {
+  const s = shapeTrend(state);
+  if (s.highWater == null || balance >= s.highWater) {
+    // A new high (or the first read) is the healthy case: re-baseline and clear.
+    return { next: { ...s, highWater: balance, belowReads: 0 }, word: "ok" };
+  }
+  if (s.highWater - balance <= BUYER_DROP_TOLERANCE_USD) {
     // Within tolerance: an in-flight call, not a drain. Do NOT reset the
     // counter - a slow bleed sits inside tolerance on every single read.
-    return buyerBelowReads >= BUYER_DROP_READS ? "draining" : "ok";
+    return { next: s, word: s.belowReads >= BUYER_DROP_READS ? "draining" : "ok" };
   }
-  buyerBelowReads += 1;
-  return buyerBelowReads >= BUYER_DROP_READS ? "draining" : "ok";
+  const below = s.belowReads + 1;
+  return { next: { ...s, belowReads: below }, word: below >= BUYER_DROP_READS ? "draining" : "ok" };
 }
+
+/** Bucketed trend for the spending wallet: "ok" | "draining". Never a number -
+ *  /api/gateway-status is public and balances stay off it. Process memory
+ *  only; exported for tests (noteBuyerBalanceStored is the read the status uses). */
+export function noteBuyerBalance(balance, { reset = false } = {}) {
+  if (reset) memTrend = { ...EMPTY_TREND };
+  if (!Number.isFinite(balance)) return "unknown";
+  const { next, word } = stepTrend(memTrend, balance);
+  memTrend = next;
+  return word;
+}
+
+/** The same read against the stored trend state (see the note above). */
+export async function noteBuyerBalanceStored(balance) {
+  if (!Number.isFinite(balance)) return "unknown";
+  const d = await trendDoc();
+  if (d.backend === "memory") return noteBuyerBalance(balance);
+  let word = null;
+  const r = await withinStoreDeadline(d.update((b) => { const o = stepTrend(b, balance); word = o.word; return o.next; }, { fallback: null }));
+  if (r?.ok && word) { memTrend = shapeTrend(r.body); return word; }
+  return noteBuyerBalance(balance);
+}
+
+/** An operator's "that fall was mine": re-baseline the high-water mark to the
+ *  current balance (or, when it cannot be read now, to the next readable
+ *  read), clear the count, and record when. The next status read is fresh and
+ *  reads "ok". Resolves { acknowledgedAt, baseline, stored } where stored is
+ *  the backend that kept it, or false when the store did not take it (the
+ *  process copy is re-baselined either way). Never a balance figure. */
+export async function acknowledgeBuyerTrend({ now = Date.now() } = {}) {
+  const pk = (process.env.X402_UPSTREAM_BUYER_KEY || "").trim();
+  if (!pk) return { configured: false, status: "unconfigured" };
+  const balance = await readBaseBuyerBalance(pk);
+  const next = { highWater: Number.isFinite(balance) ? balance : null, belowReads: 0, acknowledgedAt: new Date(now).toISOString() };
+  memTrend = { ...next };
+  trendGeneration++;
+  buyerStatusCache = null;
+  buyerStatusPending = null;
+  const d = await trendDoc();
+  let stored = "memory";
+  if (d.backend !== "memory") {
+    const r = await withinStoreDeadline(d.update(() => ({ ...next }), { fallback: null }));
+    stored = r?.ok ? d.backend : false;
+  }
+  return { configured: true, acknowledgedAt: next.acknowledgedAt, baseline: next.highWater == null ? "next-read" : "current", stored };
+}
+export function __resetBuyerTrendForTest() { memTrend = { ...EMPTY_TREND }; trendDocument = null; buyerStatusCache = null; buyerStatusPending = null; }
 const BUYER_LOW_USD = () => Number(process.env.UPSTREAM_BUYER_LOW_USD || String(BUYER_LOW_DEFAULT_USD));
 const BUYER_STATUS_CACHE_MS = 5 * 60_000;
 let buyerStatusCache = null;
@@ -93,12 +167,40 @@ export async function upstreamBuyerStatus() {
   const pk = (process.env.X402_UPSTREAM_BUYER_KEY || "").trim();
   if (!pk) return { configured: false, status: "unconfigured", attests: "balance-only" };
   if (buyerStatusCache && Date.now() - buyerStatusCache.at < BUYER_STATUS_CACHE_MS) return buyerStatusCache.result;
+  // One read at a time: two reads at once would each count the same fall.
+  if (buyerStatusPending) return buyerStatusPending;
+  const p = readBuyerStatus(pk).finally(() => { if (buyerStatusPending === p) buyerStatusPending = null; });
+  buyerStatusPending = p;
+  return p;
+}
+let buyerStatusPending = null;
+// Bumped by an acknowledgement, so a read that began before it does not
+// cache its word over the re-baselined one.
+let trendGeneration = 0;
+async function readBuyerStatus(pk) {
+  const gen = trendGeneration;
   let result;
+  try {
+    const balance = await readBaseBuyerBalance(pk);
+    result = balance == null
+      ? { configured: true, status: "unknown", attests: "balance-only" }
+      : { configured: true, status: balance < BUYER_LOW_USD() ? "low" : "ok", attests: "balance-only", trend: await noteBuyerBalanceStored(balance) };
+  } catch {
+    result = { configured: true, status: "unknown", attests: "balance-only" };
+  }
+  if (gen === trendGeneration) buyerStatusCache = { at: Date.now(), result };
+  return result;
+}
+// The Base USDC balance of the spending wallet, or null when no RPC answers.
+// `__setBuyerBalanceReaderForTest` replaces the RPC read (address -> USD or null).
+let balanceReaderForTest = null;
+export function __setBuyerBalanceReaderForTest(fn) { balanceReaderForTest = fn; buyerStatusCache = null; }
+async function readBaseBuyerBalance(pk) {
   try {
     const { privateKeyToAccount } = await import("viem/accounts");
     const address = privateKeyToAccount(pk.startsWith("0x") ? pk : `0x${pk}`).address;
+    if (balanceReaderForTest) { const v = await balanceReaderForTest(address); return Number.isFinite(v) ? v : null; }
     const data = "0x70a08231" + address.slice(2).toLowerCase().padStart(64, "0");
-    let balance = null;
     for (const rpc of BASE_RPCS) {
       try {
         const res = await fetch(rpc, {
@@ -108,20 +210,13 @@ export async function upstreamBuyerStatus() {
           signal: AbortSignal.timeout(6000),
         });
         const j = await res.json();
-        if (typeof j.result === "string" && j.result.startsWith("0x")) {
-          balance = Number(BigInt(j.result === "0x" ? "0x0" : j.result)) / 1e6;
-          break;
-        }
+        if (typeof j.result === "string" && j.result.startsWith("0x")) return Number(BigInt(j.result === "0x" ? "0x0" : j.result)) / 1e6;
       } catch { /* walk the list */ }
     }
-    result = balance == null
-      ? { configured: true, status: "unknown", attests: "balance-only" }
-      : { configured: true, status: balance < BUYER_LOW_USD() ? "low" : "ok", attests: "balance-only", trend: noteBuyerBalance(balance) };
+    return null;
   } catch {
-    result = { configured: true, status: "unknown", attests: "balance-only" };
+    return null;
   }
-  buyerStatusCache = { at: Date.now(), result };
-  return result;
 }
 
 // THE SAME WALLET ON THE OTHER EVM CHAINS (src/evm-buyer-chains.js). One key
