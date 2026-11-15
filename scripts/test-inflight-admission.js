@@ -249,7 +249,7 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   ok(r3.release && reads === 1, `a third run fits what the record still shows after one settlement is taken off: no read (${reads})`);
   const r4 = await admit(W(0x33));
   ok(r4.err?.statusCode === 429 && reads === 2 && /does not cover this one as well/.test(r4.err.message) && r4.err.retryAfter === 30, `a fourth does not: one fresh read decides, and it is refused as short (${r4.err?.statusCode}, reads ${reads})`);
-  { const f = toolErrorFields(r4.err); ok(f.attribution === "ours" && f.hint === "cover-short" && f.reason === "cover_short" && f.retryAfterSeconds === 30 && /Retry-After|add funds/i.test(f.fix || "") && /Your input is fine/.test(r4.err.message), `the short refusal's answer fields name its class and the next step (${JSON.stringify(f)})`); }
+  { const f = toolErrorFields(r4.err); ok(f.attribution === "ours" && f.hint === "cover-short" && f.reason === "cover_short" && f.retryAfterSeconds === 30 && f.fix === "Your input is fine. Add funds to this wallet, then retry the same call." && /add funds to this wallet, then retry the same call\./.test(r4.err.message), `the short refusal's answer fields name its class and the next step (${JSON.stringify(f)})`); }
   balance = PRICE * 3n; // a top-up
   const r4b = await admit(W(0x33));
   ok(r4b.err?.statusCode === 429 && reads === 2, "within a second of that read the record is reused: no further read");
@@ -440,7 +440,7 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   _ageKeptReadsForTest(60_000);
   const one = await Promise.all(Array.from({ length: 40 }, () => admit(W(0xb2))));
   const ran = one.filter((x) => x.release), out = one.filter((x) => x.err);
-  ok(ran.length === 16 && out.length === 24 && inflightCoverStatus().admittedPastKeptRead === 15 && out.every((x) => x.err.statusCode === 429 && x.err.retryAfter === 5 && x.err.coverRefusal === "kept" && /could not be read just now/.test(x.err.message) && /You have not been charged\./.test(x.err.message)), `reads down, a wallet whose last good read holds one price: the allowance of a wallet with no read (16 of 40), the rest 429 with Retry-After 5, uncharged (${ran.length} ran)`);
+  ok(ran.length === 16 && out.length === 24 && inflightCoverStatus().admittedPastKeptRead === 15 && out.every((x) => x.err.statusCode === 429 && x.err.retryAfter === 5 && x.err.coverRefusal === "kept" && /^Your input is fine\. Retry the same call after Retry-After/.test(x.err.fix) && /could not be read just now/.test(x.err.message) && /You have not been charged\./.test(x.err.message)), `reads down, a wallet whose last good read holds one price: the allowance of a wallet with no read (16 of 40), the rest 429 with Retry-After 5, uncharged (${ran.length} ran)`);
   for (const x of ran) x.release();
   // Only what a run took is taken off a kept read: [what, how the runs leave, how many, admitted of five, covered by the kept read].
   for (const [what, leave, n, admitted, onKept] of [

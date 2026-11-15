@@ -69,6 +69,8 @@ try {
     await ok(t[200] === 1 && t[429] === N_BURST - 1, `${wire}: one 200, the rest refused 429 before the handler (${JSON.stringify(t)})`);
     const refusal = rs.find((r) => r.status === 429);
     await ok(/You have not been charged\./.test(refusal?.json?.error || "") && /balance/.test(refusal.json.error) && refusal.headers.get("retry-after") === "30", `${wire}: the 429 says the balance does not cover the wallet's calls and that nothing was charged, with Retry-After (${String(refusal?.json?.error).slice(0, 90)}...)`);
+    // Not an input error: the answer names its class and carries no input schema envelope.
+    await ok(refusal?.json?.attribution === "ours" && refusal.json.hint === "cover-short" && refusal.json.reason === "cover_short" && typeof refusal.json.fix === "string" && !("expected" in refusal.json) && !("example" in refusal.json) && !("howToCall" in refusal.json) && !("required" in refusal.json), `${wire}: the coverage 429 body names its class (hint, reason, fix) and carries no expected, example or howToCall (${Object.keys(refusal?.json || {}).join(",")})`);
 
     // Never settled, balance unreadable, payments that do not settle: the
     // unread allowance at once, and the wallet's own count stops the rest.
