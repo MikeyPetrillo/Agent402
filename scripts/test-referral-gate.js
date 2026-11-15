@@ -3866,7 +3866,7 @@ try {
     fac.reset(); sales.length = 0; owed.length = 0;
     // Round 11.
     {
-      const book11 = (tag) => createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r11-${tag}`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+      const book11 = (tag) => { const doc = createJsonDocument({ name: `referral-test-${process.pid}-r11-${tag}`, log: () => {} }); const bk = createReferralBook({ doc, log, now: () => Date.now() + skew.ms }); bk.__doc = doc; return bk; };
       const refusing = () => ({ status: 200, body: { success: false, errorReason: "insufficient_funds" } });
       const payOn = async (app, { account = newAccount(), header = null } = {}) => { const p = header ? null : await signPayment(accept, { account }); const r = await send(`${app.url}/ref/echo`, { body: { text: "r11" }, headers: { "payment-signature": header || p.header, "x-test-ip": freshIp() } }); return { status: r.status, reason: r.json?.errorReason || null, p, json: r.json }; };
       // M1. A settle the facilitator refused, with the chain readable, whose payment lands afterwards.
@@ -3904,6 +3904,28 @@ try {
           const wordIdle = app.gate.statusWord();
           skew.ms -= 20 * 60_000;
           ok(before === "refused" && b.get(kI) === null && !wordIdle.reasons.some((x) => /open past 15 minutes/.test(x)), `one that never lands is closed once its authorization has expired, and never read as a settlement open past fifteen minutes (${before} -> ${b.get(kI) ? b.get(kI).state : "closed"})`);
+          // A payment proven paid always has an entry to stand in: here its entry was removed before it landed.
+          fac.mode.settle = refusing;
+          const gone = await payOn(app);
+          const kG = gateMod.referralReplayKey(gone.p.authorization);
+          await b.resolve(kG, null);
+          const txG = fac.land(gone.p.authorization, fac.nextTx());
+          const back = await payOn(app, { header: gone.p.header });
+          await quietLedger();
+          ok(b.get(kG) === null && back.status === 200 && back.json.echo === "r11" && back.json.transaction === txG && sales.filter((x) => x.tx === txG).length === 1, `a re-send that proves paid with no entry left in the book writes the entry again, so the answer is delivered and closed as any other (${back.status} ${back.reason || ""})`);
+          // Another process on the same book, with no answer of its own: a refused entry is not an open settlement, so the same authorization buys a run there.
+          const elsewhere = await payOn(app);
+          const kE = gateMod.referralReplayKey(elsewhere.p.authorization);
+          const other = await mount({}, { book: createReferralBook({ doc: b.__doc, log, now: () => Date.now() + skew.ms }) });
+          try {
+            await other.book.ready;
+            const seenThere = other.book.get(kE)?.state;
+            fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
+            const ranBefore = runs.echo;
+            const there = await send(`${other.url}/ref/echo`, { body: { text: "r11" }, headers: { "payment-signature": elsewhere.p.header, "x-test-ip": freshIp() } });
+            ok(other.book.get(kE) === null && there.status === 200 && there.json.echo === "r11" && runs.echo === ranBefore + 1, `a refused entry is not an open settlement: the same authorization, sent to a process that holds no answer for it (it reads the entry as ${seenThere}), buys its run (${there.status} ${there.json?.errorReason || there.json?.reason || ""})`);
+          } finally { await other.close(); }
+          fac.mode.settle = refusing;
           // Refused entries never count against the payer's share of the book.
           const many = newAccount();
           for (let i = 0; i < 3; i++) await b.intent({ key: `referral:r11-share-${i}`, slug: "echo", payer: many.address, nonce: freshNonce(), amount: "30000", validBefore: Math.floor(Date.now() / 1000) + 600 });
