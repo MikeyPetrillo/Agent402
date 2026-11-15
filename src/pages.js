@@ -1000,7 +1000,7 @@ export function openapiSpec(baseUrl, catalog) {
       },
     },
   };
-  // The free refund lookup: one payment, keyed by its own transaction.
+  // The free refund lookup: one transaction per ask, every refund recorded for it.
   const refundLookupOp = (operationId) => ({
     operationId,
     security: [],

@@ -189,7 +189,7 @@ try {
     ok(r?.status === 200 && typeof rj?.status === "string" && rj.tx === ex, `openapi ${path} publishes a tx example the server answers 200 to (${r?.status ?? "no example"})`);
   }
   const llms = await (await fetch(`${base}/llms.txt`)).text();
-  ok(/\/api\/refunds\]\([^)]*\/api\/refunds\?tx=\): free refund status for one payment/.test(llms), "llms.txt names the refund lookup");
+  ok(/\/api\/refunds\]\([^)]*\/api\/refunds\?tx=\): free refund status of one transaction's payments/.test(llms), "llms.txt names the refund lookup");
   let limited = null, n = 0;
   for (let i = 0; i < 40 && !limited; i++) { const r = await fetch(`${base}/api/refunds${i % 2 ? "/lookup" : ""}?tx=0x${"98".repeat(32)}`); n++; if (r.status === 429) limited = r; }
   ok(limited && limited.headers.get("retry-after") === "60", `a spray is rate limited with Retry-After, both names in one bucket (429 after ${n})`);
