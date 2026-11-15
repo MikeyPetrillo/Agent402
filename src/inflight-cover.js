@@ -83,7 +83,10 @@
 //   - A read is judged with what has left the ledger since it began taken
 //     off (a lower bound), so a run that leaves while a read is under way
 //     never forces another read; a judgment that fails on that lower bound
-//     alone takes one fresh read while time is left. A judgment that has had
+//     alone takes one fresh read while time is left (and when nothing is
+//     settling, that read is let finish, bounded by READ_TIMEOUT_MS, rather
+//     than the admission wait: the earlier read already reflected the
+//     settlement taken off it). A judgment that has had
 //     a read keeps it: a later read that does not answer never turns it into
 //     an unread one. A read that is merely slow marks nothing and goes on;
 //     a read that FAILS marks THAT ACCOUNT's reads as
@@ -824,6 +827,11 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     // a read taken after the departure, at most twice past the wait (each
     // such read given FOREIGN_REREAD_MS).
     let readUntil = waitUntil, foreignRereads = 0;
+    // The follow-up read of a judgment whose read already reflected a
+    // settlement (taken off it again, so undecided with nothing in flight) is
+    // let finish, bounded by the read timeout, instead of the admission wait:
+    // judged on a stale lower bound it would be refused with nothing in flight.
+    let followUpRead = false;
     const rereadAfterForeign = () => {
       if (mono() >= waitUntil && foreignRereads >= 2) return false;
       foreignRereads++;
@@ -859,7 +867,9 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // settlement, so only a read begun after the shared view decides.
       const foreign = foreignHeld(others, held, judges.size);
       if (foreign) stats.foreignReads++;
-      let rec = await readWithin(coverKey, terms, Math.max(freshAfter, foreign ? sharedSeq : 0), readUntil);
+      const until = followUpRead ? Math.max(readUntil, mono() + READ_TIMEOUT_MS) : readUntil;
+      followUpRead = false;
+      let rec = await readWithin(coverKey, terms, Math.max(freshAfter, foreign ? sharedSeq : 0), until);
       // NOT READ NOW. A read this judgment already had stands in (a later
       // read that does not answer never turns a judged call into an unread
       // one); else, off the report and media routes, the wallet's last good
@@ -934,8 +944,9 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
         // sends call after call past its balance costs no read per refusal.
         if (!kept && rec.seq <= seqAtStart && Date.now() - rec.at > FRESH_ENOUGH_MS) { stats.freshReads++; freshAfter = eventSeq; continue; }
         // A fresh read left it undecided with nothing settling: a settlement
-        // landed while it was under way. Read once more.
-        if (!kept && block === "settling" && cur.settling <= 0 && !beside) { stats.freshReads++; freshAfter = eventSeq; continue; }
+        // landed while it was under way. Read once more, and let that read
+        // finish (bounded by the read timeout) before deciding.
+        if (!kept && block === "settling" && cur.settling <= 0 && !beside) { stats.freshReads++; freshAfter = eventSeq; followUpRead = true; continue; }
         if (block === "settling" || block === "beside") {
           // A run that is settling may already be paid for on chain while it
           // still counts here: wait for a run to leave (here, or on another

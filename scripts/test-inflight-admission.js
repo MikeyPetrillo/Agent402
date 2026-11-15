@@ -526,6 +526,32 @@ for (const expensive of [false, true]) {
   for (const x of [X, Y]) x.release?.();
 }
 
+// ---- a read that already shows a settlement, whose follow-up read is slow, waits for that read ----
+// The wallet holds two prices. A settles while B's read is under way, and the
+// read answers with the balance after it (one price): A's amount is then
+// taken off a read that already reflects it, so B is undecided on nothing in
+// flight. The follow-up read is given its own time (the read timeout) instead
+// of the admission wait, and B is admitted on it: one run each, both settle.
+// (The mirror case above, a wallet of one price, is still refused.)
+for (const readMs of [600, 450]) {
+  fresh();
+  let balance = 2n * PRICE, reads = 0;
+  _setBalanceReaderForTest(async () => { reads++; await sleep(readMs); return balance; });
+  const who = W(readMs === 600 ? 0xe5 : 0xe6);
+  const A = await admit(who);
+  A.release.settling();
+  const t0 = Date.now();
+  const pB = admit(who);
+  await sleep(100);
+  balance -= PRICE; A.release.settled(); // A's payment is off the wallet while B's read is under way
+  const B = await pB;
+  const took = Date.now() - t0;
+  ok(typeof B.release === "function" && coveredRunStateOf(B.req) === "covered" && reads === 2, `a wallet of two prices, ${readMs} ms reads: the call judged across the other's settlement is admitted on the follow-up read (${B.err ? B.err.statusCode + " " + B.err.coverRefusal : "admitted"}, ${reads} reads, ${took} ms)`);
+  ok(took < 1000 + 2500, `... inside the read timeout past the admission wait (${took} ms)`);
+  if (B.release) { B.release.settling(); balance -= PRICE; B.release.settled(); }
+  ok(balance === 0n && inflightCoverStatus().runsInFlight === 0, "one run each, both settled, nothing left in flight");
+}
+
 // ---- a settlement that lands after a request arrived: verify's proof no longer stands ----
 {
   fresh();

@@ -178,7 +178,10 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `WALLETS_MAX` (50,000) keys, and a wallet with nothing in flight goes after 15 min untouched. A
   read record is a lower bound wherever it is held (`lowerOf`: its balance less what the wallet's
   runs took since it was asked for), and a judgment that has had a read keeps it: a later read
-  that does not answer never makes it an unread one. A slow read marks nothing; a read that FAILS
+  that does not answer never makes it an unread one. A read that already reflects a settlement
+  (that run's amount then taken off it again) leaves the judgment undecided with nothing in flight:
+  its one follow-up read is let finish, bounded by the read timeout (`READ_TIMEOUT_MS`, 2.5 s),
+  instead of the admission wait. A slow read marks nothing; a read that FAILS
   marks that account's reads down for 10 s (one log line a minute per network), during which its
   admissions wait 25 ms for a read and one read a second is made for it (`READ_FAIL_GAP_MS`). The
   report and media routes are never judged on a kept read. With nothing in flight a run is
