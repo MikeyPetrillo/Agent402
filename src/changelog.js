@@ -3,6 +3,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-15",
+    title: "Access keys and card tokens are judged per payer",
+    items: [
+      "Payments: A Tempo pull credential signed by an access key is judged on the paying account's balance, together with that account's other calls in flight, as one signed by the account's own key is: a call the balance cannot also cover is refused 429 before it runs, and nothing is charged. A card payment token pays for one run at a time: while a request it pays for is in flight, another credential carrying the same token is refused 402 before its handler, uncharged; a run that fails or is not captured frees the token for a retry, and a captured token is not accepted again for an hour.",
+    ],
+  },
+  {
+    date: "2026-11-15",
     title: "Coverage refusals name their class",
     items: [
       "Payments: a 429 from the check that a wallet's balance covers its paid calls in flight carries attribution \"ours\", a hint and a reason naming its class (cover-short and cover_short, and so on) and a fix saying what to do next, in place of the tool's input schema and example. The privacy page and payment.dataHandling in /.well-known/x402 say that each paid call reads the paying wallet's public balance, that a reservation per call in flight is kept for the life of the call, and that the last balance read is held in memory, used for at most 15 minutes, and dropped at the next paid call after that or on restart.",

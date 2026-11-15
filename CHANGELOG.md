@@ -6,6 +6,17 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-15 (access keys and card tokens are judged per payer)
+Payments:
+- A Tempo pull credential signed by an access key is judged on the paying
+  account's balance, together with that account's other calls in flight, as
+  one signed by the account's own key is: a call the balance cannot also cover
+  is refused 429 before it runs, and nothing is charged. A card payment token
+  pays for one run at a time: while a request it pays for is in flight,
+  another credential carrying the same token is refused 402 before its
+  handler, uncharged; a run that fails or is not captured frees the token for
+  a retry, and a captured token is not accepted again for an hour.
+
 ### 2026-11-15 (coverage refusals name their class)
 Payments:
 - A 429 from the check that a wallet's balance covers its paid calls in flight
