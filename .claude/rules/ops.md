@@ -118,7 +118,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `xSearchAuthors` alert (ok; see the X search author alarm below), `mppSubscriptions` failed (on,
   off: the MPP subscription engine is configured but did not build at boot, including an installed
   mppx with no subscription method; `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`;
-  `subscriptionRenewals` then reads unknown). `loopLag`
+  `subscriptionRenewals` then reads unknown). `coverageReads` pages like `sharedLimits`, on its
+  second word only: `alert: sustained` (paid calls started or refused without a balance read made
+  for them in 3 or more separate minutes of the last 10, for 3 or more accounts;
+  `coverageReadsVerdict` in `src/inflight-cover.js`). `status` ok and off close; `status: degraded`
+  alone, which one wallet can cause, opens nothing. Counts are under the operator's `inflightCover`. `loopLag`
   and `mppEvmDomainFallback` publish a flag, not a word, and page nothing.
 - **Ended MPP subscriptions:** the private half of a subscription's access key is deleted when a
   cancel is stored or the subscription ends (`finishEnded` in `src/mpp-subscriptions.js`, reached from

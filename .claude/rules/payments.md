@@ -101,7 +101,22 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   stay in the window as outcomes and never erase failures, so a buyer settling hundreds of
   calls is not cut off by a few replayed authorizations, whatever order the fast reverts and
   slower settlements land in; `GATEWAY_SETTLE_BREAKER_HARD_MAX` (default 40) failures refuse
-  a wallet whatever it settled, the bound on unpaid handler runs. The `/v1` burst alarm counts distinct buyers, not
+  a wallet whatever it settled, the bound on unpaid handler runs. **Runs in flight:** the counts are
+  of recorded outcomes, and calls that arrive together are all consulted before the first fails, so
+  for a payer with NO paid record (`src/paid-record.js`: no settlement seen by this process, no paid
+  sale on the books) the consult also counts the key's runs in flight
+  that are taken from the payer's balance after the handler (an x402 header, a Tempo pull credential)
+  and were not admitted as covered or trusted (`coveredRunStateOf`); such a call is refused 429
+  (`Retry-After` 5 s; x402 and a Tempo pull credential are not charged for it) once failures plus
+  counted runs in flight reach `_HARD_MAX`. Never counted: a covered or trusted run, any payer with a
+  paid record, a card, credits, a Tempo push credential, a key that names no wallet, and everything
+  with `INFLIGHT_COVER` set to `off` or `composite` (the consult is then as it was). Per process. **Past its
+  count:** `GATEWAY_SETTLE_BREAKER_OVERRUN_ALARM` (default `MAX`) verdict failures recorded for one
+  key after its count already read refusing (runs served past the bound) set `settleFailures` to
+  `burst`, from the `/v1` and the catalog consult alike; an alarm only. The address fallback key is
+  the IPv6 /64 (`limiterKey`), as is the composite guard's; a card buyer refused at its count is not
+  told about a wallet or a balance.
+  The `/v1` burst alarm otherwise counts distinct buyers, not
   failures. Only a refusal whose offer the next 402 withdraws (`isWithdrawnSubcentRefusal`)
   stays off the buyer's count, and it still feeds the `/v1` burst alarm, each one counted on
   its own; every other facilitator billing refusal (`src/payment-reject.js`) counts in both
@@ -110,6 +125,126 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   run stays as an outcome and never erases failures; a payer is blocked at
   `COMPOSITE_GUARD_MAX_FAILS` only while failures are more than `COMPOSITE_GUARD_MIN_FAIL_SHARE`
   (default 0.5) of its outcomes, and at `COMPOSITE_GUARD_HARD_MAX` (default 10) whatever it settled.
+- **Runs in flight are covered together:** `src/inflight-cover.js` (`admitCoveredRun`), called
+  through `admitPaidRun` (server.js) before the breaker consult on EVERY mount of a paid handler that
+  is not proof-of-work payable: the kit dispatcher, and `withToolCallLog` for the six bespoke content
+  routes (`extract`, `meta`, `dns`, `render`, `screenshot`, `pdf`) and the memory family. A new mount
+  of a paid handler calls `admitPaidRun` too. (The referral gate bounds its own lane.) Each payment
+  is verified alone and settled after its handler, so a run is admitted only when the payer's
+  balance of the paying token covers every run it has in flight plus this one; otherwise 429 before
+  the handler ("You have not been charged").
+  **The rules.** On the report and media routes (`EXPENSIVE_COMPOSITE_SLUGS`) a run is judged as
+  it always was: the admission gives a balance read up to 5 s (`COMPOSITE_SETTLE_WAIT_MS`), a run
+  the balance does not cover answers 429 with `Retry-After: 30` in the words it always had, and an
+  unread balance admits `INFLIGHT_COVER_UNREAD_MAX` (4) runs in flight for every wallet. On every
+  other paid route there is no bound on a wallet's runs at once other than its balance, and no
+  call waits for another call's settlement to make room. Two waits remain, each bounded by the
+  admission wait (`ADMIT_WAIT_MS`, about 1 s; `COMPOSITE_SETTLE_WAIT_MS`, 5 s, on the report and
+  media routes): a call whose balance read is slow waits up to it for the read, and a call refused
+  while another call of the wallet is settling answers after up to that same wait.
+  *Balance read* inside `ADMIT_WAIT_MS` (about a second): the run is admitted if and only if the
+  balance covers every run the wallet has in flight plus this one, however many those are (a funded
+  wallet's 200 calls at once are all admitted at once); otherwise 429 (`Retry-After: 30`), no
+  settle attempted, so the wallet takes no strike. While another run of the wallet is settling (its
+  payment may be off the wallet while the ledger still counts it) and cover cannot be confirmed
+  yet, the 429 says "Another call from this wallet is still settling" with `Retry-After: 5`.
+  *Balance not read right now* (the read failed, did not answer inside the wait, or the account
+  cannot be read by this server): the run is judged on the wallet's LAST GOOD READ, the last
+  balance this server read for that wallet and token no longer than `GOOD_READ_MAX_MS` (15 min)
+  ago, less what the wallet's runs have taken or hold since. Covered: admitted. Not covered: the
+  allowance below applies (a kept read is never stricter than no read: the wallet may have been
+  funded since). `taken` grows only by what a run took: a settlement's amount (the amount the
+  settle reports under a ceiling, `markCoveredRunSettled(req, amount)`), nothing for a run whose
+  answer ended at 400 or above with no settlement, and the full amount for any other end. A read
+  BEGUN inside the same judgment and then lost stands (never the allowance): refused 429 with
+  `Retry-After: 5`; a read cached from before the judgment is a kept read like any other. One
+  ledger key per balance: an EVM payment that names no asset is keyed on the chain's token. A wallet gets a good read from any read made for it and from one background read
+  when a payment of its settles and it has none younger than `GOOD_READ_REFRESH_MS` (5 min): that
+  read is queued in the lane (skipped only when `BG_QUEUE_MAX`, 32, already wait there) and, after
+  a background read on a network fails, none is asked for there for `BG_BACKOFF_MS` (10 s). The
+  read lane is PER NETWORK (8 at once each), so reads hanging on one chain take no place from a
+  wallet on another; a read an admission waits for takes a place before queued background reads,
+  which hold at most half a lane (`BG_IN_FLIGHT_MAX`), and a queued background read an admission
+  asks for is moved up. The
+  per-wallet store (`wallets`: the sum taken, the good read, the last settlement) is bounded:
+  `WALLETS_MAX` (50,000) keys, and a wallet with nothing in flight goes after 15 min untouched. A
+  read record is a lower bound wherever it is held (`lowerOf`: its balance less what the wallet's
+  runs took since it was asked for), and a judgment that has had a read keeps it: a later read
+  that does not answer never makes it an unread one. A slow read marks nothing; a read that FAILS
+  marks that account's reads down for 10 s (one log line a minute per network), during which its
+  admissions wait 25 ms for a read and one read a second is made for it (`READ_FAIL_GAP_MS`). The
+  report and media routes are never judged on a kept read. With nothing in flight a run is
+  admitted on verify's proof, unless a run of the wallet settled after the request arrived
+  (`req.__a402ArrivedAt`): then it is judged like any other.
+  *No good read that recent, balance not read:* a fixed allowance of runs in flight, never an open
+  door: `INFLIGHT_COVER_UNREAD_MAX` (4) for a payer with no paid record (`src/paid-record.js`) when
+  the admission began, `INFLIGHT_COVER_UNREAD_PAID_MAX` (16) for one with a record; a run past it
+  answers 429 at once (`Retry-After: 5`). This is the one place a wallet whose balance would cover
+  its runs can be refused.
+  A balance can be moved out while covered runs are in flight: those runs fail at settlement, and
+  the settle breaker answers afterward (`src/gateway-settle-breaker.js`).
+  **The refusal's class** rides on the error (`coverRefusal`: short, settling, beside, unread,
+  kept). `src/refusal-reason.js` files it as `cover_*` (third argument, the error), and the tool
+  log prints one line per wallet per minute and a summary line for the rest, the wallet by its
+  first characters (`createCoverRefusalLogSampler` in `src/prepayment-refusal.js`,
+  `noteCoverRefusalLog` in server.js, called once per refusal on both mounts of a paid handler,
+  the page-content and memory routes included). The refused call's `[paid-timing]` line follows
+  the same answer (`markCoverRefusalLine` in `src/paid-phase-timing.js`); a call that ran prints
+  as before. A `short` or `settling` refusal is the payer starting more than its balance covers
+  and is not counted by the top-buyer failure alarm (`BUYER_COVER_REFUSALS` in
+  `src/top-buyer-failures.js`); `beside`, `unread` and `kept` are. `coverageReads` on
+  `/api/gateway-status` (`coverageReadsVerdict`) publishes two words. `status` reads `degraded`
+  for ten minutes after an admission decided without a balance read made for it, `off` with the
+  check off, else `ok`; one wallet can make it read `degraded`. `alert` reads `sustained` only
+  when such admissions fell in 3 or more separate minutes of the last 10 AND for 3 or more
+  accounts (an account with no balance source is skipped), else `ok`. The status Worker and the
+  heartbeat page on `alert: sustained` only, under one title, and close on `status` ok or off.
+  **Across containers:** the wallet's last-settlement mark is shared (`inflight-cover-settled`, a
+  flag per wallet that lapses after `SETTLED_MARK_MS`, 2 min): before verify's proof is trusted
+  the mark is read once, and a settlement another container made forgets the last good read. A
+  reservation in the shared window counts only while the process that
+  wrote it keeps its liveness key (`inflight-cover-live`, `INFLIGHT_COVER_LIVE_TTL_MS`, default
+  30 s, renewed on a timer), so a container killed mid-run stops being counted within that time.
+  That rule applies only to a reservation whose id carries this build's mark (`LIVE_MARK`): a build
+  that keeps no liveness key writes ids without it, and its reservations count until they age out
+  of the window, so the older build's runs are never dropped while a deploy overlaps. A dropped
+  reservation is a departure (the wallet's next judgment is made on a read taken after it, and its
+  good read is forgotten), and a process whose key renewal comes later than the key lasts writes
+  the reservations it still holds back (`beatOnce`).
+  Terms (`coverTermsOfRequest`): the x402 EVM authorization or Permit2 (the MPP evm wire arrives as
+  one), a Circle Gateway batched payment (judged on the signer's Gateway balance, `/v1/balances`), a
+  Tempo pull credential from a verified sender (`req.mppTempoPull`), and Solana (the transfer's
+  SOURCE token account; the paid record is the authority's), Algorand and Stellar payments
+  (`src/rail-cover.js`, amount and asset from the matched `accepted`). Balance reads, one bounded
+  read each, null = unknown: EVM `balanceOf` (chains from the rails table), Tempo `balanceOf` on
+  `TEMPO_RPC_URL`, Solana `getTokenAccountBalance`, algod's asset holding, Horizon's classic balance
+  of the asset whose contract id is the accept's. Never judged here: credits, a card, a Tempo push
+  credential. A run leaves on its settle success (x402 afterSettle, the fallback chain, the Tempo
+  gate), which is also the payer's paid record, or when its response ends.
+  `INFLIGHT_COVER=composite`: the check covers the report and media routes only, and the settle
+  breaker counts no runs in flight; `INFLIGHT_COVER=off`: the check is off everywhere. Not behind
+  the switch (always on): the answer-header stripping on a refused payment
+  (`src/answer-headers.js`), the challenge-life rule for card and Tempo pull challenges
+  (`src/challenge-life.js`), the settle breaker's IPv6 /64 address key, and the breaker consult
+  `admitPaidRun` makes on the bespoke content routes and the memory family. A reservation nobody
+  removed (a container that died mid-run) ages out of the shared window after
+  `INFLIGHT_COVER_SHARED_WINDOW_MS` (default 900000, minimum 60000).
+  Counts on the operator
+  view of `/api/gateway-status` (`inflightCover`). Suites: `scripts/test-inflight-burst.js` (every
+  wire and mount, `scripts/lib/paid-wires-rig.js`), `scripts/test-inflight-admission.js` (the rules,
+  offline).
+- **A challenge outlives its run:** `src/challenge-life.js`. The card gate and the Tempo gate (pull
+  credentials) settle through a library call that asserts the challenge's expiry again after the
+  handler, so before the handler the challenge must have left the route's run seconds
+  (`EVM_RUN_SECONDS`; a card route with none, `STRIPE_DEFAULT_RUN_SECONDS` 20; a Tempo route with
+  none, 0) plus `CAPTURE_ALLOWANCE_SECONDS` (10): short of it, a 402 with a fresh challenge, nothing
+  run or charged. The moment the capture must begin is presented as the run window
+  (`presentRunWindow`), so the chat tiers end their upstream work by it. The MPP evm wire settles by
+  the authorization's own `validBefore` and needs no such rule (`scripts/test-challenge-life.js`).
+- **Answer headers:** a header a handler sets for its answer goes through `setAnswerHeader`
+  (`src/answer-headers.js`); the guard, mounted before every payment gate, removes the recorded names
+  from any response whose final status is 400 or above, so a gate that refuses after the handler
+  sends none of the answer (`scripts/test-answer-headers.js`).
 - **Replay guard:** `src/replay-guard.js` claims a payment credential (x402 nonce, Tempo, Stripe)
   in Redis while its call runs; the claim is renewed every 30 s until settle or release, so a
   route that outlives the claim's expiry cannot run twice on one payment. With Redis configured

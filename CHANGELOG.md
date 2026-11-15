@@ -6,6 +6,50 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-14 (calls in flight are covered together)
+Payments:
+- A wallet's paid calls in flight are covered by its balance together. On every
+  paid route that is not free through proof-of-work, a paid call is started
+  only when the wallet's balance of the paying token covers every call it has
+  in flight plus the new one; otherwise it answers 429 before anything runs,
+  and x402, the MPP evm method and a Tempo pull credential are not charged for
+  it. This applies to x402 on EVM, Solana, Algorand and Stellar, to the MPP evm
+  method, to a Tempo pull credential and to a Circle Gateway batched payment,
+  which is judged on the payer's Gateway balance.
+- On routes other than the report and media routes the balance is read inside
+  about a second, and a wallet whose balance covers its calls can send any
+  number at once: all are started at once, and no call waits for another call's
+  payment to settle. A call the balance does not cover answers 429 with
+  Retry-After 30. A call that arrives while another call from the same wallet
+  is still settling, and whose cover cannot be confirmed yet, answers 429 with
+  Retry-After 5 and says so.
+- When the balance cannot be read right now on those routes, the call is
+  started if the last balance this server read for that wallet within the past
+  15 minutes, less what the wallet's payments have taken and its calls in
+  progress hold since, covers it. Otherwise, and for a wallet with no read that
+  recent, the wallet runs up to 4 calls at once (16 for a wallet with
+  a payment on record) while its balance cannot be read, and a call past that
+  answers 429 with Retry-After 5. Each of these answers comes before anything
+  runs, and x402,
+  the MPP evm method and a Tempo pull credential are not charged for it.
+- The report and media routes are judged as before: the balance read is given
+  up to five seconds, a call the balance does not cover answers 429 with
+  Retry-After 30, and while the balance cannot be read a wallet runs up to 4
+  calls at once there, whatever its record.
+- A card or Tempo challenge must have enough life left for the route's run and
+  the charge after it. One that would expire during the run answers 402 with a
+  fresh challenge before anything runs.
+- The dub tool's X-Dub-Translation header is sent only with the audio: a call
+  whose payment is refused after the run carries neither.
+- The settle-failure count for an address with no known payer is kept per IPv6
+  /64.
+Server:
+- /api/gateway-status reports coverageReads. Its status reads ok, degraded or
+  off: degraded when a paid call was started or refused without a balance read
+  made for it inside the last ten minutes. Its alert reads sustained when such
+  calls fell in three or more separate minutes of the last ten for three or
+  more wallets, else ok.
+
 ### 2026-11-14 (Llama 3.2 successor)
 Gateway:
 - The upstream lists an expiration of 2026-11-20 for
