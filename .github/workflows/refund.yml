@@ -56,6 +56,10 @@ on:
         description: "Also repay disconnects booked past the hang-up forgiveness budget (and older disconnects with no recorded reason) - read those held rows first"
         type: boolean
         default: false
+      include_review_holds:
+        description: "Also repay rows the recording route marked held for review (a referral payment not proven as ours, one routed to another merchant, an answer partly sent or whose send was not confirmed) - read those held rows in a dry run first"
+        type: boolean
+        default: false
 
 # One refund run at a time, repo-wide. Two concurrent dispatches would each
 # read the same owed rows; the ledger's claim step makes a double-send unlikely,
@@ -105,6 +109,9 @@ jobs:
           # Same rule for a disconnect booked because the forgiveness budget
           # was spent (a repeat hang-up), or one with no recorded reason.
           REFUND_INCLUDE_REPEAT_HANGUPS: ${{ inputs.include_repeat_hangups && 'true' || 'false' }}
+          # Rows the recording route marked "held for review" have their own
+          # switch: the repeat hang-up switch above does not release them.
+          REFUND_INCLUDE_REVIEW_HOLDS: ${{ inputs.include_review_holds && 'true' || 'false' }}
           REFUND_EVM_KEY: ${{ secrets.REFUND_EVM_KEY != '' && secrets.REFUND_EVM_KEY || secrets.BURNER_KEY }}
           REFUND_STELLAR_SECRET: ${{ secrets.REFUND_STELLAR_SECRET != '' && secrets.REFUND_STELLAR_SECRET || secrets.STELLAR_BURNER_SECRET }}
           REFUND_ALGORAND_MNEMONIC: ${{ secrets.REFUND_ALGORAND_MNEMONIC != '' && secrets.REFUND_ALGORAND_MNEMONIC || secrets.ALGORAND_BURNER_MNEMONIC }}

@@ -23,6 +23,7 @@ import { taskRetentionPublic } from "./mcp-tasks.js";
 import { oneHopPublicBounds } from "./sanctions-screen.js";
 import { endedRecordRetentionPublic } from "./mpp-subscription-retention.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
+import { referralOffered } from "./referral-gate.js";
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
   const title = "Privacy - Agent402";
@@ -32,6 +33,9 @@ export function privacyPage(baseUrl) {
   // surface reads (src/gateway-nanopayments.js): its sentence and the scoping
   // of the on-chain sentences appear only while it is offered.
   const gatewayBatched = !!gatewayOfferPublic();
+  // Sales through a referral network's links (src/referral-gate.js): the
+  // sentences about that channel appear only while this server has it.
+  const referralOn = referralOffered();
   // Job and task results, and the funding screen's bounds, as the server runs
   // them (src/mcp-tasks.js, src/sanctions-screen.js).
   const jobs = taskRetentionPublic();
@@ -84,7 +88,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-13.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-15.</p>
 </section>
 
 <section>
@@ -186,7 +190,7 @@ so every claim below is verifiable in code.</p>
   audio you upload) and other AI-proxy tools are <b>forwarded to the upstream model
   provider</b> (OpenAI, or the model operator serving the request via OpenRouter) to generate the
   response, subject to that provider's own privacy terms. We don't store gateway inputs or outputs
-  beyond short-lived caches (minutes) that make repeated identical calls cheaper. For requests served
+  beyond short-lived caches (minutes) that make repeated identical calls cheaper${referralOn ? ", and the answer to a call bought through a referral link, kept with its payment for up to " + Math.round(IDEM_TTL_MS / 60000) + " minutes (see referral links below)" : ""}. For requests served
   via OpenRouter, our account keeps its optional prompt and completion logging off, routes only to
   endpoints that do not train on or publish request data, and does not let OpenRouter use inputs or
   outputs to improve its product. Request metadata such as the model, token counts and cost is still
@@ -243,7 +247,23 @@ so every claim below is verifiable in code.</p>
   a refused payment carries the resource URL the payment names and a coarse balance bucket for the paying
   wallet; and an error event carries our error message (at most 200 characters), which can name the input
   value that was refused.</li>
-  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
+${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can also be bought through a referral link issued by a
+  referral network. On those routes the payment is made to the network's payment contract on Base, which pays
+  our share to our wallet and pays the reviewer whose link was used; the split is public on chain. When a
+  request arrives through a referral link we read two more fields: the referral token the link carries, which
+  identifies the reviewer, and the buyer agent id when one is sent. We return both in the payment request and
+  send them, with the paying wallet address and the signed payment, to the referral network's payment service
+  so that it can verify and settle the payment. The referral network is a separate company. It decides for
+  itself how it uses the data it receives and publishes its own privacy notice.
+  For a referral payment we keep the paying wallet address, the payment's nonce, amount, tool and settlement
+  transaction in our settlement record until the payment is confirmed delivered or resolved; a payment that
+  needs a person to resolve it (for example one the chain does not confirm as ours) stays in that record until
+  an operator closes it, with no fixed time limit, and a short operator record of a payment that was retired,
+  closed or resolved by hand is kept after that (the most recent few hundred). A mark that a payment's sale was
+  recorded (the paying wallet, the tool and the transaction) is kept for one hour. We keep the signed payment
+  together with the tool's answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes, so that a re-sent payment gets its answer without
+  running or charging twice, and then delete them. A sale, and a refund we owe, are recorded as for any other payment.</li>
+` : ""}  <li><b>Payment metadata.</b> Beyond what the payment protocol needs to verify and settle a payment, our
   code reads these fields of a payment: the signed payer wallet address (already public on-chain), the
   scheme and network it settles on, the optional <code>payment-identifier</code> (used as an idempotency key
   and kept with the cached answer for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes), the payment's nonce and network (as an
@@ -256,7 +276,7 @@ so every claim below is verifiable in code.</p>
   as a keyed hash), the source address of a Tempo credential, a Tempo pull credential answered 402 after its
   broadcast failed (kept with its route, amount and payer until the check for a late landing ends: minutes,
   at most 24 hours while the chain cannot be read, so a transfer that lands after the 402 is booked as owed),
-  the payer the settlement receipt names, and,
+  the payer the settlement receipt names,${referralOn ? " on a referral link the referral token and the buyer agent id (see referral links above)," : ""} and,
   on a refused payment, the resource URL it names (see telemetry above). When a served call's settlement
   fails, we count it per signed authorization (its payer, network and nonce) in our shared store for
   ${Math.round(SETTLE_FAILURE_WINDOW_MS / 60000)} minutes, and while payments from many wallets are failing to settle, we keep a list of the

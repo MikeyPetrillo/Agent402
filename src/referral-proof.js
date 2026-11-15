@@ -14,14 +14,15 @@ const indexOf = (l) => { const n = parseInt(String(l?.logIndex ?? ""), 16); retu
 
 /** The split contract's routed-payment event: three indexed ids, then nine
  *  data words, by position: 0 buyer wallet, 1 merchant id, 2 product id,
- *  3 gross amount, 4 to 7 the split legs, 8 merchant amount. Pinned to a real
- *  settlement (scripts/fixtures/referral-receipt-base.json): the token's
+ *  3 gross amount, 4 to 7 the split legs, 8 merchant amount. Pinned to the
+ *  receipt shape of a settlement on the rail, with test values
+ *  (scripts/fixtures/referral-receipt-base.json): the token's
  *  AuthorizationUsed and the payer's Transfer into the contract, the split
  *  legs, the Transfer to the merchant's payout wallet, then this event last,
  *  in a transaction sent to the contract itself. */
 export const ROUTED_EVENT_SIGNATURE = "PaymentRouted(uint256,uint256,uint256,address,uint256,bytes32,uint256,uint256,uint256,uint256,uint256,uint256)";
 // keccak256 of that signature (a constant here so this module needs no
-// library; the suite checks it against the signature and the real receipt).
+// library; the suite checks it against the signature and the fixture receipt).
 export const ROUTED_EVENT_TOPIC = "0x095295347a30fa3575b9fb1e8e4afe0db77928a86555467cb2dfd7b9034a0d17";
 const ROUTED_DATA_WORDS = 9;
 const B32 = /^0x[0-9a-fA-F]{64}$/;
@@ -35,7 +36,7 @@ function decodeRouted(log) {
   // The buyer wallet is an address word: its upper twelve bytes are zero.
   if (!/^0{24}/.test(word(0))) return null;
   try {
-    return { buyer: `0x${word(0).slice(24).toLowerCase()}`, merchantId: BigInt(`0x${word(1)}`), gross: BigInt(`0x${word(3)}`), merchantAmt: BigInt(`0x${word(8)}`) };
+    return { buyer: `0x${word(0).slice(24).toLowerCase()}`, merchantId: BigInt(`0x${word(1)}`), productId: `0x${word(2).toLowerCase()}`, gross: BigInt(`0x${word(3)}`), merchantAmt: BigInt(`0x${word(8)}`) };
   } catch { return null; }
 }
 const valueOf = (log) => { try { return BigInt(log.data); } catch { return null; } };
@@ -76,9 +77,16 @@ const valueOf = (log) => { try { return BigInt(log.data); } catch { return null;
  * `nonce` null reads every authorization of `from` in the receipt (the refund
  * path knows the payer and the transaction, not the nonce). `merchantId`
  * (decimal string) and `payoutAddress` are required for "paid"; `minNet`
- * (base units) only sets `underFloor`; `routedTopic` overrides the event topic.
+ * (base units) only sets `underFloor`; `routedTopic` overrides the event
+ * topic. `productId` (a 32-byte hex id) BINDS THE PRODUCT: when given, the
+ * routed event's product word (data word 2) must equal it, or the receipt
+ * reads unknown and carries `product: { configured, received }` (a verdict
+ * of its own for the caller: the payment reached our merchant for another
+ * product, so it is never delivered or booked as this one's sale). With none
+ * given the product word is not read. The event's three indexed ids are not read:
+ * nothing this server holds says what they must be.
  */
-export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, amount, merchantId = null, payoutAddress = null, minNet = null, routedTopic = ROUTED_EVENT_TOPIC } = {}) {
+export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, amount, merchantId = null, payoutAddress = null, minNet = null, productId = null, routedTopic = ROUTED_EVENT_TOPIC } = {}) {
   const out = (verdict, why, moved = false, read = true, routedToUs = false, net = null) => ({ verdict, why, moved, read, routedToUs, net });
   if (!receipt || typeof receipt !== "object") return out("unknown", "no receipt", false, false);
   if (tx && lc(receipt.transactionHash) !== lc(tx)) return out("unpaid", "the receipt is for another transaction");
@@ -122,6 +130,7 @@ export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, am
     if (mine[0].merchantId !== ours) return out("unpaid", "the payment was routed to another merchant", true, true, toUs);
     if (!(mine[0].merchantAmt > 0n) || !paidOut(mine[0].merchantAmt)) return out("unknown", "routed to this merchant, with no transfer of the merchant amount to the payout wallet", true, true, true);
     if (sentElsewhere) return out("unknown", "the transaction was not sent to the pay-to contract", true, true, true);
+    if (B32.test(String(productId || "")) && mine[0].productId !== lc(productId)) return { ...out("unknown", "routed to this merchant for another product than the one this route sells", true, true, true), product: { configured: lc(productId), received: mine[0].productId } };
     const under = floor !== null && mine[0].merchantAmt < floor;
     return { ...out("paid", under ? "routed to this merchant and paid out, under the minimum net" : "routed to this merchant and paid out", true, true, true, mine[0].merchantAmt.toString()), underFloor: under };
   };

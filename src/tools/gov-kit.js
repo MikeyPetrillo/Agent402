@@ -23,6 +23,7 @@
 // fallback); the rest are keyless. (Treasury debt/rates live in macro-kit; don't
 // dup here.)
 import { safeFetch } from "./fetch-guard.js";
+import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { partialFields, clampFields } from "../partial-answer.js";
 
 function bad(message, statusCode = 400) {
@@ -65,7 +66,8 @@ async function getJson(url, opts = {}) {
       // An upstream 404 is an ANSWER for openFDA (no matches) - never retried,
       // and the upstream code rides on the re-labelled error so
       // getJsonAllowEmpty can read it (it was lost here until 2026-08-27).
-      if (attempt === 0 && e.upstreamStatus !== 404 && (e.statusCode === 422 || e.statusCode === 502 || e.statusCode === 504)) continue;
+      // No second attempt once a run's ceiling has passed (src/run-ceiling.js; never on a direct route).
+      if (attempt === 0 && !ceilingPassed() && e.upstreamStatus !== 404 && (e.statusCode === 422 || e.statusCode === 502 || e.statusCode === 504)) continue;
       if (e.statusCode === 422) throw Object.assign(bad(e.message, 502), { upstreamStatus: e.upstreamStatus });
       throw e;
     }
@@ -1208,3 +1210,9 @@ export const GOV_TOOLS = [
     },
   },
 ];
+
+// These handlers' every upstream wait is a safeFetch (through this kit's own
+// read helper and its retry), which ends at a run's ceiling when one is set
+// (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
+// can serve them. A handler that gains another kind of wait leaves this list.
+markEndsAtCeiling(GOV_TOOLS, ["device-510k", "device-adverse-events", "device-recalls", "drug-adverse-events", "drug-label", "drug-ndc", "drug-recalls", "earthquakes", "fec-candidates", "federal-awards", "fema-disasters", "food-recalls", "geo-lookup", "vehicle-recalls", "vin-decode", "weather-alerts"]);

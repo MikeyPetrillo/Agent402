@@ -9,6 +9,7 @@
 // data-kit and gov-kit by covering every location worldwide.
 // Source: api.open-meteo.com (CC BY 4.0).
 import { safeFetch, retryTransient } from "./fetch-guard.js";
+import { markEndsAtCeiling } from "../run-ceiling.js";
 import { OPEN_METEO_ATTRIBUTION } from "../data-attribution.js";
 
 function bad(message, statusCode = 400) {
@@ -434,3 +435,9 @@ export const WEATHER_TOOLS = [
     },
   },
 ];
+
+// These handlers' every upstream wait is a safeFetch (through this kit's own
+// read helper and its retry), which ends at a run's ceiling when one is set
+// (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
+// can serve them. A handler that gains another kind of wait leaves this list.
+markEndsAtCeiling(WEATHER_TOOLS, ["weather-air-quality", "weather-current", "weather-daily", "weather-history", "weather-hourly"]);

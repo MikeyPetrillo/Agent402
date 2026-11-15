@@ -9,6 +9,8 @@ import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { creditsSalesEnabled, creditsDailyMaxCents } from "./credits-sales.js";
 import { answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { publicIndexTermsText, withPublicIndexDate } from "./facilitator-public-index.js";
+import { referralOffered } from "./referral-gate.js";
+import { IDEM_TTL_MS } from "./idempotency-store.js";
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.
   const creditsOnSale = creditsSalesEnabled();
@@ -20,6 +22,8 @@ export function termsPage(baseUrl) {
   // surface reads (src/gateway-nanopayments.js): its paragraph and the scoping
   // of the on-chain sentences appear only while it is offered.
   const gatewayBatched = !!gatewayOfferPublic();
+  // Sales through a referral network's links (src/referral-gate.js): stated only while this server has them.
+  const referralOn = referralOffered();
   // Shared answer pages exist only while their switch is on, or while pages
   // made under it may still be served (src/answer-share.js): then the
   // paragraph reads in the past tense.
@@ -52,7 +56,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-11.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-15.</p>
 </section>
 
 <section>
@@ -91,9 +95,10 @@ If you do not agree to these terms, do not use the service.</p>
 <h2>Generated content</h2>
 <p>Outputs from the AI gateway are produced by third-party models from your inputs. We do not review
 them, do not claim ownership of them, and do not publish or host them - they are returned to you and
-not retained, with two exceptions: short-lived caches that make repeated identical calls cheaper, and the
+not retained, with ${referralOn ? "three" : "two"} exceptions: short-lived caches that make repeated identical calls cheaper, ${referralOn ? "" : "and "}the
 result of a call you run as an async job or an MCP task, which is kept for ${taskRetentionPublic().keptFor} after the job was
-created so you can fetch it. Generated
+created so you can fetch it${referralOn ? `, and the answer to a call bought through a referral link, which is kept with its payment for up to
+${Math.round(IDEM_TTL_MS / 60000)} minutes so that the same payment sent again gets the same answer` : ""}. Generated
 content may be inaccurate, incomplete, or unsuitable for your purpose; it is not professional, legal,
 financial, or medical advice. Your use of generated content, including any obligation to verify it or
 mark it as AI-generated where the law requires, is your responsibility.</p>${sharesOn ? `
@@ -138,7 +143,7 @@ infringers.</p>
 <h2>Payments</h2>
 <p><b>On-chain (x402 / MPP).</b> Paid calls settle on public blockchains${gatewayBatched ? " (except Circle Gateway batched payments, below)" : ""} - USDC on Base and the other
 chains listed at <a href="/pricing">/pricing</a>, USDG on Robinhood Chain, and MPP settlement on Base,
-Celo or Tempo. An x402 payment settles only after your call returns a successful response; if the call
+Celo or Tempo. An x402 payment on our own routes settles only after your call returns a successful response; if the call
 returns an error, the payment is not settled and you are not charged. Some payments are final before the
 call runs, such as an MPP payment sent as a Tempo transfer; if that call then fails, or if your connection
 closes after a payment has settled and before the response is delivered, we record the amount as owed
@@ -151,7 +156,18 @@ hold your private key.${publicIndex ? ` ${publicIndex}` : ""}</p>${gatewayBatche
 <p><b>Circle Gateway batched payments.</b> A Circle Gateway batched payment settles off chain at Gateway.
 If Gateway settles one after its request was answered pending and the request is never served, we record
 the amount as owed and repay it on chain after confirming it in Gateway's records.</p>` : ""}
-<p><b>Results from other sellers.</b> Some routes, such as <code>/api/route/execute</code> and
+${referralOn ? `<p id="referral-links"><b>Referral links.</b> A tool bought through a referral link is sold by Agent402 under these terms,
+at the price listed for the same call on our own route. The payment is made to the referral network's
+payment contract, which pays part to us and part to the reviewer. The network's own terms apply to its links,
+reviews and rewards. A referral payment is settled after the call has run and before its answer is sent. If a
+referral payment reaches us and the answer cannot be delivered, we record the full price you paid as owed to
+the paying wallet and repay it on Base as described under refunds below; the answer to such a call then says
+so and names the payment's transaction. A payment the network's contract pays to another merchant does not
+reach us and is not recorded as owed; the answer names its transaction. Reviews on a referral network are written by
+its reviewers, who can earn a commission. We do not write, edit, select or pay for reviews beyond that
+commission. Market, filing and price data is information from the named source at the time of the call. It is
+not investment, trading, legal or tax advice.</p>
+` : ""}<p><b>Results from other sellers.</b> Some routes, such as <code>/api/route/execute</code> and
 <code>/api/decide/execute</code>, can return a result that Agent402 obtained from a third-party seller.
 Agent402 buys that result from the seller for its own account, with its own funds, and sells it to you;
 your payment is a payment to Agent402 for the result, at the price shown before you pay. Agent402 does not

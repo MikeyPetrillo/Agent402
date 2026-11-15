@@ -33,11 +33,15 @@ LLC: credit the entity, never a personal name.
 - `src/tools/route-execute.js`: route-and-execute, buys from proven external sellers per chain
   (`src/x402-buyer.js`, `src/solana-buyer.js` whose external leg runs under `SOR_SVM_BUDGET_MS`,
   inside a recent blockhash's life, `src/tempo-buyer.js`, `src/algorand-sellers.js`).
-- `src/referral-gate.js`, `src/referral-settle.js`, `src/referral-chain.js`, `src/referral-proof.js`,
-  `src/referral-book.js`, `src/referral-answers.js`, `src/referral-run.js`:
-  referral copies of allowlisted paid routes under `/ref/<slug>` (own gate; off unless
+- `src/referral-gate.js` (the gate), `src/referral-settle.js` (facilitator client),
+  `src/referral-chain.js` (chain reads), `src/referral-proof.js` (the receipt rule),
+  `src/referral-book.js` (the settlement book and its sweep), `src/referral-answers.js` (answers
+  kept for a re-sent payment), `src/referral-run.js` (route hints inside a referral run),
+  `src/run-ceiling.js` (a run's ceiling on upstream waits): referral copies of allowlisted paid
+  routes under `/ref/<slug>` (own gate; off unless all eight required settings are set:
   `REFERRAL_PAY_TO`, `REFERRAL_FACILITATOR_URL`, `REFERRAL_SIGNER_KEY`, `REFERRAL_SLUGS`,
-  `REFERRAL_SETUP_URL` and `REFERRAL_COMMISSION_BPS` are all set; `.claude/rules/payments.md`).
+  `REFERRAL_SETUP_URL`, `REFERRAL_COMMISSION_BPS`, `REFERRAL_MERCHANT_ID` and
+  `REFERRAL_PAYOUT_ADDRESS`; `.claude/rules/payments.md`).
 - `src/refund-ledger.js` + `scripts/refund-run.js`: charged-but-failed is recorded as a debt and
   repaid only after on-chain proof (`src/payment-verify.js`).
 - `src/state-db.js`, `src/json-document.js`: the state database (Postgres) and the whole-file JSON
@@ -59,6 +63,17 @@ LLC: credit the entity, never a personal name.
 - **UI work reads `DESIGN.md` first** (tokens, type scale, components, voice); page modules use
   its `var(--token)` and `var(--fs-*)` values, never raw hex or literal sizes
   (`scripts/test-design-tokens.js`).
+- A tool whose EVERY upstream wait ends at a run's ceiling declares `endsAtCeiling`
+  (`markEndsAtCeiling`, `src/run-ceiling.js`), set beside the handler, slug by slug; the mark is what
+  lets `/ref` serve it, so a handler that gains a wait the ceiling cannot end loses the mark in the
+  same change (`scripts/test-run-ceiling.js`).
+- A sale on `/ref` is booked on the private rail `referral` (`src/paid-rails.js`): no public reader
+  of the ledger returns it, and the direct routes' breakers, counters and status words do not count it.
+- Nothing a `/ref` route answers points a buyer at this server's own surfaces (catalog, prices, docs,
+  a direct route), and a `/ref` copy is sold at the price listed for the same call on the public
+  route: a slug whose published example names this host, or that the public route gives for less
+  (proof of work, the trial parameter, the first-call allowance), is refused at boot with the
+  reason, and a listed slug that is not served reads attention on the status word.
 - A tool is `{ route, name, slug, category, price, description, tags, discovery:{inputSchema,
   input/example}, handler }`. `handler(input)` returns JSON or throws an `Error` with
   `.statusCode`.

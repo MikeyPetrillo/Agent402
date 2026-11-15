@@ -25,6 +25,7 @@
 // ecosystem (yield curves, FX time series, GDP/inflation indicators, CPI YoY,
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
 import { safeFetch, assertPublicUrl, retryTransient } from "./fetch-guard.js";
+import { markEndsAtCeiling, capByCeiling, assertBeforeCeiling } from "../run-ceiling.js";
 import { redactSecrets } from "./redact.js";
 import { ratesUrl, latestShape, seriesShape, isUnknownCurrency } from "./frankfurter.js";
 
@@ -722,9 +723,14 @@ async function fredGetJsonOnce(url, extraHeaders = {}, timeoutMs = 15_000) {
   const safeUrl = await assertPublicUrl(url);
   let res;
   try {
+    // Its own timeout, or a run's ceiling when that comes first (src/run-ceiling.js; none on a direct
+    // route, where the two are one figure). The text names the limit the read ran under.
+    assertBeforeCeiling();
+    timeoutMs = capByCeiling(timeoutMs);
     res = await fetch(safeUrl, { headers: { Accept: "application/json", ...extraHeaders }, signal: AbortSignal.timeout(timeoutMs) });
   } catch (e) {
-    throw bad(`FRED unreachable: ${e.name === "TimeoutError" ? `no response within ${Math.round(timeoutMs / 1000)}s` : e.message}`, 504);
+    if (e?.ceilingCut) throw e;
+    throw bad(`FRED unreachable: ${e.name === "TimeoutError" ? `no response within ${Math.max(1, Math.round(timeoutMs / 1000))}s` : e.message}`, 504);
   }
   const text = await res.text();
   let body = null;
@@ -1116,3 +1122,9 @@ MACRO_TOOLS.push(
     },
   },
 );
+
+// These handlers' every upstream wait is a safeFetch or the FRED read above,
+// each under its own timeout and its retry helper, all of which end at a
+// run's ceiling when one is set (src/run-ceiling.js): a caller that stops
+// waiting at a deadline of its own can serve them.
+markEndsAtCeiling(MACRO_TOOLS, ["treasury-avg-rates", "treasury-debt", "treasury-yield-curve", "treasury-yield-history", "yield-curve-spread"]);

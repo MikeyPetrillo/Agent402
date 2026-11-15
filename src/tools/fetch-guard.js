@@ -2,6 +2,7 @@ import dnsPromises, { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import { Agent, buildConnector } from "undici";
 import { checkServerIdentity } from "../tls-distrust.js";
+import { capByCeiling, ceilingPassed, ceilingLeftMs, assertBeforeCeiling } from "../run-ceiling.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
@@ -152,7 +153,8 @@ export async function resolveHostAddresses(host, { families = [4, 6] } = {}) {
   const name = String(host);
   const literal = isIP(name);
   if (literal) return [{ address: name, family: literal }];
-  const ms = lookupBudgetMs();
+  // The lookup's own bound, or a run's ceiling when that comes first (src/run-ceiling.js; none on a direct route).
+  const ms = capByCeiling(lookupBudgetMs());
   const started = Date.now();
   const settled = await Promise.allSettled(
     families.map((f) => withDeadline(queryFamily(name, f), ms).then((list) => (Array.isArray(list) ? list : []).map((address) => ({ address: String(address), family: f }))))
@@ -461,6 +463,8 @@ export async function hostIsPublic(hostname) {
  * Returns the parsed URL. Shared by the plain fetcher and the browser renderer.
  */
 export async function assertPublicUrl(rawUrl) {
+  // Inside a run whose ceiling has passed (src/run-ceiling.js) no lookup starts.
+  assertBeforeCeiling();
   let url;
   try {
     url = new URL(rawUrl);
@@ -521,7 +525,7 @@ export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, bod
     ...(body !== undefined ? { body } : {}),
     dispatcher: ssrfDispatcher,
     redirect: "manual",
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: AbortSignal.timeout(capByCeiling(timeoutMs)),
   });
 }
 
@@ -551,8 +555,12 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
       // 503 family keeps its retry.
       const throttled = e?.upstreamStatus === 429;
       // noRetry: a deterministic refusal wearing a 503 (e.g. our own key rejected).
-      if (attempt < retries && !throttled && !e?.noRetry && (sc === 504 || sc === 502 || sc === 503)) {
+      // Inside a run with a ceiling (src/run-ceiling.js) no retry is waited for
+      // that could only start after it: the wait itself must fit before the ceiling.
+      if (attempt < retries && !throttled && !e?.noRetry && ceilingLeftMs() > backoffMs && (sc === 504 || sc === 502 || sc === 503)) {
         await new Promise((r) => setTimeout(r, backoffMs));
+        // Checked again after the wait: the ceiling may have passed during it.
+        if (ceilingPassed()) throw e;
         continue;
       }
       throw e;
@@ -574,11 +582,17 @@ export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"])
  */
 export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false } = {}) {
   const url = await assertPublicUrl(rawUrl);
+  // Inside a run whose ceiling has passed (src/run-ceiling.js) nothing starts:
+  // no lookup (assertPublicUrl refuses first) and no request.
+  assertBeforeCeiling();
 
   // timeoutMs bounds the whole exchange: connect, headers AND body. The timer
   // is cleared only once the body has been read (or the call has failed), so
   // a server that sends headers and then trickles the body is cut off too.
   const controller = new AbortController();
+  // Inside a run with a ceiling the exchange ends at the ceiling when that
+  // comes first; with none (every direct route) the timeout is its own.
+  timeoutMs = capByCeiling(timeoutMs);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
   let response;

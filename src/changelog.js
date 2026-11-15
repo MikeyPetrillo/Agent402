@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-15",
+    title: "Refund lookup lists every refund of a transaction",
+    items: [
+      "Refunds: the refund lookup, GET /api/refunds?tx=<hash>, also returns refunds: every refund recorded for that transaction, oldest first, each with its own status, priceUsd and refundTx. Where more than one payment settled in one transaction, each has its own entry, and the top-level fields describe the one furthest from repaid. A transaction with one refund answers as before, with one entry.",
+    ],
+  },
+  {
     date: "2026-11-14",
     title: "Calls in flight are covered together",
     items: [

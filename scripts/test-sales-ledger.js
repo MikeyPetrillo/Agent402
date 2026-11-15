@@ -427,11 +427,24 @@ rmSync(dir, { recursive: true, force: true });
   recordSale({ slug: "hash", priceUsd: 0.001, quoteUsd: 0.001, rail: "usdc", network: "base", payer: P, tx: "0xamend2", synthetic: false });
   const before = privateRailSaleByTx("0xamend1", "referral");
   const external = salesSummary({ detailed: true }).totals.external;
-  const changed = amendPrivateRailSaleNet("0xamend1", "referral", 0.00075);
-  const again = amendPrivateRailSaleNet("0xamend1", "referral", 0.00075);
+  const changed = amendPrivateRailSaleNet("0xamend1", "referral", 0.00075, P);
+  const again = amendPrivateRailSaleNet("0xamend1", "referral", 0.00075, P);
   const after = privateRailSaleByTx("0xamend1", "referral");
   ok(changed === true && again === false && before.netUsd === 0.0009 && after.netUsd === 0.00075 && after.id === before.id && after.grossUsd === 0.001 && payerReceipts(P.toLowerCase()).rows.filter((r) => r.settlementTx === "0xamend1").length === 1, `a private-rail sale's net is corrected in place: the same row, once, and the buyer's receipts list one row (${before.netUsd} -> ${after.netUsd})`);
-  ok(amendPrivateRailSaleNet("0xamend1", "referral", 0.002) === false && amendPrivateRailSaleNet("0xamend1", "referral", 0) === false && amendPrivateRailSaleNet("0xamend2", "usdc", 0.0005) === false && amendPrivateRailSaleNet("0xamend2", "referral", 0.0005) === false && amendPrivateRailSaleNet("0xnone", "referral", 0.0005) === false && privateRailSaleByTx("0xamend1", "referral").netUsd === 0.00075 && saleByTx("0xamend2").priceUsd === 0.001, "never above the quoted gross, never zero, never a paying rail's row, never a row that is not there");
+  ok(amendPrivateRailSaleNet("0xamend1", "referral", 0.002, P) === false && amendPrivateRailSaleNet("0xamend1", "referral", 0, P) === false && amendPrivateRailSaleNet("0xamend2", "usdc", 0.0005, P) === false && amendPrivateRailSaleNet("0xamend2", "referral", 0.0005, P) === false && amendPrivateRailSaleNet("0xnone", "referral", 0.0005, P) === false && privateRailSaleByTx("0xamend1", "referral").netUsd === 0.00075 && saleByTx("0xamend2").priceUsd === 0.001, "never above the quoted gross, never zero, never a paying rail's row, never a row that is not there");
+  // Two payers' payments settled in ONE transaction: each has its own row, and each is corrected on its own.
+  {
+    const { privateRailSaleStands, payerReceipts: receiptsOf } = await import("../src/sales-ledger.js");
+    const A = "0x" + "d1".repeat(20), B = "0x" + "d2".repeat(20);
+    recordSale({ slug: "big-tool", priceUsd: 0.45, quoteUsd: 0.5, rail: "referral", wire: "referral", network: "base", payer: A, tx: "0xbatch", synthetic: false });
+    const bBefore = privateRailSaleStands("0xbatch", "referral", B);
+    recordSale({ slug: "small-tool", priceUsd: 0.018, quoteUsd: 0.02, rail: "referral", wire: "referral", network: "base", payer: B, tx: "0xbatch", synthetic: false });
+    const changedB = amendPrivateRailSaleNet("0xbatch", "referral", 0.015, B.toUpperCase().replace("0X", "0x"));
+    const netOf = (who) => receiptsOf(who).rows.filter((r) => r.settlementTx === "0xbatch").length;
+    const newest = privateRailSaleByTx("0xbatch", "referral");
+    const rowsB = [{ price_usd: amendPrivateRailSaleNet("0xbatch", "referral", 0.45, A) === false ? 0.45 : null }, { price_usd: newest?.netUsd, slug: newest?.slug }];
+    ok(privateRailSaleStands("0xbatch", "referral", A) === true && bBefore === false && privateRailSaleStands("0xbatch", "referral", B) === true && changedB === true && rowsB[0].price_usd === 0.45 && rowsB[1].price_usd === 0.015 && rowsB[1].slug === "small-tool" && netOf(A) === 1 && netOf(B) === 1 && amendPrivateRailSaleNet("0xbatch", "referral", 0.01) === false && amendPrivateRailSaleNet("0xbatch", "referral", 0.01, "0x" + "d3".repeat(20)) === false, `a sale stands per payer under a transaction, and a correction touches only that payer's row (never without a payer, never another payer's) (${JSON.stringify(rowsB)})`);
+  }
   const externalAfter = salesSummary({ detailed: true }).totals.external;
   ok(externalAfter.sales === external.sales && externalAfter.revenueUsd === external.revenueUsd, "and no public total moves: the private rail is in none of them");
 }
