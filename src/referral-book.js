@@ -305,6 +305,14 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         return undefined;
       });
     },
+    /** An operator has read a kind of operator record ("retired", "closed"):
+     *  recorded with the note; the status word stops naming the records that
+     *  were there at that time (ackAt). */
+    async noteAck(kind, note) {
+      return change((_cur, _kept, done) => { done.push({ key: `ack:${kind}`, slug: null, payer: null, amount: null, tx: null, state: "ack", delivered: true, outcome: "acknowledged", debt: false, note: String(note).slice(0, 300), at: now() }); return undefined; });
+    },
+    /** When that kind was last acknowledged (0 when never, or when the note has left the record). */
+    ackAt: (kind) => resolved.reduce((m, r) => (r && r.key === `ack:${kind}` && Number(r.at) > m ? Number(r.at) : m), 0),
     /** Record a hand note that has no entry of its own (a stop cleared
      *  where the book held no record of it). */
     async resolveNote({ slug, outcome, note }) {

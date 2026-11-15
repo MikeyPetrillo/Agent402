@@ -3769,6 +3769,55 @@ try {
         ok(stalled.status === 503 && stalled.ms < 2_000 && fac.of("/settle").length === 2, `an intent write that does not answer is given up at its deadline (${stalled.ms} ms), with no settle sent`);
       } finally { doc.st.down = false; doc.st.stall = false; await app.close(); }
     }
+    fac.reset(); sales.length = 0; owed.length = 0;
+    // P4. The status word: a route that is down says so; a reason with no fresh evidence ages out; an operator can acknowledge.
+    {
+      const seeded = casDoc();
+      seeded.st.body = { entries: {}, forgiven: [], resolved: [], retired: [{ key: "referral:old-1", slug: "echo", at: Date.now() + skew.ms }], closed: [{ key: "referral:old-2", slug: "echo", at: Date.now() + skew.ms }], short: {}, proven: {}, sold: {} };
+      const b = createReferralBook({ doc: seeded, log, now: () => Date.now() + skew.ms });
+      const app = await mount({}, { book: b });
+      const skewBefore = skew.ms;
+      try {
+        const pay = async () => { const p = await signPayment(accept, { account: newAccount() }); const r = await send(`${app.url}/ref/echo`, { body: { text: "word" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } }); return { status: r.status, reason: r.json?.errorReason }; };
+        const has = (re) => app.gate.statusWord().reasons.some((x) => re.test(x));
+        // (d) retired and closed records: named until an operator says they were read.
+        const w0 = app.gate.statusWord();
+        const noNote = await app.gate.acknowledge("retired", { note: "" }), noKind = await app.gate.acknowledge("everything", { note: "read them" });
+        const ack = await app.gate.acknowledge("retired", { note: "read the retired record; nothing owed" });
+        const w1 = app.gate.statusWord();
+        ok(has(/closed to the operator record/) && w0.reasons.some((x) => /retired at capacity/.test(x)) && noNote.ok === false && noKind.ok === false && ack.ok === true && !w1.reasons.some((x) => /retired at capacity/.test(x)) && /^[0-9a-f]{8}$/.test(w0.tag) && /^[0-9a-f]{8}$/.test(w1.tag) && w0.tag !== w1.tag && b.resolvedByHand().some((r) => r.key === "ack:retired" && /nothing owed/.test(r.note)), `an operator acknowledges the retired records with a note and the word stops naming them (the closed ones stay); the word's tag changes when the set of reasons does (${w0.tag} -> ${w1.tag})`);
+        await app.gate.acknowledge("closed", { note: "read the closed record" });
+        ok(app.gate.statusWord().status === "ok" && app.gate.statusWord().tag === "", "with both acknowledged the word reads ok, with no tag");
+        // (a) No chain head: every paid call is refused, and after five minutes of it the word says so.
+        fac.mode.rpcDown = true;
+        const down = [await pay(), await pay()];
+        const early = has(/chain head could not be read/);
+        skew.ms += 6 * 60_000;
+        const still = { status: 503 };
+        const paged = has(/chain head could not be read for 5 minutes: paid calls are refused/);
+        skew.ms -= 6 * 60_000;
+        fac.mode.rpcDown = false;
+        fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
+        const up = await pay();
+        ok(down.every((x) => x.status === 503 && x.reason === "chain_unavailable") && early === false && still.status === 503 && paged === true && up.status === 200 && !has(/chain head/), `with no chain head readable every paid call is refused and, after five minutes of it, the word reads attention and names it; a call served clears it (${down.map((x) => x.status).join(" ")}; paged ${paged})`);
+        // (b) Two unanswered /verify calls and then no traffic: the reason ages out by itself.
+        fac.mode.verify = () => ({ status: 500, body: {} });
+        const unanswered = [await pay(), await pay()];
+        fac.mode.verify = null;
+        skew.ms += 11 * 60_000;
+        const at11 = has(/facilitator has not answered/);
+        skew.ms += 25 * 60_000;
+        const at36 = has(/facilitator has not answered/);
+        ok(unanswered.every((x) => x.status === 503) && at11 === true && at36 === false, `two unanswered /verify calls read attention ten minutes on, and with no further call the reason ages out thirty minutes after the last of them (${unanswered.map((x) => `${x.status} ${x.reason}`).join(", ")}; ${at11} then ${at36})`);
+        // P8. Every open entry of one state and reason resolved in one request, each recorded.
+        for (let i = 0; i < 7; i++) { await b.intent(intentOf(5000 + i)); await b.resolve(`referral:r10-${5000 + i}`, { state: "in-doubt", reason: i < 5 ? "receipt_unreadable" : "settle_error" }); }
+        const refundMany = await app.gate.resolveManyByHand({ state: "in-doubt", reason: "receipt_unreadable", outcome: "refund", note: "bulk" });
+        const noNoteMany = await app.gate.resolveManyByHand({ state: "in-doubt", reason: "receipt_unreadable", outcome: "dismissed", note: "" });
+        const many = await app.gate.resolveManyByHand({ state: "in-doubt", reason: "receipt_unreadable", outcome: "dismissed", note: "authorizations expired unused; checked on chain" });
+        const left = b.list().filter((e) => e.state === "in-doubt");
+        ok(refundMany.ok === false && noNoteMany.ok === false && many.ok === true && many.matched === 5 && many.resolved === 5 && many.failed.length === 0 && left.length === 2 && left.every((e) => e.reason === "settle_error") && b.resolvedByHand().filter((r) => /bulk: in-doubt, receipt_unreadable/.test(r.note) && r.outcome === "dismissed").length === 5 && owed.length === 0, `a bulk resolve closes every open entry of one state and recorded reason, each recorded with the note, and never writes a refund (${many.resolved} of ${many.matched}; ${left.length} of another reason left)`);
+      } finally { fac.mode.rpcDown = false; fac.mode.verify = null; skew.ms = skewBefore; await app.close(); }
+    }
   }
 
   // --- the key stays where it is ----------------------------------------------------
