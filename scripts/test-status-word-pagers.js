@@ -217,10 +217,11 @@ await check("Worker: sharedLimits pages only on alert=sustained, clears on on an
   assert.equal(j({ sharedLimits: { status: "unknown" } })[SLT], "quiet");
   assert.equal(j({})[SLT], "quiet");
 });
-await check("Worker: coverageReads pages only on alert=sustained, never on degraded alone, clears on ok and off", () => {
+await check("Worker: coverageReads pages only on alert=sustained, never on degraded alone, and clears on alert=ok whatever status reads, on the second read in a row", () => {
   assert.equal(j({ coverageReads: { status: "degraded", alert: "sustained" } })[CRT], "bad");
-  assert.equal(j({ coverageReads: { status: "degraded", alert: "ok" } })[CRT], "quiet", "degraded without the sustained verdict (one wallet, one minute) neither pages nor closes");
-  assert.equal(j({ coverageReads: { status: "degraded" } })[CRT], "quiet", "a build without the second word never pages on the first");
+  assert.equal(j({ coverageReads: { status: "degraded", alert: "ok" } })[CRT], "good", "degraded without the sustained verdict (one wallet) clears the issue: the issue means sustained");
+  assert.equal(ALARMS.find((x) => x.title === CRT).closeAfterTwoOk, true, "it closes on the second clear read in a row");
+  assert.equal(j({ coverageReads: { status: "degraded" } })[CRT], "quiet", "a build without the second word never pages on the first, nor clears on degraded");
   for (const w of ["ok", "off"]) assert.equal(j({ coverageReads: { status: w, alert: "ok" } })[CRT], "good", w);
   for (const w of ["unknown", "something-new"]) assert.equal(j({ coverageReads: { status: w } })[CRT], "quiet", w);
   assert.equal(j({})[CRT], "quiet");
@@ -290,7 +291,7 @@ await check("Worker: the three bodies are fixed text with no figure", () => {
     [RSW, { routerSpendWindow: { status: "capped" } }, { routerSpendWindow: { status: "off" } }, null],
     [SLT, { sharedLimits: { status: "degraded", alert: "sustained" } }, { sharedLimits: { status: "on", alert: "ok" } }, { sharedLimits: { status: "degraded", alert: "ok" } }],
     [RS, { replayStore: { status: "pending", alert: "sustained" } }, { replayStore: { status: "ok", alert: "ok" } }, { replayStore: { status: "pending", alert: "ok" } }],
-    [CRT, { coverageReads: { status: "degraded", alert: "sustained" } }, { coverageReads: { status: "ok", alert: "ok" } }, { coverageReads: { status: "degraded", alert: "ok" } }],
+    [CRT, { coverageReads: { status: "degraded", alert: "sustained" } }, { coverageReads: { status: "degraded", alert: "ok" } }, { coverageReads: { status: "degraded" } }],
     ...NEW_WORDS.map(([T, field, bad, good, neither]) => [T, { [field]: { status: bad[0] } }, { [field]: { status: good[0] } }, { [field]: { status: neither[0] } }]),
   ];
   try {
@@ -404,7 +405,7 @@ const HB = [
   ["X search author reads check", NEW_WORDS[6][0], "xSearchAuthors", { status: "alert" }, [{ status: "unknown" }], [{ status: "ok" }]],
   ["MPP subscription engine check", NEW_WORDS[7][0], "mppSubscriptions", { status: "failed" }, [{ status: "unknown" }], [{ status: "on" }, { status: "off" }]],
   ["Referral settlement check", NEW_WORDS[8][0], "referralSettlement", { status: "attention" }, [{ status: "unknown" }], [{ status: "ok" }]],
-  ["Coverage balance reads check", CRT, "coverageReads", { status: "degraded", alert: "sustained" }, [{ status: "degraded", alert: "ok" }, { status: "degraded" }, { status: "unknown" }], [{ status: "ok", alert: "ok" }, { status: "off", alert: "ok" }]],
+  ["Coverage balance reads check", CRT, "coverageReads", { status: "degraded", alert: "sustained" }, [{ status: "degraded" }, { status: "unknown" }], [{ status: "degraded", alert: "ok" }, { status: "ok", alert: "ok" }, { status: "off", alert: "ok" }]],
 ];
 for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
   const step = steps.find((s) => String(s.name || "").startsWith(prefix));

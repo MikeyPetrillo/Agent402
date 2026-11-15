@@ -1086,12 +1086,18 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // any one paid call judged without a balance read, which one wallet can
     // cause, so the page reads the second word: alert=sustained (such calls
     // in three or more separate minutes of the last ten, for three or more
-    // wallets). ok and off clear; degraded with alert=ok, unknown and a build
-    // without the second word do neither. Title and body match heartbeat.yml's.
+    // wallets). The issue means alert=sustained, so it clears on what ends
+    // that: alert=ok, whatever status reads (one wallet's unread balance
+    // keeps status degraded and must not hold the issue open), or status off;
+    // on the second such read in a row, since the minutes behind the verdict
+    // can sit at the edge of its window. A build that reads status ok with no
+    // second word clears too; unknown and absent do neither.
+    // Title and body match heartbeat.yml's.
     title: "Coverage balance reads DEGRADED (calls in flight)",
-    verdict: ({ gateway: b }) => sustainedVerdict(b.coverageReads, ["ok", "off"]),
+    closeAfterTwoOk: true,
+    verdict: ({ gateway: b }) => coverageReadsAlarmVerdict(b.coverageReads),
     body: () =>
-      "/api/gateway-status reports coverageReads.alert=sustained: in three or more separate minutes of the last ten, paid calls from three or more wallets were started or refused without a balance read made for them (the read failed or took too long), so the check that a wallet's paid calls in flight are covered together (src/inflight-cover.js) judged them on each wallet's last good read, or on the fixed allowance of calls at once for a wallet with no recent read. A call a kept read covers is still served. One wallet's unread balance, however many calls it sends, reads coverageReads.status=degraded and opens nothing. Check the RPC endpoints the balance reads use and the server log; the counts are on the operator view of /api/gateway-status (inflightCover). Auto-closes when coverageReads.status reads ok or off.",
+      "/api/gateway-status reports coverageReads.alert=sustained: in three or more separate minutes of the last ten, paid calls from three or more wallets were started or refused without a balance read made for them (the read failed or took too long), so the check that a wallet's paid calls in flight are covered together (src/inflight-cover.js) judged them on each wallet's last good read, or on the fixed allowance of calls at once for a wallet with no recent read. A call a kept read covers is still served. One wallet's unread balance, however many calls it sends, reads coverageReads.status=degraded and opens nothing. Check the RPC endpoints the balance reads use and the server log; the counts are on the operator view of /api/gateway-status (inflightCover). Auto-closes after two reads in a row whose coverageReads.alert reads ok (coverageReads.status may still read degraded then: one wallet keeps nothing open) or whose coverageReads.status reads off.",
   },
   {
     // The MPP subscription engine (mppSubscriptions, server.js): failed pages
@@ -1248,6 +1254,13 @@ function wordVerdict(word, bad, good) {
 // A word that flickers in normal operation and carries a second word for the
 // pagers: alert=sustained pages, a healthy status clears, and everything else
 // (the alert status inside its grace period, unknown, absent) does neither.
+// coverageReads pages on alert=sustained and clears on alert=ok (status may
+// read degraded then) or on status ok or off.
+function coverageReadsAlarmVerdict(row) {
+  if (row?.alert === "sustained") return "bad";
+  return row?.alert === "ok" || row?.status === "ok" || row?.status === "off" ? "good" : "quiet";
+}
+
 function sustainedVerdict(row, good) {
   if (row?.alert === "sustained") return "bad";
   return good.includes(row?.status) ? "good" : "quiet";

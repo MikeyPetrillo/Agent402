@@ -915,8 +915,11 @@ jobs:
       # src/inflight-cover.js): status reads degraded for ten minutes after any
       # one paid call judged without a balance read, so this pages on the
       # second word, alert=sustained (such calls in three or more separate
-      # minutes of the last ten, for three or more wallets). ok and off close;
-      # degraded with alert=ok, unknown and absent do neither.
+      # minutes of the last ten, for three or more wallets). The issue means
+      # sustained, so it closes on what ends that: alert=ok whatever status
+      # reads (one wallet keeps status degraded and holds nothing open), or
+      # status off (or ok, on a build without the second word), on the second
+      # such read in a row. Unknown and absent do neither.
       # The status Worker runs the same check under the same title.
       - name: Coverage balance reads check (alarm on sustained calls judged without a balance read)
         if: always()
@@ -928,14 +931,38 @@ jobs:
           STATUS=${ROW%% *}; ALERT=${ROW##* }
           echo "coverageReads: $STATUS (alert $ALERT)"
           TITLE="Coverage balance reads DEGRADED (calls in flight)"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          # The mark counts only on its own line after a blank line, where
+          # the status Worker writes and reads it.
+          MARK="First ok read at "
+          NLMARK=$'\n\n'"$MARK"
+          # Only an issue with exactly this title, opened by the workflow bot
+          # or the repository owner, is the alarm (the status Worker's rule).
+          EXISTING=$(ALARM_NAME="$TITLE" ALARM_OWNER="${GITHUB_REPOSITORY%%/*}" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.ALARM_NAME) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions" or $a == (env.ALARM_OWNER | ascii_downcase))][0].number // empty' 2>/dev/null || echo "")
+          CLEAR=no
+          if [ "$ALERT" = "ok" ] || [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; then CLEAR=yes; fi
           if [ "$ALERT" = "sustained" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports coverageReads.alert=sustained: in three or more separate minutes of the last ten, paid calls from three or more wallets were started or refused without a balance read made for them (the read failed or took too long), so the check that a wallet's paid calls in flight are covered together (src/inflight-cover.js) judged them on each wallet's last good read, or on the fixed allowance of calls at once for a wallet with no recent read. A call a kept read covers is still served. One wallet's unread balance, however many calls it sends, reads coverageReads.status=degraded and opens nothing. Check the RPC endpoints the balance reads use and the server log; the counts are on the operator view of /api/gateway-status (inflightCover). Auto-closes when coverageReads.status reads ok or off." || true
+                --body "/api/gateway-status reports coverageReads.alert=sustained: in three or more separate minutes of the last ten, paid calls from three or more wallets were started or refused without a balance read made for them (the read failed or took too long), so the check that a wallet's paid calls in flight are covered together (src/inflight-cover.js) judged them on each wallet's last good read, or on the fixed allowance of calls at once for a wallet with no recent read. A call a kept read covers is still served. One wallet's unread balance, however many calls it sends, reads coverageReads.status=degraded and opens nothing. Check the RPC endpoints the balance reads use and the server log; the counts are on the operator view of /api/gateway-status (inflightCover). Auto-closes after two reads in a row whose coverageReads.alert reads ok (coverageReads.status may still read degraded then: one wallet keeps nothing open) or whose coverageReads.status reads off." || true
+            else
+              # A sustained read after a first clear read starts the count again.
+              BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
+              case "$BODY_NOW" in
+                *"$NLMARK"*) gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW%%$'\n\n'"$MARK"*}" >/dev/null 2>&1 || true ;;
+              esac
             fi
-          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "coverageReads is ${STATUS}; closing." || true
+          elif [ "$CLEAR" = "yes" ] && [ -n "$EXISTING" ]; then
+            # Closes on the second clear read in a row (this step's or the
+            # status Worker's); the first leaves a mark line in the body.
+            BODY_NOW=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null || echo "")
+            case "$BODY_NOW" in
+              *"$NLMARK"*)
+                gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "coverageReads alert is ${ALERT} (status ${STATUS}), the second clear read in a row; closing." || true
+                ;;
+              *)
+                gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "${BODY_NOW}"$'\n\n'"${MARK}$(date -u +%FT%TZ); closes on the next ok read." >/dev/null 2>&1 || true
+                ;;
+            esac
           fi
 
       # The MPP subscription engine (mppSubscriptions, server.js): failed
