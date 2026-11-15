@@ -323,8 +323,10 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
       // The payment token is claimed too: one token can be presented under
       // many challenges, and each challenge is claimed on its own, so without
       // this a burst of credentials carrying one token each started a run
-      // while only one capture could succeed. Taken before the handler,
-      // released on any run that is not captured, kept after a capture.
+      // while only one capture could succeed. Held only while a run is in
+      // flight: taken before the handler and released when the run ends,
+      // captured or not. A token with limit left may pay again under a new
+      // challenge; the challenge claim keeps one credential from paying twice.
       const spt = typeof v.validation?.spt === "string" && v.validation.spt ? v.validation.spt : null;
       const tokenKey = replayGuard && spt ? `stripe-spt:${spt}` : null;
       const unavailable = () => {
@@ -354,7 +356,7 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
         }
       }
       const releaseReplay = () => { if (replayGuard && replayKey) replayGuard.release(replayKey).catch(() => {}); if (tokenKey) replayGuard.release(tokenKey).catch(() => {}); };
-      const settleReplay = () => { if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {}); if (tokenKey) replayGuard.settle(tokenKey).catch(() => {}); };
+      const settleReplay = () => { if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {}); if (tokenKey) replayGuard.release(tokenKey).catch(() => {}); };
 
       req.stripeSettling = true;
       // The capture must begin while the challenge is unexpired: a handler

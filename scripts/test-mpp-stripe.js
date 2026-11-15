@@ -253,9 +253,11 @@ for (const seam of [true, false]) {
 
 // H) one payment token, many challenges: the token is claimed before the
 // handler. Ten credentials at once that carry one token run ONE handler and
-// make ONE capture; a run that fails (or whose capture fails) releases the
-// token, and the same token then runs once; two tokens run independently; a
-// captured token pays for nothing more. The real validate reads the token.
+// make ONE capture; the claim lasts only while a run is in flight, so after
+// a capture the token pays again under a fresh challenge, while the captured
+// credential itself is refused as a replay; a run that fails (or whose
+// capture fails) releases the token, and the same token then runs once; two
+// tokens run independently. The real validate reads the token.
 {
   let seq = 0;
   const tokenCred = (spt) => {
@@ -293,13 +295,17 @@ for (const seam of [true, false]) {
     const ok200 = ten.filter((r) => r.status === 200).length;
     const refused = ten.filter((r) => r.status === 402 && r.body?.details?.reason === "token-inflight" && r.body?.details?.charged === false).length;
     ok(runs.get("spt_burst") === 1 && captures.get("spt_burst") === 1 && ok200 === 1 && refused === 9, `gate H: ten credentials at once carrying one token ran ONE handler and made ONE capture; nine refused 402 before the handler, uncharged (runs ${runs.get("spt_burst")}, captures ${captures.get("spt_burst")}, ${ok200} x 200, ${refused} refused)`);
+    const sb = () => `runs ${runs.get("spt_burst")}, captures ${captures.get("spt_burst")}`;
     const after = await post(tokenCred("spt_burst"));
-    ok(after.status === 402 && after.body?.details?.reason === "token-consumed" && runs.get("spt_burst") === 1 && captures.get("spt_burst") === 1, `gate H: a captured token pays for nothing more (${after.status}, ${after.body?.details?.reason})`);
+    ok(after.status === 200 && runs.get("spt_burst") === 2 && captures.get("spt_burst") === 2, `gate H: after the capture the same token pays again under a fresh challenge, run and captured once (${after.status}, ${sb()})`);
+    const winner = tenCreds[ten.findIndex((r) => r.status === 200)];
+    const replayed = await post(winner);
+    ok(replayed.status === 402 && /already used or is in flight/.test(replayed.body?.detail || "") && runs.get("spt_burst") === 2 && captures.get("spt_burst") === 2, `gate H: the captured credential sent again is refused as a replay before the handler, not charged (${replayed.status}, ${sb()})`);
     // A credential refused for its token left its own challenge unclaimed:
-    // sent again, it is judged on the token, not refused as a used challenge.
+    // sent again once the token is free, it runs and is captured once.
     const loser = tenCreds[ten.findIndex((r) => r.body?.details?.reason === "token-inflight")];
     const again = await post(loser);
-    ok(again.status === 402 && again.body?.details?.reason === "token-consumed", `gate H: a credential refused for its token kept its challenge unclaimed (${again.status}, ${again.body?.details?.reason || String(again.body?.detail).slice(0, 60)})`);
+    ok(again.status === 200 && runs.get("spt_burst") === 3 && captures.get("spt_burst") === 3, `gate H: a credential refused for its token kept its challenge unclaimed and pays once the token is free (${again.status}, ${again.body?.details?.reason || String(again.body?.detail || "").slice(0, 60)}, ${sb()})`);
 
     failNext = 1;
     const failedCred = tokenCred("spt_retry");
