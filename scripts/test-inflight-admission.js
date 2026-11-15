@@ -25,7 +25,7 @@
 //   - a Circle Gateway batched payment is judged on the signer's Gateway
 //     balance; the EVM chain table comes from the rails table.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
-import { admitCoveredRun, coverageReadsWord, coverageReadsVerdict, _ageUnreadDecisionsForTest, _ageKeptReadsForTest, coverTermsOfRequest, coveredRunStateOf, inflightCoverStatus, CHAIN_BY_CAIP2, _setBalanceReaderForTest, _resetInflightCoverForTest } from "../src/inflight-cover.js";
+import { admitCoveredRun, KEPT_AT_ONCE_MS, coverageReadsWord, coverageReadsVerdict, _ageUnreadDecisionsForTest, _ageKeptReadsForTest, coverTermsOfRequest, coveredRunStateOf, inflightCoverStatus, CHAIN_BY_CAIP2, _setBalanceReaderForTest, _resetInflightCoverForTest } from "../src/inflight-cover.js";
 import { hasPaidRecord, notePaidSettlement, setPaidRecordLedger, _setPaidRecordForTest, _resetPaidRecordForTest } from "../src/paid-record.js";
 import { readRailBalance, _setGatewayBalanceClientForTest } from "../src/rail-cover.js";
 import { RAILS, GATED_RAILS } from "../src/rails.js";
@@ -254,8 +254,11 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   const r4b = await admit(W(0x33));
   ok(r4b.err?.statusCode === 429 && reads === 2, "within a second of that read the record is reused: no further read");
   await sleep(1100);
+  const r4c = await admit(W(0x33));
+  ok(r4c.err?.coverRefusal === "short" && reads === 2 && inflightCoverStatus().readGapMs === 10_000, `inside the read gap (${inflightCoverStatus().readGapMs} ms) the record is still judged as it is: refused, no further read (reads ${reads})`);
+  _ageKeptReadsForTest(10_000);
   const r5 = await admit(W(0x33));
-  ok(r5.release && reads === 3, "after a top-up, a read a second later admits it");
+  ok(r5.release && reads === 3, "after a top-up, a read once the gap has passed admits it");
   for (const x of [r2, r3, r5]) x.release();
 }
 
@@ -303,8 +306,11 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   for (let i = 0; i < 60; i++) { const x = await admit(W(0x81)); if (x.err?.statusCode === 429 && x.err.retryAfter === 30) refused++; }
   ok(refused === 60 && reads <= Math.ceil((Date.now() - t0) / 1000) + 1, `sixty refusals in ${Date.now() - t0} ms cost ${reads} balance read(s): a record under a second old is reused`);
   await sleep(1100);
+  const inGap = await admit(W(0x81));
+  ok(inGap.err?.statusCode === 429 && reads === 1, `a record a second old but inside the read gap is judged as it is: no read (${reads})`);
+  _ageKeptReadsForTest(10_000);
   await admit(W(0x81));
-  ok(reads >= 2, "a record over a second old is read again");
+  ok(reads === 2, "a record older than the read gap is read again");
   long.release();
   // The read lane full of slow reads; twenty other wallets ask, give up, and
   // their reads are dropped when their turn comes.
@@ -414,7 +420,7 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   await settleOne(W(0xb1));
   ok(reads === 1 && coverageReadsWord() === "ok", "a wallet's settled call leaves a last good read behind (one read, in the background)");
   up = false;
-  _ageKeptReadsForTest(60_000); // past the ten seconds a read is reused for: every judgment now asks for a read and finds none
+  _ageKeptReadsForTest(KEPT_AT_ONCE_MS + 60_000); // past the window a kept read is judged on at once: every judgment now asks for a read and finds none
   for (const [n, paid] of [[12, false], [40, false], [90, true], [200, true]]) {
     _setPaidRecordForTest(() => paid);
     const t0 = Date.now();
@@ -456,7 +462,7 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
     await sleep(20);
     for (let i = 0; i < n; i++) leave(await admit(W(0xb6)));
     up = false;
-    _ageKeptReadsForTest(60_000);
+    _ageKeptReadsForTest(KEPT_AT_ONCE_MS + 60_000);
     const five = await Promise.all(Array.from({ length: 5 }, () => admit(W(0xb6))));
     ok(five.filter((x) => x.release).length === admitted && inflightCoverStatus().admittedOnKeptRead === onKept, `after ${what}: of five calls at once ${admitted} are admitted, ${onKept} of them on the kept read (${five.filter((x) => x.release).length} admitted, ${inflightCoverStatus().admittedOnKeptRead} on the kept read)`);
     for (const x of five) x.release?.();
@@ -499,6 +505,9 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   // then answers with the balance from BEFORE that settlement.
   let n = 0;
   _setBalanceReaderForTest(async () => { const mine = ++n; await sleep(mine === 1 ? 20 : 600); return mine === 1 ? PRICE : mine === 2 ? PRICE : 0n; });
+  // The read gap at its floor (one second), so X's read begins before A
+  // settles, as this case needs.
+  process.env.INFLIGHT_COVER_READ_GAP_MS = "1000";
   for (const expensive of [true, false]) {
     n = 0; _resetInflightCoverForTest();
     _setBalanceReaderForTest(async () => { const mine = ++n; await sleep(mine === 1 ? 20 : 600); return mine <= 2 ? PRICE : 0n; });
@@ -516,6 +525,7 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
     ok(Z.err && X.err?.statusCode === 429 && Y.err?.statusCode === 429 && inflightCoverStatus().runsInFlight === 0, `${expensive ? "report or media route" : "every other route"}: a read replaced in the maps while a run settled and left does not admit a second run (${[X, Y].filter((x) => x.release).length} admitted)`);
     for (const x of [X, Y]) x.release?.();
   }
+  delete process.env.INFLIGHT_COVER_READ_GAP_MS;
 }
 
 // ---- once a judgment has had a read, a later read that does not answer never makes it an unread one ----
@@ -712,16 +722,16 @@ for (const readMs of [600, 450]) {
   _setBalanceReaderForTest(async () => { if (!up) throw new Error("rpc down"); return balance; });
   const a = await admit(W(0x9a)); const b = await admit(W(0x9a)); // b is refused on a read of one price, which is cached
   a.req.res = { statusCode: 502 }; a.release(); // nothing was taken
-  _ageKeptReadsForTest(5_000); // five seconds on: the wallet has been funded, and reads now fail
+  _ageKeptReadsForTest(11_000); // past the read gap: the wallet has been funded, and reads now fail
   up = false;
   const four = await Promise.all(Array.from({ length: 4 }, () => admit(W(0x9a))));
-  ok(b.err?.coverRefusal === "short" && four.every((x) => x.release) && inflightCoverStatus().admittedPastKeptRead === 3, `a wallet read at one price five seconds ago, reads now failing: four calls at once are admitted on the allowance, not refused on the cached read (${four.filter((x) => x.release).length} of 4)`);
+  ok(b.err?.coverRefusal === "short" && four.every((x) => x.release) && inflightCoverStatus().admittedPastKeptRead === 3, `a wallet read at one price eleven seconds ago, reads now failing: four calls at once are admitted on the allowance, not refused on the earlier read (${four.filter((x) => x.release).length} of 4)`);
   for (const x of four) x.release?.();
   // With the balance readable, the cached read is replaced by a fresh one and one price still runs one call.
   fresh(); up = true; balance = PRICE;
   _setBalanceReaderForTest(async () => { if (!up) throw new Error("rpc down"); return balance; });
   const c = await admit(W(0x9b)); const d = await admit(W(0x9b));
-  _ageKeptReadsForTest(5_000);
+  _ageKeptReadsForTest(11_000);
   const more = await Promise.all(Array.from({ length: 40 }, () => admit(W(0x9b))));
   ok(d.err && more.every((x) => x.err?.statusCode === 429 && x.err.coverRefusal === "short"), `with the balance readable, a one-price wallet's 40 more calls beside its one run are all refused on a fresh read (${more.filter((x) => x.release).length} admitted)`);
   c.release();
@@ -797,6 +807,180 @@ for (const readMs of [600, 450]) {
   const missing = evmRails.filter((r) => !EVM[CHAIN_BY_CAIP2[r.caip2]]?.token).map((r) => r.name);
   ok(missing.length === 0, `each key names a chain the balance read has a token and RPCs for (missing: ${missing.join(", ") || "none"})`);
   ok(Object.keys(CHAIN_BY_CAIP2).length === evmRails.length && CHAIN_BY_CAIP2["eip155:8453"] === "base" && !Object.keys(CHAIN_BY_CAIP2).some((k) => !k.startsWith("eip155:")), "nothing else is in it");
+}
+
+// ---- a fresh-enough kept read that covers is judged at once: no call waits for a new read ----
+{
+  for (const [label, readMs] of [["a 40 ms read", 40], ["a 600 ms read", 600], ["a read that never answers", 30_000]]) {
+    fresh();
+    let reads = 0, balance = PRICE * 1000n;
+    _setBalanceReaderForTest(async () => { reads++; await sleep(reads === 1 ? 0 : readMs); return balance; });
+    _setPaidRecordForTest(() => true);
+    const s = await admit(W(0xf2)); s.release.settling(); s.release.settled(); // a settlement leaves a good read behind
+    await sleep(10);
+    _ageKeptReadsForTest(60_000); // past the ten-second cache, inside the window a kept read is judged on at once
+    const r0 = reads, t0 = Date.now();
+    const all = await Promise.all(Array.from({ length: 40 }, () => admit(W(0xf2))));
+    const ms = Date.now() - t0;
+    ok(all.every((x) => x.release && coveredRunStateOf(x.req) === "covered") && ms < 150 && reads === r0 && inflightCoverStatus().admittedAtOnceOnKeptRead === 39 && coverageReadsWord() === "ok", `${label}: a funded wallet whose last good read is a minute old has 40 calls at once all admitted at once on it, no read made (${ms} ms, ${reads - r0} reads, ${inflightCoverStatus().admittedAtOnceOnKeptRead} at once; status ${coverageReadsWord()})`);
+    for (const x of all) x.release();
+  }
+  // Never more than the kept read covers, less what is in flight: a kept read
+  // of five prices, one run in flight, ten at once while the read hangs.
+  fresh();
+  let n = 0;
+  _setBalanceReaderForTest(async () => { if (++n === 1) return PRICE * 5n; await sleep(30_000); return PRICE * 1000n; });
+  _setPaidRecordForTest(() => false);
+  const s = await admit(W(0xf3)); s.release.settling(); s.release.settled(); // the read taken after it: five prices
+  await sleep(10);
+  _ageKeptReadsForTest(60_000);
+  const held = await admit(W(0xf3)); // one in flight
+  const t1 = Date.now();
+  const ten = await Promise.all(Array.from({ length: 10 }, () => admit(W(0xf3)).then((x) => ({ ...x, ms: Date.now() - t1 }))));
+  const ran = ten.filter((x) => x.release), out = ten.filter((x) => x.err);
+  ok(held.release && ran.length === 4 && ran.every((x) => x.ms < 150) && out.length === 6 && out.every((x) => x.err.coverRefusal === "kept" && x.ms >= 900), `a kept read of five prices with one run in flight: four of ten admitted at once, the six it does not cover wait for the read and are refused as before (${ran.length} at once, refused by ${Math.max(...out.map((x) => x.ms))} ms)`);
+  for (const x of [held, ...ran]) x.release();
+  // The one-price mirror: a kept read of one price and a run in flight is not judged at once.
+  fresh();
+  let m = 0;
+  _setBalanceReaderForTest(async () => { m++; return PRICE; });
+  _setPaidRecordForTest(() => true);
+  const one = await admit(W(0xf4)); const one2 = await admit(W(0xf4)); // read: one price; the second is refused
+  _ageKeptReadsForTest(60_000);
+  const forty = await Promise.all(Array.from({ length: 40 }, () => admit(W(0xf4))));
+  ok(one.release && one2.err?.coverRefusal === "short" && forty.every((x) => x.err?.coverRefusal === "short") && inflightCoverStatus().admittedAtOnceOnKeptRead === 0 && m === 2, `a one-price wallet with a run in flight: its kept read does not cover a second, so 40 more are judged on a new read and refused (${forty.filter((x) => x.release).length} admitted, ${m} reads)`);
+  one.release();
+  // A kept read older than the at-once window: the read is waited for, as before.
+  fresh();
+  let k = 0;
+  _setBalanceReaderForTest(async () => { k++; if (k > 1) await sleep(600); return PRICE * 1000n; });
+  _setPaidRecordForTest(() => true);
+  const st = await admit(W(0xf5)); st.release.settling(); st.release.settled();
+  await sleep(10);
+  _ageKeptReadsForTest(KEPT_AT_ONCE_MS + 1_000);
+  const t2 = Date.now();
+  const stale = await Promise.all(Array.from({ length: 40 }, () => admit(W(0xf5))));
+  ok(stale.every((x) => x.release) && Date.now() - t2 >= 550 && inflightCoverStatus().admittedAtOnceOnKeptRead === 0 && k === 2, `a kept read older than ${KEPT_AT_ONCE_MS / 60_000} minutes is not judged at once: 40 calls wait for the 600 ms read (${Date.now() - t2} ms, ${k} reads)`);
+  for (const x of stale) x.release();
+  await sleep(50);
+}
+
+// ---- a kept refusal with nothing in flight gives the add-funds advice ----
+{
+  fresh();
+  let n = 0;
+  _setBalanceReaderForTest(async () => { if (++n === 1) { await sleep(300); return PRICE; } throw new Error("rpc down"); });
+  _setPaidRecordForTest(() => true);
+  const A = await admit(W(0xf6));
+  A.release.settling();
+  const pB = admit(W(0xf6));
+  await sleep(100);
+  A.release.settled(); // A's price leaves while B's own read (one price) is under way; the follow-up read fails
+  const B = await pB;
+  ok(B.err?.coverRefusal === "kept" && inflightCoverStatus().runsInFlight === 0 && B.err.retryAfter === 5 && B.err.fix === "Your input is fine. Add funds to this wallet, then retry the same call." && /add funds to this wallet, then retry the same call\. You have not been charged\./.test(B.err.message), `a kept refusal with nothing in flight says to add funds, in the fix and the message (${B.err?.coverRefusal}, ${B.err?.fix})`);
+}
+
+// ---- the read gap: a wallet sending call after call past its balance costs one read per gap ----
+{
+  fresh();
+  let reads = 0;
+  _setBalanceReaderForTest(async () => { reads++; return PRICE; });
+  _setPaidRecordForTest(() => true);
+  const long = await admit(W(0xf7));
+  const out = [];
+  for (let i = 0; i < 10; i++) { out.push(await admit(W(0xf7))); await sleep(300); }
+  ok(out.every((x) => x.err?.coverRefusal === "short") && reads === 1, `ten calls 300 ms apart (three seconds) past a one-price balance: all refused on one read (${reads})`);
+  long.release();
+}
+
+// ---- admission reads have their own daily budget under the on-chain data ceiling ----
+{
+  const caps = await import("../src/upstream-hard-caps.js");
+  const share = caps.HARD_CAP_SHARES.find((x) => x.name === "cover-reads");
+  const ceiling = caps.hardCapOf(caps.HARD_CAPS.find((c) => c.name === share.of), {});
+  ok(caps.hardCapShareOf(share, {}) === Math.floor(ceiling * share.fraction) && caps.hardCapShareOf(share, { [share.env]: String(ceiling) }) === Math.floor(ceiling / 2) && caps.hardCapShareOf(share, { [share.env]: "50" }) === 50 && caps.hardCapShareOf(share, { [share.env]: "50", [caps.HARD_CAPS[0].env]: "off" }) === 50 && caps.hardCapShareOf(share, { [caps.HARD_CAPS[0].env]: "off" }) === null,
+    `the budget: ${share.fraction} of the ceiling by default (${caps.hardCapShareOf(share, {})} of ${ceiling}), a set value held to half of it, the set value when the ceiling is off`);
+  fresh(); caps._resetHardCaps();
+  process.env.INFLIGHT_COVER_READS_DAILY_MAX = "2";
+  process.env.AGENT402_BASE_RPC = "https://base-mainnet.g.alchemy.com/v2/test-key"; // Base reads reach the capped host
+  let reads = 0;
+  _setBalanceReaderForTest(async () => { reads++; return PRICE * 1000n; });
+  _setPaidRecordForTest(() => false);
+  for (const who of [W(0xe7), W(0xe8)]) { const a = await admit(who), b = await admit(who); ok(a.release && b.release && coveredRunStateOf(b.req) === "covered", "a second call in flight is read and covered"); a.release(); b.release(); }
+  ok(reads === 2 && caps.hardCapShareStatus()["cover-reads"].usedToday === 2 && caps.hardCapShareStatus()["cover-reads"].status === "spent", `two reads spend a budget of two (${reads} reads, ${JSON.stringify(caps.hardCapShareStatus()["cover-reads"])})`);
+  // Spent: a wallet never read gets the allowance at once, as when reads are down; no read is made.
+  const t0 = Date.now();
+  const six = await Promise.all(Array.from({ length: 6 }, () => admit(W(0xe9))));
+  ok(reads === 2 && six.filter((x) => x.release).length === 4 && six.filter((x) => x.err).every((x) => x.err.coverRefusal === "unread") && Date.now() - t0 < 150 && inflightCoverStatus().readsOverBudget >= 5, `budget spent, a wallet never read: the allowance of four at once and the rest refused as unread, no read made (${six.filter((x) => x.release).length} admitted, ${Date.now() - t0} ms)`);
+  for (const x of six) x.release?.();
+  // Spent: a wallet with a kept read is judged on it, as when reads are down.
+  _ageKeptReadsForTest(KEPT_AT_ONCE_MS + 60_000);
+  const three = await Promise.all(Array.from({ length: 12 }, () => admit(W(0xe7))));
+  ok(reads === 2 && three.every((x) => x.release && coveredRunStateOf(x.req) === "covered") && inflightCoverStatus().admittedOnKeptRead === 11, `budget spent, a funded wallet read before: 12 at once all admitted on its kept read, no read made (${inflightCoverStatus().admittedOnKeptRead} on the kept read)`);
+  for (const x of three) x.release();
+  ok(caps.hardCapStatus().upstreams[share.of].usedToday === 0 && caps.hardCapStatus().upstreams[share.of].refusedToday === 0, "the ceiling paid tools draw on is untouched by the share's own count");
+  // A read that reaches no capped host is not counted: the same calls on another network are read.
+  delete process.env.AGENT402_BASE_RPC;
+  const before = reads;
+  const pa = await admit(W(0xea), {}, { network: "eip155:137" }), pb = await admit(W(0xea), {}, { network: "eip155:137" });
+  ok(pb.release && reads === before + (String(process.env.ALCHEMY_API_KEY || "") ? 0 : 1), `a wallet whose reads reach no capped host is read past the budget (${reads - before} read)`);
+  pa.release?.(); pb.release?.();
+  delete process.env.INFLIGHT_COVER_READS_DAILY_MAX;
+  caps._resetHardCaps();
+}
+
+// ---- a Solana payment whose transfer accounts sit in a lookup table is keyed on the wallet ----
+{
+  const kit = await import("@solana/kit");
+  const SOLNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", CB = "ComputeBudget111111111111111111111111111111";
+  const u64 = (v) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(v), true); return b; };
+  const buyer = await kit.generateKeyPairSigner(), fp = await kit.generateKeyPairSigner();
+  const src = (await kit.generateKeyPairSigner()).address, payTo = (await kit.generateKeyPairSigner()).address, table = (await kit.generateKeyPairSigner()).address;
+  const blockhash = { blockhash: kit.blockhash("11111111111111111111111111111111"), lastValidBlockHeight: 0n };
+  let seq = 0;
+  const txOf = async (inTable) => {
+    const ixs = [
+      { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([2, 0x20, 0x4e, 0, 0]) },
+      { programAddress: kit.address(CB), accounts: [], data: new Uint8Array([3, ...u64(++seq)]) },
+      { programAddress: kit.address(TOKEN), accounts: [
+        { address: kit.address(src), role: kit.AccountRole.WRITABLE },
+        { address: kit.address(USDC), role: kit.AccountRole.READONLY },
+        { address: kit.address(payTo), role: kit.AccountRole.WRITABLE },
+        { address: buyer.address, role: kit.AccountRole.READONLY_SIGNER, signer: buyer },
+      ], data: new Uint8Array([12, ...u64(PRICE), 6]) },
+    ];
+    let msg = kit.pipe(kit.createTransactionMessage({ version: 0 }), (x) => kit.setTransactionMessageFeePayer(fp.address, x), (x) => kit.setTransactionMessageLifetimeUsingBlockhash(blockhash, x), (x) => kit.appendTransactionMessageInstructions(ixs, x));
+    if (inTable.length) msg = kit.compressTransactionMessageUsingAddressLookupTables(msg, { [table]: inTable.map((a) => kit.address(a)) });
+    return kit.getBase64EncodedWireTransaction(await kit.partiallySignTransaction([buyer.keyPair], kit.compileTransaction(msg)));
+  };
+  const solReq = async (inTable) => reqFor(b64({ x402Version: 2, accepted: { scheme: "exact", network: SOLNET, asset: USDC, amount: String(PRICE), payTo, extra: { feePayer: fp.address } }, payload: { transaction: await txOf(inTable) } }));
+  const alt = await coverTermsOfRequest(await solReq([src, USDC, payTo]));
+  const stat = await coverTermsOfRequest(await solReq([]));
+  ok(alt?.rail === "svm" && alt.byOwner === true && alt.payer === buyer.address && alt.owner === buyer.address && alt.asset === USDC && alt.atomic === PRICE, `source, mint and destination in a lookup table: the payment is keyed on the wallet, the transfer's authority (${alt?.payer === buyer.address ? "the wallet" : alt?.payer})`);
+  ok(stat?.rail === "svm" && stat.payer === src && stat.owner === buyer.address && !stat.byOwner, "control: all static, keyed on the source token account as before");
+  // The balance: the sum of the wallet's token accounts of the mint (the RPC stubbed, no network).
+  const realFetch = globalThis.fetch;
+  const asked = [];
+  let accounts = [PRICE, PRICE];
+  globalThis.fetch = async (url, init) => {
+    const j = JSON.parse(init?.body || "{}");
+    asked.push(j);
+    const result = j.method === "getTokenAccountsByOwner" ? { context: { slot: 1 }, value: accounts.map((a, i) => ({ pubkey: `acct${i}`, account: { data: { parsed: { info: { mint: j.params?.[1]?.mint, owner: j.params?.[0], tokenAmount: { amount: String(a), decimals: 6 } } } } } })) } : null;
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    ok((await readRailBalance(alt)) === 2n * PRICE && asked[0]?.method === "getTokenAccountsByOwner" && asked[0].params[0] === buyer.address && asked[0].params[1]?.mint === USDC, `its balance is the sum of the wallet's accounts of the mint, read with getTokenAccountsByOwner (${asked[0]?.method})`);
+    accounts = [];
+    ok((await readRailBalance(alt)) === null, "a wallet with no account of the mint reads unknown, never zero");
+    accounts = [PRICE, PRICE];
+    // Through the admission, with the real reader: two prices cover two runs, a third is refused.
+    fresh();
+    _setPaidRecordForTest(() => true);
+    const runs = [];
+    for (let i = 0; i < 3; i++) { const req = await solReq([src, USDC, payTo]); try { runs.push({ release: await admitCoveredRun(req) }); } catch (err) { runs.push({ err }); } }
+    ok(runs[0].release && runs[1].release && runs[2].err?.statusCode === 429 && runs[2].err.coverRefusal === "short" && inflightCoverStatus().walletsInFlight === 1, `three lookup-table payments from one wallet holding two prices: two admitted, the third refused as short (${runs.map((x) => (x.release ? "admitted" : x.err?.coverRefusal)).join(", ")})`);
+    for (const x of runs) x.release?.();
+  } finally { globalThis.fetch = realFetch; }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

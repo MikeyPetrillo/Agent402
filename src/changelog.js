@@ -3,6 +3,14 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-15",
+    title: "Kept balance reads judged at once",
+    items: [
+      "Payments: a wallet whose last balance read is under 5 minutes old, and covers every paid call it has in flight plus the new one less what its payments took since, has the new call started at once, with no wait for another read. A call that read does not cover, or a wallet whose read is older, is judged on a new read as before.",
+      "Payments: a Solana payment whose transfer names an account through an address lookup table is covered with the wallet's calls in flight too: it is judged on what the paying wallet holds of the token across its accounts.",
+    ],
+  },
+  {
+    date: "2026-11-15",
     title: "Coverage refusals name their class",
     items: [
       "Payments: a 429 from the check that a wallet's balance covers its paid calls in flight carries attribution \"ours\", a hint and a reason naming its class (cover-short and cover_short, and so on) and a fix saying what to do next, in place of the tool's input schema and example. The privacy page and payment.dataHandling in /.well-known/x402 say that each paid call reads the paying wallet's public balance, that a reservation per call in flight is kept for the life of the call, and that the last balance read is held in memory, used for at most 15 minutes, and dropped at the next paid call after that or on restart.",
@@ -20,7 +28,7 @@ const ENTRIES = [
     title: "Calls in flight are covered together",
     items: [
       "Payments: a wallet's paid calls in flight are covered by its balance together. On every paid route that is not free through proof-of-work, a paid call is started only when the wallet's balance of the paying token covers every call it has in flight plus the new one; otherwise it answers 429 before anything runs, and x402, the MPP evm method and a Tempo pull credential are not charged for it. This applies to x402 on EVM, Solana, Algorand and Stellar, to the MPP evm method, to a Tempo pull credential and to a Circle Gateway batched payment, which is judged on the payer's Gateway balance.",
-      "Payments: on routes other than the report and media routes the balance is read inside about a second, and a wallet whose balance covers its calls can send as many at once as that balance covers: the coverage check sets no other limit on calls at once, and a route's own limit still applies (the code-run tools: 2 runs at once per EVM payer, credits key or Tempo sender, and 4 per client address for other payers). A call the balance does not cover answers 429 with Retry-After 30. A call that arrives while another call from the same wallet is still settling, and whose cover cannot be confirmed yet, answers 429 with Retry-After 5 within about a second and says so.",
+      "Payments: on routes other than the report and media routes the balance is read inside about a second, and a wallet whose balance covers its calls can send as many at once as that balance covers: the coverage check sets no other limit on calls at once, and a route's own limit still applies (the code-run tools: 2 runs at once per EVM payer, credits key or Tempo sender, and 4 per client address for other payers). A call the balance does not cover answers 429 with Retry-After 30. A call that arrives while another call from the same wallet is still settling, and whose cover cannot be confirmed yet, answers 429 with Retry-After 5 within about a second and says so. Either answer takes up to about 3.5 seconds when a settlement lands during the balance read.",
       "Payments: when the balance cannot be read right now on those routes, the call is started if the last balance this server read for that wallet within the past 15 minutes, less what the wallet's payments have taken and its calls in progress hold since, covers it. Otherwise, and for a wallet with no read that recent, the wallet runs up to 4 calls at once (16 for a wallet with a payment on record) while its balance cannot be read, and a call past that answers 429 with Retry-After 5. Each of these answers comes before anything runs, and x402, the MPP evm method and a Tempo pull credential are not charged for it.",
       "Payments: the report and media routes are judged as before: the balance read is given up to five seconds, a call the balance does not cover answers 429 with Retry-After 30, and while the balance cannot be read a wallet runs up to 4 calls at once there, whatever its record.",
       "Payments: a card or Tempo challenge must have enough life left for the route's run and the charge after it. One that would expire during the run answers 402 with a fresh challenge before anything runs.",

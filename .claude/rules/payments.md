@@ -187,6 +187,27 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   report and media routes are never judged on a kept read. With nothing in flight a run is
   admitted on verify's proof, unless a run of the wallet settled after the request arrived
   (`req.__a402ArrivedAt`): then it is judged like any other.
+  *Judged at once:* off the report and media routes, a wallet whose last good read is no older than
+  `KEPT_AT_ONCE_MS` (5 min, the settlement refresh's age) and covers every run it has in flight
+  plus this one (`lowerOf`, with another container's runs added) is admitted on it at once, with no
+  read waited for (`admittedAtOnceOnKeptRead`); only before the judgment asked for a read of its
+  own, and only on a read begun after another container's view when one holds a run. A run that
+  read does not cover, or an older read, is judged as before (the one-price mirror still refuses).
+  *The read gap:* a wallet's reads are at least `INFLIGHT_COVER_READ_GAP_MS` apart (default 10 s,
+  1 s to 15 min); inside it a judgment its record does not cover is decided on that record as it
+  is (`short`, no read), so a wallet funded within the gap is recognized when it ends (the short
+  429's Retry-After is 30). Not held back by the gap: a read needed because another container holds
+  a run, the follow-up read after a settlement counted twice, a wallet with no record.
+  *The daily budget:* a read whose RPC list reaches a capped host (`ceilingOfRead`: EVM, Solana and
+  Tempo lists; `AGENT402_BASE_RPC` for Base) takes a unit of the `cover-reads` share in
+  `src/upstream-hard-caps.js` (`HARD_CAP_SHARES`, shared across replicas like the ceilings):
+  `INFLIGHT_COVER_READS_DAILY_MAX`, default a fifth of `HARDCAP_ALCHEMY_CALLS`, a set value held to
+  half of it (the ceiling off: the set value, or none). A read dropped unmade gives its unit back.
+  Past it no read is made (`readsOverBudget`) and the call is judged exactly as when reads are
+  down (the kept read, or the allowance; nothing waits), so paid tools keep the rest of the ceiling.
+  Counts on the operator view (`inflightCover.readBudget`, `readGapMs`). The longest admission off
+  the report and media routes is `ADMIT_SETTLED_READ_MAX_MS` (the wait plus the read timeout,
+  3.5 s), when a settlement lands during the read.
   *No good read that recent, balance not read:* a fixed allowance of runs in flight, never an open
   door: `INFLIGHT_COVER_UNREAD_MAX` (4) for a payer with no paid record (`src/paid-record.js`) when
   the admission began, `INFLIGHT_COVER_UNREAD_PAID_MAX` (16) for one with a record; a run past it
@@ -209,7 +230,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   check off, else `ok`; one wallet can make it read `degraded`. `alert` reads `sustained` only
   when such admissions fell in 3 or more separate minutes of the last 10 AND for 3 or more
   accounts (an account with no balance source is skipped), else `ok`. The status Worker and the
-  heartbeat page on `alert: sustained` only, under one title, and close on `status` ok or off.
+  heartbeat page on `alert: sustained` only, under one title, and close on the second read in a row
+  with `alert` ok (whatever `status` reads: one wallet keeps it degraded) or `status` off (or ok).
   **Across containers:** the wallet's last-settlement mark is shared (`inflight-cover-settled`, a
   flag per wallet that lapses after `SETTLED_MARK_MS`, 2 min): before verify's proof is trusted
   the mark is read once, and a settlement another container made forgets the last good read. A
@@ -225,7 +247,9 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   Terms (`coverTermsOfRequest`): the x402 EVM authorization or Permit2 (the MPP evm wire arrives as
   one), a Circle Gateway batched payment (judged on the signer's Gateway balance, `/v1/balances`), a
   Tempo pull credential from a verified sender (`req.mppTempoPull`), and Solana (the transfer's
-  SOURCE token account; the paid record is the authority's), Algorand and Stellar payments
+  SOURCE token account; the paid record is the authority's; when an account of the transfer is a
+  lookup-table entry, the WALLET, its static authority, `byOwner`, read as the sum of its token
+  accounts of the accepted mint by `getTokenAccountsByOwner`, none reading unknown), Algorand and Stellar payments
   (`src/rail-cover.js`, amount and asset from the matched `accepted`). Balance reads, one bounded
   read each, null = unknown: EVM `balanceOf` (chains from the rails table), Tempo `balanceOf` on
   `TEMPO_RPC_URL`, Solana `getTokenAccountBalance`, algod's asset holding, Horizon's classic balance

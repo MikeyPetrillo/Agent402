@@ -257,7 +257,7 @@ try {
     rig.fund(again, sp);
     await rig.burst(again, SQL, 10);
     rig.fund(again, sp * 5n);
-    await sleep(1100); // a balance record under a second old is reused
+    await sleep(10_100); // a balance record younger than the read gap (10 s) is judged as it is
     const back = await rig.burst(again, SQL, 5);
     await ok(tallyOf(back)[200] === 5, `a wallet refused for coverage is served all 5 calls once it holds their price (${JSON.stringify(tallyOf(back))})`);
   }
@@ -403,7 +403,10 @@ try {
     }
     rig.st.llmDelayMs = 0;
     const after = (await rig.operator("/api/gateway-status")).inflightCover;
-    await ok(after.admittedOnKeptRead - before.admittedOnKeptRead >= 4 * 39 && after.admittedPastKeptRead > before.admittedPastKeptRead && after.refusedOnKeptRead > before.refusedOnKeptRead, `those were judged on kept reads (${after.admittedOnKeptRead - before.admittedOnKeptRead} admitted, ${after.refusedOnKeptRead - before.refusedOnKeptRead} refused)`);
+    // (A funded wallet's kept read, under five minutes old, covers its calls:
+    // they are admitted on it at once, with no read asked for.)
+    const onKept = (s) => s.admittedOnKeptRead + s.admittedAtOnceOnKeptRead;
+    await ok(onKept(after) - onKept(before) >= 4 * 39 && after.admittedAtOnceOnKeptRead - before.admittedAtOnceOnKeptRead >= 4 * 39 && after.admittedPastKeptRead > before.admittedPastKeptRead && after.refusedOnKeptRead > before.refusedOnKeptRead, `those were judged on kept reads (${onKept(after) - onKept(before)} admitted, ${after.admittedAtOnceOnKeptRead - before.admittedAtOnceOnKeptRead} of them at once, ${after.refusedOnKeptRead - before.refusedOnKeptRead} refused)`);
   }
   // An unread balance is a bounded allowance, whoever asks and however the
   // balance came to be unread.

@@ -6,6 +6,17 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-15 (kept balance reads judged at once)
+Payments:
+- A wallet whose last balance read is under 5 minutes old, and covers every
+  paid call it has in flight plus the new one less what its payments took
+  since, has the new call started at once, with no wait for another read. A
+  call that read does not cover, or a wallet whose read is older, is judged on
+  a new read as before.
+- A Solana payment whose transfer names an account through an address lookup
+  table is covered with the wallet's calls in flight too: it is judged on what
+  the paying wallet holds of the token across its accounts.
+
 ### 2026-11-15 (coverage refusals name their class)
 Payments:
 - A 429 from the check that a wallet's balance covers its paid calls in flight
@@ -45,7 +56,8 @@ Payments:
   address for other payers). A call the balance does not cover answers 429 with
   Retry-After 30. A call that arrives while another call from the same wallet
   is still settling, and whose cover cannot be confirmed yet, answers 429 with
-  Retry-After 5 within about a second and says so.
+  Retry-After 5 within about a second and says so. Either answer takes up to
+  about 3.5 seconds when a settlement lands during the balance read.
 - When the balance cannot be read right now on those routes, the call is
   started if the last balance this server read for that wallet within the past
   15 minutes, less what the wallet's payments have taken and its calls in

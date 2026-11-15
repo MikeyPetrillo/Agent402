@@ -20,7 +20,9 @@
 //     authorization or a Permit2 authorization, the two shapes the exact
 //     scheme's verify accepts; the MPP evm wire arrives as one through the
 //     shim), a Tempo pull credential from a sender the gate verified, and a
-//     Solana, Algorand or Stellar x402 payment (src/rail-cover.js). Not
+//     Solana, Algorand or Stellar x402 payment (src/rail-cover.js; a Solana
+//     transfer that names an account through a lookup table is keyed on the
+//     paying wallet and judged on all it holds of the mint). Not
 //     covered, because the price is not drawn from the wallet after the
 //     handler: credits (held at authorize), a card, a Tempo push credential
 //     (final before the handler). A Circle Gateway batched payment is
@@ -48,7 +50,8 @@
 //     for it to leave, a balance read is given that long, and an unread
 //     balance admits INFLIGHT_COVER_UNREAD_MAX runs in flight (default 4)
 //     for every wallet. On every other paid route nothing is held:
-//       read: the balance is read inside ADMIT_WAIT_MS (about a second).
+//       read: the balance is read inside ADMIT_WAIT_MS (about a second; up to
+//         ADMIT_SETTLED_READ_MAX_MS when a settlement lands during the read).
 //         The run is admitted if and only if the balance covers every run
 //         the wallet has in flight plus this one, however many those are.
 //         Otherwise it is refused at once (429, Retry-After, nothing run,
@@ -70,14 +73,22 @@
 //     A wallet gets a last good read from any read made for it, and from one
 //     read taken in the background when a payment of its settles and it has
 //     none younger than GOOD_READ_REFRESH_MS (5 minutes).
+//       judged at once: a last good read no older than KEPT_AT_ONCE_MS that
+//         covers every run in flight plus this one (less what left since)
+//         admits the run at once, with no read waited for. A run it does not
+//         cover is judged as above.
+//     A wallet's reads are at least the READ GAP apart (readGapMs), and reads
+//     that reach a capped on-chain data host spend a daily budget of their
+//     own under that ceiling (src/upstream-hard-caps.js, `cover-reads`); past
+//     it the run is judged as when its balance is not read now.
 //     There is no bound on a wallet's runs at once other than its balance,
 //     and no call waits for another call's settlement to make room.
 //   - The read lane (MAX_READS_IN_FLIGHT reads at once, all wallets) is a
 //     queue: a read that finds it full waits for a place, inside the
 //     admission wait, and is made; an admission whose wait ends first is
 //     judged as not read.
-//   - A balance record under a second old is judged on as it is (a wallet
-//     sending call after call past its balance costs no read per refusal),
+//   - A balance record younger than the read gap is judged on as it is (a
+//     wallet sending call after call past its balance costs no read per refusal),
 //     and a read whose turn in the lane comes after every admission that
 //     asked for it has gone is not made.
 //   - A read is judged with what has left the ledger since it began taken
@@ -172,6 +183,7 @@ import { tempoCoverTermsOf, nonEvmCoverTermsOf, readRailBalance } from "./rail-c
 import { RAILS, GATED_RAILS, railKey } from "./rails.js";
 import { hasPaidRecord, notePaidSettlement } from "./paid-record.js";
 import { COVER_STATE, coveredRunStateOf, inflightCoverMode } from "./inflight-cover-state.js";
+import { hardCapNameForHost, takeHardCapShare, releaseHardCapShare, hardCapShareStatus } from "./upstream-hard-caps.js";
 export { coveredRunStateOf, inflightCoverMode };
 
 // CAIP-2 id -> the chain's key in the EVM read table (src/revenue-live.js
@@ -195,9 +207,26 @@ const READ_DOWN_WAIT_MS = 25;
 const READ_FAIL_GAP_MS = 1_000;
 /** A balance record this young is judged on without another read. */
 const FRESH_ENOUGH_MS = 1_000;
+/** THE READ GAP: a wallet's admission reads are at least this far apart
+ *  (INFLIGHT_COVER_READ_GAP_MS, default 10 s, never under FRESH_ENOUGH_MS nor
+ *  over GOOD_READ_MAX_MS). Inside it a judgment that its record does not
+ *  cover is decided on that record as it is (the rule FRESH_ENOUGH_MS had),
+ *  so a wallet sending call after call past its balance costs one read per
+ *  gap, not one per call. Not held back by it: a read a judgment needs
+ *  because another container's run is in flight, a follow-up read after a
+ *  settlement counted twice, and a wallet with no record at all; the daily
+ *  budget (src/upstream-hard-caps.js, `cover-reads`) bounds those. */
+export function readGapMs() {
+  const n = Number(process.env.INFLIGHT_COVER_READ_GAP_MS);
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, FRESH_ENOUGH_MS), 15 * 60_000) : 10_000;
+}
 const READS_DOWN_MAX_KEYS = 20_000;
 /** The admission wait on the report and media routes (what it always was). */
 const COMPOSITE_SETTLE_WAIT_MS = 5_000;
+/** The longest an admission off the report and media routes can take: the
+ *  admission wait, plus the read timeout a follow-up read is let run when a
+ *  settlement lands during the read (followUpRead below). */
+export const ADMIT_SETTLED_READ_MAX_MS = ADMIT_WAIT_MS + READ_TIMEOUT_MS;
 const FOREIGN_POLL_MS = 100;
 const FOREIGN_POLL_MAX_MS = 1_000;
 const FOREIGN_REREAD_MS = 250;
@@ -247,6 +276,17 @@ const WALLETS_MAX = 50_000;
 /** A wallet whose payment settles gets a read in the background when its
  *  last good read is older than this (or it has none). */
 const GOOD_READ_REFRESH_MS = 5 * 60_000;
+/** JUDGED AT ONCE: off the report and media routes, a wallet whose last good
+ *  read is no older than this, and covers every run it has in flight plus
+ *  this one less what its runs took since, is admitted on it at once: no
+ *  call waits for a new read. One it does not cover, or older, is judged as
+ *  before (a read is waited for). The settlement refresh keeps a paying
+ *  wallet's read inside it. */
+export const KEPT_AT_ONCE_MS = GOOD_READ_REFRESH_MS;
+/** The per-wallet store's bound (exported for the privacy page). */
+export const COVER_WALLETS_MAX = WALLETS_MAX;
+/** How long a shared reservation nobody removed can stay (a server that stops mid-call). */
+export function sharedWindowMs() { return SHARED_WINDOW_MS(); }
 const wallets = new Map(); // coverKey -> state; least recently touched first
 function walletOf(coverKey, now = Date.now()) {
   let w = wallets.get(coverKey);
@@ -354,7 +394,7 @@ const SETTLED = Symbol("a402.inflightCoverSettled");
 // in flight, or a balance read that covers the sum) or "unread" (the balance
 // could not be read; inside the small unread allowance). The mark is
 // COVER_STATE (src/inflight-cover-state.js).
-const stats = { admitted: 0, foreignSettlementsSeen: 0, backgroundReadsSkipped: 0, admittedPastKeptRead: 0, backgroundReads: 0, readsWentDown: 0, admittedOnKeptRead: 0, refusedOnKeptRead: 0, judgedAfterSettlement: 0, reservationsWrittenBack: 0, readsDropped: 0, deadReservationsIgnored: 0, settledReleases: 0, admittedByRead: 0, admittedUnread: 0, admittedTrusted: 0, refusedSettling: 0, freshReads: 0, readsTimedOut: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, withdrawals: 0, putBackMisses: 0, sharedMisses: 0, foreignReads: 0 };
+const stats = { admittedAtOnceOnKeptRead: 0, readsOverBudget: 0, admitted: 0, foreignSettlementsSeen: 0, backgroundReadsSkipped: 0, admittedPastKeptRead: 0, backgroundReads: 0, readsWentDown: 0, admittedOnKeptRead: 0, refusedOnKeptRead: 0, judgedAfterSettlement: 0, reservationsWrittenBack: 0, readsDropped: 0, deadReservationsIgnored: 0, settledReleases: 0, admittedByRead: 0, admittedUnread: 0, admittedTrusted: 0, refusedSettling: 0, freshReads: 0, readsTimedOut: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, withdrawals: 0, putBackMisses: 0, sharedMisses: 0, foreignReads: 0 };
 
 /**
  * The OTHER runs a shared window read reports: everything but this run's own
@@ -614,6 +654,32 @@ export async function readTokenBalance({ network, asset, payer }) {
 /** The payer's balance of the paying token, by rail. */
 const readBalance = (terms) => (terms?.rail && terms.rail !== "evm" ? readRailBalance(terms) : readTokenBalance(terms));
 let reader = readBalance;
+/**
+ * The capped upstream (src/upstream-hard-caps.js) a balance read for these
+ * terms may reach, or null: the first host on the read's RPC list that a
+ * ceiling names (EVM, Solana and Tempo reads; the others reach no capped host).
+ */
+async function ceilingOfRead(terms) {
+  try {
+    let urls = [];
+    if (terms.rail === "evm") {
+      const chain = CHAIN_BY_CAIP2[terms.network];
+      const base = String(process.env.AGENT402_BASE_RPC || "").trim();
+      if (chain === "base" && base) urls = [base];
+      else { const { EVM } = await import("./revenue-live.js"); urls = EVM[chain]?.rpcs || []; }
+    } else if (terms.rail === "svm") {
+      const { SOLANA_RPCS } = await import("./solana-history-rpc.js");
+      urls = SOLANA_RPCS;
+    } else if (terms.rail === "tempo") urls = [process.env.TEMPO_RPC_URL || "https://rpc.tempo.xyz"];
+    for (const u of urls) {
+      let host = "";
+      try { host = new URL(typeof u === "string" ? u : u?.url).hostname; } catch { continue; }
+      const name = hardCapNameForHost(host);
+      if (name) return name;
+    }
+  } catch { /* none known */ }
+  return null;
+}
 /** Test seam. */
 export function _setBalanceReaderForTest(fn) { reader = typeof fn === "function" ? fn : readBalance; }
 
@@ -667,6 +733,12 @@ function balanceFor(coverKey, terms, now, minSeq = 0, background = false) {
   // While this account's reads are failing, one read a second is made for
   // it (the probe that finds them back); every other caller is not read.
   if (!pending && (readsDown.get(coverKey) || 0) > now && now - w.readAt < READ_FAIL_GAP_MS) return null;
+  // THE DAILY BUDGET. A read whose RPC list reaches a capped on-chain data
+  // upstream takes a unit of admission's own share of that ceiling; past it
+  // no read is made, and the caller is judged as when reads are down (the
+  // kept read, or the allowance).
+  const unitAt = Date.now();
+  if (!takeHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt)) { stats.readsOverBudget++; return null; }
   w.readAt = now;
   let held = false;
   const gen = laneGen, network = networkOf(coverKey);
@@ -686,7 +758,7 @@ function balanceFor(coverKey, terms, now, minSeq = 0, background = false) {
       // Its turn in the lane has come and every admission that asked for it
       // has gone (refused, admitted another way, hung up): the read is not
       // made. It says nothing about the account's reads.
-      if (entry.asked && entry.waiters <= 0) { stats.readsDropped++; return null; }
+      if (entry.asked && entry.waiters <= 0) { stats.readsDropped++; releaseHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt); return null; }
       entry.seq = ++eventSeq;
       entry.reading = true;
       const atomic = await reader(terms);
@@ -782,6 +854,8 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
     try { const { EVM } = await import("./revenue-live.js"); const t = EVM[CHAIN_BY_CAIP2[terms.network]]?.token; if (typeof t === "string" && HEX_ADDR.test(t)) terms.asset = t.toLowerCase(); } catch { /* keyed without it */ }
   }
   const coverKey = `${terms.network}|${terms.asset || "-"}|${terms.payer}`;
+  // Which daily ceiling this wallet's reads count against, if any.
+  terms.ceiling = await ceilingOfRead(terms);
   // The wallet the paid record is kept under (a Solana payment draws on a
   // token account; its authority is the wallet).
   const owner = terms.owner || terms.payer;
@@ -867,6 +941,19 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // settlement, so only a read begun after the shared view decides.
       const foreign = foreignHeld(others, held, judges.size);
       if (foreign) stats.foreignReads++;
+      // JUDGED AT ONCE on the wallet's last good read (KEPT_AT_ONCE_MS): only
+      // off the report and media routes, only before this judgment has asked
+      // for a read of its own, only on a read that satisfies every ordering
+      // rule a new one would (begun after another container's view), and only
+      // when it covers every run in flight plus this one less what left
+      // since. The check and the admission below run with no await between.
+      if (!asBefore && !lastRec && freshAfter === 0 && !followUpRead) {
+        const g = w.good;
+        if (g && g.seq > (foreign ? sharedSeq : 0) && Date.now() - g.at <= KEPT_AT_ONCE_MS) {
+          const now0 = judgedSet(ledger.get(coverKey) || { count: 0, atomic: 0n, settling: 0 }, others);
+          if (lowerOf(g) >= now0.atomic + terms.atomic) { how = "covered"; stats.admittedAtOnceOnKeptRead++; break; }
+        }
+      }
       const until = followUpRead ? Math.max(readUntil, mono() + READ_TIMEOUT_MS) : readUntil;
       followUpRead = false;
       let rec = await readWithin(coverKey, terms, Math.max(freshAfter, foreign ? sharedSeq : 0), until);
@@ -940,9 +1027,9 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       if (block !== "unread" && mono() < waitUntil) {
         // A record that began before this judgment (a cached read): one read
         // begun now settles it, whichever way.
-        // A record a second old or less is taken as it is: a wallet that
+        // A record younger than the read gap is taken as it is: a wallet that
         // sends call after call past its balance costs no read per refusal.
-        if (!kept && rec.seq <= seqAtStart && Date.now() - rec.at > FRESH_ENOUGH_MS) { stats.freshReads++; freshAfter = eventSeq; continue; }
+        if (!kept && rec.seq <= seqAtStart && Date.now() - rec.at > readGapMs()) { stats.freshReads++; freshAfter = eventSeq; continue; }
         // A fresh read left it undecided with nothing settling: a settlement
         // landed while it was under way. Read once more, and let that read
         // finish (bounded by the read timeout) before deciding.
@@ -1004,7 +1091,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
         ? `Another call from this wallet is still settling, and until it has, the wallet's balance cannot be confirmed to cover this one as well. Your input is fine: retry the same call after Retry-After, once that call has settled. You have not been charged.`
         : cur.count <= 0
           ? `This wallet's balance no longer covers this run: another paid run from this wallet settled after this payment was checked, and the balance left does not cover this one too. Your input is fine: add funds to this wallet, then retry the same call. You have not been charged.`
-          : `This wallet already has ${cur.count} paid runs in progress here, and its balance does not cover this one as well. Each payment is checked on its own, but settling them all needs the sum. Your input is fine: ${block === "short" ? "add funds to this wallet, then retry the same call" : "retry the same call after Retry-After, once one of them has settled, or add funds"}. You have not been charged.`);
+          : `This wallet already has ${cur.count} paid runs in progress here, and its balance does not cover this one as well. Each payment is checked on its own, but settling them all needs the sum. Your input is fine: ${block === "short" || block === "beside" ? "add funds to this wallet, then retry the same call" : "retry the same call after Retry-After, once one of them has settled, or add funds"}. You have not been charged.`);
       e.statusCode = 429;
       // The refusal's class, for the tool log (src/refusal-reason.js).
       e.coverRefusal = block;
@@ -1016,10 +1103,12 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // there), and `fix` is the next step for a payer that can pay: waiting
       // helps only while a call of the wallet is in flight to settle or end
       // (settling a call lowers the balance and the amount held together, so
-      // a short balance needs funds).
+      // a short balance needs funds; so does a balance short beside another
+      // container's run, whose settling takes its amount off the balance and
+      // the window together, so it does not clear by waiting).
       e.attribution = "ours";
       e.hint = `cover-${block}`;
-      e.fix = block === "short" || (block === "kept" && cur.count <= 0)
+      e.fix = block === "short" || block === "beside" || (block === "kept" && cur.count <= 0)
         ? "Your input is fine. Add funds to this wallet, then retry the same call."
         : "Your input is fine. Retry the same call after Retry-After, when a paid call this wallet has in flight has settled.";
       e.retryAfter = asBefore ? 30 : block === "short" || block === "beside" ? 30 : 5;
@@ -1178,7 +1267,7 @@ export function _ageUnreadDecisionsForTest(ms) {
 export function inflightCoverStatus() {
   let runs = 0;
   for (const e of ledger.values()) runs += e.count;
-  return { enabled: inflightCoverEnabled(), mode: inflightCoverMode(), readsQueued: readsQueuedNow(), walletsKept: wallets.size, accountsReadDown: [...readsDown.values()].filter((t) => t > Date.now()).length, goodReadMaxMs: GOOD_READ_MAX_MS, unreadPaidMax: unreadPaidMax(), shared: SHARED, walletsInFlight: ledger.size, runsInFlight: runs, viewsKept: lastForeign.size, unreadMax: unreadMax(), ...stats };
+  return { readGapMs: readGapMs(), readBudget: hardCapShareStatus()["cover-reads"] || null, enabled: inflightCoverEnabled(), mode: inflightCoverMode(), readsQueued: readsQueuedNow(), walletsKept: wallets.size, accountsReadDown: [...readsDown.values()].filter((t) => t > Date.now()).length, goodReadMaxMs: GOOD_READ_MAX_MS, unreadPaidMax: unreadPaidMax(), shared: SHARED, walletsInFlight: ledger.size, runsInFlight: runs, viewsKept: lastForeign.size, unreadMax: unreadMax(), ...stats };
 }
 
 /** Test-only: every kept read is made `ms` older. */

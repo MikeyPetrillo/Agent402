@@ -788,6 +788,10 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   const u = await attempt(C, U, { settleWaitMs: 300 });
   const took = performance.now() - t0;
   ok(u.err?.statusCode === 429 && /does not cover this one as well/.test(u.err.message) && took >= 290 && C.inflightCoverStatus().foreignWaits === 1 && reads <= 2, `control: beside a run that stays, a run the balance does not cover is refused when the wait ends, with the same answer (${u.err?.statusCode || "admitted"}, ${Math.round(took)} ms, reads ${reads})`);
+  // A shortfall beside another container's run does not clear when that run
+  // settles (its amount leaves the balance and the window together): the
+  // answer's next step is to add funds, in the fix and the message alike.
+  ok(u.err?.coverRefusal === "beside" && u.err.fix === "Your input is fine. Add funds to this wallet, then retry the same call." && /add funds to this wallet, then retry the same call\. You have not been charged\./.test(u.err.message) && u.err.retryAfter === 30, `a beside refusal gives the add-funds advice (${u.err?.coverRefusal}: ${u.err?.fix})`);
   await unforeign(U, "d9");
 }
 {
