@@ -863,6 +863,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OP_TOKEN: ${{ secrets.AGENT402_OPERATOR_TOKEN }}
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.referralSettlement.status // "unknown"' 2>/dev/null || echo unknown)
           echo "referralSettlement: $STATUS"
@@ -871,7 +872,21 @@ jobs:
           if [ "$STATUS" = "attention" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports referralSettlement.status=attention: a settlement on the referral copies of paid routes needs an operator. One of these holds: a settlement in doubt, charged and not yet delivered, or unconfirmed for more than fifteen minutes; a settle success the chain contradicts, or one whose receipt still cannot be read (both stay until resolved by hand); the referral facilitator refused this server's own signature in the last fifteen minutes; the facilitator left two or more calls in a row unanswered over ten minutes; an intent to settle could not be stored; or the settlement book is full. The reasons and the open settlements are on the operator view (/__operator/referral.json, operator token), where an entry can be resolved by hand with a note. No payment on a referral copy is settled twice. While the book is full, or while this server's own signature keeps being refused, paid calls on the referral copies are answered as unavailable before anything runs. Auto-closes when the word reads ok." || true
+                --body "/api/gateway-status reports referralSettlement.status=attention: the referral copies of paid routes need an operator. The word reads attention while any of these holds: a settlement open past fifteen minutes (in doubt, charged and not yet delivered, or unconfirmed); a settlement kept for an operator (a settle success the chain contradicts, one whose receipt cannot be read, one whose receipt read in full does not prove the sale, or one the split contract routed to this merchant that the proof rule does not accept); a tool stopped (its product id differs from the receipt's, or its sales arrive under its stop floor); new payments held because contradicted successes came from several payers; unsettled runs from many payers, with payers that have no paid sale limited to a share of the run slots; the referral facilitator refused this server's own request in the last fifteen minutes; the facilitator left two or more calls in a row unanswered over ten minutes, or the chain head could not be read for five (both age out thirty minutes after the last such call); an intent to settle could not be stored, or the settlement store is not taking writes; the settlement book is full; or a settlement was retired at capacity or closed as unrecognized in the last day and has not been acknowledged. The reasons and the open settlements are on the operator view (/__operator/referral.json, operator token), where an entry is resolved by hand with a note, entries of one state are resolved together, and the retired and closed records are acknowledged. No payment on a referral copy is settled twice. While the book is full, the store is not taking writes, the chain head cannot be read, or this server's own request keeps being refused, paid calls on the referral copies are answered as unavailable before anything runs. Auto-closes when the word reads ok." || true
+            fi
+            # One issue covers every reason, so a NEW reason arriving while it is
+            # open is said on it: the operator view's tag is a digest of which
+            # reasons hold (no figure, no slug), and a tag the issue has not
+            # carried yet gets one comment. The reasons stay on the operator view.
+            EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+            if [ -n "$EXISTING" ] && [ -n "$OP_TOKEN" ]; then
+              TAG=$(curl -s --max-time 15 -H "Authorization: Bearer $OP_TOKEN" "$PROD/__operator/referral.json" | jq -r '.status.tag // ""' 2>/dev/null || echo "")
+              if printf '%s' "$TAG" | grep -Eq '^[0-9a-f]{8}$'; then
+                SEEN=$(gh issue view "$EXISTING" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body] | join(" ")' 2>/dev/null || echo "unreadable reasons tag $TAG")
+                if ! printf '%s' "$SEEN" | grep -q "reasons tag $TAG"; then
+                  gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "The set of reasons is now reasons tag $TAG (read at $(date -u +%FT%TZ)): a reason was added or cleared since the last one noted here. Read /__operator/referral.json." >/dev/null 2>&1 || true
+                fi
+              fi
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "referralSettlement is ok; closing." || true
