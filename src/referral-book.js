@@ -72,6 +72,10 @@ export const SOLD_MAX = 2000;
 /** Records of refused entries dropped at capacity that are kept at once, and how many the sweep reads a pass. */
 export const DROPPED_MAX = 2000;
 export const SWEEP_DROPPED_MAX = 25;
+/** Reads of an EXPIRED dropped record that reach no verdict before it is given up (logged, counted). */
+export const DROPPED_LATE_READS_MAX = 5;
+/** The time one sweep pass gives its dropped-record reads; the unread wait for the next pass. */
+export const SWEEP_DROPPED_BUDGET_MS = 20_000;
 /** Charged, undelivered entries the sweep hands on in one pass (the rest wait for the next). */
 export const SWEEP_CHARGED_MAX = 50;
 /** Full readings of an unrecognized receipt before the entry is closed to the operator record. */
@@ -114,13 +118,14 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   // At most `maxDropped`; one evicted before its expiry is counted and logged.
   let dropped = {};
   let droppedEarly = 0;
+  let droppedUnresolved = 0;
   const lcPayer = (p) => String(p).toLowerCase();
   // (A "refused" entry, kept only so a payment that lands after the
   // facilitator refused it is found, is not the payer's open settlement: it
   // does not count toward the payer's share.)
   const heldBy = (cur, payer) => { const who = lcPayer(payer); let n = 0; for (const k in cur) if (cur[k] && cur[k].payer === who && cur[k].state !== "refused") n++; return n; };
-  /** At capacity the oldest "refused" entry goes first, with no record: it
-   *  says only that a settle was refused. Null when there is none. */
+  /** At capacity the oldest "refused" entry goes first (the intent that
+   *  drops it leaves a small record, `dropped`). Null when there is none. */
   const droppable = (cur) => {
     let pick = null;
     for (const k in cur) { const e = cur[k]; if (e && e.state === "refused" && (!pick || (e.at || 0) < (pick.at || 0))) pick = e; }
@@ -170,7 +175,8 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   let queue = [];
   let flushing = null;
   let lastIntentFault = null;
-  const writes = { updates: 0, changes: 0, failed: 0, bytes: 0, lastOk: true, lastAt: 0 };
+  const writes = { updates: 0, changes: 0, failed: 0, timedOut: 0, bytes: 0, lastOk: true, lastAt: 0 };
+  let inFlight = null;
   const FALLBACK = { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {}, proven: {}, sold: {}, dropped: {} };
   const applyBatch = (batch) => (body) => {
     const cur = body && typeof body === "object" && body.entries && typeof body.entries === "object" ? { ...body.entries } : {};
@@ -199,6 +205,11 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       while (queue.length) {
         const batch = queue;
         queue = [];
+        // The write now in flight: a deadline missed by a change in it, or by
+        // one waiting behind it, is counted once for this write.
+        const write = { missed: false };
+        inFlight = write;
+        for (const item of batch) item.write = write;
         let r;
         try { r = await store.update(applyBatch(batch), { fallback: FALLBACK }); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
         // A change that threw fails only itself: the rest of its batch goes back in the queue, in order.
@@ -216,13 +227,21 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         if (r.ok && r.body) absorb(r.body);
         for (const item of batch) { if (item.timer) clearTimeout(item.timer); item.resolve(!!r.ok && !item.dropped); }
       }
-    } finally { flushing = null; if (queue.length) flushing = Promise.resolve().then(flush); }
+    } finally { inFlight = null; flushing = null; if (queue.length) flushing = Promise.resolve().then(flush); }
+  }
+  // A change's deadline passed: one not yet started is dropped; the miss is
+  // counted once per write (the write it is in, else the one it waits behind).
+  function missedDeadline(item) {
+    if (!item.started) item.dropped = true;
+    const w = item.write || inFlight;
+    if (w) { if (w.missed) return; w.missed = true; }
+    writes.timedOut++;
   }
   function change(fn, { deadlineMs = 0 } = {}) {
     return new Promise((resolve) => {
       const item = { fn, resolve, dropped: false, started: false, timer: null };
       if (deadlineMs > 0) {
-        item.timer = setTimeout(() => { if (!item.started) item.dropped = true; resolve(false); }, deadlineMs);
+        item.timer = setTimeout(() => { missedDeadline(item); resolve(false); }, deadlineMs);
         item.timer.unref?.();
       }
       queue.push(item);
@@ -246,10 +265,12 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         const prev = cur[key];
         dropped = null;
         early = 0;
+        let spared = null;
         if (!prev && heldBy(cur, payer) >= maxPerPayer) { payerFull = true; return SKIP_UPDATE; }
         if (!prev && Object.keys(cur).length >= maxEntries) {
           const spare = droppable(cur);
           if (spare) {
+            spared = { key: spare.key, entry: spare };
             // Dropped to make room, and remembered: what a chain read of it needs.
             graves[spare.key] = { key: spare.key, slug: spare.slug, payer: spare.payer, nonce: spare.nonce, amount: spare.amount, validBefore: spare.validBefore, fromBlock: spare.fromBlock ?? null, at: t };
             delete cur[spare.key];
@@ -257,15 +278,16 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             if (ks.length > maxDropped) for (const k of ks.sort((a, b) => (graves[a].at || 0) - (graves[b].at || 0)).slice(0, ks.length - maxDropped)) { if (t <= (Number(graves[k].validBefore) || 0) * 1000 + EXPIRY_SLACK_MS) early++; delete graves[k]; }
           }
         }
-        // (An entry written again for a payment is no longer a dropped one.)
-        if (graves[key]) delete graves[key];
         if (!prev && Object.keys(cur).length >= maxEntries) {
           const stuck = retirable(cur, t);
-          if (!stuck) { full = true; return SKIP_UPDATE; }
+          // (Refused as full: nothing of this intent stands, the dropped record of its key included.)
+          if (!stuck) { full = true; if (spared) { cur[spared.key] = spared.entry; delete graves[spared.key]; } return SKIP_UPDATE; }
           gone.push({ key: stuck.key, slug: stuck.slug, payer: stuck.payer, amount: stuck.amount, tx: stuck.tx || null, state: stuck.state, checks: stuck.checks || 0, openedAt: stuck.at || null, at: t });
           delete cur[stuck.key];
           dropped = stuck;
         }
+        // (An entry written again for a payment is no longer a dropped one.)
+        if (graves[key]) delete graves[key];
         cur[key] = { ...(prev || {}), key, slug: String(slug), payer: String(payer).toLowerCase(), nonce: String(nonce).toLowerCase(), amount: String(amount), validBefore: Number(validBefore) || 0, at: prev?.at || t, state: "intent", intentAt: t, attempts: (prev?.attempts || 0) + 1, tx: prev?.tx || null, saleBooked: prev?.saleBooked === true, fromBlock: prev?.fromBlock ?? (Number.isSafeInteger(fromBlock) && fromBlock > 0 ? fromBlock : null) };
         return undefined;
       }, { deadlineMs });
@@ -325,7 +347,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     retiredAtCapacity: () => retired.slice(),
     /** The refused entries dropped at capacity that are still remembered,
      *  and how many such records were themselves dropped early since boot. */
-    droppedRefused: () => ({ count: Object.keys(dropped).length, evictedEarly: droppedEarly, records: Object.values(dropped) }),
+    droppedRefused: () => ({ count: Object.keys(dropped).length, evictedEarly: droppedEarly, unresolved: droppedUnresolved, records: Object.values(dropped) }),
     /** One sale whose receipt paid this merchant less than the rate map
      *  expects (or, with `product`, one payment whose receipt names another
      *  product id than the slug's: `{ configured, received }`), counted once
@@ -493,7 +515,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      * in flight in this process. At most `max` entries are read a pass, the
      * ones read least recently first, so every open entry is reached in turn.
      */
-    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, onHeld = () => {}, onSendUnconfirmed = null, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50, maxCharged = SWEEP_CHARGED_MAX } = {}) {
+    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, onHeld = () => {}, onSendUnconfirmed = null, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50, maxCharged = SWEEP_CHARGED_MAX, droppedBudgetMs = SWEEP_DROPPED_BUDGET_MS } = {}) {
       const t = now();
       // "Read and nothing changed" marks (the check count and time of each
       // entry read this pass) are written ONCE, at the end of the pass, not
@@ -599,9 +621,22 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       // undelivered (the loop below hands it on); the rest are forgotten once
       // expired, or once the chain shows the nonce spent elsewhere.
       {
-        const graveNow = Object.values(dropped).sort((a, b) => (a.checkedAt || 0) - (b.checkedAt || 0) || (a.at || 0) - (b.at || 0)).slice(0, SWEEP_DROPPED_MAX);
-        const forget = [], seen = [], back = [];
+        // Read order: the records nearest their expiry first (those just past
+        // it lead), then the least recently read. At most SWEEP_DROPPED_MAX a
+        // pass, inside `droppedBudgetMs` of wall time: a chain that does not
+        // answer never holds up the rest of the pass. A record is forgotten
+        // only on a verdict (spent elsewhere, or expired unused with the
+        // search complete); a read that reaches none keeps it, and an EXPIRED
+        // record is given up, with one line and a count, only after
+        // DROPPED_LATE_READS_MAX such reads.
+        const all = Object.values(dropped).sort((a, b) => (Number(a.validBefore) || 0) - (Number(b.validBefore) || 0) || (a.checkedAt || 0) - (b.checkedAt || 0));
+        const graveNow = all.slice(0, SWEEP_DROPPED_MAX);
+        const forget = [], seen = [], back = [], late = [], giveUp = [];
+        const started = Date.now();
+        let readNow = 0;
         for (const g of graveNow) {
+          if (readNow > 0 && Date.now() - started >= droppedBudgetMs) break;
+          readNow++;
           let st;
           try { st = await chain.state({ from: g.payer, nonce: g.nonce, payTo, amount: g.amount, fromBlock: g.fromBlock, minNet: minNetOf(g), productId: productIdOf(g) }); } catch { st = { used: null, paid: null, transaction: null, complete: false }; }
           const verdict = chainVerdict(st, { validBeforeMs: (Number(g.validBefore) || 0) * 1000, nowMs: t, slackMs: EXPIRY_SLACK_MS });
@@ -611,13 +646,18 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             back.push({ g, tx: st.transaction, booked });
             out.landed++;
             say("error", `CHARGED-BUT-NOT-SERVED: a refused settle whose entry was dropped at capacity landed on chain (${g.slug} payer=${String(g.payer).slice(0, 6)} tx=${st.transaction})${booked ? ", sale booked" : ", sale NOT booked"}`);
-          } else if (verdict === "unpaid" || verdict === "expired-unused" || t > (Number(g.validBefore) || 0) * 1000 + EXPIRY_SLACK_MS) forget.push(g.key);
+          } else if (verdict === "unpaid" || verdict === "expired-unused") forget.push(g.key);
+          else if (t > (Number(g.validBefore) || 0) * 1000 + EXPIRY_SLACK_MS) { if ((Number(g.lateReads) || 0) + 1 >= DROPPED_LATE_READS_MAX) giveUp.push(g.key); else late.push(g.key); }
           else seen.push(g.key);
         }
-        if (forget.length || seen.length || back.length) {
+        out.droppedUnread = Math.max(0, all.length - readNow);
+        if (giveUp.length) { droppedUnresolved += giveUp.length; say("error", `${giveUp.length} dropped refused settle(s) could not be read to a verdict in ${DROPPED_LATE_READS_MAX} reads after their authorization expired (no answer, or an incomplete search): their records are given up; a payment that landed for one of them was not found`); }
+        if (forget.length || seen.length || back.length || late.length || giveUp.length) {
           await change((cur, _kept, _done, _gone, _shut, _under, _warm, _marks, graves) => {
             for (const k of forget) delete graves[k];
+            for (const k of giveUp) delete graves[k];
             for (const k of seen) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t };
+            for (const k of late) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t, lateReads: (Number(graves[k].lateReads) || 0) + 1 };
             for (const { g, tx, booked } of back) {
               if (!graves[g.key]) continue;
               delete graves[g.key];

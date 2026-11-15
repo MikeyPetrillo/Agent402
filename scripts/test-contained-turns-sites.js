@@ -24,7 +24,7 @@ const RESOLVERS = new Set(["r", "res", "resolve", "ok", "done"]);
 // Each entry: the file, the start of the callback's text (whitespace folded)
 // and why it may run bare. Match is by prefix on the folded argument text.
 const ALLOW = [
-  { file: "src/referral-book.js", arg: "() => { if (!item.started) item.dropped = true; resolve(false); }", reason: "a queued book change's own deadline: marks this module's own queue item and resolves its own promise" },
+  { file: "src/referral-book.js", arg: "() => { missedDeadline(item); resolve(false); }", reason: "a queued book change's own deadline: marks this module's own queue item and resolves its own promise" },
   { file: "src/x402-index.js", arg: "crawlLanePump", reason: "hands the next waiting crawl slice its turn: a queue of this module's own resolvers; the slice itself runs as a promise continuation, whose throw is a rejection" },
   { file: "src/server.js", arg: "revenueTick", reason: "revenue snapshot of our own wallets, run through runAsJob with its rejection caught" },
   { file: "src/server.js", arg: "() => { _mppSubs.sweepStaleCanaries()", reason: "our own subscription canaries; an async sweep whose rejection is caught" },

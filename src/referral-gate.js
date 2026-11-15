@@ -2055,7 +2055,8 @@ export function createReferralGate({
         // every other write is not healthy. One failed write that carried
         // several intents is one failure: it is counted once, by the book's
         // own count of failed writes; an intent that is stored ends the row.)
-        const failedWrites = typeof book.writeStats === "function" ? book.writeStats().failed : null;
+        // (A missed intent deadline is a failure too, counted once per write by the book.)
+        const failedWrites = typeof book.writeStats === "function" ? ((ws) => (Number(ws.failed) || 0) + (Number(ws.timedOut) || 0))(book.writeStats()) : null;
         if (failedWrites === null || failedWrites !== storeHold.countedFailedWrites) { storeHold.countedFailedWrites = failedWrites; storeHold.refusedInRow++; }
         const again = storeHold.refusedInRow >= 2;
         let took = false;
