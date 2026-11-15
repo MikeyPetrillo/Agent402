@@ -75,6 +75,9 @@ export const SWEEP_DROPPED_MAX = 25;
 /** A dropped record is given up only when BOTH hold: this many reads after its expiry reached no verdict, and this long has passed since that expiry. */
 export const DROPPED_GIVE_UP_READS = 5;
 export const DROPPED_GIVE_UP_MS = 6 * 3600_000;
+/** The share of a pass's open-entry reads kept for refused entries, and the share of its chain budget kept for dropped records. */
+export const SWEEP_REFUSED_SHARE = 0.2;
+export const SWEEP_DROPPED_BUDGET_SHARE = 0.2;
 /** The wall time one sweep pass gives ALL its chain reads (open entries, then refused ones, then dropped records). */
 export const SWEEP_CHAIN_BUDGET_MS = 40_000;
 
@@ -135,7 +138,9 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   const noteDropped = (done, kind, n, t) => {
     const key = `dropped:${kind}`;
     const last = [...done].reverse().find((r) => r && r.key === key);
-    if (last && t - (Number(last.at) || 0) < 600_000) return;
+    // (Only against a notice the operator has not acknowledged since: one acknowledged is no longer raising the word.)
+    const acked = done.reduce((m, r) => (r && r.key === "ack:dropped" && Number(r.at) > m ? Number(r.at) : m), 0);
+    if (last && t - (Number(last.at) || 0) < 600_000 && (Number(last.at) || 0) > acked) return;
     done.push({ key, slug: null, payer: null, amount: null, tx: null, state: "dropped-record", delivered: false, outcome: kind, debt: false, note: `${n} record(s) of refused settles dropped at capacity ${kind === "evicted" ? "were pushed out before a verdict" : "were given up with no verdict"}`, at: t });
   };
   const droppable = (cur) => {
@@ -587,12 +592,25 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       await handCharged();
       const leastRecent = (a, b) => (a.checkedAt || 0) - (b.checkedAt || 0) || (a.at || 0) - (b.at || 0);
       const open = Object.values(entries);
-      const due = [
-        ...open.filter((e) => e.state === "in-doubt" || (e.state === "intent" && t - (e.intentAt || e.at || 0) >= graceMs)).sort(leastRecent),
-        ...open.filter((e) => e.state === "refused").sort(leastRecent),
-      ].slice(0, max);
+      // A SHARE of the pass's reads is the refused entries' (a fifth, at least
+      // one), so entries standing in doubt never keep a refused one unread;
+      // each group is read least recently read first, the refused ones spread
+      // through the pass (one after every four of the others), so a budget
+      // that runs out early has still reached some of each.
+      const doubtful = open.filter((e) => e.state === "in-doubt" || (e.state === "intent" && t - (e.intentAt || e.at || 0) >= graceMs)).sort(leastRecent);
+      const refusedOnes = open.filter((e) => e.state === "refused").sort(leastRecent);
+      const refusedShare = Math.min(refusedOnes.length, Math.max(1, Math.floor(max * SWEEP_REFUSED_SHARE)));
+      const takeDoubtful = doubtful.slice(0, Math.max(0, max - refusedShare));
+      const takeRefused = refusedOnes.slice(0, Math.max(0, max - takeDoubtful.length));
+      const due = [];
+      for (let i = 0, r = 0; i < takeDoubtful.length || r < takeRefused.length;) {
+        for (let k = 0; k < 4 && i < takeDoubtful.length; k++) due.push(takeDoubtful[i++]);
+        if (r < takeRefused.length) due.push(takeRefused[r++]);
+      }
+      // (The open entries' reads stop at their share of the budget, so the dropped records below always have some.)
+      const entryBudgetSpent = () => Date.now() - started >= chainBudgetMs * (1 - SWEEP_DROPPED_BUDGET_SHARE);
       for (const snapshot of due) {
-        if (budgetSpent()) { out.unread = (out.unread || 0) + 1; continue; }
+        if (entryBudgetSpent()) { out.unread = (out.unread || 0) + 1; continue; }
         // The entry as it stands NOW: an earlier step of this pass, or a
         // request, may have changed or closed it since the list was made.
         const e = entries[snapshot.key];
@@ -685,7 +703,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       {
         // Read order: earliest expiry first (among records already expired,
         // the least recently read first). At most SWEEP_DROPPED_MAX a pass,
-        // and no read starts after `droppedBudgetMs` of the pass: a chain
+        // and after the first no read starts once `chainBudgetMs` is spent: a chain
         // that does not answer never holds up the rest of it. A record is
         // forgotten on a verdict (spent without paying us, expired unused, or
         // spent with nothing found by a complete search after expiry); a read
@@ -703,7 +721,8 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         const forget = [], seen = [], back = [], late = [], giveUp = [];
         let readNow = 0;
         for (const g of graveNow) {
-          if (budgetSpent()) break;
+          // (At least one dropped record is read every pass, whatever the budget.)
+          if (readNow > 0 && budgetSpent()) break;
           readNow++;
           let st;
           try { st = await chain.state({ from: g.payer, nonce: g.nonce, payTo, amount: g.amount, fromBlock: g.fromBlock, minNet: minNetOf(g), productId: productIdOf(g) }); } catch { st = { used: null, paid: null, transaction: null, complete: false }; }

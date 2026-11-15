@@ -1559,7 +1559,13 @@ export function createReferralGate({
   const storeHold = { blockedUntil: 0, probing: false, since: 0, level: 0, cooldownMs: config.storeCooldownMs, fails: [], seenFailed: 0, seenLate: 0 };
   const storeFailsIn = (t) => { const from = t - config.storeWindowMs; if (storeHold.fails.length && storeHold.fails[0].at <= from) storeHold.fails = storeHold.fails.filter((f) => f.at > from); return storeHold.fails; };
   /** An intent the store did not take: its write is counted as a failure once (refused, or late). */
+  /** The cool-down is the default again once the window holds no failure and no hold is active:
+   *  a later incident starts from the default, never from where an earlier one ended. */
+  function relaxStoreHold(t) {
+    if (!storeFailsIn(t).length && !(storeHold.blockedUntil > t)) { storeHold.level = 0; storeHold.cooldownMs = config.storeCooldownMs; }
+  }
   function noteStoreFailure(t) {
+    relaxStoreHold(t);
     const ws = typeof book.writeStats === "function" ? book.writeStats() : null;
     if (!ws) { storeHold.fails.push({ at: t, late: false }); return; }
     const failed = Number(ws.failed) || 0, late = Number(ws.timedOut) || 0;
@@ -2974,7 +2980,7 @@ export function createReferralGate({
 
   return {
     handler, sweepOnce, statusWord, resolveByHand, resolveManyByHand, acknowledge, reopenByHand, clearShortByHand, shortSales: () => shortNow(),
-    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: storeHold.blockedUntil > now(), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
+    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: (relaxStoreHold(now()), storeHold.blockedUntil > now()), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
     slugs: () => [...defs.keys()],
   };
 }
