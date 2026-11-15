@@ -338,6 +338,20 @@ export function parseCommissionBps(raw) {
   }
   return out;
 }
+/** The product id map, `<slug>:<0x 32-byte id>,...`: `{ slug: id }` (lower
+ *  case), `{}` when the text is empty, null when an entry is malformed. */
+export function parseProductIds(raw) {
+  const out = {};
+  const text = String(raw ?? "").trim();
+  if (!text) return out;
+  for (const part of text.split(",").map((x) => x.trim()).filter(Boolean)) {
+    const i = part.indexOf(":");
+    const slug = i < 0 ? "" : part.slice(0, i).trim().toLowerCase(), id = i < 0 ? "" : part.slice(i + 1).trim().toLowerCase();
+    if (!SLUG.test(slug) || !B32.test(id) || Object.hasOwn(out, slug)) return null;
+    out[slug] = id;
+  }
+  return out;
+}
 /** The commission a slug's sale is booked net of, or null when the map names neither it nor a default. */
 export function commissionBpsFor(config, slug) {
   const m = config?.commission;
@@ -385,8 +399,13 @@ const REQUIRED_VARS = ["REFERRAL_PAY_TO", "REFERRAL_FACILITATOR_URL", "REFERRAL_
  *   REFERRAL_UNCONFIRMED_MAX    (5) answers delivered on a success whose receipt is not readable yet
  *   REFERRAL_UNRECOGNIZED_READS (5) full readings of a receipt the proof rule does not recognize
  *                               before an expired entry is closed to the operator record
- *   REFERRAL_SHORT_NET_MAX      (3) sales on one slug paid under HALF the net the commission map
- *                               expects before new calls on that slug answer 503 (0: never)
+ *   REFERRAL_MIN_NET_BPS        (none) `default:<bps>,<slug>:<bps>`: the least share of the PRICE a
+ *                               sale on a slug must bring; a sale under it counts toward that
+ *                               slug's stop. Unset for a slug: half the net the commission map expects
+ *   REFERRAL_SHORT_NET_MAX      (3) sales on one slug under that floor before new calls on it
+ *                               answer 503; a slug whose tool is model-backed stops at ONE (0: never, for all)
+ *   REFERRAL_PRODUCT_IDS        (none) `<slug>:<0x 32-byte id>,...`: the product id the split
+ *                               contract's routed event must name for that slug's payment to count
  *   REFERRAL_SEND_IDLE_MS       (15000) an answer's send with no progress for this long is ended
  *   REFERRAL_SEND_MAX_MS        (120000) an answer's send is ended this long after it began
  *   REFERRAL_HANGUP_KEY_USD, REFERRAL_HANGUP_GLOBAL_USD, REFERRAL_HANGUP_WINDOW_MS
@@ -413,6 +432,12 @@ export function referralConfig(env = process.env) {
     const commission = parseCommissionBps(env?.REFERRAL_COMMISSION_BPS);
     const feeBps = intKnob(env, "REFERRAL_FEE_BPS", REFERRAL_DEFAULTS.feeBps, { min: 0, max: 10_000 });
     if (!commission) return null;
+    // Optional maps: absent is fine, malformed leaves the gate off (a misread floor or product id is worse).
+    const minNetRaw = String(env?.REFERRAL_MIN_NET_BPS ?? "").trim();
+    const minNetBps = minNetRaw ? parseCommissionBps(minNetRaw) : null;
+    if (minNetRaw && !minNetBps) return null;
+    const productIds = parseProductIds(env?.REFERRAL_PRODUCT_IDS);
+    if (productIds === null) return null;
     for (const slug of slugs) {
       const c = Object.hasOwn(commission.bySlug, slug) ? commission.bySlug[slug] : commission.default;
       if (c === null || c + feeBps > 10_000) return null;
@@ -449,6 +474,8 @@ export function referralConfig(env = process.env) {
       hangupGlobalMicro: Math.round(usdKnob(env, "REFERRAL_HANGUP_GLOBAL_USD", DEFAULT_GLOBAL_BUDGET_USD) * 1e6),
       hangupWindowMs: msKnob(env, "REFERRAL_HANGUP_WINDOW_MS", 24 * 3600_000, { max: 30 * 24 * 3600_000 }),
       commission: Object.freeze(commission), feeBps,
+      minNetBps: minNetBps ? Object.freeze({ default: minNetBps.default, bySlug: Object.freeze(minNetBps.bySlug) }) : null,
+      productIds: Object.freeze(productIds),
     });
   } catch { return null; }
 }
@@ -460,7 +487,7 @@ export function referralConfigProblem(env = process.env) {
   const set = REQUIRED_VARS.filter((n) => String(env?.[n] || "").trim());
   if (!set.length) return null;
   const missing = REQUIRED_VARS.filter((n) => !set.includes(n));
-  return missing.length ? `missing ${missing.join(", ")}` : "a value is not usable (an address, an https URL, a 32-byte signer key, a slug list, a commission map that covers every slug, commission plus fee past 10000 bps, a merchant id that is not a number, a payout address that is the pay-to contract, a routed-event topic that is not 32 bytes, or deadline + settle reserve + verify past 60 s)";
+  return missing.length ? `missing ${missing.join(", ")}` : "a value is not usable (an address, an https URL, a 32-byte signer key, a slug list, a commission map that covers every slug, commission plus fee past 10000 bps, a minimum-net map or a product id map that is malformed, a merchant id that is not a number, a payout address that is the pay-to contract, a routed-event topic that is not 32 bytes, or deadline + settle reserve + verify past 60 s)";
 }
 
 const flatUsdOf = (def) => Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
@@ -743,9 +770,9 @@ export function createLineSampler({ perMinute = 20, now = Date.now, print = () =
  * @param {(ms, fn) => any} [o.withCeiling]    run fn with handler budgets capped at ms
  * @param {{limited, note}} [o.credentialLimiter]  the refused-credential limiter
  * @param {() => ({active: boolean, leftMs: number})} [o.draining]
- * @param {(tx) => boolean} [o.saleBooked]     whether a sale stands for this transaction
+ * @param {(tx, payer) => boolean} [o.saleBooked]  whether a sale stands for this payer under this transaction
  * @param {(req) => void} [o.onSettledSale]    a settled sale by this client (paid-client allowance)
- * @param {({tx, netUsd}) => boolean|Promise<boolean>} o.amendSaleNet  correct a booked sale's net in place (true when a row changed)
+ * @param {({tx, netUsd, payer}) => boolean|Promise<boolean>} o.amendSaleNet  correct this payer's booked sale's net in place (true when a row changed)
  */
 export function createReferralGate({
   config, defs, settler, chain, book, replayGuard, baseUrl, priceUsdOf, priceForNetwork,
@@ -997,21 +1024,33 @@ export function createReferralGate({
    */
   const bookFault = (payer) => {
     let own = null;
-    const moved = [];
     for (const f of book.faults()) {
       if (f.scope !== "payer") return f;
       if (f.payer === payer) own = f;
-      if (f.moved === true) moved.push(f);
     }
-    return manyContradicted(moved) || own;
+    return own;
   };
-  /** The open contradicted successes that moved money, when they come from
-   *  REFERRAL_CONTRADICTED_PAYERS distinct payers inside one window: the
-   *  first of them (the route holds), else null. Counted per PAYER, so one
-   *  payer with many payments never reaches it. */
+  // ---- contradicted successes from several payers: a hold that heals itself --------
+  // Open contradicted successes that MOVED money, from
+  // REFERRAL_CONTRADICTED_PAYERS distinct payers inside one window and with
+  // NO proven-paid settle since (a wrong merchant id setting looks like this:
+  // every payer is charged and none served), hold the route. Counted per
+  // payer, so one payer with many payments never reaches it; counted only
+  // since the last settle a receipt proved paid to this merchant
+  // (`route.healedAt`), so contradictions scattered among sales that prove
+  // fine never add up.
+  // The hold is probe-based, like the own-fault hold: while it stands ONE
+  // payment at a time goes through. A probe the receipt proves paid ends the
+  // hold; a probe contradicted again keeps it and starts a cool-down
+  // (`ownFaultCooldownMs`) before a payer that has never paid here may probe
+  // again, so a setting that is really wrong charges one new buyer a minute,
+  // not every buyer. A payer with a paid sale on the books probes at any
+  // time: wallets made for the purpose cannot keep returning buyers out.
+  const route = { healedAt: 0, probeUntil: 0, blockedUntil: 0 };
   const manyContradicted = (moved) => {
-    if (moved.length < REFERRAL_CONTRADICTED_PAYERS) return null;
-    const byTime = moved.slice().sort((a, b) => a.at - b.at);
+    const live = moved.filter((f) => f.at > route.healedAt);
+    if (live.length < REFERRAL_CONTRADICTED_PAYERS) return null;
+    const byTime = live.slice().sort((x, y) => x.at - y.at);
     for (let i = 0; i < byTime.length; i++) {
       const payers = new Set();
       for (let j = i; j < byTime.length && byTime[j].at - byTime[i].at <= config.unsettledWindowMs; j++) payers.add(byTime[j].payer);
@@ -1019,6 +1058,26 @@ export function createReferralGate({
     }
     return null;
   };
+  const routeHeld = () => manyContradicted(book.faults().filter((f) => f.moved === true));
+  /** For a new payment while the route may be held: null (not held), "hold"
+   *  (503), or "probe" (this payment goes through as the one probe; with
+   *  `take` the probe slot is taken, to be given back by routeProbeEnd). */
+  const routeGate = (payer, take) => {
+    if (!routeHeld()) return null;
+    const t = now();
+    if (t < route.probeUntil) return "hold";
+    let paidBefore = false;
+    try { paidBefore = payerHasPaid(payer) === true; } catch { paidBefore = false; }
+    if (t < route.blockedUntil && !paidBefore) return "hold";
+    if (take) route.probeUntil = t + OWN_PROBE_MS;
+    return "probe";
+  };
+  const routeProbeEnd = (contradicted) => {
+    route.probeUntil = 0;
+    if (contradicted) route.blockedUntil = now() + config.ownFaultCooldownMs;
+  };
+  /** A settle the receipt proved paid to this merchant: earlier contradictions no longer count. */
+  const routeHealed = () => { route.healedAt = now(); route.blockedUntil = 0; };
   // ---- a sale paid under the rate map's floor --------------------------------------
   // The contract's rate for a slug above the one REFERRAL_COMMISSION_BPS
   // holds is this server's own configuration drift, never the buyer's fault:
@@ -1032,27 +1091,82 @@ export function createReferralGate({
   // stopped after `shortNetMax` such sales: 503 before the handler, nothing
   // charged. Three, because one or two can be an odd sale and three in a row
   // on one slug are the contract's rate; a smaller gap never stops a buyer.
+  /** How many sales under the stop floor a slug takes before it stops: ONE
+   *  for a tool the catalog marks model-backed (each call has upstream
+   *  cost), `shortNetMax` for any other; 0 (the knob) never stops a slug. */
+  const stopAfter = (slug) => (config.shortNetMax <= 0 ? 0 : defs.get(slug)?.modelBacked === true ? 1 : config.shortNetMax);
+  /** Whether `got` of a sale of `gross` on `slug` is under the slug's STOP
+   *  floor: the share of the price REFERRAL_MIN_NET_BPS sets for it, else
+   *  half the net the commission map expects. */
+  const underStopFloor = (slug, gross, got) => {
+    const m = config.minNetBps;
+    const bps = m ? (Object.hasOwn(m.bySlug, slug) ? m.bySlug[slug] : m.default) : null;
+    if (bps !== null && bps !== undefined) return BigInt(got) < (BigInt(gross) * BigInt(bps)) / 10_000n;
+    return BigInt(got) * 2n < BigInt(minNetOf(slug, gross));
+  };
+  // What this process has seen since boot, ahead of the book's write: the
+  // sales under the stop floor per slug (so the stop holds from the moment a
+  // short sale is seen), the slugs with a sale that arrived at or above the
+  // floor (their rate is proven), and the calls in flight per slug.
+  const rate = { deep: new Map(), proven: new Set(), inflight: new Map() };
+  /** The net a sale brought is known: raise it when it is under what the map
+   *  expects, count it toward the slug's stop when it is under the stop
+   *  floor, and call the slug's rate proven when it is not. Once per
+   *  transaction (the book counts each once). */
   const noteShortSale = (slug, amount, tx, net) => {
     try {
       const floor = BigInt(minNetOf(slug, amount));
       const got = BigInt(net);
-      if (!(got < floor)) return;
+      const deep = underStopFloor(slug, amount, got);
+      if (deep) { const seen = rate.deep.get(slug) || new Set(); seen.add(String(tx)); rate.deep.set(slug, seen); } else rate.proven.add(slug);
+      if (!(got < floor) && !deep) return;
       counters.shortNetSales++;
       line("error", `SHORT NET: the split contract paid this merchant less than the commission map expects for ${slug}: expected at least ${floor}, received ${got}, of a gross of ${amount} (tx=${tx}); the call is paid and served; correct REFERRAL_COMMISSION_BPS`);
-      book.noteShort(slug, { expected: floor.toString(), received: got.toString(), gross: String(amount), tx, deep: got * 2n < floor }).catch(() => {});
+      book.noteShort(slug, { expected: floor.toString(), received: got.toString(), gross: String(amount), tx, deep }).catch(() => {});
     } catch { /* an amount that cannot be read notes nothing */ }
   };
-  /** The short-net records the CURRENT map still does not admit: `[{ slug, ...record }]`. */
+  /** The short-net records the CURRENT maps still do not admit: `[{ slug,
+   *  ...record, expectedNow, deepNow }]` (`deepNow`: the last amount is still
+   *  under the stop floor as the maps stand now). */
   const shortNow = () => {
     const out = [];
     const all = typeof book.shortSales === "function" ? book.shortSales() : {};
     for (const slug of Object.keys(all)) {
       const r = all[slug];
-      try { if (BigInt(r.received) < BigInt(minNetOf(slug, r.gross))) out.push({ slug, ...r, expectedNow: minNetOf(slug, r.gross) }); } catch { /* unreadable: not counted */ }
+      try {
+        const deepNow = underStopFloor(slug, r.gross, r.received);
+        if (BigInt(r.received) < BigInt(minNetOf(slug, r.gross)) || deepNow) out.push({ slug, ...r, expectedNow: minNetOf(slug, r.gross), deepNow });
+      } catch { /* unreadable: not counted */ }
     }
     return out;
   };
-  const slugHeld = (slug) => config.shortNetMax > 0 && shortNow().some((r) => r.slug === slug && (Number(r.deep) || 0) >= config.shortNetMax);
+  /** No new call on this slug: its sales under the stop floor reached the
+   *  slug's bound (the book's count, or this process's own, whichever is
+   *  ahead), and the last such amount is still under the floor as the maps
+   *  stand now (a corrected map, even in part, ends it). */
+  const slugHeld = (slug) => {
+    const bound = stopAfter(slug);
+    if (!bound) return false;
+    const rec = shortNow().find((r) => r.slug === slug);
+    const seen = Math.max(rec && rec.deepNow ? Number(rec.deep) || 0 : 0, rate.deep.get(slug)?.size || 0);
+    return seen >= bound;
+  };
+  /** A RESERVATION, not a count after the fact: until one sale on a slug has
+   *  arrived at or above its stop floor in this process, no more calls are
+   *  in flight on it than the slug's bound, so a burst cannot all be served
+   *  under the floor before the first receipt is read. null (free), "hold",
+   *  or "taken" (with `take`: one in-flight place, given back by rateLeave). */
+  const rateGate = (slug, take) => {
+    const bound = stopAfter(slug);
+    if (!bound || rate.proven.has(slug)) return null;
+    const n = rate.inflight.get(slug) || 0;
+    if (n >= bound) return "hold";
+    if (take) rate.inflight.set(slug, n + 1);
+    return take ? "taken" : null;
+  };
+  const rateLeave = (slug) => { const n = (rate.inflight.get(slug) || 0) - 1; if (n > 0) rate.inflight.set(slug, n); else rate.inflight.delete(slug); };
+  /** The product id the routed event must name for this slug, or null (not bound). */
+  const productOf = (slug) => (config.productIds && Object.hasOwn(config.productIds, slug) ? config.productIds[slug] : null);
   /** Close a book entry, trying again when the write does not land: a
    *  closing write that fails is never left to be read as "undelivered". */
   async function closeEntry(key) {
@@ -1121,7 +1235,7 @@ export function createReferralGate({
     const was = e.state;
     const tx = txOf(e);
     let proof = { verdict: "unknown", moved: false };
-    try { proof = await proveWithDetail(tx, { from: e.payer, nonce: e.nonce, payTo: config.payTo, amount: e.amount, minNet: minNetOf(e.slug, e.amount) }); } catch { proof = { verdict: "unknown", moved: false }; }
+    try { proof = await proveWithDetail(tx, { from: e.payer, nonce: e.nonce, payTo: config.payTo, amount: e.amount, minNet: minNetOf(e.slug, e.amount), productId: productOf(e.slug) }); } catch { proof = { verdict: "unknown", moved: false }; }
     if (proof.verdict === "unpaid") {
       if (was !== "contradicted") {
         counters.settleContradicted++;
@@ -1222,8 +1336,8 @@ export function createReferralGate({
     if (old.length) reasons.push(`${old.length} settlement(s) open past 15 minutes`);
     if (all.some((e) => e.state === "contradicted")) reasons.push("a settle the chain contradicted is open");
     if (all.some((e) => e.state === "unconfirmed" && e.flagged === true)) reasons.push("a settle success whose receipt cannot be read is open");
-    if (manyContradicted(book.faults().filter((f) => f.moved === true))) reasons.push(`settle successes the chain contradicted came from ${REFERRAL_CONTRADICTED_PAYERS} or more payers: new payments are held`);
-    for (const r of shortNow()) reasons.push(`${r.slug}: the split contract paid less than the commission map expects (expected at least ${r.expectedNow}, received ${r.received}, of a gross of ${r.gross}; ${r.count} sale(s)${config.shortNetMax > 0 && (Number(r.deep) || 0) >= config.shortNetMax ? "; new calls on it are held" : ""})`);
+    if (routeHeld()) reasons.push(`settle successes the chain contradicted came from ${REFERRAL_CONTRADICTED_PAYERS} or more payers: new payments are held, one at a time probes`);
+    for (const r of shortNow()) reasons.push(`${r.slug}: the split contract paid less than the commission map expects (expected at least ${r.expectedNow}, received ${r.received}, of a gross of ${r.gross}; ${r.count} sale(s)${slugHeld(r.slug) ? "; new calls on it are held" : ""})`);
     if (all.some((e) => e.routedToUs === true && (e.state === "in-doubt" || e.state === "intent"))) reasons.push("a payment the split contract routed to this merchant, which the proof rule does not accept, is open");
     if (own.lastAt && t - own.lastAt < 15 * 60_000) reasons.push("the facilitator refused this server's own request");
     if ([reach.verify, reach.settle].some((r) => r.since && r.calls >= 2 && t - r.since >= 10 * 60_000)) reasons.push("the facilitator has not answered for 10 minutes");
@@ -1235,7 +1349,8 @@ export function createReferralGate({
     // So is one closed because its receipt, read in full, is not a payment this route recognizes.
     const shut = typeof book.closedUnrecognized === "function" ? book.closedUnrecognized() : [];
     if (shut.some((r) => t - (Number(r.at) || 0) < 24 * 3600_000)) reasons.push("a settlement whose receipt is not recognized was closed to the operator record");
-    return { status: reasons.length ? "attention" : "ok", reasons };
+    // Not a reason: the slugs whose payments are not bound to a product id (the operator view lists them).
+    return { status: reasons.length ? "attention" : "ok", reasons, noProductId: [...defs.keys()].filter((slug) => !productOf(slug)) };
   }
 
   /** The amount this request is quoted, in USDC base units (a decimal
@@ -1307,16 +1422,17 @@ export function createReferralGate({
     const known = (() => { try { return net !== null && net !== undefined && BigInt(net) > 0n && BigInt(net) <= BigInt(amount); } catch { return false; } })();
     const correct = () => {
       if (!known) return;
-      Promise.resolve().then(() => amendSaleNet({ tx, netUsd: Number(BigInt(net)) / 1e6 })).then((changed) => {
+      // The net is known now: raised (once per transaction) whatever the ledger write returns.
+      noteShortSale(slug, amount, tx, net);
+      Promise.resolve().then(() => amendSaleNet({ tx, netUsd: Number(BigInt(net)) / 1e6, payer })).then((changed) => {
         if (changed !== true) return;
         counters.netsCorrected++;
         line("warn", `a sale booked before its receipt could be read is corrected to the amount received (${slug} tx=${tx}: ${net} of ${amount})`);
-        noteShortSale(slug, amount, tx, net);
       }).catch(() => {});
     };
     if (entry?.saleBooked) { correct(); return true; }
     if (book.get(key)?.saleBooked === true) { if (entry) entry.saleBooked = true; correct(); return true; }
-    try { if (saleBooked(tx)) { if (entry) entry.saleBooked = true; correct(); return true; } } catch { /* booked below */ }
+    try { if (saleBooked(tx, payer)) { if (entry) entry.saleBooked = true; correct(); return true; } } catch { /* booked below */ }
     const commissionBps = commissionBpsFor(config, slug);
     if (commissionBps === null) { line("error", `sale NOT booked: no commission is configured for ${slug} (tx=${tx})`); return false; }
     const money = referralNet(amount, { commissionBps, feeBps: config.feeBps });
@@ -1443,6 +1559,7 @@ export function createReferralGate({
 
   /** The payment is proven: book it, keep the case until delivered, take back its lane note. */
   async function markPaid(entry, tx, req, { sha = null, unconfirmed = false, net = null } = {}) {
+    if (!unconfirmed) routeHealed();
     entry.charged = tx;
     entry.landed = true;
     entry.unpaid = false;
@@ -1462,7 +1579,7 @@ export function createReferralGate({
    */
   async function readChain(entry, req, { wait = false, why = "re-send" } = {}) {
     let c;
-    try { c = await chain.state({ from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, fromBlock: entry.fromBlock ?? book.get(entry.key)?.fromBlock ?? null, minNet: minNetOf(entry.slug, entry.amount) }, { wait }); }
+    try { c = await chain.state({ from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, fromBlock: entry.fromBlock ?? book.get(entry.key)?.fromBlock ?? null, minNet: minNetOf(entry.slug, entry.amount), productId: productOf(entry.slug) }, { wait }); }
     catch { c = { used: null, paid: null, transaction: null, complete: false }; }
     const verdict = chainVerdict(c, { validBeforeMs: entry.validBeforeMs, nowMs: now(), slackMs: 30_000 });
     if (verdict === "paid") {
@@ -1551,7 +1668,7 @@ export function createReferralGate({
       // THIS authorization's own transfer, routed to this merchant
       // (receiptProvesPayment). The read is retried for a few seconds.
       let proof = "unknown", provenNet = null, moved = false;
-      try { const d = await proveWithDetail(s.transaction, { from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, minNet: minNetOf(entry.slug, entry.amount) }, { waitMs: config.receiptWaitMs }); proof = d.verdict; provenNet = d.net; moved = d.moved === true; }
+      try { const d = await proveWithDetail(s.transaction, { from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, minNet: minNetOf(entry.slug, entry.amount), productId: productOf(entry.slug) }, { waitMs: config.receiptWaitMs }); proof = d.verdict; provenNet = d.net; moved = d.moved === true; }
       catch { proof = "unknown"; }
       if (proof === "unpaid") {
         // Contradicted: nothing delivered, nothing booked, and the entry is
@@ -1778,7 +1895,7 @@ export function createReferralGate({
     if (open && (open.state === "in-doubt" || open.state === "intent" || open.state === "unconfirmed")) {
       // The answer is gone: whether the buyer was charged is the chain's to say.
       let c = null;
-      try { c = await chain.state({ from: open.payer, nonce: open.nonce, payTo: config.payTo, amount: open.amount, fromBlock: open.fromBlock ?? null, minNet: minNetOf(open.slug, open.amount) }); } catch { c = null; }
+      try { c = await chain.state({ from: open.payer, nonce: open.nonce, payTo: config.payTo, amount: open.amount, fromBlock: open.fromBlock ?? null, minNet: minNetOf(open.slug, open.amount), productId: productOf(open.slug) }); } catch { c = null; }
       const fresh = book.get(key);
       if (fresh && fresh.delivered !== true && fresh.state === open.state && chainVerdict(c, { validBeforeMs: (Number(open.validBefore) || 0) * 1000, nowMs: now() }) === "paid") {
         const booked = bookSale({ key, slug: open.slug, amount: open.amount, payer: open.payer, tx: c.transaction, net: c.net ?? null });
@@ -1798,14 +1915,15 @@ export function createReferralGate({
     if (timeReason) return refuseCredential(timeReason);
     // An open entry that says this server's own bookkeeping is wrong: a new
     // payment is refused here, before anything is claimed, sent or run.
-    if (bookFault(payer)) {
+    if (bookFault(payer) || routeGate(payer, false) === "hold") {
       counters.bookFaultHeld++;
-      return refusePayment(res, "settlement_under_review", { status: 503, retryable: true, retryAfter: 300 });
+      return refusePayment(res, "settlement_under_review", { status: 503, retryable: true, retryAfter: routeHeld() ? 30 : 300 });
     }
-    // A slug whose sales keep arriving far under the rate map's floor: no new call on it.
-    if (slugHeld(def.slug)) {
+    // A slug whose sales arrive under its stop floor: no new call on it. And
+    // until a slug's rate has proven, only its bound of calls is in flight.
+    if (slugHeld(def.slug) || rateGate(def.slug, false) === "hold") {
       counters.shortNetHeld++;
-      return refusePayment(res, "rate_under_review", { status: 503, retryable: true, retryAfter: 300 });
+      return refusePayment(res, "rate_under_review", { status: 503, retryable: true, retryAfter: slugHeld(def.slug) ? 300 : 5 });
     }
 
     // The payer screen the direct route runs before serving.
@@ -1870,6 +1988,9 @@ export function createReferralGate({
     let settleSent = false;
     let answerSent = false;
     let holdsSlot = false;
+    let routeProbe = false;
+    let ratePlace = false;
+    let ranEntry = null;
     res.once("close", () => { if (!res.writableFinished) gone = true; });
     const clientGone = () => gone || res.destroyed === true || req.socket?.destroyed === true;
 
@@ -1898,6 +2019,13 @@ export function createReferralGate({
         return refusePayment(res, "settlement_unavailable", { status: 503, retryable: true, retryAfter: holdSeconds });
       }
       probing = own.streak >= config.ownFaultMax;
+      // The route hold's one probe, and this slug's place in flight: taken
+      // here, in one turn with the checks, and given back when the call ends.
+      const rg = routeGate(payer, true);
+      if (rg === "hold") { release(); counters.bookFaultHeld++; return refusePayment(res, "settlement_under_review", { status: 503, retryable: true, retryAfter: 30 }); }
+      routeProbe = rg === "probe";
+      if (slugHeld(def.slug) || rateGate(def.slug, false) === "hold") { release(); counters.shortNetHeld++; return refusePayment(res, "rate_under_review", { status: 503, retryable: true, retryAfter: slugHeld(def.slug) ? 300 : 5 }); }
+      ratePlace = rateGate(def.slug, true) === "taken";
 
       // The chain head NOW, before the payment is verified: nothing can have
       // spent the authorization for this route earlier, so the proof of its
@@ -1955,6 +2083,8 @@ export function createReferralGate({
       if (left < config.deadlineMs) { release(); counters.refused++; return refusePayment(res, "invalid_exact_evm_payload_authorization_valid_before"); }
 
       // ---- the handler starts: from here the authorization is spent -------------
+      // A short sale seen while this call was being verified: it does not run.
+      if (slugHeld(def.slug)) { release(); counters.shortNetHeld++; return refusePayment(res, "rate_under_review", { status: 503, retryable: true, retryAfter: 300 }); }
       counters.runs++;
       if (req.__a402ReferralExample === true) counters.exampleRuns++;
       const budget = config.deadlineMs;
@@ -2039,6 +2169,7 @@ export function createReferralGate({
       settling.add(key);
       holdsSlot = true;
       settleSent = true;
+      ranEntry = entry;
       const outcome = await settleEntry(entry, req);
       settledHooks(outcome === "charged");
       // The buyer left while the settle was in flight: the entry carries the
@@ -2066,6 +2197,8 @@ export function createReferralGate({
       // A probe that ended without a verdict on our signature: the next call probes.
       if (probing && own.streak >= config.ownFaultMax && now() >= own.blockedUntil) own.probeUntil = 0;
       laneLeave(laneKeys);
+      if (routeProbe) routeProbeEnd(ranEntry?.contradicted === true);
+      if (ratePlace) rateLeave(def.slug);
       if (holdsSlot) settling.delete(key);
       // The ticket's end: abandoned (its price spent from the forgiveness
       // budgets) when the buyer left and no answer went out, whether the
@@ -2092,12 +2225,13 @@ export function createReferralGate({
     const e = book.get(snapshot.key);
     if (!e || e.state !== "unconfirmed") return;
     let proof = "unknown", provenNet = null, moved = false;
-    try { const d = await proveWithDetail(e.tx, { from: e.payer, nonce: e.nonce, payTo: config.payTo, amount: e.amount, minNet: minNetOf(e.slug, e.amount) }); proof = d.verdict; provenNet = d.net; moved = d.moved === true; } catch { proof = "unknown"; }
+    try { const d = await proveWithDetail(e.tx, { from: e.payer, nonce: e.nonce, payTo: config.payTo, amount: e.amount, minNet: minNetOf(e.slug, e.amount), productId: productOf(e.slug) }); proof = d.verdict; provenNet = d.net; moved = d.moved === true; } catch { proof = "unknown"; }
     const cur = book.get(e.key);
     if (!cur || cur.state !== "unconfirmed") return;
     const entry = kept.get(e.key);
     if (proof === "paid") {
       if (entry) entry.unconfirmed = false;
+      routeHealed();
       // The sale was booked at the computed net: corrected now to what the receipt shows.
       bookSale({ key: e.key, slug: e.slug, amount: e.amount, payer: e.payer, tx: e.tx, net: provenNet });
       // A send still going out keeps its entry (charged now, the mark kept): its own end closes it.
@@ -2127,7 +2261,7 @@ export function createReferralGate({
   // An intent is left to its own request for the settle timeout and the chain read after it.
   const sweepOnce = async () => {
     // A short-net record the current map admits (the map was corrected) is dropped.
-    try { const live = new Set(shortNow().map((r) => r.slug)); for (const slug of Object.keys(book.shortSales())) if (!live.has(slug)) await book.clearShort(slug); } catch { /* the next pass */ }
+    try { const live = new Set(shortNow().map((r) => r.slug)); for (const slug of Object.keys(book.shortSales())) if (!live.has(slug)) { await book.clearShort(slug); rate.deep.delete(slug); } } catch { /* the next pass */ }
     pruneKept();
     restPrune();
     try { await answers.sweep?.(); } catch { /* the next pass */ }
@@ -2135,6 +2269,7 @@ export function createReferralGate({
     return book.sweep({
       chain, bookSale: bookFromSweep, payTo: config.payTo, graceMs: config.settleMs + 15_000,
       minNetOf: (e) => minNetOf(e.slug, e.amount),
+      productIdOf: (e) => productOf(e.slug),
       onUnpaid: (e) => { counters.usedUnpaid++; restDrop(e.key); laneNote([`payer:${String(e.payer).toLowerCase()}`], null); const entry = kept.get(e.key); if (entry) { entry.unpaid = true; entry.inDoubt = false; } },
       onCharged: (e) => oweIfUndeliverable(e, "its answer expired or was not stored"),
       unrecognizedMax: config.unrecognizedReads,
@@ -2213,6 +2348,7 @@ export function createReferralGate({
     if (typeof slug !== "string" || !slug) return { ok: false, error: "no slug" };
     if (typeof note !== "string" || note.trim().length < 3) return { ok: false, error: "a note saying what was checked is required" };
     const ok = await book.clearShort(slug, { note: note.trim() });
+    if (ok) { rate.deep.delete(slug); rate.proven.delete(slug); }
     return ok ? { ok: true, slug } : { ok: false, error: "no short-net record stands for that slug, or the book could not be written" };
   }
 

@@ -583,33 +583,46 @@ export function privateRailSaleByTx(tx, rail) {
   } catch { return null; }
 }
 const updateAttestation = db.prepare("UPDATE sales SET attest_uid = ?, attest_tx = ? WHERE id = ? AND attest_uid IS NULL");
-const updatePrivateNet = db.prepare("UPDATE sales /* private-rail */ SET price_usd = ? WHERE tx = ? AND rail = ? AND price_usd != ? AND (quote_usd IS NULL OR quote_usd >= ?)");
+const updatePrivateNet = db.prepare("UPDATE sales /* private-rail */ SET price_usd = ? WHERE tx = ? AND rail = ? AND lower(payer) = ? AND price_usd != ? AND (quote_usd IS NULL OR quote_usd >= ?)");
+const selectPrivateByTxPayer = db.prepare(
+  "SELECT id FROM sales /* private-rail */ WHERE tx = ? AND rail = ? AND lower(payer) = ? LIMIT 1"
+);
+/** Whether a sale stands on a private rail under this transaction FOR THIS
+ *  PAYER: one transaction can settle several payers' payments, and each is
+ *  a sale of its own. */
+export function privateRailSaleStands(tx, rail, payer) {
+  const t = String(tx || "").trim(), who = String(payer || "").trim().toLowerCase();
+  if (!t || !rail || !who) return false;
+  try { return !!selectPrivateByTxPayer.get(t, String(rail), who); } catch { return false; }
+}
 
 /**
  * Correct the net amount of the sale booked on a PRIVATE rail under this
  * transaction to `netUsd`: the amount its receipt shows, for a sale that was
- * booked before the receipt could be read. The one row is UPDATED IN PLACE
+ * booked before the receipt could be read. `payer` is required: the row is
+ * this payer's under this transaction, never another payment settled in the
+ * same transaction. The one row is UPDATED IN PLACE
  * (no second row, so no reader counts the sale twice; every reader of the
  * table sees the corrected amount from then on). Never a paying rail, never
  * above the row's quoted gross. True when a row changed; false when none
  * stands, it already carries that amount, or the amount is not usable.
  * Database mode: a Promise of the verdict.
  */
-export function amendPrivateRailSaleNet(tx, rail, netUsd) {
-  const t = String(tx || "").trim();
+export function amendPrivateRailSaleNet(tx, rail, netUsd, payer) {
+  const t = String(tx || "").trim(), who = String(payer || "").trim().toLowerCase();
   const n = Number(netUsd);
-  if (!t || !PRIVATE_RAILS.includes(String(rail)) || !Number.isFinite(n) || !(n > 0)) return false;
+  if (!t || !who || !PRIVATE_RAILS.includes(String(rail)) || !Number.isFinite(n) || !(n > 0)) return false;
   if (USE_PG) {
     return pgWrite("amend-private-net", async () => {
       await queuedSaleLanded(t);
       const r = await stateQuery(
-        `UPDATE ${T("sales")} SET price_usd = $1, updated_at = ${PG_NOW_MS} WHERE tx = $2 AND rail = $3 AND price_usd <> $1 AND (quote_usd IS NULL OR quote_usd >= $1) RETURNING *`,
-        [n, t, String(rail)]);
+        `UPDATE ${T("sales")} SET price_usd = $1, updated_at = ${PG_NOW_MS} WHERE tx = $2 AND rail = $3 AND lower(payer) = $4 AND price_usd <> $1 AND (quote_usd IS NULL OR quote_usd >= $1) RETURNING *`,
+        [n, t, String(rail), who]);
       for (const row of r.rows) { applySale(row); writeThrough(fileSale, saleRowOf(row)); }
       return r.rows.length > 0;
     });
   }
-  try { return updatePrivateNet.run(n, t, String(rail), n, n).changes > 0; }
+  try { return updatePrivateNet.run(n, t, String(rail), who, n, n).changes > 0; }
   catch { return false; }
 }
 
