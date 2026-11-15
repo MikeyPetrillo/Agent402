@@ -54,6 +54,8 @@ import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as m
 import { Secp256k1 } from "ox";
 import { lateWatchKey } from "./tempo-late-watches.js";
 import { SETTLE_FAULT, tempoRefusalFault } from "./settle-fault.js";
+import { markCoveredRunSettled } from "./inflight-cover.js";
+import { challengeLifeShortfall, challengeLifeReason, presentChallengeWindow } from "./challenge-life.js";
 
 const DEFAULT_DECIMALS = 6; // matches every other stablecoin rail this repo settles (unconfirmed specifically for pathUSD — decimals() unread, this is the USDC-family convention, not a live lookup)
 
@@ -786,7 +788,15 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   // an outside seller from our own wallet, or runs long upstream work) takes a
   // pull credential only from a sender the gate can verify (see the gate).
   const verifiedSenderRequired = item.verifiedSenderRequired === true;
-  return { ok: true, challenge: ch, amountAtomic: amount, expectedAtomic: expected, payerHint, payloadType, verifiedSenderRequired };
+  // A pull credential is broadcast after the handler, through a call that
+  // asserts the challenge's expiry again: one that would expire during the
+  // run is refused before it (src/challenge-life.js). A push credential is
+  // finalized before the handler and has no such wait.
+  if (payloadType === "transaction") {
+    const short = challengeLifeShortfall({ expiresAtMs: exp, runSeconds: item.runSeconds, nowMs: now });
+    if (short) return badRoute(challengeLifeReason(short));
+  }
+  return { ok: true, challenge: ch, amountAtomic: amount, expectedAtomic: expected, payerHint, payloadType, verifiedSenderRequired, expiresAtMs: exp };
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,6 +1023,7 @@ export function bindingRefusal(reason) {
   if (/does not deserialize/.test(r)) return { cls: "malformed", kind: "malformed-credential", detail: "Credential is malformed: the Authorization: Payment value does not decode.", hint: undefined };
   if (/HMAC/.test(r)) return { cls: "not-minted-here", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: `The challenge id is not one this server issued (a challenge copied from another server, or edited). ${fresh}` };
   if (/realm/.test(r)) return { cls: "wrong-realm", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: fresh };
+  if (/expires in about/.test(r)) return { cls: "expiring", kind: "payment-expired", detail: `Challenge is invalid: ${r}.`, hint: `A challenge must outlive the run it pays for. ${fresh}` };
   if (/expired/.test(r)) return { cls: "expired", kind: "payment-expired", detail: `Challenge is invalid: ${r}.`, hint: `Challenges are valid for a few minutes. ${fresh}` };
   if (/currency/.test(r)) return { cls: "wrong-currency", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: `Pay one of the currencies named in this server's tempo challenges (USDC.e first). ${fresh}` };
   if (/recipient/.test(r)) return { cls: "wrong-recipient", kind: "invalid-challenge", detail: `Challenge is invalid: ${r}.`, hint: `The challenge must name this server's Tempo payTo as recipient. ${fresh}` };
@@ -1709,6 +1720,14 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // downstream (PoW/replay-guard/x402mw): none of it applies to a
       // credential that was never an x402 payment header.
       req.tempoSettling = true;
+      // A pull credential is settled AFTER the handler, from the sender's
+      // balance: what it draws on, for the check that a wallet's runs in
+      // flight are covered together (src/inflight-cover.js). Only a sender
+      // the gate verified; a push credential is final already and has none.
+      if (binding.payloadType === "transaction") presentChallengeWindow(req, binding.expiresAtMs);
+      if (binding.payloadType === "transaction" && req.mppTempoSender) {
+        req.mppTempoPull = { sender: req.mppTempoSender, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
+      }
       // The tempo credential is the ONLY payment evidence on this request.
       // Drop any x402 payment header that rode alongside it: the dispatcher
       // skips x402 verification for a tempo-settling request, so such a
@@ -2065,6 +2084,9 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // latency; a read still pending leaves the row naming nobody.
       if (!req.mppTempoLedgerPayer && keychainSender) req.mppTempoLedgerPayer = keychainSender;
       const receiptHeader = tempoReceiptHeader(b.receipt);
+      // The payment is off the sender's balance: its run leaves the in-flight
+      // coverage ledger now, not when a slow body ends.
+      try { markCoveredRunSettled(req); } catch { /* the response-end release still applies */ }
       restore();
       if (receiptHeader) res.setHeader("Payment-Receipt", receiptHeader);
       settleReplay();

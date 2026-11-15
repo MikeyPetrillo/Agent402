@@ -34,9 +34,13 @@ import { stripe as stripeMethods } from "mppx/server";
 import { createHmac } from "node:crypto";
 import { mppProblem, markMppProblem, sendMppProblem } from "./mpp-problem.js";
 import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
+import { challengeLifeShortfall, challengeLifeReason, presentChallengeWindow } from "./challenge-life.js";
 
 export const STRIPE_MIN_USD = 0.50; // SPT card minimum (docs.stripe.com/payments/machine)
 const CHALLENGE_TIMEOUT_SECONDS = 300;
+/** The run seconds a card route with no measured bound of its own is given
+ *  when its challenge's remaining life is checked (src/challenge-life.js). */
+export const STRIPE_DEFAULT_RUN_SECONDS = 20;
 
 export function stripeEnabled() {
   return Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PROFILE_ID);
@@ -155,7 +159,11 @@ export function checkStripeCredentialBinding(authorizationHeader, { secretKey, r
   try { amount = parseInt(String(r.amount), 10); } catch { return bad("challenge amount is not an integer cents string"); }
   if (!Number.isFinite(amount)) return bad("challenge amount is not an integer cents string");
   if (amount < expected) return bad(`challenge amount ${amount} is below this route's price ${expected} cents`);
-  return { ok: true, challenge: ch, amountCents: amount, expectedCents: expected, longRunning: item.longRunning === true };
+  // The capture runs after the handler and asserts the expiry again: a
+  // challenge that would expire during the run is refused before it.
+  const short = challengeLifeShortfall({ expiresAtMs: exp, runSeconds: item.runSeconds, defaultRunSeconds: STRIPE_DEFAULT_RUN_SECONDS, nowMs: now });
+  if (short) return bad(challengeLifeReason(short));
+  return { ok: true, challenge: ch, amountCents: amount, expectedCents: expected, longRunning: item.longRunning === true, expiresAtMs: exp };
 }
 
 /** Non-mutating pre-check, run BEFORE the handler: is this a well-formed,
@@ -329,6 +337,9 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
       const settleReplay = () => { if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {}); };
 
       req.stripeSettling = true;
+      // The capture must begin while the challenge is unexpired: a handler
+      // that reads its settleable window ends its upstream work by then.
+      presentChallengeWindow(req, binding.expiresAtMs);
       // The stripe credential is the ONLY payment evidence: drop any x402
       // header riding alongside it (same identity-spoof defense as tempo).
       for (const h of ["payment-signature", "x-payment", "payment-identifier", "x-pow-solution"]) delete req.headers[h];
