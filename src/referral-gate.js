@@ -555,6 +555,19 @@ export function referralMinNet(grossUnits, { commissionBps = 0, feeBps = 0 } = {
   return least > 0n ? least : 0n;
 }
 
+/** Slugs served under /ref before the price-parity rule (referralIneligibility):
+ *  still served, and named in a warning at every boot until the owner decides. */
+export const REFERRAL_PARITY_GRANDFATHERED = Object.freeze(["hash"]);
+/** True when a definition's published example, example output or input
+ *  schema text names one of `hosts` (compared in lower case). */
+export function namesOwnHost(def, hosts = []) {
+  const list = (hosts || []).map((h) => String(h || "").trim().toLowerCase()).filter(Boolean);
+  if (!list.length || !def || typeof def !== "object") return false;
+  let text = "";
+  try { text = JSON.stringify([def.discovery?.input ?? null, def.discovery?.example ?? null, def.discovery?.output ?? null, def.discovery?.inputSchema ?? null]).toLowerCase(); } catch { return true; }
+  return list.some((h) => text.includes(h));
+}
+
 /**
  * Why a catalog definition cannot be served as a referral copy, or null.
  * `flags` are the server's own readings of the definition:
@@ -568,7 +581,7 @@ export function referralMinNet(grossUnits, { commissionBps = 0, feeBps = 0 } = {
  * cannot cut off would keep spending upstream after the buyer was told it was
  * not charged.
  */
-export function referralIneligibility(def, { identityBound = false, lastingEffect = false, paysThirdParty = false, longRunning = false, compute = false, clamped = false, ownTimeoutMs = null, deadlineMs = REFERRAL_DEFAULTS.deadlineMs, priceForNetwork = (p) => p } = {}) {
+export function referralIneligibility(def, { identityBound = false, lastingEffect = false, paysThirdParty = false, longRunning = false, compute = false, clamped = false, ownTimeoutMs = null, deadlineMs = REFERRAL_DEFAULTS.deadlineMs, priceForNetwork = (p) => p, ownHosts = [], cheaperDirect = null } = {}) {
   if (!def || typeof def !== "object") return "not in the catalog";
   if (typeof def.handler !== "function") return "in the catalog but has no handler";
   if (identityBound) return "identity-bound route";
@@ -576,6 +589,15 @@ export function referralIneligibility(def, { identityBound = false, lastingEffec
   if (paysThirdParty) return "pays an outside seller";
   if (longRunning) return "long-running or composite route";
   if (binaryTypesOf(def)) return "answers bytes, not JSON";
+  // A referred buyer is never pointed at this server's own surfaces: a tool
+  // whose published example or input hints name this host is left out (an
+  // empty request runs that example, and a refused input quotes it).
+  if (namesOwnHost(def, ownHosts)) return "its published example or input hints name this server's own host";
+  // Price parity: the referral copy never costs more than the same call on
+  // the public route. A tool the public route gives for less by a path this
+  // route lacks (`cheaperDirect` names it) is left out; the slugs served
+  // before the rule are served still, with a line at every boot.
+  if (cheaperDirect && !REFERRAL_PARITY_GRANDFATHERED.includes(def.slug)) return `the public route can be had for less than the listed price (${cheaperDirect})`;
   if (!compute && !clamped) {
     if (!Number.isFinite(ownTimeoutMs) || !(ownTimeoutMs > 0)) return "declares no upstream timeout the handler deadline can be checked against";
     if (ownTimeoutMs > deadlineMs) return `its own upstream wait (${Math.round(ownTimeoutMs / 1000)} s) is past the handler deadline (${Math.round(deadlineMs / 1000)} s)`;
@@ -593,6 +615,7 @@ export function referralRoutes(config, catalog, flagsOf = () => ({})) {
   const defs = new Map();
   const refused = [];
   const served = [];
+  const noted = [];
   const bySlug = new Map(Object.values(catalog || {}).filter((d) => d && typeof d.slug === "string").map((d) => [d.slug, d]));
   for (const slug of config?.slugs || []) {
     const def = bySlug.get(slug);
@@ -604,9 +627,10 @@ export function referralRoutes(config, catalog, flagsOf = () => ({})) {
     // Why the handler deadline can be kept, for the boot line.
     let f = {};
     try { f = flagsOf(def) || {}; } catch { f = {}; }
+    if (f.cheaperDirect) noted.push({ slug, note: `served under /ref although the public route can be had for less (${f.cheaperDirect}): it was served before the price-parity rule, and stays until the owner decides` });
     served.push({ slug, why: f.compute ? "no upstream work" : f.clamped ? `upstream work ends at the deadline${Number.isFinite(f.ownTimeoutMs) && f.ownTimeoutMs > 0 ? ` (own timeout ${Math.round(f.ownTimeoutMs / 1000)} s)` : ""}` : `own upstream timeout ${Math.round(f.ownTimeoutMs / 1000)} s fits` });
   }
-  return { defs, refused, served };
+  return { defs, refused, served, noted };
 }
 
 /** The slug a request path names under /ref/, or null. Case, a trailing slash
@@ -1535,16 +1559,41 @@ export function createReferralGate({
         ...(typeof agentId === "string" && agentId && agentId.length <= REFERRAL_AGENT_ID_MAX_CHARS ? { buyerAgentId: agentId } : {}),
         setup_url: config.setupUrl,
       },
+      // A request with no input runs the tool's published example (below):
+      // the 402 for it says so and shows that input, in a field of this
+      // server's own beside the fields the network reads.
+      ...(req.__a402ReferralExample === true && def.discovery?.input ? { emptyRequest: { note: "A request with no input runs this tool's published example, shown here as input, at the price quoted. Send your own input to run that instead.", input: def.discovery.input } } : {}),
     };
   }
 
   // The ready-to-run call a refusal carries is built for the direct route: it
   // is dropped here. Every other hint that would name a route is left out
   // where it is written (routeHint, src/referral-run.js), not rewritten.
+  // A refusal's other fields (the expected-input descriptions, an example)
+  // are written for the direct route too: any text in them that names this
+  // server's host or one of its own paths is dropped, field by field, so a
+  // referred buyer is never pointed at the catalog, the prices, the docs or a
+  // direct route. The `error` sentence and the tool's slug are kept as written.
+  const OWN_HOST_TEXT = (() => { try { return [new URL(origin).host.toLowerCase(), "agent402.tools"]; } catch { return ["agent402.tools"]; } })();
+  const OWN_PATH = /(^|[^a-z0-9.])\/(api|v1)\/|\/openapi\.json|\/llms[a-z-]*\.txt|\/\.well-known\/x402|(^|[\s"'(])\/(docs|pricing|crawler|tools|catalog)\b/i;
+  const pointsHome = (text) => { const t = String(text).toLowerCase(); return OWN_HOST_TEXT.some((h) => t.includes(h)) || OWN_PATH.test(t); };
+  function withoutPointers(value, depth = 0) {
+    if (typeof value === "string") return pointsHome(value) ? undefined : value;
+    if (!value || typeof value !== "object" || depth > 6) return value;
+    if (Array.isArray(value)) return value.map((v) => withoutPointers(v, depth + 1)).filter((v) => v !== undefined);
+    const out = {};
+    for (const [k, v] of Object.entries(value)) { const w = withoutPointers(v, depth + 1); if (w !== undefined) out[k] = w; }
+    return out;
+  }
   function scrub(body) {
-    if (!body || typeof body !== "object" || !Object.hasOwn(body, "howToCall")) return body;
-    const copy = { ...body };
-    delete copy.howToCall;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+    const copy = {};
+    for (const [k, v] of Object.entries(body)) {
+      if (k === "howToCall") continue;
+      if (k === "error" || k === "tool" || k === "transaction") { copy[k] = v; continue; }
+      const w = withoutPointers(v);
+      if (w !== undefined) copy[k] = w;
+    }
     return copy;
   }
 
