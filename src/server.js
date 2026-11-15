@@ -10858,7 +10858,7 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
   res.set("Cache-Control", "private, no-store");
   if (!REFERRAL_GATE) return res.status(409).json({ error: "the referral gate is off" });
   const { action, key, note, outcome } = req.body || {};
-  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}, or {"action":"clear-short","slug":"<slug>","note":"what was checked"}, or {"action":"acknowledge","what":"retired"|"closed","note":"what was checked"}, or {"action":"resolve-many","state":"<entry state>","reason":"<recorded reason, optional>","outcome":"dismissed"|"delivered","note":"what was checked"}';
+  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}, or {"action":"clear-short","slug":"<slug>","note":"what was checked"}, or {"action":"acknowledge","what":"retired"|"closed"|"dropped","note":"what was checked"}, or {"action":"resolve-many","state":"<entry state>","reason":"<recorded reason, optional>","outcome":"dismissed"|"delivered","note":"what was checked"}';
   // A record closed as unrecognized goes back to the open entries, where resolve works on it.
   // A slug's short-net record (and the stop it may carry) is cleared by hand.
   if (action === "clear-short") {
