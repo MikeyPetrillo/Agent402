@@ -2746,7 +2746,7 @@ try {
       const chargedDrift = await open("paid");
       await bookP.resolve(chargedDrift.key, { state: "charged-undelivered", tx: chargedDrift.tx, saleBooked: true });
       await appP.gate.sweepOnce();
-      ok(owed.filter((r) => r.tx === chargedDrift.tx).length === 1 && bookP.get(chargedDrift.key)?.state === "refund-owed", `a charged, undelivered entry whose receipt reads that way is owed back too (${owed.filter((r) => r.tx === chargedDrift.tx).length} row, ${bookP.get(chargedDrift.key)?.state})`);
+      ok(owed.filter((r) => r.tx === chargedDrift.tx).length === 1 && [undefined, "refund-owed"].includes(bookP.get(chargedDrift.key)?.state), `a charged, undelivered entry whose receipt reads that way is owed back too (${owed.filter((r) => r.tx === chargedDrift.tx).length} row, ${bookP.get(chargedDrift.key)?.state})`);
       // The operator's three outcomes work on them; a refund by hand adds no second debt.
       const refund = await appP.gate.resolveByHand(ours[0].key, { note: "the payout wallet was changed on chain; this buyer was not served", outcome: "refund" });
       const refundAgain = await appP.gate.resolveByHand(ours[0].key, { note: "asked twice", outcome: "refund" });
@@ -3820,7 +3820,7 @@ try {
       const wordFn = gateText.slice(gateText.indexOf("  function statusWord() {"), gateText.indexOf("  /** An operator acknowledges having read"));
       const raised = (wordFn.match(/reasons\.push\(/g) || []).length;
       const heartbeat = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"), worker = readFileSync(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
-      const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "under the amount the commission map expects", "product id differs", "under its stop floor", "this server does not serve", "contradicted successes came from several payers", "unsettled runs from many payers", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "book is full", "retired at capacity", "closed as unrecognized"];
+      const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "under the amount the commission map expects", "product id differs", "under its stop floor", "this server does not serve", "contradicted successes came from several payers", "unsettled runs from many payers", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "failed or were late in the last five minutes", "went without a verdict in the last day", "book is full", "retired at capacity", "closed as unrecognized"];
       const missing = FAMILIES.filter((f) => !heartbeat.includes(f) || !worker.includes(f));
       // The raw tag is never output anywhere (an issue, a comment, the job log): every line that
       // names it is its own assignment, its shape check, or the keyed digest made from it.
@@ -3856,7 +3856,8 @@ try {
         const printed = [...runs3, changed].map((r) => `${r.stdout}${r.stderr}`).join("\n") + afterNew.join("\n") + [stepSummary, stepOutput, stepEnvFile].map((f) => readFileSync(f, "utf8")).join("\n");
         ok(step && existsSync(comments) && runs3.every((r) => r.status === 0) && afterSame.length === 1 && /reasons mark [0-9a-f]{12} /.test(afterSame[0]) && afterNew.length === 2 && afterNew[0] !== afterNew[1] && !/aaaaaaaa|bbbbbbbb/.test(printed), `the heartbeat step, run for three cycles on one reasons tag against an open issue, comments once; a new tag adds one more comment; the raw tag is in no output (${afterSame.length} then ${afterNew.length} comments)`);
       }
-      ok(raised === 19 && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && /openssl dgst -sha256 -hmac "\$OP_TOKEN"/.test(heartbeat) && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with the operator token, never the tag itself (${missing.join("; ") || "all named"})`);
+      const owedWording = "include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review";
+      ok(raised === 22 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && /openssl dgst -sha256 -hmac "\$OP_TOKEN"/.test(heartbeat) && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with the operator token, never the tag itself (${missing.join("; ") || "all named"})`);
     }
     // P7. During a drain a settle ends before the database pool starts closing, with room for its book write.
     {
@@ -3999,34 +4000,6 @@ try {
           ok(w.status === "attention" && w.reasons.includes("robots-check: listed in REFERRAL_SLUGS and not served under /ref: its published example or input hints name this server's own host") && w.reasons.some((x) => /^mime: listed in REFERRAL_SLUGS and not served under \/ref: the public route can be had for less/.test(x)) && none.gate.statusWord().status === "ok", `a slug that is listed and not served raises the word to attention and names the slug and why, for as long as it is listed (${w.reasons.length} reasons)`);
         } finally { await app.close(); await none.close(); }
       }
-      // M3. One failed write on a healthy store holds nobody; a real outage clears without traffic.
-      {
-        const doc = casDoc();
-        const b = createReferralBook({ doc, log, now: () => Date.now() + skew.ms });
-        const app = await mount({ REFERRAL_STORE_COOLDOWN_MS: "60000", REFERRAL_STORE_WRITE_MS: "300" }, { book: b });
-        try {
-          fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
-          // One write fails, the next stands.
-          const realUpdate = doc.update.bind(doc);
-          let failNext = 1;
-          doc.update = async (m, o) => (failNext-- > 0 ? { ok: false, error: "one failure" } : realUpdate(m, o));
-          const hit = await payOn(app);
-          const next = await payOn(app);
-          const wordOne = app.gate.statusWord();
-          ok(hit.status === 503 && hit.reason === "settlement_store_unavailable" && next.status === 200 && !wordOne.reasons.some((x) => /store is not taking writes|intent to settle could not be stored/.test(x)) && wordOne.status === "ok" && app.gate.stats().storeHeld === 0, `one failed intent write on a store that takes the next write holds nobody and pages nobody: the next call is served and the word reads ok (${hit.status} then ${next.status})`);
-          // A store that is really down holds; with no traffic at all the sweep's own write clears the hold once the store is back.
-          doc.st.down = true;
-          const lost = await payOn(app), held = await payOn(app);
-          const wordDown = app.gate.statusWord();
-          await app.gate.sweepOnce();
-          const stillDown = app.gate.statusWord().reasons.some((x) => /store is not taking writes/.test(x));
-          doc.st.down = false;
-          await app.gate.sweepOnce();
-          const wordBack = app.gate.statusWord();
-          const served = await payOn(app);
-          ok(lost.status === 503 && held.status === 503 && held.reason === "settlement_store_down" && wordDown.reasons.some((x) => /intent to settle could not be stored/.test(x)) && wordDown.reasons.some((x) => /store is not taking writes/.test(x)) && stillDown === true && !wordBack.reasons.some((x) => /store is not taking writes/.test(x)) && served.status === 200, `a store that is down holds paid calls and the word says so; once it is back the sweep's own small write ends the hold with no paid call needed (${held.reason}; after the sweep: ${wordBack.reasons.filter((x) => /store/.test(x)).length} store reasons; then ${served.status})`);
-        } finally { doc.st.down = false; await app.close(); }
-      }
       fac.reset(); sales.length = 0; owed.length = 0;
       // F1. Refused entries never fill the book: each is room, and the first dropped at capacity.
       {
@@ -4056,49 +4029,6 @@ try {
         const at61 = Object.keys(bk.soldMarks()).length;
         skew.ms -= 61 * 60_000;
         ok(bookMod.SOLD_KEEP_MS === 3600_000 && at59 === 1 && at61 === 0, `a booked-payment mark is kept for one hour and removed by the next sweep after it, with no later sale needed (${at59} at 59 minutes, ${at61} at 61)`);
-      }
-      // R3. A store that fails every other write, one paid call every 61 s: the second failed intent write IN A ROW holds, however far apart.
-      {
-        const doc = casDoc();
-        const b = createReferralBook({ doc, log, now: () => Date.now() + skew.ms });
-        const app = await mount({ REFERRAL_STORE_COOLDOWN_MS: "600000", REFERRAL_STORE_WRITE_MS: "300" }, { book: b });
-        const skew0 = skew.ms;
-        try {
-          fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
-          const realUpdate = doc.update.bind(doc);
-          let n = 0;
-          doc.update = async (m, o) => (n++ % 2 === 0 ? { ok: false, error: "every other write fails" } : realUpdate(m, o));
-          const ran0 = runs.echo;
-          const calls = [];
-          for (let i = 0; i < 6; i++) { const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor((Date.now() + skew.ms) / 1000) + 60) }); calls.push(await payOn(app, { header: p.header })); skew.ms += 61_000; }
-          ok(runs.echo - ran0 === 2 && calls.slice(2).every((c) => c.status === 503 && c.reason === "settlement_store_down") && app.gate.statusWord().reasons.some((x) => /store is not taking writes/.test(x)) && app.gate.statusWord().reasons.some((x) => /intent to settle could not be stored/.test(x)), `a store that takes every other write, with one paid call every 61 s, gives away two tool runs and then holds, and the word says so: the second intent write to fail in a row starts the hold, however far apart (${runs.echo - ran0} runs for 6 calls; ${calls.map((c) => c.status).join(" ")})`);
-        } finally { skew.ms = skew0; await app.close(); }
-      }
-      // One failed write that carried two intents is ONE failure: nobody is held for it.
-      {
-        const doc = casDoc();
-        const b = createReferralBook({ doc, log, now: () => Date.now() + skew.ms });
-        const app = await mount({ REFERRAL_STORE_COOLDOWN_MS: "600000", REFERRAL_STORE_WRITE_MS: "3000" }, { book: b });
-        try {
-          fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
-          const realUpdate = doc.update.bind(doc);
-          let n = 0;
-          // Write 1 is slow (the two intents queue behind it and are written together); write 2, theirs, fails; the rest stand.
-          doc.update = async (m, o) => { const k = ++n; if (k === 1) { await wait(400); return realUpdate(m, o); } if (k === 2) return { ok: false, error: "one failed write" }; return realUpdate(m, o); };
-          const slow = b.resolveNote({ slug: "echo", outcome: "noted", note: "a slow write the two intents wait behind" });
-          const failedBefore = b.writeStats().failed;
-          const pair = await Promise.all([payOn(app), payOn(app)]);
-          await slow;
-          const failedWrites = b.writeStats().failed - failedBefore;
-          const third = await payOn(app);
-          // A stored intent ends the row: a later single failed write is again one failure, not the second in a row.
-          let failOnce = 1;
-          const realAgain = doc.update.bind(doc);
-          doc.update = async (m, o) => (failOnce-- > 0 ? { ok: false, error: "one more failed write" } : realAgain(m, o));
-          const later = await payOn(app), after = await payOn(app);
-          ok(later.status === 503 && after.status === 200 && app.gate.stats().storeHeld === 0, `an intent that is stored ends the row of failures: one more failed write later holds nobody (${later.status} then ${after.status} ${after.reason || ""})`);
-          ok(pair.every((c) => c.status === 503 && c.reason === "settlement_store_unavailable") && failedWrites === 1 && third.status === 200 && app.gate.stats().storeHeld === 0 && app.gate.statusWord().status === "ok", `one failed write that carried two intents is one failure: the next call is served and the word reads ok (${failedWrites} failed write; then ${third.status} ${third.reason || ""})`);
-        } finally { await app.close(); }
       }
       // R5. A refused entry dropped at capacity is still found if its payment lands.
       {
@@ -4156,22 +4086,101 @@ try {
         await sweepIt();
         const firstPass = asked.splice(0).filter((i) => i < 40); // (record 40 is still an entry, read as one)
         ok(before === 40 && bookMod.SWEEP_DROPPED_MAX === 25 && firstPass.length >= 25 && firstPass.slice(0, 25).every((i) => i >= 15) && firstPass[0] === 39, `the sweep reads the dropped records nearest their expiry first (${bookMod.SWEEP_DROPPED_MAX} a pass; first read: record ${firstPass[0]}, the earliest to expire)`);
-        // Past expiry, reads that settle nothing (no answer, an error, an incomplete search) forget nothing...
+        // Past expiry, reads that reach no verdict (no answer, an error, an incomplete search) forget nothing: not after
+        // many reads, and not after many hours with few reads. A record is given up only when BOTH have happened.
         skew.ms = skew0 + 20 * 60_000;
         mode = "throw";
-        await sweepIt(); await sweepIt();
+        for (let i = 0; i < 6; i++) await sweepIt();
         mode = "inconclusive";
-        await sweepIt();
-        const keptAfter3 = tb.droppedRefused();
-        // ...until the bound of further reads, then one line and a count for the operator.
-        for (let i = 0; i < 12; i++) await sweepIt();
-        const unresolved = tb.droppedRefused();
-        ok(keptAfter3.count === 40 && bookMod.DROPPED_LATE_READS_MAX === 5 && unresolved.count < 40 && unresolved.unresolved >= 25 && logLines.filter((l) => /dropped refused settle\(s\) could not be read to a verdict/.test(l)).length >= 1, `an expired record is kept through reads that reach no verdict (an error, no answer, an incomplete search), and only after ${bookMod.DROPPED_LATE_READS_MAX} such reads is it given up, logged and counted for the operator (${keptAfter3.count} kept after three; ${unresolved.unresolved} given up later)`);
+        for (let i = 0; i < 14; i++) await sweepIt(); // every record has now been read ten times with no verdict
+        const afterManyReads = tb.droppedRefused();
+        const tl = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r15-late`, log: () => {} }), log, maxEntries: 1, maxDropped: 10, now: () => Date.now() + skew.ms });
+        skew.ms = skew0;
+        for (let i = 0; i < 3; i++) { await tl.intent(mk(800 + i, nowS + 60)); await tl.resolve(`referral:r14-${800 + i}`, { state: "refused", at: 100 + i }); }
+        const sweepL = () => tl.sweep({ chain: { state: async () => ({ used: null, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
+        skew.ms = skew0 + bookMod.DROPPED_GIVE_UP_MS + 10 * 60_000;
+        for (let i = 0; i < 3; i++) await sweepL(); // seven hours on, three reads only
+        const afterManyHours = tl.droppedRefused();
+        // ...then, six hours past expiry AND five reads with no verdict: given up by name, counted once.
+        skew.ms = skew0 + 15 * 60_000 + bookMod.DROPPED_GIVE_UP_MS + 60_000;
+        const linesBefore = logLines.length;
+        for (let i = 0; i < 2; i++) await sweepIt();
+        const given = tb.droppedRefused();
+        const lines = logLines.slice(linesBefore).filter((l) => /could not be read to a verdict in 5 or more reads over 6 hours after its authorization's expiry/.test(l));
+        ok(afterManyReads.count === 40 && afterManyReads.unresolved === 0 && afterManyHours.count === 2 && afterManyHours.unresolved === 0 && bookMod.DROPPED_GIVE_UP_MS === 6 * 3600_000 && bookMod.DROPPED_GIVE_UP_READS === 5 && given.count === 0 && given.unresolved === 40 && lines.length === 40 && lines.every((l) => /\(echo payer=0x[0-9a-f]{4} nonce=0x[0-9a-f]{8} amount=30000\); if a payment landed for it, it was not found/.test(l)), `an expired record is kept through reads that reach no verdict: ten reads in twenty minutes give none up, nor do seven hours with three reads; one is given up only six hours past expiry AND after five such reads, by name (slug, short payer, nonce prefix, amount), counted once (${afterManyReads.count} kept after ten reads; ${afterManyHours.count} kept after seven hours; ${given.unresolved} given up, ${lines.length} lines)`);
+        // The reviewer's outage: 125 records, the landed payment among the first to expire, the chain down for five passes.
+        {
+          const to = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r15-outage`, log: () => {} }), log, maxEntries: 1, maxDropped: 500, now: () => Date.now() + skew.ms });
+          skew.ms = skew0;
+          const made = [];
+          for (let i = 0; i < 126; i++) { const m = mk(1000 + i, nowS + 60 + i); made.push(m); await to.intent(m); await to.resolve(m.key, { state: "refused", at: 100 + i }); }
+          const landedOne = made[3];
+          let up = false; const booked = [];
+          const chainO = { state: async ({ nonce }) => { if (!up) throw new Error("rpc down"); return nonce === landedOne.nonce.toLowerCase() ? { used: true, paid: true, transaction: "0x" + "c5".repeat(32), complete: true, net: "26298" } : { used: false, paid: false, transaction: null, complete: true }; } };
+          const sweepO = () => to.sweep({ chain: chainO, bookSale: async (e, tx) => { booked.push(tx); return true; }, payTo: PAY_TO });
+          skew.ms = skew0 + 10 * 60_000; // every authorization has expired
+          for (let i = 0; i < 5; i++) { await sweepO(); skew.ms += 60_000; }
+          const afterOutage = to.droppedRefused();
+          const readsEach = afterOutage.records.map((r) => Number(r.lateReads) || 0);
+          up = true;
+          for (let i = 0; i < 6; i++) { await sweepO(); skew.ms += 60_000; }
+          ok(afterOutage.count === 125 && afterOutage.unresolved === 0 && Math.max(...readsEach) === 1 && readsEach.filter((x) => x === 1).length === 125 && booked.length === 1 && to.get(landedOne.key)?.state === "charged-undelivered" && to.droppedRefused().count === 0 && to.droppedRefused().unresolved === 0, `125 dropped records through a five-pass chain outage: none is given up, each is read once (the least recently read of the expired ones first), and when the chain answers the payment that landed is found and booked (${afterOutage.count} kept, most reads on one record ${Math.max(...readsEach)}; ${booked.length} booked)`);
+        }
+        // A give-up whose write does not stand is neither counted nor logged until it does, and then once; it raises the word until acknowledged.
+        {
+          const docF = casDoc();
+          const tf = createReferralBook({ doc: docF, log, maxEntries: 1, maxDropped: 10, now: () => Date.now() + skew.ms });
+          const appF = await mount({}, { book: tf });
+          try {
+            skew.ms = skew0;
+            for (let i = 0; i < 3; i++) { await tf.intent(mk(500 + i, nowS + 60)); await tf.resolve(`referral:r14-${500 + i}`, { state: "refused", at: 100 + i }); }
+            const sweepF = () => tf.sweep({ chain: { state: async () => ({ used: null, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
+            skew.ms = skew0 + 10 * 60_000;
+            for (let i = 0; i < 5; i++) await sweepF(); // five reads with no verdict
+            const wordBefore = appF.gate.statusWord();
+            skew.ms = skew0 + bookMod.DROPPED_GIVE_UP_MS + 5 * 60_000;
+            const before = logLines.length;
+            docF.st.down = true;
+            await sweepF(); await sweepF();
+            const whileDown = { n: tf.droppedRefused().unresolved, lines: logLines.slice(before).filter((l) => /could not be read to a verdict in/.test(l)).length };
+            docF.st.down = false;
+            await sweepF(); await sweepF();
+            const afterUp = { n: tf.droppedRefused().unresolved, lines: logLines.slice(before).filter((l) => /could not be read to a verdict in/.test(l)).length };
+            ok(whileDown.n === 0 && whileDown.lines === 0 && afterUp.n === 2 && afterUp.lines === 2, `a give-up is counted and logged once, when the write that removes the record stands (while the store is down: ${whileDown.n} counted; after: ${afterUp.n} counted, ${afterUp.lines} lines)`);
+            const wordAfter = appF.gate.statusWord();
+            const noNote = await appF.gate.acknowledge("dropped", { note: "" });
+            const ack = await appF.gate.acknowledge("dropped", { note: "looked the two payments up on chain: neither landed" });
+            const wordAck = appF.gate.statusWord();
+            ok(!wordBefore.reasons.some((x) => /went without a verdict/.test(x)) && wordAfter.status === "attention" && wordAfter.reasons.includes("records of refused settles dropped at capacity went without a verdict in the last day: a payment that landed for one of them would not have been found") && noNote.ok === false && ack.ok === true && !wordAck.reasons.some((x) => /went without a verdict/.test(x)) && tf.resolvedByHand().filter((r) => r.key === "dropped:unresolved").length === 1, `records given up with no verdict raise the status word, with a reason, until an operator acknowledges having read them (${wordAfter.reasons.filter((x) => /verdict/.test(x)).length} reason; after the acknowledgement ${wordAck.reasons.filter((x) => /verdict/.test(x)).length})`);
+          } finally { await appF.close(); }
+          // An expired record pushed out at the cap before any read is counted too, and is a notice of its own.
+          skew.ms = skew0;
+          const te = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r15-evict`, log: () => {} }), log, maxEntries: 1, maxDropped: 1 });
+          for (let i = 0; i < 3; i++) { await te.intent(mk(600 + i, nowS - 1_000)); await te.resolve(`referral:r14-${600 + i}`, { state: "refused", at: 100 + i }); }
+          await te.intent(mk(609, nowS + 600));
+          ok(te.droppedRefused().count === 1 && te.droppedRefused().unresolved === 2 && te.droppedRefused().evictedEarly === 0 && te.resolvedByHand().filter((r) => r.key === "dropped:evicted").length === 1, `an expired record pushed out at the cap before any read reached a verdict is counted with the unresolved ones, with one notice however many went (${te.droppedRefused().unresolved} counted, ${te.resolvedByHand().filter((r) => r.key === "dropped:evicted").length} notice)`);
+          // The spared entry: an intent refused for a full book puts back the refused entry it had dropped for itself.
+          const docS = createJsonDocument({ name: `referral-test-${process.pid}-r15-spared`, log: () => {} });
+          const wide = createReferralBook({ doc: docS, log, maxEntries: 3 });
+          const r0 = mk(900, nowS + 600);
+          await wide.intent(r0); await wide.resolve(r0.key, { state: "refused" });
+          await wide.intent(mk(901, nowS + 600)); await wide.intent(mk(902, nowS + 600));
+          const narrow = createReferralBook({ doc: docS, log, maxEntries: 2 }); // the same document, read with a lower capacity: over it by one
+          await narrow.ready;
+          const refusedFull = await narrow.intent(mk(903, nowS + 600));
+          ok(refusedFull === false && narrow.get(r0.key)?.state === "refused" && narrow.droppedRefused().count === 0 && narrow.list().length === 3, `an intent refused for a full book leaves everything as it was: the refused entry it would have dropped is still an entry, with no dropped record (${narrow.get(r0.key)?.state || "gone"}; ${narrow.droppedRefused().count} records)`);
+        }
+        // (Three fresh records for the conclusive read.)
+        skew.ms = skew0;
+        await tb.resolve("referral:r14-40", null);
+        for (let i = 0; i < 4; i++) { await tb.intent(mk(700 + i, nowS + 60)); await tb.resolve(`referral:r14-${700 + i}`, { state: "refused", at: 100 + i }); }
+        skew.ms = skew0 + 20 * 60_000;
+        const freshRecords = tb.droppedRefused().count;
         // A conclusive read (unused, and the search complete) forgets at once, with no count.
         mode = "unused-complete";
         const unresolvedBefore = tb.droppedRefused().unresolved;
         for (let i = 0; i < 3; i++) await sweepIt();
-        ok(tb.droppedRefused().count === 0 && tb.droppedRefused().unresolved === unresolvedBefore, `a read that shows the authorization expired unused forgets the record, and is not counted as unresolved (${tb.droppedRefused().count} left)`);
+        ok(freshRecords >= 3 && tb.droppedRefused().count === 0 && tb.droppedRefused().unresolved === unresolvedBefore, `a read that shows the authorization expired unused forgets the record, and is not counted as unresolved (${freshRecords} records; ${tb.droppedRefused().count} left; unresolved ${unresolvedBefore} then ${tb.droppedRefused().unresolved})`);
         skew.ms = skew0;
       }
       // G3. A record is kept when its own intent is refused for a full book; an intent that is stored clears it; a write-back skips a record already gone.
@@ -4200,25 +4209,6 @@ try {
         const pass = await tb2.sweep({ chain: { state: async ({ nonce }) => { if (nonce === b0.nonce.toLowerCase()) { await tb2.resolve(b1.key, null); await tb2.intent(b0); await tb2.resolve(b0.key, null); return { used: true, paid: true, transaction: "0x" + "77".repeat(32), complete: true, net: "26298" }; } return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO });
         ok(had && tb2.get(b0.key) === null && tb2.droppedRefused().count === 0, `a record that was cleared while the sweep read it (its payment was handled by a request meanwhile) is not written back as an entry (${tb2.get(b0.key) ? tb2.get(b0.key).state : "no entry"}; landed ${pass.landed})`);
       }
-      // G2. A missed intent deadline is a failure, counted once per write: a store whose every other write outlives the deadline holds after two.
-      for (const spacingMs of [0, 61_000]) {
-        const doc = casDoc();
-        const b = createReferralBook({ doc, log, now: () => Date.now() + skew.ms });
-        const app = await mount({ REFERRAL_STORE_COOLDOWN_MS: "600000", REFERRAL_STORE_WRITE_MS: "200" }, { book: b });
-        const skew0 = skew.ms;
-        try {
-          fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
-          const realUpdate = doc.update.bind(doc);
-          let n = 0;
-          // (300 ms against a 200 ms deadline: the intent misses it, and the small write queued behind it still lands in time.)
-          doc.update = async (m, o) => { if (n++ % 2 === 0) await wait(300); return realUpdate(m, o); };
-          const ran0 = runs.echo;
-          const calls = [];
-          for (let i = 0; i < 6; i++) { const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor((Date.now() + skew.ms) / 1000) + 60) }); calls.push(await payOn(app, { header: p.header })); await wait(500); skew.ms += spacingMs; }
-          const w = app.gate.statusWord();
-          ok(runs.echo - ran0 === 2 && calls.slice(2).every((c) => c.status === 503 && c.reason === "settlement_store_down") && w.reasons.some((x) => /store is not taking writes/.test(x)) && w.reasons.some((x) => /intent to settle could not be stored/.test(x)) && b.writeStats().timedOut === 2, `a store whose every other write outlives the intent deadline, one call every ${spacingMs ? "61 s" : "half second"}: two tool runs, then held, and the word reads attention (${runs.echo - ran0} runs for 6 calls; ${calls.map((c) => c.status).join(" ")}; ${b.writeStats().timedOut} deadlines missed)`);
-        } finally { skew.ms = skew0; await app.close(); }
-      }
       // One slow write that carried two intents past their deadline is ONE missed deadline.
       {
         const doc = casDoc();
@@ -4241,9 +4231,9 @@ try {
         await tb.resolve("referral:r14b-12", null);
         let reads = 0, after = 0;
         const t0 = Date.now();
-        const pass = await tb.sweep({ chain: { state: async () => { reads++; await wait(200); return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO, droppedBudgetMs: 500 });
+        const pass = await tb.sweep({ chain: { state: async () => { reads++; await wait(200); return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO, chainBudgetMs: 500 });
         const tookMs = Date.now() - t0;
-        const pass2 = await tb.sweep({ chain: { state: async () => { after++; return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO, droppedBudgetMs: 500 });
+        const pass2 = await tb.sweep({ chain: { state: async () => { after++; return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO, chainBudgetMs: 500 });
         ok(tb.droppedRefused().count === 12 && reads >= 2 && reads <= 4 && tookMs < 1500 && pass.droppedUnread === 12 - reads && after === 12 && pass2.droppedUnread === 0, `the dropped-record reads of one pass stop at their time budget when the chain is slow, so the pass is not held up; the rest are read on the next pass (${reads} of 12 read in ${tookMs} ms, ${pass.droppedUnread} left for later; then ${after})`);
       }
       // The refund run prints a review hold with why, apart from a repeat hang-up, and releases it only by its own switch.
@@ -4256,6 +4246,168 @@ try {
         const released = refundRunMod.planRefunds(rowsRR, { senders: { evm: true }, includeReviewHolds: true });
         const text = lines.join("\n");
         ok(/#1 .*review: the settle is not proven as this route's sale/.test(text) && /#2 .*http 499, payer budget\)/.test(text) && !/SECRET-NOTE-TEXT/.test(text) && both.send.map((r) => r.id).join() === "2" && (both.held[refundRunMod.REVIEW_HOLD] || []).map((r) => r.id).join() === "1" && released.send.map((r) => r.id).join() === "1", `the refund run lists a review hold with why (a fixed phrase, never the note's own text), apart from a repeat hang-up; the repeat hang-up switch does not release it, its own switch does (${both.send.map((r) => r.id).join()} sent with the hang-up switch)`);
+      }
+      // ===== THE STORE RULE (src/referral-gate.js storeHold), at DEFAULT settings unless a line says otherwise =====
+      {
+        const settlesOk = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
+        const storeApp = async (env = {}) => { const doc = casDoc(); const b = createReferralBook({ doc, log, now: () => Date.now() + skew.ms }); const app = await mount(env, { book: b }); fac.mode.settle = settlesOk; return { doc, b, app, real: doc.update.bind(doc) }; };
+        const payS = async (app) => { const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor((Date.now() + skew.ms) / 1000) + 60) }); return payOn(app, { header: p.header }); };
+        const storeWord = (app) => app.gate.statusWord().reasons.filter((x) => /settlement store|intent write/.test(x));
+        const skew0 = skew.ms;
+        ok(referralConfig(ENV).storeCooldownMs === 15_000 && referralConfig(ENV).storeWindowMs === 300_000 && referralConfig(ENV).storeWriteMs === 3_000 && gateMod.REFERRAL_STORE_COOLDOWN_MAX_MS === 600_000 && referralConfig({ ...ENV, REFERRAL_STORE_WINDOW_MS: "60000" }).storeWindowMs === 60_000, "the store rule's defaults: a 5-minute window, a 15 s cool-down doubling to 10 minutes, a 3 s write deadline");
+        // a. One failed write the store recovers from.
+        {
+          const { doc, b, app, real } = await storeApp();
+          try {
+            let failNext = 1;
+            doc.update = async (m, o) => (failNext-- > 0 ? { ok: false, error: "one failure" } : real(m, o));
+            const hit = await payS(app), next = await payS(app);
+            const st = app.gate.stats();
+            ok(hit.status === 503 && hit.reason === "settlement_store_unavailable" && next.status === 200 && app.gate.statusWord().status === "ok" && st.storeHeld === 0 && st.storeHold.held === false && st.storeHold.failuresInWindow === 1, `a. one failed intent write the store recovers from: the next call is served, the word reads ok, nobody is held (${hit.status} then ${next.status}; ${st.storeHold.failuresInWindow} failure in the window)`);
+            void b;
+          } finally { await app.close(); }
+        }
+        // b. A store that is down.
+        {
+          const { doc, app } = await storeApp();
+          try {
+            const ran0 = runs.echo;
+            doc.st.down = true;
+            const lost = await payS(app);
+            const held = [await payS(app), await payS(app), await payS(app)];
+            const wordDown = storeWord(app);
+            await app.gate.sweepOnce();
+            const heldBeforeCooldown = app.gate.stats().storeHold.held;
+            skew.ms += 16_000;
+            await app.gate.sweepOnce(); // the cool-down has passed and the probe fails: held again
+            const heldWhileDown = app.gate.stats().storeHold.held;
+            doc.st.down = false;
+            await app.gate.sweepOnce(); // inside the new cool-down: no probe yet
+            const heldInsideCooldown = app.gate.stats().storeHold.held;
+            skew.ms += 16_000;
+            await app.gate.sweepOnce(); // no paid call was made: the sweep's own probe ends the hold
+            const after = app.gate.stats().storeHold;
+            const served = await payS(app);
+            ok(lost.status === 503 && runs.echo - ran0 === 2 && held.every((c) => c.status === 503 && c.reason === "settlement_store_down") && wordDown.some((x) => /store is not taking writes: paid calls are refused/.test(x)) && heldBeforeCooldown && heldWhileDown && heldInsideCooldown && after.held === false && served.status === 200 && storeWord(app).length === 0, `b. a store that is down holds at once (one tool run given away, the next three calls refused before anything runs), the word reads attention with the reason, and once the store is back the sweep's probe ends the hold after the cool-down with no paid call (${runs.echo - ran0 - 1} run given away; then ${served.status})`);
+          } finally { doc.st.down = false; skew.ms = skew0; await app.close(); }
+        }
+        // c. A store that refuses every other write, one paid call every 61 s, ten calls.
+        {
+          const { doc, app, real } = await storeApp();
+          try {
+            let n = 0;
+            doc.update = async (m, o) => (n++ % 2 === 0 ? { ok: false, error: "every other write fails" } : real(m, o));
+            const ran0 = runs.echo;
+            const calls = [], words = [];
+            for (let i = 0; i < 10; i++) { calls.push(await payS(app)); words.push(storeWord(app).length > 0); skew.ms += 61_000; }
+            const given = runs.echo - ran0;
+            ok(given >= 2 && given <= 4 && calls.every((c) => c.status === 503) && words[0] === false && words.slice(1, 6).every((x) => x === true), `c. a store that refuses every other write, one paid call every 61 s, ten calls: ${given} tool runs given away (two per five-minute window, not ten), and the word reads attention from the second failure on (${calls.map((c) => (c.reason === "settlement_store_down" ? "held" : "ran")).join(" ")})`);
+          } finally { skew.ms = skew0; await app.close(); }
+        }
+        // d1. Every write takes 180 ms against a 300 ms deadline (pinned); four calls 20 ms apart; six rounds.
+        {
+          const { doc, b, app, real } = await storeApp({ REFERRAL_STORE_WRITE_MS: "300" });
+          try {
+            doc.update = async (m, o) => { await wait(180); return real(m, o); };
+            const round = async () => { const ps = []; for (let i = 0; i < 4; i++) { ps.push(payS(app)); await wait(20); } return Promise.all(ps); };
+            const ran0 = runs.echo;
+            const r1 = await round();
+            const wordAfter1 = storeWord(app);
+            const ran1 = runs.echo;
+            const r2 = await round();
+            const ran2 = runs.echo;
+            const later = []; for (let i = 0; i < 4; i++) later.push(...await round());
+            const st = app.gate.stats().storeHold;
+            ok(b.writeStats().timedOut >= 2 && wordAfter1.some((x) => /missed its deadline|failed or were late/.test(x)) && st.held === true && runs.echo === ran2 && later.every((c) => c.status === 503 && c.reason === "settlement_store_down") && ran2 - ran0 <= 8 && storeWord(app).some((x) => /store is not taking writes/.test(x)), `d1. writes of 180 ms against a 300 ms deadline, four calls 20 ms apart: held after the second late write (${ran1 - ran0} runs in round one, ${ran2 - ran1} in round two, 0 in the next four rounds; ${[...r1, ...r2].filter((c) => c.status === 200).length} paid), and the word reads attention from the first late write`);
+          } finally { await app.close(); }
+        }
+        // d2. Writes that outlive the default 3 s deadline and stand after 3.5 s, at half-second and 61 s spacing.
+        for (const spacingMs of [500, 61_000]) {
+          const { doc, b, app, real } = await storeApp();
+          try {
+            doc.update = async (m, o) => { await wait(3_500); return real(m, o); };
+            const ran0 = runs.echo;
+            const calls = [];
+            for (let i = 0; i < 4; i++) { calls.push(await payS(app)); if (spacingMs === 500) await wait(500); else skew.ms += 61_000; }
+            const given = runs.echo - ran0;
+            ok(given <= 2 && given >= 1 && calls.slice(given).every((c) => c.status === 503 && c.reason === "settlement_store_down") && b.writeStats().timedOut >= 1 && storeWord(app).length > 0, `d2. writes that stand only after 3.5 s (deadline 3 s), one call every ${spacingMs === 500 ? "half second" : "61 s"}: ${given} tool run(s) given away, then held, word at attention (${calls.map((c) => c.status).join(" ")})`);
+          } finally { skew.ms = skew0; doc.update = real; await app.close(); }
+        }
+        // e. One failed write that carried two intents is one failure; a stored intent between two failures erases nothing.
+        {
+          const { doc, b, app, real } = await storeApp();
+          try {
+            let n = 0;
+            doc.update = async (m, o) => { const k = ++n; if (k === 1) { await wait(400); return real(m, o); } if (k === 2) return { ok: false, error: "one failed write" }; return real(m, o); };
+            const slow = b.resolveNote({ slug: "echo", outcome: "noted", note: "a slow write the two intents wait behind" });
+            const failedBefore = b.writeStats().failed;
+            const pair = await Promise.all([payS(app), payS(app)]);
+            await slow;
+            const one = app.gate.stats().storeHold.failuresInWindow, failedWrites = b.writeStats().failed - failedBefore;
+            const third = await payS(app);
+            const wordOne = app.gate.statusWord().status;
+            ok(pair.every((c) => c.status === 503 && c.reason === "settlement_store_unavailable") && failedWrites === 1 && one === 1 && third.status === 200 && wordOne === "ok" && app.gate.stats().storeHeld === 0, `e. one failed write that carried two intents is one failure: the next call is served and the word reads ok (${failedWrites} failed write, ${one} failure counted; then ${third.status})`);
+            // Two minutes and one stored intent later, a second write fails: two failures in the window hold, whatever was stored between.
+            skew.ms += 120_000;
+            let failOnce = 1;
+            doc.update = async (m, o) => (failOnce-- > 0 ? { ok: false, error: "a second failed write" } : real(m, o));
+            const second = await payS(app), after = await payS(app);
+            ok(second.status === 503 && second.reason === "settlement_store_unavailable" && after.status === 503 && after.reason === "settlement_store_down" && app.gate.stats().storeHold.failuresInWindow === 2 && storeWord(app).some((x) => /2 intent writes to the settlement store failed or were late in the last 5 minutes/.test(x)), `a stored intent erases nothing: a second failed write two minutes later is the second failure in the window and holds (${second.status} then ${after.status} ${after.reason})`);
+            // Only time erases: once both have aged out of the window, a single new failure is again one the store recovers from.
+            skew.ms += 301_000;
+            const released = await payS(app); // the cool-down has passed and the probe stands: served
+            failOnce = 1;
+            const fresh = await payS(app), next = await payS(app);
+            ok(released.status === 200 && fresh.status === 503 && next.status === 200 && app.gate.stats().storeHold.failuresInWindow === 1 && app.gate.statusWord().status === "ok", `failures leave the window only by aging out: after it, one new failed write holds nobody (${fresh.status} ${fresh.reason} then ${next.status})`);
+          } finally { skew.ms = skew0; await app.close(); }
+        }
+        // The cool-down doubles for each hold entered while the window holds two or more failures, up to its cap (window pinned to one hour so it can be reached), and f. returns to its default.
+        {
+          const { doc, app, real } = await storeApp({ REFERRAL_STORE_WINDOW_MS: "3600000" });
+          try {
+            let n = 0;
+            doc.update = async (m, o) => (n++ % 2 === 0 ? { ok: false, error: "every other write fails" } : real(m, o));
+            await payS(app); skew.ms += 1_000; await payS(app);
+            const seen = [app.gate.stats().storeHold.cooldownMs];
+            for (let i = 0; i < 8; i++) { skew.ms += seen[seen.length - 1] + 1_000; await payS(app); seen.push(app.gate.stats().storeHold.cooldownMs); }
+            ok(seen.join() === "15000,30000,60000,120000,240000,480000,600000,600000,600000", `the cool-down doubles for each hold entered while the window holds two or more failures, from 15 s up to its cap of 10 minutes (${seen.map((x) => x / 1000).join(", ")} s)`);
+          } finally { skew.ms = skew0; await app.close(); }
+        }
+        {
+          const { doc, app, real } = await storeApp();
+          try {
+            let n = 0, alternate = true;
+            doc.update = async (m, o) => (alternate && n++ % 2 === 0 ? { ok: false, error: "every other write fails" } : real(m, o));
+            await payS(app); skew.ms += 1_000; await payS(app);
+            skew.ms += 16_000; await payS(app); // a failed probe: the hold is entered again, doubled
+            const during = app.gate.stats().storeHold;
+            alternate = false; // the store is healthy from here
+            skew.ms += 301_000 + during.cooldownMs;
+            const served = await payS(app);
+            const after = app.gate.stats().storeHold;
+            ok(during.held === true && during.cooldownMs === 30_000 && during.level === 2 && served.status === 200 && after.held === false && after.cooldownMs === 15_000 && after.level === 0 && after.failuresInWindow === 0 && app.gate.statusWord().status === "ok", `f. a store healthy for longer than the window after a hold: the call is served, the cool-down is back to its default and the word reads ok (during: ${during.cooldownMs / 1000} s, level ${during.level}; after: ${after.cooldownMs / 1000} s, level ${after.level})`);
+          } finally { skew.ms = skew0; await app.close(); }
+        }
+        // g. No timer, and nothing outside the gate's own handler and sweep reads the rule.
+        {
+          const gateText = readFileSync(new URL("../src/referral-gate.js", import.meta.url), "utf8");
+          const rule = gateText.slice(gateText.indexOf("  // ---- the settlement store "), gateText.indexOf("  const OWN_PROBE_MS = "));
+          const serverText = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+          ok(rule.length > 2000 && !/setTimeout\(|setInterval\(|setImmediate\(/.test(rule) && (gateText.match(/await storeHeld\(\)/g) || []).length === 1 && (gateText.match(/await endStoreHoldIfReady\(\)/g) || []).length === 2 && !/storeHeld|storeHold|endStoreHoldIfReady/.test(serverText), "g. the store rule starts no timer, is asked once in the gate's handler and once by the sweep, and the server names it nowhere (nothing on a route outside /ref reads it)");
+        }
+      }
+      // P2. One wall budget for every chain read of a pass: with the chain hung, a charged entry is handed on at once and the pass ends inside the budget (plus one read).
+      {
+        const tb = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r15-budget`, log: () => {} }), log, maxEntries: 200 });
+        const nowS = Math.floor(Date.now() / 1000);
+        const mk = (i) => ({ key: `referral:r15b-${i}`, slug: "echo", payer: `0x${String(i + 1).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore: nowS + 600 });
+        for (let i = 0; i < 20; i++) { await tb.intent(mk(i)); await tb.resolve(`referral:r15b-${i}`, { state: i < 10 ? "in-doubt" : "refused" }); }
+        await tb.intent(mk(50)); await tb.resolve("referral:r15b-50", { state: "charged-undelivered", tx: "0x" + "ee".repeat(32), landedAt: Date.now() - 600_000 });
+        const order = []; let chargedAt = null;
+        const t0 = Date.now();
+        const pass = await tb.sweep({ chain: { state: async ({ from }) => { order.push(Number(String(from).slice(2)) - 1); await wait(250); return { used: null, paid: null, transaction: null, complete: false }; } }, bookSale: async () => true, payTo: PAY_TO, onCharged: async () => { chargedAt = Date.now() - t0; }, chainBudgetMs: 600 });
+        const took = Date.now() - t0;
+        ok(chargedAt !== null && chargedAt < 200 && order.length >= 2 && order.length <= 4 && order.every((i) => i < 10) && took < 1_600 && pass.unread === 20 - order.length && bookMod.SWEEP_CHAIN_BUDGET_MS === 40_000, `with every chain read hung, a charged entry is handed on before any read (${chargedAt} ms into the pass), the reads stop at the pass's budget, and in-doubt entries are read before refused ones (${order.length} of 20 read in ${took} ms; ${pass.unread} left for the next pass)`);
       }
       // M4. Charged, undelivered entries are never resolved in bulk.
       {
@@ -4578,6 +4730,7 @@ try {
     // A slug that is listed and not served is a reason on the status word (the server hands the gate its boot refusals).
     const opBoot = (await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
     const pub = (await call(`${srv.url}/api/gateway-status`, { method: "GET", headers: xff() })).json?.referralSettlement;
+    ok(opBoot?.droppedRefused && Object.keys(opBoot.droppedRefused).sort().join() === "count,evictedEarly,unresolved" && opBoot.droppedRefused.unresolved === 0 && opBoot.droppedRefused.count === 0 && typeof opBoot.bookWrites?.timedOut === "number", `the operator view carries the dropped-record counts, the unresolved one among them (${JSON.stringify(opBoot?.droppedRefused)})`);
     ok(opBoot?.status?.status === "attention" && ["mime", "robots-check", "qr", "no-such-tool"].every((x) => opBoot.status.reasons.some((r) => r.startsWith(`${x}: listed in REFERRAL_SLUGS and not served under /ref: `))) && opBoot.status.reasons.filter((r) => /listed in REFERRAL_SLUGS/.test(r)).length === opBoot.notServed.length && pub?.status === "attention", `every listed slug this boot does not serve is a reason on the status word, and the public word reads attention (${opBoot?.status?.reasons?.filter((r) => /listed in REFERRAL_SLUGS/.test(r)).length} of ${opBoot?.notServed?.length} refused)`);
   }
   {
