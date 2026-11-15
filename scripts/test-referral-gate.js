@@ -4167,7 +4167,8 @@ try {
           await wide.intent(mk(901, nowS + 600)); await wide.intent(mk(902, nowS + 600));
           const narrow = createReferralBook({ doc: docS, log, maxEntries: 2 }); // the same document, read with a lower capacity: over it by one
           await narrow.ready;
-          const refusedFull = await narrow.intent(mk(903, nowS + 600));
+          // (Written in one write with another change, so what the refused intent did to the book would be stored.)
+          const [refusedFull] = await Promise.all([narrow.intent(mk(903, nowS + 600)), narrow.resolve("referral:r14-901", { note: "written in the same write" })]);
           ok(refusedFull === false && narrow.get(r0.key)?.state === "refused" && narrow.droppedRefused().count === 0 && narrow.list().length === 3, `an intent refused for a full book leaves everything as it was: the refused entry it would have dropped is still an entry, with no dropped record (${narrow.get(r0.key)?.state || "gone"}; ${narrow.droppedRefused().count} records)`);
         }
         // (Three fresh records for the conclusive read.)
