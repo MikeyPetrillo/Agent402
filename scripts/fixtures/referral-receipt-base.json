@@ -1,5 +1,5 @@
 {
-  "about": "A settlement in the shape the referral rail produces, in the JSON-RPC shape eth_getTransactionReceipt returns (quantities as hex; only the fields the proof rule reads). The contract addresses, event topics, log order and word layout are the rail's on Base; the transaction hash, block, wallets, merchant id, nonce and every amount are test values.",
+  "about": "A settlement in the shape the referral rail produces, in the JSON-RPC shape eth_getTransactionReceipt returns (quantities as hex; only the fields the proof rule reads). The contract addresses, event topics, log order and word layout are the rail's on Base; the transaction hash, block, every wallet, the merchant id, the other ids, the nonce and every amount are test values.",
   "network": "eip155:8453",
   "splitContract": "0x6ee905bf1086918eb735205fdb06d4ae293efefb",
   "payer": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
@@ -53,7 +53,7 @@
         "topics": [
           "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
           "0x0000000000000000000000006ee905bf1086918eb735205fdb06d4ae293efefb",
-          "0x00000000000000000000000067b0b2e00842ec6fa031189af9687db62939a17f"
+          "0x000000000000000000000000e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
         ],
         "data": "0x00000000000000000000000000000000000000000000000000000000000000c8",
         "logIndex": "0x19a",
@@ -79,7 +79,7 @@
         "topics": [
           "0xa1e9ed17b1bfe9f68d5880cd6cb89e9c5e9789aca4e253f4b2e5830c129f470d",
           "0x0000000000000000000000000000000000000000000000000000000000000001",
-          "0x000000000000000000000000000000000000000000000000000000000011fd8a",
+          "0x00000000000000000000000000000000000000000000000000000000000a11ce",
           "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         ],
         "data": "0x000000000000000000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000aae61d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d400000000000000000000000000000000000000000000000000000000000002260000000000000000000000000000000000000000000000000000000000000000",
