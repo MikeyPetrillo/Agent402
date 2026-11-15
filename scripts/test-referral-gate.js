@@ -3096,6 +3096,16 @@ try {
         const eY2 = bookR.get(gateMod.referralReplayKey(notYet.p.authorization));
         ok(eY2?.state === "in-doubt" && eY2.unproven === true && eY2.flagged !== true && bookR.faults().every((f) => f.scope !== "route") && appR.gate.statusWord().reasons.some((x) => /read in full, does not prove the sale/.test(x)), `an unconfirmed entry whose receipt then reads as not a proof is held as unproven, with a reason of its own, and is never the route-wide flag (${eY2?.state}, flagged ${eY2?.flagged})`);
         await appR.gate.resolveByHand(gateMod.referralReplayKey(notYet.p.authorization), { note: "test cleanup", outcome: "dismissed" });
+        // An unproven entry is this server's fault: it never holds its own payer.
+        {
+          const unlucky = newAccount();
+          fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "nopayout"), network: REFERRAL_NETWORK } });
+          const firstU = await payOn(appR, "exa", { account: unlucky });
+          chainPays(1234);
+          const secondU = await payOn(appR, "exa", { account: unlucky });
+          ok(firstU.status === 402 && secondU.status === 200 && bookR.faults().some((f) => f.unproven && f.own === false), `a payer whose settle came back unproven is served on its next payment: the entry holds no payer (${firstU.status} then ${secondU.status})`);
+          for (const e of bookR.list().filter((x) => x.unproven)) await appR.gate.resolveByHand(e.key, { note: "test cleanup", outcome: "dismissed" });
+        }
         // A setting that makes EVERY success unproven: three payers, then the route probes (no buyer after them is charged but the probe).
         fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "nopayout"), network: REFERRAL_NETWORK } });
         const many = [];
