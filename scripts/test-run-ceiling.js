@@ -32,6 +32,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const world = { dnsMs: 0, upstream: "stall", t0: 0, starts: [], aborts: [] };
 const note = (kind, what) => { const e = { kind, what, at: Date.now() - world.t0, endedAt: null }; world.starts.push(e); return e; };
 stubGuardResolver((host, family) => {
+  world.lookups = (world.lookups || 0) + 1;
   const e = note("lookup", host);
   return new Promise((res, rej) => setTimeout(() => { e.endedAt = Date.now() - world.t0; try { Promise.resolve(offlineGuardAnswer(host, family)).then(res, rej); } catch (err) { rej(err); } }, world.dnsMs));
 });
@@ -160,6 +161,10 @@ try {
     const { safeFetch, retryTransient } = await import("../src/tools/fetch-guard.js");
     Object.assign(world, { dnsMs: 0, upstream: "stall", t0: Date.now(), starts: [] });
     const lateFetch = await withRunCeiling(40, async () => { await wait(80); return safeFetch("http://93.184.216.34/late"); }).then(() => null, (e) => e);
+    // (A name, so the address guard would look it up: past the ceiling no lookup starts either.)
+    const lookupsBefore = world.lookups || 0;
+    const lateName = await withRunCeiling(40, async () => { await wait(80); return safeFetch("http://late-name.example/x"); }).then(() => null, (e) => e);
+    ok(lateName?.statusCode === 504 && lateName.ceilingCut === true && (world.lookups || 0) === lookupsBefore, `a guarded fetch of a NAME asked for after the ceiling starts no lookup (${lateName?.statusCode}; ${(world.lookups || 0) - lookupsBefore} lookups)`);
     const lateTls = await withRunCeiling(40, async () => { await wait(80); return MARKED.find((d) => d.slug === "tls-cert").handler({ host: "93.184.216.34" }); }).then(() => null, (e) => e);
     ok(lateFetch?.statusCode === 504 && lateFetch.ceilingCut === true && lateTls?.statusCode === 504 && world.starts.length === 0, `a guarded fetch and a TLS connection asked for after the ceiling are refused before anything is opened (${world.starts.length} started; ${lateFetch?.statusCode}, ${lateTls?.statusCode})`);
     let calls = 0;
