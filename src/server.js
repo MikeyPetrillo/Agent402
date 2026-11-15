@@ -594,7 +594,7 @@ import { LLM_GEMINI_TOOLS, GEMINI_PATH_BY_TIER } from "./tools/llm-gemini-kit.js
 import { refusalReason } from "./refusal-reason.js";
 import { setKnownProductKeys } from "./posthog.js";
 import { LLM_RESPONSES_TOOLS } from "./tools/llm-responses-kit.js";
-import { LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD, warmQuoteTokenCounts, QUOTE_WARM_MIN_CHARS, PAYMENT_WINDOW_TAIL_MS, UPSTREAM_TIMEOUT_MS as CHAT_UPSTREAM_TIMEOUT_MS } from "./tools/llm-gateway-kit.js";
+import { MARGIN as LLM_MARGIN, LLM_GATEWAY_TOOLS, TIERS, PRICED_BY_MODEL_NOTE, modelsList, promptCacheKey, promptCacheGetShared, promptCacheStore, GATEWAY_TIER_BY_PATH, embeddingsCacheKey, EMBEDDINGS_PATH, rerankCacheKey, RERANK_PATH, gatewayCreditsStatus, oxAlphaAvailable, probeOxAlphaAvailability, OX_ROUTE, oxUpstreamIsFree, isFlatTier, METERED_MAX_QUOTE_USD, warmQuoteTokenCounts, QUOTE_WARM_MIN_CHARS, PAYMENT_WINDOW_TAIL_MS, UPSTREAM_TIMEOUT_MS as CHAT_UPSTREAM_TIMEOUT_MS } from "./tools/llm-gateway-kit.js";
 // /v1/audio/speech stays behind OPENROUTER_TTS_ENABLED as a rollout gate:
 // @x402/express (v2.16) runs the handler first and settles only a <400
 // response, so a 502 is never charged — but an UNLISTED route returns no 402
@@ -738,7 +738,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleStands } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -2556,8 +2556,11 @@ setIdentityBoundSlugs(new Set(Object.values(CATALOG).filter((d) => d.identityBou
 // handler, not identity-bound, no lasting effect, no outside seller, not
 // long-running, a JSON answer, and upstream work the handler deadline can
 // end (a pure-CPU tool; a chat tier, which reads the payment window the gate
-// presents; a handler under a budget the gate's ceiling caps) or an own
-// upstream timeout that fits the deadline.
+// presents; a handler under a budget the gate's ceiling caps; a definition
+// marked endsAtCeiling, src/run-ceiling.js, whose reads carry fixed timeouts
+// of their own that the ceiling cuts short, and which leaves that list the
+// day its handler gains another kind of wait) or an own upstream timeout
+// that fits the deadline.
 let REFERRAL_CONFIG = null;
 try { REFERRAL_CONFIG = FREE_MODE ? null : referralConfig(process.env); } catch { REFERRAL_CONFIG = null; }
 if (!FREE_MODE && !REFERRAL_CONFIG) { const why = referralConfigProblem(process.env); if (why) console.warn(`WARNING: referral gate is off: ${why}`); }
@@ -10682,13 +10685,16 @@ if (REFERRAL_ROUTES) {
       }),
       answers: referralAnswers,
       // A paid sale on the books (any paying rail): a payer the service-wide bound does not tighten.
-      payerHasPaid: (payer) => { try { return payerHasPaidSale(payer) === true; } catch { return true; } },
+      // A paid sale on the books, on a paying rail or on this gate's own rail (a returning /ref buyer).
+      payerHasPaid: (payer) => { try { return payerHasPaidSale(payer) === true || payerHasPrivateRailSale(payer, "referral") === true; } catch { return true; } },
       // A charged call whose answer can no longer be delivered: a refund of the
       // gross owed in the refund ledger. True when a row stands for THIS debt:
       // the one just written, or one already there for the same transaction
       // AND the same payer on this wire (another payer's row is not this debt).
       // A sale booked before its receipt could be read is corrected in place to the amount received.
-      amendSaleNet: ({ tx, netUsd, payer }) => amendPrivateRailSaleNet(tx, "referral", netUsd, payer),
+      amendSaleNet: ({ tx, netUsd, payer, slug }) => amendPrivateRailSaleNet(tx, "referral", netUsd, payer, slug),
+      // The share of its price a model-backed tool's upstream cost is kept within (the gateway's own bound).
+      modelNetFloorBps: Math.round(LLM_MARGIN * 10_000),
       oweRefund: async (row) => {
         const r = await recordRefundOwed(row);
         if (r === true) return true;
@@ -10715,7 +10721,7 @@ if (REFERRAL_ROUTES) {
       runAsCaller: runAsCallerOf,
       sendToolError,
       recordSale,
-      saleBooked: (tx, payer) => privateRailSaleStands(tx, "referral", payer),
+      saleBooked: (tx, payer, slug) => privateRailSaleCount(tx, "referral", payer, slug),
       isSynthetic: isSyntheticRequest,
       salePathOf,
       requireShared: (def) => sharedClaimRequired({ longRunning: isLongRunningSlug(def.slug), draining: drainSignal().aborted }),

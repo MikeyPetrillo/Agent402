@@ -15,7 +15,11 @@
 //     in src/tools/fetch-guard.js, and the few sockets and bare fetches the
 //     kits open): its timeout becomes the smaller of its own and what the
 //     ceiling has left (capByCeiling), or it is ended when the ceiling passes
-//     (atCeiling), and no retry starts once the ceiling has passed.
+//     (atCeiling); the address guard's name lookup is capped the same way;
+//     and nothing STARTS once the ceiling has passed: no request, no retry,
+//     no connection (assertBeforeCeiling). A read the ceiling ended is a 504
+//     (ceilingCutError), never an answer: a handler that turns a failed read
+//     into a result checks the ceiling first.
 //
 // A tool definition whose EVERY upstream wait goes through one of those
 // declares `endsAtCeiling: true` (markEndsAtCeiling): the gate serves it
@@ -44,6 +48,18 @@ export function ceilingLeftMs() {
 
 /** True once the current run's ceiling has passed (never, with no ceiling). */
 export const ceilingPassed = () => ceilingLeftMs() <= 0;
+
+/** The error of a read that the run's ceiling ended, or that could not start
+ *  because the ceiling had passed: a 504, never an answer. Only ever thrown
+ *  inside a run with a ceiling. */
+export function ceilingCutError() {
+  return Object.assign(new Error("The run's time limit passed before this read could finish, so the call was not completed"), { statusCode: 504, ceilingCut: true });
+}
+/** Throw ceilingCutError() once the ceiling has passed: before a read, a
+ *  retry or a connection starts. A no-op with no ceiling. */
+export function assertBeforeCeiling() {
+  if (ceilingPassed()) throw ceilingCutError();
+}
 
 /** A read's timeout under the ceiling: `ms` itself with no ceiling, else the
  *  smaller of `ms` and what is left (at least 1 ms, so a timer still fires). */

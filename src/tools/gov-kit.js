@@ -23,7 +23,7 @@
 // fallback); the rest are keyless. (Treasury debt/rates live in macro-kit; don't
 // dup here.)
 import { safeFetch } from "./fetch-guard.js";
-import { markEndsAtCeiling } from "../run-ceiling.js";
+import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { partialFields, clampFields } from "../partial-answer.js";
 
 function bad(message, statusCode = 400) {
@@ -66,7 +66,8 @@ async function getJson(url, opts = {}) {
       // An upstream 404 is an ANSWER for openFDA (no matches) - never retried,
       // and the upstream code rides on the re-labelled error so
       // getJsonAllowEmpty can read it (it was lost here until 2026-08-27).
-      if (attempt === 0 && e.upstreamStatus !== 404 && (e.statusCode === 422 || e.statusCode === 502 || e.statusCode === 504)) continue;
+      // No second attempt once a run's ceiling has passed (src/run-ceiling.js; never on a direct route).
+      if (attempt === 0 && !ceilingPassed() && e.upstreamStatus !== 404 && (e.statusCode === 422 || e.statusCode === 502 || e.statusCode === 504)) continue;
       if (e.statusCode === 422) throw Object.assign(bad(e.message, 502), { upstreamStatus: e.upstreamStatus });
       throw e;
     }
