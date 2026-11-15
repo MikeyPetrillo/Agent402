@@ -64,6 +64,8 @@ export const PER_PAYER_MAX = 40;
 const RESOLVED_MAX = 200;
 const RETIRED_MAX = 500;
 const CLOSED_MAX = 500;
+/** Slugs the proven record holds at most (one small entry each). */
+export const PROVEN_MAX = 500;
 /** Full readings of an unrecognized receipt before the entry is closed to the operator record. */
 export const UNRECOGNIZED_READS_MAX = 5;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -91,6 +93,9 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   let closed = [];
   // Sales whose receipt paid this merchant less than the rate map expects, by slug (the gate's record).
   let short = {};
+  // Slugs with a receipt-proven sale at or above their floor, each with the
+  // fingerprint of the settings it was judged against (the gate's record).
+  let proven = {};
   const lcPayer = (p) => String(p).toLowerCase();
   const heldBy = (cur, payer) => { const who = lcPayer(payer); let n = 0; for (const k in cur) if (cur[k] && cur[k].payer === who) n++; return n; };
   /** The oldest entry that may be retired at capacity: in doubt, and its
@@ -113,6 +118,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     retired = b && typeof b === "object" && Array.isArray(b.retired) ? b.retired.filter((r) => r && typeof r === "object") : [];
     closed = b && typeof b === "object" && Array.isArray(b.closed) ? b.closed.filter((r) => r && typeof r === "object") : [];
     short = b && typeof b === "object" && b.short && typeof b.short === "object" && !Array.isArray(b.short) ? { ...b.short } : {};
+    proven = b && typeof b === "object" && b.proven && typeof b.proven === "object" && !Array.isArray(b.proven) ? { ...b.proven } : {};
   };
   try { absorb(store.loadSync(null)); } catch { /* read below */ }
   const ready = Promise.resolve().then(() => store.load(null)).then((b) => { if (b) absorb(b); }).catch(() => {});
@@ -126,9 +132,10 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       const gone = body && typeof body === "object" && Array.isArray(body.retired) ? body.retired.slice() : [];
       const shut = body && typeof body === "object" && Array.isArray(body.closed) ? body.closed.slice() : [];
       const under = body && typeof body === "object" && body.short && typeof body.short === "object" && !Array.isArray(body.short) ? { ...body.short } : {};
-      const out = fn(cur, kept, done, gone, shut, under);
-      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX), short: under };
-    }, { fallback: { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {} } });
+      const warm = body && typeof body === "object" && body.proven && typeof body.proven === "object" && !Array.isArray(body.proven) ? { ...body.proven } : {};
+      const out = fn(cur, kept, done, gone, shut, under, warm);
+      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX), short: under, proven: warm };
+    }, { fallback: { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {}, proven: {} } });
     if (r.ok && r.body) absorb(r.body);
     return !!r.ok;
   }
@@ -225,6 +232,28 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      *  where the book held no record of it). */
     async resolveNote({ slug, outcome, note }) {
       return change((_cur, _kept, done) => { done.push({ key: `short:${slug}`, slug, payer: null, amount: null, tx: null, state: "short-net", delivered: true, outcome: String(outcome).slice(0, 40), debt: false, note: String(note).slice(0, 300), at: now() }); return undefined; });
+    },
+    /** A slug has a receipt-proven sale at or above its floor, judged
+     *  against the settings `fingerprint` stands for. One small record per
+     *  slug (at most PROVEN_MAX of them), so a restart does not make every
+     *  slug cold again. A build that does not know this field reads the
+     *  document without it and writes it back without it: the slugs are then
+     *  cold once, nothing else changes. */
+    async noteProven(slug, fingerprint) {
+      if (proven[slug]?.fp === fingerprint) return true;
+      return change((_cur, _kept, _done, _gone, _shut, _under, warm) => {
+        if (warm[slug]?.fp === fingerprint) return SKIP_UPDATE;
+        if (!warm[slug] && Object.keys(warm).length >= PROVEN_MAX) return SKIP_UPDATE;
+        warm[slug] = { fp: String(fingerprint), at: now() };
+        return undefined;
+      });
+    },
+    /** The proven record, by slug: `{ slug: { fp, at } }`. */
+    provenSlugs: () => ({ ...proven }),
+    /** A slug is cold again (its own stop, or an operator's clear). */
+    async clearProven(slug) {
+      if (!proven[slug]) return true;
+      return change((_cur, _kept, _done, _gone, _shut, _under, warm) => { if (!warm[slug]) return SKIP_UPDATE; delete warm[slug]; return undefined; });
     },
     /** The short-net record, by slug. */
     shortSales: () => ({ ...short }),
