@@ -190,6 +190,8 @@ try {
   }
   const llms = await (await fetch(`${base}/llms.txt`)).text();
   ok(/\/api\/refunds\]\([^)]*\/api\/refunds\?tx=\): free refund status of one transaction's payments/.test(llms), "llms.txt names the refund lookup");
+  const llmsFull = await (await fetch(`${base}/llms-full.txt`)).text();
+  ok(/\/api\/refunds\]\([^)]*\/api\/refunds\?tx=\): free refund status of one transaction's payments/.test(llmsFull) && /`refunds` \(every refund recorded for that transaction/.test(llmsFull) && !/free refund status for one payment/.test(llms + llmsFull), "llms-full.txt names it the same way, with the refunds list");
   let limited = null, n = 0;
   for (let i = 0; i < 40 && !limited; i++) { const r = await fetch(`${base}/api/refunds${i % 2 ? "/lookup" : ""}?tx=0x${"98".repeat(32)}`); n++; if (r.status === 429) limited = r; }
   ok(limited && limited.headers.get("retry-after") === "60", `a spray is rate limited with Retry-After, both names in one bucket (429 after ${n})`);
