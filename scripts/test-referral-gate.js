@@ -1306,7 +1306,7 @@ try {
       const next = await send(R("echo"), { body: { text: "next" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
       const ranBefore = runs.echo;
       const own4 = await send(R("echo"), { body: { text: "same payer" }, headers: { "payment-signature": (await signPayment(accept, { account: acct4 })).header, "x-test-ip": freshIp() } });
-      ok(misrouted.status === 402 && !("echo" in (misrouted.json || {})) && app1.book.get(k4)?.state === "contradicted" && app1.book.get(k4).scope === "payer" && next.status === 200 && own4.status === 503 && own4.json?.errorReason === "settlement_under_review" && runs.echo === ranBefore, `a success whose transaction routed the buyer's money to another merchant holds THAT payer only: the next buyer is served (${misrouted.status} ${misrouted.json?.errorReason}; scope ${app1.book.get(k4)?.scope}; next ${next.status}; same payer ${own4.status})`);
+      ok(misrouted.status === 409 && misrouted.json?.errorReason === "settled_to_another_merchant" && !("echo" in (misrouted.json || {})) && app1.book.get(k4)?.state === "contradicted" && app1.book.get(k4).scope === "payer" && next.status === 200 && own4.status === 503 && own4.json?.errorReason === "settlement_under_review" && runs.echo === ranBefore, `a success whose transaction routed the buyer's money to another merchant holds THAT payer only: the next buyer is served (${misrouted.status} ${misrouted.json?.errorReason}; scope ${app1.book.get(k4)?.scope}; next ${next.status}; same payer ${own4.status})`);
       ok(app1.book.faults().every((f) => f.scope === "payer") && createReferralBook({ doc: { loadSync: () => ({ entries: { a: { key: "a", payer: "0x1", state: "contradicted" }, b: { key: "b", payer: "0x2", state: "contradicted", scope: "route" }, c: { key: "c", payer: "0x3", state: "unconfirmed", flagged: true }, d: { key: "d", payer: "0x4", state: "unconfirmed" } } }), load: async () => null, update: async () => ({ ok: false }) }, log }).faults().map((f) => `${f.key}:${f.scope}`).join(",") === "a:payer,b:route,c:route", "a contradicted entry with no scope written on it holds its payer only; the route is held only by a scope written as route or by a flagged unconfirmed entry");
       await app1.gate.resolveByHand(k4, { note: "test cleanup: routed elsewhere" });
       // THE HOLD (route): an unconfirmed success flagged because its receipt still cannot be read.
@@ -2127,7 +2127,7 @@ try {
       // The same payment sent to the new process: it bought its run already.
       const ran = runs.echo;
       const r = await send(`${app4.url}/ref/echo`, { body: { text: "x" }, headers: { "payment-signature": gone.header } });
-      ok(r.status === 409 && r.json?.errorReason === "answer_unavailable_refund_owed" && /owed back/.test(r.json.errorMessage) && runs.echo === ran, `an authorization whose answer was lost and is owed back runs no second time, and says so (${r.status} ${r.json?.errorReason})`);
+      ok(r.status === 409 && r.json?.errorReason === "answer_unavailable_refund_owed" && /recorded as owed to the paying wallet/.test(r.json.errorMessage) && runs.echo === ran, `an authorization whose answer was lost and is owed back runs no second time, and says so (${r.status} ${r.json?.errorReason})`);
     } finally { await app4.close(); }
   }
   fac.reset(); sales.length = 0;
@@ -2814,7 +2814,7 @@ try {
       const later = [];
       for (let i = 0; i < 6; i++) later.push(await pay());
       const word = appM.gate.statusWord();
-      ok(gateMod.REFERRAL_CONTRADICTED_PAYERS === 3 && first.every((c) => c.r.status === 402 && bookM.get(c.key)?.state === "contradicted" && bookM.get(c.key).moved === true && bookM.get(c.key).scope === "payer") && probe.r.status === 402 && at.runs === runsBefore + 4 && later.every((c) => c.r.status === 503 && c.r.json?.errorReason === "settlement_under_review" && c.r.headers.get("retry-after") === "30") && runs.echo === at.runs && settles() === at.settles && verifies() === at.verifies && word.status === "attention" && heldReason(appM), `with a setting that is really wrong, three payers are contradicted, ONE more goes through as the probe and is contradicted too, and the next six are answered 503 before anything runs or is charged: one probe a cool-down, not every buyer (${first.map((c) => c.r.status).join(" ")} | probe ${probe.r.status} | ${later.map((c) => c.r.status).join(" ")}; ${runs.echo - runsBefore} runs)`);
+      ok(gateMod.REFERRAL_CONTRADICTED_PAYERS === 3 && first.every((c) => c.r.status === 409 && bookM.get(c.key)?.state === "contradicted" && bookM.get(c.key).moved === true && bookM.get(c.key).scope === "payer") && probe.r.status === 409 && at.runs === runsBefore + 4 && later.every((c) => c.r.status === 503 && c.r.json?.errorReason === "settlement_under_review" && c.r.headers.get("retry-after") === "30") && runs.echo === at.runs && settles() === at.settles && verifies() === at.verifies && word.status === "attention" && heldReason(appM), `with a setting that is really wrong, three payers are contradicted, ONE more goes through as the probe and is contradicted too, and the next six are answered 503 before anything runs or is charged: one probe a cool-down, not every buyer (${first.map((c) => c.r.status).join(" ")} | probe ${probe.r.status} | ${later.map((c) => c.r.status).join(" ")}; ${runs.echo - runsBefore} runs)`);
       // It also ends when those entries resolve.
       for (const c of [...first, probe].slice(0, 2)) await appM.gate.resolveByHand(c.key, { note: "merchant id setting corrected", outcome: "dismissed" });
       ok(bookM.faults().filter((f) => f.moved).length === 2 && !heldReason(appM), "it ends when the entries resolve");
@@ -2865,7 +2865,7 @@ try {
       fac.mode.settleDelayMs = 0;
       const reopened = !heldReason(appO);
       const next = await payO("exa");
-      ok(attack.every((x) => x === 402) && closed === true && honest.status === 200 && meanwhile.status === 503 && meanwhile.json?.errorReason === "settlement_under_review" && meanwhile.headers.get("retry-after") === "30" && reopened && next.status === 200 && bookO.counts().contradicted === 3, `three small payments hold the route only until the next honest payment: it goes through as the ONE probe (a second payer meanwhile waits), its receipt proves paid, and the hold ends with the three entries still open (${attack.join(" ")}; probe ${honest.status}, meanwhile ${meanwhile.status}, then ${next.status})`);
+      ok(attack.every((x) => x === 409) && closed === true && honest.status === 200 && meanwhile.status === 503 && meanwhile.json?.errorReason === "settlement_under_review" && meanwhile.headers.get("retry-after") === "30" && reopened && next.status === 200 && bookO.counts().contradicted === 3, `three small payments hold the route only until the next honest payment: it goes through as the ONE probe (a second payer meanwhile waits), its receipt proves paid, and the hold ends with the three entries still open (${attack.join(" ")}; probe ${honest.status}, meanwhile ${meanwhile.status}, then ${next.status})`);
       // Contradictions among sales that prove fine never add up: only those since the last proven sale count.
       fac.mode.settle = routedElsewhere;
       const two = [(await payO()).status, (await payO()).status];
@@ -2873,7 +2873,7 @@ try {
       const fine = await payO("exa");
       fac.mode.settle = routedElsewhere;
       const third = (await payO()).status;
-      ok(two.join() === "402,402" && fine.status === 200 && third === 402 && !heldReason(appO), "two contradicted payers, a sale that proves, then a third contradicted payer: no hold");
+      ok(two.join() === "409,409" && fine.status === 200 && third === 409 && !heldReason(appO), "two contradicted payers, a sale that proves, then a third contradicted payer: no hold");
       const regular = newAccount();
       fac.mode.settle = routedToUs;
       const firstSale = await payO("exa", regular);
@@ -2890,7 +2890,7 @@ try {
       // A RETURNING /ref buyer: a real sale booked on this rail earlier (before the hold), not a mark set by hand.
       const returning = await payO("exa", regular);
       const afterReturning = await payO("exa");
-      ok(more.join() === "402,402,402" && heldAgain && attackerProbe.status === 402 && stranger.status === 503 && returning.status === 200 && afterReturning.status === 200 && !heldReason(appO), `a contradicted probe keeps the hold and a never-paid payer waits out the cool-down, while a payer with a paid sale on the books probes at once and reopens the route (${attackerProbe.status}, stranger ${stranger.status}, returning ${returning.status}, then ${afterReturning.status})`);
+      ok(more.join() === "409,409,409" && heldAgain && attackerProbe.status === 409 && stranger.status === 503 && returning.status === 200 && afterReturning.status === 200 && !heldReason(appO), `a contradicted probe keeps the hold and a never-paid payer waits out the cool-down, while a payer with a paid sale on the books probes at once and reopens the route (${attackerProbe.status}, stranger ${stranger.status}, returning ${returning.status}, then ${afterReturning.status})`);
       // And the cool-down ends by itself.
       fac.mode.settle = routedElsewhere;
       for (let i = 0; i < 3; i++) await payO();
@@ -2900,7 +2900,7 @@ try {
       skew.ms = 61_000;
       const afterCool = await payO("exa");
       skew.ms = 0;
-      ok(probeAgain.status === 402 && duringCool.status === 503 && afterCool.status === 200 && !heldReason(appO), `after the cool-down the next payer, paid before or not, is the probe (${duringCool.status} then ${afterCool.status})`);
+      ok(probeAgain.status === 409 && duringCool.status === 503 && afterCool.status === 200 && !heldReason(appO), `after the cool-down the next payer, paid before or not, is the probe (${duringCool.status} then ${afterCool.status})`);
       for (const e of bookO.list()) await appO.gate.resolveByHand(e.key, { note: "test cleanup", outcome: "dismissed" });
     } finally { skew.ms = 0; fac.mode.settleDelayMs = 0; await appO.close(); }
   }
@@ -3467,6 +3467,12 @@ try {
         const { verifyInboundPayment } = await import("../src/payment-verify.js");
         const v = await Promise.all([one, two].map((c) => verifyInboundPayment({ network: "eip155:8453", payer: payer.address.toLowerCase(), amountUsd: 0.03, tx: ev(c), wire: "referral", referralPayTo: PAY_TO, referralMerchantId: MERCHANT_ID, referralPayout: PAYOUT, rpcFor: () => "http://rpc.invalid", fetchImpl: async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: j.method === "eth_getTransactionReceipt" ? fac.receipts.get(TXR) : null }), { status: 200, headers: { "content-type": "application/json" } }); } })));
         ok(v.every((x) => x.verified === true), "and the refund run proves each of them against the one receipt, by its own nonce");
+        // What the buyer was told, and what the public lookup answers for the transaction it was given.
+        const { refundLookup } = await import("../src/refund-lookup.js");
+        const seen = refundLookup(TXR);
+        ok([one, two].every((c) => c.json.transaction === TXR && c.json.refundStatusUrl === `https://shop.example/api/refunds?tx=${TXR}` && /recorded as owed to the paying wallet/.test(c.json.errorMessage) && !/will be repaid/.test(c.json.errorMessage)) && seen.status === "owed" && seen.found === true && seen.refunds.length === 2 && seen.refunds.every((r) => r.status === "owed" && r.priceUsd === 0.03), `a buyer told its payment is owed back is given the transaction and where to check it, and that lookup answers owed for each payment of the transaction (${one.json.transaction ? "tx given" : "no tx"}; lookup ${seen.status}, ${seen.refunds?.length} listed)`);
+        const resent = await send(`${app.url}/ref/exa`, { body: { text: "r8" }, headers: { "payment-signature": one.p.header, "x-test-ip": freshIp() } });
+        ok(resent.status === 409 && resent.json?.transaction === TXR && resent.json.refundStatusUrl === `https://shop.example/api/refunds?tx=${TXR}`, `the same payment sent again is told the same, with the transaction (${resent.status} ${resent.json?.errorReason})`);
       } finally { await app.close(); }
     }
     fac.reset(); sales.length = 0;
@@ -3523,6 +3529,84 @@ try {
         await quietLedger();
         ok(one.status === 200 && two.status === 200 && marks.some((m) => m.tx === TXS && m.slug === "exa") && ledger.privateRailSaleCount(TXS, "referral", payer.address, "exa") === 2, `a restart between two payments of one payer in one transaction: the first payment's mark is in the book file, and the second is booked as a row of its own (${ledger.privateRailSaleCount(TXS, "referral", payer.address, "exa")} rows; marks ${JSON.stringify(marks)})`);
       } finally { await second.close(); }
+    }
+  }
+
+  // ===========================================================================
+  // Round 9: what a buyer is told matches what happened to the payment
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    const book9 = (tag) => createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r9-${tag}`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+    const pay9 = async (app, slug, { account = newAccount(), body = { text: "r9" }, header = null } = {}) => { const p = header ? null : await signPayment(accept, { account }); const r = await send(`${app.url}/ref/${slug}`, { body, headers: { "payment-signature": header || p.header, "x-test-ip": freshIp() } }); return { status: r.status, reason: r.json?.errorReason || null, p, json: r.json }; };
+    // 1. A success the network settled to ANOTHER merchant: the buyer's money left its wallet through our settle call.
+    {
+      const b = book9("elsewhere");
+      const app = await mount({}, { book: b });
+      try {
+        let tx = null;
+        fac.mode.settle = (c) => { tx = fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "othermerchant"); return { status: 200, body: { success: true, transaction: tx, network: REFERRAL_NETWORK } }; };
+        const c = await pay9(app, "echo");
+        const key = gateMod.referralReplayKey(c.p.authorization);
+        const again = await pay9(app, "echo", { header: c.p.header });
+        const told = (x) => x.status === 409 && x.reason === "settled_to_another_merchant" && x.json.transaction === tx && /another merchant/.test(x.json.errorMessage) && /did not receive/.test(x.json.errorMessage) && /nothing was delivered/i.test(x.json.errorMessage) && !/sign a new authorization/i.test(x.json.errorMessage) && !("echo" in x.json);
+        ok(told(c) && told(again) && owed.length === 0 && sales.length === 0 && b.get(key)?.state === "contradicted" && b.get(key).moved === true, `a payment the network settled to another merchant is answered 409 with what is known (settled elsewhere, not received here, nothing delivered) and its transaction, never "sign a new authorization" (${c.status} ${c.reason}; again ${again.status} ${again.reason})`);
+        // The operator can record it as owed, with the reason; never a payment that moved no money.
+        const noNote = await app.gate.resolveByHand(key, { note: "", outcome: "refund" });
+        const rec = await app.gate.resolveByHand(key, { note: "buyer wrote in; network confirmed the misroute", outcome: "refund" });
+        const row = owed.find((o) => o.tx === tx);
+        ok(noNote.ok === false && rec.ok === true && rec.debt === true && owed.length === 1 && row.wire === "referral-operator" && row.priceUsd === 0.03 && row.evidenceKey === gateMod.referralRefundEvidence(tx, c.p.authorization.nonce) && /another merchant/.test(row.note) && /not received/.test(row.note) && /network confirmed/.test(row.note), `an operator can record that payment as owed, with the reason in the row (${rec.ok ? "recorded" : rec.error}; wire ${row?.wire})`);
+        const { verifyInboundPayment } = await import("../src/payment-verify.js");
+        const rpc = async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: j.method === "eth_getTransactionReceipt" ? fac.receipts.get(String(j.params[0]).toLowerCase()) || null : "0x1" }), { headers: { "content-type": "application/json" } }); };
+        const proven = await verifyInboundPayment({ network: "eip155:8453", payer: row.payer, amountUsd: 0.03, tx: row.evidenceKey, wire: row.wire, referralPayTo: PAY_TO, referralMerchantId: MERCHANT_ID, referralPayout: PAYOUT, rpcFor: () => "http://rpc.invalid", fetchImpl: rpc });
+        ok(proven.verified === true, `and the refund run proves that row by the buyer's own transfer into the contract (${proven.verified}: ${proven.reason || ""})`);
+        // A success naming a transaction that moved none of this buyer's money stays refused.
+        const empty = "0x" + "e9".repeat(32);
+        fac.receipts.set(empty, { transactionHash: empty, status: "0x1", to: PAY_TO, logs: [] });
+        fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: empty, network: REFERRAL_NETWORK } });
+        const d = await pay9(app, "echo");
+        const keyD = gateMod.referralReplayKey(d.p.authorization);
+        const refused = await app.gate.resolveByHand(keyD, { note: "asked for a refund", outcome: "refund" });
+        ok(d.reason !== "settled_to_another_merchant" && !("transaction" in (d.json || {})) && b.get(keyD)?.state === "contradicted" && b.get(keyD).moved !== true && refused.ok === false && owed.length === 1, `a contradicted success whose transaction moved none of the buyer's money is not told it was settled elsewhere, and no debt can be recorded for it (${d.status} ${d.reason}; ${refused.error})`);
+        await app.gate.resolveByHand(keyD, { note: "test cleanup", outcome: "dismissed" });
+      } finally { await app.close(); }
+    }
+    fac.reset(); sales.length = 0; owed.length = 0;
+    // 2. A refusal at settle is the facilitator's word: the entry closes on a chain read, not on that word.
+    {
+      const b = book9("refused");
+      const app = await mount({}, { book: b });
+      try {
+        fac.mode.settle = () => ({ status: 200, body: { success: false, errorReason: "insufficient_funds" } });
+        const clear = await pay9(app, "echo");
+        const kClear = gateMod.referralReplayKey(clear.p.authorization);
+        ok(clear.status === 402 && clear.reason === "insufficient_funds" && b.get(kClear) === null && /no charge is recorded/i.test(clear.json.errorMessage) && /owed/.test(clear.json.errorMessage) && !/Nothing was charged/.test(clear.json.errorMessage), `a settle refused, with the chain reading the authorization unused: the entry is closed, and the buyer is told no charge is recorded and what follows if one lands (${clear.status}; entry ${b.get(kClear) ? "open" : "closed"}; "${clear.json?.errorMessage}")`);
+        // The chain cannot be read: the refusal alone closes nothing.
+        const refusedBlind = () => { fac.mode.rpcDown = true; return { status: 200, body: { success: false, errorReason: "insufficient_funds" } }; };
+        fac.mode.settle = refusedBlind;
+        const open = await pay9(app, "echo");
+        fac.mode.rpcDown = false;
+        const kOpen = gateMod.referralReplayKey(open.p.authorization);
+        ok(open.status === 402 && b.get(kOpen)?.state === "in-doubt" && sales.length === 0, `a settle refused while the chain cannot be read keeps its entry, in doubt (${open.status}; ${b.get(kOpen)?.state || "closed"})`);
+        // The payment lands after all (the facilitator sent it late).
+        const late = fac.land(open.p.authorization, fac.nextTx());
+        await app.gate.sweepOnce();
+        await quietLedger();
+        const eLate = b.get(kOpen);
+        ok(eLate && ["charged-undelivered", "refund-owed"].includes(eLate.state) && eLate.tx === late && (owed.some((o) => o.tx === late) || eLate.state === "charged-undelivered"), `and a payment that lands late is found by the sweep: charged, undelivered, never lost (${eLate?.state})`);
+        const got = await pay9(app, "echo", { header: open.p.header });
+        ok((got.status === 200 && got.json.echo === "r9") || (got.status === 409 && got.json.transaction === late), `its buyer's re-send gets the answer or is told it is owed back, with the transaction (${got.status} ${got.reason || ""})`);
+        // The chain reads unused and the authorization expired: closed by the sweep.
+        fac.mode.settle = refusedBlind;
+        const idle = await pay9(app, "echo");
+        fac.mode.rpcDown = false;
+        const kIdle = gateMod.referralReplayKey(idle.p.authorization);
+        const wasOpen = b.get(kIdle)?.state;
+        skew.ms += 20 * 60_000;
+        await app.gate.sweepOnce();
+        ok(wasOpen === "in-doubt" && b.get(kIdle) === null && !owed.some((o) => o.payer === idle.p.authorization.from.toLowerCase()), `one that never lands is closed once its authorization can no longer be sent (${wasOpen} -> ${b.get(kIdle) ? b.get(kIdle).state : "closed"})`);
+        skew.ms -= 20 * 60_000;
+      } finally { fac.mode.rpcDown = false; await app.close(); }
     }
   }
 
