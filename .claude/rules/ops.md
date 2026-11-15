@@ -349,7 +349,10 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   book at capacity with nothing to retire, refuses a paid call (503 before `/verify` and the
   handler); at capacity the oldest expired in-doubt entry is retired to the operator record. The leased sweep `referral-settle-sweep` (at
   boot and every `REFERRAL_SWEEP_MS`, default 60000; `contained`) reads up to 50 open entries a
-  pass, the ones read least recently first, each as it stands at that moment: routed to this
+  pass (in-doubt and intent entries first, a reserved fifth of the reads for refused entries, each
+  group least recently read first; no read starts after the pass's 40 s chain budget, of which the
+  last fifth is kept for dropped records, and at least one dropped record is read every pass), each
+  as it stands at that moment: routed to this
   merchant by its own receipt books the sale once; a nonce spent without paying us, an
   authorization expired unused, or one expired with a complete search that found nothing closes
   the entry with nothing booked; a spent one whose transaction was found, with a receipt read in
@@ -406,9 +409,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   owed back, never both (the store decides; `.claude/rules/payments.md`), and an answer whose
   sender ended mid-send gets a refund held for review. During a drain a settle call ends 10 s
   before the drain's deadline (`REFERRAL_DRAIN_SETTLE_MARGIN_MS`), 4 s before the state database's
-  pool starts closing, so its book write lands. Store outage: an intent write is given up at 3 s,
-  and after one the store did not take, paid calls are refused before the tool runs until a small
-  write stands (`REFERRAL_STORE_WRITE_MS`, `REFERRAL_STORE_COOLDOWN_MS`). The status word also
+  pool starts closing, so its book write lands. Store outage: an intent write is given up at 3 s; the hold that follows is the store rule in
+  `.claude/rules/payments.md` (`REFERRAL_STORE_WRITE_MS`, `REFERRAL_STORE_WINDOW_MS`,
+  `REFERRAL_STORE_COOLDOWN_MS`). The status word also
   reads attention while the chain head could not be read for 5 minutes (every paid call is then
   refused) and while the store takes no writes; "not answering" reasons age out 30 minutes after
   the last unanswered call; the retired and closed reasons clear when an operator acknowledges them
