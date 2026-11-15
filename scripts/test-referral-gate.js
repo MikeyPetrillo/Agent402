@@ -424,6 +424,21 @@ if (ONLY_PART !== "2") {
   ok(why.nohandler === "in the catalog but has no handler", `a slug in the catalog with no handler says so (${why.nohandler})`);
   ok(/declares no upstream timeout/.test(why.unbounded), "a tool with upstream work the deadline cannot end, and no declared timeout, is not served");
   ok(referralIneligibility(catalog["POST /g"], { ownTimeoutMs: 60_000, deadlineMs: 60_000 }) === null, "an upstream wait that fits the deadline is eligible");
+  {
+    // No pointer to this server's own surfaces, and price parity with the public route's free paths.
+    const base = { handler: async () => ({}), price: "$0.01" };
+    const own = ["shop.example", "agent402.tools"];
+    const inExample = { ...base, slug: "probe-a", discovery: { input: { url: "https://Shop.Example/api/pricing" } } };
+    const inSchema = { ...base, slug: "probe-b", discovery: { input: { url: "https://example.com" }, inputSchema: { properties: { url: { description: "e.g. https://agent402.tools/robots.txt" } } } } };
+    const clean = { ...base, slug: "probe-c", discovery: { input: { url: "https://example.com/shop.examples" } } };
+    const whyA = referralIneligibility(inExample, { compute: true, ownHosts: own }), whyB = referralIneligibility(inSchema, { compute: true, ownHosts: own });
+    ok(/own host/.test(whyA || "") && /own host/.test(whyB || "") && gateMod.namesOwnHost(inExample, own) && !gateMod.namesOwnHost(inExample, []) && referralIneligibility({ ...base, slug: "probe-c", discovery: { input: { url: "https://example.com" } } }, { compute: true, ownHosts: own }) === null && referralIneligibility(inExample, { compute: true }) === null, `a tool whose published example or input hints name this server's own host is refused at boot, with the reason (${whyA}); one that names another host is not`);
+    void clean;
+    const cheaper = referralIneligibility({ ...base, slug: "probe-d" }, { compute: true, cheaperDirect: "free by proof-of-work or the trial parameter" });
+    const grand = referralIneligibility({ ...base, slug: gateMod.REFERRAL_PARITY_GRANDFATHERED[0] }, { compute: true, cheaperDirect: "free by proof-of-work or the trial parameter" });
+    const routes = referralRoutes({ slugs: ["probe-d", gateMod.REFERRAL_PARITY_GRANDFATHERED[0]], deadlineMs: 60_000 }, { a: { ...base, slug: "probe-d" }, b: { ...base, slug: gateMod.REFERRAL_PARITY_GRANDFATHERED[0] } }, () => ({ compute: true, cheaperDirect: "free by proof-of-work or the trial parameter" }));
+    ok(/can be had for less than the listed price \(free by proof-of-work/.test(cheaper || "") && grand === null && routes.refused.length === 1 && routes.refused[0].slug === "probe-d" && routes.defs.size === 1 && routes.noted.length === 1 && routes.noted[0].slug === gateMod.REFERRAL_PARITY_GRANDFATHERED[0] && /served before the price-parity rule/.test(routes.noted[0].note) && referralRoutes({ slugs: ["probe-d"], deadlineMs: 60_000 }, { a: { ...base, slug: "probe-d" } }, () => ({ compute: true })).noted.length === 0, `a tool the public route gives for less by a path /ref lacks is refused at boot (${cheaper}); a slug served before the rule is served still and named at every boot (${routes.noted[0]?.slug})`);
+  }
   ok(referralSlugOfPath("/ref/hash") === "hash" && referralSlugOfPath("/REF/Hash/") === "hash" && referralSlugOfPath("/ref/%68ash") === "hash" && referralSlugOfPath("/ref/") === null && referralSlugOfPath("/ref/a/b") === null && referralSlugOfPath("/api/hash") === null && referralSlugOfPath("/ref/" + "a".repeat(500)) === null, "the wide reading of a /ref path (for the gates that count every spelling)");
   ok(isCanonicalReferralPath("/ref/hash", "hash") && !isCanonicalReferralPath("/ref/%68ash", "hash") && !isCanonicalReferralPath("/REF/hash", "hash") && !isCanonicalReferralPath("/ref/hash/", "hash"), "only /ref/<slug> exactly is canonical");
 }
@@ -646,6 +661,12 @@ try {
     const exEmpty = await send(R("exa"), { method: "POST", body: {} });
     const exNoBody = await send(R("exa"), { method: "POST" });
     ok(exGet.status === 402 && exEmpty.status === 402 && exNoBody.status === 402 && exGet.json.accepts[0].amount === "30000", "an empty request (a bare GET, a POST with no body, a POST of {}) to a fixed-price tool reads its price");
+    {
+      const withInput = await send(R("exa"), { method: "POST", body: { text: "mine" }, headers: { "x-referrer-token": "tok-9" } });
+      const emptyTok = await send(R("exa"), { method: "POST", body: {}, headers: { "x-referrer-token": "tok-9" } });
+      const noExample = await send(R("echo"), { method: "POST", body: {} });
+      ok([exGet, exEmpty, exNoBody].every((r) => /no input runs this tool's published example/.test(r.json.emptyRequest?.note || "") && JSON.stringify(r.json.emptyRequest.input) === JSON.stringify({ text: "the published example", n: 2 })) && !("emptyRequest" in withInput.json) && !("emptyRequest" in noExample.json) && emptyTok.json.extensions.attributionToken === "tok-9" && Object.keys(emptyTok.json.extensions).sort().join() === "attributionToken,setup_url" && emptyTok.json.accepts.length === 1 && JSON.stringify(emptyTok.json.accepts[0]) === JSON.stringify(withInput.json.accepts[0]), `the 402 for an empty request says it runs the published example and shows that input, beside the fields the network reads (accepts and the echoed token unchanged); a request with input, or a tool with no example, carries no such field (${Object.keys(exGet.json).join()})`);
+    }
     const acc = exGet.json.accepts[0];
     const viaPost = await send(R("exa"), { method: "POST", body: {}, headers: { "payment-signature": (await signPayment(acc)).header } });
     ok(viaPost.status === 200 && viaPost.json?.got === "the published example" && viaPost.json.n === 2 && /^0x/.test(viaPost.json.transaction || "") && seen.exa?.text === "the published example", `a paid POST of {} runs exactly the published example and settles (${viaPost.status} ${viaPost.text.slice(0, 90)})`);
@@ -3707,7 +3728,7 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
     let last = null;
     for (let i = 0; i < 7; i++) last = await call(`${w.url}/ref/hash`, { method: "GET", headers: at("198.51.100.2") });
     ok(last.status === 429 && last.json?.reason === "unpaid-quote-budget", `past the unpaid-quote budget a /ref price check is answered 429 (${last.status})`);
-    ok(last.json?.hint && !/published at/.test(last.json.hint) && !/openapi|well-known|api\/pricing/.test(last.json.hint) && /settled a paid call in the last \d+ minutes reads against/.test(last.json.hint), `and its text claims no discovery listing and states the allowance a settled call earns (${String(last.json?.hint).slice(0, 200)})`);
+    ok(last.json?.hint && !/published at/.test(last.json.hint) && !/openapi|well-known|api\/pricing|crawler|https?:\/\//.test(last.json.hint) && /settled a paid call in the last \d+ minutes reads against/.test(last.json.hint), `and its text claims no discovery listing and states the allowance a settled call earns (${String(last.json?.hint).slice(0, 200)})`);
     const directHint = (await (async () => { let r = null; for (let i = 0; i < 7; i++) r = await call(`${w.url}/api/hash`, { body: { text: "a" }, headers: at("198.51.100.3") }); return r; })()).json?.hint || "";
     ok(/published at \/\.well-known\/x402/.test(directHint), "the direct route's 429 keeps its own text");
     // A settled referral call earns its address the paid-client allowance: its price checks read against the raised ceiling.
@@ -3832,26 +3853,57 @@ try {
   const bootLog = srv.log();
   const servedLine = /Referral gate enabled for (\d+) route\(s\): ([^\n]*)/.exec(bootLog);
   const served = servedLine ? servedLine[2].split(",").map((s) => s.trim()) : [];
-  const SERVED = ["hash", "mime", "onchain-sql", "perp-funding", "perp-basis", "stablecoin-peg", "edgar-company-facts", "v1-chat-auto", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered", "v1-chat"];
-  ok(servedLine && SERVED.every((x) => served.includes(x)) && DATA_SLUGS.every((x) => served.includes(x)) && served.length === SERVED.length + DATA_SLUGS.length, `the boot serves the eligible slugs (${servedLine ? servedLine[2] : "no line"})`);
+  // Left out since they were listed: three whose published examples name this server's own host, and mime (free by proof-of-work on the public route).
+  const OWN_HOST_SLUGS = ["http-check", "robots-check", "sitemap"];
+  const SERVED = ["hash", "onchain-sql", "perp-funding", "perp-basis", "stablecoin-peg", "edgar-company-facts", "v1-chat-auto", "v1-chat-pro", "v1-chat-premium", "v1-chat-metered", "v1-chat"];
+  ok(servedLine && SERVED.every((x) => served.includes(x)) && DATA_SLUGS.every((x) => served.includes(x) !== OWN_HOST_SLUGS.includes(x)) && served.length === SERVED.length + DATA_SLUGS.length - OWN_HOST_SLUGS.length, `the boot serves the eligible slugs (${servedLine ? servedLine[2] : "no line"})`);
   const whyServed = Object.fromEntries([...bootLog.matchAll(/\[referral\] (\S+) is served under \/ref: ([^\n]*)/g)].map((m) => [m[1], m[2]]));
   console.log(`# boot verdicts: ${JSON.stringify(whyServed)}`);
   ok(/no upstream work/.test(whyServed.hash || "") && ["v1-chat-auto", "v1-chat-pro", "v1-chat-premium"].every((x) => /ends at the deadline \(own timeout 90 s\)/.test(whyServed[x] || "")) && ["onchain-sql", "perp-funding", "perp-basis", "stablecoin-peg", "edgar-company-facts"].every((x) => /ends at the deadline \(own timeout 290 s\)/.test(whyServed[x] || "")), "each served slug says why its handler deadline can be kept: no upstream work, or upstream work the deadline ends (with the tool's own timeout named)");
   {
     // The data tools: served because the gate's deadline really ends their upstream reads, at the direct price.
-    const notByCeiling = DATA_SLUGS.filter((x) => !/^upstream work ends at the deadline$/.test(whyServed[x] || ""));
+    const notByCeiling = DATA_SLUGS.filter((x) => !OWN_HOST_SLUGS.includes(x) && !/^upstream work ends at the deadline$/.test(whyServed[x] || ""));
     const refusedData = DATA_SLUGS.filter((x) => new RegExp(`\\[referral\\] ${x} is not served`).test(bootLog));
-    ok(DATA_SLUGS.length === 36 && notByCeiling.length === 0 && refusedData.length === 0 && /\[referral\] dns is not served under \/ref: in the catalog but has no handler/.test(bootLog), `each of the 36 paid data tools is served under /ref because its upstream work ends at the deadline, none is refused, and dns (a route with no handler of its own) stays out (${notByCeiling.join(",") || "all 36 by the ceiling"})`);
+    ok(OWN_HOST_SLUGS.every((x) => new RegExp(`\\[referral\\] ${x} is not served under /ref: its published example or input hints name this server's own host`).test(bootLog)) && /\[referral\] mime is not served under \/ref: the public route can be had for less than the listed price \(free by proof-of-work or the trial parameter\)/.test(bootLog) && /\[referral\] hash is served under \/ref although the public route can be had for less \(free by proof-of-work or the trial parameter\): it was served before the price-parity rule/.test(bootLog) && (await call(`${srv.url}/ref/mime`, { method: "GET", headers: xff() })).status === 404 && (await call(`${srv.url}/ref/robots-check`, { method: "GET", headers: xff() })).status === 404, `a slug whose published example names this server's own host, and one the public route gives free, are refused at boot with the reason; hash, served before the parity rule, is named at boot and served (${refusedData.join(",")})`);
+    ok(DATA_SLUGS.length === 36 && notByCeiling.length === 0 && refusedData.join() === OWN_HOST_SLUGS.join() && /\[referral\] dns is not served under \/ref: in the catalog but has no handler/.test(bootLog), `each of the other 33 paid data tools is served under /ref because its upstream work ends at the deadline, and dns (a route with no handler of its own) stays out (${notByCeiling.join(",") || "all 36 by the ceiling"})`);
     const pricing = (await call(`${srv.url}/api/pricing`, { method: "GET", headers: xff() })).json;
     const rowsP = Array.isArray(pricing?.endpoints) ? pricing.endpoints : [];
     const priceOf = new Map(rowsP.filter((r) => r && r.slug).map((r) => [r.slug, r.price]));
     const wrongPrice = [];
-    for (const slug of DATA_SLUGS) {
+    for (const slug of DATA_SLUGS.filter((x) => !OWN_HOST_SLUGS.includes(x))) {
       const q = await call(`${srv.url}/ref/${slug}`, { method: "GET", headers: xff() });
       const want = baseUnitsOf(priceOf.get(slug));
       if (q.status !== 402 || want === null || q.json?.accepts?.[0]?.amount !== want.toString() || q.json.accepts[0].payTo !== PAY_TO) wrongPrice.push(`${slug}: ${q.status} ${q.json?.accepts?.[0]?.amount} want ${want}`);
     }
-    ok(priceOf.size > 400 && wrongPrice.length === 0, `each one's 402 pays the split contract the tool's direct list price (${wrongPrice.join("; ") || "36 of 36"})`);
+    ok(priceOf.size > 400 && wrongPrice.length === 0, `each one's 402 pays the split contract the tool's direct list price (${wrongPrice.join("; ") || "33 of 33"})`);
+    // NO POINTER to this server's own surfaces, on anything a /ref route of a served slug answers:
+    // the 402 (with its example, for an empty request), an input the route refuses unpaid, and the same input paid.
+    const hostOf = new URL(srv.url).host;
+    const pointers = (text, slug) => {
+      const found = [];
+      for (const m of String(text).matchAll(new RegExp(`(?:agent402\\.tools|${hostOf.replace(/[.]/g, "\\.")})(\\/[^\\s"'\\\\<>)]*)?`, "gi"))) { const path = m[1] || "/"; if (!path.startsWith(`/ref/${slug}`) && !path.startsWith("/api/refunds?tx=")) found.push(m[0]); }
+      for (const m of String(text).matchAll(/(?:^|[\s"'(])(\/(?:api\/(?!refunds\?tx=)[a-z0-9-]+|v1\/[a-z0-9/-]+|openapi\.json|llms[a-z-]*\.txt|\.well-known\/x402|docs|pricing|crawler|tools|catalog)\b[^\s"']*)/gi)) found.push(m[1]);
+      return found;
+    };
+    ok(pointers(`see https://agent402.tools/api/pricing or /openapi.json, POST /api/hash, https://${hostOf}/docs`, "hash").length === 4 && pointers(`{"url":"https://${hostOf}/ref/hash","endpoint":"/ref/hash","refundStatusUrl":"https://agent402.tools/api/refunds?tx=0xab"}`, "hash").length === 0, "control: the walk's reading finds a pointer to pricing, the spec, a direct route or the docs, and passes the route's own URL and the refund lookup");
+    const pointed = [];
+    let walked = 0;
+    for (const slug of served) {
+      const empty = await call(`${srv.url}/ref/${slug}`, { method: "GET", headers: xff() });
+      const emptyPost = await call(`${srv.url}/ref/${slug}`, { body: {}, headers: xff() });
+      const badGet = await call(`${srv.url}/ref/${slug}?zz_not_a_field=1`, { method: "GET", headers: xff() });
+      const bad = await call(`${srv.url}/ref/${slug}`, { body: { zz_not_a_field: 1 }, headers: xff() });
+      const acc = [empty, emptyPost, bad, badGet].map((r) => r.json?.accepts?.[0]).find(Boolean);
+      const paidBad = acc ? await call(`${srv.url}/ref/${slug}`, { body: { zz_not_a_field: 1 }, headers: { ...xff(), "payment-signature": (await signPayment(acc)).header } }) : null;
+      for (const [what, r] of [["empty GET", empty], ["empty POST", emptyPost], ["invalid GET", badGet], ["invalid POST", bad], ["invalid, paid", paidBad]]) {
+        if (!r) continue;
+        walked++;
+        const hit = pointers(r.text, slug);
+        if (hit.length) pointed.push(`${slug} ${what} (${r.status}): ${hit.slice(0, 2).join(" ")}`);
+        if (hit.length && process.env.WALK_DEBUG) console.log(`# WALK ${slug} ${what}: ${r.text.slice(0, 900)}`);
+      }
+    }
+    ok(walked >= served.length * 4 && pointed.length === 0, `no answer of a served /ref route points a buyer at this server's catalog, pricing, docs or direct routes: ${walked} answers of ${served.length} slugs walked (${pointed.slice(0, 6).join("; ") || "none"})`);
   }
   ok(/\[referral\] image-gen is not served under \/ref: its own upstream wait \(60 s\) is past the handler deadline \(4 s\)/.test(bootLog), "image-gen is left out at boot: its own upstream wait is past the handler deadline");
   ok(/\[referral\] image-gen-premium is not served under \/ref: long-running/.test(bootLog) && /\[referral\] no-such-tool is not served under \/ref: not in the catalog/.test(bootLog) && /\[referral\] attest is not served/.test(bootLog) && /\[referral\] qr is not served under \/ref: answers bytes/.test(bootLog), "a long-running, an identity-bound, a binary and a missing slug are left out with a reason");
@@ -3949,10 +4001,7 @@ try {
     const emptyPaid = await call(`${srv.url}/ref/hash`, { body: {}, headers: { ...xff(), "payment-signature": (await signPayment(emptyPost.json.accepts[0])).header } });
     const exampleHex = createHash("sha256").update("hello world").digest("hex");
     ok(emptyPost.status === 402 && emptyPaid.status === 200 && emptyPaid.json?.hex === exampleHex && /^0x/.test(emptyPaid.json.transaction || ""), `a paid POST of {} to a fixed-price tool runs its published example and settles (${emptyPaid.status} ${emptyPaid.text.slice(0, 90)})`);
-    const mimeGet = await call(`${srv.url}/ref/mime`, { method: "GET", headers: xff() });
-    const mimePaid = await call(`${srv.url}/ref/mime`, { method: "GET", headers: { ...xff(), "payment-signature": (await signPayment(mimeGet.json.accepts[0])).header } });
-    const mimeOwn = await call(`${srv.url}/ref/mime?ext=png`, { method: "GET", headers: { ...xff(), "payment-signature": (await signPayment(mimeGet.json.accepts[0])).header } });
-    ok(mimeGet.status === 402 && mimePaid.status === 200 && mimePaid.json?.mime === "image/webp" && mimeOwn.status === 200 && mimeOwn.json?.mime === "image/png", `a GET tool: a paid GET with no query runs the published example (${mimePaid.json?.mime}); one with a query is served as sent (${mimeOwn.json?.mime})`);
+    // (A GET tool with a published example is covered in the in-process part: every pure-CPU GET tool is free by proof-of-work on the public route, so none is served here.)
     const { LLM_GATEWAY_TOOLS } = await import("../src/tools/llm-gateway-kit.js");
     const proExample = LLM_GATEWAY_TOOLS.find((t) => t.slug === "v1-chat-pro").discovery.input;
     const proDirect = baseAmountOf(await call(`${srv.url}/v1/pro/chat/completions`, { body: proExample, headers: xff() }));

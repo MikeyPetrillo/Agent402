@@ -903,7 +903,7 @@ function trialClientKey(ip) {
 const TRIAL_LIMITS_LABEL = `${TRIAL_PER_TOOL_HOUR} per tool per hour, ${TRIAL_IP_HOUR} per hour per client`;
 const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY} per day per client`;
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
-import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed } from "./first-call-allowance.js";
+import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed, allowanceRouteRefusal } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
 import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
@@ -2571,6 +2571,17 @@ let REFERRAL_CONFIG = null;
 try { REFERRAL_CONFIG = FREE_MODE ? null : referralConfig(process.env); } catch { REFERRAL_CONFIG = null; }
 if (!FREE_MODE && !REFERRAL_CONFIG) { const why = referralConfigProblem(process.env); if (why) console.warn(`WARNING: referral gate is off: ${why}`); }
 const isChatTierDef = (def) => def?.category === "llm" && /\/chat\/completions$/.test(String(def.route || ""));
+const REFERRAL_OWN_HOSTS = [...new Set([(() => { try { return new URL(BASE_URL).host; } catch { return ""; } })(), "agent402.tools"].filter(Boolean))];
+/** The path by which the public route gives this call for less than its
+ *  listed price, or null: proof-of-work (and the trial parameter, which only
+ *  the same pure-CPU set takes), or the first-call allowance while it is on. */
+function referralCheaperDirect(def) {
+  try {
+    if (isComputePayable(def)) return "free by proof-of-work or the trial parameter";
+    if (firstCallAllowanceEnabled() && allowanceRouteRefusal(def) === null) return "the first-call allowance covers it";
+  } catch { return "could not be checked"; }
+  return null;
+}
 const REFERRAL_ROUTES = REFERRAL_CONFIG ? referralRoutes(REFERRAL_CONFIG, CATALOG, (def) => ({
   identityBound: isIdentityBoundRoute(def),
   lastingEffect: defHasLastingEffect(def),
@@ -2587,8 +2598,15 @@ const REFERRAL_ROUTES = REFERRAL_CONFIG ? referralRoutes(REFERRAL_CONFIG, CATALO
   // attempt timeout, an image tier's, a slow route's run budget.
   ownTimeoutMs: Math.max(isChatTierDef(def) ? CHAT_UPSTREAM_TIMEOUT_MS : 0, Number(def.handler?.__budgetMs) || 0, Number(def.runSeconds) * 1000 || 0, Number(IMAGE_GEN_TIERS[def.slug]?.timeoutMs) || 0) || null,
   priceForNetwork,
+  // No pointer to this server's own surfaces on /ref: the hosts a published
+  // example must not name (the configured base URL's and the canonical one).
+  ownHosts: REFERRAL_OWN_HOSTS,
+  // Price parity: the paths by which the public route gives this call for
+  // less than its listed price, which the referral route does not have.
+  cheaperDirect: referralCheaperDirect(def),
 })) : null;
 if (REFERRAL_ROUTES) {
+  for (const r of REFERRAL_ROUTES.noted) console.warn(`[referral] ${r.slug} is ${r.note}`);
   for (const r of REFERRAL_ROUTES.refused) console.warn(`[referral] ${r.slug} is not served under /ref: ${r.reason}`);
   for (const r of REFERRAL_ROUTES.served) console.log(`[referral] ${r.slug} is served under /ref: ${r.why}`);
   console.log(`Referral gate enabled for ${REFERRAL_ROUTES.defs.size} route(s): ${[...REFERRAL_ROUTES.defs.keys()].join(", ") || "none"}`);
@@ -3605,9 +3623,10 @@ const UNPAID_BUDGET = UNPAID_QUOTE_BUDGET > 0 ? createUnpaidQuoteBudget({
   // A /ref/<slug> copy is priced like the route it copies (either verb).
   isPriced: (method, path) => Boolean(CATALOG[`${method} ${path}`]) || Boolean(referralDefOfPath(path)),
   // A /ref copy is on no discovery document, and its paid-client allowance
-  // is the paid-quote trust window a settled call opens: its 429 says so.
-  hintFor: (req, { rule, paidCeiling, policyUrl }) => (referralDefOfPath(req.path)
-    ? `${rule} A request carrying a payment is never counted, and an address that settled a paid call in the last ${PAID_QUOTE_TRUST_MINUTES} minutes reads against ${paidCeiling} per hour. See ${policyUrl}`
+  // is the paid-quote trust window a settled call opens: its 429 says so,
+  // and names no page of this site (a referred buyer is not pointed at it).
+  hintFor: (req, { rule, paidCeiling }) => (referralDefOfPath(req.path)
+    ? `${rule} A request carrying a payment is never counted, and an address that settled a paid call in the last ${PAID_QUOTE_TRUST_MINUTES} minutes reads against ${paidCeiling} per hour.`
     : null),
   isSynthetic: isSyntheticRequest,
   policyUrl: `${BASE_URL.replace(/\/$/, "")}/crawler`,
