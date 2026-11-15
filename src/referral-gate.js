@@ -1535,7 +1535,7 @@ export function createReferralGate({
   // write (bounded by `storeWriteMs`): a write that stands ends the hold, one
   // that does not starts the cool-down again. Returns the seconds to wait,
   // or 0 when the call may go on.
-  const storeHold = { blockedUntil: 0, probing: false, since: 0, lastIntentFailAt: 0 };
+  const storeHold = { blockedUntil: 0, probing: false, since: 0, refusedInRow: 0, countedFailedWrites: -1 };
   // How long a debt claim on an entry stands without its row (a process that
   // stopped between the two): after it the entry can be claimed or delivered again.
   const DEBT_CLAIM_MS = 60_000;
@@ -2037,6 +2037,7 @@ export function createReferralGate({
     // (serve): the proof of this payment is looked for from there.
     try { stored = (await book.intent({ key: entry.key, slug: entry.slug, payer: entry.payer, nonce: entry.auth.nonce, amount: entry.amount, validBefore: Math.floor(entry.validBeforeMs / 1000), fromBlock: entry.fromBlock, deadlineMs: config.storeWriteMs })) === true; }
     catch { stored = false; }
+    if (stored) storeHold.refusedInRow = 0;
     if (!stored) {
       counters.intentFailed++;
       // The word reads attention for this only when the store is really not
@@ -2049,10 +2050,14 @@ export function createReferralGate({
       // One failed write is not an outage: one small write is tried at once,
       // and only when that fails too do paid calls wait.
       if (typeof book.intentFault !== "function" || book.intentFault() === "store") {
-        // (And a second intent the store does not take inside a minute holds
-        // whatever that write says: a store that fails every other write is not healthy.)
-        const again = storeHold.lastIntentFailAt && now() - storeHold.lastIntentFailAt < 60_000;
-        storeHold.lastIntentFailAt = now();
+        // (And a second FAILED WRITE of an intent in a row, however far
+        // apart, holds whatever that small write says: a store that fails
+        // every other write is not healthy. One failed write that carried
+        // several intents is one failure: it is counted once, by the book's
+        // own count of failed writes; an intent that is stored ends the row.)
+        const failedWrites = typeof book.writeStats === "function" ? book.writeStats().failed : null;
+        if (failedWrites === null || failedWrites !== storeHold.countedFailedWrites) { storeHold.countedFailedWrites = failedWrites; storeHold.refusedInRow++; }
+        const again = storeHold.refusedInRow >= 2;
         let took = false;
         if (!again) { try { took = typeof book.ping === "function" && (await book.ping({ deadlineMs: config.storeWriteMs })) === true; } catch { took = false; } }
         if (!took) { reach.intentFailedAt = now(); storeHold.blockedUntil = now() + config.storeCooldownMs; storeHold.since = storeHold.since || now(); }

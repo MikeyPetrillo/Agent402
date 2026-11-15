@@ -69,6 +69,9 @@ export const PROVEN_MAX = 500;
 /** Booked-payment marks: kept this long, at most this many. */
 export const SOLD_KEEP_MS = 3600_000;
 export const SOLD_MAX = 2000;
+/** Records of refused entries dropped at capacity that are kept at once, and how many the sweep reads a pass. */
+export const DROPPED_MAX = 2000;
+export const SWEEP_DROPPED_MAX = 25;
 /** Charged, undelivered entries the sweep hands on in one pass (the rest wait for the next). */
 export const SWEEP_CHARGED_MAX = 50;
 /** Full readings of an unrecognized receipt before the entry is closed to the operator record. */
@@ -84,7 +87,7 @@ export const EXPIRY_SLACK_MS = 120_000;
 export const referralBookFile = () => (process.env.REFERRAL_BOOK_FILE || join(existsSync("/data") ? "/data" : tmpdir(), "agent402-referral-settlements.json"));
 const defaultFile = referralBookFile;
 
-export function createReferralBook({ doc = null, file = defaultFile(), now = Date.now, log = console, maxEntries = MAX_ENTRIES, maxPerPayer = PER_PAYER_MAX } = {}) {
+export function createReferralBook({ doc = null, file = defaultFile(), now = Date.now, log = console, maxEntries = MAX_ENTRIES, maxPerPayer = PER_PAYER_MAX, maxDropped = DROPPED_MAX } = {}) {
   const store = doc || createJsonDocument({ name: REFERRAL_BOOK_DOC, file, log: () => {} });
   let entries = {};
   // The gate's own hang-up forgiveness records ([time, micro-dollars, key
@@ -104,6 +107,13 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   // The payments whose sale this gate has booked, by authorization key (the
   // per-payment mark that outlives the entry and the process): { key: { tx, payer, slug, at } }.
   let sold = {};
+  // Refused entries dropped at capacity, by key (`dropped`): the few fields a
+  // chain read needs ({ key, slug, payer, nonce, amount, validBefore,
+  // fromBlock, at }), kept until the authorization can no longer be sent, so
+  // a payment the facilitator lands after all is still found by the sweep.
+  // At most `maxDropped`; one evicted before its expiry is counted and logged.
+  let dropped = {};
+  let droppedEarly = 0;
   const lcPayer = (p) => String(p).toLowerCase();
   // (A "refused" entry, kept only so a payment that lands after the
   // facilitator refused it is found, is not the payer's open settlement: it
@@ -138,6 +148,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     short = b && typeof b === "object" && b.short && typeof b.short === "object" && !Array.isArray(b.short) ? { ...b.short } : {};
     proven = b && typeof b === "object" && b.proven && typeof b.proven === "object" && !Array.isArray(b.proven) ? { ...b.proven } : {};
     sold = b && typeof b === "object" && b.sold && typeof b.sold === "object" && !Array.isArray(b.sold) ? { ...b.sold } : {};
+    dropped = b && typeof b === "object" && b.dropped && typeof b.dropped === "object" && !Array.isArray(b.dropped) ? { ...b.dropped } : {};
   };
   try { absorb(store.loadSync(null)); } catch { /* read below */ }
   const ready = Promise.resolve().then(() => store.load(null)).then((b) => { if (b) absorb(b); }).catch(() => {});
@@ -160,7 +171,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   let flushing = null;
   let lastIntentFault = null;
   const writes = { updates: 0, changes: 0, failed: 0, bytes: 0, lastOk: true, lastAt: 0 };
-  const FALLBACK = { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {}, proven: {}, sold: {} };
+  const FALLBACK = { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {}, proven: {}, sold: {}, dropped: {} };
   const applyBatch = (batch) => (body) => {
     const cur = body && typeof body === "object" && body.entries && typeof body.entries === "object" ? { ...body.entries } : {};
     let kept = body && typeof body === "object" && Array.isArray(body.forgiven) ? body.forgiven : [];
@@ -170,17 +181,18 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     const under = body && typeof body === "object" && body.short && typeof body.short === "object" && !Array.isArray(body.short) ? { ...body.short } : {};
     const warm = body && typeof body === "object" && body.proven && typeof body.proven === "object" && !Array.isArray(body.proven) ? { ...body.proven } : {};
     const marks = body && typeof body === "object" && body.sold && typeof body.sold === "object" && !Array.isArray(body.sold) ? { ...body.sold } : {};
+    const graves = body && typeof body === "object" && body.dropped && typeof body.dropped === "object" && !Array.isArray(body.dropped) ? { ...body.dropped } : {};
     let any = false;
     for (const item of batch) {
       if (item.dropped) continue;
       item.started = true;
       let out;
-      try { out = item.fn(cur, kept, done, gone, shut, under, warm, marks); } catch (e) { item.threw = true; throw e; }
+      try { out = item.fn(cur, kept, done, gone, shut, under, warm, marks, graves); } catch (e) { item.threw = true; throw e; }
       if (out === SKIP_UPDATE) continue;
       any = true;
       if (Array.isArray(out)) kept = out;
     }
-    return any ? { entries: cur, forgiven: kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX), short: under, proven: warm, sold: marks } : SKIP_UPDATE;
+    return any ? { entries: cur, forgiven: kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX), short: under, proven: warm, sold: marks, dropped: graves } : SKIP_UPDATE;
   };
   async function flush() {
     try {
@@ -229,11 +241,24 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     async intent({ key, slug, payer, nonce, amount, validBefore, fromBlock = null, deadlineMs = 0 }) {
       const t = now();
       let full = false, payerFull = false, dropped = null;
-      const ok = await change((cur, _kept, _done, gone) => {
+      let early = 0;
+      const ok = await change((cur, _kept, _done, gone, _shut, _under, _warm, _marks, graves) => {
         const prev = cur[key];
         dropped = null;
+        early = 0;
         if (!prev && heldBy(cur, payer) >= maxPerPayer) { payerFull = true; return SKIP_UPDATE; }
-        if (!prev && Object.keys(cur).length >= maxEntries) { const spare = droppable(cur); if (spare) delete cur[spare.key]; }
+        if (!prev && Object.keys(cur).length >= maxEntries) {
+          const spare = droppable(cur);
+          if (spare) {
+            // Dropped to make room, and remembered: what a chain read of it needs.
+            graves[spare.key] = { key: spare.key, slug: spare.slug, payer: spare.payer, nonce: spare.nonce, amount: spare.amount, validBefore: spare.validBefore, fromBlock: spare.fromBlock ?? null, at: t };
+            delete cur[spare.key];
+            const ks = Object.keys(graves);
+            if (ks.length > maxDropped) for (const k of ks.sort((a, b) => (graves[a].at || 0) - (graves[b].at || 0)).slice(0, ks.length - maxDropped)) { if (t <= (Number(graves[k].validBefore) || 0) * 1000 + EXPIRY_SLACK_MS) early++; delete graves[k]; }
+          }
+        }
+        // (An entry written again for a payment is no longer a dropped one.)
+        if (graves[key]) delete graves[key];
         if (!prev && Object.keys(cur).length >= maxEntries) {
           const stuck = retirable(cur, t);
           if (!stuck) { full = true; return SKIP_UPDATE; }
@@ -247,6 +272,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       if (ok && dropped) say("error", `the settlement book was at capacity (${maxEntries}): the oldest in-doubt entry whose authorization has expired was retired to the operator record (${dropped.slug} payer=${String(dropped.payer).slice(0, 6)} tx=${dropped.tx || "none read"})`);
       if (payerFull) say("error", `one payer holds its whole share of the settlement book (${maxPerPayer} open entries, payer=${String(payer).slice(0, 6)}); its new settlement is refused before /settle until its entries resolve`);
       if (full) say("error", `the settlement book is full (${maxEntries} open entries, none may be retired); a new settlement is refused before /settle until entries resolve`);
+      if (ok && early) { droppedEarly += early; say("error", `${early} record(s) of refused settles dropped at capacity were themselves dropped before their authorization expired (more than ${maxDropped} at once): a payment that lands late for one of them would not be found`); }
       lastIntentFault = ok ? (full ? "full" : payerFull ? "payer" : null) : "store";
       return ok && !full && !payerFull;
     },
@@ -297,6 +323,9 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     resolvedByHand: () => resolved.slice(),
     /** Entries retired at capacity, oldest first. */
     retiredAtCapacity: () => retired.slice(),
+    /** The refused entries dropped at capacity that are still remembered,
+     *  and how many such records were themselves dropped early since boot. */
+    droppedRefused: () => ({ count: Object.keys(dropped).length, evictedEarly: droppedEarly, records: Object.values(dropped) }),
     /** One sale whose receipt paid this merchant less than the rate map
      *  expects (or, with `product`, one payment whose receipt names another
      *  product id than the slug's: `{ configured, received }`), counted once
@@ -563,6 +592,40 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
           }
           return any ? undefined : SKIP_UPDATE;
         });
+      }
+      // The refused entries dropped at capacity: each is read like an open
+      // one until its authorization can no longer be sent. A payment that
+      // landed after all is written back as an entry, charged and
+      // undelivered (the loop below hands it on); the rest are forgotten once
+      // expired, or once the chain shows the nonce spent elsewhere.
+      {
+        const graveNow = Object.values(dropped).sort((a, b) => (a.checkedAt || 0) - (b.checkedAt || 0) || (a.at || 0) - (b.at || 0)).slice(0, SWEEP_DROPPED_MAX);
+        const forget = [], seen = [], back = [];
+        for (const g of graveNow) {
+          let st;
+          try { st = await chain.state({ from: g.payer, nonce: g.nonce, payTo, amount: g.amount, fromBlock: g.fromBlock, minNet: minNetOf(g), productId: productIdOf(g) }); } catch { st = { used: null, paid: null, transaction: null, complete: false }; }
+          const verdict = chainVerdict(st, { validBeforeMs: (Number(g.validBefore) || 0) * 1000, nowMs: t, slackMs: EXPIRY_SLACK_MS });
+          if (verdict === "paid") {
+            let booked = false;
+            try { booked = (await bookSale(g, st.transaction, st.net ?? null)) === true; } catch { booked = false; }
+            back.push({ g, tx: st.transaction, booked });
+            out.landed++;
+            say("error", `CHARGED-BUT-NOT-SERVED: a refused settle whose entry was dropped at capacity landed on chain (${g.slug} payer=${String(g.payer).slice(0, 6)} tx=${st.transaction})${booked ? ", sale booked" : ", sale NOT booked"}`);
+          } else if (verdict === "unpaid" || verdict === "expired-unused" || t > (Number(g.validBefore) || 0) * 1000 + EXPIRY_SLACK_MS) forget.push(g.key);
+          else seen.push(g.key);
+        }
+        if (forget.length || seen.length || back.length) {
+          await change((cur, _kept, _done, _gone, _shut, _under, _warm, _marks, graves) => {
+            for (const k of forget) delete graves[k];
+            for (const k of seen) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t };
+            for (const { g, tx, booked } of back) {
+              if (!graves[g.key]) continue;
+              delete graves[g.key];
+              if (!cur[g.key]) cur[g.key] = { key: g.key, slug: g.slug, payer: g.payer, nonce: g.nonce, amount: g.amount, validBefore: g.validBefore, fromBlock: g.fromBlock ?? null, at: g.at || t, state: "charged-undelivered", tx, saleBooked: booked, landedAt: t, updatedAt: t };
+            }
+            return undefined;
+          });
+        }
       }
       // A booked-payment mark is kept SOLD_KEEP_MS: removed here once older,
       // so it does not wait for the next sale to be pruned.
