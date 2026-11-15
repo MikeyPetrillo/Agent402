@@ -86,6 +86,37 @@ for (const [doc, re, pkg, why] of CLAIMS) {
   ok(guide.includes("failed to settle for a reason about the payment itself") && guide.includes("(${SETTLE_BREAKER_UNKNOWN_MAX} for failures whose cause the settlement did not name") && /UNKNOWN_MAX_FAILS as SETTLE_BREAKER_UNKNOWN_MAX/.test(guide) && NEVER.test(guide),
     "src/guides.js breaker row reads the unknown-cause count from the code and says our side or the facilitator's is never counted");
 }
+// The in-flight coverage figures (src/inflight-cover.js): the allowance of
+// calls at once for a wallet with no recent read (and with a payment on
+// record), how long a kept read is judged on, and the code-run tools' own
+// per-payer limit (src/tools/code-run-kit.js). The wiki types them; the guide
+// rows read them from the code. Each figure is compared, so a changed default
+// or a changed sentence fails here.
+{
+  for (const k of ["INFLIGHT_COVER_UNREAD_MAX", "INFLIGHT_COVER_UNREAD_PAID_MAX"]) delete process.env[k];
+  const cover = await import("../src/inflight-cover.js");
+  const { CODE_RUN_PER_PAYER_MAX } = await import("../src/tools/code-run-kit.js");
+  const { unreadMax: u, unreadPaidMax: p } = cover.inflightCoverStatus();
+  const min = Math.round(cover.GOOD_READ_MAX_MS / 60_000);
+  ok(Number.isInteger(u) && Number.isInteger(p) && p > u && Number.isInteger(min) && min > 0 && CODE_RUN_PER_PAYER_MAX >= 1,
+    `control: the coverage figures read from the code (${u} unread, ${p} with a paid record, ${min} minutes, code-run ${CODE_RUN_PER_PAYER_MAX})`);
+  const vol = (String(read("wiki/Buying-at-Volume.md") || "").split("\n").find((l) => l.startsWith("| Paid calls in flight, per wallet")) || "");
+  const sh = (String(read("wiki/Self-Hosting.md") || "").split("\n").find((l) => l.startsWith("| `INFLIGHT_COVER`")) || "");
+  ok(vol.includes(`within the past ${min} minutes`) && vol.includes(`has not read in the past ${min} minutes`) && vol.includes(`runs up to ${u} calls at once (${p} for a wallet with a payment on record)`) && vol.includes(`a wallet runs up to ${u} calls at once there`) && vol.includes(`(the code-run tools: ${CODE_RUN_PER_PAYER_MAX} runs at once per payer)`),
+    `wiki/Buying-at-Volume.md coverage row states ${u} and ${p} calls at once, ${min} minutes and code-run ${CODE_RUN_PER_PAYER_MAX}`);
+  ok(sh.includes(`within the past ${min} minutes`) && sh.includes(`\`_UNREAD_MAX\` calls at once (default ${u})`) && sh.includes(`\`_UNREAD_PAID_MAX\` (default ${p})`) && sh.includes(`the code-run tools run ${CODE_RUN_PER_PAYER_MAX} at once per payer`),
+    `wiki/Self-Hosting.md INFLIGHT_COVER row states defaults ${u} and ${p}, ${min} minutes and code-run ${CODE_RUN_PER_PAYER_MAX}`);
+  // Every figure in the two wiki rows is one of the above, so a figure typed
+  // beside them that the code does not hold is caught too.
+  const stray = (row) => [...row.matchAll(/up to (\d+) calls at once|past (\d+) minutes|\(default (\d+)\)/g)].map((m) => Number(m[1] ?? m[2] ?? m[3])).filter((n) => ![u, p, min].includes(n));
+  ok(stray(vol).length === 0 && stray(sh).length === 0, `no other coverage figure in the wiki rows (${[...stray(vol), ...stray(sh)].join(", ") || "none"})`);
+  const guide = read("src/guides.js") || "";
+  const row = guide.split("\n").find((l) => l.startsWith("| A wallet's paid calls in flight, on every paid route")) || "";
+  ok(/const COVER_UNREAD_MAX = inflightCover\.inflightCoverStatus\(\)\.unreadMax;/.test(guide) && /const COVER_UNREAD_PAID_MAX = inflightCover\.inflightCoverStatus\(\)\.unreadPaidMax;/.test(guide) && /const COVER_GOOD_READ_MINUTES = Math\.round\(\(Number\(inflightCover\.GOOD_READ_MAX_MS\)/.test(guide) && /import \{ CODE_RUN_PER_PAYER_MAX \} from "\.\/tools\/code-run-kit\.js";/.test(guide),
+    "src/guides.js reads the coverage figures and the code-run limit from the code");
+  ok(row.includes("${COVER_GOOD_READ_MINUTES} minutes") && row.includes("up to ${COVER_UNREAD_MAX} calls at once (${COVER_UNREAD_PAID_MAX} with a payment on record)") && row.includes("(the code-run tools: ${CODE_RUN_PER_PAYER_MAX} runs at once per payer)") && !/\b\d+ calls at once|\bpast \d+ minutes|\b\d+ runs at once/.test(row),
+    "src/guides.js coverage row quotes the derived figures and types none");
+}
 // facilitatorFunds: a gas balance under the floor reads low; one that cannot
 // be read reads unknown (src/tool-failure-monitor.js), which does not page.
 {
