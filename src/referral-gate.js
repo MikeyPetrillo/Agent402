@@ -569,6 +569,13 @@ export function referralMinNet(grossUnits, { commissionBps = 0, feeBps = 0 } = {
  *  (shutdown, src/server.js), and the book write that records the settle's
  *  outcome has to land first. */
 export const REFERRAL_DRAIN_SETTLE_MARGIN_MS = 10_000;
+/** True when this server sells through referral links: paid mode, with every
+ *  required REFERRAL_* setting present and usable (the gate is then built).
+ *  The legal pages and the payment data-handling list read it, so a server
+ *  with the gate off says nothing about a channel it does not have. */
+export function referralOffered(env = process.env) {
+  try { return env.FREE_MODE !== "true" && referralConfig(env) !== null; } catch { return false; }
+}
 /** Slugs served under /ref before the price-parity rule (referralIneligibility):
  *  still served, and named in a warning at every boot until the owner decides. */
 export const REFERRAL_PARITY_GRANDFATHERED = Object.freeze(["hash"]);
