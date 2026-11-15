@@ -4268,7 +4268,7 @@ try {
     const hostOf = new URL(srv.url).host;
     const pointers = (text, slug) => {
       const found = [];
-      for (const m of String(text).matchAll(new RegExp(`(?:agent402\\.tools|${hostOf.replace(/[.]/g, "\\.")})(\\/[^\\s"'\\\\<>)]*)?`, "gi"))) { const path = m[1] || "/"; if (!path.startsWith(`/ref/${slug}`) && !path.startsWith("/api/refunds?tx=")) found.push(m[0]); }
+      for (const m of String(text).matchAll(new RegExp(`(?:agent402\\.tools|${hostOf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(\\/[^\\s"'\\\\<>)]*)?`, "gi"))) { const path = m[1] || "/"; if (!path.startsWith(`/ref/${slug}`) && !path.startsWith("/api/refunds?tx=")) found.push(m[0]); }
       for (const m of String(text).matchAll(/(?:^|[\s"'(])(\/(?:api\/(?!refunds\?tx=)[a-z0-9-]+|v1\/[a-z0-9/-]+|openapi\.json|llms[a-z-]*\.txt|\.well-known\/x402|docs|pricing|crawler|tools|catalog)\b[^\s"']*)/gi)) found.push(m[1]);
       return found;
     };
