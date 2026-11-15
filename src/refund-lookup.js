@@ -17,7 +17,22 @@
 // hash, so there is no prefix search and nothing to enumerate, and an unknown
 // transaction answers in exactly the same shape as a known one with no refund
 // ("none"), so the answer does not say whether we ever saw that payment.
-import { refundByEvidence } from "./refund-ledger.js";
+//
+// One transaction can hold several payments (a rail that settles more than
+// one authorization in a transaction keys each debt `<tx>#<nonce>`), so the
+// answer lists every refund of that transaction in `refunds`, each with its
+// own status and amount, and leads with the one furthest from repaid. The
+// nonce is never shown and is never a lookup key: the buyer holds the tx.
+import { refundsByTransaction } from "./refund-ledger.js";
+
+const KEYED_EVIDENCE = /^(0x[0-9a-fA-F]{64})#0x[0-9a-fA-F]{64}$/;
+/** The settlement transaction a ledger row's evidence names: the evidence
+ *  itself, or the part before `#` of a per-payment key. */
+export function evidenceTx(evidence) {
+  const e = String(evidence || "").trim();
+  const m = KEYED_EVIDENCE.exec(e);
+  return m ? m[1] : e;
+}
 
 const CAIP_TO_CHAIN = {
   "eip155:8453": "base", "eip155:137": "polygon", "eip155:42161": "arbitrum", "eip155:10": "optimism",
@@ -92,7 +107,7 @@ const NOTES = {
  *  status does); `priceUsd` is the price of the call that payment bought, the
  *  amount a refund repays (`amountUsd`, kept for earlier readers); `txUrl`
  *  is the payment itself on its explorer. */
-export function publicRefundView(tx, row) {
+export function publicRefundView(tx, row, rows = row ? [row] : []) {
   const status = row && NOTES[row.status] ? row.status : "none";
   const has = status !== "none";
   const refundTx = has && status === "paid" && row.paidTx ? String(row.paidTx) : null;
@@ -111,30 +126,43 @@ export function publicRefundView(tx, row) {
     refundTxUrl: refundTx ? explorerTxUrl(row.network, refundTx) : null,
     refundedAt: refundTx && row.resolvedAt ? new Date(row.resolvedAt).toISOString() : null,
     note: NOTES[status],
+    // Every refund recorded for this transaction (one, except where several
+    // payments settled in it), oldest first; empty when there is none.
+    refunds: rows.filter((r) => r && NOTES[r.status] && r.status !== "none").map((r) => {
+      const sent = r.status === "paid" && r.paidTx ? String(r.paidTx) : null;
+      const p = Number(Number(r.priceUsd || 0).toFixed(6));
+      return { status: r.status, priceUsd: p, amountUsd: p, refundTx: sent, refundTxUrl: sent ? explorerTxUrl(r.network, sent) : null, refundedAt: sent && r.resolvedAt ? new Date(r.resolvedAt).toISOString() : null };
+    }),
   };
 }
 
+// The row an answer leads with: the one furthest from repaid, so a
+// transaction with a debt still owed never reads as settled.
+const LEAD_ORDER = ["owed", "sending", "paid", "void"];
+
 /** Look one presented transaction up. Throws a 400 for input that is not one
  *  transaction hash; otherwise always answers the same shape. */
-export function refundLookup(input, { byEvidence = refundByEvidence } = {}) {
+export function refundLookup(input, { byTransaction = refundsByTransaction } = {}) {
   const keys = lookupKeys(input);
   if (!keys) {
     const e = new Error("\"tx\" must be one settlement transaction hash (0x-prefixed hex on EVM chains, a signature on Solana, a transaction id on Stellar or Algorand).");
     e.statusCode = 400;
     throw e;
   }
-  let row = null;
-  for (const k of keys) { row = byEvidence(k); if (row) break; }
-  return publicRefundView(keys[0], row);
+  const seen = new Map();
+  for (const k of keys) for (const r of byTransaction(k) || []) if (r && !seen.has(r.evidence)) seen.set(r.evidence, r);
+  const rows = [...seen.values()];
+  const lead = LEAD_ORDER.map((s) => rows.find((r) => r.status === s)).find(Boolean) || null;
+  return publicRefundView(keys[0], lead, rows);
 }
 
 /** A caller's own refunds, for identity-bound surfaces (my-usage).
  *  The settlement tx is included here: the caller proved the wallet. */
 export function ownRefundsView(rows) {
   const list = (Array.isArray(rows) ? rows : []).map((r) => ({
-    ...publicRefundView(String(r.evidence || ""), r),
+    ...publicRefundView(evidenceTx(r.evidence), r),
     recordedAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
-  })).map(({ note, ...rest }) => rest);
+  })).map(({ note, refunds, ...rest }) => rest);
   // A row keyed on the payer|slug|minute fallback has no settlement tx to show.
   for (const r of list) if (!lookupKeys(r.tx)) r.tx = null;
   const sum = (s) => Number(list.filter((r) => r.status === s).reduce((a, r) => a + (r.amountUsd || 0), 0).toFixed(6));

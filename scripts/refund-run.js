@@ -379,7 +379,8 @@ export function ourPayToSet(accepts, env = process.env) {
 // input data (Basescan decodes it as UTF-8). Names the settlement it repays
 // when the row holds a real transaction hash (public on chain already).
 export function refundMemo(row) {
-  const ev = String(row?.evidence || "").trim();
+  // A per-payment key (`<tx>#<authorization nonce>`) names its transaction.
+  const ev = String(row?.evidence || "").trim().replace(/^(0x[0-9a-fA-F]{64})#0x[0-9a-fA-F]{64}$/, "$1");
   return /^0x[0-9a-fA-F]{64}$/.test(ev) ? `agent402 refund for ${ev}` : "agent402 refund";
 }
 export function refundMemoHex(row) {

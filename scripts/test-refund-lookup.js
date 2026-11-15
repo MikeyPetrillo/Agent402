@@ -22,7 +22,9 @@ import { getFreePort } from "./lib/free-port.js";
 const dir = mkdtempSync(join(tmpdir(), "refund-lookup-"));
 process.env.REFUND_DB_DIR = dir;
 process.env.SALES_LEDGER_DB = join(dir, "sales.db");
-const { recordRefundOwed, markRefundPaid, markRefundVoid, listRefunds, refundsForPayer, claimRefundForSend } = await import("../src/refund-ledger.js");
+const { recordRefundOwed, markRefundPaid, markRefundVoid, listRefunds, refundsForPayer, claimRefundForSend, refundByEvidence } = await import("../src/refund-ledger.js");
+const { referralRefundWriter, referralRefundEvidence } = await import("../src/referral-gate.js");
+const { refundMemo } = await import("./refund-run.js");
 const { refundLookup, lookupKeys, ownRefundsView, explorerTxUrl, publicRefundView } = await import("../src/refund-lookup.js");
 const { USAGE_TOOLS } = await import("../src/tools/usage-kit.js");
 
@@ -69,7 +71,7 @@ ok(refundLookup(TX_SOL).status === "owed" && refundLookup(TX_SOL).chain === "sol
 ok(refundLookup(TX_SOL.replace("V", "v")).status === "none", "base58 is never case-folded: a different spelling is a different signature");
 
 // every status, with found / priceUsd / the payment's explorer link
-const KEYS = "tx,found,status,priceUsd,amountUsd,network,chain,txUrl,refundTx,refundTxUrl,refundedAt,note";
+const KEYS = "tx,found,status,priceUsd,amountUsd,network,chain,txUrl,refundTx,refundTxUrl,refundedAt,note,refunds";
 ok(Object.keys(paid).join() === KEYS, `the answer carries exactly the public fields (${Object.keys(paid).join()})`);
 ok(paid.found === true && paid.priceUsd === 0.005 && paid.txUrl === `https://basescan.org/tx/${TX_PAID}`, "paid: found, the call's price and the payment on its explorer");
 const sending = refundLookup(TX_SEND);
@@ -101,8 +103,37 @@ throws400(() => refundLookup(`${TX_PAID},${TX_OWED}`), "two hashes in one ask ar
 ok(lookupKeys(TX_PAID).length === 1 && lookupKeys("A".repeat(52)).length === 1, "an Algorand txid shape is accepted as-is");
 ok(explorerTxUrl("stellar:pubnet", "ab") === "https://stellar.expert/explorer/public/tx/ab" && explorerTxUrl("algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", "X") === "https://allo.info/tx/X" && explorerTxUrl("eip155:4663", "0x1").includes("robinhood"), "explorer links cover the non-EVM and newer EVM rails");
 
+// ---- a payment keyed by its own authorization (the referral rail writes
+// `<tx>#<nonce>`, one row per payment, so two payments settled in one
+// transaction are two debts): the buyer holds the TRANSACTION, and the lookup
+// by transaction finds every row of it.
+const TX_REF = "0x" + "5e".repeat(32), TX_REF1 = "0x" + "6f".repeat(32);
+const N1 = "0x" + "01".repeat(32), N2 = "0x" + "02".repeat(32);
+const oweReferral = referralRefundWriter({ recordRefundOwed, refundByEvidence });
+ok(await oweReferral({ slug: "ref-tool", network: "eip155:8453", payer: PAYER_A, priceUsd: 0.03, tx: TX_REF1, evidenceKey: referralRefundEvidence(TX_REF1, N1), httpStatus: 409, wire: "referral" }) === true
+  && await oweReferral({ slug: "ref-tool", network: "eip155:8453", payer: PAYER_A, priceUsd: 0.01, tx: TX_REF, evidenceKey: referralRefundEvidence(TX_REF, N1), httpStatus: 409, wire: "referral" }) === true
+  && await oweReferral({ slug: "ref-tool", network: "eip155:8453", payer: PAYER_B, priceUsd: 0.02, tx: TX_REF, evidenceKey: referralRefundEvidence(TX_REF, N2), httpStatus: 409, wire: "referral-operator" }) === true, "fixture: three referral debts written by the gate's own writer, two of them in one transaction");
+const one = refundLookup(TX_REF1);
+ok(one.status === "owed" && one.found === true && one.priceUsd === 0.03 && one.chain === "base" && one.txUrl === `https://basescan.org/tx/${TX_REF1}` && one.refunds.length === 1 && one.refunds[0].status === "owed" && one.refunds[0].priceUsd === 0.03, `a debt keyed by its authorization is found by its transaction: owed, never "none" (${one.status}, ${one.refunds?.length} listed)`);
+ok(refundLookup(TX_REF1.toUpperCase().replace("0X", "0x")).status === "owed", "in either hex case");
+const two = refundLookup(TX_REF);
+ok(two.status === "owed" && two.refunds.length === 2 && two.refunds.map((r) => r.priceUsd).sort().join() === "0.01,0.02" && two.refunds.every((r) => r.status === "owed"), `two payments settled in one transaction are both listed, each with its own status and amount (${two.refunds?.map((r) => `${r.status} ${r.priceUsd}`).join("; ")})`);
+const allRows = listRefunds({ status: "all" });
+const refId = (ev) => allRows.find((r) => r.evidence === ev).id;
+const RF_REF = "0x" + "7a".repeat(32);
+ok(claimRefundForSend(refId(referralRefundEvidence(TX_REF, N1))) && markRefundPaid(refId(referralRefundEvidence(TX_REF, N1)), RF_REF), "fixture: one of the two is repaid");
+const mixed = refundLookup(TX_REF);
+ok(mixed.status === "owed" && mixed.priceUsd === 0.02 && mixed.refundTx === null && mixed.refunds.find((r) => r.priceUsd === 0.01)?.status === "paid" && mixed.refunds.find((r) => r.priceUsd === 0.01)?.refundTx === RF_REF && mixed.refunds.find((r) => r.priceUsd === 0.02)?.status === "owed", "with one repaid and one owed the answer leads with the one still owed, and each row says its own");
+const refBlob = JSON.stringify([one, two, mixed]);
+ok(![PAYER_A, PAYER_B].some((p) => refBlob.toLowerCase().includes(p.toLowerCase().slice(2))) && !refBlob.includes(N1.slice(2)) && !refBlob.includes(N2.slice(2)) && !/ref-tool|referral|evidence|"id"/.test(refBlob), "and none of it carries a payer, a tool, a wire or the authorization's nonce");
+throws400(() => refundLookup(referralRefundEvidence(TX_REF, N1)), "the keyed form itself is not a transaction and is refused");
+ok(refundLookup("0x" + "5e".repeat(31) + "5f").status === "none" && refundLookup(TX_REF).refunds.length === 2 && refundLookup("0x" + "99".repeat(32)).refunds.length === 0, "a neighboring hash matches nothing (no prefix search), and an unknown one lists nothing");
+ok(refundMemo({ evidence: referralRefundEvidence(TX_REF, N1) }) === `agent402 refund for ${TX_REF}` && refundMemo({ evidence: TX_PAID }) === `agent402 refund for ${TX_PAID}` && refundMemo({ evidence: `${PAYER_A}|x|1` }) === "agent402 refund", "the refund's memo names the settlement transaction for a keyed row too, and never a fallback key");
+const mineRef = ownRefundsView(refundsForPayer(PAYER_B)).rows.find((r) => r.amountUsd === 0.02 && r.status === "owed");
+ok(mineRef?.tx === TX_REF && mineRef.txUrl === `https://basescan.org/tx/${TX_REF}`, `the payer's own listing shows the transaction of a keyed row (${mineRef?.tx})`);
+
 // ---- identity-bound listing
-const mine = refundsForPayer(PAYER_A.toLowerCase());
+const mine = refundsForPayer(PAYER_A.toLowerCase()).filter((r) => !String(r.evidence).includes("#"));
 ok(mine.length === 4 && mine.every((r) => r.evidence !== TX_B && r.evidence !== TX_SOL), "refundsForPayer returns only that wallet's rows (EVM matched case-insensitively)");
 ok(refundsForPayer(SOL_PAYER.toLowerCase()).length === 0 && refundsForPayer(SOL_PAYER).length === 1, "a base58 payer is matched exactly, never folded");
 ok(refundsForPayer("").length === 0 && refundsForPayer(null).length === 0, "no payer, no rows");
@@ -113,10 +144,10 @@ ok(view.rows.find((r) => r.amountUsd === 0.004).txUrl === null, "a fallback ledg
 const myUsage = USAGE_TOOLS.find((t) => t.slug === "my-usage");
 const reqFor = (from) => { const h = Buffer.from(JSON.stringify({ x402Version: 2, payload: { signature: "0x00", authorization: { from } } })).toString("base64"); return { header: (k) => (k === "payment-signature" ? h : undefined) }; };
 const outA = await myUsage.handler({}, reqFor(PAYER_A));
-ok(outA.refunds && outA.refunds.count === 4 && outA.refunds.rows.some((r) => r.tx === TX_PAID && r.refundTx === RF_PAID), "my-usage lists the signed payer's refunds with our refund tx");
+ok(outA.refunds && outA.refunds.count === 6 && outA.refunds.rows.some((r) => r.tx === TX_PAID && r.refundTx === RF_PAID), "my-usage lists the signed payer's refunds with our refund tx");
 ok(!JSON.stringify(outA.refunds).includes(TX_B), "and never another wallet's");
 const outB = await myUsage.handler({}, reqFor(PAYER_B));
-ok(outB.refunds.count === 2 && outB.refunds.rows.every((r) => r.tx === TX_B || r.tx === TX_SEND), "control: the other wallet sees exactly its own rows");
+ok(outB.refunds.count === 3 && outB.refunds.rows.every((r) => r.tx === TX_B || r.tx === TX_SEND || r.tx === TX_REF) && outB.refunds.rows.every((r) => !("refunds" in r)), "control: the other wallet sees exactly its own rows");
 try { await myUsage.handler({}, { header: () => undefined }); ok(false, "an unsigned caller is refused"); } catch (e) { ok(e?.statusCode === 400, "an unsigned caller is refused (no refunds without the payment identity)"); }
 
 // ---- the route, booted: free, same shape, rate limited
