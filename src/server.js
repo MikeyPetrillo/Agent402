@@ -4279,7 +4279,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // The referral gate's settlements (src/referral-gate.js): ok / attention,
     // only while the gate is mounted. One word; the reasons and counts are on
     // /__operator/referral.json. The heartbeat and the status Worker page on attention.
-    ...(REFERRAL_GATE ? { referralSettlement: (() => { try { const w = REFERRAL_GATE.statusWord(); return full ? w : { status: w.status }; } catch { return { status: "unknown" }; } })() } : {}),
+    ...(REFERRAL_GATE ? { referralSettlement: (() => { try { const w = REFERRAL_GATE.statusWord(); return full ? w : { status: w.status, tag: w.tag }; } catch { return { status: "unknown" }; } })() } : {}),
     gatewayBalance: (() => { try { return gatewayBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
@@ -10813,7 +10813,7 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
   res.set("Cache-Control", "private, no-store");
   if (!REFERRAL_GATE) return res.status(409).json({ error: "the referral gate is off" });
   const { action, key, note, outcome } = req.body || {};
-  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}, or {"action":"clear-short","slug":"<slug>","note":"what was checked"}';
+  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}, or {"action":"clear-short","slug":"<slug>","note":"what was checked"}, or {"action":"acknowledge","what":"retired"|"closed","note":"what was checked"}, or {"action":"resolve-many","state":"<entry state>","reason":"<recorded reason, optional>","outcome":"dismissed"|"delivered","note":"what was checked"}';
   // A record closed as unrecognized goes back to the open entries, where resolve works on it.
   // A slug's short-net record (and the stop it may carry) is cleared by hand.
   if (action === "clear-short") {
@@ -10825,6 +10825,20 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
   if (action === "reopen") {
     try {
       const r = await REFERRAL_GATE.reopenByHand(typeof key === "string" ? key : "", { note: typeof note === "string" ? note : "" });
+      return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
+    } catch { return res.status(503).json({ error: "the settlement book could not be written" }); }
+  }
+  // The retired or closed records were read: the word stops naming them.
+  if (action === "acknowledge") {
+    try {
+      const r = await REFERRAL_GATE.acknowledge(typeof req.body?.what === "string" ? req.body.what : "", { note: typeof note === "string" ? note : "" });
+      return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
+    } catch { return res.status(503).json({ error: "the settlement book could not be written" }); }
+  }
+  // Every open entry of one state (and one recorded reason), each recorded with the note.
+  if (action === "resolve-many") {
+    try {
+      const r = await REFERRAL_GATE.resolveManyByHand({ state: req.body?.state, reason: req.body?.reason ?? null, outcome, note: typeof note === "string" ? note : "", max: req.body?.max });
       return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
     } catch { return res.status(503).json({ error: "the settlement book could not be written" }); }
   }

@@ -1512,9 +1512,16 @@ export function createReferralGate({
   // The facilitator not answering (a timeout, a 5xx, an intermediary's page):
   // since when without a break, and how many calls in that stretch.
   // Counted per endpoint: a /verify that answers says nothing of a /settle that does not.
-  const reach = { verify: { since: 0, calls: 0 }, settle: { since: 0, calls: 0 }, intentFailedAt: 0, contradictedAt: 0 };
-  const noteUnanswered = (stage) => { const r = reach[stage]; if (!r.since) r.since = now(); r.calls++; };
-  const noteAnswered = (stage) => { reach[stage].since = 0; reach[stage].calls = 0; };
+  const reach = { verify: { since: 0, calls: 0, last: 0 }, settle: { since: 0, calls: 0, last: 0 }, chain: { since: 0, calls: 0, last: 0 }, intentFailedAt: 0, contradictedAt: 0 };
+  const noteUnanswered = (stage) => { const r = reach[stage]; if (!r.since) r.since = now(); r.calls++; r.last = now(); };
+  const noteAnswered = (stage) => { reach[stage].since = 0; reach[stage].calls = 0; reach[stage].last = 0; };
+  // "Not answering" is a reading of calls that went unanswered: two or more
+  // in a row, over `forMs`, the last of them within REACH_AGE_OUT_MS. With no
+  // call since then there is no evidence either way, so the reason ages out
+  // (it used to stand until the next paid call or a restart).
+  const REACH_AGE_OUT_MS = 30 * 60_000;
+  const CHAIN_DOWN_MS = 5 * 60_000;
+  const unreachable = (r, t, forMs) => !!(r && r.since && r.calls >= 2 && t - r.since >= forMs && t - (r.last || r.since) < REACH_AGE_OUT_MS);
 
   /**
    * One word for /api/gateway-status: "attention" while any of these holds,
@@ -1553,17 +1560,57 @@ export function createReferralGate({
     for (const r of shortNow()) reasons.push(`${r.slug}: the split contract paid less than the commission map expects (expected at least ${r.expectedNow}, received ${r.received}, of a gross of ${r.gross}; ${r.count} sale(s)${slugHeld(r.slug) ? "; new calls on it are held" : ""})`);
     if (all.some((e) => e.routedToUs === true && (e.state === "in-doubt" || e.state === "intent"))) reasons.push("a payment the split contract routed to this merchant, which the proof rule does not accept, is open");
     if (own.lastAt && t - own.lastAt < 15 * 60_000) reasons.push("the facilitator refused this server's own request");
-    if ([reach.verify, reach.settle].some((r) => r.since && r.calls >= 2 && t - r.since >= 10 * 60_000)) reasons.push("the facilitator has not answered for 10 minutes");
+    if ([reach.verify, reach.settle].some((r) => unreachable(r, t, 10 * 60_000))) reasons.push("the facilitator has not answered for 10 minutes");
+    // The route is down while the chain head cannot be read: every paid call is refused before /verify.
+    if (unreachable(reach.chain, t, CHAIN_DOWN_MS)) reasons.push("the chain head could not be read for 5 minutes: paid calls are refused before anything runs");
+    if (storeHold.blockedUntil) reasons.push("the settlement store is not taking writes: paid calls are refused before anything runs");
     if (reach.intentFailedAt && t - reach.intentFailedAt < 15 * 60_000) reasons.push("an intent to settle could not be stored");
     if (book.full()) reasons.push("the settlement book is full");
     // An entry retired at capacity is an operator's to read: the word says so for a day.
     const gone = typeof book.retiredAtCapacity === "function" ? book.retiredAtCapacity() : [];
-    if (gone.some((r) => t - (Number(r.at) || 0) < 24 * 3600_000)) reasons.push("a settlement was retired at capacity");
+    // (Until an operator acknowledges having read them: acknowledge.)
+    const ackOf = (kind) => (typeof book.ackAt === "function" ? book.ackAt(kind) : 0);
+    if (gone.some((r) => t - (Number(r.at) || 0) < 24 * 3600_000 && (Number(r.at) || 0) > ackOf("retired"))) reasons.push("a settlement was retired at capacity");
     // So is one closed because its receipt, read in full, is not a payment this route recognizes.
     const shut = typeof book.closedUnrecognized === "function" ? book.closedUnrecognized() : [];
-    if (shut.some((r) => t - (Number(r.at) || 0) < 24 * 3600_000)) reasons.push("a settlement whose receipt is not recognized was closed to the operator record");
+    if (shut.some((r) => t - (Number(r.at) || 0) < 24 * 3600_000 && (Number(r.at) || 0) > ackOf("closed"))) reasons.push("a settlement whose receipt is not recognized was closed to the operator record");
     // Not a reason: the slugs whose payments are not bound to a product id (the operator view lists them).
-    return { status: reasons.length ? "attention" : "ok", reasons, noProductId: [...defs.keys()].filter((slug) => !productOf(slug)) };
+    // `tag`: a short digest of WHICH reasons hold (their wording with every
+    // figure and slug-specific part left out), so a pager that keeps one
+    // issue open can say when the set changed without the reasons leaving
+    // the operator view.
+    const kinds = [...new Set(reasons.map((r) => r.replace(/^[a-z0-9-]+: /, "").replace(/0x[0-9a-f]+|\d+/gi, "#").replace(/\(.*$/, "").trim()))].sort();
+    const tag = kinds.length ? createHash("sha256").update(kinds.join("\n")).digest("hex").slice(0, 8) : "";
+    return { status: reasons.length ? "attention" : "ok", reasons, tag, noProductId: [...defs.keys()].filter((slug) => !productOf(slug)) };
+  }
+
+  /** An operator acknowledges having read the retired or closed records:
+   *  the status word stops naming the ones there now. `{ ok }`. */
+  async function acknowledge(kind, { note = "" } = {}) {
+    if (!["retired", "closed"].includes(kind)) return { ok: false, error: 'name what was read: "retired" or "closed"' };
+    if (typeof note !== "string" || note.trim().length < 3) return { ok: false, error: "a note saying what was checked is required" };
+    let ok = false;
+    try { ok = (await book.noteAck(kind, note.trim())) === true; } catch { ok = false; }
+    return ok ? { ok: true, acknowledged: kind } : { ok: false, error: "the settlement book could not be written" };
+  }
+
+  /** An operator resolves, in one request, every open entry of one state
+   *  whose recorded reason is `reason` (at most `max`), each through
+   *  resolveByHand and each recorded with the note. Never the outcome
+   *  refund: a debt is written one entry at a time.
+   *  `{ ok, matched, resolved, failed: [{ key, error }] }`. */
+  async function resolveManyByHand({ state, reason = null, outcome, note = "", max = 200 } = {}) {
+    if (!["dismissed", "delivered"].includes(outcome)) return { ok: false, error: 'a bulk resolve takes the outcome "dismissed" or "delivered"; a refund is recorded one entry at a time' };
+    if (typeof state !== "string" || !state) return { ok: false, error: "name the state of the entries to resolve" };
+    if (typeof note !== "string" || note.trim().length < 3) return { ok: false, error: "a note saying what was checked is required" };
+    const want = book.list().filter((e) => e.state === state && (reason === null || reason === undefined || String(e.reason || "") === String(reason))).slice(0, Math.max(1, Math.min(500, Number(max) || 200)));
+    const failed = [];
+    let done = 0;
+    for (const e of want) {
+      const r = await resolveByHand(e.key, { note: `${note.trim()} (bulk: ${state}${reason ? `, ${reason}` : ""})`, outcome });
+      if (r.ok) done++; else failed.push({ key: e.key, error: r.error });
+    }
+    return { ok: true, matched: want.length, resolved: done, failed };
   }
 
   /** The amount this request is quoted, in USDC base units (a decimal
@@ -2390,9 +2437,11 @@ export function createReferralGate({
       if (!Number.isSafeInteger(fromBlock) || fromBlock <= 0) {
         release();
         counters.headUnavailable++;
+        noteUnanswered("chain");
         faultLog.line(`the chain head could not be read before /verify (${def.slug}); buyer answered 503, nothing ran`);
         return refusePayment(res, "chain_unavailable", { status: 503, retryable: true, retryAfter: 15 });
       }
+      noteAnswered("chain");
 
       // The facilitator's own reading of the payment, always, before the
       // handler. It is sent the payment as this server validated it.
@@ -2759,7 +2808,7 @@ export function createReferralGate({
   }
 
   return {
-    handler, sweepOnce, statusWord, resolveByHand, reopenByHand, clearShortByHand, shortSales: () => shortNow(),
+    handler, sweepOnce, statusWord, resolveByHand, resolveManyByHand, acknowledge, reopenByHand, clearShortByHand, shortSales: () => shortNow(),
     stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, coldInflight: Object.fromEntries(rate.inflight), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
     slugs: () => [...defs.keys()],
   };
