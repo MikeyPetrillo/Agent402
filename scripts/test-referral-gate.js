@@ -4088,6 +4088,12 @@ try {
           await slow;
           const failedWrites = b.writeStats().failed - failedBefore;
           const third = await payOn(app);
+          // A stored intent ends the row: a later single failed write is again one failure, not the second in a row.
+          let failOnce = 1;
+          const realAgain = doc.update.bind(doc);
+          doc.update = async (m, o) => (failOnce-- > 0 ? { ok: false, error: "one more failed write" } : realAgain(m, o));
+          const later = await payOn(app), after = await payOn(app);
+          ok(later.status === 503 && after.status === 200 && app.gate.stats().storeHeld === 0, `an intent that is stored ends the row of failures: one more failed write later holds nobody (${later.status} then ${after.status} ${after.reason || ""})`);
           ok(pair.every((c) => c.status === 503 && c.reason === "settlement_store_unavailable") && failedWrites === 1 && third.status === 200 && app.gate.stats().storeHeld === 0 && app.gate.statusWord().status === "ok", `one failed write that carried two intents is one failure: the next call is served and the word reads ok (${failedWrites} failed write; then ${third.status} ${third.reason || ""})`);
         } finally { await app.close(); }
       }
@@ -4102,17 +4108,21 @@ try {
           const first = await payOn(app);
           const kF = gateMod.referralReplayKey(first.p.authorization);
           const more = [];
-          for (let i = 0; i < 3; i++) more.push(await payOn(app));
+          for (let i = 0; i < 4; i++) more.push(await payOn(app));
           const rec = small.droppedRefused();
-          ok(small.get(kF) === null && rec.count === 1 && rec.records[0].key === kF && rec.records[0].payer === first.p.authorization.from.toLowerCase() && rec.records[0].nonce === first.p.authorization.nonce.toLowerCase() && rec.records[0].amount === "30000" && rec.records[0].slug === "echo" && Number(rec.records[0].validBefore) > 0 && rec.evictedEarly === 0, `a refused entry dropped at capacity leaves a small record of what a chain read of it needs (${rec.count} record)`);
+          rec.records.sort((x, y) => (x.key === kF ? -1 : y.key === kF ? 1 : 0));
+          ok(small.get(kF) === null && rec.count === 2 && rec.records[0].key === kF && rec.records[0].payer === first.p.authorization.from.toLowerCase() && rec.records[0].nonce === first.p.authorization.nonce.toLowerCase() && rec.records[0].amount === "30000" && rec.records[0].slug === "echo" && Number(rec.records[0].validBefore) > 0 && rec.evictedEarly === 0, `a refused entry dropped at capacity leaves a small record of what a chain read of it needs (${rec.count} records)`);
           // The facilitator lands that payment after all; nobody re-sends it.
           const txF = fac.land(first.p.authorization, fac.nextTx());
-          skew.ms += 11 * 60_000;
+          const validFor = Number(first.p.authorization.validBefore) * 1000 - Date.now();
+          skew.ms = skew0 + Math.max(0, validFor - 20_000);
           await app.gate.sweepOnce();
+          const stillKept = small.droppedRefused().count;
+          skew.ms = skew0 + 11 * 60_000;
           await app.gate.sweepOnce();
           await quietLedger();
           const rowsF = owed.filter((o) => o.tx === txF);
-          ok(sales.filter((x) => x.tx === txF).length === 1 && rowsF.length === 1 && rowsF[0].priceUsd === 0.03 && small.droppedRefused().records.every((r) => r.key !== kF) && logLines.some((l) => /a refused settle whose entry was dropped at capacity landed on chain/.test(l)), `the payment of a dropped refused entry that lands after all is found by the sweep: the sale is booked and the full price recorded as owed, once (${sales.filter((x) => x.tx === txF).length} sale, ${rowsF.length} row)`);
+          ok(stillKept === 1 && sales.filter((x) => x.tx === txF).length === 1 && rowsF.length === 1 && rowsF[0].priceUsd === 0.03 && small.droppedRefused().records.every((r) => r.key !== kF) && logLines.some((l) => /a refused settle whose entry was dropped at capacity landed on chain/.test(l)), `the payment of a dropped refused entry that lands after all is found by the sweep: the sale is booked and the full price recorded as owed, once (${sales.filter((x) => x.tx === txF).length} sale, ${rowsF.length} row)`);
           // Records of entries whose authorization has expired are forgotten.
           skew.ms += 30 * 60_000;
           await app.gate.sweepOnce();

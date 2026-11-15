@@ -178,6 +178,7 @@ try {
   ok((await fetch(`${base}/api/refunds?tx=${PAYER_B}`)).status === 400, "a wallet address as tx is a 400 over HTTP");
   const spec = await (await fetch(`${base}/openapi.json`)).json();
   const op = spec?.paths?.["/api/refunds"]?.get;
+  ok(/one transaction's payments/.test(op?.summary || "") && /one transaction per ask/.test(op?.responses?.[200]?.description || "") && /One transaction per ask; never a wallet's list/.test(op?.description || "") && !/one payment/i.test(`${op?.summary} ${op?.responses?.[200]?.description} ${op?.description}`), "the published lookup text says one transaction per ask, in its summary, description and 200 answer");
   ok(op && Array.isArray(op.security) && op.security.length === 0 && op.parameters?.[0]?.name === "tx" && op.responses?.[200]?.content?.["application/json"]?.schema?.properties?.status?.enum?.join() === "owed,sending,paid,void,none" && !("payer" in (op.responses[200].content["application/json"].schema.properties || {})), "openapi documents GET /api/refunds: free, one tx, every status, no payer field");
   // The sweep (scripts/test-all.js buildGetUrl) calls each GET with its
   // published parameter examples: both names must publish a tx that answers 200.
