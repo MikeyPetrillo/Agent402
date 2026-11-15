@@ -4279,7 +4279,7 @@ app.get("/api/gateway-status", async (req, res) => {
     // The referral gate's settlements (src/referral-gate.js): ok / attention,
     // only while the gate is mounted. One word; the reasons and counts are on
     // /__operator/referral.json. The heartbeat and the status Worker page on attention.
-    ...(REFERRAL_GATE ? { referralSettlement: (() => { try { const w = REFERRAL_GATE.statusWord(); return full ? w : { status: w.status, tag: w.tag }; } catch { return { status: "unknown" }; } })() } : {}),
+    ...(REFERRAL_GATE ? { referralSettlement: (() => { try { const w = REFERRAL_GATE.statusWord(); return full ? w : { status: w.status }; } catch { return { status: "unknown" }; } })() } : {}),
     gatewayBalance: (() => { try { return gatewayBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
     // Redis persistence (src/redis-persistence.js): on / degraded / off /
     // unknown. One word publicly; the operator also gets the INFO fields.
@@ -10799,7 +10799,7 @@ if (REFERRAL_GATE) {
 app.get("/__operator/referral.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "private, no-store").json(REFERRAL_GATE
-    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50), shortNet: REFERRAL_GATE.shortSales() }
+    ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), openTotal: REFERRAL_BOOK.list().length, openByState: REFERRAL_BOOK.counts(), bookWrites: REFERRAL_BOOK.writeStats(), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50), shortNet: REFERRAL_GATE.shortSales() }
     : { enabled: false });
 });
 // An operator closes one open referral settlement by hand (a contradicted or

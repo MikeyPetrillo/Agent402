@@ -56,7 +56,7 @@ for (const value of [undefined, "", " , ", "base,stellar", "solana", "Solana"]) 
   ok(!ANY.test(r.llms) && !/public index/.test(pageText(r.rail)), `llms.txt and /robinhood ${tag}: nothing said`);
   ok(dateOf(r.p) === PRIVACY_OWN && dateOf(r.t) === TERMS_OWN, `${tag}: both pages keep their own dates though _SINCE is set`);
 }
-ok(TERMS_OWN === "2026-11-11", "terms keeps its own date: the image generation filtering-level sentence");
+ok(TERMS_OWN === "2026-11-14", "terms keeps its own date: the referral links paragraph and the scope of the x402 settlement sentence");
 
 // --- robinhood: the paragraph, scoped no-sale line, terms, machine surfaces ---
 for (const value of ["robinhood", " Robinhood ,solana", "robinhood,stellar"]) {

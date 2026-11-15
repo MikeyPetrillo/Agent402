@@ -32,6 +32,7 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { settledHoldText, settledValidityHoldText, CONSUMED_VALIDITY_MARGIN_MS } from "./replay-guard.js";
 import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { publicIndexManifest } from "./facilitator-public-index.js";
+import { referralOffered } from "./referral-gate.js";
 const REPO = REPO_URL;
 const MAINTAINER = { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: REPO };
 
@@ -214,6 +215,10 @@ export function serviceManifest({ baseUrl, network, networks, wallet, walletName
           "the source of a Tempo MPP credential (a did:pkh address): to classify the payer of a sale",
           "a Tempo pull credential answered 402 after its broadcast failed, with its route, amount and the payer it names: kept until the check for a late landing ends (minutes; at most 24 hours while the chain cannot be read), so a transfer that lands after the 402 is booked as owed",
           "the payer named in the facilitator's settlement receipt: recorded with the sale when the payment itself names none we can verify",
+          ...(referralOffered() ? [
+            `on a referral link, the referral token the link carries (it identifies the reviewer): returned in the payment request and sent to the referral network's payment service with the payment, and kept inside the signed payment for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes`,
+            `on a referral link, the buyer agent id, when sent: returned in the payment request and sent to the referral network's payment service with the payment, and kept inside the signed payment for up to ${Math.round(IDEM_TTL_MS / 60000)} minutes`,
+          ] : []),
         ],
         retains: "each sale's payer address, settlement transaction, route and price, in the sales ledger; the ledger's payer list is not published, while pages that show individual on-chain payments show them as the chain records them (shortened payer addresses), see /terms",
         note: "The optional x402 annotation fields description and reason are not read, logged or retained. On a refused payment the resource URL the payment names is recorded in failure telemetry.",

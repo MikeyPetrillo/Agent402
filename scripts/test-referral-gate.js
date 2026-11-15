@@ -3793,6 +3793,16 @@ try {
       going = false;
       ok(removed === 6 && turns >= 12, `the sweep of the answers at rest reads one file a turn of the event loop (${turns} turns for 12 files; ${removed} expired removed)`);
     }
+    // The pagers' issue text names every family of reason the word raises (one list, read from the gate's source).
+    {
+      const gateText = readFileSync(new URL("../src/referral-gate.js", import.meta.url), "utf8");
+      const wordFn = gateText.slice(gateText.indexOf("  function statusWord() {"), gateText.indexOf("  /** An operator acknowledges having read"));
+      const raised = (wordFn.match(/reasons\.push\(/g) || []).length;
+      const heartbeat = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"), worker = readFileSync(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
+      const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "product id differs", "under its stop floor", "contradicted successes came from several payers", "unsettled runs from many payers", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "book is full", "retired at capacity", "closed as unrecognized"];
+      const missing = FAMILIES.filter((f) => !heartbeat.includes(f) || !worker.includes(f));
+      ok(raised === 18 && missing.length === 0 && !/One of these holds/.test(heartbeat + worker), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list) (${missing.join("; ") || "all named"})`);
+    }
     // P7. During a drain a settle ends before the database pool starts closing, with room for its book write.
     {
       const serverText = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
@@ -3887,6 +3897,12 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
     const b = await call(`${off.url}/ref/hash`, { body: { text: "a" } });
     const direct = await call(`${off.url}/api/hash`, { body: { text: "a" } });
     ok(a.status === 404 && b.status === 404 && direct.status === 402, `with the REFERRAL_* variables unset /ref/* is a 404 and the direct route is unchanged (${a.status}, ${b.status}, ${direct.status})`);
+    {
+      // A server without the channel says nothing about it on its legal pages or in the payment data-handling list.
+      const privacyOff = (await call(`${off.url}/privacy`, { method: "GET" })).text, termsOff = (await call(`${off.url}/terms`, { method: "GET" })).text;
+      const listOff = (await call(`${off.url}/.well-known/x402`, { method: "GET" })).json?.payment?.dataHandling?.readsOnly || [];
+      ok(!/referral/i.test(privacyOff) && !/referral/i.test(termsOff) && listOff.length > 5 && !listOff.some((x) => /referral/i.test(x)) && /with two exceptions/.test(termsOff), "with the gate off, /privacy, /terms and payment.dataHandling.readsOnly say nothing of referral links");
+    }
     // Fully inert: /ref answers exactly what any unknown path answers (status, body, headers), on every method.
     const same = [];
     for (const [method, extra] of [["GET", {}], ["POST", { body: { text: "a" } }], ["OPTIONS", { headers: { origin: "https://client.example", "access-control-request-method": "POST" } }], ["HEAD", {}]]) {
@@ -3948,7 +3964,7 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
     let last = null;
     for (let i = 0; i < 7; i++) last = await call(`${w.url}/ref/hash`, { method: "GET", headers: at("198.51.100.2") });
     ok(last.status === 429 && last.json?.reason === "unpaid-quote-budget", `past the unpaid-quote budget a /ref price check is answered 429 (${last.status})`);
-    ok(last.json?.hint && !/published at/.test(last.json.hint) && !/openapi|well-known|api\/pricing|crawler|https?:\/\//.test(last.json.hint) && /settled a paid call in the last \d+ minutes reads against/.test(last.json.hint), `and its text claims no discovery listing and states the allowance a settled call earns (${String(last.json?.hint).slice(0, 200)})`);
+    ok(last.json?.hint && !/published at/.test(last.json.hint) && !/openapi|well-known|api\/pricing|\/crawler|https?:\/\//.test(last.json.hint) && /settled a paid call in the last \d+ minutes reads against/.test(last.json.hint), `and its text claims no discovery listing and states the allowance a settled call earns (${String(last.json?.hint).slice(0, 200)})`);
     const directHint = (await (async () => { let r = null; for (let i = 0; i < 7; i++) r = await call(`${w.url}/api/hash`, { body: { text: "a" }, headers: at("198.51.100.3") }); return r; })()).json?.hint || "";
     ok(/published at \/\.well-known\/x402/.test(directHint), "the direct route's 429 keeps its own text");
     // A settled referral call earns its address the paid-client allowance: its price checks read against the raised ceiling.
@@ -4126,6 +4142,15 @@ try {
     ok(walked >= served.length * 4 && pointed.length === 0, `no answer of a served /ref route points a buyer at this server's catalog, pricing, docs or direct routes: ${walked} answers of ${served.length} slugs walked (${pointed.slice(0, 6).join("; ") || "none"})`);
   }
   ok(/\[referral\] image-gen is not served under \/ref: its own upstream wait \(60 s\) is past the handler deadline \(4 s\)/.test(bootLog), "image-gen is left out at boot: its own upstream wait is past the handler deadline");
+  {
+    // With the gate on, the legal pages and the machine-readable list name the channel and the two fields read.
+    const strip = (h) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    const privacyOn = strip((await call(`${srv.url}/privacy`, { method: "GET", headers: xff() })).text), termsOn = strip((await call(`${srv.url}/terms`, { method: "GET", headers: xff() })).text);
+    const listOn = (await call(`${srv.url}/.well-known/x402`, { method: "GET", headers: xff() })).json?.payment?.dataHandling?.readsOnly || [];
+    ok(/Referral links\. Some tools can also be bought through a referral link issued by a referral network/.test(privacyOn) && /the referral token the link carries, which identifies the reviewer, and the buyer agent id when one is sent/.test(privacyOn) && /separate company established in the European Union/.test(privacyOn) && /with no fixed time limit/.test(privacyOn) && /for up to 10 minutes/.test(privacyOn) && /on a referral link the referral token and the buyer agent id/.test(privacyOn), "with the gate on, /privacy says what a referral link sends where, who the network is to us, and what is kept for how long (entries an operator must resolve: no fixed limit)");
+    ok(/Referral links\. A tool bought through a referral link is sold by Agent402 under these terms, at no more than the price of the same call on our own route/.test(termsOn) && /we record the full price you paid as owed to the paying wallet and repay it on Base as described under refunds below/.test(termsOn) && /We do not write, edit, select or pay for reviews beyond that commission/.test(termsOn) && /It is not investment, trading, legal or tax advice/.test(termsOn) && /with three exceptions/.test(termsOn) && /answer to a call bought through a referral link, which is kept with its payment for up to 10 minutes/.test(termsOn) && /An x402 payment on our own routes settles only after/.test(termsOn), "with the gate on, /terms states who sells a referred call and at what price, the refund of a charged call that was not delivered, the review disclosure, the data disclaimer and the kept answer");
+    ok(listOn.filter((x) => /^on a referral link, the (referral token|buyer agent id)/.test(x)).length === 2 && listOn.every((x) => !/not stored/.test(x) || !/referral/.test(x)), `payment.dataHandling.readsOnly names the referral token and the buyer agent id (${listOn.filter((x) => /referral/.test(x)).length} entries)`);
+  }
   ok(/\[referral\] image-gen-premium is not served under \/ref: long-running/.test(bootLog) && /\[referral\] no-such-tool is not served under \/ref: not in the catalog/.test(bootLog) && /\[referral\] attest is not served/.test(bootLog) && /\[referral\] qr is not served under \/ref: answers bytes/.test(bootLog), "a long-running, an identity-bound, a binary and a missing slug are left out with a reason");
   for (const slug of ["image-gen", "image-gen-premium", "attest", "qr", "no-such-tool"]) {
     const r = await call(`${srv.url}/ref/${slug}`, { method: "GET", headers: xff() });
@@ -4351,7 +4376,9 @@ try {
     await wait(300);
     const after = await snapshot();
     // /api/gateway-status carries the gate's one word, referralSettlement {status}, and nothing else of it.
-    const textOf = (p) => (p === "/api/gateway-status" ? JSON.stringify({ ...after[p].json, referralSettlement: undefined }) : after[p].text);
+    // (/.well-known/x402 names the two fields a referral link adds to what is read of a payment, in payment.dataHandling.readsOnly: a data-handling statement, read apart from this scan and pinned above.)
+    const withoutReadsOnly = (j) => JSON.stringify({ ...j, payment: { ...(j?.payment || {}), dataHandling: { ...(j?.payment?.dataHandling || {}), readsOnly: (j?.payment?.dataHandling?.readsOnly || []).filter((x) => !/^on a referral link, the (referral token|buyer agent id)/.test(x)) } } });
+    const textOf = (p) => (p === "/api/gateway-status" ? JSON.stringify({ ...after[p].json, referralSettlement: undefined }) : p === "/.well-known/x402" ? withoutReadsOnly(after[p].json) : after[p].text);
     const gw = after["/api/gateway-status"].json?.referralSettlement;
     ok(gw && JSON.stringify(Object.keys(gw)) === JSON.stringify(["status"]) && ["ok", "attention"].includes(gw.status), `/api/gateway-status publishes the gate's one word and nothing else of it (${JSON.stringify(gw)})`);
     const named = SURFACES.filter((s) => /\/ref\/|referral/i.test(textOf(s)) || textOf(s).toLowerCase().includes(PAY_TO.toLowerCase()));
