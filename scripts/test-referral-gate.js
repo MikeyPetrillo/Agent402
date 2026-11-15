@@ -2843,6 +2843,12 @@ try {
       const attack = [];
       for (let i = 0; i < 3; i++) attack.push((await payO()).status);
       const closed = heldReason(appO);
+      // A probe answered success with NO readable receipt proves nothing: the hold stands.
+      fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + createHash("sha256").update(`unproven-${Math.random()}`).digest("hex") } });
+      const unproven = await payO("exa");
+      const stillClosed = heldReason(appO);
+      for (const e of bookO.list().filter((x) => x.state === "unconfirmed")) await appO.gate.resolveByHand(e.key, { note: "test cleanup", outcome: "dismissed" });
+      ok(unproven.status === 200 && stillClosed === true, `a probe whose success has no readable receipt does not end the hold: only a receipt that proves the payment does (${unproven.status}, held ${stillClosed})`);
       // ...and the next honest payment is the probe: it proves fine, is served, and the hold is over.
       fac.mode.settle = routedToUs;
       fac.mode.settleDelayMs = 400;
@@ -2959,6 +2965,16 @@ try {
         fac.mode.settleDelayMs = 0;
         ok(flown.every((c) => c.status === 200) && afterFirst.status === 503 && afterFirst.reason === "rate_under_review", `calls already running when the first short sale is read are served (they cannot be recalled); a call that arrives after it is refused (${tally(flown)}; after: ${afterFirst.status})`);
       } finally { fac.mode.settleDelayMs = 0; await appB.close(); }
+      // The stop does not wait on the book's write: with a book whose short-net write never lands, it still holds.
+      {
+        const inner = newBook("nowrite");
+        const appN = await mount({}, { book: { ...inner, noteShort: async () => false } });
+        try {
+          chainPays(9000);
+          const firstN = await payOn(appN, "mb"), secondN = await payOn(appN, "mb");
+          ok(firstN.status === 200 && secondN.status === 503 && secondN.reason === "rate_under_review" && !inner.shortSales().mb, `a short sale stops its slug from the moment it is seen, ahead of the book's record (${firstN.status} then ${secondN.status})`);
+        } finally { await appN.close(); }
+      }
       // A map corrected IN PART: the floor is met again, so the stop ends, though the gap is still raised.
       const appB2 = await mount({ REFERRAL_COMMISSION_BPS: "default:8500,busy:4321" }, { book: bookB });
       try {
