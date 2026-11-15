@@ -478,7 +478,7 @@ const LIVE_NAME = "inflight-cover-live";
 // When a run of a wallet last settled, for the other containers: a flag per
 // wallet whose `until` is that time plus SETTLED_MARK_MS (it lapses after).
 const SETTLED_NAME = "inflight-cover-settled";
-const SETTLED_MARK_MS = 120_000;
+export const SETTLED_MARK_MS = 120_000;
 const LIVE_TTL_MS = () => { const n = Number(process.env.INFLIGHT_COVER_LIVE_TTL_MS); return Number.isFinite(n) && n >= 500 ? n : 30_000; };
 const LIVE_CACHE_MS = 2_000;
 const procOf = (member) => String(member).slice(0, String(member).lastIndexOf(":"));
@@ -997,17 +997,31 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // Retry-After they always had.
       const undecided = block === "settling" && !asBefore;
       const e = new Error(block === "unread"
-        ? `This wallet already has ${cur.count} paid runs in progress here, and its balance could not be read to confirm it also covers this one. Retry when one of them finishes. You have not been charged.`
+        ? `This wallet already has ${cur.count} paid runs in progress here, and its balance could not be read to confirm it also covers this one. Your input is fine: retry the same call after Retry-After, once one of them has settled. You have not been charged.`
         : block === "kept" && !asBefore
-        ? `This wallet's balance could not be read just now, and the last balance read for it, less what its payments here have taken and its calls in progress hold, does not cover this one. Retry in a few seconds. You have not been charged.`
+        ? `This wallet's balance could not be read just now, and the last balance read for it, less what its payments here have taken and its calls in progress hold, does not cover this one. Your input is fine: ${cur.count > 0 ? "retry the same call after Retry-After, once one of its calls in progress has settled" : "add funds to this wallet, then retry the same call"}. You have not been charged.`
         : undecided
-        ? `Another call from this wallet is still settling, and until it has, the wallet's balance cannot be confirmed to cover this one as well. Retry in a few seconds. You have not been charged.`
+        ? `Another call from this wallet is still settling, and until it has, the wallet's balance cannot be confirmed to cover this one as well. Your input is fine: retry the same call after Retry-After, once that call has settled. You have not been charged.`
         : cur.count <= 0
-          ? `This wallet's balance no longer covers this run: another paid run from this wallet settled after this payment was checked, and the balance left does not cover this one too. Add funds and retry. You have not been charged.`
-          : `This wallet already has ${cur.count} paid runs in progress here, and its balance does not cover this one as well. Each payment is checked on its own, but settling them all needs the sum. Retry when one of them finishes, or add funds. You have not been charged.`);
+          ? `This wallet's balance no longer covers this run: another paid run from this wallet settled after this payment was checked, and the balance left does not cover this one too. Your input is fine: add funds to this wallet, then retry the same call. You have not been charged.`
+          : `This wallet already has ${cur.count} paid runs in progress here, and its balance does not cover this one as well. Each payment is checked on its own, but settling them all needs the sum. Your input is fine: ${block === "short" ? "add funds to this wallet, then retry the same call" : "retry the same call after Retry-After, once one of them has settled, or add funds"}. You have not been charged.`);
       e.statusCode = 429;
       // The refusal's class, for the tool log (src/refusal-reason.js).
       e.coverRefusal = block;
+      // Not the caller's input: this server's own admission limit, so the
+      // answer carries no input schema (src/tool-error-fields.js
+      // notCallersInput). The attribution vocabulary (src/upstream-deadline.js)
+      // has no payer-side word, so every class reads "ours": this server's
+      // limit. The hint names the class (`reason` is derived from coverRefusal
+      // there), and `fix` is the next step for a payer that can pay: waiting
+      // helps only while a call of the wallet is in flight to settle or end
+      // (settling a call lowers the balance and the amount held together, so
+      // a short balance needs funds).
+      e.attribution = "ours";
+      e.hint = `cover-${block}`;
+      e.fix = block === "short" || (block === "kept" && cur.count <= 0)
+        ? "Your input is fine. Add funds to this wallet, then retry the same call."
+        : "Your input is fine. Retry the same call after Retry-After, when a paid call this wallet has in flight has settled.";
       e.retryAfter = asBefore ? 30 : block === "short" || block === "beside" ? 30 : 5;
       throw e;
     }

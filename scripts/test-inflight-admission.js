@@ -29,6 +29,7 @@ import { admitCoveredRun, coverageReadsWord, coverageReadsVerdict, _ageUnreadDec
 import { hasPaidRecord, notePaidSettlement, setPaidRecordLedger, _setPaidRecordForTest, _resetPaidRecordForTest } from "../src/paid-record.js";
 import { readRailBalance, _setGatewayBalanceClientForTest } from "../src/rail-cover.js";
 import { RAILS, GATED_RAILS } from "../src/rails.js";
+import { toolErrorFields, notCallersInput } from "../src/tool-error-fields.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -248,6 +249,7 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   ok(r3.release && reads === 1, `a third run fits what the record still shows after one settlement is taken off: no read (${reads})`);
   const r4 = await admit(W(0x33));
   ok(r4.err?.statusCode === 429 && reads === 2 && /does not cover this one as well/.test(r4.err.message) && r4.err.retryAfter === 30, `a fourth does not: one fresh read decides, and it is refused as short (${r4.err?.statusCode}, reads ${reads})`);
+  { const f = toolErrorFields(r4.err); ok(f.attribution === "ours" && f.hint === "cover-short" && f.reason === "cover_short" && f.retryAfterSeconds === 30 && f.fix === "Your input is fine. Add funds to this wallet, then retry the same call." && /add funds to this wallet, then retry the same call\./.test(r4.err.message), `the short refusal's answer fields name its class and the next step (${JSON.stringify(f)})`); }
   balance = PRICE * 3n; // a top-up
   const r4b = await admit(W(0x33));
   ok(r4b.err?.statusCode === 429 && reads === 2, "within a second of that read the record is reused: no further read");
@@ -270,7 +272,14 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   const b = await admit(W(0x41));
   const took = Date.now() - t0;
   ok(b.err?.statusCode === 429 && took >= 900 && took < 1500, `a call beside one whose settlement has not answered waits about a second, then is refused (${b.err?.statusCode}, ${took} ms)`);
-  ok(b.err?.retryAfter === 5 && /Another call from this wallet is still settling/.test(b.err.message) && /Retry in a few seconds\. You have not been charged\./.test(b.err.message) && !/does not cover/.test(b.err.message), `the refusal says another call is still settling and asks for a retry in about 5 s (${b.err?.retryAfter}: ${String(b.err?.message).slice(0, 70)}...)`);
+  ok(b.err?.retryAfter === 5 && /Another call from this wallet is still settling/.test(b.err.message) && /retry the same call after Retry-After, once that call has settled\. You have not been charged\./.test(b.err.message) && !/does not cover/.test(b.err.message), `the refusal says another call is still settling and asks for a retry after Retry-After, 5 s (${b.err?.retryAfter}: ${String(b.err?.message).slice(0, 70)}...)`);
+  // Not an input error: attributed to this server's own limit, so the answer
+  // carries no input schema, and it names its class and the next step.
+  {
+    const f = toolErrorFields(b.err);
+    ok(b.err.attribution === "ours" && notCallersInput(b.err, 429) && f.attribution === "ours" && f.hint === "cover-settling" && f.reason === "cover_settling" && f.retryAfterSeconds === 5 && /^Your input is fine\. Retry the same call after Retry-After/.test(f.fix || ""),
+      `the settling refusal's answer fields: attribution ours, hint cover-settling, reason cover_settling, a fix, no schema (${JSON.stringify(f)})`);
+  }
   ok(inflightCoverStatus().refusedSettling === 1, "counted as a settling refusal");
   // The settle answers within the wait: served.
   const cP = admit(W(0x41));
@@ -431,7 +440,7 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   _ageKeptReadsForTest(60_000);
   const one = await Promise.all(Array.from({ length: 40 }, () => admit(W(0xb2))));
   const ran = one.filter((x) => x.release), out = one.filter((x) => x.err);
-  ok(ran.length === 16 && out.length === 24 && inflightCoverStatus().admittedPastKeptRead === 15 && out.every((x) => x.err.statusCode === 429 && x.err.retryAfter === 5 && x.err.coverRefusal === "kept" && /could not be read just now/.test(x.err.message) && /You have not been charged\./.test(x.err.message)), `reads down, a wallet whose last good read holds one price: the allowance of a wallet with no read (16 of 40), the rest 429 with Retry-After 5, uncharged (${ran.length} ran)`);
+  ok(ran.length === 16 && out.length === 24 && inflightCoverStatus().admittedPastKeptRead === 15 && out.every((x) => x.err.statusCode === 429 && x.err.retryAfter === 5 && x.err.coverRefusal === "kept" && /^Your input is fine\. Retry the same call after Retry-After/.test(x.err.fix) && /could not be read just now/.test(x.err.message) && /You have not been charged\./.test(x.err.message)), `reads down, a wallet whose last good read holds one price: the allowance of a wallet with no read (16 of 40), the rest 429 with Retry-After 5, uncharged (${ran.length} ran)`);
   for (const x of ran) x.release();
   // Only what a run took is taken off a kept read: [what, how the runs leave, how many, admitted of five, covered by the kept read].
   for (const [what, leave, n, admitted, onKept] of [

@@ -42,8 +42,11 @@ let e2bInFlight = 0;
 // the payer's own identity where the request carries one (signed EVM payer,
 // credits key, Tempo sender); otherwise on the client IP, with a looser limit
 // because many callers can share one address.
-const PER_PAYER_MAX_CONCURRENT = perReplica(2);
-const PER_IP_MAX_CONCURRENT = perReplica(4);
+// The service-wide figure the public copy quotes (src/guides.js, the wiki).
+export const CODE_RUN_PER_PAYER_MAX = 2;
+const PER_PAYER_MAX_CONCURRENT = perReplica(CODE_RUN_PER_PAYER_MAX);
+export const CODE_RUN_PER_IP_MAX = 4;
+const PER_IP_MAX_CONCURRENT = perReplica(CODE_RUN_PER_IP_MAX);
 const payerInFlight = new Map();
 // The caller a run counts against: the route's own request, else the caller
 // a request-less step runs for (route-execute, decide and skill packs call

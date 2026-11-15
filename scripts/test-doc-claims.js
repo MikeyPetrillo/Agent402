@@ -86,6 +86,66 @@ for (const [doc, re, pkg, why] of CLAIMS) {
   ok(guide.includes("failed to settle for a reason about the payment itself") && guide.includes("(${SETTLE_BREAKER_UNKNOWN_MAX} for failures whose cause the settlement did not name") && /UNKNOWN_MAX_FAILS as SETTLE_BREAKER_UNKNOWN_MAX/.test(guide) && NEVER.test(guide),
     "src/guides.js breaker row reads the unknown-cause count from the code and says our side or the facilitator's is never counted");
 }
+// The in-flight coverage figures (src/inflight-cover.js): the allowance of
+// calls at once for a wallet with no recent read (and with a payment on
+// record), how long a kept read is judged on, and the code-run tools' own
+// per-payer limit (src/tools/code-run-kit.js). The wiki types them; the guide
+// rows read them from the code. Each figure is compared, so a changed default
+// or a changed sentence fails here.
+{
+  for (const k of ["INFLIGHT_COVER_UNREAD_MAX", "INFLIGHT_COVER_UNREAD_PAID_MAX"]) delete process.env[k];
+  const cover = await import("../src/inflight-cover.js");
+  const { CODE_RUN_PER_PAYER_MAX, CODE_RUN_PER_IP_MAX } = await import("../src/tools/code-run-kit.js");
+  const { unreadMax: u, unreadPaidMax: p } = cover.inflightCoverStatus();
+  const min = Math.round(cover.GOOD_READ_MAX_MS / 60_000);
+  ok(Number.isInteger(u) && Number.isInteger(p) && p > u && Number.isInteger(min) && min > 0 && CODE_RUN_PER_PAYER_MAX >= 1 && CODE_RUN_PER_IP_MAX > CODE_RUN_PER_PAYER_MAX,
+    `control: the coverage figures read from the code (${u} unread, ${p} with a paid record, ${min} minutes, code-run ${CODE_RUN_PER_PAYER_MAX} per payer, ${CODE_RUN_PER_IP_MAX} per address)`);
+  const vol = (String(read("wiki/Buying-at-Volume.md") || "").split("\n").find((l) => l.startsWith("| Paid calls in flight, per wallet")) || "");
+  const sh = (String(read("wiki/Self-Hosting.md") || "").split("\n").find((l) => l.startsWith("| `INFLIGHT_COVER`")) || "");
+  ok(vol.includes(`within the past ${min} minutes`) && vol.includes(`has not read in the past ${min} minutes`) && vol.includes(`runs up to ${u} calls at once (${p} for a wallet with a payment on record)`) && vol.includes(`a wallet runs up to ${u} calls at once there`) && vol.includes(`(the code-run tools: ${CODE_RUN_PER_PAYER_MAX} runs at once per EVM payer, credits key or Tempo sender, and ${CODE_RUN_PER_IP_MAX} per client address for other payers)`),
+    `wiki/Buying-at-Volume.md coverage row states ${u} and ${p} calls at once, ${min} minutes and code-run ${CODE_RUN_PER_PAYER_MAX}`);
+  ok(sh.includes(`within the past ${min} minutes`) && sh.includes(`\`_UNREAD_MAX\` calls at once (default ${u})`) && sh.includes(`\`_UNREAD_PAID_MAX\` (default ${p})`) && sh.includes(`the code-run tools run ${CODE_RUN_PER_PAYER_MAX} at once per EVM payer, credits key or Tempo sender, and ${CODE_RUN_PER_IP_MAX} per client address for other payers`),
+    `wiki/Self-Hosting.md INFLIGHT_COVER row states defaults ${u} and ${p}, ${min} minutes and code-run ${CODE_RUN_PER_PAYER_MAX}`);
+  // Every figure in the two wiki rows is one of the above, so a figure typed
+  // beside them that the code does not hold is caught too.
+  const stray = (row) => [...row.matchAll(/up to (\d+) calls at once|past (\d+) minutes|\(default (\d+)\)/g)].map((m) => Number(m[1] ?? m[2] ?? m[3])).filter((n) => ![u, p, min].includes(n));
+  ok(stray(vol).length === 0 && stray(sh).length === 0, `no other coverage figure in the wiki rows (${[...stray(vol), ...stray(sh)].join(", ") || "none"})`);
+  const guide = read("src/guides.js") || "";
+  const row = guide.split("\n").find((l) => l.startsWith("| A wallet's paid calls in flight, on every paid route")) || "";
+  ok(/const COVER_UNREAD_MAX = inflightCover\.inflightCoverStatus\(\)\.unreadMax;/.test(guide) && /const COVER_UNREAD_PAID_MAX = inflightCover\.inflightCoverStatus\(\)\.unreadPaidMax;/.test(guide) && /const COVER_GOOD_READ_MINUTES = Math\.round\(\(Number\(inflightCover\.GOOD_READ_MAX_MS\)/.test(guide) && /import \{ CODE_RUN_PER_PAYER_MAX, CODE_RUN_PER_IP_MAX \} from "\.\/tools\/code-run-kit\.js";/.test(guide),
+    "src/guides.js reads the coverage figures and the code-run limit from the code");
+  ok(row.includes("${COVER_GOOD_READ_MINUTES} minutes") && row.includes("up to ${COVER_UNREAD_MAX} calls at once (${COVER_UNREAD_PAID_MAX} with a payment on record)") && row.includes("(the code-run tools: ${CODE_RUN_PER_PAYER_MAX} runs at once per EVM payer, credits key or Tempo sender, and ${CODE_RUN_PER_IP_MAX} per client address for other payers)") && !/\b\d+ calls at once|\bpast \d+ minutes|\b\d+ runs at once|\b\d+ per client address/.test(row),
+    "src/guides.js coverage row quotes the derived figures and types none");
+}
+// What the coverage check keeps, and for how long (src/inflight-cover.js): a
+// kept balance read is only dropped when a later paid call arrives (or on a
+// restart), so the privacy page and payment.dataHandling say "used for at most
+// N minutes, and dropped at the next paid call after that or on restart", read
+// the figures from the code, and never promise a hard retention bound.
+{
+  const priv = (read("src/privacy.js") || "").replace(/\s+/g, " ");
+  const disc = read("src/discovery.js") || "";
+  const DROP = "and dropped at the next paid call after that or on restart";
+  ok(priv.includes(`held in the server's memory, used for at most \${COVER_KEEP_MINUTES} minutes, ${DROP}`) && priv.includes("kept in our shared store for the life of the call") && priv.includes("kept there for ${COVER_SETTLED_MARK_MINUTES} minutes") && /const COVER_KEEP_MINUTES = Math\.round\(GOOD_READ_MAX_MS \/ 60_000\);/.test(priv) && /const COVER_SETTLED_MARK_MINUTES = Math\.round\(SETTLED_MARK_MS \/ 60_000\);/.test(priv) && !/neither is kept longer than/.test(priv),
+    "src/privacy.js: the kept balance read is used for a derived time and dropped at the next paid call or on restart; reservations live for the call; the settled mark's time is derived");
+  ok(disc.includes(`used for at most \${Math.round(GOOD_READ_MAX_MS / 60000)} minutes, ${DROP}`) && disc.includes("kept there ${Math.round(SETTLED_MARK_MS / 60000)} minutes") && !/neither longer than/.test(disc),
+    "src/discovery.js dataHandling says the same, with the figures read from the code");
+}
+// A 429 on a catalog operation is not charged on x402 only: a Tempo transfer
+// sent before the call is recorded as owed. The OpenAPI 429 every catalog
+// operation carries and the API reference row say so, and name the coverage
+// check as one limit among the documented ones.
+{
+  const pages = read("src/pages.js") || "";
+  const api = read("wiki/API-Reference.md") || "";
+  const SCOPE = "Not charged on x402; a Tempo transfer sent before the call is recorded as owed.";
+  const o429 = (pages.match(/const OPENAPI_429 = Object\.freeze\(\{ description: "([^"]*)" \}\);/) || [])[1] || "";
+  const row = api.split("\n").find((l) => l.startsWith("| `429` |")) || "";
+  ok(o429.includes("one of the documented limits") && o429.includes(SCOPE) && !/\band not charged\b|\bnever charged\b/i.test(o429) && /429: OPENAPI_429,/.test(pages),
+    `src/pages.js: every catalog operation's 429 scopes "not charged" to x402 and names a Tempo transfer as owed (${o429.slice(0, 60)}...)`);
+  ok(row.includes("one of the documented limits") && row.includes(SCOPE) && !/\band not charged\b|\bnever charged\b/i.test(row),
+    "wiki/API-Reference.md: the 429 row scopes not charged to x402 and names a Tempo transfer as owed");
+}
 // facilitatorFunds: a gas balance under the floor reads low; one that cannot
 // be read reads unknown (src/tool-failure-monitor.js), which does not page.
 {
