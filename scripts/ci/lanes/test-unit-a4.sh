@@ -125,6 +125,8 @@ t node scripts/test-pending-settle.js
 t node scripts/test-own-relayer.js
 # Referral copies of paid routes (/ref/<slug>): the 402 shape, amount parity with the direct route, one run per authorization, handler-first settlement on a signed facilitator request, net booking (local stub facilitator, keys made in the test).
 t node scripts/test-referral-gate.js
+# A run's ceiling: every tool marked endsAtCeiling ends its upstream work at it, starts none after it, and never answers from a cut read
+t node scripts/test-run-ceiling.js
 # Robinhood settle order follows the listed facilitator's relayer gas: dry -> our relayer first, funded -> facilitator first, unread never moves it (offline)
 t node scripts/test-robinhood-order.js
 # robinhoodSettler: relayer once our relayer has settled first past ROBINHOOD_RELAYER_FIRST_ALERT_HOURS, ok shorter or after the facilitator is first again, off disabled; the stored

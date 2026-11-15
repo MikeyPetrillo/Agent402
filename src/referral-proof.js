@@ -79,9 +79,10 @@ const valueOf = (log) => { try { return BigInt(log.data); } catch { return null;
  * (base units) only sets `underFloor`; `routedTopic` overrides the event
  * topic. `productId` (a 32-byte hex id) BINDS THE PRODUCT: when given, the
  * routed event's product word (data word 2) must equal it, or the receipt
- * reads unknown (a payment routed to our merchant for another product is
- * held for an operator, never delivered as this one). With none given the
- * product word is not read. The event's three indexed ids are not read:
+ * reads unknown and carries `product: { configured, received }` (a verdict
+ * of its own for the caller: the payment reached our merchant for another
+ * product, so it is never delivered or booked as this one's sale). With none
+ * given the product word is not read. The event's three indexed ids are not read:
  * nothing this server holds says what they must be.
  */
 export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, amount, merchantId = null, payoutAddress = null, minNet = null, productId = null, routedTopic = ROUTED_EVENT_TOPIC } = {}) {
@@ -128,7 +129,7 @@ export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, am
     if (mine[0].merchantId !== ours) return out("unpaid", "the payment was routed to another merchant", true, true, toUs);
     if (!(mine[0].merchantAmt > 0n) || !paidOut(mine[0].merchantAmt)) return out("unknown", "routed to this merchant, with no transfer of the merchant amount to the payout wallet", true, true, true);
     if (sentElsewhere) return out("unknown", "the transaction was not sent to the pay-to contract", true, true, true);
-    if (B32.test(String(productId || "")) && mine[0].productId !== lc(productId)) return out("unknown", "routed to this merchant for another product than the one this route sells", true, true, true);
+    if (B32.test(String(productId || "")) && mine[0].productId !== lc(productId)) return { ...out("unknown", "routed to this merchant for another product than the one this route sells", true, true, true), product: { configured: lc(productId), received: mine[0].productId } };
     const under = floor !== null && mine[0].merchantAmt < floor;
     return { ...out("paid", under ? "routed to this merchant and paid out, under the minimum net" : "routed to this merchant and paid out", true, true, true, mine[0].merchantAmt.toString()), underFloor: under };
   };

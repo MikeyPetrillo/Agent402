@@ -2,7 +2,7 @@ import dnsPromises, { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import { Agent, buildConnector } from "undici";
 import { checkServerIdentity } from "../tls-distrust.js";
-import { capByCeiling, ceilingPassed } from "../run-ceiling.js";
+import { capByCeiling, ceilingPassed, assertBeforeCeiling } from "../run-ceiling.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
@@ -153,7 +153,8 @@ export async function resolveHostAddresses(host, { families = [4, 6] } = {}) {
   const name = String(host);
   const literal = isIP(name);
   if (literal) return [{ address: name, family: literal }];
-  const ms = lookupBudgetMs();
+  // The lookup's own bound, or a run's ceiling when that comes first (src/run-ceiling.js; none on a direct route).
+  const ms = capByCeiling(lookupBudgetMs());
   const started = Date.now();
   const settled = await Promise.allSettled(
     families.map((f) => withDeadline(queryFamily(name, f), ms).then((list) => (Array.isArray(list) ? list : []).map((address) => ({ address: String(address), family: f }))))
@@ -555,6 +556,8 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
       // Inside a run with a ceiling (src/run-ceiling.js) no retry starts once it has passed.
       if (attempt < retries && !throttled && !e?.noRetry && !ceilingPassed() && (sc === 504 || sc === 502 || sc === 503)) {
         await new Promise((r) => setTimeout(r, backoffMs));
+        // Checked again after the wait: the ceiling may have passed during it.
+        if (ceilingPassed()) throw e;
         continue;
       }
       throw e;
@@ -575,7 +578,10 @@ export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"])
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
 export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false } = {}) {
+  // Inside a run whose ceiling has passed (src/run-ceiling.js) nothing starts: no lookup, no request.
+  assertBeforeCeiling();
   const url = await assertPublicUrl(rawUrl);
+  assertBeforeCeiling();
 
   // timeoutMs bounds the whole exchange: connect, headers AND body. The timer
   // is cleared only once the body has been read (or the call has failed), so

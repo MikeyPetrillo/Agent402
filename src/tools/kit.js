@@ -5,7 +5,7 @@
 // (via bad()) for invalid input.
 import { createHash, createHmac, randomBytes, randomUUID, randomInt } from "node:crypto";
 import { resolveMx, Resolver } from "node:dns/promises";
-import { markEndsAtCeiling, capByCeiling, atCeiling } from "../run-ceiling.js";
+import { markEndsAtCeiling, capByCeiling, atCeiling, ceilingPassed, ceilingCutError, assertBeforeCeiling } from "../run-ceiling.js";
 import { isIP } from "node:net";
 import tls from "node:tls";
 import { assertQueryableName } from "./dns-name-filter.js";
@@ -1759,8 +1759,11 @@ const validationTools = [
         const resolver = new Resolver();
         const off = atCeiling(() => resolver.cancel());
         try {
+          assertBeforeCeiling();
           ptr = await resolver.reverse(ip);
-        } catch {
+        } catch (e) {
+          // A lookup the ceiling ended is a run that did not finish, never "no PTR record".
+          if (e?.ceilingCut || ceilingPassed()) throw ceilingCutError();
           ptr = [];
         } finally { off(); }
       }
@@ -2098,6 +2101,7 @@ async function rdapAuthoritativeBase(tld) {
   const now = Date.now();
   if (!rdapBootstrap.map || now - rdapBootstrap.at >= RDAP_BOOTSTRAP_TTL_MS) {
     try {
+      assertBeforeCeiling();
       const res = await fetch("https://data.iana.org/rdap/dns.json", {
         signal: AbortSignal.timeout(capByCeiling(10_000)),
         dispatcher: ssrfDispatcher,
@@ -2108,6 +2112,8 @@ async function rdapAuthoritativeBase(tld) {
     } catch (err) {
       // Keep serving the stale map (or none); a failed refresh must not take
       // the tool down - rdap.org below still answers every TLD.
+      // A refresh that a run's ceiling cut short says nothing about the registry list: the next call asks again.
+      if (err?.ceilingCut || ceilingPassed()) return rdapBootstrap.map?.get(tld) ?? null;
       console.warn(`[whois] IANA RDAP bootstrap refresh failed (${err.message}); using ${rdapBootstrap.map ? "stale map" : "rdap.org only"}`);
       rdapBootstrap = { at: now - RDAP_BOOTSTRAP_TTL_MS + RDAP_BOOTSTRAP_RETRY_MS, map: rdapBootstrap.map };
     }
@@ -2146,6 +2152,7 @@ const networkTools = [
       const timer = setTimeout(() => controller.abort(), capByCeiling(15_000));
       const started = Date.now();
       try {
+        assertBeforeCeiling();
         const res = await fetch(url, {
           method,
           redirect: "follow",
@@ -2163,6 +2170,8 @@ const networkTools = [
         return { up: res.status < 500, status: res.status, latencyMs, finalUrl: res.url, headers };
       } catch (err) {
         if (isSsrfBlock(err)) throw bad("URL resolves to a private address (including after redirects)");
+        // A check a run's ceiling ended (src/run-ceiling.js) did not finish: a 504, never the answer "down".
+        if (err?.ceilingCut || ceilingPassed()) throw ceilingCutError();
         return { up: false, error: err.name === "AbortError" ? "Timed out after 15s" : err.message, latencyMs: Date.now() - started };
       } finally {
         clearTimeout(timer);
@@ -2234,6 +2243,7 @@ const networkTools = [
         ip = resolved.address;
       }
       await assertPublicUrl(`https://${ip.includes(":") ? `[${ip}]` : ip}/`); // throws 400 if private
+      assertBeforeCeiling();
       const cert = await new Promise((resolve, reject) => {
         const socket = tls.connect(
           { host: ip, port: 443, servername: host, timeout: 10_000, rejectUnauthorized: false },
@@ -2253,7 +2263,7 @@ const networkTools = [
         });
         socket.on("error", (e) => reject(Object.assign(new Error(`TLS error: ${e.message}`), { statusCode: 502 })));
         // A run's ceiling (none on a direct route) ends the connection as its own timeout does.
-        const off = atCeiling(() => { socket.destroy(); reject(Object.assign(new Error("TLS connection timed out"), { statusCode: 504 })); });
+        const off = atCeiling(() => { socket.destroy(); reject(ceilingCutError()); });
         socket.on("close", off);
       });
       const { c, authorized, authorizationError, protocol, cipher } = cert;
@@ -2324,6 +2334,7 @@ const networkTools = [
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), capByCeiling(12_000));
         try {
+          assertBeforeCeiling();
           const res = await fetch(url, {
             signal: controller.signal,
             redirect: "follow",
@@ -2402,7 +2413,9 @@ const networkTools = [
       let text = "";
       try {
         ({ html: text } = await safeFetch(`${target.origin}/robots.txt`, { maxBytes: 512 * 1024 }));
-      } catch {
+      } catch (e) {
+        // A read a run's ceiling ended (src/run-ceiling.js) is not "no robots.txt".
+        if (e?.ceilingCut || ceilingPassed()) throw ceilingCutError();
         return { allowed: true, matchedRule: null, note: "No readable robots.txt - crawling is not restricted by robots.txt", sitemaps: [] };
       }
       const groups = parseRobots(text);

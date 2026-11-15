@@ -203,19 +203,28 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     /** Entries retired at capacity, oldest first. */
     retiredAtCapacity: () => retired.slice(),
     /** One sale whose receipt paid this merchant less than the rate map
-     *  expects, counted once per transaction under its slug:
+     *  expects (or, with `product`, one payment whose receipt names another
+     *  product id than the slug's: `{ configured, received }`), counted once
+     *  per transaction under its slug:
      *  `{ count, deep, expected, received, gross, tx, firstAt, at }` (`deep`
      *  counts the ones the gate calls far under). Kept until the map admits
      *  the amount or an operator clears it (clearShort). */
-    async noteShort(slug, { expected, received, gross, tx, deep = false } = {}) {
+    async noteShort(slug, { expected, received, gross, tx, deep = false, product = null } = {}) {
       const t = now();
       return change((_cur, _kept, _done, _gone, _shut, under) => {
         const prev = under[slug] && typeof under[slug] === "object" ? under[slug] : null;
         const txs = Array.isArray(prev?.txs) ? prev.txs : [];
         if (txs.includes(tx)) return SKIP_UPDATE;
-        under[slug] = { count: (prev?.count || 0) + 1, deep: (prev?.deep || 0) + (deep ? 1 : 0), expected: String(expected), received: String(received), gross: String(gross), tx: String(tx), txs: [...txs, String(tx)].slice(-50), firstAt: prev?.firstAt || t, at: t };
+        // A product note carries no amounts: it keeps the slug's short-net figures as they stand.
+        const amounts = product ? { count: prev?.count || 0, deep: prev?.deep || 0, expected: String(prev?.expected ?? "0"), received: String(prev?.received ?? "0"), gross: String(prev?.gross ?? gross) } : { count: (prev?.count || 0) + 1, deep: (prev?.deep || 0) + (deep ? 1 : 0), expected: String(expected), received: String(received), gross: String(gross) };
+        under[slug] = { ...amounts, tx: String(tx), txs: [...txs, String(tx)].slice(-50), firstAt: prev?.firstAt || t, at: t, ...(product || prev?.product ? { product: product || prev.product } : {}) };
         return undefined;
       });
+    },
+    /** Record a hand note that has no entry of its own (a stop cleared
+     *  where the book held no record of it). */
+    async resolveNote({ slug, outcome, note }) {
+      return change((_cur, _kept, done) => { done.push({ key: `short:${slug}`, slug, payer: null, amount: null, tx: null, state: "short-net", delivered: true, outcome: String(outcome).slice(0, 40), debt: false, note: String(note).slice(0, 300), at: now() }); return undefined; });
     },
     /** The short-net record, by slug. */
     shortSales: () => ({ ...short }),
@@ -265,6 +274,11 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         const e = entries[k];
         if (!e) continue;
         if (e.state === "contradicted" || (e.state === "unconfirmed" && e.flagged === true)) out.push({ key: k, payer: e.payer, state: e.state, scope: e.state === "unconfirmed" || e.scope === "route" ? "route" : "payer", moved: e.state === "contradicted" && e.moved === true, at: Number(e.contradictedAt) || 0 });
+        // A settle success whose receipt was READ IN FULL and does not prove
+        // the sale (`unproven`): this server's settings or the contract's
+        // shape, never the payer's doing, so it holds no payer of its own
+        // (`own: false`); with money moved it counts toward the many-payer hold.
+        else if (e.state === "in-doubt" && e.unproven === true) out.push({ key: k, payer: e.payer, state: e.state, scope: "payer", own: false, unproven: true, moved: e.moved === true, at: Number(e.unprovenAt) || 0 });
       }
       return out;
     },
@@ -300,7 +314,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      * in flight in this process. At most `max` entries are read a pass, the
      * ones read least recently first, so every open entry is reached in turn.
      */
-    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50 } = {}) {
+    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, onHeld = () => {}, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50 } = {}) {
       const t = now();
       const out = { read: 0, landed: 0, unpaid: 0, expired: 0, unknown: 0, charged: 0, unrecognized: 0 };
       try { const b = await store.load(null); if (b) absorb(b); } catch { /* the last body read */ }
@@ -346,6 +360,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
           if (keep) {
             if (e.routedToUs !== true && s.routedToUs === true) say("error", `a spent authorization's transaction was routed to THIS merchant by the split contract, and the receipt is not one the proof rule accepts (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${String(s.transaction).toLowerCase()}: ${String(s.why || "").slice(0, 120)}); kept open for an operator, never closed by itself`);
             await this.resolve(e.key, { state: e.state === "intent" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, seenTx: String(s.transaction).toLowerCase(), ...(s.routedToUs === true ? { routedToUs: true } : {}), why: String(s.why || "").slice(0, 160) });
+            try { onHeld(e, s); } catch { /* the caller's note only */ }
             continue;
           }
           const full = read;

@@ -15,7 +15,7 @@
 // PoW-eligible); covered by scripts/test-data-kit.js.
 import { readFileSync } from "node:fs";
 import { safeFetch } from "./fetch-guard.js";
-import { markEndsAtCeiling } from "../run-ceiling.js";
+import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
 import { ratesUrl, latestShape, isUnknownCurrency } from "./frankfurter.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
@@ -37,7 +37,8 @@ async function getJson(url, { allowEmpty = false } = {}) {
       ({ html } = await safeFetch(url, { maxBytes: 3 * 1024 * 1024 }));
       break;
     } catch (e) {
-      if (attempt === 0 && (e.statusCode === 502 || e.statusCode === 504)) continue;
+      // No second attempt once a run's ceiling has passed (src/run-ceiling.js; never on a direct route).
+      if (attempt === 0 && !ceilingPassed() && (e.statusCode === 502 || e.statusCode === 504)) continue;
       throw e;
     }
   }

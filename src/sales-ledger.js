@@ -583,17 +583,34 @@ export function privateRailSaleByTx(tx, rail) {
   } catch { return null; }
 }
 const updateAttestation = db.prepare("UPDATE sales SET attest_uid = ?, attest_tx = ? WHERE id = ? AND attest_uid IS NULL");
-const updatePrivateNet = db.prepare("UPDATE sales /* private-rail */ SET price_usd = ? WHERE tx = ? AND rail = ? AND lower(payer) = ? AND price_usd != ? AND (quote_usd IS NULL OR quote_usd >= ?)");
+const updatePrivateNet = db.prepare("UPDATE sales /* private-rail */ SET price_usd = ? WHERE tx = ? AND rail = ? AND lower(payer) = ? AND (? IS NULL OR slug = ?) AND price_usd != ? AND (quote_usd IS NULL OR quote_usd >= ?)");
 const selectPrivateByTxPayer = db.prepare(
-  "SELECT id FROM sales /* private-rail */ WHERE tx = ? AND rail = ? AND lower(payer) = ? LIMIT 1"
+  "SELECT COUNT(*) AS n FROM sales /* private-rail */ WHERE tx = ? AND rail = ? AND lower(payer) = ? AND (? IS NULL OR slug = ?)"
 );
+const qPayerPrivateSale = db.prepare("SELECT 1 AS hit FROM sales /* private-rail */ WHERE payer = ? AND rail = ? LIMIT 1");
+/** True when this payer has a sale on the given PRIVATE rail. For that
+ *  rail's own gate only (a returning buyer there); no public or
+ *  buyer-facing figure reads it, and payerHasPaidSale is unchanged. */
+export function payerHasPrivateRailSale(payer, rail) {
+  const p = normalizePayerAddress(payer);
+  if (!p || !PRIVATE_RAILS.includes(String(rail))) return false;
+  try { return Boolean(qPayerPrivateSale.get(p, String(rail))); } catch { return false; }
+}
+/** How many sales stand on a private rail under this transaction for this
+ *  payer (and this slug, when given). */
+export function privateRailSaleCount(tx, rail, payer, slug = null) {
+  const t = String(tx || "").trim(), who = String(payer || "").trim().toLowerCase();
+  if (!t || !rail || !who) return 0;
+  const s = slug ? String(slug) : null;
+  try { return Number(selectPrivateByTxPayer.get(t, String(rail), who, s, s)?.n) || 0; } catch { return 0; }
+}
 /** Whether a sale stands on a private rail under this transaction FOR THIS
  *  PAYER: one transaction can settle several payers' payments, and each is
  *  a sale of its own. */
 export function privateRailSaleStands(tx, rail, payer) {
   const t = String(tx || "").trim(), who = String(payer || "").trim().toLowerCase();
   if (!t || !rail || !who) return false;
-  try { return !!selectPrivateByTxPayer.get(t, String(rail), who); } catch { return false; }
+  return privateRailSaleCount(t, rail, who) > 0;
 }
 
 /**
@@ -608,7 +625,7 @@ export function privateRailSaleStands(tx, rail, payer) {
  * stands, it already carries that amount, or the amount is not usable.
  * Database mode: a Promise of the verdict.
  */
-export function amendPrivateRailSaleNet(tx, rail, netUsd, payer) {
+export function amendPrivateRailSaleNet(tx, rail, netUsd, payer, slug = null) {
   const t = String(tx || "").trim(), who = String(payer || "").trim().toLowerCase();
   const n = Number(netUsd);
   if (!t || !who || !PRIVATE_RAILS.includes(String(rail)) || !Number.isFinite(n) || !(n > 0)) return false;
@@ -616,13 +633,13 @@ export function amendPrivateRailSaleNet(tx, rail, netUsd, payer) {
     return pgWrite("amend-private-net", async () => {
       await queuedSaleLanded(t);
       const r = await stateQuery(
-        `UPDATE ${T("sales")} SET price_usd = $1, updated_at = ${PG_NOW_MS} WHERE tx = $2 AND rail = $3 AND lower(payer) = $4 AND price_usd <> $1 AND (quote_usd IS NULL OR quote_usd >= $1) RETURNING *`,
-        [n, t, String(rail), who]);
+        `UPDATE ${T("sales")} SET price_usd = $1, updated_at = ${PG_NOW_MS} WHERE tx = $2 AND rail = $3 AND lower(payer) = $4 AND ($5::text IS NULL OR slug = $5::text) AND price_usd <> $1 AND (quote_usd IS NULL OR quote_usd >= $1) RETURNING *`,
+        [n, t, String(rail), who, slug ? String(slug) : null]);
       for (const row of r.rows) { applySale(row); writeThrough(fileSale, saleRowOf(row)); }
       return r.rows.length > 0;
     });
   }
-  try { return updatePrivateNet.run(n, t, String(rail), who, n, n).changes > 0; }
+  try { const s = slug ? String(slug) : null; return updatePrivateNet.run(n, t, String(rail), who, s, s, n, n).changes > 0; }
   catch { return false; }
 }
 
