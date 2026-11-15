@@ -12,12 +12,16 @@ const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a
 const lc = (v) => String(v ?? "").toLowerCase();
 const indexOf = (l) => { const n = parseInt(String(l?.logIndex ?? ""), 16); return Number.isFinite(n) ? n : null; };
 
-/** The split contract's routed-payment event, as its reference documents it:
- *  three indexed ids, then nine data words (buyer wallet, merchant id, product
- *  id, gross amount, four split legs, merchant amount). */
+/** The split contract's routed-payment event: three indexed ids, then nine
+ *  data words, by position: 0 buyer wallet, 1 merchant id, 2 product id,
+ *  3 gross amount, 4 to 7 the split legs, 8 merchant amount. Pinned to a real
+ *  settlement (scripts/fixtures/referral-receipt-base.json): the token's
+ *  AuthorizationUsed and the payer's Transfer into the contract, the split
+ *  legs, the Transfer to the merchant's payout wallet, then this event last,
+ *  in a transaction sent to the contract itself. */
 export const ROUTED_EVENT_SIGNATURE = "PaymentRouted(uint256,uint256,uint256,address,uint256,bytes32,uint256,uint256,uint256,uint256,uint256,uint256)";
 // keccak256 of that signature (a constant here so this module needs no
-// library; the suite checks it against the signature).
+// library; the suite checks it against the signature and the real receipt).
 export const ROUTED_EVENT_TOPIC = "0x095295347a30fa3575b9fb1e8e4afe0db77928a86555467cb2dfd7b9034a0d17";
 const ROUTED_DATA_WORDS = 9;
 const B32 = /^0x[0-9a-fA-F]{64}$/;
@@ -39,7 +43,15 @@ const valueOf = (log) => { try { return BigInt(log.data); } catch { return null;
 /**
  * Whether a receipt proves that THIS authorization paid `amount` from `from`
  * to the split contract `payTo` AND that the contract routed it to OUR
- * merchant. Pure. `{ verdict: "paid" | "unpaid" | "unknown", why }`.
+ * merchant. Pure. `{ verdict: "paid" | "unpaid" | "unknown", why, moved, read,
+ * routedToUs, net }`. `read` is true when the receipt was there with its log
+ * list (a verdict made on a complete reading); `moved` is true when the
+ * authorization's own transfer into the contract is in it (whatever the
+ * contract did next); `routedToUs` is true when, after that transfer, the
+ * contract's routed event names OUR merchant id, whatever the payout
+ * address, the amounts or the verdict (a payment that reached our merchant
+ * and that this rule may still not prove: never closed by itself); `net` is
+ * the merchant amount the receipt shows (a decimal string), on "paid" only.
  *
  * The token's receive path (FiatToken `_receiveWithAuthorization`: it requires
  * the caller to be the payee, marks the nonce used, then transfers) emits
@@ -49,21 +61,32 @@ const valueOf = (log) => { try { return BigInt(log.data); } catch { return null;
  * What the contract did with THIS payment is read from the logs between that
  * pair and the next authorization in the transaction.
  *
+ * PAID needs all of: that pair; the contract's routed event naming this
+ * buyer, this gross and `merchantId`; and a Transfer from the contract to
+ * `payoutAddress` of the merchant amount the event states (above zero).
+ * There is no other way to "paid": a payout transfer with no decodable event
+ * is unknown. The SIZE of the merchant amount does not decide it: the buyer
+ * paid the whole amount and the contract routed it to us, so a share under
+ * `minNet` (the contract's rate above the one this server expects) is still
+ * paid, reported as `underFloor` with the amount in `net` for the caller to
+ * raise. A receipt whose `to` is not
+ * the contract is unknown too (the settlement this rule is pinned to is sent
+ * to the contract).
+ *
  * `nonce` null reads every authorization of `from` in the receipt (the refund
- * path knows the payer and the transaction, not the nonce).
- * `merchantId` (decimal string) and `payoutAddress` are required for "paid";
- * `minNet` (base units) is the least a payout transfer must carry when no
- * routed event can be decoded; `routedTopic` overrides the event topic.
+ * path knows the payer and the transaction, not the nonce). `merchantId`
+ * (decimal string) and `payoutAddress` are required for "paid"; `minNet`
+ * (base units) only sets `underFloor`; `routedTopic` overrides the event topic.
  */
 export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, amount, merchantId = null, payoutAddress = null, minNet = null, routedTopic = ROUTED_EVENT_TOPIC } = {}) {
-  const out = (verdict, why) => ({ verdict, why });
-  if (!receipt || typeof receipt !== "object") return out("unknown", "no receipt");
+  const out = (verdict, why, moved = false, read = true, routedToUs = false, net = null) => ({ verdict, why, moved, read, routedToUs, net });
+  if (!receipt || typeof receipt !== "object") return out("unknown", "no receipt", false, false);
   if (tx && lc(receipt.transactionHash) !== lc(tx)) return out("unpaid", "the receipt is for another transaction");
   if (lc(receipt.status) !== "0x1") return out("unpaid", "the transaction did not succeed");
   let need;
   try { need = BigInt(amount); } catch { return out("unpaid", "no amount"); }
   if (!(need > 0n) || !ADDR.test(String(payTo || "")) || !ADDR.test(String(from || ""))) return out("unpaid", "no payer, pay-to or amount");
-  if (!Array.isArray(receipt.logs)) return out("unknown", "the receipt carries no log list");
+  if (!Array.isArray(receipt.logs)) return out("unknown", "the receipt carries no log list", false, false);
   const logs = [...receipt.logs].sort((a, b) => (indexOf(a) ?? 0) - (indexOf(b) ?? 0));
   const isUsed = (l) => lc(l?.address) === lc(TOKEN) && lc(l?.topics?.[0]) === AUTHORIZATION_USED_TOPIC;
   let ours = null;
@@ -72,6 +95,8 @@ export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, am
   let floor = null;
   try { floor = minNet === null || minNet === "" ? null : BigInt(minNet); } catch { floor = null; }
   const topic = B32.test(String(routedTopic || "")) ? lc(routedTopic) : ROUTED_EVENT_TOPIC;
+  // Where the transaction was sent, when the receipt says: the contract itself.
+  const sentElsewhere = ADDR.test(String(receipt.to || "")) && lc(receipt.to) !== lc(payTo);
 
   const one = (i) => {
     // 1. Its own transfer into the split contract.
@@ -85,20 +110,20 @@ export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, am
     let end = logs.length;
     for (let k = i + 2; k < logs.length; k++) { if (isUsed(logs[k])) { end = k; break; } }
     const segment = logs.slice(i + 2, end);
-    if (ours === null || payout === null) return out("unknown", "no merchant id or payout wallet configured to check the routing against");
-    const paidOut = (test) => segment.some((l) => lc(l.address) === lc(TOKEN) && lc(l.topics?.[0]) === TRANSFER_TOPIC && lc(l.topics?.[1]) === topicOf(payTo) && lc(l.topics?.[2]) === topicOf(payout) && (() => { const v = valueOf(l); return v !== null && test(v); })());
+    if (ours === null || payout === null) return out("unknown", "no merchant id or payout wallet configured to check the routing against", true);
+    const paidOut = (amt) => segment.some((l) => lc(l.address) === lc(TOKEN) && lc(l.topics?.[0]) === TRANSFER_TOPIC && lc(l.topics?.[1]) === topicOf(payTo) && lc(l.topics?.[2]) === topicOf(payout) && valueOf(l) === amt);
     const routed = segment.filter((l) => lc(l.address) === lc(payTo) && lc(l.topics?.[0]) === topic).map(decodeRouted);
     const decoded = routed.filter(Boolean);
-    if (decoded.length) {
-      const mine = decoded.filter((e) => e.buyer === lc(from) && e.gross === value);
-      if (mine.length !== 1) return out("unknown", "the routed event does not name this buyer and amount exactly once");
-      if (mine[0].merchantId !== ours) return out("unpaid", "the payment was routed to another merchant");
-      if (!(mine[0].merchantAmt > 0n) || !paidOut((v) => v === mine[0].merchantAmt)) return out("unknown", "routed to this merchant, with no transfer of the merchant amount to the payout wallet");
-      return out("paid", "routed to this merchant and paid out");
-    }
-    // No event this module can decode: the payout transfer alone.
-    if (floor !== null && floor > 0n && paidOut((v) => v >= floor && v <= value)) return out("paid", "paid out to the payout wallet (no routed event decoded)");
-    return out("unknown", routed.length ? "a routed event of an unrecognized shape, and no payout transfer" : "no routed event and no payout transfer");
+    if (!decoded.length) return out("unknown", routed.length ? "a routed event of an unrecognized shape" : "no routed event", true);
+    // The contract's event names our merchant id for this payment, whatever else holds.
+    const toUs = decoded.some((e) => e.merchantId === ours);
+    const mine = decoded.filter((e) => e.buyer === lc(from) && e.gross === value);
+    if (mine.length !== 1) return out("unknown", "the routed event does not name this buyer and amount exactly once", true, true, toUs);
+    if (mine[0].merchantId !== ours) return out("unpaid", "the payment was routed to another merchant", true, true, toUs);
+    if (!(mine[0].merchantAmt > 0n) || !paidOut(mine[0].merchantAmt)) return out("unknown", "routed to this merchant, with no transfer of the merchant amount to the payout wallet", true, true, true);
+    if (sentElsewhere) return out("unknown", "the transaction was not sent to the pay-to contract", true, true, true);
+    const under = floor !== null && mine[0].merchantAmt < floor;
+    return { ...out("paid", under ? "routed to this merchant and paid out, under the minimum net" : "routed to this merchant and paid out", true, true, true, mine[0].merchantAmt.toString()), underFloor: under };
   };
 
   const candidates = [];
@@ -113,4 +138,3 @@ export function proveReceipt(receipt, { tx = null, from, nonce = null, payTo, am
 }
 /** proveReceipt's one word. */
 export const receiptProvesPayment = (receipt, o) => proveReceipt(receipt, o).verdict;
-

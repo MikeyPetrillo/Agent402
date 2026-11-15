@@ -24,6 +24,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { createServer, request as httpRequest } from "node:http";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -42,7 +43,7 @@ const ONLY_PART = process.env.REFERRAL_TEST_PART || "";
 const gateMod = await import("../src/referral-gate.js");
 const { referralConfig, referralConfigProblem, referralRoutes, referralIneligibility, referralSlugOfPath, isCanonicalReferralPath, createReferralGate, referralNet, baseUnitsOf, checkReferralPayment, parseCommissionBps, commissionBpsFor, isLocalReceiveSignature, createLineSampler, REFERRAL_ASSET, REFERRAL_NETWORK, REFERRAL_REASONS } = gateMod;
 const { createReferralSettler, referralRequestDigest } = await import("../src/referral-settle.js");
-const { createReferralChainReader, chainVerdict, receiptProvesPayment } = await import("../src/referral-chain.js");
+const { createReferralChainReader, chainVerdict, receiptProvesPayment, proveReceipt } = await import("../src/referral-chain.js");
 const { createReferralBook } = await import("../src/referral-book.js");
 const { createReferralAnswerStore } = await import("../src/referral-answers.js");
 const { createJsonDocument } = await import("../src/json-document.js");
@@ -119,7 +120,7 @@ function stubFacilitator() {
   //   wrongtx     the receipt answers for another transaction hash
   //   cancel      the buyer canceled the authorization (no transaction of ours)
   //   nolog       spent, and no log of either kind anywhere
-  function land(auth, tx = null, kind = "paid", { block = chainState.head, payTo = auth.to } = {}) {
+  function land(auth, tx = null, kind = "paid", { block = chainState.head, payTo = auth.to, bps = 1234n } = {}) {
     const t = String(tx || "0x" + createHash("sha256").update(`${keyOf(auth.from, auth.nonce)}|${kind}|${Math.random()}`).digest("hex")).toLowerCase();
     used.set(keyOf(auth.from, auth.nonce), { tx: t, block, canceled: kind === "cancel", nolog: kind === "nolog" });
     if (kind === "cancel" || kind === "nolog") return t;
@@ -132,12 +133,13 @@ function stubFacilitator() {
     //   othermerchant  routed to another merchant id, paid out to another wallet
     //   noevent        nothing after the pair (the money sits in the contract)
     //   payoutonly     no routed event, a transfer of the net to our payout wallet
+    //   viaforwarder   the whole paid shape, in a transaction sent to another contract
     //   nopayout       a routed event naming us, with no transfer to our payout wallet
     //   badevent       a routed event of another shape (8 data words), no payout
     //   otherbuyer     a routed event naming another buyer wallet
     //   wronggross     a routed event stating another gross amount
     const gross = BigInt(auth.value);
-    const net = gross - (gross * 1234n) / 10000n;
+    const net = gross - (gross * BigInt(bps)) / 10000n;
     const routing = [];
     const ev = (o = {}) => routedLog({ router: payTo, buyer: auth.from, merchantId: MERCHANT_ID, gross, merchantAmt: net, ...o }, 6, block);
     if (kind === "othermerchant") routing.push(transferLog(payTo, OTHER, net, 5, block), ev({ merchantId: "7" }));
@@ -165,7 +167,8 @@ function stubFacilitator() {
   const defaults = () => ({
     verify: () => ({ status: 200, body: { isValid: true } }),
     // A facilitator that settles: the authorization lands, paid, in a real-shaped receipt.
-    settle: (call) => ({ status: 200, body: { success: true, transaction: land(call.json.paymentPayload.payload.authorization, nextTx()), network: REFERRAL_NETWORK } }),
+    // The contract pays each slug's own share (the suite's `busy` slug has a commission of its own).
+    settle: (call) => ({ status: 200, body: { success: true, transaction: land(call.json.paymentPayload.payload.authorization, nextTx(), "paid", { bps: call.json.paymentPayload.accepted?.extra?.endpoint === "/ref/busy" ? 4321n : 1234n }), network: REFERRAL_NETWORK } }),
     settleDelayMs: 0, verifyDelayMs: 0, rpcDown: false, receiptDown: false, acceptOnce: false, acceptOnceReason: null,
   });
   const mode = defaults();
@@ -268,6 +271,58 @@ const rawPost = (url, body, headers, abortAfterMs) => new Promise((resolve) => {
   setTimeout(() => req.destroy(), abortAfterMs);
 });
 
+// One paid POST over a raw socket whose client reads `readBytes` of the body
+// and then RESETS the connection; with 0 it reads nothing and resets once
+// `when()` says the server has started sending. Resolves `{ got }`.
+const rawPaid = (url, body, headers, { readBytes = 0, when = async () => {} } = {}) => new Promise((resolve) => {
+  const u = new URL(url);
+  const data = JSON.stringify(body);
+  const sock = netConnect({ port: Number(u.port), host: u.hostname });
+  let got = 0, head = Buffer.alloc(0), inBody = false, done = false;
+  sock.on("error", () => {});
+  sock.on("close", () => { if (!done) { done = true; resolve({ got }); } });
+  sock.on("connect", () => {
+    if (readBytes === 0) sock.pause();
+    sock.write(`POST ${u.pathname} HTTP/1.1\r\nhost: ${u.host}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(data)}\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join("")}\r\n${data}`);
+    if (readBytes === 0) Promise.resolve().then(when).then(() => sock.resetAndDestroy());
+  });
+  sock.on("data", (d) => {
+    if (!inBody) {
+      head = Buffer.concat([head, d]);
+      const i = head.indexOf("\r\n\r\n");
+      if (i < 0) return;
+      inBody = true;
+      got += head.length - (i + 4);
+    } else got += d.length;
+    if (got >= readBytes) sock.resetAndDestroy();
+  });
+});
+
+// A deterministic stand-in for a connection that stops taking an answer: a
+// middleware that sits between the gate's send and the socket.
+//   x-test-cut: K     pieces are confirmed up to K body bytes; the next piece is
+//                     swallowed (never written, never confirmed) and the response is destroyed
+//   x-test-stall: K   the same, but the response is left open (rig.stalled) for the test to end
+//   x-test-drop: 1    every piece is written and NO write callback is ever called
+//                     (what a compressor between the send and the socket does)
+const rig = { stalled: [] };
+const sendRig = (req, res, next) => {
+  const cut = req.headers["x-test-cut"], stall = req.headers["x-test-stall"], drop = req.headers["x-test-drop"];
+  if (cut === undefined && stall === undefined && drop === undefined) return next();
+  const limit = Number(cut ?? stall);
+  const write = res.write.bind(res);
+  let passed = 0;
+  res.write = (part, cb) => {
+    if (drop !== undefined) return write(part);
+    if (passed + part.length <= limit) { passed += part.length; return write(part, cb); }
+    if (cut !== undefined) setTimeout(() => res.destroy(), 20); else rig.stalled.push(res);
+    return true;
+  };
+  return next();
+};
+// A call that may end with the connection cut: its status, or "cut".
+const cutCall = (url, opts) => call(url, opts).then((r) => r, () => ({ status: "cut", json: null, text: "", headers: new Headers() }));
+
 const fac = await stubFacilitator();
 
 // ===============================================================================
@@ -279,7 +334,7 @@ const ENV = {
   REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT,
   // The receipt of a settle success is read once in the suite (no waiting on a stub).
   REFERRAL_RECEIPT_WAIT_MS: "0",
-  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
+  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
   // Synthetic figures, chosen to be no real rate.
   REFERRAL_COMMISSION_BPS: "default:1234,busy:4321", REFERRAL_FEE_BPS: "0",
   REFERRAL_DEADLINE_MS: "1000", REFERRAL_SETTLE_RESERVE_MS: "1000", REFERRAL_SETTLE_MS: "2000", REFERRAL_VERIFY_MS: "1000",
@@ -390,7 +445,7 @@ if (ONLY_PART !== "2") {
 {
   const chain = createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, publicLanes: [], merchantId: MERCHANT_ID, payoutAddress: PAYOUT, headMaxAgeMs: 0, tries: 2, budgetMs: 1500, pauseMs: 50, timeoutMs: 500 });
   const mk = () => ({ from: newAccount().address, to: PAY_TO, value: "30000", nonce: freshNonce() });
-  const ask = (a, over = {}) => chain.state({ from: a.from, nonce: a.nonce, payTo: PAY_TO, amount: "30000", ...over });
+  const ask = (a, over = {}) => chain.state({ from: a.from, nonce: a.nonce, payTo: PAY_TO, amount: "30000", minNet: "26298", ...over });
   const a = mk();
   const unused = await ask(a);
   fac.land(a, "0x" + "5a".repeat(32));
@@ -460,6 +515,8 @@ const TOOLS = {
   // Tools with a published example: an empty request runs it.
   exa: { slug: "exa", name: "Example", category: "test", price: "$0.03", discovery: { input: { text: "the published example", n: 2 } }, handler: async (i) => { seen.exa = { ...i }; return { got: i.text ?? null, n: i.n ?? null }; } },
   chatx: { slug: "chatx", name: "Chat example", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), discovery: { input: { max_tokens: 3, messages: [{ role: "user", content: "example" }], stream: true } }, handler: async (i, req) => { seen.chatx = { max_tokens: i.max_tokens, stream: i.stream, content: i.messages?.[0]?.content, stash: req.__meteredQuoteUsd }; return { id: "cx", choices: [] }; } },
+  // An answer of the size asked (for the delivery checks).
+  big: { slug: "big", name: "Big", category: "test", price: "$0.03", handler: async (i) => ({ blob: "a".repeat(Math.min(Number(i.n) || 0, 7_800_000)) }) },
   // Reports the scopes a run is served in: the caller key and the referral-run mark.
   scopes: { slug: "scopes", name: "Scopes", category: "test", price: "$0.03", handler: async () => ({ caller: currentDispatchCaller(), referral: inReferralRun(), hint: routeHint("call POST /api/scopes", "") }) },
   // Reads the two mechanisms the gate presents its deadline through.
@@ -505,6 +562,7 @@ function mount(envOverride = {}, depOverride = {}) {
     sendToolError: (res, err, slug) => res.status(err?.statusCode || 502).json({ error: String(err?.message || "request failed"), tool: slug }),
     recordSale: (row) => { sales.push(row); return ledger.recordSale(row); },
     saleBooked: (tx) => !!ledger.privateRailSaleByTx(tx, "referral"),
+    amendSaleNet: ({ tx, netUsd }) => ledger.amendPrivateRailSaleNet(tx, "referral", netUsd),
     payerScreen: async (req, res) => {
       const from = JSON.parse(Buffer.from(req.headers["payment-signature"], "base64").toString("utf8")).payload.authorization.from;
       if (from !== SCREENED.address) return true;
@@ -527,6 +585,7 @@ function mount(envOverride = {}, depOverride = {}) {
     ...depOverride,
   });
   const app = express();
+  for (const mw of depOverride.appUse || []) app.use(mw);
   app.use(express.json({ limit: "100kb" }));
   app.get("/ref/:slug", (req, res) => gate.handler(req, res));
   app.post("/ref/:slug", (req, res) => gate.handler(req, res));
@@ -1103,10 +1162,11 @@ try {
     // WHO the split contract paid: the same authorization and transfer, routed differently.
     const routed = {};
     for (const kind of ["paid", "viaforwarder", "payoutonly", "othermerchant", "noevent", "nopayout", "badevent", "otherbuyer", "wronggross"]) routed[kind] = prove(pair(kind));
-    ok(routed.paid === "paid" && routed.viaforwarder === "paid" && routed.payoutonly === "paid", `a payment is OURS when the split contract's routed event names this buyer, this gross and our merchant id and the merchant amount is transferred to our payout wallet (whoever sent the transaction), or, with no event at all, by a transfer of at least the expected net to our payout wallet (${JSON.stringify(routed)})`);
+    ok(routed.paid === "paid", `a payment is OURS when the split contract's routed event names this buyer, this gross and our merchant id and the merchant amount is transferred to our payout wallet, in a transaction sent to the contract (${JSON.stringify(routed)})`);
+    ok(routed.payoutonly === "unknown" && routed.viaforwarder === "unknown", `nothing stands in for the routed event: a payout transfer alone is not a payment of ours, and neither is the paid shape in a transaction sent to another contract (${routed.payoutonly}, ${routed.viaforwarder})`);
     ok(routed.othermerchant === "unpaid", `the same authorization and transfer, routed to ANOTHER merchant, is not paid to us (${routed.othermerchant})`);
     ok(["noevent", "nopayout", "badevent", "otherbuyer", "wronggross"].every((k) => routed[k] === "unknown"), `a shape that is not recognized (no event and no payout, our event without its payout, an event of another shape, of another buyer, of another gross) is UNKNOWN: never paid, never unpaid (${JSON.stringify(routed)})`);
-    ok(prove(pair("paid"), { merchantId: "7" }) === "unpaid" && prove(pair("paid"), { payoutAddress: OUR_WALLET }) === "unknown" && prove(pair("paid"), { merchantId: null }) === "unknown" && prove(pair("payoutonly"), { minNet: "30001" }) === "unknown" && prove(pair("payoutonly"), { minNet: null }) === "unknown", "another merchant id configured reads not ours; another payout wallet, no merchant id, or a payout under the expected net reads unknown");
+    ok(prove(pair("paid"), { merchantId: "7" }) === "unpaid" && prove(pair("paid"), { payoutAddress: OUR_WALLET }) === "unknown" && prove(pair("paid"), { merchantId: null }) === "unknown" && prove(pair("paid"), { minNet: "26299" }) === "paid" && prove(pair("paid"), { minNet: null }) === "paid" && prove(pair("paid"), { minNet: "26298" }) === "paid", "another merchant id configured reads not ours; another payout wallet or no merchant id reads unknown; the SIZE of the merchant amount does not decide it (a share under the expected net is still paid)");
     {
       // Built by hand: each differs from a paid receipt in ONE thing.
       const OTHER = "0x" + "7".repeat(40);
@@ -1118,8 +1178,8 @@ try {
       const payoutFromElsewhere = rc([...pairOf(a1), fac.transferLog(OTHER, PAYOUT, net, 0, 1), evOurs()]);
       const payoutOfAnotherAmount = rc([...pairOf(a1), fac.transferLog(PAY_TO, PAYOUT, net - 1n, 0, 1), evOurs()]);
       const eventFromElsewhere = rc([...pairOf(a1), fac.transferLog(PAY_TO, PAYOUT, net, 0, 1), evOurs({ router: OTHER })]);
-      const noFloor = { minNet: null };
-      ok(prove(whole) === "paid" && prove(whole, noFloor) === "paid", "the hand-built whole receipt is paid, with or without a payout floor");
+      const noFloor = {};
+      ok(prove(whole) === "paid" && prove(whole, { minNet: null }) === "paid", "the hand-built whole receipt is paid, with or without an expected net");
       ok(prove(payoutFromElsewhere, noFloor) === "unknown", `a transfer to our payout wallet that does not come FROM the split contract is not its payout (${prove(payoutFromElsewhere, noFloor)})`);
       ok(prove(payoutOfAnotherAmount, noFloor) === "unknown", `a payout that is not exactly the merchant amount the event states is not its payout (${prove(payoutOfAnotherAmount, noFloor)})`);
       ok(prove(eventFromElsewhere, noFloor) === "unknown", `a routed event emitted by another address than the split contract is not read (${prove(eventFromElsewhere, noFloor)})`);
@@ -1127,6 +1187,11 @@ try {
       const a2 = { from: a1.from, to: PAY_TO, value: "30000", nonce: freshNonce() };
       const two = rc([...pairOf(a1), ...pairOf(a2), fac.transferLog(PAY_TO, PAYOUT, net, 0, 1), evOurs()]);
       ok(prove(two, noFloor) === "unknown" && prove(two, { ...noFloor, nonce: a2.nonce }) === "paid", `what the contract did with an authorization is read only up to the NEXT authorization: the routing after a later one does not prove an earlier one (${prove(two, noFloor)}, ${prove(two, { ...noFloor, nonce: a2.nonce })})`);
+    }
+    {
+      const detail = (kind) => proveReceipt(pair(kind), { tx, from: a1.from, nonce: a1.nonce, payTo: PAY_TO, amount: "30000", merchantId: MERCHANT_ID, payoutAddress: PAYOUT, minNet: "26298" });
+      const toUs = Object.fromEntries(["paid", "nopayout", "otherbuyer", "wronggross", "othermerchant", "noevent", "badevent", "payoutonly", "elsewhere"].map((k) => [k, detail(k).routedToUs]));
+      ok(toUs.paid === true && toUs.nopayout === true && toUs.otherbuyer === true && toUs.wronggross === true && toUs.othermerchant === false && toUs.noevent === false && toUs.badevent === false && toUs.payoutonly === false && toUs.elsewhere === false && detail("paid").net === "26298" && detail("nopayout").net === null, `the proof says whether the contract's routed event names OUR merchant id, whatever else fails: true with no payout, another buyer or another gross; false for another merchant, no event, an event of another shape, or no transfer into the contract (${JSON.stringify(toUs)})`);
     }
     const { ROUTED_EVENT_TOPIC, ROUTED_EVENT_SIGNATURE } = await import("../src/referral-proof.js");
     ok(ROUTED_EVENT_TOPIC === keccak256(stringToHex(ROUTED_EVENT_SIGNATURE)) && ROUTED_EVENT_TOPIC === ROUTED_TOPIC && prove(pair("othermerchant")) === "unpaid" && prove(pair("othermerchant"), { routedTopic: "0x" + "1".repeat(64) }) === "unknown", "the event topic is the keccak of the documented signature, and a configured topic replaces it (the documented event is then no longer read)");
@@ -1164,7 +1229,8 @@ try {
     const ip = freshIp();
     // A made-up hash with no receipt yet: delivered, booked, kept as unconfirmed for the sweep.
     fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + "f1".repeat(32) } });
-    const p1 = await signPayment(accept, { account: newAccount() });
+    const acct1 = newAccount();
+    const p1 = await signPayment(accept, { account: acct1 });
     const k1 = gateMod.referralReplayKey(p1.authorization);
     const u = await send(R("echo"), { body: { text: "unconfirmed" }, headers: { "payment-signature": p1.header, "x-test-ip": ip } });
     await wait(50);
@@ -1173,24 +1239,89 @@ try {
     fac.receipts.set("0x" + "f1".repeat(32), { transactionHash: "0x" + "f2".repeat(32), status: "0x1", to: PAY_TO, logs: [] });
     await app1.gate.sweepOnce();
     ok(app1.book.get(k1)?.state === "contradicted" && app1.gate.statusWord().status === "attention" && logLines.some((l) => /CONTRADICTS/.test(l)), `the sweep flags it as contradicted and the word reads attention (${app1.book.get(k1)?.state})`);
+    // THE HOLD (payer): that answer went out on a success the chain denies. A
+    // payment can be made to produce this, so it holds its own payer only.
+    const settlesFine = (call) => ({ status: 200, body: { success: true, transaction: fac.land(call.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
+    const keyOfPayment = (p) => gateMod.referralReplayKey(p.authorization);
+    {
+      fac.mode.settle = settlesFine;
+      const neighbor = await send(R("echo"), { body: { text: "neighbor" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+      const at = { runs: runs.echo, verifies: verifies(), settles: settles(), sales: sales.length, held: app1.gate.stats().bookFaultHeld };
+      const sameAgain = await signPayment(accept, { account: acct1 });
+      const refused = await send(R("echo"), { body: { text: "held" }, headers: { "payment-signature": sameAgain.header, "x-test-ip": freshIp() } });
+      const probe = await send(R("echo"), { body: { text: "probe" } });
+      ok(app1.book.get(k1)?.scope === "payer" && neighbor.status === 200 && refused.status === 503 && refused.json?.errorReason === "settlement_under_review" && refused.json.retryable === true && refused.headers.get("retry-after") === "300" && /Nothing ran and nothing was charged/.test(refused.json.errorMessage || ""), `while a contradicted entry says an answer went out against the chain, a new payment by ITS payer is answered 503 and every other payer is served (${refused.status} ${refused.json?.errorReason}, neighbor ${neighbor.status}, scope ${app1.book.get(k1)?.scope})`);
+      ok(runs.echo === at.runs && verifies() === at.verifies && settles() === at.settles && sales.length === at.sales && app1.book.get(keyOfPayment(sameAgain)) === null && app1.gate.stats().bookFaultHeld === at.held + 1, `and nothing ran, nothing was sent to the facilitator, nothing was booked or recorded for it (${runs.echo - at.runs} runs, ${verifies() - at.verifies} verifies, ${settles() - at.settles} settles)`);
+      ok(probe.status === 402 && Array.isArray(probe.json?.accepts) && app1.gate.statusWord().status === "attention", `the unpaid 402 is still quoted, and the word reads attention (${probe.status})`);
+      const cleared = await app1.gate.resolveByHand(k1, { note: "the answer went out; the receipt named is another transaction's", outcome: "dismissed" });
+      const served = await send(R("echo"), { body: { text: "held" }, headers: { "payment-signature": sameAgain.header, "x-test-ip": freshIp() } });
+      ok(cleared.ok === true && served.status === 200 && served.json?.echo === "held" && runs.echo === at.runs + 1, `the hold ends when the entry resolves, and the refused payment (never claimed) is then served (${served.status})`);
+    }
     // A made-up hash whose receipt pays ANOTHER authorization: not delivered, not booked.
     const other = { from: newAccount().address, to: PAY_TO, value: "30000", nonce: freshNonce() };
     const otherTx = fac.land(other);
     fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: otherTx } });
-    const p2 = await signPayment(accept, { account: newAccount() });
+    const acct2 = newAccount();
+    const p2 = await signPayment(accept, { account: acct2 });
     const before = sales.length;
     const c = await send(R("echo"), { body: { text: "contradicted" }, headers: { "payment-signature": p2.header, "x-test-ip": ip } });
     ok(c.status === 402 && !("echo" in (c.json || {})) && sales.length === before && app1.gate.stats().settleContradicted >= 2, `a success naming a transaction that did not pay this authorization: nothing delivered, nothing booked (${c.status} ${c.json?.errorReason})`);
     {
       const k2 = gateMod.referralReplayKey(p2.authorization);
+      // THE HOLD (payer): the named transaction never moved this buyer's money
+      // into the split contract, so only this payer is held; nobody can close
+      // the route for others this way.
+      fac.mode.settle = settlesFine;
+      const neighbor = await send(R("echo"), { body: { text: "neighbor" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+      const ranBefore = runs.echo;
+      const sameAgain = await signPayment(accept, { account: acct2 });
+      const own = await send(R("echo"), { body: { text: "same payer" }, headers: { "payment-signature": sameAgain.header, "x-test-ip": freshIp() } });
+      ok(app1.book.get(k2)?.scope === "payer" && neighbor.status === 200 && own.status === 503 && own.json?.errorReason === "settlement_under_review" && runs.echo === ranBefore, `a contradicted success whose transaction never moved the buyer's money holds that payer only: another payer is served, the same payer is refused before anything runs (${neighbor.status}, ${own.status}; scope ${app1.book.get(k2)?.scope})`);
       skew.ms = 40 * 60_000;
       const laterWord = app1.gate.statusWord();
       skew.ms = 0;
       ok(app1.book.get(k2)?.state === "contradicted" && app1.book.get(k2).tx === otherTx && laterWord.status === "attention" && laterWord.reasons.some((x) => /contradicted is open/.test(x)), `a contradicted success is KEPT as an entry naming the transaction, and the word stays at attention for it (never clears by itself) (${app1.book.get(k2)?.state}; ${laterWord.reasons.join("; ")})`);
       const noNote = await app1.gate.resolveByHand(k2, { note: "" });
       const byHand = await app1.gate.resolveByHand(k2, { note: "checked the transaction by hand: not ours", outcome: "dismissed" });
-      ok(noNote.ok === false && byHand.ok === true && app1.book.get(k2) === null && app1.book.resolvedByHand().some((r) => r.key === k2 && /by hand/.test(r.note) && r.state === "contradicted") && (await app1.gate.resolveByHand(k2, { note: "again please" })).ok === false, "an operator resolves it by hand: a note is required, the entry is recorded with the note and removed, and a second resolve finds nothing");
+      ok(noNote.ok === false && byHand.ok === true && byHand.debt === false && app1.book.get(k2) === null && app1.book.resolvedByHand().some((r) => r.key === k2 && /by hand/.test(r.note) && r.state === "contradicted" && r.outcome === "dismissed" && r.debt === false) && (await app1.gate.resolveByHand(k2, { note: "again please" })).ok === false, "an operator resolves it by hand: a note is required, the entry is recorded with the outcome and the note and removed, and a second resolve finds nothing");
+      const ownAfter = await send(R("echo"), { body: { text: "same payer" }, headers: { "payment-signature": sameAgain.header, "x-test-ip": freshIp() } });
+      ok(ownAfter.status === 200, `and that payer is served again once its entry is resolved (${ownAfter.status})`);
       for (const e of app1.book.list().filter((x) => x.state === "contradicted")) await app1.gate.resolveByHand(e.key, { note: "test cleanup" });
+    }
+    {
+      // THE HOLD (payer): the buyer's transfer reached the split contract and was routed to ANOTHER merchant.
+      // An authorization names no merchant, so its signer can present it elsewhere: never a route-wide hold.
+      fac.mode.settle = (call) => ({ status: 200, body: { success: true, transaction: fac.land(call.json.paymentPayload.payload.authorization, fac.nextTx(), "othermerchant") } });
+      const acct4 = newAccount();
+      const p4 = await signPayment(accept, { account: acct4 });
+      const k4 = keyOfPayment(p4);
+      const misrouted = await send(R("echo"), { body: { text: "misrouted" }, headers: { "payment-signature": p4.header, "x-test-ip": freshIp() } });
+      fac.mode.settle = settlesFine;
+      const next = await send(R("echo"), { body: { text: "next" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+      const ranBefore = runs.echo;
+      const own4 = await send(R("echo"), { body: { text: "same payer" }, headers: { "payment-signature": (await signPayment(accept, { account: acct4 })).header, "x-test-ip": freshIp() } });
+      ok(misrouted.status === 402 && !("echo" in (misrouted.json || {})) && app1.book.get(k4)?.state === "contradicted" && app1.book.get(k4).scope === "payer" && next.status === 200 && own4.status === 503 && own4.json?.errorReason === "settlement_under_review" && runs.echo === ranBefore, `a success whose transaction routed the buyer's money to another merchant holds THAT payer only: the next buyer is served (${misrouted.status} ${misrouted.json?.errorReason}; scope ${app1.book.get(k4)?.scope}; next ${next.status}; same payer ${own4.status})`);
+      ok(app1.book.faults().every((f) => f.scope === "payer") && createReferralBook({ doc: { loadSync: () => ({ entries: { a: { key: "a", payer: "0x1", state: "contradicted" }, b: { key: "b", payer: "0x2", state: "contradicted", scope: "route" }, c: { key: "c", payer: "0x3", state: "unconfirmed", flagged: true }, d: { key: "d", payer: "0x4", state: "unconfirmed" } } }), load: async () => null, update: async () => ({ ok: false }) }, log }).faults().map((f) => `${f.key}:${f.scope}`).join(",") === "a:payer,b:route,c:route", "a contradicted entry with no scope written on it holds its payer only; the route is held only by a scope written as route or by a flagged unconfirmed entry");
+      await app1.gate.resolveByHand(k4, { note: "test cleanup: routed elsewhere" });
+      // THE HOLD (route): an unconfirmed success flagged because its receipt still cannot be read.
+      fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + "f5".repeat(32) } });
+      const p5 = await signPayment(accept, { account: newAccount() });
+      const k5 = keyOfPayment(p5);
+      const u5 = await send(R("echo"), { body: { text: "no receipt" }, headers: { "payment-signature": p5.header, "x-test-ip": freshIp() } });
+      await wait(50);
+      fac.mode.settle = settlesFine;
+      const unflagged = await send(R("echo"), { body: { text: "before the flag" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+      skew.ms = 4 * 60_000;
+      await app1.gate.sweepOnce();
+      skew.ms = 0;
+      const ranFlag = runs.echo;
+      const waiting = await signPayment(accept, { account: newAccount() });
+      const flaggedRefusal = await send(R("echo"), { body: { text: "flagged" }, headers: { "payment-signature": waiting.header, "x-test-ip": freshIp() } });
+      ok(u5.status === 200 && unflagged.status === 200 && app1.book.get(k5)?.state === "unconfirmed" && app1.book.get(k5).flagged === true && flaggedRefusal.status === 503 && flaggedRefusal.json?.errorReason === "settlement_under_review" && runs.echo === ranFlag && app1.gate.statusWord().status === "attention", `an unconfirmed success is served past while it is fresh; once it is flagged (no receipt after 3 minutes) a new payment is refused before anything runs (${unflagged.status} then ${flaggedRefusal.status}; flagged ${app1.book.get(k5)?.flagged})`);
+      fac.land(p5.authorization, "0x" + "f5".repeat(32));
+      await app1.gate.sweepOnce();
+      const resumed = await send(R("echo"), { body: { text: "flagged" }, headers: { "payment-signature": waiting.header, "x-test-ip": freshIp() } });
+      ok(app1.book.get(k5) === null && resumed.status === 200 && resumed.json?.echo === "flagged", `the hold clears by itself when the receipt proves the payment (${app1.book.get(k5)?.state ?? "closed"}, ${resumed.status})`);
     }
     // The sweep confirms an unconfirmed one whose receipt appears and proves it.
     fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + "f3".repeat(32) } });
@@ -1547,6 +1678,13 @@ try {
     fac.land(g.authorization, txg, "othermerchant");
     await app1.gate.sweepOnce();
     const contradicted = { owed: owed.length, state: app1.book.get(kg)?.state };
+    {
+      // THE HOLD (route): a payment BOOKED on a receipt whose receipt no longer proves it. No payment can cause that.
+      const ranFlip = runs.echo;
+      const waitingFlip = await signPayment(accept, { account: newAccount() });
+      const flipRefused = await send(R("echo"), { body: { text: "flip" }, headers: { "payment-signature": waitingFlip.header, "x-test-ip": freshIp() } });
+      ok(app1.book.get(kg)?.scope === "route" && flipRefused.status === 503 && flipRefused.json?.errorReason === "settlement_under_review" && runs.echo === ranFlip, `a booked payment whose receipt stops proving it holds the whole route (${flipRefused.status}; scope ${app1.book.get(kg)?.scope})`);
+    }
     ok(unread.owed === 0 && unread.state === "charged-undelivered" && contradicted.owed === 0 && contradicted.state === "contradicted", `a charged entry whose transaction has no readable receipt gets NO refund debt (it waits); one whose receipt shows the money went to another merchant gets none either and is kept as contradicted (${JSON.stringify(unread)} then ${JSON.stringify(contradicted)})`);
     await app1.gate.resolveByHand(kg, { note: "test cleanup" });
     // The proven one does get its debt, once, with the direct routes' fields.
@@ -1737,7 +1875,7 @@ try {
     const txA = fac.land(a1);
     const good = fac.receipts.get(txA);
     const gapped = { ...good, logs: good.logs.map((l, i) => (i === 0 ? l : { ...l, logIndex: `0x${(parseInt(l.logIndex, 16) + 1).toString(16)}` })) };
-    const proofOf = (r) => receiptProvesPayment(r, { tx: txA, from: a1.from, nonce: a1.nonce, payTo: PAY_TO, amount: "30000", merchantId: MERCHANT_ID, payoutAddress: PAYOUT });
+    const proofOf = (r) => receiptProvesPayment(r, { tx: txA, from: a1.from, nonce: a1.nonce, payTo: PAY_TO, amount: "30000", merchantId: MERCHANT_ID, payoutAddress: PAYOUT, minNet: "26298" });
     ok(proofOf(good) === "paid" && proofOf(gapped) === "unpaid", `a Transfer listed next to the authorization but NOT at the very next log index is not its own transfer (${proofOf(gapped)})`);
     const dir = join(tmp, "expiry-answers");
     let clock = Date.now();
@@ -1761,6 +1899,7 @@ try {
   // --- a buyer who leaves ---------------------------------------------------------
   hangupMod._resetHangupForgiveness();
   const directBudgetBefore = JSON.stringify(hangupMod.hangupForgivenessStatus());
+  const forgivenBefore = { usd: app1.gate.stats().forgivenUsd, records: app1.book.forgiven().length };
   {
     // With a forgiveness ticket: not settled, the authorization held.
     const acct = newAccount();
@@ -1770,7 +1909,7 @@ try {
     ok(outcome === "aborted" && settles() === 0 && sales.length === 0 && logLines.some((l) => /client gone before settlement \(busy/.test(l)), `a connection closed before settlement starts, inside the forgiveness budget, is not settled (${settles()} settle, ${sales.length} sale)`);
     const again = await send(R("echo"), { body: { text: "back" }, headers: { "payment-signature": p.header, "x-test-ip": "5.5.5.5" } });
     ok(again.status === 409, `its claim is HELD: the same authorization buys nothing more (${again.status})`);
-    ok(app1.gate.stats().forgivenUsd === 0.03 && JSON.stringify(hangupMod.hangupForgivenessStatus()) === directBudgetBefore && app1.book.forgiven().length === 1, `the forgiven run is spent from this route's own budget and recorded in the book; the direct routes' forgiveness budget is untouched (${app1.gate.stats().forgivenUsd} forgiven here)`);
+    ok(Math.abs(app1.gate.stats().forgivenUsd - forgivenBefore.usd - 0.03) < 1e-9 && JSON.stringify(hangupMod.hangupForgivenessStatus()) === directBudgetBefore && app1.book.forgiven().length === forgivenBefore.records + 1, `the forgiven run is spent from this route's own budget and recorded in the book; the direct routes' forgiveness budget is untouched (${app1.gate.stats().forgivenUsd} forgiven here)`);
     // The budget is spent: the next hang-up by this payer is settled, and its answer kept.
     const q = await signPayment(accept, { account: acct });
     const key = gateMod.referralReplayKey(q.authorization);
@@ -1952,7 +2091,7 @@ try {
     try {
       const early = await book.sweep({ chain: { state: async () => { throw new Error("must not be read"); } }, payTo: PAY_TO, bookSale: async () => true, graceMs: 60_000 });
       ok(early.read === 0, "the sweep leaves an intent alone while its own request may still be settling");
-      const first = await book.sweep({ chain: createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, publicLanes: [], merchantId: MERCHANT_ID, payoutAddress: PAYOUT, headMaxAgeMs: 0, tries: 1, budgetMs: 1000 }), payTo: PAY_TO, bookSale: (e, t) => app4.gate.sweepOnce && sales.push({ sweep: true, tx: t }) && true, graceMs: 0 });
+      const first = await book.sweep({ chain: createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, publicLanes: [], merchantId: MERCHANT_ID, payoutAddress: PAYOUT, headMaxAgeMs: 0, tries: 1, budgetMs: 1000 }), payTo: PAY_TO, bookSale: (e, t) => app4.gate.sweepOnce && sales.push({ sweep: true, tx: t }) && true, minNetOf: () => "26298", graceMs: 0 });
       ok(first.landed === 1 && first.expired === 1 && first.unknown === 1, `the sweep reads every open intent against the chain: one landed, one expired unused, one still open (${JSON.stringify(first)})`);
       // The gate's own sweep books the sale, once.
       await book.resolve(kGone, { state: "intent", saleBooked: false, intentAt: Date.now() - 600_000 });
@@ -2067,6 +2206,624 @@ try {
     const pages = [...src.matchAll(/\$\{(WINDOW_PAGE|SCORECARD_ROWS)\}([^`]*)`/g)].filter((m) => m[1] === "WINDOW_PAGE" && !/PAYING_RAILS_SQL|PUBLIC_RAIL_SQL/.test(m[2]));
     ok(pages.length === 0 && /SCORECARD_ROWS = `[^`]*PAYING_RAILS_SQL/.test(src), "and every paged window read names its rails too");
     ok(PRIVATE_RAILS.includes("referral") && !PAYING_RAILS.includes("referral"), "referral is a private rail, never a paying one");
+  }
+
+  // ===========================================================================
+  // The proof rule, pinned to a real settlement (scripts/fixtures/referral-receipt-base.json)
+  // ===========================================================================
+  {
+    const fx = JSON.parse(readFileSync(new URL("./fixtures/referral-receipt-base.json", import.meta.url), "utf8"));
+    const { ROUTED_EVENT_TOPIC } = await import("../src/referral-proof.js");
+    const args = { tx: fx.transaction.hash, from: fx.payer, nonce: fx.nonce, payTo: fx.splitContract, amount: fx.amount, merchantId: fx.merchantId, payoutAddress: fx.payoutAddress, minNet: fx.minNet };
+    const real = proveReceipt(fx.receipt, args);
+    ok(real.verdict === "paid" && real.moved === true && real.read === true, `the real receipt proves the payment with the real merchant id, payout wallet, amount and minimum net (${real.verdict}: ${real.why})`);
+    const logs = fx.receipt.logs;
+    const pad = (a) => `0x${"0".repeat(24)}${String(a).slice(2).toLowerCase()}`;
+    const word = (l, i) => l.data.slice(2 + i * 64, 2 + (i + 1) * 64);
+    const routedReal = logs[6];
+    ok(logs.length === 7 && routedReal.topics[0] === ROUTED_EVENT_TOPIC && routedReal.topics.length === 4 && routedReal.address === fx.splitContract && routedReal.data.length === 2 + 9 * 64
+      && `0x${word(routedReal, 0).slice(24)}` === fx.payer && BigInt(`0x${word(routedReal, 1)}`) === BigInt(fx.merchantId) && BigInt(`0x${word(routedReal, 3)}`) === 1000n && BigInt(`0x${word(routedReal, 8)}`) === 900n,
+    "the real routed event is the documented topic from the split contract: three indexed ids, nine data words, word 0 the payer, word 1 the merchant id, word 3 the gross, word 8 the merchant amount");
+    ok(logs[0].topics[1] === pad(fx.payer) && logs[0].topics[2] === fx.nonce && logs[1].topics[1] === pad(fx.payer) && logs[1].topics[2] === pad(fx.splitContract) && BigInt(logs[1].data) === 1000n && parseInt(logs[1].logIndex, 16) === parseInt(logs[0].logIndex, 16) + 1
+      && logs[5].topics[1] === pad(fx.splitContract) && logs[5].topics[2] === pad(fx.payoutAddress) && BigInt(logs[5].data) === 900n && parseInt(logs[6].logIndex, 16) > parseInt(logs[5].logIndex, 16),
+    "its order is the one the rule reads: AuthorizationUsed, directly the payer's transfer into the contract, the split legs, the payout to our wallet, then the routed event last");
+    ok(fx.transaction.to === fx.splitContract && fx.receipt.to === fx.splitContract && fx.transaction.selector === "0xc3fbce30" && fx.transaction.from === fx.receipt.from && fx.transaction.from !== fx.payer, "the transaction is sent to the split contract itself, by a relayer that is not the payer");
+    ok(referralNet(fx.amount, { commissionBps: 1000, feeBps: 0 }).netUnits === 900n && proveReceipt(fx.receipt, { ...args, nonce: null }).verdict === "paid" && proveReceipt(fx.receipt, { ...args, nonce: null, minNet: "1" }).verdict === "paid", "the net the gate books for that sale is the merchant amount the receipt shows, and the refund path's reading (the payer and the transaction, no nonce) proves it too");
+    // Each tamper changes ONE thing; none is paid.
+    const w32 = (n) => BigInt(n).toString(16).padStart(64, "0");
+    const setWord = (l, i, hex64) => { l.data = `0x${Array.from({ length: 9 }, (_, k) => (k === i ? hex64 : word(l, k))).join("")}`; };
+    const OTHER = "0x" + "7".repeat(40);
+    const tampered = (fn, over = {}) => { const r = structuredClone(fx.receipt); fn(r); return proveReceipt(r, { ...args, ...over }).verdict; };
+    const cases = {
+      "another merchant id configured": [tampered(() => {}, { merchantId: "1180382" }), "unpaid"],
+      "another merchant id in the event": [tampered((r) => setWord(r.logs[6], 1, w32(7))), "unpaid"],
+      "another payer": [tampered(() => {}, { from: OTHER }), "unpaid"],
+      "another nonce": [tampered(() => {}, { nonce: "0x" + "1".repeat(64) }), "unpaid"],
+      "a larger amount asked": [tampered(() => {}, { amount: "1001" }), "unpaid"],
+
+
+
+      "a lower payout transfer alone": [tampered((r) => { r.logs[5].data = `0x${w32(899)}`; }), "unknown"],
+      "the routed event from another contract": [tampered((r) => { r.logs[6].address = OTHER; }), "unknown"],
+      "the routed event under another topic": [tampered((r) => { r.logs[6].topics[0] = "0x" + "2".repeat(64); }), "unknown"],
+      "the routed event removed (a payout transfer alone)": [tampered((r) => { r.logs.pop(); }), "unknown"],
+      "the payout to another address": [tampered((r) => { r.logs[5].topics[2] = pad(OTHER); }), "unknown"],
+      "the payout wallet configured as another": [tampered(() => {}, { payoutAddress: OTHER }), "unknown"],
+      "the payer's transfer short by one": [tampered((r) => { r.logs[1].data = `0x${w32(999)}`; }), "unpaid"],
+      "another gross in the event": [tampered((r) => setWord(r.logs[6], 3, w32(1001))), "unknown"],
+      "another buyer in the event": [tampered((r) => setWord(r.logs[6], 0, pad(OTHER).slice(2))), "unknown"],
+      "the routed event and payout before the payer's transfer": [tampered((r) => { r.logs[5].logIndex = "0x190"; r.logs[6].logIndex = "0x191"; }), "unknown"],
+      "the payer's transfer not directly after the authorization": [tampered((r) => { r.logs[0].logIndex = "0x190"; }), "unpaid"],
+      "sent to another contract": [tampered((r) => { r.to = OTHER; }), "unknown"],
+      "a failed transaction": [tampered((r) => { r.status = "0x0"; }), "unpaid"],
+      "another transaction hash asked": [tampered(() => {}, { tx: "0x" + "3".repeat(64) }), "unpaid"],
+      "another split contract configured": [tampered(() => {}, { payTo: OTHER }), "unpaid"],
+    };
+    const wrong = Object.entries(cases).filter(([, [got, want]]) => got !== want || got === "paid");
+    ok(wrong.length === 0 && Object.keys(cases).length === 20, `every single-field tamper of the real receipt is refused: never paid (${wrong.map(([k, [got, want]]) => `${k}: ${got}, want ${want}`).join("; ") || "20 tampers"})`);
+    {
+      // The net does not decide: the buyer paid the whole amount and the contract routed it to us.
+      const under = proveReceipt(fx.receipt, { ...args, minNet: "901" });
+      const lower = structuredClone(fx.receipt); setWord(lower.logs[6], 8, w32(750)); lower.logs[5].data = `0x${w32(750)}`;
+      const low = proveReceipt(lower, args);
+      const at = proveReceipt(fx.receipt, args), none = proveReceipt(fx.receipt, { ...args, minNet: null });
+      ok(under.verdict === "paid" && under.underFloor === true && under.net === "900" && low.verdict === "paid" && low.underFloor === true && low.net === "750" && at.underFloor === false && none.verdict === "paid" && none.underFloor === false, `a merchant amount under the expected net is still PAID (the contract's rate above the one this server expects): reported as under the floor, with the amount received (${under.verdict}/${under.underFloor}, ${low.net})`);
+    }
+    const shuffled = structuredClone(fx.receipt);
+    shuffled.logs.reverse();
+    ok(proveReceipt(shuffled, args).verdict === "paid", "the order is read from the log indexes, not from the order of the list");
+    // The refund path (src/payment-verify.js) reads the same receipt the same way.
+    const { verifyInboundPayment } = await import("../src/payment-verify.js");
+    const refundProof = (receipt, over = {}) => verifyInboundPayment({ network: "eip155:8453", payer: fx.payer, amountUsd: 0.001, tx: fx.transaction.hash, wire: "referral", referralPayTo: fx.splitContract, referralMerchantId: fx.merchantId, referralPayout: fx.payoutAddress, rpcFor: () => "http://rpc.invalid", fetchImpl: async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: j.method === "eth_getTransactionReceipt" ? receipt : null }), { status: 200, headers: { "content-type": "application/json" } }); }, ...over });
+    const noEvent = structuredClone(fx.receipt); noEvent.logs.pop();
+    const [rOk, rNoEvent, rOther] = [await refundProof(fx.receipt), await refundProof(noEvent), await refundProof(fx.receipt, { referralMerchantId: "7" })];
+    ok(rOk.verified === true && rNoEvent.verified === false && rOther.verified === false, `the refund run proves a debt against the real receipt, and not against it without its routed event or under another merchant id (${rOk.verified}, ${rNoEvent.verified}: ${rNoEvent.reason || ""}, ${rOther.verified})`);
+  }
+
+  // ===========================================================================
+  // A buyer who leaves DURING the settle call, whose payment then lands
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    const store = createReferralAnswerStore({ now: () => Date.now() + skew.ms });
+    // One hang-up of the stub price fits a payer's forgiveness budget; a second does not.
+    const appH = await mount({ REFERRAL_HANGUP_KEY_USD: "0.03", REFERRAL_HANGUP_GLOBAL_USD: "1" }, { answers: store });
+    const { isRepeatHangup, planRefunds } = await import("./refund-run.js");
+    try {
+      const leave = async (acct, ip, text) => {
+        const p = await signPayment(accept, { account: acct, validBefore: String(Math.floor(Date.now() / 1000) + 600) });
+        const outcome = await rawPost(`${appH.url}/ref/echo`, { text }, { "payment-signature": p.header, "x-test-ip": ip }, 150);
+        return { p, key: gateMod.referralReplayKey(p.authorization), outcome };
+      };
+      // The answer expires unread; the sweep then owes the payment back.
+      const expireAndSweep = async () => { skew.ms = 11 * 60_000; await appH.gate.sweepOnce(); await appH.gate.sweepOnce(); skew.ms = 0; await quietLedger(); };
+      const acct = newAccount(), ip = freshIp();
+      // 1. The first one, inside the budget: the settle (400 ms) is in flight when the buyer leaves, and lands.
+      fac.mode.settleDelayMs = 400;
+      const first = await leave(acct, ip, "first");
+      await wait(800);
+      const e1 = appH.book.get(first.key);
+      ok(first.outcome === "aborted" && e1?.state === "charged-undelivered" && e1.hangup === "settle in flight" && sales.length === 1 && Math.abs(appH.gate.stats().forgivenUsd - 0.03) < 1e-9, `a buyer gone during the settle call whose payment lands: charged, undelivered, recorded as a hang-up, and its forgiveness ticket is SPENT (${e1?.state} ${e1?.hangup}; ${appH.gate.stats().forgivenUsd} forgiven)`);
+      // 2. The same payer does it again: the budget is spent, so this one carries the reason the refund run holds.
+      const second = await leave(acct, ip, "second");
+      await wait(800);
+      const e2 = appH.book.get(second.key);
+      ok(second.outcome === "aborted" && e2?.state === "charged-undelivered" && e2.hangup === "payer budget", `a repeat hang-up during the settle call carries the spent-budget reason, not the first one's (${e2?.state} ${e2?.hangup})`);
+      fac.mode.settleDelayMs = 0;
+      await expireAndSweep();
+      const row1 = owed.filter((o) => o.tx === e1?.tx), row2 = owed.filter((o) => o.tx === e2?.tx);
+      ok(row1.length === 1 && row1[0].priceUsd === 0.03 && row1[0].httpStatus === 499 && row1[0].hangupReason === "settle in flight" && isRepeatHangup(row1[0]) === false && row1[0].wire === "referral" && row1[0].payer === acct.address.toLowerCase(), `the first is owed back once, at the GROSS, as an ordinary hang-up debt (${row1.length} row: ${row1[0]?.priceUsd} ${row1[0]?.httpStatus} ${row1[0]?.hangupReason})`);
+      ok(row2.length === 1 && row2[0].priceUsd === 0.03 && row2[0].httpStatus === 499 && row2[0].hangupReason === "payer budget" && isRepeatHangup(row2[0]) === true, `the repeat is owed once at the gross with the reason the refund run HOLDS for review (${row2.length} row: ${row2[0]?.httpStatus} ${row2[0]?.hangupReason})`);
+      const plan = planRefunds([{ ...row1[0], id: 1, evidence: row1[0]?.tx }, { ...row2[0], id: 2, evidence: row2[0]?.tx }].map((r) => ({ ...r, synthetic: 0 })), { senders: { evm: true }, maxEachUsd: 1, maxTotalUsd: 10, maxPerPayerUsd: 10 });
+      const heldRows = Object.values(plan.held || {}).flat();
+      ok(heldRows.some((r) => r.id === 2) && !heldRows.some((r) => r.id === 1), `the refund planner holds the repeat and not the first (${Object.keys(plan.held || {}).join("; ")})`);
+      await expireAndSweep();
+      ok(owed.filter((o) => o.tx === e1?.tx || o.tx === e2?.tx).length === 2 && appH.book.get(first.key)?.state !== "charged-undelivered", "a later pass writes neither debt again");
+      // 3. Another payer leaves during a settle that ends in doubt; the payment lands LATER and the sweep finds it.
+      sales.length = 0;
+      fac.mode.settleDelayMs = 400;
+      fac.mode.settle = () => ({ status: 500, body: {} });
+      const third = await leave(newAccount(), freshIp(), "third");
+      await wait(2200);
+      const doubt = appH.book.get(third.key);
+      const tx3 = fac.land(third.p.authorization, "0x" + "c3".repeat(32));
+      fac.mode.settleDelayMs = 0;
+      await appH.gate.sweepOnce();
+      await quietLedger();
+      const landed = appH.book.get(third.key);
+      ok(third.outcome === "aborted" && doubt?.state === "in-doubt" && doubt.hangup === "settle in flight" && landed?.state === "charged-undelivered" && landed.hangup === "settle in flight" && sales.filter((x) => x.tx === tx3).length === 1, `a buyer gone during a settle whose outcome was not known yet is recorded as a hang-up on the open entry, and stays one when the payment lands later (${doubt?.state} ${doubt?.hangup} then ${landed?.state} ${landed?.hangup})`);
+      await expireAndSweep();
+      const row3 = owed.filter((o) => o.tx === tx3);
+      ok(row3.length === 1 && row3[0].priceUsd === 0.03 && row3[0].httpStatus === 499 && row3[0].hangupReason === "settle in flight" && sales.filter((x) => x.tx === tx3).length === 1 && sales.find((x) => x.tx === tx3).priceUsd === 0.026298, `its debt is the gross, once, as a hang-up debt, and the sale stays booked once at the net (${row3.length} row: ${row3[0]?.priceUsd} ${row3[0]?.httpStatus} ${row3[0]?.hangupReason})`);
+    } finally { fac.mode.settleDelayMs = 0; skew.ms = 0; await appH.close(); }
+  }
+
+  // ===========================================================================
+  // A spent authorization whose transaction is found and is NOT a payment of ours: an end
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    const bookU = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-unrecognized`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+    const appU = await mount({ REFERRAL_UNRECOGNIZED_READS: "3" }, { book: bookU });
+    const closedU = () => (typeof bookU.closedUnrecognized === "function" ? bookU.closedUnrecognized() : []);
+    try {
+      const open = async (validFor, kind) => {
+        const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + validFor) });
+        const key = gateMod.referralReplayKey(p.authorization);
+        await bookU.intent({ key, slug: "echo", payer: p.authorization.from, nonce: p.authorization.nonce, amount: "30000", validBefore: Number(p.authorization.validBefore), fromBlock: fac.chainState.head });
+        await bookU.resolve(key, { state: "in-doubt" });
+        return { key, tx: fac.land(p.authorization, null, kind) };
+      };
+      const stuck = await open(-600, "noevent");   // expired; the money sits in the contract, no event
+      const live = await open(600, "noevent");     // the same, still sendable
+      const dark = await open(-600, "noevent");    // the same, its receipt unreadable
+      const ours = await open(-600, "paid");       // a receipt that IS ours
+      fac.receipts.delete(dark.tx);
+      ok(appU.config.unrecognizedReads === 3 && referralConfig(ENV).unrecognizedReads === 5 && referralConfig({ ...ENV, REFERRAL_UNRECOGNIZED_READS: "0" }).unrecognizedReads === 5, "REFERRAL_UNRECOGNIZED_READS is read (default 5; a malformed one reads as the default)");
+      const passes = [];
+      for (let i = 0; i < 2; i++) { passes.push(await appU.gate.sweepOnce()); }
+      const mid = { stuck: bookU.get(stuck.key), closed: closedU().length };
+      ok(mid.stuck?.state === "in-doubt" && mid.stuck.unrecognizedReads === 2 && mid.stuck.seenTx === stuck.tx && mid.closed === 0, `a spent authorization whose transaction was found, with a receipt read in full that the rule does not recognize, stays open while it has been read fewer than the bound (${mid.stuck?.state}, ${mid.stuck?.unrecognizedReads} readings)`);
+      passes.push(await appU.gate.sweepOnce());
+      await quietLedger();
+      const record = closedU().find((r) => r.key === stuck.key);
+      ok(bookU.get(stuck.key) === null && record && record.tx === stuck.tx && record.reads === 3 && /no routed event/.test(record.why) && record.slug === "echo" && passes[2].unrecognized === 1 && appU.gate.stats().unrecognizedClosed === 1 && logLines.some((l) => l.includes(stuck.tx) && /closed to the operator record, nothing booked, no refund written/.test(l)), `at the bound, with the authorization no longer sendable, it is closed to the operator record with its transaction and an error line (${JSON.stringify(record)})`);
+      ok(!sales.some((x) => x.tx === stuck.tx) && !owed.some((o) => o.tx === stuck.tx), "no sale is booked and no refund is written for it");
+      ok(bookU.get(live.key)?.state === "in-doubt" && bookU.get(live.key).unrecognizedReads === 3 && bookU.get(dark.key)?.state === "in-doubt" && !bookU.get(dark.key).unrecognizedReads && closedU().length === 1, `one whose authorization can still be sent is not closed whatever the count, and a receipt that cannot be READ is never counted (${bookU.get(live.key)?.unrecognizedReads} readings live, ${bookU.get(dark.key)?.unrecognizedReads ?? 0} dark)`);
+      ok(sales.filter((x) => x.tx === ours.tx).length === 1 && !closedU().some((r) => r.key === ours.key) && owed.filter((o) => o.tx === ours.tx).length === 1, `a receipt that IS ours is booked the first time it is read and never closed this way: it took the paid path (its answer was never stored, so the gross is owed back) (${sales.filter((x) => x.tx === ours.tx).length} sale, ${owed.filter((o) => o.tx === ours.tx).length} debt)`);
+      const word = appU.gate.statusWord();
+      skew.ms = 25 * 3600_000;
+      const nextDay = appU.gate.statusWord();
+      skew.ms = 0;
+      ok(word.status === "attention" && word.reasons.some((x) => /not recognized was closed/.test(x)) && !nextDay.reasons.some((x) => /not recognized was closed/.test(x)), `the word reads attention for it for a day (${word.reasons.join("; ")})`);
+      // Once the live one can no longer be sent, it ends the same way.
+      skew.ms = 20 * 60_000;
+      await appU.gate.sweepOnce();
+      skew.ms = 0;
+      ok(bookU.get(live.key) === null && closedU().some((r) => r.key === live.key && r.tx === live.tx) && !sales.some((x) => x.tx === live.tx) && !owed.some((o) => o.tx === live.tx), "and the still-sendable one is closed the same way once its authorization has expired");
+    } finally { skew.ms = 0; await appU.close(); }
+  }
+
+  // ===========================================================================
+  // An operator's outcome for an entry resolved by hand
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    const charged = async (kind = "paid", extra = {}) => {
+      const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) });
+      const key = gateMod.referralReplayKey(p.authorization);
+      const tx = fac.land(p.authorization, null, kind);
+      await app1.book.intent({ key, slug: "echo", payer: p.authorization.from, nonce: p.authorization.nonce, amount: "30000", validBefore: Number(p.authorization.validBefore), fromBlock: fac.chainState.head });
+      await app1.book.resolve(key, { state: "charged-undelivered", tx, saleBooked: true, ...extra });
+      return { key, tx, payer: p.authorization.from.toLowerCase() };
+    };
+    const recordOf = (key) => app1.book.resolvedByHand().filter((r) => r.key === key);
+    const a = await charged();
+    const unnamed = await app1.gate.resolveByHand(a.key, { note: "buyer wrote in" });
+    const oldWord = await app1.gate.resolveByHand(a.key, { note: "buyer wrote in", outcome: "refunded" });
+    const notAWord = await app1.gate.resolveByHand(a.key, { note: "buyer wrote in", outcome: 5 });
+    ok(unnamed.ok === false && /outcome/.test(unnamed.error) && oldWord.ok === false && notAWord.ok === false && app1.book.get(a.key)?.state === "charged-undelivered" && owed.length === 0 && recordOf(a.key).length === 0, `a charged, undelivered entry is never closed by hand without one of the three outcomes named (${unnamed.error})`);
+    const refund = await app1.gate.resolveByHand(a.key, { note: "buyer wrote in: answer never arrived", outcome: "refund" });
+    const rowsA = owed.filter((o) => o.tx === a.tx);
+    ok(refund.ok === true && refund.debt === true && rowsA.length === 1 && rowsA[0].priceUsd === 0.03 && rowsA[0].wire === "referral" && rowsA[0].network === "eip155:8453" && rowsA[0].payer === a.payer && /resolved by an operator/.test(rowsA[0].note) && app1.book.get(a.key)?.state === "refund-owed", `the outcome refund writes the debt at the GROSS behind the receipt proof, and the entry stays as the refund-owed mark (${rowsA.length} row, ${rowsA[0]?.priceUsd}, ${app1.book.get(a.key)?.state})`);
+    ok(recordOf(a.key).length === 1 && recordOf(a.key)[0].outcome === "refund" && recordOf(a.key)[0].debt === true && recordOf(a.key)[0].state === "charged-undelivered" && /never arrived/.test(recordOf(a.key)[0].note), "and it is recorded with the outcome, the note, the state it was resolved from and that a debt was written");
+    const refundAgain = await app1.gate.resolveByHand(a.key, { note: "sent twice by mistake", outcome: "refund" });
+    await app1.gate.sweepOnce();
+    ok(refundAgain.ok === true && owed.filter((o) => o.tx === a.tx).length === 1, `a second refund for the same entry, and the sweep after it, write no second debt (${owed.filter((o) => o.tx === a.tx).length})`);
+    // Behind the proof: a receipt that does not prove a payment to us writes nothing.
+    const b = await charged("othermerchant");
+    const unproven = await app1.gate.resolveByHand(b.key, { note: "asked for a refund", outcome: "refund" });
+    ok(unproven.ok === false && /does not prove/.test(unproven.error) && !owed.some((o) => o.tx === b.tx) && app1.book.get(b.key)?.state === "contradicted" && recordOf(b.key).length === 0, `refund with a receipt that does not prove a payment routed to us writes NO debt and flags the entry (${unproven.error}; ${app1.book.get(b.key)?.state})`);
+    await app1.gate.resolveByHand(b.key, { note: "test cleanup: routed elsewhere", outcome: "dismissed" });
+    const c = await charged("paid", { delivered: true });
+    const servedAlready = await app1.gate.resolveByHand(c.key, { note: "asked for a refund", outcome: "refund" });
+    ok(servedAlready.ok === false && /delivered mark/.test(servedAlready.error) && !owed.some((o) => o.tx === c.tx), `refund is refused for an entry that carries the delivered mark (${servedAlready.error})`);
+    await app1.gate.resolveByHand(c.key, { note: "test cleanup: delivered", outcome: "delivered" });
+    const d = await charged();
+    fac.mode.receiptDown = true;
+    const unread = await app1.gate.resolveByHand(d.key, { note: "asked for a refund", outcome: "refund" });
+    fac.mode.receiptDown = false;
+    ok(unread.ok === false && /could not be read/.test(unread.error) && !owed.some((o) => o.tx === d.tx) && app1.book.get(d.key)?.state === "charged-undelivered", `refund with no readable receipt writes nothing and leaves the entry as it was (${unread.error})`);
+    const delivered = await app1.gate.resolveByHand(d.key, { note: "the buyer confirmed the answer arrived", outcome: "delivered" });
+    const e = await charged();
+    const dismissed = await app1.gate.resolveByHand(e.key, { note: "our own test payment", outcome: "dismissed" });
+    await app1.gate.sweepOnce();
+    ok(delivered.ok === true && delivered.debt === false && dismissed.ok === true && dismissed.debt === false && app1.book.get(d.key) === null && app1.book.get(e.key) === null && !owed.some((o) => o.tx === d.tx || o.tx === e.tx) && recordOf(d.key)[0]?.outcome === "delivered" && recordOf(d.key)[0].debt === false && recordOf(e.key)[0]?.outcome === "dismissed" && /own test payment/.test(recordOf(e.key)[0].note), "delivered and dismissed write no debt: the entry is removed and recorded with the outcome and the note");
+  }
+
+  // ===========================================================================
+  // How much of an answer went out: delivered, not served, partly served
+  // (a deterministic rig between the send and the socket: no kernel buffer decides)
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    // The counts and the three endings, on a scripted response: pieces 1 and 2 are taken, piece 3 fails.
+    const { sendCounted, sentOutcome } = gateMod;
+    {
+      const fake = (failAt) => { const r = { destroyed: false, parts: [], ended: 0, write(part, cb) { this.parts.push(part.length); if (this.parts.length === failAt) { this.destroyed = true; cb(new Error("reset")); } else cb(); return true; }, end() { this.ended++; }, destroy() { this.destroyed = true; } }; return r; };
+      const body = Buffer.alloc(2500, 0x61);
+      const all = fake(0), cut = fake(3), dead = fake(0);
+      dead.destroyed = true;
+      const [sAll, sCut, sDead] = [sendCounted(all, body, { chunkBytes: 1000 }), sendCounted(cut, body, { chunkBytes: 1000 }), sendCounted(dead, body, { chunkBytes: 1000 })];
+      ok(JSON.stringify(all.parts) === "[1000,1000,500]" && all.ended === 1 && sAll.taken === 2500 && sAll.dispatched === 2500 && sentOutcome(sAll).how === "delivered" && sentOutcome(sAll).atMost === 2500, `every piece confirmed: the pieces add up to the body, the response is ended once, and the send reads delivered (${JSON.stringify(sAll)})`);
+      ok(JSON.stringify(cut.parts) === "[1000,1000,500]" && cut.ended === 0 && sCut.taken === 2000 && sCut.dispatched === 2500 && sentOutcome(sCut).how === "partial" && sentOutcome(sCut).atMost === 2500 && sentOutcome({ total: 5000, dispatched: 3000, taken: 2000 }).atMost === 3000, `a piece whose write fails is handed over but never counted as taken, nothing follows it, and the send reads partial, bounded by the bytes handed over, not the bytes confirmed (${JSON.stringify(sCut)})`);
+      ok(dead.parts.length === 0 && sDead.dispatched === 0 && sentOutcome(sDead).how === "not-served" && sentOutcome(sDead).atMost === 0 && sentOutcome({ total: 10, dispatched: 10, taken: 0 }).how === "partial" && sentOutcome({ total: 10, dispatched: 0, taken: 0 }).how === "not-served" && sentOutcome({ total: 10, dispatched: 10, taken: 10 }).how === "delivered", "nothing handed to a closed connection reads not served; a first piece in flight and unconfirmed reads partial, never not served");
+      // The bounds: a write that is never confirmed, and a send that keeps going too long.
+      const silent = { destroyed: false, parts: 0, ended: 0, write() { this.parts++; return true; }, end() { this.ended++; }, destroy() { this.destroyed = true; } };
+      const slow = { destroyed: false, parts: 0, ended: 0, write(part, cb) { this.parts++; setTimeout(cb, 40); return true; }, end() { this.ended++; }, destroy() { this.destroyed = true; } };
+      const t0 = Date.now();
+      const sSilent = sendCounted(silent, body, { chunkBytes: 1000, idleMs: 60, maxMs: 5000 });
+      const sSlow = sendCounted(slow, Buffer.alloc(100_000, 0x61), { chunkBytes: 1000, idleMs: 5000, maxMs: 150 });
+      for (let i = 0; i < 100 && !(silent.destroyed && slow.destroyed); i++) await wait(10);
+      const took = Date.now() - t0;
+      await wait(120);
+      ok(silent.destroyed === true && sSilent.ended === "idle" && silent.parts === 1 && silent.ended === 0 && sSilent.taken === 0 && sentOutcome(sSilent).how === "partial" && took < 1000, `a piece that is never confirmed (a layer that drops the write callback, a reader that stopped) ends the send at the no-progress bound: the response is destroyed, nothing more is written, and the counts read partial (${JSON.stringify(sSilent)} after ${took} ms)`);
+      ok(slow.destroyed === true && sSlow.ended === "max" && sSlow.taken > 0 && sSlow.taken < 100_000 && slow.parts <= sSlow.taken / 1000 + 1 && slow.ended === 0, `a send that keeps making progress is still ended at its longest-send bound, and writes nothing after it (${JSON.stringify(sSlow)})`);
+      ok(gateMod.REFERRAL_SEND_IDLE_MS === 15_000 && gateMod.REFERRAL_SEND_MAX_MS === 120_000 && referralConfig(ENV).sendIdleMs === 15_000 && referralConfig(ENV).sendMaxMs === 120_000 && referralConfig({ ...ENV, REFERRAL_SEND_IDLE_MS: "400", REFERRAL_SEND_MAX_MS: "9000" }).sendIdleMs === 400 && referralConfig({ ...ENV, REFERRAL_SEND_MAX_MS: "9000" }).sendMaxMs === 9000, "REFERRAL_SEND_IDLE_MS (15 s) and REFERRAL_SEND_MAX_MS (120 s) are read");
+    }
+    const store = createReferralAnswerStore({ now: () => Date.now() + skew.ms });
+    const appD = await mount({}, { answers: store, appUse: [sendRig] });
+    const { isRepeatHangup } = await import("./refund-run.js");
+    const N = 100_000;
+    try {
+      const pay = async () => { const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) }); return { p, key: gateMod.referralReplayKey(p.authorization) }; };
+      const big = (c, headers = {}, n = N) => cutCall(`${appD.url}/ref/big`, { body: { n }, headers: { "payment-signature": c.p.header, "x-test-ip": freshIp(), ...headers } });
+      // Several chunks, read to the end: delivered whole, and the entry closes.
+      const whole = await pay();
+      const full = await big(whole, {}, 300_000);
+      await wait(50);
+      ok(gateMod.REFERRAL_SEND_CHUNK_BYTES === 16384 && full.status === 200 && full.json?.blob?.length === 300_000 && /^0x[0-9a-f]{64}$/.test(full.json.transaction || "") && Number(full.headers.get("content-length")) === Buffer.byteLength(full.text) && /^application\/json/.test(full.headers.get("content-type") || "") && appD.book.get(whole.key) === null && appD.gate.stats().partlyServed === 0, `an answer of several chunks read to the end arrives whole (its length stated), and is delivered (${full.status}, ${full.json?.blob?.length} characters)`);
+      // Two pieces confirmed, the third never: partly served.
+      const some = await pay();
+      const r1 = await big(some, { "x-test-cut": "32768" });
+      await wait(150);
+      const e1 = appD.book.get(some.key);
+      ok(r1.status === "cut" && e1?.state === "charged-undelivered" && e1.delivered === false && e1.partial === true && e1.partialSent === 49152 && e1.partialOf > N && e1.hangup === gateMod.REFERRAL_PARTIAL_HOLD_REASON && !(Number(e1.sendingUntil) > 0) && appD.gate.stats().partlyServed === 1, `an answer cut off after two pieces were taken and a third was handed over is PARTLY SERVED: not delivered, not closed, marked partial with the bytes handed over, the most the buyer can hold (${e1?.state}, delivered ${e1?.delivered}, at most ${e1?.partialSent} of ${e1?.partialOf})`);
+      const settlesBefore = settles();
+      const fetched = await big(some);
+      await wait(100);
+      ok(fetched.status === 200 && fetched.json?.blob?.length === N && settles() === settlesBefore && appD.book.get(some.key) === null, `the kept answer is still there for a re-send of the same payment, which delivers it whole and closes the entry (${fetched.status}, ${fetched.json?.blob?.length})`);
+      // The FIRST piece handed over and never confirmed: still partly served, never "not served".
+      const first = await pay();
+      const r0 = await big(first, { "x-test-cut": "0" });
+      await wait(150);
+      const e0 = appD.book.get(first.key);
+      ok(r0.status === "cut" && e0?.state === "charged-undelivered" && e0.delivered === false && e0.partial === true && e0.partialSent === 16384 && e0.hangup === "payer budget" && appD.gate.stats().partlyServed === 2, `a first piece handed to the socket and never confirmed is partly served too: a piece in flight may have reached the buyer (${e0?.state}, at most ${e0?.partialSent} of ${e0?.partialOf})`);
+      // A SEND IN FLIGHT: the sweep leaves its entry alone, and a re-send meanwhile is told so.
+      const slowOne = await pay();
+      rig.stalled.length = 0;
+      const stalledCall = big(slowOne, { "x-test-stall": "16384" });
+      for (let i = 0; i < 200 && rig.stalled.length === 0; i++) await wait(10);
+      const beforeSweep = appD.book.get(slowOne.key);
+      const pass = await appD.gate.sweepOnce();
+      const midSend = appD.book.get(slowOne.key);
+      ok(rig.stalled.length === 1 && beforeSweep?.delivered === true && Number(beforeSweep.sendingUntil) > Date.now() && midSend?.state === "charged-undelivered" && midSend.delivered === true && !owed.some((o) => o.tx === midSend.tx), `a sweep pass during a send that has not ended leaves the entry and its delivered mark in place (${JSON.stringify(midSend && { state: midSend.state, delivered: midSend.delivered })}; pass ${JSON.stringify(pass)})`);
+      const during = await big(slowOne);
+      const byHandDuring = await appD.gate.resolveByHand(slowOne.key, { note: "resolving mid-send", outcome: "dismissed" });
+      ok(during.status === 409 && during.json?.reason === "inflight" && during.headers.get("x-payment-replay") === "inflight" && appD.gate.stats().sendInflightRefused === 1 && byHandDuring.ok === false, `one send in flight per payment: a re-send while the answer is still going out is answered 409 inflight and holds no second copy; an operator cannot close the entry mid-send (${during.status} ${during.json?.reason})`);
+      rig.stalled[0].destroy();
+      const stalledEnd = await stalledCall;
+      await wait(150);
+      const afterReset = appD.book.get(slowOne.key);
+      const collected = await big(slowOne);
+      await wait(100);
+      ok(stalledEnd.status === "cut" && afterReset?.state === "charged-undelivered" && afterReset.partial === true && afterReset.delivered === false && collected.status === 200 && collected.json?.blob?.length === N && appD.book.get(slowOne.key) === null, `when that send ends cut off the entry is still there, partly served, and the re-send collects the whole answer (${afterReset?.state} then ${collected.status})`);
+      // The same for a success delivered before its receipt could be read: the receipt arriving mid-send does not close it.
+      {
+        fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + "ab12".repeat(16) } });
+        const un = await pay();
+        rig.stalled.length = 0;
+        const unCall = big(un, { "x-test-stall": "16384" });
+        for (let i = 0; i < 200 && rig.stalled.length === 0; i++) await wait(10);
+        fac.reset();
+        const asSent = appD.book.get(un.key);
+        fac.land(un.p.authorization, "0x" + "ab12".repeat(16));
+        await appD.gate.sweepOnce();
+        const confirmedMidSend = appD.book.get(un.key);
+        rig.stalled[0].destroy();
+        await unCall;
+        await wait(150);
+        const cutAfter = appD.book.get(un.key);
+        const got = await big(un);
+        await wait(100);
+        ok(asSent?.state === "unconfirmed" && asSent.delivered === true && confirmedMidSend?.state === "charged-undelivered" && confirmedMidSend.delivered === true && cutAfter?.state === "charged-undelivered" && cutAfter.partial === true && got.status === 200 && got.json?.blob?.length === N && appD.book.get(un.key) === null, `an unconfirmed payment whose receipt proves it while its answer is still going out keeps its entry (now charged); the cut-off send is then partly served and the re-send collects the answer (${asSent?.state} -> ${confirmedMidSend?.state} -> ${cutAfter?.state}; re-send ${got.status})`);
+      }
+      // After the bound a delivered mark left by a process that died is closed as before.
+      const dead = await pay();
+      await appD.book.intent({ key: dead.key, slug: "big", payer: dead.p.authorization.from, nonce: dead.p.authorization.nonce, amount: "30000", validBefore: Number(dead.p.authorization.validBefore), fromBlock: fac.chainState.head });
+      await appD.book.resolve(dead.key, { state: "charged-undelivered", tx: "0x" + "de".repeat(32), delivered: true, sendingUntil: Date.now() + 60_000 });
+      await appD.gate.sweepOnce();
+      const kept1 = appD.book.get(dead.key)?.delivered;
+      skew.ms = 2 * 60_000;
+      await appD.gate.sweepOnce();
+      skew.ms = 0;
+      ok(kept1 === true && appD.book.get(dead.key) === null && !owed.some((o) => o.tx === "0x" + "de".repeat(32)), "a delivered mark with no send behind it (the process that set it is gone) is kept until its bound has passed and then closed, never refunded");
+      // Never collected: the debt is written at the gross, and HELD for review.
+      skew.ms = 11 * 60_000;
+      await appD.gate.sweepOnce();
+      await appD.gate.sweepOnce();
+      skew.ms = 0;
+      const rows = owed.filter((o) => o.tx === e0?.tx);
+      ok(rows.length === 1 && rows[0].priceUsd === 0.03 && rows[0].httpStatus === 499 && rows[0].hangupReason === "payer budget" && isRepeatHangup(rows[0]) === true && /partly sent \(at most 16384 of \d+ bytes\)/.test(rows[0].note) && !owed.some((o) => o.tx === e1?.tx), `a partly served answer that is never collected is owed once at the gross with the reason the refund run HOLDS (never repaid on its own), its byte counts in the note; the one collected by a re-send is owed nothing (${rows.length} row: ${rows[0]?.httpStatus} ${rows[0]?.hangupReason}; ${rows[0]?.note})`);
+    } finally { skew.ms = 0; await appD.close(); }
+    // The bounds on a mounted gate: a send that makes no progress ends by itself.
+    const appI = await mount({ REFERRAL_SEND_IDLE_MS: "300" }, { appUse: [sendRig] });
+    try {
+      const pay = async () => { const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) + 600) }); return { p, key: gateMod.referralReplayKey(p.authorization) }; };
+      // The first piece is handed over and never confirmed. A reader that stopped taking it sees the
+      // connection cut; behind a layer that drops the callback the bytes do go out (the client has the
+      // answer), and this server, with no confirmation, cannot say so: it ends the send and reads partial.
+      for (const [name, headers, clientSees] of [["a reader that stops taking the answer", { "x-test-stall": "0" }, "cut"], ["a layer that never calls the write callback back", { "x-test-drop": "1" }, 200]]) {
+        const c = await pay();
+        const t0 = Date.now();
+        const r = await Promise.race([cutCall(`${appI.url}/ref/big`, { body: { n: 5000 }, headers: { "payment-signature": c.p.header, "x-test-ip": freshIp(), ...headers } }), wait(5000).then(() => ({ status: "hung" }))]);
+        const took = Date.now() - t0;
+        // Where the client already has its 200, the send is still open here until the bound: a re-send is told so.
+        const early = clientSees === 200 ? await cutCall(`${appI.url}/ref/big`, { body: { n: 5000 }, headers: { "payment-signature": c.p.header, "x-test-ip": freshIp() } }) : { status: 409 };
+        for (let i = 0; i < 100 && appI.book.get(c.key)?.delivered !== false; i++) await wait(20);
+        const ended = Date.now() - t0;
+        const e = appI.book.get(c.key);
+        ok(r.status === clientSees && took < 3000 && ended < 3000 && e?.state === "charged-undelivered" && e.delivered === false && e.partial === true && !(Number(e.sendingUntil) > 0) && (clientSees === 200 ? early.status === 409 : true), `${name}: the send ends at the no-progress bound instead of waiting forever, the entry reads partly served and the answer is kept (the client saw ${r.status}; ended after ${ended} ms; ${e?.state}, partial ${e?.partial})`);
+        const again = await cutCall(`${appI.url}/ref/big`, { body: { n: 5000 }, headers: { "payment-signature": c.p.header, "x-test-ip": freshIp() } });
+        await wait(50);
+        ok(again.status === 200 && again.json?.blob?.length === 5000 && appI.book.get(c.key) === null, `and a re-send on a clean connection collects it (${again.status})`);
+      }
+      ok(appI.gate.stats().sendsEndedIdle === 2 && logLines.some((l) => /send was ended at its no-progress bound/.test(l)), `each is counted and logged (${appI.gate.stats().sendsEndedIdle})`);
+    } finally { await appI.close(); }
+  }
+
+  // ===========================================================================
+  // The minimum net: tolerant of the contract's rounding, never of a short payout
+  // ===========================================================================
+  {
+    const { referralMinNet } = gateMod;
+    const ceil = (a, b) => (a + b - 1n) / b;
+    const rows = [];
+    let bad = 0;
+    for (const gross of [1n, 7n, 999n, 1000n, 1234n, 30001n]) for (const c of [1000n, 1500n]) for (const f of [0n, 300n]) {
+      const min = referralMinNet(gross, { commissionBps: Number(c), feeBps: Number(f) });
+      // What a contract may pay: the merchant share floored; or the gross less each leg rounded up
+      // (the commission in two legs of 65% and 35% of it, and the fee).
+      const floored = (gross * (10_000n - c - f)) / 10_000n;
+      const legsUp = gross - ceil(gross * c * 65n, 1_000_000n) - ceil(gross * c * 35n, 1_000_000n) - (f ? ceil(gross * f, 10_000n) : 0n);
+      const exact = referralNet(gross, { commissionBps: Number(c), feeBps: Number(f) }).netUnits;
+      rows.push(`${gross}@${c}+${f}: min ${min}, floored ${floored}, legs up ${legsUp}`);
+      if (min > floored || (legsUp > 0n && min > legsUp) || min > exact || exact - min > 5n || min < 0n) bad++;
+    }
+    ok(bad === 0 && rows.length === 24, `at every amount, commission and fee the minimum net admits a merchant share rounded in the contract's favor (floored, or every leg rounded up) and stays within 5 units of the exact net (${rows.filter((_, i) => i % 5 === 0).join("; ")})`);
+    ok(referralMinNet(1000n, { commissionBps: 1000 }) === 897n && referralMinNet(1234n, { commissionBps: 1000 }) === 1107n && referralMinNet(1234n, { commissionBps: 1500, feeBps: 300 }) === 1008n && referralMinNet(1n, { commissionBps: 1000 }) === 0n, "the figures: 1000 at 10% asks 897, 1234 at 10% asks 1107, 1234 at 15% plus 3% asks 1008, and it never goes below zero");
+    // Through the proof and the gate: a sale of 1234 at 10% whose contract floored the merchant share (1110, where the exact net is 1111).
+    const a = { from: newAccount().address, to: PAY_TO, value: "1234", nonce: freshNonce() };
+    const txOdd = fac.land(a, null, "paid", { bps: 0n });
+    const odd = structuredClone(fac.receipts.get(txOdd));
+    const setNet = (r, net) => { r.logs[2].data = `0x${BigInt(net).toString(16).padStart(64, "0")}`; r.logs[3].data = r.logs[3].data.slice(0, 2 + 8 * 64) + BigInt(net).toString(16).padStart(64, "0"); return r; };
+    const proveOdd = (net) => proveReceipt(setNet(structuredClone(odd), net), { tx: txOdd, from: a.from, nonce: a.nonce, payTo: PAY_TO, amount: "1234", merchantId: MERCHANT_ID, payoutAddress: PAYOUT, minNet: referralMinNet(1234n, { commissionBps: 1000 }).toString() });
+    ok(proveOdd(1110n).verdict === "paid" && proveOdd(1110n).net === "1110" && proveOdd(1111n).verdict === "paid" && proveOdd(1107n).verdict === "paid" && proveOdd(1107n).underFloor === false && proveOdd(1106n).verdict === "paid" && proveOdd(1106n).underFloor === true && proveOdd(1106n).routedToUs === true, `a merchant share rounded down by the contract is paid inside the floor, and the proof states the amount received; one under the tolerance is paid and reported as under the floor (${proveOdd(1110n).underFloor}, ${proveOdd(1106n).underFloor})`);
+  }
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    // The sale is booked at the amount the receipt shows, not at a computed one.
+    fac.mode.settle = (call) => {
+      const t = fac.land(call.json.paymentPayload.payload.authorization, fac.nextTx());
+      const r = fac.receipts.get(t), w = (26296n).toString(16).padStart(64, "0");
+      r.logs[2].data = `0x${w}`;
+      r.logs[3].data = r.logs[3].data.slice(0, 2 + 8 * 64) + w;
+      return { status: 200, body: { success: true, transaction: t, network: REFERRAL_NETWORK } };
+    };
+    const p = await signPayment(accept, { account: newAccount() });
+    const r = await send(R("echo"), { body: { text: "received net" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+    await quietLedger();
+    ok(r.status === 200 && sales.length === 1 && sales[0].priceUsd === 0.026296 && sales[0].quoteUsd === 0.03, `a payout that differs from the computed net inside the tolerance (26296 where 26298 was computed) is booked as received (${sales[0]?.priceUsd})`);
+    // A success booked before its receipt can be read has only the computed net.
+    fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + "e7".repeat(32) } });
+    const q = await signPayment(accept, { account: newAccount() });
+    const u = await send(R("echo"), { body: { text: "no receipt yet" }, headers: { "payment-signature": q.header, "x-test-ip": freshIp() } });
+    await quietLedger();
+    ok(u.status === 200 && sales.length === 2 && sales[1].priceUsd === 0.026298, `an unconfirmed success, whose receipt is not there to read, is booked at the computed net (${sales[1]?.priceUsd})`);
+    fac.land(q.authorization, "0x" + "e7".repeat(32));
+    await app1.gate.sweepOnce();
+  }
+
+  // ===========================================================================
+  // A receipt the split contract routed to OUR merchant is never closed by itself
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    // This server's payout address is behind the chain: every receipt pays PAYOUT, the reader expects another wallet.
+    const bookP = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-drift`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+    const appP = await mount({ REFERRAL_UNRECOGNIZED_READS: "3" }, { book: bookP, chain: createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, publicLanes: [], merchantId: MERCHANT_ID, payoutAddress: newAccount().address, headMaxAgeMs: 0, tries: 2, budgetMs: 1200, pauseMs: 100, timeoutMs: 500 }) });
+    try {
+      const open = async (kind) => {
+        const p = await signPayment(accept, { account: newAccount(), validBefore: String(Math.floor(Date.now() / 1000) - 600) });
+        const key = gateMod.referralReplayKey(p.authorization);
+        await bookP.intent({ key, slug: "echo", payer: p.authorization.from, nonce: p.authorization.nonce, amount: "30000", validBefore: Number(p.authorization.validBefore), fromBlock: fac.chainState.head });
+        await bookP.resolve(key, { state: "in-doubt" });
+        return { key, tx: fac.land(p.authorization, null, kind), payer: p.authorization.from.toLowerCase() };
+      };
+      const ours = [await open("paid"), await open("paid"), await open("paid")];
+      const notOurs = await open("noevent");
+      const elsewhere = await open("othermerchant");
+      for (let i = 0; i < 6; i++) await appP.gate.sweepOnce();
+      await quietLedger();
+      const kept = ours.map((o) => bookP.get(o.key));
+      ok(kept.every((e) => e?.state === "in-doubt" && e.routedToUs === true && !e.unrecognizedReads) && kept[0].seenTx === ours[0].tx && !bookP.closedUnrecognized().some((r) => ours.some((o) => o.key === r.key)), `an expired entry whose receipt carries the split contract's routed event naming OUR merchant id is never counted and never closed, however often it is read (${kept.map((e) => `${e?.state}/${e?.routedToUs}`).join(", ")})`);
+      ok(bookP.get(notOurs.key) === null && bookP.closedUnrecognized().some((r) => r.key === notOurs.key) && bookP.get(elsewhere.key) === null && !bookP.closedUnrecognized().some((r) => r.key === elsewhere.key), "a receipt with no routed event for our merchant still ends: closed to the record at the bound, or closed as not paid when it was routed to another merchant");
+      const word = appP.gate.statusWord();
+      ok(word.status === "attention" && word.reasons.some((x) => /routed to this merchant/.test(x)) && sales.length === 0 && owed.length === 0, `the word reads attention for it, and nothing is booked or owed by itself (${word.reasons.join("; ")})`);
+      // The automatic path never takes the operator's proof: a charged entry whose receipt now fails on the payout waits.
+      const chargedDrift = await open("paid");
+      await bookP.resolve(chargedDrift.key, { state: "charged-undelivered", tx: chargedDrift.tx, saleBooked: true });
+      await appP.gate.sweepOnce();
+      ok(owed.length === 0 && bookP.get(chargedDrift.key)?.state === "charged-undelivered", `by itself the sweep writes no debt on that weaker proof: only an operator's refund does (${owed.length} debts, ${bookP.get(chargedDrift.key)?.state})`);
+      await appP.gate.resolveByHand(chargedDrift.key, { note: "test cleanup", outcome: "dismissed" });
+      // The operator's three outcomes work on it.
+      const refund = await appP.gate.resolveByHand(ours[0].key, { note: "the payout wallet was changed on chain; this buyer was not served", outcome: "refund" });
+      const rowsR = owed.filter((o) => o.tx === ours[0].tx);
+      const delivered = await appP.gate.resolveByHand(ours[1].key, { note: "the buyer confirmed the answer", outcome: "delivered" });
+      const dismissed = await appP.gate.resolveByHand(ours[2].key, { note: "our own test payment", outcome: "dismissed" });
+      ok(refund.ok === true && refund.debt === true && rowsR.length === 1 && rowsR[0].priceUsd === 0.03 && rowsR[0].payer === ours[0].payer && rowsR[0].wire === "referral-operator" && /operator refund: the buyer's transfer into the split contract is proven/.test(rowsR[0].note) && sales.length === 0 && bookP.get(ours[0].key)?.state === "refund-owed" && bookP.get(ours[0].key).tx === ours[0].tx && delivered.ok === true && dismissed.ok === true && bookP.get(ours[1].key) === null && bookP.get(ours[2].key) === null && owed.length === 1, `an operator's refund on it writes the debt at the gross against the transaction the sweep found (the receipt shows the buyer's transfer and our merchant id); delivered and dismissed close it with no debt (${refund.ok} ${refund.error || ""}; ${rowsR.length} row)`);
+      // Not for a receipt that does not name our merchant: no operator proof there.
+      const reopened = await appP.gate.reopenByHand(notOurs.key, { note: "closed too early: checking it by hand" });
+      const noNote = await appP.gate.reopenByHand(notOurs.key, { note: "" });
+      const back = bookP.get(notOurs.key);
+      ok(reopened.ok === true && noNote.ok === false && back?.state === "in-doubt" && back.noAutoClose === true && back.seenTx === notOurs.tx && back.payer === notOurs.payer && back.amount === "30000" && !bookP.closedUnrecognized().some((r) => r.key === notOurs.key) && bookP.resolvedByHand().some((r) => r.key === notOurs.key && r.outcome === "reopened" && /closed too early/.test(r.note)) && (await appP.gate.reopenByHand(notOurs.key, { note: "twice over" })).ok === false && appP.gate.stats().reopenedByHand === 1, `an operator can put a closed record back as an open entry (recorded with the note, removed from the record, once) (${JSON.stringify(back && { state: back.state, noAutoClose: back.noAutoClose })})`);
+      for (let i = 0; i < 5; i++) await appP.gate.sweepOnce();
+      // AN EVENT THE RULE DOES NOT RECOGNIZE: the operator can still refund, on the buyer's own transfer.
+      const stillOpen = bookP.get(notOurs.key)?.state;
+      const handRefund = await appP.gate.resolveByHand(notOurs.key, { note: "the buyer paid; the routing is not one we read", outcome: "refund" });
+      const handAgain = await appP.gate.resolveByHand(notOurs.key, { note: "asked twice", outcome: "refund" });
+      const rowsN = owed.filter((o) => o.tx === notOurs.tx);
+      ok(stillOpen === "in-doubt" && handRefund.ok === true && handRefund.debt === true && rowsN.length === 1 && rowsN[0].priceUsd === 0.03 && rowsN[0].wire === "referral-operator" && rowsN[0].payer === notOurs.payer && /operator refund: the buyer's transfer into the split contract is proven, its routing is not recognized; no sale was booked/.test(rowsN[0].note) && sales.length === 0 && bookP.get(notOurs.key)?.state === "refund-owed", `a reopened entry is never closed by itself again, and an operator's refund on it is written on the buyer's own transfer into the split contract, as an operator refund with the reason, with NO sale booked (${handRefund.ok} ${handRefund.error || ""}; ${rowsN.length} row on ${rowsN[0]?.wire})`);
+      ok(handAgain.ok === true && owed.filter((o) => o.tx === notOurs.tx).length === 1 && bookP.resolvedByHand().filter((r) => r.key === notOurs.key && r.outcome === "refund").length === 1, `a second refund on the same entry writes no second debt and no second hand record (${bookP.resolvedByHand().filter((r) => r.key === notOurs.key && r.outcome === "refund").length})`);
+      // Never for money the contract routed to ANOTHER merchant, and never with no receipt.
+      const theirs = await open("othermerchant");
+      await bookP.resolve(theirs.key, { state: "in-doubt", seenTx: theirs.tx, noAutoClose: true });
+      const notOurSale = await appP.gate.resolveByHand(theirs.key, { note: "asked for a refund", outcome: "refund" });
+      const unreadable = await open("noevent");
+      await bookP.resolve(unreadable.key, { seenTx: unreadable.tx });
+      fac.mode.receiptDown = true;
+      const noReceipt = await appP.gate.resolveByHand(unreadable.key, { note: "asked for a refund", outcome: "refund" });
+      fac.mode.receiptDown = false;
+      ok(notOurSale.ok === false && /does not prove/.test(notOurSale.error) && noReceipt.ok === false && /could not be read/.test(noReceipt.error) && !owed.some((o) => o.tx === theirs.tx || o.tx === unreadable.tx), `the operator's refund is refused for a payment routed to another merchant and for a receipt that cannot be read (${notOurSale.error}; ${noReceipt.error})`);
+      for (const e of bookP.list().filter((x) => x.state === "contradicted" || x.state === "in-doubt")) await appP.gate.resolveByHand(e.key, { note: "test cleanup", outcome: "dismissed" });
+      // The refund run proves such a row by that transfer, and no other row.
+      const { verifyInboundPayment } = await import("../src/payment-verify.js");
+      const verifyRow = (row, receipt) => verifyInboundPayment({ network: "eip155:8453", payer: row.payer, amountUsd: row.priceUsd, tx: row.tx, wire: row.wire, referralPayTo: PAY_TO, referralMerchantId: MERCHANT_ID, referralPayout: PAYOUT, rpcFor: () => "http://rpc.invalid", fetchImpl: async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: j.method === "eth_getTransactionReceipt" ? receipt : null }), { status: 200, headers: { "content-type": "application/json" } }); } });
+      const rcN = fac.receipts.get(notOurs.tx);
+      const vOperator = await verifyRow(rowsN[0], rcN), vPlain = await verifyRow({ ...rowsN[0], wire: "referral" }, rcN), vOtherPayer = await verifyRow({ ...rowsN[0], payer: "0x" + "9".repeat(40) }, rcN), vMore = await verifyRow({ ...rowsN[0], priceUsd: 0.04 }, rcN);
+      ok(vOperator.verified === true && vPlain.verified === false && vOtherPayer.verified === false && vMore.verified === false && gateMod.refundRowCovers({ evidence: notOurs.tx, payer: notOurs.payer, wire: "referral-operator" }, rowsN[0]) === true, `the refund run proves an operator row by the payer's own transfer of the amount into the split contract (not for another payer or a larger amount); the same receipt does not prove an ordinary referral row (${vOperator.verified}, ${vPlain.verified}, ${vOtherPayer.verified}, ${vMore.verified})`);
+    } finally { skew.ms = 0; await appP.close(); }
+  }
+
+  // ===========================================================================
+  // The contract's rate above the commission map: paid, served, booked as received, raised at once
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    const bookS = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-short`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+    const appS = await mount({}, { book: bookS });
+    const chainPays = (bps) => { fac.mode.settle = (call) => ({ status: 200, body: { success: true, transaction: fac.land(call.json.paymentPayload.payload.authorization, fac.nextTx(), "paid", { bps: BigInt(bps) }), network: REFERRAL_NETWORK } }); };
+    const paid = async (slug, account = newAccount()) => { const p = await signPayment(accept, { account }); const r = await send(`${appS.url}/ref/${slug}`, { body: { text: "rate" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } }); return { r, p, key: gateMod.referralReplayKey(p.authorization) }; };
+    try {
+      // The map says 1234 bps; the contract takes 2500: 22500 arrives where at least 26295 is expected.
+      chainPays(2500);
+      const before = { unconfirmed: appS.gate.stats().unconfirmed, held: appS.gate.stats().unconfirmedHeld };
+      const same = newAccount();
+      const calls = [];
+      for (let i = 0; i < 8; i++) calls.push(await paid("echo", i >= 6 ? same : newAccount()));
+      await quietLedger();
+      await wait(60);
+      ok(calls.every((c) => c.r.status === 200 && c.r.json?.echo === "rate") && settles() === 8 && bookS.size() === 0 && appS.gate.stats().unconfirmed === before.unconfirmed && appS.gate.stats().unconfirmedHeld === before.held && bookS.faults().length === 0, `a receipt that shows the buyer's transfer and the routed event naming our merchant is a PAID call whatever the net: 8 of 8 answered (a payer's second payment too), nothing left open, no unconfirmed slot used, no hold (${calls.map((c) => c.r.status).join(" ")}; book ${bookS.size()})`);
+      ok(sales.length === 8 && sales.every((x) => x.priceUsd === 0.0225 && x.quoteUsd === 0.03) && ledger.privateRailSaleByTx(sales[0].tx, "referral")?.netUsd === 0.0225, `each sale is booked at the merchant amount its receipt shows, not at the computed net (${sales[0]?.priceUsd})`);
+      const word = appS.gate.statusWord();
+      const rec = bookS.shortSales().echo;
+      ok(word.status === "attention" && word.reasons.some((x) => /^echo: .*expected at least 26295, received 22500, of a gross of 30000; 8 sale\(s\)\)$/.test(x)) && rec?.count === 8 && rec.deep === 0 && appS.gate.stats().shortNetSales === 8 && logLines.some((l) => /SHORT NET: .* for echo: expected at least 26295, received 22500/.test(l)), `the word reads attention from the first such sale, with a reason that names the slug and both amounts; a gap of this size never stops a buyer (${word.reasons.join("; ")})`);
+      await bookS.noteShort("echo", { expected: "26295", received: "22500", gross: "30000", tx: sales[0].tx });
+      ok(bookS.shortSales().echo.count === 8, `a transaction is counted once, however often it is noted (${bookS.shortSales().echo.count})`);
+      // The reverse (the map above the contract's rate) raises nothing.
+      chainPays(500);
+      const generous = await paid("exa");
+      await quietLedger();
+      ok(generous.r.status === 200 && !bookS.shortSales().exa && sales[sales.length - 1].priceUsd === 0.0285, `a payout above the expected net is served, booked as received, and raises nothing (${generous.r.status}, ${sales[sales.length - 1]?.priceUsd})`);
+      // FAR under the floor (under half of it): after three such sales the slug stops, before the handler.
+      chainPays(6000);
+      const deep = [];
+      for (let i = 0; i < 3; i++) deep.push(await paid("list"));
+      await wait(60);
+      const at = { settles: settles(), verifies: verifies() };
+      const stopped = await paid("list");
+      const otherSlug = await paid("owntx");
+      ok(appS.config.shortNetMax === 3 && deep.every((c) => c.r.status === 200) && bookS.shortSales().list?.deep === 3 && stopped.r.status === 503 && stopped.r.json?.errorReason === "rate_under_review" && stopped.r.headers.get("retry-after") === "300" && settles() === at.settles + 1 && bookS.get(stopped.key) === null && otherSlug.r.status === 200 && appS.gate.stats().shortNetHeld === 1 && appS.gate.statusWord().reasons.some((x) => /^list: .*new calls on it are held/.test(x)), `a slug whose sales arrive under half the expected net is stopped after three of them: the next call on it is answered 503 before anything is sent or run, nothing charged; another slug is served (${deep.map((c) => c.r.status).join(" ")} then ${stopped.r.status} ${stopped.r.json?.errorReason}; other slug ${otherSlug.r.status})`);
+      ok(referralConfig({ ...ENV, REFERRAL_SHORT_NET_MAX: "0" }).shortNetMax === 0 && referralConfig({ ...ENV, REFERRAL_SHORT_NET_MAX: "7" }).shortNetMax === 7 && referralConfig(ENV).shortNetMax === 3, "REFERRAL_SHORT_NET_MAX is read (3; 0 never stops a slug)");
+      // The operator clears it; the stop ends, and it is recorded.
+      const noNote = await appS.gate.clearShortByHand("list", { note: "" });
+      const cleared = await appS.gate.clearShortByHand("list", { note: "the rate is being corrected; serve meanwhile" });
+      chainPays(1234);
+      const resumed = await send(`${appS.url}/ref/list`, { body: { text: "rate" }, headers: { "payment-signature": stopped.p.header, "x-test-ip": freshIp() } });
+      ok(noNote.ok === false && cleared.ok === true && !bookS.shortSales().list && resumed.status === 200 && bookS.resolvedByHand().some((r) => r.outcome === "short-net-cleared" && r.slug === "list" && /being corrected/.test(r.note)) && (await appS.gate.clearShortByHand("list", { note: "twice over" })).ok === false, `an operator clears the record with a note (recorded), and the refused payment, never claimed, is then served (${resumed.status})`);
+    } finally { await appS.close(); }
+    // A restart with the corrected map: the record no longer reads short, and the sweep drops it.
+    const appS2 = await mount({ REFERRAL_COMMISSION_BPS: "default:2500,busy:4321" }, { book: bookS });
+    try {
+      const wordFixed = appS2.gate.statusWord();
+      const hadRecord = !!bookS.shortSales().echo;
+      await appS2.gate.sweepOnce();
+      ok(hadRecord && !wordFixed.reasons.some((x) => /^echo:/.test(x)) && !bookS.shortSales().echo, `once the map admits the amount received the reason is gone, and the next sweep drops the record (${wordFixed.reasons.join("; ") || "no reasons"})`);
+    } finally { await appS2.close(); }
+  }
+
+  // ===========================================================================
+  // A success booked before its receipt could be read is corrected to the amount received
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    const bookC = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-correct`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+    const appC = await mount({}, { book: bookC });
+    try {
+      const txC = "0x" + "c9".repeat(32);
+      fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: txC } });
+      const acct = newAccount();
+      const p = await signPayment(accept, { account: acct });
+      const r = await send(`${appC.url}/ref/echo`, { body: { text: "early" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      await quietLedger();
+      const early = ledger.privateRailSaleByTx(txC, "referral");
+      // The receipt arrives: the contract took 2500 bps, the sale was booked at the map's 1234.
+      fac.land(p.authorization, txC, "paid", { bps: 2500n });
+      await appC.gate.sweepOnce();
+      await wait(80);
+      const late = ledger.privateRailSaleByTx(txC, "referral");
+      const mine = ledger.payerReceipts(acct.address.toLowerCase()).rows.filter((x) => x.settlementTx === txC);
+      ok(r.status === 200 && early?.netUsd === 0.026298 && late?.netUsd === 0.0225 && late.id === early.id && late.grossUsd === 0.03 && mine.length === 1 && sales.length === 1 && appC.gate.stats().netsCorrected === 1 && bookC.shortSales().echo?.count === 1 && bookC.size() === 0, `at confirmation the ONE row is corrected in place to the receipt's merchant amount: no second row, the buyer's receipts list it once, and the short net is raised then (${early?.netUsd} -> ${late?.netUsd}; rows ${mine.length})`);
+      await appC.gate.sweepOnce();
+      await wait(40);
+      ok(ledger.privateRailSaleByTx(txC, "referral")?.netUsd === 0.0225 && appC.gate.stats().netsCorrected === 1 && bookC.shortSales().echo?.count === 1, "and it is corrected, and counted, once");
+    } finally { await appC.close(); }
+  }
+
+  // ===========================================================================
+  // Contradicted successes from several payers hold the route; one payer's never do
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    // This server's merchant id setting is not the id the contract routes to: every success is contradicted.
+    const bookM = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-many`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+    const appM = await mount({}, { book: bookM, chain: createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, publicLanes: [], merchantId: "9999", payoutAddress: PAYOUT, headMaxAgeMs: 0, tries: 2, budgetMs: 1200, pauseMs: 100, timeoutMs: 500 }) });
+    try {
+      const pay = async (account = newAccount()) => { const p = await signPayment(accept, { account }); return { p, key: gateMod.referralReplayKey(p.authorization), r: await send(`${appM.url}/ref/echo`, { body: { text: "m" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } }) }; };
+      const runsBefore = runs.echo;
+      const first = [await pay(), await pay()];
+      const third = await pay();
+      const at = { runs: runs.echo, settles: settles(), verifies: verifies() };
+      const later = [];
+      for (let i = 0; i < 6; i++) later.push(await pay());
+      const word = appM.gate.statusWord();
+      ok(gateMod.REFERRAL_CONTRADICTED_PAYERS === 3 && [...first, third].every((c) => c.r.status === 402 && bookM.get(c.key)?.state === "contradicted" && bookM.get(c.key).moved === true && bookM.get(c.key).scope === "payer") && at.runs === runsBefore + 3 && later.every((c) => c.r.status === 503 && c.r.json?.errorReason === "settlement_under_review") && runs.echo === at.runs && settles() === at.settles && verifies() === at.verifies && word.status === "attention" && word.reasons.some((x) => /came from 3 or more payers/.test(x)), `contradicted successes that moved money from three distinct payers hold the route: the next six payers are answered 503 before anything runs or is charged (${[...first, third].map((c) => c.r.status).join(" ")} then ${later.map((c) => c.r.status).join(" ")}; ${runs.echo - runsBefore} runs, ${settles()} settles)`);
+      // It clears when those entries resolve.
+      await appM.gate.resolveByHand(third.key, { note: "merchant id setting corrected", outcome: "dismissed" });
+      fac.reset();
+      const freed = bookM.faults().filter((f) => f.moved).length;
+      ok(freed === 2 && !appM.gate.statusWord().reasons.some((x) => /came from 3 or more payers/.test(x)), `it ends when the entries resolve (${freed} left)`);
+      for (const c of first) await appM.gate.resolveByHand(c.key, { note: "test cleanup", outcome: "dismissed" });
+    } finally { await appM.close(); }
+    // One payer with many payments never trips it; nor do payers far apart in time, or ones that moved no money.
+    const bookO = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-one`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+    const appO = await mount({}, { book: bookO });
+    try {
+      const seed = async (payer, extra) => { const key = `referral:${createHash("sha256").update(`${payer}${Math.random()}`).digest("hex")}`; await bookO.intent({ key, slug: "echo", payer, nonce: freshNonce(), amount: "30000", validBefore: Math.floor(Date.now() / 1000) + 600, fromBlock: fac.chainState.head }); await bookO.resolve(key, { state: "contradicted", scope: "payer", tx: "0x" + "1".repeat(64), ...extra }); return key; };
+      const serve1 = async () => (await send(`${appO.url}/ref/echo`, { body: { text: "o" }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } })).status;
+      const one = "0x" + "a1".repeat(20), t = Date.now();
+      const keys = [];
+      for (let i = 0; i < 5; i++) keys.push(await seed(one, { moved: true, contradictedAt: t }));
+      const onePayer = await serve1();
+      keys.push(await seed("0x" + "a2".repeat(20), { moved: true, contradictedAt: t }));
+      keys.push(await seed("0x" + "a3".repeat(20), { moved: false, contradictedAt: t }));
+      keys.push(await seed("0x" + "a4".repeat(20), { moved: true, contradictedAt: t - 20 * 60_000 }));
+      const twoPayers = await serve1();
+      keys.push(await seed("0x" + "a5".repeat(20), { moved: true, contradictedAt: t + 1000 }));
+      const threePayers = await serve1();
+      ok(onePayer === 200 && twoPayers === 200 && threePayers === 503, `one payer's five contradicted payments hold nobody else; nor do two payers, one that moved no money, or one outside the window; a third payer inside the window does (${onePayer}, ${twoPayers}, ${threePayers})`);
+      for (const k of keys) await appO.gate.resolveByHand(k, { note: "test cleanup", outcome: "dismissed" });
+    } finally { await appO.close(); }
   }
 
   // --- the key stays where it is ----------------------------------------------------
@@ -2237,7 +2994,7 @@ const orStub = createServer((req, res) => {
       setTimeout(() => {
         if (res.destroyed || res.writableEnded) return;
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "gen-test", object: "chat.completion", created: Math.floor(Date.now() / 1000), model: parsed.model || "openai/gpt-6-luna", choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6, cost: 0.000001 } }));
+        res.end(JSON.stringify({ id: "gen-test", object: "chat.completion", created: Math.floor(Date.now() / 1000), model: parsed.model || "openai/gpt-6-luna", choices: [{ index: 0, message: { role: "assistant", content: JSON.stringify(parsed.messages || "").includes("a long answer please") ? "OK ".repeat(1500) : "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6, cost: 0.000001 } }));
       }, or.delayMs);
       return;
     }
@@ -2549,6 +3306,53 @@ try {
     const lane = await call(`${srv.url}/ref/v1-chat-auto`, { body: chatBody(), headers: { "x-forwarded-for": "198.18.99.1", "payment-signature": (await signPayment(acc, { account: payers[0] })).header } });
     ok(lane.status === 429 && lane.json?.errorReason === "too_many_unsettled_runs", `and is held by the referral route's own bound (${lane.status} ${lane.json?.errorReason})`);
   }
+  {
+    // An answer over 1 KB through the app's REAL middleware stack, under each
+    // encoding a client may ask for: delivered whole, uncompressed, every time.
+    const bodyL = { messages: [{ role: "user", content: "a long answer please" }], max_tokens: 5 };
+    const accL = (await call(`${srv.url}/ref/v1-chat`, { body: bodyL, headers: xff() })).json?.accepts?.[0];
+    const seenL = [];
+    for (const enc of ["identity", "gzip", "br"]) {
+      const payL = await signPayment(accL, { account: newAccount() });
+      const t0 = Date.now();
+      let out;
+      try {
+        const r = await fetch(`${srv.url}/ref/v1-chat`, { method: "POST", headers: { "content-type": "application/json", ...xff(), "payment-signature": payL.header, "accept-encoding": enc }, body: JSON.stringify(bodyL), signal: AbortSignal.timeout(8000) });
+        const text = await r.text();
+        let j = null; try { j = JSON.parse(text); } catch { /* asserted below */ }
+        out = { enc, status: r.status, bytes: text.length, encoding: r.headers.get("content-encoding"), whole: Number(r.headers.get("content-length")) === Buffer.byteLength(text) && /^0x[0-9a-f]{64}$/.test(j?.transaction || "") && String(j?.choices?.[0]?.message?.content || "").length >= 4000, ms: Date.now() - t0 };
+      } catch (e) { out = { enc, status: `no answer (${e?.name})`, ms: Date.now() - t0 }; }
+      seenL.push(out);
+    }
+    await wait(300);
+    const opL = (await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
+    ok(seenL.every((o) => o.status === 200 && o.bytes > 4000 && o.encoding === null && o.whole === true) && opL.sinceBoot.partlyServed === 0 && opL.sinceBoot.sendsEndedIdle === 0 && !opL.open.some((e) => e.partial === true), `an answer over 1 KB is delivered whole through the real middleware stack whatever Accept-Encoding asks: nothing sits between the counted send and the socket (${seenL.map((o) => `${o.enc}: ${o.status} ${o.bytes ?? ""} bytes in ${o.ms} ms`).join("; ")}; partly served ${opL.sinceBoot.partlyServed})`);
+    {
+      // The contract's rate above the map, on the real server: paid, answered, booked as received, raised at once.
+      fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx(), "paid", { bps: 2500n }), network: REFERRAL_NETWORK } });
+      const viewOf = async () => (await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
+      const v0 = await viewOf();
+      const seenR = [];
+      for (let i = 0; i < 7; i++) {
+        const payR = await signPayment(accL, { account: newAccount() });
+        const rr = await call(`${srv.url}/ref/v1-chat`, { body: bodyL, headers: { ...xff(), "payment-signature": payR.header } });
+        seenR.push(rr.status);
+      }
+      await wait(300);
+      const v1 = await viewOf();
+      const gsR = await call(`${srv.url}/api/gateway-status`, { method: "GET" });
+      const recR = v1.shortNet?.find((x) => x.slug === "v1-chat");
+      ok(seenR.every((x) => x === 200) && v1.sinceBoot.settled === v0.sinceBoot.settled + 7 && v1.sinceBoot.unconfirmed === v0.sinceBoot.unconfirmed && v1.sinceBoot.unconfirmedHeld === v0.sinceBoot.unconfirmedHeld && v1.sinceBoot.book["in-doubt"] === v0.sinceBoot.book["in-doubt"] && v1.sinceBoot.book.unconfirmed === v0.sinceBoot.book.unconfirmed && recR?.count === 7 && Number(recR.received) < Number(recR.expectedNow) && v1.status.status === "attention" && v1.status.reasons.some((x) => /^v1-chat: .*expected at least \d+, received \d+/.test(x)) && gsR.json?.referralSettlement?.status === "attention", `on the real server a rate raised on chain before the map knows it charges nobody without an answer: 7 of 7 paid calls answered, none unconfirmed or in doubt, and the public word reads attention at once with the slug and both amounts (${seenR.join(" ")}; ${v1.status.reasons.filter((x) => /^v1-chat/.test(x)).join("; ")})`);
+      const clearedR = await call(`${srv.url}/__operator/referral.json`, { body: { action: "clear-short", slug: "v1-chat", note: "test: the map is being corrected" }, headers: { "x-operator-token": TOKEN_OP } });
+      const clearNoToken = await call(`${srv.url}/__operator/referral.json`, { body: { action: "clear-short", slug: "v1-chat", note: "no token" } });
+      const v2 = await viewOf();
+      ok(clearedR.status === 200 && clearedR.json?.ok === true && clearNoToken.status === 404 && !v2.shortNet.some((x) => x.slug === "v1-chat") && v2.resolvedByHand.some((r) => r.outcome === "short-net-cleared"), `the operator route clears a slug's short-net record with a note (404 without the token) (${clearedR.status})`);
+      fac.reset();
+    }
+    const reopenNone = await call(`${srv.url}/__operator/referral.json`, { body: { action: "reopen", key: "referral:" + "0".repeat(64), note: "no such record" }, headers: { "x-operator-token": TOKEN_OP } });
+    const reopenNoToken = await call(`${srv.url}/__operator/referral.json`, { body: { action: "reopen", key: "referral:" + "0".repeat(64), note: "no such record" } });
+    ok(reopenNone.status === 400 && reopenNone.json?.ok === false && reopenNoToken.status === 404, `the operator route's reopen answers 400 for a record that is not there, and 404 without the token (${reopenNone.status}, ${reopenNoToken.status})`);
+  }
   const op = await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } });
   ok(op.status === 200 && op.json?.enabled === true && op.json.sinceBoot?.settled >= 4 && op.json.sinceBoot.timeouts >= 1 && op.json.sinceBoot.screened === 1 && op.json.routes.includes("hash") && Array.isArray(op.json.open) && Array.isArray(op.json.notServed), `the operator view carries the gate's counters, its open settlements and the slugs it does not serve (${JSON.stringify(op.json?.sinceBoot)})`);
 
@@ -2565,7 +3369,11 @@ try {
     const noToken = await post({ action: "resolve", key: keyH, note: "checked by hand" }, {});
     const badAction = await post({ action: "delete-everything" });
     const noNote = await post({ action: "resolve", key: keyH });
+    const badOutcome = await post({ action: "resolve", key: keyH, note: "checked on chain", outcome: "refunded" });
+    const emptyOutcome = await post({ action: "resolve", key: keyH, note: "checked on chain", outcome: "" });
+    const noProof = await post({ action: "resolve", key: keyH, note: "checked on chain", outcome: "refund" });
     const before = (await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
+    ok(badOutcome.status === 400 && /refund.*delivered.*dismissed/.test(badOutcome.json?.error || "") && emptyOutcome.status === 400 && noProof.status === 400 && noProof.json?.ok === false && before.open.some((e) => e.key === keyH) && Array.isArray(before.closedUnrecognized), `the operator route takes the three outcomes only, and refund for an entry with no transaction to prove writes nothing and leaves it open (${badOutcome.status}, ${noProof.status} ${noProof.json?.error})`);
     const done = await post({ action: "resolve", key: keyH, note: "checked on chain: never settled", outcome: "dismissed" });
     const after = (await call(`${srv.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
     ok(stuck.status === 402 && noToken.status === 404 && badAction.status === 400 && noNote.status === 400 && before.open.some((e) => e.key === keyH) && done.status === 200 && done.json?.ok === true && !after.open.some((e) => e.key === keyH) && after.resolvedByHand.some((r) => r.key === keyH && /never settled/.test(r.note)) && /no-store/.test(done.headers.get("cache-control") || ""), `an operator resolves an open settlement by hand: 404 without the token, a note required, the entry recorded with the note and removed (${noToken.status}, ${badAction.status}, ${noNote.status}, ${done.status})`);
