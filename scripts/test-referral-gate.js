@@ -2247,37 +2247,37 @@ try {
   }
 
   // ===========================================================================
-  // The proof rule, pinned to a real settlement (scripts/fixtures/referral-receipt-base.json)
+  // The proof rule, pinned to the receipt shape of the rail (scripts/fixtures/referral-receipt-base.json)
   // ===========================================================================
   {
     const fx = JSON.parse(readFileSync(new URL("./fixtures/referral-receipt-base.json", import.meta.url), "utf8"));
     const { ROUTED_EVENT_TOPIC } = await import("../src/referral-proof.js");
     const args = { tx: fx.transaction.hash, from: fx.payer, nonce: fx.nonce, payTo: fx.splitContract, amount: fx.amount, merchantId: fx.merchantId, payoutAddress: fx.payoutAddress, minNet: fx.minNet };
     const real = proveReceipt(fx.receipt, args);
-    ok(real.verdict === "paid" && real.moved === true && real.read === true, `the real receipt proves the payment with the real merchant id, payout wallet, amount and minimum net (${real.verdict}: ${real.why})`);
+    ok(real.verdict === "paid" && real.moved === true && real.read === true, `the fixture receipt proves the payment with its merchant id, payout wallet, amount and minimum net (${real.verdict}: ${real.why})`);
     const logs = fx.receipt.logs;
     const pad = (a) => `0x${"0".repeat(24)}${String(a).slice(2).toLowerCase()}`;
     const word = (l, i) => l.data.slice(2 + i * 64, 2 + (i + 1) * 64);
     const routedReal = logs[6];
     ok(logs.length === 7 && routedReal.topics[0] === ROUTED_EVENT_TOPIC && routedReal.topics.length === 4 && routedReal.address === fx.splitContract && routedReal.data.length === 2 + 9 * 64
-      && `0x${word(routedReal, 0).slice(24)}` === fx.payer && BigInt(`0x${word(routedReal, 1)}`) === BigInt(fx.merchantId) && BigInt(`0x${word(routedReal, 3)}`) === 1000n && BigInt(`0x${word(routedReal, 8)}`) === 900n,
-    "the real routed event is the documented topic from the split contract: three indexed ids, nine data words, word 0 the payer, word 1 the merchant id, word 3 the gross, word 8 the merchant amount");
-    ok(logs[0].topics[1] === pad(fx.payer) && logs[0].topics[2] === fx.nonce && logs[1].topics[1] === pad(fx.payer) && logs[1].topics[2] === pad(fx.splitContract) && BigInt(logs[1].data) === 1000n && parseInt(logs[1].logIndex, 16) === parseInt(logs[0].logIndex, 16) + 1
-      && logs[5].topics[1] === pad(fx.splitContract) && logs[5].topics[2] === pad(fx.payoutAddress) && BigInt(logs[5].data) === 900n && parseInt(logs[6].logIndex, 16) > parseInt(logs[5].logIndex, 16),
+      && `0x${word(routedReal, 0).slice(24)}` === fx.payer && BigInt(`0x${word(routedReal, 1)}`) === BigInt(fx.merchantId) && BigInt(`0x${word(routedReal, 3)}`) === 5000n && BigInt(`0x${word(routedReal, 8)}`) === 4250n,
+    "the fixture routed event is the documented topic from the split contract: three indexed ids, nine data words, word 0 the payer, word 1 the merchant id, word 3 the gross, word 8 the merchant amount");
+    ok(logs[0].topics[1] === pad(fx.payer) && logs[0].topics[2] === fx.nonce && logs[1].topics[1] === pad(fx.payer) && logs[1].topics[2] === pad(fx.splitContract) && BigInt(logs[1].data) === 5000n && parseInt(logs[1].logIndex, 16) === parseInt(logs[0].logIndex, 16) + 1
+      && logs[5].topics[1] === pad(fx.splitContract) && logs[5].topics[2] === pad(fx.payoutAddress) && BigInt(logs[5].data) === 4250n && parseInt(logs[6].logIndex, 16) > parseInt(logs[5].logIndex, 16),
     "its order is the one the rule reads: AuthorizationUsed, directly the payer's transfer into the contract, the split legs, the payout to our wallet, then the routed event last");
     ok(fx.transaction.to === fx.splitContract && fx.receipt.to === fx.splitContract && fx.transaction.selector === "0xc3fbce30" && fx.transaction.from === fx.receipt.from && fx.transaction.from !== fx.payer, "the transaction is sent to the split contract itself, by a relayer that is not the payer");
-    ok(referralNet(fx.amount, { commissionBps: 1000, feeBps: 0 }).netUnits === 900n && proveReceipt(fx.receipt, { ...args, nonce: null }).verdict === "paid" && proveReceipt(fx.receipt, { ...args, nonce: null, minNet: "1" }).verdict === "paid", "the net the gate books for that sale is the merchant amount the receipt shows, and the refund path's reading (the payer and the transaction, no nonce) proves it too");
+    ok(referralNet(fx.amount, { commissionBps: 1500, feeBps: 0 }).netUnits === 4250n && proveReceipt(fx.receipt, { ...args, nonce: null }).verdict === "paid" && proveReceipt(fx.receipt, { ...args, nonce: null, minNet: "1" }).verdict === "paid", "the net the gate books for that sale is the merchant amount the receipt shows, and the refund path's reading (the payer and the transaction, no nonce) proves it too");
     // Each tamper changes ONE thing; none is paid.
     const w32 = (n) => BigInt(n).toString(16).padStart(64, "0");
     const setWord = (l, i, hex64) => { l.data = `0x${Array.from({ length: 9 }, (_, k) => (k === i ? hex64 : word(l, k))).join("")}`; };
     const OTHER = "0x" + "7".repeat(40);
     const tampered = (fn, over = {}) => { const r = structuredClone(fx.receipt); fn(r); return proveReceipt(r, { ...args, ...over }).verdict; };
     const cases = {
-      "another merchant id configured": [tampered(() => {}, { merchantId: "1180382" }), "unpaid"],
+      "another merchant id configured": [tampered(() => {}, { merchantId: "700002" }), "unpaid"],
       "another merchant id in the event": [tampered((r) => setWord(r.logs[6], 1, w32(7))), "unpaid"],
       "another payer": [tampered(() => {}, { from: OTHER }), "unpaid"],
       "another nonce": [tampered(() => {}, { nonce: "0x" + "1".repeat(64) }), "unpaid"],
-      "a larger amount asked": [tampered(() => {}, { amount: "1001" }), "unpaid"],
+      "a larger amount asked": [tampered(() => {}, { amount: "5001" }), "unpaid"],
 
 
 
@@ -2288,7 +2288,7 @@ try {
       "the payout to another address": [tampered((r) => { r.logs[5].topics[2] = pad(OTHER); }), "unknown"],
       "the payout wallet configured as another": [tampered(() => {}, { payoutAddress: OTHER }), "unknown"],
       "the payer's transfer short by one": [tampered((r) => { r.logs[1].data = `0x${w32(999)}`; }), "unpaid"],
-      "another gross in the event": [tampered((r) => setWord(r.logs[6], 3, w32(1001))), "unknown"],
+      "another gross in the event": [tampered((r) => setWord(r.logs[6], 3, w32(5001))), "unknown"],
       "another buyer in the event": [tampered((r) => setWord(r.logs[6], 0, pad(OTHER).slice(2))), "unknown"],
       "the routed event and payout before the payer's transfer": [tampered((r) => { r.logs[5].logIndex = "0x190"; r.logs[6].logIndex = "0x191"; }), "unknown"],
       "the payer's transfer not directly after the authorization": [tampered((r) => { r.logs[0].logIndex = "0x190"; }), "unpaid"],
@@ -2298,24 +2298,24 @@ try {
       "another split contract configured": [tampered(() => {}, { payTo: OTHER }), "unpaid"],
     };
     const wrong = Object.entries(cases).filter(([, [got, want]]) => got !== want || got === "paid");
-    ok(wrong.length === 0 && Object.keys(cases).length === 20, `every single-field tamper of the real receipt is refused: never paid (${wrong.map(([k, [got, want]]) => `${k}: ${got}, want ${want}`).join("; ") || "20 tampers"})`);
+    ok(wrong.length === 0 && Object.keys(cases).length === 20, `every single-field tamper of the fixture receipt is refused: never paid (${wrong.map(([k, [got, want]]) => `${k}: ${got}, want ${want}`).join("; ") || "20 tampers"})`);
     {
       // The net does not decide: the buyer paid the whole amount and the contract routed it to us.
-      const under = proveReceipt(fx.receipt, { ...args, minNet: "901" });
-      const lower = structuredClone(fx.receipt); setWord(lower.logs[6], 8, w32(750)); lower.logs[5].data = `0x${w32(750)}`;
+      const under = proveReceipt(fx.receipt, { ...args, minNet: "4251" });
+      const lower = structuredClone(fx.receipt); setWord(lower.logs[6], 8, w32(3750)); lower.logs[5].data = `0x${w32(3750)}`;
       const low = proveReceipt(lower, args);
       const at = proveReceipt(fx.receipt, args), none = proveReceipt(fx.receipt, { ...args, minNet: null });
-      ok(under.verdict === "paid" && under.underFloor === true && under.net === "900" && low.verdict === "paid" && low.underFloor === true && low.net === "750" && at.underFloor === false && none.verdict === "paid" && none.underFloor === false, `a merchant amount under the expected net is still PAID (the contract's rate above the one this server expects): reported as under the floor, with the amount received (${under.verdict}/${under.underFloor}, ${low.net})`);
+      ok(under.verdict === "paid" && under.underFloor === true && under.net === "4250" && low.verdict === "paid" && low.underFloor === true && low.net === "3750" && at.underFloor === false && none.verdict === "paid" && none.underFloor === false, `a merchant amount under the expected net is still PAID (the contract's rate above the one this server expects): reported as under the floor, with the amount received (${under.verdict}/${under.underFloor}, ${low.net})`);
     }
     const shuffled = structuredClone(fx.receipt);
     shuffled.logs.reverse();
     ok(proveReceipt(shuffled, args).verdict === "paid", "the order is read from the log indexes, not from the order of the list");
     // The refund path (src/payment-verify.js) reads the same receipt the same way.
     const { verifyInboundPayment } = await import("../src/payment-verify.js");
-    const refundProof = (receipt, over = {}) => verifyInboundPayment({ network: "eip155:8453", payer: fx.payer, amountUsd: 0.001, tx: fx.transaction.hash, wire: "referral", referralPayTo: fx.splitContract, referralMerchantId: fx.merchantId, referralPayout: fx.payoutAddress, rpcFor: () => "http://rpc.invalid", fetchImpl: async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: j.method === "eth_getTransactionReceipt" ? receipt : null }), { status: 200, headers: { "content-type": "application/json" } }); }, ...over });
+    const refundProof = (receipt, over = {}) => verifyInboundPayment({ network: "eip155:8453", payer: fx.payer, amountUsd: 0.005, tx: fx.transaction.hash, wire: "referral", referralPayTo: fx.splitContract, referralMerchantId: fx.merchantId, referralPayout: fx.payoutAddress, rpcFor: () => "http://rpc.invalid", fetchImpl: async (_u, init) => { const j = JSON.parse(init.body); return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: j.method === "eth_getTransactionReceipt" ? receipt : null }), { status: 200, headers: { "content-type": "application/json" } }); }, ...over });
     const noEvent = structuredClone(fx.receipt); noEvent.logs.pop();
     const [rOk, rNoEvent, rOther] = [await refundProof(fx.receipt), await refundProof(noEvent), await refundProof(fx.receipt, { referralMerchantId: "7" })];
-    ok(rOk.verified === true && rNoEvent.verified === false && rOther.verified === false, `the refund run proves a debt against the real receipt, and not against it without its routed event or under another merchant id (${rOk.verified}, ${rNoEvent.verified}: ${rNoEvent.reason || ""}, ${rOther.verified})`);
+    ok(rOk.verified === true && rNoEvent.verified === false && rOther.verified === false, `the refund run proves a debt against the fixture receipt, and not against it without its routed event or under another merchant id (${rOk.verified}, ${rNoEvent.verified}: ${rNoEvent.reason || ""}, ${rOther.verified})`);
   }
 
   // ===========================================================================
@@ -3037,7 +3037,7 @@ try {
     // 4. The product is bound.
     {
       const fx = JSON.parse(readFileSync(new URL("./fixtures/referral-receipt-base.json", import.meta.url), "utf8"));
-      const REAL_PRODUCT = "0x33027547537d35728a741470df1ccf65de10b454ca0def7c5c20b257b7b8d161";
+      const REAL_PRODUCT = `0x${"d4".repeat(32)}`; // the product word the fixture's routed event carries
       const args = { tx: fx.transaction.hash, from: fx.payer, nonce: fx.nonce, payTo: fx.splitContract, amount: fx.amount, merchantId: fx.merchantId, payoutAddress: fx.payoutAddress, minNet: fx.minNet };
       const bound = proveReceipt(fx.receipt, { ...args, productId: REAL_PRODUCT });
       const boundUpper = proveReceipt(fx.receipt, { ...args, productId: REAL_PRODUCT.toUpperCase().replace("0X", "0x") });
@@ -3045,7 +3045,7 @@ try {
       const tampered = structuredClone(fx.receipt);
       tampered.logs[6].data = tampered.logs[6].data.slice(0, 2 + 2 * 64) + "cd".repeat(32) + tampered.logs[6].data.slice(2 + 3 * 64);
       const tamperedBound = proveReceipt(tampered, { ...args, productId: REAL_PRODUCT }), tamperedUnbound = proveReceipt(tampered, args);
-      ok(`0x${fx.receipt.logs[6].data.slice(2 + 2 * 64, 2 + 3 * 64)}` === REAL_PRODUCT && bound.verdict === "paid" && boundUpper.verdict === "paid" && other.verdict === "unknown" && other.routedToUs === true && /another product/.test(other.why) && tamperedBound.verdict === "unknown" && tamperedUnbound.verdict === "paid", `the real receipt's product id (data word 2) is the one bound for its slug: with it the receipt is paid; under another configured id, or with the product word changed, it reads unknown, routed to us; with no id configured the word is not read (${bound.verdict}, ${other.verdict}, ${tamperedBound.verdict}, ${tamperedUnbound.verdict})`);
+      ok(`0x${fx.receipt.logs[6].data.slice(2 + 2 * 64, 2 + 3 * 64)}` === REAL_PRODUCT && bound.verdict === "paid" && boundUpper.verdict === "paid" && other.verdict === "unknown" && other.routedToUs === true && /another product/.test(other.why) && tamperedBound.verdict === "unknown" && tamperedUnbound.verdict === "paid", `the fixture receipt's product id (data word 2) is the one bound for its slug: with it the receipt is paid; under another configured id, or with the product word changed, it reads unknown, routed to us; with no id configured the word is not read (${bound.verdict}, ${other.verdict}, ${tamperedBound.verdict}, ${tamperedUnbound.verdict})`);
       const ids = referralConfig({ ...ENV, REFERRAL_PRODUCT_IDS: `Echo:${REAL_PRODUCT.toUpperCase().replace("0X", "0x")}, list:0x${"0".repeat(64)}` });
       ok(ids?.productIds?.echo === REAL_PRODUCT && ids.productIds.list === `0x${"0".repeat(64)}` && Object.keys(referralConfig(ENV).productIds).length === 0 && referralConfig({ ...ENV, REFERRAL_PRODUCT_IDS: "echo:0x1234" }) === null && referralConfig({ ...ENV, REFERRAL_PRODUCT_IDS: `echo:${REAL_PRODUCT},echo:${REAL_PRODUCT}` }) === null && /product id map/.test(referralConfigProblem({ ...ENV, REFERRAL_PRODUCT_IDS: "echo" }) || ""), "REFERRAL_PRODUCT_IDS is read per slug (optional); a malformed map leaves the gate off with a reason");
       // On the gate: the stub contract's product word is zero. `echo` is bound to it, `list` to another id, `exa` to none.

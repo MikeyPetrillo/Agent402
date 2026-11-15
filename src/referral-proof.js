@@ -14,14 +14,15 @@ const indexOf = (l) => { const n = parseInt(String(l?.logIndex ?? ""), 16); retu
 
 /** The split contract's routed-payment event: three indexed ids, then nine
  *  data words, by position: 0 buyer wallet, 1 merchant id, 2 product id,
- *  3 gross amount, 4 to 7 the split legs, 8 merchant amount. Pinned to a real
- *  settlement (scripts/fixtures/referral-receipt-base.json): the token's
+ *  3 gross amount, 4 to 7 the split legs, 8 merchant amount. Pinned to the
+ *  receipt shape of a settlement on the rail, with test values
+ *  (scripts/fixtures/referral-receipt-base.json): the token's
  *  AuthorizationUsed and the payer's Transfer into the contract, the split
  *  legs, the Transfer to the merchant's payout wallet, then this event last,
  *  in a transaction sent to the contract itself. */
 export const ROUTED_EVENT_SIGNATURE = "PaymentRouted(uint256,uint256,uint256,address,uint256,bytes32,uint256,uint256,uint256,uint256,uint256,uint256)";
 // keccak256 of that signature (a constant here so this module needs no
-// library; the suite checks it against the signature and the real receipt).
+// library; the suite checks it against the signature and the fixture receipt).
 export const ROUTED_EVENT_TOPIC = "0x095295347a30fa3575b9fb1e8e4afe0db77928a86555467cb2dfd7b9034a0d17";
 const ROUTED_DATA_WORDS = 9;
 const B32 = /^0x[0-9a-fA-F]{64}$/;
