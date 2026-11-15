@@ -373,10 +373,14 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   (`refund` writes its debt). The view's `shortNet` lists slugs whose sales arrived under the
   net `REFERRAL_COMMISSION_BPS` expects (attention from the first, with both amounts): correct
   the map and redeploy (the sweep drops the record), or clear it with
-  `{"action":"clear-short","slug":"<slug>","note":"what was checked"}`; a slug paid under half the
-  expected net `REFERRAL_SHORT_NET_MAX` times answers 503 until then. With contradicted entries
-  from three payers the whole route answers 503 until they are resolved (check
-  `REFERRAL_MERCHANT_ID` first). Operator view: `GET /__operator/referral.json`. The
+  `{"action":"clear-short","slug":"<slug>","note":"what was checked"}`; a slug paid under its stop
+  floor (`REFERRAL_MIN_NET_BPS`, else half the expected net) once for a model-backed tool,
+  `REFERRAL_SHORT_NET_MAX` times for another, answers 503 until then. With contradicted entries
+  from three payers and no proven sale since, the route lets one payment at a time through as a
+  probe and answers 503 to the rest: a probe that proves reopens it by itself; if probes keep
+  being contradicted, check `REFERRAL_MERCHANT_ID` and resolve the entries. The word's
+  `noProductId` lists slugs not bound to a product id (`REFERRAL_PRODUCT_IDS`); an open entry
+  routed to us for another product stays for the operator. Operator view: `GET /__operator/referral.json`. The
   word `referralSettlement` on `/api/gateway-status` (only while the gate is mounted) reads
   attention on the conditions `.claude/rules/payments.md` lists; the status Worker and
   `heartbeat.yml` page on it (`scripts/test-referral-gate.js`, `scripts/test-status-word-pagers.js`).
