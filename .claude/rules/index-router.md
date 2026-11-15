@@ -18,6 +18,7 @@ paths:
   - "src/shared-paytos.js"
   - "src/external-spend-guard.js"
   - "src/router-spend-window.js"
+  - "src/upstream-buyer-status.js"
 ---
 
 # Seller index, router and route-execute
@@ -131,6 +132,16 @@ Loaded when an index, discovery, router or buyer file is read.
   else `UPSTREAM_BUYER_LOW_USD`), one word per chain under `upstreamBuyerEvm` on
   `/api/gateway-status` ("off" with none enabled). The unproven tier stays Base only. Off Base no
   buyer payment settles back into the spending wallet, so each chain's balance is funded by hand.
+- **Spending wallet trend:** `upstreamBuyer.trend` on `/api/gateway-status` reads `draining` after
+  `UPSTREAM_BUYER_DROP_READS` (default 3) consecutive reads more than `UPSTREAM_BUYER_DROP_TOLERANCE_USD`
+  (default 0.5) under the Base wallet's high-water mark (`src/upstream-buyer-status.js`). The mark,
+  the count and the last acknowledgement are one state document (`upstream-buyer-trend`; without a
+  state database the file `UPSTREAM_BUYER_TREND_FILE`, else process memory), so a restart neither
+  forgets a drain nor reopens an explained one. An operator who withdrew sends
+  `POST /__operator/upstream-buyer/acknowledge` (X-Operator-Token only): the mark is re-baselined to
+  the current balance (or the next readable read), the next read is fresh and `ok`, and the
+  heartbeat closes its issue; 503 when the store did not take it. Words only, never a figure
+  (`scripts/test-buyer-balance-trend.js`).
 - **Router evidence:** `src/evidence-binding.js` keeps settlement evidence per wallet;
   `src/seller-funding.js` nets payments made with USDC the paid wallet itself sent the payer
   (each payer's history read once when it first pays, then incremental; state on `/data`);

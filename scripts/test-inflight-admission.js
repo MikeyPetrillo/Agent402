@@ -526,6 +526,32 @@ for (const expensive of [false, true]) {
   for (const x of [X, Y]) x.release?.();
 }
 
+// ---- a read that already shows a settlement, whose follow-up read is slow, waits for that read ----
+// The wallet holds two prices. A settles while B's read is under way, and the
+// read answers with the balance after it (one price): A's amount is then
+// taken off a read that already reflects it, so B is undecided on nothing in
+// flight. The follow-up read is given its own time (the read timeout) instead
+// of the admission wait, and B is admitted on it: one run each, both settle.
+// (The mirror case above, a wallet of one price, is still refused.)
+for (const readMs of [600, 450]) {
+  fresh();
+  let balance = 2n * PRICE, reads = 0;
+  _setBalanceReaderForTest(async () => { reads++; await sleep(readMs); return balance; });
+  const who = W(readMs === 600 ? 0xe5 : 0xe6);
+  const A = await admit(who);
+  A.release.settling();
+  const t0 = Date.now();
+  const pB = admit(who);
+  await sleep(100);
+  balance -= PRICE; A.release.settled(); // A's payment is off the wallet while B's read is under way
+  const B = await pB;
+  const took = Date.now() - t0;
+  ok(typeof B.release === "function" && coveredRunStateOf(B.req) === "covered" && reads === 2, `a wallet of two prices, ${readMs} ms reads: the call judged across the other's settlement is admitted on the follow-up read (${B.err ? B.err.statusCode + " " + B.err.coverRefusal : "admitted"}, ${reads} reads, ${took} ms)`);
+  ok(took < 1000 + 2500, `... inside the read timeout past the admission wait (${took} ms)`);
+  if (B.release) { B.release.settling(); balance -= PRICE; B.release.settled(); }
+  ok(balance === 0n && inflightCoverStatus().runsInFlight === 0, "one run each, both settled, nothing left in flight");
+}
+
 // ---- a settlement that lands after a request arrived: verify's proof no longer stands ----
 {
   fresh();
@@ -616,6 +642,45 @@ for (const expensive of [false, true]) {
   const r0 = reads;
   for (let i = 0; i < 300; i++) { const who = "0x" + (0x2000000 + i).toString(16).padStart(40, "0"); const y = await admit(who); y.release.settling(); y.release.settled(); }
   ok(reads - r0 <= 3 && inflightCoverStatus().backgroundReadsSkipped >= 295, `300 wallets settling while reads fail asked for ${reads - r0} reads in all (${inflightCoverStatus().backgroundReadsSkipped} held back)`);
+}
+
+// ---- an account with no balance source never backs off its network's background reads ----
+// A Stellar contract account (C...) has no balance this server can read: its
+// failed read is its own state, so it must not hold back the read taken after
+// another account's settlement on the same network. Both failure shapes: a
+// reader that answers no balance, and one that throws.
+{
+  const sdk = await import("@stellar/stellar-sdk");
+  const SAC = sdk.StrKey.encodeContract(Buffer.alloc(32, 0x5a));
+  const PAYTO = sdk.Keypair.random().publicKey();
+  let sn = 0;
+  const stellarReq = (from) => {
+    const args = [new sdk.Address(from).toScVal(), new sdk.Address(PAYTO).toScVal(), sdk.nativeToScVal(PRICE, { type: "i128" })];
+    const b = new sdk.TransactionBuilder(new sdk.Account(sdk.Keypair.random().publicKey(), String(++sn)), { fee: "100", networkPassphrase: sdk.Networks.PUBLIC });
+    b.addOperation(sdk.Operation.invokeContractFunction({ contract: SAC, function: "transfer", args }));
+    return reqFor(b64({ x402Version: 2, accepted: { scheme: "exact", network: "stellar:pubnet", asset: SAC, amount: String(PRICE), payTo: PAYTO }, payload: { transaction: b.setTimeout(300).build().toXDR() } }));
+  };
+  for (const shape of ["no balance", "a throw"]) {
+    fresh();
+    const contract = sdk.StrKey.encodeContract(Buffer.alloc(32, shape === "a throw" ? 0x31 : 0x32));
+    const account = sdk.Keypair.random().publicKey();
+    const asked = [];
+    _setBalanceReaderForTest(async (t) => { asked.push(t.payer); if (t.payer.startsWith("C")) { if (shape === "a throw") throw new Error("no source"); return null; } return PRICE * 100n; });
+    const cReq = stellarReq(contract);
+    const terms = await coverTermsOfRequest(cReq);
+    ok(terms?.rail === "stellar" && terms.payer === contract, `${shape}: a contract account's Stellar payment has cover terms (${terms?.rail} ${terms?.payer?.slice(0, 4)})`);
+    const c = await admitCoveredRun(cReq);
+    c.settling(); c.settled(); // its read taken after the settlement fails: that account has no source
+    await sleep(20);
+    const s0 = inflightCoverStatus();
+    ok(asked.includes(contract) && s0.backgroundReads === 1, `${shape}: the contract account's background read was asked for and failed (${s0.backgroundReads} asked)`);
+    const gReq = stellarReq(account);
+    const g = await admitCoveredRun(gReq);
+    g.settling(); g.settled();
+    await sleep(20);
+    const s1 = inflightCoverStatus();
+    ok(asked.includes(account) && s1.backgroundReads === 2 && s1.backgroundReadsSkipped === 0, `${shape}: another account on the same network still gets its background read: the no-source failure set no back-off (${s1.backgroundReads} asked, ${s1.backgroundReadsSkipped} held back)`);
+  }
 }
 
 // ---- while an account's reads are down, an admission waits for a read only a moment ----

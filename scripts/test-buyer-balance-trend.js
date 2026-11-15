@@ -10,6 +10,10 @@
 // tell that from a drain would page on every healthy call.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { noteBuyerBalance, upstreamBuyerStatus } from "../src/upstream-buyer-status.js";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { bootServer } from "./lib/boot-server.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -83,6 +87,91 @@ const fresh = (v) => noteBuyerBalance(v, { reset: true });
   const st = await upstreamBuyerStatus();
   ok(st.configured === false && st.status === "unconfigured" && st.attests === "balance-only", "keyless upstreamBuyerStatus is unconfigured and says it attests the balance only");
   if (saved !== undefined) process.env.X402_UPSTREAM_BUYER_KEY = saved;
+}
+
+// The trend state is stored (src/json-document.js: the state database, else
+// UPSTREAM_BUYER_TREND_FILE), so a restart carries both a real drain and an
+// operator's acknowledgement. A "restart" is a fresh instance of the module
+// reading the same store.
+{
+  const dir = mkdtempSync(join(tmpdir(), "buyer-trend-"));
+  const savedKey = process.env.X402_UPSTREAM_BUYER_KEY, savedFile = process.env.UPSTREAM_BUYER_TREND_FILE;
+  process.env.X402_UPSTREAM_BUYER_KEY = "0x" + "11".repeat(32);
+  let gen = 0;
+  const instance = async (file, balanceOf) => {
+    process.env.UPSTREAM_BUYER_TREND_FILE = file;
+    const m = await import(`../src/upstream-buyer-status.js?restart=${++gen}`);
+    readers.set(m, async () => balanceOf());
+    return m;
+  };
+  const readers = new Map();
+  // Each status read is a fresh read: setting the reader drops the 5-minute cache.
+  const read = async (m) => { m.__setBuyerBalanceReaderForTest(readers.get(m)); return (await m.upstreamBuyerStatus()).trend; };
+  try {
+    // A withdrawal: 50 -> 23.75 for three reads is draining; acknowledged, the next read is ok.
+    const fileA = join(dir, "a.json");
+    let bal = 50;
+    let m = await instance(fileA, () => bal);
+    ok(await read(m) === "ok", "stored: the first read baselines");
+    bal = 23.75;
+    const words = [];
+    for (let i = 0; i < 3; i++) words.push(await read(m));
+    ok(words.join() === "ok,ok,draining", `stored: a fall past the tolerance for three reads reads draining (${words})`);
+    const ack = await m.acknowledgeBuyerTrend({ now: Date.parse("2026-11-15T12:00:00Z") });
+    ok(ack.configured && ack.baseline === "current" && ack.stored === "file" && ack.acknowledgedAt === "2026-11-15T12:00:00.000Z" && !("balance" in ack) && !JSON.stringify(ack).includes("23.75"),
+      `acknowledge re-baselines to the current balance, records when, and names no figure (${JSON.stringify(ack)})`);
+    ok((await m.upstreamBuyerStatus()).trend === "ok", "acknowledged: the very next status read is fresh and reads ok (the 5-minute cache was dropped)");
+    // Restart: a new module instance reading the same store.
+    m = await instance(fileA, () => bal);
+    ok(await read(m) === "ok", "acknowledged: still ok after a restart (the baseline was stored, not only held in memory)");
+    ok([await read(m), await read(m), await read(m)].every((w) => w === "ok"), "and stays ok on later reads at the acknowledged balance");
+    // A real drain survives a restart: two reads below, restart, the third reads draining.
+    const fileB = join(dir, "b.json");
+    let b = 40;
+    let d = await instance(fileB, () => b);
+    await read(d);
+    b = 30;
+    ok(await read(d) === "ok" && await read(d) === "ok", "drain: two reads below the mark are not yet an alarm");
+    d = await instance(fileB, () => b);
+    ok(await read(d) === "draining", "drain: the third read below, after a restart, reads draining (the count was stored)");
+    d = await instance(fileB, () => b);
+    ok(await read(d) === "draining", "drain: and a second restart does not forget it");
+    // With no store configured the trend lives in memory, as before.
+    const mem = await instance("", () => 10);
+    ok(await read(mem) === "ok" && !existsSync(join(dir, "c.json")), "no store configured: the trend is kept in process memory");
+    // An unreadable balance at acknowledgement baselines at the next readable read.
+    const fileC = join(dir, "c.json");
+    let c = 9;
+    const u = await instance(fileC, () => c);
+    await read(u); c = 3; await read(u); await read(u);
+    ok(await read(u) === "draining", "unreadable-at-ack setup: draining");
+    u.__setBuyerBalanceReaderForTest(async () => null);
+    const ack2 = await u.acknowledgeBuyerTrend();
+    ok(ack2.baseline === "next-read" && ack2.stored === "file", `an acknowledgement with the balance unreadable baselines at the next read (${JSON.stringify(ack2)})`);
+    ok(await read(u) === "ok", "and that next read reads ok");
+  } finally {
+    if (savedKey === undefined) delete process.env.X402_UPSTREAM_BUYER_KEY; else process.env.X402_UPSTREAM_BUYER_KEY = savedKey;
+    if (savedFile === undefined) delete process.env.UPSTREAM_BUYER_TREND_FILE; else process.env.UPSTREAM_BUYER_TREND_FILE = savedFile;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// The operator route: registered on the app, header token only. No buyer key
+// on this boot, so the authorized call answers 409 and reads no balance (no
+// outbound read); without the token, or with it in Authorization, 404.
+{
+  const TOKEN = "buyer-trend-operator-token-" + process.pid;
+  const srv = await bootServer({ env: { FREE_MODE: "true", AGENT402_OPERATOR_TOKEN: TOKEN, X402_UPSTREAM_BUYER_KEY: "" }, stores: "buyer-trend" });
+  try {
+    const url = `${srv.url}/__operator/upstream-buyer/acknowledge`;
+    const none = await fetch(url, { method: "POST" });
+    const bearer = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${TOKEN}` } });
+    const header = await fetch(url, { method: "POST", headers: { "X-Operator-Token": TOKEN } });
+    const hb = await header.json().catch(() => null);
+    ok(none.status === 404, `acknowledge without the token answers 404 (${none.status})`);
+    ok(bearer.status === 404, `acknowledge with the token in Authorization answers 404: header token only (${bearer.status})`);
+    ok(header.status === 409 && hb?.status === "unconfigured" && /no-store/.test(header.headers.get("cache-control") || ""), `acknowledge with X-Operator-Token reaches the handler (${header.status} ${JSON.stringify(hb)})`);
+  } finally { await srv.stop(); }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

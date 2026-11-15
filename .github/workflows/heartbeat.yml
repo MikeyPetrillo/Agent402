@@ -2185,8 +2185,11 @@ jobs:
       # spend, so barring a manual withdrawal the balance only rises. A
       # low-water alarm fires after the money is gone; this fires on the first
       # unexplained dollar. A withdrawal trips it too, deliberately: the alarm's
-      # job is to say "this wallet fell and nobody told me", and a human who
-      # withdrew can close the issue in one click.
+      # job is to say "this wallet fell and nobody told me". The operator who
+      # withdrew acknowledges it (POST /__operator/upstream-buyer/acknowledge),
+      # which re-baselines the stored high-water mark, so the next read is ok
+      # and the issue closes here; closing the issue by hand does not, since
+      # the trend still reads draining and the next run opens it again.
       - name: Upstream buyer wallet trend (a self-funding wallet that FALLS is unexplained)
         if: always()
         continue-on-error: true
@@ -2197,21 +2200,30 @@ jobs:
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$TREND" = "draining" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The x402 upstream spending wallet has fallen below its high-water mark across several consecutive reads.
+              # Single-quoted heredoc: the curl line below is text for the
+              # reader, and $AGENT402_OPERATOR_TOKEN is never expanded here.
+              read -r -d '' BODY <<'EOF_BODY' || true
+          The x402 upstream spending wallet has fallen below its high-water mark across several consecutive reads.
 
           The route-execute tiers are SELF-FUNDING: they settle into this wallet and each charges more than it can spend, so their traffic can only raise the balance. A sustained fall means one of:
 
-          1. A manual withdrawal - close this issue if that was you.
+          1. A manual withdrawal. If that was you, acknowledge it: this re-baselines the stored high-water mark to the current balance, the next read is ok, and the next heartbeat run closes this issue. Closing the issue by hand does not clear the alarm; the next run opens it again.
+
+             curl -s -X POST -H "X-Operator-Token: $AGENT402_OPERATOR_TOKEN" https://agent402.tools/__operator/upstream-buyer/acknowledge
+
+             Export the token from your own secret store first; never paste it into this issue. The answer names when it was acknowledged and whether the state store kept it (a 503 means it did not: send it again).
           2. seller-payability or attest, which spend from this wallet without settling into it (seller-payability probes external sellers; attest pays Base gas in ETH). A slow trickle from those is expected and sits inside the tolerance; a sustained fall is not.
           3. Upstream spend whose revenue never arrived: a buyer's payment verified and then failed to settle, which is the drain the per-payer ceiling in src/external-spend-guard.js bounds. Check /__operator/stats and the route-execute receipts.
-          4. Something we do not understand, which is why this alarm exists.
+          4. Something we do not understand, which is why this alarm exists. Do not acknowledge a fall you cannot explain.
 
-          Balances are deliberately not published on /api/gateway-status; read the wallet directly to see the number."
+          Balances are deliberately not published on /api/gateway-status; read the wallet directly to see the number.
+          EOF_BODY
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still falling at $(date -u +%FT%TZ)."
             fi
           elif [ "$TREND" = "ok" ] && [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the wallet set a new high-water mark at $(date -u +%FT%TZ)."
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: the trend reads ok at $(date -u +%FT%TZ) (a new high-water mark, or an operator acknowledged the fall)."
           fi
 
       # Settlement freshness — the alarm that did not exist on 2026-08-07.

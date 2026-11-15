@@ -31,6 +31,7 @@ import { marked, headingId, MARKDOWN_INLINE_MAX_CHARS, markdownLooksCostly } fro
 import { runMarkdown, markdownPoolState, markdownPoolEvents, RENDER_DEADLINE_MS, ORDINARY_BUDGET_MS, ORDINARY_QUEUE_MAX, ORDINARY_CALLER_MAX, COSTLY_AHEAD_MAX, COSTLY_WAIT_MAX_MS } from "../src/tools/markdown-pool.js";
 import { headingId as guidesHeadingId } from "../src/guides.js";
 import { sentenceEnds, countSentenceEnds, splitOnSentenceEnds } from "../src/tools/sentence-ends.js";
+import { bound, oursMs, OURS_READING } from "./lib/ours-clock.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
@@ -255,14 +256,32 @@ function rng(seed) {
   // A ref cycle reached along many paths: a 2,000-ref cycle and 1,500 keys
   // that reference its head (about 94 KB), and the same through one wrapper
   // ref per key. Nothing inside a cycle is reusable from inside it, so the
-  // walk's steps are capped: refused with a 400 naming the cap, inside the
-  // free tier's CPU bound.
+  // walk's steps are capped: refused with a 400 naming the cap. The step
+  // count is the protection and is asserted exactly (the message names the
+  // cap); the time it takes to spend those steps depends on the runner, so it
+  // is read on the ours clock (least of three) against a bound scaled by a
+  // same-process baseline job: a runner twice as slow gets twice the room,
+  // while a step made several times dearer still fails.
   {
     const { RESOLVE_REFS_MAX_STEPS } = await import("../src/tools/api-kit.js");
+    const stepBound = bound(BOUND_MS, 60);
+    const leastOursAsync = async (fn) => {
+      let ms = Infinity, err;
+      for (let k = 0; k < 3; k++) {
+        const t0 = oursMs();
+        try { await fn(); err = undefined; } catch (e) { err = e; }
+        const took = oursMs() - t0;
+        ms = Math.min(ms, took);
+        if (ms < stepBound.ms / 2 || took > stepBound.ms * 4) break;
+      }
+      return { ms, err };
+    };
     const cycleKeys = (L, N, wrap) => { const s = { c: {}, w: {} }; for (let i = 0; i < L; i++) s.c["s" + i] = { $ref: "#/c/s" + ((i + 1) % L) }; for (let i = 0; i < N; i++) { if (wrap) { s.w["w" + i] = { $ref: "#/c/s0" }; s["k" + i] = { $ref: "#/w/w" + i }; } else s["k" + i] = { $ref: "#/c/s0" }; } return s; };
     for (const [label, spec] of [["1,500 keys", cycleKeys(2000, 1500, false)], ["1,000 wrapped keys", cycleKeys(2000, 1000, true)]]) {
-      const r = await bestOf(() => tool.handler({ spec }));
-      ok(Number.isFinite(RESOLVE_REFS_MAX_STEPS) && r.err?.statusCode === 400 && /steps/.test(r.err.message) && /in parts/.test(r.err.message) && r.ms < BOUND_MS, `resolve-refs: a ${JSON.stringify(spec).length}-byte spec of ${label} into a 2,000-ref cycle is refused with a 400 in ${r.ms.toFixed(0)}ms of CPU (${r.err?.statusCode || "answered"} ${String(r.err?.message || "").slice(0, 60)})`);
+      const r = await leastOursAsync(() => tool.handler({ spec }));
+      const capText = `more than ${RESOLVE_REFS_MAX_STEPS.toLocaleString("en-US")} steps`;
+      ok(RESOLVE_REFS_MAX_STEPS === 1_500_000 && r.err?.statusCode === 400 && r.err.message.includes(capText) && /in parts/.test(r.err.message), `resolve-refs: a ${JSON.stringify(spec).length}-byte spec of ${label} into a 2,000-ref cycle is refused with a 400 at the ${RESOLVE_REFS_MAX_STEPS}-step cap (${r.err?.statusCode || "answered"} ${String(r.err?.message || "").slice(0, 60)})`);
+      ok(r.ms < stepBound.ms, `resolve-refs: that refusal takes ${r.ms.toFixed(0)}ms (${OURS_READING}), ${stepBound.note}`);
     }
     // A cycle met with no ref in progress resolves the same way each time, so
     // it is resolved once and reused: 1,500 keys referencing the head of a
