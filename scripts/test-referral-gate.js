@@ -44,7 +44,8 @@ const gateMod = await import("../src/referral-gate.js");
 const { referralConfig, referralConfigProblem, referralRoutes, referralIneligibility, referralSlugOfPath, isCanonicalReferralPath, createReferralGate, referralNet, baseUnitsOf, checkReferralPayment, parseCommissionBps, commissionBpsFor, isLocalReceiveSignature, createLineSampler, REFERRAL_ASSET, REFERRAL_NETWORK, REFERRAL_REASONS } = gateMod;
 const { createReferralSettler, referralRequestDigest } = await import("../src/referral-settle.js");
 const { createReferralChainReader, chainVerdict, receiptProvesPayment, proveReceipt } = await import("../src/referral-chain.js");
-const { createReferralBook } = await import("../src/referral-book.js");
+const bookMod = await import("../src/referral-book.js");
+const { createReferralBook } = bookMod;
 const { createReferralAnswerStore } = await import("../src/referral-answers.js");
 const { createJsonDocument } = await import("../src/json-document.js");
 const { createReplayGuard } = await import("../src/replay-guard.js");
@@ -3628,6 +3629,145 @@ try {
         ok(wasOpen === "in-doubt" && b.get(kIdle) === null && !owed.some((o) => o.payer === idle.p.authorization.from.toLowerCase()), `one that never lands is closed once its authorization can no longer be sent (${wasOpen} -> ${b.get(kIdle) ? b.get(kIdle).state : "closed"})`);
         skew.ms -= 20 * 60_000;
       } finally { fac.mode.rpcDown = false; await app.close(); }
+    }
+  }
+
+  // ===========================================================================
+  // Round 10: the book under load, two processes on one book, a store that is down
+  // ===========================================================================
+  fac.reset(); sales.length = 0; owed.length = 0;
+  {
+    const { SKIP_UPDATE } = await import("../src/json-document.js");
+    // A document under compare-and-swap, as the state database gives it: a
+    // write stands only on the version that was read; a loser reads again.
+    const casDoc = () => {
+      const st = { body: null, version: 0, attempts: 0, writes: 0, down: false, stall: false };
+      return {
+        st,
+        loadSync: () => st.body,
+        load: async () => st.body,
+        async update(mutate, { fallback = null, retries = 12 } = {}) {
+          for (let a = 0; a <= retries; a++) {
+            if (st.stall) await new Promise(() => {});
+            if (st.down) return { ok: false, error: "store down" };
+            st.attempts++;
+            const v = st.version;
+            const base = structuredClone(st.body ?? fallback);
+            await wait(1);
+            const out = mutate(base);
+            if (out === SKIP_UPDATE) return { ok: true, body: st.body ?? fallback, changed: false };
+            const next = out === undefined ? base : out;
+            await wait(2);
+            if (st.down) return { ok: false, error: "store down" };
+            if (st.version === v) { st.version++; st.body = next; st.writes++; return { ok: true, body: next, changed: true }; }
+          }
+          return { ok: false, error: "update conflict: retries exhausted" };
+        },
+      };
+    };
+    const intentOf = (i, extra = {}) => ({ key: `referral:r10-${i}`, slug: "echo", payer: `0x${String(i).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore: Math.floor(Date.now() / 1000) + 600, ...extra });
+    // P1. This process's writers never race each other: changes asked for together are one write.
+    {
+      const doc = casDoc();
+      const b = createReferralBook({ doc, log });
+      const results = await Promise.all(Array.from({ length: 60 }, (_, i) => b.intent(intentOf(i))));
+      const w = b.writeStats();
+      ok(results.every((x) => x === true) && b.list().length === 60 && doc.st.attempts === doc.st.writes && w.failed === 0 && w.updates <= 4 && w.changes === 60, `60 changes asked for at once are all stored, with no write refused and no write made twice: ${w.updates} writes carried ${w.changes} changes (${doc.st.attempts} attempts for ${doc.st.writes} writes)`);
+      // Each caller still gets its own answer: a change that does not apply answers for itself only.
+      const mixed = await Promise.all([b.resolve("referral:r10-0", { note: "a" }), b.resolve("referral:r10-missing", { note: "b" }), b.resolve("referral:r10-1", { state: "in-doubt" }, { unless: (c) => c.state === "intent" }), b.resolve("referral:r10-2", null)]);
+      ok(mixed.join() === "true,false,false,true" && b.get("referral:r10-0").note === "a" && b.get("referral:r10-1").state === "intent" && b.get("referral:r10-2") === null, `changes written together each answer for themselves: applied, no such entry, refused by its own condition on the stored entry, removed (${mixed.join()})`);
+      // The sweep's "read, nothing changed" marks are one write a pass.
+      for (let i = 3; i < 33; i++) await b.resolve(`referral:r10-${i}`, { state: "in-doubt" });
+      const before = b.writeStats().updates;
+      const pass = await b.sweep({ chain: { state: async () => ({ used: null, paid: null, transaction: null, complete: false }) }, bookSale: async () => false, payTo: PAY_TO });
+      const after = b.writeStats().updates;
+      ok(pass.read === 30 && pass.unknown === 30 && after - before === 1 && b.list().filter((e) => e.checks === 1 && e.checkedAt).length === 30, `a sweep pass that reads 30 open entries and changes none writes the book once for their check marks, not 30 times (${after - before} write)`);
+      // P5. Charged, undelivered entries: at most the bound a pass, the oldest first; none in a request's hands.
+      const doc2 = casDoc();
+      const b2 = createReferralBook({ doc: doc2, log, maxEntries: 500 });
+      await Promise.all(Array.from({ length: 62 }, (_, i) => b2.intent(intentOf(1000 + i))));
+      await Promise.all(Array.from({ length: 62 }, (_, i) => b2.resolve(`referral:r10-${1000 + i}`, { state: "charged-undelivered", tx: "0x" + String(i).padStart(64, "0"), landedAt: 1_000 + i, ...(i === 0 ? { inCallUntil: Date.now() + 60_000 } : {}) })));
+      const handed = [];
+      const pass2 = await b2.sweep({ chain: { state: async () => ({}) }, bookSale: async () => false, payTo: PAY_TO, onCharged: async (e) => { handed.push(e.key); } });
+      ok(bookMod.SWEEP_CHARGED_MAX === 50 && handed.length === 50 && pass2.charged === 50 && pass2.chargedLeft === 11 && !handed.includes("referral:r10-1000") && handed[0] === "referral:r10-1001" && handed[49] === "referral:r10-1050", `the sweep hands on at most ${bookMod.SWEEP_CHARGED_MAX} charged, undelivered entries a pass, the ones charged longest ago first, and never one a request settled moments ago (${handed.length} handed, ${pass2.chargedLeft} left)`);
+    }
+    // P2. Two processes on one book: an answer is delivered or owed back, never both.
+    {
+      const doc = createJsonDocument({ name: `referral-test-${process.pid}-r10-two`, log: () => {} });
+      const bookA = createReferralBook({ doc, log, now: () => Date.now() + skew.ms }), bookB = createReferralBook({ doc, log, now: () => Date.now() + skew.ms });
+      const A = await mount({}, { book: bookA }), B = await mount({}, { book: bookB });
+      try {
+        // A settles and is about to send; B's sweep runs in between.
+        const p = await signPayment(accept, { account: newAccount() });
+        const key = gateMod.referralReplayKey(p.authorization);
+        let sweptMidCall = null;
+        fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
+        const origResolve = bookA.resolve.bind(bookA);
+        bookA.resolve = async (k, patch, opts) => {
+          const r = await origResolve(k, patch, opts);
+          // Right after A records the charge, and before its delivered mark: B sweeps.
+          if (k === key && patch && patch.state === "charged-undelivered" && patch.landedAt && sweptMidCall === null) { sweptMidCall = owed.length; await B.gate.sweepOnce(); sweptMidCall = owed.length - sweptMidCall; }
+          return r;
+        };
+        const served = await send(`${A.url}/ref/echo`, { body: { text: "two" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+        bookA.resolve = origResolve;
+        await B.gate.sweepOnce();
+        ok(served.status === 200 && served.json.echo === "two" && sweptMidCall === 0 && owed.length === 0, `a second process's sweep that sees a payment the first is about to deliver writes no refund for it (answer ${served.status}; ${owed.length} refund rows)`);
+        // B's memory holds a charged, undelivered entry; A has since delivered it. B's debt is decided on the store's copy.
+        const p2 = await signPayment(accept, { account: newAccount() });
+        const k2 = gateMod.referralReplayKey(p2.authorization);
+        const tx2 = fac.land(p2.authorization, fac.nextTx());
+        await bookA.intent({ key: k2, slug: "echo", payer: p2.authorization.from, nonce: p2.authorization.nonce, amount: "30000", validBefore: Number(p2.authorization.validBefore) });
+        await bookA.resolve(k2, { state: "charged-undelivered", tx: tx2, landedAt: Date.now() - 120_000 });
+        await bookB.sweep({ chain: { state: async () => ({}) }, bookSale: async () => false, payTo: PAY_TO }); // B reads the store: its memory now holds the entry
+        await bookA.resolve(k2, { delivered: true, deliveredAt: Date.now(), sendingUntil: Date.now() + 30_000 }); // A delivers; B's memory is stale
+        const stale = bookB.get(k2);
+        const byHand = await B.gate.resolveByHand(k2, { note: "buyer wrote in", outcome: "refund" });
+        ok(stale?.delivered !== true && byHand.ok === false && /changed|delivered/.test(byHand.error) && owed.length === 0 && B.gate.stats().debtClaimLost === 1, `a debt is decided on the entry as the STORE has it: one delivered by the other process meanwhile gets no refund row, whatever this process's memory says (${byHand.error}; ${owed.length} rows)`);
+        // The other way round: B has recorded the payment as owed back; A, which still holds the answer, does not also send it.
+        const c3 = await signPayment(accept, { account: newAccount() });
+        const k3 = gateMod.referralReplayKey(c3.authorization);
+        fac.mode.settle = () => ({ status: 500, body: {} });
+        const first = await send(`${A.url}/ref/echo`, { body: { text: "three" }, headers: { "payment-signature": c3.header, "x-test-ip": freshIp() } });
+        const tx3 = fac.land(c3.authorization, fac.nextTx());
+        await bookB.sweep({ chain: { state: async () => ({ used: true, paid: true, transaction: tx3, complete: true, net: "26298" }) }, bookSale: async () => true, payTo: PAY_TO });
+        const owedB = await B.gate.resolveByHand(k3, { note: "buyer wrote in: no answer", outcome: "refund" });
+        const again = await send(`${A.url}/ref/echo`, { body: { text: "three" }, headers: { "payment-signature": c3.header, "x-test-ip": freshIp() } });
+        ok(first.status === 402 && owedB.ok === true && owed.filter((o) => o.tx === tx3).length === 1 && again.status === 409 && again.json?.errorReason === "answer_unavailable_refund_owed" && again.json.transaction === tx3 && !("echo" in again.json) && A.gate.stats().deliveryLostToDebt === 1, `a payment the other process has recorded as owed back is not also delivered by the process that still holds its answer (${again.status} ${again.json?.errorReason}; ${owed.filter((o) => o.tx === tx3).length} row)`);
+      } finally { await A.close(); await B.close(); }
+    }
+    fac.reset(); sales.length = 0; owed.length = 0;
+    // P3. A store that does not take writes gives away one tool run, not one per call.
+    {
+      const doc = casDoc();
+      const b = createReferralBook({ doc, log, now: () => Date.now() + skew.ms });
+      const app = await mount({ REFERRAL_STORE_COOLDOWN_MS: "400", REFERRAL_STORE_WRITE_MS: "300" }, { book: b });
+      try {
+        fac.mode.settle = (c) => ({ status: 200, body: { success: true, transaction: fac.land(c.json.paymentPayload.payload.authorization, fac.nextTx()), network: REFERRAL_NETWORK } });
+        const pay = async () => { const p = await signPayment(accept, { account: newAccount() }); const t0 = Date.now(); const r = await send(`${app.url}/ref/echo`, { body: { text: "store" }, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } }); return { status: r.status, reason: r.json?.errorReason, ms: Date.now() - t0, retry: r.headers.get("retry-after") }; };
+        const fine = await pay();
+        const ran0 = runs.echo;
+        doc.st.down = true;
+        const first = await pay();
+        const ran1 = runs.echo;
+        const next = [await pay(), await pay(), await pay()];
+        const ran2 = runs.echo;
+        ok(fine.status === 200 && first.status === 503 && first.reason === "settlement_store_unavailable" && ran1 === ran0 + 1 && next.every((x) => x.status === 503 && x.reason === "settlement_store_down" && Number(x.retry) >= 1) && ran2 === ran1 && fac.of("/settle").length === 1 && app.gate.stats().storeHeld === 3, `after an intent the store did not take, the next paid calls are answered 503 before anything runs: one tool run given away, not one per call (${first.status} ${first.reason}; then ${next.map((x) => `${x.status} ${x.reason}`).join(", ")}; ${ran2 - ran0} run)`);
+        // After the cool-down one call makes one small write first; while the store is down it runs nothing.
+        await wait(450);
+        const probe = await pay();
+        const ran3 = runs.echo;
+        doc.st.down = false;
+        const held = await pay();
+        await wait(450);
+        const back = await pay();
+        ok(probe.status === 503 && probe.reason === "settlement_store_down" && ran3 === ran2 && held.status === 503 && back.status === 200 && runs.echo === ran3 + 1 && logLines.some((l) => /the settlement store takes writes again/.test(l)), `after the cool-down one small write is tried before any tool runs: it fails while the store is down (nothing runs), and once it stands paid calls are served (${probe.status}, ${held.status}, then ${back.status} ${back.reason || ""})`);
+        // A store that stalls: the call is answered at the write deadline, not after the store's own timeout.
+        doc.st.stall = true;
+        const stalled = await pay();
+        doc.st.stall = false;
+        ok(stalled.status === 503 && stalled.ms < 2_000 && fac.of("/settle").length === 2, `an intent write that does not answer is given up at its deadline (${stalled.ms} ms), with no settle sent`);
+      } finally { doc.st.down = false; doc.st.stall = false; await app.close(); }
     }
   }
 

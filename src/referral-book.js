@@ -69,6 +69,8 @@ export const PROVEN_MAX = 500;
 /** Booked-payment marks: kept this long, at most this many. */
 export const SOLD_KEEP_MS = 3600_000;
 export const SOLD_MAX = 2000;
+/** Charged, undelivered entries the sweep hands on in one pass (the rest wait for the next). */
+export const SWEEP_CHARGED_MAX = 50;
 /** Full readings of an unrecognized receipt before the entry is closed to the operator record. */
 export const UNRECOGNIZED_READS_MAX = 5;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -131,21 +133,79 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
   const ready = Promise.resolve().then(() => store.load(null)).then((b) => { if (b) absorb(b); }).catch(() => {});
   const say = (level, text) => { try { (log[level] || log.log).call(log, `[referral] ${text}`); } catch { /* a log never breaks a call */ } };
 
-  async function change(fn) {
-    const r = await store.update((body) => {
-      const cur = body && typeof body === "object" && body.entries && typeof body.entries === "object" ? { ...body.entries } : {};
-      const kept = body && typeof body === "object" && Array.isArray(body.forgiven) ? body.forgiven : [];
-      const done = body && typeof body === "object" && Array.isArray(body.resolved) ? body.resolved.slice() : [];
-      const gone = body && typeof body === "object" && Array.isArray(body.retired) ? body.retired.slice() : [];
-      const shut = body && typeof body === "object" && Array.isArray(body.closed) ? body.closed.slice() : [];
-      const under = body && typeof body === "object" && body.short && typeof body.short === "object" && !Array.isArray(body.short) ? { ...body.short } : {};
-      const warm = body && typeof body === "object" && body.proven && typeof body.proven === "object" && !Array.isArray(body.proven) ? { ...body.proven } : {};
-      const marks = body && typeof body === "object" && body.sold && typeof body.sold === "object" && !Array.isArray(body.sold) ? { ...body.sold } : {};
-      const out = fn(cur, kept, done, gone, shut, under, warm, marks);
-      return out === SKIP_UPDATE ? SKIP_UPDATE : { entries: cur, forgiven: Array.isArray(out) ? out : kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX), short: under, proven: warm, sold: marks };
-    }, { fallback: { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {}, proven: {}, sold: {} } });
-    if (r.ok && r.body) absorb(r.body);
-    return !!r.ok;
+  // ONE WRITER AT A TIME per process, and changes asked for together are
+  // written together. Every change of this book is a read-modify-write of one
+  // document under compare-and-swap; two of this process's own writers must
+  // never race each other there (each loser read and wrote the whole document
+  // again, and past the retries a paid call was refused). So changes queue:
+  // the ones waiting when a write starts are applied, in order, to ONE read
+  // of the document and stored by ONE write, and compare-and-swap is left to
+  // arbitrate between processes only. Each caller still learns whether the
+  // store took the write its change was in. A change given a `deadlineMs`
+  // answers false at that deadline: one not yet started is dropped and never
+  // applied; one already in a write may still land (only a change that is
+  // safe to land unanswered is given a deadline: the intent, which the sweep
+  // closes when no settle follows it).
+  let queue = [];
+  let flushing = null;
+  let lastIntentFault = null;
+  const writes = { updates: 0, changes: 0, failed: 0, bytes: 0, lastOk: true, lastAt: 0 };
+  const FALLBACK = { entries: {}, forgiven: [], resolved: [], retired: [], closed: [], short: {}, proven: {}, sold: {} };
+  const applyBatch = (batch) => (body) => {
+    const cur = body && typeof body === "object" && body.entries && typeof body.entries === "object" ? { ...body.entries } : {};
+    let kept = body && typeof body === "object" && Array.isArray(body.forgiven) ? body.forgiven : [];
+    const done = body && typeof body === "object" && Array.isArray(body.resolved) ? body.resolved.slice() : [];
+    const gone = body && typeof body === "object" && Array.isArray(body.retired) ? body.retired.slice() : [];
+    const shut = body && typeof body === "object" && Array.isArray(body.closed) ? body.closed.slice() : [];
+    const under = body && typeof body === "object" && body.short && typeof body.short === "object" && !Array.isArray(body.short) ? { ...body.short } : {};
+    const warm = body && typeof body === "object" && body.proven && typeof body.proven === "object" && !Array.isArray(body.proven) ? { ...body.proven } : {};
+    const marks = body && typeof body === "object" && body.sold && typeof body.sold === "object" && !Array.isArray(body.sold) ? { ...body.sold } : {};
+    let any = false;
+    for (const item of batch) {
+      if (item.dropped) continue;
+      item.started = true;
+      let out;
+      try { out = item.fn(cur, kept, done, gone, shut, under, warm, marks); } catch (e) { item.threw = true; throw e; }
+      if (out === SKIP_UPDATE) continue;
+      any = true;
+      if (Array.isArray(out)) kept = out;
+    }
+    return any ? { entries: cur, forgiven: kept, resolved: done.slice(-RESOLVED_MAX), retired: gone.slice(-RETIRED_MAX), closed: shut.slice(-CLOSED_MAX), short: under, proven: warm, sold: marks } : SKIP_UPDATE;
+  };
+  async function flush() {
+    try {
+      while (queue.length) {
+        const batch = queue;
+        queue = [];
+        let r;
+        try { r = await store.update(applyBatch(batch), { fallback: FALLBACK }); } catch (e) { r = { ok: false, error: String(e?.message || e) }; }
+        // A change that threw fails only itself: the rest of its batch goes back in the queue, in order.
+        if (!r.ok && batch.length > 1 && batch.some((b) => b.threw)) {
+          for (const item of batch.filter((b) => b.threw)) { if (item.timer) clearTimeout(item.timer); item.resolve(false); }
+          queue = [...batch.filter((b) => !b.threw), ...queue];
+          continue;
+        }
+        writes.updates++;
+        writes.changes += batch.length;
+        writes.lastOk = !!r.ok;
+        writes.lastAt = now();
+        if (!r.ok) writes.failed++;
+        if (r.ok && r.changed !== false) { try { writes.bytes += JSON.stringify(r.body ?? null).length; } catch { /* a count only */ } }
+        if (r.ok && r.body) absorb(r.body);
+        for (const item of batch) { if (item.timer) clearTimeout(item.timer); item.resolve(!!r.ok && !item.dropped); }
+      }
+    } finally { flushing = null; if (queue.length) flushing = Promise.resolve().then(flush); }
+  }
+  function change(fn, { deadlineMs = 0 } = {}) {
+    return new Promise((resolve) => {
+      const item = { fn, resolve, dropped: false, started: false, timer: null };
+      if (deadlineMs > 0) {
+        item.timer = setTimeout(() => { if (!item.started) item.dropped = true; resolve(false); }, deadlineMs);
+        item.timer.unref?.();
+      }
+      queue.push(item);
+      if (!flushing) flushing = Promise.resolve().then(flush);
+    });
   }
   return {
     ready,
@@ -156,7 +216,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      * gate then does not call /settle). `fromBlock` is the chain head when the
      * intent was written: the proof of payment is looked for from there.
      */
-    async intent({ key, slug, payer, nonce, amount, validBefore, fromBlock = null }) {
+    async intent({ key, slug, payer, nonce, amount, validBefore, fromBlock = null, deadlineMs = 0 }) {
       const t = now();
       let full = false, payerFull = false, dropped = null;
       const ok = await change((cur, _kept, _done, gone) => {
@@ -172,22 +232,31 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         }
         cur[key] = { ...(prev || {}), key, slug: String(slug), payer: String(payer).toLowerCase(), nonce: String(nonce).toLowerCase(), amount: String(amount), validBefore: Number(validBefore) || 0, at: prev?.at || t, state: "intent", intentAt: t, attempts: (prev?.attempts || 0) + 1, tx: prev?.tx || null, saleBooked: prev?.saleBooked === true, fromBlock: prev?.fromBlock ?? (Number.isSafeInteger(fromBlock) && fromBlock > 0 ? fromBlock : null) };
         return undefined;
-      });
+      }, { deadlineMs });
       if (ok && dropped) say("error", `the settlement book was at capacity (${maxEntries}): the oldest in-doubt entry whose authorization has expired was retired to the operator record (${dropped.slug} payer=${String(dropped.payer).slice(0, 6)} tx=${dropped.tx || "none read"})`);
       if (payerFull) say("error", `one payer holds its whole share of the settlement book (${maxPerPayer} open entries, payer=${String(payer).slice(0, 6)}); its new settlement is refused before /settle until its entries resolve`);
       if (full) say("error", `the settlement book is full (${maxEntries} open entries, none may be retired); a new settlement is refused before /settle until entries resolve`);
+      lastIntentFault = ok ? (full ? "full" : payerFull ? "payer" : null) : "store";
       return ok && !full && !payerFull;
     },
+    /** Why the last intent was not stored: "store" (the store did not take
+     *  the write), "full", "payer" (that payer's share is spent), or null. */
+    intentFault: () => lastIntentFault,
     /** Change an entry (`patch` merged), or remove it (`patch` null).
      *  Resolves true only when the store answered AND the change stands: a
      *  patch on an entry that is not there is false; a removal of one that is
      *  already gone is true. A caller that must know (the delivered mark, a
      *  closing write) reads the result. */
-    async resolve(key, patch) {
+    async resolve(key, patch, { unless = null } = {}) {
       let ran = false, found = false;
       const ok = await change((cur) => {
         ran = true;
+        found = false;
         if (!cur[key]) return SKIP_UPDATE;
+        // `unless(entry)`: the change is not made (and answers false) when the
+        // entry AS THE STORE HAS IT NOW says so: the one place two processes'
+        // decisions about one entry (deliver it, or owe it back) are settled.
+        if (typeof unless === "function" && unless(cur[key]) === true) return SKIP_UPDATE;
         found = true;
         if (patch === null) delete cur[key];
         else cur[key] = { ...cur[key], ...patch, updatedAt: now() };
@@ -342,6 +411,14 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
     },
     forgiven: () => forgiven.slice(),
     get: (key) => entries[key] || null,
+    /** The store's write counters since boot (operator read, tests): updates
+     *  sent, changes they carried, failed updates, bytes written, and whether
+     *  the last one stood. */
+    writeStats: () => ({ ...writes }),
+    /** True when the last write the store was sent stood (true before any). */
+    lastWriteOk: () => writes.lastOk,
+    /** One small write, to learn whether the store takes writes now. */
+    async ping({ deadlineMs = 0 } = {}) { return change(() => undefined, { deadlineMs }); },
     /** The entries, newest first (the operator view). An entry holds no answer and no payment. */
     list: () => Object.values(entries).sort((a, b) => (b.at || 0) - (a.at || 0)).map(({ answer, payment, ...e }) => ({ ...e })),
     size: () => Object.keys(entries).length,
@@ -367,8 +444,14 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
      * in flight in this process. At most `max` entries are read a pass, the
      * ones read least recently first, so every open entry is reached in turn.
      */
-    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, onHeld = () => {}, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50 } = {}) {
+    async sweep({ chain, bookSale, payTo, minNetOf = () => null, productIdOf = () => null, onUnpaid = () => {}, onCharged = async () => {}, onUnrecognized = () => {}, onHeld = () => {}, unrecognizedMax = UNRECOGNIZED_READS_MAX, graceMs = 120_000, max = 50, maxCharged = SWEEP_CHARGED_MAX } = {}) {
       const t = now();
+      // "Read and nothing changed" marks (the check count and time of each
+      // entry read this pass) are written ONCE, at the end of the pass, not
+      // once per entry: a pass over 50 open entries is then one write of the
+      // document for them, not 50.
+      const marks = [];
+      const mark = (key, patch) => { marks.push({ key, patch }); if (entries[key]) entries[key] = { ...entries[key], ...patch }; };
       const out = { read: 0, landed: 0, unpaid: 0, expired: 0, unknown: 0, charged: 0, unrecognized: 0 };
       try { const b = await store.load(null); if (b) absorb(b); } catch { /* the last body read */ }
       const due = Object.values(entries)
@@ -416,7 +499,7 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
           const keep = read && (s.routedToUs === true || e.noAutoClose === true || s.moved === true || (e.unproven === true && e.moved === true));
           if (keep) {
             if (e.routedToUs !== true && s.routedToUs === true) say("error", `a spent authorization's transaction was routed to THIS merchant by the split contract, and the receipt is not one the proof rule accepts (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${String(s.transaction).toLowerCase()}: ${String(s.why || "").slice(0, 120)}); kept open for an operator, never closed by itself`);
-            await this.resolve(e.key, { state: e.state === "intent" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, seenTx: String(s.transaction).toLowerCase(), ...(s.routedToUs === true ? { routedToUs: true } : {}), why: String(s.why || "").slice(0, 160) });
+            mark(e.key, { state: e.state === "intent" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, seenTx: String(s.transaction).toLowerCase(), ...(s.routedToUs === true ? { routedToUs: true } : {}), why: String(s.why || "").slice(0, 160) });
             try { onHeld(e, s); } catch { /* the caller's note only */ }
             continue;
           }
@@ -443,8 +526,21 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
               continue;
             }
           }
-          await this.resolve(e.key, { state: e.state === "intent" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, ...(full ? { unrecognizedReads: reads, seenTx: String(s.transaction).toLowerCase() } : {}) });
+          mark(e.key, { state: e.state === "intent" ? "in-doubt" : e.state, checks: (e.checks || 0) + 1, checkedAt: t, ...(full ? { unrecognizedReads: reads, seenTx: String(s.transaction).toLowerCase() } : {}) });
         }
+      }
+      if (marks.length) {
+        await change((cur) => {
+          let any = false;
+          for (const { key, patch } of marks) {
+            const c = cur[key];
+            // Only an entry still open as it was read: a request may have changed or closed it meanwhile.
+            if (!c || (c.state !== "in-doubt" && c.state !== "intent")) continue;
+            cur[key] = { ...c, ...patch, updatedAt: t };
+            any = true;
+          }
+          return any ? undefined : SKIP_UPDATE;
+        });
       }
       // A refund-owed mark is kept until its authorization can no longer be sent again.
       for (const key of Object.keys(entries)) {
@@ -456,12 +552,18 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
       // again as it stands now. One that carries the delivered mark was
       // served: its closing write did not land, and is made again here; it is
       // never handed on as undelivered.
-      for (const key of Object.keys(entries)) {
+      // At most `maxCharged` a pass, the ones charged longest ago first.
+      const chargedKeys = Object.keys(entries).filter((k) => entries[k] && entries[k].state === "charged-undelivered").sort((a, b) => (entries[a].landedAt || entries[a].at || 0) - (entries[b].landedAt || entries[b].at || 0));
+      for (const key of chargedKeys) {
         const e = entries[key];
         if (!e || e.state !== "charged-undelivered") continue;
         // A send that may still be going out is left to its own end.
         if (e.delivered === true && Number(e.sendingUntil) > t) continue;
         if (e.delivered === true) { await this.resolve(key, null); continue; }
+        // A request (in this process or another one on the same book) settled
+        // it moments ago and is about to send its answer: left to that request.
+        if (Number(e.inCallUntil) > t) continue;
+        if (out.charged >= Math.max(1, maxCharged)) { out.chargedLeft = (out.chargedLeft || 0) + 1; continue; }
         out.charged++;
         try { await onCharged(e); } catch { /* the next pass asks again */ }
       }
