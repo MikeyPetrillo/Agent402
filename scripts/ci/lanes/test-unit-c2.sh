@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (17 scripts, one process each)
+# @step 1: Offline suites (18 scripts, one process each)
 # Boot /supported guard (a dead facilitator costs ONE rail, not every paid route — the 2026-08-01 Celo outage; probe-driven drop, fail-open on total blindness, escape hatch — offline)
 t node scripts/test-supported-guard.js
 # A rail dropped at boot on a failed or slow /supported read is read again on a backoff and rejoins the 402 and every derived surface without a restart

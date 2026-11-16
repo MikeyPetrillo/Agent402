@@ -7,7 +7,7 @@
 // issue line, and the workflow's wiring. Offline: an injected fetch, and one
 // run of the CLI against a loopback stub on port 0. Nothing here pays.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { readFileSync, mkdtempSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
@@ -15,8 +15,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { load } from "js-yaml";
 import {
-  decide, run, issueBody, logLines, catalogRows, missingFromEveryPass, presenceExemption, ISSUE_TITLE,
-  DEFAULT_MAX_ROUTES, DEFAULT_MAX_SPEND_USD, UNREADABLE_PAGE_AFTER,
+  decide, run, issueBody, logLines, catalogRows, missingFromEveryPass, presenceExemption, issueListedKeys, ISSUE_TITLE,
+  DEFAULT_MAX_ROUTES, DEFAULT_MAX_SPEND_USD, UNREADABLE_PAGE_AFTER, PAGE_TIMEOUT_MS, DEFAULT_READ_DEADLINE_MS,
 } from "./bazaar-presence.js";
 import { aboveCeilingRoutes } from "./lib/keepalive-plan.js";
 
@@ -54,7 +54,7 @@ const slugsOf = (list) => list.map((r) => r.slug).sort();
   const d = decide({ reading: reading([without("cheap-a"), without("cheap-a")]), prev: null });
   ok(d.readable && slugsOf(d.buy).join() === "cheap-a", "a route absent from both passes is bought");
   ok(d.action === "none", "the first miss buys and does not page");
-  ok(d.state.missing["/api/cheap-a"] === "bought", "the state remembers the route as bought");
+  ok(d.state.missing["POST /api/cheap-a"] === "bought", "the state remembers the route as bought");
 
   const one = decide({ reading: reading([without("cheap-a"), ALL_PATHS]), prev: null });
   ok(one.buy.length === 0 && one.newlyMissing.length === 0, "a route absent from one pass only is listed: not bought, not missing");
@@ -77,7 +77,7 @@ const slugsOf = (list) => list.map((r) => r.slug).sort();
   ok(why["route-execute-max"] === "route-execute", "a route-execute tier is exempt");
   ok(why["unpriced"] === "unpriced", "an unpriced route is exempt");
   ok(why["report"] === "above the ceiling", "a route the pass above the ceiling buys is exempt here");
-  ok(d.state.missing["/api/report"] === "above the ceiling", "an exempt route is still remembered, so a repeat miss pages");
+  ok(d.state.missing["POST /api/report"] === "above the ceiling", "an exempt route is still remembered, so a repeat miss pages");
   // The tail exemption holds only where the tail pass covers the route.
   const tail = new Set(aboveCeilingRoutes(PRICING).map((r) => r.slug));
   ok(tail.has("report") && !tail.has("route-execute-max"), "control: the tail pass covers the report and not the route-execute tier");
@@ -114,7 +114,7 @@ const slugsOf = (list) => list.map((r) => r.slug).sort();
   const second = decide({ reading: r, prev: first.state });
   ok(second.buy.length === 0, "a route still missing on the next check is not bought again");
   ok(second.action === "open" && second.cause === "missing", "a route still missing on the next check opens the issue");
-  ok(second.state.missing["/api/cheap-a"] === "bought", "the note of the first miss is kept");
+  ok(second.state.missing["POST /api/cheap-a"] === "bought", "the note of the first miss is kept");
   const third = decide({ reading: r, prev: second.state, openIssue: true });
   ok(third.action === "update" && third.buy.length === 0, "a third miss keeps the one issue and buys nothing");
   const back = decide({ reading: reading([ALL_PATHS, ALL_PATHS]), prev: third.state, openIssue: true });
@@ -143,12 +143,62 @@ const slugsOf = (list) => list.map((r) => r.slug).sort();
     s = d.state;
   }
   ok(actions.slice(0, -1).every((a) => a === "none") && actions.at(-1) === "open", `the issue opens only on the ${UNREADABLE_PAGE_AFTER}rd unreadable check in a row (${actions.join(",")})`);
-  ok(s.missing["/api/cheap-a"] === "bought", "an unreadable check keeps the previous missing set");
+  ok(s.missing["POST /api/cheap-a"] === "bought", "an unreadable check keeps the previous missing set");
   ok(decide({ reading: null, prev: s, openIssue: true }).action === "none", "an unreadable check never closes or edits the issue");
   const afterBlind = decide({ reading: reading([without("cheap-a"), without("cheap-a")]), prev: s });
   ok(afterBlind.buy.length === 0 && afterBlind.action === "open", "a route missing before and after unreadable checks is a repeat miss: no rebuy, a page");
   ok(afterBlind.state.unreadable === 0, "a readable check resets the unreadable streak");
-  ok(issueBody(d).includes("could not read") && !DOLLAR_FIGURE.test(issueBody(d)), "the unreadable body says so, with no figure");
+  ok(issueBody(d).includes("could not complete a reading") && !DOLLAR_FIGURE.test(issueBody(d)), "the unreadable body says so, with no figure");
+  ok(!/\bCDP\b|coinbase|availab|outage|\b[45]\d\d\b/i.test(issueBody(d)), "the unreadable body names no listing operator and records no availability");
+}
+
+// --- lost state with an issue open -----------------------------------------------
+{
+  const r = reading([without("cheap-a"), without("cheap-a")]);
+  const first = decide({ reading: r, prev: null });
+  const second = decide({ reading: r, prev: first.state });
+  const listed = issueListedKeys(issueBody(second));
+  ok(listed.has("POST /api/cheap-a") && listed.size === 1, "the open issue's body is read back as the routes it lists");
+  const lost = decide({ reading: r, prev: null, openIssue: true, issueListed: listed });
+  ok(lost.buy.length === 0, "lost state: a route the open issue lists is not bought again");
+  ok(lost.action === "update" && lost.repeat.length === 1, `lost state: the route still missing updates the issue (${lost.action})`);
+  ok(lost.state.missing["POST /api/cheap-a"] === "listed", "lost state: the route is remembered from the issue");
+  const lostOther = decide({ reading: reading([without("cheap-b"), without("cheap-b")]), prev: null, openIssue: true, issueListed: listed });
+  ok(lostOther.action !== "close" && lostOther.action === "none", `lost state: an issue open while a route is missing is never closed (${lostOther.action})`);
+  ok(slugsOf(lostOther.buy).join() === "cheap-b", "lost state: a route the issue does not list is bought once");
+  const lostEmpty = decide({ reading: reading([without("cheap-b"), without("cheap-b")]), prev: null, openIssue: true, issueListed: new Set() });
+  ok(lostEmpty.action === "none", "lost state: an issue listing no route (the unreadable one) is not closed while a route is missing");
+  const unread = decide({ reading: r, prev: null, openIssue: true, issueListed: null });
+  ok(unread.buy.length === 0 && unread.action !== "close", "lost state and an unreadable issue body: nothing bought, nothing closed");
+  ok(!Object.hasOwn(unread.state.missing, "POST /api/cheap-a"), "a held route is not remembered, so the next check may buy it");
+  const back = decide({ reading: reading([ALL_PATHS, ALL_PATHS]), prev: null, openIssue: true, issueListed: listed });
+  ok(back.action === "close", "lost state: nothing missing closes the issue");
+  ok(decide({ reading: r, prev: { missing: {}, unreadable: 0 }, openIssue: true, issueListed: listed }).action === "close", "control: with saved state, the issue's list is not consulted");
+  ok(issueListedKeys("- `POST /api/x`: a\n- `GET /a b`: c\nnot - `POST /api/y`").size === 1, "only well-formed list lines of the body are read");
+}
+
+// --- a held buy (a keep-alive pass queued) ---------------------------------------
+{
+  const r = reading([without("cheap-a"), without("cheap-a")]);
+  const held = decide({ reading: r, prev: null, hold: true });
+  ok(held.buy.length === 0 && held.held.length === 1, "a held check buys nothing");
+  ok(!Object.hasOwn(held.state.missing, "POST /api/cheap-a"), "a held route is not remembered as bought");
+  const next = decide({ reading: r, prev: held.state });
+  ok(slugsOf(next.buy).join() === "cheap-a" && next.action === "none", "the check after a hold buys the route as new");
+}
+
+// --- a GET and a POST on one path ---------------------------------------------------
+{
+  const shared = { endpoints: [
+    { slug: "memory-write", path: "/api/memory", method: "POST", price: "$0.001" },
+    { slug: "memory-read", path: "/api/memory", method: "GET", price: "$0.001" },
+    row("keep", "$0.001"),
+  ] };
+  ok(catalogRows(shared).length === 3, "a GET and a POST on one path are two catalog rows");
+  const d = decide({ reading: reading([["/api/keep"], ["/api/keep"]], shared), prev: null });
+  ok(slugsOf(d.buy).join() === "memory-read", `the GET sharing a path with an exempt POST is bought (${slugsOf(d.buy).join()})`);
+  ok(d.exempt.some((e) => e.slug === "memory-write" && e.why === "lasting-effect"), "the POST on that path stays exempt");
+  ok(d.state.missing["GET /api/memory"] === "bought" && d.state.missing["POST /api/memory"] === "lasting-effect", "the state keys each by method and path");
 }
 
 // --- run(): reads, logs, outputs; no figure anywhere -----------------------------
@@ -193,7 +243,26 @@ const runOnce = async (name, fetchJson, extraEnv = {}) => {
   ok(/^slugs=$/m.test(sw.out), "run(): a walk that stops short of the total is unreadable, never a miss");
   const cap = await runOnce("cap", fetchFor({ walks: [pagesOf(without("cheap-a", "cheap-b")), pagesOf(without("cheap-a", "cheap-b"))] }), { MAX_SPEND_USD: "0.01" });
   ok(/^slugs=$/m.test(cap.out) && cap.lines.some((l) => /Refusing the buy/.test(l)), "run(): over the per-run cap, nothing is written to buy");
-  const all = [a, b, u, p, e, sw, cap];
+  const slow = async (url) => (url.endsWith("/api/pricing") ? PRICING : new Promise(() => {}));
+  const t0 = Date.now();
+  const dl = [];
+  for (let i = 0; i < UNREADABLE_PAGE_AFTER; i++) dl.push(await runOnce("dl", slow, { READ_DEADLINE_MS: "40" }));
+  ok(Date.now() - t0 < 5000, "run(): a reading that never completes ends at the deadline");
+  ok(dl.every((x) => x.code === 0 && /^slugs=$/m.test(x.out)) && dl[0].lines.some((l) => /deadline/.test(l)), "run(): a slow listing counts as unreadable and buys nothing");
+  ok(JSON.parse(readFileSync(dl[0].env.STATE_FILE, "utf8")).unreadable === UNREADABLE_PAGE_AFTER, "run(): the state is saved and the unreadable streak grows on each slow check");
+  ok(/^action=none$/m.test(dl[0].out) && /^action=open$/m.test(dl.at(-1).out.split("\n").slice(-4).join("\n")), "run(): the third slow check in a row pages");
+  const st = await runOnce("st", async (url) => { if (url.endsWith("/api/pricing")) return PRICING; throw new Error("https://x.example/ answered 503"); });
+  ok(!st.lines.some((l) => /\b[45]\d\d\b|answered|x\.example/.test(l)), "run(): no log line carries an HTTP status or an upstream message");
+  // Lost state, an issue open listing cheap-a: no rebuy, update, never close.
+  const issueFile = join(dir, "issue.md");
+  writeFileSync(issueFile, "intro\n\n- `POST /api/cheap-a`: a buy was sent on the check before\n");
+  const lost = await runOnce("lost", fetchFor({ walks: [pagesOf(without("cheap-a")), pagesOf(without("cheap-a"))] }), { OPEN_ISSUE: "7", OPEN_ISSUE_BODY_FILE: issueFile });
+  ok(/^slugs=$/m.test(lost.out) && /^action=update$/m.test(lost.out), "run(): lost state with the issue listing the route buys nothing and updates");
+  const noBody = await runOnce("nobody", fetchFor({ walks: [pagesOf(without("cheap-b")), pagesOf(without("cheap-b"))] }), { OPEN_ISSUE: "7", OPEN_ISSUE_BODY_FILE: join(dir, "absent.md") });
+  ok(/^slugs=$/m.test(noBody.out) && /^action=none$/m.test(noBody.out), "run(): lost state with an unreadable issue body buys nothing and closes nothing");
+  const holdRun = await runOnce("hold", fetchFor({ walks: [pagesOf(without("cheap-a")), pagesOf(without("cheap-a"))] }), { HOLD_BUY: "1" });
+  ok(/^slugs=$/m.test(holdRun.out), "run(): HOLD_BUY=1 writes no slugs");
+  const all = [a, b, u, p, e, sw, cap, st, lost, noBody, holdRun, ...dl];
   const leaks = all.flatMap((r) => r.lines.concat(r.body.split("\n"))).filter((l) => DOLLAR_FIGURE.test(l));
   ok(leaks.length === 0, `no log line or issue body carries a dollar figure${leaks.length ? `: ${leaks.join(" | ")}` : ""}`);
   ok(!logLines(decide({ reading: reading([without("cheap-a"), without("cheap-a")]), prev: null })).some((l) => /0\.0\d/.test(l)), "no log line carries a price");
@@ -228,7 +297,7 @@ const runOnce = async (name, fetchJson, extraEnv = {}) => {
   const o = existsSync(out) ? readFileSync(out, "utf8") : "";
   ok(code === 0 && /^slugs=cheap-b$/m.test(o), `the CLI writes the one missing slug (exit ${code})`);
   ok(walk >= 1, `the CLI walks the listing at least twice (${walk + 1})`);
-  ok(JSON.parse(readFileSync(join(dir, "cli.json"), "utf8")).missing["/api/cheap-b"] === "bought", "the CLI writes the state for the next check");
+  ok(JSON.parse(readFileSync(join(dir, "cli.json"), "utf8")).missing["POST /api/cheap-b"] === "bought", "the CLI writes the state for the next check");
   ok(!DOLLAR_FIGURE.test(stdout), "the CLI's output carries no dollar figure");
 }
 
@@ -281,12 +350,36 @@ const runOnce = async (name, fetchJson, extraEnv = {}) => {
   ok(!/\$\{\{/.test(runs), "no run block interpolates an expression (values reach the shell through env)");
   ok(!/30 days without|CDP removes|removed after/.test(src), "the workflow states no rule of the listing's");
   ok(wf.permissions?.issues === "write" && wf.permissions?.contents === "read", "permissions are read plus issues");
+  // Only main buys.
+  const install = (job.steps || []).find((s) => /npm ci/.test(s.run || "")) || {};
+  for (const [name, s] of [["the buy", buy], ["the client install", install]]) {
+    ok(/steps\.check\.outputs\.slugs != ''/.test(s.if || "") && /github\.ref == 'refs\/heads\/main'/.test(s.if || "") && !/\|\|/.test(s.if || ""), `${name} runs only on refs/heads/main`);
+  }
+  ok(/\[ "\$GITHUB_REF" = "refs\/heads\/main" \] \|\| HOLD=1/.test(check.run || ""), "a check off main holds its buy, so its state never records one");
+  ok(/HOLD_BUY="\$HOLD"/.test(check.run || "") && /gh run list[^\n]*--workflow "\$WF"/.test(check.run || "") && /bazaar-keepalive\.yml bazaar-keepalive-tail\.yml/.test(check.run || ""), "the check reads the keep-alive runs again and holds the buy when one is queued");
+  ok(/OPEN_ISSUE_BODY_FILE=open-issue\.md/.test(check.run || "") && /gh issue view "\$OPEN"[^\n]*--json body/.test(check.run || ""), "the check reads the open issue's body");
+  // Timeouts: the reading's deadline sits inside the check step, and the job holds both steps.
+  const checkMin = check["timeout-minutes"], buyMin = buy["timeout-minutes"], jobMin = job["timeout-minutes"];
+  ok(Number.isInteger(checkMin) && DEFAULT_READ_DEADLINE_MS + 3 * PAGE_TIMEOUT_MS <= checkMin * 60_000, `the reading's deadline ends well inside the check step (${checkMin} min)`);
+  ok(Number.isInteger(buyMin) && jobMin >= checkMin + buyMin + 5, `the job's timeout holds the check and the buy (${jobMin} >= ${checkMin} + ${buyMin} + 5)`);
+  ok(PAGE_TIMEOUT_MS * 10 <= DEFAULT_READ_DEADLINE_MS, "one page's wait is a small part of the reading's deadline");
+  // The close comment carries no figure.
+  const issueStep = (job.steps || []).find((s) => /gh issue close/.test(s.run || "")) || {};
+  const closeText = (issueStep.run || "").match(/--comment "([^"]*)"/)?.[1] || "";
+  ok(closeText && !DOLLAR_FIGURE.test(closeText) && !/\d/.test(closeText.replace(/\$RUN_URL/g, "")) && !/\bCDP\b/.test(closeText), `the close comment carries no figure or count (${closeText})`);
+  ok(!/came back only after/.test(src) && !/came back only after/.test(read("scripts/bazaar-presence.js")), "the headers do not say a route came back only after our settlement");
 }
 
 // --- documented ----------------------------------------------------------------
 {
   const doc = read("CLAUDE.md");
   ok(/BAZAAR_PRESENCE_MAX_USD/.test(doc) && /bazaar-presence\.yml/.test(doc), "CLAUDE.md documents the workflow and its repo variable");
+  const wfSrc = read(".github/workflows/bazaar-presence.yml");
+  const docDefault = doc.match(/`BAZAAR_PRESENCE_MAX_USD` caps one run's buy \(default (\d+(?:\.\d+)?)/)?.[1];
+  const wfDefault = wfSrc.match(/vars\.BAZAAR_PRESENCE_MAX_USD\s*\|\|\s*'([^']+)'/)?.[1];
+  ok(docDefault && docDefault === wfDefault && Number(docDefault) === DEFAULT_MAX_SPEND_USD, `CLAUDE.md's default cap matches the workflow's and the script's (${docDefault}, ${wfDefault}, ${DEFAULT_MAX_SPEND_USD})`);
+  const docRoutes = doc.match(/more than (\d+) routes also refuses/)?.[1];
+  ok(docRoutes && Number(docRoutes) === DEFAULT_MAX_ROUTES && load(wfSrc).jobs.presence.env.MAX_ROUTES === docRoutes, "CLAUDE.md's route cap matches the workflow's and the script's");
   const lanes = ["test-unit-c2"].map((l) => read(`scripts/ci/lanes/${l}.sh`)).join("\n");
   ok(/node scripts\/test-bazaar-presence\.js/.test(lanes), "this suite runs in a CI lane");
 }
