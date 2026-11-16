@@ -24,7 +24,7 @@ import { COINGECKO_CREDIT, COINGECKO_ATTRIBUTION, COINGECKO_API_URL, attribution
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
 
-const KEY = "cg-test-key-7f3a9c41d2e8b6";
+const KEY = "placeholder-not-a-key"; // test-only placeholder
 // Everything the kits print is captured so the key can be looked for in it.
 const printed = [];
 for (const m of ["log", "warn", "error", "info"]) {
