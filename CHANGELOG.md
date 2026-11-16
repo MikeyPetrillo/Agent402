@@ -8,12 +8,14 @@ carries its own version on npm.
 
 ### 2026-11-16 (own sources that do not resolve are ours)
 Tools:
-- When a source a tool reads on its own (the weather, geocoding, holiday,
-  government, Treasury, FX, World Bank, FRED, crypto market, SEC filing,
-  market data and npm registry reads) does not resolve, the answer is 503 with
-  Retry-After 5, attribution ours and hint our-egress, uncharged, so the same
-  call can be sent again. A URL you supply that does not resolve still answers
-  400.
+- When a source a tool reads on its own does not resolve, the answer is a
+  503, uncharged, never the 400 a URL you supply gets when it does not
+  resolve. The weather, geocoding, holiday, government, Treasury debt and
+  average-rate, FX history, World Bank, FRED, crypto market, SEC filing,
+  market data and npm registry reads answer 503 with Retry-After 5,
+  attribution ours and hint our-egress, so the same call can be sent again;
+  the Treasury yield-curve tools, fx-rate and fx-dashboard keep their own 503
+  with Retry-After for a source they cannot read.
 
 ### 2026-11-15 (access keys and card tokens are judged per payer)
 Payments:
