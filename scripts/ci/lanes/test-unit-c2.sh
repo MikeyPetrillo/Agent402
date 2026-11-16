@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (14 scripts, one process each)
+# @step 1: Offline suites (16 scripts, one process each)
 # Boot /supported guard (a dead facilitator costs ONE rail, not every paid route — the 2026-08-01 Celo outage; probe-driven drop, fail-open on total blindness, escape hatch — offline)
 t node scripts/test-supported-guard.js
 # A rail dropped at boot on a failed or slow /supported read is read again on a backoff and rejoins the 402 and every derived surface without a restart
@@ -13,6 +13,8 @@ t node scripts/test-rail-restore.js
 t node scripts/test-verify-failover.js
 # The Bazaar keep-alive is actually scheduled, fails loudly without a key, and pages (CDP removes a resource after 30 days without a settlement)
 t node scripts/test-bazaar-keepalive.js
+# Weekly Bazaar rank monitor: query list from demand, our rank only, week-over-week drop and the one-issue page (offline fixtures)
+t node scripts/test-bazaar-rank-monitor.js
 # verify_failed carries a DERIVED payer id (never an address), so a retry loop can be told from many clients (offline)
 t node scripts/test-verify-failed-payer-key.js
 t node scripts/test-svm-payer.js
