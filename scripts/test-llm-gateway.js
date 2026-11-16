@@ -321,7 +321,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     ok(ev?.properties.upstreamUsd === 0.0000049 && ev?.properties.tier === "v1-chat-nano" && ev?.properties.completionTokens === 1, "streams now carry margin telemetry (cost captured from the scrubbed frame)");
   }
   // No req (non-HTTP caller) → no user field; the same payer → the same id.
-  globalThis.fetch = async (url, init) => { seenStreamBody = JSON.parse(init.body); return { ok: true, status: 200, body: sseBody(["data: [DONE]\n\n"]) }; };
+  globalThis.fetch = async (url, init) => { seenStreamBody = JSON.parse(init.body); return { ok: true, status: 200, body: sseBody(['data: {"choices":[{"delta":{"content":"O"}}]}\n\n', "data: [DONE]\n\n"]) }; };
   await (await nano.handler({ model: "deepseek/deepseek-chat", messages: [{ role: "user", content: "hi" }], stream: true })).__sse(fakeRes());
   ok(seenStreamBody.user === undefined, "no request context → no user field");
   const { upstreamUserId } = await import("../src/tools/llm-gateway-kit.js");
@@ -334,7 +334,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
     const body = JSON.parse(init.body);
     tried.push(body.model);
     if (body.model === "mistralai/ministral-8b-2512") return { ok: false, status: 502, text: async () => "provider down" };
-    return { ok: true, status: 200, body: sseBody(["data: [DONE]\n\n"]) };
+    return { ok: true, status: 200, body: sseBody(['data: {"choices":[{"delta":{"content":"O"}}]}\n\n', "data: [DONE]\n\n"]) };
   };
   const res2 = fakeRes();
   await (await nano.handler({ model: "mistralai/ministral-8b-2512", messages: [{ role: "user", content: "hi" }], stream: true })).__sse(res2);
@@ -420,7 +420,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   globalThis.fetch = async (url, init) => {
     const b = JSON.parse(init.body); flexTried.push(`${b.model}:${b.service_tier || "default"}`);
     if (b.service_tier === "flex") return { ok: false, status: 503, text: async () => "flex capacity" };
-    return { ok: true, status: 200, body: sseBody(["data: [DONE]\n\n"]) };
+    return { ok: true, status: 200, body: sseBody(['data: {"choices":[{"delta":{"content":"O"}}]}\n\n', "data: [DONE]\n\n"]) };
   };
   const resF = fakeRes();
   await (await nano.handler({ model: "google/gemini-3.1-flash-lite", messages: [{ role: "user", content: "hi" }], stream: true })).__sse(resF);
@@ -594,7 +594,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   seen = null;
   globalThis.fetch = async (url, init) => {
     seen = JSON.parse(init.body);
-    return { ok: true, status: 200, body: { async *[Symbol.asyncIterator]() { yield Buffer.from("data: [DONE]\n\n"); } } };
+    return { ok: true, status: 200, body: { async *[Symbol.asyncIterator]() { yield Buffer.from('data: {"choices":[{"delta":{"content":"O"}}]}\n\ndata: [DONE]\n\n'); } } };
   };
   const streamRes = { headersSent: false, writeHead() { this.headersSent = true; }, flushHeaders() {}, write() {}, end() {}, on() {} };
   await (await nano.handler({ model: "deepseek/deepseek-chat", messages: msg1(), stream: true })).__sse(streamRes);
@@ -632,7 +632,7 @@ ok(LLM_GATEWAY_TOOLS.every((t) => t.route.startsWith("POST /v1/")), "routes live
   seen = null;
   globalThis.fetch = async (url, init) => {
     seen = JSON.parse(init.body);
-    return { ok: true, status: 200, body: { async *[Symbol.asyncIterator]() { yield Buffer.from("data: [DONE]\n\n"); } } };
+    return { ok: true, status: 200, body: { async *[Symbol.asyncIterator]() { yield Buffer.from('data: {"choices":[{"delta":{"content":"O"}}]}\n\ndata: [DONE]\n\n'); } } };
   };
   const streamRes = { headersSent: false, writeHead() { this.headersSent = true; }, flushHeaders() {}, write() {}, end() {}, on() {} };
   await (await nano.handler({ model: "deepseek/deepseek-chat", messages: msg1(), stream: true, zdr: true })).__sse(streamRes);
