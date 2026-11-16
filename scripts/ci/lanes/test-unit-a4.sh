@@ -41,6 +41,8 @@ t node scripts/test-openapi-fallback.js
 t node scripts/test-producer-shapes.js
 # Human checkout (no free report, generate-once, auto-refund)
 t node scripts/test-human-checkout.js
+# Owed card refunds are listed from the records, not only the issues index written after them (offline, file backend)
+t node scripts/test-human-checkout-owed-records.js
 # OpenAI Responses wire on the five tiers (validation, server-tool refusal, store:false, reasoning defaults, nested usage scrub - offline)
 t node scripts/test-llm-responses.js
 # Server tools (pinned engines, buyer cannot widen the cap, loop priced into the margin - offline)
@@ -235,6 +237,8 @@ t node scripts/test-mpp-subscriptions.js
 t node scripts/test-mpp-subscription-key-lifetime.js
 # MPP subscription payers are screened before the first payment and before each renewal
 t node scripts/test-mpp-subscription-screen.js
+# A settled first subscription payment with no record of ours is booked owed or rebuilt, never lost (offline, real refund ledger)
+t node scripts/test-mpp-subscription-activation-owed.js
 # Subscription gas sponsor: a rolling 24 h count and fee ceiling refuses a sponsored send past it before the RPC (offline, stub RPC)
 t node scripts/test-tempo-sponsor-ceiling.js
 # Tempo buyer: a minted credential must move exactly the capped quote to the checked recipient, refused before it is sent; our paying scripts sign tempo/charge under the per-call

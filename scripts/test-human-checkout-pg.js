@@ -125,6 +125,23 @@ try {
   const owed = await A.fulfill("cs_owed");
   ok(owed.refundId === "re_2" && owed.refundOwed === false && file("cs_owed")?.refundId === "re_2", "an imported owed refund is retried and the outcome written through");
 
+  // ---- (4b) the owed list comes from the records, not only the index -------
+  // The index is patched in a statement after the record: a failure in
+  // between leaves an owed record unindexed, or a refunded one indexed.
+  const putRow = (id, body) => sdb.stateQuery(`INSERT INTO ${sdb.stateDbSchema()}.records (collection, id, body) VALUES ('human-checkout', $1, $2::jsonb) ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body`, [id, JSON.stringify(body)]);
+  const unidx = { status: "error", refundId: null, refundOwed: true, refundAttempts: 4, lastRefundAttemptAt: 0, paymentIntent: "pi_unidx", product: "research", at: new Date(clock - 20 * 60_000).toISOString(), error: "x" };
+  await putRow("cs_unidx", unidx);
+  await putRow("_issues", { ...((await row("_issues")) || {}), cs_fail: { kind: "refund-owed", at: new Date(clock).toISOString(), attempts: 1 }, cs_idxonly: { kind: "refund-owed", at: new Date(clock).toISOString(), attempts: 1, product: "research" } });
+  const listed = (await B.listIssues()).refundOwed;
+  ok(listed.some((x) => x.id === "cs_unidx" && x.attempts === 4 && x.at === unidx.at && x.product === "research"), `an owed record the index never caught is listed (${JSON.stringify(listed.map((x) => x.id))})`);
+  ok(!listed.some((x) => x.id === "cs_fail") && (await row("cs_fail"))?.refundId === "re_1", "an index entry whose record shows the refund was sent is not listed");
+  ok(listed.some((x) => x.id === "cs_idxonly") && !listed.some((x) => x.id === "cs_paid"), "control: an index entry with no record is listed, a delivered report is not");
+  const owedIds = (await A.owedRefunds()).map((x) => x.id);
+  ok(owedIds.includes("cs_unidx") && !owedIds.includes("cs_fail"), `the owed list the refundsOwed word reads agrees (${JSON.stringify(owedIds)})`);
+  await putRow("cs_unidx", { ...unidx, refundId: "re_x", refundOwed: false });
+  await putRow("_issues", Object.fromEntries(Object.entries((await row("_issues")) || {}).filter(([k]) => k !== "cs_fail" && k !== "cs_idxonly")));
+  ok(!(await B.listIssues()).refundOwed.some((x) => x.id === "cs_unidx"), "once its record shows the refund it leaves the list");
+
   // ---- (5) the public toggle updates the row and the mirror -----------------
   const pubOn = await A.setPublic("cs_paid", true);
   ok(pubOn.status === "done" && /^rp_/.test(pubOn.publicId) && readPublicReport(pubOn.publicId)?.input === "AAPL" && (await row("_public"))?.[pubOn.publicId] === "cs_paid", "publishing mints the id on the row, in the index and in the mirror");

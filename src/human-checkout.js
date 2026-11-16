@@ -1153,9 +1153,64 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     refundOwed: Object.entries(issues).map(([id, v]) => ({ id, ...v })),
     storeDir: dir,
   });
+  // The owed refunds come from the RECORDS: the issues index is written after
+  // the record, in a statement of its own, so a failure in between left an
+  // owed record off the list (and a refund recorded after the index entry
+  // left it on for good). An error record with no refundId is owed; an index
+  // entry whose record is an error record follows that record; an index
+  // entry with no error record is kept (a debt is never left out for want of
+  // an answer). The error records only: a few rows, read in one statement on
+  // the database; on the files, the directory is re-read only when it changed.
+  const owedEntryOf = (rec) => ({ kind: "refund-owed", at: rec.at, attempts: rec.refundAttempts, ...(typeof rec.product === "string" ? { product: rec.product } : {}) });
+  function mergeOwed(index, errors) {
+    const out = {};
+    for (const [id, rec] of errors) if (!rec.refundId) out[id] = { ...(index[id] || {}), ...owedEntryOf(rec) };
+    for (const [id, v] of Object.entries(index)) if (!errors.has(id)) out[id] = v;
+    return out;
+  }
+  async function errorRecordsPg() {
+    await readyP();
+    const r = await stateQuery(
+      `SELECT id, body->>'at' AS at, body->'refundAttempts' AS attempts, body->>'product' AS product, body->>'refundId' AS refund_id
+       FROM ${RT()} WHERE collection = $1 AND body->>'status' = 'error'`, [COLL]);
+    const out = new Map();
+    for (const row of r.rows) if (SESSION_RE.test(row.id)) out.set(row.id, { at: row.at, refundAttempts: row.attempts, product: row.product, refundId: row.refund_id });
+    // A final record still waiting here for its replay is this container's latest word on it.
+    for (const [id, rec] of pendingFinals) if (rec?.status === "error") out.set(id, rec);
+    return out;
+  }
+  const scanned = { dirMtimeMs: null, files: new Map() }; // file -> { mtimeMs, size, rec | null }
+  function errorRecordsFile() {
+    let dirMtimeMs = null;
+    try { dirMtimeMs = statSync(dir).mtimeMs; } catch { return new Map(); }
+    if (dirMtimeMs !== scanned.dirMtimeMs) {
+      const seen = new Set();
+      for (const f of (() => { try { return readdirSync(dir); } catch { return []; } })()) {
+        if (!f.endsWith(".json") || !SESSION_RE.test(f.slice(0, -5))) continue;
+        seen.add(f);
+        let st; try { st = statSync(join(dir, f)); } catch { continue; }
+        const was = scanned.files.get(f);
+        if (was && was.mtimeMs === st.mtimeMs && was.size === st.size) continue;
+        const body = readJson(join(dir, f));
+        scanned.files.set(f, { mtimeMs: st.mtimeMs, size: st.size, rec: body?.status === "error" ? { at: body.at, refundAttempts: body.refundAttempts, product: body.product, refundId: body.refundId || null } : null });
+      }
+      for (const f of scanned.files.keys()) if (!seen.has(f)) scanned.files.delete(f);
+      scanned.dirMtimeMs = dirMtimeMs;
+    }
+    const out = new Map();
+    for (const [f, v] of scanned.files) if (v.rec) out.set(f.slice(0, -5), v.rec);
+    return out;
+  }
   function listIssues() {
-    if (USE_PG) return (async () => issuesOf(await readIndex(INFLIGHT), await readIndex(ISSUES)))();
-    return issuesOf(readIndex(INFLIGHT), readIndex(ISSUES));
+    if (USE_PG) {
+      return (async () => {
+        const index = await readIndex(ISSUES);
+        let errors = null;
+        try { errors = await errorRecordsPg(); } catch (e) { log(`[human-checkout] owed list read from the index only: ${String(e?.message || e).slice(0, 120)}`); }
+        return issuesOf(await readIndex(INFLIGHT), errors ? mergeOwed(index, errors) : index);
+      })();
+    }
+    return issuesOf(readIndex(INFLIGHT), mergeOwed(readIndex(ISSUES), errorRecordsFile()));
   }
   // The owed card refunds (a refund Stripe refused, retried on the buyer's
   // polls and then left for the operator), each with when it was recorded:
