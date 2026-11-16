@@ -539,7 +539,6 @@ import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
 
-
 const client = new x402Client();
 client.setSpendControls?.({ maxAmountPerPayment: "${spendCap}" }); // refuse any quote above this tool's price
 registerExactEvmScheme(client, { signer: privateKeyToAccount(KEY) });

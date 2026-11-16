@@ -12,7 +12,7 @@
 //      the amount agrees with the x402 money parser the accepts use
 //      (convertToTokenAmount) and scales exactly between any two decimals.
 //   3. A source guard: no payment module turns dollars into base units with a
-//      float multiplied by 10 ** decimals (the drift this suite pins).
+//      float multiplied by 10 ** decimals, 1e6 or 100 (the drift this suite pins).
 // Offline: no relay, no chain, no store.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
@@ -100,8 +100,10 @@ function tempoRefusals(decimals, prices) {
 
 // ---- 3. Source guard --------------------------------------------------------
 {
-  const FILES = ["src/mpp-tempo.js", "src/mpp-subscriptions.js", "src/payment-verify.js", "src/pages.js"];
-  const FLOAT_SCALE = /Math\.round\([^;\n]*\*\s*(?:10\s*\*\*|Math\.pow\(10|1e7\b)|\.toFixed\((?:decimals|envDecimals\(\))\)/;
+  // A dollar figure times 10 ** decimals, 1e6 (USDC) or 100 (cents) in float
+  // math, or a float's own toFixed at the token's places, is the drift.
+  const FILES = ["src/mpp-tempo.js", "src/mpp-subscriptions.js", "src/payment-verify.js", "src/pages.js", "src/mpp-stripe.js"];
+  const FLOAT_SCALE = /(?:Math\.round|BigInt)\([^;\n]*\*\s*(?:10\s*\*\*|Math\.pow\(10|1e[67]\b|100\b)|\*\s*1e6\b|\.toFixed\((?:decimals|envDecimals\(\))\)/;
   const hits = [];
   for (const f of FILES) {
     readFileSync(new URL(`../${f}`, import.meta.url), "utf8").split("\n").forEach((line, i) => {

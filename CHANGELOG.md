@@ -12,13 +12,16 @@ Payments:
   answers one of them and not the other: the request whose claim lands in the
   store reads the claim this server already holds and is answered 409
   (X-Payment-Replay: inflight), uncharged. A claim taken while the store did
-  not answer is written there within a second of its next answer, so a
-  container serving beside this one reads that payment in flight.
-- A dollar price becomes a token amount by integer arithmetic on every rail,
-  so a challenge and the check of it name the same amount at any token
-  decimals: a Tempo credential that pays exactly its challenge is accepted
-  when the token carries 18 decimals, and the published offer amounts, the
-  subscription amounts and the on-chain payment proofs read the same figure.
+  not answer is written there once this server reaches the store again,
+  without waiting for the claim's 30-second renewal, so a container serving
+  beside this one reads that payment in flight.
+- A dollar price becomes a token or card amount by integer arithmetic where a
+  challenge is minted and where a payment is checked against its price, so
+  the two name the same amount at any token decimals: a Tempo credential that
+  pays exactly its challenge is accepted when the token carries 18 decimals,
+  and the card challenge and its check, the published offer amounts, the
+  subscription amounts and the payment proofs on every chain and Circle
+  Gateway read the same figure.
 
 ### 2026-11-16 (late Solana and Algorand payments are repaid)
 Payments:

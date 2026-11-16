@@ -264,7 +264,7 @@ async function verifyAlgorand({ tx, payer, payToSet, amountUsd, asset, indexers,
   if (t.sender !== payer) return minedFail("sender is not the payer we would repay");
   if (![...payToSet].includes(ax.receiver)) return minedFail("receiver is not a wallet we control");
   // USDC on Algorand is 6-decimal; the amount is already in atomic units.
-  const expected = BigInt(Math.round(Number(amountUsd) * 1e6));
+  const expected = usdToBaseUnits(Number(amountUsd), 6);
   const moved = BigInt(ax.amount || 0);
   if (expected <= 0n) return fail("expected amount is zero");
   if (moved < expected) return minedFail(`transfer is short: moved ${moved} < expected ${expected} (atomic)`);
@@ -308,7 +308,7 @@ async function verifyGatewayBatched({ tx, payer, payToSet, amountUsd, network, f
   if (!ours.has(String(t.toAddress || "").toLowerCase())) return fail("Circle Gateway transfer is not to our payTo");
   if (t.recipientNetwork !== network && t.sendingNetwork !== network) return fail("Circle Gateway transfer is on a different network than this debt");
   if (!/^[0-9]{1,78}$/.test(String(t.amount ?? ""))) return fail("Circle Gateway transfer amount unreadable");
-  const expected = BigInt(Math.round(Number(amountUsd) * 1e6)); // USDC, 6 decimals on Gateway
+  const expected = usdToBaseUnits(Number(amountUsd), 6); // USDC, 6 decimals on Gateway
   if (expected <= 0n) return fail("expected amount is zero");
   const moved = BigInt(t.amount);
   if (moved < expected) return fail(`transfer is short: moved ${moved} < expected ${expected} (atomic)`);
@@ -372,7 +372,7 @@ export async function verifyInboundPayment({
       if (!rpcUrl) return fail(`no RPC configured for ${network}`);
       if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
-      const units = BigInt(Math.round(Number(amountUsd) * 1e6));
+      const units = usdToBaseUnits(Number(amountUsd), 6);
       if (units <= 0n) return fail("expected amount is zero");
       let receipt;
       try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
@@ -390,7 +390,7 @@ export async function verifyInboundPayment({
       if (!/^\d{1,78}$/.test(String(referralMerchantId ?? "")) || !/^0x[0-9a-fA-F]{40}$/.test(String(referralPayout || ""))) return fail("no referral merchant id or payout address configured (REFERRAL_MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS) - cannot prove the payment was routed to us");
       if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
-      const units = BigInt(Math.round(Number(amountUsd) * 1e6));
+      const units = usdToBaseUnits(Number(amountUsd), 6);
       if (units <= 0n) return fail("expected amount is zero");
       let receipt;
       try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }

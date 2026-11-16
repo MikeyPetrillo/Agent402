@@ -15,6 +15,12 @@
 //      and it takes a per-process claim; that claim is written to the store as
 //      soon as the store answers again (not at the first 30 s renewal), so the
 //      new container, whose next try reaches the store, reads it in flight.
+//   5. B's store read is held; A's read fails, A runs and settles while the
+//      store is down (its consumed mark reaches only this process). When B's
+//      read returns, B's store claim lands: B must read the local consumed
+//      mark under that claim and be refused as consumed.
+//   6. The mirror: B's held read then fails, after A claimed and settled on
+//      the store path; B falls back and reads A's consumed mark there.
 //   4. Controls: one request alone is granted on each path; after a release a
 //      retry of the same unused payment is granted.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -105,6 +111,51 @@ try {
     ok(n === "inflight", `new container: the same payment reads in flight (got ${n})`);
     await oldC.settle("n:race-3");
     ok(await newC.begin("n:race-3", undefined, { requireShared: true }) === "consumed", "and consumed once the old container settles it");
+  }
+
+  // ---- 5. B's store read held; A falls back, runs and settles while the -----
+  //         store is down; B's read then returns and B's store claim lands.
+  //         The settle never reached the store, so B must read this process's
+  //         own consumed mark under its store claim and be refused.
+  {
+    const store = memStore();
+    __setTestClient(store);
+    const g = createReplayGuard({ consumedRetryDelaysMs: [], pendingRetryMs: 60_000, deferredWriteMs: 60_000 });
+    const held = gate();
+    store.plan.push(held.p);
+    const pB = g.begin("n:race-5");
+    await sleep(5);
+    store.setDown(true);
+    const a = await g.begin("n:race-5");
+    await g.settle("n:race-5");
+    store.setDown(false);
+    held.open();
+    const b = await pB;
+    ok(a === "ok", `A, whose store read fails, takes the per-process claim and runs (got ${a})`);
+    ok(b === "consumed", `B, whose held store read returns after A settled with the store down, is refused as consumed (got ${b})`);
+    ok(claimsIn(store).length === 0, `B gives its store claim back (claims in store: ${claimsIn(store).length})`);
+  }
+
+  // ---- 6. The mirror: B's store read held then failed; A claims and settles --
+  //         on the store path meanwhile. B falls back to the per-process path
+  //         and must read A's consumed mark there.
+  {
+    const store = memStore();
+    __setTestClient(store);
+    const g = createReplayGuard();
+    let fail;
+    const held = new Promise((_, rej) => { fail = rej; });
+    held.catch(() => {});
+    store.plan.push(held);
+    const pB = g.begin("n:race-6");
+    await sleep(5);
+    const a = await g.begin("n:race-6");
+    await g.settle("n:race-6");
+    fail(new Error("simulated blip"));
+    const b = await pB;
+    ok(a === "ok", `A claims on the store path while B's read is held (got ${a})`);
+    ok(b === "consumed", `B, whose held store read then fails, falls back and is refused as consumed (got ${b})`);
+    ok(g._state().inFlight === 0, "no per-process claim is left behind");
   }
 
   // ---- 4. Control: a payment nobody else holds is granted on the fallback ----
