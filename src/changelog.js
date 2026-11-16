@@ -8,6 +8,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "CamelCase seller names are read as words",
+    items: [
+      "Router: /api/route reads a camelCase seller name as words: an operationId such as webPageToMarkdown or getUSDCPrice splits at its capitals (get usdc price), so a multi-word query covers the name as it covers a snake_case or kebab-case one. Query words are read as before.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "A card refund made by hand is recorded",
     items: [
       `Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded once Stripe reports it succeeded (a refund still pending leaves the payment owed until it does), and a check that runs every ${mins(READBACK_INTERVAL_MS)}, first ${mins(READBACK_FIRST_MS)} after the server starts, reads back every payment still owed a refund without issuing one, so a refund made by hand after the retries stop also shows the payment refunded and leaves the owed refund alarm.`,

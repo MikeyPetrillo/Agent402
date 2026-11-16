@@ -6,6 +6,13 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (camelCase seller names are read as words)
+Router:
+- /api/route reads a camelCase seller name as words: an operationId such as
+  webPageToMarkdown or getUSDCPrice splits at its capitals (get usdc price),
+  so a multi-word query covers the name as it covers a snake_case or
+  kebab-case one. Query words are read as before.
+
 ### 2026-11-16 (a card refund made by hand is recorded)
 Payments:
 - A failed card report whose payment was already refunded outside the server
