@@ -20,8 +20,9 @@ LLC: credit the entity, never a personal name.
 - `src/mcp-http.js`: hosted MCP connector at `/mcp` (dotted tool names: `catalog.search`,
   `catalog.find`, `catalog.call`, `payment.info`, `server.describe`, `sellers.list`,
   `demand.request`, flagship aliases). Old snake names remain CallTool aliases only.
-- `src/mcp-mpp.js`, `src/mcp-tasks.js`, `src/mcp-skills.js`, `src/mcp-x402-routes.js`: connector
-  payments, long calls as tasks, skill packs, internal x402 twins of flagships (see `.claude/rules/mcp.md`).
+- `src/mcp-mpp.js`, `src/mcp-tasks.js`, `src/mcp-skills.js`, `src/mcp-x402.js`, `src/mcp-x402-routes.js`:
+  connector payments, long calls as tasks, skill packs, the x402 MCP codec and the internal x402 twins of
+  flagships (both not yet wired to `/mcp`; see `.claude/rules/mcp.md`).
 - `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js`, `src/mpp-subscriptions.js`: MPP
   wire support. x402 keeps sole settlement authority on the evm path; the shim only translates.
 - `src/credits.js`: prepaid card credits (hold at authorize, debit on a final 200).
@@ -206,6 +207,12 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   mark is one above-ceiling keep-alive pass plus a margin, read from the live catalog
   (`scripts/keepalive-plan.js low-water`), never under it, and the variable alone when the
   catalog cannot be read.
+- `bazaar-presence.yml` reads the CDP listing every four hours (`scripts/bazaar-presence.js`, two
+  full passes at least) and buys each route missing from every pass once per absence through
+  `refresh-bazaar.js` MODE=missing with an explicit slug list (`REQUIRE_SLUGS=1`); exempt kinds
+  and routes above the ceiling are never bought there. The repo variable
+  `BAZAAR_PRESENCE_MAX_USD` caps one run's buy (default 2; more than 10 routes also refuses).
+  One issue opens on a route missing two checks in a row, or three unreadable checks in a row.
 - The heartbeat also pages (one issue) on a security advisory in triage longer than the repo
   variable `ADVISORY_TRIAGE_MAX_HOURS` (default 24), and on a read it cannot make
   (`scripts/advisory-triage-check.js`): it reads with the Actions secret `ADVISORY_READ_TOKEN`

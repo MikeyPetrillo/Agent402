@@ -1,0 +1,162 @@
+# Bazaar presence check, every four hours.
+#
+# Routes have been observed to leave the Bazaar discovery listing well inside
+# the 30-day window the keep-alive passes cover (2026-11-14: two routes left
+# for up to an hour and returned after a settlement of ours). The daily
+# and weekly passes buy an unlisted route at most once a day and only within
+# their own selection, so nothing else would notice such an absence for hours.
+#
+# scripts/bazaar-presence.js reads our catalog and the listing (two full
+# passes at least; a route is missing only when every pass lacks it), and on
+# the FIRST check that finds a route missing writes its slug for one buy here:
+# scripts/refresh-bazaar.js MODE=missing with that explicit list and
+# REQUIRE_SLUGS=1, which reads the listing once more and buys only what is
+# still missing then. A route is bought once per absence, never again while it
+# stays missing. Never bought here: quoted and model-priced routes, the
+# route-execute tiers, every route whose effect outlives the answer
+# (scripts/lib/keepalive-plan.js exemptKind), and the routes priced above the
+# weekly ceiling, which bazaar-keepalive-tail.yml buys. The whole buy is
+# refused over MAX_ROUTES routes or over the per-run cap (repo variable
+# BAZAAR_PRESENCE_MAX_USD).
+#
+# ONE issue under a fixed title opens when a route is missing on two readable
+# checks in a row, and when the listing has been unreadable on three checks in
+# a row; it closes on a readable check with no repeat miss. An unreadable
+# listing never buys and never pages on its own first failure. The state
+# between checks (the routes missing last time, the unreadable streak) is a
+# small file in the Actions cache; a lost cache reads as a first check, except
+# that a route the open issue lists is never bought again and the issue is not
+# closed while any route is missing. A reading that has not completed within
+# the script's deadline (well inside the check step's timeout) is unreadable.
+# Only a run on main buys.
+#
+# One process, no matrix: the buy can never fan out. The buying job shares the
+# keep-alive concurrency group (one burner, never two passes at once), and it
+# does not start at all while a keep-alive pass is running or queued, so a
+# check never takes the one pending place in that group from a keep-alive pass.
+# The check step reads the keep-alive runs again just before deciding and buys
+# nothing (HOLD_BUY=1) when one has been queued since.
+# Logs and the issue carry route paths and counts, never a price or a total.
+name: Bazaar presence check
+
+on:
+  schedule:
+    # Every four hours, clear of the daily (05:37), Tuesday (04:17) and
+    # twice-monthly (14:41) keep-alive starts.
+    - cron: "11 2-22/4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  busy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      busy: ${{ steps.runs.outputs.busy }}
+    steps:
+      - name: Is a keep-alive pass running or queued
+        id: runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BUSY=false
+          for WF in bazaar-keepalive.yml bazaar-keepalive-tail.yml; do
+            N=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WF" --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo unreadable)
+            if [ "$N" != "0" ]; then BUSY=true; echo "$WF: active or unreadable ($N); this check waits for the next slot."; fi
+          done
+          echo "busy=$BUSY" >> "$GITHUB_OUTPUT"
+
+  presence:
+    needs: busy
+    if: needs.busy.outputs.busy == 'false'
+    runs-on: ubuntu-24.04
+    # The check step (its reading ends at the script's deadline, inside the
+    # step's timeout) plus the buy step's timeout, with room for setup.
+    timeout-minutes: 60
+    # One group with bazaar-keepalive.yml and bazaar-keepalive-tail.yml.
+    concurrency:
+      group: bazaar-keepalive
+      cancel-in-progress: false
+    env:
+      TARGET_URL: https://agent402.tools
+      STATE_FILE: .bazaar-presence/state.json
+      TITLE: Bazaar presence check
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      MAX_SPEND_USD: ${{ vars.BAZAAR_PRESENCE_MAX_USD || '2' }}
+      MAX_ROUTES: "10"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Restore the state of the last check
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .bazaar-presence
+          key: bazaar-presence-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: bazaar-presence-
+      - name: Check the listing (reads only, pays nothing)
+        id: check
+        timeout-minutes: 25
+        run: |
+          mkdir -p .bazaar-presence
+          # Only an open issue with exactly this title, opened by the workflow
+          # bot, is ours; an issue anyone else opens under it is ignored.
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions")][0].number // empty')
+          echo "open=$OPEN" >> "$GITHUB_OUTPUT"
+          # The open issue's body lists the routes it is about (read when the
+          # saved state is lost); an unreadable body holds every buy.
+          rm -f open-issue.md
+          if [ -n "$OPEN" ]; then gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body > open-issue.md 2>/dev/null || rm -f open-issue.md; fi
+          # A keep-alive pass queued since the busy job read, or a run off
+          # main: buy nothing now.
+          HOLD=0
+          [ "$GITHUB_REF" = "refs/heads/main" ] || HOLD=1
+          for WF in bazaar-keepalive.yml bazaar-keepalive-tail.yml; do
+            N=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WF" --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo unreadable)
+            [ "$N" = "0" ] || HOLD=1
+          done
+          HOLD_BUY="$HOLD" OPEN_ISSUE="$OPEN" OPEN_ISSUE_BODY_FILE=open-issue.md OUT_DIR=out node scripts/bazaar-presence.js
+      - name: Install the x402 client
+        if: steps.check.outputs.slugs != '' && github.ref == 'refs/heads/main'
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+      - name: Buy each newly missing route once
+        if: steps.check.outputs.slugs != '' && github.ref == 'refs/heads/main'
+        timeout-minutes: 30
+        env:
+          MODE: missing
+          PAY_NETWORK: base
+          SLUGS: ${{ steps.check.outputs.slugs }}
+          REQUIRE_SLUGS: "1"
+          MAX_PRICE_USD: ${{ steps.check.outputs.max_price }}
+          BATCH_COUNT: "1"
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          # Signs X-Heartbeat-Token so these self-buys are booked as ours.
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the presence check cannot buy a missing route"; exit 1; }
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          echo "::add-mask::$BURNER_KEY"
+          node scripts/refresh-bazaar.js
+      - name: Save the state for the next check
+        if: always() && steps.check.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .bazaar-presence
+          key: bazaar-presence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Open, update or close the one issue
+        if: always() && steps.check.outcome == 'success'
+        env:
+          ACTION: ${{ steps.check.outputs.action }}
+          OPEN: ${{ steps.check.outputs.open }}
+        run: |
+          case "$ACTION" in
+            open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file out/body.md ;;
+            update) gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file out/body.md ;;
+            close) gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "A readable check found no route of ours missing twice in a row. Run: $RUN_URL" ;;
+          esac

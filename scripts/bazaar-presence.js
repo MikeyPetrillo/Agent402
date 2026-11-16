@@ -1,0 +1,322 @@
+#!/usr/bin/env node
+// Bazaar presence check: is every route of ours in the CDP discovery listing?
+//
+// Routes have been observed to leave the listing inside the 30-day window
+// the keep-alive passes cover (2026-11-14: two routes, settled 17 days and
+// less earlier, left the listing for up to an hour and returned after a
+// settlement of ours). This check reads the listing every few hours
+// (.github/workflows/bazaar-presence.yml) and decides three things:
+//
+//   which routes to buy   A route is missing when every full pass of the
+//                         listing lacks it (walkAgreed, two passes at least,
+//                         a third when they disagree), so a page shift
+//                         between requests never reads as a missing row. A
+//                         missing route is bought once per absence: on the
+//                         first check that finds it missing, never again
+//                         while it stays missing. Exempt kinds are never
+//                         bought (scripts/lib/keepalive-plan.js exemptKind:
+//                         quoted, model-priced, the route-execute tiers and
+//                         every route whose effect outlives the answer), nor
+//                         is a route the twice-monthly pass above the ceiling
+//                         owns (aboveCeilingRoutes: report products and
+//                         premium tiers; their price, and the upstream work
+//                         behind it, does not belong in a pass every few
+//                         hours). The whole buy is refused when it holds more
+//                         than MAX_ROUTES routes or its list prices together
+//                         are over MAX_SPEND_USD. HOLD_BUY=1 (a keep-alive
+//                         pass is running or queued) buys nothing and
+//                         remembers no buyable route, so the next check
+//                         treats it as new again. Catalog rows are keyed by
+//                         method and path (a GET and a POST may share a
+//                         path); the listing is keyed by path.
+//   whether to page       ONE issue opens when a route is missing on two
+//                         readable checks in a row (the first check bought
+//                         it, or could not), whatever its kind, and when
+//                         the listing or our catalog has been unreadable on
+//                         UNREADABLE_PAGE_AFTER checks in a row. It closes
+//                         on a readable check with no repeat miss.
+//   what to remember      The routes missing now and the unreadable streak,
+//                         for the next check (the workflow keeps the file in
+//                         the Actions cache). An unreadable check keeps the
+//                         previous missing set, buys nothing and closes
+//                         nothing. A reading that has not completed
+//                         within READ_DEADLINE_MS is unreadable.
+//   lost state            With no saved state and an issue open, a route the
+//                         issue already lists counts as a repeat miss (never
+//                         bought again, the issue updated), and the issue is
+//                         never closed while any route is missing.
+//
+// Reads only: /api/pricing and the listing. The buy is scripts/refresh-bazaar.js
+// MODE=missing with the slugs this writes (REQUIRE_SLUGS=1), which reads the
+// listing again and buys only what is still missing then.
+//
+// The run logs and the issue are public: nothing here prints a price, a total
+// or a cap, and the issue carries route paths of ours and fixed words only.
+//
+// Env: TARGET_URL (default https://agent402.tools), BAZAAR_REGISTRY_URL,
+// STATE_FILE (read and rewritten), OUT_DIR (body.md), OPEN_ISSUE (the number
+// of the open issue, empty when none), OPEN_ISSUE_BODY_FILE (its body),
+// HOLD_BUY, MAX_SPEND_USD, MAX_ROUTES, UNREADABLE_PAGE_AFTER, READ_DEADLINE_MS. Writes slugs=, max_price=, action= to $GITHUB_OUTPUT.
+// Exit: 0 (a refusal and an unreadable listing included), 2 bad usage.
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
+import {
+  exemptKind, aboveCeilingRoutes, usdMicros, microsToUsd, spendCapVerdict, routeCountVerdict,
+} from "./lib/keepalive-plan.js";
+
+export const DEFAULT_MAX_ROUTES = 10;
+export const DEFAULT_MAX_SPEND_USD = 2;
+export const UNREADABLE_PAGE_AFTER = 3;
+export const ISSUE_TITLE = "Bazaar presence check";
+// One page of the listing or the catalog waits this long; the whole reading
+// (two or three passes) this long. The workflow's step and job timeouts are
+// set above both (scripts/test-bazaar-presence.js reads them).
+export const PAGE_TIMEOUT_MS = 30_000;
+export const DEFAULT_READ_DEADLINE_MS = 20 * 60_000;
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
+// A path printed into the public issue: our own catalog's shape only.
+const PATH_RE = /^\/[A-Za-z0-9/_.:-]{1,200}$/;
+
+/** A listing resource URL -> its path when it is on `host`, else null. */
+export function pathOnHost(resource, host) {
+  try {
+    const u = new URL(String(resource));
+    return u.host.toLowerCase() === String(host).toLowerCase() ? u.pathname : null;
+  } catch { return null; }
+}
+
+/** The catalog's rows as { key, slug, path, method, micros }, one per method
+ *  and path: a GET and a POST on one path are two routes. */
+export function catalogRows(pricing) {
+  const rows = Array.isArray(pricing?.endpoints) ? pricing.endpoints : Array.isArray(pricing?.tools) ? pricing.tools : [];
+  const seen = new Set();
+  const out = [];
+  for (const r of rows) {
+    if (!r || typeof r !== "object" || typeof r.path !== "string") continue;
+    const method = String(r.method || "GET").toUpperCase();
+    const key = `${method} ${r.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ row: r, key, slug: typeof r.slug === "string" ? r.slug : "", path: r.path, method, micros: usdMicros(r.price) });
+  }
+  return out;
+}
+
+/** The routes an open issue's body lists ("- `METHOD /path`: ..."), as keys. */
+export function issueListedKeys(body) {
+  const out = new Set();
+  for (const m of String(body || "").matchAll(/^- `([A-Z]{3,7}) (\/[^`\s]+)`/gm)) if (PATH_RE.test(m[2])) out.add(`${m[1]} ${m[2]}`);
+  return out;
+}
+
+/** Why the presence check does not buy a route, or null when it may. */
+export function presenceExemption(entry, tailSlugs) {
+  if (!SLUG_RE.test(entry.slug)) return "unreadable slug";
+  if (!(entry.micros > 0)) return "unpriced";
+  const kind = exemptKind(entry.row);
+  if (kind) return kind;
+  if (tailSlugs.has(entry.slug)) return "above the ceiling";
+  return null;
+}
+
+/** Pure: the catalog's routes absent from every pass of the listing. `passes`
+ *  is walkAgreed's: each with `keys`, the set of our paths it held. */
+export function missingFromEveryPass(catalog, passes) {
+  const seen = new Set();
+  for (const p of passes || []) for (const k of p.keys || []) seen.add(k);
+  return catalog.filter((c) => !seen.has(c.path));
+}
+
+/** Pure: the decision for one check. `reading` is null when the listing or the
+ *  catalog could not be read, else { pricing, passes }. `prev` is the state the
+ *  last check left ({ missing: { "METHOD path": note }, unreadable }), or null
+ *  when none was saved. `issueListed` is the set of keys the open issue lists,
+ *  or null when its body could not be read. `hold` buys nothing. */
+export function decide({ reading, prev, openIssue = false, issueListed = new Set(), hold = false, maxSpendUsd = DEFAULT_MAX_SPEND_USD, maxRoutes = DEFAULT_MAX_ROUTES, unreadablePageAfter = UNREADABLE_PAGE_AFTER }) {
+  const lost = !prev || typeof prev !== "object";
+  const prevMissing = prev && prev.missing && typeof prev.missing === "object" ? prev.missing : {};
+  const prevStreak = Number.isInteger(prev?.unreadable) && prev.unreadable > 0 ? prev.unreadable : 0;
+  if (!reading) {
+    const streak = prevStreak + 1;
+    const page = streak >= unreadablePageAfter;
+    return {
+      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [],
+      state: { missing: prevMissing, unreadable: streak },
+      action: page && !openIssue ? "open" : "none", cause: page ? "unreadable" : null,
+    };
+  }
+  const catalog = catalogRows(reading.pricing);
+  const tailSlugs = new Set(aboveCeilingRoutes(reading.pricing).map((r) => r.slug));
+  const missing = missingFromEveryPass(catalog, reading.passes);
+  // State lost with an issue open: what the issue lists was missing before.
+  const inherited = lost && openIssue && issueListed instanceof Set ? issueListed : new Set();
+  const wasMissing = (m) => Object.hasOwn(prevMissing, m.key) || inherited.has(m.key);
+  const repeat = missing.filter(wasMissing);
+  const newlyMissing = missing.filter((m) => !wasMissing(m));
+  // State lost and the open issue unreadable: no way to tell a repeat, so no buy.
+  const held = hold || (lost && openIssue && !(issueListed instanceof Set));
+  const exempt = [];
+  let buy = [];
+  for (const m of newlyMissing) {
+    const why = presenceExemption(m, tailSlugs);
+    if (why) exempt.push({ ...m, why }); else buy.push(m);
+  }
+  const heldBuy = held ? buy : [];
+  if (held) buy = [];
+  let refused = null;
+  if (buy.length) {
+    const count = routeCountVerdict(buy, maxRoutes);
+    const spend = spendCapVerdict(buy, maxSpendUsd);
+    if (!count.ok) refused = count.reason;
+    else if (!spend.ok) refused = spend.reason;
+    if (refused) buy = [];
+  }
+  const state = { missing: {}, unreadable: 0 };
+  for (const m of repeat) state.missing[m.key] = Object.hasOwn(prevMissing, m.key) ? prevMissing[m.key] : "listed";
+  for (const m of exempt) state.missing[m.key] = m.why;
+  // A held route is not remembered: the next check sees it as new and may buy it.
+  for (const m of buy) state.missing[m.key] = "bought";
+  if (refused) for (const m of newlyMissing) if (!Object.hasOwn(state.missing, m.key) && !heldBuy.includes(m)) state.missing[m.key] = "refused";
+  // Never close on lost state while a route is missing: the issue may be about it.
+  const action = repeat.length ? (openIssue ? "update" : "open") : !openIssue ? "none" : lost && missing.length ? "none" : "close";
+  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, state, action, cause: repeat.length ? "missing" : null };
+}
+
+const NOTE = {
+  bought: "a buy was sent on the check before",
+  listed: "listed here before; not bought again",
+  refused: "not bought: the check before refused the buy under its caps",
+  quoted: "not bought here: quoted route",
+  "model-priced": "not bought here: model-priced route",
+  "route-execute": "not bought here: route-execute tier",
+  "lasting-effect": "not bought here: its effect outlives the answer",
+  "above the ceiling": "not bought here: the pass above the ceiling buys it",
+  unpriced: "not bought here: unpriced",
+  "unreadable slug": "not bought here: unreadable slug",
+};
+
+/** The issue body: fixed text and our own route paths, no figure or count. */
+export function issueBody(decision, runUrl = "") {
+  const run = runUrl && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/.test(runUrl) ? `\n\nRun: ${runUrl}` : "";
+  if (decision.cause === "unreadable") {
+    return "The presence check could not complete a reading on several checks in a row, so it cannot tell whether every route of ours is listed. Nothing is bought until a reading completes. This issue closes on the next completed check that finds no route missing twice in a row." + run;
+  }
+  const lines = decision.repeat
+    .filter((m) => PATH_RE.test(m.path))
+    .map((m) => `- \`${m.method} ${m.path}\`: ${NOTE[decision.state.missing[m.key]] || "not bought here"}`);
+  return [
+    "These routes of ours were observed to leave the Bazaar discovery listing and were still missing on the next check (each check reads the listing in two full passes at least, and a route counts as missing only when every pass lacks it).",
+    "",
+    ...lines,
+    "",
+    "A route the check may buy is bought once per absence (scripts/bazaar-presence.js, then scripts/refresh-bazaar.js MODE=missing). A route still missing after that, or one of a kind the check never buys, needs a hand pass: `gh workflow run bazaar-keepalive.yml --ref main -f slugs=<slug>` for a route at or under the ceiling, `gh workflow run bazaar-keepalive-tail.yml --ref main` for one above it. This issue closes on the next readable check with no route missing twice in a row.",
+  ].join("\n") + run;
+}
+
+/** The log lines for one decision: counts, paths and words, never a figure. */
+export function logLines(d) {
+  if (!d.readable) return [`The listing or the catalog could not be read; nothing bought. Unreadable checks in a row: ${d.state.unreadable}.`];
+  const out = [`Routes missing from every pass: ${d.newlyMissing.length + d.repeat.length} (newly missing ${d.newlyMissing.length}, missing on the check before too ${d.repeat.length}).`];
+  for (const m of d.newlyMissing) {
+    if (!PATH_RE.test(m.path)) continue;
+    const ex = d.exempt.find((e) => e.key === m.key);
+    out.push(`  missing ${m.method} ${m.path}${ex ? ` (not bought: ${ex.why})` : (d.held || []).includes(m) ? " (held: a keep-alive pass is running or queued, or the open issue could not be read)" : ""}`);
+  }
+  for (const m of d.repeat) if (PATH_RE.test(m.path)) out.push(`  still missing ${m.method} ${m.path}`);
+  if (d.refused) out.push(`Refusing the buy: ${d.refused}. Nothing bought.`);
+  else out.push(`Routes to buy: ${d.buy.length}.`);
+  return out;
+}
+
+async function getJson(url) {
+  const r = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(PAGE_TIMEOUT_MS) });
+  if (!r.ok) throw new Error("not ok");
+  return r.json();
+}
+
+/** Reads the catalog and the listing; null when either is unreadable, when the
+ *  listing holds none of our routes (an empty listing is no reading), or when
+ *  the whole reading has not completed within `deadlineMs`. Logs fixed words
+ *  only: no status, no upstream message. */
+export async function readListing({ target, registryUrl = BAZAAR_REGISTRY_URL, fetchJson = getJson, log = () => {}, deadlineMs = DEFAULT_READ_DEADLINE_MS }) {
+  const host = new URL(target).host;
+  let expired = false;
+  const say = (m) => { if (!expired) log(m); };
+  const bounded = async (url) => {
+    if (expired) throw new Error("deadline");
+    return fetchJson(url);
+  };
+  const read = async () => {
+    try {
+      const pricing = await bounded(`${target.replace(/\/+$/, "")}/api/pricing`);
+      if (catalogRows(pricing).length === 0) { say("The catalog lists no routes."); return null; }
+      const feed = await walkAgreed(registryUrl, {
+        isOurs: (it) => pathOnHost(it?.resource, host) !== null,
+        keyOf: (it) => pathOnHost(it?.resource, host),
+        fetchJson: bounded,
+      });
+      say(`The listing was read in ${feed.passes.length} full passes${feed.agreed ? "; the last two agree" : "; they disagree, so only a route absent from every pass counts as missing"}.`);
+      if (feed.passes.some((p) => p.keys.size === 0)) { say("A pass held none of our routes; not a reading."); return null; }
+      return { pricing, passes: feed.passes };
+    } catch {
+      say("The reading did not complete (a page could not be read).");
+      return null;
+    }
+  };
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve("deadline"), deadlineMs); });
+  const out = await Promise.race([read(), deadline]);
+  clearTimeout(timer);
+  if (out === "deadline") {
+    expired = true;
+    log("The reading did not complete within its deadline; this check counts as unreadable.");
+    return null;
+  }
+  return out;
+}
+
+function readState(file) {
+  if (!file) return null;
+  try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; }
+}
+
+/** One check; returns the exit code. Every dependency is injectable so
+ *  scripts/test-bazaar-presence.js runs it offline. */
+export async function run({ env = process.env, log = console.log, fetchJson = getJson } = {}) {
+  const target = env.TARGET_URL || "https://agent402.tools";
+  try { new URL(target); } catch { log("bazaar-presence: TARGET_URL is not a URL"); return 2; }
+  const maxRoutes = env.MAX_ROUTES === undefined || env.MAX_ROUTES === "" ? DEFAULT_MAX_ROUTES : Number(env.MAX_ROUTES);
+  const maxSpendUsd = env.MAX_SPEND_USD === undefined || env.MAX_SPEND_USD === "" ? DEFAULT_MAX_SPEND_USD : env.MAX_SPEND_USD;
+  const pageAfter = Math.max(1, parseInt(env.UNREADABLE_PAGE_AFTER || "", 10) || UNREADABLE_PAGE_AFTER);
+  const deadlineMs = Math.max(1, parseInt(env.READ_DEADLINE_MS || "", 10) || DEFAULT_READ_DEADLINE_MS);
+  const prev = readState(env.STATE_FILE);
+  const openIssue = /^\d+$/.test(String(env.OPEN_ISSUE || ""));
+  let issueListed = new Set();
+  if (openIssue) {
+    try { issueListed = issueListedKeys(readFileSync(env.OPEN_ISSUE_BODY_FILE || "", "utf8")); } catch { issueListed = null; }
+  }
+  if (!prev) log(openIssue ? "No saved state: the open issue's routes count as missing before." : "No saved state: this reads as a first check.");
+  const hold = env.HOLD_BUY === "1";
+  if (hold) log("A keep-alive pass is running or queued: this check buys nothing.");
+  const reading = await readListing({ target, registryUrl: env.BAZAAR_REGISTRY_URL || BAZAAR_REGISTRY_URL, fetchJson, log, deadlineMs });
+  const d = decide({ reading, prev, openIssue, issueListed, hold, maxSpendUsd, maxRoutes, unreadablePageAfter: pageAfter });
+  for (const l of logLines(d)) log(l);
+  log(`Issue: ${d.action}.`);
+  if (env.STATE_FILE) writeFileSync(env.STATE_FILE, JSON.stringify({ v: 1, ...d.state }));
+  if (env.OUT_DIR) {
+    mkdirSync(env.OUT_DIR, { recursive: true });
+    writeFileSync(join(env.OUT_DIR, "body.md"), issueBody(d, env.RUN_URL || ""));
+  }
+  if (env.GITHUB_OUTPUT) {
+    const max = d.buy.reduce((m, r) => Math.max(m, r.micros), 0);
+    appendFileSync(env.GITHUB_OUTPUT, `slugs=${d.buy.map((r) => r.slug).join(",")}\nmax_price=${d.buy.length ? microsToUsd(max) : ""}\naction=${d.action}\n`);
+  }
+  return 0;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run().then((code) => process.exit(code), (e) => { console.error("bazaar-presence:", String(e?.message || e).slice(0, 160)); process.exit(2); });
+}

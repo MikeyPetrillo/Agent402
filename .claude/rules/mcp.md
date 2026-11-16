@@ -17,6 +17,10 @@ Loaded when a connector or front-door file is read.
   reachable only with the loopback secret (anything else is the ordinary 404), rewritten to the tool's route
   and priced by its accepts with resource `/mcp` and an MCP discovery extension; a flagged request the twin
   paywall does not price runs the route's own paywall. Not yet called by `/mcp`.
+  `src/mcp-x402.js` is the x402 MCP transport codec (`_meta["x402/payment"]` in, payment-required,
+  invalid-payment and settlement-failed results, `x402/payment-response` out): pure, not yet wired to `/mcp`.
+  Its interop suite needs the official `@x402/mcp` client, which CI installs with `--no-save` in the
+  step before the suite and `package.json` never lists (an optional peer of mppx would ship in prod).
 - **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`
   and `server.describe`; the access line names coins and wires from the rails list and the MPP
   config. The unpaid 402 body carries the access line and the `/agents.md` link only with
