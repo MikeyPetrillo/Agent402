@@ -161,7 +161,7 @@ async function readPackument(name) {
   let text;
   try {
     ({ html: text } = await safeFetch(`${REGISTRY}/${encodeName(name)}`, {
-      headers: { Accept: "application/json" }, maxBytes: PACKUMENT_MAX_BYTES, timeoutMs: REGISTRY_TIMEOUT_MS,
+      headers: { Accept: "application/json" }, maxBytes: PACKUMENT_MAX_BYTES, timeoutMs: REGISTRY_TIMEOUT_MS, ownUpstream: true,
     }));
   } catch (err) {
     if (err?.statusCode === 413) return remember(packumentCache, name, { oversize: true });
@@ -180,7 +180,7 @@ async function readVersionDoc(name, version) {
   let text;
   try {
     ({ html: text } = await safeFetch(`${REGISTRY}/${encodeName(name)}/${encodeURIComponent(version)}`, {
-      headers: { Accept: "application/json" }, maxBytes: VERSION_DOC_MAX_BYTES, timeoutMs: REGISTRY_TIMEOUT_MS,
+      headers: { Accept: "application/json" }, maxBytes: VERSION_DOC_MAX_BYTES, timeoutMs: REGISTRY_TIMEOUT_MS, ownUpstream: true,
     }));
   } catch (err) {
     if (err?.upstreamStatus === 404) throw bad(`Package "${name}" has no version or dist-tag "${version}" on the npm registry`, 404);
@@ -202,7 +202,7 @@ async function readGithub(owner, repo) {
   let text;
   try {
     ({ html: text } = await safeFetch(`${GITHUB_API}/repos/${owner}/${repo}`, {
-      headers: ghHeaders(), maxBytes: GITHUB_MAX_BYTES, timeoutMs: GITHUB_TIMEOUT_MS,
+      headers: ghHeaders(), maxBytes: GITHUB_MAX_BYTES, timeoutMs: GITHUB_TIMEOUT_MS, ownUpstream: true,
     }));
   } catch (err) {
     const s = err?.upstreamStatus;

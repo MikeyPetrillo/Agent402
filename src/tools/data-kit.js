@@ -34,7 +34,7 @@ async function getJson(url, { allowEmpty = false } = {}) {
   // convention as gov-kit/finance-kit getJson.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      ({ html } = await safeFetch(url, { maxBytes: 3 * 1024 * 1024 }));
+      ({ html } = await safeFetch(url, { maxBytes: 3 * 1024 * 1024, ownUpstream: true }));
       break;
     } catch (e) {
       // No second attempt once a run's ceiling has passed (src/run-ceiling.js; never on a direct route).
@@ -226,6 +226,9 @@ export const DATA_TOOLS = [
         if (err.upstreamStatus === 404) {
           throw bad("location not covered - weather.gov serves US locations only", 400);
         }
+        // Our own side (this server could not look up weather.gov's host): the
+        // 503 with its Retry-After and attribution goes out unchanged.
+        if (err.statusCode === 503 && err.attribution === "ours") throw err;
         console.warn(`[weather-forecast] weather.gov /points failed: ${err.message ?? err}`);
         throw bad(`weather.gov upstream error - ${err.message ?? "unreachable"}`, 502);
       }

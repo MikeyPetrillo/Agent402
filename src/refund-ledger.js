@@ -110,6 +110,24 @@ const insertOwed = db.prepare(`
   VALUES (@evidence, @slug, @network, @payer, @priceUsd, @httpStatus, @synthetic, @createdAt, @wire, @hangupReason, @note)
 `);
 const selectByEvidence = db.prepare("SELECT * FROM refunds WHERE evidence = ?");
+// EVM TRANSACTION HASHES ARE HEX, so two spellings of one hash are one
+// payment. Such a key (and a referral payment's `<tx>#<nonce>`) is written in
+// lowercase; a row an earlier build wrote in another case keeps its spelling
+// and every read and owed-row change resolves to it, so one payment is one
+// debt. Only the 0x-hex shape is folded: base58 (Solana), base32 (Algorand)
+// and every other id is kept exactly as given.
+db.exec("CREATE INDEX IF NOT EXISTS refunds_evidence_lc ON refunds (lower(evidence))");
+const EVM_HEX_EVIDENCE = /^0[xX][0-9a-fA-F]{64}(#0[xX][0-9a-fA-F]{64})?$/;
+const selectByEvidenceLc = db.prepare("SELECT evidence FROM refunds WHERE lower(evidence) = ? ORDER BY id ASC LIMIT 1");
+/** The ledger key for `raw` (trimmed): an EVM hex hash resolves to the row
+ *  already booked under any spelling of it, else its lowercase form. */
+function evidenceKey(raw) {
+  const t = typeof raw === "string" ? raw.trim() : "";
+  if (!EVM_HEX_EVIDENCE.test(t)) return t;
+  const lc = t.toLowerCase();
+  try { const have = selectByEvidenceLc.get(lc); if (have?.evidence) return have.evidence; } catch { /* the lowercase key */ }
+  return lc;
+}
 // Only an OWED row: a row already being sent or paid is never quietly voided.
 const voidOwedByEvidence = db.prepare(`
   UPDATE refunds SET status = 'void', note = CASE WHEN note IS NULL OR note = '' THEN @note ELSE note || '; ' || @note END, resolvedAt = @resolvedAt
@@ -191,6 +209,7 @@ const PG_DDL = () => `
   );
   CREATE INDEX IF NOT EXISTS refunds_status ON ${T("refunds")} (status);
   CREATE INDEX IF NOT EXISTS refunds_updated_at ON ${T("refunds")} (updated_at);
+  CREATE INDEX IF NOT EXISTS refunds_evidence_lc ON ${T("refunds")} (lower(evidence));
   CREATE TABLE IF NOT EXISTS ${T("refund_marks")} (
     evidence TEXT PRIMARY KEY,
     state    TEXT NOT NULL,
@@ -299,8 +318,25 @@ const OWED_CHANGES = {
   // A held claim that was served: its note says so, so reopen never matches it.
   renoteVoid: () => `UPDATE ${T("refunds")} SET note = $3, updated_at = ${PG_NOW_MS} WHERE evidence = $1 AND status = 'void' AND note = $2 RETURNING *`,
 };
-/** One owed-debt change: the void marks its evidence first (see INSERT_OWED_SQL), then each is one guarded UPDATE. */
+/** The key an EVM hex hash is written under, read from Postgres itself inside
+ *  the queued write (the mirror may not hold a row another container wrote,
+ *  or one written before this process's first pull): the row already there
+ *  under any spelling of it, else the lowercase form. Any other key as given. */
+async function pgEvidenceKey(ev) {
+  if (typeof ev !== "string" || !EVM_HEX_EVIDENCE.test(ev)) return ev;
+  const lc = ev.toLowerCase();
+  const r = await stateQuery(`SELECT evidence FROM ${T("refunds")} WHERE lower(evidence) = $1 ORDER BY id ASC LIMIT 1`, [lc]);
+  return r.rows[0]?.evidence ?? lc;
+}
+/** Insert-if-absent of one debt, under the key Postgres resolves (pgEvidenceKey). */
+async function insertOwedPg(row) {
+  row.evidence = await pgEvidenceKey(row.evidence);
+  return stateQuery(INSERT_OWED_SQL(), owedParams(row));
+}
+/** One owed-debt change: the void marks its evidence first (see INSERT_OWED_SQL), then each is one guarded UPDATE.
+ *  `params[0]` is resolved in place to the key Postgres holds (pgEvidenceKey). */
 async function runOwedChange(op, params) {
+  params[0] = await pgEvidenceKey(params[0]);
   if (op === "void") await stateQuery(VOID_MARK_SQL(), [params[0], Number(params[2]) || Date.now()]);
   return stateQuery(OWED_CHANGES[op](), params);
 }
@@ -323,7 +359,7 @@ async function replayDeadLetters() {
       const isChange = e.kind === "refund-change" && OWED_CHANGES[v?.op] && Array.isArray(v.params) && v.params[0];
       if (!isDebt && !isChange) return "drop";
       let r;
-      try { r = await (isDebt ? stateQuery(INSERT_OWED_SQL(), owedParams(v)) : runOwedChange(v.op, v.params)); writer.answered(); }
+      try { r = await (isDebt ? insertOwedPg(v) : runOwedChange(v.op, v.params)); writer.answered(); }
       catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); return "keep"; } writer.failed(err); throw err; }
       if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); return "landed"; }
       await refreshWhere("evidence = $1", [isDebt ? v.evidence : v.params[0]]).catch(() => {});
@@ -544,7 +580,7 @@ export function receiptProvesCharge(receipt) {
 export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatus, synthetic, wire, hangupReason, note = null } = {}) {
   try {
     const evidence = (typeof tx === "string" && tx.trim())
-      ? tx.trim()
+      ? evidenceKey(tx)
       : `${payer || "unknown"}|${slug || "unknown"}|${Math.floor(Date.now() / 60_000)}`;
     const row = cleanRow({
       evidence,
@@ -564,7 +600,7 @@ export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatu
       // is refused, times out, or whose process is killed first is replayed
       // insert-if-absent by evidence, so it is never dropped.
       return writer.write("record", async () => {
-        const r = await stateQuery(INSERT_OWED_SQL(), owedParams(row));
+        const r = await insertOwedPg(row);
         return applyOrRefresh(r, "evidence = $1", [row.evidence]);
       }, { kind: "refund", payload: row });
     }
@@ -684,7 +720,7 @@ export function markRefundVoid(id, note) {
  *  Database mode: from the mirror (this process's landed writes, plus other
  *  containers' writes as of the last refresh). */
 export function refundByEvidence(evidence) {
-  try { return (typeof evidence === "string" && evidence.trim() && selectByEvidence.get(evidence.trim())) || null; } catch { return null; }
+  try { return (typeof evidence === "string" && evidence.trim() && selectByEvidence.get(evidenceKey(evidence))) || null; } catch { return null; }
 }
 // Every debt of one settlement transaction: the row keyed on the transaction
 // itself, and the rows keyed `<tx>#<authorization nonce>` (one per payment,
@@ -692,10 +728,16 @@ export function refundByEvidence(evidence) {
 // referralRefundEvidence). An exact key and one bounded index range ("#" to
 // the character after it), never a pattern: `tx` is one whole hash.
 const selectByTransaction = db.prepare("SELECT * FROM refunds WHERE evidence = ? OR (evidence >= ? AND evidence < ?) ORDER BY id ASC LIMIT 50");
+// An EVM hash matches its rows in any spelling (the lowercase index).
+const selectByTransactionLc = db.prepare("SELECT * FROM refunds WHERE lower(evidence) = ? OR (lower(evidence) >= ? AND lower(evidence) < ?) ORDER BY id ASC LIMIT 50");
 // Database mode: reads the in-memory mirror, as refundByEvidence does.
 export function refundsByTransaction(tx) {
   const t = typeof tx === "string" ? tx.trim() : "";
   if (!t || t.includes("#")) return [];
+  if (EVM_HEX_EVIDENCE.test(t)) {
+    const lc = t.toLowerCase();
+    try { return selectByTransactionLc.all(lc, `${lc}#`, `${lc}$`); } catch { return []; }
+  }
   try { return selectByTransaction.all(t, `${t}#`, `${t}$`); } catch { return []; }
 }
 
@@ -721,6 +763,7 @@ export async function refundByEvidenceFresh(evidence, { ms = 1500 } = {}) {
  *  later (from another container's dead-letter) books nothing. */
 export function voidOwedOnClaim(evidence, note) {
   if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return refuse();
+  evidence = evidenceKey(evidence);
   if (USE_PG) {
     return owedChange("void-on-claim", "void", [evidence.trim(), noNul(note.trim()), Date.now()]);
   }
@@ -736,6 +779,7 @@ export function voidOwedOnClaim(evidence, note) {
  *  that lands later for a run that then fails must still book. */
 export function voidOwedForServe(evidence, note) {
   if (typeof evidence !== "string" || !evidence.trim() || !note || typeof note !== "string" || !note.trim()) return refuse();
+  evidence = evidenceKey(evidence);
   if (USE_PG) return owedChange("void-for-serve", "hold", [evidence.trim(), noNul(note.trim()), Date.now()]);
   try { return voidOwedByEvidence.run({ evidence: evidence.trim(), note: note.trim(), resolvedAt: Date.now() }).changes > 0; } catch { return false; }
 }
@@ -748,7 +792,7 @@ export function voidOwedForServe(evidence, note) {
 export function reopenHeldClaim(evidence, { held, httpStatus, hangupReason = null, note } = {}) {
   const st = Number(httpStatus);
   if (typeof evidence !== "string" || !evidence.trim() || !held || !note || !Number.isInteger(st) || st < 400) return refuse();
-  const ev = evidence.trim();
+  const ev = evidenceKey(evidence);
   const reason = st === 499 && hangupReason ? String(hangupReason).slice(0, 40) : null;
   const n = String(note).slice(0, 200);
   if (USE_PG) return owedChange("reopen-held", "reopen", [ev, held, st, noNul(reason), noNul(n)]);
@@ -759,7 +803,7 @@ export function reopenHeldClaim(evidence, { held, httpStatus, hangupReason = nul
  *  claim that was served: reopenHeldClaim then no longer matches it). True
  *  when it did; database mode: a Promise of it. */
 export function renoteVoidRefund(evidence, from, to) {
-  const ev = String(evidence || "").trim();
+  const ev = evidenceKey(String(evidence || ""));
   if (!ev || !from || !to) return refuse();
   if (USE_PG) return owedChange("renote-void", "renoteVoid", [ev, from, noNul(String(to).slice(0, 200))]);
   try { return renoteVoid.run({ evidence: ev, from, to: String(to).slice(0, 200) }).changes > 0; } catch { return false; }
@@ -770,12 +814,13 @@ export function renoteVoidRefund(evidence, from, to) {
  *  when it did (so a caller can act once per transition); database mode: a
  *  Promise of it. */
 export function renoteOwedRefund(evidence, from, to) {
+  evidence = evidenceKey(String(evidence || ""));
   if (USE_PG) {
-    const ev = String(evidence || "").trim();
+    const ev = evidence;
     if (!ev) return refuse();
     return owedChange("renote", "renote", [ev, from, noNul(to)]);
   }
-  try { return renoteOwed.run({ evidence: String(evidence || "").trim(), from, to }).changes > 0; } catch { return false; }
+  try { return renoteOwed.run({ evidence, from, to }).changes > 0; } catch { return false; }
 }
 
 /** Turn an OWED row whose note reads `from` into a disconnect debt (http 499,
@@ -784,7 +829,7 @@ export function renoteOwedRefund(evidence, from, to) {
  *  Returns true when it did; database mode: a Promise of it. */
 export function promoteOwedToHangup(evidence, { from, hangupReason, append } = {}) {
   if (typeof evidence !== "string" || !evidence.trim() || !from || !append) return refuse();
-  const ev = evidence.trim();
+  const ev = evidenceKey(evidence);
   const reason = hangupReason ? String(hangupReason).slice(0, 40) : null;
   const add = String(append).slice(0, 120);
   if (USE_PG) {
@@ -802,7 +847,7 @@ export function promoteOwedToHangup(evidence, { from, hangupReason, append } = {
 export function restateOwedAsHandlerFailure(evidence, { from, httpStatus, append } = {}) {
   const st = Number(httpStatus);
   if (typeof evidence !== "string" || !evidence.trim() || !from || !append || !Number.isInteger(st) || st < 400 || st === 499) return refuse();
-  const ev = evidence.trim();
+  const ev = evidenceKey(evidence);
   const add = String(append).slice(0, 120);
   if (USE_PG) {
     return owedChange("restate-failure", "restate", [ev, from, st, noNul(add)]);
@@ -887,6 +932,11 @@ export function refundsForPayer(payer, { limit = 50 } = {}) {
   try {
     return /^0x[0-9a-fA-F]{40}$/.test(p) ? selectForPayerEvm.all(p.toLowerCase(), n) : selectForPayerExact.all(p, n);
   } catch { return []; }
+}
+
+/** Test seam (file mode): a row written exactly as an earlier build wrote it. */
+export function __insertRefundVerbatim({ evidence, slug = "legacy", network = null, payer = null, priceUsd = 0 } = {}) {
+  return db.prepare("INSERT INTO refunds (evidence, slug, network, payer, priceUsd, createdAt) VALUES (?, ?, ?, ?, ?, ?)").run(evidence, slug, network, payer, priceUsd, Date.now()).changes > 0;
 }
 
 /** Test seam. Database mode: a Promise, and the Postgres table is emptied too. */

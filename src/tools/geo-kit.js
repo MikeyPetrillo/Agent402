@@ -29,7 +29,7 @@ async function getJson(url, provider = "nominatim") {
   }
   let html;
   try {
-    ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024 }));
+    ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024, ownUpstream: true }));
   } catch (err) {
     // Nominatim enforces the strictest per-IP policy in the catalog (1 req/s,
     // blocks heavy IPs) and our egress IP is shared platform-wide. A throttle

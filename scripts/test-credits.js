@@ -311,6 +311,25 @@ try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
     r4.statusCode = 200; r4.emit("finish");
     ok(Math.abs(cr.balance(KEY).balanceUsd - (b4 - expected)) < 1e-9 && Math.abs(cr.balance(KEY).heldUsd - held4) < 1e-9, `gate (streamed): the debit is the metered usage, the rest of the hold is returned (balance ${cr.balance(KEY).balanceUsd})`);
     ok(Math.abs(debits[debits.length - 1].priceUsd - expected) < 1e-9, "gate (streamed): the accounting hook books the metered amount");
+    // A chat stream that ends with no answer (all reasoning, then length) is a
+    // 502 before any byte: the hold is returned and nothing is debited.
+    globalThis.fetch = async () => ({ ok: true, status: 200, body: (async function* () {
+      yield Buffer.from(`data: ${JSON.stringify({ choices: [{ delta: { content: "", reasoning: "thinking" } }] })}\n\n`);
+      yield Buffer.from(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}\n\n`);
+      yield Buffer.from(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 64, cost: COST } })}\n\n`);
+      yield Buffer.from("data: [DONE]\n\n");
+    })() });
+    const r5 = fakeRes(); r5.getHeader = (k) => r5.headers[k];
+    r5.writeHead = (code) => { r5.statusCode = code; r5.headersSent = true; }; r5.write = () => true; r5.on = r5.addListener;
+    const req5 = { method: "POST", path: "/v1/metered/stream", headers: { authorization: `Bearer ${KEY}` }, body: { stream: true } };
+    r5.req = req5;
+    const b5 = cr.balance(KEY).balanceUsd, d5 = debits.length;
+    gateS(req5, r5, () => {});
+    const e5 = await streamOpenRouterTo({ model: "fake/model", messages: [], stream: true }, r5, { timeoutMs: 2000, holdUntilAnswer: true }).then(() => null, (e) => e);
+    globalThis.fetch = realFetch;
+    ok(e5?.statusCode === 502 && !r5.headersSent && !("__meteredUsageUsd" in req5), "an empty chat stream is a 502 before the 200, with no metered usage left on the request");
+    r5.statusCode = 502; r5.emit("finish"); // what the route binder answers for it
+    ok(Math.abs(cr.balance(KEY).balanceUsd - b5) < 1e-9 && debits.length === d5, `gate (streamed): an empty chat stream is not debited, the hold is returned (balance ${cr.balance(KEY).balanceUsd})`);
     if (prevMeter === undefined) delete process.env.GATEWAY_METERED_BILLING; else process.env.GATEWAY_METERED_BILLING = prevMeter;
     if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = prevKey;
   }
