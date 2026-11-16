@@ -30,13 +30,20 @@
 //   tx:<network>:<tx>        taken by the request that served the
 //                            transaction, on a normal settle (onAfterSettle;
 //                            on Stellar, ownSettledStellarTx in the settle
-//                            itself) or a recovery.
+//                            itself) or a recovery. On Solana and Algorand a
+//                            settle whose transaction another request already
+//                            holds is failed in onAfterSettle (a signed
+//                            transaction resent is the same transaction), so
+//                            one transaction answers one request. Hex ids
+//                            (EVM, Stellar) are lowercased; base58 and base32
+//                            ids are kept exactly as written.
 //
 // A claim is a SET NX with a TTL on the shared Redis when REDIS_URL is set, so
 // two replicas cannot both own one key; without Redis, or when it does not
 // answer, the same claim is made in this process.
 import { GATEWAY_PENDING_BOOKED } from "./gateway-wire.js";
 import { randomUUID } from "node:crypto";
+import { AfterSettleAbortError } from "@x402/core/server";
 import { getSharedRedisClient } from "./shared-limit.js";
 import { settleTxOf, stellarAuthorizationsOf } from "./stellar-confirm.js";
 import { pendingNonceOf } from "./circle-facilitator.js";
@@ -203,8 +210,16 @@ export const legacyNonceClaimKey = (network, nonce) => `nonce:${String(network)}
 // A Stellar address is kept as signed (never case-folded); the nonce is an
 // int64 in decimal.
 export const stellarNonceClaimKey = (network, signer, nonce) => `nonce:${String(network)}:${String(signer)}:${String(nonce)}`;
-// EVM tx hashes are hex: lowercasing is exact for them.
-export const txClaimKey = (network, tx) => `tx:${String(network)}:${String(tx).toLowerCase()}`;
+// EVM and Stellar tx hashes are hex: lowercasing is exact for them. A Solana
+// signature (base58) or an Algorand id (base32) is case-significant and kept
+// as written.
+const hexTxNetwork = (network) => /^(?:eip155|stellar):/.test(String(network));
+export const txClaimKey = (network, tx) => `tx:${String(network)}:${hexTxNetwork(network) ? String(tx).toLowerCase() : String(tx)}`;
+// The rails whose settle is a signed transaction the facilitator broadcasts:
+// a resend of one payment carries the same transaction, so its id is claimed
+// and a second answer for it refused (there is no authorization nonce to
+// claim before settle).
+const claimsTxAfterSettle = (network) => /^(?:solana|algorand):/.test(String(network));
 
 const STATE = "__a402SettleClaim";
 const reqOf = (ctx) => ctx?.transportContext?.request?.adapter?.req;
@@ -303,6 +318,7 @@ export function registerSettlementClaimHooks(server) {
     }
   });
   server.onAfterSettle(async (ctx) => {
+    let heldElsewhere = null;
     try {
       const r = ctx?.result;
       if (!r || r.success !== true) return;
@@ -310,12 +326,18 @@ export function registerSettlementClaimHooks(server) {
       if (s) await extendHeld(s);
       // A Stellar settle claims its own transaction inside the settle
       // (ownSettledStellarTx), where a transaction another request already
-      // serves can still be refused; this claim is the EVM one.
+      // serves can still be refused; this claim is the EVM one, and the
+      // Solana and Algorand one, which also refuses.
       const network = String(r.network || ctx?.requirements?.network || "");
-      if (typeof r.transaction === "string" && r.transaction && network.startsWith("eip155:")) {
-        await claimSettlementKey(txClaimKey(network, r.transaction), s?.id || `settled:${randomUUID()}`);
+      if (typeof r.transaction === "string" && r.transaction && (network.startsWith("eip155:") || claimsTxAfterSettle(network))) {
+        const c = await claimSettlementKey(txClaimKey(network, r.transaction), s?.id || `settled:${randomUUID()}`);
+        if (!c.claimed && claimsTxAfterSettle(network)) heldElsewhere = r.transaction;
       }
     } catch { /* never touch a payment */ }
+    if (heldElsewhere) {
+      console.warn(`[settlement-claims] ${String(ctx?.requirements?.network || "")} transaction ${heldElsewhere} settled but another request already holds it; not answering twice for one payment`);
+      throw new AfterSettleAbortError(TX_SERVED_ELSEWHERE, "This payment's transaction already answered another request.");
+    }
   });
   return server;
 }

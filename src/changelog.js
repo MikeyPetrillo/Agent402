@@ -9,6 +9,20 @@ const ENTRIES = [
     ],
   },
   {
+    date: "2026-11-16",
+    title: "Own sources that do not resolve are ours",
+    items: [
+      "Tools: when a source a tool reads on its own does not resolve, the answer is a 503, uncharged, never the 400 a URL you supply gets when it does not resolve. The weather, geocoding, holiday, government, Treasury debt and average-rate, FX history, World Bank, FRED, crypto market, SEC filing, market data and npm registry reads answer 503 with Retry-After 5, attribution ours and hint our-egress, so the same call can be sent again; the Treasury yield-curve tools, fx-rate and fx-dashboard keep their own 503 with Retry-After for a source they cannot read.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "Late Solana and Algorand payments are repaid",
+    items: [
+      "Payments: A payment that reaches the chain after its call was refused is found and repaid on Solana and Algorand as on EVM: a settlement that failed while naming its transaction is followed on chain, and once it lands it is recorded as owed to the buyer, once. On EVM, a settlement refused as already submitted whose chain read failed is followed the same way, and a transaction that never appears is closed as not landed only after an exact payment's signed authorization reads unused, so a transfer sent in another transaction is still repaid. On Solana and Algorand one settled transaction answers one request.",
+    ],
+  },
+  {
     date: "2026-11-15",
     title: "Access keys and card tokens are judged per payer",
     items: [

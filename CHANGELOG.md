@@ -19,6 +19,29 @@ Gateway:
   window starts sending before it closes, and is then served and charged as
   before.
 
+### 2026-11-16 (own sources that do not resolve are ours)
+Tools:
+- When a source a tool reads on its own does not resolve, the answer is a
+  503, uncharged, never the 400 a URL you supply gets when it does not
+  resolve. The weather, geocoding, holiday, government, Treasury debt and
+  average-rate, FX history, World Bank, FRED, crypto market, SEC filing,
+  market data and npm registry reads answer 503 with Retry-After 5,
+  attribution ours and hint our-egress, so the same call can be sent again;
+  the Treasury yield-curve tools, fx-rate and fx-dashboard keep their own 503
+  with Retry-After for a source they cannot read.
+
+### 2026-11-16 (late Solana and Algorand payments are repaid)
+Payments:
+- A payment that reaches the chain after its call was refused is found and
+  repaid on Solana and Algorand as on EVM: a settlement that failed while
+  naming its transaction is followed on chain, and once it lands it is
+  recorded as owed to the buyer, once. On EVM, a settlement refused as already
+  submitted whose chain read failed is followed the same way, and a
+  transaction that never appears is closed as not landed only after an exact
+  payment's signed authorization reads unused, so a transfer sent in another
+  transaction is still repaid. On Solana and Algorand one settled transaction
+  answers one request.
+
 ### 2026-11-15 (access keys and card tokens are judged per payer)
 Payments:
 - A Tempo pull credential signed by an access key runs only once the chain
