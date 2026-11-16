@@ -41,10 +41,62 @@ const isPlainObject = (v) => {
   return proto === Object.prototype || proto === null;
 };
 
+/** A lower bound on the UTF-8 bytes JSON.stringify(value) would write, found
+ *  by a walk that stops as soon as the bound passes `maxBytes`, the nesting
+ *  passes MAX_DEPTH or a value is its own ancestor. Each node costs at least
+ *  one byte, so the walk visits at most `maxBytes` nodes, and its recursion is
+ *  at most MAX_DEPTH + 1 frames deep whatever the input's nesting. Reads
+ *  values the way JSON.stringify does (own enumerable string keys), so a
+ *  getter that throws is caught here, before any serialization. */
+function boundedSize(value, maxBytes) {
+  let bytes = 0;
+  const stack = new Set();
+  // Bytes a value writes at least: a string its quotes and one per UTF-16
+  // unit (a unit is one to three UTF-8 bytes, a surrogate pair four), null
+  // four, any other primitive one; undefined, a function or a symbol writes
+  // nothing as an object member.
+  const skipped = (v) => v === undefined || typeof v === "function" || typeof v === "symbol";
+  const walk = (v, depth) => {
+    if (v === null || typeof v !== "object") {
+      bytes += typeof v === "string" ? v.length + 2 : v === null ? 4 : skipped(v) ? 0 : 1;
+      return bytes > maxBytes ? "too_large" : null;
+    }
+    if (stack.has(v)) return "not_json";
+    if (depth > MAX_DEPTH) return "too_deep";
+    stack.add(v);
+    bytes += 2;
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length; i++) {
+        if (i > 0) bytes += 1;
+        if (bytes > maxBytes) return "too_large";
+        const r = walk(v[i], depth + 1);
+        if (r) return r;
+      }
+    } else {
+      let members = 0;
+      for (const key of Object.keys(v)) {
+        const member = v[key];
+        if (skipped(member)) continue;
+        bytes += key.length + 3 + (members++ > 0 ? 1 : 0);
+        if (bytes > maxBytes) return "too_large";
+        const r = walk(member, depth + 1);
+        if (r) return r;
+      }
+    }
+    stack.delete(v);
+    return null;
+  };
+  try { return walk(value, 1); } catch { return "not_json"; }
+}
+
 /** A detached JSON copy of `value` (no getters, no prototype chain, no
  *  accessor surprises), or a reason it cannot be one: bytes over `maxBytes`,
- *  depth over MAX_DEPTH, or a key that names a prototype slot. Never throws. */
+ *  depth over MAX_DEPTH, or a key that names a prototype slot. The bounded
+ *  walk runs first, so serialization never starts on an input past either
+ *  bound. Never throws. */
 function jsonCopy(value, maxBytes) {
+  const early = boundedSize(value, maxBytes);
+  if (early) return { reason: early };
   let json;
   try { json = JSON.stringify(value); } catch { return { reason: "not_json" }; }
   if (typeof json !== "string") return { reason: "not_json" };
@@ -127,21 +179,24 @@ function isPaymentRequiredV2(value) {
 
 /** Copy the `_meta` entries of an MPP challenge (src/mcp-mpp.js) onto `into`
  *  by reference, so each value serializes exactly as it was given. Only own
- *  string keys; prototype slots are skipped. */
+ *  string keys; prototype slots are skipped, and so is every "x402/" key: the
+ *  x402 entries of a result are written by this module alone, so a caller's
+ *  meta can never put a settle receipt on a failure. */
 function mergeMeta(into, extra) {
   if (!isPlainObject(extra)) return into;
   for (const key of Object.keys(extra)) {
-    if (FORBIDDEN_KEYS.has(key)) continue;
+    if (FORBIDDEN_KEYS.has(key) || key.startsWith("x402/")) continue;
     Object.defineProperty(into, key, { value: extra[key], enumerable: true, writable: true, configurable: true });
   }
   return into;
 }
 
-function requiredShape(paymentRequired, { message, meta } = {}) {
+function requiredShape(paymentRequired, { message, meta, settleReceipt } = {}) {
   const content = [{ type: "text", text: JSON.stringify(paymentRequired) }];
   if (typeof message === "string" && message.trim()) content.push({ type: "text", text: message.trim() });
   const result = { isError: true, structuredContent: paymentRequired, content };
   const merged = mergeMeta({}, meta);
+  if (settleReceipt) merged[X402_PAYMENT_RESPONSE_META] = settleReceipt;
   if (Object.keys(merged).length) result._meta = merged;
   return result;
 }
@@ -168,14 +223,27 @@ export function buildPaymentRequiredResult(paymentRequired, { message, mppMeta }
  */
 export function buildSettlementFailedResult(paymentRequired, { reason, message, settleResponse, mppMeta } = {}) {
   if (!isPaymentRequiredV2(paymentRequired)) return null;
-  const why = typeof reason === "string" && reason.trim() ? reason.trim().slice(0, 200) : "Settlement failed";
-  const body = { ...paymentRequired, error: `Payment settlement failed: ${why}` };
-  const meta = mergeMeta({}, mppMeta);
+  const why = typeof reason === "string" && reason.trim() ? reason.trim().slice(0, 200) : "";
+  const body = { ...paymentRequired, error: why ? `Payment settlement failed: ${why}` : "Payment settlement failed" };
+  let settleReceipt = null;
   if (isPlainObject(settleResponse) && settleResponse.success === false) {
     const { copy } = jsonCopy(settleResponse, X402_PAYMENT_MAX_BYTES);
-    if (copy) meta[X402_PAYMENT_RESPONSE_META] = copy;
+    if (copy && copy.success === false) settleReceipt = copy;
   }
-  return requiredShape(body, { message, meta });
+  return requiredShape(body, { message, meta: mppMeta, settleReceipt });
+}
+
+/**
+ * The result for a payment that cannot be used (the reader refused it, or the
+ * route's verify did): the payment-required shape again, its `error` naming
+ * the reason, so a client can sign a fresh payment and retry, as the
+ * transport spec and the official server do. No settle receipt rides on it.
+ * null when `paymentRequired` is not a valid v2 PaymentRequired. Never throws.
+ */
+export function buildInvalidPaymentResult(paymentRequired, { reason, message, mppMeta } = {}) {
+  if (!isPaymentRequiredV2(paymentRequired)) return null;
+  const why = typeof reason === "string" && reason.trim() ? reason.trim().slice(0, 200) : "Payment verification failed";
+  return requiredShape({ ...paymentRequired, error: why }, { message, meta: mppMeta });
 }
 
 /** The SettleResponse from the route's PAYMENT-RESPONSE header, when it
@@ -204,5 +272,7 @@ export function paymentResponseMeta(headerValue) {
 export function withPaymentResponse(result, headerValue) {
   const meta = paymentResponseMeta(headerValue);
   if (!meta || !isPlainObject(result)) return result;
-  return { ...result, _meta: mergeMeta(mergeMeta({}, result._meta), meta) };
+  const merged = mergeMeta({}, result._meta);
+  merged[X402_PAYMENT_RESPONSE_META] = meta[X402_PAYMENT_RESPONSE_META];
+  return { ...result, _meta: merged };
 }
