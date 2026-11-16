@@ -331,7 +331,8 @@ function audit({ exclude, width, ragFrac, ragWords }) {
 
 async function settle(page) {
   // Scroll the whole page so scroll-reveal sections render, then return to the top.
-  await page.evaluate(async () => {
+  // Returns false when API-drawn content never replaced its spinner.
+  return page.evaluate(async () => {
     const step = Math.max(200, Math.floor(innerHeight * 0.8));
     // Bounded: a page that grows as it scrolls cannot keep this loop going.
     for (let y = 0, k = 0; y < document.documentElement.scrollHeight && k < 600; y += step, k++) { scrollTo(0, y); await new Promise((r) => setTimeout(r, 40)); }
@@ -342,8 +343,10 @@ async function settle(page) {
     // spinner to go (bounded), then for fonts, then one frame, so the audit
     // measures the bound text and never a page whose content has not arrived.
     for (let k = 0; k < 150 && document.querySelector("#app[data-api] > .status .spin"); k++) await new Promise((r) => setTimeout(r, 100));
+    const drawn = !document.querySelector("#app[data-api] > .status .spin");
     await document.fonts.ready;
     await new Promise((r) => requestAnimationFrame(() => r()));
+    return drawn;
   });
 }
 
@@ -431,7 +434,7 @@ try {
           if (!/html/i.test(res.headers()["content-type"] || "")) { log.push(`skip - ${key} is not HTML`); return log; }
           let found;
           try {
-            found = await withDeadline((async () => { await settle(page); return page.evaluate(audit, { exclude: EXCLUDE, width, ragFrac: RAG_MIN_FRACTION, ragWords: RAG_MIN_WORDS }); })(), PAGE_DEADLINE_MS);
+            found = await withDeadline((async () => { if (!(await settle(page))) return null; return page.evaluate(audit, { exclude: EXCLUDE, width, ragFrac: RAG_MIN_FRACTION, ragWords: RAG_MIN_WORDS }); })(), PAGE_DEADLINE_MS);
           } catch (e) {
             if (!e.deadline) throw e;
             const msg = `FAIL - ${key} did not settle and audit within ${PAGE_DEADLINE_MS} ms`;
@@ -439,6 +442,12 @@ try {
             log.push(msg); failures++; counts[key] = "hang";
             try { await page.close(); } catch {}
             page = await ctx.newPage();
+            return log;
+          }
+          if (found === null) {
+            const msg = `FAIL - ${key} content never drew (its loading spinner was still showing after the wait)`;
+            console.log(msg);
+            log.push(msg); failures++; counts[key] = "never-drew";
             return log;
           }
           counts[key] = found.length;
