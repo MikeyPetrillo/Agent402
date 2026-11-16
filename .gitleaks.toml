@@ -160,6 +160,13 @@ regexes = [
   # test-mpp-tempo-shim.js proves is never relayed to a buyer.
   '''0123456789abcdef0123456789abcdef''',
   '''tempo-api-key-SECRET-123''',
+  # scripts/test-mcp-x402-connector.js and scripts/test-gateway-withdraw.js:
+  # made-up values in secret-named variables, set so the suites can prove the
+  # connector and the withdraw script never print them. Not credentials;
+  # pinned exactly (also reported under every merge commit that carries them).
+  '''^test-mcp-x402-conn-secret$''',
+  '''^Zk9pRqT7vW2xY5aB$''',
+  '''^Pq8sLm3nVx6cWe1R$''',
   # The fixture JWTs, allowlisted by their PAYLOADS (2026-09-22). This used to
   # be a stopword on the HS256 header, which is the first segment of EVERY
   # HS256 token: a planted Supabase-shaped service_role key was flagged by the
