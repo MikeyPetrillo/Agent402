@@ -1201,13 +1201,19 @@ export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
     if (room >= ATTRIBUTION_MIN_LEAD || (room >= ATTRIBUTION_SHORT_LEAD && tail.length + 1 + ATTRIBUTION_MIN_LEAD > max)) return `${bazaarCapDescription(lead, room)} ${tail}`;
   }
   const head = s.slice(0, max);
-  const sentenceEnd = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), head.endsWith(".") ? head.length - 1 : -1);
-  if (sentenceEnd >= Math.floor(max * 0.5)) return head.slice(0, sentenceEnd + 1).trim();
-  const wordEnd = head.lastIndexOf(" ");
-  let cut = (wordEnd > 0 ? head.slice(0, wordEnd) : head).trim();
+  // An abbreviation ("e.g. ", "i.e. ") is not a sentence end.
+  const masked = head.replace(/\b(e\.g|i\.e|etc|vs)\. /gi, (m) => m.replace(/\. $/, "_ "));
+  const sentenceEnd = Math.max(masked.lastIndexOf(". "), masked.lastIndexOf("! "), masked.lastIndexOf("? "), masked.endsWith(".") ? masked.length - 1 : -1);
   // A cut inside a bracket leaves it open ("runs 3 tools (a, b."): end before it.
-  const open = cut.lastIndexOf("(");
-  if (open > 0 && open > cut.lastIndexOf(")")) cut = cut.slice(0, open).trim();
+  const closeBracket = (t) => { const open = t.lastIndexOf("("); return open > 0 && open > t.lastIndexOf(")") ? t.slice(0, open).trim().replace(/[,;:\-]+$/, "") : t; };
+  if (sentenceEnd >= Math.floor(max * 0.5)) {
+    const sentence = head.slice(0, sentenceEnd + 1).trim();
+    const closed = closeBracket(sentence);
+    if (closed === sentence) return sentence;
+    if (closed.length >= Math.floor(max * 0.5)) return closed.replace(/[.!?]?$/, ".");
+  }
+  const wordEnd = head.lastIndexOf(" ");
+  const cut = closeBracket((wordEnd > 0 ? head.slice(0, wordEnd) : head).trim());
   return cut.replace(/[,;:\-]+$/, "") + ".";
 }
 

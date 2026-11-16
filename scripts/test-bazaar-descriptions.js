@@ -31,6 +31,8 @@ for (const must of ["search", "answer", "extract", "render", "vin-decode", "geo-
   const mr = BAZAAR_DESCRIPTIONS["memory-read"] || "";
   {
     const cutOpen = bazaarCapDescription("Pack runs 3 underlying tools (alpha-tool, beta-tool, gamma-tool, delta-tool); partial-success per step and more words here.", 70);
+    const eg = bazaarCapDescription("Lists every coin id with its symbol and name. Pass a platform (e.g. ethereum, solana, base, arbitrum, optimism) to filter results by chain and more.", 90);
+    ok(!/\([^)]*$/.test(eg) && !/e\.g\.$/.test(eg), `a cut never ends on an abbreviation inside a bracket (${eg})`);
     ok(!/\([^)]*$/.test(cutOpen) && /tools\.$/.test(cutOpen), `a cut never leaves a bracket open (${cutOpen})`);
   }
   ok(bazaarCapDescription(mr) === mr && /paying wallet/.test(mr) && /omit it to list/.test(mr) && /own namespace by default/.test(mr) && /granted/.test(mr) && !/\?[a-z]+=/.test(mr), "memory-read: curated copy reads whole and names the key read, the key list, the payer's own namespace and a granted one");
