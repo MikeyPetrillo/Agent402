@@ -503,7 +503,9 @@ async function listen(app) {
     let healthy = false;
     keychainAnswer = createKeychainSenderVerifier({ check: async () => (healthy ? "active" : "unreadable") });
     const r1 = await get("/plain", TX_AGENT);
+    const vSpend = seen.validate;
     const r1s = await get("/spend", TX_AGENT);
+    ok(seen.validate === vSpend, `C: on a spending route a failed key read is answered before any relay call (validate +${seen.validate - vSpend})`);
     healthy = true;
     const r2 = await get("/plain", TX_AGENT);
     ok(r1.status === 503 && r1.retryAfter === String(TEMPO_SENDER_CHECK_RETRY_AFTER_S) && r1.body.details?.charged === false && r1s.status === 503 && r1s.body.details?.reason === "sender-check-unavailable", `C: a failed key read answers 503 with Retry-After on an ordinary and a spending route, uncharged (${r1.status}, ${r1s.status})`);
