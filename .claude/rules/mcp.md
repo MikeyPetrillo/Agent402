@@ -13,6 +13,10 @@ Loaded when a connector or front-door file is read.
 - **Connector modules:** `src/mcp-mpp.js` makes wallet-only tools payable on the connector by replaying the call as a
   loopback request to the real paid route; `src/mcp-tasks.js` handles long calls as MCP tasks;
   `src/mcp-skills.js` serves skill packs over the Skills extension (`MCP_SKILLS=on`, negotiated only).
+  `src/mcp-x402-routes.js` holds internal x402 twins of six fixed-price flagships at `/__mcp-x402/<slug>`:
+  reachable only with the loopback secret (anything else is the ordinary 404), rewritten to the tool's route
+  and priced by its accepts with resource `/mcp` and an MCP discovery extension; a flagged request the twin
+  paywall does not price runs the route's own paywall. Not yet called by `/mcp`.
   `src/mcp-x402.js` is the x402 MCP transport codec (`_meta["x402/payment"]` in, payment-required,
   invalid-payment and settlement-failed results, `x402/payment-response` out): pure, not yet wired to `/mcp`.
   Its interop suite needs the official `@x402/mcp` client, which CI installs with `--no-save` in the

@@ -11,6 +11,7 @@ import { createTrafficStore, trafficMiddleware } from "./traffic-classifier.js";
 import { redisSharedSettled, createUnpaidQuoteBudget, looksLikePayment, unpaidQuoteBudgetPerHour, isMcpLoopback, normalizeCatalogPath, METERED_UNPAID_QUOTES_PER_MIN, METERED_UNPAID_QUOTES_PER_HOUR, PAID_CLIENT_METERED_QUOTES_PER_MIN, PAID_CLIENT_METERED_QUOTES_PER_HOUR, clientKeyOf as quoteClientKeyOf, workerEgressAddressKeyOf } from "./unpaid-quote-budget.js";
 import { createPaidQuoteTrust, paidAndSettled } from "./paid-quote-trust.js";
 import { stripMcpMarker } from "./mcp-loopback.js";
+import { createMcpX402Gate, mcpX402PaymentSpecs } from "./mcp-x402-routes.js";
 import { canonicalizePaymentHeaders, decodePaymentHeader, encodePaymentHeader } from "./payment-header.js";
 import { RAILS_OR, RAILS, x402EvmOnly, x402RailsFor } from "./rails.js";
 import { onGatedRailOffered } from "./gated-rails.js";
@@ -2720,6 +2721,11 @@ let catalogPathByFold = null;
 // else (src/mcp-loopback.js): a client-sent one is dropped, a genuine one is
 // remembered on the request and its secret never reaches a handler.
 app.use(stripMcpMarker);
+// The connector's internal x402 twins (src/mcp-x402-routes.js): a marked
+// loopback request to /__mcp-x402/<slug> is rewritten to the tool's own path
+// here, before every gate, so it runs the HTTP route's chain; any other
+// request under that prefix goes on to the ordinary 404.
+app.use(createMcpX402Gate({ getCatalog: () => CATALOG }));
 // Payment headers (PAYMENT-SIGNATURE, X-PAYMENT) are decoded once here
 // (src/payment-header.js) and rewritten to the canonical base64 of their
 // JSON, so every later reader, the paywall included, reads the same bytes.
@@ -11230,6 +11236,9 @@ if (FREE_MODE) {
     network: NETWORK,
     baseUrl: BASE_URL,
     catalog: CATALOG,
+    // The hosted connector's x402 twins of six flagships: the HTTP route's
+    // accepts, resource /mcp, an MCP discovery extension. Not catalog entries.
+    mcpRoutes: mcpX402PaymentSpecs(CATALOG),
     // Retired pairwise converters, priced identically to the tool that
     // replaced them (POST /api/unit-convert, $0.001) because it is the same
     // work through the same table. Wildcards, NOT catalog entries: `*` compiles

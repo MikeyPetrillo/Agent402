@@ -66,10 +66,12 @@ import {
   GATEWAY_API_BASE, GATEWAY_KIND_NAME, GATEWAY_WIRE, GatewayNanopaymentsClient, gatewayKindsFromSupported, gatewayAcceptFields,
   installGatewayRouting, isGatewayBatchedPayment, preflightGatewayPayment, createGatewayPendingBook, gatewayBalanceStatus,
   refreshGatewayBalance, _resetGatewayBalanceForTests, startGatewayBalanceWatch, gatewayNanopaymentNetworks, gatewayNanopaymentsEnabled,
-  CDN_PENDING_RESERVE_MS, pendingKey, createGatewayPendingResolver, gatewayResourceOf,
+  CDN_PENDING_RESERVE_MS, pendingKey, createGatewayPendingResolver, gatewayResourceOf, gatewayArrivalOf,
   gatewayPendingLost, _resetGatewayPendingLostForTests, notePendingLost, retryLostPending, gatewayLostDurableStore, _gatewayLostDurableSettled, _gatewayLostPathsForTests, LOST_EVICTED_WINDOW_MS, byTransferIdAnyCase, gatewayTransferMatches, normalizeGatewayTransfer,
 } from "../src/gateway-nanopayments.js";
 import { GATEWAY_MAX_TIMEOUT_SECONDS } from "../client/index.js";
+import { createMcpX402Gate } from "../src/mcp-x402-routes.js";
+import { mcpLoopbackHeaders } from "../src/mcp-loopback.js";
 import { classifySettlementPending, settlementKindOf, isGatewayBatchedHeader, isGatewayBatchedRequest, isGatewayWire } from "../src/gateway-wire.js";
 import { hintFor } from "../src/verify-hint.js";
 import { verifyInboundPayment } from "../src/payment-verify.js";
@@ -814,6 +816,59 @@ await check("a pending resend resumes only on the route it was booked on (method
     assert.equal(v.isValid, true, "the same route resumes");
     const served = await server.settlePayment(p, baseAccept, undefined, A2);
     assert.equal(served.success, true);
+    assert.equal(await book.get(key), null, "served and dropped");
+  } finally { gw.mode = "ok"; rmSync(dir, { recursive: true, force: true }); }
+});
+
+await check("a connector x402 twin's pending payment books the public route (GET /api/memory) and its arrival; it resumes on the twin only, never on the HTTP route, and an HTTP route's never on the twin", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "a402-gw-twin-"));
+  const book = createGatewayPendingBook({ file: join(dir, "p.json"), log: () => {} });
+  await book.ready;
+  const bc = new GatewayNanopaymentsClient({ fetchImpl: fetchStub, networks: ["eip155:8453"], onPending: (e) => book.book(e), pendingWaitMs: 100, pendingPollMs: 40 });
+  await bc.getSupported();
+  const plainClient = { async getSupported() { return { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }; }, async verify() { throw new Error("plain verify must not be asked"); }, async settle() { throw new Error("plain settle must not be asked"); } };
+  const server = new x402ResourceServer([plainClient]).register("eip155:8453", new ExactEvmScheme());
+  await server.initialize();
+  installGatewayRouting(server, bc, new Set(["eip155:8453"]), { pendingBook: book, wasServed: async () => false });
+  // A twin request is one the real gate rewrote: the in-process loopback marker, on a loopback socket.
+  const gate = createMcpX402Gate({ getCatalog: () => ({ "GET /api/memory": { slug: "memory-read", price: "$0.001", discovery: { input: {} } } }) });
+  const reqOf = (url, headers = {}) => { const r = { method: "GET", url, originalUrl: url, headers: { ...headers }, socket: { remoteAddress: "127.0.0.1" } }; Object.defineProperty(r, "path", { get() { return this.url.split("?")[0]; } }); return r; };
+  const twinReq = () => { const r = reqOf("/__mcp-x402/memory-read?key=a", Object.fromEntries(Object.entries(mcpLoopbackHeaders()).map(([k, v]) => [k.toLowerCase(), v]))); gate(r, {}, () => {}); return r; };
+  const tcOf = (req) => ({ request: { adapter: { req } } });
+  const T = twinReq();
+  assert.equal(T.url, "/api/memory?key=a", "the gate rewrote the twin request");
+  assert.equal(T.originalUrl, "/__mcp-x402/memory-read?key=a");
+  assert.equal(gatewayResourceOf(T), "GET /api/memory", "a twin names the public route, not its internal path");
+  assert.equal(gatewayArrivalOf(T), "x402-mcp");
+  assert.equal(gatewayResourceOf(reqOf("/api/memory")), "GET /api/memory");
+  assert.equal(gatewayArrivalOf(reqOf("/api/memory")), null);
+  try {
+    gw.mode = "pending";
+    const p = await signed({ accept: baseAccept, chainId: 8453, resource: "https://example.invalid/mcp" });
+    assert.equal((await server.verifyPayment(p, baseAccept, undefined, tcOf(T))).isValid, true);
+    assert.equal((await server.settlePayment(p, baseAccept, undefined, tcOf(T))).errorReason, "settlement_pending");
+    const key = pendingKey("eip155:8453", acct.address, p.payload.authorization.nonce);
+    const e0 = await book.get(key);
+    assert.equal(e0.resource, "GET /api/memory", "booked under the public route");
+    assert.equal(e0.arrival, "x402-mcp", "and the twin's arrival");
+    // An HTTP route's pending payment: booked without an arrival.
+    const q = await signed({ accept: baseAccept, chainId: 8453 });
+    assert.equal((await server.verifyPayment(q, baseAccept, undefined, tcOf(reqOf("/api/memory")))).isValid, true);
+    assert.equal((await server.settlePayment(q, baseAccept, undefined, tcOf(reqOf("/api/memory")))).errorReason, "settlement_pending");
+    const qkey = pendingKey("eip155:8453", acct.address, q.payload.authorization.nonce);
+    assert.equal((await book.get(qkey)).resource, "GET /api/memory");
+    assert.equal((await book.get(qkey)).arrival, undefined);
+    gw.mode = "ok";
+    gw.transfers.push(recordFor(p, "confirmed"), recordFor(q, "confirmed"));
+    const vh = await server.verifyPayment(p, baseAccept, undefined, tcOf(reqOf("/api/memory")));
+    assert.deepEqual([vh.isValid, vh.invalidReason], [false, "resource_mismatch"], "the twin's pending payment is refused on the HTTP route");
+    assert.equal((await book.get(key)).state, "pending");
+    const vt = await server.verifyPayment(q, baseAccept, undefined, tcOf(twinReq()));
+    assert.deepEqual([vt.isValid, vt.invalidReason], [false, "resource_mismatch"], "the HTTP route's pending payment is refused on the twin");
+    assert.equal((await book.get(qkey)).state, "pending");
+    const T2 = twinReq();
+    assert.equal((await server.verifyPayment(p, baseAccept, undefined, tcOf(T2))).isValid, true, "the twin resumes");
+    assert.equal((await server.settlePayment(p, baseAccept, undefined, tcOf(T2))).success, true);
     assert.equal(await book.get(key), null, "served and dropped");
   } finally { gw.mode = "ok"; rmSync(dir, { recursive: true, force: true }); }
 });
