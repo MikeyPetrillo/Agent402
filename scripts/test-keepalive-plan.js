@@ -9,6 +9,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -151,7 +152,7 @@ const DOLLAR_FIGURE = /\$\s?\d/;
   const target = `http://127.0.0.1:${server.address().port}`;
   const env = { PATH: process.env.PATH, HOME: process.env.HOME, TARGET_URL: target, MODE: "sweep", DRY_RUN: "1", STALE_DAYS: "0", BATCH_COUNT: "1", REQUIRE_SLUGS: "1" };
   const rb = (extra) => new Promise((resolve) => {
-    const p = spawn(process.execPath, [new URL("./refresh-bazaar.js", import.meta.url).pathname], { env: { ...env, ...extra } });
+    const p = spawn(process.execPath, [fileURLToPath(new URL("./refresh-bazaar.js", import.meta.url))], { env: { ...env, ...extra } });
     let out = "";
     p.stdout.on("data", (d) => (out += d)); p.stderr.on("data", (d) => (out += d));
     p.on("close", (code) => resolve({ code, out }));
@@ -204,7 +205,7 @@ async function signedPass({ routes, cap, maxPrice = "2" }) {
     SLUGS: routes.map((r) => r.slug).join(","), REQUIRE_SLUGS: "1", MAX_PRICE_USD: maxPrice, MAX_SPEND_USD: cap, STALE_DAYS: "0", BATCH_COUNT: "1",
     BURNER_KEY: `0x${randomBytes(32).toString("hex")}` };
   const out = await new Promise((resolve) => {
-    const p = spawn(process.execPath, [new URL("./refresh-bazaar.js", import.meta.url).pathname], { env });
+    const p = spawn(process.execPath, [fileURLToPath(new URL("./refresh-bazaar.js", import.meta.url))], { env });
     let o = "";
     p.stdout.on("data", (d) => (o += d)); p.stderr.on("data", (d) => (o += d));
     p.on("close", (code) => resolve({ code, out: o }));
