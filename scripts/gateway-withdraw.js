@@ -50,6 +50,10 @@
 // recipient and the signer, a random salt and no hook data. The attestation
 // Gateway answers is submitted to GatewayMinter.gatewayMint on the destination
 // chain by the recipient-side signer.
+//
+// Output: an RPC URL can carry a provider key (in its path, query, userinfo
+// or host), so no part of one is printed. Every line this script writes, and
+// every error it catches, passes through redactRpcText first.
 import { pathToFileURL } from "node:url";
 import { privateKeyToAccount } from "viem/accounts";
 import { createPublicClient, createWalletClient, http, pad, parseUnits, formatUnits, zeroAddress, encodeFunctionData } from "viem";
@@ -82,6 +86,37 @@ const TYPES = {
   ],
   BurnIntent: [{ name: "maxBlockHeight", type: "uint256" }, { name: "maxFee", type: "uint256" }, { name: "spec", type: "TransferSpec" }],
 };
+// Any URL in a message (a client error names the endpoint it called).
+const ANY_URL = /\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s"'<>]+/gi;
+const URL_WITHHELD = "[rpc-url-withheld]";
+/** Text with every RPC URL in it withheld: each configured RPC (src/evm-rpcs.js
+ *  for every Gateway chain) and each piece of one that could carry a key
+ *  (host, userinfo, path segments, query values), then any other URL. */
+export function redactRpcText(text, env = process.env) {
+  let s = String(text ?? "");
+  const pieces = new Set();
+  for (const net of Object.values(GATEWAY_NETWORK_NAMES)) {
+    const rpc = evmRpcFor(net, env);
+    if (!rpc) continue;
+    pieces.add(rpc);
+    let u = null;
+    try { u = new URL(rpc); } catch { /* not a URL: withheld as written */ }
+    if (!u) continue;
+    pieces.add(u.href);
+    for (const p of [u.hostname, u.username, u.password, decodeURIComponent(u.password || ""), ...u.pathname.split("/"), ...[...u.searchParams.values()]]) {
+      if (p && p.length >= 6) pieces.add(p);
+    }
+  }
+  // Longest first, so a piece inside a longer one never leaves the rest.
+  for (const p of [...pieces].sort((a, b) => b.length - a.length)) {
+    for (const v of new Set([p, encodeURI(p), encodeURIComponent(p)])) s = s.split(v).join(URL_WITHHELD);
+    const lower = p.toLowerCase();
+    if (lower !== p) s = s.split(lower).join(URL_WITHHELD);
+  }
+  return s.replace(ANY_URL, URL_WITHHELD);
+}
+const errorText = (e) => String(e?.shortMessage || e?.message || e);
+
 const b32 = (addr) => pad(addr.toLowerCase(), { size: 32 });
 const domainNames = () => Object.entries(GATEWAY_NETWORK_NAMES).map(([name, caip2]) => `${name} (Gateway domain ${GATEWAY_DOMAINS[caip2]})`).join(", ");
 
@@ -109,6 +144,17 @@ export async function currentBlock(network, { fetchImpl = (...a) => globalThis.f
  * collect the output).
  */
 export async function runWithdraw({ argv = process.argv.slice(2), env = process.env, fetchImpl = (...a) => globalThis.fetch(...a), log = console.log, error = console.error } = {}) {
+  const say = (m) => log(redactRpcText(m, env));
+  const warn = (m) => error(redactRpcText(m, env));
+  try {
+    return await withdraw({ argv, env, fetchImpl, log: say, error: warn });
+  } catch (e) {
+    warn(`gateway-withdraw stopped: ${errorText(e).slice(0, 300)}`);
+    return 1;
+  }
+}
+
+async function withdraw({ argv, env, fetchImpl, log, error }) {
   const flag = (name, dflt = null) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? (argv[i + 1] ?? "") : dflt; };
   const has = (name) => argv.includes(`--${name}`);
   const execute = has("execute");
@@ -183,7 +229,7 @@ export async function runWithdraw({ argv = process.argv.slice(2), env = process.
     const amountUsd = amountFlag != null ? Number(amountFlag) : Number(formatUnits(roomAtomic, 6));
     let head;
     try { head = await currentBlock(source, { fetchImpl, env }); }
-    catch (e) { error(`  domain ${domain}: could not read the current block on ${source} (${String(e?.message || e).slice(0, 120)}); a burn intent is never signed without an expiry`); return 1; }
+    catch (e) { error(`  domain ${domain}: could not read the current block on ${source} (${redactRpcText(errorText(e), env).slice(0, 120)}); a burn intent is never signed without an expiry`); return 1; }
     const spec = {
       version: 1, sourceDomain: Number(domain), destinationDomain: GATEWAY_DOMAINS[dest],
       sourceContract: b32(GATEWAY_WALLET), destinationContract: b32(GATEWAY_MINTER),
@@ -214,8 +260,9 @@ export async function runWithdraw({ argv = process.argv.slice(2), env = process.
     const rpc = evmRpcFor(p.dest, env);
     if (!rpc) { error(`no RPC configured for ${p.dest}; the attestation was not minted`); return 1; }
     const chain = { id: CHAIN_ID[p.dest], name: p.dest, nativeCurrency: { name: "gas", symbol: "GAS", decimals: 18 }, rpcUrls: { default: { http: [rpc] } } };
-    const wallet = createWalletClient({ account, chain, transport: http(rpc) });
-    const pub = createPublicClient({ chain, transport: http(rpc) });
+    const transport = http(rpc, { fetchFn: fetchImpl });
+    const wallet = createWalletClient({ account, chain, transport });
+    const pub = createPublicClient({ chain, transport });
     const data = encodeFunctionData({
       abi: [{ type: "function", name: "gatewayMint", stateMutability: "nonpayable", inputs: [{ name: "attestationPayload", type: "bytes" }, { name: "signature", type: "bytes" }], outputs: [] }],
       functionName: "gatewayMint", args: [out.attestation, out.signature],
@@ -230,5 +277,5 @@ export async function runWithdraw({ argv = process.argv.slice(2), env = process.
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runWithdraw().then((code) => { process.exitCode = code; }, (e) => { console.error(String(e?.message || e).slice(0, 200)); process.exitCode = 1; });
+  runWithdraw().then((code) => { process.exitCode = code; }, (e) => { console.error(redactRpcText(errorText(e)).slice(0, 200)); process.exitCode = 1; });
 }

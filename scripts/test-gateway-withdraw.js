@@ -10,7 +10,9 @@
 //   - the dry run is the default and prints no key;
 //   - a whole-balance withdrawal leaves room for the fee (value plus maxFee
 //     within the balance), an --amount past that is refused, and the
-//     --max-fee default is 1% of the default withdraw alert.
+//     --max-fee default is 1% of the default withdraw alert;
+//   - no part of an RPC URL (which can carry a provider key) is printed on a
+//     failed block read, a failed mint or a thrown error.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import assert from "node:assert/strict";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -166,6 +168,59 @@ await check("--recipient is limited to our own wallets unless --allow-external-r
     const self = await run(["--from", "base"]);
     assert.equal(self.code, 0, "the seller address itself needs no list");
   } finally { setOwnWalletImportForTest(null); }
+});
+
+await check("an RPC URL, which can carry a provider key, is never printed: not on a failed block read, not on a failed mint, not on a thrown error", async () => {
+  const SECRET = "Zk9pRqT7vW2xY5aB";
+  const KEYED = `https://ops:${SECRET}pw@${SECRET.toLowerCase()}.rpc-keyed.example.invalid/v2/${SECRET}?apikey=${SECRET}q`;
+  const keyedEnv = { EVM_RPC_8453: KEYED, EVM_RPC_5042: KEYED };
+  const leaks = (text) => text.includes(SECRET) || text.toLowerCase().includes(SECRET.toLowerCase()) || text.includes("rpc-keyed.example.invalid");
+  const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const drive = async (argv, rpc, { attest = false } = {}) => {
+    const out = [], err = [];
+    const fetchImpl = async (url, init = {}) => {
+      const u = String(url);
+      const body = init.body ? JSON.parse(init.body) : null;
+      if (u === `${GATEWAY_API_BASE}/v1/balances`) return json(200, { token: "USDC", balances: body.sources.map((s) => ({ domain: s.domain, depositor: s.depositor, balance: "12.5" })) });
+      if (u === `${GATEWAY_API_BASE}/v1/transfer`) return attest ? json(200, { transferId: "t1", attestation: "0x01", signature: "0x02", fees: { total: "0", token: "USDC" } }) : json(500, {});
+      if (u === KEYED) return rpc(u, body);
+      throw new Error(`unexpected fetch ${u}`);
+    };
+    // The mint's own client must use the same stub: nothing reaches a network.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    let code, thrown = null;
+    try {
+      code = await runWithdraw({ argv, env: { ...env, ...keyedEnv }, fetchImpl, log: (m) => out.push(String(m)), error: (m) => err.push(String(m)) });
+    } catch (e) { thrown = e; } finally { globalThis.fetch = realFetch; }
+    return { code, thrown, text: `${out.join("\n")}\n${err.join("\n")}`, err: err.join("\n") };
+  };
+  // A fetch that fails naming the URL it was given (as a parse failure or a
+  // socket error message does).
+  const named = await drive(["--from", "base", "--execute"], (u) => { throw new TypeError(`fetch failed: request to ${u} failed, reason: getaddrinfo ENOTFOUND ${new URL(u).hostname}`); });
+  assert.equal(named.thrown, null, "the run answers with a code, never a thrown error");
+  assert.equal(named.code, 1);
+  assert.match(named.err, /never signed without an expiry/);
+  assert.ok(!leaks(named.text), "the failed block read prints no part of the RPC URL");
+  // The block read works, Gateway attests, and the mint's RPC refuses: the
+  // client error that names its URL is printed without it.
+  let blockReads = 0;
+  const mint = await drive(["--from", "base", "--execute"], (u, body) => {
+    if (body?.method === "eth_blockNumber" && blockReads++ === 0) return json(200, { jsonrpc: "2.0", id: body.id, result: "0x1234567" });
+    return json(500, { error: `upstream ${u} refused` });
+  }, { attest: true });
+  assert.equal(mint.thrown, null, "the mint failure answers with a code, never a thrown error carrying the URL");
+  assert.equal(mint.code, 1);
+  assert.ok(mint.err.length > 0, "the mint failure is reported");
+  assert.ok(!leaks(mint.text), `the failed mint prints no part of the RPC URL (${mint.err.slice(0, 300)})`);
+});
+
+await check("the redaction keeps a message readable and leaves text with no URL as it was", async () => {
+  const { redactRpcText } = await import("./gateway-withdraw.js");
+  const keyed = "https://rpc.example.invalid/v2/abcdef123456";
+  const out = redactRpcText(`HTTP request failed. URL: ${keyed} Status: 500`, { EVM_RPC_8453: keyed });
+  assert.ok(!out.includes("abcdef123456") && !out.includes("rpc.example.invalid") && /HTTP request failed\. URL: \S+ Status: 500/.test(out), out);
+  assert.equal(redactRpcText("eip155:8453 RPC answered HTTP 503", {}), "eip155:8453 RPC answered HTTP 503");
 });
 
 console.log(process.exitCode ? `FAILED (${pass} passed)` : `${pass} passed`);
