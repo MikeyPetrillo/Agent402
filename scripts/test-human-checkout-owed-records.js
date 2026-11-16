@@ -164,10 +164,12 @@ try {
     // A Stripe read that never answers is given up after the per-call timeout.
     const hcT = mk(dir, { readbackCallTimeoutMs: 50 });
     listHang = true;
-    const keepAlive = setInterval(() => {}, 1000); // the read-back's own timers are unref'd
+    // The suite's own bound (ref'd, so it also holds the process open): a
+    // pass with no per-call timeout would wait here for good.
+    let bound = null;
     const t0 = Date.now();
-    const timed = await hcT.readBackOwedRefunds();
-    clearInterval(keepAlive);
+    const timed = await Promise.race([hcT.readBackOwedRefunds(), new Promise((r) => { bound = setTimeout(() => r({ recorded: -1 }), 3000); })]);
+    clearTimeout(bound);
     listHang = false;
     ok(timed.recorded === 0 && Date.now() - t0 < 2000, `a read that never answers is given up per call (${Date.now() - t0} ms)`);
 
