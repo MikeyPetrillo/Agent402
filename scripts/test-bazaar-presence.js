@@ -58,6 +58,8 @@ const slugsOf = (list) => list.map((r) => r.slug).sort();
 
   const one = decide({ reading: reading([without("cheap-a"), ALL_PATHS]), prev: null });
   ok(one.buy.length === 0 && one.newlyMissing.length === 0, "a route absent from one pass only is listed: not bought, not missing");
+  const last = decide({ reading: reading([ALL_PATHS, without("cheap-a")]), prev: null });
+  ok(last.buy.length === 0 && last.newlyMissing.length === 0, "a route absent from the last pass only is listed too");
   const one3 = decide({ reading: reading([without("cheap-b"), without("cheap-b"), ALL_PATHS]), prev: null });
   ok(one3.buy.length === 0, "a route present in a third pass is listed");
   ok(missingFromEveryPass(catalogRows(PRICING), []).length === ALL_PATHS.length, "control: with no pass, every route reads missing (so an empty reading must be refused upstream)");
