@@ -51,6 +51,8 @@ t node scripts/test-report-prose-filter.js
 t node scripts/test-llms-mpp-header-note.js
 # "Payment-nonce replay guard (M3 — Attack II: concurrent replay collapses to one grant, release-on-failure)"
 t node scripts/test-replay-guard.js
+# Two requests carrying one payment while the shared store answers one of them: one claim (offline, in-memory store)
+t node scripts/test-replay-claim-race.js
 t node scripts/test-payment-header-signed-fields.js
 t node scripts/test-replay-topology.js
 # "Replay guard with its shared store unreachable: long-running routes refuse 503 before any payment, fast routes keep the per-process claim (real server + stub facilitator - offline)"

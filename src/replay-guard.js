@@ -64,6 +64,9 @@ import { base64BytesOf } from "./base64-bytes.js";
 // within this.
 const INFLIGHT_TTL_SECONDS = 120;
 export const INFLIGHT_RENEW_MS = 30_000;
+// How often a claim taken on this process while the store did not answer is
+// tried there, until it is written.
+export const DEFERRED_CLAIM_WRITE_MS = 1_000;
 // Renewal stops after this long, so a caller that never settles or releases
 // cannot hold a nonce (or a timer) forever. Far past any run budget.
 const MAX_HOLD_MS = 30 * 60_000;
@@ -480,6 +483,8 @@ export function createReplayGuard({
   consumedRetryDelaysMs = [50, 250],
   // How often a consumed mark the store missed is written again.
   pendingRetryMs = 2_000,
+  // How often a claim taken while the store did not answer is tried there.
+  deferredWriteMs = DEFERRED_CLAIM_WRITE_MS,
 } = {}) {
   // Local (per-process) state. `consumed` and `inFlight` are this process's
   // own marks, kept whatever backend answered; with no store configured they
@@ -498,6 +503,8 @@ export function createReplayGuard({
   const claims = new Map();
   // key -> interval renewing this process's Redis claim on it.
   const renewers = new Map();
+  // key -> interval writing a per-process claim to the store (startDeferredWrite).
+  const deferredWriters = new Map();
   // key -> { settledAt, until, claim }: a consumed mark the store missed,
   // oldest first, written again by one shared retry loop (schedulePending).
   const pending = new Map();
@@ -530,10 +537,46 @@ export function createReplayGuard({
     }, renewMs);
     t.unref?.();
     renewers.set(key, t);
+    const claim = claims.get(key);
+    if (claim && !claim.shared) startDeferredWrite(key, claim, until);
   }
   function stopRenew(key) {
     const t = renewers.get(key);
     if (t) { clearInterval(t); renewers.delete(key); }
+    stopDeferredWrite(key);
+  }
+  // A claim taken on this process while the store did not answer is written
+  // there on the first try that reaches it (every deferredWriteMs), not at the
+  // first renewal: until it is, a container beside this one (a deploy's
+  // overlap, another replica) that reaches the store would claim the same
+  // payment there and run it too. Ends once written, once the name is found
+  // held by another request, or when the claim ends.
+  function startDeferredWrite(key, claim, until) {
+    stopDeferredWrite(key);
+    const { primary } = namesOf(key);
+    let busy = false;
+    const t = setInterval(async () => {
+      if (busy) return;
+      if (claims.get(key) !== claim || claim.shared || Date.now() >= until) { stopDeferredWrite(key); return; }
+      busy = true;
+      try {
+        const c = await getSharedRedisClient();
+        if (!c) return;
+        const took = await c.set(REDIS_PREFIX + "f:" + primary, claim.token, { NX: true, EX: inflightTtlSeconds });
+        if (deferredWriters.get(key) === t) stopDeferredWrite(key);
+        if (took) {
+          claim.shared = true;
+          // Settled or released while the write was out: give it back.
+          if (claims.get(key) !== claim) await delIfValue(c, REDIS_PREFIX + "f:" + primary, claim.token);
+        }
+      } catch { /* the next tick retries */ } finally { busy = false; }
+    }, deferredWriteMs);
+    t.unref?.();
+    deferredWriters.set(key, t);
+  }
+  function stopDeferredWrite(key) {
+    const t = deferredWriters.get(key);
+    if (t) { clearInterval(t); deferredWriters.delete(key); }
   }
 
   // Prune expired local consumed entries from the head (insertion order).
@@ -724,6 +767,12 @@ export function createReplayGuard({
           // the first read and the claim is seen here.
           if (await c.get(REDIS_PREFIX + "c:" + primary)) return back("consumed");
           if (legacy && isLegacyEntry(await c.get(REDIS_PREFIX + "c:" + legacy), names)) return back("consumed");
+          // This process's own marks again, with no await between the read
+          // and the add: while this call waited on the store, another call
+          // here may have claimed the payment on the per-process path (its
+          // store read failed, so the store never saw it) or settled it.
+          if (isConsumedLocal(lk, Date.now())) return back("consumed");
+          if (inFlight.has(lk)) return back("inflight");
           inFlight.add(lk);
           claims.set(key, { token, legacyTag, legacyHeld, shared: true });
           startRenew(key);
@@ -744,8 +793,9 @@ export function createReplayGuard({
           // fall through to the local path below
         }
       }
-      // Checked again: another call on this process may have claimed the
-      // payment while this one waited on the store.
+      // Checked again: another call on this process may have claimed or
+      // settled the payment while this one waited on the store.
+      if (isConsumedLocal(lk, Date.now())) return "consumed";
       if (inFlight.has(lk)) return "inflight";
       inFlight.add(lk);
       // With a store configured, the claim is written there once it answers.
