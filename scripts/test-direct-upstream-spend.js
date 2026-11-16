@@ -33,6 +33,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { load as yamlLoad } from "js-yaml";
+import { urlMatches, isHost } from "./lib/url-host.js";
 
 delete process.env.UPSTREAM_COSTS_JSON;
 delete process.env.UPSTREAM_COSTS_FILE;
@@ -86,8 +87,8 @@ const DIRECT_PORT = direct.server.address().port, OR_PORT = or.server.address().
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => {
   const u = String(url);
-  if (u.startsWith("https://openrouter.ai/api/v1/chat/completions")) return realFetch(`http://127.0.0.1:${OR_PORT}/api/v1/chat/completions`, init);
-  if (u.startsWith(`http://127.0.0.1:${DIRECT_PORT}/`)) return realFetch(url, init);
+  if (urlMatches(u, "openrouter.ai", "/api/v1/chat/completions")) return realFetch(`http://127.0.0.1:${OR_PORT}/api/v1/chat/completions`, init);
+  if (isHost(u, "127.0.0.1") && new URL(u).port === String(DIRECT_PORT)) return realFetch(url, init);
   throw new Error(`test: unexpected outbound fetch to ${u.slice(0, 60)}`);
 };
 
