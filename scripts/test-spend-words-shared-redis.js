@@ -40,10 +40,20 @@ if (process.env.SPEND_WORDS_CHILD) {
   process.env.EXA_API_KEY = "test-key";
   process.env.X_BEARER_TOKEN = "test-bearer";
   console.warn = () => {};
-  const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-  requireUpstreamCosts("test-spend-words-shared-redis");
+  // The direct upstream's day books the upstream's own reported charge, so it needs no table.
+  if (job.kit !== "direct") {
+    const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+    requireUpstreamCosts("test-spend-words-shared-redis");
+  }
   let kit;
-  if (job.kit === "router") {
+  if (job.kit === "direct") {
+    // The direct upstream's daily spend (src/direct-upstream-spend.js): an
+    // alarm only, so a call is one billed answer booked at its reported charge.
+    Object.assign(process.env, { DIRECT_UPSTREAM_URL: "http://127.0.0.1:9/v1", DIRECT_UPSTREAM_KEY: "k", DIRECT_UPSTREAM_MODELS: "deepseek/x=x" });
+    const m = await import("../src/direct-upstream-spend.js");
+    const E = 1;
+    kit = { E, alarm: "DIRECT_UPSTREAM_DAILY_ALERT_USD", hard: "DIRECT_UPSTREAM_UNUSED_HARD", call: async () => { m.noteDirectSpend("deepseek/x", { prompt_tokens: 1, completion_tokens: 1 }, E); }, book: () => {}, refresh: () => m.refreshDirectSpendShared(), status: () => m.directUpstreamSpendStatus() };
+  } else if (job.kit === "router") {
     // The router's per-minute holds (src/router-spend-window.js): a call is
     // one hold through the buyer's own reserveSpend.
     const b = await import("../src/x402-buyer.js");
@@ -262,6 +272,26 @@ for (const kit of ["exa", "x"]) {
   await new Promise((r) => closed.close(r));
   const e1 = await run(["refresh", "status", "call", "call", "call", "refresh", "status"], { redisUrl: `redis://127.0.0.1:${closedPort}` });
   ok(e1.code === 0 && e1.out?.[1] === "ok" && e1.out?.slice(2, 5).every((x) => x === 200) && e1.out?.[6] === "over", `router: with the store refusing connections every hold is taken and the word is this process's own (${show(e1)})`);
+}
+
+// ---- directUpstreamSpend: the direct upstream's day, an alarm only ------------
+// No refusal exists here, so the word is ok or high: high once the shared day
+// reaches the threshold, read by a new process that booked nothing, and by
+// one that booked under the threshold on its own.
+{
+  const base = { kit: "direct", alarm: 2.5, hard: 0 };
+  const p = `${prefix}-direct`;
+  const run = (steps, opts = {}) => container({ ...base, steps }, { prefix: p, ...opts });
+  const control = await run(["refresh", "status"]);
+  ok(control.out?.[1] === "ok", `direct: before any spend a new process reads ok (${show(control)})`);
+  const a = await run(["call", "call", "status", "refresh", "status"]);
+  ok(a.out?.[2] === "ok" && a.out?.[4] === "ok", `direct: control, two answers stay under the threshold in one process (${show(a)})`);
+  const b = await run(["call", "status", "refresh", "status"]);
+  ok(b.out?.[1] === "ok" && b.out?.[3] === "high", `direct: a process that booked one reads high once the shared day passes the threshold (${show(b)})`);
+  const c = await run(["status", "refresh", "status"]);
+  ok(c.out?.[0] === "ok" && c.out?.[2] === "high", `direct: a new process that booked nothing reads high from the shared day (${show(c)})`);
+  const other = await container({ ...base, steps: ["refresh", "status"] }, { prefix: `${p}-other` });
+  ok(other.out?.[1] === "ok", `direct: a process on another counter still reads ok (${show(other)})`);
 }
 
 // ---- the caller path: /api/gateway-status on a server that made no call ------

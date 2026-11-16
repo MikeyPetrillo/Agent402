@@ -115,7 +115,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   a row, `closeAfterTwoOk`, so a failed probe between cool-downs does not reopen it each cycle),
   `firstCallAllowance` unavailable
   (on, spent: spent is the day's cap working as set; present only while the trial is on),
-  `xSearchAuthors` alert (ok; see the X search author alarm below), `mppSubscriptions` failed (on,
+  `directUpstreamSpend` high and `directUpstreamBalance` exhausted (ok, off; alarms only, see
+  gateway.md), `xSearchAuthors` alert (ok; see the X search author alarm below), `mppSubscriptions` failed (on,
   off: the MPP subscription engine is configured but did not build at boot, including an installed
   mppx with no subscription method; `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`;
   `subscriptionRenewals` then reads unknown). `coverageReads` pages like `sharedLimits`, on its

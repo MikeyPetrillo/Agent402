@@ -1630,7 +1630,8 @@ jobs:
       # robinhoodSettler pages on relayer (ok
       # and off close); subscriptionRenewals pages on unconfirmed (ok and off
       # close); directUpstream pages on degraded (ok and off close,
-      # starting does neither); ok closes; unknown does neither. The issues are public, so a body carries
+      # starting does neither); directUpstreamSpend on high and
+      # directUpstreamBalance on exhausted (ok and off close); ok closes; unknown does neither. The issues are public, so a body carries
       # the word and the operator endpoint only: slugs, upstreams, facilitators
       # and reasons stay on /__operator/tool-failures.json. The status Worker
       # runs the same checks every five minutes under the same titles.
@@ -1717,6 +1718,15 @@ jobs:
           # close; starting does neither.
           TITLE="directUpstream: the direct upstream is degraded"
           check_word directUpstream "degraded" "ok off" "/__operator/direct-upstream.json"
+          # The direct upstream's spend for the UTC day passed
+          # DIRECT_UPSTREAM_DAILY_ALERT_USD (src/direct-upstream-spend.js): high
+          # pages (an alarm only, every call is still served); ok and off close.
+          TITLE="directUpstreamSpend: the direct upstream's daily spend is high"
+          check_word directUpstreamSpend "high" "ok off" "/api/gateway-status"
+          # Its latest answer was a 402 balance refusal (those calls were served
+          # by OpenRouter): exhausted pages; ok and off close.
+          TITLE="directUpstreamBalance: the direct upstream's prepaid balance is exhausted"
+          check_word directUpstreamBalance "exhausted" "ok off" "/__operator/direct-upstream.json"
 
       # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
       # counted by src/tool-failure-monitor.js): one word on
