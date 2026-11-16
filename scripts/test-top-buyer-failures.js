@@ -271,7 +271,8 @@ const facilitator = createServer((req, res) => {
     if (path === "/supported") return reply(200, { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }, { x402Version: 2, scheme: "exact", network: SOL, extra: { feePayer: feePayer.address } }], extensions: [], signers: {} });
     let j = {}; try { j = JSON.parse(body); } catch { /* empty */ }
     if (path === "/verify") { verifies++; return refuseAll ? reply(200, { isValid: false, invalidReason: "invalid_exact_svm_payload_transaction" }) : reply(200, { isValid: true }); }
-    if (path === "/settle") { settles++; return reply(200, { success: true, transaction: "5".repeat(64), network: SOL }); }
+    // Each settle names its own transaction: one Solana transaction answers one request.
+    if (path === "/settle") { settles++; return reply(200, { success: true, transaction: `${"5".repeat(60)}${String(settles).padStart(4, "1")}`, network: SOL }); }
     if (path === "/rpc") return reply(200, { jsonrpc: "2.0", id: 1, result: "0x0" });
     return reply(404, {});
   });

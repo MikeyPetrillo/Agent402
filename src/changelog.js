@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-16",
+    title: "Late Solana and Algorand payments are repaid",
+    items: [
+      "Payments: A payment that reaches the chain after its call was refused is found and repaid on Solana and Algorand as on EVM: a settlement that failed while naming its transaction is followed on chain, and once it lands it is recorded as owed to the buyer, once. On EVM, a settlement refused as already submitted whose chain read failed is followed the same way, and a transaction that never appears is closed as not landed only after an exact payment's signed authorization reads unused, so a transfer sent in another transaction is still repaid. On Solana and Algorand one settled transaction answers one request.",
+    ],
+  },
+  {
     date: "2026-11-15",
     title: "Access keys and card tokens are judged per payer",
     items: [
