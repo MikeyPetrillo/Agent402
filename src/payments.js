@@ -1213,8 +1213,11 @@ export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
     if (closed.length >= Math.floor(max * 0.5)) return closed.replace(/[.!?]?$/, ".");
   }
   const wordEnd = head.lastIndexOf(" ");
-  const cut = closeBracket((wordEnd > 0 ? head.slice(0, wordEnd) : head).trim());
-  return cut.replace(/[,;:\-]+$/, "") + ".";
+  let cut = closeBracket((wordEnd > 0 ? head.slice(0, wordEnd) : head).trim()).replace(/[,;:\-]+$/, "");
+  // A cut that ends on a joining word ("dates, or", "price and") leaves a
+  // dangling clause: drop the joiner and the comma before it.
+  for (let i = 0; i < 3 && /\s(and|or|with|of|the|a|an|to|for|in|by|from|as|plus|because|any|its|their|that|which|when|where|whose|each|every|than|via|per|at|on|into)$/i.test(cut); i++) cut = cut.replace(/\s+\S+$/, "").replace(/[,;:\-]+$/, "").trim();
+  return cut + ".";
 }
 
 // The listing icon: the 512px PNG mark (server.js), on a path whose extension
