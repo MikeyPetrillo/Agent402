@@ -305,6 +305,23 @@ try {
     ok((await pgRows("id = $1", [vid]))[0].status === "owed", "and the claim changed nothing");
     ok((await rl.recordRefundOwed({ slug: "hash", network: "tempo", payer: "0x" + "cd".repeat(20), priceUsd: 0.01, tx: "0xunmarked", httpStatus: 400, wire: "mpp-tempo" })) === true && (await rl.claimRefundForSend(Number(rl.refundByEvidence("0xunmarked").id), "refund-run")) === true, "control: an owed row with no void mark is claimed");
   }
+  // ---- one payment, one row: an EVM hash in another case is the same debt ----
+  // A row in Postgres the mirror has not pulled yet (another container's, or
+  // one written before this process's mirror loaded) is matched by the write
+  // itself, so a second spelling of its hash books nothing.
+  {
+    const legacy = `0x${"C0FfEe12".repeat(8)}`, lc = legacy.toLowerCase();
+    const payer = "0x" + "ef".repeat(20);
+    await sdb.stateQuery(`INSERT INTO ${T} (evidence, slug, network, payer, price_usd, http_status, created_at, note) VALUES ($1, 'hash', 'eip155:8453', $2, 0.01, 502, $3, 'n1')`, [legacy, payer, Date.now()]);
+    ok(!rl.refundByEvidence(lc), "setup: the mirror has not pulled the mixed-case row");
+    ok((await rl.recordRefundOwed({ slug: "hash", network: "eip155:8453", payer, priceUsd: 0.01, tx: lc, httpStatus: 502 })) === false, "a debt for the lowercase spelling of a row only Postgres holds is a duplicate");
+    ok((await rl.recordRefundOwed({ slug: "hash", network: "eip155:8453", payer, priceUsd: 0.01, tx: legacy.toUpperCase().replace(/^0X/, "0x"), httpStatus: 502 })) === false, "and so is the capital spelling");
+    ok((await pgRows("lower(evidence) = $1", [lc])).length === 1, "Postgres holds one row for the payment");
+    ok((await rl.renoteOwedRefund(lc, "n1", "n2")) === true && (await pgRows("evidence = $1", [legacy]))[0].note === "n2", "an owed-row change under another spelling reaches the Postgres row");
+    ok((await rl.recordRefundOwed({ slug: "hash", network: "eip155:8453", payer, priceUsd: 0.01, tx: `0x${"AbCdEf01".repeat(8)}`, httpStatus: 502 })) === true && (await pgRows("evidence = $1", [`0x${"abcdef01".repeat(8)}`])).length === 1, "a new EVM hash is written in lowercase");
+    const sol = "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW";
+    ok((await rl.recordRefundOwed({ slug: "hash", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payer: "SoLPaYeR", priceUsd: 0.01, tx: sol, httpStatus: 502 })) === true && (await pgRows("evidence = $1", [sol])).length === 1, "a Solana signature is stored exactly as given");
+  }
 } finally {
   await sdb.__dropStateSchema();
   await sdb.closeStateDb();

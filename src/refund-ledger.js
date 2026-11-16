@@ -209,6 +209,7 @@ const PG_DDL = () => `
   );
   CREATE INDEX IF NOT EXISTS refunds_status ON ${T("refunds")} (status);
   CREATE INDEX IF NOT EXISTS refunds_updated_at ON ${T("refunds")} (updated_at);
+  CREATE INDEX IF NOT EXISTS refunds_evidence_lc ON ${T("refunds")} (lower(evidence));
   CREATE TABLE IF NOT EXISTS ${T("refund_marks")} (
     evidence TEXT PRIMARY KEY,
     state    TEXT NOT NULL,
@@ -317,8 +318,25 @@ const OWED_CHANGES = {
   // A held claim that was served: its note says so, so reopen never matches it.
   renoteVoid: () => `UPDATE ${T("refunds")} SET note = $3, updated_at = ${PG_NOW_MS} WHERE evidence = $1 AND status = 'void' AND note = $2 RETURNING *`,
 };
-/** One owed-debt change: the void marks its evidence first (see INSERT_OWED_SQL), then each is one guarded UPDATE. */
+/** The key an EVM hex hash is written under, read from Postgres itself inside
+ *  the queued write (the mirror may not hold a row another container wrote,
+ *  or one written before this process's first pull): the row already there
+ *  under any spelling of it, else the lowercase form. Any other key as given. */
+async function pgEvidenceKey(ev) {
+  if (typeof ev !== "string" || !EVM_HEX_EVIDENCE.test(ev)) return ev;
+  const lc = ev.toLowerCase();
+  const r = await stateQuery(`SELECT evidence FROM ${T("refunds")} WHERE lower(evidence) = $1 ORDER BY id ASC LIMIT 1`, [lc]);
+  return r.rows[0]?.evidence ?? lc;
+}
+/** Insert-if-absent of one debt, under the key Postgres resolves (pgEvidenceKey). */
+async function insertOwedPg(row) {
+  row.evidence = await pgEvidenceKey(row.evidence);
+  return stateQuery(INSERT_OWED_SQL(), owedParams(row));
+}
+/** One owed-debt change: the void marks its evidence first (see INSERT_OWED_SQL), then each is one guarded UPDATE.
+ *  `params[0]` is resolved in place to the key Postgres holds (pgEvidenceKey). */
 async function runOwedChange(op, params) {
+  params[0] = await pgEvidenceKey(params[0]);
   if (op === "void") await stateQuery(VOID_MARK_SQL(), [params[0], Number(params[2]) || Date.now()]);
   return stateQuery(OWED_CHANGES[op](), params);
 }
@@ -341,7 +359,7 @@ async function replayDeadLetters() {
       const isChange = e.kind === "refund-change" && OWED_CHANGES[v?.op] && Array.isArray(v.params) && v.params[0];
       if (!isDebt && !isChange) return "drop";
       let r;
-      try { r = await (isDebt ? stateQuery(INSERT_OWED_SQL(), owedParams(v)) : runOwedChange(v.op, v.params)); writer.answered(); }
+      try { r = await (isDebt ? insertOwedPg(v) : runOwedChange(v.op, v.params)); writer.answered(); }
       catch (err) { if (isRowError(err)) { warnOnce("dead-letter row", err); return "keep"; } writer.failed(err); throw err; }
       if (r.rows[0]) { applyPgRow(r.rows[0]); writeThroughRow(r.rows[0]); return "landed"; }
       await refreshWhere("evidence = $1", [isDebt ? v.evidence : v.params[0]]).catch(() => {});
@@ -582,7 +600,7 @@ export function recordRefundOwed({ slug, network, payer, priceUsd, tx, httpStatu
       // is refused, times out, or whose process is killed first is replayed
       // insert-if-absent by evidence, so it is never dropped.
       return writer.write("record", async () => {
-        const r = await stateQuery(INSERT_OWED_SQL(), owedParams(row));
+        const r = await insertOwedPg(row);
         return applyOrRefresh(r, "evidence = $1", [row.evidence]);
       }, { kind: "refund", payload: row });
     }
