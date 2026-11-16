@@ -210,6 +210,11 @@ if (ROLE === "model") {
     const r = await attempt(C, W, { settleWaitMs: 800 });
     const st = C.inflightCoverStatus();
     ok(r.err?.statusCode === 429 && reads === 1 && st.withdrawals === 1, `model, unlisted window: a run waiting outside it does not take its own absence for a departure (${r.err?.statusCode || "admitted"}, reads ${reads}, want 1; waits ${st.withdrawals}, want 1)`);
+    // A balance short beside another container's run does not clear when
+    // that run settles (its amount leaves the balance and the window
+    // together): the refusal's advice is to add funds, in the fix and the
+    // message alike (runs with no shared store).
+    ok(r.err?.coverRefusal === "beside" && r.err.fix === "Your input is fine. Add funds to this wallet, then retry after Retry-After." && /add funds to this wallet, then retry after Retry-After\. You have not been charged\./.test(r.err.message) && r.err.retryAfter === 30, `model: a beside refusal gives the add-funds advice (${r.err?.coverRefusal}: ${r.err?.fix})`);
     unlisted = false;
   }
   {
@@ -788,6 +793,10 @@ for (const [label, staggered] of [["one after another", true], ["at once", false
   const u = await attempt(C, U, { settleWaitMs: 300 });
   const took = performance.now() - t0;
   ok(u.err?.statusCode === 429 && /does not cover this one as well/.test(u.err.message) && took >= 290 && C.inflightCoverStatus().foreignWaits === 1 && reads <= 2, `control: beside a run that stays, a run the balance does not cover is refused when the wait ends, with the same answer (${u.err?.statusCode || "admitted"}, ${Math.round(took)} ms, reads ${reads})`);
+  // A shortfall beside another container's run does not clear when that run
+  // settles (its amount leaves the balance and the window together): the
+  // answer's next step is to add funds, in the fix and the message alike.
+  ok(u.err?.coverRefusal === "beside" && u.err.fix === "Your input is fine. Add funds to this wallet, then retry after Retry-After." && /add funds to this wallet, then retry after Retry-After\. You have not been charged\./.test(u.err.message) && u.err.retryAfter === 30, `a beside refusal gives the add-funds advice (${u.err?.coverRefusal}: ${u.err?.fix})`);
   await unforeign(U, "d9");
 }
 {

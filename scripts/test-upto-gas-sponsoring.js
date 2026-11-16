@@ -481,7 +481,7 @@ try {
       const fredRoutes = MACRO_TOOLS.filter((t) => t.attribution === "fred").map((t) => t.route);
       const missing = [];
       for (const route of fredRoutes) { const w = await call(b.url, route); if (!(w.status === 402 && String(w.pr?.resource?.description || "").endsWith(FRED_NOTICE))) missing.push(`${route} (${w.status})`); }
-      ok(fredRoutes.length >= 12 && missing.length === 0, `${order}: every FRED route's 402 listing keeps the FRED notice (${fredRoutes.length} routes; missing: ${missing.join(", ") || "none"})`);
+      ok(fredRoutes.length >= 9 && missing.length === 0, `${order}: every FRED route's 402 listing keeps the FRED notice (${fredRoutes.length} routes; missing: ${missing.join(", ") || "none"})`);
       // Control: a metered route that fits keeps both upto networks.
       const m = await challenge(b.url);
       ok(new Set((m.pr?.accepts || []).filter((x) => x.scheme === "upto").map((x) => x.network)).size === 2, `${order}: a route that fits keeps upto on both networks`);

@@ -23,6 +23,33 @@ Payments:
   under a new challenge, while a credential that was captured is refused if it
   is sent again.
 
+### 2026-11-15 (kept balance reads judged at once)
+Payments:
+- On routes other than the report and media routes, a wallet whose last
+  balance read is under 5 minutes old, and covers every paid call it has in
+  flight plus the new one less what its payments took since, has the new call
+  started at once, with no wait for another read. A call that read does not
+  cover, or a wallet whose read is older, is judged on a new read as before.
+- A Solana payment whose transfer names an account through an address lookup
+  table is covered with the wallet's calls in flight too: it is judged on what
+  the paying wallet holds of the token across its accounts.
+
+### 2026-11-15 (yield curve and FX answers name their source)
+Data:
+- The treasury-yield-curve, treasury-yield-history and yield-curve-spread tools
+  read the U.S. Treasury's Daily Treasury Par Yield Curve Rates, with the same
+  tenors, inputs and answer shape, and name it in source or asOf; their
+  descriptions end with "Source: U.S. Treasury." The server keeps the curve in
+  memory and refreshes it in the background every 30 minutes; when a refresh
+  fails, answers carry stale: true and staleAsOf. A call that finds a year it
+  needs not yet held waits at most 20 seconds, then answers 503 with
+  Retry-After.
+- Answers from fx-rate carry source, naming the European Central Bank reference
+  rates, as fx-dashboard answers do. Both read those rates only: when they
+  cannot be read, fx-rate answers 503 with Retry-After, and fx-dashboard
+  serves its marked snapshot of up to a day or answers 503 the same way. The
+  FX tools' descriptions end with "Source: European Central Bank."
+
 ### 2026-11-15 (coverage refusals name their class)
 Payments:
 - A 429 from the check that a wallet's balance covers its paid calls in flight
@@ -31,9 +58,10 @@ Payments:
   in place of the tool's input schema and example. The privacy page and
   payment.dataHandling in /.well-known/x402 say that each paid call reads the
   paying wallet's public balance, that a reservation per call in flight is
-  kept for the life of the call, and that the last balance read is held in
-  memory, used for at most 15 minutes, and dropped at the next paid call after
-  that or on restart.
+  kept for the life of the call, and at most 30 minutes when a server stops
+  mid-call, and that the last balance read is held in memory, used for at most
+  15 minutes, and dropped once the wallet has been idle 15 minutes, sooner
+  when the server holds 50,000 wallets, or on restart.
 
 ### 2026-11-15 (refund lookup lists every refund of a transaction)
 Refunds:
@@ -62,7 +90,8 @@ Payments:
   address for other payers). A call the balance does not cover answers 429 with
   Retry-After 30. A call that arrives while another call from the same wallet
   is still settling, and whose cover cannot be confirmed yet, answers 429 with
-  Retry-After 5 within about a second and says so.
+  Retry-After 5 within about a second and says so. Either answer takes up to
+  about 3.5 seconds when a settlement lands during the balance read.
 - When the balance cannot be read right now on those routes, the call is
   started if the last balance this server read for that wallet within the past
   15 minutes, less what the wallet's payments have taken and its calls in

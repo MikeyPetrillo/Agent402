@@ -7,12 +7,16 @@
 // draws on, the token, and the base units it moves. Read only after the gate
 // verified the payment:
 //   - Tempo pull: the sender the gate VERIFIED (the signature or the chain
-//     proved it; never the credential's client-written source), the
-//     challenge's currency and amount (src/mpp-tempo.js sets them on the
+//     proved it; never the credential's client-written source; for a pull
+//     signed by an access key, the account the key signs for, which is the
+//     account that pays), the challenge's currency and amount (src/mpp-tempo.js sets them on the
 //     request). A push credential is final before the handler and has none.
 //   - Solana: the SOURCE token account of the transfer (the balance that
 //     moves is that account's, whoever its authority is), the mint, and the
-//     accept's amount.
+//     accept's amount. When an account of the transfer sits in an address
+//     lookup table (the source cannot be read without an RPC), the payment is
+//     keyed on the WALLET instead: the transfer's authority, always a static
+//     key (`byOwner`), judged on what it holds of the accepted mint.
 //   - Algorand: the sender of the signed payment transaction, the accept's
 //     asset id and amount.
 //   - Stellar: the `from` of the invoked transfer, the accept's asset
@@ -24,7 +28,10 @@
 // BALANCES. One bounded read each, null when it cannot be read (the caller
 // treats null as unknown, never as zero):
 //   - Tempo: balanceOf on the TIP-20 token through TEMPO_RPC_URL.
-//   - Solana: getTokenAccountBalance of the source account (SOLANA_RPCS).
+//   - Solana: getTokenAccountBalance of the source account (SOLANA_RPCS);
+//     for a payment keyed on the wallet, the sum of the wallet's token
+//     accounts of the mint (getTokenAccountsByOwner with the mint; a wallet
+//     with none reads as unknown, never zero).
 //   - Algorand: the account's holding of the asset from algod
 //     (ALGORAND_ALGOD_BASES).
 //   - Circle Gateway batched: the signer's available Gateway balance on the
@@ -40,7 +47,7 @@
 import { paymentHeaderOf } from "./payer.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { nonEvmPayerFromRequest } from "./non-evm-payer.js";
-import { svmTransferAccounts, isSvmNetwork } from "./svm-payer.js";
+import { svmTransferAccounts, svmTransferAuthority, isSvmNetwork } from "./svm-payer.js";
 
 const UINT = /^\d{1,39}$/;
 const HEX_ADDR = /^0x[0-9a-fA-F]{40}$/;
@@ -67,10 +74,19 @@ export async function nonEvmCoverTermsOf(req) {
   if (!network || !UINT.test(amount) || !asset || asset.length > 128) return null;
   const atomic = BigInt(amount);
   if (isSvmNetwork(network)) {
-    const t = svmTransferAccounts(p?.payload?.transaction ?? p?.transaction);
-    if (!t || t.mint !== asset) return null;
-    // `owner`: the wallet (the transfer's authority), which the paid record is kept under.
-    return { rail: "svm", payer: t.source, owner: t.authority, network, asset, atomic };
+    const tx = p?.payload?.transaction ?? p?.transaction;
+    const t = svmTransferAccounts(tx);
+    if (t) {
+      if (t.mint !== asset) return null;
+      // `owner`: the wallet (the transfer's authority), which the paid record is kept under.
+      return { rail: "svm", payer: t.source, owner: t.authority, network, asset, atomic };
+    }
+    // An account of the transfer is a lookup-table entry: keyed on the wallet
+    // (its authority, read from the static keys), whose balance is what it
+    // holds of the accepted mint (the gate matched the mint before verify).
+    const a = svmTransferAuthority(tx);
+    if (!a?.found || typeof a.authority !== "string" || !a.authority) return null;
+    return { rail: "svm", byOwner: true, payer: a.authority, owner: a.authority, network, asset, atomic };
   }
   if (!/^(algorand|stellar):/.test(network)) return null;
   let key = null;
@@ -117,8 +133,24 @@ async function tempoBalance({ payer, asset }, timeoutMs) {
     return typeof hex === "string" && /^0x[0-9a-fA-F]{1,64}$/.test(hex) ? BigInt(hex) : null;
   }, timeoutMs);
 }
-async function svmBalance({ payer }, timeoutMs) {
+const SVM_OWNER_ACCOUNTS_MAX = 64;
+async function svmBalance({ payer, asset, byOwner }, timeoutMs) {
   const { SOLANA_RPCS } = await import("./solana-history-rpc.js");
+  if (byOwner === true) {
+    return firstAnswer(SOLANA_RPCS, async (u, o) => {
+      const r = await postRpc(u, "getTokenAccountsByOwner", [payer, { mint: asset }, { encoding: "jsonParsed" }], o);
+      const list = r?.value;
+      if (!Array.isArray(list) || !list.length || list.length > SVM_OWNER_ACCOUNTS_MAX) return null;
+      let sum = 0n;
+      for (const e of list) {
+        const info = e?.account?.data?.parsed?.info;
+        const amt = info?.tokenAmount?.amount;
+        if (info?.mint !== asset || typeof amt !== "string" || !UINT.test(amt)) return null;
+        sum += BigInt(amt);
+      }
+      return sum;
+    }, timeoutMs);
+  }
   return firstAnswer(SOLANA_RPCS, async (u, o) => {
     const r = await postRpc(u, "getTokenAccountBalance", [payer], o);
     const amt = r?.value?.amount;

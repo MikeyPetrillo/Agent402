@@ -155,8 +155,9 @@ await check("a custom window renders its label, its totals and its form values",
 });
 await check("the headline keeps its all-time figures and says so", () => {
   const d = doc(pageFor({ range: "7d" }).html);
-  assert.ok(/settled transactions, all-time/.test(d.body.textContent));
-  assert.ok(/revenue, settled on-chain \(x402 rails \+ Tempo MPP\), all-time/.test(d.body.textContent));
+  const ext = d.getElementById("rvExternal").textContent.replace(/\s+/g, " ");
+  assert.ok(/external payments? · \$[\d.]+ revenue, all-time settled on-chain \(x402 rails \+ Tempo MPP\)/.test(ext), ext);
+  assert.ok(/settled transactions? through our rails \(x402 \+ MPP\), our own test purchases included/.test(d.getElementById("rvThroughput").textContent), "throughput stays, as the secondary line");
 });
 await check("a refused range opens the default and names the reason", () => {
   const d = doc(pageFor({ range: "forever" }).html);

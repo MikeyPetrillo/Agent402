@@ -126,9 +126,12 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   `breaker_open`); after that it is half-open (reads ok publicly) and the next call that passes the
   price check and the share draw takes the one trial: a success closes it, a counted failure
   reopens it, an uncounted outcome passes the trial on. Only text
-  messages (system/user/assistant) and `DIRECT_ALLOWED_PARAMS` go there; tools, images,
-  response_format, logprobs, reasoning, service_tier, plugins or any other field keep the call on
-  OpenRouter. Every body carries `provider: { zdr: true }` and the clamped `max_tokens`. Any failure
+  messages (system/user/assistant) and `DIRECT_ALLOWED_PARAMS` go there, plus `reasoning` in the
+  one shape the upstream takes (`DIRECT_REASONING`: `{ effort }` alone, so the tiers' effort default
+  from `REASONING_MODELS` rides along); tools, images, response_format, logprobs, any other
+  reasoning shape (a budget, `exclude`, `enabled`), service_tier, plugins or any other field keep the
+  call on OpenRouter (skip bucket `param:<field>`). Every body carries `provider: { zdr: true }`
+  (set last, over anything the attempt carried) and the clamped `max_tokens`. Any failure
   (connect, timeout, 402, 429 without retry, 503, 5xx, other 4xx, an error object in a 200 body
   after leading whitespace, a non-JSON or messageless body, a missing cost) is a walkable 502/503/504
   and the same model goes to OpenRouter; so is an empty refusal or an empty `length` answer from
@@ -144,6 +147,26 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   provider"), the location sentence gains its exception, and the page prints the later of its date
   and `DIRECT_UPSTREAM_SINCE` (once reached; a boot warning while configured without a valid one).
   Suite: `scripts/test-direct-upstream.js`.
+- **Switching the direct upstream on (Railway; names only, values never in the repo):**
+  required: `DIRECT_UPSTREAM_URL` (the base ending in `/v1`; unset = off), `DIRECT_UPSTREAM_KEY`
+  (bearer; unset = off), `DIRECT_UPSTREAM_MODELS` (`<openrouter id>=<upstream id>,...`, the only ids
+  ever sent; unset or unparsable = off) and `DIRECT_UPSTREAM_SHARE` (`50` for a split; unset reads
+  100, so set it explicitly). The price guard needs a threshold: `DIRECT_UPSTREAM_MIN_SAVING_PCT`
+  or, unset, the private table's `vendor.direct.minSaving` (neither: 0). The direct listing at
+  `<URL>/models` must price each mapped id, or the guard keeps it on OpenRouter (`price_unlisted`).
+  /privacy reads `DIRECT_UPSTREAM_SINCE` (the date the disclosure took effect; unset: the page
+  keeps its date, with a boot warning), `DIRECT_UPSTREAM_NAME` (unset: "a direct inference
+  provider", with a boot warning) and `DIRECT_UPSTREAM_POLICY_URL` (unset: no link); the sentence,
+  the Third parties item and the location exception print whenever the first three switches parse.
+  Optional, with their defaults: `DIRECT_UPSTREAM_TIMEOUT_MS` 45000, `_MAX_BYTES` 4 MB,
+  `_BREAKER_FAILS` 3, `_BREAKER_OPEN_MS` 5 minutes, `_PRICE_REFRESH_MS` one hour,
+  `_PRICE_TIMEOUT_MS` 15 s, `_PRICE_MAX_BYTES` 4 MB, `_MEASURE_WINDOW` 200, `_MEASURE_MIN` 30,
+  `_MEASURE_PROBE_PCT` 2. At any share only attempts whose model id is a key of the map (exact,
+  case-insensitive; a `:variant` suffix does not match) get a direct attempt
+  (`withDirectAttempts`); every other model's chain is unchanged. A direct failure, an empty
+  direct answer included, walks to the same model on OpenRouter, and the buyer is settled once,
+  from the answer that served. The Actions secrets `DIRECT_UPSTREAM_URL` and
+  `DIRECT_UPSTREAM_MODELS` turn on the listing check in `model-drift.yml` (optional).
 - **Direct upstream price guard:** `src/gateway-direct-pricebook.js`. A direct attempt is taken only
   when a per-call eligibility check passes: the kit's input estimate (the clamp's own estimate for
   the link; `estimateInputTokens` of the direct body on the metered tier) times prompt price plus
