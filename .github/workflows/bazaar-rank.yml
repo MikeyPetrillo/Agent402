@@ -48,7 +48,9 @@ jobs:
           node-version: 22
       - name: Check and update the one issue
         run: |
-          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq "[.[] | select(.title == \"$TITLE\")][0].number // empty")
+          # Only an open issue with exactly this title, opened by the workflow
+          # bot, is ours; an issue anyone else opens under it is ignored.
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions")][0].number // empty')
           if [ -n "$OPEN" ]; then
             gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body > open-issue.md
             node scripts/bazaar-rank-monitor.js --issue-body open-issue.md --out out
