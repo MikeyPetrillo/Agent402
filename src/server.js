@@ -6922,7 +6922,7 @@ app.get("/__operator/quote-probes.json", (req, res) => {
 app.get("/__operator/seller-load.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   const host = typeof req.query.host === "string" ? req.query.host.trim().toLowerCase().slice(0, 253) : "";
-  if (host) return res.set("Cache-Control", "no-store").json(await sellerLoad.requestLog(host).catch((e) => ({ host, error: String(e?.message || e).slice(0, 120) })));
+  if (host) return res.set("Cache-Control", "no-store").json(await sellerLoad.requestLog(host).catch((e) => ({ host, error: redactSecrets(e?.message || String(e)).slice(0, 120) })));
   res.set("Cache-Control", "no-store").json(sellerLoadStatus());
 });
 app.get("/__operator/successions.json", (req, res) => {
