@@ -358,7 +358,7 @@ for (const seam of [true, false]) {
     bump(runs, spt);
     if (req.headers["x-grant"] === "1") reserveHangupForgiveness(req, { keys: ["ip:stripe-h2"], priceUsd: 0.5 });
     res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) }));
-    setTimeout(() => res.status(200).json({ ok: true }), Math.min(Math.max(Number(req.headers["x-delay"]) || 20, 0), 5000));
+    setTimeout(() => res.status(200).json({ ok: true }), req.headers["x-slow"] === "1" ? 400 : 20);
   });
   const { s, url } = await listen(app);
   const post = (auth, headers = {}, signal) => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: auth, ...headers }, signal }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
@@ -374,7 +374,7 @@ for (const seam of [true, false]) {
     const refused = nine.filter((r) => r.status === 402 && r.body?.details?.reason === "token-inflight").length;
     ok(midCapture && one.status === 200 && runs.get("spt_slow") === 1 && captures.get("spt_slow") === 1 && refused === 9, `gate H2: nine requests with the token arriving during a slow capture: still ONE run and ONE capture, nine refused before the handler (runs ${runs.get("spt_slow")}, captures ${captures.get("spt_slow")}, ${refused} refused)`);
 
-    await post(tokenCred("spt_gone"), { "x-grant": "1", "x-delay": "400" }, AbortSignal.timeout(100)).catch(() => null);
+    await post(tokenCred("spt_gone"), { "x-grant": "1", "x-slow": "1" }, AbortSignal.timeout(100)).catch(() => null);
     await new Promise((r) => setTimeout(r, 700));
     ok(runs.get("spt_gone") === 1 && !captures.get("spt_gone"), `gate H2: a buyer gone before the answer, with a forgiveness ticket, is not captured (runs ${runs.get("spt_gone")}, captures ${captures.get("spt_gone") || 0})`);
     const after = await post(tokenCred("spt_gone"));
