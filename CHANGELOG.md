@@ -6,6 +6,20 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (one claim per payment, one amount per price)
+Payments:
+- Two requests carrying one payment are claimed once when the shared store
+  answers one of them and not the other: the request whose claim lands in the
+  store reads the claim this server already holds and is answered 409
+  (X-Payment-Replay: inflight), uncharged. A claim taken while the store did
+  not answer is written there within a second of its next answer, so a
+  container serving beside this one reads that payment in flight.
+- A dollar price becomes a token amount by integer arithmetic on every rail,
+  so a challenge and the check of it name the same amount at any token
+  decimals: a Tempo credential that pays exactly its challenge is accepted
+  when the token carries 18 decimals, and the published offer amounts, the
+  subscription amounts and the on-chain payment proofs read the same figure.
+
 ### 2026-11-16 (late Solana and Algorand payments are repaid)
 Payments:
 - A payment that reaches the chain after its call was refused is found and
