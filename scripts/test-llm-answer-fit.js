@@ -227,6 +227,8 @@ for (const [name, w] of Object.entries(WIRES)) {
   const budget = tier.price * MARGIN;
   ok(recoveryRunAffordable(probe, tier, 0, 0) === (worst <= budget) && recoveryRunAffordable(probe, tier, 0, budget) === false && recoveryRunAffordable(probe, tier, 0, budget - worst + budget / 1e3) === false, "the price check is the margin clamp's own budget: the empty run's cost plus one worst-case run must fit under it");
   ok(recoveryRunAffordable(probe, tier, 0, undefined) === (2 * worst <= budget) && recoveryRunAffordable(probe, tier, 0, NaN) === (2 * worst <= budget) && recoveryRunAffordable(probe, tier, 0, -1) === (2 * worst <= budget), "an unreported cost counts as a worst-case run");
+  const half = (budget - worst) / 2;
+  ok(half > 0 && recoveryRunAffordable(probe, tier, 0, half, undefined, half * 0.9) === true && recoveryRunAffordable(probe, tier, 0, half, undefined, half * 1.1) === false && recoveryRunAffordable(probe, tier, 0, 0, undefined, NaN) === (2 * worst <= budget), "an earlier discarded answer's cost (a direct empty answer) is counted with the empty run's; an unreadable one counts as a worst-case run");
   // retryEmptyAtLowestEffort: once per call, and never when a condition fails
   const once = { used: false };
   let runs = 0;

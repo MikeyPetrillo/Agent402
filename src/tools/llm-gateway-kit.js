@@ -2839,8 +2839,11 @@ export function lowestEffortRetry(sentReasoning, buyerReasoning, model) {
 /** Whether one more run of a link fits what the call's price covers once the
  *  empty run's reported cost is counted: on a flat tier the margin budget the
  *  clamp holds every link to, on the metered tier the call's quote. An
- *  unreported cost counts as the link's worst case. */
-export function recoveryRunAffordable(probe, tier, imageCount, spentUsd, quotedUsd) {
+ *  unreported cost counts as the link's worst case. `priorSpentUsd` is what
+ *  the call's earlier discarded answers cost (an empty direct answer before
+ *  the empty one being recovered); a value that is not a finite, non-negative
+ *  number counts as one more worst case. */
+export function recoveryRunAffordable(probe, tier, imageCount, spentUsd, quotedUsd, priorSpentUsd = 0) {
   let worst;
   try { worst = worstCaseUpstreamCost(probe, tier, imageCount).totalUsd; } catch { return false; }
   if (!Number.isFinite(worst)) return false;
@@ -2850,7 +2853,8 @@ export function recoveryRunAffordable(probe, tier, imageCount, spentUsd, quotedU
     try { quote = meteredQuoteFromNormalized(probe, imageCount); } catch { return false; }
     budget = Number.isFinite(quotedUsd) && quotedUsd > 0 ? Math.min(quotedUsd, quote) : quote;
   } else budget = tier.price * MARGIN;
-  const spent = typeof spentUsd === "number" && Number.isFinite(spentUsd) && spentUsd >= 0 ? spentUsd : worst;
+  const known = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
+  const spent = (known(spentUsd) ? spentUsd : worst) + (known(priorSpentUsd) ? priorSpentUsd : worst);
   return spent + worst <= budget;
 }
 /** Runs the one recovery try of a call (see lowestEffortRetry). `once` is the
@@ -4600,6 +4604,10 @@ function makeHandler(routeTier) {
     let refusedModel = null;
     const timeouts = timedOutBudget();
     const recovery = { used: false }; // one lowest-effort recovery try per call
+    // What the call's discarded answers (an empty refusal or an empty-for-length
+    // answer, on any link) cost: the recovery run is weighed against it too.
+    let discardedUsd = 0;
+    const discard = (d) => { const c = d?.usage?.cost; discardedUsd += typeof c === "number" && Number.isFinite(c) && c >= 0 ? c : NaN; };
     for (const { model, flex, direct } of attempts) {
       // A model that refused on flex will refuse on default too - don't pay twice.
       if (model === refusedModel) continue;
@@ -4633,7 +4641,7 @@ function makeHandler(routeTier) {
           const plan = lowestEffortRetry(outbound.reasoning, body.reasoning, model);
           const again = await retryEmptyAtLowestEffort({
             once: recovery, plan, req, timeouts,
-            affordable: () => recoveryRunAffordable(outbound[LINK_PROBE], TIERS[tierSlug], imageCount, data?.usage?.cost, req?.__meteredQuoteUsd),
+            affordable: () => recoveryRunAffordable(outbound[LINK_PROBE], TIERS[tierSlug], imageCount, data?.usage?.cost, req?.__meteredQuoteUsd, discardedUsd),
             run: (p, ms) => retryRateLimited(() => callOpenRouter({ ...outbound, reasoning: p.reasoning, usage: { include: true } }, { timeoutMs: ms, req }), { delays: rateLimitDelaysFor(flex) }),
             usable: (d) => !isEmptyLength(d) && !isEmptyRefusal(d),
           });
@@ -4644,6 +4652,7 @@ function makeHandler(routeTier) {
         // isEmptyRefusal above. Streams can't be inspected this way; there
         // the raw SSE passes through and finish_reason discloses.
         if (isEmptyRefusal(data)) {
+          discard(data);
           if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_refusal" });
           if (directBody) noteDirectOutcome(false, "empty");
           lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
@@ -4657,6 +4666,7 @@ function makeHandler(routeTier) {
           // The output cap was spent before any content (reasoning tokens are
           // output tokens). Never serve a paid empty 200: try the next link
           // (flex->default first, then the chain); end-to-end empty is a 502.
+          discard(data);
           if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_length" });
           if (directBody) noteDirectOutcome(false, "empty");
           lastErr = bad(EMPTY_LENGTH_MESSAGE, 502);
