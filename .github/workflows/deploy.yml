@@ -3513,7 +3513,7 @@ jobs:
           for i in $(seq 1 40); do curl -sf http://127.0.0.1:3000/health >/dev/null 2>&1 && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/health >/dev/null || { echo "server never became healthy"; tail -40 /tmp/unit-c-srv.log; exit 1; }
 
-      - name: Offline suites (16 scripts, one process each)
+      - name: Offline suites (17 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-c2 1
 
   publish-gate:
