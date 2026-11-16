@@ -195,7 +195,7 @@ async function bootAndBurst(routerWorkers) {
   const port = await getFreePort();
   const log = [];
   const proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: file, INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: TOKEN, ROUTE_INDEX_WARM_DELAY_MS: "500", X402_INDEX_CRAWL: "", ROUTER_WORKERS: String(routerWorkers), ROUTER_WORKER_TEST_HOOKS: "", LOOP_LAG_WARN_MS: "250" },
+    env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: file, INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", AGENT402_OPERATOR_TOKEN: TOKEN, ROUTE_INDEX_WARM_DELAY_MS: "500", X402_INDEX_CRAWL: "on", ROUTER_WORKERS: String(routerWorkers), ROUTER_WORKER_TEST_HOOKS: "", LOOP_LAG_WARN_MS: "250" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const keep = (c) => { for (const l of String(c).split("\n")) if (l.trim()) log.push(l.slice(0, 300)); };
