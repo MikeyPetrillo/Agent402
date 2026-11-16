@@ -121,15 +121,42 @@ const LINE_PREFIX = "- Absent: ";
 const KIND = { unmatched: "our listing does not match this query", outranked: "our listing matches this query but none of our routes comes back" };
 
 // The issue's reason lines: one per absent query of ours that is not
-// acknowledged, sorted, in fixed words. Status "unmeasured" when any query
-// could not be read (the run then changes nothing).
+// acknowledged, sorted, in fixed words, plus the set of queries this run
+// measured. Status "unmeasured" when any query could not be read (the run
+// then changes nothing).
 export function decide(rows, ack = new Set()) {
-  if (!rows.length || rows.some((r) => !r.ok)) return { status: "unmeasured", lines: [] };
+  if (!rows.length || rows.some((r) => !r.ok)) return { status: "unmeasured", lines: [], measured: new Set() };
   const lines = rows
     .filter((r) => !r.present && !ack.has(r.query))
     .map((r) => `${LINE_PREFIX}${r.query} (${r.matches ? KIND.outranked : KIND.unmatched})`)
     .sort();
-  return { status: "measured", lines };
+  return { status: "measured", lines, measured: new Set(rows.map((r) => r.query)) };
+}
+
+// The query text of one reason line, or "" when the line is not one of ours.
+export function queryOfLine(line) {
+  const s = String(line || "");
+  if (!s.startsWith(LINE_PREFIX)) return "";
+  const rest = s.slice(LINE_PREFIX.length);
+  for (const k of Object.values(KIND)) {
+    const tail = ` (${k})`;
+    if (rest.endsWith(tail)) return rest.slice(0, -tail.length);
+  }
+  return "";
+}
+
+// Only a query measured this run can clear its line. A line in the open
+// issue whose query this run did not measure (a demand query that left this
+// week's ranking, or every demand query when the ranking could not be read)
+// is kept as it is, unless its query is acknowledged.
+export function keepUnmeasured(result, openBody, ack = new Set()) {
+  if (result.status !== "measured" || openBody == null) return result;
+  const measured = result.measured || new Set();
+  const kept = linesFromBody(openBody).filter((l) => {
+    const q = queryOfLine(l);
+    return q && !measured.has(q) && !ack.has(q);
+  });
+  return { ...result, lines: [...new Set([...result.lines, ...kept])].sort() };
 }
 
 export function issueBody(lines, runUrl) {
@@ -221,14 +248,21 @@ async function main() {
   const openBody = bodyPath && existsSync(bodyPath) ? readFileSync(bodyPath, "utf8") : null;
   const runUrl = process.env.RUN_URL || "";
   mkdirSync(outDir, { recursive: true });
-  let result = { status: "unmeasured", lines: [] };
+  let result = { status: "unmeasured", lines: [], measured: new Set() };
   try {
-    const stats = await getJson(`${base}/api/stats`, { deadline });
+    // An unreadable ranking leaves the demand queries unmeasured (their
+    // lines stay as they are); the flagships are still measured.
+    let topTools = null;
+    try {
+      const stats = await getJson(`${base}/api/stats`, { deadline });
+      if (Array.isArray(stats?.topTools)) topTools = stats.topTools;
+    } catch { /* ranking unreadable */ }
     const pricing = await getJson(`${base}/api/pricing`, { deadline });
     const routes = ourRoutes(pricing.endpoints);
     if (routes.size) {
-      const rows = await measure(buildQueries(stats.topTools, pricing.endpoints), routes, { deadline });
-      result = decide(rows, parseAck(process.env.BAZAAR_RANK_ACK));
+      const ack = parseAck(process.env.BAZAAR_RANK_ACK);
+      const rows = await measure(buildQueries(topTools, pricing.endpoints), routes, { deadline });
+      result = keepUnmeasured(decide(rows, ack), openBody, ack);
     }
   } catch { /* our own catalog could not be read: unmeasured */ }
   const action = issueAction(result, openBody);

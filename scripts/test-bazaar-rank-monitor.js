@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import {
   FLAGSHIPS, WORST_CASE_MS, queryFromName, buildQueries, ourRoutes, isOurs, readReply, parseAck,
-  decide, issueBody, linesFromBody, issueAction, getJson, measure,
+  decide, issueBody, linesFromBody, issueAction, getJson, measure, queryOfLine, keepUnmeasured,
 } from "./bazaar-rank-monitor.js";
 
 let pass = 0, fail = 0;
@@ -94,6 +94,40 @@ ok(issueAction(measured([]), null) === "none", "nothing left and nothing open do
 ok(issueAction({ status: "unmeasured", lines: [] }, body) === "none", "an unmeasured run never closes the issue");
 ok(issueAction({ status: "unmeasured", lines: [] }, null) === "none", "an unmeasured run never opens the issue");
 
+// ---- only a measured query clears its line ----------------------------------
+ok(queryOfLine("- Absent: web search (our listing does not match this query)") === "web search", "a line's query text is read back");
+ok(queryOfLine("- Absent: a (b) (our listing matches this query but none of our routes comes back)") === "a (b)", "the query is read up to the fixed reason words");
+ok(queryOfLine("- Absent: x (something else)") === "" && queryOfLine("hello") === "", "a line that is not ours reads as no query");
+{
+  // Week one: the demand query "hash" is absent; the issue opens.
+  const wk1 = decide([row("web search", true), row("chat completion", true), row("hash", false)]);
+  ok(issueAction(keepUnmeasured(wk1, null), null) === "open", "week one: an absent demand query opens the issue");
+  const open1 = issueBody(wk1.lines, RUN);
+  // Week two: "hash" left the top-tools ranking, so it is not measured.
+  const q2 = buildQueries(top.filter((t) => t.slug !== "hash" && t.slug !== "dup"), endpoints);
+  ok(!q2.some((q) => q.query === "hash"), "week two's query list does not hold the query that left the ranking");
+  let wk2 = keepUnmeasured(decide(q2.map((q) => row(q.query, true))), open1);
+  ok(wk2.lines.length === 1 && wk2.lines[0].includes("hash"), "a query not measured this run keeps its line");
+  ok(issueAction(wk2, open1) === "none", "an absent query that drops out of the ranking does not close or edit the issue");
+  // The ranking could not be read: only the flagships are measured.
+  const q3 = buildQueries(undefined, endpoints);
+  ok(q3.length === FLAGSHIPS.length, "a missing ranking measures only the flagships");
+  wk2 = keepUnmeasured(decide(q3.map((q) => row(q.query, true))), open1);
+  ok(issueAction(wk2, open1) === "none" && wk2.lines.length === 1, "a missing ranking leaves the demand lines and does not close");
+  // Measured again and present: now it clears.
+  wk2 = keepUnmeasured(decide([row("web search", true), row("chat completion", true), row("hash", true)]), open1);
+  ok(issueAction(wk2, open1) === "close", "a measured query that is present clears its line and closes");
+  // A measured flagship clears while an unmeasured demand line stays.
+  const open2 = issueBody(decide([row("web search", false), row("hash", false)]).lines, RUN);
+  wk2 = keepUnmeasured(decide(q3.map((q) => row(q.query, true))), open2);
+  ok(issueAction(wk2, open2) === "update" && wk2.lines.length === 1 && wk2.lines[0].includes("hash"), "a measured flagship clears its own line only");
+  // An acknowledged query's kept line is dropped.
+  wk2 = keepUnmeasured(decide(q3.map((q) => row(q.query, true))), open1, parseAck("hash"));
+  ok(issueAction(wk2, open1) === "close", "an acknowledged query's unmeasured line does not hold the issue open");
+  // An unmeasured run still changes nothing.
+  ok(issueAction(keepUnmeasured(decide([row("web search", undefined, false, false)]), open1), open1) === "none", "an unmeasured run still changes nothing");
+}
+
 // ---- fetch: retry 5xx and timeouts only -------------------------------------
 const noSleep = async () => {};
 const stub = (answers) => {
@@ -157,9 +191,65 @@ ok(/gh issue create/.test(wf) && /gh issue edit/.test(wf) && /gh issue comment/.
 ok((wf.match(/gh issue create/g) || []).length === 1, "exactly one place opens an issue");
 for (const mm of wf.matchAll(/uses:\s*([^\s#]+)/g)) ok(/@[0-9a-f]{40}$/.test(mm[1]), `action pinned to a commit (${mm[1].split("@")[0]})`);
 
+// ---- the workflow's issue step, run with a stub gh and a stub node ----------
+{
+  const { writeFileSync, mkdtempSync, chmodSync, rmSync } = await import("node:fs");
+  const { spawnSync } = await import("node:child_process");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const jqOk = spawnSync("jq", ["--version"], { encoding: "utf8" }).status === 0;
+  ok(jqOk, "jq is installed (the stub gh applies the workflow's --jq with it)");
+  const lines = wf.split("\n");
+  const at = lines.findIndex((l) => /- name: Check and update the one issue/.test(l));
+  const runAt = lines.findIndex((l, i) => i > at && /^\s+run: \|$/.test(l));
+  const indent = lines[runAt + 1].match(/^\s*/)[0].length;
+  const stepLines = [];
+  for (let i = runAt + 1; i < lines.length && (lines[i].trim() === "" || lines[i].match(/^\s*/)[0].length >= indent); i++) stepLines.push(lines[i].slice(indent));
+  const script = stepLines.join("\n");
+  ok(at > 0 && script.includes("gh issue list") && script.includes("gh issue create"), "the issue step's script is read from the workflow");
+  const dir = mkdtempSync(join(tmpdir(), "bazaar-rank-wf-"));
+  // gh: "issue list" applies the step's own --jq to GH_STUB_ISSUES; every call is logged.
+  writeFileSync(join(dir, "gh"), `#!/bin/bash
+printf '%s\\n' "gh $1 $2 $3" >> "$GH_STUB_LOG"
+if [ "$1 $2" = "issue list" ]; then
+  EXPR=""; while [ $# -gt 0 ]; do if [ "$1" = "--jq" ]; then shift; EXPR="$1"; fi; shift; done
+  printf '%s' "$GH_STUB_ISSUES" | jq -r "$EXPR"
+elif [ "$1 $2" = "issue view" ]; then printf 'body\\n'; fi
+`);
+  // node: writes the action the test asks for.
+  writeFileSync(join(dir, "node"), `#!/bin/bash
+printf '%s\\n' "node $*" >> "$GH_STUB_LOG"
+OUT=""; while [ $# -gt 0 ]; do if [ "$1" = "--out" ]; then shift; OUT="$1"; fi; shift; done
+mkdir -p "$OUT"; printf '%s\\n' "$STUB_ACTION" > "$OUT/action.txt"; printf 'measured\\n' > "$OUT/status.txt"; printf 'b\\n' > "$OUT/body.md"
+`);
+  chmodSync(join(dir, "gh"), 0o755); chmodSync(join(dir, "node"), 0o755);
+  const run = (issues, action) => {
+    const cwd = mkdtempSync(join(tmpdir(), "bazaar-rank-cwd-"));
+    const log = join(cwd, "calls.log");
+    writeFileSync(log, "");
+    const r = spawnSync("bash", ["-e", "-c", script], { cwd, encoding: "utf8", env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "o/r", GITHUB_STEP_SUMMARY: join(cwd, "summary.md"), RUN_URL: "https://run.example/1", TITLE: title, GH_STUB_ISSUES: JSON.stringify(issues), GH_STUB_LOG: log, STUB_ACTION: action } });
+    const calls = readFileSync(log, "utf8").split("\n").filter(Boolean);
+    rmSync(cwd, { recursive: true, force: true });
+    return { status: r.status, err: r.stderr, calls };
+  };
+  const bot = { number: 5, title, author: { login: "app/github-actions" } };
+  const stranger = { number: 9, title, author: { login: "someone-else" } };
+  let w = run([stranger, bot], "close");
+  ok(w.status === 0 && w.calls.includes("gh issue view 5") && w.calls.includes("gh issue close 5") && !w.calls.some((c) => / 9$/.test(c)), `with a newer issue by another account under the title, the bot's issue is the one read and closed (${w.calls.join("; ")}) ${w.err.slice(0, 160)}`);
+  w = run([stranger], "open");
+  ok(w.status === 0 && !w.calls.some((c) => c.startsWith("gh issue view")) && w.calls.some((c) => c.startsWith("node ") && !c.includes("--issue-body")) && w.calls.includes("gh issue create --repo"), `with only another account's issue under the title, a new issue is opened (${w.calls.join("; ")})`);
+  w = run([{ ...bot, author: { login: "github-actions[bot]" } }], "update");
+  ok(w.calls.includes("gh issue edit 5") && w.calls.includes("gh issue comment 5"), "the bot's login in either spelling is ours");
+  w = run([{ ...bot, title: `${title} (copy)` }], "open");
+  ok(w.calls.includes("gh issue create --repo"), "a bot issue under another title is not ours");
+  rmSync(dir, { recursive: true, force: true });
+}
+
 // ---- the script prints nothing about the search -----------------------------
 const src = readFileSync(new URL("./bazaar-rank-monitor.js", import.meta.url), "utf8");
 const logs = [...src.matchAll(/console\.(log|error|warn)\(([^;]*)\);/g)].map((x) => x[2]);
+ok(/result = keepUnmeasured\(decide\(rows, ack\), openBody, ack\)/.test(src), "the run keeps the open issue's unmeasured lines");
+ok(/let topTools = null;\s*try \{\s*const stats = await getJson\(`\$\{base\}\/api\/stats`, \{ deadline \}\);\s*if \(Array\.isArray\(stats\?\.topTools\)\) topTools = stats\.topTools;\s*\} catch \{/.test(src), "an unreadable ranking is caught on its own, so the flagships are still measured");
 ok(logs.length >= 1 && logs.every((a) => !/rows|lines|reply|resources|query/.test(a)), "the script's log lines carry no rows, queries or replies");
 
 console.log(`\n${pass} passed, ${fail} failed`);
