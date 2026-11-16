@@ -10,7 +10,10 @@
 //    of an answer), and a delivered report is never listed;
 //  - through the caller path: a failed report whose refund fails while the
 //    index cannot be written is listed, and leaves the list once a later
-//    poll refunds it.
+//    poll refunds it;
+//  - a refund Stripe reports pending is never recorded as made: the record
+//    stays owed until a later read finds it succeeded, and stays owed when
+//    it fails (read-back, and a poll whose create answers pending).
 //   node scripts/test-human-checkout-owed-records.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -40,8 +43,9 @@ const stripe = {
     create: async ({ payment_intent }) => {
       creates.push(payment_intent);
       const d = dashboard.get(payment_intent);
+      if (d?.createResult) return { ...d.createResult };
       if (d) { const e = new Error(d.createError.message); e.code = d.createError.code; throw e; }
-      if (refundFail) throw new Error("stripe refund down"); return { id: "re_live" };
+      if (refundFail) throw new Error("stripe refund down"); return { id: "re_live", status: "succeeded" };
     },
     list: async ({ payment_intent }) => { if (listHang) return new Promise(() => {}); lookups.push(`list:${payment_intent}`); return { data: dashboard.get(payment_intent)?.refunds || [] }; },
   },
@@ -106,7 +110,7 @@ try {
     const owedRec = (pi) => ({ status: "error", refundId: null, refundOwed: true, refundAttempts: 2, lastRefundAttemptAt: 0, paymentIntent: pi, product: "research", at: iso(20 * 60_000), error: "We couldn't complete this report. Your refund is being processed." });
     const cases = {
       cs_dash: { pi: "pi_dash", createError: { code: "charge_already_refunded", message: "Charge ch_x has already been refunded." }, refunds: [{ id: "re_failed", status: "failed", created: 3 }, { id: "re_dash", status: "succeeded", created: 2 }] },
-      cs_cached: { pi: "pi_cached", createError: { code: "idempotency_error", message: "replayed earlier failure" }, refunds: [{ id: "re_hand", status: "pending", created: 5 }], fullyRefunded: true },
+      cs_cached: { pi: "pi_cached", createError: { code: "idempotency_error", message: "replayed earlier failure" }, refunds: [{ id: "re_hand", status: "succeeded", created: 5 }], fullyRefunded: true },
       cs_partial: { pi: "pi_partial", createError: { code: "amount_too_large", message: "Refund amount is greater than unrefunded amount" }, refunds: [{ id: "re_part", status: "succeeded", created: 4 }], fullyRefunded: false },
       cs_none: { pi: "pi_none", createError: { code: "charge_already_refunded", message: "Charge has already been refunded." }, refunds: [{ id: "re_x", status: "canceled", created: 1 }] },
       // Two live refunds on one payment (a partial, then the rest): the newest is recorded.
@@ -186,6 +190,61 @@ try {
     for (let i = 0; i < 100 && ids(await hc2.owedRefunds()).length; i++) await wait(20);
     hc2.stop();
     ok(ids(await hc2.owedRefunds()).length === 0, "the read-back's first run after start() records the dashboard refund");
+  }
+
+  // ---- a pending refund is not a refund -------------------------------------
+  // Stripe marks the charge fully refunded while a refund is still pending,
+  // and a pending refund can still fail. Only a succeeded refund is recorded;
+  // the read-back pass reads a pending one again on later passes.
+  {
+    const dir = join(root, "pending");
+    mkdirSync(dir, { recursive: true });
+    const capRec = (pi, attempts = 6) => ({ status: "error", refundId: null, refundOwed: true, refundAttempts: attempts, lastRefundAttemptAt: 0, paymentIntent: pi, product: "research", at: iso(20 * 60_000), error: "We couldn't complete this report. Your refund is being processed." });
+    const cases = {
+      cs_pend_ok: { pi: "pi_pend_ok", createError: { code: "charge_already_refunded", message: "already refunded" }, refunds: [{ id: "re_pend_ok", status: "pending", created: 3 }], fullyRefunded: true },
+      cs_pend_fail: { pi: "pi_pend_fail", createError: { code: "charge_already_refunded", message: "already refunded" }, refunds: [{ id: "re_pend_fail", status: "pending", created: 3 }], fullyRefunded: true },
+      // A partial refund succeeded and the rest is still pending.
+      cs_pend_mix: { pi: "pi_pend_mix", createError: { code: "charge_already_refunded", message: "already refunded" }, refunds: [{ id: "re_mix_a", status: "succeeded", created: 2 }, { id: "re_mix_b", status: "pending", created: 4 }], fullyRefunded: true },
+    };
+    for (const [id, c] of Object.entries(cases)) {
+      sessions[id] = { id, mode: "payment", payment_status: "paid", payment_intent: c.pi, metadata: { product: "research", input: "x" } };
+      dashboard.set(c.pi, c);
+      writeFileSync(join(dir, `${id}.json`), JSON.stringify(capRec(c.pi)));
+    }
+    const hc = mk(dir);
+    creates.length = 0;
+    const p1 = await hc.readBackOwedRefunds();
+    ok(p1.checked === 3 && p1.recorded === 0, `a fully refunded charge whose refund is pending is not recorded (${JSON.stringify(p1)})`);
+    ok(ids(await hc.owedRefunds()).join() === "cs_pend_fail,cs_pend_mix,cs_pend_ok", "all three stay owed while a refund is pending");
+    // Stripe settles them: one succeeds, one fails (the charge is no longer refunded).
+    cases.cs_pend_ok.refunds[0].status = "succeeded";
+    cases.cs_pend_fail.refunds[0].status = "failed";
+    cases.cs_pend_fail.fullyRefunded = false;
+    cases.cs_pend_fail.createError = { code: "x", message: "down" };
+    const p2 = await hc.readBackOwedRefunds();
+    ok(p2.recorded === 1, `the next pass records the refund that succeeded (${JSON.stringify(p2)})`);
+    const okRec = await hc.fulfill("cs_pend_ok");
+    ok(okRec?.refundId === "re_pend_ok" && okRec.refundOwed === false && /has been refunded/.test(okRec.error), `pending then succeeded is recorded as refunded (${okRec?.refundId})`);
+    const failRec = await hc.fulfill("cs_pend_fail");
+    ok(!failRec?.refundId && failRec?.refundOwed === true && /being processed/.test(failRec.error), "pending then failed stays owed and is never told it was refunded");
+    const p3 = await hc.readBackOwedRefunds();
+    ok(p3.recorded === 0 && ids(await hc.owedRefunds()).join() === "cs_pend_fail,cs_pend_mix", `a failed refund and a still-pending remainder stay owed on later passes (${ids(await hc.owedRefunds()).join()})`);
+    ok(creates.length === 0, `the read-back never issues a refund (${creates.length} creates)`);
+
+    // The buyer-poll path: refunds.create answers a refund that is pending.
+    const dirP = join(root, "pending-poll");
+    mkdirSync(dirP, { recursive: true });
+    const pc = { pi: "pi_poll_pend", createResult: { id: "re_poll_pend", status: "pending" }, refunds: [{ id: "re_poll_pend", status: "pending", created: 6 }], fullyRefunded: true };
+    sessions.cs_poll_pend = { id: "cs_poll_pend", mode: "payment", payment_status: "paid", payment_intent: pc.pi, metadata: { product: "research", input: "x" } };
+    dashboard.set(pc.pi, pc);
+    writeFileSync(join(dirP, "cs_poll_pend.json"), JSON.stringify(capRec(pc.pi, 2)));
+    const hcP = mk(dirP);
+    const polled = await hcP.fulfill("cs_poll_pend");
+    ok(creates.includes("pi_poll_pend") && !polled?.refundId && polled?.refundOwed === true && /being processed/.test(polled.error), "a poll whose refund is created pending stays owed");
+    clock += 60_000;
+    pc.refunds[0].status = "succeeded"; // the key replays the pending answer; the list holds the truth
+    const polled2 = await hcP.fulfill("cs_poll_pend");
+    ok(polled2?.refundId === "re_poll_pend" && polled2.refundOwed === false, `the next poll reads the refund back once it succeeded (${polled2?.refundId})`);
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

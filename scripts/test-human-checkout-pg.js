@@ -49,7 +49,7 @@ let genCalls = 0;
 const stripe = {
   checkout: { sessions: { retrieve: async (id) => { await wait(15); const s = sessions[id]; if (!s) throw new Error("No such session"); return s; } } },
   refunds: {
-    create: async (args) => { if (refundFail) throw new Error("stripe refund down"); refunds.push(args); return { id: "re_" + refunds.length }; },
+    create: async (args) => { if (refundFail) throw new Error("stripe refund down"); refunds.push(args); return { id: "re_" + refunds.length, status: "succeeded" }; },
     // A payment refunded by hand in the Stripe dashboard (read back, never re-refunded).
     list: async ({ payment_intent }) => ({ data: payment_intent === "pi_cap" ? [{ id: "re_cap", status: "succeeded", created: 1 }] : payment_intent === "pi_cap_part" ? [{ id: "re_cap_part", status: "succeeded", created: 1 }] : [] }),
   },

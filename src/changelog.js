@@ -10,7 +10,7 @@ const ENTRIES = [
     date: "2026-11-16",
     title: "A card refund made by hand is recorded",
     items: [
-      `Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded, and a check that runs every ${mins(READBACK_INTERVAL_MS)}, first ${mins(READBACK_FIRST_MS)} after the server starts, reads back every payment still owed a refund without issuing one, so a refund made by hand after the retries stop also shows the payment refunded and leaves the owed refund alarm.`,
+      `Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded once Stripe reports it succeeded (a refund still pending leaves the payment owed until it does), and a check that runs every ${mins(READBACK_INTERVAL_MS)}, first ${mins(READBACK_FIRST_MS)} after the server starts, reads back every payment still owed a refund without issuing one, so a refund made by hand after the retries stop also shows the payment refunded and leaves the owed refund alarm.`,
       `Payments: The sweep that deletes an unpaid wallet subscription offer's email, subject and signing key runs ${mins(OFFER_SWEEP_FIRST_MS)} after the server starts, as well as every ${mins(OFFER_SWEEP_INTERVAL_MS)}, so a restart does not hold the deletion back.`,
     ],
   },

@@ -35,7 +35,7 @@ import { hookStatements } from "./lib/pg-statement-hook.js";
 
 const SELF = fileURLToPath(import.meta.url);
 const stripeOf = (refunds) => ({
-  refunds: { create: async (o) => { refunds.push(o.payment_intent); return { id: `re_${refunds.length}` }; } },
+  refunds: { create: async (o) => { refunds.push(o.payment_intent); return { id: `re_${refunds.length}`, status: "succeeded" }; } },
   checkout: { sessions: { retrieve: async (id) => ({ id, mode: "payment", payment_status: "paid", payment_intent: `pi_${id}`, amount_total: 200, customer_details: { email: null }, metadata: { product: "dossier", input: "MSFT" } }) } },
 });
 delete process.env.ZEPTOMAIL_TOKEN; delete process.env.RESEND_API_KEY; delete process.env.EMAIL_FROM;

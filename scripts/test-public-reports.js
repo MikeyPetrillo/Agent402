@@ -34,7 +34,7 @@ const SID = `cs_pubtest_${Date.now().toString(36)}`;
 const created = [];
 function cleanup() { for (const f of created) { try { unlinkSync(f); } catch { /* gone */ } } }
 
-const stripe = { checkout: { sessions: { retrieve: async (id) => (id === SID ? { id, payment_status: "paid", mode: "payment", metadata: { product: "domain-audit", input: "example.com" }, customer_details: { email: null } } : null) } }, refunds: { create: async () => ({ id: "re_x" }) } };
+const stripe = { checkout: { sessions: { retrieve: async (id) => (id === SID ? { id, payment_status: "paid", mode: "payment", metadata: { product: "domain-audit", input: "example.com" }, customer_details: { email: null } } : null) } }, refunds: { create: async () => ({ id: "re_x", status: "succeeded" }) } };
 const generate = async () => ({ report: "# Domain Security Audit: example.com\n\n**Overall grade: A**\n\n" + "Detail line. ".repeat(400), title: "example.com", sources: [{ n: 1, title: "DNS", url: "https://example.com" }], tables: [{ label: "Checks", columns: ["a"], rows: [["b"]] }] });
 const hc = createHumanCheckout({ stripe, generate, baseUrl: "http://x.test", storeDir: DIR, onSale: () => {}, log: () => {} });
 created.push(join(DIR, `${SID}.json`));

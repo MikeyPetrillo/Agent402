@@ -66,7 +66,7 @@ const code = `
     cs_credit: { id: "cs_credit", mode: "payment", payment_status: "paid", payment_intent: "pi_c", customer_details: { email: null }, metadata: { credits_pack: "credits-20" } },
     cs_report: { id: "cs_report", payment_status: "paid", payment_intent: "pi_r", customer_details: { email: null }, metadata: { product: "dossier", input: "AAPL" } },
   };
-  const stripe = { checkout: { sessions: { retrieve: async (id) => sessions[id] } }, refunds: { create: async () => ({ id: "re_1" }) } };
+  const stripe = { checkout: { sessions: { retrieve: async (id) => sessions[id] } }, refunds: { create: async () => ({ id: "re_1", status: "succeeded" }) } };
   const credits = createCredits({ stripe, baseUrl: "https://agent402.tools", storeDir: H + "/credits", log: () => {} });
   const decide = openDecideLedger(H + "/decide.db");
   const hc = createHumanCheckout({ stripe, generate: async () => ({ report: "# R\\n\\nText. [1]", title: "T", sources: [], tables: [] }), baseUrl: "https://agent402.tools", storeDir: H + "/checkout", onSale: () => {}, log: () => {} });

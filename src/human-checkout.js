@@ -713,7 +713,13 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         // one instead of failing or doubling.
         try {
           const r = await stripe.refunds.create({ payment_intent: piId }, { idempotencyKey: `agent402-refund-${piId}` });
-          return r.id;
+          if (r?.status === "succeeded" && typeof r.id === "string") return r.id;
+          // A refund Stripe has not finished (pending, or one that failed) is
+          // not recorded as made: the payment stays owed. The key replays this
+          // same answer on a retry, so the refund's current state is read
+          // back from the payment's refund list instead.
+          log(`[human-checkout] refund not yet succeeded (${String(r?.status || "unknown").slice(0, 24)}): kept owed`);
+          return await existingRefundId(piId, null);
         } catch (e) {
           log(`[human-checkout] refund failed: ${String(e?.message || e).slice(0, 160)}`);
           return await existingRefundId(piId, e);
@@ -726,11 +732,16 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // Stripe dashboard) makes refunds.create fail for good, and the key above
   // replays a first failure as well: read the refund that exists, and take it
   // when the charge is fully refunded (Stripe's already-refunded refusal says
-  // so; any other refusal is checked on the charge). Null when there is none.
+  // so; any other refusal is checked on the charge). Only a succeeded refund
+  // counts: while any refund of the payment is still pending (or waits on an
+  // action) the payment stays owed, since Stripe can still fail it, and the
+  // read-back pass reads it again later. Null when there is none.
   async function existingRefundId(piId, err) {
     try {
       const listed = await stripe.refunds.list({ payment_intent: piId, limit: 100 });
-      const live = (listed?.data || []).filter((r) => r && typeof r.id === "string" && (r.status === "succeeded" || r.status === "pending"));
+      const rows = (listed?.data || []).filter((r) => r && typeof r.id === "string");
+      if (rows.some((r) => r.status === "pending" || r.status === "requires_action")) return null;
+      const live = rows.filter((r) => r.status === "succeeded");
       if (!live.length) return null;
       let full = err?.code === "charge_already_refunded";
       if (!full) {
@@ -899,7 +910,7 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // This pass (its own timer, under a lease, never on a status read) reads
   // each owed record's payment back (existingRefundId: refunds.list and the
   // charge, never refunds.create) and records the refund when the charge is
-  // fully refunded. At most READBACK_MAX_PER_PASS records per pass, taken in
+  // fully refunded by refunds that succeeded. At most READBACK_MAX_PER_PASS records per pass, taken in
   // turn from a rotating start, each read waited for readbackCallTimeoutMs.
   let readbackStart = 0;
   async function readBackOwedRefunds({ max = READBACK_MAX_PER_PASS } = {}) {
