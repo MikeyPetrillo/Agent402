@@ -3,6 +3,14 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-15",
+    title: "Yield curve and FX answers name their source",
+    items: [
+      "Data: the treasury-yield-curve, treasury-yield-history and yield-curve-spread tools read the U.S. Treasury's Daily Treasury Par Yield Curve Rates, with the same tenors, inputs and answer shape, and name it in source or asOf; their descriptions end with \"Source: U.S. Treasury.\" The server keeps the curve in memory and refreshes it in the background every 30 minutes; when a refresh fails, answers carry stale: true and staleAsOf. A call that finds a year it needs not yet held waits at most 20 seconds, then answers 503 with Retry-After.",
+      "Data: answers from fx-rate carry source, naming the European Central Bank reference rates, as fx-dashboard answers do. Both read those rates only: when they cannot be read, fx-rate answers 503 with Retry-After, and fx-dashboard serves its marked snapshot of up to a day or answers 503 the same way. The FX tools' descriptions end with \"Source: European Central Bank.\"",
+    ],
+  },
+  {
+    date: "2026-11-15",
     title: "Coverage refusals name their class",
     items: [
       "Payments: a 429 from the check that a wallet's balance covers its paid calls in flight carries attribution \"ours\", a hint and a reason naming its class (cover-short and cover_short, and so on) and a fix saying what to do next, in place of the tool's input schema and example. The privacy page and payment.dataHandling in /.well-known/x402 say that each paid call reads the paying wallet's public balance, that a reservation per call in flight is kept for the life of the call, and that the last balance read is held in memory, used for at most 15 minutes, and dropped at the next paid call after that or on restart.",

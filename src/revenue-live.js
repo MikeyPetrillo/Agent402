@@ -2156,7 +2156,7 @@ export function revenuePage(baseUrl, snap) {
   const canonical = baseUrl + "/revenue";
   const title = "Transactions - x402 and MPP settlements on-chain | Agent402";
   const description =
-    `Every payment through the Agent402 rails, external and our own, across both wires (x402 and MPP) and ${RAILS_AMP}, plus Tempo. Each figure links to its on-chain proof.`;
+    `External payments and revenue on the Agent402 rails across both wires (x402 and MPP) and ${RAILS_AMP}, plus Tempo, with every settlement through our rails counted beside them. Each figure links to its on-chain proof.`;
   const chainKeyByLabel = { ...Object.fromEntries(Object.entries(EVM).map(([k, c]) => [c.label, k])), Solana: "solana", Stellar: "stellar", Algorand: "algorand" };
   const at = snap.allTime || {};
   const perChainOf = (r) => at.perChain?.[chainKeyByLabel[r.rail]];
@@ -2209,16 +2209,19 @@ export function revenuePage(baseUrl, snap) {
   const railsSorted = [...snap.rails].sort((a, b) => (Number(perChainOf(b)?.inboundCount) || 0) - (Number(perChainOf(a)?.inboundCount) || 0));
   const partialNotes = snap.rails.filter((r) => r.scanNote).length;
 
-  // Hero: two numbers - throughput (every settled transaction, ours included:
-  // the rail-stability signal) and distinct paying agents (the demand signal).
-  // The dollar figure stays, external-only, one line under them: the decision
-  // (the operator, 2026-09-01) was to lead with the counts and never to REMOVE
-  // the revenue split. See railThroughput() for why MPP is Tempo-only here.
+  // Hero: two numbers - external payments with their revenue (money from
+  // outside wallets: the demand signal) and distinct paying wallets. The
+  // throughput total (every settled transaction, ours included: the
+  // rail-stability signal) stays on the page as one smaller line under them,
+  // never removed (the operator, 2026-11-15: external is the headline now;
+  // 2026-09-01: never REMOVE the revenue split). See railThroughput() for why
+  // MPP is Tempo-only here.
   const throughput = railThroughput(snap).total;
   // What this page is measuring, said once at the top. Derived from the same
   // snapshot the rest of the page renders, plus the index totals server.js
-  // hands in - never typed, or the framing sentence goes stale first.
-  const standing = standingBand({ ...(snap.standing || {}), settled: railThroughput(snap).total, eyebrow: "THE MARKET WE INDEX" });
+  // hands in - never typed, or the framing sentence goes stale first. The
+  // throughput total is not repeated in the band: it sits under the hero.
+  const standing = standingBand({ ...(snap.standing || {}), eyebrow: "THE MARKET WE INDEX" });
   // External payments across the scanned on-chain rails PLUS Tempo MPP
   // settlements (Tempo is not a scanned chain; ledgerSummary folds it in from
   // the sales ledger). Falls back to the on-chain pair for an older snapshot.
@@ -2228,18 +2231,24 @@ export function revenuePage(baseUrl, snap) {
   const extCount = Number(at.allTimeExternalAllCount ?? at.allTimeExternalWithTempoCount ?? at.allTimeExternalCount ?? 0);
   const extUsd = Number(at.allTimeExternalAllUsd ?? at.allTimeExternalWithTempoUsd ?? at.allTimeExternalUsd ?? 0);
   const agents = Number(snap.agents?.buyers || 0);
-  const big = (n, label, sub) => `
-    <div style="min-width:0;">
+  const big = (n, label, sub, id) => `
+    <div style="min-width:0;"${id ? ` id="${id}"` : ""}>
       <div style="font-family:var(--font-mono);font-size:var(--fs-3xl);font-weight:700;color:var(--accent);line-height:1.05;">${n.toLocaleString()}</div>
       <div style="font-size:var(--fs-md);color:var(--ink);margin-top:6px;">${label}</div>
       <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin-top:3px;">${sub}</div>
     </div>`;
-  const hero = throughput ? `
+  const syncNote = at.syncing ? " · ledger still backfilling" : "";
+  const extLabel = `external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, all-time`;
+  const extSub = `${gwBatched ? "x402 rails and Tempo MPP settled on-chain, plus Circle Gateway batched payments settled off chain" : "settled on-chain (x402 rails + Tempo MPP)"}${syncNote}`;
+  const card = snap.card?.allTimeCount ? `<strong style="color:var(--ink);">${Number(snap.card.allTimeCount).toLocaleString()}</strong> card checkout purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}), reports and monitors, by card, not on-chain` : "";
+  const throughputLine = throughput ? `<strong style="color:var(--ink);">${throughput.toLocaleString()}</strong> settled transaction${throughput === 1 ? "" : "s"} through our rails (x402 + MPP), our own test purchases included` : "";
+  const secondary = [throughputLine, card].filter(Boolean).join(" · ");
+  const hero = throughput || extCount ? `
     <div class="ml-2col" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:22px 0 14px;max-width:720px;">
-      ${big(throughput, "settled transactions, all-time", `x402 + MPP, ours included${at.syncing ? " · ledger still backfilling" : ""}`)}
+      ${big(extCount, extLabel, extSub, "rvExternal")}
       ${agents ? big(agents, `distinct outside wallet${agents === 1 ? " has" : "s have"} paid us on-chain`, `unique outside wallets${snap.agents?.scope?.since ? `, since ${esc(snap.agents.scope.since)}` : ""}${snap.agents?.top5SharePct != null ? ` · top 5 = ${snap.agents.top5SharePct}% of their payments` : ""}`) : ""}
     </div>
-    <p style="font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--ink);margin:0 0 4px;"><strong>${extCount.toLocaleString()}</strong> external payment${extCount === 1 ? "" : "s"} · <strong>$${extUsd.toFixed(2)}</strong> revenue, ${gwBatched ? "x402 rails and Tempo MPP settled on-chain, plus Circle Gateway batched payments settled off chain" : "settled on-chain (x402 rails + Tempo MPP)"}, all-time${snap.card?.allTimeCount ? ` · <strong>${Number(snap.card.allTimeCount).toLocaleString()}</strong> card checkout purchase${snap.card.allTimeCount === 1 ? "" : "s"} ($${Number(snap.card.allTimeUsd).toFixed(2)}) <span style="color:var(--muted);font-weight:400;">reports and monitors, by card, not on-chain</span>` : ""}</p>` : "";
+    ${secondary ? `<p id="rvThroughput" style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--muted);margin:0 0 4px;">${secondary}</p>` : ""}` : "";
 
   const body = `
   <div style="max-width:1100px;margin:0 auto;padding:56px 30px;">

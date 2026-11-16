@@ -13,13 +13,19 @@
 // macro kit's FRED routes carry); CoinGecko in src/tools/coingecko-rate.js;
 // Jupiter in src/tools/solana-intel-kit.js; OpenStreetMap in
 // src/tools/geo-kit.js; Open-Meteo in src/tools/weather-kit.js; NVD in
-// src/tools/cve-kit.js.
+// src/tools/cve-kit.js; the ECB's reuse terms, which ask that the ECB be
+// cited as the source of its reference rates
+// (https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html),
+// in src/tools/frankfurter.js; the U.S. Treasury's yield curve (a U.S.
+// government work, credit requested) in src/tools/macro-kit.js.
 export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
 export const COINGECKO_ATTRIBUTION = "Data provided by CoinGecko.";
 export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
 export const OSM_ATTRIBUTION = "Data © OpenStreetMap contributors, ODbL (openstreetmap.org/copyright).";
 export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0).";
 export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD.";
+export const ECB_ATTRIBUTION = "Source: European Central Bank.";
+export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
 
 /** Source key (a tool's `attribution` field) -> the sentence its terms require. */
 export const ATTRIBUTIONS = Object.freeze({
@@ -29,6 +35,8 @@ export const ATTRIBUTIONS = Object.freeze({
   openstreetmap: OSM_ATTRIBUTION,
   "open-meteo": OPEN_METEO_ATTRIBUTION,
   nvd: NVD_NOTICE,
+  ecb: ECB_ATTRIBUTION,
+  "us-treasury": US_TREASURY_ATTRIBUTION,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */

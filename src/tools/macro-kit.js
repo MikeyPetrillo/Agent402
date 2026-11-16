@@ -4,15 +4,11 @@
 // Two tiers of sources:
 //
 //   1. Fully keyless (always works):
-//      • US Treasury constant-maturity yields via FRED CSV download (DGS*
-//        series, St. Louis Fed; the CSV endpoint is keyless even though the
-//        JSON API requires a key). When FRED_API_KEY is set, an upstream
-//        failure of the CSV scrape falls back to the keyed JSON API — the
-//        keyless endpoint shares prod's Railway egress IP with other tenants
-//        and intermittently throttles it.
+//      • US Treasury Daily Treasury Par Yield Curve Rates (home.treasury.gov,
+//        keyless CSV per year, public domain) for the yield-curve tools
 //      • US Treasury Fiscal Data API (api.fiscaldata.treasury.gov) — public
 //        domain, for debt outstanding and average interest rates by security
-//      • ECB reference rates via Frankfurter v2 (api.frankfurter.dev/v2, providers=ecb) — open data
+//      • ECB reference rates via Frankfurter v2 (api.frankfurter.dev/v2, providers=ecb), ECB cited as the source
 //      • World Bank Indicators API (api.worldbank.org) — open data
 //
 //   2. Keyed FRED JSON API (requires FRED_API_KEY env var, free to obtain at
@@ -25,9 +21,9 @@
 // ecosystem (yield curves, FX time series, GDP/inflation indicators, CPI YoY,
 // fed funds, recession signals). Pure HTTP wrappers, deterministic.
 import { safeFetch, assertPublicUrl, retryTransient } from "./fetch-guard.js";
-import { markEndsAtCeiling, capByCeiling, assertBeforeCeiling } from "../run-ceiling.js";
+import { markEndsAtCeiling, capByCeiling, assertBeforeCeiling, ceilingLeftMs } from "../run-ceiling.js";
 import { redactSecrets } from "./redact.js";
-import { ratesUrl, latestShape, seriesShape, isUnknownCurrency } from "./frankfurter.js";
+import { ratesUrl, latestShape, seriesShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 
 // Moved to fetch-guard.js 2026-08-12 (now used by gov-kit.js and
 // weather-kit.js too, not just here) — re-exported so this file's own
@@ -106,24 +102,15 @@ async function safeFetchRetry(url, opts = {}) {
 // two extra chances at a feed that answers in <1s when it answers at all.
 const FISCAL_FETCH = { retries: 2, backoffMs: 400, timeoutMs: 8_000 };
 
-// The FX primary gets a SHORT leash, for the opposite reason to FISCAL_FETCH
-// above: this tool has a fast keyless fallback, and the fallback only fires
-// when the primary THROWS. A primary that is merely slow blocks the whole call
-// and the fallback never gets its turn.
-//
-// Measured 2026-08-03: api.frankfurter.dev answers in ~0.06s warm but 7.8s and
-// 11.6s cold, while the fallback open.er-api.com answers in ~0.08s every time.
-// On the default 15s timeout with a retry, a cold primary could hold a PAID
-// $0.015 call for up to 30s before failing over - and prod's self-check, which
-// gives up at 12s, was recording fx-dashboard as a 504 outage while a healthy
-// second publisher sat unused.
-//
-// 2.5s and no retry: if the spec'd primary cannot beat a host that answers in
-// under a tenth of a second, it has already lost. Retrying it is worse than
-// falling through, because the fallback IS the retry. The two publishers agree
-// to 4dp on ECB daily reference rates and the response names which one served,
-// so failing over costs the buyer nothing but is never silent.
-const FX_PRIMARY = { retries: 0, timeoutMs: 2_500 };
+// fx-dashboard's read of the ECB rates gets a short per-attempt leash and
+// one retry, for the opposite reason to FISCAL_FETCH above: the host answers
+// in ~0.06s warm but took 7.8s and 11.6s cold (measured 2026-08-03), so a
+// first attempt that is merely slow is cut at 5s and the retry meets a warm
+// host. Worst case 5s + 0.3s + 5s stays inside prod's 12s self-check, which
+// recorded a 504 outage on the inherited 15s timeout. The ECB reference rates
+// are the only source: past both attempts the dashboard serves its marked
+// snapshot (up to a day old) or answers 503 with a retry hint.
+const FX_PRIMARY = { retries: 1, timeoutMs: 5_000 };
 
 async function getJson(url, opts = {}) {
   const { html } = await safeFetchRetry(url, { maxBytes: 5 * 1024 * 1024, ...opts });
@@ -134,26 +121,237 @@ async function getJson(url, opts = {}) {
   }
 }
 
-async function getText(url) {
-  const { html } = await safeFetchRetry(url, { maxBytes: 5 * 1024 * 1024 });
-  return html;
+// The US Treasury's own Daily Treasury Par Yield Curve Rates (public domain,
+// keyless): one CSV per calendar year, newest row first, dates MM/DD/YYYY.
+// These are the yields the Federal Reserve's H.15 constant-maturity series
+// are taken from, value for value.
+//
+// Tenor map, by header name (Treasury has added columns over the years, so
+// positions are never assumed): the eleven tenors these tools publish come
+// from the columns of the same maturity. Treasury also publishes 1.5, 2 and 4
+// month columns; no tool publishes those tenors, so they are not read. Every
+// published tenor has a Treasury column; an empty cell (a tenor not yet or no
+// longer issued on that day) is null.
+const TREASURY_YIELD_TENORS = [
+  ["1 Mo", "mo1"], ["3 Mo", "mo3"], ["6 Mo", "mo6"],
+  ["1 Yr", "yr1"], ["2 Yr", "yr2"], ["3 Yr", "yr3"],
+  ["5 Yr", "yr5"], ["7 Yr", "yr7"], ["10 Yr", "yr10"],
+  ["20 Yr", "yr20"], ["30 Yr", "yr30"],
+];
+export const TREASURY_YIELD_SOURCE = "U.S. Treasury Daily Treasury Par Yield Curve Rates";
+
+export function treasuryYieldCsvUrl(year) {
+  return `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/${year}/all?type=daily_treasury_yield_curve&field_tdr_date_value=${year}&_format=csv`;
 }
 
-// Constant-maturity tenors FRED publishes daily as the DGS* series. Order
-// matters — it's the column order of the CSV we fetch, and the order of the
-// output object keys.
-const FRED_YIELD_SERIES = [
-  ["DGS1MO", "mo1"], ["DGS3MO", "mo3"], ["DGS6MO", "mo6"],
-  ["DGS1", "yr1"], ["DGS2", "yr2"], ["DGS3", "yr3"],
-  ["DGS5", "yr5"], ["DGS7", "yr7"], ["DGS10", "yr10"],
-  ["DGS20", "yr20"], ["DGS30", "yr30"],
-];
+const unquote = (s) => String(s ?? "").trim().replace(/^"|"$/g, "");
 
-// Parse FRED's two-column-per-series CSV download. The first column is
-// observation_date, then one column per series in the requested order. Empty
-// cells mean "no observation" (weekend, holiday, or series gap) and become
-// null. We trim to rows that have *any* yield value so callers don't see a
-// trailing weekend with all-null values from a midweek pull.
+// One year's CSV -> rows in the tools' shape ({recordDate, mo1 ... yr30}),
+// oldest first. A row with no yield at all is dropped. A file with a header
+// and no rows (the first days of January) is an empty year, not an error.
+export function parseTreasuryYieldCsv(csv) {
+  const text = String(csv || "");
+  if (/^\s*</.test(text)) throw bad("U.S. Treasury returned a web page in place of the yield curve file", 502);
+  const lines = text.trim().split(/\r?\n/);
+  const header = (lines[0] || "").split(",").map(unquote);
+  if (header[0] !== "Date") throw bad("U.S. Treasury yield curve file has no Date column", 502);
+  const colIdx = TREASURY_YIELD_TENORS.map(([col]) => header.indexOf(col));
+  if (lines.length > 1 && colIdx.some((i) => i < 0)) throw bad("U.S. Treasury yield curve file is missing expected tenor columns", 502);
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split(",").map(unquote);
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(cells[0]);
+    if (!m) continue;
+    const out = { recordDate: `${m[3]}-${m[1]}-${m[2]}` };
+    let hasAny = false;
+    TREASURY_YIELD_TENORS.forEach(([, dst], j) => {
+      const raw = cells[colIdx[j]];
+      const n = raw == null || raw === "" || raw === "N/A" ? NaN : Number(raw);
+      if (Number.isFinite(n)) { out[dst] = n; hasAny = true; } else out[dst] = null;
+    });
+    if (hasAny) rows.push(out);
+  }
+  rows.sort((a, b) => (a.recordDate < b.recordDate ? -1 : a.recordDate > b.recordDate ? 1 : 0));
+  return rows;
+}
+
+// The Treasury host takes 15-20 s to build each file (measured 2026-11-15,
+// the same for a month or a year), longer than a buyer can wait on a paid
+// call. So the files are read in the background and served from memory:
+//   - The current year's file is refreshed on a timer (every 30 minutes, and
+//     shortly after boot in production; startTreasuryYieldRefresh), one read
+//     at a time, never awaited by a request. A request that finds it older
+//     than 30 minutes serves what is held and starts the same single read
+//     without waiting for it.
+//   - An earlier year's file is kept a day; the timer reads last year's too.
+//   - When the latest refresh failed, or the held copy is past two refresh
+//     periods, the answer is served marked stale (stale, staleAsOf), the
+//     fx-dashboard convention, never a 502 or 504.
+//   - A request that finds a year it needs not held at all (a cold process)
+//     reads every needed year at once and waits at most its budget
+//     (TREASURY_YIELD_BUDGET_MS, inside the hosted connector's wait and the
+//     payment window); past it, it answers 503 with Retry-After, and nothing
+//     is charged (a status of 400 or more is never settled). The read it
+//     started runs on, up to TREASURY_YIELD_READ_MS, and fills the cache.
+// The cache is this process's memory only, so each replica keeps its own and
+// no lease orders the timer: there is no shared state for two to race on.
+const TREASURY_YIELD_READ_MS = 45_000;
+const TREASURY_YIELD_BUDGET_MS = 20_000;
+const TREASURY_YIELD_REFRESH_MS = 30 * 60 * 1000;
+const TREASURY_YIELD_PAST_TTL_MS = 24 * 3600 * 1000;
+const TREASURY_YIELD_STALE_MS = 2 * TREASURY_YIELD_REFRESH_MS + 5 * 60 * 1000;
+const TREASURY_YIELD_RETRY_AFTER_S = 30;
+const treasuryYieldYears = new Map(); // year -> { at, rows, failedAt }
+const treasuryYieldReads = new Map(); // year -> in-flight read (single flight)
+const treasuryYieldTimer = { interval: null, boot: null };
+export function _resetTreasuryYieldCacheForTest() { stopTreasuryYieldRefresh(); treasuryYieldYears.clear(); treasuryYieldReads.clear(); }
+
+const treasuryYieldBudgetMs = () => {
+  const n = Number(process.env.TREASURY_YIELD_BUDGET_MS);
+  return Number.isFinite(n) && n > 0 ? n : TREASURY_YIELD_BUDGET_MS;
+};
+
+// One read of one year's file, shared by everyone who asks while it runs. It
+// holds no request's deadline: it ends at its own cap and fills the cache.
+function readTreasuryYear(year) {
+  const running = treasuryYieldReads.get(year);
+  if (running) return running;
+  const read = (async () => {
+    try {
+      const { html } = await safeFetchRetry(treasuryYieldCsvUrl(year), { maxBytes: 5 * 1024 * 1024, retries: 0, timeoutMs: TREASURY_YIELD_READ_MS });
+      const rows = parseTreasuryYieldCsv(html);
+      treasuryYieldYears.set(year, { at: Date.now(), rows, failedAt: 0 });
+      const keep = new Date().getUTCFullYear() - 2;
+      for (const y of [...treasuryYieldYears.keys()]) if (y < keep) treasuryYieldYears.delete(y);
+      return rows;
+    } catch (e) {
+      const held = treasuryYieldYears.get(year);
+      if (held) held.failedAt = Date.now();
+      console.warn(`[treasury-yield] ${year} file read failed (${String(e?.message || e).slice(0, 120)})`);
+      throw e;
+    } finally {
+      treasuryYieldReads.delete(year);
+    }
+  })();
+  treasuryYieldReads.set(year, read);
+  read.catch(() => {}); // a background read's failure is logged above, never unhandled
+  return read;
+}
+
+/** One refresh pass: the current year's file when older than the refresh
+ *  period, last year's when older than a day. Never throws. */
+export async function refreshTreasuryYields(now = Date.now()) {
+  const year = new Date(now).getUTCFullYear();
+  const due = [];
+  const cur = treasuryYieldYears.get(year);
+  if (!cur || now - cur.at >= TREASURY_YIELD_REFRESH_MS - 60_000) due.push(year);
+  const prev = treasuryYieldYears.get(year - 1);
+  if (!prev || now - prev.at >= TREASURY_YIELD_PAST_TTL_MS) due.push(year - 1);
+  const results = await Promise.allSettled(due.map(readTreasuryYear));
+  return { read: due, failed: results.filter((r) => r.status === "rejected").length };
+}
+
+/** Start the background refresh (idempotent): a first pass shortly after
+ *  boot, then every 30 minutes. Timers are unref'd. */
+export function startTreasuryYieldRefresh({ firstDelayMs = 5_000 } = {}) {
+  if (treasuryYieldTimer.interval) return false;
+  const tick = () => { refreshTreasuryYields().catch(() => {}); };
+  treasuryYieldTimer.boot = setTimeout(tick, firstDelayMs);
+  treasuryYieldTimer.boot.unref?.();
+  treasuryYieldTimer.interval = setInterval(tick, TREASURY_YIELD_REFRESH_MS);
+  treasuryYieldTimer.interval.unref?.();
+  return true;
+}
+export function stopTreasuryYieldRefresh() {
+  if (treasuryYieldTimer.boot) clearTimeout(treasuryYieldTimer.boot);
+  if (treasuryYieldTimer.interval) clearInterval(treasuryYieldTimer.interval);
+  treasuryYieldTimer.boot = treasuryYieldTimer.interval = null;
+}
+// Production starts it at import (the image sets NODE_ENV=production; Railway
+// sets RAILWAY_ENVIRONMENT_NAME). A FREE_MODE boot and every test leave it off
+// unless they ask (TREASURY_YIELD_REFRESH=on, or startTreasuryYieldRefresh());
+// TREASURY_YIELD_REFRESH=off disarms it anywhere.
+{
+  const sw = String(process.env.TREASURY_YIELD_REFRESH || "").toLowerCase();
+  const production = process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT_NAME;
+  if (sw === "on" || (sw !== "off" && production && process.env.FREE_MODE !== "true")) startTreasuryYieldRefresh();
+}
+
+function treasuryYieldUnavailable(cause) {
+  console.warn(`[treasury-yield] answered 503 (${String(cause?.message || cause).slice(0, 120)})`);
+  return Object.assign(
+    bad(`The U.S. Treasury yield curve file could not be read in time; nothing was charged - retry in ${TREASURY_YIELD_RETRY_AFTER_S} s`, 503),
+    { retryAfter: TREASURY_YIELD_RETRY_AFTER_S, attribution: "upstream", upstreamFailure: "deadline" },
+  );
+}
+
+// Business days of `year` up to `now`, less a margin for holidays: how many
+// rows the current year's file can hold, before it is read.
+function rowsSoFar(now) {
+  const d = new Date(now), start = Date.UTC(d.getUTCFullYear(), 0, 1);
+  const days = Math.floor((now - start) / 86400_000) + 1;
+  return Math.max(0, Math.floor((days * 5) / 7) - 12);
+}
+
+// The last `count` published days, oldest first, with the stale marks of the
+// years they came from. Held years answer at once. The years not held are
+// read together, all under one budget: the current year, plus earlier ones
+// while the rows held (or, for a year not held, the rows it can hold) fall
+// short of `count`; if a file holds fewer rows than that, the next earlier
+// year is read under what is left of the same budget. `count` is at most
+// 250, so at most three years are ever needed.
+async function fetchTreasuryYields(count = 1) {
+  const now = Date.now();
+  const year = new Date(now).getUTCFullYear();
+  const cur = treasuryYieldYears.get(year);
+  if (cur && now - cur.at >= TREASURY_YIELD_REFRESH_MS) readTreasuryYear(year); // refresh, not awaited
+  const budget = Math.max(1, Math.min(treasuryYieldBudgetMs(), ceilingLeftMs()));
+  let timer = null, deadline = null;
+  try {
+    for (;;) {
+      const years = [];
+      let expect = 0;
+      for (let y = year; y >= year - 2 && expect < count; y--) {
+        years.push(y);
+        const e = treasuryYieldYears.get(y);
+        expect += e ? e.rows.length : y === year ? rowsSoFar(now) : 245;
+      }
+      // Done once every year counted is held: then the held rows cover
+      // `count`, or all three years are held.
+      const missing = years.filter((y) => !treasuryYieldYears.get(y));
+      if (!missing.length) break;
+      if (!deadline) {
+        deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${budget} ms`)), budget); timer.unref?.(); });
+      }
+      try {
+        await Promise.race([Promise.all(missing.map(readTreasuryYear)), deadline]);
+      } catch (e) {
+        throw treasuryYieldUnavailable(e);
+      }
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  // Newest year first, until `count` rows: the years the answer is built
+  // from, and the stale mark of any of them.
+  let rows = [], staleAt = 0;
+  for (let y = year; y >= year - 2 && rows.length < count; y--) {
+    const e = treasuryYieldYears.get(y);
+    if (!e) break;
+    if (!e.rows.length) continue;
+    rows = e.rows.concat(rows);
+    const stale = e.failedAt > e.at || now - e.at >= (y === year ? TREASURY_YIELD_STALE_MS : TREASURY_YIELD_PAST_TTL_MS + TREASURY_YIELD_STALE_MS);
+    if (stale) staleAt = staleAt ? Math.min(staleAt, e.at) : e.at;
+  }
+  if (!rows.length) throw treasuryYieldUnavailable(new Error("no usable yield rows"));
+  return { rows: rows.slice(-count), stale: staleAt ? { stale: true, staleAsOf: new Date(staleAt).toISOString() } : {} };
+}
+
+async function fetchLatestYieldCurve() {
+  const { rows, stale } = await fetchTreasuryYields(1);
+  return { curve: rows[rows.length - 1], stale };
+}
+
 // FRED answers a scheduled maintenance window with an HTML page (HTTP 200) in
 // place of data. That is the upstream's own outage: a 503 that says so, with a
 // retry hint, never a generic 502. Uncharged like every refusal.
@@ -163,124 +361,6 @@ export function isFredMaintenancePage(text) {
 }
 export function fredMaintenanceError() {
   return Object.assign(bad("FRED (St. Louis Fed) is in scheduled maintenance and is serving no data right now. Retry later; you were not charged.", 503), { retryAfter: 900, attribution: "upstream", noRetry: true });
-}
-
-function parseFredYieldsCsv(csv) {
-  if (isFredMaintenancePage(csv)) throw fredMaintenanceError();
-  const lines = csv.trim().split(/\r?\n/);
-  if (lines.length < 2) throw bad("FRED returned no rows", 502);
-  const header = lines[0].split(",");
-  const seriesIds = FRED_YIELD_SERIES.map(([id]) => id);
-  // Defensive: map column positions by header name in case FRED ever reorders.
-  const colIdx = seriesIds.map((id) => header.indexOf(id));
-  if (colIdx.some((i) => i < 0)) throw bad("FRED CSV missing expected columns", 502);
-  const rows = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cells = lines[i].split(",");
-    const recordDate = cells[0];
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDate)) continue;
-    const out = { recordDate };
-    let hasAny = false;
-    FRED_YIELD_SERIES.forEach(([, dst], j) => {
-      const raw = cells[colIdx[j]];
-      if (raw == null || raw === "" || raw === ".") {
-        out[dst] = null;
-      } else {
-        const n = Number(raw);
-        if (Number.isFinite(n)) { out[dst] = n; hasAny = true; }
-        else { out[dst] = null; }
-      }
-    });
-    if (hasAny) rows.push(out);
-  }
-  if (!rows.length) throw bad("FRED returned no usable yield rows", 502);
-  return rows;
-}
-
-// Keyed-API fallback for the yield-curve tools. fredgraph.csv is a keyless
-// scrape endpoint, and prod shares one Railway egress IP with other tenants —
-// a per-IP throttle or anti-bot block upstream turns into OUR intermittent
-// failure. When the CSV path fails with an upstream error AND FRED_API_KEY is
-// configured, refetch the same DGS* series via the keyed JSON API (one
-// /series/observations call per series, concurrency-bounded) and reassemble
-// the exact row shape parseFredYieldsCsv produces, so the three handlers
-// (latest curve / history / spreads) never notice which path served them.
-// Window: the handlers only ever read the trailing 250 business days
-// (`?days` caps at 250), so ~550 calendar days of lookback covers the worst
-// case (weekends + holidays) with margin — no need to mirror the CSV's
-// full-since-1962 history.
-const FRED_YIELD_FALLBACK_LOOKBACK_DAYS = 550;
-const FRED_YIELD_FALLBACK_CONCURRENCY = 4;
-
-export async function assembleFredYieldRows(observationsBySeries) {
-  // observationsBySeries: array aligned with FRED_YIELD_SERIES, each an array
-  // of {date, value} (missing "." observations already filtered out — the
-  // fredObservations contract). Merge into fredgraph-CSV row shape: one row
-  // per date, every tenor key present, null where a series has no observation.
-  const byDate = new Map();
-  FRED_YIELD_SERIES.forEach(([, dst], j) => {
-    for (const { date, value } of observationsBySeries[j] || []) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(value)) continue;
-      let row = byDate.get(date);
-      if (!row) {
-        row = { recordDate: date };
-        for (const [, d] of FRED_YIELD_SERIES) row[d] = null;
-        byDate.set(date, row);
-      }
-      row[dst] = value;
-    }
-  });
-  // Same trim semantics as the CSV parser: keep only rows with ≥1 observation
-  // (guaranteed by construction here), chronological order.
-  const rows = [...byDate.values()].sort((a, b) => (a.recordDate < b.recordDate ? -1 : 1));
-  if (!rows.length) throw bad("FRED returned no usable yield rows", 502);
-  return rows;
-}
-
-async function fetchFredYieldsViaKeyedApi() {
-  const startDate = new Date(Date.now() - FRED_YIELD_FALLBACK_LOOKBACK_DAYS * 86400_000)
-    .toISOString().slice(0, 10);
-  const results = new Array(FRED_YIELD_SERIES.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < FRED_YIELD_SERIES.length) {
-      const idx = next++;
-      results[idx] = await fredObservations({ seriesId: FRED_YIELD_SERIES[idx][0], startDate });
-    }
-  };
-  await Promise.all(Array.from({ length: FRED_YIELD_FALLBACK_CONCURRENCY }, worker));
-  return assembleFredYieldRows(results);
-}
-
-// Is a fetchFredYields failure an UPSTREAM problem the keyed API could route
-// around? 502/503/504 cover gateway errors, timeouts, and the CSV parser's
-// "no rows / missing columns" throws. `upstreamStatus` covers safeFetch's 4xx
-// mapping: our fredgraph URL is fixed and correct, so an upstream 403/429
-// (per-IP throttle — the exact shared-egress failure mode) is never a caller
-// error here even though safeFetch attributes it as 422.
-function isYieldCsvUpstreamFailure(e) {
-  const sc = e?.statusCode;
-  return sc === 502 || sc === 503 || sc === 504 || e?.upstreamStatus !== undefined;
-}
-
-async function fetchFredYields() {
-  const ids = FRED_YIELD_SERIES.map(([id]) => id).join(",");
-  const url = `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${ids}`;
-  try {
-    const csv = await getText(url);
-    return parseFredYieldsCsv(csv);
-  } catch (e) {
-    // Fall back only on upstream failures, and only when the keyed API is
-    // configured — with no key, behavior is exactly as before.
-    if (!isYieldCsvUpstreamFailure(e) || !(process.env.FRED_API_KEY || "").trim()) throw e;
-    console.warn(`[macro] fredgraph.csv failed (${e.message}) - falling back to keyed FRED API`);
-    return fetchFredYieldsViaKeyedApi();
-  }
-}
-
-async function fetchLatestYieldCurve() {
-  const rows = await fetchFredYields();
-  return rows[rows.length - 1];
 }
 
 // G10 majors quoted vs USD — the standard FX dashboard most callers want.
@@ -294,51 +374,53 @@ let fxDashCache = null;
 
 export const MACRO_TOOLS = [
   {
-    route: "GET /api/treasury-yield-curve", name: "US Treasury daily yield curve", slug: "treasury-yield-curve", category: "data", attribution: "fred", price: "$0.005",
+    route: "GET /api/treasury-yield-curve", name: "US Treasury daily yield curve", slug: "treasury-yield-curve", category: "data", attribution: "us-treasury", price: "$0.005",
     description:
-      "Latest US Treasury daily constant-maturity yield curve in one object: recordDate plus mo1, mo3, mo6, yr1, yr2, yr3, yr5, yr7, yr10, yr20 and yr30, each a yield in percent. Source: FRED DGS* series (St. Louis Fed), public domain. No params - always returns the most recent published curve, which trails today by a business day or two; for a date range use treasury-yield-history. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Latest US Treasury daily par yield curve in one object: recordDate plus mo1, mo3, mo6, yr1, yr2, yr3, yr5, yr7, yr10, yr20 and yr30, each a yield in percent, from the Treasury's Daily Treasury Par Yield Curve Rates (public domain). No params - always returns the most recent published curve, which trails today by a business day or two; for a date range use treasury-yield-history. Source: U.S. Treasury.",
     tags: ["treasury", "yield-curve", "interest-rates", "rates", "macro", "bonds", "fed", "10-year", "yields"],
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { recordDate: "2026-09-22", mo1: 3.97, mo3: 4.16, mo6: 4.26, yr1: 4.43, yr2: 4.71, yr3: 4.81, yr5: 4.83, yr7: 4.89, yr10: 4.96, yr20: 5.33, yr30: 5.29, unit: "percent", source: "FRED DGS* constant-maturity series (St. Louis Fed)" } },
+      output: { example: { recordDate: "2026-09-22", mo1: 3.97, mo3: 4.16, mo6: 4.26, yr1: 4.43, yr2: 4.71, yr3: 4.81, yr5: 4.83, yr7: 4.89, yr10: 4.96, yr20: 5.33, yr30: 5.29, unit: "percent", source: "U.S. Treasury Daily Treasury Par Yield Curve Rates" } },
     },
     // unit + source were absent: a bare object of numbers did not say what it
     // measured or where it came from.
-    handler: async () => ({ ...(await fetchLatestYieldCurve()), unit: "percent", source: "FRED DGS* constant-maturity series (St. Louis Fed)" }),
+    handler: async () => {
+      const { curve, stale } = await fetchLatestYieldCurve();
+      return { ...curve, unit: "percent", source: TREASURY_YIELD_SOURCE, ...stale };
+    },
   },
   {
-    route: "GET /api/treasury-yield-history", name: "US Treasury yield history", slug: "treasury-yield-history", category: "data", attribution: "fred", price: "$0.005",
+    route: "GET /api/treasury-yield-history", name: "US Treasury yield history", slug: "treasury-yield-history", category: "data", attribution: "us-treasury", price: "$0.005",
     description:
-      "Daily history of US Treasury constant-maturity yields over the last N business days, oldest first: one row per day with recordDate and each maturity's yield in percent. Source: FRED DGS* series (St. Louis Fed), public domain. ?days=30 (1-250, default 30). This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Daily history of US Treasury par yields over the last N business days, oldest first: one row per day with recordDate and each maturity's yield in percent, from the Treasury's Daily Treasury Par Yield Curve Rates (public domain). ?days=30 (1-250, default 30). Source: U.S. Treasury.",
     tags: ["treasury", "yield-curve", "history", "interest-rates", "rates", "macro", "bonds", "time-series"],
     discovery: {
       input: { days: 30 },
       inputSchema: {
         properties: { days: { type: "number", description: "Number of business days, 1-250 (default 30)" } },
       },
-      output: { example: { days: 30, count: 30, history: [{ recordDate: "2026-05-01", yr2: 4.71, yr10: 4.46 }] } },
+      output: { example: { days: 30, count: 30, history: [{ recordDate: "2026-05-01", yr2: 3.88, yr10: 4.39 }] } },
     },
     handler: async (i) => {
       const days = Math.min(Math.max(parseInt(i.days, 10) || 30, 1), 250);
-      const rows = await fetchFredYields();
-      // FRED returns the full history; slice the tail to N business days.
-      const tail = rows.slice(-days);
-      return { days, count: tail.length, history: tail };
+      // The last N published days, reading only the years they span.
+      const { rows: tail, stale } = await fetchTreasuryYields(days);
+      return { days, count: tail.length, history: tail, ...stale };
     },
   },
   {
-    route: "GET /api/yield-curve-spread", name: "Treasury yield-curve spreads + inversion", slug: "yield-curve-spread", category: "data", attribution: "fred", price: "$0.005",
+    route: "GET /api/yield-curve-spread", name: "Treasury yield-curve spreads + inversion", slug: "yield-curve-spread", category: "data", attribution: "us-treasury", price: "$0.005",
     description:
-      "Derived 2s10s and 3m10y Treasury yield-curve spreads (in basis points) plus a boolean flag per spread that is true when the curve is inverted. Source: FRED constant-maturity yields (public domain). No params. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.",
+      "Derived 2s10s and 3m10y Treasury yield-curve spreads (in basis points) plus a boolean flag per spread that is true when the curve is inverted. Computed from the Treasury's Daily Treasury Par Yield Curve Rates (public domain). No params. Source: U.S. Treasury.",
     tags: ["yield-curve", "spread", "2s10s", "3m10y", "inversion", "recession", "macro", "treasury", "rates", "bonds"],
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { recordDate: "2026-06-12", spread2s10sBps: -27, spread3m10yBps: -88, inverted2s10s: true, inverted3m10y: true, asOf: "FRED constant-maturity Treasury yields" } },
+      output: { example: { recordDate: "2026-06-12", spread2s10sBps: 39, spread3m10yBps: 70, inverted2s10s: false, inverted3m10y: false, asOf: "U.S. Treasury Daily Treasury Par Yield Curve Rates" } },
     },
     handler: async () => {
-      const curve = await fetchLatestYieldCurve();
+      const { curve, stale } = await fetchLatestYieldCurve();
       const { yr2, yr10, mo3 } = curve;
       if (yr2 == null || yr10 == null || mo3 == null) throw bad("Required tenors missing from latest yield curve row", 502);
       const spread2s10sBps = Math.round((yr10 - yr2) * 100);
@@ -348,7 +430,8 @@ export const MACRO_TOOLS = [
         spread2s10sBps, spread3m10yBps,
         inverted2s10s: spread2s10sBps < 0,
         inverted3m10y: spread3m10yBps < 0,
-        asOf: "FRED constant-maturity Treasury yields (public domain)",
+        asOf: TREASURY_YIELD_SOURCE,
+        ...stale,
       };
     },
   },
@@ -409,9 +492,9 @@ export const MACRO_TOOLS = [
     },
   },
   {
-    route: "GET /api/fx-historical", name: "Historical FX rate by date", slug: "fx-historical", category: "data", price: "$0.002",
+    route: "GET /api/fx-historical", name: "Historical FX rate by date", slug: "fx-historical", category: "data", attribution: "ecb", price: "$0.002",
     description:
-      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date. ?from=USD&to=EUR&date=2024-01-02",
+      "Historical foreign-exchange rate for a specific date using European Central Bank reference rates. Returns the rate that was published on (or rolled forward to) the requested date. ?from=USD&to=EUR&date=2024-01-02. Source: European Central Bank.",
     tags: ["forex", "fx", "currency", "historical", "exchange-rate", "ecb", "macro"],
     discovery: {
       input: { from: "USD", to: "EUR", date: "2024-01-02" },
@@ -449,9 +532,9 @@ export const MACRO_TOOLS = [
     },
   },
   {
-    route: "GET /api/fx-timeseries", name: "FX rate time series", slug: "fx-timeseries", category: "data", price: "$0.005",
+    route: "GET /api/fx-timeseries", name: "FX rate time series", slug: "fx-timeseries", category: "data", attribution: "ecb", price: "$0.005",
     description:
-      "Daily FX rates between two currencies across a date window using European Central Bank reference rates. ?from=USD&to=EUR&startDate=2024-01-02&endDate=2024-01-31",
+      "Daily FX rates between two currencies across a date window using European Central Bank reference rates. ?from=USD&to=EUR&startDate=2024-01-02&endDate=2024-01-31. Source: European Central Bank.",
     tags: ["forex", "fx", "currency", "time-series", "exchange-rate", "ecb", "macro", "history"],
     discovery: {
       input: { from: "USD", to: "EUR", startDate: "2024-01-02", endDate: "2024-01-31" },
@@ -492,47 +575,36 @@ export const MACRO_TOOLS = [
     },
   },
   {
-    route: "GET /api/fx-dashboard", name: "G10 FX dashboard vs USD", slug: "fx-dashboard", category: "data", price: "$0.005",
+    route: "GET /api/fx-dashboard", name: "G10 FX dashboard vs USD", slug: "fx-dashboard", category: "data", attribution: "ecb", price: "$0.005",
     description:
-      "Snapshot of all G10 spot exchange rates quoted against USD (EUR, GBP, JPY, CHF, CAD, AUD, NZD, SEK, NOK) using ECB reference rates. Includes the USD-strength index (simple geometric mean of inverse rates). No params.",
+      "Snapshot of all G10 spot exchange rates quoted against USD (EUR, GBP, JPY, CHF, CAD, AUD, NZD, SEK, NOK) using European Central Bank reference rates. Includes the USD-strength index (simple geometric mean of inverse rates). No params. Source: European Central Bank.",
     tags: ["forex", "fx", "dashboard", "g10", "dxy", "usd-strength", "ecb", "macro"],
     discovery: {
       input: {},
       inputSchema: { properties: {} },
-      output: { example: { base: "USD", date: "2026-06-12", rates: { EUR: 0.91, GBP: 0.78 }, usdStrengthIndex: 1.04, source: "ECB via Frankfurter" } },
+      output: { example: { base: "USD", date: "2026-06-12", rates: { EUR: 0.91, GBP: 0.78 }, usdStrengthIndex: 1.04, source: "European Central Bank euro foreign exchange reference rates (via Frankfurter)" } },
     },
     handler: async () => {
       // OBSERVED failing from prod (4× 504 on 2026-07-23; sub-second from a
-      // laptop) — the shared-egress-IP pattern. Two remedies, both justified
-      // by the data's own cadence (ECB reference rates update once daily):
-      //   1. serve-stale cache: a same-day snapshot is simply the answer, and
-      //      a stale one (marked) beats a 504 for a dashboard read.
-      //   2. keyless fallback host (open.er-api.com, the fx-rate fallback) —
-      //      different publisher, same quotes to 4dp; source says which served.
+      // laptop). ECB reference rates update once per business day, so a
+      // same-day snapshot is simply the answer, and a stale one (marked)
+      // beats an error for a dashboard read.
       const fresh = fxDashCache && Date.now() - fxDashCache.at < FX_DASH_TTL_MS;
       if (fresh) return fxDashCache.value;
-      let j = null, source = "ECB via Frankfurter (open data)";
+      let j = null, failure = null;
       try {
         j = latestShape(await getJson(ratesUrl({ base: "USD", quotes: G10 }), FX_PRIMARY), "USD");
-        if (!j) throw bad("Frankfurter returned no G10 rows", 502);
+        if (!j) throw bad("ECB reference rates returned no G10 rows", 502);
       } catch (e) {
-        console.warn(`[fx-dashboard] frankfurter failed (${String(e?.message || e).slice(0, 80)}) - walking to open.er-api.com`);
-        try {
-          const alt = await getJson("https://open.er-api.com/v6/latest/USD");
-          if (alt?.result === "success" && alt?.rates) {
-            j = { date: String(alt.time_last_update_utc || "").slice(0, 16) || null, rates: alt.rates };
-            source = "Open ER-API (open data; Frankfurter unavailable)";
-          }
-        } catch (e2) {
-          console.warn(`[fx-dashboard] open.er-api.com also failed (${String(e2?.message || e2).slice(0, 80)})`);
-        }
+        failure = e;
+        console.warn(`[fx-dashboard] ECB reference rates read failed (${String(e?.message || e).slice(0, 80)})`);
       }
       if (!j) {
-        // Both hosts down: a marked same-day-ish snapshot beats a 504.
+        // A marked same-day-ish snapshot beats an error.
         if (fxDashCache && Date.now() - fxDashCache.at < FX_DASH_STALE_MS) {
           return { ...fxDashCache.value, stale: true, asOf: new Date(fxDashCache.at).toISOString() };
         }
-        throw bad("FX upstreams unavailable (Frankfurter and Open ER-API)", 502);
+        throw fxSourceUnavailable(failure);
       }
       const rates = j?.rates ?? {};
       const have = G10.filter((c) => typeof rates[c] === "number");
@@ -547,7 +619,7 @@ export const MACRO_TOOLS = [
         base: "USD", date: j.date ?? null,
         rates: Object.fromEntries(have.map((c) => [c, rates[c]])),
         usdStrengthIndex,
-        source,
+        source: ECB_FX_SOURCE,
       };
       fxDashCache = { at: Date.now(), value };
       return value;
