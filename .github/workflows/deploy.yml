@@ -1123,7 +1123,8 @@ jobs:
           E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
-      # The official x402 MCP client, for test-mcp-x402.js alone. It is not in
+      # The official x402 MCP client, for test-mcp-x402.js and
+      # test-mcp-x402-connector.js alone. It is not in
       # package.json: mppx names it as an optional peer, so a dev dependency
       # would be kept by `npm ci --omit=dev` and ship in the production image.
       # Pinned, scripts off, keys shadowed as in the install above; it runs on

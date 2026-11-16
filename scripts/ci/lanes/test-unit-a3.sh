@@ -25,6 +25,8 @@ t node scripts/test-mcp-answer-bound.js
 t node scripts/test-mcp-error-redaction.js
 # x402 MCP transport codec: payment-required and invalid-payment results with MPP _meta kept byte for byte (x402/ keys never merged), _meta payment reader refuses malformed input as 400 with size and depth bounded before serialization, PAYMENT-SIGNATURE and PAYMENT-RESPONSE round trips through @x402/core, the official @x402/mcp client (installed --no-save by the step before) pays and re-signs against it (offline, in-memory)
 t node scripts/test-mcp-x402.js
+# x402 MCP wire on the hosted connector: a flagship's first ask carries the twin's PaymentRequired beside the MPP challenges, the official @x402/mcp client (installed --no-save by the step before) pays it and reads the settle receipt, memory.read keyed on the signed payer, replay refused, settle failure and error answers unsettled with no output, MPP wins when both are sent, a free tool at its limit offers x402, paid calls skip the per-IP transport limiter (paid boot, stub facilitator)
+t node scripts/test-mcp-x402-connector.js
 
 # @step 2: Offline suites (13 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)

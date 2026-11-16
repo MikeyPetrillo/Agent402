@@ -10284,6 +10284,9 @@ app.get("/analytics", async (req, res) => {
 // https://agent402.tools/mcp into Claude/ChatGPT custom connectors. Mounted
 // before the paywall — it meters itself (PoW-eligible tools only, per-IP
 // rate limit) and counts served calls under the proof-of-work tier.
+// The port the connector's loopback replays reach: PORT until the listener
+// is bound, then the bound port (a PORT=0 boot learns it only then).
+let loopbackPort = PORT;
 const mcpMountOpts = {
   baseUrl: BASE_URL,
   isComputePayable,
@@ -10291,7 +10294,13 @@ const mcpMountOpts = {
   // with an MPP credential in _meta; the call is replayed to our own paid
   // route so the real gates settle (src/mcp-mpp.js). Same rollout switch as
   // the MPP shim - without MPP_SECRET_KEY there are no challenges to mint.
-  mppLoopback: (process.env.MPP_SECRET_KEY || "").trim() ? createMcpMppLoopback({ port: PORT }) : null,
+  mppLoopback: (process.env.MPP_SECRET_KEY || "").trim() ? createMcpMppLoopback({ port: () => loopbackPort }) : null,
+  // The x402 MCP wire on /mcp (src/mcp-x402.js): a payment in
+  // _meta["x402/payment"] is replayed to the flagship's internal twin
+  // (src/mcp-x402-routes.js) or, for catalog.call, the slug's own route, as a
+  // PAYMENT-SIGNATURE header, so the x402 paywall verifies and settles it.
+  // FREE_MODE has no paywall, so nothing to pay.
+  x402Loopback: FREE_MODE ? null : createMcpMppLoopback({ port: () => loopbackPort }),
   // Hosted leaderboard snapshot powers the new `top_x402_sellers` MCP tool —
   // same data the HTML /leaderboard and /api/leaderboard surfaces use, so
   // agents see the same numbers no matter which surface they hit. Hourly-
@@ -13205,6 +13214,7 @@ const httpServer = app.listen(PORT, () => {
   // The bound port, so a PORT=0 boot (a test reading the port back) prints
   // the port the kernel assigned, not the 0 it asked with.
   const boundPort = httpServer.address()?.port ?? PORT;
+  loopbackPort = boundPort;
   console.log(`Agent402 listening on :${boundPort} with ${Object.keys(CATALOG).length} paid tools`);
 });
 // Connection timeouts (Node defaults: request 300 s, headers 60 s, keep-alive

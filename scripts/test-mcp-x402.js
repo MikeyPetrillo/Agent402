@@ -135,7 +135,7 @@ const MPP_META = {
   const cyclic = { ...PAYLOAD }; cyclic.self = cyclic;
   const getterThrows = Object.defineProperty({}, X402_PAYMENT_META, { enumerable: true, get() { throw new Error("boom"); } });
   const innerGetter = { ...PAYLOAD, payload: Object.defineProperty({}, "signature", { enumerable: true, get() { throw new Error("boom"); } }) };
-  const deep = { ...PAYLOAD, extensions: {} }; let cur = deep.extensions; for (let i = 0; i < 20; i++) { cur.n = {}; cur = cur.n; }
+  const deep = { ...PAYLOAD, extensions: {} }; let cur = deep.extensions; for (let i = 0; i < 40; i++) { cur.n = {}; cur = cur.n; }
   const big = { ...PAYLOAD, extensions: { pad: "x".repeat(X402_PAYMENT_MAX_BYTES) } };
   // Nesting deep enough that a recursive serializer or walker overflows the stack.
   const abyss = { ...PAYLOAD, extensions: {} }; cur = abyss.extensions; for (let i = 0; i < 20000; i++) { cur.n = {}; cur = cur.n; }

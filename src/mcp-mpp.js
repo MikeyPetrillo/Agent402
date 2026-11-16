@@ -147,14 +147,16 @@ export function mcpBinaryResult({ slug, bytes, contentType, headers }) {
 
 export function createMcpMppLoopback({ port, host = "127.0.0.1", fetchImpl = fetch, timeoutMs = 60_000 } = {}) {
   if (!port) throw new Error("createMcpMppLoopback: port is required");
-  const base = `http://${host}:${port}`;
+  // `port` may be a function: the listener's bound port, read per call (a
+  // boot on PORT=0 learns it only once it listens).
+  const baseOf = () => `http://${host}:${typeof port === "function" ? port() : port}`;
   // `timeoutMs` may be overridden PER CALL: a task-shaped composite run outlives
   // the default 60s bound (30s to 4 min), and the loopback is the paid request,
   // so cutting it short would abort work the buyer is waiting for.
-  return async function payCall({ def, params, credentialHeader, ip, signal, idempotencyKey, timeoutMs: callTimeoutMs, heartbeatToken, progressKey } = {}) {
+  return async function payCall({ def, params, credentialHeader, paymentSignature, ip, signal, idempotencyKey, timeoutMs: callTimeoutMs, heartbeatToken, progressKey } = {}) {
     const [method, path] = String(def.route || "POST /").split(" ");
     const m = (method || "POST").toUpperCase();
-    let url = base + path;
+    let url = baseOf() + path;
     // The connector's marker, with this process's secret (src/mcp-loopback.js):
     // the route reads it as our own replay only with the secret on a local socket.
     const headers = { Accept: "application/json, */*", "X-Forwarded-For": String(ip || "127.0.0.1"), ...mcpLoopbackHeaders() };
@@ -164,6 +166,10 @@ export function createMcpMppLoopback({ port, host = "127.0.0.1", fetchImpl = fet
     // forwarding grants nothing a caller could not already send directly.
     if (typeof heartbeatToken === "string" && heartbeatToken && heartbeatToken.length <= 64) headers["X-Heartbeat-Token"] = heartbeatToken;
     if (credentialHeader) headers.Authorization = credentialHeader;
+    // An x402 payment the connector read from _meta["x402/payment"] and
+    // re-encoded (src/mcp-x402.js paymentSignatureHeader): the header
+    // @x402/express reads, so the route's own paywall verifies and settles it.
+    if (typeof paymentSignature === "string" && paymentSignature) headers["PAYMENT-SIGNATURE"] = paymentSignature;
     if (idempotencyKey) headers["Idempotency-Key"] = String(idempotencyKey);
     // An MCP task's progress key (src/job-progress.js): this process's own
     // in-memory sink for the task, never a value a buyer sent.

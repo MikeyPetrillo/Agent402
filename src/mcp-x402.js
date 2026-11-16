@@ -31,7 +31,12 @@ export const X402_PAYMENT_HEADER = "PAYMENT-SIGNATURE";
  *  authorization is under 1 KiB and a signed Solana, Stellar or Algorand
  *  transaction a few KiB. */
 export const X402_PAYMENT_MAX_BYTES = 8192;
-const MAX_DEPTH = 8;
+/** Object nesting a payment may have. A payment echoes the offer's
+ *  extensions, and a Bazaar extension carries the tool's input schema and
+ *  output example inside its own JSON Schema: the deepest offer the catalog
+ *  makes nests 18 levels (measured over every route's 402), so 32 leaves room
+ *  and still bounds the walk's recursion. */
+const MAX_DEPTH = 32;
 const MAX_HEADER_CHARS = 16384;
 const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
