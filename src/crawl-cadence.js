@@ -42,3 +42,20 @@ export function isSlowOrigin(origin) {
 
 /** "every 6 hours": the slower cycle an operator can ask us for (CRAWL_SLOW_ORIGINS). */
 export const slowOriginIntervalLabel = () => everyLabel(CRAWL_INTERVAL_MS * SLOW_ORIGIN_EVERY_CYCLES);
+
+// A paid route's live 402 is read once and then again once this much time has
+// passed (a learned quote's age, and the weekly re-check of a route whose
+// price the seller's own documents declare). A re-registration reads it now.
+export const LIVE_QUOTE_MAX_AGE_MS = Number(process.env.QUOTE_MAX_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+export const NETWORKS_VERIFY_AGE_MS = Number(process.env.NETWORKS_VERIFY_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+
+/** A span as prose: "a week", "2 days", "a day", "12 hours", "an hour", "30 minutes". */
+export function spanLabel(ms) {
+  const n = Math.round(Number(ms) || 0);
+  const WEEK = 7 * 86_400_000, DAY = 86_400_000, HOUR = 3_600_000;
+  const unit = (k, one, many) => (k === 1 ? one : `${k} ${many}`);
+  if (n >= WEEK && n % WEEK === 0) return unit(n / WEEK, "a week", "weeks");
+  if (n >= DAY && n % DAY === 0) return unit(n / DAY, "a day", "days");
+  if (n >= HOUR && n % HOUR === 0) return unit(n / HOUR, "an hour", "hours");
+  return unit(Math.round(n / 60_000), "a minute", "minutes");
+}

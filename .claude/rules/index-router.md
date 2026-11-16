@@ -61,22 +61,40 @@ Loaded when an index, discovery, router or buyer file is read.
   matched on it, and an `Agent402` group still applies), `Agent402-Probe` (paywall, quote and
   network probes; `probePublicUrl`'s default), `Agent402-Router` (the pre-payment probe, the
   model-list read and the purchase, with `X-Agent402-Via: router`), `Agent402-Fetch` (a tool
-  fetching a caller's URL; `safeFetch`'s default) and `Agent402Bot` (the site-crawl tool). None is
-  the bare `Agent402/1.0` (`scripts/test-user-agents.js`).
-- **Seller load:** `src/seller-load.js`, state in the shared limits store with process memory as
-  the floor. An unchanged manifest and OpenAPI (304 or the same body hash) on a scheduled crawl
+  fetching a caller's URL; `safeFetch`'s default, or `NETWORK_KIT_USER_AGENT` in network-kit2 when
+  set) and `Agent402Bot` (the site-crawl tool). The older `Agent402/1.0` token is left only in the
+  kits that call one data provider's fixed API, a list `scripts/test-user-agents.js` pins. Every
+  robots.txt group naming one of our tokens is combined (RFC 9309; `robotsAllows` in kit.js).
+- **Seller load:** `src/seller-load.js`. Process memory decides every request; the shared limits
+  store is written behind it (per key, never awaited by a caller) and read once per crawl cycle by
+  `sellerLoad.prefetch(due)`, one parallel batch bounded by `PREFETCH_WAIT_MS`, so a slow store
+  never adds a round trip per origin or to a buyer's probe (`scripts/test-crawl-cycle-health.js`,
+  `scripts/test-router-probe-load.js`). An unchanged manifest and OpenAPI (304 or the same body hash) on a scheduled crawl
   doubles that origin's wait from an hour up to `SELLER_REVISIT_MAX_HOURS` (default 12, at most 24,
   `off` disables); a change, a failed crawl, a router purchase that did not deliver
   (`noteSellerDeliveryFailure`) or a re-registration resets it, and an unscheduled read never
   lengthens it. Every crawler read and probe is counted per operator (`src/operator-key.js`) per
   UTC day; past `SELLER_PROBE_DAILY_BUDGET` (default 200, `off` disables) the scheduled crawl and
-  its paywall and quote probes wait, while reads inside a started crawl, a registration's reads and
-  the router's pre-payment probe are counted and never refused. A 429 or 503 on a crawler read or
+  its paywall and quote probes and the MPP index's crawl reads wait, while reads inside a started
+  crawl and a registration's reads are counted and never refused. The router's pre-payment probe
+  (`sendRouterProbe`) has its own day count, is never refused and never counts against the crawl's
+  budget. A 429 or 503 on a crawler read or
   a probe holds that hostname's scheduled crawl and probes until Retry-After (30 minutes without
-  one, at most a day); a router purchase is never held. A skipped origin keeps its entry, is left
-  out of `cycleOkFraction` and the cycle tally, and an origin read after a wait gets the hold
-  window (`INDEX_CRAWL_HOLD_HOURS`) counted from the end of that wait. Counts on
-  `/__operator/seller-load.json` (`scripts/test-seller-load.js`, `scripts/test-crawl-revisit.js`).
+  one, at most a day), the MPP index's included; a router purchase is never held. A skipped origin
+  keeps its entry; one backed off for unchanged documents votes healthy (not our side) in
+  `cycleOkFraction` and the cycle tally, a throttled or budgeted one is left out, and an origin read
+  after a wait gets the hold window (`INDEX_CRAWL_HOLD_HOURS`) counted from the end of that wait.
+  `CRAWL_SLOW_ORIGINS` applies to the MPP index too (`mppCrawlDue`). Counts on
+  `/__operator/seller-load.json`; `?host=` gives the request log (per component and minute, two
+  days). Tests: `scripts/test-seller-load.js`, `scripts/test-crawl-revisit.js`,
+  `scripts/test-mpp-seller-load.js`.
+- **Live price reads:** a paid route's 402 is read once, then after `LIVE_QUOTE_MAX_AGE_MS` /
+  `NETWORKS_VERIFY_AGE_MS` (src/crawl-cadence.js, a week). A manifest price that fills an OpenAPI
+  row keeps `originDeclaredPrice`, and a carried quote that confirms a snapshot price keeps its age,
+  so a rebuilt row is not due every cycle. A route above every route-execute tier
+  (`readThisWeekAboveRouterCaps`) is read weekly at most whatever else makes it due, except on a
+  re-registration; the paywall probe asks the cheapest paid GET route
+  (`scripts/test-quote-weekly.js`).
 - **Paywall probe:** one unpaid request per seller checks that its paid route answers a 402,
   on a rotation capped at `X402_PAYWALL_PROBES_PER_CYCLE` sellers per crawl cycle (default 25; 0 turns
   every paywall probe off, re-checks included). The verdict is kept apart from crawl health: it reports

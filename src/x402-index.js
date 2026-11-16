@@ -302,7 +302,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 // this is the multiplier.
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
-import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
 import { sellerLoad, bodyHash } from "./seller-load.js";
@@ -5041,7 +5041,7 @@ const QUOTE_DRIFT_FACTOR = Number(process.env.QUOTE_DRIFT_FACTOR) || 2;
  *  stand forever, which is the same ratchet by a quieter route. An unstamped
  *  quote counts as stale once, so pre-existing rows get one refresh. Budgeted
  *  and backed-off like every other probe. */
-const QUOTE_MAX_AGE_MS = Number(process.env.QUOTE_MAX_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+const QUOTE_MAX_AGE_MS = LIVE_QUOTE_MAX_AGE_MS; // src/crawl-cadence.js (QUOTE_MAX_AGE_MS)
 export function quoteIsStale(t, now = Date.now()) {
   if (t?.quoteSource !== "live-402") return false;
   if (!isPricedAboveZero(t?.price)) return false;
@@ -5058,7 +5058,7 @@ export function quoteIsStale(t, now = Date.now()) {
 // on issue #1178). One live read, then a weekly one, unions what the 402
 // actually offers into the row. Learned quotes have their own clock
 // (quoteIsStale); this is the manifest-vs-402 consistency check.
-const NETWORKS_VERIFY_AGE_MS = Number(process.env.NETWORKS_VERIFY_AGE_MS) || 7 * 24 * 60 * 60 * 1000;
+// NETWORKS_VERIFY_AGE_MS: src/crawl-cadence.js
 export function networksNeedLiveVerify(t, now = Date.now()) {
   if (!t || t.quoteSource === "live-402") return false;
   if (!isPricedAboveZero(t.price)) return false;

@@ -65,7 +65,7 @@ function fresh(opts = {}) {
   ok(!(await load.resetRevisit("https://never.example", "listing-failure")), "a reset of an origin that was never backed off changes nothing");
   const st = load.status();
   ok(st.revisit.resets["re-registration"] === 1 && st.revisit.resets["listing-failure"] === 1 && st.revisit.unchangedReads > 0 && st.revisit.changedReads > 0, "the operator view counts unchanged reads, changes and resets by reason");
-  ok(!JSON.stringify(st).includes("seller.example"), "the operator view names no origin");
+  ok(!/seller\.example/.test(JSON.stringify(st)), "the operator view names no origin");
 }
 {
   const { load } = fresh({ revisitCapMs: 0 });
@@ -124,6 +124,32 @@ function fresh(opts = {}) {
   const tLong = await load.noteThrottle("https://slow.example", 429, 7 * 86400);
   ok(tLong === now() + THROTTLE_MAX_MS, "a hold never passes a day");
   ok((await load.noteThrottle(u, 429, "5")) >= tDate, "a shorter Retry-After never cuts a longer hold short");
+}
+
+// ---- the request log ------------------------------------------------------------------
+{
+  const store = createMemoryLimits();
+  let t = T0;
+  const a = createSellerLoad({ store, now: () => t });
+  const b = createSellerLoad({ store, now: () => t });
+  const U = "https://logged.example/api/x";
+  await a.takeBudget(U, "crawler", { essential: true });
+  await a.takeBudget(U, "quote");
+  await a.takeBudget(U, "quote");
+  await b.takeBudget(U, "router-probe", { essential: true });
+  t += 61_000;
+  await a.takeBudget(U, "paywall");
+  await a.flush(); await b.flush();
+  const log = await b.requestLog("logged.example");
+  const row = (minute, kind) => log.rows.find((r) => r.minute === new Date(minute).toISOString() && r.kind === kind)?.requests || 0;
+  const m0 = Math.floor(T0 / 60_000) * 60_000;
+  ok(log.total === 5 && row(m0, "quote") === 2 && row(m0, "crawler") === 1 && row(m0, "router-probe") === 1 && row(m0 + 60_000, "paywall") === 1,
+    `the request log counts each component's requests to a host per minute, across containers (${JSON.stringify(log.rows)})`);
+  const refused = createSellerLoad({ store: createMemoryLimits(), now: () => t, dailyBudget: 1 });
+  await refused.takeBudget(U, "quote"); await refused.takeBudget(U, "quote");
+  ok((await refused.requestLog("logged.example")).total === 1, "a request the budget refused was not sent and is not logged");
+  t += 2 * 24 * H + 60_000;
+  ok((await b.requestLog("logged.example")).total === 0, "past two days the counts are gone");
 }
 
 // ---- a shared store that does not answer --------------------------------------------

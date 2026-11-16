@@ -1,6 +1,8 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } from "./mpp-subscription-retention.js";
 import { READBACK_FIRST_MS, READBACK_INTERVAL_MS } from "./card-refund-readback.js";
+import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel as span, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
+import { REVISIT_CAP_MS, DAILY_BUDGET, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS, revisitIntervalMs } from "./seller-load.js";
 
 // A timer figure as an entry prints it, read from the module that runs it.
 const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a minute" : `${n} minutes`; };
@@ -8,13 +10,24 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "Price reads keep their weekly clock, and the router never uses up a seller's crawl",
+    items: [
+      `Index: A paid route priced in a seller's manifest and listed without a price in its /openapi.json is read live once and then again after ${span(LIVE_QUOTE_MAX_AGE_MS)}, as every other route is; until now every crawl asked it again, because the merge of the two documents dropped the mark that the price was the seller's own.`,
+      `Index: A route priced above everything the router buys is asked at most once in ${span(LIVE_QUOTE_MAX_AGE_MS)}, and when its seller registers again; the check that a seller's routes still ask for payment uses its cheapest paid route.`,
+      `Index: Every robots.txt group that names Agent402 or Agent402-Crawler is read as one (RFC 9309), so a Disallow in any of them holds whatever another allows.`,
+      `Index: The MPP index's reads of a seller count against the same daily allowance, wait out the same Retry-After holds, and follow the slower cycle (${slowOriginIntervalLabel()}) a site asked for.`,
+      `Operations: The seller load controls decide from each server's own memory and read the shared store once per crawl cycle, so a slow store no longer slows the crawl or a buyer's purchase, and a crawl cycle's health counts the sites waiting on unchanged documents as the good reads they were.`,
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Our requests to sellers name themselves and back off",
     items: [
-      "Index: Each part of the service that sends requests to a seller names itself with its own User-Agent: Agent402-Crawler for the index crawler's document reads, Agent402-Probe for the unpaid price and paywall checks, Agent402-Router for a purchase made for a paying caller (and the request that opens it), and Agent402-Fetch for a tool fetching a URL its caller named. Each keeps the browser-compatible form and links to /crawler, which lists them all; none is the bare Agent402/1.0. robots.txt groups for Agent402 still apply to the crawler.",
-      "Index: When a seller's manifest and /openapi.json come back unchanged (a 304, or the same bytes), the wait before the crawler reads that origin again doubles each time, from one hour up to 12 hours. A changed document, a failed crawl, a purchase that did not deliver, or registering again puts it back on the 30-minute cycle; a waiting origin's listing stays as it was.",
-      "Index: The crawler and the unpaid price checks send at most 200 requests a day to one site, counted per registrable domain or per hostname on shared hosting; past that they wait for the next UTC day. The router's request before a purchase for a paying caller is counted and always goes through.",
-      "Index: A 429 or 503 from a seller pauses the crawl and the unpaid price checks for that host until its Retry-After, 30 minutes when it names none, and never longer than a day.",
-      "Operations: /__operator/seller-load.json counts the revisit waits, resets by reason, requests and refusals per kind, the hosts past their day and the Retry-After holds, without naming a seller.",
+      "Index: Each part of the service that sends requests to a seller names itself with its own User-Agent: Agent402-Crawler for the index crawler's document reads, Agent402-Probe for the unpaid price and paywall checks, Agent402-Router for a purchase made for a paying caller (and the request that opens it), and Agent402-Fetch for a tool fetching a URL its caller named. Each keeps the browser-compatible form and links to /crawler, which lists them all; no request to a site in the index or to a URL a caller names carries the older Agent402/1.0 token. robots.txt groups for Agent402 still apply to the crawler.",
+      `Index: When a seller's manifest and /openapi.json come back unchanged (a 304, or the same bytes), the wait before the crawler reads that origin again doubles each time, from ${span(revisitIntervalMs(1))} up to ${span(REVISIT_CAP_MS)}. A changed document, a failed crawl, a purchase that did not deliver, or registering again puts it back on the regular cycle (${crawlIntervalLabel()}); a waiting origin's listing stays as it was.`,
+      `Index: The crawler, the unpaid price checks and the MPP index's reads send at most ${DAILY_BUDGET.toLocaleString("en-US")} requests a day to one site, counted per registrable domain or per hostname on shared hosting; past that they wait for the next UTC day. The router's request before a purchase for a paying caller is counted on its own and always goes through.`,
+      `Index: A 429 or 503 from a seller pauses the crawl and the unpaid price checks for that host until its Retry-After, ${span(THROTTLE_DEFAULT_MS)} when it names none, and never longer than ${span(THROTTLE_MAX_MS)}.`,
+      `Operations: /__operator/seller-load.json counts the revisit waits, resets by reason, requests and refusals per kind, the hosts past their day and the Retry-After holds, without naming a seller; with ?host= it lists the requests we sent that host per component and minute over the last ${span(REQUEST_LOG_KEEP_MS)}.`,
     ],
   },
   {

@@ -82,7 +82,9 @@ ok(/github\.com\/MikeyPetrillo/i.test(control), "control: the sweep's own patter
 // somewhere the pattern does not look.
 const MUST_IMPORT = ["src/ledger-chrome.js", "src/ledger-home.js", "src/company.js",
   "src/terms.js", "src/security-page.js", "src/why.js", "src/discovery.js", "src/transparency.js",
-  "src/seo.js", "src/tools/web-kit.js"];
+  "src/seo.js"];
+// (src/tools/web-kit.js read it for the User-Agent it sent; that string now
+// comes from src/user-agents.js and names no repository.)
 for (const rel of MUST_IMPORT) {
   const src = readFileSync(join(ROOT, rel), "utf8");
   ok(/from "\.\.?\/repo-link\.js"/.test(src), `${rel} reads the constant`);

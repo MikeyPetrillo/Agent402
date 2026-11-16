@@ -36,8 +36,36 @@ const mppSrc = readFileSync(new URL("../src/mpp-index.js", import.meta.url), "ut
 ok(CRAWLER_UA === UA.CRAWLER_UA && text.includes(UA.CRAWLER_UA), "the page quotes the crawler's User-Agent (src/user-agents.js)");
 for (const { token, ua } of UA.SELLER_FACING_USER_AGENTS) ok(text.includes(ua), `the page lists ${token}'s full User-Agent`);
 ok(new Set(UA.SELLER_FACING_USER_AGENTS.map((u) => u.ua)).size === UA.SELLER_FACING_USER_AGENTS.length, "every component's User-Agent is distinct");
-ok(UA.SELLER_FACING_USER_AGENTS.every((u) => u.ua !== UA.RETIRED_BARE_UA && u.ua.includes("https://agent402.tools/crawler")), "none is the bare Agent402/1.0, and each links to /crawler");
-ok(text.includes(`We do not send the bare User-Agent ${UA.RETIRED_BARE_UA}`), "the page says the bare string is not ours");
+ok(UA.SELLER_FACING_USER_AGENTS.every((u) => u.ua !== UA.RETIRED_BARE_UA && u.ua.includes(UA.INFO_URL)), "none is the bare Agent402/1.0, and each links to /crawler");
+ok(text.includes(`No request to a site in our index, or to a URL a caller names, carries the older ${UA.RETIRED_BARE_UA} token`), "the page says the older token never reaches a seller or a caller's URL (scoped: test-user-agents pins where it remains)");
+
+// ---- every figure on the page and in its changelog entries comes from code ----------
+{
+  const { spanLabel, LIVE_QUOTE_MAX_AGE_MS, slowOriginIntervalLabel } = await import("../src/crawl-cadence.js");
+  const SL = await import("../src/seller-load.js");
+  for (const [what, ms] of [["revisit cap", SL.REVISIT_CAP_MS], ["default hold", SL.THROTTLE_DEFAULT_MS], ["longest hold", SL.THROTTLE_MAX_MS], ["request log", SL.REQUEST_LOG_KEEP_MS], ["price re-read", LIVE_QUOTE_MAX_AGE_MS]]) {
+    ok(text.includes(spanLabel(ms)), `the page prints the ${what} from code (${spanLabel(ms)})`);
+  }
+  ok(text.includes(`at most ${SL.DAILY_BUDGET.toLocaleString("en-US")} requests a day`) && text.includes(slowOriginIntervalLabel()), "the daily budget and the slow cycle are printed from code");
+  // Typed figures: the prose of the page module and of the changelog's
+  // seller-request entries, with every \${...} interpolation removed, names no
+  // count of time or requests in digits or words.
+  const TYPED = /\b(\d[\d,.]*|one|two|three|four|five|six|seven|eight|nine|ten|twelve|twenty|thirty|a|an)[ -](second|minute|hour|day|week|request)s?\b/gi;
+  // A rate's unit ("in an hour", "a day") and "one request made for one
+  // caller" are not figures the code could change.
+  const ALLOW = new Set(["a day", "a request", "a minute", "an hour", "one request"]);
+  const stripInterp = (src) => src.replace(/\$\{(?:[^{}]|\{[^{}]*\})*\}/g, "");
+  const pageSrc = readFileSync(new URL("../src/crawler-page.js", import.meta.url), "utf8");
+  const sections = stripInterp(pageSrc.slice(pageSrc.indexOf("const SECTIONS = ["), pageSrc.indexOf("export function crawlerPage")));
+  const typedPage = [...sections.matchAll(TYPED)].map((m) => m[0]).filter((m) => !ALLOW.has(m.toLowerCase()));
+  ok(typedPage.length === 0, `no figure is typed into the page's prose (${typedPage.join(", ") || "none"})`);
+  const clSrc = readFileSync(new URL("../src/changelog.js", import.meta.url), "utf8");
+  const TITLES = ["Our requests to sellers name themselves and back off", "Price reads keep their weekly clock, and the router never uses up a seller's crawl"];
+  const blocks = [...clSrc.matchAll(/title: "([^"]*)",\s*items: \[([\s\S]*?)\n {4}\],/g)].filter((b) => TITLES.includes(b[1]));
+  ok(blocks.length === TITLES.length, `the changelog's seller-request entries are found (${blocks.length})`);
+  const typedCl = blocks.flatMap((b) => [...stripInterp(b[2]).matchAll(TYPED)].map((m) => `${b[1]}: ${m[0]}`)).filter((m) => !ALLOW.has(m.split(": ").pop().toLowerCase()));
+  ok(typedCl.length === 0, `no figure is typed into those entries (${typedCl.join("; ") || "none"})`);
+}
 ok(/const ROBOTS_UA = CRAWLER_TOKEN;/.test(idxSrc) && ROBOTS_TOKEN === UA.CRAWLER_TOKEN && text.includes(`product token ${ROBOTS_TOKEN}`), `robots.txt rules are matched on the token the page names (${ROBOTS_TOKEN})`);
 // Every unpaid 402 probe goes through probePublicUrl (src/tools/fetch-guard.js),
 // which sets the crawler User-Agent; neither index makes a raw fetch to a seller.

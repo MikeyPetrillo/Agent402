@@ -17,8 +17,8 @@ import { siteOrgRef } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { NAMED_CLIENT_BUDGET_MULTIPLIER, unpaidQuoteBudgetPerHour } from "./unpaid-quote-budget.js";
 import { CRAWLER_UA, PROBE_UA, ROUTER_UA, FETCH_UA, SITE_CRAWL_UA, SITE_CRAWL_TOKEN, CRAWLER_TOKEN, RETIRED_BARE_UA } from "./user-agents.js";
-import { crawlIntervalLabel, slowOriginIntervalLabel } from "./crawl-cadence.js";
-import { REVISIT_CAP_MS, DAILY_BUDGET, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS } from "./seller-load.js";
+import { crawlIntervalLabel, slowOriginIntervalLabel, spanLabel, LIVE_QUOTE_MAX_AGE_MS } from "./crawl-cadence.js";
+import { REVISIT_CAP_MS, DAILY_BUDGET, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, REQUEST_LOG_KEEP_MS } from "./seller-load.js";
 
 // The strings each component sends come from one list (src/user-agents.js),
 // so the page cannot quote a User-Agent we do not use.
@@ -29,11 +29,9 @@ export const ROBOTS_TOKEN = CRAWLER_TOKEN;
 // A robots group for the shorter token still applies to the crawler.
 export const ROBOTS_LEGACY_TOKEN = "Agent402";
 
-const hours = (ms) => {
-  const h = Math.round(ms / 3_600_000);
-  return h === 1 ? "an hour" : `${h} hours`;
-};
-const minutes = (ms) => `${Math.round(ms / 60_000)} minutes`;
+// Every span on this page is printed from the constant the code runs on
+// (scripts/test-crawler-page.js fails on a figure typed into the prose).
+const span = spanLabel;
 
 // What the crawler reads and how robots.txt applies to each read, written from
 // src/x402-index.js (probePath, robotsForbids, enrichLiveQuotes, probePaywall,
@@ -44,7 +42,7 @@ const SECTIONS = [
     h: "What the crawler reads",
     p: [
       `Agent402 publishes an index of services that advertise machine payments over x402 or MPP. For each x402 origin in it, the crawler reads <code>/robots.txt</code>, the x402 manifest at <code>/.well-known/x402</code>, and <code>/openapi.json</code> to name and describe the routes. When an origin publishes no manifest, it also tries <code>/agents.json</code> and then <code>/llms.txt</code>, two other places a service may list its paid routes.`,
-      `It sends an unpaid request to paid routes the index lists, to read the price and payment networks in their 402 challenge. When one origin claims to have moved from another, it reads <code>/.well-known/agent402-succession</code> on both to confirm the claim. For the MPP index, it reads a registered server's <code>/openapi.json</code> and sends one unpaid request to a paid endpoint to confirm its <code>WWW-Authenticate: Payment</code> challenge.`,
+      `It sends an unpaid request to paid routes the index lists, to read the price and payment networks in their 402 challenge. A route already read is asked again after ${esc(span(LIVE_QUOTE_MAX_AGE_MS))}, sooner only when the price your own documents state for it moves far from the one it quoted, or when you register again at <a href="/sell">/sell</a>. The check that a site's paid routes still ask for payment uses its cheapest paid route. When one origin claims to have moved from another, it reads <code>/.well-known/agent402-succession</code> on both to confirm the claim. For the MPP index, it reads a registered server's <code>/openapi.json</code> and sends one unpaid request to a paid endpoint to confirm its <code>WWW-Authenticate: Payment</code> challenge.`,
       `We do not log in, submit forms, or pay to see more. A 402 challenge is a public advertisement of price and payment rails, and asking for one with no credential is the ordinary way to read it.`,
     ],
   },
@@ -57,23 +55,24 @@ const SECTIONS = [
       `<code>${esc(ROUTER_UA)}</code>: our router buying from you for a paying caller, including the one unpaid request that opens each purchase. It also carries <code>X-Agent402-Via: router</code>.`,
       `<code>${esc(FETCH_UA)}</code>: a tool in our catalog fetching a URL its caller named, one request for one caller.`,
       `<code>${esc(SITE_CRAWL_UA)}</code>: the multi-page site-crawl tool, run for one caller and limited to a few pages.`,
-      `We do not send the bare User-Agent <code>${esc(RETIRED_BARE_UA)}</code>. A User-Agent is text anyone can copy, so a request carrying one of these strings at a volume or cadence this page does not describe may not be ours: email us the timestamps and paths and we will check them against our own records.`,
+      `No request to a site in our index, or to a URL a caller names, carries the older <code>${esc(RETIRED_BARE_UA)}</code> token; it remains only on the requests some catalog tools make to the fixed data APIs they are built on.`,
+      `A User-Agent is text anyone can copy, so a request carrying one of these strings at a volume or cadence this page does not describe may not be ours. We keep a count of the requests each of these components sends each host, per minute, for ${esc(span(REQUEST_LOG_KEEP_MS))}: email us the host and the timestamps from that window and we will check them against it.`,
     ],
   },
   {
     h: "How it behaves",
     p: [
-      `The crawler identifies itself on every document read as <code>${esc(CRAWLER_UA)}</code> and on every unpaid price check as <code>${esc(PROBE_UA)}</code>, so it can be recognized, rate-limited or blocked by name. robots.txt rules are matched on the product token <code>${esc(ROBOTS_TOKEN)}</code>, and a group written for <code>${esc(ROBOTS_LEGACY_TOKEN)}</code> applies too.`,
+      `The crawler identifies itself on every document read as <code>${esc(CRAWLER_UA)}</code> and on every unpaid price check as <code>${esc(PROBE_UA)}</code>, so it can be recognized, rate-limited or blocked by name. robots.txt rules are matched on the product token <code>${esc(ROBOTS_TOKEN)}</code>, and a group written for <code>${esc(ROBOTS_LEGACY_TOKEN)}</code> applies too: every group that names either is read as one, so a <code>Disallow</code> in any of them holds.`,
       `It honors <code>robots.txt</code>, with these exceptions. The x402 manifest at <code>/.well-known/x402</code> is read whatever robots.txt says: it is a protocol endpoint published to be fetched by payment clients. Once an origin publishes that manifest, <code>/openapi.json</code> is read under a rule written for every crawler (<code>User-agent: *</code>); a rule that names ${esc(ROBOTS_TOKEN)} still stops it. The unpaid request to a paid route, and the MPP index's two reads, are not robots-gated: they read the price a route quotes to every caller. <code>/agents.json</code> and <code>/llms.txt</code> always follow robots.txt, and a robots.txt we cannot fetch or parse does not block the crawl.`,
       `It re-reads an origin ${esc(crawlIntervalLabel())}, backs off on errors, sends conditional requests so an unchanged document costs a single 304, and caps what it will read from any one response.`,
       REVISIT_CAP_MS > 0
-        ? `When your manifest and <code>/openapi.json</code> come back unchanged (a 304, or the same bytes as last time), the wait before the next read doubles each time, up to ${esc(hours(REVISIT_CAP_MS))}. A changed document, a purchase from you that did not deliver, or registering again at <a href="/sell">/sell</a> puts the origin back on the regular cycle.`
+        ? `When your manifest and <code>/openapi.json</code> come back unchanged (a 304, or the same bytes as last time), the wait before the next read doubles each time, up to ${esc(span(REVISIT_CAP_MS))}. A changed document, a purchase from you that did not deliver, or registering again at <a href="/sell">/sell</a> puts the origin back on the regular cycle.`
         : `Every origin is read on the regular cycle.`,
       DAILY_BUDGET > 0
-        ? `The crawler and the unpaid price checks together send at most ${esc(DAILY_BUDGET.toLocaleString("en-US"))} requests a day to one site, counted per registrable domain, or per hostname on shared hosting such as a platform subdomain. Past that, they wait for the next day (UTC). The router's request before a purchase for a paying caller is counted too, and purchases always go through.`
+        ? `The crawler, the unpaid price checks and the MPP index's reads together send at most ${esc(DAILY_BUDGET.toLocaleString("en-US"))} requests a day to one site, counted per registrable domain, or per hostname on shared hosting such as a platform subdomain. Past that, they wait for the next day (UTC). The router's request before a purchase for a paying caller is counted on its own, so buyers never use up that allowance, and purchases always go through.`
         : `This deployment sets no daily request budget per site.`,
-      `A <code>429</code> or <code>503</code> answer pauses the crawl and the unpaid price checks for that host until its <code>Retry-After</code>, or for ${esc(minutes(THROTTLE_DEFAULT_MS))} when it names no time, and never longer than ${esc(hours(THROTTLE_MAX_MS))}. Your listing stays as it was while we wait.`,
-      `To be read less often, email us the origin and we will move it to a slower cycle (${esc(slowOriginIntervalLabel())}); your listing and purchases for paying callers continue as before. If our crawler is causing you a problem, email us and we will stop it. A <code>Disallow</code> for ${esc(ROBOTS_TOKEN)} stops every read above except the manifest and the unpaid price check, and needs no message from us.`,
+      `A <code>429</code> or <code>503</code> answer pauses the crawl, the unpaid price checks and the MPP index's reads for that host until its <code>Retry-After</code>, or for ${esc(span(THROTTLE_DEFAULT_MS))} when it names no time, and never longer than ${esc(span(THROTTLE_MAX_MS))}. Your listing stays as it was while we wait.`,
+      `To be read less often, email us the origin and we will move it to a slower cycle (${esc(slowOriginIntervalLabel())}) in both indexes; your listing and purchases for paying callers continue as before. If our crawler is causing you a problem, email us and we will stop it. A <code>Disallow</code> for ${esc(ROBOTS_TOKEN)} stops every read above except the manifest and the unpaid price check, and needs no message from us.`,
     ],
     links: [["/robots.txt", "Our own robots.txt"], ["mailto:mike@agent402.tools", "mike@agent402.tools"]],
   },

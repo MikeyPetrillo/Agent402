@@ -29,6 +29,7 @@ const idx = await import("../src/x402-index.js");
 const { sellerLoad } = await import("../src/seller-load.js");
 const { upstreamFailure } = await import("../src/tools/fetch-guard.js");
 const UA = await import("../src/user-agents.js");
+const { hostOf, isHost } = await import("./lib/url-host.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
@@ -62,7 +63,8 @@ function serve(o, m = manifest(o), api = openapi(o)) {
   docs.set(`${o}/.well-known/x402`, { body: JSON.stringify(m), etag: `"m${++etagN}"` });
   docs.set(`${o}/openapi.json`, { body: JSON.stringify(api), etag: `"o${++etagN}"` });
 }
-const fetchedFrom = (o) => reads.filter(([u]) => u.startsWith(o)).length;
+const fromOrigin = (o) => ([u]) => isHost(u, hostOf(o));
+const fetchedFrom = (o) => reads.filter(fromOrigin(o)).length;
 const turn = async (o) => idx.__crawlScheduledForTest(o);
 
 // ---- unchanged documents: the wait doubles to the cap -----------------------------
@@ -71,7 +73,7 @@ const turn = async (o) => idx.__crawlScheduledForTest(o);
   serve(O);
   let skip = await turn(O);
   ok(skip === null && fetchedFrom(O) >= 2, `the first turn reads the documents (${fetchedFrom(O)} reads)`);
-  ok(reads.filter(([u]) => u.startsWith(O)).every(([, ua]) => ua === UA.CRAWLER_UA), "every crawler read asks for the crawler's User-Agent");
+  ok(reads.filter(fromOrigin(O)).every(([, ua]) => ua === UA.CRAWLER_UA), "every crawler read asks for the crawler's User-Agent");
   const entry0 = idx._cacheForTests().get(O);
   ok(entry0 && !entry0.error && entry0.tools?.length === 1, "the seller is listed");
   // A day of 30-minute cycles.
