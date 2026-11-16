@@ -168,6 +168,8 @@ t node scripts/test-crawl-politeness.js
 t node scripts/test-seller-load.js
 # The real crawl backs off unchanged origins, waits out Retry-After and a spent budget, never touches a skipped entry, never holds the router (offline)
 t node scripts/test-crawl-revisit.js
+# Live price reads keep their weekly clock across crawls; a route above every router tier is read weekly at most; the paywall probe asks the cheapest route (offline)
+t node scripts/test-quote-weekly.js
 # Each component sends its own User-Agent: crawler, probe, router, caller-driven fetch tools; none sends the bare Agent402/1.0 (offline)
 t node scripts/test-user-agents.js
 # Index warm-start is incremental (NDJSON twin parsed a batch per turn; no event-loop hold; legacy fallback — offline)

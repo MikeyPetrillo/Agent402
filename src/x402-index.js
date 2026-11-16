@@ -3893,6 +3893,14 @@ export function mergeManifestIntoTools(manifestTools = [], existing = []) {
     if (!hit.name || hit.name === hit.route || String(hit.name).startsWith("/")) hit.name = m.name || hit.name;
     if (!hit.description) hit.description = m.description || "";
     if (!hit.price && sellerNumText(m.price) !== undefined && m.price) hit.price = m.price;
+    // The manifest's price is the origin's own declaration (see the stamp in
+    // manifestRowsPass), and it stays one when it reaches a row another
+    // document already listed: a row priced from the manifest here without the
+    // stamp read as a price "from somewhere no read looked at", so the weekly
+    // live re-read (networksNeedLiveVerify, quoteIsStale) found it due on
+    // every crawl. Stamped only where the row's price IS the manifest's.
+    if (!isPricedAboveZero(hit.originDeclaredPrice) && isPricedAboveZero(m.originDeclaredPrice)
+        && priceToMicroUsd(hit.price) === priceToMicroUsd(m.originDeclaredPrice)) hit.originDeclaredPrice = m.originDeclaredPrice;
     if ((!hit.slug || hit.slug === hit.route) && m.slug) hit.slug = m.slug;
     // Settlement terms too, and this is the half that used to be missing. An
     // OpenAPI document carries no payment metadata, so a row sourced from one
@@ -4914,6 +4922,15 @@ function carryLearnedOnto(t, { exact: learnedExact, byRoute: learnedByRoute }) {
       // (An origin-priced row is due through networksNeedLiveVerify instead,
       // and a row already priced carries no age from the hit in any case.)
       if (hit.quoteObservedAt && !withheldRead) t.quoteObservedAt = hit.quoteObservedAt;
+    } else if (fromQuote && isPricedAboveZero(t.price) && !originPricedThisCrawl && Number(hit.quoteObservedAt) > 0 && !withheldRead
+        && priceToMicroUsd(t.price) === priceToMicroUsd(hit.price)) {
+      // A row the rebuild priced from a document that is not the origin's
+      // declaration (a registry's settlement snapshot, a label) at the very
+      // amount the live 402 quoted: the quote confirmed that price, so its age
+      // rides with it. Without the age the row was stamped "live-402" below
+      // with none, which quoteIsStale reads as never observed, so every crawl
+      // asked the route again. A price that differs from the quote stays due.
+      t.quoteObservedAt = hit.quoteObservedAt;
     }
     // Did this row just take its chains from the hit? A row with no chains of
     // its own takes a learned quote's chains through the route fallback (the
@@ -5061,6 +5078,16 @@ export function networksNeedLiveVerify(t, now = Date.now()) {
   // such a row had no stamp and was read on the next crawl; it still is.
   if (!isPricedAboveZero(t.originDeclaredPrice)) return true;
   return now - at >= NETWORKS_VERIFY_AGE_MS;
+}
+
+/** Is this row's declared price above every route-execute tier (so the router
+ *  never buys it), and was its live 402 read within the quote window? Such a
+ *  row is not asked again by the automatic crawl until the window passes. */
+export function readThisWeekAboveRouterCaps(t, now = Date.now()) {
+  const usd = priceUsdOf(t?.originDeclaredPrice) ?? priceUsdOf(t?.price);
+  if (!(usd > 0) || routeExecuteHint(usd) != null) return false;
+  const lastRead = Math.max(Number(t?.quoteObservedAt) || 0, Number(t?.networksVerifiedAt) || 0, Number(t?.liveProvenAt) || 0);
+  return lastRead > 0 && now - lastRead < QUOTE_MAX_AGE_MS;
 }
 
 export function priceDisagreesWithOrigin(t) {
@@ -5254,6 +5281,10 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
       // A route observed free inside the quote window is left alone by the
       // automatic crawl; an explicit re-registration still re-asks it.
       && (ignoreBudget || !isObservedFree(t))
+      // A route priced above every router tier is never bought by us, so its
+      // live 402 is read once and then once a week (and on a re-registration),
+      // whatever else would make it due: a drift, a stamp from another verb.
+      && (ignoreBudget || !readThisWeekAboveRouterCaps(t))
       && probeMethodsFor(t).length                       // never PUT/PATCH/DELETE
       && probeDue(originUrl, `quote:${t.route}`);
   // The registry fallback hands its pass runner in (`candidatePass`), so a
@@ -5615,8 +5646,12 @@ async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) 
       && !URL_TEMPLATE_RE.test(t.route)
   );
   // Prefer a GET: no body to guess, and a wrong body shape would produce a 400
-  // that says nothing about the paywall.
-  const pick = paid.find((t) => String(t.method || "GET").toUpperCase() === "GET") || paid[0];
+  // that says nothing about the paywall. Among those, the cheapest: an unpaid
+  // request to a seller's dearest product (a report priced in the thousands)
+  // reads the same paywall as one to its cheapest route, and is the request a
+  // seller least wants from a crawler.
+  const cheapestFirst = (list) => list.reduce((best, t) => (best && (priceUsdOf(best.price) ?? Infinity) <= (priceUsdOf(t.price) ?? Infinity) ? best : t), null);
+  const pick = cheapestFirst(paid.filter((t) => String(t.method || "GET").toUpperCase() === "GET")) || cheapestFirst(paid);
   if (!pick) return null;
   const method = String(pick.method || "GET").toUpperCase();
   // Built from the origin the manifest was redirected to, when one is recorded:

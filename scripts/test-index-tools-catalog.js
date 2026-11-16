@@ -1125,9 +1125,11 @@ const page = (results, extra = {}) =>
     // them by quoteObservedAt alone, which a withheld row does not carry. Two
     // kinds of row sat level with it and ahead of it in array order:
     //  - "snapshot": a learned quote's row that the rebuild priced from a
-    //    registry snapshot keeps the quote's stamp but not its age, so it is due
-    //    on every crawl and read as never attempted. A cap's worth of these took
-    //    the probes on every crawl, and the withheld rows never got theirs.
+    //    registry snapshot at another amount keeps the quote's stamp but not
+    //    its age, so it is due on every crawl and read as never attempted. A
+    //    cap's worth of these took the probes on every crawl, and the withheld
+    //    rows never got theirs. (A snapshot at the quoted amount carries the
+    //    age and is not due: see the weekly re-read check below.)
     //  - "weekly": origin-priced rows due for their weekly re-read. They took
     //    the first crawl's probes.
     // A stamp naming the row's own verb now also counts as a read, so a row
@@ -1155,7 +1157,7 @@ const page = (results, extra = {}) =>
             ? { seller: ORIGIN, method: "GET", route: compRoute(i), slug: `comp-${i}`, price: 0.02, paid: true, networks: [BASE], payToByNetwork: { [BASE]: NOW_PAYTO } }
             : { seller: ORIGIN, method: "GET", route: compRoute(i), slug: `comp-${i}`, price: 0.02, originDeclaredPrice: 0.02, quoteSource: "openapi", networks: [BASE] };
           const compPrev = (i) => competitor === "snapshot"
-            ? { ...compBuilt(i), quoteSource: "live-402", quoteObservedAt: twoDays, networks: [BASE, OP], networksVerifiedAt: twoDays, networksVerifiedMethod: "GET" }
+            ? { ...compBuilt(i), price: 0.03, quoteSource: "live-402", quoteObservedAt: twoDays, networks: [BASE, OP], networksVerifiedAt: twoDays, networksVerifiedMethod: "GET" }
             : { ...compBuilt(i), networksVerifiedAt: eightDays, networksVerifiedMethod: "GET", payToByNetwork: { [BASE]: NOW_PAYTO } };
           const heldBuilt = (i) => ({ seller: ORIGIN, method: "GET", route: heldRoute(i), slug: `held-${i}`, quoteSource: "openapi", networks: [BASE] });
           // As the older carry left them: a learned quote with both chains and a
