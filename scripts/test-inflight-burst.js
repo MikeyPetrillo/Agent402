@@ -163,7 +163,37 @@ try {
     const rSlow = await rig.pay(slowKey, SQL);
     const took = Date.now() - t0;
     rig.st.keyReadDelayMs = 0;
-    await ok(rSlow.status === 402 && rSlow.json?.details?.reason === "sender-unverified" && rSlow.json?.details?.charged === false && rig.outcomesOf(lone).attempts === 0 && took < 3800, `tempo: a key read that does not answer within its timeout is refused before the handler, uncharged (${rSlow.status}, ${took} ms)`);
+    await ok(rSlow.status === 503 && rSlow.json?.details?.reason === "sender-check-unavailable" && rSlow.json?.details?.charged === false && rSlow.headers.get("retry-after") === "3" && rig.outcomesOf(lone).attempts === 0 && took < 3800, `tempo: a key read that does not answer within its timeout answers 503 with Retry-After before the handler, uncharged (${rSlow.status}, ${took} ms)`);
+    // ...and the same key, sent again once the read answers, is admitted.
+    const again = await rig.pay(slowKey, SQL);
+    await ok(again.status === 200 && rig.outcomesOf(lone).settled === 1, `tempo: the same access key sent again with the chain answering is admitted and settles (${again.status})`);
+
+    // Sixteen key reads for forged keys in flight fill every read slot. A
+    // genuine key arriving next waits for a slot, and is admitted once one
+    // frees within the read budget (the case where none frees in time, a 503
+    // with Retry-After, is in scripts/test-tempo-sender.js: here every read is
+    // itself bounded by the same budget, so a slot always frees inside it).
+    for (const [label, forgedMs, want] of [["a slot frees within the budget", 900, 200]]) {
+      const target = await rig.wallet("tempo"); rig.fund(target, price * 20n);
+      const buyer = await rig.wallet("tempo"); rig.fund(buyer, price * 3n);
+      const genuine = await rig.wallet("tempo", { accessKeyOf: buyer });
+      const genuinePair = `${buyer.address.toLowerCase()}:${genuine.account.accessKeyAddress.toLowerCase()}`;
+      rig.st.keyReadDelayFor = (pair) => (pair === genuinePair ? 0 : forgedMs);
+      const forgers = []; for (let i = 0; i < 16; i++) forgers.push(await rig.wallet("tempo", { forgedKeyOf: target }));
+      const fcreds = []; for (const f of forgers) fcreds.push(await rig.credentialFor(f, SQL));
+      const gcred = await rig.credentialFor(genuine, SQL);
+      const r0 = rig.st.keyReads;
+      const fp = Promise.all(fcreds.map((c) => rig.send(SQL, c)));
+      for (let i = 0; i < 100 && rig.st.keyReads - r0 < 16; i++) await sleep(10);
+      const t1 = Date.now();
+      const g = await rig.send(SQL, gcred);
+      const gt = Date.now() - t1;
+      await fp;
+      rig.st.keyReadDelayFor = null;
+      if (want === 200) await ok(g.status === 200 && rig.outcomesOf(buyer).settled === 1 && gt >= 500, `tempo: 16 forged key reads in flight, ${label}: the genuine key waits for a slot and is admitted (${g.status}, ${gt} ms)`);
+      else await ok(g.status === 503 && g.json?.details?.reason === "sender-check-unavailable" && g.headers.get("retry-after") === "3" && rig.outcomesOf(buyer).attempts === 0, `tempo: 16 forged key reads in flight, ${label}: the genuine key answers 503 with Retry-After, uncharged, never 402 (${g.status}, ${g.json?.details?.reason}, ${gt} ms)`);
+      await sleep(100);
+    }
   }
 
   // A model-backed route: the upstream is called once per run that can be paid for.

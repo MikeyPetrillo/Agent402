@@ -137,7 +137,7 @@ const env = {
 process.env.TEMPO_API_KEY = "test-tempo-key";
 process.env.TEMPO_RECIPIENT_ADDRESS = TREASURY;
 process.env.TEMPO_CURRENCY = CURRENCY;
-const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED } = await import("../src/mpp-tempo.js");
+const { inspectTempoSender, tempoSenderOf, tempoAccessKeyActive, tempoAccessKeyState, createKeychainSenderVerifier, KEYCHAIN_UNAVAILABLE, TEMPO_SENDER_CHECK_RETRY_AFTER_S, createTempoGate, checkTempoCredentialBinding, TEMPO_SENDER_UNVERIFIED } = await import("../src/mpp-tempo.js");
 const { gatewaySettleBreakerKey } = await import("../src/gateway-settle-breaker.js");
 
 // Signed transactions, one per shape.
@@ -312,12 +312,12 @@ const activeRec = (key, extra = {}) => ({ signatureType: 0, keyId: key, expiry: 
   // The cached verifier: dedupe, cache both ways, bounded concurrency.
   let reads = 0, release;
   const gate = new Promise((r) => { release = r; });
-  const slow = createKeychainSenderVerifier({ check: async ({ account }) => { reads++; await gate; return account === lc(root.address); }, maxInFlight: 2 });
+  const slow = createKeychainSenderVerifier({ check: async ({ account }) => { reads++; await gate; return account === lc(root.address); }, maxInFlight: 2, queueWaitMs: 50 });
   const a = slow({ account: root.address, accessKey: agentKeyAddress });
   const b = slow({ account: root.address, accessKey: agentKeyAddress });
   const c = slow({ account: victim, accessKey: attacker });
   const overflow = await slow({ account: attacker, accessKey: victim });
-  ok(overflow === null && reads === 2, `B: concurrent reads for one key are deduplicated, and past maxInFlight the answer is null without a read (reads ${reads})`);
+  ok(overflow === KEYCHAIN_UNAVAILABLE && reads === 2, `B: concurrent reads for one key are deduplicated, and past maxInFlight a new key waits for a slot; none freeing within the wait, it is unavailable (not a no) without a read (${overflow}, reads ${reads})`);
   release();
   ok((await a) === lc(root.address) && (await b) === lc(root.address) && (await c) === null, "B: an active key resolves to the account; an inactive one to null");
   await sleep(0);
@@ -328,17 +328,39 @@ const activeRec = (key, extra = {}) => ({ signatureType: 0, keyId: key, expiry: 
   const before = reads;
   await expiring({ account: root.address, accessKey: agentKeyAddress });
   ok(reads === before + 1, "B: an expired cache entry is read again");
-  const throwing = createKeychainSenderVerifier({ check: async () => { throw new Error("rpc down"); } });
-  ok((await throwing({ account: root.address, accessKey: agentKeyAddress })) === null, "B: a check that throws resolves to null (unverified), never rejects");
-  ok((await throwing({ account: root.address, accessKey: agentKeyAddress, inlineAuthorization: true })) === null, "B: ...even for a credential carrying an inline authorization (an unreadable chain is not an absent key)");
+  // A slot that frees within the wait: the queued key is read then.
+  {
+    let freeFirst; const held = new Promise((r) => { freeFirst = r; });
+    let qReads = 0;
+    const q = createKeychainSenderVerifier({ check: async ({ account }) => { qReads++; if (account === victim) await held; return "active"; }, maxInFlight: 1, queueWaitMs: 1000 });
+    const first = q({ account: victim, accessKey: attacker });
+    const t = Date.now();
+    const queued = q({ account: root.address, accessKey: agentKeyAddress });
+    setTimeout(freeFirst, 100);
+    const got = await queued;
+    ok(got === lc(root.address) && qReads === 2 && Date.now() - t >= 90 && (await first) === victim, `B: past maxInFlight a new key waits for a free slot and is read once one frees (${got}, reads ${qReads}, waited ${Date.now() - t} ms)`);
+  }
+  let throws = 0;
+  const throwing = createKeychainSenderVerifier({ check: async () => { throws++; throw new Error("rpc down"); } });
+  ok((await throwing({ account: root.address, accessKey: agentKeyAddress })) === KEYCHAIN_UNAVAILABLE, "B: a check that throws resolves to unavailable (not a no), never rejects");
+  await sleep(0);
+  ok((await throwing({ account: root.address, accessKey: agentKeyAddress, inlineAuthorization: true })) === KEYCHAIN_UNAVAILABLE && throws === 2, `B: ...even for a credential carrying an inline authorization, and a failed read is not remembered: the next request reads again (reads ${throws})`);
+  {
+    let healthy = false, n = 0;
+    const blip = createKeychainSenderVerifier({ check: async () => { n++; return healthy ? "active" : "unreadable"; } });
+    const r1 = await blip({ account: root.address, accessKey: agentKeyAddress });
+    healthy = true; await sleep(0);
+    const r2 = await blip({ account: root.address, accessKey: agentKeyAddress });
+    ok(r1 === KEYCHAIN_UNAVAILABLE && r2 === lc(root.address) && n === 2, `B: one failed read, then the RPC is healthy: the next request is read again and vouched for (${r1}, ${r2})`);
+  }
 
   // Inline authorization: accepted only while the chain holds no record of the key.
   for (const state of ["absent", "revoked", "expired", "mismatch", "unreadable", "active"]) {
     const v = createKeychainSenderVerifier({ check: async () => state });
     const withInline = await v({ account: root.address, accessKey: agentKeyAddress, inlineAuthorization: true });
     const without = await createKeychainSenderVerifier({ check: async () => state })({ account: root.address, accessKey: agentKeyAddress, inlineAuthorization: false });
-    const want = state === "active" || state === "absent" ? lc(root.address) : null;
-    ok(withInline === want && without === (state === "active" ? lc(root.address) : null),
+    const want = state === "active" || state === "absent" ? lc(root.address) : state === "unreadable" ? KEYCHAIN_UNAVAILABLE : null;
+    ok(withInline === want && without === (state === "active" ? lc(root.address) : state === "unreadable" ? KEYCHAIN_UNAVAILABLE : null),
       `B: chain state ${state}: with an inline authorization -> ${withInline}, without -> ${without}`);
   }
   // A remembered "absent" is reused for a credential carrying the authorization,
@@ -389,7 +411,7 @@ async function listen(app) {
   app.get("/spend", handler);
   app.get("/plain", handler);
   const { server, url } = await listen(app);
-  const get = async (path, raw, o) => { const r = await fetch(`${url}${path}`, { headers: { Authorization: credential(raw, o) } }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+  const get = async (path, raw, o) => { const r = await fetch(`${url}${path}`, { headers: { Authorization: credential(raw, o) } }); return { status: r.status, retryAfter: r.headers.get("retry-after"), body: await r.json().catch(() => ({})) }; };
 
   // Route that spends before settlement.
   let v0 = seen.validate;
@@ -474,7 +496,46 @@ async function listen(app) {
   r = await get("/plain", TX_AGENT);
   const waited = Date.now() - t;
   if (savedTimeout === undefined) delete process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS; else process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS = savedTimeout;
-  ok(r.status === 402 && r.body.details?.reason === "sender-unverified" && r.body.details?.charged === false && waited >= 240 && waited < 1500, `C: a chain read that never answers is waited for only up to its timeout, then refused before the handler, uncharged (${r.status}, ${waited} ms)`);
+  ok(r.status === 503 && r.body.details?.reason === "sender-check-unavailable" && r.body.details?.charged === false && r.retryAfter === String(TEMPO_SENDER_CHECK_RETRY_AFTER_S) && waited >= 240 && waited < 1500, `C: a chain read that never answers is waited for only up to its timeout, then answered 503 with Retry-After before the handler, uncharged (${r.status}, Retry-After ${r.retryAfter}, ${waited} ms)`);
+  // One failed read (the RPC blips), then a retry after Retry-After with the
+  // RPC healthy: admitted. Through the real verifier, so nothing is remembered.
+  {
+    let healthy = false;
+    keychainAnswer = createKeychainSenderVerifier({ check: async () => (healthy ? "active" : "unreadable") });
+    const r1 = await get("/plain", TX_AGENT);
+    const r1s = await get("/spend", TX_AGENT);
+    healthy = true;
+    const r2 = await get("/plain", TX_AGENT);
+    ok(r1.status === 503 && r1.retryAfter === String(TEMPO_SENDER_CHECK_RETRY_AFTER_S) && r1.body.details?.charged === false && r1s.status === 503 && r1s.body.details?.reason === "sender-check-unavailable", `C: a failed key read answers 503 with Retry-After on an ordinary and a spending route, uncharged (${r1.status}, ${r1s.status})`);
+    ok(r2.status === 200 && r2.body.pull === lc(root.address), `C: ...and the retry with the RPC healthy is admitted, booked against the account (${r2.status}, ${JSON.stringify(r2.body)})`);
+    // Every read slot held by forged keys whose reads do not end: a genuine
+    // key arriving next waits for a slot only within the read budget, then
+    // answers 503 with Retry-After, never a 402. Once a slot frees, it is read
+    // and admitted.
+    const savedT = process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS;
+    process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS = "400";
+    let freeAll; const stuck = new Promise((res) => { freeAll = res; });
+    keychainAnswer = createKeychainSenderVerifier({ maxInFlight: 16, check: async ({ account }) => (account === victim ? (await stuck, "absent") : "active") });
+    const flood = [];
+    for (let i = 0; i < 16; i++) flood.push(get("/plain", oxKeychain({ account: victim, key: generatePrivateKey() })));
+    await sleep(50);
+    const tq = Date.now();
+    const full = await get("/plain", TX_AGENT);
+    const fullMs = Date.now() - tq;
+    ok(full.status === 503 && full.body.details?.reason === "sender-check-unavailable" && full.retryAfter === String(TEMPO_SENDER_CHECK_RETRY_AFTER_S) && fullMs < 1200, `C: 16 key reads in flight that do not end: a genuine key waits only within the budget, then 503 with Retry-After, never 402 (${full.status}, ${full.body.details?.reason}, ${fullMs} ms)`);
+    const late = get("/plain", TX_AGENT);
+    await sleep(100);
+    freeAll();
+    const lateR = await late;
+    const floodR = await Promise.all(flood);
+    ok(lateR.status === 200 && lateR.body.pull === lc(root.address), `C: ...and with a slot freeing inside the budget the genuine key is read and admitted (${lateR.status})`);
+    ok(floodR.every((x) => x.status === 402 || x.status === 503), `C: the flooding forged credentials are never served (${[...new Set(floodR.map((x) => x.status))]})`);
+    if (savedT === undefined) delete process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS; else process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS = savedT;
+    // A definite no from the chain stays a 402.
+    keychainAnswer = createKeychainSenderVerifier({ check: async () => "revoked" });
+    const r3 = await get("/plain", TX_AGENT);
+    ok(r3.status === 402 && r3.body.details?.reason === "sender-unverified", `C: a definite no from the chain is still 402 sender-unverified (${r3.status})`);
+  }
   server.close();
 }
 

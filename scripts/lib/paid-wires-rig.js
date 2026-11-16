@@ -63,9 +63,10 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   // payment blob -> { id, amount }: which account a settle call draws on.
   const payments = new Map();
   // Access keys the chain holds, "account:key" (lowercase); a getKey read of
-  // any other pair answers the empty record. st.keyReadDelayMs delays it.
+  // any other pair answers the empty record. st.keyReadDelayMs delays it
+  // (st.keyReadDelayFor(pair), when set, per pair).
   const chainKeys = new Set();
-  const st = { keyReadDelayMs: 0, keyReads: 0, verifyDelayMs: 0, settleDelayMs: 250, readDelayMs: 0, readDelayFor: null, llmDelayMs: 0, llmStatus: 0, images: 0, captures: 0, expired: 0, stripeCapture: "decline", verifies: 0, settleAttempts: 0, settled: 0, refused: 0, completions: 0, reads: 0, byAccount: new Map() };
+  const st = { keyReadDelayMs: 0, keyReadDelayFor: null, keyReads: 0, verifyDelayMs: 0, settleDelayMs: 250, readDelayMs: 0, readDelayFor: null, llmDelayMs: 0, llmStatus: 0, images: 0, captures: 0, expired: 0, stripeCapture: "decline", verifies: 0, settleAttempts: 0, settled: 0, refused: 0, completions: 0, reads: 0, byAccount: new Map() };
   const tally = (id, k) => { const t = st.byAccount.get(id) || { attempts: 0, settled: 0, refused: 0 }; t[k]++; st.byAccount.set(id, t); };
   // The most settle calls one account had under way at once (each is a
   // handler that has just answered), outside the tallies.
@@ -103,9 +104,10 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       }
       if (path === "/tempo-rpc" && j.method === "eth_call" && String(j?.params?.[0]?.to || "").toLowerCase() === viemTempo.Addresses.accountKeychain.toLowerCase()) {
         st.keyReads++;
-        if (st.keyReadDelayMs) await sleep(st.keyReadDelayMs);
         const { args } = decodeFunctionData({ abi: viemTempo.Abis.accountKeychain, data });
         const k = `${String(args[0]).toLowerCase()}:${String(args[1]).toLowerCase()}`;
+        const d = typeof st.keyReadDelayFor === "function" ? st.keyReadDelayFor(k) : st.keyReadDelayMs;
+        if (d) await sleep(d);
         const rec = chainKeys.has(k) ? { signatureType: 0, keyId: args[1], expiry: BigInt(Math.floor(Date.now() / 1000) + 3600), enforceLimits: false, isRevoked: false } : { signatureType: 0, keyId: "0x0000000000000000000000000000000000000000", expiry: 0n, enforceLimits: false, isRevoked: false };
         return reply(200, { jsonrpc: "2.0", id: j.id ?? 1, result: encodeFunctionResult({ abi: viemTempo.Abis.accountKeychain, functionName: "getKey", result: rec }) });
       }
