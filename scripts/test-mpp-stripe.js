@@ -358,7 +358,7 @@ for (const seam of [true, false]) {
     bump(runs, spt);
     if (req.headers["x-grant"] === "1") reserveHangupForgiveness(req, { keys: ["ip:stripe-h2"], priceUsd: 0.5 });
     res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) }));
-    setTimeout(() => res.status(200).json({ ok: true }), Number(req.headers["x-delay"] || 20));
+    setTimeout(() => res.status(200).json({ ok: true }), Math.min(Math.max(Number(req.headers["x-delay"]) || 20, 0), 5000));
   });
   const { s, url } = await listen(app);
   const post = (auth, headers = {}, signal) => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: auth, ...headers }, signal }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
