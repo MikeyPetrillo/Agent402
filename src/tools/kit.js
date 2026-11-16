@@ -2095,6 +2095,11 @@ export function parseRdapBootstrap(json) {
 
 const RDAP_BOOTSTRAP_TTL_MS = 24 * 60 * 60 * 1000; // IANA's registry list changes rarely
 const RDAP_BOOTSTRAP_RETRY_MS = 10 * 60 * 1000; // after a failed refresh, back off before asking IANA again
+/** True when an RDAP answer is the registry's own "not registered": a 404
+ *  carrying an RDAP (JSON) body. A 404 page of any other type is an outage. */
+export function rdapSaysNotFound(status, contentType) {
+  return status === 404 && String(contentType || "").toLowerCase().includes("json");
+}
 let rdapBootstrap = { at: 0, map: null };
 
 async function rdapAuthoritativeBase(tld) {
@@ -2341,7 +2346,14 @@ const networkTools = [
             dispatcher: ssrfDispatcher,
             headers: { Accept: "application/rdap+json" },
           });
-          if (res.status === 404) throw Object.assign(new Error("Domain not found in RDAP"), { statusCode: 404 });
+          // A 404 is "not registered" only when the RDAP server says so in
+          // RDAP's own JSON. A registry server that is down can answer every
+          // domain with a web server's 404 page (seen on a whole TLD); that is
+          // an outage, not an answer, so it falls through like any failure.
+          if (res.status === 404) {
+            if (rdapSaysNotFound(res.status, res.headers.get("content-type"))) throw Object.assign(new Error("Domain not found in RDAP"), { statusCode: 404 });
+            throw Object.assign(new Error("RDAP upstream answered HTTP 404 without an RDAP body (registry server unavailable)"), { statusCode: 502, upstreamStatus: 404 });
+          }
           if (!res.ok) throw Object.assign(new Error(`RDAP returned HTTP ${res.status}`), { statusCode: 502, upstreamStatus: res.status });
           return await res.json();
         } finally {
@@ -2367,7 +2379,7 @@ const networkTools = [
       if (!data) {
         const why =
           lastErr?.upstreamStatus === 429 ? "RDAP upstreams rate-limited (HTTP 429)"
-          : lastErr?.statusCode ? lastErr.message
+          : lastErr?.statusCode ? `RDAP upstream unavailable (${lastErr.message})`
           : lastErr?.name === "AbortError" || lastErr?.name === "TimeoutError" ? "RDAP lookup timed out"
           : `RDAP lookup failed: ${lastErr?.message}`;
         throw Object.assign(new Error(why), { statusCode: 502 });

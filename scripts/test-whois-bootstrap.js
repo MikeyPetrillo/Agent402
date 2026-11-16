@@ -2,7 +2,7 @@
 // No network: feeds dns.json-shaped fixtures to parseRdapBootstrap and pins
 // the TLD → authoritative-base mapping the handler walks before rdap.org.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { parseRdapBootstrap } from "../src/tools/kit.js";
+import { parseRdapBootstrap, rdapSaysNotFound } from "../src/tools/kit.js";
 
 let failed = 0;
 const ok = (cond, msg) => {
@@ -52,6 +52,11 @@ const ok = (cond, msg) => {
 
 // ---- 4. degenerate inputs return an empty map, never throw ----
 {
+  ok(rdapSaysNotFound(404, "application/rdap+json"), "a 404 with an RDAP body is not registered");
+ok(rdapSaysNotFound(404, "application/json; charset=utf-8"), "a 404 with a JSON body is not registered");
+ok(!rdapSaysNotFound(404, "text/html"), "a 404 web page is an outage, not an answer (a whole TLD answered so on 2026-11-16)");
+ok(!rdapSaysNotFound(404, null), "a 404 with no type is an outage");
+ok(!rdapSaysNotFound(200, "application/rdap+json"), "a 200 is not a not-found");
   ok(parseRdapBootstrap(null).size === 0, "null input → empty map");
   ok(parseRdapBootstrap({}).size === 0, "missing services → empty map");
   ok(parseRdapBootstrap({ services: "nope" }).size === 0, "non-array services → empty map");
