@@ -96,6 +96,7 @@ import { chainVerdict } from "./referral-chain.js";
 import { runAsReferral } from "./referral-run.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { DEFAULT_KEY_BUDGET_USD, DEFAULT_GLOBAL_BUDGET_USD } from "./hangup-forgiveness.js";
+import { SWEEP_CHAIN_BUDGET_MS, SWEEP_UNCONFIRMED_BUDGET_SHARE } from "./referral-book.js";
 
 export const REFERRAL_NETWORK = "eip155:8453";
 export const REFERRAL_CHAIN_ID = 8453;
@@ -866,12 +867,13 @@ export function createLineSampler({ perMinute = 20, now = Date.now, print = () =
  *                                             REFERRAL_MIN_NET_BPS names neither the slug nor a default (the server passes
  *                                             the gateway's own margin bound, src/tools/llm-gateway-kit.js MARGIN)
  * @param {({tx, netUsd, payer, slug, grossUsd}) => boolean|Promise<boolean>} o.amendSaleNet  correct THIS payment's booked net in place: the row of that payer, slug and gross under the transaction (true when a row changed)
+ * @param {number} [o.sweepChainBudgetMs]      the wall time one sweep pass gives all its chain reads (SWEEP_CHAIN_BUDGET_MS)
  */
 export function createReferralGate({
   config, defs, settler, chain, book, replayGuard, baseUrl, priceUsdOf, priceForNetwork,
   preValidate, prePaymentRefusal, warmQuote, runAsCaller, sendToolError, recordSale, saleBooked, isSynthetic, salePathOf, requireShared, onRun = null,
   payerScreen, isolate, presentWindow, withCeiling, credentialLimiter, clientKey, draining, onSettledSale, payerHasPaid, oweRefund, amendSaleNet, answers, modelNetFloorBps = null,
-  notServed = [],
+  notServed = [], sweepChainBudgetMs = SWEEP_CHAIN_BUDGET_MS,
   log = console, now = Date.now,
 } = {}) {
   if (!config || !(defs instanceof Map) || !settler || !chain || !book || !replayGuard) throw new Error("referral gate: config, defs, settler, chain, book and replayGuard are required");
@@ -1550,7 +1552,7 @@ export function createReferralGate({
   //     while the window still holds two or more failures, so a store that
   //     takes every other write does not pass it). A probe that fails starts
   //     the hold again. Each hold entered while the window holds two or more
-  //     failures doubles the cool-down (`storeCooldownMs`, 15 s, up to
+  //     failures, or again after a failed probe, doubles the cool-down (`storeCooldownMs`, 15 s, up to
   //     REFERRAL_STORE_COOLDOWN_MAX_MS); it is the default again once the
   //     window holds no failure.
   //  5. A full book or the payer's own share refusing an intent is not a
@@ -1562,7 +1564,7 @@ export function createReferralGate({
   /** The cool-down is the default again once the window holds no failure and no hold is active:
    *  a later incident starts from the default, never from where an earlier one ended. */
   function relaxStoreHold(t) {
-    if (!storeFailsIn(t).length && !(storeHold.blockedUntil > t)) { storeHold.level = 0; storeHold.cooldownMs = config.storeCooldownMs; }
+    if (!storeFailsIn(t).length && !storeHold.blockedUntil) { storeHold.level = 0; storeHold.cooldownMs = config.storeCooldownMs; }
   }
   function noteStoreFailure(t) {
     relaxStoreHold(t);
@@ -1574,10 +1576,13 @@ export function createReferralGate({
     if (moreFailed || moreLate) storeHold.fails.push({ at: t, late: moreLate });
     if (storeHold.fails.length > 200) storeHold.fails.splice(0, storeHold.fails.length - 200);
   }
-  /** Start (or start again) the hold at `t`. */
-  function enterStoreHold(t) {
-    const many = storeFailsIn(t).length >= 2;
-    if (!storeFailsIn(t).length) storeHold.level = 0;
+  /** Start (or start again) the hold at `t`. `again`: the probe at the end
+   *  of a cool-down failed, so the store is still not taking writes,
+   *  whatever the window holds by now (a cool-down longer than the window
+   *  outlives the failures that started it): the cool-down doubles again, up to its cap. */
+  function enterStoreHold(t, { again = false } = {}) {
+    const many = storeFailsIn(t).length >= 2 || again;
+    if (!storeFailsIn(t).length && !again) storeHold.level = 0;
     if (many) storeHold.level = Math.min(storeHold.level + 1, 30);
     storeHold.cooldownMs = many ? Math.min(config.storeCooldownMs * 2 ** (storeHold.level - 1), Math.max(config.storeCooldownMs, REFERRAL_STORE_COOLDOWN_MAX_MS)) : config.storeCooldownMs;
     storeHold.blockedUntil = t + storeHold.cooldownMs;
@@ -1597,7 +1602,7 @@ export function createReferralGate({
     let took = false;
     try { took = await storeProbe(); } finally { storeHold.probing = false; }
     if (took) { storeHold.blockedUntil = 0; storeHold.since = 0; if (!storeFailsIn(now()).length) { storeHold.level = 0; storeHold.cooldownMs = config.storeCooldownMs; } line("warn", "the settlement store takes writes again: paid calls are served"); return true; }
-    enterStoreHold(now());
+    enterStoreHold(now(), { again: true });
     return false;
   }
   // How long a debt claim on an entry stands without its row (a process that
@@ -2877,8 +2882,18 @@ export function createReferralGate({
     pruneKept();
     restPrune();
     try { await answers.sweep?.(); } catch { /* the next pass */ }
-    for (const e of book.list().filter((x) => x.state === "unconfirmed").sort((a, b) => (a.checkedAt || 0) - (b.checkedAt || 0)).slice(0, 50)) await confirmUnconfirmed(e);
+    // ONE CHAIN BUDGET for the pass (`sweepChainBudgetMs`, the book's SWEEP_CHAIN_BUDGET_MS):
+    // no proof read for an unconfirmed entry starts past its share of it, and
+    // the book's reads go on from the same start, so a chain that does not
+    // answer holds the pass for the budget and one read, never for one read
+    // per entry. The entries not read wait for the next pass (least recently read first).
+    const passStarted = Date.now();
+    for (const e of book.list().filter((x) => x.state === "unconfirmed").sort((a, b) => (a.checkedAt || 0) - (b.checkedAt || 0)).slice(0, 50)) {
+      if (Date.now() - passStarted >= sweepChainBudgetMs * SWEEP_UNCONFIRMED_BUDGET_SHARE) break;
+      await confirmUnconfirmed(e);
+    }
     return book.sweep({
+      startedAt: passStarted, chainBudgetMs: sweepChainBudgetMs,
       chain, bookSale: bookFromSweep, payTo: config.payTo, graceMs: config.settleMs + 15_000,
       minNetOf: (e) => minNetOf(e.slug, e.amount),
       productIdOf: (e) => productOf(e.slug),
@@ -2980,7 +2995,7 @@ export function createReferralGate({
 
   return {
     handler, sweepOnce, statusWord, resolveByHand, resolveManyByHand, acknowledge, reopenByHand, clearShortByHand, shortSales: () => shortNow(),
-    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: (relaxStoreHold(now()), storeHold.blockedUntil > now()), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
+    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: (relaxStoreHold(now()), storeHold.blockedUntil > 0), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
     slugs: () => [...defs.keys()],
   };
 }

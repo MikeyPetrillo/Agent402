@@ -37,6 +37,11 @@ import Database from "better-sqlite3";
 import pg from "pg";
 import { SQLITE_STORES, RECORD_DIRS, LOG_FILES, INDEX_CACHE, DB_ONLY } from "./lib/state-stores.mjs";
 import { PARTS_COLLECTION, isPartedHeader, headerHashes, partId, assembleEntry } from "../src/index-parts.js";
+import { REFERRAL_BOOK_DOC } from "../src/referral-book.js";
+// A document stored as a head and one row per key (src/json-rows-document.js):
+// written as the one whole body a file build reads, its rows folded back in.
+const ROWS_DOCS = new Map([[REFERRAL_BOOK_DOC, `${REFERRAL_BOOK_DOC}.rows`]]);
+const ROWS_COLLECTIONS = new Set(ROWS_DOCS.values());
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BOOKKEEPING = new Set(["imports", "leases", ...DB_ONLY]);
@@ -129,6 +134,19 @@ export async function exportState(outDir, { url = process.env.STATE_DATABASE_URL
     if (tables.has("documents")) {
       for await (const row of cursorRows(client, `SELECT name, body::text AS body FROM ${schema}.documents ORDER BY name`)) {
         if (!/^[a-z0-9][a-z0-9._:-]{0,120}$/.test(row.name)) { report.unmapped.push(`document ${row.name}`); continue; }
+        if (ROWS_DOCS.has(row.name)) {
+          const body = JSON.parse(row.body);
+          // (A plain read: the documents cursor is open on this connection. A few thousand rows at most.)
+          for (const r of (await client.query(`SELECT id, body->'b' AS b FROM ${schema}.records WHERE collection = $1 ORDER BY id`, [ROWS_DOCS.get(row.name)])).rows) {
+            const id = String(r.id), cut = id.indexOf(":");
+            const part = id.slice(0, cut), key = id.slice(cut + 1);
+            if (!body[part] || typeof body[part] !== "object" || Array.isArray(body[part])) body[part] = {};
+            body[part][key] = r.b; // (a row wins over a section the head still holds, as the store's own fold does)
+          }
+          writeFileSync(join(out, row.name), JSON.stringify(body));
+          report.documents++;
+          continue;
+        }
         writeFileSync(join(out, row.name), row.body);
         report.documents++;
       }
@@ -158,6 +176,12 @@ export async function exportState(outDir, { url = process.env.STATE_DATABASE_URL
             }
           })();
           report.records[collection] = (await writeLines(join(out, INDEX_CACHE.file), lines)) - 1;
+          continue;
+        }
+        if (ROWS_COLLECTIONS.has(collection)) {
+          // Folded into their document's file above; no directory of their own.
+          report.records[collection] = Number(n);
+          log(`${collection}: ${n} row(s) folded into their document`);
           continue;
         }
         if (collection === PARTS_COLLECTION) {

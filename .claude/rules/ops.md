@@ -327,9 +327,19 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
 - **X posting:** `announce.yml` / `scripts/tweet.js` (workflow dispatch only) and
   `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
 - **Referral settlement book:** `src/referral-book.js` keeps the referral gate's unfinished
-  settlements in the `referral-settlements` state document (without a database the file
+  settlements in the `referral-settlements` state document, stored as a head row (the small
+  sections) and one `records` row per open entry, booked-payment mark and dropped record
+  (collection `referral-settlements.rows`, `src/json-rows-document.js`): every write locks the head
+  row (`SELECT ... FOR UPDATE`, 5 s lock wait), reads only the rows written since this process's
+  copy, and writes only the rows it changes (about 600 bytes a paid call's write at 2,000 entries);
+  a failed write that carried several changes writes each again on its own, once. The first write
+  of this build folds the old whole-book document into rows, and any whole-book section an older
+  build writes during a deploy's overlap is folded the same way (a row already standing wins).
+  ROLLBACK: a build before this one reads the new head as a book with no open entries (it cannot
+  read the rows): fix forward, never roll back past it (`scripts/state-export.js` writes the book
+  back as one document for a file-mode restore). Without a database it is the file
   `REFERRAL_BOOK_FILE`, else `/data/agent402-referral-settlements.json`, else the same name under
-  the temp directory): an `intent` written before `/settle` (with the chain head read before
+  the temp directory. Its states: an `intent` written before `/settle` (with the chain head read before
   `/verify`, so the proof is searched from there however late it is read), `in-doubt` when the
   call did not say whether the payment moved, `unconfirmed` when the facilitator answered success
   and its receipt was not yet readable (`flagged` after 3 minutes without one), `contradicted`
@@ -353,7 +363,10 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   boot and every `REFERRAL_SWEEP_MS`, default 60000; `contained`) reads up to 50 open entries a
   pass (in-doubt and intent entries first, a reserved fifth of the reads for refused entries, each
   group least recently read first; no read starts after the pass's 40 s chain budget, of which the
-  last fifth is kept for dropped records, and at least one dropped record is read every pass), each
+  last fifth is kept for dropped records, and at least one dropped record is read every pass; the
+  proof reads of unconfirmed entries start only in the budget's first quarter and those of charged
+  ones in its first half; dropped records are read least recently read first, and one is given up
+  only after reads the chain answered; one pass at a time per process, lease or not), each
   as it stands at that moment: routed to this
   merchant by its own receipt books the sale once; a nonce spent without paying us, an
   authorization expired unused, or one expired with a complete search that found nothing closes

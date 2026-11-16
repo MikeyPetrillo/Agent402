@@ -4100,14 +4100,15 @@ try {
         for (let i = 0; i < 41; i++) { await tb.intent(mk(i, nowS + 900 - i * 10)); await tb.resolve(`referral:r14-${i}`, { state: "refused", at: 100 + i }); }
         const asked = [];
         let mode = "inconclusive";
-        const chain = { state: async ({ from }) => { asked.push(Number(String(from).slice(2))); if (mode === "throw") throw new Error("rpc down"); if (mode === "unused-complete") return { used: false, paid: false, transaction: null, complete: true }; return { used: null, paid: null, transaction: null, complete: false }; } };
+        const chain = { state: async ({ from }) => { asked.push(Number(String(from).slice(2))); if (mode === "throw") throw new Error("rpc down"); if (mode === "unused-complete") return { used: false, paid: false, transaction: null, complete: true }; return { used: true, paid: null, transaction: null, complete: false }; } };
         const sweepIt = () => tb.sweep({ chain, bookSale: async () => true, payTo: PAY_TO });
         const before = tb.droppedRefused().count;
         await sweepIt();
         const firstPass = asked.splice(0).filter((i) => i < 40); // (record 40 is still an entry, read as one)
         ok(before === 40 && bookMod.SWEEP_DROPPED_MAX === 25 && firstPass.length >= 25 && firstPass.slice(0, 25).every((i) => i >= 15) && firstPass[0] === 39, `the sweep reads the dropped records nearest their expiry first (${bookMod.SWEEP_DROPPED_MAX} a pass; first read: record ${firstPass[0]}, the earliest to expire)`);
         // Past expiry, reads that reach no verdict (no answer, an error, an incomplete search) forget nothing: not after
-        // many reads, and not after many hours with few reads. A record is given up only when BOTH have happened.
+        // many reads, and not after many hours with few reads. A record is given up only when BOTH have happened, and
+        // only reads the chain ANSWERED (here: the nonce spent, the search incomplete) count toward it.
         skew.ms = skew0 + 20 * 60_000;
         mode = "throw";
         for (let i = 0; i < 6; i++) await sweepIt();
@@ -4117,7 +4118,7 @@ try {
         const tl = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r15-late`, log: () => {} }), log, maxEntries: 1, maxDropped: 10, now: () => Date.now() + skew.ms });
         skew.ms = skew0;
         for (let i = 0; i < 3; i++) { await tl.intent(mk(800 + i, nowS + 60)); await tl.resolve(`referral:r14-${800 + i}`, { state: "refused", at: 100 + i }); }
-        const sweepL = () => tl.sweep({ chain: { state: async () => ({ used: null, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
+        const sweepL = () => tl.sweep({ chain: { state: async () => ({ used: true, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
         skew.ms = skew0 + bookMod.DROPPED_GIVE_UP_MS + 10 * 60_000;
         for (let i = 0; i < 3; i++) await sweepL(); // seven hours on, three reads only
         const afterManyHours = tl.droppedRefused();
@@ -4135,13 +4136,13 @@ try {
           const made = [];
           for (let i = 0; i < 126; i++) { const m = mk(1000 + i, nowS + 60 + i); made.push(m); await to.intent(m); await to.resolve(m.key, { state: "refused", at: 100 + i }); }
           const landedOne = made[3];
-          let up = false; const booked = [];
-          const chainO = { state: async ({ nonce }) => { if (!up) throw new Error("rpc down"); return nonce === landedOne.nonce.toLowerCase() ? { used: true, paid: true, transaction: "0x" + "c5".repeat(32), complete: true, net: "26298" } : { used: false, paid: false, transaction: null, complete: true }; } };
+          let up = false; const booked = []; const asks = new Map();
+          const chainO = { state: async ({ nonce }) => { if (!up) { asks.set(String(nonce).toLowerCase(), (asks.get(String(nonce).toLowerCase()) || 0) + 1); throw new Error("rpc down"); } return nonce === landedOne.nonce.toLowerCase() ? { used: true, paid: true, transaction: "0x" + "c5".repeat(32), complete: true, net: "26298" } : { used: false, paid: false, transaction: null, complete: true }; } };
           const sweepO = () => to.sweep({ chain: chainO, bookSale: async (e, tx) => { booked.push(tx); return true; }, payTo: PAY_TO });
           skew.ms = skew0 + 10 * 60_000; // every authorization has expired
           for (let i = 0; i < 5; i++) { await sweepO(); skew.ms += 60_000; }
           const afterOutage = to.droppedRefused();
-          const readsEach = afterOutage.records.map((r) => Number(r.lateReads) || 0);
+          const readsEach = afterOutage.records.map((r) => asks.get(String(r.nonce).toLowerCase()) || 0);
           up = true;
           for (let i = 0; i < 6; i++) { await sweepO(); skew.ms += 60_000; }
           ok(afterOutage.count === 125 && afterOutage.unresolved === 0 && Math.max(...readsEach) === 1 && readsEach.filter((x) => x === 1).length === 125 && booked.length === 1 && to.get(landedOne.key)?.state === "charged-undelivered" && to.droppedRefused().count === 0 && to.droppedRefused().unresolved === 0, `125 dropped records through a five-pass chain outage: none is given up, each is read once (the least recently read of the expired ones first), and when the chain answers the payment that landed is found and booked (${afterOutage.count} kept, most reads on one record ${Math.max(...readsEach)}; ${booked.length} booked)`);
@@ -4154,7 +4155,7 @@ try {
           try {
             skew.ms = skew0;
             for (let i = 0; i < 3; i++) { await tf.intent(mk(500 + i, nowS + 60)); await tf.resolve(`referral:r14-${500 + i}`, { state: "refused", at: 100 + i }); }
-            const sweepF = () => tf.sweep({ chain: { state: async () => ({ used: null, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
+            const sweepF = () => tf.sweep({ chain: { state: async () => ({ used: true, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
             skew.ms = skew0 + 10 * 60_000;
             for (let i = 0; i < 5; i++) await sweepF(); // five reads with no verdict
             const wordBefore = appF.gate.statusWord();
@@ -4354,7 +4355,7 @@ try {
             ok(given <= 2 && given >= 1 && calls.slice(given).every((c) => c.status === 503 && c.reason === "settlement_store_down") && b.writeStats().timedOut >= 1 && storeWord(app).length > 0, `d2. writes that stand only after 3.5 s (deadline 3 s), one call every ${spacingMs === 500 ? "half second" : "61 s"}: ${given} tool run(s) given away, then held, word at attention (${calls.map((c) => c.status).join(" ")})`);
           } finally { skew.ms = skew0; doc.update = real; await app.close(); }
         }
-        // e. One failed write that carried two intents is one failure; a stored intent between two failures erases nothing.
+        // e. One failed write that carried two intents fails neither (each is written again alone); a stored intent between two failures erases nothing.
         {
           const { doc, b, app, real } = await storeApp();
           try {
@@ -4367,13 +4368,16 @@ try {
             const one = app.gate.stats().storeHold.failuresInWindow, failedWrites = b.writeStats().failed - failedBefore;
             const third = await payS(app);
             const wordOne = app.gate.statusWord().status;
-            ok(pair.every((c) => c.status === 503 && c.reason === "settlement_store_unavailable") && failedWrites === 1 && one === 1 && third.status === 200 && wordOne === "ok" && app.gate.stats().storeHeld === 0, `e. one failed write that carried two intents is one failure: the next call is served and the word reads ok (${failedWrites} failed write, ${one} failure counted; then ${third.status})`);
-            // Two minutes and one stored intent later, a second write fails: two failures in the window hold, whatever was stored between.
-            skew.ms += 120_000;
+            ok(pair.every((c) => c.status === 200) && failedWrites === 1 && one === 0 && third.status === 200 && wordOne === "ok" && app.gate.stats().storeHeld === 0, `e. one failed write that carried two intents fails neither: each is written again on its own, both calls are served and the word reads ok (${failedWrites} failed write, ${one} failure counted; ${pair.map((c) => c.status).join(" ")} then ${third.status})`);
+            // One failed intent write, then two minutes and one stored intent later a second one: two failures in the window hold, whatever was stored between.
             let failOnce = 1;
+            doc.update = async (m, o) => (failOnce-- > 0 ? { ok: false, error: "a first failed write" } : real(m, o));
+            const firstFail = await payS(app), stored = await payS(app);
+            skew.ms += 120_000;
+            failOnce = 1;
             doc.update = async (m, o) => (failOnce-- > 0 ? { ok: false, error: "a second failed write" } : real(m, o));
             const second = await payS(app), after = await payS(app);
-            ok(second.status === 503 && second.reason === "settlement_store_unavailable" && after.status === 503 && after.reason === "settlement_store_down" && app.gate.stats().storeHold.failuresInWindow === 2 && storeWord(app).some((x) => /2 intent writes to the settlement store failed or were late in the last 5 minutes/.test(x)), `a stored intent erases nothing: a second failed write two minutes later is the second failure in the window and holds (${second.status} then ${after.status} ${after.reason})`);
+            ok(firstFail.status === 503 && stored.status === 200 && second.status === 503 && second.reason === "settlement_store_unavailable" && after.status === 503 && after.reason === "settlement_store_down" && app.gate.stats().storeHold.failuresInWindow === 2 && storeWord(app).some((x) => /2 intent writes to the settlement store failed or were late in the last 5 minutes/.test(x)), `a stored intent erases nothing: a second failed write two minutes later is the second failure in the window and holds (${second.status} then ${after.status} ${after.reason})`);
             // Only time erases: once both have aged out of the window, a single new failure is again one the store recovers from.
             skew.ms += 301_000;
             const released = await payS(app); // the cool-down has passed and the probe stands: served
@@ -4408,6 +4412,60 @@ try {
             const after = app.gate.stats().storeHold;
             ok(during.held === true && during.cooldownMs === 30_000 && during.level === 2 && served.status === 200 && after.held === false && after.cooldownMs === 15_000 && after.level === 0 && after.failuresInWindow === 0 && app.gate.statusWord().status === "ok", `f. a store healthy for longer than the window after a hold: the call is served, the cool-down is back to its default and the word reads ok (during: ${during.cooldownMs / 1000} s, level ${during.level}; after: ${after.cooldownMs / 1000} s, level ${after.level})`);
           } finally { skew.ms = skew0; await app.close(); }
+        }
+        // h. At the DEFAULT 5-minute window a store that stays down reaches the 10-minute cap: each failed probe doubles the cool-down,
+        //    however long ago the failures that started the hold left the window; the hold reads held from its start to its end.
+        {
+          const { doc, app } = await storeApp();
+          try {
+            doc.st.down = true;
+            await payS(app); // one failed write, and its probe fails: held at the default cool-down
+            const seen = [app.gate.stats().storeHold.cooldownMs];
+            const heldAfterCooldown = [];
+            for (let i = 0; i < 8; i++) {
+              skew.ms += seen[seen.length - 1] + 1_000;
+              heldAfterCooldown.push(app.gate.stats().storeHold.held); // the cool-down has passed, no probe yet: the hold still stands
+              await app.gate.sweepOnce(); // the sweep's probe fails: held again
+              seen.push(app.gate.stats().storeHold.cooldownMs);
+            }
+            doc.st.down = false;
+            skew.ms += seen[seen.length - 1] + 1_000;
+            await app.gate.sweepOnce();
+            const ended = app.gate.stats().storeHold;
+            ok(seen.join() === "15000,15000,30000,60000,120000,240000,480000,600000,600000" && heldAfterCooldown.every((x) => x === true) && ended.held === false, `h. at the default 5-minute window a store that stays down doubles the cool-down on every failed probe up to its 10-minute cap (${seen.map((x) => x / 1000).join(", ")} s), and the hold reads held after each cool-down until a probe stands (${heldAfterCooldown.join(" ")}; then ${ended.held})`);
+          } finally { doc.st.down = false; skew.ms = skew0; await app.close(); }
+        }
+        // i. A hold that ended while its failures are still in the window keeps its level: the next failure doubles from there,
+        //    with the sweep making the probes (the cool-down returns to the default only once the window holds no failure).
+        {
+          const { doc, app, real } = await storeApp();
+          try {
+            let failNext = 0;
+            doc.update = async (m, o) => (failNext-- > 0 ? { ok: false, error: "a failed write" } : real(m, o));
+            failNext = 1; await payS(app); skew.ms += 1_000; failNext = 1; await payS(app); // two failures: held, 15 s
+            const first = app.gate.stats().storeHold;
+            skew.ms += 16_000;
+            await app.gate.sweepOnce(); // the probe (two writes) stands: the hold ends inside the window
+            const between = app.gate.stats().storeHold;
+            skew.ms += 1_000;
+            failNext = 1; await payS(app); // a third failure inside the window
+            const second = app.gate.stats().storeHold;
+            ok(first.cooldownMs === 15_000 && first.level === 1 && between.held === false && between.level === 1 && between.failuresInWindow === 2 && second.held === true && second.level === 2 && second.cooldownMs === 30_000, `i. a hold that ended with its failures still in the window keeps its level, and the next failure there doubles the cool-down (15 s, ended at level ${between.level} with ${between.failuresInWindow} failures in the window, then ${second.cooldownMs / 1000} s at level ${second.level})`);
+          } finally { skew.ms = skew0; await app.close(); }
+        }
+        // j. The sweep's proof reads for unconfirmed entries start only inside their share of the pass's chain budget.
+        {
+          let reads = 0;
+          const slowChain = { state: async () => ({ used: false, paid: false, transaction: null, complete: true }), head: async () => 1, proveTransaction: async () => "unknown", proveDetail: async () => { reads++; await wait(150); return { verdict: "unknown", read: false }; } };
+          const bj = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-sweep-budget`, log: () => {} }), log, now: () => Date.now() + skew.ms });
+          const appJ = await mount({}, { book: bj, chain: slowChain, sweepChainBudgetMs: 800 });
+          try {
+            for (let i = 0; i < 10; i++) { const k = `referral:sweep-budget-${i}`; await bj.intent({ key: k, slug: "echo", payer: `0x${String(i + 1).padStart(40, "0")}`, nonce: freshNonce(), amount: "30000", validBefore: Math.floor(Date.now() / 1000) + 600 }); await bj.resolve(k, { state: "unconfirmed", tx: "0x" + String(i).padStart(64, "0"), landedAt: Date.now() }); }
+            const t0 = Date.now();
+            await appJ.gate.sweepOnce();
+            const took = Date.now() - t0;
+            ok(reads >= 1 && reads <= 2 && took < 800 + 300, `j. ten unconfirmed entries against a proof read that takes 150 ms: reads start only inside their quarter of an 800 ms chain budget (${reads} read, the pass took ${took} ms); the rest wait for the next pass`);
+          } finally { await appJ.close(); }
         }
         // B1. Separate incidents never compound: two failed writes one second apart, healthy after, every 11 minutes, nine times.
         {
@@ -4504,7 +4562,7 @@ try {
           // Two records expire now, two more a minute later.
           for (let i = 0; i < 5; i++) { await tn.intent(mk(i, nowS + (i < 2 ? 60 : 120))); await tn.resolve(`referral:r16n-${i}`, { state: "refused", at: 100 + i }); }
           await tn.resolve("referral:r16n-4", null);
-          const sweepN = () => tn.sweep({ chain: { state: async () => ({ used: null, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
+          const sweepN = () => tn.sweep({ chain: { state: async () => ({ used: true, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
           skew.ms = skew0 + 10 * 60_000;
           for (let i = 0; i < 5; i++) await sweepN();
           skew.ms = skew0 + bookMod.DROPPED_GIVE_UP_MS + 90_000; // six hours past the first two only
