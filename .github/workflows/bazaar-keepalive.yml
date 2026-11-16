@@ -1,10 +1,11 @@
 # Keep every catalog route listed in the settlement-driven indexes.
 #
-# CDP's own seller docs: "Resources that go 30 days without a settlement are
-# removed." That is not a registration failure, it is a cull, and it explains
+# Routes have been observed to leave the Bazaar listing after about 30 days
+# without a settlement. That is not a registration failure, and it explains
 # what looked all night like a broken harvester: our oldest surviving listing
-# is dated exactly 30 days back, and 405 of 573 routes had simply aged out
-# because nothing had paid them inside the window. Fewer listings means less
+# was dated about 30 days back, and 405 of 573 routes had dropped out because
+# nothing had paid them inside that window. The purpose of this workflow is to
+# keep routes listed. Fewer listings means less
 # discovery, which means fewer buyers, which means fewer settlements - the loop
 # tightens on itself.
 #
@@ -13,17 +14,17 @@
 # them"). It was wired to workflow_dispatch only and had never run on a
 # schedule. This is that schedule; the script is unchanged.
 #
-# WEEKLY, not monthly, against a 30-day rule: four missed runs in a row still
-# leave the listings alive, so a broken week is not a cull.
+# WEEKLY, not monthly, against the observed 30-day window: four missed runs in
+# a row still leave the listings alive, so a broken week drops nothing.
 #
 # The CI burner pays OUR payTo, so most of the money is circular. The price
 # ceiling is a proxy for upstream cost, not an exclusion: some swept routes
 # bill a third party per call, which is why this runs weekly rather than daily.
 # The ceiling is $0.10 a route: a fixed-price route up to that price has no
 # other scheduled buyer, and at the earlier $0.05 one priced above it reached
-# the 30-day removal with only hand-run passes between. Routes above the
-# ceiling (report products, premium tiers) are not bought here and remain
-# findable via the live 402. The per-batch spend cap is $2: a batch refuses to
+# the observed 30-day window with only hand-run passes between. Routes above the
+# ceiling (report products, premium tiers) are not bought here: their own
+# pass runs twice a month (bazaar-keepalive-tail.yml). The per-batch spend cap is $2: a batch refuses to
 # start when its estimate is over the cap, and with every selected route due
 # at once a batch at this ceiling comes to a little over $1.
 name: Bazaar keep-alive
@@ -35,12 +36,12 @@ on:
     # facilitator settlements for nothing.
     # GitHub throttles schedules on a busy repo (measured 2026-08-30: a
     # 15-minute cron delivered one run in 9.8 hours), which is exactly why the
-    # cadence keeps 4x headroom against the 30-day rule.
+    # cadence keeps 4x headroom against the observed 30-day window.
     - cron: "17 4 * * 2"
     # DAILY, zero-upstream only. The weekly pass above is bounded by PRICE,
     # which is only a proxy for upstream cost. This one is bounded by that
     # actual question (UPSTREAM_FREE_ONLY): routes that call no third party,
-    # so it can run every day and keeps most of the catalog inside the cull.
+    # so it can run every day and keeps most of the catalog inside the window.
     - cron: "37 5 * * *"
   workflow_dispatch:
     inputs:
@@ -110,9 +111,10 @@ jobs:
           SKIP_UPSTREAM_FREE: ${{ github.event.schedule == '17 4 * * 2' && '1' || inputs.skip_upstream_free }}
           MIN_PRICE_USD: ${{ inputs.min_price_usd || '0' }}
           SLUG_PREFIX: ${{ inputs.slug_prefix }}
-          # 14 days against a 30-day removal: a weekly pass reaches a listing
-          # at 14 to 21 days and again a week later if that buy fails, and a
-          # route a customer is actually buying costs us nothing to keep listed.
+          # 14 days against the observed 30-day window: a weekly pass reaches
+          # a listing at 14 to 21 days and again a week later if that buy
+          # fails, and a route a customer is actually buying costs us nothing
+          # to keep listed.
           STALE_DAYS: ${{ inputs.stale_days || '14' }}
           SLUGS: ${{ inputs.slugs }}
           # PER BATCH, not per pass: the estimate is checked inside each batch,
@@ -126,7 +128,7 @@ jobs:
           # Signs X-Heartbeat-Token so these self-buys are booked as ours.
           POW_SECRET: ${{ secrets.POW_SECRET }}
         run: |
-          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the keep-alive cannot pay, and listings will age out in 30 days"; exit 1; }
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the keep-alive cannot pay, and listings may leave the Bazaar after about 30 days"; exit 1; }
           [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
           echo "::add-mask::$BURNER_KEY"
           node scripts/refresh-bazaar.js
@@ -159,7 +161,7 @@ jobs:
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
           if [ "$SWEEP" != "success" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A Bazaar keep-alive pass did not complete (result: $SWEEP, trigger: ${GITHUB_EVENT_NAME}${SCHEDULE:+ $SCHEDULE}). CDP removes a resource after 30 days without a settlement, so a sustained failure silently delists the catalog - which is how 405 of 573 routes disappeared before 2026-08-31. Currently listed: $LISTED. Re-run: \`gh workflow run bazaar-keepalive.yml --ref main\`."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "A Bazaar keep-alive pass did not complete (result: $SWEEP, trigger: ${GITHUB_EVENT_NAME}${SCHEDULE:+ $SCHEDULE}). Routes have been observed to leave the Bazaar listing after about 30 days without a settlement, and this pass keeps them listed, so a sustained failure can drop the catalog from the listing - which is how 405 of 573 routes disappeared before 2026-08-31. Currently listed: $LISTED. Re-run: \`gh workflow run bazaar-keepalive.yml --ref main\`."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ). Listed: $LISTED."
             fi

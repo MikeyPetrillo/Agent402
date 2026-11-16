@@ -73,7 +73,7 @@ ok(/max-parallel:\s*1/.test(wf), "batches run sequentially - one burner address,
 
 // The matrix is fixed, the batch count is an input: with fewer batches than
 // matrix jobs, the extra jobs must select nothing. A clamped index made every
-// extra job repeat batch 0, so each route was bought once per matrix job.
+// extra job repeat the last batch, so each route was bought once per matrix job.
 {
   const { inBatch, batchIndexOf } = await import("./refresh-bazaar.js");
   const matrix = [...(wf.match(/batch:\s*\[([^\]]*)\]/) || [, ""])[1].matchAll(/\d+/g)].map((m) => batchIndexOf(m[0]));

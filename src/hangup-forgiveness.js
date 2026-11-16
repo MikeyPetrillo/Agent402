@@ -124,21 +124,11 @@ export const DEFAULT_GLOBAL_BUDGET_USD = 2;
 // every memory route must be classified as a writer here or as a known reader.
 // scripts/test-gateway-nanopayments.js builds every flagged catalog definition
 // and fails when one is missing here (defHasLastingEffect reads the flags too).
-const LASTING_EFFECT_SLUGS = new Set([
-  "memory-write", "memory-incr", "memory-cas", "memory-grant", "memory-revoke", "memory-remember", "memory-forget",
-  "attest",
-  "feedback",
-  "route-execute", "route-execute-plus", "route-execute-max", "route-execute-pro",
-  "seller-payability",
-  "flight-search", "flight-status",
-  "decide-execute",
-]);
-export const LASTING_EFFECT_SLUG_LIST = Object.freeze([...LASTING_EFFECT_SLUGS]);
-
-/** True for a slug whose effect outlives an undelivered answer: never forgiven. */
-export function hasLastingEffect(slug) {
-  return typeof slug === "string" && LASTING_EFFECT_SLUGS.has(slug);
-}
+// The list itself lives in src/lasting-effect-slugs.js (no imports), so the
+// keep-alive plan reads it before any install; hasLastingEffect(slug) is
+// "never forgiven" here.
+import { LASTING_EFFECT_SLUG_LIST, hasLastingEffect } from "./lasting-effect-slugs.js";
+export { LASTING_EFFECT_SLUG_LIST, hasLastingEffect };
 
 /**
  * The same question asked of a catalog definition: its slug is listed, or its
