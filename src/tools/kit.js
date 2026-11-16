@@ -2025,13 +2025,17 @@ export function parseRobots(text) {
 
 export function robotsAllows(groups, ua, path) {
   const uaLower = ua.toLowerCase();
-  let group =
-    groups.find((g) => g.agents.some((a) => a !== "*" && uaLower.includes(a))) ??
-    groups.find((g) => g.agents.includes("*"));
-  if (!group) return { allowed: true, matchedRule: null };
+  // Every group that names us is read as one (RFC 9309 2.2.1: matching groups
+  // are combined), so a Disallow for one of our tokens holds whatever another
+  // group for our other token allows; only with no such group do the `*`
+  // groups apply, also combined.
+  const named = groups.filter((g) => g.agents.some((a) => a && a !== "*" && uaLower.includes(a)));
+  const matching = named.length ? named : groups.filter((g) => g.agents.includes("*"));
+  if (!matching.length) return { allowed: true, matchedRule: null };
+  const rules = matching.length === 1 ? matching[0].rules : matching.flatMap((g) => g.rules);
   const target = String(path).slice(0, ROBOTS_MAX_PATH_CHARS);
   let best = null;
-  for (const rule of group.rules) {
+  for (const rule of rules) {
     if (!rule.path) continue;
     // rule.path comes from the target site's own robots.txt and `path` from the
     // caller, so both sides are outside input. Matching is robotsRuleMatches
@@ -2039,7 +2043,9 @@ export function robotsAllows(groups, ua, path) {
     // skipped, as before, and rule and path lengths are bounded.
     if ((rule.path.match(/\*/g) || []).length > 3) continue;
     if (rule.path.length > ROBOTS_MAX_RULE_CHARS) continue;
-    if (robotsRuleMatches(rule.path, target) && (!best || rule.path.length > best.path.length)) best = rule;
+    // The longest match wins; between an Allow and a Disallow of the same
+    // length, the Allow (RFC 9309 2.2.2).
+    if (robotsRuleMatches(rule.path, target) && (!best || rule.path.length > best.path.length || (rule.path.length === best.path.length && rule.allow && !best.allow))) best = rule;
   }
   return { allowed: best ? best.allow : true, matchedRule: best ? `${best.allow ? "Allow" : "Disallow"}: ${best.path}` : null };
 }

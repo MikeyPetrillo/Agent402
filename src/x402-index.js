@@ -6081,6 +6081,8 @@ async function crawlScheduled(origin) {
   return null;
 }
 export async function __crawlScheduledForTest(originUrl) { return crawlScheduled(originUrl); }
+/** Test seam: one whole crawl cycle (no lease), and the summary it logged. */
+export async function __runCrawlCycleForTest() { await runCrawl(); return lastCycleSummary; }
 
 /** Did this crawl read fail on our side? Our own deadline or abort, our
  *  resolver failing to finish a lookup, our own byte cap on the document, or
@@ -7343,11 +7345,26 @@ async function runCrawl() {
     // budget, or backed off because its documents have not changed. A skipped
     // origin keeps its entry exactly as it is and casts no vote below.
     const skipped = new Map();
+    // What other containers recorded for these origins, read in one batch
+    // before any is decided (bounded: a slow store costs the cycle its wait).
+    await sellerLoad.prefetch(due);
     await runPool(due, CRAWL_CONCURRENCY, async (origin) => {
       const skip = await crawlScheduled(origin);
       if (skip) skipped.set(origin, skip);
     });
     const crawled = skipped.size ? due.filter((o) => !skipped.has(o)) : due;
+    // An origin backed off because its documents did not change was read, and
+    // read well, within its wait (a failed read resets the back-off), so it
+    // votes as a healthy read that did not fail on our side. Left out, the
+    // cycle's health was measured on little but the origins that keep
+    // failing: with healthy sellers backed off, a few dark ones read as a
+    // cycle 0% healthy (no dead submission ever released) and 100% failing on
+    // our side (the hold on a dark seller's listing never aging out). An
+    // outage of ours still shows: a backed-off origin is read again within
+    // its wait, a failed read puts it back on every cycle, and a release
+    // needs a seller idle for days, never one read well hours ago.
+    const backedOff = skipped.size ? due.filter((o) => skipped.get(o) === "unchanged") : [];
+    crawlCycleTally.done += backedOff.length;
     const oursShare = closeCrawlCycleTally();
     // Each step is guarded on its own: a throw in one used to skip the release
     // silently for every later cycle, and the slots it should have freed stayed
@@ -7361,7 +7378,7 @@ async function runCrawl() {
     // cached verdict - diluting the denominator with stale OKs in the UNSAFE
     // direction, so during an egress outage the fraction could stay above the
     // 0.5 floor and slots would be released anyway.
-    const fraction = cycleOkFraction(crawled);
+    const fraction = cycleOkFraction(backedOff.length ? [...crawled, ...backedOff] : crawled);
     let release;
     try { release = releaseDeadSubmissions(fraction); } catch (e) { release = { released: 0, reason: `error: ${String(e?.message || e).slice(0, 120)}` }; }
     const skippedBy = {};

@@ -86,7 +86,10 @@ function fresh(opts = {}) {
   ok((await load.probeRefusal(b, "quote")) === "budget", "and a price probe reads why");
   ok((await load.budgetSpent(a)).spent, "the day reads spent");
   const ess = await load.takeBudget(a, "router-probe", { essential: true });
-  ok(ess.ok && ess.used === 6, "the router's probe for a paying caller is counted and never refused");
+  ok(ess.ok && ess.used === 1 && ess.routine === false && (await load.routerProbesToday(a)) === 1, "the router's probe for a paying caller is counted on its own day count and never refused");
+  ok((await load.budgetSpent(a)).used === 5, "and does not count against the crawl's budget");
+  const crawlRead = await load.takeBudget(a, "crawler", { essential: true });
+  ok(crawlRead.ok && crawlRead.used === 6, "a read inside a crawl already started is counted on the day's budget and never refused");
   const plan = await load.crawlPlan("https://a.example.com");
   ok(plan.skip === "budget", "a scheduled crawl of a spent host waits");
   ok((await load.takeBudget("https://one.supabase.co/functions/v1/f", "crawler")).ok && (await load.takeBudget("https://two.supabase.co/x", "crawler")).ok, "on shared hosting each hostname has its own budget");

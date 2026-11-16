@@ -18,6 +18,7 @@ import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, no
 const UA = await import("../src/user-agents.js");
 const { safeFetch, probePublicUrl } = await import("../src/tools/fetch-guard.js");
 const { readFileSync, readdirSync } = await import("node:fs");
+const { isHost } = await import("./lib/url-host.js");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
@@ -71,9 +72,24 @@ try {
     if (!tool) { ok(false, `${slug} is in the catalog`); continue; }
     const before = seen.length;
     await tool.handler(input).catch(() => null);
-    const sent = seen.slice(before).filter((r) => r.url.includes("caller-named.example.com"));
+    const sent = seen.slice(before).filter((r) => isHost(r.url, "caller-named.example.com"));
     ok(sent.length > 0 && sent.every((r) => r.ua === UA.FETCH_UA), `${slug} sends the fetch string to the URL its caller named (${sent.length} request(s))`);
   }
+
+  // A deployment that sets NETWORK_KIT_USER_AGENT keeps it on the caller-named
+  // fetches of http-headers and tech-stack (a fresh module instance reads it).
+  process.env.NETWORK_KIT_USER_AGENT = "Operator-Set/2.0";
+  try {
+    const nk = await import("../src/tools/network-kit2.js?ua=operator");
+    const nkTools = Object.values(nk).filter(Array.isArray).flat().filter((t) => t && typeof t.handler === "function");
+    for (const slug of ["http-headers", "tech-stack"]) {
+      const tool = nkTools.find((t) => t.slug === slug);
+      const before = seen.length;
+      await tool?.handler({ url: "https://caller-named.example.com/" }).catch(() => null);
+      const sent = seen.slice(before).filter((r) => isHost(r.url, "caller-named.example.com"));
+      ok(sent.length > 0 && sent.every((r) => r.ua === "Operator-Set/2.0"), `${slug} sends NETWORK_KIT_USER_AGENT when the deployment sets it (${sent.length} request(s))`);
+    }
+  } finally { delete process.env.NETWORK_KIT_USER_AGENT; }
 
   // The router's model-list read, inside a paying caller's purchase.
   const { sellerServesModel, ROUTER_UA } = await import("../src/x402-buyer.js");
@@ -91,7 +107,7 @@ const idx = src("x402-index.js"), mpp = src("mpp-index.js");
 ok(/crawlFetch\(url, \{ \.\.\.opts, userAgent: CRAWLER_UA \}\)/.test(idx), "every x402 index document read asks for the crawler string (crawlRead)");
 ok((idx.match(/safeFetch\([^;]*\)/g) || []).filter((c) => !/crawlFetch|safeFetch\(url, opts\)/.test(c)).every((c) => c.includes("userAgent: CRAWLER_UA")), "the index's other reads (registries, succession markers) send the crawler string");
 ok(/let probeFetch = \(url, opts\) => probePublicUrl\(url, opts\);/.test(idx), "the index's probes go through probePublicUrl, so they send the probe string");
-ok((mpp.match(/await safeFetch\(/g) || []).length === (mpp.match(/userAgent: CRAWLER_UA/g) || []).length, "every MPP index read sends the crawler string");
+ok((mpp.match(/safeFetch\([^)]/g) || []).length > 0 && (mpp.match(/safeFetch\([^)]/g) || []).length === (mpp.match(/userAgent: CRAWLER_UA/g) || []).length, "every MPP index read sends the crawler string");
 const server = src("server.js");
 ok((server.match(/userAgent: ROUTER_UA/g) || []).length === 2, "the router's pre-payment probe and the operator's diagnosis probe send the router string");
 ok(/import \{ ROUTER_UA \} from "\.\/x402-buyer\.js"|"user-agent": ROUTER_UA/.test(src("tempo-buyer.js")), "the Tempo buyer sends the router string");
@@ -100,6 +116,18 @@ const walk = (dir) => { for (const e of readdirSync(new URL(`../${dir}`, import.
 walk("src");
 const bare = files.filter((f) => /["'`]Agent402\/1\.0["'`]/.test(readFileSync(new URL(`../${f}`, import.meta.url), "utf8")) && f !== "src/user-agents.js");
 ok(bare.length === 0, `no file sends the bare Agent402/1.0 (${bare.join(", ") || "none"})`);
+// The older `Agent402/1.0` product token survives only in kits that call one
+// data provider's fixed API (never a seller, never a URL a caller names), which
+// is what /crawler says. A new file that sends it, or one of these that starts
+// fetching a caller's URL with it, is a change the page has to follow.
+const VENDOR_ONLY = new Set(["src/tools/x-data-kit.js", "src/tools/farcaster-social-kit.js", "src/tools/enrich-kit.js", "src/tools/b2b-enrich-kit.js", "src/tools/network-kit2.js", "src/tools/cve-kit.js", "src/tools/defi-kit.js", "src/tools/derivatives-kit.js", "src/tools/solana-intel-kit.js", "src/tools/crypto-kit.js", "src/tools/crypto-markets-kit.js", "src/tools/crypto-signals-kit.js"]);
+const legacy = files.filter((f) => f !== "src/user-agents.js" && f !== "src/changelog.js" && /Agent402\/1\.0/.test(readFileSync(new URL(`../${f}`, import.meta.url), "utf8")));
+ok(legacy.length > 0 && legacy.every((f) => VENDOR_ONLY.has(f)), `the Agent402/1.0 token appears only in the vendor-API kits (${legacy.filter((f) => !VENDOR_ONLY.has(f)).join(", ") || "no others"})`);
+{
+  const nk2 = src("tools/network-kit2.js");
+  const uses = [...nk2.matchAll(/"User-Agent": (\w+)/g)].map((m) => m[1]);
+  ok(uses.includes("CALLER_FETCH_UA") && uses.filter((u) => u === "USER_AGENT").length === 1 && /fetchJson\(url, label\)/.test(nk2), "network-kit2 sends its vendor string only from fetchJson (fixed data APIs); caller-named fetches send the fetch string or the deployment's own");
+}
 
 console.log(`\n${fail ? "FAILED" : "PASSED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

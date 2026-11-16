@@ -1,4 +1,4 @@
-// How much of a seller's hosting our own requests use, and three controls that
+// How much of a seller's hosting our own requests use, and the controls that
 // keep it small. Some sellers run on plans where every request counts against
 // a quota, a 304 or a 402 included, so a request we do not need is a cost we
 // put on them.
@@ -11,27 +11,31 @@
 //      crawl, a failed router purchase or a re-registration puts it back on the
 //      normal cycle.
 //   2. Per-host daily budget. Every request the index and its probes send to a
-//      host (crawler reads, the paywall probe, price probes, the router's
-//      pre-payment probe) is counted per operator (src/operator-key.js: the
-//      registrable domain, or the whole hostname on shared hosting) per UTC
-//      day. Past DAILY_BUDGET (SELLER_PROBE_DAILY_BUDGET, default 200) the
-//      crawl and the unpaid probes skip that host until the day rolls. The
-//      router's probe for a paying caller is counted and never skipped.
+//      host (crawler reads, the paywall probe, price probes, the MPP index's
+//      reads) is counted per operator (src/operator-key.js: the registrable
+//      domain, or the whole hostname on shared hosting) per UTC day. Past
+//      DAILY_BUDGET (SELLER_PROBE_DAILY_BUDGET, default 200) the crawl and the
+//      unpaid probes skip that host until the day rolls. The router's probe for
+//      a paying caller is counted on a day count of its own, never skipped and
+//      never counted against the crawl's budget.
 //   3. Retry-After. A 429 or 503 from a seller to the crawler or a probe holds
 //      that host's crawl and probes until its Retry-After (or THROTTLE_DEFAULT_MS
 //      when it names none), never past THROTTLE_MAX_MS. A router purchase is
 //      never held.
+//   4. A request log: how many requests each component sent each host per
+//      minute, kept REQUEST_LOG_KEEP_MS (two days), for the operator view a
+//      seller's question is checked against.
 //
 // A skip never changes a listing: the entry stays exactly as the last
 // completed read left it.
 //
-// STATE is the shared limits store (src/shared-limits.js: Redis, shared by
-// every container, the same store the index's re-registration cooldowns use),
-// with this process's memory as the floor when the store does not answer.
-// Counts for the operator view: sellerLoadStatus(), on
-// /__operator/seller-load.json.
+// STATE: this process's memory decides, and the shared limits store
+// (src/shared-limits.js: Redis, shared by every container) is written behind
+// it and read once per crawl cycle (see createSellerLoad), so a slow store
+// never slows a crawl or a buyer's probe. Counts for the operator view:
+// sellerLoadStatus(), on /__operator/seller-load.json.
 import { createHash } from "node:crypto";
-import { shared, createMemoryLimits, noteSharedLimitsDegraded } from "./shared-limits.js";
+import { shared as sharedLimits, createMemoryLimits, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWL_INTERVAL_MS } from "./crawl-cadence.js";
 
@@ -117,27 +121,43 @@ function decodeState(member) {
   return st;
 }
 
+/** How long a cycle's prefetch of the shared state waits before deciding on
+ *  this process's own view (src/x402-index.js runCrawl). */
+export const PREFETCH_WAIT_MS = 2_000;
+/** The request log keeps counts per host, component and minute this long. */
+export const REQUEST_LOG_KEEP_MS = 2 * DAY_MS;
+const REQUEST_LOG_FLUSH_MS = 5_000;
+const REQUEST_LOG = "seller-request-log"; // window per hostname: `${minute}|${kind}|${seq}`, weight = requests
+
 /**
- * The controls over one store. `store` is the shared limits interface;
- * `local` the process-memory floor used when the store does not answer (and
- * written beside it, so a store that goes away leaves a recent view).
+ * The controls over one store.
+ *
+ * This process's memory (`local`) decides every request: a crawl or a probe
+ * never waits on the shared store. Each write lands in memory first and goes
+ * to the store behind it (in order per key, never awaited by a caller), and
+ * what other containers wrote reaches memory through `prefetch`, which the
+ * crawl calls once per cycle for the origins it is about to visit: one batch
+ * of reads in parallel, bounded by `prefetchWaitMs`. A store that is slow or
+ * down therefore costs a cycle at most that wait, not a round trip per origin.
  */
 export function createSellerLoad({
-  store = shared,
+  store = sharedLimits,
   local = createMemoryLimits(),
-  mirrorLocal = store !== local && store?.mode === "redis",
   now = () => Date.now(),
   revisitCapMs = REVISIT_CAP_MS,
   revisitBaseMs = REVISIT_BASE_MS,
   dailyBudget = DAILY_BUDGET,
+  prefetchWaitMs = PREFETCH_WAIT_MS,
 } = {}) {
   let clock = now;
+  const shares = store && store !== local;
   const counts = {
     unchangedReads: 0, changedReads: 0,
     skipped: { unchanged: 0, throttled: 0, budget: 0 },
     resets: {},
     throttles: { noted: 0, withRetryAfter: 0 },
     requests: {}, refused: {},
+    prefetch: { cycles: 0, timedOut: 0, merged: 0 },
   };
   // This process's view, for the operator counts: origins currently backed
   // off, and requests counted per operator today. Bounded.
@@ -146,39 +166,146 @@ export function createSellerLoad({
   const bump = (o, k) => { o[k] = (o[k] || 0) + 1; };
   const bounded = (map, cap = 20_000) => { while (map.size > cap) map.delete(map.keys().next().value); };
 
-  async function read(fn) {
-    let r;
-    try { r = await fn(store); } catch (e) { r = { ok: false, error: e?.message }; }
-    if (r?.ok) return r;
-    if (store !== local) { noteSharedLimitsDegraded("seller-load", r); return fn(local); }
-    return r;
+  // ---- the write-behind to the shared store ----------------------------------
+  const chains = new Map();        // store key -> the tail of its write chain
+  const pending = new Set();
+  /** Run `fn(store)` after the last write queued for `key`; never awaited by a
+   *  decision, never rejects. */
+  function behind(key, fn) {
+    if (!shares) return Promise.resolve(null);
+    const prev = chains.get(key) || Promise.resolve();
+    const p = prev.then(() => fn(store)).then(
+      (r) => { if (!r?.ok) noteSharedLimitsDegraded("seller-load", r); return r; },
+      (e) => { noteSharedLimitsDegraded("seller-load", { error: e?.message }); return null; },
+    );
+    chains.set(key, p);
+    pending.add(p);
+    p.finally(() => { pending.delete(p); if (chains.get(key) === p) chains.delete(key); });
+    return p;
   }
-  async function write(fn) {
-    let r;
-    try { r = await fn(store); } catch (e) { r = { ok: false, error: e?.message }; }
-    if (store === local) return r;
-    if (r?.ok) {
-      if (mirrorLocal) { try { await fn(local); } catch { /* the floor never throws */ } }
-      return r;
-    }
-    noteSharedLimitsDegraded("seller-load", r);
-    return fn(local);
+  /** A shared read that never throws: the store's answer, or null. */
+  async function shared(fn) {
+    if (!shares) return null;
+    try { const r = await fn(store); if (r?.ok) return r; noteSharedLimitsDegraded("seller-load", r); } catch (e) { noteSharedLimitsDegraded("seller-load", { error: e?.message }); }
+    return null;
   }
 
-  async function readRevisit(origin) {
-    const key = normOrigin(origin);
-    const r = await read((s) => s.windowRead(REVISIT, key, { windowMs: STATE_KEEP_MS, now: clock() }));
+  // ---- revisit state -----------------------------------------------------------
+  const lastEntry = (r) => {
     const entries = Array.isArray(r?.entries) ? r.entries : [];
-    if (!entries.length) return null;
-    const last = entries.reduce((a, b) => (b.score >= a.score ? b : a));
-    return decodeState(last.member);
+    return entries.length ? entries.reduce((a, b) => (b.score >= a.score ? b : a)) : null;
+  };
+  async function readRevisitEntry(origin) {
+    return lastEntry(await local.windowRead(REVISIT, normOrigin(origin), { windowMs: STATE_KEEP_MS, now: clock() }));
+  }
+  async function readRevisit(origin) {
+    const e = await readRevisitEntry(origin);
+    return e ? decodeState(e.member) : null;
+  }
+  async function setLocalRevisit(key, member, score) {
+    await local.windowClear(REVISIT, key);
+    await local.windowAdd(REVISIT, key, { windowMs: STATE_KEEP_MS, member, now: clock(), score });
   }
   async function writeRevisit(origin, st) {
     const key = normOrigin(origin);
     const t = clock();
     if (st.streak > 0) { backedOff.set(key, st.nextAt); bounded(backedOff); } else backedOff.delete(key);
-    await write((s) => s.windowClear(REVISIT, key));
-    return write((s) => s.windowAdd(REVISIT, key, { windowMs: STATE_KEEP_MS, member: encodeState(st), now: t, score: t }));
+    const member = encodeState(st);
+    await setLocalRevisit(key, member, t);
+    void behind(`r|${key}`, async (s) => {
+      const c = await s.windowClear(REVISIT, key);
+      if (!c?.ok) return c;
+      return s.windowAdd(REVISIT, key, { windowMs: STATE_KEEP_MS, member, now: t, score: t });
+    });
+  }
+
+  // ---- the day's counts --------------------------------------------------------
+  const budgetKey = (origin, t) => `${dayOf(t)}|${operatorKey(origin)}`;
+  /** Raise this process's count of `key` to `value` when another container's
+   *  requests put the shared one higher. */
+  async function mergeCount(key, value) {
+    const v = Number(value) || 0;
+    const have = Number((await local.counterGet(BUDGET, key, { now: clock() }))?.value) || 0;
+    if (v > have) { await local.counterAdd(BUDGET, key, v - have, 2 * DAY_MS, { now: clock() }); counts.prefetch.merged++; }
+  }
+  async function countLocal(key, delta = 1) {
+    const r = await local.counterAdd(BUDGET, key, delta, 2 * DAY_MS, { now: clock() });
+    return Number(r?.value) || 0;
+  }
+  function countShared(key, delta = 1) {
+    const t = clock();
+    void behind(`b|${key}`, async (s) => {
+      const r = await s.counterAdd(BUDGET, key, delta, 2 * DAY_MS, { now: t });
+      if (r?.ok) await mergeCount(key, r.value);
+      return r;
+    });
+  }
+
+  // ---- the request log (counts per host, component and minute) -----------------
+  const logBuckets = new Map();    // hostname -> Map(`${minute}|${kind}` -> { n, flushed })
+  const logTimers = new Map();
+  let logSeq = 0;
+  function noteRequest(url, kind) {
+    const host = hostnameOf(url);
+    if (!host) return;
+    const minute = Math.floor(clock() / 60_000) * 60_000;
+    let m = logBuckets.get(host);
+    if (!m) { m = new Map(); logBuckets.set(host, m); bounded(logBuckets, 5_000); }
+    const k = `${minute}|${kind}`;
+    const b = m.get(k) || { n: 0, flushed: 0 };
+    b.n++;
+    m.set(k, b);
+    const cutoff = clock() - REQUEST_LOG_KEEP_MS;
+    for (const key of m.keys()) { if (Number(key.split("|")[0]) <= cutoff) m.delete(key); else break; }
+    if (shares && !logTimers.has(host)) {
+      const tm = setTimeout(() => flushLog(host), REQUEST_LOG_FLUSH_MS);
+      tm.unref?.();
+      logTimers.set(host, tm);
+    }
+  }
+  function flushLog(host) {
+    logTimers.delete(host);
+    const m = logBuckets.get(host);
+    if (!m) return Promise.resolve();
+    const writes = [];
+    for (const [k, b] of m) {
+      const delta = b.n - b.flushed;
+      if (delta <= 0) continue;
+      b.flushed = b.n;
+      const [minute] = k.split("|");
+      const member = `${k}|${process.pid}.${++logSeq}`;
+      writes.push(behind(`l|${host}`, (s) => s.windowAdd(REQUEST_LOG, host, { windowMs: REQUEST_LOG_KEEP_MS, member, weight: delta, now: clock(), score: Number(minute) })));
+    }
+    return Promise.all(writes);
+  }
+
+  // ---- reading other containers' writes ---------------------------------------
+  /** Merge what the shared store holds for `origin` into this process's view:
+   *  the newer revisit state, the later hold, the higher count. */
+  async function hydrate(origin) {
+    if (!shares) return;
+    const key = normOrigin(origin);
+    const host = hostnameOf(origin);
+    const t = clock();
+    await Promise.all([
+      shared((s) => s.windowRead(REVISIT, key, { windowMs: STATE_KEEP_MS, now: t })).then(async (r) => {
+        const theirs = lastEntry(r);
+        if (!theirs) return;
+        const mine = await readRevisitEntry(origin);
+        if (!mine || theirs.score > mine.score) {
+          await setLocalRevisit(key, theirs.member, theirs.score);
+          const st = decodeState(theirs.member);
+          if (st.streak > 0) { backedOff.set(key, st.nextAt); bounded(backedOff); }
+          counts.prefetch.merged++;
+        }
+      }),
+      host ? shared((s) => s.flagGet(THROTTLE, host, { now: t })).then(async (r) => {
+        const until = Number(r?.until) || 0;
+        const mine = Number((await local.flagGet(THROTTLE, host, { now: clock() }))?.until) || 0;
+        if (until > mine) { await local.flagSet(THROTTLE, host, until, { now: clock() }); counts.prefetch.merged++; }
+      }) : null,
+      originOf(origin) ? shared((s) => s.counterGet(BUDGET, budgetKey(origin, t), { now: t })).then((r) => (r ? mergeCount(budgetKey(origin, t), r.value) : null)) : null,
+    ]);
   }
 
   return {
@@ -186,6 +313,28 @@ export function createSellerLoad({
     setClock(fn) { clock = typeof fn === "function" ? fn : now; },
     revisitIntervalMs: (streak) => revisitIntervalMs(streak, { baseMs: revisitBaseMs, capMs: revisitCapMs }),
     readRevisit,
+
+    /** Read the shared state of `origins` into this process before a crawl
+     *  cycle decides them: all at once, waiting at most `prefetchWaitMs`.
+     *  Resolves `{ origins, timedOut }`; never throws. */
+    async prefetch(origins, { waitMs = prefetchWaitMs } = {}) {
+      const list = [...new Set((origins || []).map(normOrigin).filter(Boolean))];
+      if (!shares || !list.length) return { origins: 0, timedOut: false };
+      counts.prefetch.cycles++;
+      let timer;
+      const all = Promise.allSettled(list.map((o) => hydrate(o))).then(() => false);
+      const wait = new Promise((r) => { timer = setTimeout(() => r(true), Math.max(0, waitMs)); timer.unref?.(); });
+      const timedOut = await Promise.race([all, wait]);
+      clearTimeout(timer);
+      if (timedOut) counts.prefetch.timedOut++;
+      return { origins: list.length, timedOut };
+    },
+
+    /** Test seam: wait for every write queued to the shared store. */
+    async flush() {
+      for (const host of [...logTimers.keys()]) { clearTimeout(logTimers.get(host)); flushLog(host); }
+      while (pending.size) await Promise.allSettled([...pending]);
+    },
 
     /** Is `origin` due a crawl? `{ due, streak, nextAt, intervalMs }`. An
      *  origin with no state, or one whose state cannot be read, is due. */
@@ -230,7 +379,7 @@ export function createSellerLoad({
     async throttledUntil(url) {
       const host = hostnameOf(url);
       if (!host) return 0;
-      const r = await read((s) => s.flagGet(THROTTLE, host, { now: clock() }));
+      const r = await local.flagGet(THROTTLE, host, { now: clock() });
       return Number(r?.until) > clock() ? Number(r.until) : 0;
     },
 
@@ -249,28 +398,48 @@ export function createSellerLoad({
       if (secs) counts.throttles.withRetryAfter++;
       const held = await this.throttledUntil(url).catch(() => 0);
       if (held >= until) return held;
-      await write((s) => s.flagSet(THROTTLE, host, until, { now: clock() }));
+      await local.flagSet(THROTTLE, host, until, { now: clock() });
+      const t = clock();
+      void behind(`t|${host}`, async (s) => {
+        // Never cut short a longer hold another container recorded.
+        const theirs = Number((await s.flagGet(THROTTLE, host, { now: t }))?.until) || 0;
+        return theirs >= until ? { ok: true } : s.flagSet(THROTTLE, host, until, { now: t });
+      });
       return until;
     },
 
     /** Count one request to the host of `url` and decide it. Non-essential
-     *  requests past the day's budget are refused (and not counted); an
-     *  essential one (the router's probe for a paying caller) is always
-     *  allowed. `{ ok, used, budget }`. */
+     *  requests past the day's budget are refused (and not counted). The
+     *  router's probe for a paying caller (`router-probe`, essential) is
+     *  counted on a day count of its own and never refused, so a seller busy
+     *  with buyers does not use up the crawl's budget; any other essential
+     *  request (a read inside a crawl already started) is counted on the day's
+     *  budget and never refused. Never waits on the shared store.
+     *  `{ ok, used, budget }`. */
     async takeBudget(url, kind, { essential = false } = {}) {
       const k = String(kind || "other");
       const origin = originOf(url);
-      if (!origin || dailyBudget <= 0) { bump(counts.requests, k); return { ok: true, used: 0, budget: dailyBudget }; }
+      if (!origin) { bump(counts.requests, k); return { ok: true, used: 0, budget: dailyBudget }; }
       const t = clock();
-      const key = `${dayOf(t)}|${operatorKey(origin)}`;
-      const r = await write((s) => s.counterAdd(BUDGET, key, 1, 2 * DAY_MS, { now: t }));
-      const used = Number(r?.value) || 0;
+      if (essential && k === "router-probe") {
+        const key = `${budgetKey(origin, t)}|router`;
+        const used = await countLocal(key);
+        countShared(key);
+        bump(counts.requests, k);
+        noteRequest(url, k);
+        return { ok: true, used, budget: dailyBudget, routine: false };
+      }
+      if (dailyBudget <= 0) { bump(counts.requests, k); noteRequest(url, k); return { ok: true, used: 0, budget: dailyBudget }; }
+      const key = budgetKey(origin, t);
+      const used = await countLocal(key);
       if (!essential && used > dailyBudget) {
-        await write((s) => s.counterAdd(BUDGET, key, -1, 2 * DAY_MS, { now: t }));
+        await countLocal(key, -1);
         bump(counts.refused, k);
         return { ok: false, used: used - 1, budget: dailyBudget };
       }
+      countShared(key);
       bump(counts.requests, k);
+      noteRequest(url, k);
       hostDay.set(key, used); bounded(hostDay);
       return { ok: true, used, budget: dailyBudget };
     },
@@ -280,21 +449,35 @@ export function createSellerLoad({
     async budgetSpent(url) {
       const origin = originOf(url);
       if (!origin || dailyBudget <= 0) return { spent: false, used: 0, budget: dailyBudget };
-      const key = `${dayOf(clock())}|${operatorKey(origin)}`;
-      const r = await read((s) => s.counterGet(BUDGET, key, { now: clock() }));
+      const r = await local.counterGet(BUDGET, budgetKey(origin, clock()), { now: clock() });
       const used = Number(r?.value) || 0;
       return { spent: used >= dailyBudget, used, budget: dailyBudget };
+    },
+
+    /** The router's probes counted today for the operator of `url`. */
+    async routerProbesToday(url) {
+      const origin = originOf(url);
+      if (!origin) return 0;
+      return Number((await local.counterGet(BUDGET, `${budgetKey(origin, clock())}|router`, { now: clock() }))?.value) || 0;
+    },
+
+    /** Why an unpaid request to `url` should wait (a Retry-After hold, a spent
+     *  day), or null. Reads only; counts nothing. */
+    async hold(url) {
+      if (await this.throttledUntil(url)) return "throttled";
+      if ((await this.budgetSpent(url)).spent) return "budget";
+      return null;
     },
 
     /** The scheduled crawl's plan for `origin`: `skip` is why it waits this
      *  cycle ("throttled" for a Retry-After, "budget" for a spent day,
      *  "unchanged" for a back-off) or null, and `intervalMs` the back-off the
-     *  origin is on (0 on the normal cycle). Reads the store; never throws,
-     *  and an unreadable state crawls. */
+     *  origin is on (0 on the normal cycle). Never throws, and an unreadable
+     *  state crawls. */
     async crawlPlan(origin) {
       try {
-        if (await this.throttledUntil(origin)) { counts.skipped.throttled++; return { skip: "throttled", intervalMs: 0 }; }
-        if ((await this.budgetSpent(origin)).spent) { counts.skipped.budget++; return { skip: "budget", intervalMs: 0 }; }
+        const held = await this.hold(origin);
+        if (held) { counts.skipped[held]++; return { skip: held, intervalMs: 0 }; }
         const due = await this.revisitDue(origin);
         if (!due.due) { counts.skipped.unchanged++; return { skip: "unchanged", intervalMs: due.intervalMs }; }
         return { skip: null, intervalMs: due.intervalMs };
@@ -311,6 +494,27 @@ export function createSellerLoad({
       } catch { return null; }
     },
 
+    /** The requests we sent the host `hostname` over the last two days, per
+     *  component and minute, oldest first: this process's own counts merged
+     *  with what every container wrote to the shared store. */
+    async requestLog(hostname) {
+      const host = String(hostname || "").trim().toLowerCase();
+      const cutoff = clock() - REQUEST_LOG_KEEP_MS;
+      const byKey = new Map();
+      const add = (minute, kind, n) => { if (minute > cutoff) { const k = `${minute}|${kind}`; byKey.set(k, (byKey.get(k) || 0) + n); } };
+      let complete = true;
+      if (shares) {
+        await flushLog(host);
+        const r = await shared((s) => s.windowRead(REQUEST_LOG, host, { windowMs: REQUEST_LOG_KEEP_MS, now: clock() }));
+        if (r && Array.isArray(r.entries)) for (const e of r.entries) { const [minute, kind] = String(e.member).split("|"); add(Number(minute), kind, Number(e.weight) || 1); }
+        else complete = false;
+      }
+      if (!shares || !complete) for (const [k, b] of logBuckets.get(host) || []) { const [minute, kind] = k.split("|"); add(Number(minute), kind, b.n); }
+      const rows = [...byKey].map(([k, n]) => { const [minute, kind] = k.split("|"); return { minute: new Date(Number(minute)).toISOString(), kind, requests: n }; })
+        .sort((a, b) => (a.minute < b.minute ? -1 : a.minute > b.minute ? 1 : a.kind < b.kind ? -1 : 1));
+      return { host, keptHours: REQUEST_LOG_KEEP_MS / HOUR_MS, complete, rows, total: rows.reduce((n, r) => n + r.requests, 0) };
+    },
+
     /** Counts for the operator view: never an origin or a host. */
     status() {
       const t = clock();
@@ -325,13 +529,29 @@ export function createSellerLoad({
       for (const [, at] of backedOff) if (at > t) backedOffNow++;
       return {
         revisit: { capHours: revisitCapMs / HOUR_MS, firstWaitMinutes: revisitIntervalMs(1, { baseMs: revisitBaseMs, capMs: revisitCapMs }) / 60_000, originsBackedOff: backedOffNow, unchangedReads: counts.unchangedReads, changedReads: counts.changedReads, resets: { ...counts.resets } },
-        budget: { perOperatorPerDay: dailyBudget, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused } },
+        budget: { perOperatorPerDay: dailyBudget, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused }, routerProbesCountedApart: true },
         throttle: { defaultMinutes: THROTTLE_DEFAULT_MS / 60_000, maxHours: THROTTLE_MAX_MS / HOUR_MS, ...counts.throttles },
         crawlsSkipped: { ...counts.skipped },
+        prefetch: { ...counts.prefetch, waitMs: prefetchWaitMs },
+        requestLog: { keptHours: REQUEST_LOG_KEEP_MS / HOUR_MS, hostsInMemory: logBuckets.size },
         store: store?.mode || "memory",
+        writesPending: pending.size,
       };
     },
   };
+}
+
+/** One probe the router sends for a paying caller (src/server.js): counted on
+ *  the host's router count and noted in the request log without waiting on
+ *  any store, sent whatever the day's crawl budget reads, and a 429 or 503
+ *  answer holds the host's unpaid probes (never this purchase). `send()`
+ *  makes the request and resolves the Response. */
+export async function sendRouterProbe(url, send, { load = sellerLoad } = {}) {
+  void Promise.resolve().then(() => load.takeBudget(url, "router-probe", { essential: true })).catch(() => {});
+  const p = await send();
+  const st = Number(p?.status);
+  if (st === 429 || st === 503) void Promise.resolve().then(() => load.noteThrottle(url, st, p.headers?.get?.("retry-after"))).catch(() => {});
+  return p;
 }
 
 /** The process's controls, over the shared limits store. */

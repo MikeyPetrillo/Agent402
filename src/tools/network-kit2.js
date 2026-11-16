@@ -21,6 +21,9 @@ import { FETCH_UA } from "../user-agents.js";
 const USER_AGENT =
   (process.env.NETWORK_KIT_USER_AGENT || "").trim() ||
   "Agent402/1.0 (+https://agent402.tools)";
+// A fetch of the URL a caller named (http-headers, tech-stack): the deployment's
+// NETWORK_KIT_USER_AGENT when set, as before, else the catalog fetch string.
+const CALLER_FETCH_UA = (process.env.NETWORK_KIT_USER_AGENT || "").trim() || FETCH_UA;
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -255,7 +258,7 @@ async function httpHeadersHandler(body) {
       signal: controller.signal,
       redirect: "follow",
       dispatcher: ssrfDispatcher,
-      headers: { "User-Agent": FETCH_UA, Accept: "*/*" },
+      headers: { "User-Agent": CALLER_FETCH_UA, Accept: "*/*" },
     });
   } catch (err) {
     if (err.name === "AbortError") throw bad("Target did not respond within 10s", 504);
@@ -384,7 +387,7 @@ async function techStackHandler(body) {
   // attribution. We just need the final HTML + headers. 2MB cap — modern SPA
   // homepages (Stripe, Vercel) can exceed 256KB easily; the signature scan
   // below only reads substrings so memory is bounded regardless of page size.
-  const { finalUrl, html } = await safeFetch(raw, { maxBytes: 2 * 1024 * 1024 });
+  const { finalUrl, html } = await safeFetch(raw, { maxBytes: 2 * 1024 * 1024, userAgent: CALLER_FETCH_UA });
   // safeFetch doesn't return response headers — re-fetch HEAD for headers only.
   // If HEAD is rejected, fall back to an empty headers object: the HTML signals
   // alone still catch most frameworks/CMSes.
@@ -399,7 +402,7 @@ async function techStackHandler(body) {
         signal: controller.signal,
         redirect: "follow",
         dispatcher: ssrfDispatcher,
-        headers: { "User-Agent": FETCH_UA, Accept: "*/*" },
+        headers: { "User-Agent": CALLER_FETCH_UA, Accept: "*/*" },
       });
       for (const [k, v] of r.headers.entries()) headers[k.toLowerCase()] = v;
     } finally { clearTimeout(timer); }

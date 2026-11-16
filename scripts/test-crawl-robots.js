@@ -163,5 +163,30 @@ const fetcher = (body) => async () => { hits++; if (body instanceof Error) throw
   ok(wk > -1 && fb > wk, "and the flagged call is the manifest branch's, which runs before the fallback's unflagged call");
 }
 
+// ---- every group that names us is read as one (RFC 9309 2.2.1) --------------------
+{
+  // A Disallow written for the crawler's own token holds after an Allow written
+  // for the shorter token, in either order, and a `*` group does not join them.
+  for (const [label, text] of [
+    ["Allow for Agent402 first", "User-agent: Agent402\nAllow: /\n\nUser-agent: Agent402-Crawler\nDisallow: /private\n"],
+    ["Disallow for Agent402-Crawler first", "User-agent: Agent402-Crawler\nDisallow: /private\n\nUser-agent: Agent402\nAllow: /\n"],
+  ]) {
+    const groups = parseRobots(text);
+    ok(robotsAllows(groups, "Agent402-Crawler", "/private/x").allowed === false, `${label}: the crawler's Disallow is honoured`);
+    ok(robotsAllows(groups, "Agent402-Crawler", "/public").allowed === true, `${label}: and the Allow still opens the rest`);
+  }
+  const star = parseRobots("User-agent: Agent402\nAllow: /\n\nUser-agent: *\nDisallow: /\n");
+  ok(robotsAllows(star, "Agent402-Crawler", "/x").allowed === true, "a group that names us replaces the * group, as before");
+  const stars = parseRobots("User-agent: *\nDisallow: /a\n\nUser-agent: *\nDisallow: /b\n");
+  ok(!robotsAllows(stars, "Agent402-Crawler", "/a").allowed && !robotsAllows(stars, "Agent402-Crawler", "/b").allowed, "two * groups are combined too");
+  const tie = parseRobots("User-agent: Agent402\nDisallow: /p\nAllow: /p\n");
+  ok(robotsAllows(tie, "Agent402-Crawler", "/p").allowed === true, "an Allow and a Disallow of the same length: the Allow wins (RFC 9309 2.2.2)");
+  const empty = parseRobots("User-agent:\nDisallow: /\n");
+  ok(robotsAllows(empty, "Agent402-Crawler", "/x").allowed === true, "an empty User-agent line names nobody");
+  __resetRobotsCacheForTest();
+  const split = async () => "User-agent: Agent402\nAllow: /\n\nUser-agent: Agent402-Crawler\nDisallow: /openapi.json\n";
+  ok((await robotsForbids("https://split.example", "/openapi.json", { fetchText: split })) !== null, "the crawl honours that Disallow on its own reads");
+}
+
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

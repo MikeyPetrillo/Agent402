@@ -211,9 +211,9 @@ const turn = async (o) => idx.__crawlScheduledForTest(o);
 {
   const { readFileSync } = await import("node:fs");
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  const probeAt = server.slice(server.indexOf("const probeAt = async (u, timeoutMs = 6000) =>"), server.indexOf("let probe = await probeAt(r.url);"));
-  ok(/takeBudget\(u, "router-probe", \{ essential: true \}\)/.test(probeAt) && /userAgent: ROUTER_UA/.test(probeAt) && /"X-Agent402-Via": "router"/.test(probeAt),
-    "the router's pre-payment probe is counted as essential, sends the router's User-Agent and says it is the router");
+  const probeAt = server.slice(server.indexOf("const probeAt = (u, timeoutMs = 6000) =>"), server.indexOf("let probe = await probeAt(r.url);"));
+  ok(/sendRouterProbe\(u, \(\) => probePublicUrl\(u, \{/.test(probeAt) && /userAgent: ROUTER_UA/.test(probeAt) && /"X-Agent402-Via": "router"/.test(probeAt),
+    "the router's pre-payment probe goes through sendRouterProbe (counted apart, never held: test-router-probe-load), sends the router's User-Agent and says it is the router");
   ok(!/probeRefusal|throttledUntil|crawlPlan/.test(probeAt), "and nothing in it can hold a paying caller's purchase back");
 }
 

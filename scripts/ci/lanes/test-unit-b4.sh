@@ -170,6 +170,12 @@ t node scripts/test-seller-load.js
 t node scripts/test-crawl-revisit.js
 # Live price reads keep their weekly clock across crawls; a route above every router tier is read weekly at most; the paywall probe asks the cheapest route (offline)
 t node scripts/test-quote-weekly.js
+# A cycle with healthy origins backed off still measures its health on them: 1000 origins, 200 dark (offline)
+t node scripts/test-crawl-cycle-health.js
+# The MPP index obeys the seller load controls: day budget, Retry-After holds, CRAWL_SLOW_ORIGINS (offline)
+t node scripts/test-mpp-seller-load.js
+# The router's probe is sent with the day spent, counted apart and never waits on the store; 429 holds and failed-buy resets (offline)
+t node scripts/test-router-probe-load.js
 # Each component sends its own User-Agent: crawler, probe, router, caller-driven fetch tools; none sends the bare Agent402/1.0 (offline)
 t node scripts/test-user-agents.js
 # Index warm-start is incremental (NDJSON twin parsed a batch per turn; no event-loop hold; legacy fallback — offline)
