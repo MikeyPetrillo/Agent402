@@ -3,6 +3,14 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "A card refund made by hand is recorded",
+    items: [
+      "Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded, so the report shows the payment refunded and leaves the owed refund alarm.",
+      "Payments: The sweep that deletes an unpaid wallet subscription offer's email, subject and signing key runs a minute after the server starts, as well as every ten minutes, so a restart does not hold the deletion back.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Settled subscription payments are never lost",
     items: [
       "Payments: A wallet subscription whose first payment settled but whose record could not be written is booked as owed to the buyer, once, and the buyer is told the payment settled. Sending the same request again before the payment challenge expires hands the subscription back and cancels that debt; a refund already being sent refuses it instead, so a buyer is never both served and refunded. Once the challenge expires the debt stands and the signing key is deleted. A first payment the server stopped before answering is found before its signing key is deleted: the subscription is rebuilt when the offer named a delivery email, and otherwise the payment is booked as owed.",
@@ -14,7 +22,7 @@ const ENTRIES = [
     date: "2026-11-16",
     title: "One claim per payment, one amount per price",
     items: [
-      "Payments: Two requests carrying one payment are claimed once when the shared store answers one of them and not the other: the request whose claim lands in the store reads the claim this server already holds and is answered 409 (X-Payment-Replay: inflight), uncharged. A claim taken while the store did not answer is written there once this server reaches the store again, without waiting for the claim's 30-second renewal, so a container serving beside this one reads that payment in flight.",
+      "Payments: Two requests carrying one payment are claimed once when the shared store answers one of them and not the other: the request whose claim lands in the store reads the claim this server already holds and is refused uncharged: answered 409 (X-Payment-Replay: inflight) on x402, and refused as an invalid challenge (402) on a card or Tempo payment. A claim taken while the store did not answer is written there once this server reaches the store again, without waiting for the claim's 30-second renewal, so a container serving beside this one reads that payment in flight.",
       "Payments: A dollar price becomes a token or card amount by integer arithmetic where a challenge is minted and where a payment is checked against its price, so the two name the same amount at any token decimals: a Tempo credential that pays exactly its challenge is accepted when the token carries 18 decimals, and the card challenge and its check, the published offer amounts, the subscription amounts and the payment proofs on every chain and Circle Gateway read the same figure.",
     ],
   },

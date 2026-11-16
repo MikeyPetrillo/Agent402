@@ -710,11 +710,37 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         // the same payment (a retry whose reply was lost, or one started
         // after an earlier call stopped being waited for) returns the first
         // one instead of failing or doubling.
-        const r = await stripe.refunds.create({ payment_intent: piId }, { idempotencyKey: `agent402-refund-${piId}` });
-        return r.id;
+        try {
+          const r = await stripe.refunds.create({ payment_intent: piId }, { idempotencyKey: `agent402-refund-${piId}` });
+          return r.id;
+        } catch (e) {
+          log(`[human-checkout] refund failed: ${String(e?.message || e).slice(0, 160)}`);
+          return await existingRefundId(piId, e);
+        }
       }
     } catch (e) { log(`[human-checkout] refund failed: ${String(e?.message || e).slice(0, 160)}`); }
     return null;
+  }
+  // A payment already refunded outside this code (an operator's refund in the
+  // Stripe dashboard) makes refunds.create fail for good, and the key above
+  // replays a first failure as well: read the refund that exists, and take it
+  // when the charge is fully refunded (Stripe's already-refunded refusal says
+  // so; any other refusal is checked on the charge). Null when there is none.
+  async function existingRefundId(piId, err) {
+    try {
+      const listed = await stripe.refunds.list({ payment_intent: piId, limit: 100 });
+      const live = (listed?.data || []).filter((r) => r && typeof r.id === "string" && (r.status === "succeeded" || r.status === "pending"));
+      if (!live.length) return null;
+      let full = err?.code === "charge_already_refunded";
+      if (!full) {
+        const pi = await stripe.paymentIntents.retrieve(piId, { expand: ["latest_charge"] });
+        full = pi?.latest_charge?.refunded === true;
+      }
+      if (!full) return null;
+      const r = live.reduce((a, b) => ((b.created || 0) > (a.created || 0) ? b : a));
+      log(`[human-checkout] refund already made for ${piId.slice(0, 12)}: recorded ${r.id}`);
+      return r.id;
+    } catch (e) { log(`[human-checkout] existing refund lookup failed: ${String(e?.message || e).slice(0, 160)}`); return null; }
   }
   // Persist an error outcome; an unrefunded one is OWED (indexed, retried).
   // `intent`: the record written BEFORE a refund is issued (database mode):

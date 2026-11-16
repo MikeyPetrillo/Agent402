@@ -120,6 +120,26 @@ const flat = (s) => { let out = "", inTag = false; for (const ch of s) { if (inT
   const unnamed = TOMBSTONE_FIELDS.filter((k) => !WORDS[k] || !printed.includes(WORDS[k]));
   ok(printed.length > 0 && unnamed.length === 0, `every field the reduced record keeps is named by words in the /privacy sentence (${unnamed.join(", ") || "none unnamed"})`);
   ok(!/aside from short-lived caches that make repeated identical calls cheaper, not retained/.test(t), "/terms no longer says outputs are kept in caches only");
+
+  // An unpaid subscription offer: its marker (email, subject) and key go when
+  // the offer sweep drops it, which is OFFER_SWEEP_AFTER_MS after the mint
+  // plus at most one OFFER_SWEEP_INTERVAL_MS tick, not when the challenge
+  // expires. The page prints that bound from the engine's constants, and the
+  // bound stays inside the hour the page promised before it printed figures.
+  const R = await import("../src/mpp-subscription-retention.js");
+  const engineMod = await import("../src/mpp-subscriptions.js");
+  const o = R.offerRetentionPublic();
+  const boundMs = R.OFFER_SWEEP_AFTER_MS + R.OFFER_SWEEP_INTERVAL_MS;
+  ok(engineMod.CHALLENGE_TTL_MS === R.CHALLENGE_TTL_MS && engineMod.OFFER_SWEEP_AFTER_MS === R.OFFER_SWEEP_AFTER_MS && engineMod.OFFER_SWEEP_INTERVAL_MS === R.OFFER_SWEEP_INTERVAL_MS,
+    "the engine runs with the offer figures /privacy reads (one definition)");
+  ok(R.OFFER_SWEEP_AFTER_MS >= R.CHALLENGE_TTL_MS && R.OFFER_SWEEP_FIRST_MS > 0 && R.OFFER_SWEEP_FIRST_MS <= R.OFFER_SWEEP_INTERVAL_MS,
+    "an offer is swept only after its challenge expires, and the first sweep after a start comes no later than one interval");
+  ok(o.payableMinutes === Math.ceil(R.CHALLENGE_TTL_MS / 60_000) && o.sweepMinutes === Math.ceil(R.OFFER_SWEEP_INTERVAL_MS / 60_000) && o.deletedWithinMinutes === Math.ceil(boundMs / 60_000),
+    `the published offer bound is the sweep delay plus one sweep interval (${o.deletedWithinMinutes} minutes)`);
+  ok(boundMs <= 60 * 60_000, `an unpaid offer's email, subject and key are deleted within an hour (bound ${boundMs / 60_000} minutes)`);
+  ok(flatP.includes(`A subscription you ask for and do not pay keeps the email, the subject and the key while its offer can be paid (${o.payableMinutes} minutes), and a check that runs every ${o.sweepMinutes} minutes deletes all three within ${o.deletedWithinMinutes} minutes of your request.`)
+    && !flatP.includes("only until its offer expires"),
+    `/privacy prints the unpaid offer's bound from the engine's figures (${o.payableMinutes} payable, deleted within ${o.deletedWithinMinutes})`);
 }
 
 // --- wiki/Self-Hosting.md: every payTo variable, and BASE_URL -------------------

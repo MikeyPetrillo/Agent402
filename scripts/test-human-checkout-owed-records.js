@@ -28,9 +28,23 @@ const sessions = {
   cs_live: { id: "cs_live", mode: "payment", payment_status: "paid", payment_intent: "pi_live", metadata: { product: "research", input: "FAIL" } },
 };
 let refundFail = true;
+// A payment an operator refunded in the Stripe dashboard: create refuses it,
+// and the refund that was made is read back by its PaymentIntent.
+const dashboard = new Map(); // pi -> { createError, refunds: [...], fullyRefunded }
+const lookups = [];
 const stripe = {
   checkout: { sessions: { retrieve: async (id) => { const s = sessions[id]; if (!s) throw new Error("No such session"); return s; } } },
-  refunds: { create: async () => { if (refundFail) throw new Error("stripe refund down"); return { id: "re_live" }; } },
+  refunds: {
+    create: async ({ payment_intent }) => {
+      const d = dashboard.get(payment_intent);
+      if (d) { const e = new Error(d.createError.message); e.code = d.createError.code; throw e; }
+      if (refundFail) throw new Error("stripe refund down"); return { id: "re_live" };
+    },
+    list: async ({ payment_intent }) => { lookups.push(`list:${payment_intent}`); return { data: dashboard.get(payment_intent)?.refunds || [] }; },
+  },
+  paymentIntents: {
+    retrieve: async (id) => { lookups.push(`pi:${id}`); return { id, latest_charge: { id: `ch_${id}`, refunded: dashboard.get(id)?.fullyRefunded === true } }; },
+  },
 };
 const generate = async () => { throw new Error("upstream boom"); };
 const mk = (dir) => createHumanCheckout({ stripe, generate, baseUrl: "https://agent402.tools", storeDir: dir, onSale: () => {}, now: () => clock, log: () => {}, owedListWaitMs: 0 });
@@ -77,6 +91,37 @@ try {
     const retried = await hc.fulfill("cs_live");
     ok(retried.refundId === "re_live" && retried.refundOwed === false, `control: a later poll refunds it (${retried.refundId})`);
     ok(!hc.listIssues().refundOwed.some((x) => x.id === "cs_live") && !(await hc.owedRefunds()).some((x) => x.id === "cs_live"), "once refunded it leaves the list, though the index still cannot be written");
+  }
+
+  // ---- refunded by hand in the Stripe dashboard -----------------------------
+  // The retry's refunds.create fails (already refunded, or a key that replays
+  // an earlier failure); the refund the operator made is read back and its id
+  // recorded, so the record leaves the owed list.
+  {
+    const dir = join(root, "dashboard");
+    mkdirSync(dir, { recursive: true });
+    const owedRec = (pi) => ({ status: "error", refundId: null, refundOwed: true, refundAttempts: 2, lastRefundAttemptAt: 0, paymentIntent: pi, product: "research", at: iso(20 * 60_000), error: "We couldn't complete this report. Your refund is being processed." });
+    const cases = {
+      cs_dash: { pi: "pi_dash", createError: { code: "charge_already_refunded", message: "Charge ch_x has already been refunded." }, refunds: [{ id: "re_failed", status: "failed", created: 3 }, { id: "re_dash", status: "succeeded", created: 2 }] },
+      cs_cached: { pi: "pi_cached", createError: { code: "idempotency_error", message: "replayed earlier failure" }, refunds: [{ id: "re_hand", status: "pending", created: 5 }], fullyRefunded: true },
+      cs_partial: { pi: "pi_partial", createError: { code: "amount_too_large", message: "Refund amount is greater than unrefunded amount" }, refunds: [{ id: "re_part", status: "succeeded", created: 4 }], fullyRefunded: false },
+      cs_none: { pi: "pi_none", createError: { code: "charge_already_refunded", message: "Charge has already been refunded." }, refunds: [{ id: "re_x", status: "canceled", created: 1 }] },
+    };
+    for (const [id, c] of Object.entries(cases)) {
+      sessions[id] = { id, mode: "payment", payment_status: "paid", payment_intent: c.pi, metadata: { product: "research", input: "x" } };
+      dashboard.set(c.pi, c);
+      writeFileSync(join(dir, `${id}.json`), JSON.stringify(owedRec(c.pi)));
+    }
+    const hc = mk(dir);
+    ok(ids(await hc.owedRefunds()).join() === "cs_cached,cs_dash,cs_none,cs_partial", "setup: all four records are owed");
+    const got = {};
+    for (const id of Object.keys(cases)) got[id] = await hc.fulfill(id);
+    ok(got.cs_dash?.refundId === "re_dash" && got.cs_dash.refundOwed === false, `a payment already refunded in the dashboard records that refund's id (${got.cs_dash?.refundId})`);
+    ok(got.cs_cached?.refundId === "re_hand" && got.cs_cached.refundOwed === false, `a failed create whose payment is fully refunded records the existing refund (${got.cs_cached?.refundId})`);
+    ok(!got.cs_partial?.refundId && got.cs_partial?.refundOwed === true, "control: a partial refund leaves the record owed");
+    ok(!got.cs_none?.refundId && got.cs_none?.refundOwed === true, "control: with no live refund on the payment the record stays owed");
+    ok(lookups.includes("list:pi_dash") && !lookups.includes("pi:pi_dash") && lookups.includes("pi:pi_cached"), `an already-refunded refusal needs no PaymentIntent read; any other refusal checks the charge is fully refunded (${lookups.join(",")})`);
+    ok(ids(await hc.owedRefunds()).join() === "cs_none,cs_partial", `the dashboard-refunded records leave the owed list the refundsOwed word reads (${ids(await hc.owedRefunds()).join()})`);
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

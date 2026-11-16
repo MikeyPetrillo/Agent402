@@ -21,7 +21,7 @@ import { firstCallAllowanceEnabled } from "./first-call-allowance.js";
 import { directUpstreamPrivacyText, directUpstreamThirdPartyText, directUpstreamLocationText, withDirectUpstreamDate } from "./gateway-direct-upstream.js";
 import { taskRetentionPublic } from "./mcp-tasks.js";
 import { oneHopPublicBounds } from "./sanctions-screen.js";
-import { endedRecordRetentionPublic } from "./mpp-subscription-retention.js";
+import { endedRecordRetentionPublic, offerRetentionPublic } from "./mpp-subscription-retention.js";
 import { publicIndexPrivacyText, publicIndexNoSaleText, withPublicIndexDate, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 import { referralOffered } from "./referral-gate.js";
 import { GOOD_READ_MAX_MS, SETTLED_MARK_MS, COVER_WALLETS_MAX, sharedWindowMs } from "./inflight-cover.js";
@@ -55,6 +55,7 @@ export function privacyPage(baseUrl) {
   // An ended MPP subscription's reduced record, as the engine keeps it
   // (src/mpp-subscription-retention.js).
   const mppSub = endedRecordRetentionPublic();
+  const mppOffer = offerRetentionPublic();
   // Shared answers and the first-call allowance each ship behind a switch:
   // their lines appear only while the switch is on. The shared-answer line
   // also stays, in the past tense, while pages made under the switch may
@@ -211,7 +212,7 @@ so every claim below is verifiable in code.</p>
   A monitor subscription paid over MPP is different: its record holds the paying wallet together with the
   subject you asked us to watch, the email you give for delivery (optional), and a signing key our server
   made for that subscription. A subscription you ask for and do not pay keeps the email, the subject and the key
-  only until its offer expires, and all three are deleted within an hour of your request. Your signed authorization lets that key send one payment per period from your
+  while its offer can be paid (${mppOffer.payableMinutes} minutes), and a check that runs every ${mppOffer.sweepMinutes} minutes deletes all three within ${mppOffer.deletedWithinMinutes} minutes of your request. Your signed authorization lets that key send one payment per period from your
   account, in one token, to our address, up to the subscription price, until the expiry you signed. The
   key is kept only while a later payment can still be taken: it is deleted from our records when you cancel,
   when the expiry you signed passes, or when the subscription ends for any other reason (a nightly backup
