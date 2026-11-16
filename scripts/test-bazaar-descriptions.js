@@ -178,7 +178,11 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
     const tail = attributionTailOf(def?.description || "") || "";
     if (!keys.length) { ok(!tail, `skill-${pack.slug}: no tool it runs needs an attribution, and its text carries none`); continue; }
     packsWithSources++;
-    const want = keys.map((k) => ATTRIBUTIONS[k]);
+    // A combined key's sentence holds a shorter key's (open-meteo-cams holds
+    // open-meteo's): the pack carries the longer one only, once.
+    const all = keys.map((k) => ATTRIBUTIONS[k]);
+    const want = all.filter((x) => !all.some((y) => y !== x && y.includes(x)));
+    ok(!/Open-Meteo\.com \(CC BY 4\.0\)\..*Open-Meteo\.com \(CC BY 4\.0\)\./.test(tail), `skill-${pack.slug}: no attribution sentence is repeated`);
     ok(want.every((w) => tail.includes(w)) && tail.length === want.join(" ").length, `skill-${pack.slug}: the pack text ends with the ${keys.join(" + ")} attribution`);
     const r = listingEnds(def.slug, def.description, want);
     ok(r.ok, `skill-${pack.slug}: the listing keeps the ${keys.join(" + ")} attribution at both cuts (${r.listed.length} / ${r.cut.length} chars)`);

@@ -97,6 +97,20 @@ for (const keyed of [false, true]) {
   }
 }
 
+// --- 2b. Copernicus credits (src/data-attribution.js) ---
+{
+  const { ATTRIBUTIONS, CAMS_ATTRIBUTION, C3S_ATTRIBUTION, attributionTailOf } = await import("../src/data-attribution.js");
+  ok(CAMS_ATTRIBUTION === "Generated using Copernicus Atmosphere Monitoring Service information." && C3S_ATTRIBUTION === "Contains modified Copernicus Climate Change Service information.", "the two Copernicus sentences");
+  for (const [slug, key, credit] of [["weather-air-quality", "open-meteo-cams", CAMS_ATTRIBUTION], ["weather-history", "open-meteo-c3s", C3S_ATTRIBUTION]]) {
+    const t = tool(slug);
+    ok(t.attribution === key && attributionTailOf(t.description) === ATTRIBUTIONS[key] && t.description.endsWith(`Open-Meteo.com (CC BY 4.0). ${credit}`), `${slug}: attribution ${key}, description ends with the Open-Meteo and Copernicus credits`);
+    const out = await t.handler(t.discovery.input);
+    ok(out.credit === credit && t.discovery.output.example.credit === credit, `${slug}: the answer and its published example carry the Copernicus credit`);
+  }
+  for (const slug of ["weather-current", "weather-daily", "weather-hourly"]) ok(tool(slug).attribution === "open-meteo" && !/Copernicus/.test(tool(slug).description), `${slug}: Open-Meteo credit only`);
+  for (const t of WEATHER_TOOLS) ok(!/\bno key\b/i.test(t.description), `${t.slug}: the description does not say "no key"`);
+}
+
 // --- 3. Failures on the keyed host ---
 process.env.OPEN_METEO_API_KEY = KEY;
 const errorText = (e) => JSON.stringify({ message: e?.message, ...e });
