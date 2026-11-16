@@ -22,3 +22,4 @@ bdcc579e940c7573c228c0561a65883c8e1712a8:scripts/test-front-door.js:generic-api-
 abaa1e8551cb11a44920cb716685a26c13e3222f:scripts/test-decide-index.js:generic-api-key:342
 # A test placeholder CoinGecko key in scripts/test-coingecko-endpoint.js (PR #1996), replaced by a low-entropy placeholder; never a credential.
 4b81d57b51d2a3d2cb3b04857ed5037b732d8da2:scripts/test-coingecko-endpoint.js:generic-api-key:23
+c40442064705ce150cfe0e90bd755ec6e66acb02:scripts/test-mcp-x402-connector.js:generic-api-key:118
