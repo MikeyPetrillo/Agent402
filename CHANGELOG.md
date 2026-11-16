@@ -13,8 +13,8 @@ Payments:
   naming its transaction is followed on chain, and once it lands it is
   recorded as owed to the buyer, once. On EVM, a settlement refused as already
   submitted whose chain read failed is followed the same way, and a
-  transaction that never appears is closed as not landed only after the
-  payment's authorization reads unused, so a transfer sent in another
+  transaction that never appears is closed as not landed only after an exact
+  payment's signed authorization reads unused, so a transfer sent in another
   transaction is still repaid. On Solana and Algorand one settled transaction
   answers one request.
 
