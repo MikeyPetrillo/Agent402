@@ -136,6 +136,9 @@ so every claim below is verifiable in code.</p>
   in memory to compute the response. It is not stored, except in these cases:
   <ul>
     <li>the <code>/api/memory</code> tools, whose purpose <i>is</i> storage (see below);</li>
+    <li>when a tool fetches a URL you name, the host name in it (never the path, the query or who asked)
+    is counted per minute, so we can answer a site that asks how often we called it; the counts are
+    deleted after two days;</li>
     <li>some tools that read public data cache their answer for between one minute and one day, keyed
     by the input that produced it (a domain, an address to geocode, a URL), so a repeat call is faster;
     identical repeat calls to the AI gateway, identical retries carrying an
