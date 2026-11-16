@@ -223,4 +223,64 @@ await check("the redaction keeps a message readable and leaves text with no URL 
   assert.equal(redactRpcText("eip155:8453 RPC answered HTTP 503", {}), "eip155:8453 RPC answered HTTP 503");
 });
 
+// The say/warn wrapper in runWithdraw is what redacts every line the run
+// prints: a value Gateway answers (printed by log) and an error the run
+// catches (printed by error) that carry the RPC URL are both withheld, so a
+// run whose wrapper is removed fails here.
+const keyedRun = async (rpcUrl, { transferId = "t1", transferThrows = null } = {}) => {
+  const out = [], err = [];
+  const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const fetchImpl = async (url, init = {}) => {
+    const u = String(url);
+    const body = init.body ? JSON.parse(init.body) : null;
+    if (u === `${GATEWAY_API_BASE}/v1/balances`) return json(200, { token: "USDC", balances: body.sources.map((s) => ({ domain: s.domain, depositor: s.depositor, balance: "12.5" })) });
+    if (u === `${GATEWAY_API_BASE}/v1/transfer`) {
+      if (transferThrows) throw new Error(transferThrows);
+      return json(200, { transferId, attestation: "0x01", signature: "0x02", fees: { total: "0", token: "USDC" } });
+    }
+    if (u === rpcUrl && body?.method === "eth_blockNumber") return json(200, { jsonrpc: "2.0", id: body.id, result: "0x1234567" });
+    if (u === rpcUrl) return json(500, { error: "refused" });
+    throw new Error(`unexpected fetch ${u}`);
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  let code, thrown = null;
+  try {
+    code = await runWithdraw({ argv: ["--from", "base", "--execute"], env: { ...env, EVM_RPC_8453: rpcUrl, EVM_RPC_5042: rpcUrl }, fetchImpl, log: (m) => out.push(String(m)), error: (m) => err.push(String(m)) });
+  } catch (e) { thrown = e; } finally { globalThis.fetch = realFetch; }
+  return { code, thrown, out: out.join("\n"), err: err.join("\n") };
+};
+
+await check("every printed line passes the redaction wrapper: a logged Gateway value and a caught error carrying the RPC URL are withheld", async () => {
+  const SECRET = "Pq8sLm3nVx6cWe1R";
+  const KEYED = `https://rpc.wrapper-keyed.example.invalid/v2/${SECRET}`;
+  const logged = await keyedRun(KEYED, { transferId: `t-${KEYED}` });
+  assert.equal(logged.thrown, null);
+  assert.match(logged.out, /attestation for eip155:8453: transferId t-/, "the logged line is still printed");
+  assert.ok(!logged.out.includes(SECRET) && !logged.out.includes("wrapper-keyed"), `a logged line prints no part of the RPC URL (${logged.out.slice(-300)})`);
+  const caught = await keyedRun(KEYED, { transferThrows: `connect to ${KEYED} refused` });
+  assert.equal(caught.thrown, null, "a thrown error answers with a code");
+  assert.equal(caught.code, 1);
+  assert.match(caught.err, /gateway-withdraw stopped: connect to \S+ refused/, "the caught error is still printed");
+  assert.ok(!caught.err.includes(SECRET) && !caught.err.includes("wrapper-keyed"), `a caught error prints no part of the RPC URL (${caught.err})`);
+});
+
+await check("an RPC password whose % is not valid URL encoding is withheld and every line still prints", async () => {
+  const { redactRpcText } = await import("./gateway-withdraw.js");
+  const PW = "ab%zzSecretPw9";
+  const KEYED = `https://ops:${PW}@rpc.pct-keyed.example.invalid/v2/k`;
+  const e = { EVM_RPC_8453: KEYED };
+  let line;
+  assert.doesNotThrow(() => { line = redactRpcText(`request to ${KEYED} failed; password ${PW}`, e); }, "redaction never throws on a malformed escape");
+  assert.ok(!line.includes("zzSecretPw9") && !line.includes("pct-keyed"), line);
+  assert.match(line, /^request to \S+ failed; password \S+$/);
+  assert.equal(redactRpcText("eip155:8453 RPC answered HTTP 503", e), "eip155:8453 RPC answered HTTP 503", "text with no URL prints as it was");
+  // A lone surrogate in a configured value (encodeURI throws on one) does not stop the output either.
+  assert.doesNotThrow(() => redactRpcText("x", { EVM_RPC_8453: "https://rpc.example.invalid/\uD800abcdef" }));
+  const r = await keyedRun(KEYED, { transferId: `t-${PW}` });
+  assert.equal(r.thrown, null, "the run answers with a code");
+  assert.match(r.out, /seller 0x[0-9a-fA-F]{40}/, "the run's lines are printed");
+  assert.ok(!`${r.out}\n${r.err}`.includes("zzSecretPw9") && !`${r.out}\n${r.err}`.includes("pct-keyed"), `no part of the password or host is printed (${r.out.slice(-200)} | ${r.err})`);
+});
+
 console.log(process.exitCode ? `FAILED (${pass} passed)` : `${pass} passed`);

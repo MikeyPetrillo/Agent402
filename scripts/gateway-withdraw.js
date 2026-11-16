@@ -89,31 +89,40 @@ const TYPES = {
 // Any URL in a message (a client error names the endpoint it called).
 const ANY_URL = /\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s"'<>]+/gi;
 const URL_WITHHELD = "[rpc-url-withheld]";
+// Each form a piece may be printed in. A transform that throws (a "%" that is
+// not a valid escape, a lone surrogate) is skipped: the piece as written is
+// still withheld.
+const tryForm = (fn, v) => { try { return fn(v); } catch { return null; } };
 /** Text with every RPC URL in it withheld: each configured RPC (src/evm-rpcs.js
  *  for every Gateway chain) and each piece of one that could carry a key
- *  (host, userinfo, path segments, query values), then any other URL. */
+ *  (host, userinfo, path segments, query values), then any other URL. Never
+ *  throws: should the withholding itself fail, the line is replaced whole. */
 export function redactRpcText(text, env = process.env) {
-  let s = String(text ?? "");
-  const pieces = new Set();
-  for (const net of Object.values(GATEWAY_NETWORK_NAMES)) {
-    const rpc = evmRpcFor(net, env);
-    if (!rpc) continue;
-    pieces.add(rpc);
-    let u = null;
-    try { u = new URL(rpc); } catch { /* not a URL: withheld as written */ }
-    if (!u) continue;
-    pieces.add(u.href);
-    for (const p of [u.hostname, u.username, u.password, decodeURIComponent(u.password || ""), ...u.pathname.split("/"), ...[...u.searchParams.values()]]) {
-      if (p && p.length >= 6) pieces.add(p);
+  try {
+    let s = String(text ?? "");
+    const pieces = new Set();
+    for (const net of Object.values(GATEWAY_NETWORK_NAMES)) {
+      const rpc = evmRpcFor(net, env);
+      if (!rpc) continue;
+      pieces.add(rpc);
+      let u = null;
+      try { u = new URL(rpc); } catch { /* not a URL: withheld as written */ }
+      if (!u) continue;
+      pieces.add(u.href);
+      for (const p of [u.hostname, u.username, u.password, tryForm(decodeURIComponent, u.username), tryForm(decodeURIComponent, u.password), ...u.pathname.split("/"), ...[...u.searchParams.values()]]) {
+        if (p && p.length >= 6) pieces.add(p);
+      }
     }
+    // Longest first, so a piece inside a longer one never leaves the rest.
+    for (const p of [...pieces].sort((a, b) => b.length - a.length)) {
+      for (const v of new Set([p, tryForm(encodeURI, p), tryForm(encodeURIComponent, p)])) if (v) s = s.split(v).join(URL_WITHHELD);
+      const lower = p.toLowerCase();
+      if (lower !== p) s = s.split(lower).join(URL_WITHHELD);
+    }
+    return s.replace(ANY_URL, URL_WITHHELD);
+  } catch {
+    return "[line withheld: it could not be checked for an RPC URL]";
   }
-  // Longest first, so a piece inside a longer one never leaves the rest.
-  for (const p of [...pieces].sort((a, b) => b.length - a.length)) {
-    for (const v of new Set([p, encodeURI(p), encodeURIComponent(p)])) s = s.split(v).join(URL_WITHHELD);
-    const lower = p.toLowerCase();
-    if (lower !== p) s = s.split(lower).join(URL_WITHHELD);
-  }
-  return s.replace(ANY_URL, URL_WITHHELD);
 }
 const errorText = (e) => String(e?.shortMessage || e?.message || e);
 
