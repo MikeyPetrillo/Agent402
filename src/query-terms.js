@@ -44,6 +44,7 @@ export function isCjkTerm(term) {
 // snake_case and kebab-case already split on the separator. Inserting a space
 // and folding the whole string afterwards keeps the fold identical to before
 // for every character, including the ones whose lower case adds a mark.
+export const CASE_SPLIT_MAX_CHARS = 256;
 const CASE_BOUNDARY_RE = /(?<=[\p{L}\p{N}]\p{Ll})(?=\p{Lu})|(?<=\p{N})(?=\p{Lu}\p{Ll})|(?<=\p{Lu}{2})(?=\p{Lu}\p{Ll}{2})/gu;
 
 /** Split a string into alphanumeric runs, Unicode-aware, lower-cased, with
@@ -53,6 +54,10 @@ export function splitTokens(str) {
   const lower = s.toLowerCase();
   // Already folded (every haystack the routers build): no case to read.
   if (lower === s) return lower.split(NON_TOKEN_RE).filter(Boolean);
+  // A long string (a seller can publish names up to its document's size) is
+  // folded whole: reading case costs per character, and a name over ten words
+  // earns no slug credit anyway, so only short names are split.
+  if (s.length > CASE_SPLIT_MAX_CHARS) return lower.split(NON_TOKEN_RE).filter(Boolean);
   return s.replace(CASE_BOUNDARY_RE, " ").toLowerCase().split(NON_TOKEN_RE).filter(Boolean);
 }
 

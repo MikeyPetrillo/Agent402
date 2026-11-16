@@ -5,7 +5,7 @@
 // while its English twin ranked three sellers. Offline, synthetic catalog.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
-import { queryTerms, termMatcher, splitTokens, isCjkTerm } from "../src/query-terms.js";
+import { queryTerms, termMatcher, splitTokens, isCjkTerm, CASE_SPLIT_MAX_CHARS } from "../src/query-terms.js";
 const { routeQuery, _cacheForTests, allIndexedTools } = await import("../src/x402-index.js");
 const { findTools } = await import("../src/find.js");
 let pass = 0, fail = 0;
@@ -25,6 +25,12 @@ ok(queryTerms("x".repeat(5) + " " + "y".repeat(5), { max: 1 }).length === 1, "th
 ok(eq(queryTerms("csv csv CSV"), ["csv"]), "terms are deduplicated");
 ok(eq(splitTokens("Gzip, HTML-strip"), ["gzip", "html", "strip"]), "splitTokens is the lower-cased token list");
 // camelCase and acronym boundaries are read before folding (2026-11-16).
+{
+  const huge = "getTokenPrice".repeat(80000); // ~1 MB of camelCase
+  const t0 = performance.now(); const toks = splitTokens(huge); const ms = performance.now() - t0;
+  ok(toks.length === 1 && ms < 50, `a name longer than ${CASE_SPLIT_MAX_CHARS} characters is folded whole, not case-split (${ms.toFixed(1)} ms)`);
+  ok(eq(splitTokens("getTokenPrice".padEnd(CASE_SPLIT_MAX_CHARS, "x")), splitTokens("getTokenPrice".padEnd(CASE_SPLIT_MAX_CHARS, "x"))) && splitTokens("getUSDCPrice").length === 3, "names up to the limit are still split");
+}
 ok(eq(splitTokens("webPageToMarkdown"), ["web", "page", "to", "markdown"]), "a camelCase operationId splits at each capital");
 ok(eq(splitTokens("getTokenPrice"), ["get", "token", "price"]), "getTokenPrice -> get token price");
 ok(eq(splitTokens("getUSDCPrice"), ["get", "usdc", "price"]), "an acronym ends before the capital that opens the next word");
