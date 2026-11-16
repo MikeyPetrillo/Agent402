@@ -147,7 +147,12 @@ const MISSING_CHAIN = (() => {
 // sweep run in several bounded passes (each ~1/COUNT of the routes + cost) so no
 // single pass runs long enough to time out. Default = one batch (everything).
 const BATCH_COUNT = Math.max(1, parseInt(process.env.BATCH_COUNT || "1", 10) || 1);
-const BATCH_INDEX = Math.min(BATCH_COUNT - 1, Math.max(0, parseInt(process.env.BATCH_INDEX || "0", 10) || 0));
+// Not clamped: a matrix job whose index is past BATCH_COUNT (a fixed matrix run
+// with fewer batches) selects nothing, so it never repeats batch 0's buys.
+export const batchIndexOf = (raw) => Math.max(0, parseInt(raw || "0", 10) || 0);
+/** True when work-list position i belongs to batch idx of count. */
+export const inBatch = (i, count, idx) => i % count === idx;
+const BATCH_INDEX = batchIndexOf(process.env.BATCH_INDEX);
 const BAZAAR_URL = BAZAAR_REGISTRY_URL;
 const HOST = new URL(TARGET).host;
 
@@ -408,7 +413,7 @@ export async function runMissingMode({ sweep = false } = {}) {
     .filter((t) => isStale(t))
     .sort((a, b) => (sweep ? a.priceUsd - b.priceUsd : b.priceUsd - a.priceUsd))
     // Batch stride (applied after sort so each batch is a price-balanced slice).
-    .filter((_, i) => i % BATCH_COUNT === BATCH_INDEX);
+    .filter((_, i) => inBatch(i, BATCH_COUNT, BATCH_INDEX));
   const batchNote = BATCH_COUNT > 1 ? ` · batch ${BATCH_INDEX + 1}/${BATCH_COUNT}` : "";
   const chainNote = MISSING_CHAIN ? ` (rows carrying ${MISSING_CHAIN.name}, ${catalog.filter((t) => t.onChain).length} routes sold there)` : "";
   console.log(
