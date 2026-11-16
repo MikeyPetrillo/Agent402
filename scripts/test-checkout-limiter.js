@@ -59,7 +59,10 @@ try {
   const parserAt = src.search(/app\.use\((?:unlessBodyUnread\()?express\.json\(\{ limit: "100kb" \}\)/);
   ok(guardAt > 0 && parserAt > 0 && guardAt < parserAt,
     "the rate check is mounted BEFORE the global body parser - otherwise a malformed body is never counted");
-  const inRoute = src.match(/if \(!req\.__checkoutRateChecked && checkoutLimiter\.check/g) || [];
+  // The wallet subscribe route lives in its own module (src/mpp-subscribe-route.js), its limiter passed in.
+  const subscribeSrc = await (await import("node:fs/promises")).readFile(new URL("../src/mpp-subscribe-route.js", import.meta.url), "utf8");
+  const inRoute = [...(src.match(/if \(!req\.__checkoutRateChecked && checkoutLimiter\.check/g) || []), ...(subscribeSrc.match(/if \(!req\.__checkoutRateChecked && rateLimited\(req\)\)/g) || [])];
+  ok(/rateLimited: \(req\) => checkoutLimiter\.check\(clientIp\(req\)\)\.limited/.test(src), "the wallet subscribe route is handed the checkout limiter");
   ok(inRoute.length >= 4, `every in-route check is guarded by __checkoutRateChecked, so one request spends one token (${inRoute.length} sites)`);
   ok(!/if \(checkoutLimiter\.check\(clientIp\(req\)\)\.limited\) return res\.status\(429\)[\s\S]{0,40}\n\s*const product/.test(src),
     "no unguarded in-route check remains on a covered path");

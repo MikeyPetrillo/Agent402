@@ -174,7 +174,7 @@ const listed = newAccount();
   ok(r.err?.statusCode === 402 && r.err.screenRejected === true && r.err.message === REFUSAL.detail, "the refusal is a 402 carrying the per-call Tempo rail's own text");
   const problem = tempoRefusalProblem("screen-rejected");
   ok(problem.details?.charged === false && problem.details?.reason === "screen-rejected" && problem.detail === S.TEMPO_SCREEN_REFUSED_DETAIL && /per-call and subscription payments/.test(problem.detail) && /not broadcast and nothing was charged/.test(problem.detail), "the answer the route sends is the screen-rejected problem: uncharged, and its text names subscription payments");
-  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const server = readFileSync(new URL("../src/mpp-subscribe-route.js", import.meta.url), "utf8"); // the subscribe route (mounted by server.js)
   const at = server.indexOf("if (e?.screenRejected) return sendMppProblem(res, tempoRefusalProblem(\"screen-rejected\"));");
   ok(at > 0 && at < server.indexOf("try { res.set(\"WWW-Authenticate\", (await mint()).header); }"), "the subscribe route answers with that problem before it would mint a fresh challenge");
   ok(engine._store._keys().filter((k) => k.startsWith("a402:sub:")).length === 1 && !readFileSync(path, "utf8").includes("l@example.com"), "no subscription record exists for the refused wallet");

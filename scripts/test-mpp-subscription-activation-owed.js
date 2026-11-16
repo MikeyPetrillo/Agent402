@@ -14,6 +14,16 @@
 //    record is rebuilt from the offer and mppx's record, and the key is kept;
 //    an offer that carries no product (minted by an earlier build) books owed
 //    and the key goes;
+//  - a payment the ledger already holds a row for (the buyer was answered
+//    "refunded") is never rebuilt by the sweep: the debt stands, the key goes;
+//    a debt a rebuild voided and never finished is owed again;
+//  - an offer with no email is never rebuilt (nobody could see it): owed;
+//  - a rebuild whose record write fails owes the debt again;
+//  - the route relays the settled-not-recorded answer (on the engine's flag,
+//    never its wording) and keeps every other 5xx text its own;
+//  - a debt booked after a concurrent retry served the payment is voided;
+//  - the offer marker (email, target) goes on activation, on the timed sweep
+//    with no mint, and with the key;
 //  - an unpaid offer is still swept with nothing booked.
 //   node scripts/test-mpp-subscription-activation-owed.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
@@ -47,7 +57,7 @@ const PRICE_USD = MONITOR_PRODUCTS["domain-monitor"].price / 100;
 let clock = Date.parse("2026-09-01T00:00:00.000Z");
 let txSeq = 0;
 
-function makeEngine(name, { writeMppxRecord = true } = {}) {
+function makeEngine(name, { writeMppxRecord = true, refunds = null, screen = null } = {}) {
   const calls = { activate: 0, sales: [] };
   const refs = new Map(); // one settlement reference per credential, as a re-sent credential names the same transfer
   const engine = createMppSubscriptions({
@@ -65,6 +75,8 @@ function makeEngine(name, { writeMppxRecord = true } = {}) {
     },
     chargePeriod: async () => { throw new Error("no renewals in this suite"); },
     findRenewalOnChain: async () => ({ found: false }),
+    ...(refunds ? { refunds } : {}),
+    ...(screen ? { screen } : {}),
   });
   return { engine, calls };
 }
@@ -196,6 +208,170 @@ async function attempt(fn) { try { return { value: await fn() }; } catch (error)
   const row = await rowFor(reference);
   ok(row?.status === "owed" && row.payer === signed.payer && Math.abs(row.priceUsd - PRICE_USD) < 1e-9, `a settled first payment the sweep cannot rebuild is booked owed (${row?.status})`);
   ok(!holdsKey(engine, addr) && subRecords(engine).length === 0 && calls.sales.length === 0, "and its key is destroyed, with no subscription and no sale");
+}
+
+
+const realLedger = { recordOwed: ledger.recordRefundOwed, voidForServe: ledger.voidOwedForServe, reopenHeld: ledger.reopenHeldClaim, renoteVoid: ledger.renoteVoidRefund, byEvidence: (ev) => ledger.refundByEvidenceFresh(ev) };
+const markersFor = (engine, addr) => Object.entries(engine._store._snapshot()).filter(([k, v]) => k.startsWith("a402:offer:") && String(v?.accessKeyAddress || "").toLowerCase() === addr.toLowerCase()).map(([, v]) => v);
+function failSubWrites(engine, times = 1) {
+  const cas = engine._store.compareAndSet.bind(engine._store);
+  let left = times;
+  engine._store.compareAndSet = async (k, d) => { if (left > 0 && String(k).startsWith("a402:sub:mpp_")) { left--; throw new Error("simulated store failure"); } return cas(k, d); };
+  return () => { engine._store.compareAndSet = cas; };
+}
+async function mintSigned(engine, target, email) {
+  const offer = await engine.mintOffer({ product: "domain-monitor", target, ...(email ? { email } : {}) });
+  const ch = Challenge.deserialize(offer.header);
+  const addr = ch.request.methodDetails.accessKey.accessKeyAddress.toLowerCase();
+  return { ch, addr, ...(await signCredential(ch)) };
+}
+
+// 6. Booked owed and answered "refunded"; the buyer never retries; the
+//    challenge expires and the sweep runs: the debt stands, no subscription.
+{
+  const { engine, calls } = makeEngine("owed-then-sweep");
+  const s6 = await mintSigned(engine, "owedsweep.example.org", "o@example.com");
+  const restore = failSubWrites(engine);
+  const first = await attempt(() => engine.activateFromCredential(s6.header));
+  restore();
+  const ev = `0x${txSeq.toString(16).padStart(64, "a")}`;
+  ok(first.error?.statusCode === 500 && first.error.settledNotRecorded === true && (await rowFor(ev))?.status === "owed", `setup: settled, not recorded, booked owed (${first.error?.statusCode})`);
+  ok(/before the payment challenge expires/.test(first.error.message) && /refunded/.test(first.error.message), `the answer says a retry works only inside the challenge window, else a refund (${first.error.message})`);
+  clock += OFFER_SWEEP_AFTER_MS + 1000;
+  await engine.mintOffer({ product: "domain-monitor", target: "next6.example.org" });
+  ok((await rowFor(ev))?.status === "owed", `the sweep leaves the debt owed (${(await rowFor(ev))?.status})`);
+  ok(subRecords(engine).length === 0 && calls.sales.length === 0, "no subscription is rebuilt behind a buyer told they are refunded");
+  ok(!holdsKey(engine, s6.addr), "the key is destroyed, so the settled authorization can never bill again");
+  ok(markersFor(engine, s6.addr).length === 0, "and the offer's marker (email, target) is gone");
+  const late = await attempt(() => engine.activateFromCredential(s6.header));
+  ok(late.error?.statusCode === 402 && (await rowFor(ev))?.status === "owed" && subRecords(engine).length === 0, `a retry after the challenge expired is refused and the debt is untouched (${late.error?.statusCode})`);
+}
+
+// 7. No ledger row, the offer names a product and target but no email: owed, key destroyed.
+{
+  const { engine, calls } = makeEngine("no-email");
+  const s7 = await mintSigned(engine, "noemail.example.org", null);
+  const binding = { amountAtomic: s7.ch.request.amount, credential: { payload: { signature: "0x01" } }, challenge: s7.ch };
+  const reference = `0x${(++txSeq).toString(16).padStart(64, "d")}`;
+  await engine._subStore.put(mppxRecord({ accessKey: { accessKeyAddress: s7.addr, keyType: "secp256k1" }, binding, lookupKey: `${s7.payer}|${s7.addr}`, payer: s7.payer }, reference, "sub-noemail-1"));
+  clock += OFFER_SWEEP_AFTER_MS + 1000;
+  await engine.mintOffer({ product: "domain-monitor", target: "next7.example.org" });
+  ok((await rowFor(reference))?.status === "owed", `an email-less settled offer is booked owed (${(await rowFor(reference))?.status})`);
+  ok(!holdsKey(engine, s7.addr) && subRecords(engine).length === 0 && calls.sales.length === 0, "never rebuilt (no one could see it); the key is destroyed");
+}
+
+// 8. A rebuild voided the debt and died before its record: the sweep owes it again.
+{
+  let reopenWorks = false;
+  const refunds = { ...realLedger, reopenHeld: (...a) => (reopenWorks ? realLedger.reopenHeld(...a) : false) };
+  const { engine, calls } = makeEngine("held", { refunds });
+  const s8 = await mintSigned(engine, "held.example.org", "h@example.com");
+  let restore = failSubWrites(engine);
+  await attempt(() => engine.activateFromCredential(s8.header));
+  restore();
+  const ev = `0x${txSeq.toString(16).padStart(64, "a")}`;
+  ok((await rowFor(ev))?.status === "owed", "setup: booked owed");
+  restore = failSubWrites(engine);
+  const retry = await attempt(() => engine.activateFromCredential(s8.header));
+  restore();
+  ok(retry.error && (await rowFor(ev))?.status === "void", `setup: the rebuild voided the debt and did not finish (${(await rowFor(ev))?.status})`);
+  reopenWorks = true;
+  clock += OFFER_SWEEP_AFTER_MS + 1000;
+  await engine.mintOffer({ product: "domain-monitor", target: "next8.example.org" });
+  const row = await rowFor(ev);
+  ok(row?.status === "owed", `the sweep owes the held debt again (${row?.status} ${row?.note})`);
+  ok(subRecords(engine).length === 0 && calls.sales.length === 0 && !holdsKey(engine, s8.addr), "no subscription, no sale, the key destroyed");
+}
+
+// 9. A rebuild whose record write fails owes the debt again; the next retry serves it.
+{
+  const { engine, calls } = makeEngine("rebuild-fails");
+  const s9 = await mintSigned(engine, "rebuildfail.example.org", "r@example.com");
+  let restore = failSubWrites(engine);
+  await attempt(() => engine.activateFromCredential(s9.header));
+  restore();
+  const ev = `0x${txSeq.toString(16).padStart(64, "a")}`;
+  restore = failSubWrites(engine);
+  const retry = await attempt(() => engine.activateFromCredential(s9.header));
+  restore();
+  ok(retry.error?.statusCode === 500 && (await rowFor(ev))?.status === "owed", `a failed rebuild leaves the debt owed, never void (${retry.error?.statusCode} ${(await rowFor(ev))?.status})`);
+  const third = await attempt(() => engine.activateFromCredential(s9.header));
+  ok(third.value?.status === "active" && (await rowFor(ev))?.status === "void" && calls.sales.length === 1, `the next retry serves it and voids the debt once (${third.value?.status} ${(await rowFor(ev))?.status})`);
+  clock += OFFER_SWEEP_AFTER_MS + 1000;
+  await engine.mintOffer({ product: "domain-monitor", target: "next9.example.org" });
+  ok((await rowFor(ev))?.status === "void" && holdsKey(engine, s9.addr), "a later sweep reopens nothing and keeps the served key");
+}
+
+// 10. The offer marker's email goes on activation, on the timed sweep (no mint), and with the key.
+{
+  const { engine } = makeEngine("privacy");
+  const sA = await mintSigned(engine, "privacy-a.example.org", "a@example.com");
+  ok(markersFor(engine, sA.addr)[0]?.email === "a@example.com", "setup: the open offer's marker holds the email");
+  const act = await attempt(() => engine.activateFromCredential(sA.header));
+  ok(act.value?.status === "active" && markersFor(engine, sA.addr).length === 0, `activation drops the offer's marker (${act.value?.status})`);
+
+  const sB = await mintSigned(engine, "privacy-b.example.org", "b@example.com");
+  clock += OFFER_SWEEP_AFTER_MS + 1000;
+  engine.start({ offerIntervalMs: 20, firstMs: 3_600_000 });
+  for (let i = 0; i < 100 && markersFor(engine, sB.addr).length; i++) await new Promise((r) => setTimeout(r, 20));
+  engine.stop();
+  ok(markersFor(engine, sB.addr).length === 0 && !holdsKey(engine, sB.addr), "the timed sweep drops an expired offer's marker and key with no mint");
+  ok(holdsKey(engine, sA.addr), "control: the timed sweep never destroys a key a subscription uses");
+
+  const listed = { addresses: () => ({ ok: false, reason: "listed" }), funding: async () => ({ ok: true }) };
+  const { engine: e2 } = makeEngine("privacy-screen", { screen: listed });
+  const sC = await mintSigned(e2, "privacy-c.example.org", "c@example.com");
+  const refused = await attempt(() => e2.activateFromCredential(sC.header));
+  ok(refused.error?.screenRejected === true && !holdsKey(e2, sC.addr) && markersFor(e2, sC.addr).length === 0, "a destroyed key takes its offer's marker with it");
+}
+
+// 11. Through the HTTP route: the settled-not-recorded answer reaches the buyer.
+{
+  const express = (await import("express")).default;
+  const { mppSubscribeHandler } = await import("../src/mpp-subscribe-route.js");
+  const { engine } = makeEngine("route");
+  let stubError = null;
+  const stub = { mintOffer: (a) => engine.mintOffer(a), activateFromCredential: async (h) => { if (stubError) throw stubError; return engine.activateFromCredential(h); } };
+  const app = express();
+  app.use(express.json());
+  app.post("/subscribe", mppSubscribeHandler({ engine: stub, rateLimited: () => false, isCanary: () => false, warn: () => {} }));
+  const server = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
+  const url = `http://127.0.0.1:${server.address().port}/subscribe`;
+  const post = (headers = {}, body = { product: "domain-monitor", target: "route.example.org" }) => fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  try {
+    const unpaid = await post();
+    const ch = Challenge.deserialize(unpaid.headers.get("www-authenticate"));
+    ok(unpaid.status === 402, `setup: the route mints a challenge (${unpaid.status})`);
+    const signed = await signCredential(ch);
+    const restore = failSubWrites(engine);
+    const res = await post({ authorization: signed.header });
+    restore();
+    const body = await res.json();
+    ok(res.status === 500 && /payment settled/i.test(body.error || "") && /before the payment challenge expires/.test(body.error) && body.paymentSettled === true,
+      `the buyer reads that the payment settled and what happens next (${res.status} ${body.error})`);
+    const again = await post({ authorization: signed.header });
+    const againBody = await again.json();
+    ok(again.status === 200 && againBody.status === "active", `the same request sent again inside the window receives the subscription (${again.status})`);
+    stubError = Object.assign(new Error("The first subscription payment settled, but the subscription could not be recorded."), { statusCode: 500 });
+    const plain = await (await post({ authorization: signed.header })).json();
+    ok(plain.error === "Could not complete the subscription right now.", `control: an unflagged 5xx with the same words keeps the route's own text (${plain.error})`);
+  } finally { server.close(); }
+}
+
+// 12. A retry rebuilt the subscription between the failed write and the booking: the debt is voided.
+{
+  let racer = null, raced = null;
+  const refunds = { ...realLedger, recordOwed: async (row) => { if (racer) { const go = racer; racer = null; raced = await attempt(go); } return realLedger.recordOwed(row); } };
+  const { engine, calls } = makeEngine("race", { refunds });
+  const s12 = await mintSigned(engine, "race.example.org", "race@example.com");
+  racer = () => engine.activateFromCredential(s12.header);
+  const restore = failSubWrites(engine);
+  const first = await attempt(() => engine.activateFromCredential(s12.header));
+  restore();
+  const ev = `0x${txSeq.toString(16).padStart(64, "a")}`;
+  ok(raced?.value?.status === "active", `setup: the concurrent retry was served (${raced?.value?.status || raced?.error?.message})`);
+  ok(first.value?.status === "active" && first.value.replay === true, `the first call answers with the served subscription (${first.value?.status || first.error?.message})`);
+  ok((await rowFor(ev))?.status === "void" && calls.sales.length === 1, `the debt booked after it was served is voided: never served and refunded (${(await rowFor(ev))?.status})`);
 }
 
 rmSync(tmp, { recursive: true, force: true });
