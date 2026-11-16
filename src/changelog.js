@@ -8,6 +8,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "The hosted MCP connector accepts x402",
+    items: [
+      "Surfaces: The hosted MCP connector at /mcp accepts x402 in the call, over the x402 MCP transport: the first ask for a paid tool carries an x402 PaymentRequired beside the MPP challenges, a client sends the signed payment in _meta[\"x402/payment\"], and a paid answer carries the settle receipt in _meta[\"x402/payment-response\"]. Six flagship tools (web.search, web.news, web.answer, market.quote, browser.render and memory.read) are offered with resource /mcp, and catalog.call and the other flagships with the tool's own HTTP route; that route's x402 paywall verifies the payment, runs the tool and settles only a successful answer.",
+      "Surfaces: On the hosted MCP connector, a payment whose settlement is not decided yet (a Circle Gateway batched payment still settling, or a broadcast transfer not yet confirmed) is answered with the paid route's explanation and no new offer, so a client does not sign a second payment for one call. A free tool at its rate limit offers its x402 challenge, so a client that pays is served past the limit. A call carrying a payment has its own, larger per-client request limit when it reaches a paid route; any other call keeps the normal one.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "A card refund made by hand is recorded",
     items: [
       `Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded once Stripe reports it succeeded (a refund still pending leaves the payment owed until it does), and a check that runs every ${mins(READBACK_INTERVAL_MS)}, first ${mins(READBACK_FIRST_MS)} after the server starts, reads back every payment still owed a refund without issuing one, so a refund made by hand after the retries stop also shows the payment refunded and leaves the owed refund alarm.`,

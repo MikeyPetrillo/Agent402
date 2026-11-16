@@ -23,8 +23,14 @@ Loaded when a connector or front-door file is read.
   is asked and paid on the twin, `catalog.call` (and a flagship without a twin) on the slug's own HTTP
   route; the first ask carries the x402 PaymentRequired beside the MPP `_meta` challenges; MPP wins when
   both are sent; x402 is blocking only (a slow route is refused before the payment is presented).
-  A call carrying a payment skips the per-IP transport limiter and the free-tier limiter, and a free tool
-  at its limit offers its route's x402 challenge (`scripts/test-mcp-x402-connector.js`).
+  A tools/call whose `_meta` holds a plausible payment (`metaCarriesPayment`: an MPP credential that
+  decodes, or an x402 payment on an offered network) is counted on its own per-IP transport bucket
+  (`AGENT402_MCP_PAID_REQ_PER_MIN`/`_HOUR`, default 5x the normal one); unless the call then reaches a
+  paywall replay (`reachesPaidReplay`), the handler also holds it to the normal bucket, so a credential
+  on a discovery tool buys nothing. A free tool at its limit offers its route's x402 challenge. A 402
+  whose settlement is undecided (retry same-payment or watch-transaction, or settlement_pending) is the
+  pending result: the route's hint, no offer. A twin's unpaid offer is reused for 30 s
+  (`scripts/test-mcp-x402-connector.js`).
   The interop suites need the official `@x402/mcp` client, which CI installs with `--no-save` in the
   step before them and `package.json` never lists (an optional peer of mppx would ship in prod).
 - **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`
