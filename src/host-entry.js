@@ -12,7 +12,7 @@
 // counted in a seller total. Renderers take a figures object so the page
 // modules stay offline-testable; a null figures object renders nothing.
 import { esc } from "./ledger-chrome.js";
-import { isPaidRail } from "./paid-rails.js";
+import { isCountedRail } from "./paid-rails.js";
 
 const ALL_TIME_DAYS = 36_500;
 
@@ -43,14 +43,14 @@ const isoDay = (ms) => {
 // at their list price so the free-tier funnel can be measured. Those calls
 // settle nowhere, so the "settlements" figure is the paying rails only, read
 // from the same per-rail split the summary already returns (the same
-// isPaidRail rule its revenue total and the buyer counts use).
+// isCountedRail rule its revenue total and the buyer counts use).
 export function paidExternalSettlements(summary) {
   const byRail = summary?.totals?.byRail;
   if (byRail && typeof byRail === "object" && Object.keys(byRail).length) {
     let n = 0;
     for (const [k, v] of Object.entries(byRail)) {
       const [side, rail] = String(k).split(":");
-      if (side === "external" && isPaidRail(rail)) n += Number(v) || 0;
+      if (side === "external" && isCountedRail(rail)) n += Number(v) || 0;
     }
     return n;
   }

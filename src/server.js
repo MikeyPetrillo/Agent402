@@ -743,7 +743,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -912,6 +912,7 @@ import { createReferralSettler } from "./referral-settle.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
 import { createReferralAnswerStore, ANSWER_DIR_NAME as REFERRAL_ANSWER_DIR_NAME } from "./referral-answers.js";
+import { referralReconciliation, reconcileDays } from "./referral-reconcile.js";
 import { join as joinPath, dirname as dirnamePath } from "node:path";
 import { presentRunWindow } from "./evm-validity.js";
 import { withBudgetCeiling } from "./upstream-deadline.js";
@@ -919,7 +920,7 @@ import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
-import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 import { publicIndexBootWarnings } from "./facilitator-public-index.js";
@@ -10720,6 +10721,26 @@ app.use(async (req, res, next) => {
 // /api/gateway-status) is paged on by the heartbeat and the status Worker. Operator view:
 // /__operator/referral.json.
 const referralPayerScreen = createX402PayerScreen();
+// A referral sale is a sale of the tool (owner's decision, 2026-11-14): the
+// gate books it once per payment on the private rail "referral" (the sales
+// ledger's public figures count that row at the gross, src/paid-rails.js),
+// and the same booking counts it as one paid call served on Base in the
+// served-call counters (/api/stats: viaUSDC, the per-chain split, the tool
+// ranking, the activity feed) and sends the settlement event the direct
+// routes send. Counted here, at the one booking, so a payment the book holds
+// several entries or re-sends for is still one sale. Our own wallets' buys
+// are internal, as on the direct routes.
+function recordReferralSale(row) {
+  const booked = recordSale(row);
+  try {
+    if (row && row.rail === "referral") {
+      const own = !!row.synthetic || isOwnWallet(row.payer);
+      recordServedCall(row.slug, "usdc", "base", null, { internal: own });
+      capturePostHogSettlement({ slug: row.slug, rail: "referral", network: "base", priceUsd: Number(row.quoteUsd) || Number(row.priceUsd) || 0, synthetic: !!row.synthetic, payer: row.payer || null, wire: "referral", ownWallet: isOwnWallet(row.payer) });
+    }
+  } catch { /* counting never fails a booking */ }
+  return booked;
+}
 let REFERRAL_GATE = null;
 let REFERRAL_BOOK = null;
 if (REFERRAL_ROUTES) {
@@ -10776,7 +10797,7 @@ if (REFERRAL_ROUTES) {
       },
       runAsCaller: runAsCallerOf,
       sendToolError,
-      recordSale,
+      recordSale: recordReferralSale,
       saleBooked: (tx, payer, slug) => privateRailSaleCount(tx, "referral", payer, slug),
       isSynthetic: isSyntheticRequest,
       salePathOf,
@@ -10807,8 +10828,9 @@ if (REFERRAL_ROUTES) {
       // A settled call earns this client address the paid-quote trust window, as a direct one does.
       onSettledSale: (req) => { QUOTE_TRUST.mark(quoteClientKeyOf(req)); },
       // The tool-call event a direct run sends, with the rail named. The
-      // tool-call log, the failure monitor and the served-call counters are
-      // read by public surfaces and are left alone.
+      // tool-call log and the failure monitor are the direct routes' own and
+      // are left alone; the sale itself is counted where it is booked
+      // (recordReferralSale).
       onRun: (req, res, def) => {
         const startedAt = Date.now();
         res.once("close", () => {
@@ -10830,7 +10852,12 @@ if (REFERRAL_GATE) {
   // is an unknown path and answers exactly as one.
   addApiHeaderPrefix("/ref");
   allowCorsPrefix("/ref/");
-  const referralRoute = (req, res) => REFERRAL_GATE.handler(req, res);
+  // Every answer the copy sends (a 200) is tallied per slug and day: the
+  // "served" side of the operator's reconciliation (below).
+  const referralRoute = (req, res) => {
+    res.once("finish", () => { if (res.statusCode === 200) { try { recordReferralAnswer(req.params?.slug); } catch { /* a tally never fails a call */ } } });
+    return REFERRAL_GATE.handler(req, res);
+  };
   app.get("/ref/:slug", referralRoute);
   app.post("/ref/:slug", referralRoute);
   // Open settlements are read against the chain at boot and every minute, under a lease.
@@ -10842,6 +10869,30 @@ app.get("/__operator/referral.json", (req, res) => {
   res.set("Cache-Control", "private, no-store").json(REFERRAL_GATE
     ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), openTotal: REFERRAL_BOOK.list().length, openByState: REFERRAL_BOOK.counts(), bookWrites: REFERRAL_BOOK.writeStats(), droppedRefused: (({ count, evictedEarly, unresolved }) => ({ count, evictedEarly, unresolved }))(REFERRAL_BOOK.droppedRefused()), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50), shortNet: REFERRAL_GATE.shortSales() }
     : { enabled: false });
+});
+// Per tool over one window (?days=, default 30, at most 90): the answers the
+// referral copy served, the sales booked for it in the sales ledger (gross and
+// net) and the entries the referral book holds (src/referral-reconcile.js).
+// Operator only: the net never leaves it.
+app.get("/__operator/referral-reconciliation.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const days = reconcileDays(req.query?.days);
+    const now = Date.now();
+    const since = now - days * 86_400_000;
+    res.json(referralReconciliation({
+      days, now,
+      enabled: !!REFERRAL_GATE,
+      slugs: REFERRAL_GATE ? REFERRAL_GATE.slugs() : [],
+      served: referralAnswersByDay(new Date(since).toISOString().slice(0, 10), new Date(now).toISOString().slice(0, 10)),
+      sales: privateRailSlugWindow("referral", since, now),
+      open: REFERRAL_BOOK ? REFERRAL_BOOK.list() : [],
+      sold: REFERRAL_BOOK ? REFERRAL_BOOK.soldMarks() : {},
+    }));
+  } catch (err) {
+    res.status(500).json({ error: redactSecrets(String(err?.message || err)).slice(0, 200) });
+  }
 });
 // An operator closes one open referral settlement by hand (a contradicted or
 // flagged one, one nothing on chain can settle, a charged one whose answer the

@@ -2222,13 +2222,15 @@ try {
     ok(Object.values(REFERRAL_REASONS).every((t) => typeof t === "string" && t.length > 20 && !/reviewer|commission/i.test(t)), "every reason of the gate's own carries a sentence, in mechanism words");
   }
 
-  // --- the ledger: a private rail no public reader returns ------------------------------
+  // --- the ledger: a private rail every sales figure counts at the gross, and no lookup returns ---
   {
     await quietLedger();
     const tx = good.json.transaction;
-    const summary = ledger.salesSummary({ days: 30, detailed: true });
+    const summary = ledger.salesSummary({ days: 30 });
     const text = JSON.stringify(summary);
-    ok(!/referral/.test(text) && summary.totals.external.sales === 0 && summary.totals.external.revenueUsd === 0 && Object.keys(summary.totals.byRail).length === 0, `the sales summary (/api/sales) counts and names nothing of it (${JSON.stringify(summary.totals)})`);
+    const booked = Object.values(ledger.privateRailSlugWindow("referral", 0, Date.now() + 1000));
+    const ext = booked.reduce((a, r) => a + r.external, 0), extInt = booked.reduce((a, r) => a + r.internal, 0);
+    ok(ext > 0 && !/referral/.test(text) && summary.totals.external.sales === ext && summary.totals.internal.sales === extInt && summary.totals.byRail["external:marketplace"] === ext && Object.keys(summary.totals.byRail).every((k) => /:marketplace$/.test(k)) && summary.totals.external.revenueUsd > 0, `the sales summary (/api/sales) counts each referral sale once under a rail it names marketplace, and never names the gate (${JSON.stringify(summary.totals)}; ${ext} booked outside)`);
     ok(ledger.saleByTx(tx) === null && ledger.salesByTx(tx).length === 0, "a lookup by transaction (attest, feedback, the settlement books, the refund backfill) does not return a referral row");
     ok(ledger.externalSalesForSlugs(["echo", "busy", "chat"], 0, Date.now() + 1000).length === 0 && ledger.firstRecordedTs() === null && ledger.payerHasPaidSale(buyer.address.toLowerCase()) === false, "the refund backfill's read, the ledger's first-row date and the paid-sale test do not see it");
     ok(ledger.proofFeed({ slug: "echo" })?.rows?.length === undefined || !/referral/.test(JSON.stringify(ledger.proofFeed({ slug: "echo" }))), "the proof feed does not carry it");
@@ -2243,10 +2245,16 @@ try {
     // Every statement that reads the sales table states which rails it reads.
     const src = readFileSync(fileURLToPath(new URL("../src/sales-ledger.js", import.meta.url)), "utf8");
     const statements = [...src.matchAll(/(?:db\.prepare\(|const [A-Z_]+ = )\s*(`[^`]*`|"[^"]*")/g)].map((m) => m[1]).filter((q) => /\bFROM sales\b/i.test(q) && /^SELECT\b/i.test(q.replace(/^[`"]\s*/, "")));
-    const unmarked = statements.filter((q) => !/PAYING_RAILS_SQL|PUBLIC_RAIL_SQL|BUYER_RAILS_SQL|buyer-view|private-rail|\bwire (?:IN|=)|rail IN \('card'|rail = 'card'|WINDOW_PAGE|SCORECARD_ROWS|MIN\(id\)|MAX\(id\)/.test(q));
-    ok(statements.length >= 40 && unmarked.length === 0, `every SELECT on the sales table reads paying rails, a wire of its own, the public rails, or is a marked buyer or private-rail view (${statements.length} statements${unmarked.length ? `; unmarked: ${unmarked.map((q) => q.replace(/\s+/g, " ").slice(0, 90)).join(" | ")}` : ""})`);
-    const pages = [...src.matchAll(/\$\{(WINDOW_PAGE|SCORECARD_ROWS)\}([^`]*)`/g)].filter((m) => m[1] === "WINDOW_PAGE" && !/PAYING_RAILS_SQL|PUBLIC_RAIL_SQL/.test(m[2]));
-    ok(pages.length === 0 && /SCORECARD_ROWS = `[^`]*PAYING_RAILS_SQL/.test(src), "and every paged window read names its rails too");
+    const unmarked = statements.filter((q) => !/PAYING_RAILS_SQL|COUNTED_RAILS_SQL|PUBLIC_RAIL_SQL|BUYER_RAILS_SQL|buyer-view|private-rail|\bwire (?:IN|=)|rail IN \('card'|rail = 'card'|WINDOW_PAGE|SCORECARD_ROWS|MIN\(id\)|MAX\(id\)/.test(q));
+    ok(statements.length >= 40 && unmarked.length === 0, `every SELECT on the sales table reads paying rails, the counted rails, a wire of its own, the public rails, or is a marked buyer or private-rail view (${statements.length} statements${unmarked.length ? `; unmarked: ${unmarked.map((q) => q.replace(/\s+/g, " ").slice(0, 90)).join(" | ")}` : ""})`);
+    const pages = [...src.matchAll(/\$\{(WINDOW_PAGE|SCORECARD_ROWS)\}([^`]*)`/g)].filter((m) => m[1] === "WINDOW_PAGE" && !/PAYING_RAILS_SQL|COUNTED_RAILS_SQL|PUBLIC_RAIL_SQL/.test(m[2]));
+    ok(pages.length === 0 && /SCORECARD_ROWS = `[^`]*COUNTED_RAILS_SQL/.test(src), "and every paged window read names its rails too");
+    // A read that counts the private rails values each row at what its buyer
+    // paid (SALE_AMOUNT_SQL), never the net: a summed net beside a public
+    // list price gives the commission away. The one net reader is marked.
+    const counted = [...src.matchAll(/(?:db\.prepare\(|const [A-Z_]+ = )\s*(`[^`]*`)/g)].map((m) => m[1]).filter((q) => /COUNTED_RAILS_SQL/.test(q) && /SUM\(/.test(q));
+    const netSums = counted.filter((q) => /SUM\((?:CAST\(ROUND\()?price_usd\b/.test(q) && !/net-received/.test(q));
+    ok(counted.length >= 8 && netSums.length === 0 && counted.filter((q) => /net-received/.test(q)).length === 1, `every counted-rail sum is at the buyer's amount; one marked net reader (${counted.length} sums${netSums.length ? `; net: ${netSums.map((q) => q.replace(/\s+/g, " ").slice(0, 90)).join(" | ")}` : ""})`);
     ok(PRIVATE_RAILS.includes("referral") && !PAYING_RAILS.includes("referral"), "referral is a private rail, never a paying one");
   }
 
@@ -5077,15 +5085,39 @@ try {
     ok(gw && JSON.stringify(Object.keys(gw)) === JSON.stringify(["status"]) && ["ok", "attention"].includes(gw.status), `/api/gateway-status publishes the gate's one word and nothing else of it (${JSON.stringify(gw)})`);
     const named = SURFACES.filter((s) => /\/ref\/|referral/i.test(textOf(s)) || textOf(s).toLowerCase().includes(PAY_TO.toLowerCase()));
     ok(named.length === 0, `no public surface mentions /ref, the gate or its pay-to address (${SURFACES.length} read${named.length ? `; named on ${named.join(", ")}` : ""})`);
+    {
+      // The MCP connector lists and finds the tool by its direct route only.
+      const rpc = async (method, params) => {
+        const r = await fetch(`${srv.url}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "x-forwarded-for": "192.0.2.253" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+        return r.text();
+      };
+      const mcpTexts = [await rpc("tools/list", {}), await rpc("tools/call", { name: "catalog.search", arguments: { query: "hash" } }), await rpc("tools/call", { name: "catalog.find", arguments: { task: "sha256 hash of a text" } })];
+      ok(mcpTexts.every((t) => t.length > 50 && !/\/ref\/|referral/i.test(t) && !t.toLowerCase().includes(PAY_TO.toLowerCase())) && /hash/.test(mcpTexts[1]), `the MCP connector's list, search and find never name /ref, the gate or its pay-to address (${mcpTexts.map((t) => t.length).join(", ")} chars)`);
+    }
     const unread = SURFACES.filter((s) => after[s].status !== 200 && after[s].status !== before[s].status);
     ok(unread.length === 0 && SURFACES.filter((s) => after[s].status === 200).length >= 20, `every surface answers as before (${SURFACES.filter((s) => after[s].status === 200).length} of ${SURFACES.length} answer 200)`);
-    // The ledger- and counter-backed surfaces read exactly as before the referral sales (dates aside).
-    const norm = (t) => String(t).replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "T").replace(/\b1[6-9]\d{11}\b/g, "N").replace(/"processUptimeSeconds":\d+/g, '"processUptimeSeconds":0');
-    const LEDGER = ["/api/sales", "/api/stats", "/api/revenue/daily", "/api/calls/daily", "/api/revenue/mpp", "/api/revenue/tempo-daily", "/api/revenue/decide", "/api/proof", "/api/scorecard"];
-    const moved = LEDGER.filter((s2) => before[s2].status === 200 && norm(after[s2].text) !== norm(before[s2].text));
-    ok(moved.length === 0 && LEDGER.filter((s2) => before[s2].status === 200).length >= 6, `after ${fac.of("/settle").length} referral settles (${fac.of("/settle").filter((c) => c.json).length} runs) the sales, stats, revenue, calls, proof and scorecard surfaces read exactly as before (${LEDGER.filter((s2) => before[s2].status === 200).length} compared${moved.length ? `; moved: ${moved.map((m) => { const x = norm(before[m].text), y = norm(after[m].text); let d = 0; while (d < x.length && x[d] === y[d]) d++; return `${m} at ${d}: ${x.slice(Math.max(0, d - 60), d + 60)} -> ${y.slice(Math.max(0, d - 60), d + 60)}`; }).join(" | ")}` : ""})`);
+    // The referral sales are sales of their tools (owner's decision 2026-11-14): every
+    // public sales figure counts each one once, at what its buyer paid, under its slug,
+    // as an outside sale, and none names the gate (checked above).
+    const rec = await call(`${srv.url}/__operator/referral-reconciliation.json?days=30`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } });
+    const recNoToken = await call(`${srv.url}/__operator/referral-reconciliation.json`, { method: "GET" });
+    const booked = rec.json?.totals?.booked || {};
+    ok(rec.status === 200 && /private/.test(rec.headers.get("cache-control") || "") && /no-store/.test(rec.headers.get("cache-control") || "") && recNoToken.status === 404 && booked.sales >= 3 && booked.external >= 3 && booked.netUsd < booked.grossUsd, `the operator's reconciliation reads the booked referral sales, private and no-store, and 404 without the token (${rec.status}/${recNoToken.status}; ${booked.sales} booked, ${booked.external} external)`);
+    const hashRow = rec.json?.tools?.find((t) => t.slug === "hash");
+    ok(hashRow && hashRow.booked.sales >= 1 && hashRow.served >= hashRow.booked.sales && rec.json.tools.every((t) => t.served >= 0 && Number.isInteger(t.servedMinusBooked)), `per tool it sets answers served beside the sales booked (hash: ${hashRow?.served} served, ${hashRow?.booked?.sales} booked)`);
+    // /api/sales and /api/scorecard are served from a 60 s reading taken before the sales,
+    // so the summary they draw is read where it is not held: the operator's (the same function).
+    const opSum = (await call(`${srv.url}/__operator/sales.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
+    const salesBefore = before["/api/sales"].json?.totals?.external?.sales || 0;
+    const mkt = opSum?.totals?.byRail?.["external:marketplace"] || 0;
+    const revDelta = +((opSum?.totals?.external?.revenueUsd || 0) - (before["/api/sales"].json?.totals?.external?.revenueUsd || 0)).toFixed(4);
+    ok(opSum?.totals?.external?.sales - salesBefore === booked.external && mkt === booked.external && booked.internal === 0 && Math.abs(revDelta - +booked.grossUsd.toFixed(4)) < 0.0002 && !/referral/.test(after["/api/sales"].text), `the sales summary counts each external referral sale once, at the gross, under a rail named "marketplace" (+${opSum?.totals?.external?.sales - salesBefore} sales, +$${revDelta}; booked ${booked.external}, gross $${booked.grossUsd})`);
+    const usdcDelta = (after["/api/stats"].json?.toolCallsServed?.viaUSDC || 0) - (before["/api/stats"].json?.toolCallsServed?.viaUSDC || 0);
+    const baseDelta = (after["/api/stats"].json?.toolCallsServed?.viaUSDCByNetwork?.base || 0) - (before["/api/stats"].json?.toolCallsServed?.viaUSDCByNetwork?.base || 0);
+    ok(usdcDelta === booked.external && baseDelta === booked.external && (after["/api/stats"].json?.topTools || []).some((t) => t.slug === "hash"), `/api/stats counts each as one paid call on Base, and ranks the tool (+${usdcDelta} viaUSDC, +${baseDelta} on base)`);
     const opSales = await call(`${srv.url}/__operator/sales.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } });
-    ok(opSales.status === 200 && !/referral/.test(opSales.text), "the operator's sales summary does not count it as a sale either (the gate's own view does)");
+    const opHash = (opSales.json?.topExternal || []).find((r) => r.slug === "hash");
+    ok(opSales.status === 200 && opHash && opHash.sales >= 1 && (opSales.json?.recentExternal || []).filter((r) => r.rail === "referral").every((r) => r.priceUsd > 0 && r.priceUsd === +r.priceUsd), `the operator's sales summary counts it under its slug (${opHash?.sales} hash sales)`);
   }
   {
     const acc = laneAcc, payers = [lanePayer];
@@ -5252,7 +5284,7 @@ try {
     const closed = (await call(`${b.url}/__operator/referral.json`, { method: "GET", headers: { "x-operator-token": TOKEN_OP } })).json;
     ok(closed?.open?.length === 0 && closed.sinceBoot?.restoredAnswers === 1, "and the delivered entry is closed");
     const sales2 = await call(`${b.url}/api/sales`, { method: "GET" });
-    ok(sales2.status === 200 && !/referral/.test(sales2.text), "and the sale the sweep booked is on no public surface");
+    ok(sales2.status === 200 && !/referral/.test(sales2.text) && sales2.json?.totals?.byRail?.["external:marketplace"] === 1 && sales2.json.totals.external.sales === 1, `and the sale the sweep booked is counted once on the public sales summary, never named (${JSON.stringify(sales2.json?.totals)})`);
   } catch (e) {
     failed++;
     console.error(`FAIL - the kill test threw: ${e?.stack || e}`);

@@ -8,6 +8,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "Marketplace sales count in our figures",
+    items: [
+      "Payments: A sale made through a marketplace listing of one of our tools now counts in the public sales figures: the sales summary, the served-call counters, the tool rankings, the bestsellers feed, the buyer scorecard and the per-network split each count it once, as an outside sale of that tool, at the price its buyer paid.",
+      "Payments: On the transactions page, a marketplace sale settled on chain is counted once, and the paying wallets figure counts the buyer who paid for it rather than the marketplace's payment contract.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "A card refund made by hand is recorded",
     items: [
       `Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded once Stripe reports it succeeded (a refund still pending leaves the payment owed until it does), and a check that runs every ${mins(READBACK_INTERVAL_MS)}, first ${mins(READBACK_FIRST_MS)} after the server starts, reads back every payment still owed a refund without issuing one, so a refund made by hand after the retries stop also shows the payment refunded and leaves the owed refund alarm.`,

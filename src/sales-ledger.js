@@ -48,7 +48,7 @@ import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { OUR_EVM_WALLETS, OUR_SOLANA_WALLETS, OUR_STELLAR_WALLETS, OUR_ALGORAND_WALLETS } from "./revenue-live.js";
 import { normalizePayerAddress } from "./payer.js";
-import { PAYING_RAILS_SQL, isPaidRail, PUBLIC_RAIL_SQL, BUYER_RAILS_SQL, BUYER_AMOUNT_SQL, PRIVATE_RAILS } from "./paid-rails.js";
+import { PAYING_RAILS_SQL, isPaidRail, PUBLIC_RAIL_SQL, BUYER_RAILS_SQL, BUYER_AMOUNT_SQL, PRIVATE_RAILS, COUNTED_RAILS_SQL, SALE_AMOUNT_SQL, isCountedRail, publicRailName } from "./paid-rails.js";
 import { withSchemaLock, stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
 import { PG_NOW_MS, REFRESH_MS, REFRESH_MARGIN_MS, fileNewerThan, ledgerFileMtime, sqliteFileRows, serialQueue, singleFlight, insertRows, syncIdSequence, everyMs, makeWarnOnce, pgNowMs, noNul, cleanRow, createDeadLetter, isRowError, createLedgerWriter } from "./ledger-mirror.js";
 import { retryingLoad } from "./store-retry.js";
@@ -604,6 +604,44 @@ export function privateRailSalesByTx(tx, rail) {
   if (!t || !PRIVATE_RAILS.includes(String(rail))) return [];
   try { return selectPrivateAllByTx.all(t, String(rail)).map((r) => ({ id: r.id, slug: r.slug, netUsd: Number(r.price_usd) || 0, grossUsd: r.quote_usd == null ? null : Number(r.quote_usd), payer: r.payer || null })); } catch { return []; }
 }
+const selectPrivateBuyersByTx = db.prepare("SELECT payer, internal FROM sales /* private-rail */ WHERE tx = ? AND rail = ? ORDER BY id");
+/** The buyers of the rows booked on a private rail under this transaction,
+ *  oldest first: `[{ payer, internal }]`. Read by the on-chain buyer figures
+ *  (src/revenue-ledger.js), which see the split contract's payout to us and
+ *  name the buyer behind it; never an amount. */
+export function privateRailBuyersByTx(tx, rail) {
+  const t = String(tx || "").trim();
+  if (!t || !PRIVATE_RAILS.includes(String(rail))) return [];
+  try { return selectPrivateBuyersByTx.all(t, String(rail)).map((r) => ({ payer: r.payer || null, internal: !!r.internal })); } catch { return []; }
+}
+const selectPrivateSlugWindow = db.prepare(`
+  SELECT slug, internal, COUNT(*) AS n, SUM(price_usd) AS net, SUM(COALESCE(quote_usd, price_usd)) AS gross,
+         MIN(ts) AS first_ts, MAX(ts) AS last_ts
+  FROM sales /* private-rail */ WHERE rail = ? AND ts >= ? AND ts < ?
+  GROUP BY slug, internal`);
+const selectPrivateSlugPayers = db.prepare(`
+  SELECT slug, COUNT(DISTINCT payer) AS payers
+  FROM sales /* private-rail */ WHERE rail = ? AND ts >= ? AND ts < ? AND payer IS NOT NULL
+  GROUP BY slug`);
+/** Per slug, the sales booked on a private rail over [sinceMs, untilMs):
+ *  `{ [slug]: { sales, external, internal, grossUsd, netUsd, payers, firstAt, lastAt } }`.
+ *  Operator use only (the referral reconciliation): the net is ours. */
+export function privateRailSlugWindow(rail, sinceMs, untilMs = Date.now()) {
+  if (!PRIVATE_RAILS.includes(String(rail))) return {};
+  const out = {};
+  for (const r of selectPrivateSlugWindow.all(String(rail), Number(sinceMs) || 0, Number(untilMs) || Date.now())) {
+    const e = out[r.slug] || (out[r.slug] = { sales: 0, external: 0, internal: 0, grossUsd: 0, netUsd: 0, payers: 0, firstAt: null, lastAt: null });
+    const n = Number(r.n) || 0;
+    e.sales += n;
+    if (r.internal) e.internal += n; else e.external += n;
+    e.grossUsd = +(e.grossUsd + (Number(r.gross) || 0)).toFixed(6);
+    e.netUsd = +(e.netUsd + (Number(r.net) || 0)).toFixed(6);
+    if (r.first_ts != null && (e.firstAt === null || r.first_ts < Date.parse(e.firstAt))) e.firstAt = new Date(r.first_ts).toISOString();
+    if (r.last_ts != null && (e.lastAt === null || r.last_ts > Date.parse(e.lastAt))) e.lastAt = new Date(r.last_ts).toISOString();
+  }
+  for (const r of selectPrivateSlugPayers.all(String(rail), Number(sinceMs) || 0, Number(untilMs) || Date.now())) if (out[r.slug]) out[r.slug].payers = Number(r.payers) || 0;
+  return out;
+}
 /** How many sales stand on a private rail under this transaction for this
  *  payer (and this slug, when given). */
 export function privateRailSaleCount(tx, rail, payer, slug = null) {
@@ -807,12 +845,12 @@ export function setAttestation(id, { uid, attestTx }) {
 }
 
 const qExtBySlug = db.prepare(`
-  SELECT slug, COUNT(*) AS sales, SUM(price_usd) AS revenue, MAX(ts) AS last_ts
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  SELECT slug, COUNT(*) AS sales, SUM(${SALE_AMOUNT_SQL}) AS revenue, MAX(ts) AS last_ts
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ?
   GROUP BY slug ORDER BY sales DESC, revenue DESC LIMIT 20`);
 const qExtRecent = db.prepare(`
-  SELECT ts, slug, price_usd, rail, network, payer, tx
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL}
+  SELECT ts, slug, ${SALE_AMOUNT_SQL} AS price_usd, rail, network, payer, tx
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL}
   ORDER BY ts DESC LIMIT 20`);
 const qIntRecent = db.prepare(`
   SELECT ts, slug, price_usd, rail, network, payer, tx
@@ -937,12 +975,12 @@ const groupOrder = (a, b) => (a === b ? 0 : a == null ? -1 : b == null ? 1 : a <
 // a time (windowPages below), so these are gathered as sets across the pages
 // and counted once at the end: a distinct count is never added.
 const qExtDistinctSlugsPage = db.prepare(`
-  SELECT DISTINCT slug ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL}`).pluck();
+  SELECT DISTINCT slug ${WINDOW_PAGE} AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL}`).pluck();
 const qExtDistinctPayersPage = db.prepare(`
-  SELECT DISTINCT payer ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL`).pluck();
+  SELECT DISTINCT payer ${WINDOW_PAGE} AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL`).pluck();
 const qExtByPayer = db.prepare(`
-  SELECT payer, COUNT(*) AS sales, SUM(price_usd) AS revenue, MAX(ts) AS last_ts
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
+  SELECT payer, COUNT(*) AS sales, SUM(${SALE_AMOUNT_SQL}) AS revenue, MAX(ts) AS last_ts
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
   GROUP BY payer ORDER BY revenue DESC LIMIT 10`);
 // Demand composition: external tools ranked by how many DISTINCT verified
 // wallets bought each (breadth, not dollars) — the public /index "what agents
@@ -950,9 +988,9 @@ const qExtByPayer = db.prepare(`
 // (EVM exposes the payer; SVM rows carry none), and internal=0 excludes our
 // own canary/burner traffic, so this only ever counts independent demand.
 const qExtBuyersBySlug = db.prepare(`
-  SELECT slug, COUNT(DISTINCT payer) AS buyers, COUNT(*) AS sales, SUM(price_usd) AS revenue
+  SELECT slug, COUNT(DISTINCT payer) AS buyers, COUNT(*) AS sales, SUM(${SALE_AMOUNT_SQL}) AS revenue
   FROM sales
-  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
+  WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL AND ts >= ?
   GROUP BY slug ORDER BY buyers DESC, sales DESC LIMIT ?`);
 // Money is added across pages as integer nano-dollars (each row's price rounded
 // to 1e-9 USD, exact for any price the ledger records): a float sum's value
@@ -961,8 +999,8 @@ const qExtBuyersBySlug = db.prepare(`
 // rounding boundary moved by $0.0001. Integers add exactly in any order.
 const NANO_PER_USD = 1e9;
 const qTotalsPage = db.prepare(`
-  SELECT internal, rail, COUNT(*) AS n, SUM(CAST(ROUND(price_usd * ${NANO_PER_USD}) AS INTEGER)) AS nano
-  ${WINDOW_PAGE} AND ${PUBLIC_RAIL_SQL} GROUP BY internal, rail`);
+  SELECT internal, rail, COUNT(*) AS n, SUM(CAST(ROUND(${SALE_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano
+  ${WINDOW_PAGE} AND (${PUBLIC_RAIL_SQL} OR rail IN ${COUNTED_RAILS_SQL}) GROUP BY internal, rail`);
 // Exact nano-dollars to dollars at 4 decimals, half up, in integers (no float
 // rounding of the total itself). Exact while |nano| < 2^53 ($9M).
 function nanoToUsd4(nano) {
@@ -979,9 +1017,9 @@ const qFirstTs = db.prepare(`SELECT MIN(ts) AS ts FROM sales WHERE ${PUBLIC_RAIL
 // LIMIT: the row count is bounded by the catalog size, and the ranking lens
 // (buyers vs sales vs revenue) is the caller's choice, not the query's.
 const qExtSlugWindow = db.prepare(`
-  SELECT slug, COUNT(*) AS sales, SUM(price_usd) AS revenue,
+  SELECT slug, COUNT(*) AS sales, SUM(${SALE_AMOUNT_SQL}) AS revenue,
          COUNT(DISTINCT payer) AS buyers, MIN(ts) AS first_ts, MAX(ts) AS last_ts
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?
   GROUP BY slug`);
 
 // Payer-scoped view (the /api/my-usage tool). Money rails only — PoW rows
@@ -1088,11 +1126,11 @@ const qPayerByNetwork = db.prepare(`
 // they still count toward settlements, never toward buyers.
 const qExternalByNetworkPage = db.prepare(`
   SELECT network, COUNT(*) AS n
-  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL}
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL}
   GROUP BY network`);
 const qExternalByNetworkPayersPage = db.prepare(`
   SELECT DISTINCT network, payer
-  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL`);
+  ${WINDOW_PAGE} AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL`);
 // The outside payers that spent the most over a window, for the top-buyer
 // failure alarm (src/top-buyer-failures.js): money rails only, external rows
 // only, and every wallet of ours left out again by address (BURNERS: the
@@ -1621,8 +1659,10 @@ export function cardSales({ days = 30 } = {}) {
 
 /**
  * External PAID revenue per UTC day: [{day, revenueUsd, sales}]. The margin
- * view's revenue side - external rows on money rails only, same isPaidRail
- * rule as salesSummary (a pow row's price is what it WOULD have cost).
+ * view's revenue side (operator only) - external rows on the counted rails,
+ * the same set salesSummary counts (a pow row's price is what it WOULD have
+ * cost). Revenue here is what REACHED us: a referral sale adds its net, the
+ * one figure that reads it, because a margin is taken on money received.
  */
 // Database mode: reads the in-memory mirror; exact for this process's landed writes, at most REFRESH_MS (15 s) behind another container's.
 export function externalDailyRevenue({ days = 60 } = {}) {
@@ -1630,7 +1670,7 @@ export function externalDailyRevenue({ days = 60 } = {}) {
   const rows = db.prepare(
     `SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day,
             SUM(price_usd) AS usd, COUNT(*) AS n
-     FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+     FROM sales /* net-received */ WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ?
      GROUP BY day ORDER BY day`
   ).all(since);
   return rows.map((r) => ({ day: r.day, revenueUsd: +Number(r.usd || 0).toFixed(6), sales: r.n }));
@@ -1685,10 +1725,12 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
     // set, and it survived the first pass of that consolidation because it is
     // JavaScript and the sweep matched the SQL spelling. A mutation test found
     // it — dropping a rail from the constant left this total still counting it.
-    const paid = isPaidRail(r.rail);
+    const paid = isCountedRail(r.rail);
     totals[side].sales += r.n;
     if (paid) nanoBySide[side] += r.nano;
-    totals.byRail[`${side}:${r.rail}`] = r.n;
+    // A private rail is named as a public figure names it (paid-rails.js publicRailName).
+    const railKey = `${side}:${publicRailName(r.rail)}`;
+    totals.byRail[railKey] = (totals.byRail[railKey] || 0) + r.n;
   }
   totals.external.revenueUsd = nanoToUsd4(nanoBySide.external);
   totals.internal.revenueUsd = nanoToUsd4(nanoBySide.internal);
@@ -1729,8 +1771,8 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
 // path, payer), folded in JS: distinct payers are counted per path group as a
 // set, never added across versions or rows.
 const qExtByPathPayer = db.prepare(`
-  SELECT via, payer, COUNT(*) AS n, SUM(price_usd) AS usd
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+  SELECT via, payer, COUNT(*) AS n, SUM(${SALE_AMOUNT_SQL}) AS usd
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ?
   GROUP BY via, payer`);
 /**
  * { [path]: { sales, revenueUsd, payers, versions } } over the window: path is
@@ -1779,21 +1821,21 @@ const COHORT_CACHE_MS = 60_000;
 const qCohortDayTools = db.prepare(`
   SELECT payer, MAX(n) AS n FROM (
     SELECT payer, (ts / 86400000) AS d, COUNT(DISTINCT slug) AS n
-    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?
+    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?
     GROUP BY payer, d)
   GROUP BY payer HAVING MAX(n) > ?`);
 const qCohortHourCalls = db.prepare(`
   SELECT payer, MAX(n) AS n FROM (
     SELECT payer, (ts / 3600000) AS h, COUNT(*) AS n
-    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?
+    FROM sales WHERE internal = 0 AND payer IS NOT NULL AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?
     GROUP BY payer, h)
   GROUP BY payer HAVING MAX(n) > ?`);
 const qCohortPayer = db.prepare(`
-  SELECT COUNT(DISTINCT slug) AS tools, COUNT(*) AS calls, SUM(price_usd) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
-  FROM sales WHERE internal = 0 AND payer = ? AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?`);
+  SELECT COUNT(DISTINCT slug) AS tools, COUNT(*) AS calls, SUM(${SALE_AMOUNT_SQL}) AS usd, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+  FROM sales WHERE internal = 0 AND payer = ? AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?`);
 const qCohortDaily = db.prepare(`
-  SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day, payer, COUNT(*) AS n, SUM(price_usd) AS usd
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ? AND ts < ?
+  SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day, payer, COUNT(*) AS n, SUM(${SALE_AMOUNT_SQL}) AS usd
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ? AND ts < ?
   GROUP BY day, payer`);
 let cohortCache = null; // { key, at, value }
 /**
@@ -2057,12 +2099,12 @@ export const MPP_AGENT_METHODS = Object.freeze({
 const MPP_AGENT_WIRES_SQL = `(${Object.keys(MPP_AGENT_METHODS).map((w) => `'${w}'`).join(", ")})`;
 const qAgentRowsAll = db.prepare(`
   SELECT CAST((ts - ${WEEK_EPOCH_MS}) / ${WEEK_MS} AS INTEGER) AS wk, payer, wire,
-         COUNT(*) AS n, SUM(price_usd) AS usd
-  FROM sales WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND ts >= ?
+         COUNT(*) AS n, SUM(${SALE_AMOUNT_SQL}) AS usd
+  FROM sales WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND ts >= ?
   GROUP BY wk, payer, wire`);
 const qAgentFirstAll = db.prepare(`
   SELECT payer, MIN(ts) AS first_ts FROM sales
-  WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL GROUP BY payer`);
+  WHERE internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL GROUP BY payer`);
 const qAgentFirstMpp = db.prepare(`
   SELECT payer, MIN(ts) AS first_ts FROM sales
   WHERE internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL AND wire IN ${MPP_AGENT_WIRES_SQL} GROUP BY payer`);
@@ -2158,12 +2200,12 @@ export function mppAgentsWeekly({ weeks = 12, now = Date.now() } = {}) {
 // that carry a transaction. The sample read runs only on a page holding rows
 // of a month that still lacks its samples.
 const SCORECARD_ROWS = `FROM sales NOT INDEXED
-  WHERE id >= ? AND id < ? AND internal = 0 AND rail IN ${PAYING_RAILS_SQL} AND payer IS NOT NULL
+  WHERE id >= ? AND id < ? AND internal = 0 AND rail IN ${COUNTED_RAILS_SQL} AND payer IS NOT NULL
     AND payer NOT IN (SELECT value FROM json_each(?))`;
 const qScorecardPriorPage = db.prepare(`SELECT DISTINCT payer ${SCORECARD_ROWS} AND ts < ?`).pluck();
 const qScorecardPage = db.prepare(`
   SELECT payer, network, CAST(ts / 86400000 AS INTEGER) AS day, COUNT(*) AS n,
-         SUM(CAST(ROUND(price_usd * ${NANO_PER_USD}) AS INTEGER)) AS nano,
+         SUM(CAST(ROUND(${SALE_AMOUNT_SQL} * ${NANO_PER_USD}) AS INTEGER)) AS nano,
          SUM(CASE WHEN tx IS NOT NULL AND (wire IS NULL OR wire <> '${GATEWAY_WIRE}') THEN 1 ELSE 0 END) AS with_tx
   ${SCORECARD_ROWS} AND ts >= ? AND ts < ?
   GROUP BY payer, network, day`);
