@@ -38,9 +38,10 @@ const accepts = (amount) => [
   { scheme: "exact", network: "eip155:8453", amount, asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: PAY, maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } },
   { scheme: "exact", network: SOL, amount, asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", payTo: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin", maxTimeoutSeconds: 60, extra: { feePayer: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin" } },
 ];
-// [route, USD, atomic amount]: a cheap route, a mid one, one above every router tier.
-const ROUTES = [["/api/cheap", "0.01", "10000"], ["/api/mid", "0.5", "500000"], ["/api/report", "3000", "3000000000"]];
-ok(Number(ROUTES[2][1]) > TOP_CAP && Number(ROUTES[1][1]) <= TOP_CAP, `the report route is above the top router tier ($${TOP_CAP}) and the mid route is not`);
+// [route, USD, atomic amount]: one above every router tier, a mid one, a cheap
+// one, listed dearest first (so the paywall probe's pick is not list order).
+const ROUTES = [["/api/report", "3000", "3000000000"], ["/api/mid", "0.5", "500000"], ["/api/cheap", "0.01", "10000"]];
+ok(Number(ROUTES[0][1]) > TOP_CAP && Number(ROUTES[1][1]) <= TOP_CAP, `the report route is above the top router tier ($${TOP_CAP}) and the mid route is not`);
 
 const docs = new Map();
 idx.__setCrawlFetchForTest(async (url) => {
