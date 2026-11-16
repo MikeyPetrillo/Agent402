@@ -45,6 +45,7 @@ import { markUntrusted } from "./provenance.js";
 // Its own string and robots.txt product token (RFC 9309), from the one list
 // of our User-Agents (src/user-agents.js).
 import { SITE_CRAWL_UA, SITE_CRAWL_TOKEN } from "../user-agents.js";
+import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
 export const CRAWL_USER_AGENT = SITE_CRAWL_UA;
 const ROBOTS_UA_PRODUCT = SITE_CRAWL_TOKEN;
 
@@ -280,6 +281,7 @@ async function budgetedFetch(startUrl, budget, { hostPolicy, maxBytes, accept = 
   async function fetchHop(parsed, signal) {
     let res;
     try {
+      noteHostRequest(parsed.href, "site-crawl");
       res = await fetch(parsed.href, {
         method: "GET",
         redirect: "manual",

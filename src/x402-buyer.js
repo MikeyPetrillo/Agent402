@@ -36,7 +36,7 @@ import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2, canonicalAvmNetw
 // one list of our User-Agents (src/user-agents.js), re-exported for the
 // buyers that import it from here.
 import { ROUTER_UA } from "./user-agents.js";
-import { sellerLoad } from "./seller-load.js";
+import { sellerLoad, noteHostRequest } from "./seller-load.js";
 export { ROUTER_UA };
 import { recordOutbound } from "./outbound-ledger.js";
 import { createHash } from "node:crypto";
@@ -973,6 +973,7 @@ export function modelListed(ids, model) {
 async function readModelList(modelsUrl, { fetchImpl }) {
   try {
     if (buyerAddressGuard) await assertPublicUrl(modelsUrl);
+    noteHostRequest(modelsUrl, "router-buy");
     const r = await fetchImpl(modelsUrl, {
       // Part of a paying caller's purchase, so it says so like the buy does.
       headers: { Accept: "application/json", "User-Agent": ROUTER_UA, "X-Agent402-Via": "router" },
@@ -1195,6 +1196,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
   const reject3xx = (r) => { if (r.status >= 300 && r.status < 400) throw sellerSaid(bad("Seller returned a redirect - refusing to follow off the validated host", 502)); };
   let bare;
   const bareCapMs = legTimeoutMs();
+  noteHostRequest(url, "router-buy"); // the request log /crawler describes (src/seller-load.js)
   try { bare = await fetch(url, { ...reqInit, signal: AbortSignal.timeout(bareCapMs) }); }
   catch (e) { throw bareLegFailure(e, { capMs: bareCapMs, clamped: bareCapMs < timeoutMs }); }
   reject3xx(bare);
@@ -1633,6 +1635,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
     };
     let paid;
     try {
+      noteHostRequest(url, "router-buy");
       paid = await fetch(url, { ...reqInit, dispatcher: paidDispatcher, signal: AbortSignal.timeout(legTimeoutMs()), headers: paidHeaders });
     } catch (fetchErr) {
       // SELLER-EDGE COMPAT (measured live 2026-09-01 on one seller): their
@@ -1716,6 +1719,7 @@ export async function payX402(url, { maxAtomic, method = "GET", body, headers = 
         const host = (() => { try { return new URL(url).host; } catch { return "seller"; } })();
         console.warn(`[x402-buyer] ${host} asked for X-PAYMENT by name on a v2 challenge - resending the same credential under both header names (once)`);
         try {
+          noteHostRequest(url, "router-buy");
           paid = await fetch(url, { ...reqInit, dispatcher: sellerDispatcher(true), signal: AbortSignal.timeout(legTimeoutMs()), headers: { ...paidHeaders, "X-PAYMENT": payHeaders["PAYMENT-SIGNATURE"] } });
         } catch (e) {
           console.warn(`[x402-buyer] ${host}: X-PAYMENT resend failed (${String(e?.message || e).slice(0, 80)}) - keeping the first response`);

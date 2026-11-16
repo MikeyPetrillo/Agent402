@@ -8,7 +8,8 @@ import { capByCeiling, ceilingPassed, ceilingLeftMs, assertBeforeCeiling } from 
 // its caller names another (the index crawler passes its own), and
 // probePublicUrl sends the probe string unless its caller names another (the
 // router passes its own).
-import { FETCH_UA, PROBE_UA } from "../user-agents.js";
+import { FETCH_UA, PROBE_UA, CRAWLER_UA } from "../user-agents.js";
+import { noteHostRequest } from "../seller-load.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
@@ -625,6 +626,9 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   // comes first; with none (every direct route) the timeout is its own.
   timeoutMs = capByCeiling(timeoutMs);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // In the request log /crawler describes (src/seller-load.js): a catalog
+  // tool's fetch. The index crawler's reads are counted where they are budgeted.
+  if (userAgent !== CRAWLER_UA) noteHostRequest(String(url), "fetch");
   try {
   let response;
   try {

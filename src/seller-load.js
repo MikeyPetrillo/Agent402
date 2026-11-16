@@ -24,7 +24,10 @@
 //      never held.
 //   4. A request log: how many requests each component sent each host per
 //      minute, kept REQUEST_LOG_KEEP_MS (two days), for the operator view a
-//      seller's question is checked against.
+//      seller's question is checked against. Every component /crawler lists is
+//      in it: the crawl and the probes through the budget, and the catalog's
+//      fetches for a caller, the site-crawl tool and the router's purchase
+//      through noteHostRequest (host counts only, at most 5,000 hosts held).
 //
 // A skip never changes a listing: the entry stays exactly as the last
 // completed read left it.
@@ -124,6 +127,8 @@ function decodeState(member) {
 /** How long a cycle's prefetch of the shared state waits before deciding on
  *  this process's own view (src/x402-index.js runCrawl). */
 export const PREFETCH_WAIT_MS = 2_000;
+/** How many origins' reads the prefetch starts in one turn of the event loop. */
+const PREFETCH_CHUNK = 100;
 /** The request log keeps counts per host, component and minute this long. */
 export const REQUEST_LOG_KEEP_MS = 2 * DAY_MS;
 const REQUEST_LOG_FLUSH_MS = 5_000;
@@ -321,10 +326,23 @@ export function createSellerLoad({
       const list = [...new Set((origins || []).map(normOrigin).filter(Boolean))];
       if (!shares || !list.length) return { origins: 0, timedOut: false };
       counts.prefetch.cycles++;
-      let timer;
-      const all = Promise.allSettled(list.map((o) => hydrate(o))).then(() => false);
+      let timer, stop = false;
+      // Started PREFETCH_CHUNK origins at a time with a turn of the event loop
+      // between: every read is still in flight together, but the work of
+      // resolving them (each merges into this process's memory) never runs as
+      // one long turn for thousands of origins.
+      const all = (async () => {
+        const runs = [];
+        for (let i = 0; i < list.length && !stop; i += PREFETCH_CHUNK) {
+          if (i) await new Promise((r) => setImmediate(r));
+          for (const o of list.slice(i, i + PREFETCH_CHUNK)) runs.push(hydrate(o).catch(() => {}));
+        }
+        await Promise.allSettled(runs);
+        return false;
+      })();
       const wait = new Promise((r) => { timer = setTimeout(() => r(true), Math.max(0, waitMs)); timer.unref?.(); });
       const timedOut = await Promise.race([all, wait]);
+      stop = true;
       clearTimeout(timer);
       if (timedOut) counts.prefetch.timedOut++;
       return { origins: list.length, timedOut };
@@ -444,6 +462,10 @@ export function createSellerLoad({
       return { ok: true, used, budget: dailyBudget };
     },
 
+    /** Note one request to the host of `url` in the request log only: no
+     *  budget, no hold (see noteHostRequest). */
+    logRequest(url, kind) { noteRequest(url, String(kind || "other")); },
+
     /** Requests counted today for the operator of `url`, and whether the
      *  budget is spent. */
     async budgetSpent(url) {
@@ -556,4 +578,13 @@ export async function sendRouterProbe(url, send, { load = sellerLoad } = {}) {
 
 /** The process's controls, over the shared limits store. */
 export const sellerLoad = createSellerLoad();
+
+/** Note one request a component of ours sent the host of `url`, in the
+ *  request log only (host, component and minute; never a path or a caller):
+ *  the components outside the crawl's budget, a catalog tool fetching for its
+ *  caller (`fetch`), the site-crawl tool (`site-crawl`) and the router's
+ *  purchase (`router-buy`). Never throws, never waits. */
+export function noteHostRequest(url, kind) {
+  try { sellerLoad.logRequest(url, kind); } catch { /* the log never fails a request */ }
+}
 export const sellerLoadStatus = () => sellerLoad.status();

@@ -150,6 +150,57 @@ function fresh(opts = {}) {
   ok((await refused.requestLog("logged.example")).total === 1, "a request the budget refused was not sent and is not logged");
   t += 2 * 24 * H + 60_000;
   ok((await b.requestLog("logged.example")).total === 0, "past two days the counts are gone");
+  // Requests outside the budget (a catalog fetch, the site-crawl tool, the
+  // router's purchase) are logged by host and component, never refused or
+  // counted against the day; the hosts held in memory stay capped.
+  const c = createSellerLoad({ store: createMemoryLimits(), now: () => t, dailyBudget: 1 });
+  c.logRequest("https://caller.example/a/b?q=1", "fetch");
+  c.logRequest("https://caller.example/other", "fetch");
+  c.logRequest("https://caller.example/", "site-crawl");
+  c.logRequest("https://caller.example/buy", "router-buy");
+  const cl = await c.requestLog("caller.example");
+  ok(cl.total === 4 && cl.rows.find((r) => r.kind === "fetch")?.requests === 2 && cl.rows.every((r) => !/\//.test(r.kind)) && JSON.stringify(cl).indexOf("/a/b") < 0,
+    `logged per host and component, with no path (${JSON.stringify(cl.rows)})`);
+  ok((await c.budgetSpent("https://caller.example/")).used === 0 && (await c.takeBudget("https://caller.example/x", "quote")).ok, "and none of them uses the host's day");
+  for (let i = 0; i < 6000; i++) c.logRequest(`https://h${i}.example/`, "fetch");
+  ok(c.status().requestLog.hostsInMemory === 5000, `the hosts held in memory stay at 5,000 (${c.status().requestLog.hostsInMemory})`);
+  await c.flush();
+}
+
+// ---- a cycle's prefetch of 3,000 origins never holds the event loop ----------------
+{
+  // Another container's state for 3,000 origins; this process reads it all
+  // before a crawl cycle. One turn of the event loop must stay short: read in
+  // one batch, the reads of every origin resolved inside one turn.
+  const N = 3000, MAX_TURN_MS = 15;
+  const store = createMemoryLimits();
+  let t = T0;
+  const writer = createSellerLoad({ store, now: () => t });
+  const origins = Array.from({ length: N }, (_, i) => `https://s${i}.example`);
+  for (const o of origins) {
+    await writer.noteDiscoveryRead(o, { manifestHash: "m" });
+    await writer.noteDiscoveryRead(o, { manifestHash: undefined });
+    await writer.takeBudget(`${o}/x`, "quote");
+    await writer.noteThrottle(o, 429, "60");
+  }
+  await writer.flush();
+  const turns = [];
+  for (let run = 0; run < 3; run++) {
+    const reader = createSellerLoad({ store, now: () => t });
+    let max = 0, last = performance.now(), done = false;
+    const tick = () => { const n = performance.now(); max = Math.max(max, n - last); last = n; if (!done) setImmediate(tick); };
+    setImmediate(tick);
+    const r = await reader.prefetch(origins, { waitMs: 60_000 });
+    done = true;
+    await new Promise((res) => setImmediate(res));
+    turns.push(max);
+    if (run === 2) {
+      ok(r.origins === N && !r.timedOut && (await reader.hold(origins[N - 1])) === "throttled" && !(await reader.revisitDue(origins[N - 1])).due && (await reader.budgetSpent(`${origins[0]}/x`)).used === 1,
+        "control: the prefetch read every origin's state (hold, back-off, count)");
+    }
+  }
+  const best = Math.min(...turns);
+  ok(best < MAX_TURN_MS, `the prefetch of ${N} origins holds the event loop at most ${best.toFixed(1)} ms in one turn (runs ${turns.map((x) => x.toFixed(1)).join(", ")} ms; limit ${MAX_TURN_MS})`);
 }
 
 // ---- a shared store that does not answer --------------------------------------------

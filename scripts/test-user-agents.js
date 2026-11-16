@@ -11,7 +11,10 @@
 //   - the router's model-list read and its purchase send the router string;
 //   - the index and MPP index crawls ask for the crawler string, and their
 //     probes for the probe string (the crawl itself in test-crawl-revisit.js);
-//   - no file sends the bare `Agent402/1.0`.
+//   - no file sends the bare `Agent402/1.0`;
+//   - each of those requests is counted, per host and component, in the
+//     request log /crawler says we keep (src/seller-load.js): the catalog's
+//     fetches, the site-crawl tool and the router's purchase included.
 // Offline: no network, no server.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
@@ -19,6 +22,9 @@ const UA = await import("../src/user-agents.js");
 const { safeFetch, probePublicUrl } = await import("../src/tools/fetch-guard.js");
 const { readFileSync, readdirSync } = await import("node:fs");
 const { isHost } = await import("./lib/url-host.js");
+const { sellerLoad } = await import("../src/seller-load.js");
+/** Requests the request log holds for `host` from component `kind`. */
+const logged = async (host, kind) => (await sellerLoad.requestLog(host)).rows.filter((r) => r.kind === kind).reduce((n, r) => n + r.requests, 0);
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.log(`FAIL - ${m}`); } };
@@ -46,8 +52,10 @@ globalThis.fetch = async (url, init) => {
 };
 const last = () => seen.at(-1)?.ua;
 try {
-  await safeFetch("https://seller.example.com/doc").catch(() => null);
+  const fetchesBefore = await logged("fetched-for-caller.example.com", "fetch");
+  await safeFetch("https://fetched-for-caller.example.com/doc").catch(() => null);
   ok(last() === UA.FETCH_UA, "safeFetch sends the fetch string by default");
+  ok((await logged("fetched-for-caller.example.com", "fetch")) - fetchesBefore === 1, "and the request log counts it for the host as a catalog fetch");
   await safeFetch("https://seller.example.com/doc", { userAgent: UA.CRAWLER_UA }).catch(() => null);
   ok(last() === UA.CRAWLER_UA, "and the string its caller names");
   await probePublicUrl("https://seller.example.com/paid");
@@ -71,9 +79,32 @@ try {
     const tool = bySlug(slug);
     if (!tool) { ok(false, `${slug} is in the catalog`); continue; }
     const before = seen.length;
+    const loggedBefore = await logged("caller-named.example.com", "fetch");
     await tool.handler(input).catch(() => null);
     const sent = seen.slice(before).filter((r) => isHost(r.url, "caller-named.example.com"));
     ok(sent.length > 0 && sent.every((r) => r.ua === UA.FETCH_UA), `${slug} sends the fetch string to the URL its caller named (${sent.length} request(s))`);
+    const n = (await logged("caller-named.example.com", "fetch")) - loggedBefore;
+    ok(n === sent.length, `and the request log counts each of them for the host as a catalog fetch (${n} of ${sent.length})`);
+  }
+
+  // The site-crawl tool: its own string, and its requests in the log.
+  {
+    const { CRAWL_TOOLS } = await import("../src/tools/crawl-kit.js");
+    const crawl = CRAWL_TOOLS.find((t) => t.slug === "site-crawl");
+    const before = seen.length;
+    const loggedBefore = await logged("crawl-me.example.com", "site-crawl");
+    await crawl.handler({ url: "https://crawl-me.example.com/", maxPages: 2 }).catch(() => null);
+    const sent = seen.slice(before).filter((r) => isHost(r.url, "crawl-me.example.com"));
+    ok(sent.length > 0 && sent.every((r) => r.ua === UA.SITE_CRAWL_UA), `site-crawl sends its own string (${sent.length} request(s))`);
+    const n = (await logged("crawl-me.example.com", "site-crawl")) - loggedBefore;
+    ok(n === sent.length, `and the request log counts each of them for the host (${n} of ${sent.length})`);
+  }
+  // safeFetch for the index crawler is counted where the crawl budgets it,
+  // never twice here.
+  {
+    const b = await logged("seller.example.com", "fetch");
+    await safeFetch("https://seller.example.com/doc", { userAgent: UA.CRAWLER_UA }).catch(() => null);
+    ok((await logged("seller.example.com", "fetch")) === b, "a crawler read through safeFetch is not logged as a catalog fetch");
   }
 
   // A deployment that sets NETWORK_KIT_USER_AGENT keeps it on the caller-named
@@ -97,6 +128,7 @@ try {
   let modelInit = null;
   await sellerServesModel("https://router-seller.example.com/v1/chat/completions", "m-1", { fetchImpl: async (u, init) => { modelInit = init; return new Response(JSON.stringify({ data: [{ id: "m-1" }] }), { status: 200 }); } });
   ok(uaOf(modelInit) === UA.ROUTER_UA && modelInit?.headers?.["X-Agent402-Via"] === "router", "the router's model-list read sends the router string and says it is the router");
+  ok((await logged("router-seller.example.com", "router-buy")) === 1, "and the request log counts it for the host as the router's purchase");
 } finally {
   globalThis.fetch = orig;
 }
@@ -111,6 +143,14 @@ ok((mpp.match(/safeFetch\([^)]/g) || []).length > 0 && (mpp.match(/safeFetch\([^
 const server = src("server.js");
 ok((server.match(/userAgent: ROUTER_UA/g) || []).length === 2, "the router's pre-payment probe and the operator's diagnosis probe send the router string");
 ok(/import \{ ROUTER_UA \} from "\.\/x402-buyer\.js"|"user-agent": ROUTER_UA/.test(src("tempo-buyer.js")), "the Tempo buyer sends the router string");
+// Every request the buyers send a seller is in the request log: each fetch of
+// the seller's URL follows a noteHostRequest(url, "router-buy") line.
+for (const f of ["x402-buyer.js", "tempo-buyer.js"]) {
+  const lines = src(f).split("\n");
+  const sends = lines.map((l, i) => [l, i]).filter(([l]) => /\bawait fetch\(url,/.test(l));
+  const unlogged = sends.filter(([, i]) => !/noteHostRequest\(url, "router-buy"\)/.test(lines[i - 1] || ""));
+  ok(sends.length >= 2 && unlogged.length === 0, `every purchase request in ${f} is counted in the request log (${sends.length} sends${unlogged.length ? `; not counted at lines ${unlogged.map(([, i]) => i + 1).join(", ")}` : ""})`);
+}
 const files = [];
 const walk = (dir) => { for (const e of readdirSync(new URL(`../${dir}`, import.meta.url), { withFileTypes: true })) { if (e.isDirectory()) walk(`${dir}/${e.name}`); else if (e.name.endsWith(".js")) files.push(`${dir}/${e.name}`); } };
 walk("src");

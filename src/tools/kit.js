@@ -8,6 +8,7 @@ import { resolveMx, Resolver } from "node:dns/promises";
 import { markEndsAtCeiling, capByCeiling, atCeiling, ceilingPassed, ceilingCutError, assertBeforeCeiling } from "../run-ceiling.js";
 import { isIP } from "node:net";
 import { FETCH_UA } from "../user-agents.js";
+import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
 import tls from "node:tls";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
@@ -2160,6 +2161,7 @@ const networkTools = [
       const started = Date.now();
       try {
         assertBeforeCeiling();
+        noteHostRequest(String(url), "fetch");
         const res = await fetch(url, {
           method,
           redirect: "follow",

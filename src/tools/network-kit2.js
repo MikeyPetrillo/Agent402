@@ -17,6 +17,7 @@ import { assertPublicUrl, ssrfDispatcher, safeFetch } from "./fetch-guard.js";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { normalizeHost } from "./network-kit.js";
 import { FETCH_UA } from "../user-agents.js";
+import { noteHostRequest } from "../seller-load.js"; // the request log /crawler describes
 
 const USER_AGENT =
   (process.env.NETWORK_KIT_USER_AGENT || "").trim() ||
@@ -253,6 +254,7 @@ async function httpHeadersHandler(body) {
   const timer = setTimeout(() => controller.abort(), 10000);
   let response;
   try {
+    noteHostRequest(String(parsed), "fetch");
     response = await fetch(parsed, {
       method,
       signal: controller.signal,
@@ -397,6 +399,7 @@ async function techStackHandler(body) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
+      noteHostRequest(String(parsed), "fetch");
       const r = await fetch(parsed, {
         method: "HEAD",
         signal: controller.signal,
