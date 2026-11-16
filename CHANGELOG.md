@@ -6,6 +6,33 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (our requests to sellers name themselves and back off)
+Index:
+- Each part of the service that sends requests to a seller names itself with
+  its own User-Agent: Agent402-Crawler for the index crawler's document reads,
+  Agent402-Probe for the unpaid price and paywall checks, Agent402-Router for
+  a purchase made for a paying caller (and the request that opens it), and
+  Agent402-Fetch for a tool fetching a URL its caller named. Each keeps the
+  browser-compatible form and links to /crawler, which lists them all; none is
+  the bare Agent402/1.0. robots.txt groups for Agent402 still apply to the
+  crawler.
+- When a seller's manifest and /openapi.json come back unchanged (a 304, or
+  the same bytes), the wait before the crawler reads that origin again doubles
+  each time, from one hour up to 12 hours. A changed document, a failed crawl,
+  a purchase that did not deliver, or registering again puts it back on the
+  30-minute cycle; a waiting origin's listing stays as it was.
+- The crawler and the unpaid price checks send at most 200 requests a day to
+  one site, counted per registrable domain or per hostname on shared hosting;
+  past that they wait for the next UTC day. The router's request before a
+  purchase for a paying caller is counted and always goes through.
+- A 429 or 503 from a seller pauses the crawl and the unpaid price checks for
+  that host until its Retry-After, 30 minutes when it names none, and never
+  longer than a day.
+Operations:
+- /__operator/seller-load.json counts the revisit waits, resets by reason,
+  requests and refusals per kind, the hosts past their day and the Retry-After
+  holds, without naming a seller.
+
 ### 2026-11-16 (a card refund made by hand is recorded)
 Payments:
 - A failed card report whose payment was already refunded outside the server
