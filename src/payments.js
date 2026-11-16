@@ -64,7 +64,7 @@ import { verifyFailureLine, payerNamedBy } from "./verify-failure-log.js";
 import { createRailRecheck, railRecheckSettings } from "./rail-recheck.js";
 import { bootReadSettings, readSupportedAtBoot } from "./boot-supported-read.js";
 import { svmPaymentAuthority, isSvmNetwork } from "./svm-payer.js";
-import { isX402McpRequest } from "./mcp-x402-routes.js";
+import { mcpX402Dispatch, mcpX402Knows } from "./mcp-x402-routes.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -2849,9 +2849,9 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   }
   const mcpHttpServer = Object.keys(mcpRouteConfigs).length ? new x402HTTPResourceServer(server, mcpRouteConfigs) : null;
   const mcpVendorMw = mcpHttpServer ? withBazaarHidden(mcpRouteConfigs, () => paymentMiddlewareFromHTTPServer(mcpHttpServer, undefined, undefined, false)) : null;
-  const withMcpTwins = (main, mcp) => (mcp ? function paymentMiddlewareWithMcpTwins(req, res, next) {
-    return (isX402McpRequest(req) ? mcp : main)(req, res, next);
-  } : main);
+  // A flagged request this server does not price runs the HTTP route's own
+  // paywall: never passed on unpaid.
+  const withMcpTwins = (main, mcp) => mcpX402Dispatch({ main, mcp, knows: mcpHttpServer ? mcpX402Knows(mcpHttpServer) : () => false });
 
   // X402_SYNC_ON_START=false skips the facilitator handshake at boot —
   // only for local testing where the facilitator is unreachable.

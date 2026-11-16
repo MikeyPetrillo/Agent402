@@ -42,6 +42,10 @@ const tick = () => new Promise((r) => setImmediate(r));
   ok(/paymentMiddlewareFromHTTPServer\(mcpHttpServer, undefined, undefined, false\)/.test(src) && /withGuardedInit\(mcpVendorMw, init, mcpHttpServer\)/.test(src),
     "payments.js: the MCP twins' middleware is built with syncFacilitatorOnStart=false behind the same guarded init");
   ok(/if \(!syncOnStart\) return withMcpTwins\(vendorMw, mcpVendorMw\);/.test(src), "payments.js: X402_SYNC_ON_START=false still skips the handshake entirely");
+  // A flagged request the twins' paywall does not price runs the HTTP
+  // route's paywall (mcpX402Dispatch, tested in test-mcp-x402-routes.js).
+  ok(/const withMcpTwins = \(main, mcp\) => mcpX402Dispatch\(\{ main, mcp, knows: mcpHttpServer \? mcpX402Knows\(mcpHttpServer\) : \(\) => false \}\);/.test(src),
+    "payments.js: the twins' paywall runs only for a request it prices; any other runs the HTTP route's");
 }
 
 // ---- 3. a fatal-class rejection never exits, is logged, and self-heals on the next paid request ----

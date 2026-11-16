@@ -18,8 +18,11 @@
 // row, openapi path, sitemap URL or llms.txt line names them.
 //
 // A sale made through a twin books the arrival path "x402-mcp"
-// (src/sale-path.js). The flag lives in a WeakSet that only the rewrite below
-// writes, so no request header or body can set it.
+// (src/sale-path.js), and its catalog slug (x402McpEntryOf) wherever a book
+// would otherwise read the slug from the resource URL. The flag lives in a
+// WeakMap that only the rewrite below writes, so no request header or body
+// can set it. A flagged request the twins' paywall does not price is sent to
+// the HTTP route's paywall (mcpX402Dispatch), never on unpaid.
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { isMcpLoopback } from "./mcp-loopback.js";
 import { FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
@@ -37,12 +40,52 @@ export const MCP_X402_INPUT_SCHEMA_MAX_BYTES = 900;
 /** The internal path of a slug's twin. */
 export const mcpX402PathOf = (slug) => `${MCP_X402_PREFIX}${slug}`;
 
-const flagged = new WeakSet();
+const flagged = new WeakMap();
 
 /** True only for a request the twin gate below rewrote. */
 export function isX402McpRequest(req) {
   return !!req && typeof req === "object" && flagged.has(req);
 }
+
+/** The twin a flagged request runs ({ slug, toolName, route, method, path }), or null. */
+export function x402McpEntryOf(req) {
+  if (!req || typeof req !== "object") return null;
+  const e = flagged.get(req);
+  return e ? { slug: e.slug, toolName: e.toolName, route: e.route, method: e.method, path: e.path } : null;
+}
+
+/** The twin slug a dotted MCP tool name stands for, or null. */
+export function mcpX402SlugOfToolName(name) {
+  if (typeof name !== "string") return null;
+  return MCP_X402_SLUGS.find((s) => FLAGSHIP_MCP_NAMES[s] === name) || null;
+}
+
+/** The paywall a request runs: a flagged request goes to the twins' paywall
+ *  only when that paywall prices it (`knows`); any other flagged request,
+ *  and every other request, goes to the HTTP route's own paywall. A flagged
+ *  request is never passed on unpaid. */
+export function mcpX402Dispatch({ main, mcp, knows }) {
+  if (!mcp) return main;
+  return function paymentMiddlewareWithMcpTwins(req, res, next) {
+    let twin = false;
+    if (isX402McpRequest(req)) { try { twin = knows(req) === true; } catch { twin = false; } }
+    return (twin ? mcp : main)(req, res, next);
+  };
+}
+
+/** `knows` for mcpX402Dispatch: whether an x402 HTTP resource server prices
+ *  this request, read the way @x402/express reads it. */
+export function mcpX402Knows(httpServer) {
+  return (req) => {
+    const path = req.path;
+    let decodedPath = path;
+    try { decodedPath = decodeURIComponent(path); } catch { decodedPath = path; }
+    return httpServer.requiresPayment({ adapter: { getMethod: () => req.method }, path, decodedPath, method: req.method }) === true;
+  };
+}
+
+// RFC 7240 respond-async, as src/async-jobs.js reads it.
+const PREFER_ASYNC_TOKEN = /(^|[\s,;])respond-async(?=$|[\s,;=])/gi;
 
 const isFixedPrice = (def) => typeof def?.quote !== "function" && typeof def?.tierQuote !== "function";
 
@@ -102,7 +145,9 @@ export function mcpX402PaymentSpecs(catalog) {
  * every other middleware. A genuine marked request for a known twin, on the
  * tool's own method, is rewritten to the tool's catalog path (query kept) and
  * flagged; a gate credential other than an x402 payment header is removed
- * from it (the twins are x402 only). Anything else under the prefix goes on
+ * from it (the twins are x402 only), and so is a respond-async preference: a
+ * job's replay would reach the twin's path without the marker, so a twin
+ * always answers in the request. Anything else under the prefix goes on
  * unchanged to the app's 404.
  */
 export function createMcpX402Gate({ getCatalog }) {
@@ -116,7 +161,11 @@ export function createMcpX402Gate({ getCatalog }) {
     const headers = req.headers || {};
     delete headers.authorization;
     delete headers["x-pow-solution"];
-    flagged.add(req);
+    if (typeof headers.prefer === "string" && /respond-async/i.test(headers.prefer)) {
+      const rest = headers.prefer.replace(PREFER_ASYNC_TOKEN, "$1").replace(/^[\s,;]+|[\s,;]+$/g, "").replace(/,\s*,/g, ",");
+      if (rest) headers.prefer = rest; else delete headers.prefer;
+    }
+    flagged.set(req, entry);
     const q = req.url.indexOf("?");
     req.url = entry.path + (q >= 0 ? req.url.slice(q) : "");
     return next();
