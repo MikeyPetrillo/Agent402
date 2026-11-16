@@ -324,7 +324,7 @@ export function createSellerLoad({
       let backedOffNow = 0;
       for (const [, at] of backedOff) if (at > t) backedOffNow++;
       return {
-        revisit: { capHours: revisitCapMs / HOUR_MS, baseMinutes: revisitBaseMs / 60_000, originsBackedOff: backedOffNow, unchangedReads: counts.unchangedReads, changedReads: counts.changedReads, resets: { ...counts.resets } },
+        revisit: { capHours: revisitCapMs / HOUR_MS, firstWaitMinutes: revisitIntervalMs(1, { baseMs: revisitBaseMs, capMs: revisitCapMs }) / 60_000, originsBackedOff: backedOffNow, unchangedReads: counts.unchangedReads, changedReads: counts.changedReads, resets: { ...counts.resets } },
         budget: { perOperatorPerDay: dailyBudget, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused } },
         throttle: { defaultMinutes: THROTTLE_DEFAULT_MS / 60_000, maxHours: THROTTLE_MAX_MS / HOUR_MS, ...counts.throttles },
         crawlsSkipped: { ...counts.skipped },

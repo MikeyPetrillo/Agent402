@@ -106,21 +106,39 @@ const turn = async (o) => idx.__crawlScheduledForTest(o);
   await idx.__crawlSellerForTest(O);
   clock += CYCLE;
   ok((await turn(O)) === null, "an unscheduled read (registration) does not lengthen the wait");
+  // A re-registration inside the re-read cooldown reads nothing, and still
+  // puts the origin back on the cycle.
+  for (let i = 0; i < 4; i++) await sellerLoad.noteDiscoveryRead(O, { manifestHash: undefined, openapiHash: undefined });
+  clock += CYCLE;
+  ok((await turn(O)) === "unchanged", "backed off for hours");
+  const n = fetchedFrom(O);
+  await idx.registerOrigin(O).catch(() => null);
+  ok(fetchedFrom(O) === n, "a second registration inside the cooldown re-reads nothing");
+  ok((await turn(O)) === null, "and the origin is read on the next cycle all the same");
 }
 
 // ---- a failed crawl resets -------------------------------------------------------
 {
   const O = "https://flaky.example";
   serve(O);
-  await turn(O); clock += CYCLE; await turn(O); clock += CYCLE;
-  ok((await turn(O)) === "unchanged", "backed off after an unchanged read");
+  await turn(O);
+  // Five unchanged reads: a 12 hour wait.
+  for (let i = 0; i < 5; i++) await sellerLoad.noteDiscoveryRead(O, { manifestHash: undefined, openapiHash: undefined });
+  clock += CYCLE;
+  ok((await turn(O)) === "unchanged", "backed off for 12 hours");
+  const good = docs.get(`${O}/.well-known/x402`);
   docs.delete(`${O}/.well-known/x402`);
-  clock += 2 * H;
+  clock += 12 * H;
   ok((await turn(O)) === null, "read again when the wait ends");
   const e = idx._cacheForTests().get(O);
   ok(e && e.tools?.length >= 1, "a missing manifest keeps the listing from the other documents");
+  // The same manifest comes back: the back-off starts over from one hour,
+  // not from the 12 hours it had reached before the failure.
+  docs.set(`${O}/.well-known/x402`, good);
   clock += CYCLE;
   ok((await turn(O)) === null, "a manifest that stopped answering puts the origin back on the cycle");
+  clock += H;
+  ok((await turn(O)) === null, "and once it is back the wait starts over at one hour");
 }
 
 // ---- our own failed read after a long wait keeps the listing --------------------
