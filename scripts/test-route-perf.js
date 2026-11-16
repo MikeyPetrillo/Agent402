@@ -239,11 +239,14 @@ const cache = _cacheForTests();
   {
     const bigEntry = (origin, n) => ({ manifest: { name: "huge", homepage: origin }, tools: Array.from({ length: n }, (_, k) => ({ seller: origin, method: "POST", route: `/r${k}`, slug: `zanzibar-${k}`, name: `Zanzibar ${k}`, description: `zanzibar tool number ${k} quux${k}`, category: "data", tags: [], price: 0.001, networks: ["eip155:8453"] })), fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
     const big = "https://huge-seller.example";
-    // Build the 80,000 rows BEFORE the gap meter starts, so the meter times the
-    // indexer and not the fixture.
+    // Build the 80,000 rows and store them BEFORE the gap meter starts, so the
+    // meter times the background indexer and not the fixture or the store's
+    // own synchronous clean of every row (the caller's turn; outside a suite
+    // that lifts it, the per-seller cap keeps that clean to 5,000 rows). The
+    // indexer's first slice runs on a later turn, inside the meter.
     const bigValue = bigEntry(big, 80000);
-    const meter = gapMeter();
     cache.set(big, bigValue);
+    const meter = gapMeter();
     for (let i = 0; i < 400 && (_routeIndexStatsForTest().pending || _routeIndexStatsForTest().partial); i++) await new Promise((r) => setTimeout(r, 5));
     const { worst, worstWall } = meter.stop();
     ok(!_routeIndexStatsForTest().partial && worst < BG_GAP.ms, `an 80,000-tool seller indexes in the background without a long event-loop gap (worst ${worst.toFixed(0)} ms ours, ${worstWall.toFixed(0)} ms wall; ${BG_GAP.note})`);
