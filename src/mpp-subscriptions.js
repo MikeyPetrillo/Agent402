@@ -107,6 +107,7 @@ import * as Tempo from "mppx/tempo";
 import { tempo as tempoServer } from "mppx/server";
 import { privateKeyToAccount } from "viem/accounts";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
+import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
 import { redactSecrets } from "./tools/redact.js";
 import { withSponsorCeiling, sponsorCeilingWord } from "./tempo-sponsor-ceiling.js";
 import { screenAddresses, screenFunding, maskAddress, TEMPO_SCREEN_REFUSED_DETAIL } from "./sanctions-screen.js";
@@ -905,7 +906,7 @@ export function checkSubscriptionBinding(authorizationHeader, { secretKey, realm
   // The price binding, exactly as the charge gate does it: a legitimately
   // minted challenge for one product must not buy a dearer one.
   const decimals = envDecimals();
-  const expected = BigInt(Math.round((p.price / 100) * 10 ** decimals));
+  const expected = usdToBaseUnits(p.price / 100, decimals);
   let amount;
   try { amount = BigInt(String(r.amount)); } catch { return bad("challenge amount is not an integer base-units string"); }
   if (amount < expected) return bad(`challenge amount ${amount} is below this product's price ${expected}`);
@@ -1155,7 +1156,7 @@ export function createMppSubscriptions({
     // never reads this default: `verify` works off the CHALLENGE's own request,
     // which we mint per product. It is set anyway so the method is never
     // constructed with an incomplete request shape.
-    amount: (MONITOR_PRODUCTS["domain-monitor"].price / 100).toFixed(envDecimals()),
+    amount: usdToTokenDecimalString(MONITOR_PRODUCTS["domain-monitor"].price / 100, envDecimals()),
     currencies: [currency], decimals, recipient, chainId: TEMPO_MAINNET_CHAIN_ID,
     periodCount: PERIOD_COUNT, periodUnit: PERIOD_UNIT,
     subscriptionExpires: new Date(Math.floor((Date.now() + SUBSCRIPTION_TERM_MS) / 1000) * 1000),
@@ -1482,7 +1483,7 @@ export function createMppSubscriptions({
       products: Object.entries(MONITOR_PRODUCTS).map(([key, p]) => ({
         product: key, label: p.label, kind: p.kind,
         priceUsdPerPeriod: p.price / 100,
-        amountAtomic: String(BigInt(Math.round((p.price / 100) * 10 ** decimals))),
+        amountAtomic: String(usdToBaseUnits(p.price / 100, decimals)),
         inputField: p.inputField, inputLabel: p.inputLabel, blurb: p.blurb,
         subscribe: baseUrl ? `${baseUrl}/api/mpp/monitors/subscribe` : undefined,
       })),
@@ -1551,7 +1552,7 @@ export function createMppSubscriptions({
       // Bound into the HMAC via `opaque` (see checkSubscriptionBinding).
       meta: { product: String(product), target: t, ...(mail ? { email: mail } : {}) },
       request: {
-        amount: (p.price / 100).toFixed(decimals),
+        amount: usdToTokenDecimalString(p.price / 100, decimals),
         accessKey: { accessKeyAddress: ak.accessKeyAddress, keyType: ak.keyType },
         chainId: TEMPO_MAINNET_CHAIN_ID,
         currency, decimals,

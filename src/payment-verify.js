@@ -36,6 +36,7 @@ export const REFERRAL_USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 import { isGatewayWire } from "./gateway-wire.js";
 import { proveReceipt } from "./referral-proof.js";
 import { STELLAR_USDC_CODE, STELLAR_USDC_ISSUER } from "./stellar-confirm.js";
+import { usdToBaseUnits } from "./base-units.js";
 
 /** Circle Gateway's API (the batched x402 option, src/gateway-nanopayments.js). */
 export const GATEWAY_API_BASE_URL = "https://gateway-api.circle.com";
@@ -127,7 +128,7 @@ async function verifyEvm({ tx, payer, payToSet, amountUsd, asset, rpcUrl, fetchI
   } catch (e) { return fail(`could not read token decimals: ${e.message}`); }
   const decimals = Number(BigInt(decimalsHex || "0x0"));
   if (!Number.isFinite(decimals) || decimals > 36) return fail("token decimals unreadable");
-  const expected = BigInt(Math.round(Number(amountUsd) * 10 ** decimals));
+  const expected = usdToBaseUnits(Number(amountUsd), decimals);
   if (expected <= 0n) return fail("expected amount is zero");
 
   const from = String(payer).toLowerCase();
@@ -183,7 +184,7 @@ async function verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrl, fet
   catch (e) { return fail(`could not read token decimals: ${e.message}`); }
   const decimals = Number(BigInt(decimalsHex || "0x0"));
   if (!Number.isFinite(decimals) || decimals > 36) return fail("token decimals unreadable");
-  const expected = BigInt(Math.round(Number(amountUsd) * 10 ** decimals));
+  const expected = usdToBaseUnits(Number(amountUsd), decimals);
   if (expected <= 0n) return fail("expected amount is zero");
   if (best < expected) return fail(`transfer is short: moved ${best} < expected ${expected} (atomic)`);
   return pass({ movedAtomic: best.toString(), decimals, tx, token });
@@ -224,7 +225,7 @@ async function verifySolana({ tx, payer, payToSet, amountUsd, asset, rpcs, fetch
   const debited = sum(meta.preTokenBalances, payer) - sum(meta.postTokenBalances, payer);
   if (debited <= 0n) return minedFail("this payer was not debited in that transaction");
 
-  const expected = BigInt(Math.round(Number(amountUsd) * 10 ** decimals));
+  const expected = usdToBaseUnits(Number(amountUsd), decimals);
   if (expected <= 0n) return fail("expected amount is zero");
   if (credited < expected) return minedFail(`transfer is short: credited ${credited} < expected ${expected} (atomic)`);
   return pass({ movedAtomic: credited.toString(), decimals, tx });
@@ -472,13 +473,12 @@ export async function verifyInboundPayment({
       // transfer satisfied a debt of any size. Stellar amounts are decimal
       // strings with 7 places - compare in integer stroops, not floats.
       const stroops = (v) => {
-        const n = Number(v);
-        return Number.isFinite(n) ? Math.round(n * 1e7) : null;
+        try { return usdToBaseUnits(typeof v === "string" ? v : Number(v), 7); } catch { return null; }
       };
       const got = stroops(found.amount);
       const want = stroops(amountUsd);
       if (got === null || want === null) return fail("could not read the transferred amount");
-      if (want <= 0) return fail("expected amount is zero");
+      if (want <= 0n) return fail("expected amount is zero");
       if (got < want) return fail(`transfer is short: ${found.amount} < ${amountUsd}`);
       return pass({ tx: found.transaction, amount: found.amount });
     }
