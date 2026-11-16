@@ -8,6 +8,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "Weather data reliability and Copernicus credits",
+    items: [
+      "Tools: The weather tools read their data on a reserved service lane when the server holds a weather data key, and a refusal of that key answers a temporary error that names our side, not the buyer's input, while /api/gateway-status reports openMeteo (off, ok or refused) and the operator is paged on refused.",
+      "Tools: weather-air-quality credits the Copernicus Atmosphere Monitoring Service and weather-history credits the Copernicus Climate Change Service, in each tool's description and in a credit field on each answer, beside the Open-Meteo credit.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "A card refund made by hand is recorded",
     items: [
       `Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded once Stripe reports it succeeded (a refund still pending leaves the payment owed until it does), and a check that runs every ${mins(READBACK_INTERVAL_MS)}, first ${mins(READBACK_FIRST_MS)} after the server starts, reads back every payment still owed a refund without issuing one, so a refund made by hand after the retries stop also shows the payment refunded and leaves the owed refund alarm.`,
