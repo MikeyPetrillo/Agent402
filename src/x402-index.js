@@ -10367,11 +10367,23 @@ function computeToolStatics(t) {
     // (caseRuns) are extra words for coverage only, so "webPageToMarkdown" is
     // one word here and "GitHub repo enrichment" stays three.
     nameSlug: null,
+    // Index into names of a one-run camelCase name alias, or -1.
+    partsOnly: -1,
   };
   const nameRuns = caseRuns(name);
   {
     const ns = nameRuns.toks.join("-");
-    if ((nameRuns.toks.length > 1 || nameRuns.parts) && nameRuns.toks.length <= NAME_SLUG_MAX_TOKENS && ns !== st.slug) st.nameSlug = ns;
+    // Words a reader sees: a camelCase run counts each of its parts, so a long
+    // camelCase sentence meets the same word limit as a spaced one.
+    const words = nameRuns.toks.reduce((n, _t, j) => n + ((nameRuns.parts && nameRuns.parts[j]) ? nameRuns.parts[j].length : 1), 0);
+    if (words > 1 && words <= NAME_SLUG_MAX_TOKENS && ns !== st.slug) {
+      st.nameSlug = ns;
+      // A one-run camelCase name ("GitHub", "webPageToMarkdown") scores only
+      // when the query covers every part: its whole run alone ("github") is a
+      // brand word, not a slug, and earns nothing here (main never made a
+      // one-word name an alias).
+      if (nameRuns.toks.length === 1) st.partsOnly = 1 + st.aliases.length;
+    }
   }
   const aliasRuns = rawAliases.map(caseRuns);
   // Every name the slug rule scores: slug, curated aliases, the name in slug
@@ -11044,6 +11056,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     if (st.injected) return;
     if (st.offSeller) return;
     const { name, hay, names, nameToks, nameParts } = st;
+    const partsOnly = st.partsOnly ?? -1;
     let score = 0, mSlug = 0, mName = 0, mText = 0;
     // A slug (or alias) EVERY token of which appears in the query is an exact
     // match for each of those tokens, not a substring one. Before 2026-09-10 a
@@ -11059,6 +11072,7 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     // run exactly as before, and a part alone ("ai" of OpenAI) scores nothing.
     const covered = nameToks.map((toks, i) => {
       const parts = nameParts[i];
+      if (i === partsOnly) return parts && parts[0] ? parts[0].every((p) => termSet.has(p)) : false;
       if (!parts) return toks.length > 1 && toks.every((tok) => termSet.has(tok));
       return toks.every((tok, j) => termSet.has(tok) || (parts[j] && parts[j].every((p) => termSet.has(p))));
     });
@@ -11068,7 +11082,9 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
       for (let i = 0; i < names.length && slugScore < 10; i++) {
         const n = names[i];
         let s = 0;
-        if (n === term || (covered[i] && (nameToks[i].includes(term) || (nameParts[i] && nameParts[i].some((p) => p !== null && p.includes(term)))))) s = 10;
+        if (i === partsOnly) {
+          if (covered[i] && nameParts[i][0].includes(term)) s = 10;
+        } else if (n === term || (covered[i] && (nameToks[i].includes(term) || (nameParts[i] && nameParts[i].some((p) => p !== null && p.includes(term)))))) s = 10;
         else if (short ? nameToks[i].includes(term) : n.includes(term)) s = 4;
         if (s > slugScore) slugScore = s;
       }

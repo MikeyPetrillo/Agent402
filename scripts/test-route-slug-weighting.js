@@ -220,5 +220,27 @@ ok(exact > 0 && exact <= 13, `an exact one-term slug match stays within the docu
   }
 }
 
+// A one-word brand name is not a slug alias (2026-11-16 re-review): an
+// outside seller named only "GitHub" scored 10 on "github" through its
+// camelCase parts and outranked our github-repo; main scored it 3. And a long
+// camelCase sentence counts its parts against the ten-word limit.
+{
+  const ext = (q, name, slug = "brandrow") => {
+    cache.clear();
+    cache.set("https://brand.example", entry("https://brand.example", [{ slug, name, description: "" }]));
+    const r = routeQuery({ query: q, top: 5, include: "external", ...CTX }).results.find((x) => x.slug === slug)?.score ?? 0;
+    cache.clear();
+    return r;
+  };
+  for (const [q, cased] of [["github", "GitHub"], ["openai", "OpenAI"], ["defi", "DeFi"], ["github hub", "GitHub"]]) {
+    const folded = cased.toLowerCase(), a = ext(q, cased), b = ext(q, folded);
+    ok(a === b, `"${q}": a seller named only "${cased}" scores as one named "${folded}" (${a} = ${b})`);
+  }
+  const sentence = "whichStocks areSetUp toBuyToday andWhichOnes shouldYouSell rightNow forProfit";
+  const s1 = ext("which stocks are set up to buy today", sentence);
+  const s2 = ext("which stocks are set up to buy today", sentence.replace(/([A-Z])/g, " $1").toLowerCase());
+  ok(s1 <= s2, `a camelCase sentence over ten words gets no slug credit (${s1} <= spaced ${s2})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
