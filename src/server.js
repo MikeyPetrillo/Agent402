@@ -925,6 +925,7 @@ import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 import { publicIndexBootWarnings } from "./facilitator-public-index.js";
 import { directUpstreamBootWarnings, directUpstreamReport } from "./gateway-direct-upstream.js";
 import { directPriceBookBootWarnings, directPriceBookReport, directUpstreamStatus, startDirectPriceBook } from "./gateway-direct-pricebook.js";
+import { directUpstreamSpendStatus, directUpstreamBalanceStatus, refreshDirectSpendShared } from "./direct-upstream-spend.js";
 
 // FACILITATOR_PUBLIC_INDEX_*: a disclosure switch that cannot say what its
 // value asks (an unknown chain, no host to name, an invalid policy URL or
@@ -3257,7 +3258,7 @@ app.get("/__operator/discovery-refusals.json", async (req, res) => {
 // bucket and p50/p90 latency per upstream for the listed model ids.
 app.get("/__operator/direct-upstream.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
-  res.set("Cache-Control", "private, no-store").json({ ...directUpstreamReport(), priceBook: directPriceBookReport() });
+  res.set("Cache-Control", "private, no-store").json({ ...directUpstreamReport(), priceBook: directPriceBookReport(), spend: directUpstreamSpendStatus({ full: true }), balance: directUpstreamBalanceStatus({ full: true }) });
 });
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
@@ -4209,7 +4210,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // process's own counters start empty, so each word is built from the larger
   // of the two (one bounded read each, reused for a few seconds; never
   // rejects). jevSpend reads unknown until its shared day has been read once.
-  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared()]);
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared(), refreshDirectSpendShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
@@ -4496,6 +4497,13 @@ app.get("/api/gateway-status", async (req, res) => {
     // breaker is open). The word publicly; the operator read adds a reason
     // code while degraded; the figures are on /__operator/direct-upstream.json.
     directUpstream: (() => { try { return directUpstreamStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // The direct upstream's day spend (src/direct-upstream-spend.js): off, ok
+    // or high (past DIRECT_UPSTREAM_DAILY_ALERT_USD; an alarm only, every call
+    // is still served). And its balance: off, ok or exhausted (its latest
+    // answer was a 402 balance refusal; those calls were served by OpenRouter).
+    // The word publicly; the figures for the operator.
+    directUpstreamSpend: (() => { try { return directUpstreamSpendStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    directUpstreamBalance: (() => { try { return directUpstreamBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
     ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.

@@ -40,10 +40,20 @@ if (process.env.SPEND_WORDS_CHILD) {
   process.env.EXA_API_KEY = "test-key";
   process.env.X_BEARER_TOKEN = "test-bearer";
   console.warn = () => {};
-  const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
-  requireUpstreamCosts("test-spend-words-shared-redis");
+  // The direct upstream's day books the upstream's own reported charge, so it needs no table.
+  if (job.kit !== "direct") {
+    const { requireUpstreamCosts } = await import("./lib/require-upstream-costs.js");
+    requireUpstreamCosts("test-spend-words-shared-redis");
+  }
   let kit;
-  if (job.kit === "router") {
+  if (job.kit === "direct") {
+    // The direct upstream's daily spend (src/direct-upstream-spend.js): an
+    // alarm only, so a call is one billed answer booked at its reported charge.
+    Object.assign(process.env, { DIRECT_UPSTREAM_URL: "http://127.0.0.1:9/v1", DIRECT_UPSTREAM_KEY: "k", DIRECT_UPSTREAM_MODELS: "deepseek/x=x" });
+    const m = await import("../src/direct-upstream-spend.js");
+    const E = 1;
+    kit = { E, alarm: "DIRECT_UPSTREAM_DAILY_ALERT_USD", hard: "DIRECT_UPSTREAM_UNUSED_HARD", call: async () => { m.noteDirectSpend("deepseek/x", { prompt_tokens: 1, completion_tokens: 1 }, E); }, book: () => {}, refresh: () => m.refreshDirectSpendShared(), status: () => m.directUpstreamSpendStatus(), shared: () => m._directSpendSharedForTest() };
+  } else if (job.kit === "router") {
     // The router's per-minute holds (src/router-spend-window.js): a call is
     // one hold through the buyer's own reserveSpend.
     const b = await import("../src/x402-buyer.js");
@@ -72,6 +82,10 @@ if (process.env.SPEND_WORDS_CHILD) {
       else if (verb === "book") { kit.book(Number(arg) * kit.E); out.push("booked"); }
       else if (verb === "refresh") { const t = performance.now(); await kit.refresh(); out.push(Math.round(performance.now() - t)); }
       else if (verb === "status") { const s = kit.status(); out.push(s.status); }
+      else if (verb === "burst") { for (let i = 0; i < Number(arg); i++) await kit.call(); out.push("burst"); }
+      // The direct day's shared write is one at a time: wait until it and what it carries have landed.
+      else if (verb === "drain") { const t = Date.now(); while ((kit.shared().pending || kit.shared().carriedMicro) && Date.now() - t < 5000) await new Promise((r) => setTimeout(r, 10)); out.push("drained"); }
+      else if (verb === "pending") { const p = kit.shared(); out.push(`${p.pending}:${p.carriedMicro}`); }
       else if (verb === "minute") out.push(Math.floor(Date.now() / 60_000)); // the shared counter's fixed minute
       else if (verb === "sleep") { await new Promise((r) => setTimeout(r, Number(arg))); out.push("slept"); }
     } catch (e) { out.push(`threw:${String(e?.message || e).slice(0, 80)}`); }
@@ -114,6 +128,40 @@ function container(job, { prefix, redisUrl = process.env.REDIS_URL, timeoutMs = 
   });
 }
 const show = (r) => (r.out ? JSON.stringify(r.out) : `exit ${r.code} ${r.stderr}`);
+
+// A store that connects and never answers: it answers the client's connection
+// commands (so the client is connected) and records every other command name.
+async function muteStore() {
+  const sockets = new Set();
+  const unanswered = [];
+  const mute = createServer((s) => {
+    sockets.add(s); s.on("close", () => sockets.delete(s)); s.on("error", () => {});
+    let buf = "";
+    s.on("data", (d) => {
+      buf += d.toString("latin1");
+      // RESP arrays of bulk strings: *N, then N times $len and the bytes.
+      for (;;) {
+        const head = buf.match(/^\*(\d+)\r\n/);
+        if (!head) return;
+        let at = head[0].length;
+        const parts = [];
+        for (let k = 0; k < Number(head[1]); k++) {
+          const len = buf.slice(at).match(/^\$(\d+)\r\n/);
+          if (!len || buf.length < at + len[0].length + Number(len[1]) + 2) return;
+          parts.push(buf.slice(at + len[0].length, at + len[0].length + Number(len[1])));
+          at += len[0].length + Number(len[1]) + 2;
+        }
+        buf = buf.slice(at);
+        const name = String(parts[0] || "").toUpperCase();
+        if (name === "HELLO") s.write("%1\r\n$5\r\nproto\r\n:3\r\n");
+        else if (["CLIENT", "SELECT", "AUTH", "PING"].includes(name)) s.write("+OK\r\n");
+        else unanswered.push(name);
+      }
+    });
+  });
+  const port = await new Promise((r) => mute.listen(0, "127.0.0.1", () => r(mute.address().port)));
+  return { port, unanswered, close: async () => { for (const s of sockets) s.destroy(); await new Promise((r) => mute.close(r)); } };
+}
 
 // A prefix of its own per run, so reruns and parallel lanes never share a day.
 const prefix = `spend-words-${randomBytes(5).toString("hex")}`;
@@ -168,37 +216,9 @@ for (const kit of ["exa", "x"]) {
   // read. No wall-clock bound is asserted on a child: without that bound the
   // read does not resolve, the container is ended at its deadline (many
   // times the bound) and reports no result at all.
-  const sockets = new Set();
-  const unanswered = [];
-  const mute = createServer((s) => {
-    sockets.add(s); s.on("close", () => sockets.delete(s)); s.on("error", () => {});
-    let buf = "";
-    s.on("data", (d) => {
-      buf += d.toString("latin1");
-      // RESP arrays of bulk strings: *N, then N times $len and the bytes.
-      for (;;) {
-        const head = buf.match(/^\*(\d+)\r\n/);
-        if (!head) return;
-        let at = head[0].length;
-        const parts = [];
-        for (let k = 0; k < Number(head[1]); k++) {
-          const len = buf.slice(at).match(/^\$(\d+)\r\n/);
-          if (!len || buf.length < at + len[0].length + Number(len[1]) + 2) return;
-          parts.push(buf.slice(at + len[0].length, at + len[0].length + Number(len[1])));
-          at += len[0].length + Number(len[1]) + 2;
-        }
-        buf = buf.slice(at);
-        const name = String(parts[0] || "").toUpperCase();
-        if (name === "HELLO") s.write("%1\r\n$5\r\nproto\r\n:3\r\n");
-        else if (["CLIENT", "SELECT", "AUTH", "PING"].includes(name)) s.write("+OK\r\n");
-        else unanswered.push(name);
-      }
-    });
-  });
-  const mutePort = await new Promise((r) => mute.listen(0, "127.0.0.1", () => r(mute.address().port)));
+  const { port: mutePort, unanswered, close: closeMute } = await muteStore();
   const e2 = await run(["book:2", "refresh", "status"], { redisUrl: `redis://127.0.0.1:${mutePort}`, env: { SHARED_LIMITS_OP_MS: "600000" } });
-  for (const s of sockets) s.destroy();
-  await new Promise((r) => mute.close(r));
+  await closeMute();
   ok(unanswered.length > 0, `${kit}: control, the stub store received the status read's commands and answered none (${[...new Set(unanswered)].join(",") || "none received"})`);
   const waited = e2.out?.[1];
   ok(e2.code === 0 && e2.out?.[2] === "over", `${kit}: with the store accepting and never answering the word is this process's own (${show(e2)})`);
@@ -262,6 +282,44 @@ for (const kit of ["exa", "x"]) {
   await new Promise((r) => closed.close(r));
   const e1 = await run(["refresh", "status", "call", "call", "call", "refresh", "status"], { redisUrl: `redis://127.0.0.1:${closedPort}` });
   ok(e1.code === 0 && e1.out?.[1] === "ok" && e1.out?.slice(2, 5).every((x) => x === 200) && e1.out?.[6] === "over", `router: with the store refusing connections every hold is taken and the word is this process's own (${show(e1)})`);
+}
+
+// ---- directUpstreamSpend: the direct upstream's day, an alarm only ------------
+// No refusal exists here, so the word is unknown, ok or high: unknown until
+// this process has read the shared day once (a new process cannot say ok),
+// high once the shared day reaches the threshold, read by a new process that
+// booked nothing, and by one that booked under the threshold on its own.
+{
+  const base = { kit: "direct", alarm: 2.5, hard: 0 };
+  const p = `${prefix}-direct`;
+  const run = (steps, opts = {}) => container({ ...base, steps }, { prefix: p, ...opts });
+  const control = await run(["refresh", "status"]);
+  ok(control.out?.[1] === "ok", `direct: before any spend a new process reads ok (${show(control)})`);
+  const a = await run(["call", "call", "drain", "status", "refresh", "status"]);
+  ok(a.out?.[3] === "unknown" && a.out?.[5] === "ok", `direct: control, two answers stay under the threshold in one process (${show(a)})`);
+  const b = await run(["call", "drain", "status", "refresh", "status"]);
+  ok(b.out?.[2] === "unknown" && b.out?.[4] === "high", `direct: a process that booked one reads unknown before its read, high once the shared day passes the threshold (${show(b)})`);
+  const c = await run(["status", "refresh", "status"]);
+  ok(c.out?.[0] === "unknown" && c.out?.[2] === "high", `direct: a new process that booked nothing reads unknown, then high from the shared day (${show(c)})`);
+  const other = await container({ ...base, steps: ["refresh", "status"] }, { prefix: `${p}-other` });
+  ok(other.out?.[1] === "ok", `direct: a process on another counter still reads ok (${show(other)})`);
+  // A store that refuses the connection: the shared day is never read, so the
+  // word is unknown (never ok) under the threshold and high past it on this
+  // process's own count.
+  const closed = createServer();
+  const closedPort = await new Promise((r) => closed.listen(0, "127.0.0.1", () => r(closed.address().port)));
+  await new Promise((r) => closed.close(r));
+  const e1 = await run(["refresh", "status", "call", "call", "call", "refresh", "status"], { redisUrl: `redis://127.0.0.1:${closedPort}` });
+  ok(e1.code === 0 && e1.out?.[1] === "unknown" && e1.out?.[6] === "high", `direct: with the store refusing connections the word reads unknown, then high on this process's own count (${show(e1)})`);
+  // A store that accepts and never answers: the shared write is one at a time,
+  // so a burst sends one counter command and carries the rest in a number.
+  const N = 2000;
+  const m = await muteStore();
+  const e2 = await run([`burst:${N}`, "sleep:300", "pending"], { redisUrl: `redis://127.0.0.1:${m.port}`, env: { SHARED_LIMITS_OP_MS: "600000" } });
+  const writes = m.unanswered.filter((n) => n.startsWith("EVAL")).length;
+  await m.close();
+  ok(e2.code === 0 && e2.out?.[2] === `true:${(N - 1) * 1e6}`, `direct: against a hung store one write is in flight and the rest is carried (${show(e2)})`);
+  ok(writes === 1, `direct: and the store received one counter write for ${N} answers (${writes}; ${[...new Set(m.unanswered)].join(",") || "none"})`);
 }
 
 // ---- the caller path: /api/gateway-status on a server that made no call ------
