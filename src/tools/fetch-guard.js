@@ -481,12 +481,12 @@ export async function assertPublicUrl(rawUrl, { ownUpstream = false } = {}) {
   if (!ownUpstream) return assertCallerUrl(rawUrl);
   // A host this server chose (a kit's fixed API), not one the caller
   // supplied: a refusal of its name is our 503, never the caller's 400.
-  try {
-    return await assertCallerUrl(rawUrl);
-  } catch (err) {
-    if (err?.statusCode === 400 && err.message === UNRESOLVED_OR_PRIVATE) throw ownUpstreamUnresolved(err);
-    throw err;
-  }
+  return assertCallerUrl(rawUrl).catch((err) => { throw asOwnUpstreamRefusal(err); });
+}
+/** The up-front refusal of a host name, re-stated as our 503 for a host this
+ *  server chose; any other error (a malformed URL, a ceiling) unchanged. */
+function asOwnUpstreamRefusal(err) {
+  return err?.statusCode === 400 && err.message === UNRESOLVED_OR_PRIVATE ? ownUpstreamUnresolved(err) : err;
 }
 async function assertCallerUrl(rawUrl) {
   // Inside a run whose ceiling has passed (src/run-ceiling.js) no lookup starts.
@@ -606,10 +606,10 @@ export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"])
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
-export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream = false } = {}) {
+export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream } = {}) {
+  const url = await assertPublicUrl(rawUrl).catch((err) => { throw ownUpstream ? asOwnUpstreamRefusal(err) : err; });
   // `ownUpstream`: the URL is one this server chose (a kit's fixed API host),
   // not one the caller supplied, so a host that does not resolve is our 503.
-  const url = await assertPublicUrl(rawUrl, { ownUpstream });
   // Inside a run whose ceiling has passed (src/run-ceiling.js) nothing starts:
   // no lookup (assertPublicUrl refuses first) and no request.
   assertBeforeCeiling();
