@@ -11,11 +11,13 @@ Tools:
 - The weather tools read their data on a reserved service lane when the server
   holds a weather data key, and a refusal of that key answers a temporary
   error that names our side, not the buyer's input, while /api/gateway-status
-  reports openMeteo (off, ok or refused) and the operator is paged on refused.
+  reports openMeteo (off, unknown, ok or refused) and the operator is paged on
+  refused.
 - weather-air-quality credits the Copernicus Atmosphere Monitoring Service and
-  weather-history credits the Copernicus Climate Change Service, in each
-  tool's description and in a credit field on each answer, beside the
-  Open-Meteo credit.
+  weather-history credits the Copernicus Climate Change Service, each with the
+  Copernicus disclaimer, in each tool's description and in a credit field on
+  each answer, beside the Open-Meteo credit; weather-history states its range
+  as 1940 to the most recent days.
 
 ### 2026-11-16 (a card refund made by hand is recorded)
 Payments:

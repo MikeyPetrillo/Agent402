@@ -1178,8 +1178,11 @@ function dropQueryHints(s) {
   return kept.join(" ").trim();
 }
 
-// The least room a kept attribution sentence leaves for the text before it.
+// The least room a kept attribution sentence leaves for the text before it;
+// a run of sentences too long for that (a credit that carries a required
+// disclaimer) keeps itself whole over any lead of ATTRIBUTION_SHORT_LEAD or more.
 const ATTRIBUTION_MIN_LEAD = 80;
+const ATTRIBUTION_SHORT_LEAD = 12;
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (!s) return s;
   // A catalog description often carries query-parameter hints ("?bytes=1..1024
@@ -1195,7 +1198,7 @@ export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (tail && s.length > tail.length) {
     const room = max - tail.length - 1;
     const lead = s.slice(0, s.length - tail.length).trim();
-    if (room >= ATTRIBUTION_MIN_LEAD) return `${bazaarCapDescription(lead, room)} ${tail}`;
+    if (room >= ATTRIBUTION_MIN_LEAD || (room >= ATTRIBUTION_SHORT_LEAD && tail.length + 1 + ATTRIBUTION_MIN_LEAD > max)) return `${bazaarCapDescription(lead, room)} ${tail}`;
   }
   const head = s.slice(0, max);
   const sentenceEnd = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), head.endsWith(".") ? head.length - 1 : -1);

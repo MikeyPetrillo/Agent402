@@ -1005,7 +1005,7 @@ jobs:
           fi
 
       # The weather kit's Open-Meteo reads (openMeteo, server.js): refused
-      # pages (a keyed request was refused in the last 15 minutes); ok and off
+      # pages (the last keyed outcome was a refusal); ok and off
       # clear; unknown and absent do neither.
       # The status Worker runs the same check under the same title.
       - name: Open-Meteo keyed reads check (alarm when a keyed request is refused)
@@ -1021,7 +1021,7 @@ jobs:
           if [ "$STATUS" = "refused" ]; then
             if [ -z "$EXISTING" ]; then
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "/api/gateway-status reports openMeteo.status=refused: Open-Meteo refused a keyed request from the weather tools in the last fifteen minutes (the key was not accepted, or does not cover that API), so those calls answered a temporary service error. Read the [open-meteo] keyed request refused line in the server log on Railway, then check OPEN_METEO_API_KEY and the Open-Meteo account. Auto-closes when the word reads ok or off." || true
+                --body "/api/gateway-status reports openMeteo.status=refused: Open-Meteo refused the weather tools' keyed requests (two in a row, or one bad-request answer naming the API key) with no keyed success since (the key was not accepted, or does not cover that API), so those calls answer a temporary service error. Read the [open-meteo] keyed request refused line in the server log on Railway, then check OPEN_METEO_API_KEY and the Open-Meteo account. Auto-closes when the word reads ok or off." || true
             fi
           elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "openMeteo is ${STATUS}; closing." || true

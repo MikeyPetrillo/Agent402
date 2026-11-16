@@ -21,11 +21,13 @@
 // air quality and reanalysis data come from Copernicus services, whose
 // licences ask for their own credit beside Open-Meteo's: the air quality API
 // docs (open-meteo.com/en/docs/air-quality-api) require attribution to the
-// CAMS ENSEMBLE data provider, and the Copernicus licence behind the archive's
-// ERA5 reanalysis (open-meteo.com/en/licence, C3S) asks for "Contains modified
-// Copernicus Climate Change Service information" where the data is processed.
-// Those tools carry a combined key (Open-Meteo's sentence, then the
-// Copernicus one), so the run of sentences stays one tail.
+// CAMS ENSEMBLE data provider, and the Copernicus licence (open-meteo.com/en/licence)
+// asks for "Contains modified Copernicus ... information" where the data is
+// processed (air quality answers carry a computed AQI; the archive is ERA5
+// reanalysis) and, in clause 5.1.3, the disclaimer that neither the European
+// Commission nor ECMWF is responsible for any use of it. Those tools carry a
+// combined key (Open-Meteo's sentence, the Copernicus one, the disclaimer),
+// so the run of sentences stays one tail.
 export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
 export const COINGECKO_ATTRIBUTION = "Data provided by CoinGecko.";
 export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
@@ -34,8 +36,12 @@ export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0
 export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD.";
 export const ECB_ATTRIBUTION = "Source: European Central Bank.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
-export const CAMS_ATTRIBUTION = "Generated using Copernicus Atmosphere Monitoring Service information.";
+export const CAMS_ATTRIBUTION = "Contains modified Copernicus Atmosphere Monitoring Service information (CAMS ENSEMBLE data provider).";
 export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
+export const COPERNICUS_DISCLAIMER = "Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.";
+/** The Copernicus credit an answer carries: its sentence, then the disclaimer. */
+export const CAMS_CREDIT = `${CAMS_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
+export const C3S_CREDIT = `${C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
 
 /** Source key (a tool's `attribution` field) -> the sentence its terms require. */
 export const ATTRIBUTIONS = Object.freeze({
@@ -47,8 +53,8 @@ export const ATTRIBUTIONS = Object.freeze({
   nvd: NVD_NOTICE,
   ecb: ECB_ATTRIBUTION,
   "us-treasury": US_TREASURY_ATTRIBUTION,
-  "open-meteo-cams": `${OPEN_METEO_ATTRIBUTION} ${CAMS_ATTRIBUTION}`,
-  "open-meteo-c3s": `${OPEN_METEO_ATTRIBUTION} ${C3S_ATTRIBUTION}`,
+  "open-meteo-cams": `${OPEN_METEO_ATTRIBUTION} ${CAMS_CREDIT}`,
+  "open-meteo-c3s": `${OPEN_METEO_ATTRIBUTION} ${C3S_CREDIT}`,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */
