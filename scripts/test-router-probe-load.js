@@ -72,6 +72,11 @@ const reply = (status, headers = {}) => new Response("{}", { status, headers });
   t = performance.now();
   await sendRouterProbe(U, async () => reply(503), { load });
   ok(performance.now() - t < 100, `a 503 answer is held without waiting on the store (${Math.round(performance.now() - t)} ms)`);
+  t = performance.now();
+  await load.takeBudget(U, "router-probe", { essential: true });
+  await load.takeBudget(U, "quote");
+  await load.noteThrottle("https://other-held.example/x", 429, "60");
+  ok(performance.now() - t < 100, `counting a request and noting a hold never wait on the store (${Math.round(performance.now() - t)} ms)`);
   await new Promise((r) => setImmediate(r)); // the hold is noted in memory on the next turn
   t = performance.now();
   const plan = await load.crawlPlan("https://slow-store-seller.example");
