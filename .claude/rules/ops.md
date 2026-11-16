@@ -331,13 +331,17 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   sections) and one `records` row per open entry, booked-payment mark and dropped record
   (collection `referral-settlements.rows`, `src/json-rows-document.js`): every write locks the head
   row (`SELECT ... FOR UPDATE`, 5 s lock wait), reads only the rows written since this process's
-  copy, and writes only the rows it changes (about 600 bytes a paid call's write at 2,000 entries);
-  a failed write that carried several changes writes each again on its own, once. The first write
-  of this build folds the old whole-book document into rows, and any whole-book section an older
-  build writes during a deploy's overlap is folded the same way (a row already standing wins).
-  ROLLBACK: a build before this one reads the new head as a book with no open entries (it cannot
-  read the rows): fix forward, never roll back past it (`scripts/state-export.js` writes the book
-  back as one document for a file-mode restore). Without a database it is the file
+  copy, and writes only the rows it changes (about 600 bytes a paid call's write at 2,000 entries
+  once the mirror is off); a failed write that carried several changes writes each again on its
+  own, once. OVERLAP AND ROLLBACK (this release): every write also puts the whole body in the head
+  (the mirror, marked `__rowsAt` with the head version it wrote), so a build before rows, which
+  reads and writes the book as one document, sees every entry during a deploy's overlap or after a
+  rollback; a head without this build's mark was written last by such a build, and its sections are
+  taken as written (a key it added or changed is written to its row, a row it no longer holds is
+  deleted). The first write folds the old whole-book document into rows the same way. The next
+  release turns the mirror off (`mirror: false`); from then on a rollback past this build reads no
+  open entries: fix forward (`scripts/state-export.js` writes the book back as one document, by the
+  same rule, for a file-mode restore). Without a database it is the file
   `REFERRAL_BOOK_FILE`, else `/data/agent402-referral-settlements.json`, else the same name under
   the temp directory. Its states: an `intent` written before `/settle` (with the chain head read before
   `/verify`, so the proof is searched from there however late it is read), `in-doubt` when the

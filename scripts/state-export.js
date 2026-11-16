@@ -37,11 +37,12 @@ import Database from "better-sqlite3";
 import pg from "pg";
 import { SQLITE_STORES, RECORD_DIRS, LOG_FILES, INDEX_CACHE, DB_ONLY } from "./lib/state-stores.mjs";
 import { PARTS_COLLECTION, isPartedHeader, headerHashes, partId, assembleEntry } from "../src/index-parts.js";
-import { REFERRAL_BOOK_DOC } from "../src/referral-book.js";
+import { REFERRAL_BOOK_DOC, REFERRAL_BOOK_PARTS } from "../src/referral-book.js";
+import { wholeBodyOf } from "../src/json-rows-document.js";
 // A document stored as a head and one row per key (src/json-rows-document.js):
 // written as the one whole body a file build reads, its rows folded back in.
-const ROWS_DOCS = new Map([[REFERRAL_BOOK_DOC, `${REFERRAL_BOOK_DOC}.rows`]]);
-const ROWS_COLLECTIONS = new Set(ROWS_DOCS.values());
+const ROWS_DOCS = new Map([[REFERRAL_BOOK_DOC, { collection: `${REFERRAL_BOOK_DOC}.rows`, parts: REFERRAL_BOOK_PARTS }]]);
+const ROWS_COLLECTIONS = new Set([...ROWS_DOCS.values()].map((d) => d.collection));
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BOOKKEEPING = new Set(["imports", "leases", ...DB_ONLY]);
@@ -132,18 +133,19 @@ export async function exportState(outDir, { url = process.env.STATE_DATABASE_URL
 
     // 3. JSON documents, exactly as stored.
     if (tables.has("documents")) {
-      for await (const row of cursorRows(client, `SELECT name, body::text AS body FROM ${schema}.documents ORDER BY name`)) {
+      for await (const row of cursorRows(client, `SELECT name, version, body::text AS body FROM ${schema}.documents ORDER BY name`)) {
         if (!/^[a-z0-9][a-z0-9._:-]{0,120}$/.test(row.name)) { report.unmapped.push(`document ${row.name}`); continue; }
         if (ROWS_DOCS.has(row.name)) {
-          const body = JSON.parse(row.body);
+          const { collection: rowsOf, parts } = ROWS_DOCS.get(row.name);
+          const rows = Object.fromEntries(parts.map((p) => [p, {}]));
           // (A plain read: the documents cursor is open on this connection. A few thousand rows at most.)
-          for (const r of (await client.query(`SELECT id, body->'b' AS b FROM ${schema}.records WHERE collection = $1 ORDER BY id`, [ROWS_DOCS.get(row.name)])).rows) {
+          for (const r of (await client.query(`SELECT id, body->'b' AS b FROM ${schema}.records WHERE collection = $1 ORDER BY id`, [rowsOf])).rows) {
             const id = String(r.id), cut = id.indexOf(":");
             const part = id.slice(0, cut), key = id.slice(cut + 1);
-            if (!body[part] || typeof body[part] !== "object" || Array.isArray(body[part])) body[part] = {};
-            body[part][key] = r.b; // (a row wins over a section the head still holds, as the store's own fold does)
+            if (rows[part]) rows[part][key] = r.b;
           }
-          writeFileSync(join(out, row.name), JSON.stringify(body));
+          // The body as the store itself reads it: the rows, or the sections an older build wrote last.
+          writeFileSync(join(out, row.name), JSON.stringify(wholeBodyOf({ body: JSON.parse(row.body), version: row.version, rows, parts })));
           report.documents++;
           continue;
         }

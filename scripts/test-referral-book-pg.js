@@ -3,23 +3,63 @@
 // over src/json-rows-document.js): a head row and one row per entry, written
 // under the head's row lock.
 //   - the old whole-book document is read once and folded into rows; nothing in it is lost;
-//   - a whole-book section a build before this one writes during a deploy's overlap is folded too (a row wins);
-//   - a write at 2,000 entries carries the entry it changes, not the book;
+//   - a deploy's overlap with the build before rows, run as its own process
+//     (that build's code from git when this clone holds it): each build sees
+//     the entries the other writes, closes and changes, and an entry the older
+//     build closed after this one made it a row is never left open;
+//   - a write at 2,000 entries carries the entry it changes, not the book (mirror off);
 //   - two processes writing one book at once lose no write;
 //   - another process's writes and deletions reach this one's copy;
 //   - a change that throws, or edits an entry in place, fails alone.
 // Requires STATE_DATABASE_URL (CI fails without it).
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
-import { spawn } from "node:child_process";
+import { spawn, fork, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, mkdirSync, symlinkSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { requireTestPg } from "./lib/test-pg.js";
 
 const WORKER = process.argv[2] === "--worker";
-if (!WORKER) requireTestPg({ label: "test-referral-book-pg" });
+const OLD_WORKER = process.argv[2] === "--old-worker";
+// The last build that kept the book as one whole document (its code is read from git when the clone holds it).
+const OLD_BUILD_REF = "4f4d9c8606f7995de9e18a82d2288f0585cd3039";
+if (OLD_WORKER) {
+  // The build before rows, as a process of its own: its book over its own
+  // whole-document store, driven by the parent one call at a time.
+  const quietOld = { error() {}, warn() {}, log() {} };
+  const dir = process.argv[3];
+  let book, close;
+  if (dir === "sim") {
+    // No old code in this clone: this build's book over the whole-document store it used then (the same compare-and-set write of the whole body).
+    const [{ createReferralBook: make, REFERRAL_BOOK_DOC: DOC }, { createJsonDocument }, sdbOld] = await Promise.all([import("../src/referral-book.js"), import("../src/json-document.js"), import("../src/state-db.js")]);
+    book = make({ doc: createJsonDocument({ name: DOC, file: null, log: () => {} }), log: quietOld, maxEntries: 100_000, maxPerPayer: 100_000 });
+    close = () => sdbOld.closeStateDb();
+  } else {
+    const [{ createReferralBook: make }, sdbOld] = await Promise.all([import(pathToFileURL(join(dir, "src/referral-book.js")).href), import(pathToFileURL(join(dir, "src/state-db.js")).href)]);
+    book = make({ file: null, log: quietOld, maxEntries: 100_000, maxPerPayer: 100_000 });
+    close = () => sdbOld.closeStateDb();
+  }
+  await book.ready;
+  process.on("message", async ({ id, op, args = [] }) => {
+    let out = null;
+    try {
+      if (op === "intent") out = await book.intent(args[0]);
+      else if (op === "resolve") out = await book.resolve(args[0], args[1]);
+      else if (op === "get") { await book.ping(); out = book.get(args[0]); }
+      else if (op === "close") { await close(); out = true; }
+    } catch (e) { out = { error: String(e?.message || e) }; }
+    process.send({ id, out });
+    if (op === "close") process.exit(0);
+  });
+  process.send({ ready: true });
+  await new Promise(() => {}); // (driven by messages until "close")
+}
+if (!WORKER && !OLD_WORKER) requireTestPg({ label: "test-referral-book-pg" });
 const sdb = await import("../src/state-db.js");
-const { createReferralBook, REFERRAL_BOOK_DOC } = await import("../src/referral-book.js");
-const { createJsonRowsDocument } = await import("../src/json-rows-document.js");
+const { createReferralBook, REFERRAL_BOOK_DOC, REFERRAL_BOOK_PARTS } = await import("../src/referral-book.js");
+const { createJsonRowsDocument, ROWS_MARK } = await import("../src/json-rows-document.js");
 const { SKIP_UPDATE } = await import("../src/json-document.js");
 
 const hex = (n) => `0x${randomBytes(n).toString("hex")}`;
@@ -73,27 +113,77 @@ try {
   const rows = await rowsOf();
   const byId = new Map(rows.map((r) => [r.id, r.body.b]));
   const intact = Object.entries(oldEntries).every(([k, v]) => canon(byId.get(`entries:${k}`)) === canon(v)) && Object.keys(oldSold).every((k) => byId.has(`sold:${k}`)) && Object.keys(oldDropped).every((k) => byId.has(`dropped:${k}`));
-  ok(readOld && wrote && rows.length === 1991 + 2000 + 5 && intact && !("entries" in head.body) && !("sold" in head.body) && !("dropped" in head.body) && head.body.proven?.echo?.fp === "f" && head.body.forgiven.length === 1, `the old whole-book document is read as it stands and folded into rows by the first write: every entry, booked-payment mark and dropped record kept exactly (${rows.length} rows), the small sections stay in the head`);
+  const mirrorWhole = Object.keys(head.body.entries || {}).length === 1991 && Object.keys(head.body.sold || {}).length === 2000 && Object.keys(head.body.dropped || {}).length === 5 && head.body[ROWS_MARK] === head.version;
+  ok(readOld && wrote && rows.length === 1991 + 2000 + 5 && intact && mirrorWhole && head.body.proven?.echo?.fp === "f" && head.body.forgiven.length === 1, `the old whole-book document is read as it stands and folded into rows by the first write: every entry, booked-payment mark and dropped record kept exactly (${rows.length} rows); the head keeps the small sections and, for the overlap release, the whole body marked with its version`);
 
-  // ---- a write at 2,000 entries is the size of what it changes ----
-  const sizes = [], times = [];
-  for (let i = 0; i < 9; i++) { const e = intentOf(); const t0 = performance.now(); await book.intent(e); times.push(performance.now() - t0); sizes.push(book.writeStats().bytes); }
-  const per = sizes.map((x, i) => x - (i ? sizes[i - 1] : sizes[0])).slice(1);
-  times.sort((a, b) => a - b);
-  console.log(`  (a write at ${book.size()} entries: ${Math.max(...per)} bytes at most, median ${times[4].toFixed(1)} ms)`);
-  ok(book.size() === 2000 && per.every((b) => b > 0 && b < 2048), `a paid call's write at 2,000 open entries carries its own entry only (${Math.max(...per)} bytes at most, not the whole book)`);
-
-  // ---- a build before this one writes a whole-book section during the overlap: folded, a row wins ----
+  // ---- a deploy's overlap: the build before rows, as its own process, beside this one ----
   {
-    const rowKey = first.key;
-    const lateKey = `${hex(32)}#${hex(32)}`;
-    const h = await headOf();
-    // The older build's compare-and-set write: its own entries section (the one entry it wrote, and a stale copy of one that is a row).
-    await sdb.stateQuery(`UPDATE ${sdb.stateDbSchema()}.documents SET body = $2::jsonb, version = version + 1 WHERE name = $1 AND version = $3`, [REFERRAL_BOOK_DOC, JSON.stringify({ ...h.body, entries: { [lateKey]: { key: lateKey, slug: "echo", payer: hex(20), state: "intent", at: 1 }, [rowKey]: { key: rowKey, state: "intent", stale: true } } }), h.version]);
-    await book.ping();
-    const after = await headOf();
-    const rs = new Map((await rowsOf()).map((r) => [r.id, r.body.b]));
-    ok(!("entries" in after.body) && rs.get(`entries:${lateKey}`)?.state === "intent" && rs.get(`entries:${rowKey}`)?.stale !== true && book.get(lateKey)?.state === "intent", "an entries section an older build writes into the head during a deploy's overlap is folded into rows by the next write; a row already standing for a key is kept as it is");
+    let oldDir = "sim";
+    try {
+      const repo = fileURLToPath(new URL("..", import.meta.url));
+      execFileSync("git", ["cat-file", "-e", `${OLD_BUILD_REF}^{commit}`], { cwd: repo, stdio: "ignore" });
+      oldDir = mkdtempSync(join(tmpdir(), "a402-old-book-"));
+      execFileSync("sh", ["-c", `git archive ${OLD_BUILD_REF} src scripts package.json | tar -x -C "${oldDir}"`], { cwd: repo, stdio: "ignore" });
+      symlinkSync(join(repo, "node_modules"), join(oldDir, "node_modules"));
+    } catch { if (oldDir !== "sim") { try { rmSync(oldDir, { recursive: true, force: true }); } catch { /* temp */ } } oldDir = "sim"; }
+    console.log(`  (the older build: ${oldDir === "sim" ? "this build's book over the whole-document store (the old commit is not in this clone)" : `commit ${OLD_BUILD_REF.slice(0, 9)}`})`);
+    const child = fork(fileURLToPath(import.meta.url), ["--old-worker", oldDir], { env: process.env, stdio: ["ignore", "inherit", "inherit", "ipc"] });
+    let seq = 0;
+    const waiting = new Map();
+    let readyOld;
+    const isReady = new Promise((r) => { readyOld = r; });
+    child.on("message", (m) => { if (m?.ready) readyOld(true); else if (waiting.has(m?.id)) { waiting.get(m.id)(m.out); waiting.delete(m.id); } });
+    // (A process that ends early fails what waits on it, never hangs the suite.)
+    child.on("exit", () => { readyOld(false); for (const r of waiting.values()) r({ error: "the older build's process ended" }); waiting.clear(); });
+    const old = (op, ...args) => new Promise((r) => { const id = ++seq; waiting.set(id, r); child.send({ id, op, args }); });
+    try {
+      if (!(await isReady)) throw new Error("the older build's process did not start");
+      const soldBefore = (await rowsOf()).filter((r) => r.id.startsWith("sold:")).length;
+      // 1. The older build writes an intent; this build's next write makes it a row; the older build then closes it.
+      const k = intentOf();
+      const oWrote = await old("intent", k);
+      await book.intent(intentOf());
+      const isRow = (await rowsOf()).some((r) => r.id === `entries:${k.key}`);
+      const oClosed = await old("resolve", k.key, null);
+      await book.ping();
+      const closedRow = (await rowsOf()).some((r) => r.id === `entries:${k.key}`);
+      ok(oWrote === true && isRow && oClosed === true && book.get(k.key) === null && !closedRow, `an entry the older build writes, this build makes a row, and the older build then closes is closed here too: no open intent is left for the sweep to read as charged and not served (row before close ${isRow}, after ${closedRow}; here ${JSON.stringify(book.get(k.key))})`);
+      // 2. This build's change is seen by the older build.
+      const j = intentOf();
+      await book.intent(j);
+      await book.resolve(j.key, { state: "charged-undelivered", tx: hex(32) });
+      const seen = await old("get", j.key);
+      ok(seen?.state === "charged-undelivered", `an entry this build writes and charges is read by the older build as it stands (${seen?.state})`);
+      // 3. The older build changes an entry that is a row here: its value is taken.
+      const l = intentOf();
+      await book.intent(l);
+      const oPatched = await old("resolve", l.key, { state: "in-doubt", attempts: 2 });
+      await book.ping();
+      const lRow = new Map((await rowsOf()).map((r) => [r.id, r.body.b])).get(`entries:${l.key}`);
+      ok(oPatched === true && book.get(l.key)?.state === "in-doubt" && lRow?.state === "in-doubt" && lRow?.attempts === 2, `a change the older build makes to an entry after this build wrote its row is taken here and into the row (${lRow?.state})`);
+      // 4. Nothing else moved: every booked-payment mark stands through the older build's writes.
+      const soldAfter = (await rowsOf()).filter((r) => r.id.startsWith("sold:")).length;
+      ok(soldBefore === 2000 && soldAfter === soldBefore && book.get(j.key)?.state === "charged-undelivered", `the older build's whole-body writes keep every booked-payment mark and this build's own entries (${soldAfter} marks)`);
+      await old("close");
+    } finally {
+      try { child.kill(); } catch { /* gone */ }
+      if (oldDir !== "sim") { try { rmSync(oldDir, { recursive: true, force: true }); } catch { /* temp */ } }
+    }
+  }
+
+  // ---- a write at 2,000 entries is the size of what it changes (the mirror off, as the next release runs) ----
+  {
+    const SIZE_DOC = "referral-size-test";
+    await sdb.documents.put(SIZE_DOC, oldBody);
+    const lean = createReferralBook({ doc: createJsonRowsDocument({ name: SIZE_DOC, parts: REFERRAL_BOOK_PARTS, mirror: false, log: () => {} }), log: quiet });
+    await lean.ready;
+    await lean.intent(intentOf());
+    const sizes = [], times = [];
+    for (let i = 0; i < 9; i++) { const e = intentOf(); const t0 = performance.now(); await lean.intent(e); times.push(performance.now() - t0); sizes.push(lean.writeStats().bytes); }
+    const per = sizes.map((x, i) => x - (i ? sizes[i - 1] : sizes[0])).slice(1);
+    times.sort((a, b) => a - b);
+    console.log(`  (a write at ${lean.size()} entries: ${Math.max(...per)} bytes at most, median ${times[4].toFixed(1)} ms)`);
+    ok(lean.size() === 2000 && per.every((b) => b > 0 && b < 2048), `with the mirror off, a paid call's write at 2,000 open entries carries its own entry only (${Math.max(...per)} bytes at most, not the whole book)`);
   }
 
   // ---- another process's writes and deletions reach this copy ----

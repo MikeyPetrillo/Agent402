@@ -16,16 +16,28 @@
 //      whose value is a new object, the deletions, and the head (its body
 //      only when the small sections changed; its version always).
 // A write is then the size of the entries it touches, not the size of the
-// book. Values in the copy are frozen: a change replaces an entry, it never
+// book (once the mirror below is off; while it is on the head carries the
+// whole body too). Values in the copy are frozen: a change replaces an entry, it never
 // edits one in place (an in-place edit would throw, never go unwritten).
 //
-// ROLL FORWARD. A head that still holds a map as a section (the whole-book
-// shape a build before this one wrote, read once at the first write, or
-// written by such a build during a deploy's overlap) is folded into rows by
-// the next write, a row already standing for a key winning over the section's
-// copy, and the head is written back without it. A build before this one
-// reads the new head as a book with no open entries and cannot be rolled back
-// to safely: fix forward (.claude/rules/ops.md).
+// THE OVERLAP WITH A BUILD BEFORE THIS ONE (one release). A build before
+// this one reads and writes the book as ONE document (the head's body, by
+// compare-and-set on its version) and runs beside this one for a deploy's
+// overlap (and after a rollback). So that each sees every change the other
+// makes:
+//   - this build writes the WHOLE body into the head beside the rows (the
+//     `mirror`), with a mark naming the head version it wrote (`__rowsAt`):
+//     an older build reads every entry, mark and record, and its own write
+//     is based on them (its compare-and-set re-reads after any write here);
+//   - a head whose mark is not its own version was written last by an older
+//     build (which never keeps the mark): its sections are the book as that
+//     build left it, and they are TAKEN AS WRITTEN: a key it added becomes a
+//     row, a key it changed is rewritten, and a row it no longer holds (an
+//     entry it closed) is deleted. The same holds for the whole-book head a
+//     build before this one left behind, read once at the first write.
+// The mirror costs a whole-book head write per update while it is on; the
+// release after this one turns it off (`mirror: false`), and the rows alone
+// are written from then on.
 //
 // WITHOUT A DATABASE the document is a json-document (a file, or memory).
 import { existsSync, readFileSync } from "node:fs";
@@ -34,7 +46,26 @@ import { stateDbEnabled, stateDbSchema, withStateTx } from "./state-db.js";
 
 /** How long one update waits for another process's write to the same document (ms). */
 export const ROWS_LOCK_WAIT_MS = 5_000;
+/** The head field naming the head version whose write carried the mirror (an older build never keeps it). */
+export const ROWS_MARK = "__rowsAt";
 const isMap = (v) => v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * The whole body a head and its rows stand for (`rows`: { [part]: { key: value } }):
+ * the rows, unless the head was written last by a build before rows (its mark
+ * is not `version`), whose sections are then the book as it stands. Pure:
+ * the store's own read and the state export (scripts/state-export.js) agree.
+ */
+export function wholeBodyOf({ body, version, rows, parts }) {
+  const out = isMap(body) ? { ...body } : {};
+  const mirrored = Object.hasOwn(out, ROWS_MARK) && Number(out[ROWS_MARK]) === Number(version);
+  delete out[ROWS_MARK];
+  for (const p of parts) {
+    if (!mirrored && isMap(out[p])) continue; // taken as the older build wrote it
+    out[p] = { ...(rows?.[p] || {}) };
+  }
+  return out;
+}
 
 /**
  * @param {object} o
@@ -42,7 +73,7 @@ const isMap = (v) => v && typeof v === "object" && !Array.isArray(v);
  * @param {string[]} o.parts   the sections stored one row per key
  * @param {string|null} [o.file]  the file without a database, and the one-time import source with one
  */
-export function createJsonRowsDocument({ name, parts, file = null, log = console.warn, lockWaitMs = ROWS_LOCK_WAIT_MS } = {}) {
+export function createJsonRowsDocument({ name, parts, file = null, log = console.warn, lockWaitMs = ROWS_LOCK_WAIT_MS, mirror = true } = {}) {
   if (!stateDbEnabled()) return createJsonDocument({ name, file, log });
   if (!Array.isArray(parts) || !parts.length) throw new Error("a rows document needs its parts");
   const PARTS = [...parts];
@@ -53,13 +84,16 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
   // This process's copy: the head version it reflects (-1: none read), the
   // head without the parts (and its text, to tell a change), and the parts.
   let copy = { version: -1, head: {}, headText: "{}", parts: emptyParts() };
-  const stats = { updates: 0, rowsWritten: 0, rowsDeleted: 0, headWrites: 0, bytes: 0, refreshes: 0, folded: 0, lastBytes: 0 };
+  const stats = { updates: 0, rowsWritten: 0, rowsDeleted: 0, headWrites: 0, bytes: 0, refreshes: 0, folded: 0, lastBytes: 0, lastRowBytes: 0 };
   let lastError = null;
 
-  const splitHead = (body) => {
+  /** The head without the parts and the mark, and the sections an older build wrote (none when the mark is `version`). */
+  const splitHead = (body, version) => {
     const head = isMap(body) ? { ...body } : {};
+    const mirrored = Object.hasOwn(head, ROWS_MARK) && Number(head[ROWS_MARK]) === Number(version);
+    delete head[ROWS_MARK];
     const sections = {};
-    for (const p of PARTS) { if (p in head) { if (isMap(head[p])) sections[p] = head[p]; delete head[p]; } }
+    for (const p of PARTS) { if (p in head) { if (!mirrored && isMap(head[p])) sections[p] = head[p]; delete head[p]; } }
     return { head, sections };
   };
   const assemble = (c) => {
@@ -67,7 +101,12 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
     for (const p of PARTS) body[p] = { ...c.parts[p] };
     return body;
   };
-  /** The copy as of head version `version` (whose body is `headBody`), read inside `client`'s transaction. */
+  /**
+   * The copy as of head version `version` (whose body is `headBody`), read
+   * inside `client`'s transaction. When an older build wrote the head last,
+   * `parts` are its sections (taken as written) and `rows` what the rows hold,
+   * so the next write brings the rows to the sections; `rows` is null otherwise.
+   */
   async function readCopy(client, version, headBody) {
     const base = copy;
     const r = await client.query(`SELECT id, CASE WHEN (body->>'v')::bigint > $2 THEN body->'b' END AS b, (body->>'v')::bigint > $2 AS fresh FROM ${T("records")} WHERE collection = $1`, [collection, base.version]);
@@ -89,8 +128,11 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
       for (const row of all.rows) { const id = String(row.id); const cut = id.indexOf(":"); const p = id.slice(0, cut); if (next[p]) next[p][id.slice(cut + 1)] = Object.freeze(row.b); }
     }
     stats.refreshes++;
-    const { head, sections } = splitHead(headBody);
-    return { version, head, headText: JSON.stringify(head), parts: next, sections };
+    const { head, sections } = splitHead(headBody, version);
+    if (!Object.keys(sections).length) return { version, head, headText: JSON.stringify(head), parts: next, rows: null };
+    const taken = { ...next };
+    for (const p of Object.keys(sections)) taken[p] = Object.fromEntries(Object.entries(sections[p]).map(([k, v]) => [k, v !== null && typeof v === "object" ? Object.freeze(v) : v]));
+    return { version, head, headText: JSON.stringify(head), parts: taken, rows: next };
   }
   const importBody = () => {
     if (!file || !existsSync(file)) return null;
@@ -98,24 +140,19 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
   };
   /** Lock the head (creating it from the import or `fallback` the first time); the copy as the row stands. */
   async function lockedCopy(client, fallback, lock = "FOR UPDATE") {
-    const sel = `SELECT version, CASE WHEN version = $2 THEN NULL ELSE body END AS body FROM ${T("documents")} WHERE name = $1 ${lock}`;
-    let r = await client.query(sel, [name, copy.version]);
+    // (A head this build wrote carries the whole body as its mirror: read without it.)
+    const sel = `SELECT version, CASE WHEN version = $2 THEN NULL WHEN body->>'${ROWS_MARK}' = version::text THEN body - $3::text[] ELSE body END AS body FROM ${T("documents")} WHERE name = $1 ${lock}`;
+    let r = await client.query(sel, [name, copy.version, PARTS]);
     if (!r.rows.length) {
       if (lock !== "FOR UPDATE") return null;
       const first = importBody() ?? fallback ?? {};
       await client.query(`INSERT INTO ${T("documents")} (name, body) VALUES ($1, $2::jsonb) ON CONFLICT (name) DO NOTHING`, [name, JSON.stringify(isMap(first) ? first : {})]);
-      r = await client.query(sel, [name, -1]);
+      r = await client.query(sel, [name, -1, PARTS]);
     }
     const version = Number(r.rows[0].version);
-    if (version === copy.version) return { ...copy, sections: {} };
+    if (version === copy.version) return { ...copy, rows: null };
     return readCopy(client, version, r.rows[0].body);
   }
-  /** Fold a whole-book section into the copy: a key already a row is kept as the row has it. */
-  const foldSections = (c) => {
-    const fold = [];
-    for (const p of Object.keys(c.sections || {})) for (const [k, v] of Object.entries(c.sections[p])) if (!(k in c.parts[p])) { c.parts[p] = c.parts[p] === copy.parts[p] ? { ...c.parts[p] } : c.parts[p]; c.parts[p][k] = Object.freeze(v); fold.push([p, k]); }
-    return fold;
-  };
 
   const api = {
     name,
@@ -132,10 +169,8 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
           return got;
         });
         if (!c) return fallback;
-        const hasSections = Object.keys(c.sections || {}).length > 0;
-        const fold = foldSections(c);
-        // A copy holding a folded section is not taken as the row's version: the next write folds it for real.
-        copy = { version: hasSections || fold.length ? -1 : c.version, head: c.head, headText: c.headText, parts: c.parts };
+        // A copy taken from an older build's sections is not the rows' version: the next write brings the rows to it.
+        copy = { version: c.rows ? -1 : c.version, head: c.head, headText: c.headText, parts: c.parts };
         lastError = null;
         return assemble(copy);
       } catch (e) {
@@ -158,8 +193,7 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
         landed = await withStateTx(async (client) => {
           await client.query(`SET LOCAL lock_timeout = ${Math.max(1, Math.floor(Number(lockWaitMs) || ROWS_LOCK_WAIT_MS))}`);
           const c = await lockedCopy(client, fallback);
-          const fold = foldSections(c);
-          const hadSections = Object.keys(c.sections || {}).length > 0;
+          const hadSections = !!c.rows;
           const given = assemble(c);
           const out = mutate(given);
           if (out === SKIP_UPDATE && !hadSections) return { c, changed: false };
@@ -167,24 +201,26 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
           const next = out === SKIP_UPDATE ? assemble(c) : out === undefined ? given : out;
           const ups = [], dels = [];
           const parts2 = {};
-          const folded = new Set(fold.map(([p, k]) => `${p}:${k}`));
           for (const p of PARTS) {
             const now_ = isMap(next[p]) ? next[p] : {};
-            const was = c.parts[p];
+            // (Against what the rows hold: after an older build's write, every key it holds is written and every row it dropped deleted.)
+            const was = (c.rows || c.parts)[p];
             const kept = {};
             for (const k of Object.keys(now_)) {
               const v = now_[k];
               if (v === undefined) continue;
-              if (was[k] !== v || folded.has(`${p}:${k}`)) ups.push([`${p}:${k}`, v]);
+              if (was[k] !== v) ups.push([`${p}:${k}`, v]);
               kept[k] = v !== null && typeof v === "object" ? Object.freeze(v) : v;
             }
             for (const k of Object.keys(was)) if (!(k in kept)) dels.push(`${p}:${k}`);
             parts2[p] = kept;
           }
-          const { head } = splitHead(next);
+          const { head } = splitHead(next, null);
           const headText = JSON.stringify(head);
-          const headChanged = headText !== c.headText || hadSections;
           const version = c.version + 1;
+          // With the mirror on, the head carries the whole body and the mark of this version (header note).
+          const headChanged = mirror || headText !== c.headText || hadSections;
+          const bodyText = mirror ? JSON.stringify({ ...head, ...parts2, [ROWS_MARK]: version }) : headText;
           let bytes = 0;
           if (ups.length) {
             const text = JSON.stringify(ups);
@@ -192,11 +228,11 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
             await client.query(`INSERT INTO ${T("records")} (collection, id, body) SELECT $1, e->>0, jsonb_build_object('v', $2::bigint, 'b', e->1) FROM jsonb_array_elements($3::jsonb) AS e ON CONFLICT (collection, id) DO UPDATE SET body = EXCLUDED.body, updated_at = now()`, [collection, version, text]);
           }
           if (dels.length) await client.query(`DELETE FROM ${T("records")} WHERE collection = $1 AND id = ANY($2::text[])`, [collection, dels]);
-          if (headChanged) bytes += headText.length;
-          const r = await client.query(`UPDATE ${T("documents")} SET version = version + 1, updated_at = now()${headChanged ? ", body = $3::jsonb" : ""} WHERE name = $1 AND version = $2 RETURNING version`, headChanged ? [name, c.version, headText] : [name, c.version]);
+          if (headChanged) bytes += bodyText.length;
+          const r = await client.query(`UPDATE ${T("documents")} SET version = version + 1, updated_at = now()${headChanged ? ", body = $3::jsonb" : ""} WHERE name = $1 AND version = $2 RETURNING version`, headChanged ? [name, c.version, bodyText] : [name, c.version]);
           // (The row is locked: its version is the one read. A miss is a fault, never a lost change.)
           if (!r.rowCount) throw new Error("the head row moved under its lock");
-          return { c: { version, head, headText, parts: parts2 }, changed: true, ups: ups.length, dels: dels.length, headChanged, bytes, hadSections };
+          return { c: { version, head, headText, parts: parts2 }, changed: true, ups: ups.length, dels: dels.length, headChanged, bytes, rowBytes: bytes - (headChanged ? bodyText.length : 0), hadSections };
         });
       } catch (e) {
         lastError = String(e?.message || e).slice(0, 160);
@@ -214,7 +250,8 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
       if (landed.headChanged) stats.headWrites++;
       stats.bytes += landed.bytes;
       stats.lastBytes = landed.bytes;
-      if (landed.hadSections) { stats.folded++; say(`whole-book sections folded into rows (head version ${copy.version})`); }
+      stats.lastRowBytes = landed.rowBytes;
+      if (landed.hadSections) { stats.folded++; say(`the book as an older build wrote it was taken into rows (head version ${copy.version})`); }
       return { ok: true, body: assemble(copy), version: copy.version, changed: true, bytes: landed.bytes };
     },
     /** Write counters since boot (tests, the operator view). */
