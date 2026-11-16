@@ -100,7 +100,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-15.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-16.</p>
 </section>
 
 <section>
@@ -210,7 +210,8 @@ so every claim below is verifiable in code.</p>
   <li><b>On-chain payments.</b> A per-call x402 or MPP payment carries no card number, name or email.
   A monitor subscription paid over MPP is different: its record holds the paying wallet together with the
   subject you asked us to watch, the email you give for delivery (optional), and a signing key our server
-  made for that subscription. Your signed authorization lets that key send one payment per period from your
+  made for that subscription. A subscription you ask for and do not pay keeps the email, the subject and the key
+  only until its offer expires, and all three are deleted within an hour of your request. Your signed authorization lets that key send one payment per period from your
   account, in one token, to our address, up to the subscription price, until the expiry you signed. The
   key is kept only while a later payment can still be taken: it is deleted from our records when you cancel,
   when the expiry you signed passes, or when the subscription ends for any other reason (a nightly backup

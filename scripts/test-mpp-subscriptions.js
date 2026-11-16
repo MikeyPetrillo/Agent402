@@ -47,6 +47,9 @@ const PERIOD = periodMs();
 const PRICE_ATOMIC = BigInt(MONITOR_PRODUCTS["domain-monitor"].price / 100 * 1e6);
 
 const tmp = mkdtempSync(join(tmpdir(), "a402-mppsubs-"));
+// A first payment whose record write fails books an owed row (read on first
+// use, so this lands before the refund ledger is imported): this suite's own.
+process.env.REFUND_DB_DIR = tmp;
 process.env.MPP_SECRET_KEY = SECRET;
 process.env.TEMPO_RECIPIENT_ADDRESS = RECIPIENT;
 process.env.TEMPO_CURRENCY = "usdc";

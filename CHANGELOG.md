@@ -6,6 +6,24 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (settled subscription payments are never lost)
+Payments:
+- A wallet subscription whose first payment settled but whose record could
+  not be written is booked as owed to the buyer, once, and the buyer is told
+  the payment settled. Sending the same request again before the payment
+  challenge expires hands the subscription back and cancels that debt; a
+  refund already being sent refuses it instead, so a buyer is never both
+  served and refunded. Once the challenge expires the debt stands and the
+  signing key is deleted. A first payment the server stopped before
+  answering is found before its signing key is deleted: the subscription is
+  rebuilt when the offer named a delivery email, and otherwise the payment is
+  booked as owed.
+- An unpaid wallet subscription offer's email, subject and signing key are
+  deleted within an hour of the request.
+- An owed card report refund is counted from the report's own record, so the
+  refund alarm reads it even when the list of open issues missed it, and
+  stops reading it once the record shows the refund was sent.
+
 ### 2026-11-16 (one claim per payment, one amount per price)
 Payments:
 - Two requests carrying one payment are claimed once when the shared store

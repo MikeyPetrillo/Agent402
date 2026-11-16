@@ -3,6 +3,15 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "Settled subscription payments are never lost",
+    items: [
+      "Payments: A wallet subscription whose first payment settled but whose record could not be written is booked as owed to the buyer, once, and the buyer is told the payment settled. Sending the same request again before the payment challenge expires hands the subscription back and cancels that debt; a refund already being sent refuses it instead, so a buyer is never both served and refunded. Once the challenge expires the debt stands and the signing key is deleted. A first payment the server stopped before answering is found before its signing key is deleted: the subscription is rebuilt when the offer named a delivery email, and otherwise the payment is booked as owed.",
+      "Payments: An unpaid wallet subscription offer's email, subject and signing key are deleted within an hour of the request.",
+      "Payments: An owed card report refund is counted from the report's own record, so the refund alarm reads it even when the list of open issues missed it, and stops reading it once the record shows the refund was sent.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "One claim per payment, one amount per price",
     items: [
       "Payments: Two requests carrying one payment are claimed once when the shared store answers one of them and not the other: the request whose claim lands in the store reads the claim this server already holds and is answered 409 (X-Payment-Replay: inflight), uncharged. A claim taken while the store did not answer is written there once this server reaches the store again, without waiting for the claim's 30-second renewal, so a container serving beside this one reads that payment in flight.",
