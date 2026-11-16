@@ -272,8 +272,8 @@ for (const [name, w] of Object.entries(WIRES)) {
 {
   const sse = {
     chat: 'data: {"id":"c","choices":[{"index":0,"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n',
-    messages: 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
-    responses: 'event: response.created\ndata: {"type":"response.created","response":{"id":"r"}}\n\nevent: response.completed\ndata: {"type":"response.completed","response":{"id":"r"}}\n\n',
+    messages: 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
+    responses: 'event: response.created\ndata: {"type":"response.created","response":{"id":"r"}}\n\nevent: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\nevent: response.completed\ndata: {"type":"response.completed","response":{"id":"r"}}\n\n',
   };
   for (const [name, w] of Object.entries(WIRES)) {
     const run = async (body) => {
