@@ -32,7 +32,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 const T0 = Date.parse("2026-11-16T03:00:00Z");
 const slow = (ms, inner = createMemoryLimits()) => {
   const s = { mode: "redis", ops: 0 };
-  for (const k of ["windowAdd", "windowRead", "windowReadMany", "windowRemove", "windowClear", "flagSet", "flagGet", "counterAdd", "counterGet", "counterClear"]) {
+  for (const k of ["windowAdd", "windowRead", "windowReadMany", "windowRemove", "windowClear", "flagSet", "flagGet", "counterAdd", "counterGet", "counterClear", "tallyAdd", "tallyReadMany"]) {
     s[k] = async (...a) => { s.ops++; await new Promise((r) => setTimeout(r, ms)); return inner[k](...a); };
   }
   return s;

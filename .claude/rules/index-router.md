@@ -86,7 +86,9 @@ Loaded when an index, discovery, router or buyer file is read.
   after a wait gets the hold window (`INDEX_CRAWL_HOLD_HOURS`) counted from the end of that wait.
   `CRAWL_SLOW_ORIGINS` applies to the MPP index too (`mppCrawlDue`). Counts on
   `/__operator/seller-load.json`; `?host=` gives the request log (per component and minute, two
-  days). Tests: `scripts/test-seller-load.js`, `scripts/test-crawl-revisit.js`,
+  days: one counter per host, minute and component in a shared-store tally per host and hour, so
+  a write never reads the host's history; a process holds a few minutes per host, at most 32
+  entries). Tests: `scripts/test-seller-load.js`, `scripts/test-crawl-revisit.js`,
   `scripts/test-mpp-seller-load.js`.
 - **Live price reads:** a paid route's 402 is read once, then after `LIVE_QUOTE_MAX_AGE_MS` /
   `NETWORKS_VERIFY_AGE_MS` (src/crawl-cadence.js, a week). A manifest price that fills an OpenAPI

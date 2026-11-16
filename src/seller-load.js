@@ -27,7 +27,10 @@
 //      seller's question is checked against. Every component /crawler lists is
 //      in it: the crawl and the probes through the budget, and the catalog's
 //      fetches for a caller, the site-crawl tool and the router's purchase
-//      through noteHostRequest (host counts only, at most 5,000 hosts held).
+//      through noteHostRequest (host counts only). The store keeps one counter
+//      per host, minute and component (a tally per host and hour), so a write
+//      never reads the host's history; this process keeps at most 5,000 hosts
+//      and, per host, the counts it has not written and the last few minutes.
 //
 // A skip never changes a listing: the entry stays exactly as the last
 // completed read left it.
@@ -132,7 +135,13 @@ const PREFETCH_CHUNK = 100;
 /** The request log keeps counts per host, component and minute this long. */
 export const REQUEST_LOG_KEEP_MS = 2 * DAY_MS;
 const REQUEST_LOG_FLUSH_MS = 5_000;
-const REQUEST_LOG = "seller-request-log"; // window per hostname: `${minute}|${kind}|${seq}`, weight = requests
+const REQUEST_LOG = "seller-request-log"; // tally per hostname and hour: `${minute}|${kind}` -> requests
+/** Hosts whose recent counts this process holds. */
+const LOG_HOSTS_CAP = 5_000;
+/** Minutes of a host's counts this process keeps after writing them. */
+const LOG_MEMORY_MINUTES = 2;
+/** Counts (minute and component) this process holds for one host at most. */
+const LOG_MEMORY_ENTRIES_PER_HOST = 32;
 
 /**
  * The controls over one store.
@@ -247,40 +256,78 @@ export function createSellerLoad({
   }
 
   // ---- the request log (counts per host, component and minute) -----------------
+  // The store holds one counter per (host, minute, component): a tally per host
+  // and hour whose fields are `${minute}|${kind}`, so a write adds to a counter
+  // and never reads the host's history. This process holds only the minutes it
+  // has not written yet and the last LOG_MEMORY_MINUTES, at most
+  // LOG_MEMORY_ENTRIES_PER_HOST per host.
   const logBuckets = new Map();    // hostname -> Map(`${minute}|${kind}` -> { n, flushed })
   const logTimers = new Map();
-  let logSeq = 0;
+  let logEntries = 0;
+  function dropLogHost(host) {
+    const m = logBuckets.get(host);
+    if (!m) return;
+    logEntries -= m.size;
+    logBuckets.delete(host);
+    const tm = logTimers.get(host);
+    if (tm) { clearTimeout(tm); logTimers.delete(host); }
+  }
+  /** Called right after a flush: drop from `m` the minutes before the last
+   *  few, then the oldest past the per-host cap. */
+  function trimLog(m) {
+    const keepFrom = Math.floor(clock() / 60_000) * 60_000 - (LOG_MEMORY_MINUTES - 1) * 60_000;
+    for (const [k, b] of m) {
+      if (m.size <= LOG_MEMORY_ENTRIES_PER_HOST && Number(k.split("|")[0]) >= keepFrom) break;
+      m.delete(k); logEntries--;
+    }
+  }
   function noteRequest(url, kind) {
     const host = hostnameOf(url);
     if (!host) return;
     const minute = Math.floor(clock() / 60_000) * 60_000;
     let m = logBuckets.get(host);
-    if (!m) { m = new Map(); logBuckets.set(host, m); bounded(logBuckets, 5_000); }
+    if (!m) {
+      m = new Map(); logBuckets.set(host, m);
+      // Past the host cap the oldest host goes, its unwritten counts first.
+      while (logBuckets.size > LOG_HOSTS_CAP) {
+        const old = logBuckets.keys().next().value;
+        const om = logBuckets.get(old);
+        flushLog(old, om);
+        dropLogHost(old);
+      }
+    }
     const k = `${minute}|${kind}`;
-    const b = m.get(k) || { n: 0, flushed: 0 };
+    let b = m.get(k);
+    if (!b) { b = { n: 0, flushed: 0 }; m.set(k, b); logEntries++; }
     b.n++;
-    m.set(k, b);
-    const cutoff = clock() - REQUEST_LOG_KEEP_MS;
-    for (const key of m.keys()) { if (Number(key.split("|")[0]) <= cutoff) m.delete(key); else break; }
+    if (m.size > LOG_MEMORY_ENTRIES_PER_HOST) { flushLog(host, m); trimLog(m); }
     if (shares && !logTimers.has(host)) {
       const tm = setTimeout(() => flushLog(host), REQUEST_LOG_FLUSH_MS);
       tm.unref?.();
       logTimers.set(host, tm);
     }
   }
-  function flushLog(host) {
-    logTimers.delete(host);
-    const m = logBuckets.get(host);
+  function flushLog(host, m = logBuckets.get(host)) {
+    const tm = logTimers.get(host);
+    if (tm) { clearTimeout(tm); logTimers.delete(host); }
     if (!m) return Promise.resolve();
-    const writes = [];
+    const byHour = new Map();    // hour -> [[`${minute}|${kind}`, delta]]
     for (const [k, b] of m) {
       const delta = b.n - b.flushed;
-      if (delta <= 0) continue;
+      if (delta <= 0 || !shares) continue;
       b.flushed = b.n;
-      const [minute] = k.split("|");
-      const member = `${k}|${process.pid}.${++logSeq}`;
-      writes.push(behind(`l|${host}`, (s) => s.windowAdd(REQUEST_LOG, host, { windowMs: REQUEST_LOG_KEEP_MS, member, weight: delta, now: clock(), score: Number(minute) })));
+      const hour = Math.floor(Number(k.split("|")[0]) / HOUR_MS) * HOUR_MS;
+      if (!byHour.has(hour)) byHour.set(hour, []);
+      byHour.get(hour).push([k, delta]);
     }
+    const writes = [];
+    for (const [hour, increments] of byHour) {
+      const t = clock();
+      writes.push(behind(`l|${host}`, (s) => (typeof s.tallyAdd === "function"
+        ? s.tallyAdd(REQUEST_LOG, `${host}|${hour}`, increments, REQUEST_LOG_KEEP_MS + HOUR_MS, { now: t })
+        : { ok: false, error: "no tally" })));
+    }
+    if (m === logBuckets.get(host)) trimLog(m);
     return Promise.all(writes);
   }
 
@@ -527,8 +574,10 @@ export function createSellerLoad({
       let complete = true;
       if (shares) {
         await flushLog(host);
-        const r = await shared((s) => s.windowRead(REQUEST_LOG, host, { windowMs: REQUEST_LOG_KEEP_MS, now: clock() }));
-        if (r && Array.isArray(r.entries)) for (const e of r.entries) { const [minute, kind] = String(e.member).split("|"); add(Number(minute), kind, Number(e.weight) || 1); }
+        const hours = [];
+        for (let h = Math.floor(cutoff / HOUR_MS) * HOUR_MS; h <= clock(); h += HOUR_MS) hours.push({ name: REQUEST_LOG, key: `${host}|${h}` });
+        const r = await shared((s) => (typeof s.tallyReadMany === "function" ? s.tallyReadMany(hours, { now: clock() }) : { ok: false, error: "no tally" }));
+        if (r && Array.isArray(r.results)) for (const one of r.results) for (const [k, n] of Object.entries(one?.fields || {})) { const [minute, kind] = k.split("|"); add(Number(minute), kind, Number(n) || 0); }
         else complete = false;
       }
       if (!shares || !complete) for (const [k, b] of logBuckets.get(host) || []) { const [minute, kind] = k.split("|"); add(Number(minute), kind, b.n); }
@@ -555,7 +604,7 @@ export function createSellerLoad({
         throttle: { defaultMinutes: THROTTLE_DEFAULT_MS / 60_000, maxHours: THROTTLE_MAX_MS / HOUR_MS, ...counts.throttles },
         crawlsSkipped: { ...counts.skipped },
         prefetch: { ...counts.prefetch, waitMs: prefetchWaitMs },
-        requestLog: { keptHours: REQUEST_LOG_KEEP_MS / HOUR_MS, hostsInMemory: logBuckets.size },
+        requestLog: { keptHours: REQUEST_LOG_KEEP_MS / HOUR_MS, hostsInMemory: logBuckets.size, entriesInMemory: logEntries },
         store: store?.mode || "memory",
         writesPending: pending.size,
       };

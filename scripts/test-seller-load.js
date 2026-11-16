@@ -165,6 +165,68 @@ function fresh(opts = {}) {
   for (let i = 0; i < 6000; i++) c.logRequest(`https://h${i}.example/`, "fetch");
   ok(c.status().requestLog.hostsInMemory === 5000, `the hosts held in memory stay at 5,000 (${c.status().requestLog.hostsInMemory})`);
   await c.flush();
+  ok((await c.requestLog("h0.example")).total === 1, "a host dropped from memory had its counts written first");
+}
+
+// ---- a busy host's request log: one counter per host, component and minute ----------
+{
+  // Three components each send a busy host a request every 5 s for two days,
+  // flushed after every request (the write-behind's cadence). The store holds
+  // one counter per (minute, component), grouped by hour: an add touches one
+  // counter and never reads the host's window, so its cost does not grow with
+  // the host's history.
+  const store = createMemoryLimits();
+  const calls = {};
+  const spy = new Proxy(store, { get(target, p) {
+    const v = target[p];
+    if (typeof v !== "function") return v;
+    return (...a) => { if (a[0] === "seller-request-log") calls[p] = (calls[p] || 0) + 1; return v.apply(target, a); };
+  } });
+  let t = Math.floor(T0 / H) * H;
+  const load = createSellerLoad({ store: spy, now: () => t });
+  const HOST = "busy.example", KINDS = ["fetch", "crawler", "router-buy"];
+  const STEPS = (2 * 24 * H) / 5_000;
+  for (let i = 0; i < STEPS; i++) {
+    for (const k of KINDS) load.logRequest(`https://${HOST}/p${i}`, k);
+    await load.flush();
+    t += 5_000;
+  }
+  t -= 5_000;
+  const sizes = store._tallySizes?.() || { keys: Infinity, fields: Infinity, maxFieldsPerKey: Infinity };
+  ok(!calls.windowAdd && calls.tallyAdd > 0, `no request-log write scans a window (windowAdd ${calls.windowAdd || 0}, tallyAdd ${calls.tallyAdd || 0})`);
+  ok(sizes.maxFieldsPerKey <= 60 * KINDS.length, `one counter per minute and component: at most ${60 * KINDS.length} in any one key an add touches (${sizes.maxFieldsPerKey})`);
+  ok(sizes.fields <= (2 * 24 * 60 + 60) * KINDS.length && sizes.keys <= 50, `two days at a busy host are ${sizes.fields} counters in ${sizes.keys} keys (was one member per flush)`);
+  const log = await load.requestLog(HOST);
+  ok(log.complete && log.total === STEPS * KINDS.length,
+    `the operator read still sums every request in the two days (${log.total} of ${STEPS * KINDS.length})`);
+  t += 30 * 60_000;
+  const later = await load.requestLog(HOST);
+  ok(later.total === (STEPS - 30 * 12) * KINDS.length, `half an hour on, the oldest hour's later minutes are still read (${later.total} of ${(STEPS - 30 * 12) * KINDS.length})`);
+  ok(log.rows.every((r) => r.requests <= 12) && new Set(log.rows.map((r) => r.kind)).size === KINDS.length, "per component and minute, twelve a minute each");
+  const mem = load.status().requestLog;
+  ok(mem.entriesInMemory <= 2 * KINDS.length, `this process holds only the last few minutes of the host (${mem.entriesInMemory} entries)`);
+}
+
+// ---- in-process memory is bounded per host, flushed or not ----------------------------
+{
+  const store = createMemoryLimits({ tallyFieldCap: 1_000_000 });
+  let t = T0;
+  const load = createSellerLoad({ store, now: () => t });
+  const KINDS = ["fetch", "crawler", "router-buy", "quote"];
+  // An hour of requests with no timer flush in between (a stalled loop):
+  // the host's in-memory counts stay capped, and none of them is lost.
+  for (let m = 0; m < 60; m++) { for (const k of KINDS) load.logRequest("https://unflushed.example/", k); t += 60_000; }
+  const held = load.status().requestLog.entriesInMemory;
+  ok(held <= 32, `one host's in-memory entries stay capped with no flush (${held})`);
+  await load.flush();
+  ok((await load.requestLog("unflushed.example")).total === 60 * KINDS.length, "and every request still reaches the operator read");
+  // 3,000 hosts x 4 components x 60 minutes: bounded by hosts x the per-host cap.
+  for (let m = 0; m < 60; m++) { for (let h = 0; h < 3000; h++) for (const k of KINDS) load.logRequest(`https://m${h}.example/`, k); t += 60_000; }
+  const st = load.status().requestLog;
+  ok(st.entriesInMemory <= st.hostsInMemory * 32, `3,000 busy hosts hold ${st.entriesInMemory} entries in memory (cap ${st.hostsInMemory} x 32)`);
+  await load.flush();
+  const sample = await load.requestLog("m7.example");
+  ok(sample.total === 60 * KINDS.length, `an evicted or capped host's counts reached the store (${sample.total})`);
 }
 
 // ---- a cycle's prefetch of 3,000 origins never holds the event loop ----------------
