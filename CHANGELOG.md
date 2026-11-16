@@ -6,6 +6,23 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-15 (access keys and card tokens are judged per payer)
+Payments:
+- A Tempo pull credential signed by an access key runs only once the chain
+  confirms that key belongs to the account the transaction names; one whose
+  key the chain reports is not that account's is refused 402 before it runs,
+  uncharged, and when the chain cannot be read in time the answer is 503 with
+  Retry-After 3, uncharged, so the same request can be sent again. A confirmed
+  one is judged on that account's balance, together with that account's other
+  calls in flight, as one signed by the account's own key is: a call the
+  balance cannot also cover is refused 429 before it runs, and nothing is
+  charged. A card payment token pays for one run at a time: while a request it
+  pays for is in flight, another credential carrying the same token is refused
+  402 before its handler, uncharged; the token is free again once that run
+  ends, captured or not, so a token with limit left pays for a later request
+  under a new challenge, while a credential that was captured is refused if it
+  is sent again.
+
 ### 2026-11-15 (kept balance reads judged at once)
 Payments:
 - On routes other than the report and media routes, a wallet whose last

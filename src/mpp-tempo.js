@@ -968,45 +968,73 @@ export async function tempoAccessKeyActive(keychain = {}, opts = {}) {
   return (await tempoAccessKeyState(keychain, opts)) === "active";
 }
 
+/** What a keychain check answers when the chain could not be asked (an RPC
+ *  error, a timeout, no read slot within the wait): not a verdict on the key,
+ *  so the caller asks the buyer to try again rather than refusing the key. */
+export const KEYCHAIN_UNAVAILABLE = "unavailable";
+
 /** A cached, deduplicated and concurrency-bounded keychain check. Resolves to
  *  the account (lowercased) when its access key is active on chain, or when
  *  the chain holds no record of the key and the credential carries the
  *  account's own authorization of it (keychain.inlineAuthorization, checked
- *  offline by inspectTempoSender); else null. A revoked, expired or
- *  unreadable key is never accepted. Never rejects. `check` resolves to a
- *  tempoAccessKeyState word (true reads as "active"). An active key is
- *  remembered for `ttlMs`, any other state for `negativeTtlMs`; a remembered
- *  "absent" is not reused for a credential WITHOUT an inline authorization
- *  (the key may have been installed since), which reads again. Past
- *  `maxInFlight` concurrent reads the answer is null without a read
- *  (unverified, never a guess). Exported for tests. */
-export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlMs = 60_000, negativeTtlMs = 15_000, maxInFlight = 16, maxEntries = 5000 } = {}) {
+ *  offline by inspectTempoSender); to null when the chain answered and the
+ *  key is not that account's (revoked, expired, another key, or absent with
+ *  no inline authorization); and to KEYCHAIN_UNAVAILABLE when the chain could
+ *  not be read. Never rejects. `check` resolves to a tempoAccessKeyState word
+ *  (true reads as "active"; a throw reads as "unreadable"). An active key is
+ *  remembered for `ttlMs`, a definite answer for `negativeTtlMs`, a failed
+ *  read not at all, so the next request reads again. A remembered "absent" is
+ *  not reused for a credential WITHOUT an inline authorization (the key may
+ *  have been installed since), which reads again. At most `maxInFlight` reads
+ *  run at once; a new key past that waits for a free slot up to `queueWaitMs`
+ *  (default: the read timeout), and is unavailable if none frees in time.
+ *  Exported for tests. */
+export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlMs = 60_000, negativeTtlMs = 15_000, maxInFlight = 16, maxEntries = 5000, queueWaitMs = null } = {}) {
   const cache = new Map(); // "account:key" -> { state, until }
   const inFlight = new Map(); // "account:key" -> Promise<state>
+  let slotFreed = null; let wakeSlot = null;
+  const nextSlot = () => { if (!slotFreed) slotFreed = new Promise((r) => { wakeSlot = r; }); return slotFreed; };
+  const freeSlot = () => { if (wakeSlot) { const w = wakeSlot; slotFreed = null; wakeSlot = null; w(); } };
   const stateOf = (v) => (v === true || v === "active" ? "active" : typeof v === "string" ? v : "inactive");
-  return async function verifyKeychainSender(keychain, now = Date.now()) {
+  const verify = async function verifyKeychainSender(keychain, now = Date.now()) {
     const account = lcAddress(keychain?.account);
     const accessKey = lcAddress(keychain?.accessKey);
     if (!account || !accessKey) return null;
     const inline = keychain.inlineAuthorization === true;
-    const decide = (state) => (state === "active" || (state === "absent" && inline) ? account : null);
+    const decide = (state) => (state === "active" || (state === "absent" && inline) ? account : state === "unreadable" ? KEYCHAIN_UNAVAILABLE : null);
     const k = `${account}:${accessKey}`;
     const hit = cache.get(k);
     if (hit && hit.until > now && (hit.state !== "absent" || inline)) return decide(hit.state);
     let p = inFlight.get(k);
+    if (!p && inFlight.size >= maxInFlight) {
+      const deadline = Date.now() + (Number.isFinite(queueWaitMs) && queueWaitMs >= 0 ? queueWaitMs : accessKeyTimeoutMs());
+      while (inFlight.size >= maxInFlight && !inFlight.has(k)) {
+        const left = deadline - Date.now();
+        if (left <= 0) return KEYCHAIN_UNAVAILABLE;
+        let t = null;
+        await Promise.race([nextSlot(), new Promise((r) => { t = setTimeout(r, left); })]);
+        clearTimeout(t);
+      }
+      p = inFlight.get(k);
+    }
     if (!p) {
-      if (inFlight.size >= maxInFlight) return null;
       p = Promise.resolve().then(() => check({ account, accessKey })).then(stateOf, () => "unreadable");
       inFlight.set(k, p);
       p.then((state) => {
         inFlight.delete(k);
         cache.delete(k);
-        if (cache.size >= maxEntries) cache.delete(cache.keys().next().value);
-        cache.set(k, { state, until: Date.now() + (state === "active" ? ttlMs : negativeTtlMs) });
+        if (state !== "unreadable") {
+          if (cache.size >= maxEntries) cache.delete(cache.keys().next().value);
+          cache.set(k, { state, until: Date.now() + (state === "active" ? ttlMs : negativeTtlMs) });
+        }
+        freeSlot();
       });
     }
     return decide(await p);
   };
+  /** Reads under way now (one per account and key), for tests and status. */
+  verify.readsInFlight = () => inFlight.size;
+  return verify;
 }
 const verifyTempoKeychainSenderDefault = createKeychainSenderVerifier();
 /** The production keychain check (TEMPO_RPC_URL, cached). */
@@ -1046,6 +1074,11 @@ export const TEMPO_SENDER_UNVERIFIED = Object.freeze({
   detail: "This route accepts a Tempo pull credential only when its signature proves the paying account: signed by the account's own key, or by an access key that is active for that account on Tempo or that the transaction authorizes with the account's own key. This credential's signer could not be verified, so it was not sent for validation and nothing was charged.",
   hint: "Pay with a credential signed by the account's key, or by an access key that is active on chain or carries the account's authorization for it, or pay this route over another method offered in the WWW-Authenticate header.",
 });
+
+/** The answer when the chain read of an access key could not be made: a
+ *  503 with this Retry-After, nothing charged. Exported for tests. */
+export const TEMPO_SENDER_CHECK_RETRY_AFTER_S = 3;
+export const TEMPO_SENDER_CHECK_UNAVAILABLE_TEXT = "The access key that signed this credential could not be checked on Tempo just now, so no run was started and nothing was charged. Send the same request again in a few seconds.";
 
 /** Best-effort amount (base units) from a credential, for the refusal log only. */
 function amountOfCredential(authorizationHeader) {
@@ -1600,25 +1633,42 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
     // own authorization carried inline), started here beside relay validation.
     // A route that spends before the buyer's payment settles
     // (verifiedSenderRequired) waits for that proof and refuses a pull
-    // credential without it, before any relay call. Every other route keys its
-    // bounds on the keychain account only if the read has answered by the time
-    // validation has, else on the client IP: no added latency, and never an
-    // unverified sender.
+    // credential without it, before any relay call. Every other route waits
+    // for it after validation (the read runs beside validation, bounded by
+    // TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS) and refuses a keychain credential the
+    // read did not vouch for, before the handler and uncharged: the run is
+    // booked against the named account's balance only once the chain has
+    // confirmed the key is that account's, so a key that is not cannot hold
+    // another account's calls back. Never an unverified sender.
     const isPull = binding.payloadType === "transaction";
     const senderInfo = isPull ? inspectTempoSender(auth) : null;
     const signedSender = senderInfo?.verified || null;
     let keychainSender = null;
     let keychainRead = null;
     if (isPull && !signedSender && senderInfo.keychain && typeof verifyKeychainSender === "function") {
-      keychainRead = Promise.resolve().then(() => verifyKeychainSender(senderInfo.keychain)).then((a) => lcAddress(a), () => null);
-      keychainRead.then((a) => { keychainSender = a; });
+      // Bounded here as well, whatever verifier is configured: no answer in
+      // time, or a check that throws, reads as "the chain could not be read"
+      // (KEYCHAIN_UNAVAILABLE), never as a verdict on the key.
+      let timer = null;
+      const late = new Promise((resolve) => { timer = setTimeout(() => resolve(KEYCHAIN_UNAVAILABLE), accessKeyTimeoutMs()); timer.unref?.(); });
+      keychainRead = Promise.race([Promise.resolve().then(() => verifyKeychainSender(senderInfo.keychain)).then((a) => (a === KEYCHAIN_UNAVAILABLE ? a : lcAddress(a)), () => KEYCHAIN_UNAVAILABLE), late]).finally(() => clearTimeout(timer));
+      keychainRead.then((a) => { if (lcAddress(a)) keychainSender = a; });
     }
     const SENDER_REFUSED = Symbol("sender-refused");
     let t0 = Date.now();
+    // The read could not be made (an RPC failure, its timeout, no read slot in
+    // time): 503 with Retry-After, uncharged, so the buyer sends the same
+    // request again; a definite "not this account's key" is the 402 below.
+    const keychainUnavailable = () => {
+      logTempoRefusal(req, { cls: "sender-check-unavailable", amountAtomic: binding.amountAtomic, timings: { total: Date.now() - tStart }, detail: "keychain envelope; the chain read of the access key could not be made" });
+      res.setHeader("Retry-After", String(TEMPO_SENDER_CHECK_RETRY_AFTER_S));
+      return sendMppProblem(res, mppProblem("verification-failed", TEMPO_SENDER_CHECK_UNAVAILABLE_TEXT, { status: 503, hint: `Send the same request again in about ${TEMPO_SENDER_CHECK_RETRY_AFTER_S} seconds.`, details: { reason: "sender-check-unavailable", charged: false, retryAfterSeconds: TEMPO_SENDER_CHECK_RETRY_AFTER_S } }));
+    };
     const senderGate = isPull && binding.verifiedSenderRequired && !signedSender
-      ? (keychainRead || Promise.resolve(null)).then((a) => !!a)
+      ? (keychainRead || Promise.resolve(null)).then((a) => (a === KEYCHAIN_UNAVAILABLE ? KEYCHAIN_UNAVAILABLE : !!lcAddress(a)))
       : Promise.resolve(true);
     senderGate.then((allowed) => {
+      if (allowed === KEYCHAIN_UNAVAILABLE) { keychainUnavailable(); return SENDER_REFUSED; }
       if (!allowed) {
         logTempoRefusal(req, { cls: TEMPO_SENDER_UNVERIFIED.cls, amountAtomic: binding.amountAtomic, timings: { total: Date.now() - tStart }, detail: `before validate: ${senderInfo?.envelope || "?"} envelope, ${senderInfo?.reason || "no sender"}${keychainRead ? "; the chain read did not vouch for the key" : ""}` });
         noteTempoRefusal(req);
@@ -1653,6 +1703,22 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // whose body now says verification-failed with the reason class.
         markMppProblem(req, res, tempoRefusalProblem(cls, v.reason));
         return next();
+      }
+
+      // A keychain credential (signed by an access key) runs only once the
+      // chain has confirmed that key is the named account's: its account is
+      // what the run is booked against below. No proof in time, or a key that
+      // is not that account's: refused here, before any claim, nothing charged.
+      if (isPull && !signedSender && senderInfo?.keychain) {
+        const proven = keychainRead ? await keychainRead : null;
+        if (proven === KEYCHAIN_UNAVAILABLE) return keychainUnavailable();
+        if (!lcAddress(proven)) {
+          logTempoRefusal(req, { cls: TEMPO_SENDER_UNVERIFIED.cls, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `after validate: keychain envelope, ${senderInfo.reason || "no sender"}; the chain read did not vouch for the key` });
+          noteTempoRefusal(req);
+          markMppProblem(req, res, mppProblem(TEMPO_SENDER_UNVERIFIED.kind, TEMPO_SENDER_UNVERIFIED.detail, { hint: TEMPO_SENDER_UNVERIFIED.hint, details: { reason: TEMPO_SENDER_UNVERIFIED.cls, charged: false } }));
+          return next();
+        }
+        keychainSender = proven;
       }
 
       // Claim the credential's identity BEFORE the handler runs — the whole
@@ -1722,8 +1788,12 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       req.tempoSettling = true;
       // A pull credential is settled AFTER the handler, from the sender's
       // balance: what it draws on, for the check that a wallet's runs in
-      // flight are covered together (src/inflight-cover.js). Only a sender
-      // the gate verified; a push credential is final already and has none.
+      // flight are covered together (src/inflight-cover.js). The account it
+      // draws on is the verified sender: for a transaction signed by an access
+      // key, the account the chain confirmed that key belongs to (above), so a
+      // burst through one key is judged on the account's balance together
+      // with the account's own calls. A push credential is final already and
+      // has none.
       if (binding.payloadType === "transaction") presentChallengeWindow(req, binding.expiresAtMs);
       if (binding.payloadType === "transaction" && req.mppTempoSender) {
         req.mppTempoPull = { sender: req.mppTempoSender, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };

@@ -251,6 +251,140 @@ for (const seam of [true, false]) {
   } finally { __setTestClient(null); s.close(); }
 }
 
+// H) one payment token, many challenges: the token is claimed before the
+// handler. Ten credentials at once that carry one token run ONE handler and
+// make ONE capture; the claim lasts only while a run is in flight, so after
+// a capture the token pays again under a fresh challenge, while the captured
+// credential itself is refused as a replay; a run that fails (or whose
+// capture fails) releases the token, and the same token then runs once; two
+// tokens run independently. The real validate reads the token.
+{
+  let seq = 0;
+  const tokenCred = (spt) => {
+    const challenge = Challenge.fromMethod(testMethod, {
+      realm: REALM, expires: new Date(Date.now() + 60_000 + (seq++)),
+      request: { amount: "0.50", currency: "usd", decimals: 2, networkId: PROFILE, paymentMethodTypes: ["card"] },
+      secretKey: SECRET,
+    });
+    return Credential.serialize({ challenge, payload: { spt } });
+  };
+  const runs = new Map(), captures = new Map();
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  let failNext = 0, declineNext = 0;
+  const app = express();
+  app.use(createStripeGate({ ...GATE, replayGuard: createReplayGuard(),
+    settle: async (auth) => {
+      const spt = Credential.deserialize(auth).payload.spt;
+      await new Promise((r) => setTimeout(r, 50));
+      if (declineNext > 0) { declineNext--; return { ok: false, error: "declined", reason: "declined" }; }
+      bump(captures, spt);
+      return { ok: true, receipt: { method: "stripe", status: "success", reference: `pi_${spt}_${captures.get(spt)}`, timestamp: new Date().toISOString() } };
+    } }));
+  app.post("/paid", (req, res) => {
+    const spt = Credential.deserialize(req.headers.authorization).payload.spt;
+    bump(runs, spt);
+    if (failNext > 0) { failNext--; return res.status(502).json({ error: "upstream failed" }); }
+    setTimeout(() => res.status(200).json({ ok: true }), 150);
+  });
+  const { s, url } = await listen(app);
+  const post = (auth) => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: auth } }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+  const w0 = console.warn; console.warn = () => {};
+  try {
+    const tenCreds = Array.from({ length: 10 }, () => tokenCred("spt_burst"));
+    const ten = await Promise.all(tenCreds.map(post));
+    const ok200 = ten.filter((r) => r.status === 200).length;
+    const refused = ten.filter((r) => r.status === 402 && r.body?.details?.reason === "token-inflight" && r.body?.details?.charged === false).length;
+    ok(runs.get("spt_burst") === 1 && captures.get("spt_burst") === 1 && ok200 === 1 && refused === 9, `gate H: ten credentials at once carrying one token ran ONE handler and made ONE capture; nine refused 402 before the handler, uncharged (runs ${runs.get("spt_burst")}, captures ${captures.get("spt_burst")}, ${ok200} x 200, ${refused} refused)`);
+    const sb = () => `runs ${runs.get("spt_burst")}, captures ${captures.get("spt_burst")}`;
+    const after = await post(tokenCred("spt_burst"));
+    ok(after.status === 200 && runs.get("spt_burst") === 2 && captures.get("spt_burst") === 2, `gate H: after the capture the same token pays again under a fresh challenge, run and captured once (${after.status}, ${sb()})`);
+    const winner = tenCreds[ten.findIndex((r) => r.status === 200)];
+    const replayed = await post(winner);
+    ok(replayed.status === 402 && /already used or is in flight/.test(replayed.body?.detail || "") && runs.get("spt_burst") === 2 && captures.get("spt_burst") === 2, `gate H: the captured credential sent again is refused as a replay before the handler, not charged (${replayed.status}, ${sb()})`);
+    // A credential refused for its token left its own challenge unclaimed:
+    // sent again once the token is free, it runs and is captured once.
+    const loser = tenCreds[ten.findIndex((r) => r.body?.details?.reason === "token-inflight")];
+    const again = await post(loser);
+    ok(again.status === 200 && runs.get("spt_burst") === 3 && captures.get("spt_burst") === 3, `gate H: a credential refused for its token kept its challenge unclaimed and pays once the token is free (${again.status}, ${again.body?.details?.reason || String(again.body?.detail || "").slice(0, 60)}, ${sb()})`);
+
+    failNext = 1;
+    const failedCred = tokenCred("spt_retry");
+    const f1 = await post(failedCred);
+    ok(f1.status === 502 && runs.get("spt_retry") === 1 && !captures.get("spt_retry"), `gate H: a failed run is not captured (${f1.status})`);
+    const f2 = await post(failedCred);
+    ok(f2.status === 200 && runs.get("spt_retry") === 2 && captures.get("spt_retry") === 1, `gate H: after a failed run the same token (and credential) runs once more and is captured once (${f2.status}, runs ${runs.get("spt_retry")}, captures ${captures.get("spt_retry")})`);
+
+    declineNext = 1;
+    const d1 = await post(tokenCred("spt_decline"));
+    const d2 = await post(tokenCred("spt_decline"));
+    ok(d1.status === 402 && d2.status === 200 && runs.get("spt_decline") === 2 && captures.get("spt_decline") === 1, `gate H: a capture that fails releases the token; the next credential with it runs and is captured (${d1.status}, ${d2.status})`);
+
+    const two = await Promise.all([post(tokenCred("spt_a")), post(tokenCred("spt_b"))]);
+    ok(two.every((r) => r.status === 200) && runs.get("spt_a") === 1 && runs.get("spt_b") === 1 && captures.get("spt_a") === 1 && captures.get("spt_b") === 1, `gate H: two tokens at once run independently (${two.map((r) => r.status)})`);
+  } finally { console.warn = w0; s.close(); }
+}
+
+// H2) the token claim spans the capture, and a hang-up frees it.
+//   - A slow capture: one request runs, and nine more carrying the same token
+//     arrive while its capture is still under way: still one run and one
+//     capture, the nine refused before the handler.
+//   - A buyer gone before the answer, holding a forgiveness ticket: nothing is
+//     captured, and the same token under a fresh challenge then runs and is
+//     captured once.
+{
+  const { createHangupSettlementHook, clientGoneBeforeFirstByte } = await import("../src/hangup-settlement.js");
+  const { reserveHangupForgiveness, settleHangupTicket, _resetHangupForgiveness } = await import("../src/hangup-forgiveness.js");
+  const savedKeyBudget = process.env.HANGUP_FORGIVE_KEY_USD;
+  _resetHangupForgiveness();
+  process.env.HANGUP_FORGIVE_KEY_USD = "1";
+  let seq = 0;
+  const tokenCred = (spt) => Credential.serialize({ challenge: Challenge.fromMethod(testMethod, { realm: REALM, expires: new Date(Date.now() + 60_000 + (seq++)), request: { amount: "0.50", currency: "usd", decimals: 2, networkId: PROFILE, paymentMethodTypes: ["card"] }, secretKey: SECRET }), payload: { spt } });
+  const runs = new Map(), captures = new Map();
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  let captureMs = 0, capturing = 0;
+  const app = express();
+  app.use(createHangupSettlementHook({ onUndelivered: () => {} }));
+  app.use(createStripeGate({ ...GATE, replayGuard: createReplayGuard(),
+    settle: async (auth) => {
+      const spt = Credential.deserialize(auth).payload.spt;
+      capturing++;
+      await new Promise((r) => setTimeout(r, captureMs));
+      capturing--;
+      bump(captures, spt);
+      return { ok: true, receipt: { method: "stripe", status: "success", reference: `pi_${spt}_${captures.get(spt)}`, timestamp: new Date().toISOString() } };
+    } }));
+  app.post("/paid", (req, res) => {
+    const spt = Credential.deserialize(req.headers.authorization).payload.spt;
+    bump(runs, spt);
+    if (req.headers["x-grant"] === "1") reserveHangupForgiveness(req, { keys: ["ip:stripe-h2"], priceUsd: 0.5 });
+    res.once("close", () => settleHangupTicket(req, { abandoned: clientGoneBeforeFirstByte(req) }));
+    setTimeout(() => res.status(200).json({ ok: true }), req.headers["x-slow"] === "1" ? 400 : 20);
+  });
+  const { s, url } = await listen(app);
+  const post = (auth, headers = {}, signal) => fetch(`${url}/paid`, { method: "POST", headers: { Authorization: auth, ...headers }, signal }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+  const w0 = console.warn; console.warn = () => {};
+  try {
+    captureMs = 600;
+    const first = post(tokenCred("spt_slow"));
+    for (let i = 0; i < 40 && capturing === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    const midCapture = capturing === 1;
+    const nine = await Promise.all(Array.from({ length: 9 }, () => post(tokenCred("spt_slow"))));
+    const one = await first;
+    captureMs = 0;
+    const refused = nine.filter((r) => r.status === 402 && r.body?.details?.reason === "token-inflight").length;
+    ok(midCapture && one.status === 200 && runs.get("spt_slow") === 1 && captures.get("spt_slow") === 1 && refused === 9, `gate H2: nine requests with the token arriving during a slow capture: still ONE run and ONE capture, nine refused before the handler (runs ${runs.get("spt_slow")}, captures ${captures.get("spt_slow")}, ${refused} refused)`);
+
+    await post(tokenCred("spt_gone"), { "x-grant": "1", "x-slow": "1" }, AbortSignal.timeout(100)).catch(() => null);
+    await new Promise((r) => setTimeout(r, 700));
+    ok(runs.get("spt_gone") === 1 && !captures.get("spt_gone"), `gate H2: a buyer gone before the answer, with a forgiveness ticket, is not captured (runs ${runs.get("spt_gone")}, captures ${captures.get("spt_gone") || 0})`);
+    const after = await post(tokenCred("spt_gone"));
+    ok(after.status === 200 && runs.get("spt_gone") === 2 && captures.get("spt_gone") === 1, `gate H2: after the hang-up the same token under a fresh challenge runs and is captured once (${after.status}, ${after.body?.details?.reason || "-"}, runs ${runs.get("spt_gone")}, captures ${captures.get("spt_gone") || 0})`);
+  } finally {
+    console.warn = w0; s.close(); _resetHangupForgiveness();
+    if (savedKeyBudget === undefined) delete process.env.HANGUP_FORGIVE_KEY_USD; else process.env.HANGUP_FORGIVE_KEY_USD = savedKeyBudget;
+  }
+}
+
 // ---- wiring pin: server.js MUST bypass the x402 paywall for a validated
 // stripe request, exactly like req.tempoSettling. Without it a real card
 // payment is 402'd by the paywall and never served (the gate here runs with

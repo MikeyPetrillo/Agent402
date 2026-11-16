@@ -107,6 +107,95 @@ try {
     await ok(rig.outcomesOf(a).attempts === 1 && tallyOf(ra)[429] === 19, `${wire}: the short wallet beside it still ran one handler (${JSON.stringify(rig.outcomesOf(a))})`);
   }
 
+  // A Tempo pull credential signed by an ACCESS KEY of an account (a keychain
+  // signature; the chain read of the key does not answer here) draws on the
+  // account's balance, and is judged on it, together with the account's own
+  // key: one price held, five at once, one run.
+  {
+    const N = 5;
+    for (const [label, via] of [["an access key", true], ["the account key", false]]) {
+      const acct = await rig.wallet("tempo");
+      const price = await rig.priceOf(acct, SQL);
+      rig.fund(acct, price);
+      const w = via ? await rig.wallet("tempo", { accessKeyOf: acct }) : acct;
+      const rs = await rig.burst(w, SQL, N);
+      const t = tallyOf(rs), o = rig.outcomesOf(acct);
+      await ok(o.attempts === 1 && o.settled === 1 && o.refused === 0 && t[200] === 1 && t[429] === N - 1, `tempo through ${label}: ${N} pull calls at once from an account holding one call's price ran ONE handler and it settled; the rest 429 before the handler (${JSON.stringify(t)}, ${JSON.stringify(o)})`);
+      const refusal = rs.find((r) => r.status === 429);
+      await ok(/You have not been charged\./.test(refusal?.json?.error || "") && refusal?.json?.reason === "cover_short", `tempo through ${label}: the 429 says nothing was charged (${refusal?.json?.reason})`);
+      // Funded for N: all N served, none refused.
+      const rich = await rig.wallet("tempo");
+      rig.fund(rich, price * BigInt(N));
+      const rw = via ? await rig.wallet("tempo", { accessKeyOf: rich }) : rich;
+      const rr = await rig.burst(rw, SQL, N);
+      await ok(tallyOf(rr)[200] === N && rig.outcomesOf(rich).settled === N, `tempo through ${label}: an account holding ${N} calls' price is served all ${N} at once (${JSON.stringify(tallyOf(rr))})`);
+    }
+    // The account key and an access key at once draw on one balance: one run.
+    const acct = await rig.wallet("tempo");
+    const price = await rig.priceOf(acct, SQL);
+    rig.fund(acct, price);
+    const key = await rig.wallet("tempo", { accessKeyOf: acct });
+    const creds = [];
+    for (let i = 0; i < 6; i++) creds.push(await rig.credentialFor(i % 2 ? key : acct, SQL));
+    const rs = await Promise.all(creds.map((c) => rig.send(SQL, c)));
+    const o = rig.outcomesOf(acct);
+    await ok(o.attempts === 1 && o.settled === 1 && tallyOf(rs)[429] === 5, `tempo: the account key and an access key sending at once are judged on the account's one balance (${JSON.stringify(tallyOf(rs))}, ${JSON.stringify(o)})`);
+
+    // A key that is NOT the account's, naming a funded account: every call is
+    // refused before the handler, uncharged, and books nothing against that
+    // account, whose own calls at the same moment are all admitted.
+    const victim = await rig.wallet("tempo");
+    rig.fund(victim, price * 5n);
+    const forger = await rig.wallet("tempo", { forgedKeyOf: victim });
+    const [forged, own] = await Promise.all([rig.burst(forger, SQL, 10), rig.burst(victim, SQL, 5)]);
+    const ov = rig.outcomesOf(victim);
+    await ok(forged.every((r) => r.status === 402 && r.json?.details?.reason === "sender-unverified" && r.json?.details?.charged === false), `tempo: 10 pulls signed by a key that is not the named account's are refused 402 before the handler, uncharged (${JSON.stringify(tallyOf(forged))})`);
+    await ok(tallyOf(own)[200] === 5 && ov.attempts === 5 && ov.settled === 5, `tempo: the named account's own 5 calls at the same moment are all admitted and settled (${JSON.stringify(tallyOf(own))}, ${JSON.stringify(ov)})`);
+    // An access key the chain holds no record of, and a key read that does
+    // not answer in time: refused, uncharged.
+    const lone = await rig.wallet("tempo"); rig.fund(lone, price * 3n);
+    const stray = await rig.wallet("tempo", { accessKeyOf: lone, unregistered: true });
+    const rStray = await rig.pay(stray, SQL);
+    await ok(rStray.status === 402 && rStray.json?.details?.reason === "sender-unverified" && rig.outcomesOf(lone).attempts === 0, `tempo: an access key the chain holds no record of is refused before the handler (${rStray.status}, ${rStray.json?.details?.reason})`);
+    const slowKey = await rig.wallet("tempo", { accessKeyOf: lone });
+    rig.st.keyReadDelayMs = 4000;
+    const t0 = Date.now();
+    const rSlow = await rig.pay(slowKey, SQL);
+    const took = Date.now() - t0;
+    rig.st.keyReadDelayMs = 0;
+    await ok(rSlow.status === 503 && rSlow.json?.details?.reason === "sender-check-unavailable" && rSlow.json?.details?.charged === false && rSlow.headers.get("retry-after") === "3" && rig.outcomesOf(lone).attempts === 0 && took < 3800, `tempo: a key read that does not answer within its timeout answers 503 with Retry-After before the handler, uncharged (${rSlow.status}, ${took} ms)`);
+    // ...and the same key, sent again once the read answers, is admitted.
+    const again = await rig.pay(slowKey, SQL);
+    await ok(again.status === 200 && rig.outcomesOf(lone).settled === 1, `tempo: the same access key sent again with the chain answering is admitted and settles (${again.status})`);
+
+    // Sixteen key reads for forged keys in flight fill every read slot. A
+    // genuine key arriving next waits for a slot, and is admitted once one
+    // frees within the read budget (the case where none frees in time, a 503
+    // with Retry-After, is in scripts/test-tempo-sender.js: here every read is
+    // itself bounded by the same budget, so a slot always frees inside it).
+    for (const [label, forgedMs, want] of [["a slot frees within the budget", 900, 200]]) {
+      const target = await rig.wallet("tempo"); rig.fund(target, price * 20n);
+      const buyer = await rig.wallet("tempo"); rig.fund(buyer, price * 3n);
+      const genuine = await rig.wallet("tempo", { accessKeyOf: buyer });
+      const genuinePair = `${buyer.address.toLowerCase()}:${genuine.account.accessKeyAddress.toLowerCase()}`;
+      rig.st.keyReadDelayFor = (pair) => (pair === genuinePair ? 0 : forgedMs);
+      const forgers = []; for (let i = 0; i < 16; i++) forgers.push(await rig.wallet("tempo", { forgedKeyOf: target }));
+      const fcreds = []; for (const f of forgers) fcreds.push(await rig.credentialFor(f, SQL));
+      const gcred = await rig.credentialFor(genuine, SQL);
+      const r0 = rig.st.keyReads;
+      const fp = Promise.all(fcreds.map((c) => rig.send(SQL, c)));
+      for (let i = 0; i < 100 && rig.st.keyReads - r0 < 16; i++) await sleep(10);
+      const t1 = Date.now();
+      const g = await rig.send(SQL, gcred);
+      const gt = Date.now() - t1;
+      await fp;
+      rig.st.keyReadDelayFor = null;
+      if (want === 200) await ok(g.status === 200 && rig.outcomesOf(buyer).settled === 1 && gt >= 500, `tempo: 16 forged key reads in flight, ${label}: the genuine key waits for a slot and is admitted (${g.status}, ${gt} ms)`);
+      else await ok(g.status === 503 && g.json?.details?.reason === "sender-check-unavailable" && g.headers.get("retry-after") === "3" && rig.outcomesOf(buyer).attempts === 0, `tempo: 16 forged key reads in flight, ${label}: the genuine key answers 503 with Retry-After, uncharged, never 402 (${g.status}, ${g.json?.details?.reason}, ${gt} ms)`);
+      await sleep(100);
+    }
+  }
+
   // A model-backed route: the upstream is called once per run that can be paid for.
   for (const wire of ["evm", "tempo", "svm"]) {
     const w = await rig.wallet(wire);

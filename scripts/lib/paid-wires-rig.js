@@ -26,7 +26,8 @@ const algosdk = (await import("algosdk")).default;
 const { Challenge, Credential } = await import("mppx");
 const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
 const viemTempo = await import("viem/tempo");
-const { keccak256 } = await import("viem");
+const TempoAccount = viemTempo.Account;
+const { keccak256, encodeFunctionResult, decodeFunctionData } = await import("viem");
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
@@ -61,7 +62,11 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   const acct = (id) => { if (!accounts.has(id)) accounts.set(id, { balance: 10n ** 15n, readable: true, shown: null }); return accounts.get(id); };
   // payment blob -> { id, amount }: which account a settle call draws on.
   const payments = new Map();
-  const st = { verifyDelayMs: 0, settleDelayMs: 250, readDelayMs: 0, readDelayFor: null, llmDelayMs: 0, llmStatus: 0, images: 0, captures: 0, expired: 0, stripeCapture: "decline", verifies: 0, settleAttempts: 0, settled: 0, refused: 0, completions: 0, reads: 0, byAccount: new Map() };
+  // Access keys the chain holds, "account:key" (lowercase); a getKey read of
+  // any other pair answers the empty record. st.keyReadDelayMs delays it
+  // (st.keyReadDelayFor(pair), when set, per pair).
+  const chainKeys = new Set();
+  const st = { keyReadDelayMs: 0, keyReadDelayFor: null, keyReads: 0, verifyDelayMs: 0, settleDelayMs: 250, readDelayMs: 0, readDelayFor: null, llmDelayMs: 0, llmStatus: 0, images: 0, captures: 0, expired: 0, stripeCapture: "decline", verifies: 0, settleAttempts: 0, settled: 0, refused: 0, completions: 0, reads: 0, byAccount: new Map() };
   const tally = (id, k) => { const t = st.byAccount.get(id) || { attempts: 0, settled: 0, refused: 0 }; t[k]++; st.byAccount.set(id, t); };
   // The most settle calls one account had under way at once (each is a
   // handler that has just answered), outside the tallies.
@@ -96,6 +101,15 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       if (j.method === "eth_call" && data.startsWith("0x70a08231")) {
         const v = await readOf(`${path === "/rpc" ? "evm" : "tempo"}:0x${data.slice(-40).toLowerCase()}`);
         return v == null ? reply(500, {}) : reply(200, { jsonrpc: "2.0", id: j.id ?? 1, result: "0x" + v.toString(16) });
+      }
+      if (path === "/tempo-rpc" && j.method === "eth_call" && String(j?.params?.[0]?.to || "").toLowerCase() === viemTempo.Addresses.accountKeychain.toLowerCase()) {
+        st.keyReads++;
+        const { args } = decodeFunctionData({ abi: viemTempo.Abis.accountKeychain, data });
+        const k = `${String(args[0]).toLowerCase()}:${String(args[1]).toLowerCase()}`;
+        const d = typeof st.keyReadDelayFor === "function" ? st.keyReadDelayFor(k) : st.keyReadDelayMs;
+        if (d) await sleep(d);
+        const rec = chainKeys.has(k) ? { signatureType: 0, keyId: args[1], expiry: BigInt(Math.floor(Date.now() / 1000) + 3600), enforceLimits: false, isRevoked: false } : { signatureType: 0, keyId: "0x0000000000000000000000000000000000000000", expiry: 0n, enforceLimits: false, isRevoked: false };
+        return reply(200, { jsonrpc: "2.0", id: j.id ?? 1, result: encodeFunctionResult({ abi: viemTempo.Abis.accountKeychain, functionName: "getKey", result: rec }) });
       }
       return reply(200, { jsonrpc: "2.0", id: j.id ?? 1, result: path === "/rpc" ? "0x0" : null });
     }
@@ -224,10 +238,19 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   // tempoSeq: a Tempo credential is claimed by its challenge, so each one minted
   // here gets an expiry of its own (two with one expiry are one challenge).
   let solSeq = 1, avmSeq = 0, xlmNonce = 9_000_000, tempoNonce = 0, tempoSeq = 0;
-  async function wallet(wire, { signer = null } = {}) {
+  // `signer`: another token account of the same Solana wallet (authority).
+  // `accessKeyOf`: a Tempo wallet whose transactions are signed by a new
+  // access key of that wallet's account (a keychain signature): the same
+  // account, the same balance, another key, which the chain holds for that
+  // account. `forgedKeyOf`: transactions that NAME that wallet's account but
+  // are signed by a key the chain does not hold for it; a relay that does not
+  // check the key would still draw on the named account, so the stub does.
+  // `unregistered`: a genuine-looking access key the chain has no record of.
+  async function wallet(wire, { signer = null, accessKeyOf = null, forgedKeyOf = null, unregistered = false } = {}) {
+    if (wire === "tempo" && forgedKeyOf) { const a = TempoAccount.fromSecp256k1(generatePrivateKey(), { access: forgedKeyOf.address }); return { wire, id: forgedKeyOf.id, address: forgedKeyOf.address, account: a, keychain: true }; }
     if (wire === "evm" || wire === "mpp-evm") { const a = privateKeyToAccount(generatePrivateKey()); return { wire, id: `evm:${a.address.toLowerCase()}`, address: a.address }; }
-    if (wire === "tempo") { const a = privateKeyToAccount(generatePrivateKey()); return { wire, id: `tempo:${a.address.toLowerCase()}`, address: a.address, account: a }; }
-    // `signer`: another token account of the same Solana wallet (authority).
+    if (wire === "tempo" && accessKeyOf) { const a = TempoAccount.fromSecp256k1(generatePrivateKey(), { access: accessKeyOf.root }); if (!unregistered) chainKeys.add(`${accessKeyOf.address.toLowerCase()}:${a.accessKeyAddress.toLowerCase()}`); return { wire, id: accessKeyOf.id, address: accessKeyOf.address, account: a, keychain: true }; }
+    if (wire === "tempo") { const k = generatePrivateKey(); const a = privateKeyToAccount(k); return { wire, id: `tempo:${a.address.toLowerCase()}`, address: a.address, account: a, root: TempoAccount.fromSecp256k1(k) }; }
     if (wire === "svm") { const s = signer || await kit.generateKeyPairSigner(); const source = (await kit.generateKeyPairSigner()).address; return { wire, id: `svm:${source}`, address: s.address, signer: s, source }; }
     if (wire === "avm") { const a = algosdk.generateAccount(); return { wire, id: `avm:${a.addr.toString()}`, address: a.addr.toString(), account: a }; }
     if (wire === "stellar") { const g = sdk.Keypair.random().publicKey(); return { wire, id: `stellar:${g}`, address: g }; }
@@ -261,7 +284,8 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       const seen = o.challenges.find((c) => c.method === "tempo" && c.intent === "charge");
       const ch = Challenge.from({ realm: seen.realm, method: "tempo", intent: "charge", expires: new Date(Date.now() + (ttlMs ?? 60_000) + (tempoSeq++ % 20_000)), request: { amount: seen.request.amount, currency: TEMPO_CUR, decimals: 6, recipient: TREASURY, methodDetails: { chainId: 4217 } }, secretKey: secret });
       // As the stock client signs it: valid for TEMPO_TX_LIFE_MS from now, and the stub relay holds it to that.
-      const tx = await w.account.signTransaction({ chainId: 4217, type: "tempo", calls: [{ to: TEMPO_CUR, data: "0x" }], nonce: tempoNonce++, gas: 100000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, validBefore: Math.floor((Date.now() + TEMPO_TX_LIFE_MS) / 1000) }, { serializer: viemTempo.Transaction.serialize });
+      const fields = { chainId: 4217, type: "tempo", calls: [{ to: TEMPO_CUR, data: "0x" }], nonce: tempoNonce++, gas: 100000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, validBefore: Math.floor((Date.now() + TEMPO_TX_LIFE_MS) / 1000) };
+      const tx = w.keychain ? await w.account.signTransaction(fields) : await w.account.signTransaction(fields, { serializer: viemTempo.Transaction.serialize });
       payments.set(tx, { id: w.id, amount: BigInt(seen.request.amount), signedAt: Date.now(), lifeMs: TEMPO_TX_LIFE_MS });
       return { Authorization: Credential.serialize({ challenge: ch, payload: { signature: tx, type: "transaction" } }) };
     }

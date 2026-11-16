@@ -320,21 +320,43 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
       }
       req.mppStripeCredential = true;
       const replayKey = replayGuard ? `stripe:${binding.challenge.id}` : null;
+      // The payment token is claimed too: one token can be presented under
+      // many challenges, and each challenge is claimed on its own, so without
+      // this a burst of credentials carrying one token each started a run
+      // while only one capture could succeed. Held only while a run is in
+      // flight: taken before the handler and released when the run ends,
+      // captured or not. A token with limit left may pay again under a new
+      // challenge; the challenge claim keeps one credential from paying twice.
+      const spt = typeof v.validation?.spt === "string" && v.validation.spt ? v.validation.spt : null;
+      const tokenKey = replayGuard && spt ? `stripe-spt:${spt}` : null;
+      const unavailable = () => {
+        res.setHeader("Retry-After", "30");
+        return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and the card was not charged. Retry in about 30 seconds.", reason: "replay-store-unavailable" });
+      };
       if (replayGuard && replayKey) {
         // The shared claim is required whenever another container may be
         // serving (src/replay-topology.js: more than one replica, a deploy's
         // overlap window, a drain) and always on a long-running or composite
         // route: with the shared store configured but unreachable it is
         // refused before the handler runs, and nothing is captured.
-        const verdict = await replayGuard.begin(replayKey, undefined, { requireShared: sharedClaimRequired({ longRunning: binding.longRunning, draining: drainSignal().aborted }) });
-        if (verdict === "unavailable") {
-          res.setHeader("Retry-After", "30");
-          return res.status(503).json({ error: "This route is briefly unavailable: the shared payment store did not answer, so no run was started and the card was not charged. Retry in about 30 seconds.", reason: "replay-store-unavailable" });
-        }
+        const requireShared = sharedClaimRequired({ longRunning: binding.longRunning, draining: drainSignal().aborted });
+        const verdict = await replayGuard.begin(replayKey, undefined, { requireShared });
+        if (verdict === "unavailable") return unavailable();
         if (verdict !== "ok") return sendMppProblem(res, mppProblem("invalid-challenge", `Challenge is invalid: this credential was already used or is in flight (${verdict}). Request the resource again for a fresh challenge.`));
+        if (tokenKey) {
+          let tv;
+          try { tv = await replayGuard.begin(tokenKey, undefined, { requireShared }); } catch (e) { replayGuard.release(replayKey).catch(() => {}); throw e; }
+          if (tv !== "ok") {
+            // This credential's challenge was not used: release it, so the
+            // same credential can be sent again once the token is free.
+            replayGuard.release(replayKey).catch(() => {});
+            if (tv === "unavailable") return unavailable();
+            return sendMppProblem(res, mppProblem("invalid-challenge", `Challenge is invalid: this credential's payment token ${tv === "inflight" ? "is paying for another request in flight; send this request again once that one has answered" : "has already paid for a request; pay with a new payment token"}. Nothing was charged.`, { details: { reason: `token-${tv}`, charged: false } }));
+          }
+        }
       }
-      const releaseReplay = () => { if (replayGuard && replayKey) replayGuard.release(replayKey).catch(() => {}); };
-      const settleReplay = () => { if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {}); };
+      const releaseReplay = () => { if (replayGuard && replayKey) replayGuard.release(replayKey).catch(() => {}); if (tokenKey) replayGuard.release(tokenKey).catch(() => {}); };
+      const settleReplay = () => { if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {}); if (tokenKey) replayGuard.release(tokenKey).catch(() => {}); };
 
       req.stripeSettling = true;
       // The capture must begin while the challenge is unexpired: a handler
@@ -393,14 +415,16 @@ export function createStripeGate({ validate = validateStripeCredential, settle =
       }
       // The buyer left before anything could reach them and the request holds
       // a granted forgiveness ticket (src/hangup-settlement.js): do not
-      // capture. The credential stays spent, so it cannot buy a second run.
+      // capture. The credential stays spent, so it cannot buy a second run;
+      // its payment token was not captured and is released.
       // Without a ticket the card is captured as usual and the hang-up hook
       // books the undelivered charge as owed; so is a close during the
       // capture itself.
       if (chargeCancelledForClientGone(req)) {
         bufferedCalls = [];
         restore();
-        settleReplay();
+        if (replayGuard && replayKey) replayGuard.settle(replayKey).catch(() => {});
+        if (tokenKey) replayGuard.release(tokenKey).catch(() => {});
         console.warn(`[mpp-stripe] client gone before the handler's answer could be sent (${req.method} ${req.path}) - not captured, not charged`);
         try { res.removeHeader("Content-Length"); res.statusCode = 499; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ error: CLIENT_GONE_TEXT, charged: false })); } catch { /* socket already gone */ }
         return;
