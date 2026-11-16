@@ -1,5 +1,6 @@
-// Weather kit — global weather data, keyless and deterministic.
-// Wraps Open-Meteo (open-source weather API, no key, global coverage):
+// Weather kit — global weather data, deterministic; the buyer needs no key.
+// Wraps Open-Meteo (open-source weather API, global coverage; read with
+// OPEN_METEO_API_KEY when it is set, see openMeteoRequest below):
 //   weather-current     current conditions for any lat/lon on Earth
 //   weather-daily       7-day daily forecast (highs, lows, precip, wind, UV)
 //   weather-hourly      48-hour hourly forecast (temp, precip, wind, clouds)
@@ -11,17 +12,68 @@
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling } from "../run-ceiling.js";
 import { OPEN_METEO_ATTRIBUTION } from "../data-attribution.js";
+import { redactSecrets } from "./redact.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
+// Each Open-Meteo API this kit reads, by its public host. With
+// OPEN_METEO_API_KEY set, a request goes to the same API's keyed host (the
+// public host with a "customer-" prefix) and carries the key as `apikey`;
+// without it, the public host and no key, so a self-hosted server with no
+// key reads exactly what it read before.
+const OPEN_METEO_HOSTS = Object.freeze({
+  forecast: "api.open-meteo.com",
+  archive: "archive-api.open-meteo.com",
+  airQuality: "air-quality-api.open-meteo.com",
+});
+
+function openMeteoKey(env = process.env) {
+  return String(env.OPEN_METEO_API_KEY ?? "").trim();
+}
+
+/** The one place an Open-Meteo URL is built. Returns the URL to fetch, the
+ *  public host (the only host any message names) and the host fetched. */
+export function openMeteoRequest(api, path, params, env = process.env) {
+  const publicHost = OPEN_METEO_HOSTS[api];
+  if (!publicHost) throw new Error(`unknown Open-Meteo API: ${api}`);
+  const key = openMeteoKey(env);
+  const q = new URLSearchParams(params);
+  if (key) q.set("apikey", key);
+  const host = key ? `customer-${publicHost}` : publicHost;
+  return { url: `https://${host}${path}?${q}`, host, publicHost, keyed: Boolean(key) };
+}
+
+// A failed read, restated so no message, field or log line built from it
+// names the keyed host or carries the key. A 429 stays what safeFetch makes
+// it, a 503 (the call is not charged) with Retry-After, and retryTransient
+// does not retry it: keyed traffic is never sent on to the public host. A
+// 401 or 403 on the keyed host is our key refused, a 503 on our side.
+function openMeteoFailure(err, req) {
+  const up = err?.upstreamStatus;
+  if (req.keyed && (up === 401 || up === 403)) {
+    return Object.assign(new Error(`Open-Meteo refused this server's request (HTTP ${up}); this is on our side, not your input - retry later`), {
+      statusCode: 503, upstreamStatus: up, attribution: "ours", noRetry: true,
+    });
+  }
+  if (!req.keyed || !(err instanceof Error)) return err;
+  err.message = redactSecrets(String(err.message).split(req.host).join(req.publicHost));
+  return err;
+}
+
 // One retry on a transient 502/503/504 - added 2026-08-12 after
 // weather-hourly hit exactly this shape live in CI (a plain 15s timeout,
 // zero retries previously; api.open-meteo.com answered fine on a later
-// attempt). retryTransient never retries a deterministic 4xx.
-async function getJson(url) {
-  const { html } = await retryTransient(() => safeFetch(url, { maxBytes: 2 * 1024 * 1024, ownUpstream: true }));
+// attempt). retryTransient never retries a deterministic 4xx or a 429.
+export async function openMeteoJson(api, path, params, env = process.env) {
+  const req = openMeteoRequest(api, path, params, env);
+  let html;
+  try {
+    ({ html } = await retryTransient(() => safeFetch(req.url, { maxBytes: 2 * 1024 * 1024, ownUpstream: true })));
+  } catch (err) {
+    throw openMeteoFailure(err, req);
+  }
   try {
     return JSON.parse(html);
   } catch {
@@ -123,7 +175,7 @@ export const WEATHER_TOOLS = [
         wind_speed_unit: tempUnit === "fahrenheit" ? "mph" : "kmh",
         timezone: "auto",
       });
-      const data = await getJson(`https://api.open-meteo.com/v1/forecast?${params}`);
+      const data = await openMeteoJson("forecast", "/v1/forecast", params);
       if (!data?.current) throw bad("Open-Meteo returned no current data", 502);
       const c = data.current;
       return {
@@ -198,7 +250,7 @@ export const WEATHER_TOOLS = [
         timezone: "auto",
         forecast_days: days,
       });
-      const data = await getJson(`https://api.open-meteo.com/v1/forecast?${params}`);
+      const data = await openMeteoJson("forecast", "/v1/forecast", params);
       const d = data?.daily;
       if (!d?.time?.length) throw bad("Open-Meteo returned no daily data", 502);
       const result = d.time.map((date, idx) => ({
@@ -268,7 +320,7 @@ export const WEATHER_TOOLS = [
         timezone: "auto",
         forecast_hours: hours,
       });
-      const data = await getJson(`https://api.open-meteo.com/v1/forecast?${params}`);
+      const data = await openMeteoJson("forecast", "/v1/forecast", params);
       const h = data?.hourly;
       if (!h?.time?.length) throw bad("Open-Meteo returned no hourly data", 502);
       const result = h.time.map((time, idx) => ({
@@ -345,7 +397,7 @@ export const WEATHER_TOOLS = [
         wind_speed_unit: tempUnit === "fahrenheit" ? "mph" : "kmh",
         timezone: "auto",
       });
-      const data = await getJson(`https://archive-api.open-meteo.com/v1/archive?${params}`);
+      const data = await openMeteoJson("archive", "/v1/archive", params);
       const d = data?.daily;
       if (!d?.time?.length) throw bad("Open-Meteo returned no historical data", 502);
       const result = d.time.map((date, idx) => ({
@@ -403,7 +455,7 @@ export const WEATHER_TOOLS = [
         latitude: lat, longitude: lon,
         current: "us_aqi,pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone",
       });
-      const data = await getJson(`https://air-quality-api.open-meteo.com/v1/air-quality?${params}`);
+      const data = await openMeteoJson("airQuality", "/v1/air-quality", params);
       if (!data?.current) throw bad("Open-Meteo returned no air quality data", 502);
       const c = data.current;
       const aqi = c.us_aqi ?? null;

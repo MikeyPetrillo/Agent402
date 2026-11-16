@@ -1,0 +1,150 @@
+// Open-Meteo host and key selection (src/tools/weather-kit.js), offline.
+//
+//   1. openMeteoRequest: with OPEN_METEO_API_KEY set, every API reads its
+//      "customer-" host with `apikey`; without it, the public host and no key.
+//   2. Each weather tool, with a stubbed fetch and resolver: the URL it fetched
+//      (host and key), and an answer whose `source` names the public host only.
+//   3. A 429 on the keyed host is a 503 (no charge), fetched once: no retry and
+//      no second try on the public host. A 401/403 there is our 503. A 5xx keeps
+//      its one retry on the keyed host.
+//   4. No error message, error field or console line carries the key or the
+//      keyed host name, and redactSecrets drops an apikey query value from any
+//      URL in text, configured or not.
+//
+//   node scripts/test-open-meteo-keyed.js
+import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { stubGuardResolver } from "./lib/guard-resolver-stub.js";
+
+let pass = 0, fail = 0;
+const lines = [];
+const ok = (cond, msg) => { if (cond) { pass++; lines.push(`ok - ${msg}`); } else { fail++; lines.push(`FAIL - ${msg}`); } };
+
+// Every console line the kit (or anything it calls) writes, kept and scanned.
+const captured = [];
+const realConsole = {};
+for (const m of ["log", "info", "warn", "error", "debug"]) {
+  realConsole[m] = console[m];
+  console[m] = (...args) => { captured.push(args.map((a) => (a instanceof Error ? `${a.message} ${a.stack}` : typeof a === "string" ? a : JSON.stringify(a))).join(" ")); };
+}
+
+const KEY = "omk" + "Zx7Qp2Lw9Rt4Vb8Nc3";
+delete process.env.OPEN_METEO_API_KEY;
+const { WEATHER_TOOLS, openMeteoRequest } = await import("../src/tools/weather-kit.js");
+const { redactSecrets } = await import("../src/tools/redact.js");
+
+const restoreResolver = stubGuardResolver((host, family) => (/(^|\.)open-meteo\.com$/.test(host) ? (family === 4 ? ["93.184.216.34"] : []) : undefined));
+
+// --- 1. URL selection ---
+const P = { latitude: 1, longitude: 2 };
+for (const [api, path, pub] of [
+  ["forecast", "/v1/forecast", "api.open-meteo.com"],
+  ["archive", "/v1/archive", "archive-api.open-meteo.com"],
+  ["airQuality", "/v1/air-quality", "air-quality-api.open-meteo.com"],
+]) {
+  const free = new URL(openMeteoRequest(api, path, P, {}).url);
+  ok(free.host === pub && !free.searchParams.has("apikey") && free.pathname === path, `${api}: no key -> ${pub}, no apikey`);
+  const blank = new URL(openMeteoRequest(api, path, P, { OPEN_METEO_API_KEY: "  " }).url);
+  ok(blank.host === pub && !blank.searchParams.has("apikey"), `${api}: blank key -> public host`);
+  const r = openMeteoRequest(api, path, P, { OPEN_METEO_API_KEY: KEY });
+  const keyed = new URL(r.url);
+  ok(keyed.host === `customer-${pub}` && keyed.searchParams.get("apikey") === KEY && keyed.searchParams.get("latitude") === "1", `${api}: key -> customer-${pub} with apikey`);
+  ok(r.publicHost === pub && r.keyed === true, `${api}: public host kept for messages`);
+}
+
+// --- 2. Each tool's fetch ---
+const fetched = [];
+let reply = () => new Response("{}", { status: 200 });
+const realFetch = globalThis.fetch;
+// A real response names the URL it answered for; safeFetch's messages read it.
+globalThis.fetch = async (url) => {
+  fetched.push(String(url));
+  const r = await reply(String(url));
+  Object.defineProperty(r, "url", { value: String(url) });
+  return r;
+};
+
+const BODY = {
+  current: { time: "2026-01-01T00:00", temperature_2m: 1, weather_code: 0, us_aqi: 10, pm2_5: 1 },
+  daily: { time: ["2026-01-01"], weather_code: [0], temperature_2m_max: [2], temperature_2m_min: [1], sunrise: ["2026-01-01T07:00"], sunset: ["2026-01-01T17:00"] },
+  hourly: { time: ["2026-01-01T00:00"], temperature_2m: [1], weather_code: [0] },
+};
+reply = () => new Response(JSON.stringify(BODY), { status: 200, headers: { "content-type": "application/json" } });
+const EXPECT = {
+  "weather-current": "api.open-meteo.com",
+  "weather-daily": "api.open-meteo.com",
+  "weather-hourly": "api.open-meteo.com",
+  "weather-history": "archive-api.open-meteo.com",
+  "weather-air-quality": "air-quality-api.open-meteo.com",
+};
+const tool = (slug) => WEATHER_TOOLS.find((t) => t.slug === slug);
+for (const keyed of [false, true]) {
+  if (keyed) process.env.OPEN_METEO_API_KEY = KEY; else delete process.env.OPEN_METEO_API_KEY;
+  for (const [slug, pub] of Object.entries(EXPECT)) {
+    fetched.length = 0;
+    const t = tool(slug);
+    const out = await t.handler(t.discovery.input);
+    const u = new URL(fetched[0]);
+    const want = keyed ? `customer-${pub}` : pub;
+    ok(fetched.length === 1 && u.host === want, `${slug} (${keyed ? "key" : "no key"}): fetched ${u.host}`);
+    ok(keyed ? u.searchParams.get("apikey") === KEY : !u.searchParams.has("apikey"), `${slug} (${keyed ? "key" : "no key"}): apikey ${keyed ? "sent" : "absent"}`);
+    const text = JSON.stringify(out);
+    ok(!text.includes(KEY) && !text.includes("customer-") && /open-meteo\.com \(CC BY 4\.0\)/.test(out.source), `${slug} (${keyed ? "key" : "no key"}): answer names the public host only`);
+  }
+}
+
+// --- 3. Failures on the keyed host ---
+process.env.OPEN_METEO_API_KEY = KEY;
+const errorText = (e) => JSON.stringify({ message: e?.message, ...e });
+async function failing(status, headers = {}) {
+  fetched.length = 0;
+  reply = () => new Response(JSON.stringify({ error: true, reason: `echo apikey=${KEY}` }), { status, headers });
+  try { await tool("weather-current").handler({ lat: 1, lon: 2 }); return null; } catch (e) { return e; }
+}
+let e = await failing(429, { "retry-after": "7" });
+ok(e?.statusCode === 503 && e.upstreamStatus === 429 && e.retryAfter === 7, "keyed 429 -> 503 with Retry-After 7 (not charged)");
+ok(fetched.length === 1 && fetched.every((u) => new URL(u).host === "customer-api.open-meteo.com"), "keyed 429: one fetch, no retry, no public-host fallback");
+ok(!errorText(e).includes(KEY) && !errorText(e).includes("customer-"), "keyed 429: error carries neither key nor keyed host");
+
+for (const st of [401, 403]) {
+  e = await failing(st);
+  ok(e?.statusCode === 503 && e.attribution === "ours" && fetched.length === 1, `keyed ${st} -> our 503, one fetch`);
+  ok(!errorText(e).includes(KEY) && !errorText(e).includes("customer-"), `keyed ${st}: error is clean`);
+}
+e = await failing(500);
+ok(e?.statusCode === 502 && fetched.length === 2 && fetched.every((u) => new URL(u).host === "customer-api.open-meteo.com"), "keyed 500 -> 502 after one retry on the keyed host");
+ok(!errorText(e).includes(KEY) && !errorText(e).includes("customer-"), "keyed 500: error is clean");
+e = await failing(400);
+ok(e?.statusCode === 422 && !errorText(e).includes(KEY) && !errorText(e).includes("customer-"), "keyed 400 -> 422, clean");
+
+// A transport failure whose text quotes the full request URL is scrubbed too.
+fetched.length = 0;
+reply = (url) => { throw Object.assign(new TypeError(`fetch failed for ${url}`), { cause: { code: "ECONNRESET" } }); };
+try { await tool("weather-current").handler({ lat: 1, lon: 2 }); e = null; } catch (x) { e = x; }
+ok(e?.statusCode === 504 && !errorText(e).includes(KEY) && !errorText(e).includes("customer-"), "keyed transport error quoting the URL: clean");
+
+// Without a key a 429 keeps today's answer: a 503, one fetch, public host.
+delete process.env.OPEN_METEO_API_KEY;
+e = await failing(429);
+ok(e?.statusCode === 503 && fetched.length === 1 && new URL(fetched[0]).host === "api.open-meteo.com", "no key: 429 -> 503 on the public host, one fetch");
+
+// --- 4. Redaction ---
+for (const [txt, label] of [
+  [`GET https://x.example/v1/a?lat=1&apikey=${KEY}&b=2`, "apikey"],
+  [`https://x.example/v1/a?api_key=${KEY}`, "api_key"],
+  [`see https://x.example/?API-KEY=${KEY}#frag`, "API-KEY"],
+]) {
+  const r = redactSecrets(txt);
+  ok(!r.includes(KEY) && r.includes("=[redacted]"), `redactSecrets drops an unconfigured ${label} query value`);
+}
+ok(redactSecrets("set the apikey field; ?apikey=short") === "set the apikey field; ?apikey=short", "redactSecrets leaves prose and a short value alone");
+process.env.OPEN_METEO_API_KEY = KEY;
+ok(!redactSecrets(`upstream said ${KEY}`).includes(KEY), "redactSecrets drops the configured key value anywhere");
+
+globalThis.fetch = realFetch;
+restoreResolver();
+for (const [m, f] of Object.entries(realConsole)) console[m] = f;
+ok(captured.every((l) => !l.includes(KEY) && !l.includes("customer-")), `no console line carries the key or keyed host (${captured.length} lines)`);
+
+for (const l of lines) console.log(l);
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

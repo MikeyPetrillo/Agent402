@@ -65,6 +65,10 @@ const CREDENTIAL_PARAM_RE = /^(key|api[-_]?key|apikey|token|access[-_]?token|aut
 // (100 KB of "a.a.a..." once took seconds with an unbounded scheme).
 const USERINFO_IN_TEXT_RE = /\b([a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/]{0,256}:)([^\s@/]{1,256})@/gi;
 const MIN_SECRET_LEN = 8;
+// An API key a URL carries as a query value (`?apikey=...`, `&api_key=...`),
+// whichever variable it came from: a request URL printed into an error or a
+// log line loses that value. Bounded, so the scan stays linear.
+const API_KEY_QUERY_IN_TEXT_RE = /([?&]api[-_]?key=)([^&#\s"'<>]{8,1024})/gi;
 
 // Known key shapes: provider prefixes, a JWT, a UUID.
 const KEY_SHAPE_RE = /^(?:sk|pk|rk)[-_][A-Za-z0-9_-]{8,}$|^(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[abpres])[-_][A-Za-z0-9_-]{8,}$|^(?:AKIA|ASIA|AIza)[A-Za-z0-9_-]{12,}$|^eyJ[A-Za-z0-9_-]{8,}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -331,6 +335,7 @@ export function redactSecrets(text) {
   if (out.includes("\n")) out = replaceSpans(out, spansAcrossBreaks(out, (j) => [...knownSpans(j, values), ...hexKeySpans(j)]));
   if (prefixes.length) out = redactTruncated(out, prefixes);
   out = replaceSpans(out, hexKeySpans(out));
+  if (/api[-_]?key=/i.test(out)) out = out.replace(API_KEY_QUERY_IN_TEXT_RE, "$1[redacted]");
   if (!out.includes("://") || !out.includes("@")) return out;
   return out.replace(USERINFO_IN_TEXT_RE, "$1[redacted]@");
 }
