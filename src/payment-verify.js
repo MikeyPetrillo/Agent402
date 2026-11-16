@@ -36,6 +36,7 @@ export const REFERRAL_USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 import { isGatewayWire } from "./gateway-wire.js";
 import { proveReceipt } from "./referral-proof.js";
 import { STELLAR_USDC_CODE, STELLAR_USDC_ISSUER } from "./stellar-confirm.js";
+import { usdToBaseUnits } from "./base-units.js";
 
 /** Circle Gateway's API (the batched x402 option, src/gateway-nanopayments.js). */
 export const GATEWAY_API_BASE_URL = "https://gateway-api.circle.com";
@@ -127,7 +128,7 @@ async function verifyEvm({ tx, payer, payToSet, amountUsd, asset, rpcUrl, fetchI
   } catch (e) { return fail(`could not read token decimals: ${e.message}`); }
   const decimals = Number(BigInt(decimalsHex || "0x0"));
   if (!Number.isFinite(decimals) || decimals > 36) return fail("token decimals unreadable");
-  const expected = BigInt(Math.round(Number(amountUsd) * 10 ** decimals));
+  const expected = usdToBaseUnits(Number(amountUsd), decimals);
   if (expected <= 0n) return fail("expected amount is zero");
 
   const from = String(payer).toLowerCase();
@@ -183,7 +184,7 @@ async function verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrl, fet
   catch (e) { return fail(`could not read token decimals: ${e.message}`); }
   const decimals = Number(BigInt(decimalsHex || "0x0"));
   if (!Number.isFinite(decimals) || decimals > 36) return fail("token decimals unreadable");
-  const expected = BigInt(Math.round(Number(amountUsd) * 10 ** decimals));
+  const expected = usdToBaseUnits(Number(amountUsd), decimals);
   if (expected <= 0n) return fail("expected amount is zero");
   if (best < expected) return fail(`transfer is short: moved ${best} < expected ${expected} (atomic)`);
   return pass({ movedAtomic: best.toString(), decimals, tx, token });
@@ -224,7 +225,7 @@ async function verifySolana({ tx, payer, payToSet, amountUsd, asset, rpcs, fetch
   const debited = sum(meta.preTokenBalances, payer) - sum(meta.postTokenBalances, payer);
   if (debited <= 0n) return minedFail("this payer was not debited in that transaction");
 
-  const expected = BigInt(Math.round(Number(amountUsd) * 10 ** decimals));
+  const expected = usdToBaseUnits(Number(amountUsd), decimals);
   if (expected <= 0n) return fail("expected amount is zero");
   if (credited < expected) return minedFail(`transfer is short: credited ${credited} < expected ${expected} (atomic)`);
   return pass({ movedAtomic: credited.toString(), decimals, tx });
@@ -263,7 +264,7 @@ async function verifyAlgorand({ tx, payer, payToSet, amountUsd, asset, indexers,
   if (t.sender !== payer) return minedFail("sender is not the payer we would repay");
   if (![...payToSet].includes(ax.receiver)) return minedFail("receiver is not a wallet we control");
   // USDC on Algorand is 6-decimal; the amount is already in atomic units.
-  const expected = BigInt(Math.round(Number(amountUsd) * 1e6));
+  const expected = usdToBaseUnits(Number(amountUsd), 6);
   const moved = BigInt(ax.amount || 0);
   if (expected <= 0n) return fail("expected amount is zero");
   if (moved < expected) return minedFail(`transfer is short: moved ${moved} < expected ${expected} (atomic)`);
@@ -307,7 +308,7 @@ async function verifyGatewayBatched({ tx, payer, payToSet, amountUsd, network, f
   if (!ours.has(String(t.toAddress || "").toLowerCase())) return fail("Circle Gateway transfer is not to our payTo");
   if (t.recipientNetwork !== network && t.sendingNetwork !== network) return fail("Circle Gateway transfer is on a different network than this debt");
   if (!/^[0-9]{1,78}$/.test(String(t.amount ?? ""))) return fail("Circle Gateway transfer amount unreadable");
-  const expected = BigInt(Math.round(Number(amountUsd) * 1e6)); // USDC, 6 decimals on Gateway
+  const expected = usdToBaseUnits(Number(amountUsd), 6); // USDC, 6 decimals on Gateway
   if (expected <= 0n) return fail("expected amount is zero");
   const moved = BigInt(t.amount);
   if (moved < expected) return fail(`transfer is short: moved ${moved} < expected ${expected} (atomic)`);
@@ -371,7 +372,7 @@ export async function verifyInboundPayment({
       if (!rpcUrl) return fail(`no RPC configured for ${network}`);
       if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
-      const units = BigInt(Math.round(Number(amountUsd) * 1e6));
+      const units = usdToBaseUnits(Number(amountUsd), 6);
       if (units <= 0n) return fail("expected amount is zero");
       let receipt;
       try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
@@ -389,7 +390,7 @@ export async function verifyInboundPayment({
       if (!/^\d{1,78}$/.test(String(referralMerchantId ?? "")) || !/^0x[0-9a-fA-F]{40}$/.test(String(referralPayout || ""))) return fail("no referral merchant id or payout address configured (REFERRAL_MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS) - cannot prove the payment was routed to us");
       if (!/^0x[0-9a-fA-F]{64}$/.test(String(tx || ""))) return fail("no usable transaction hash recorded");
       if (!/^0x[0-9a-fA-F]{40}$/.test(String(payer || ""))) return fail("payer is not an EVM address");
-      const units = BigInt(Math.round(Number(amountUsd) * 1e6));
+      const units = usdToBaseUnits(Number(amountUsd), 6);
       if (units <= 0n) return fail("expected amount is zero");
       let receipt;
       try { receipt = await rpc(rpcUrl, "eth_getTransactionReceipt", [tx], fetchImpl, timeoutMs); }
@@ -472,13 +473,12 @@ export async function verifyInboundPayment({
       // transfer satisfied a debt of any size. Stellar amounts are decimal
       // strings with 7 places - compare in integer stroops, not floats.
       const stroops = (v) => {
-        const n = Number(v);
-        return Number.isFinite(n) ? Math.round(n * 1e7) : null;
+        try { return usdToBaseUnits(typeof v === "string" ? v : Number(v), 7); } catch { return null; }
       };
       const got = stroops(found.amount);
       const want = stroops(amountUsd);
       if (got === null || want === null) return fail("could not read the transferred amount");
-      if (want <= 0) return fail("expected amount is zero");
+      if (want <= 0n) return fail("expected amount is zero");
       if (got < want) return fail(`transfer is short: ${found.amount} < ${amountUsd}`);
       return pass({ tx: found.transaction, amount: found.amount });
     }

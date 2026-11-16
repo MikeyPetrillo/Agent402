@@ -3,6 +3,14 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "One claim per payment, one amount per price",
+    items: [
+      "Payments: Two requests carrying one payment are claimed once when the shared store answers one of them and not the other: the request whose claim lands in the store reads the claim this server already holds and is answered 409 (X-Payment-Replay: inflight), uncharged. A claim taken while the store did not answer is written there once this server reaches the store again, without waiting for the claim's 30-second renewal, so a container serving beside this one reads that payment in flight.",
+      "Payments: A dollar price becomes a token or card amount by integer arithmetic where a challenge is minted and where a payment is checked against its price, so the two name the same amount at any token decimals: a Tempo credential that pays exactly its challenge is accepted when the token carries 18 decimals, and the card challenge and its check, the published offer amounts, the subscription amounts and the payment proofs on every chain and Circle Gateway read the same figure.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "An empty streamed answer is not charged",
     items: [
       "Gateway: A streamed answer on the chat completions, Messages or Responses routes that ends with no answer (every token spent on reasoning or thinking, or an empty refusal) is answered 502 before any byte is sent and is not charged, as a non-streamed call already is; a payment sent before the call is recorded as owed back. The next model in the chain is tried first. A streamed answer with content is sent from its first answer token, with the reasoning before it, so it arrives as fast as before. On a connection that ends a response with no byte for about 100 seconds, a reasoning phase that outlasts that window starts sending before it closes, and is then served and charged as before.",

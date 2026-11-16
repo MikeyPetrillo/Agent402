@@ -49,6 +49,7 @@ import { chargeCancelledForClientGone, markSettleSent, CLIENT_GONE_TEXT } from "
 import { tempoPushSender } from "./tempo-confirm.js";
 import { syncWindowRefusalOf } from "./slow-sync-window.js";
 import { sharedClaimRequired } from "./replay-topology.js";
+import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
 import { drainSignal } from "./drain-abort.js";
 import { screenAddresses, screenFunding, sanctionsScreenStatus, maskAddress as maskOne, TEMPO_SCREEN_REFUSED_DETAIL, TEMPO_SCREEN_REFUSED_HINT } from "./sanctions-screen.js";
 import { Secp256k1 } from "ox";
@@ -628,7 +629,7 @@ export function mintTempoChallenge({ priceUsd, description, realm, secretKey, ti
     realm,
     expires: new Date(Date.now() + timeoutSeconds * 1000),
     request: {
-      amount: amount.toFixed(decimals),
+      amount: usdToTokenDecimalString(amount, decimals),
       chainId: TEMPO_MAINNET_CHAIN_ID,
       currency,
       decimals,
@@ -760,7 +761,7 @@ export function checkTempoCredentialBinding(authorizationHeader, { secretKey, re
   // request also carried).
   if (item.identityBound) return badRoute("this route is wallet-identity bound (the payment IS the identity); Tempo credentials carry no payer this server verifies - pay it over an x402 rail");
   if (item.longRunning) return badRoute("this route runs longer than a Tempo credential stays valid (settlement happens after the handler); pay it over an EVM x402 rail or by card", { longRunning: true });
-  const expected = BigInt(Math.round(priceUsd * 10 ** envDecimals()));
+  const expected = usdToBaseUnits(priceUsd, envDecimals());
   let amount;
   try { amount = BigInt(String(r.amount)); } catch { return bad("challenge amount is not an integer base-units string"); }
   if (amount < expected) return badRoute(`challenge amount ${amount} is below this route's price ${expected}`);

@@ -1,6 +1,7 @@
 // Server-rendered catalogue pages and the OpenAPI spec — all generated from
 // the tool catalog so they never drift from what the API actually serves.
 import { siteOrgRef } from "./site-org.js";
+import { usdToBaseUnits } from "./base-units.js";
 import { frontDoorOneLine } from "./front-door.js";
 import { openapiRequestBody } from "./openapi-request.js";
 import { asyncAdvice } from "./slow-routes.js";
@@ -38,6 +39,10 @@ import { PARAM_ALIASES } from "./input-aliases.js";
 import { UNIT_CATEGORIES } from "./tools/convert-gen.js";
 import { toolJudgeEnabled } from "./tool-judge.js";
 import { fromPriceLabel } from "./quoted-from.js";
+
+// A price in base units of an offer's token (src/base-units.js), or null
+// when the price is not a dollar figure.
+const baseUnitsOrNull = (usd, decimals) => { try { return String(usdToBaseUnits(usd, decimals)); } catch { return null; } };
 
 export const CATEGORIES = {
   web: { label: "Web & documents", blurb: "Read the live web: browser rendering, screenshots, article extraction, PDFs, metadata." },
@@ -916,7 +921,7 @@ export function openapiSpec(baseUrl, catalog) {
           offers: mpp.map((o) => ({
             intent: o.intent,
             method: o.method,
-            amount: range ? null : String(Math.round(priceUsd * 10 ** o.decimals)),
+            amount: range ? null : baseUnitsOrNull(priceUsd, o.decimals),
             currency: o.currency,
             ...(o.chainId ? { chainId: o.chainId } : {}),
             description: o.description,

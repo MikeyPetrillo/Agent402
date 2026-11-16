@@ -6,6 +6,23 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (one claim per payment, one amount per price)
+Payments:
+- Two requests carrying one payment are claimed once when the shared store
+  answers one of them and not the other: the request whose claim lands in the
+  store reads the claim this server already holds and is answered 409
+  (X-Payment-Replay: inflight), uncharged. A claim taken while the store did
+  not answer is written there once this server reaches the store again,
+  without waiting for the claim's 30-second renewal, so a container serving
+  beside this one reads that payment in flight.
+- A dollar price becomes a token or card amount by integer arithmetic where a
+  challenge is minted and where a payment is checked against its price, so
+  the two name the same amount at any token decimals: a Tempo credential that
+  pays exactly its challenge is accepted when the token carries 18 decimals,
+  and the card challenge and its check, the published offer amounts, the
+  subscription amounts and the payment proofs on every chain and Circle
+  Gateway read the same figure.
+
 ### 2026-11-16 (an empty streamed answer is not charged)
 Gateway:
 - A streamed answer on the chat completions, Messages or Responses routes that

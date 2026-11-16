@@ -81,6 +81,8 @@ t node scripts/test-agent-redteam.js
 # Every accept of every 402 asks list plus the chain's premium, raised to its
 # floor, as /api/pricing publishes them (three rails, a stub facilitator).
 t node scripts/test-accept-prices.js
+# One dollar price, one base-unit amount at every token decimals: Tempo mint and check agree (offline)
+t node scripts/test-base-unit-parity.js
 # A throw in an x402 beforeVerify / beforeSettle hook answers the hook's declared choice: the
 # wallet blocklist and the Arc contract-wallet gate refuse with their own reason (402, no settle,
 # no sale, no idempotency commit, never the handler for a verify refusal), bookkeeping hooks pass;
