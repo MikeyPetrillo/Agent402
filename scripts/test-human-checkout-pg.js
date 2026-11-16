@@ -140,7 +140,18 @@ try {
   ok(owedIds.includes("cs_unidx") && !owedIds.includes("cs_fail"), `the owed list the refundsOwed word reads agrees (${JSON.stringify(owedIds)})`);
   await putRow("cs_unidx", { ...unidx, refundId: "re_x", refundOwed: false });
   await putRow("_issues", Object.fromEntries(Object.entries((await row("_issues")) || {}).filter(([k]) => k !== "cs_fail" && k !== "cs_idxonly")));
-  ok(!(await B.listIssues()).refundOwed.some((x) => x.id === "cs_unidx"), "once its record shows the refund it leaves the list");
+  // The error records are read at most once per few seconds per container
+  // (the list is read by a public, uncached surface): another container's
+  // write shows once that bound passes.
+  ok((await B.listIssues()).refundOwed.some((x) => x.id === "cs_unidx"), "inside the cache bound another container's write is not read yet (one statement per bound)");
+  clock += 6_000;
+  ok(!(await B.listIssues()).refundOwed.some((x) => x.id === "cs_unidx"), "once its record shows the refund it leaves the list, within the cache bound");
+  await putRow("cs_unidx2", { ...unidx, paymentIntent: "pi_unidx2" });
+  ok(!(await B.listIssues()).refundOwed.some((x) => x.id === "cs_unidx2"), "setup: the new owed record is inside B's cache bound");
+  await B.setPublic("cs_paid", false);
+  ok((await B.listIssues()).refundOwed.some((x) => x.id === "cs_unidx2"), "a write by this container drops its cache at once");
+  await putRow("cs_unidx2", { ...unidx, paymentIntent: "pi_unidx2", refundId: "re_y", refundOwed: false });
+  clock += 6_000;
 
   // ---- (5) the public toggle updates the row and the mirror -----------------
   const pubOn = await A.setPublic("cs_paid", true);

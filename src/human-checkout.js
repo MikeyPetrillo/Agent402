@@ -434,7 +434,11 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
   // Every primitive answers at once on the files and in a promise on the
   // database; the callers await either.
   let throughWarned = false;
+  // Every database write of this container passes through here: the owed
+  // list's short cache (errorRecordsPg) is dropped on any of them.
+  let localWriteGen = 0;
   const through = (path, body) => {
+    localWriteGen++;
     if (!USE_PG || !existsSync(dir)) return;
     if (!writeJsonAtomic(path, body) && !throughWarned) { throughWarned = true; log(`[human-checkout] write-through to ${dir} failed (the database row is the record)`); }
   };
@@ -1168,13 +1172,32 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     for (const [id, v] of Object.entries(index)) if (!errors.has(id)) out[id] = v;
     return out;
   }
+  // The owed list is read by public, uncached surfaces (/api/gateway-status),
+  // so the error records are read at most once per OWED_LIST_CACHE_MS per
+  // container: another container's write shows within that bound, this
+  // container's own write at once (it drops the cache), and concurrent
+  // readers share one statement.
+  const OWED_LIST_CACHE_MS = 5_000;
+  let errorRowsCache = null; // { at, gen, p }
+  function errorRowsPg() {
+    const c = errorRowsCache;
+    if (c && c.gen === localWriteGen && now() - c.at < OWED_LIST_CACHE_MS) return c.p;
+    const entry = { at: now(), gen: localWriteGen, p: null };
+    entry.p = (async () => {
+      await readyP();
+      const r = await stateQuery(
+        `SELECT id, body->>'at' AS at, body->'refundAttempts' AS attempts, body->>'product' AS product, body->>'refundId' AS refund_id
+         FROM ${RT()} WHERE collection = $1 AND body->>'status' = 'error'`, [COLL]);
+      return r.rows;
+    })();
+    entry.p.catch(() => { if (errorRowsCache === entry) errorRowsCache = null; });
+    errorRowsCache = entry;
+    return entry.p;
+  }
   async function errorRecordsPg() {
-    await readyP();
-    const r = await stateQuery(
-      `SELECT id, body->>'at' AS at, body->'refundAttempts' AS attempts, body->>'product' AS product, body->>'refundId' AS refund_id
-       FROM ${RT()} WHERE collection = $1 AND body->>'status' = 'error'`, [COLL]);
+    const rows = await errorRowsPg();
     const out = new Map();
-    for (const row of r.rows) if (SESSION_RE.test(row.id)) out.set(row.id, { at: row.at, refundAttempts: row.attempts, product: row.product, refundId: row.refund_id });
+    for (const row of rows) if (SESSION_RE.test(row.id)) out.set(row.id, { at: row.at, refundAttempts: row.attempts, product: row.product, refundId: row.refund_id });
     // A final record still waiting here for its replay is this container's latest word on it.
     for (const [id, rec] of pendingFinals) if (rec?.status === "error") out.set(id, rec);
     return out;
