@@ -520,6 +520,37 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   ok(/concat\(\[encodeFunctionData\(\{ abi: ERC20, functionName: "transfer"[^\n]*refundMemoHex\(row\)\]\)/.test(prep) && /prepareTransactionRequest\(\{ to: token, data, gas \}\)/.test(send) && /sendRawTransaction\(\{ serializedTransaction: serialized \}\)/.test(send) && !/writeContract/.test(prep + send), "the EVM sender sends the transfer with the memo suffix appended");
 }
 
+// EVM transaction hashes are hex, so two spellings of one hash are one
+// payment: one debt row, found under either spelling. Base58 and base32 ids
+// are case-sensitive and are never folded.
+{
+  __resetRefunds();
+  const { refundByEvidence, refundsByTransaction, voidOwedOnClaim } = await import("../src/refund-ledger.js");
+  const hex = "aBcDeF0123456789".repeat(4);
+  const upper = `0x${hex.toUpperCase()}`, mixed = `0x${hex}`, lower = `0x${hex.toLowerCase()}`;
+  const base = { slug: "case", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000009", priceUsd: 0.001, httpStatus: 502 };
+  ok(recordRefundOwed({ ...base, tx: upper }) === true, "an EVM hash in capitals books the debt");
+  ok(recordRefundOwed({ ...base, tx: mixed }) === false, "the same EVM hash in mixed case is the same debt");
+  ok(listRefunds().filter((r) => r.slug === "case").length === 1, "one owed row for one payment under two spellings");
+  ok(listRefunds().find((r) => r.slug === "case")?.evidence === lower, "an EVM hash is keyed in lowercase");
+  ok(refundByEvidence(upper)?.evidence === lower && refundByEvidence(mixed)?.evidence === lower, "the row is found under any spelling of its hash");
+  ok(refundsByTransaction(upper).length === 1, "a transaction's debts are found under any spelling");
+  const sol = "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW";
+  const algo = "TXIDALGORANDBASE32ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCD";
+  ok(recordRefundOwed({ ...base, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", tx: sol }) === true && refundByEvidence(sol)?.evidence === sol, "a Solana signature is stored exactly as given");
+  ok(recordRefundOwed({ ...base, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", tx: sol.toLowerCase() }) === true, "a Solana signature in another case is another id, never folded");
+  ok(recordRefundOwed({ ...base, network: "algorand:mainnet", tx: algo }) === true && refundByEvidence(algo)?.evidence === algo && !refundByEvidence(algo.toLowerCase()), "an Algorand id is stored and read exactly as given");
+  // A row an earlier build wrote in mixed case still matches: a new debt for
+  // it is a duplicate, and reads and owed-row changes reach it.
+  const { __insertRefundVerbatim } = await import("../src/refund-ledger.js");
+  const legacyHex = `0x${"F0e1D2c3B4a59687".repeat(4)}`;
+  ok(__insertRefundVerbatim({ evidence: legacyHex, slug: "legacy", network: "eip155:8453", payer: base.payer, priceUsd: 0.001 }), "a mixed-case row as an earlier build wrote it");
+  ok(recordRefundOwed({ ...base, slug: "legacy", tx: legacyHex.toLowerCase() }) === false, "a debt for a hash already booked in mixed case is a duplicate");
+  ok(listRefunds().filter((r) => r.slug === "legacy").length === 1, "one row for the legacy payment");
+  ok(refundByEvidence(legacyHex.toLowerCase())?.evidence === legacyHex && refundsByTransaction(legacyHex.toUpperCase()).length === 1, "the legacy mixed-case row is read under the lowercase spelling");
+  ok(voidOwedOnClaim(legacyHex.toUpperCase(), "served on the resend") === true && refundByEvidence(legacyHex)?.status === "void", "an owed-row change reaches the legacy mixed-case row");
+}
+
 __resetRefunds();
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
