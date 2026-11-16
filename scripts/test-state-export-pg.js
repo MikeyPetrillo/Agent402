@@ -38,6 +38,9 @@ try {
   await c.query(`INSERT INTO ${S}.records (collection, id, body) VALUES ('x402-index', $1, $2::jsonb), ('x402-index-parts', $3, $4::jsonb), ('x402-index-parts', $5, $6::jsonb)`,
     [PARTED, JSON.stringify({ manifest: { name: "Parted" }, fetchedAt: 7, error: null, source: "crawl", history: [], paywall: null, discoveryPath: null, parts: { tools: 3, size: 2000, hashes: [H1, H2] }, contentHash: "x" }),
       `${PARTED}#${H1}`, JSON.stringify({ origin: PARTED, hash: H1, tools: [{ route: "/a" }, { route: "/b" }] }), `${PARTED}#${H2}`, JSON.stringify({ origin: PARTED, hash: H2, tools: [{ route: "/c" }] })]);
+  // The referral book stored as a head and one row per entry (src/json-rows-document.js): exported as one whole body.
+  await c.query(`INSERT INTO ${S}.documents (name, body) VALUES ('referral-settlements', '{"resolved": [], "forgiven": []}'::jsonb)`);
+  await c.query(`INSERT INTO ${S}.records (collection, id, body) VALUES ('referral-settlements.rows', 'entries:k1', '{"v": 2, "b": {"key": "k1", "state": "charged-undelivered"}}'::jsonb), ('referral-settlements.rows', 'sold:k0', '{"v": 1, "b": {"tx": "0x1"}}'::jsonb)`);
 
   const ex = run(["scripts/state-export.js", "--out", out]);
   ok(ex.status === 0 && !/UNMAPPED/.test(ex.stdout), `the export runs with every table mapped${ex.status ? ` (${(ex.stderr || ex.stdout).slice(-400)})` : ""}`);
@@ -60,6 +63,8 @@ try {
   const partedLine = ndLines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((e) => Array.isArray(e) && e[0] === PARTED);
   ok(partedLine && partedLine[1].tools?.map((t) => t.route).join() === "/a,/b,/c" && !("parts" in partedLine[1]) && partedLine[1].manifest?.name === "Parted", "a seller stored in parts is exported as one assembled line");
   ok(!readdirSync(out).includes("x402-index-parts"), "the part rows get no directory of their own");
+  const bookOut = JSON.parse(readFileSync(join(out, "referral-settlements"), "utf8"));
+  ok(bookOut.entries?.k1?.state === "charged-undelivered" && bookOut.sold?.k0?.tx === "0x1" && Array.isArray(bookOut.resolved) && !readdirSync(out).includes("referral-settlements.rows"), "the referral book's rows are exported folded into its one document, with no directory of their own");
 
   // The money figures: file-mode readers on the export against the database.
   const summary = (mode) => {
