@@ -3,28 +3,34 @@
 // Reads only (one GET); never signs or pays. The buys are scripts/refresh-bazaar.js's.
 //
 //   node scripts/keepalive-plan.js tail
-//       The scheduled pass above the weekly ceiling: prints the route count and
-//       the pass total, and refuses (exit 3) when the total is over
-//       MAX_SPEND_USD. Writes slugs= and max_price= to $GITHUB_OUTPUT.
+//       The scheduled pass above the weekly ceiling: prints the route count,
+//       and refuses (exit 3) when the pass total is over MAX_SPEND_USD.
+//       Writes slugs= and max_price= to $GITHUB_OUTPUT.
 //   node scripts/keepalive-plan.js snapshot <file>
 //       Saves slug -> fixed price of the live catalog (the deploy job takes it
 //       before it ships a build).
 //   node scripts/keepalive-plan.js changed <file>
 //       Compares the live catalog with a snapshot: the routes whose fixed price
-//       changed, exempt kinds left out. Refuses (exit 3) over MAX_SPEND_USD.
-//       Writes slugs= and max_price= to $GITHUB_OUTPUT.
+//       changed, exempt kinds left out. Refuses (exit 3) over MAX_SPEND_USD or
+//       over MAX_ROUTES routes (default 25). Writes slugs= and max_price= to
+//       $GITHUB_OUTPUT.
 //   node scripts/keepalive-plan.js low-water
 //       Prints the burner low-water mark in whole USD: one tail pass plus the
 //       margin, never under FLOOR_USD.
 //
-// Env: TARGET_URL (default https://agent402.tools), MAX_SPEND_USD, FLOOR_USD.
+// Env: TARGET_URL (default https://agent402.tools), MAX_SPEND_USD, MAX_ROUTES,
+// FLOOR_USD.
+//
+// The run logs are public: nothing here prints a total, a cap or a price, only
+// route counts, slugs and whether a cap held (the low-water mark goes to the
+// caller's variable, never to a log line of its own).
 // Exit: 0 done (an empty plan included), 2 unreadable catalog or bad usage,
 // 3 refused by the spend cap.
 import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
-  KEEPALIVE_CEILING_USD, aboveCeilingRoutes, passMicros, microsToUsd, spendCapVerdict,
-  priceSnapshot, changedPriceRoutes, burnerLowWaterUsd,
+  aboveCeilingRoutes, passMicros, microsToUsd, spendCapVerdict, routeCountVerdict,
+  priceSnapshot, changedPriceRoutes, burnerLowWaterUsd, PRICE_CHANGE_MAX_ROUTES,
 } from "./lib/keepalive-plan.js";
 
 async function readPricing(target) {
@@ -69,7 +75,7 @@ export async function run(argv, { env = process.env, log = console.log, err = co
   let routes;
   if (cmd === "tail") {
     routes = aboveCeilingRoutes(pricing);
-    log(`Routes priced above the $${KEEPALIVE_CEILING_USD.toFixed(2)} keep-alive ceiling, exempt kinds left out: ${routes.length}, one pass $${microsToUsd(passMicros(routes)).toFixed(3)}.`);
+    log(`Routes priced above the keep-alive ceiling, exempt kinds left out: ${routes.length}.`);
   } else {
     let before;
     try { before = JSON.parse(readFileSync(file, "utf8")); } catch {
@@ -77,12 +83,18 @@ export async function run(argv, { env = process.env, log = console.log, err = co
       return 2;
     }
     routes = changedPriceRoutes(before, priceSnapshot(pricing));
-    log(`Routes whose fixed price changed: ${routes.length}${routes.length ? ` (${routes.map((r) => `${r.slug} $${microsToUsd(r.beforeMicros)} -> $${microsToUsd(r.micros)}`).join(", ")})` : ""}.`);
+    log(`Routes whose fixed price changed: ${routes.length}${routes.length ? ` (${routes.map((r) => r.slug).join(", ")})` : ""}.`);
+    const count = routeCountVerdict(routes, env.MAX_ROUTES ?? PRICE_CHANGE_MAX_ROUTES);
+    if (!count.ok) {
+      err(`keepalive-plan: refusing: ${routes.length} routes, over the route-count cap.`);
+      writeOutputs(env, []);
+      return 3;
+    }
   }
   if (!routes.length) { writeOutputs(env, routes); return 0; }
   const verdict = spendCapVerdict(routes, env.MAX_SPEND_USD);
   if (!verdict.ok) {
-    err(`keepalive-plan: refusing: $${verdict.estUsd.toFixed(3)} for ${routes.length} routes, cap $${verdict.capUsd} (${verdict.reason}).`);
+    err(`keepalive-plan: refusing: ${routes.length} routes, ${verdict.reason}.`);
     writeOutputs(env, []);
     return 3;
   }

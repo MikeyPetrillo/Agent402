@@ -5377,15 +5377,21 @@ jobs:
           esac
 
       # A route whose fixed price this deploy changed is bought once, so the
-      # Bazaar re-reads its listing at the new price instead of keeping the old
-      # one until a buyer settles it. Quoted, model-priced and route-execute
-      # routes are exempt (scripts/lib/keepalive-plan.js). Same buyer as the
-      # keep-alive (scripts/refresh-bazaar.js, the burner, Base), the whole set
-      # capped by BAZAAR_PRICE_CHANGE_MAX_USD: over it, nothing is bought and
-      # the warning names the hand pass. Never fails the deploy, which has
-      # already shipped; a refusal or a failed buy is a warning on the run.
+      # Bazaar listing shows the new price instead of the old one until a buyer
+      # settles it. Quoted and model-priced routes, and every route whose effect
+      # outlives the answer (it spends our own wallet or buys from an outside
+      # seller: src/lasting-effect-slugs.js), are exempt
+      # (scripts/lib/keepalive-plan.js). Same buyer as the keep-alive
+      # (scripts/refresh-bazaar.js, the burner, Base), the whole set capped by
+      # BAZAAR_PRICE_CHANGE_MAX_USD and by MAX_ROUTES routes: over either,
+      # nothing is bought and the warning names the hand pass. Never fails the
+      # deploy, which has already shipped (continue-on-error, its own timeout);
+      # a refusal or a failed buy is a warning on the run. The logs carry route
+      # counts and slugs, never a total or a cap.
       - name: Buy each route whose fixed price changed
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 18
         env:
           DATABENTO_API_KEY: ""
           RAILWAY_API_TOKEN: ""
@@ -5399,6 +5405,7 @@ jobs:
           WALLET_ADDRESS: ""
           TARGET_URL: https://agent402.tools
           MAX_SPEND_USD: ${{ vars.BAZAAR_PRICE_CHANGE_MAX_USD || '5' }}
+          MAX_ROUTES: "25"
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
           POW_SECRET: ${{ secrets.POW_SECRET }}
         run: |
@@ -5409,7 +5416,7 @@ jobs:
           OUT=$(GITHUB_OUTPUT="$RUNNER_TEMP/price-change.out" BURNER_KEY="" POW_SECRET="" node scripts/keepalive-plan.js changed "$RUNNER_TEMP/prices-before.json" 2>&1); CODE=$?
           set -e
           echo "$OUT"
-          if [ "$CODE" = "3" ]; then echo "::warning::Price-change buy refused by its cap: $OUT Run bazaar-keepalive.yml with slugs, stale_days=0 and max_spend_usd at or above the total."; exit 0; fi
+          if [ "$CODE" = "3" ]; then echo "::warning::Price-change buy refused: the changed routes are over the cap (spend or route count). Run bazaar-keepalive.yml with those slugs, stale_days=0 and a max_spend_usd that covers them."; exit 0; fi
           if [ "$CODE" != "0" ]; then echo "::warning::Price-change plan could not run (exit $CODE); no buy on this run."; exit 0; fi
           SLUGS=$(sed -n 's/^slugs=//p' "$RUNNER_TEMP/price-change.out" | tail -1)
           MAXP=$(sed -n 's/^max_price=//p' "$RUNNER_TEMP/price-change.out" | tail -1)

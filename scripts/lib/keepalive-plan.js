@@ -1,17 +1,20 @@
 // Route selection, spend caps and the burner low-water figure for the Bazaar
-// keep-alive passes. Pure functions over /api/pricing rows, no imports, so the
-// heartbeat can run the CLI (scripts/keepalive-plan.js) without an install.
+// keep-alive passes. Pure functions over /api/pricing rows. The one import is
+// the server's own lasting-effect list (src/lasting-effect-slugs.js, itself
+// import-free), so the heartbeat can run the CLI (scripts/keepalive-plan.js)
+// without an install.
 //
 // Three passes read this:
 //   - the scheduled pass above the weekly keep-alive's per-route ceiling
 //     (.github/workflows/bazaar-keepalive-tail.yml), every route priced above
 //     KEEPALIVE_CEILING_USD that is not an exempt kind;
 //   - the deploy job's one buy of each route whose fixed price changed
-//     (scripts/bazaar-price-change.js), same exempt kinds;
+//     (scripts/keepalive-plan.js changed, from deploy.yml), same exempt kinds;
 //   - the heartbeat's burner low-water mark, one above-ceiling pass plus a
 //     margin (burnerLowWaterUsd).
 //
 // Money is counted in integer micro-USD: a sum of float dollars drifts.
+import { hasLastingEffect } from "../../src/lasting-effect-slugs.js";
 
 /** The weekly keep-alive's per-route ceiling (bazaar-keepalive.yml's
  *  max_price_usd default). The scheduled tail pass buys what is above it. */
@@ -27,14 +30,19 @@ export const microsToUsd = (m) => Math.round(m) / 1e6;
 
 /** Why a route is never bought by these passes, or null. A quoted route's list
  *  price is a floor (its 402 asks what the input costs); a model-priced route's
- *  price follows the model a caller names; the route-execute tiers buy from
- *  outside sellers and need their own request (scripts/mint-bazaar-rows.js
- *  --expensive). */
+ *  price follows the model a caller names; a route whose effect outlives the
+ *  answer (the server's list, src/lasting-effect-slugs.js: it spends our own
+ *  wallet, buys from an outside seller, or writes something lasting, such as
+ *  the route-execute tiers, seller-payability, the flight tools, attest and
+ *  the memory writers) is never bought by a scheduled pass (the route-execute
+ *  tiers have their own request, scripts/mint-bazaar-rows.js --expensive).
+ *  A row that carries the server's flags is read by them too. */
 export function exemptKind(row) {
   if (!row || typeof row !== "object") return "unreadable";
   if (row.quoted === true) return "quoted";
   if (row.pricedByModel === true) return "model-priced";
   if (typeof row.slug === "string" && /^route-execute(-|$)/.test(row.slug)) return "route-execute";
+  if (hasLastingEffect(row.slug) || row.lastingEffect === true || row.spendsOwnWallet === true || row.paysThirdPartySeller === true) return "lasting-effect";
   return null;
 }
 
@@ -67,9 +75,17 @@ export function spendCapVerdict(routes, capUsd) {
   return { ok, estUsd: microsToUsd(est), capUsd: microsToUsd(cap), reason: ok ? null : cap > 0 ? "estimate over the cap" : "no cap set" };
 }
 
-/** Whether one more buy fits under the cap, given what the pass already paid. */
-export function buyFits(spentMicros, priceMicros, capMicros) {
-  return capMicros > 0 && spentMicros + priceMicros <= capMicros;
+/** The most routes one deploy's price-change buy takes (deploy.yml passes
+ *  MAX_ROUTES): a deploy that changes more prices than this is a repricing,
+ *  bought by a hand pass, not inside the deploy job. */
+export const PRICE_CHANGE_MAX_ROUTES = 25;
+
+/** Whether a set of routes is within a route-count cap; a cap that is not a
+ *  positive integer refuses everything. */
+export function routeCountVerdict(routes, maxRoutes) {
+  const max = Number(maxRoutes);
+  const ok = Number.isInteger(max) && max > 0 && routes.length <= max;
+  return { ok, reason: ok ? null : "over the route-count cap" };
 }
 
 /** slug -> { path, micros, exempt } of the live catalog, the snapshot the

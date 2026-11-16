@@ -62,7 +62,8 @@
 // for (spend/price cap, batch stride) · 2 = misconfigured.
 
 import { disableVendorSpendControls } from "../src/x402-spend-controls.js";
-import { assertOwnPaidTarget, guardCappedSigning, capFromEnv } from "./lib/buyer-guard.js";
+import { assertOwnPaidTarget, guardCappedSigning, capFromEnv, signedEvmValueOf, signedAtomicOf } from "./lib/buyer-guard.js";
+import { knownAsset } from "../client/known-assets.js";
 import { createHmac } from "node:crypto";
 // The keep-alive pays production from our own burner. It sends the signed
 // X-Heartbeat-Token (when the job holds POW_SECRET) so every accounting
@@ -77,7 +78,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { chainOf, routeSellsOn, walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
-import { buyFits, usdMicros } from "./lib/keepalive-plan.js";
+import { usdMicros } from "./lib/keepalive-plan.js";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
@@ -418,7 +419,7 @@ export async function runMissingMode({ sweep = false } = {}) {
   const chainNote = MISSING_CHAIN ? ` (rows carrying ${MISSING_CHAIN.name}, ${catalog.filter((t) => t.onChain).length} routes sold there)` : "";
   console.log(
     sweep
-      ? `Catalog: ${catalog.length} · sweeping ${missing.length} routes priced ≤ $${MAX_PRICE_USD} via ${PAY_NETWORK}${batchNote}`
+      ? `Catalog: ${catalog.length} · sweeping ${missing.length} routes under the price ceiling via ${PAY_NETWORK}${batchNote}`
       : `Catalog: ${catalog.length} · already on Bazaar: ${registered.size}${chainNote} · missing: ${missing.length}${batchNote}`
   );
   if (!missing.length) {
@@ -426,26 +427,32 @@ export async function runMissingMode({ sweep = false } = {}) {
     return 0;
   }
 
+  // Counts only in these logs: a pass's totals and caps are not printed (the
+  // run logs are public), only route counts and whether the cap held.
   const estCost = missing.reduce((s, t) => s + t.priceUsd, 0);
-  console.log(`Estimated total cost to ${sweep ? "sweep" : "register"} all routes: $${estCost.toFixed(3)}`);
   if (estCost > MAX_SPEND_USD) {
-    console.error(`Estimate exceeds MAX_SPEND_USD=$${MAX_SPEND_USD}. Refusing to run. Raise MAX_SPEND_USD or filter the set.`);
+    console.error(`The ${missing.length} routes' list prices together are over the MAX_SPEND_USD cap. Refusing to run. Raise MAX_SPEND_USD or filter the set.`);
     return 2;
   }
+  console.log(`The ${missing.length} routes' list prices together are within the MAX_SPEND_USD cap.`);
 
   if (DRY_RUN) {
     console.log("DRY_RUN=1 — listing the work without paying:");
-    for (const t of missing.slice(0, 20)) console.log(`  ${t.method} ${t.path} (${t.price})`);
+    for (const t of missing.slice(0, 20)) console.log(`  ${t.method} ${t.path}`);
     if (missing.length > 20) console.log(`  … and ${missing.length - 20} more`);
     return 0;
   }
 
-  const payFetch = await buildPayFetch();
-  console.log(`Spending up to $${estCost.toFixed(3)} …`);
-  // The cap holds during the pass too, not only on the estimate: a buy that
-  // would take what the pass has settled over MAX_SPEND_USD is not sent.
-  const capMicros = usdMicros(MAX_SPEND_USD);
-  let spentMicros = 0;
+  // The cap holds during the pass too, not only on the estimate, and it
+  // counts what was SIGNED, not what answered 200: every signature (a retry's
+  // included, since a buy reported failed may still have settled) adds its
+  // authorization value, a signature that would take the signed total over
+  // MAX_SPEND_USD is refused before it is made, and each signature is held to
+  // the route's planned list price, so a 402 asking more (a deploy that raised
+  // the price mid-pass) is refused rather than paid.
+  const budget = signedSpendBudget(MAX_SPEND_USD);
+  const payFetch = await buildPayFetch(budget);
+  console.log(`Buying ${missing.length} routes …`);
 
   // `bought` records the paths whose settlement we actually observed, so the
   // post-check below can tell "the harvester hasn't ingested it yet" apart from
@@ -454,24 +461,25 @@ export async function runMissingMode({ sweep = false } = {}) {
   for (let i = 0; i < missing.length; i++) {
     const t = missing[i];
     const key = `${t.method} ${t.path}`;
-    if (!buyFits(spentMicros, usdMicros(t.priceUsd), capMicros)) {
-      console.error(`  CAP ${key} (${t.price}) not bought: the pass has settled $${(spentMicros / 1e6).toFixed(3)} of its $${MAX_SPEND_USD} cap.`);
+    if (!budget.fits(t.priceUsd)) {
+      console.error(`  CAP ${key} not bought: what the pass has signed plus this route is over the MAX_SPEND_USD cap.`);
       results.fail++;
       results.errors.push(`${t.path}: spend cap`);
       results.failedPaths.push(t.path);
       continue;
     }
+    budget.forRoute(t.priceUsd);
     let lastStatus = 0;
     for (let attempt = 0; attempt < 3; attempt++) {
+      budget.refused = null;
       try {
         const { url, init } = await sweepRequest(t, examples, { headers: heartbeatHeaders() });
         const res = await buyOnce(payFetch, url, init);
         lastStatus = res.status;
         if (res.status === 200) {
           results.ok++;
-          spentMicros += usdMicros(t.priceUsd);
           results.bought.add(t.path);
-          if (i % 50 === 0 || i === missing.length - 1 || res.job) console.log(`  [${i + 1}/${missing.length}] OK ${key} (${t.price})${res.job ? " as a job" : ""}`);
+          if (i % 50 === 0 || i === missing.length - 1 || res.job) console.log(`  [${i + 1}/${missing.length}] OK ${key}${res.job ? " as a job" : ""}`);
           break;
         }
         if (retryable(res, attempt)) {
@@ -486,12 +494,15 @@ export async function runMissingMode({ sweep = false } = {}) {
         results.failedPaths.push(t.path);
         break;
       } catch (e) {
-        if (attempt < 2) {
+        // A signature our own caps refused is not retried: the next attempt
+        // would meet the same 402 and the same cap.
+        const capRefusal = budget.refused || /refused before sending|selected accept refused/.test(String(e?.message || ""));
+        if (attempt < 2 && !capRefusal) {
           console.warn(`  RETRY ${key} → ${(e.message || "").slice(0, 80)} (attempt ${attempt + 1}/3, waiting 5s)`);
           await new Promise((r) => setTimeout(r, 5000));
           continue;
         }
-        const msg = (e && e.message ? e.message : String(e)).slice(0, 160);
+        const msg = capRefusal ? "refused by the spend cap or the route's planned price" : (e && e.message ? e.message : String(e)).slice(0, 160);
         console.warn(`  FAIL ${key} → ${msg}`);
         results.fail++;
         results.errors.push(`${t.path}: ${msg}`);
@@ -500,7 +511,8 @@ export async function runMissingMode({ sweep = false } = {}) {
       }
     }
   }
-  console.log(`\n${sweep ? "Sweep" : "Registration"} pass complete: ${results.ok} ok, ${results.fail} failed.`);
+  budget.forRoute(null);
+  console.log(`\n${sweep ? "Sweep" : "Registration"} pass complete: ${results.ok} ok, ${results.fail} failed, ${budget.signatures} signature(s).`);
 
   if (sweep) {
     // Settlement-driven indexes have no public recount endpoint: success = the
@@ -640,13 +652,61 @@ function acceptCapUsd() {
   return capFromEnv("REFRESH_MAX_ACCEPT_USD", fallback, { script: "refresh-bazaar" });
 }
 
-// One pay-capable fetch for whichever chain PAY_NETWORK selects.
-async function buildPayFetch() {
+/** The running total of what one pass has SIGNED, in micro-USD, against its
+ *  cap. `signCapUsd(base)` is the most the next signature may authorize: the
+ *  per-signature ceiling, the current route's planned list price, and what is
+ *  left under the cap, whichever is least (0 refuses). `record` is called with
+ *  every signature the guard let through, before it is sent. Exported for
+ *  scripts/test-keepalive-plan.js. */
+export function signedSpendBudget(capUsd) {
+  const capMicros = usdMicros(capUsd);
+  let signedMicros = 0, routeMicros = null, signatures = 0;
+  return {
+    refused: null,
+    get signedMicros() { return signedMicros; },
+    get signatures() { return signatures; },
+    fits(priceUsd) { return capMicros > 0 && signedMicros + usdMicros(priceUsd) <= capMicros; },
+    forRoute(priceUsd) { routeMicros = priceUsd == null ? null : usdMicros(priceUsd); },
+    signCapUsd(baseUsd) {
+      let m = Math.min(usdMicros(baseUsd), Math.max(0, capMicros - signedMicros));
+      if (routeMicros !== null) m = Math.min(m, routeMicros);
+      return m / 1e6;
+    },
+    record(micros) { signedMicros += micros; signatures++; },
+  };
+}
+
+/** The micro-USD a payload just signed authorizes: the EVM authorization's
+ *  value, else the selected accept's amount (a Solana payload carries no
+ *  plaintext value; the guard priced the accept before signing). Unreadable
+ *  counts as the whole accept cap, never as zero. */
+function signedMicrosOf({ paymentRequired, selectedRequirements, paymentPayload }, fallbackMicros) {
+  const net = selectedRequirements?.network;
+  const raw = String(net || "").startsWith("eip155:") ? signedEvmValueOf(paymentPayload) : signedAtomicOf(paymentRequired?.x402Version, selectedRequirements);
+  const dec = knownAsset(net, selectedRequirements?.asset)?.decimals;
+  if (raw === null || typeof raw === "string" && !/^\d+$/.test(raw) || !Number.isInteger(dec)) return fallbackMicros;
+  const atomic = BigInt(raw);
+  const scale = 10n ** BigInt(Math.abs(dec - 6));
+  const micros = dec >= 6 ? (atomic + scale - 1n) / scale : atomic * scale;
+  return Number(micros);
+}
+
+// One pay-capable fetch for whichever chain PAY_NETWORK selects. With a
+// `budget` (signedSpendBudget), every signature is capped by it and counted.
+async function buildPayFetch(budget = null) {
   assertOwnPaidTarget(TARGET, "refresh-bazaar");
   const { x402Client } = await import("@x402/core/client");
   const { wrapFetchWithPayment } = await import("@x402/fetch");
   const client = disableVendorSpendControls(new x402Client());
-  const maxUsd = acceptCapUsd();
+  const baseUsd = acceptCapUsd();
+  const maxUsd = budget ? () => budget.signCapUsd(baseUsd) : baseUsd;
+  // Only a refusal by amount marks the attempt (the guard also logs the
+  // accepts on chains this pass does not pay on, which is no refusal).
+  const log = (m) => { if (budget && /over the cap|no positive cap/.test(String(m))) budget.refused = m; console.error(m); };
+  const countSigned = () => {
+    if (!budget) return;
+    client.onAfterPaymentCreation(async (ctx) => { budget.record(signedMicrosOf(ctx, usdMicros(baseUsd))); });
+  };
   if (PAY_NETWORK === "solana") {
     const raw = (process.env.SOLANA_BURNER_KEY || "").trim();
     if (!raw) {
@@ -658,14 +718,16 @@ async function buildPayFetch() {
     const signer = await kit.createKeyPairSignerFromBytes(bytes);
     const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
     registerExactSvmScheme(client, { signer });
-    guardCappedSigning(client, { maxUsd, networks: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"] });
+    guardCappedSigning(client, { maxUsd, networks: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"], log });
+    countSigned();
     console.log(`Paying via Solana from ${signer.address} …`);
   } else {
     const { privateKeyToAccount } = await import("viem/accounts");
     const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
     const account = privateKeyToAccount(loadKey());
     registerExactEvmScheme(client, { signer: account });
-    guardCappedSigning(client, { maxUsd, networks: ["eip155:8453"] });
+    guardCappedSigning(client, { maxUsd, networks: ["eip155:8453"], log });
+    countSigned();
     console.log(`Paying via Base from ${account.address} …`);
   }
   return wrapFetchWithPayment(fetch, client);

@@ -1,18 +1,23 @@
 # Keep the routes priced above the weekly keep-alive's ceiling listed.
 #
 # bazaar-keepalive.yml buys fixed-price routes up to $0.10 each. A route priced
-# above that (report products, premium tiers) had no scheduled buyer, so its
-# listing reached the 30-day removal unless a buyer or a hand pass settled it.
-# This pass buys each of them on the 1st and 15th of the month (at most 17 days
-# apart against the 30-day rule), with the same script, burner and per-signature
-# cap as the hand passes (scripts/refresh-bazaar.js, MODE=sweep, Base).
+# above that (report products, premium tiers) had no scheduled buyer. Routes
+# have been observed to leave the Bazaar listing after about 30 days without a
+# settlement, so a route nobody bought could drop out of it unless a hand pass
+# settled it. The purpose of this pass is to keep those routes listed: it buys
+# each of them on the 1st and 15th of the month (at most 17 days apart), with
+# the same script, burner and per-signature cap as the hand passes
+# (scripts/refresh-bazaar.js, MODE=sweep, Base).
 #
 # Selection is scripts/lib/keepalive-plan.js: every route above the ceiling
-# that is not quoted, model-priced or a route-execute tier
-# (scripts/mint-bazaar-rows.js buys those). The plan step reads the live
+# that is not quoted or model-priced and whose effect does not outlive the
+# answer (the server's list, src/lasting-effect-slugs.js: the route-execute
+# tiers, which scripts/mint-bazaar-rows.js buys, and every route that spends
+# our own wallet or buys from an outside seller). The plan step reads the live
 # catalog and refuses the whole pass when its total is over the pass cap; the
 # buy step runs the pass in ONE process, which refuses again on the estimate
-# and stops buying once what it has settled would pass the cap.
+# and counts every signature it makes against the cap, each one held to the
+# route's planned price. The logs carry route counts, never a total or a cap.
 name: Bazaar keep-alive (above the ceiling)
 
 on:
@@ -74,7 +79,7 @@ jobs:
           # Signs X-Heartbeat-Token so these self-buys are booked as ours.
           POW_SECRET: ${{ secrets.POW_SECRET }}
         run: |
-          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the keep-alive cannot pay, and listings will age out in 30 days"; exit 1; }
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the keep-alive cannot pay, and routes priced above the ceiling may leave the Bazaar listing"; exit 1; }
           [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
           echo "::add-mask::$BURNER_KEY"
           node scripts/refresh-bazaar.js
@@ -90,11 +95,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SWEEP: ${{ needs.sweep.result }}
         run: |
-          TITLE="Bazaar keep-alive above the ceiling FAILED - listings will age out"
+          TITLE="Bazaar keep-alive above the ceiling FAILED"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
           if [ "$SWEEP" != "success" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The keep-alive pass over the routes priced above the weekly ceiling did not complete (result: $SWEEP). CDP removes a resource after 30 days without a settlement. The run log names a refused plan (over the pass cap), a failed buy or a missing key. Re-run: \`gh workflow run bazaar-keepalive-tail.yml --ref main\`."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The keep-alive pass over the routes priced above the weekly ceiling did not complete (result: $SWEEP). Routes have been observed to leave the Bazaar listing after about 30 days without a settlement, so this pass keeps them listed. The run log names a refused plan (over the pass cap), a failed buy or a missing key. Re-run: \`gh workflow run bazaar-keepalive-tail.yml --ref main\`."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ)."
             fi
