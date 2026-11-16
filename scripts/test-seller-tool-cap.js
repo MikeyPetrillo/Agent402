@@ -89,7 +89,7 @@ const TOKEN = "seller-tool-cap-operator-token-0123456789";
 const serverEnv = {
   ...process.env, ...ownStoreEnv("seller-tool-cap"),
   FREE_MODE: "true", PORT: "0", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", INDEX_SELLER_TOOL_CAP: String(CAP),
-  X402_INDEX_CRAWL: "", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", REDIS_URL: "", STATE_DATABASE_URL: "",
+  X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", REDIS_URL: "", STATE_DATABASE_URL: "",
   ROUTER_WORKERS: "0", LOAD_SHED: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", LAZY_DEPS_WARM: "off", AGENT402_OPERATOR_TOKEN: TOKEN,
 };
 const proc = spawn(process.execPath, ["src/server.js"], { cwd: ROOT, env: serverEnv, stdio: ["ignore", "pipe", "pipe"] });

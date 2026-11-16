@@ -86,6 +86,7 @@ Set these on your host. None are committed to the repo.
 | `REDIS_URL` | No | Enables Redis: response caching (see below), and, across replicas, the shared rate limits, breakers and budgets (`SHARED_LIMITS=off` turns those off), the payment replay guard and idempotency store. A plain `redis://` URL to a public host is refused at boot |
 | `STATE_DATABASE_URL` | No | Postgres connection string for the state database; unset keeps state in SQLite and files on `/data` |
 | `RATE_LIMIT_REPLICAS` | With replicas | How many server replicas share the limits; set it to the replica count (default 1) |
+| `X402_INDEX_CRAWL`, `MPP_INDEX_CRAWL` | No | The seller crawlers that build the x402 and MPP indexes (`/index`, `/api/index`, `/api/route`). They run on a production boot only: `NODE_ENV=production` (the `Dockerfile` sets it) or Railway's production environment, and never under `FREE_MODE` or `CI`. `on` starts a crawler on any other boot; `off` keeps it off everywhere. A local or test server crawls nothing by default |
 | `INDEX_PULL_MS` | No | How often each replica pulls the seller index rows another wrote (default 30000) |
 | `TEMPO_RELAY` | No | `off` settles Tempo payments in the server itself (verify, simulate, broadcast over `TEMPO_RPC_URL`) and screens every party to a per-call payment against OFAC's SDN list; unset uses Tempo's hosted relay |
 | `JEV_MODEL` | No | The Jev version the judgment routes pin to (default `jev-1.14.0`); `TYPESAFE_MODEL` overrides it for the internal callers |
