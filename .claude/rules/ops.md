@@ -370,7 +370,8 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   last fifth is kept for dropped records, and at least one dropped record is read every pass; the
   proof reads of unconfirmed entries start only in the budget's first quarter and those of charged
   ones in its first half; dropped records are read least recently read first, and one is given up
-  only after reads the chain answered; one pass at a time per process, lease or not), each
+  only after reads the chain answered (the nonce unspent, or spent with its receipt read or its
+  search complete); one pass at a time per process, lease or not), each
   as it stands at that moment: routed to this
   merchant by its own receipt books the sale once; a nonce spent without paying us, an
   authorization expired unused, or one expired with a complete search that found nothing closes

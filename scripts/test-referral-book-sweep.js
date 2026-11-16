@@ -3,7 +3,8 @@
 // offline against a memory document and a stub chain:
 //   - the refused entries' share of a pass's reads, its spread and its cap;
 //   - dropped records read in turn (least recently read first) when reads are slow;
-//   - a dropped record is given up only on reads the chain ANSWERED;
+//   - a dropped record is given up only on reads the chain ANSWERED (a nonce
+//     read as unused, or spent with its receipt read or its search complete);
 //   - an expired dropped record pushed out at the cap is logged;
 //   - charged entries' proof reads stop at their share of the pass's chain budget,
 //     counted from the start the caller gives;
@@ -66,7 +67,15 @@ const entry = (tag, i, validBefore = nowS() + 900) => ({ key: `referral:${tag}-$
   const b = newBook({ maxEntries: 1, maxDropped: 10, now: () => Date.now() + skew });
   for (let i = 0; i < 3; i++) { const e = entry("U", i, nowS() + 60); await b.intent(e); await b.resolve(e.key, { state: "refused", at: 100 + i }); }
   let mode = "throw";
-  const chain = { state: async () => { if (mode === "throw") throw new Error("rpc down"); if (mode === "silent") return { used: null, paid: null, transaction: null, complete: false }; return { used: true, paid: null, transaction: null, complete: false }; } };
+  const chain = { state: async () => {
+    if (mode === "throw") throw new Error("rpc down");
+    if (mode === "silent") return { used: null, paid: null, transaction: null, complete: false };
+    // Spent, but its log search or its receipt read failed: where the payment went is not known.
+    if (mode === "spentUnread") return { used: true, paid: null, transaction: null, complete: false };
+    if (mode === "spentReceiptFailed") return { used: true, paid: null, transaction: hex(32), complete: false, receiptRead: false };
+    // Spent, its receipt read in full and not recognized: an answered read.
+    return { used: true, paid: null, transaction: hex(32), complete: false, receiptRead: true };
+  } };
   const sweep = () => b.sweep({ chain, bookSale: async () => true, payTo: PAY_TO });
   skew = 10 * 60_000;
   for (let i = 0; i < 6; i++) await sweep();
@@ -74,11 +83,15 @@ const entry = (tag, i, validBefore = nowS() + 900) => ({ key: `referral:${tag}-$
   for (let i = 0; i < 6; i++) await sweep();
   skew = bookMod.DROPPED_GIVE_UP_MS + 3 * 3600_000; // nine hours past expiry, twelve passes of a chain that never answered
   for (let i = 0; i < 6; i++) await sweep();
+  mode = "spentUnread";
+  for (let i = 0; i < 6; i++) await sweep();
+  mode = "spentReceiptFailed";
+  for (let i = 0; i < 6; i++) await sweep();
   const kept = b.droppedRefused();
   mode = "answered";
   for (let i = 0; i < 6; i++) await sweep();
   const after = b.droppedRefused();
-  ok(kept.count === 2 && kept.unresolved === 0 && after.count === 0 && after.unresolved === 2, `a chain outage longer than six hours gives up no dropped record (only reads the chain answered count): ${kept.count} kept after 18 unanswered passes; given up after five answered reads with no verdict: ${after.unresolved}`);
+  ok(kept.count === 2 && kept.unresolved === 0 && after.count === 0 && after.unresolved === 2, `a chain outage longer than six hours, or a nonce read as spent whose search or receipt read failed, gives up no dropped record (only reads the chain answered count): ${kept.count} kept after 30 such passes; given up after five answered reads with no verdict: ${after.unresolved}`);
 }
 {
   // An expired record pushed out at the cap leaves a line.

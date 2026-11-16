@@ -73,7 +73,7 @@ export const SOLD_MAX = 2000;
 /** Records of refused entries dropped at capacity that are kept at once, and how many the sweep reads a pass. */
 export const DROPPED_MAX = 2000;
 export const SWEEP_DROPPED_MAX = 25;
-/** A dropped record is given up only when BOTH hold: this many reads after its expiry that the chain answered (the nonce read as spent or unspent) reached no verdict, and this long has passed since that expiry. */
+/** A dropped record is given up only when BOTH hold: this many reads after its expiry that the chain answered (the nonce read as unspent, or as spent with its receipt read or its search complete) reached no verdict, and this long has passed since that expiry. */
 export const DROPPED_GIVE_UP_READS = 5;
 export const DROPPED_GIVE_UP_MS = 6 * 3600_000;
 /** The share of a pass's open-entry reads kept for refused entries, and the share of its chain budget kept for dropped records. */
@@ -767,10 +767,12 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             out.landed++;
             say("error", `CHARGED-BUT-NOT-SERVED: a refused settle whose entry was dropped at capacity landed on chain (${g.slug} payer=${String(g.payer).slice(0, 6)} tx=${st.transaction})${booked ? ", sale booked" : ", sale NOT booked"}`);
           } else if (verdict === "unpaid" || verdict === "expired-unused") forget.push(g.key);
-          // Only a read the chain ANSWERED (the nonce read as spent or unspent)
-          // counts toward giving a record up: a chain that does not answer,
-          // however long, never gives up a record whose payment may have landed.
-          else if (t > expiredAt(g) && (st?.used === true || st?.used === false)) { if ((Number(g.lateReads) || 0) + 1 >= DROPPED_GIVE_UP_READS && t > (Number(g.validBefore) || 0) * 1000 + DROPPED_GIVE_UP_MS) giveUp.push(g); else late.push(g.key); }
+          // Only a read the chain ANSWERED counts toward giving a record up: the
+          // nonce read as unspent, or as spent with its receipt read in full or
+          // its search complete. A chain that does not answer, however long, or
+          // a spent nonce whose log search or receipt read failed, never gives
+          // up a record whose payment may have landed.
+          else if (t > expiredAt(g) && (st?.used === false || (st?.used === true && (st.receiptRead === true || st.complete === true)))) { if ((Number(g.lateReads) || 0) + 1 >= DROPPED_GIVE_UP_READS && t > (Number(g.validBefore) || 0) * 1000 + DROPPED_GIVE_UP_MS) giveUp.push(g); else late.push(g.key); }
           else seen.push(g.key);
         }
         out.droppedUnread = Math.max(0, all.length - readNow);
