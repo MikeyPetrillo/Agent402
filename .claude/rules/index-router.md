@@ -19,6 +19,9 @@ paths:
   - "src/external-spend-guard.js"
   - "src/router-spend-window.js"
   - "src/upstream-buyer-status.js"
+  - "src/seller-load.js"
+  - "src/user-agents.js"
+  - "src/operator-key.js"
 ---
 
 # Seller index, router and route-execute
@@ -53,6 +56,27 @@ Loaded when an index, discovery, router or buyer file is read.
   `[x402-index] fallback passes <listed> rows (kept <n>) <origin hash>: pick= copy= vouch= stamp= carry=
   quotes= total= longest=` line when its listing was cut, its passes total over 200 ms or one pass is
   over 100 ms (`scripts/test-fallback-crawl-turn.js`).
+- **Our User-Agents:** `src/user-agents.js` is the one list of what each component sends to a
+  seller, rendered on /crawler: `Agent402-Crawler` (document and registry reads; robots.txt is
+  matched on it, and an `Agent402` group still applies), `Agent402-Probe` (paywall, quote and
+  network probes; `probePublicUrl`'s default), `Agent402-Router` (the pre-payment probe, the
+  model-list read and the purchase, with `X-Agent402-Via: router`), `Agent402-Fetch` (a tool
+  fetching a caller's URL; `safeFetch`'s default) and `Agent402Bot` (the site-crawl tool). None is
+  the bare `Agent402/1.0` (`scripts/test-user-agents.js`).
+- **Seller load:** `src/seller-load.js`, state in the shared limits store with process memory as
+  the floor. An unchanged manifest and OpenAPI (304 or the same body hash) on a scheduled crawl
+  doubles that origin's wait from an hour up to `SELLER_REVISIT_MAX_HOURS` (default 12, at most 24,
+  `off` disables); a change, a failed crawl, a router purchase that did not deliver
+  (`noteSellerDeliveryFailure`) or a re-registration resets it, and an unscheduled read never
+  lengthens it. Every crawler read and probe is counted per operator (`src/operator-key.js`) per
+  UTC day; past `SELLER_PROBE_DAILY_BUDGET` (default 200, `off` disables) the scheduled crawl and
+  its paywall and quote probes wait, while reads inside a started crawl, a registration's reads and
+  the router's pre-payment probe are counted and never refused. A 429 or 503 on a crawler read or
+  a probe holds that hostname's scheduled crawl and probes until Retry-After (30 minutes without
+  one, at most a day); a router purchase is never held. A skipped origin keeps its entry, is left
+  out of `cycleOkFraction` and the cycle tally, and an origin read after a wait gets the hold
+  window (`INDEX_CRAWL_HOLD_HOURS`) counted from the end of that wait. Counts on
+  `/__operator/seller-load.json` (`scripts/test-seller-load.js`, `scripts/test-crawl-revisit.js`).
 - **Paywall probe:** one unpaid request per seller checks that its paid route answers a 402,
   on a rotation capped at `X402_PAYWALL_PROBES_PER_CYCLE` sellers per crawl cycle (default 25; 0 turns
   every paywall probe off, re-checks included). The verdict is kept apart from crawl health: it reports
