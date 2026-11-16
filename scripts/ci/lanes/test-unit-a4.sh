@@ -174,7 +174,7 @@ t node scripts/test-leaderboard-page.js
 # MPP index self-serve registration + snapshot honesty tests (offline)
 t node scripts/test-mpp-index.js
 
-# @step 3: Offline suites (23 scripts, one process each)
+# @step 3: Offline suites (36 scripts, one process each)
 # Ledger-backed rail transfers (empty ledger must fall back, never render zero)
 t node scripts/test-ledger-recent.js
 # The shared HTML escapers escape the single quote; leaderboard notes are escaped per note
@@ -206,6 +206,8 @@ t node scripts/test-off-seller-route.js
 t node scripts/test-seller-tool-cap.js
 # A throw inside a scheduled turn (the drain, a shadow rebuild) or inside one seller's listing is contained: the process stays up, the other sellers answer, the counts reach the
 t node scripts/test-crash-containment.js
+# Seller crawlers start on a production boot only: a CI=true FREE_MODE boot attempts no crawl request in 20 s (live control with the switches on); no workflow or test forces a crawl without a stub
+t node scripts/test-crawl-default-off.js
 # Every setImmediate/setTimeout/setInterval callback in the index module and the server runs under contained() or is allowlisted with a reason
 t node scripts/test-contained-turns-sites.js
 # /api/route ordering: route-order.js pinned to the comparator, read by why.tiebreaks and the ranking sentence (offline)

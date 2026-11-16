@@ -115,7 +115,7 @@ const proc = spawn(process.execPath, ["src/server.js"], {
   cwd: ROOT,
   env: {
     ...process.env, FREE_MODE: "true", PORT: "0", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
-    X402_INDEX_CRAWL: "", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", REDIS_URL: "", STATE_DATABASE_URL: "",
+    X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", REDIS_URL: "", STATE_DATABASE_URL: "",
     X402_ECONOMY_DB: join(dir, "econ.db"), MEMORY_DB_FILE: join(dir, "memory.db"), ROUTER_WORKERS: "1", LOAD_SHED: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off",
   },
   stdio: ["ignore", "pipe", "pipe"],

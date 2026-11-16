@@ -25,6 +25,14 @@ Surfaces:
   limit. A call carrying a payment has its own, larger per-client request limit
   when it reaches a paid route; any other call keeps the normal one.
 
+### 2026-11-16 (test and CI servers no longer crawl seller hosts)
+Operations:
+- Test and CI servers no longer crawl seller hosts: the x402 and MPP index
+  crawlers start on a production boot only (NODE_ENV=production, which the
+  image sets, or the platform's production environment), never under FREE_MODE
+  or CI, unless X402_INDEX_CRAWL=on or MPP_INDEX_CRAWL=on says so. Before,
+  a local, test or CI server without the switch set ran its own pass over every indexed seller.
+
 ### 2026-11-16 (a card refund made by hand is recorded)
 Payments:
 - A failed card report whose payment was already refunded outside the server

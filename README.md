@@ -142,7 +142,7 @@ curl -s -X POST localhost:3000/api/hash -H 'content-type: application/json' \
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https%3A%2F%2Fgithub.com%2FMikeyPetrillo%2FAgent402)
 
-The button creates the service from this repository; it adds no database or cache. Set `FREE_MODE=true` to serve every tool free, or the paid-mode variables in [Self-Hosting](https://github.com/MikeyPetrillo/Agent402/wiki/Self-Hosting): without one or the other the server exits at boot. Redis and Postgres are optional and you add them yourself: `REDIS_URL` enables the upstream response cache (`X-Cache: hit|miss`), and `DATABASE_URL` enables the public `/api/analytics` dashboard.
+The button creates the service from this repository; it adds no database or cache. Set `FREE_MODE=true` to serve every tool free, or the paid-mode variables in [Self-Hosting](https://github.com/MikeyPetrillo/Agent402/wiki/Self-Hosting): without one or the other the server exits at boot. The seller index crawls on a production boot (the image sets `NODE_ENV=production`; a `FREE_MODE` boot needs `X402_INDEX_CRAWL=on`). Redis and Postgres are optional and you add them yourself: `REDIS_URL` enables the upstream response cache (`X-Cache: hit|miss`), and `DATABASE_URL` enables the public `/api/analytics` dashboard.
 
 ## Pay per call from a wallet
 
