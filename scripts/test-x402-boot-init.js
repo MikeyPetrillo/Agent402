@@ -34,9 +34,14 @@ const tick = () => new Promise((r) => setImmediate(r));
   ok(/paymentMiddlewareFromHTTPServer\(httpServer, undefined, undefined, false\)/.test(src),
     "payments.js: paymentMiddlewareFromHTTPServer(..., false) - the vendor never starts an init of its own");
   // The init is named because the rail re-read asks it whether the first init has latched.
-  ok(/const init = createGuardedInit\(httpServer\);/.test(src) && /return withGuardedInit\(vendorMw, init, httpServer\);/.test(src) && !/initialize\(\)\s*;/.test(src.slice(src.indexOf("const restoreRail = "), src.indexOf("return withGuardedInit(vendorMw, init, httpServer);"))),
+  ok(/const init = createGuardedInit\(httpServer\);/.test(src) && /return withMcpTwins\(withGuardedInit\(vendorMw, init, httpServer\), /.test(src) && !/initialize\(\)\s*;/.test(src.slice(src.indexOf("const restoreRail = "), src.indexOf("return withMcpTwins(withGuardedInit(vendorMw, init, httpServer), "))),
     "payments.js: the guarded init wraps the vendor middleware, and a rail restore never calls initialize() again");
-  ok(/if \(!syncOnStart\) return vendorMw;/.test(src), "payments.js: X402_SYNC_ON_START=false still skips the handshake entirely");
+  // The connector's x402 twins (src/mcp-x402-routes.js) run a second vendor
+  // middleware over the same core server: built the same way, behind the
+  // same guarded init, never an init of its own.
+  ok(/paymentMiddlewareFromHTTPServer\(mcpHttpServer, undefined, undefined, false\)/.test(src) && /withGuardedInit\(mcpVendorMw, init, mcpHttpServer\)/.test(src),
+    "payments.js: the MCP twins' middleware is built with syncFacilitatorOnStart=false behind the same guarded init");
+  ok(/if \(!syncOnStart\) return withMcpTwins\(vendorMw, mcpVendorMw\);/.test(src), "payments.js: X402_SYNC_ON_START=false still skips the handshake entirely");
 }
 
 // ---- 3. a fatal-class rejection never exits, is logged, and self-heals on the next paid request ----
