@@ -23,11 +23,10 @@ function bad(message, statusCode = 400) {
 // read on its keyed host (the public host with a "customer-" prefix) with the
 // key as `apikey`; without the key, or for an API marked keyed: false, the
 // public host and no key, so a self-hosted server with no key reads exactly
-// what it read before. The archive stays on the public host: the keyed
-// archive host refuses this key (HTTP 403).
+// what it read before.
 const OPEN_METEO_APIS = Object.freeze({
   forecast: { host: "api.open-meteo.com", keyed: true },
-  archive: { host: "archive-api.open-meteo.com", keyed: false },
+  archive: { host: "archive-api.open-meteo.com", keyed: true },
   airQuality: { host: "air-quality-api.open-meteo.com", keyed: true },
 });
 

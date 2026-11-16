@@ -1,8 +1,7 @@
 // Open-Meteo host and key selection (src/tools/weather-kit.js), offline.
 //
-//   1. openMeteoRequest: with OPEN_METEO_API_KEY set, the forecast and air
-//      quality APIs read their "customer-" host with `apikey`; the archive
-//      stays on its public host with no key; without a key, every public host.
+//   1. openMeteoRequest: with OPEN_METEO_API_KEY set, every API reads its
+//      "customer-" host with `apikey`; without it, the public host and no key.
 //   2. Each weather tool, with a stubbed fetch and resolver: the URL it fetched
 //      (host and key), and an answer whose `source` names the public host only.
 //   3. A 429 on the keyed host is a 503 (no charge), fetched once: no retry and
@@ -41,6 +40,7 @@ const restoreResolver = stubGuardResolver((host, family) => (/(^|\.)open-meteo\.
 const P = { latitude: 1, longitude: 2 };
 for (const [api, path, pub] of [
   ["forecast", "/v1/forecast", "api.open-meteo.com"],
+  ["archive", "/v1/archive", "archive-api.open-meteo.com"],
   ["airQuality", "/v1/air-quality", "air-quality-api.open-meteo.com"],
 ]) {
   const free = new URL(openMeteoRequest(api, path, P, {}).url);
@@ -51,12 +51,6 @@ for (const [api, path, pub] of [
   const keyed = new URL(r.url);
   ok(keyed.host === `customer-${pub}` && keyed.searchParams.get("apikey") === KEY && keyed.searchParams.get("latitude") === "1", `${api}: key -> customer-${pub} with apikey`);
   ok(r.publicHost === pub && r.keyed === true, `${api}: public host kept for messages`);
-}
-
-{
-  const r = openMeteoRequest("archive", "/v1/archive", P, { OPEN_METEO_API_KEY: KEY });
-  const u = new URL(r.url);
-  ok(u.host === "archive-api.open-meteo.com" && !u.searchParams.has("apikey") && r.keyed === false, "archive: key set -> still the public host, no apikey");
 }
 
 // --- 2. Each tool's fetch ---
@@ -92,7 +86,7 @@ for (const keyed of [false, true]) {
     const t = tool(slug);
     const out = await t.handler(t.discovery.input);
     const u = new URL(fetched[0]);
-    const sendsKey = keyed && slug !== "weather-history";
+    const sendsKey = keyed;
     const want = sendsKey ? `customer-${pub}` : pub;
     ok(fetched.length === 1 && u.host === want, `${slug} (${keyed ? "key" : "no key"}): fetched ${u.host}`);
     ok(sendsKey ? u.searchParams.get("apikey") === KEY : !u.searchParams.has("apikey"), `${slug} (${keyed ? "key" : "no key"}): apikey ${sendsKey ? "sent" : "absent"}`);
