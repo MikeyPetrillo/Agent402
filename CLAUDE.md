@@ -324,3 +324,6 @@ Actions secrets), never in the repo. Rollout switches are generally "key present
 bucket credentials (`BACKUP_S3_*`) live on Railway only, shown by `railway bucket credentials` and pasted by the operator
 into the service variables, never in Actions: the deploy job's variable upsert must not name a
 variable whose source of truth is Railway (`scripts/test-ci-secretless-install.js`).
+The direct inference upstream's daily spend alarm reads `DIRECT_UPSTREAM_DAILY_ALERT_USD`
+(Railway; `0` or `off` turns it off; `src/direct-upstream-spend.js`): an alarm only, it never
+refuses, caps or reroutes a call.
