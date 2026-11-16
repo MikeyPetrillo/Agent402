@@ -10713,9 +10713,10 @@ app.use(async (req, res, next) => {
 // at its deadline. What it keeps apart: its replay guard is its own
 // instance; a run is marked for the settle breaker's other lane, so the
 // direct routes' breaker, its status word and its counters neither judge nor
-// count it; a settled call is booked on the rail "referral", a private rail
-// (src/paid-rails.js) no public reader of the ledger returns, and is not
-// counted by recordServedCall or the tool-call log. Settlements that are not
+// count it; a settled call is booked once on the rail "referral", a private
+// rail (src/paid-rails.js) that public sales figures count at the buyer's
+// price and name "marketplace", and recordReferralSale counts it as a paid
+// call served (/api/stats); the tool-call log does not. Settlements that are not
 // finished live in a durable book (src/referral-book.js) a leased sweep reads
 // against the chain; its status word (referralSettlement on
 // /api/gateway-status) is paged on by the heartbeat and the status Worker. Operator view:
