@@ -3855,7 +3855,13 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     if (isAlreadyOnChainSettleError(ctx?.error)) {
       const r = await recoverAlreadyOnChain(ctx);
       if (!r.recovered) {
-        console.warn(`[payments] already-on-chain settle on ${ctx?.requirements?.network} not recovered: ${r.reason}`);
+        // The chain gave no verdict for an authorization this request owns:
+        // the transfer may have landed, so the authorization is booked for
+        // the late-settlement reconcile (registered after these hooks), which
+        // reads its state and owes a transfer that used it.
+        const lateAuth = r.unread === true ? lateAuthOf(ctx) : null;
+        if (lateAuth) ctx.__a402LateAuth = { ...lateAuth, via: "already on chain" };
+        console.warn(`[payments] already-on-chain settle on ${ctx?.requirements?.network} not recovered: ${r.reason}${lateAuth ? "; the authorization is booked until it is read on chain" : ""}`);
         return;
       }
       releaseCoverOnSettled(ctx, r.result);

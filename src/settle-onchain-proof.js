@@ -78,7 +78,7 @@ export async function proveAuthorizationSettled({
   try { required = BigInt(requirements.amount); } catch { return { proven: false, reason: "requirements amount unreadable" }; }
   if (required <= 0n) return { proven: false, reason: "requirements amount is zero" };
   const url = rpcFor(network);
-  if (!url) return { proven: false, reason: `no RPC for ${network}` };
+  if (!url) return { proven: false, reason: `no RPC for ${network}`, unread: true };
 
   const started = Date.now();
   const call = (method, params) => {
@@ -121,7 +121,10 @@ export async function proveAuthorizationSettled({
       lastReason = `could not read the chain: ${String(e?.message || e).slice(0, 120)}`;
     }
   }
-  return { proven: false, reason: lastReason };
+  // The chain never answered a verdict (not found in the bound, a receipt
+  // or block not readable yet, or the reads failed): the transfer may still
+  // have landed, so the caller books the authorization (`unread`).
+  return { proven: false, reason: lastReason, unread: true };
 }
 
 const reqOf = (ctx) => ctx?.transportContext?.request?.adapter?.req;
@@ -144,7 +147,9 @@ export async function recoverAlreadyOnChain(ctx, { saleByTx = null, prove = prov
   if (!nonceOwner.claimed) return { recovered: false, reason: "another request owns this authorization" };
   state.nonceKey = nonceKey;
   const proof = await prove({ paymentPayload: ctx?.paymentPayload, requirements: ctx?.requirements, notBeforeMs: state.seenAt });
-  if (!proof.proven) return { recovered: false, reason: proof.reason };
+  // Unread: this request owns the authorization and the chain gave no
+  // verdict, so the caller books it for the late-settlement reconcile.
+  if (!proof.proven) return { recovered: false, reason: proof.reason, ...(proof.unread === true ? { unread: true } : {}) };
   let lookup = saleByTx;
   if (!lookup) lookup = (await import("./sales-ledger.js")).saleByTxFresh;
   let sold = null;
