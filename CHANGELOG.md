@@ -8,12 +8,16 @@ carries its own version on npm.
 
 ### 2026-11-16 (an empty streamed answer is not charged)
 Gateway:
-- A streamed chat completion that ends with no answer (every token spent on
-  reasoning, or an empty refusal) is answered 502 before any byte is sent and
-  is not charged, as a non-streamed call already is; a payment sent before the
-  call is recorded as owed back. The next model in the chain is tried first. A
-  streamed answer with content is sent from its first answer token, with the
-  reasoning before it, so it arrives as fast as before.
+- A streamed answer on the chat completions, Messages or Responses routes that
+  ends with no answer (every token spent on reasoning or thinking, or an empty
+  refusal) is answered 502 before any byte is sent and is not charged, as a
+  non-streamed call already is; a payment sent before the call is recorded as
+  owed back. The next model in the chain is tried first. A streamed answer
+  with content is sent from its first answer token, with the reasoning before
+  it, so it arrives as fast as before. On a connection that ends a response
+  with no byte for about 100 seconds, a reasoning phase that outlasts that
+  window starts sending before it closes, and is then served and charged as
+  before.
 
 ### 2026-11-15 (access keys and card tokens are judged per payer)
 Payments:

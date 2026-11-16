@@ -3404,10 +3404,16 @@ export function chatDeltaHasAnswer(d) {
   if (typeof d.refusal === "string" && d.refusal.trim() !== "") return true;
   return Object.keys(d).some((k) => !NON_ANSWER_DELTA_KEYS.has(k) && filled(d[k]));
 }
-/** Reads the chat stream's frames until the first one that carries an
- *  answer, and keeps the last finish reason and whether an error frame came. */
-export function createChatAnswerWatch() {
-  const w = { answered: false, finish: null, native: null, errored: false, dataFrames: 0 };
+/** The refusal text for an empty safety refusal, on every wire. */
+export const EMPTY_REFUSAL_MESSAGE = "Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model";
+/** A stream's answer watch: reads `data:` frames until the first one that
+ *  carries an answer. `onFrame(f, w)` reads one parsed frame of the wire's
+ *  format: it sets w.answered, and the ending fields its `ending(w)` reads;
+ *  `ending(w)` names the refusal for a stream that ended with no answer, or
+ *  returns null for an ending the buffered path serves. A frame that cannot
+ *  be read counts as an answer (it is passed on as before the hold). */
+export function createAnswerWatch({ onFrame, ending }) {
+  const w = { answered: false, finish: null, native: null, reason: null, errored: false, dataFrames: 0 };
   w.scan = (text) => {
     if (w.answered) return;
     for (const line of String(text).split("\n")) {
@@ -3417,8 +3423,20 @@ export function createChatAnswerWatch() {
       if (payload === "[DONE]") continue;
       w.dataFrames++;
       let f;
-      try { f = JSON.parse(payload); } catch { w.answered = true; return; } // a frame we cannot read is passed on as today
+      try { f = JSON.parse(payload); } catch { w.answered = true; return; }
       if (!f || typeof f !== "object") { w.answered = true; return; }
+      onFrame(f, w);
+      if (w.answered) return;
+    }
+  };
+  w.emptyEnding = () => (w.answered ? null : ending(w));
+  return w;
+}
+/** The chat wire's watch: an answer is a delta chatDeltaHasAnswer reads as
+ *  one; the ending is the buffered path's isEmptyLength / isEmptyRefusal. */
+export function createChatAnswerWatch() {
+  return createAnswerWatch({
+    onFrame(f, w) {
       if (f.error) w.errored = true;
       for (const c of Array.isArray(f.choices) ? f.choices : []) {
         if (!c || typeof c !== "object") continue;
@@ -3426,18 +3444,14 @@ export function createChatAnswerWatch() {
         if (c.native_finish_reason) w.native = String(c.native_finish_reason).toLowerCase();
         if (chatDeltaHasAnswer(c.delta) || chatDeltaHasAnswer(c.message)) { w.answered = true; return; }
       }
-    }
-  };
-  /** The refusal for a stream that ended with no answer, or null when the
-   *  ending is one the buffered path serves (a plain stop or tool-call end). */
-  w.emptyEnding = () => {
-    if (w.answered) return null;
-    if (!w.errored && w.native !== "refusal" && (w.finish === "stop" || w.finish === "tool_calls" || w.finish === "function_call")) return null;
-    if (w.finish === "content_filter" || w.native === "refusal") return "Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model";
-    if (w.finish === "length") return EMPTY_LENGTH_MESSAGE;
-    return "Upstream stream ended before producing any content";
-  };
-  return w;
+    },
+    ending(w) {
+      if (!w.errored && w.native !== "refusal" && (w.finish === "stop" || w.finish === "tool_calls" || w.finish === "function_call")) return null;
+      if (w.finish === "content_filter" || w.native === "refusal") return EMPTY_REFUSAL_MESSAGE;
+      if (w.finish === "length") return EMPTY_LENGTH_MESSAGE;
+      return "Upstream stream ended before producing any content";
+    },
+  });
 }
 /** The most bytes a stream holds back while it waits for the first answer
  *  frame: well past what any tier's output cap can produce as reasoning. */
@@ -3454,7 +3468,7 @@ export const STREAM_TIMEOUT_MS = 180_000;
 export const STREAM_DROPPED_FRAME = 'data: {"error":{"message":"upstream stream dropped"}}\n\n';
 // `req` (the route call's request; Express's res.req by default) decides
 // whether a refusal prints the charge sentence (src/not-charged.js).
-export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = STREAM_TIMEOUT_MS, fetchUpstream = fetchOpenRouter, vendorKeys = false, errorFrameFails = false, modelAs, req = res?.req, holdUntilAnswer = false } = {}) {
+export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = STREAM_TIMEOUT_MS, fetchUpstream = fetchOpenRouter, vendorKeys = false, errorFrameFails = false, modelAs, req = res?.req, holdUntilAnswer = false, streamTimeoutMs = STREAM_TIMEOUT_MS } = {}) {
   // One controller covers connect AND the whole body read; client disconnect
   // aborts the upstream so a closed tab never keeps burning tokens.
   // `timeoutMs` bounds the wait for the first data frame (it may be shorter
@@ -3473,13 +3487,19 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
   // no answer is still a 502 before any byte, which no wire settles.
   let started = false;
   let committed = false;
-  const answer = holdUntilAnswer ? createChatAnswerWatch() : null;
+  const answer = typeof holdUntilAnswer === "function" ? holdUntilAnswer() : holdUntilAnswer ? createChatAnswerWatch() : null;
+  // Set when our own overall stream limit fires after the first data frame.
+  let overallTimedOut = false;
+  // Through the CDN proxy a response that sends no byte for about 100 s is
+  // ended (src/cdn-sync-window.js): a held stream commits once the request's
+  // synchronous window is down to PAYMENT_WINDOW_TAIL_MS, as before the hold.
+  let holdTimer = null;
   // What a held attempt recorded for a credits debit is put back when it
   // fails, so a later attempt is metered on its own usage only.
   const meterReq = res?.req;
   const hadMetered = !!meterReq && Object.prototype.hasOwnProperty.call(meterReq, "__meteredUsageUsd");
   const meteredBefore = meterReq?.__meteredUsageUsd;
-  let timer = setTimeout(() => { if (!started) firstFrameTimedOut = true; ctrl.abort(); }, timeoutMs);
+  let timer = setTimeout(() => { if (!started) firstFrameTimedOut = true; else overallTimedOut = true; ctrl.abort(); }, timeoutMs);
   res.on?.("close", () => ctrl.abort());
   try {
     let upstream;
@@ -3509,9 +3529,14 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
     const begin = () => {
       if (started) return;
       started = true;
-      if (timeoutMs < STREAM_TIMEOUT_MS) {
+      if (timeoutMs < streamTimeoutMs) {
         clearTimeout(timer);
-        timer = setTimeout(() => ctrl.abort(), Math.max(0, STREAM_TIMEOUT_MS - (Date.now() - startedAt)));
+        timer = setTimeout(() => { overallTimedOut = true; ctrl.abort(); }, Math.max(0, streamTimeoutMs - (Date.now() - startedAt)));
+      }
+      const left = answer ? cdnSyncLeftMs(req) : null;
+      if (left != null && !committed) {
+        holdTimer = setTimeout(() => { if (!committed) { try { commit(); } catch { /* the buyer may be gone */ } } }, Math.max(0, left - PAYMENT_WINDOW_TAIL_MS));
+        holdTimer.unref?.();
       }
     };
     const commit = () => {
@@ -3547,8 +3572,10 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       if (answer.answered) return commit();
       if (answer.dataFrames > 0) begin();
       // A comment-only prelude commits at 64 KB as before; held reasoning at
-      // STREAM_HOLD_MAX_BYTES, which no tier's output cap reaches.
-      if ((!started && pending.length > 64_000) || pending.length > STREAM_HOLD_MAX_BYTES) commit();
+      // STREAM_HOLD_MAX_BYTES, which no tier's output cap reaches, or when the
+      // CDN window is down to its tail.
+      const left = started ? cdnSyncLeftMs(req) : null;
+      if ((!started && pending.length > 64_000) || pending.length > STREAM_HOLD_MAX_BYTES || (left != null && left <= PAYMENT_WINDOW_TAIL_MS)) commit();
     };
     try {
       // Billing fields are stripped in flight (see createSseUsageScrubber);
@@ -3564,8 +3591,10 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       console.warn(`[gateway] stream relay ${committed ? "dropped mid-stream" : started ? "failed before any answer frame" : "failed before the first data frame"}: ${e?.message || e}`);
       if (!committed) {
         const err = bad(started ? "Upstream stream ended before producing any content" : "Upstream stream ended before producing any data frame", 502);
-        if (firstFrameTimedOut) err.upstreamTimeout = true;
-        if (started) err.emptyAnswer = true;
+        // Our own limit cutting a held stream is a timeout, not an empty
+        // answer: it counts in the call's timed-out budget. A drop or a
+        // hang-up after the first frame is neither.
+        if (firstFrameTimedOut || overallTimedOut) err.upstreamTimeout = true;
         throw err;
       }
       // The 200 is committed and settles; the buyer is told the stream was
@@ -3576,6 +3605,8 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
       try { res.write(STREAM_DROPPED_FRAME); } catch { /* the buyer may be gone too */ }
     }
     if (!committed && started && answer) {
+      // A body that ended after our own limit fired is that timeout.
+      if (overallTimedOut) throw Object.assign(bad("Upstream stream ended before producing any content", 502), { upstreamTimeout: true });
       // Data frames came and none carried an answer: the buffered path's
       // empty-answer rule (isEmptyLength, isEmptyRefusal) on a stream.
       const refusal = answer.emptyEnding();
@@ -3586,6 +3617,7 @@ export async function streamOpenRouterTo(body, res, { onUsage, url, timeoutMs = 
     res.end();
   } finally {
     clearTimeout(timer);
+    clearTimeout(holdTimer);
     if (!committed && answer && meterReq) {
       if (hadMetered) meterReq.__meteredUsageUsd = meteredBefore;
       else delete meterReq.__meteredUsageUsd;
@@ -4655,7 +4687,7 @@ function makeHandler(routeTier) {
           discard(data);
           if (abListed) noteDirectAb(abLabel, { ok: false, reason: "empty_refusal" });
           if (directBody) noteDirectOutcome(false, "empty");
-          lastErr = bad("Upstream declined the request (safety filter) - rephrase the prompt, or pick a different model", 502);
+          lastErr = bad(EMPTY_REFUSAL_MESSAGE, 502);
           // A direct attempt's empty answer is a direct failure: the same
           // model is still tried on OpenRouter. Only an OpenRouter empty
           // answer skips the model's remaining attempts.

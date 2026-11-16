@@ -15,6 +15,12 @@
 // the one with content 200 and settled once. A credits hold on an empty
 // stream is returned (scripts/test-credits.js).
 //
+// Through the CDN proxy (a request with a synchronous deadline) a held stream
+// commits once the window is down to its tail, so a long reasoning phase is
+// delivered and charged as before the hold. Our own stream limit cutting a
+// held stream is a timeout, not an empty answer. The Messages and Responses
+// streams hold the same way, each with its own frame format.
+//
 //   node scripts/test-stream-empty-answer.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports
 import { EventEmitter } from "node:events";
@@ -40,10 +46,12 @@ const WITH_CONTENT = [reasoning("Let me think"), reasoning(" about it"), content
 
 // An upstream that sends `frames`, each after `gapMs` (or [ms, frame] pairs),
 // and errors out instead of ending when `cut` is set.
-const upstreamOf = (frames, { gapMs = 0, cut = false } = {}) => async () => ({ ok: true, status: 200, body: (async function* () {
+const upstreamOf = (frames, { gapMs = 0, cut = false } = {}) => async (_b, { signal } = {}) => ({ ok: true, status: 200, body: (async function* () {
   for (const f of frames) {
     const [ms, text] = Array.isArray(f) ? f : [gapMs, f];
     if (ms) await sleep(ms);
+    // Like a real connection, an abort errors the body mid-read.
+    if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
     yield new TextEncoder().encode(text);
   }
   if (cut) throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
@@ -55,10 +63,26 @@ const fakeRes = (req = null) => {
     write(c) { res.writes.push({ at: Date.now() - res.t0, text: String(c) }); res.out += String(c); return true; }, end() { res.writableEnded = true; } });
   return res;
 };
-const relay = async (frames, opts = {}, hold = true, req = null) => {
+const relay = async (frames, opts = {}, hold = true, req = null, extra = {}) => {
   const res = fakeRes(req);
-  const r = await settle(() => streamOpenRouterTo({ model: "fake/model", messages: [], stream: true }, res, { fetchUpstream: upstreamOf(frames, opts), timeoutMs: 5000, holdUntilAnswer: hold }));
+  const r = await settle(() => streamOpenRouterTo({ model: "fake/model", messages: [], stream: true }, res, { fetchUpstream: upstreamOf(frames, opts), timeoutMs: 5000, holdUntilAnswer: hold, ...extra }));
   return { res, err: r.err };
+};
+const { createMessagesAnswerWatch, EMPTY_MAX_TOKENS_MESSAGE, LLM_MESSAGES_TOOLS } = await import("../src/tools/llm-messages-kit.js");
+const { createResponsesAnswerWatch, EMPTY_INCOMPLETE_MESSAGE, LLM_RESPONSES_TOOLS } = await import("../src/tools/llm-responses-kit.js");
+// Messages (Anthropic) and Responses (OpenAI) stream frames.
+const ev = (type, o) => `event: ${type}\ndata: ${JSON.stringify({ type, ...o })}\n\n`;
+const MSG = {
+  empty: [ev("message_start", { message: { id: "m", type: "message", role: "assistant", model: "m", content: [], usage: { input_tokens: 3, output_tokens: 0 } } }), ev("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } }), ev("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: "Let me think" } }), ev("content_block_delta", { index: 0, delta: { type: "signature_delta", signature: "sig" } }), ev("content_block_stop", { index: 0 }), ev("message_delta", { delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 64 } }), ev("message_stop", {})],
+  content: [ev("message_start", { message: { id: "m", type: "message", role: "assistant", model: "m", content: [], usage: { input_tokens: 3, output_tokens: 0 } } }), ev("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } }), ev("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: "Let me think" } }), ev("content_block_stop", { index: 0 }), ev("content_block_start", { index: 1, content_block: { type: "text", text: "" } }), ev("content_block_delta", { index: 1, delta: { type: "text_delta", text: "The answer" } }), ev("content_block_stop", { index: 1 }), ev("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 9 } }), ev("message_stop", {})],
+  refusal: [ev("message_start", { message: { id: "m", type: "message", role: "assistant", model: "m", content: [] } }), ev("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } }), ev("message_delta", { delta: { stop_reason: "refusal" } }), ev("message_stop", {})],
+  tool: [ev("message_start", { message: { id: "m", type: "message", role: "assistant", model: "m", content: [] } }), ev("content_block_start", { index: 0, content_block: { type: "tool_use", id: "t", name: "f", input: {} } }), ev("message_delta", { delta: { stop_reason: "tool_use" } }), ev("message_stop", {})],
+};
+const RESP = {
+  empty: [ev("response.created", { response: { id: "r", model: "m", status: "in_progress" } }), ev("response.output_item.added", { output_index: 0, item: { type: "reasoning", id: "rs" } }), ev("response.reasoning_summary_text.delta", { delta: "Let me think" }), ev("response.output_item.done", { output_index: 0, item: { type: "reasoning", id: "rs" } }), ev("response.incomplete", { response: { id: "r", model: "m", status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, usage: { input_tokens: 3, output_tokens: 64 } } })],
+  content: [ev("response.created", { response: { id: "r", model: "m", status: "in_progress" } }), ev("response.output_item.added", { output_index: 0, item: { type: "reasoning", id: "rs" } }), ev("response.reasoning_summary_text.delta", { delta: "Let me think" }), ev("response.output_item.added", { output_index: 1, item: { type: "message", id: "mg", role: "assistant", content: [] } }), ev("response.content_part.added", { part: { type: "output_text", text: "" } }), ev("response.output_text.delta", { delta: "The answer" }), ev("response.completed", { response: { id: "r", model: "m", status: "completed", usage: { input_tokens: 3, output_tokens: 9 } } })],
+  refusal: [ev("response.created", { response: { id: "r", model: "m", status: "in_progress" } }), ev("response.incomplete", { response: { id: "r", model: "m", status: "incomplete", incomplete_details: { reason: "content_filter" } } })],
+  tool: [ev("response.created", { response: { id: "r", model: "m", status: "in_progress" } }), ev("response.output_item.added", { output_index: 0, item: { type: "function_call", name: "f", call_id: "c", arguments: "" } }), ev("response.completed", { response: { id: "r", model: "m", status: "completed" } })],
 };
 
 // ---- 1. the relay ---------------------------------------------------------------
@@ -121,6 +145,58 @@ ok(!chatDeltaHasAnswer({ role: "assistant", content: "", reasoning: "x", reasoni
   ok(!held.err && held.res.status === 200 && held.res.out === plain.res.out && held.res.out.endsWith(STREAM_DROPPED_FRAME), "a stream cut after content: the same committed 200 and dropped frame as before");
 }
 {
+  // Through the CDN: the synchronous window's tail is PAYMENT_WINDOW_TAIL_MS.
+  // A window that leaves 300 ms before its tail, a reasoning phase of 1 s.
+  const TAIL = K.PAYMENT_WINDOW_TAIL_MS;
+  const long = [[0, reasoning("a")], ...[...Array(9)].map((_, i) => [100, reasoning("r" + i)]), [100, content("The")], [0, content(" answer")], [0, finish("stop")], [0, usage()], [0, DONE]];
+  const cdnReq = () => ({ headers: {}, cdnSyncDeadlineMs: Date.now() + TAIL + 300 });
+  const firstAt = (res) => res.writes[0]?.at;
+  const held = await relay(long, {}, true, cdnReq());
+  ok(!held.err && held.res.status === 200 && firstAt(held.res) >= 250 && firstAt(held.res) <= 500 && held.res.out.includes('"content":" answer"') && held.res.writableEnded, `CDN window: a 1 s reasoning phase commits at the window's tail (first byte at ${firstAt(held.res)} ms, window tail at 300 ms) and the answer is delivered`);
+  console.log(`  CDN window: first byte at ${firstAt(held.res)} ms with the tail at 300 ms; reasoning phase 1000 ms`);
+  // ...and charged once: the credits meter records the served stream's usage.
+  const { setUpstreamCostsForTest } = await import("../src/upstream-costs.js");
+  setUpstreamCostsForTest({ models: [["fake/", { prompt: 1, completion: 1 }]], meter: { markup: 1.2 } });
+  const prevMeter = process.env.GATEWAY_METERED_BILLING;
+  process.env.GATEWAY_METERED_BILLING = "on";
+  const credReq = { ...cdnReq(), creditsSettled: true, creditsPriceUsd: 0.05 };
+  const metered = await relay(long, {}, true, credReq);
+  ok(!metered.err && metered.res.status === 200 && Number.isFinite(credReq.__meteredUsageUsd) && credReq.__meteredUsageUsd > 0, `CDN window: the committed stream is metered as a served answer (${credReq.__meteredUsageUsd})`);
+  if (prevMeter === undefined) delete process.env.GATEWAY_METERED_BILLING; else process.env.GATEWAY_METERED_BILLING = prevMeter;
+  // A quiet upstream: no frame arrives at the tail, the timer commits.
+  const quiet = await relay([[0, reasoning("a")], [900, content("late")], [0, finish("stop")], [0, DONE]], {}, true, cdnReq());
+  ok(!quiet.err && quiet.res.headersSent && firstAt(quiet.res) >= 250 && firstAt(quiet.res) <= 500, `CDN window: with no frame at the tail, the hold commits on its own timer (first byte at ${firstAt(quiet.res)} ms)`);
+  // An empty answer that ends inside the window is still a 502.
+  const inside = await relay([[0, reasoning("a")], [50, reasoning("b")], [0, finish("length")], [0, DONE]], {}, true, cdnReq());
+  ok(inside.err?.statusCode === 502 && inside.err.emptyAnswer === true && !inside.res.headersSent, "CDN window: an empty answer that ends inside the window is still a 502 before any byte");
+  // No CDN deadline: a long hold is not committed early.
+  const direct = await relay(long, {}, true, { headers: {} });
+  ok(!direct.err && firstAt(direct.res) >= 900, `no CDN deadline: the hold lasts to the first answer frame (first byte at ${firstAt(direct.res)} ms)`);
+}
+{
+  // Our own stream limit cutting a held stream: a timeout, not an empty answer.
+  const endless = [[0, reasoning("a")], ...[...Array(50)].map((_, i) => [20, reasoning("r" + i)])];
+  const cut = await relay(endless, {}, true, null, { timeoutMs: 200, streamTimeoutMs: 300 });
+  ok(cut.err?.statusCode === 502 && cut.err.upstreamTimeout === true && cut.err.emptyAnswer !== true && K.timedOutAttempt(cut.err, Date.now() - 300, 300), `our own stream limit on a held stream is a timeout (upstreamTimeout ${cut.err?.upstreamTimeout}, emptyAnswer ${cut.err?.emptyAnswer})`);
+  const dropped = await relay([reasoning("a"), reasoning("b")], { cut: true });
+  ok(dropped.err?.statusCode === 502 && dropped.err.emptyAnswer !== true && dropped.err.upstreamTimeout !== true, "a drop after the first frame is neither an empty answer nor a timeout");
+}
+{
+  // The Messages and Responses streams.
+  for (const [wire, factory, F, emptyMsg] of [["messages", createMessagesAnswerWatch, MSG, EMPTY_MAX_TOKENS_MESSAGE], ["responses", createResponsesAnswerWatch, RESP, EMPTY_INCOMPLETE_MESSAGE]]) {
+    const e = await relay(F.empty, {}, factory);
+    ok(e.err?.statusCode === 502 && e.err.message === emptyMsg && e.err.emptyAnswer === true && !e.res.headersSent, `${wire}: all thinking, then the cap: a 502 before any byte (${e.err?.message?.slice(0, 40)})`);
+    const ctl = await relay(F.empty, {}, false);
+    ok(!ctl.err && ctl.res.status === 200, `${wire} CONTROL: without the hold it was a committed 200`);
+    const r = await relay(F.refusal, {}, factory);
+    ok(r.err?.statusCode === 502 && /declined the request/.test(r.err.message), `${wire}: an empty refusal is a 502`);
+    const held = await relay(F.content, {}, factory), plain = await relay(F.content, {}, false);
+    ok(!held.err && held.res.status === 200 && held.res.out === plain.res.out && held.res.out.includes("The answer"), `${wire}: a stream with content is relayed byte for byte as before`);
+    const tool = await relay(F.tool, {}, factory);
+    ok(!tool.err && tool.res.status === 200, `${wire}: a tool call is an answer`);
+  }
+}
+{
   // A credits stream's metered usage recorded by an empty attempt is put back.
   const { setUpstreamCostsForTest } = await import("../src/upstream-costs.js");
   setUpstreamCostsForTest({ models: [["fake/", { prompt: 1, completion: 1 }]], meter: { markup: 1.2 } });
@@ -158,26 +234,56 @@ ok(!chatDeltaHasAnswer({ role: "assistant", content: "", reasoning: "x", reasoni
   globalThis.fetch = realFetch;
 }
 
+{
+  // The Messages and Responses handlers: an empty stream is a 502 before any
+  // byte and skips the model's other attempt; one with content is served.
+  const realFetch = globalThis.fetch;
+  for (const [wire, tool, input, F, emptyMsg] of [
+    ["messages", LLM_MESSAGES_TOOLS.find((t) => t.slug === "v1-chat-nano-messages"), { messages: [{ role: "user", content: "hi" }], max_tokens: 20 }, MSG, EMPTY_MAX_TOKENS_MESSAGE],
+    ["responses", LLM_RESPONSES_TOOLS.find((t) => t.slug === "v1-chat-nano-responses"), { input: "hi", max_output_tokens: 20 }, RESP, EMPTY_INCOMPLETE_MESSAGE],
+  ]) {
+    const calls = [];
+    const run = async (framesFor, extra = {}) => {
+      calls.length = 0;
+      globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); calls.push(`${b.model}@${b.service_tier || "default"}`); return upstreamOf(framesFor(b))(); };
+      const res = fakeRes();
+      const r = await settle(async () => (await tool.handler({ model: "openai/gpt-6-luna", stream: true, ...input, ...extra })).__sse(res));
+      return { res, err: r.err };
+    };
+    const one = await run(() => F.empty, { model_fallback: false });
+    ok(one.err?.statusCode === 502 && one.err.message === emptyMsg && !one.res.headersSent && calls.length === 1, `${wire} handler: an empty stream is a 502 before any byte, the model's other attempt skipped (${calls.join(" > ")})`);
+    const walk = await run(() => (calls.length === 1 ? F.empty : F.content));
+    ok(!walk.err && walk.res.status === 200 && walk.res.out.includes("The answer") && calls.length === 2, `${wire} handler: an empty stream walks to the next model, which serves (${calls.join(" > ")})`);
+  }
+  globalThis.fetch = realFetch;
+}
+
 // ---- 2. every wire of a booted paid server ------------------------------------------
 {
   const { bootPaidWires, WIRES } = await import("./lib/paid-wires-rig.js");
   rig = await bootPaidWires({ label: "stream-empty-answer" });
-  const ROUTE = { method: "POST", path: "/v1/chat/completions", body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 64, stream: true, model_fallback: false } };
+  const ROUTES = [
+    ["chat", { method: "POST", path: "/v1/chat/completions", body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 64, stream: true, model_fallback: false } }, EMPTY_LENGTH, WITH_CONTENT, '"content":" answer"'],
+    ["messages", { method: "POST", path: "/v1/messages", body: { model: "openai/gpt-5-nano", messages: [{ role: "user", content: "hi" }], max_tokens: 64, stream: true, model_fallback: false } }, MSG.empty, MSG.content, "The answer"],
+    ["responses", { method: "POST", path: "/v1/responses", body: { model: "openai/gpt-5-nano", input: "hi", max_output_tokens: 64, stream: true, model_fallback: false } }, RESP.empty, RESP.content, "The answer"],
+  ];
   try {
-    for (const wire of WIRES) {
-      const w = await rig.wallet(wire);
-      const price = await rig.priceOf(w, ROUTE);
-      rig.fund(w, price * 10n);
-      const before = rig.accounts.get(w.id)?.balance;
-      rig.st.llmStreamFrames = () => EMPTY_LENGTH;
-      const c0 = rig.st.completions;
-      const empty = await rig.pay(w, ROUTE);
-      const o1 = rig.outcomesOf(w);
-      ok(empty.status === 502 && rig.st.completions > c0 && !empty.text.includes("data:") && o1.attempts === 0 && rig.accounts.get(w.id)?.balance === before, `${wire}: an empty streamed answer is answered ${empty.status}, never settled (settle ${JSON.stringify(o1)})`);
-      rig.st.llmStreamFrames = () => WITH_CONTENT;
-      const good = await rig.pay(w, ROUTE);
-      const o2 = rig.outcomesOf(w);
-      ok(good.status === 200 && good.text.includes('"content":" answer"') && good.text.includes("[DONE]") && o2.settled === 1 && rig.accounts.get(w.id)?.balance === before - price, `${wire}: a streamed answer with content is 200 and settled once (settle ${JSON.stringify(o2)})`);
+    for (const [route, ROUTE, emptyFrames, contentFrames, mark] of ROUTES) {
+      for (const wire of WIRES) {
+        const w = await rig.wallet(wire);
+        const price = await rig.priceOf(w, ROUTE);
+        rig.fund(w, price * 10n);
+        const before = rig.accounts.get(w.id)?.balance;
+        rig.st.llmStreamFrames = () => emptyFrames;
+        const c0 = rig.st.completions;
+        const empty = await rig.pay(w, ROUTE);
+        const o1 = rig.outcomesOf(w);
+        ok(empty.status === 502 && rig.st.completions > c0 && !empty.text.includes("data:") && o1.attempts === 0 && rig.accounts.get(w.id)?.balance === before, `${route} on ${wire}: an empty streamed answer is answered ${empty.status}, never settled (settle ${JSON.stringify(o1)})`);
+        rig.st.llmStreamFrames = () => contentFrames;
+        const good = await rig.pay(w, ROUTE);
+        const o2 = rig.outcomesOf(w);
+        ok(good.status === 200 && good.text.includes(mark) && o2.settled === 1 && rig.accounts.get(w.id)?.balance === before - price, `${route} on ${wire}: a streamed answer with content is 200 and settled once (settle ${JSON.stringify(o2)})`);
+      }
     }
   } catch (e) { ok(false, `paid wires: ${e?.stack || e}`); for (const l of rig.log().split("\n").filter(Boolean).slice(-20)) console.error("  server:", l.slice(0, 300)); }
   finally { await rig.stop(); }

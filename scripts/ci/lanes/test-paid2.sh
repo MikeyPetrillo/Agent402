@@ -25,7 +25,7 @@ t node scripts/test-inflight-burst.js
 t node scripts/test-inflight-admission.js
 # A header a handler set for its answer is not sent on a refusal: dub on Tempo pull, MPP evm and x402 (boots a paid server - offline)
 t node scripts/test-answer-headers.js
-# A streamed chat answer that ends with no answer (all reasoning) is a 502 before any byte and is never settled on any wire; one with content is relayed byte for byte as before and settled once (boots a paid server - offline)
+# A streamed chat, Messages or Responses answer that ends with no answer (all reasoning) is a 502 before any byte and is never settled on any wire; one with content is relayed byte for byte and settled once; a hold commits at the CDN window tail (boots a paid server - offline)
 t node scripts/test-stream-empty-answer.js
 # A card or Tempo challenge must outlive the run it pays for, and the breaker keys an address by its IPv6 /64 (boots a paid server - offline)
 t node scripts/test-challenge-life.js
