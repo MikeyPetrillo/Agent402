@@ -5,7 +5,8 @@ const ENTRIES = [
     date: "2026-11-16",
     title: "Settled subscription payments are never lost",
     items: [
-      "Payments: A wallet subscription whose first payment settled but whose record could not be written is booked as owed to the buyer, once, and the buyer is told the payment settled. Sending the same request again hands the subscription back and cancels that debt; a refund already being sent refuses it instead, so a buyer is never both served and refunded. A first payment left with no record after its challenge expires is found before its signing key is deleted: the subscription is rebuilt from the offer, or the payment is booked as owed.",
+      "Payments: A wallet subscription whose first payment settled but whose record could not be written is booked as owed to the buyer, once, and the buyer is told the payment settled. Sending the same request again before the payment challenge expires hands the subscription back and cancels that debt; a refund already being sent refuses it instead, so a buyer is never both served and refunded. Once the challenge expires the debt stands and the signing key is deleted. A first payment the server stopped before answering is found before its signing key is deleted: the subscription is rebuilt when the offer named a delivery email, and otherwise the payment is booked as owed.",
+      "Payments: An unpaid wallet subscription offer's email, subject and signing key are deleted within an hour of the request.",
       "Payments: An owed card report refund is counted from the report's own record, so the refund alarm reads it even when the list of open issues missed it, and stops reading it once the record shows the refund was sent.",
     ],
   },
