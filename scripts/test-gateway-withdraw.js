@@ -277,6 +277,10 @@ await check("an RPC password whose % is not valid URL encoding is withheld and e
   assert.equal(redactRpcText("eip155:8453 RPC answered HTTP 503", e), "eip155:8453 RPC answered HTTP 503", "text with no URL prints as it was");
   // A lone surrogate in a configured value (encodeURI throws on one) does not stop the output either.
   assert.doesNotThrow(() => redactRpcText("x", { EVM_RPC_8453: "https://rpc.example.invalid/\uD800abcdef" }));
+  // Should the check itself fail, the line is withheld whole, never printed as it came.
+  const unreadable = new Proxy({}, { get() { throw new Error("env unreadable"); } });
+  const whole = redactRpcText(`request to ${KEYED} failed`, unreadable);
+  assert.ok(!whole.includes("pct-keyed") && !whole.includes("zzSecretPw9") && /withheld/.test(whole), whole);
   const r = await keyedRun(KEYED, { transferId: `t-${PW}` });
   assert.equal(r.thrown, null, "the run answers with a code");
   assert.match(r.out, /seller 0x[0-9a-fA-F]{40}/, "the run's lines are printed");
