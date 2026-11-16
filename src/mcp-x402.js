@@ -251,6 +251,52 @@ export function buildInvalidPaymentResult(paymentRequired, { reason, message, mp
   return requiredShape({ ...paymentRequired, error: why }, { message, meta: mppMeta });
 }
 
+/**
+ * The result for a payment whose settlement is not decided yet: Circle
+ * Gateway still settling a batched payment (retry same-payment: the SAME
+ * payment resent later is served with no new charge), or a broadcast transfer
+ * not yet confirmed on chain (retry watch-transaction). It carries the
+ * route's own explanation and NO PaymentRequired: a client that signed a
+ * fresh offer here could pay twice. `refusal` is the route's 402 body
+ * ({reason, retry, hint, network, transactions}); `settleResponse`, when
+ * marked success: false, rides in _meta["x402/payment-response"].
+ * Never throws.
+ */
+export function buildSettlementPendingResult({ label = "Agent402", refusal = {}, retryAfterSeconds = null, settleResponse = null } = {}) {
+  const r = isPlainObject(refusal) ? refusal : {};
+  const text = (v, n) => (typeof v === "string" && v.trim() ? v.trim().slice(0, n) : null);
+  const retry = text(r.retry, 40);
+  const hint = text(r.hint, 1000) || "This payment's settlement is not confirmed yet, so the answer was withheld. Do not sign a new authorization for this call: a second one is a second payment.";
+  const wait = Number.isFinite(Number(retryAfterSeconds)) && Number(retryAfterSeconds) > 0 ? Math.min(Math.ceil(Number(retryAfterSeconds)), 3600) : null;
+  const transactions = Array.isArray(r.transactions) ? r.transactions.filter((t) => typeof t === "string" && /^0x[0-9a-fA-F]{64}$/.test(t)).slice(0, 8) : [];
+  const structured = {
+    reason: text(r.reason, 60) || "settlement-pending",
+    ...(retry ? { retry } : {}),
+    ...(wait ? { retryAfterSeconds: wait } : {}),
+    ...(text(r.network, 80) ? { network: text(r.network, 80) } : {}),
+    ...(transactions.length ? { transactions } : {}),
+    hint,
+  };
+  const resend = retry === "same-payment" ? ` Resend this call with the same _meta["${X402_PAYMENT_META}"]${wait ? ` after about ${wait} s` : ""}.` : "";
+  const result = { isError: true, structuredContent: structured, content: [{ type: "text", text: `${label}: ${hint}${resend}` }] };
+  if (isPlainObject(settleResponse) && settleResponse.success === false) {
+    const { copy } = jsonCopy(settleResponse, X402_PAYMENT_MAX_BYTES);
+    if (copy && copy.success === false) result._meta = { [X402_PAYMENT_RESPONSE_META]: copy };
+  }
+  return result;
+}
+
+/** True for a paid route's 402 that says the payment's settlement is not
+ *  decided yet (buildSettlementPendingResult): its body's retry verb is
+ *  same-payment or watch-transaction, or its settle answer reads
+ *  settlement_pending. Never throws. */
+export function isSettlementUndecided(body, settleResponse) {
+  try {
+    if (isPlainObject(body) && (body.retry === "same-payment" || body.retry === "watch-transaction")) return true;
+    return isPlainObject(settleResponse) && settleResponse.success === false && settleResponse.errorReason === "settlement_pending";
+  } catch { return false; }
+}
+
 /** The SettleResponse from the route's PAYMENT-RESPONSE header, when it
  *  records a completed settlement (success: true with a transaction and a
  *  network); null otherwise. Never throws. */

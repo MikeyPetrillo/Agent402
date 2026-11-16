@@ -106,8 +106,10 @@ import { decodePaymentResponseHeader } from "@x402/core/http";
 import {
   readPaymentFromMeta, paymentSignatureHeader, paymentRequiredFromHeader,
   buildPaymentRequiredResult, buildInvalidPaymentResult, buildSettlementFailedResult, withPaymentResponse,
+  buildSettlementPendingResult, isSettlementUndecided,
 } from "./mcp-x402.js";
 import { mcpX402Entries, mcpX402PathOf } from "./mcp-x402-routes.js";
+import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
 
 // serverInfo reports the agent402-mcp package version in the deployed build
 // (mcp/package.json, which the image copies) with the server's build as
@@ -162,6 +164,14 @@ export function mcpClientsSeenSinceBoot(limit = 20) {
 const MCP_REQ_PER_MIN = Number(process.env.AGENT402_MCP_REQ_PER_MIN) || Math.max(60, MAX_CALLS_PER_BURST * 3);
 const MCP_REQ_PER_HOUR = Number(process.env.AGENT402_MCP_REQ_PER_HOUR) || Math.max(600, MAX_CALLS_PER_WINDOW * 3);
 const mcpReqLimiter = createLimiter("mcp-transport", { perMin: MCP_REQ_PER_MIN, perHour: MCP_REQ_PER_HOUR });
+// A tools/call carrying a plausible payment (metaCarriesPayment) is counted on
+// its own, larger per-IP bucket at the transport instead: a buyer paying for
+// each call is not held to the free figure. Only a call that then reaches a
+// paywall replay stays on it alone; any other path meets the bucket above too.
+const MCP_PAID_REQ_PER_MIN = Number(process.env.AGENT402_MCP_PAID_REQ_PER_MIN) || MCP_REQ_PER_MIN * 5;
+const MCP_PAID_REQ_PER_HOUR = Number(process.env.AGENT402_MCP_PAID_REQ_PER_HOUR) || MCP_REQ_PER_HOUR * 5;
+const mcpPaidReqLimiter = createLimiter("mcp-transport-paid", { perMin: MCP_PAID_REQ_PER_MIN, perHour: MCP_PAID_REQ_PER_HOUR });
+const reqLimitText = (path, retryAfterSeconds) => `Too many requests to ${path} - slow down and retry in about ${retryAfterSeconds} s.`;
 const MCP_MAX_CONCURRENT = Number(process.env.AGENT402_MCP_MAX_CONCURRENT) || 64;
 const MCP_REQ_DEADLINE_MS = Number(process.env.AGENT402_MCP_REQ_DEADLINE_MS) || 30_000;
 // After the deadline fires (or the client disconnects) we abort + close the
@@ -232,17 +242,30 @@ const TASK_GATE_MS = Number(process.env.AGENT402_MCP_TASK_GATE_MS) || 8_000;
 export const TASK_PROGRESS_META = "org.agent402/progress";
 let mcpInFlight = 0;
 
-/** True for a tools/call whose _meta carries a payment this connector would
- *  present to a paywall: an MPP credential, or an x402 payment the reader
- *  accepts (src/mcp-x402.js). Never throws. */
+/** True when a call's _meta holds a PLAUSIBLE payment, read the way the HTTP
+ *  limiters read a payment header (src/payment-attempt.js, the rule
+ *  looksLikePayment applies): an MPP credential that decodes, or an x402
+ *  payment the reader accepts whose network this server offers. When an MPP
+ *  credential rides along it alone decides (the dispatch uses MPP then).
+ *  Shape, not validity: the paywall verifies. Never throws. */
+export function metaCarriesPayment(meta) {
+  try {
+    if (!meta || typeof meta !== "object") return false;
+    const cred = credentialHeaderFromMeta(meta);
+    if (cred) return decodesAsMppCredential(cred);
+    const read = readPaymentFromMeta(meta);
+    return read.ok === true && !!read.payment && decodesAsX402Payment(paymentSignatureHeader(read.payment));
+  } catch { return false; }
+}
+
+/** True for a tools/call whose _meta carries a plausible payment
+ *  (metaCarriesPayment). Such a request is held to the payment limit at the
+ *  transport, and to the normal limit too unless its call reaches a paywall
+ *  replay (see the CallTool handler). Never throws. */
 export function carriesPayment(body) {
   try {
     if (!body || typeof body !== "object" || body.method !== "tools/call") return false;
-    const meta = body.params?._meta;
-    if (!meta || typeof meta !== "object") return false;
-    if (credentialHeaderFromMeta(meta)) return true;
-    const read = readPaymentFromMeta(meta);
-    return read.ok === true && !!read.payment;
+    return metaCarriesPayment(body.params?._meta);
   } catch { return false; }
 }
 
@@ -488,7 +511,39 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // shows capabilities), and for every other request while skills are armed,
   // so resources/list and resources/read are answered for a client that saw
   // the declaration on its own initialize.
-  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {} } = {}) {
+  /** The catalog entry a tools/call names: a flagship by any of its
+   *  spellings, or catalog.call's slug. The dispatch and the payment-limit
+   *  test below both read it, so they cannot disagree on the target. */
+  function callTargetOf(name, args) {
+    const namedSlug = namedToolSlugs.get(name) ?? namedToolSlugs.get(String(name).replace(/_/g, "-")) ?? null;
+    const isNamed = namedSlug !== null;
+    if (name !== "catalog.call" && !isNamed) return { isNamed, resolvedSlug: null, entry: null };
+    const resolvedSlug = isNamed ? namedSlug : String(args?.slug ?? "");
+    return { isNamed, resolvedSlug, entry: tools.get(resolvedSlug) || null };
+  }
+
+  // The names the CallTool handler answers before it resolves a target.
+  const answeredBeforeTarget = (name, args) => (scoped && HIDDEN_WHEN_SCOPED.has(name))
+    || ["catalog.search", "catalog.find", "demand.request", "server.describe", "payment.info"].includes(name)
+    || (name === "decide.feedback" && Boolean(decideFeedback))
+    || (name === "sellers.list" && sellersListed);
+
+  /** True when this call is replayed to a paywall with the payment in its
+   *  _meta (payOverMpp or payOverX402 below) and that payment is plausible
+   *  (metaCarriesPayment): an MPP credential on a paid tool while the MPP
+   *  gates are mounted, or, with no MPP credential, an x402 payment on any
+   *  tool while the x402 wire is on. Never throws. */
+  function reachesPaidReplay(name, args, meta) {
+    try {
+      if (answeredBeforeTarget(name, args) || !metaCarriesPayment(meta)) return false;
+      const { entry } = callTargetOf(name, args);
+      if (!entry) return false;
+      if (credentialHeaderFromMeta(meta)) return Boolean(mppLoopback) && !entry.free;
+      return Boolean(x402Loopback);
+    } catch { return false; }
+  }
+
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false } = {}) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -897,19 +952,27 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     /** Turn the route's answer to an x402-paid loopback into the MCP result:
      *  a <400 answer is the tool result plus the settle receipt in
      *  _meta["x402/payment-response"]; a settle that failed after the handler
-     *  is the settlement-failed result with none of the tool's output; any
+     *  is the settlement-failed result with none of the tool's output; a
+     *  settlement not decided yet is the pending result (no offer); any
      *  other 402 is the invalid-payment result (a fresh PaymentRequired to
      *  sign again); any other status is an error that was not charged. */
     async function translateX402Response(entry, target, params, isNamed, r, ip, signal) {
       const def = entry.def;
       if (r.status === 402) {
-        const offer = paymentRequiredFromHeader(r.headers.get("payment-required")) || await x402Offer(target, params, ip, signal);
         let settle = null;
         try { settle = r.headers.get("payment-response") ? decodePaymentResponseHeader(String(r.headers.get("payment-response")).trim()) : null; } catch { settle = null; }
         const body = r.json && typeof r.json === "object" ? r.json : {};
+        // Settlement not decided yet (a Gateway batched payment still
+        // settling, a broadcast not yet confirmed, a verify that never got a
+        // verdict): the route's own explanation and no offer, since signing a
+        // fresh one could pay twice.
+        if (isSettlementUndecided(body, settle)) {
+          return buildSettlementPendingResult({ label: `Agent402 (${def.slug})`, refusal: body, retryAfterSeconds: r.headers.get("retry-after"), settleResponse: settle });
+        }
+        const offer = paymentRequiredFromHeader(r.headers.get("payment-required")) || await x402Offer(target, params, ip, signal);
         if (settle && settle.success === false) {
           const out = offer && buildSettlementFailedResult(offer, { reason: typeof settle.errorReason === "string" ? settle.errorReason : "", settleResponse: settle });
-          return out || { content: [{ type: "text", text: `Agent402 (${def.slug}): payment settlement failed - not charged.` }], isError: true };
+          return out || { content: [{ type: "text", text: `Agent402 (${def.slug}): the x402 payment did not settle, so this call was not charged.` }], isError: true };
         }
         const why = [offer?.error, body.error, body.hint].find((v) => typeof v === "string" && v.trim() && !/^payment required$/i.test(v.trim()));
         const out = offer && buildInvalidPaymentResult(offer, { reason: why || "Payment verification failed" });
@@ -1167,6 +1230,14 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const name = resolveListedName(rawName);
       const overBound = toolInputBoundRefusal(rawName, args, maxToolInputElements);
       if (overBound) throw new McpError(ErrorCode.InvalidParams, overBound);
+      // A request the transport counted on the payment bucket meets the
+      // normal bucket too, unless this call reaches a paywall replay with its
+      // payment: a credential on a discovery tool, an unknown tool or a free
+      // tool's in-process run buys nothing over an unpaid call.
+      if (paymentCall && !reachesPaidReplay(name, args, req.params?._meta)) {
+        const budget = mcpReqLimiter.check(ip);
+        if (budget.limited) return { content: [{ type: "text", text: reqLimitText(path, budget.retryAfterSeconds) }], isError: true };
+      }
       if (scoped && HIDDEN_WHEN_SCOPED.has(name)) {
         return { content: [{ type: "text", text: `${rawName} is not available on ${path} - this endpoint serves one product (${[...flagshipSet].map(mcpNameOf).join(", ")}). The full catalog connector is ${baseUrl}/mcp.` }], isError: true };
       }
@@ -1522,15 +1593,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // snake form, raw kebab slug — so no existing caller breaks across
         // renames. Flagships may be free or wallet-only; wallet-only falls
         // through to the paid-access response below (same as call_tool).
-        const namedSlug = namedToolSlugs.get(name) ?? namedToolSlugs.get(name.replace(/_/g, "-")) ?? null;
-        const isNamed = namedSlug !== null;
+        const { isNamed, resolvedSlug, entry } = callTargetOf(name, args);
         // After resolveListedName, catalog.call is the envelope path; everything
         // else must be a named flagship (or legacy alias mapped above).
         if (name !== "catalog.call" && !isNamed) {
           return { content: [{ type: "text", text: `Unknown tool ${quotedEcho(rawName)}.` }], isError: true };
         }
-        const resolvedSlug = isNamed ? namedSlug : String(args.slug ?? "");
-        const entry = tools.get(resolvedSlug);
         if (!entry) {
           // A slug we RETIRED is named as retired, with its replacement, and
           // counted like the HTTP 410 (tool_gone, surface mcp), so an old
@@ -1808,11 +1876,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // so it must not be bypassable by injecting a header.
     const ip = (req.ip || req.socket.remoteAddress || "?").trim();
     // R-11 outer gate #1: per-IP raw-request cap, BEFORE allocating anything.
-    // A tools/call that carries a payment (an x402 payment the reader accepts,
-    // or an MPP credential) skips it: a paying buyer is never refused for
-    // rate. The paid route it reaches treats it as the direct HTTP path treats
-    // any request carrying a payment; the in-flight ceiling below still holds.
-    const reqBudget = carriesPayment(req.body) ? { limited: false } : mcpReqLimiter.check(ip);
+    // A tools/call carrying a plausible payment (carriesPayment) is counted on
+    // the larger payment bucket here instead; its handler then holds it to
+    // this bucket too unless the call reaches a paywall replay, so a junk or
+    // misplaced credential buys nothing over an unpaid call.
+    const paymentCall = carriesPayment(req.body);
+    const reqBudget = (paymentCall ? mcpPaidReqLimiter : mcpReqLimiter).check(ip);
     if (reqBudget.limited) {
       // A client that is told when to come back waits; one that is not retries at once.
       res.setHeader("Retry-After", String(reqBudget.retryAfterSeconds));
@@ -1865,7 +1934,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport.close(); } catch { /* already closing */ } });
-      await buildServer(ip, ac.signal, typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null, { skillsCaps, reqHeaders: req.headers }).connect(transport);
+      await buildServer(ip, ac.signal, typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null, { skillsCaps, reqHeaders: req.headers, paymentCall }).connect(transport);
       run = transport.handleRequest(req, res, req.body);
       // R-11/F14: per-request deadline. On fire, abort the handler and close the
       // transport so it settles, then (in finally) await that settle before the
