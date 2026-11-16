@@ -121,7 +121,7 @@ function cgErrorCode(text) {
 }
 
 async function jsonGet(url, host = "CoinGecko") {
-  const safeUrl = await assertPublicUrl(url);
+  const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   // CoinGecko Demo key (env-gated; keyless works too, just worse): keyless
   // requests are rate-limited PER IP — and Railway egress IPs are shared, so
   // the effective quota is whatever other tenants left. A key moves metering

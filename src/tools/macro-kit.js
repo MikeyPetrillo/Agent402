@@ -89,7 +89,7 @@ const treasuryAvgLastGood = new Map();
 
 async function safeFetchRetry(url, opts = {}) {
   const { retries, backoffMs, ...fetchOpts } = opts;
-  return retryTransient(() => safeFetch(url, fetchOpts), {
+  return retryTransient(() => safeFetch(url, { ...fetchOpts, ownUpstream: true }), {
     ...(retries !== undefined ? { retries } : {}),
     ...(backoffMs !== undefined ? { backoffMs } : {}),
   });
@@ -792,7 +792,7 @@ async function fredGetJson(url, extraHeaders = {}, { timeoutMs, retries } = {}) 
 }
 
 async function fredGetJsonOnce(url, extraHeaders = {}, timeoutMs = 15_000) {
-  const safeUrl = await assertPublicUrl(url);
+  const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   let res;
   try {
     // Its own timeout, or a run's ceiling when that comes first (src/run-ceiling.js; none on a direct

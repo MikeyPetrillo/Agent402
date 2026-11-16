@@ -8,7 +8,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.REFUND_DB_DIR = process.env.TMPDIR || "/tmp";
 import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
-import { planRefunds, familyOf, ourPayToSet, LASTING_HANGUP_HOLD, isLastingEffectHangup, REPEAT_HANGUP_HOLD, isRepeatHangup, refundMemo, refundMemoHex } from "./refund-run.js";
+import { planRefunds, DUPLICATE_EVIDENCE_HOLD, familyOf, ourPayToSet, LASTING_HANGUP_HOLD, isLastingEffectHangup, REPEAT_HANGUP_HOLD, isRepeatHangup, refundMemo, refundMemoHex } from "./refund-run.js";
 import { LASTING_EFFECT_SLUG_LIST } from "../src/hangup-forgiveness.js";
 import { readFileSync } from "node:fs";
 
@@ -72,6 +72,21 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
 {
   const p = planRefunds([mk({ id: 1 }), mk({ id: 2, priceUsd: 0.002 })], { senders: SENDERS });
   ok(p.send.length === 2 && p.totalUsd === 0.003, `sends both and sums the total ($${p.totalUsd})`);
+}
+
+// 6a. Two owed rows whose evidence is one EVM hash in two spellings are one
+// payment: the row with the lowest id is planned, the other held with a
+// reason. A Solana signature in two cases is two ids and is never folded.
+{
+  const h = "0x" + "aB".repeat(32);
+  const p = planRefunds([mk({ id: 7, evidence: h.toLowerCase() }), mk({ id: 3, evidence: h }), mk({ id: 9, evidence: h.toUpperCase().replace(/^0X/, "0x") })], { senders: SENDERS });
+  ok(p.send.length === 1 && p.send[0].id === 3, `one payment under three spellings is planned once, the earliest row (sent ${p.send.map((r) => r.id)})`);
+  ok((p.held[DUPLICATE_EVIDENCE_HOLD] || []).map((r) => r.id).sort().join() === "7,9", "the later spellings are held with the duplicate-evidence reason");
+  const sol = "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW";
+  const s2 = planRefunds([mk({ id: 1, network: "eip155:8453", evidence: sol }), mk({ id: 2, network: "eip155:8453", evidence: sol.toLowerCase() })], { senders: SENDERS });
+  ok(s2.send.length === 2 && !s2.held[DUPLICATE_EVIDENCE_HOLD], "ids that are not EVM hex hashes are never folded together");
+  const k = planRefunds([mk({ id: 1, evidence: `${h}#0x${"11".repeat(32)}` }), mk({ id: 2, evidence: `${h}#0x${"22".repeat(32)}` })], { senders: SENDERS });
+  ok(k.send.length === 2, "two payments settled in one transaction (two nonces) stay two debts");
 }
 
 // 6b. A row carrying the SALES LEDGER's short chain name plans exactly like
@@ -518,6 +533,48 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   const prep = src.slice(src.indexOf("export async function prepareEvm"), src.indexOf("async function sendEvm"));
   const send = src.slice(src.indexOf("async function sendEvm"), src.indexOf("async function sendStellar"));
   ok(/concat\(\[encodeFunctionData\(\{ abi: ERC20, functionName: "transfer"[^\n]*refundMemoHex\(row\)\]\)/.test(prep) && /prepareTransactionRequest\(\{ to: token, data, gas \}\)/.test(send) && /sendRawTransaction\(\{ serializedTransaction: serialized \}\)/.test(send) && !/writeContract/.test(prep + send), "the EVM sender sends the transfer with the memo suffix appended");
+}
+
+// EVM transaction hashes are hex, so two spellings of one hash are one
+// payment: one debt row, found under either spelling. Base58 and base32 ids
+// are case-sensitive and are never folded.
+{
+  __resetRefunds();
+  const { refundByEvidence, refundsByTransaction, voidOwedOnClaim } = await import("../src/refund-ledger.js");
+  const hex = "aBcDeF0123456789".repeat(4);
+  const upper = `0x${hex.toUpperCase()}`, mixed = `0x${hex}`, lower = `0x${hex.toLowerCase()}`;
+  const base = { slug: "case", network: "eip155:8453", payer: "0xAbCd000000000000000000000000000000000009", priceUsd: 0.001, httpStatus: 502 };
+  ok(recordRefundOwed({ ...base, tx: upper }) === true, "an EVM hash in capitals books the debt");
+  ok(recordRefundOwed({ ...base, tx: mixed }) === false, "the same EVM hash in mixed case is the same debt");
+  ok(listRefunds().filter((r) => r.slug === "case").length === 1, "one owed row for one payment under two spellings");
+  ok(listRefunds().find((r) => r.slug === "case")?.evidence === lower, "an EVM hash is keyed in lowercase");
+  ok(refundByEvidence(upper)?.evidence === lower && refundByEvidence(mixed)?.evidence === lower, "the row is found under any spelling of its hash");
+  ok(refundsByTransaction(upper).length === 1, "a transaction's debts are found under any spelling");
+  const sol = "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW";
+  const algo = "TXIDALGORANDBASE32ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCD";
+  ok(recordRefundOwed({ ...base, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", tx: sol }) === true && refundByEvidence(sol)?.evidence === sol, "a Solana signature is stored exactly as given");
+  ok(recordRefundOwed({ ...base, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", tx: sol.toLowerCase() }) === true, "a Solana signature in another case is another id, never folded");
+  ok(recordRefundOwed({ ...base, network: "algorand:mainnet", tx: algo }) === true && refundByEvidence(algo)?.evidence === algo && !refundByEvidence(algo.toLowerCase()), "an Algorand id is stored and read exactly as given");
+  // A row an earlier build wrote in mixed case still matches: a new debt for
+  // it is a duplicate, and reads and owed-row changes reach it.
+  const { __insertRefundVerbatim } = await import("../src/refund-ledger.js");
+  const legacyHex = `0x${"F0e1D2c3B4a59687".repeat(4)}`;
+  ok(__insertRefundVerbatim({ evidence: legacyHex, slug: "legacy", network: "eip155:8453", payer: base.payer, priceUsd: 0.001 }), "a mixed-case row as an earlier build wrote it");
+  ok(recordRefundOwed({ ...base, slug: "legacy", tx: legacyHex.toLowerCase() }) === false, "a debt for a hash already booked in mixed case is a duplicate");
+  ok(listRefunds().filter((r) => r.slug === "legacy").length === 1, "one row for the legacy payment");
+  ok(refundByEvidence(legacyHex.toLowerCase())?.evidence === legacyHex && refundsByTransaction(legacyHex.toUpperCase()).length === 1, "the legacy mixed-case row is read under the lowercase spelling");
+  ok(voidOwedOnClaim(legacyHex.toUpperCase(), "served on the resend") === true && refundByEvidence(legacyHex)?.status === "void", "an owed-row change reaches the legacy mixed-case row");
+  // Every owed-row change keyed on evidence reaches the row under another spelling.
+  const { renoteOwedRefund, restateOwedAsHandlerFailure, voidOwedForServe, reopenHeldClaim, promoteOwedToHangup, renoteVoidRefund } = await import("../src/refund-ledger.js");
+  const h = `0x${"9a8B7c6D5e4F3a2b".repeat(4)}`, H = h.toUpperCase().replace(/^0X/, "0x");
+  recordRefundOwed({ ...base, slug: "changes", tx: h.toLowerCase(), note: "n1" });
+  ok(renoteOwedRefund(H, "n1", "n2") === true, "renote reaches the row under another spelling");
+  ok(restateOwedAsHandlerFailure(H, { from: "n2", httpStatus: 502, append: "failed" }) === true, "restate reaches the row under another spelling");
+  ok(voidOwedForServe(H, "held") === true && refundByEvidence(h)?.status === "void", "the serve hold reaches the row under another spelling");
+  ok(reopenHeldClaim(H, { held: refundByEvidence(h)?.note, httpStatus: 502, note: "n3" }) === true && refundByEvidence(h)?.status === "owed", "reopen reaches the row under another spelling");
+  ok(promoteOwedToHangup(H, { from: "n3", hangupReason: "payer budget", append: "hung up" }) === true && refundByEvidence(h)?.httpStatus === 499, "promote reaches the row under another spelling");
+  voidOwedForServe(h, "held2");
+  ok(renoteVoidRefund(H, refundByEvidence(h)?.note, "served") === true && refundByEvidence(h)?.note === "served", "renote of a void row reaches it under another spelling");
 }
 
 __resetRefunds();

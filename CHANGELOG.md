@@ -6,6 +6,17 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (own sources that do not resolve are ours)
+Tools:
+- When a source a tool reads on its own does not resolve, the answer is a
+  503, uncharged, never the 400 a URL you supply gets when it does not
+  resolve. The weather, geocoding, holiday, government, Treasury debt and
+  average-rate, FX history, World Bank, FRED, crypto market, SEC filing,
+  market data and npm registry reads answer 503 with Retry-After 5,
+  attribution ours and hint our-egress, so the same call can be sent again;
+  the Treasury yield-curve tools, fx-rate and fx-dashboard keep their own 503
+  with Retry-After for a source they cannot read.
+
 ### 2026-11-16 (late Solana and Algorand payments are repaid)
 Payments:
 - A payment that reaches the chain after its call was refused is found and
