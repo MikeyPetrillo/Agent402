@@ -83,12 +83,18 @@ async function boot(query = { range: "7d" }) {
     assert.deepEqual(names, ["head", "rails", "mpp", "decide"]);
     assert.equal(w.document.querySelector("[data-rv-live] #rvz"), null, "the chart and its range control are never swapped");
   });
+  await check("the big live figure is external payments; throughput is the line under it", () => {
+    const head = w.document.querySelector('[data-rv-live="head"]');
+    assert.match(head.querySelector("#rvExternal").textContent, /^\s*4\s+external payments/);
+    assert.match(head.querySelector("#rvThroughput").textContent, /^14 settled transactions through our rails \(x402 \+ MPP\), our own test purchases included/);
+    assert.ok(head.innerHTML.indexOf('id="rvExternal"') < head.innerHTML.indexOf('id="rvThroughput"'), "external leads, throughput follows");
+  });
   await check("a tick swaps in new figures; the series is read every fifth minute for the same window", async () => {
-    assert.match(text('[data-rv-live="head"]'), /\b4\b external payments/);
+    assert.match(text('[data-rv-live="head"] #rvExternal'), /^\s*4\s+external payments · \$[\d.]+ revenue/);
     env.page = pageAt(NOW + 60_000, { range: "7d" }, 9);
     env.fetched.length = 0;
     await tick();
-    assert.match(text('[data-rv-live="head"]'), /\b9\b external payments/);
+    assert.match(text('[data-rv-live="head"] #rvExternal'), /^\s*9\s+external payments · \$[\d.]+ revenue/);
     assert.deepEqual(env.fetched, ["/revenue?range=7d"], "the first minute reads only its own URL, range kept");
     for (let i = 0; i < 3; i++) await tick();
     assert.equal(env.fetched.filter((u) => u.startsWith("/api/")).length, 0, "no series read in minutes two to four");
@@ -168,7 +174,7 @@ async function boot(query = { range: "7d" }) {
     assert.equal(text('[data-rv-live="head"]'), head, "focused section untouched");
     link.blur();
     await tick();
-    assert.match(text('[data-rv-live="head"]'), /\b12\b external payments/);
+    assert.match(text('[data-rv-live="head"] #rvExternal'), /^\s*12\s+external payments · \$[\d.]+ revenue/);
   });
   await check("a section with text selected in it waits", async () => {
     const head = w.document.querySelector('[data-rv-live="head"]');
@@ -181,7 +187,7 @@ async function boot(query = { range: "7d" }) {
     assert.equal(head.textContent, before, "selected section untouched");
     sel.removeAllRanges();
     await tick();
-    assert.match(head.textContent, /\b15\b external payments/);
+    assert.match(head.querySelector("#rvExternal").textContent, /^\s*15\s+external payments · \$[\d.]+ revenue/);
   });
   await check("a preset range rolls over when the server's day moves on", async () => {
     env.page = pageAt(NOW + DAY_MS, { range: "7d" }, 12);

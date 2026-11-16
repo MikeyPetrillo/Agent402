@@ -1,5 +1,5 @@
 {
-  "about": "Free public data: FX (frankfurter/open.er-api), US Treasury fiscal data, World Bank, open-meteo, NHTSA, openFDA (tier 1). fred-* need a key and are tier 2.",
+  "about": "Free public data: FX (ECB reference rates via frankfurter), US Treasury fiscal data, World Bank, open-meteo, NHTSA, openFDA (tier 1). fred-* need a key and are tier 2.",
   "cases": [
     {
       "slug": "fx-rate",

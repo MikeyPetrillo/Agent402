@@ -89,7 +89,7 @@ export function transparencyPage(baseUrl, traffic = null) {
 <section>
 <div class="tp-eyebrow">$ GET /transparency</div>
 <h1 class="tp-h1">Disclosures</h1>
-<p style="font-size:var(--fs-base);color:var(--muted);">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, every settled transaction by rail at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
+<p style="font-size:var(--fs-base);color:var(--muted);">What the company publishes about itself, in one place: uptime from two outside observers at <a href="/status">/status</a>, external payments and revenue by rail, with every settled transaction beside them, at <a href="/revenue">/revenue</a>, metered receipts against their quotes at <a href="/proof">/proof</a>, and how the service is secured at <a href="/security">/security</a>. The material disclosures below are kept verbatim, with on-chain receipts.</p>
 <p class="tp-updated">Agent402 (agent402.tools)${updated ? ` · last updated ${updated}.` : ""}</p>
 </section>
 
@@ -186,14 +186,14 @@ and these are the receipts:</p>
 <h2 id="revenue-figures">How the revenue figures are counted</h2>
 <p>The <a href="/revenue">transactions page</a> shows two kinds of number and keeps them apart on purpose.</p>
 <ul>
+  <li><strong>Revenue</strong> is external only, and external payments lead the page. A payment counts as external when it comes from a wallet that is
+  not ours (canary, test and funding wallets are excluded) and is per-call sized, at most $${MAX_CALL_USD};
+  anything bigger is funding or a test, not a buy. The chart's "Internal" filter shows the excluded traffic
+  explicitly rather than hiding it.</li>
   <li><strong>Throughput</strong> is every settled transaction through our pay rails, our own included. We run
   our own money through the same gates buyers use, continuously: a daily paid canary on every rail, Tempo MPP
   settlements through the day, and weekly full-catalog sweeps. Those are real on-chain transactions, which is the
   point, but they are ours, so they prove the plumbing and never count as earnings.</li>
-  <li><strong>Revenue</strong> is external only. A payment counts as external when it comes from a wallet that is
-  not ours (canary, test and funding wallets are excluded) and is per-call sized, at most $${MAX_CALL_USD};
-  anything bigger is funding or a test, not a buy. The chart's "Internal" filter shows the excluded traffic
-  explicitly rather than hiding it.</li>
   <li><strong>MPP</strong> settlements on Base and Celo are the same on-chain USDC transfer as x402 (the shim
   translates the credential), so they are already inside the on-chain count; only Tempo, MPP's native rail, is
   added on top. The sales ledger began recording the wire on 2026-07-24, so earlier days read as x402 because

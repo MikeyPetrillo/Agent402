@@ -30,7 +30,9 @@
 // Every outbound body carries provider: { zdr: true } (zero data retention: the
 // upstream serves only from zero-retention workers or answers 503) and an
 // explicit max_tokens (the gateway's clamped value). A request using a feature
-// outside DIRECT_ALLOWED_PARAMS / text-only messages is not sent here at all.
+// outside DIRECT_ALLOWED_PARAMS / text-only messages is not sent here at all;
+// `reasoning` goes only in the shape the upstream accepts (DIRECT_REASONING:
+// an effort alone), so the tiers' own effort default rides along.
 // Any failure (connect, timeout, non-2xx, an error object in a 200 body, a
 // malformed body, a missing cost) becomes a walkable 502/503/504 and the chain
 // goes on to OpenRouter; the upstream bills only answered requests, and the
@@ -49,10 +51,23 @@ const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 export const DIRECT_DEFAULT_TIMEOUT_MS = 45_000;
 
 /** Top-level request fields forwarded as is. Anything else on the attempt that
- *  is not an OpenRouter-only call-time field (DROPPED) keeps the request on
- *  OpenRouter: tools, tool_choice, response_format, logprobs, reasoning,
+ *  is not an OpenRouter-only call-time field (DROPPED) or a reasoning object
+ *  in the accepted shape (DIRECT_REASONING) keeps the request on OpenRouter:
+ *  tools, tool_choice, response_format, logprobs, any other reasoning shape,
  *  service_tier, plugins and every unknown field. */
 export const DIRECT_ALLOWED_PARAMS = Object.freeze(["temperature", "top_p", "stop", "seed", "presence_penalty", "frequency_penalty"]);
+/** The reasoning shape the upstream accepts: `{ effort }` and nothing else, an
+ *  effort from the gateway's validated set. A budget (`max_tokens`), `exclude`
+ *  or `enabled` keeps the request on OpenRouter. */
+export const DIRECT_REASONING = Object.freeze({ keys: Object.freeze(["effort"]), efforts: Object.freeze(["none", "minimal", "low", "medium", "high", "xhigh", "max"]) });
+/** The attempt's reasoning object as sent to the upstream, or null when its
+ *  shape is not one the upstream accepts. */
+export function directReasoningFrom(r) {
+  if (!r || typeof r !== "object" || Array.isArray(r)) return null;
+  const keys = Object.keys(r).filter((k) => r[k] !== undefined);
+  if (!keys.length || keys.some((k) => !DIRECT_REASONING.keys.includes(k))) return null;
+  return DIRECT_REASONING.efforts.includes(r.effort) ? { effort: r.effort } : null;
+}
 /** OpenRouter-only fields the gateway adds at call time; never forwarded. */
 const DROPPED = new Set(["provider", "user", "session_id", "cache_control", "usage", "zdr", "transforms"]);
 const MESSAGE_ROLES = new Set(["system", "user", "assistant"]);
@@ -169,6 +184,7 @@ export function directBodyFrom(attempt, target, { stream = false } = {}) {
     if (v === undefined || k === "model" || k === "messages" || k === "max_tokens" || k === "stream" || DROPPED.has(k)) continue;
     if (k === "n" && (v === 1)) continue;
     if (k === "plugins" && Array.isArray(v) && v.length === 0) continue;
+    if (k === "reasoning") { if (directReasoningFrom(v)) continue; return { reason: "param:reasoning" }; }
     if (!DIRECT_ALLOWED_PARAMS.includes(k)) return { reason: `param:${k}` };
   }
   const msgs = attempt?.messages;
@@ -180,6 +196,8 @@ export function directBodyFrom(attempt, target, { stream = false } = {}) {
   if (!Number.isInteger(maxTokens) || maxTokens < 1) return { reason: "max_tokens" };
   const body = { model: target, messages: msgs, max_tokens: maxTokens };
   for (const k of DIRECT_ALLOWED_PARAMS) if (attempt[k] !== undefined) body[k] = attempt[k];
+  const reasoning = directReasoningFrom(attempt.reasoning);
+  if (reasoning) body.reasoning = reasoning;
   if (stream) { body.stream = true; body.stream_options = { include_usage: true }; }
   body.provider = { zdr: true };
   return { body };

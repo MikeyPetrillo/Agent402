@@ -2650,6 +2650,11 @@ export const REASONING_MODELS = [
   { id: "x-ai/grok-4.7", efforts: ["low", "medium", "high", "xhigh"], reasoningOutsideMaxTokens: true },
   // qwen3.8-max-prime: reasoning MANDATORY, default effort xhigh (live 2026-09-24).
   { id: "qwen/qwen3.8-max-prime", efforts: ["minimal", "low", "medium", "high", "xhigh"] },
+  // qwen3.8-27b: reasoning default-on at "xhigh", efforts none/low/medium/xhigh
+  // (live catalog 2026-11-15). Without this row it reasoned unbounded and spent
+  // a 4096 cap with nothing said; base and metered inject "low", and an empty
+  // answer gets the one same-model retry at "none".
+  { id: "qwen/qwen3.8-27b", efforts: ["none", "low", "medium", "xhigh"] },
   // GPT-6 Astra: reasoning MANDATORY (no "none"), default effort medium; the
   // prefix covers gpt-6-astra-pro, which the live catalog lists with the same
   // set. Claude Fable 5.1: adaptive thinking mandatory, default effort high.
@@ -2660,7 +2665,8 @@ export const REASONING_MODELS = [
   // Claude Fable 5.2: the same mandatory reasoning and efforts (live catalog 2026-11-12).
   { id: "anthropic/claude-fable-5.2", efforts: ["low", "medium", "high", "xhigh", "max"] },
   // DeepSeek V4.1 Flash: reasoning default-on at "high", efforts
-  // none/low/high/max (live catalog 2026-11-12). The budget tiers inject "low".
+  // none/low/high/max (live catalog 2026-11-12). The budget tiers inject "low",
+  // which the direct upstream takes as is (DIRECT_REASONING).
   { id: "deepseek/deepseek-v4.1-flash", efforts: ["none", "low", "high", "max"] },
   // stealth/ox-alpha: reasoning.mandatory true, default_effort "max" (live
   // catalog 2026-08-22). Without this row defaultReasoningFor returns null,

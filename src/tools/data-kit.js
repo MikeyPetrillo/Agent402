@@ -3,8 +3,8 @@
 //   barcode-lookup    Open Food Facts (open data, ODbL) — UPC/EAN -> product
 //                     (100 req/min/IP upstream + shared Railway egress IP →
 //                     serve-stale cache below)
-//   fx-rate           Frankfurter (European Central Bank reference rates),
-//                     open.er-api.com as a diverse keyless fallback
+//   fx-rate           Frankfurter (European Central Bank reference rates, the
+//                     ECB cited as the source; no other publisher)
 //   weather-forecast  api.weather.gov (US gov, public domain) — US only
 //   public-holidays   Nager.Date (open source, MIT) — holidays by country+year
 //                     (community-run, self-documented flapping → serve-stale
@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import { safeFetch } from "./fetch-guard.js";
 import { markEndsAtCeiling, ceilingPassed } from "../run-ceiling.js";
-import { ratesUrl, latestShape, isUnknownCurrency } from "./frankfurter.js";
+import { ratesUrl, latestShape, isUnknownCurrency, ECB_FX_SOURCE, fxSourceUnavailable } from "./frankfurter.js";
 
 // Committed open dataset (see src/data/LICENSE.md — ODbL attribution).
 // Regenerate with scripts/build-countries-data.js. Loaded once at module load;
@@ -137,9 +137,9 @@ export const DATA_TOOLS = [
     },
   },
   {
-    route: "GET /api/fx-rate", name: "Currency exchange rate", slug: "fx-rate", category: "data", price: "$0.002",
+    route: "GET /api/fx-rate", name: "Currency exchange rate", slug: "fx-rate", category: "data", attribution: "ecb", price: "$0.002",
     description:
-      "Live currency conversion using European Central Bank reference rates. Converts an amount between two currencies and returns the rate and date. ?from=USD&to=EUR&amount=100",
+      "Live currency conversion using European Central Bank reference rates. Converts an amount between two currencies and returns the rate, its date and its source. ?from=USD&to=EUR&amount=100. Source: European Central Bank.",
     tags: ["currency", "forex", "fx", "exchange-rate", "convert", "ecb"],
     discovery: {
       input: { from: "USD", to: "EUR", amount: 100 },
@@ -151,7 +151,7 @@ export const DATA_TOOLS = [
         },
         required: ["from", "to"],
       },
-      output: { example: { from: "USD", to: "EUR", amount: 100, rate: 0.923, result: 92.3, date: "2026-06-13" } },
+      output: { example: { from: "USD", to: "EUR", amount: 100, rate: 0.923, result: 92.3, date: "2026-06-13", source: "European Central Bank euro foreign exchange reference rates (via Frankfurter)" } },
     },
     handler: async (i) => {
       const from = String(i.from ?? "").trim().toUpperCase();
@@ -168,45 +168,27 @@ export const DATA_TOOLS = [
         if (from === to) {
           const jId = latestShape(await getJson(ratesUrl({ base: "USD", quotes: ["EUR"] })), "USD");
           if (!jId) throw bad("Frankfurter returned no USD/EUR reference rate", 502);
-          return { from, to, amount, rate: 1, result: amount, date: jId.date };
+          return { from, to, amount, rate: 1, result: amount, date: jId.date, source: ECB_FX_SOURCE };
         }
-        // v2 has no amount parameter: convert here at full precision, the same
-        // arithmetic as the fallback branch below (src/tools/frankfurter.js).
+        // v2 has no amount parameter: convert here at full precision
+        // (src/tools/frankfurter.js).
         const j = latestShape(await getJson(ratesUrl({ base: from, quotes: [to] })), from);
         const r = j?.rates?.[to];
         if (j == null) throw unknownPair();
         if (typeof r !== "number" || !(r > 0)) throw bad(`unsupported currency pair ${from}/${to}`, 502);
-        return { from, to, amount, rate: Number(r.toFixed(6)), result: Number((amount * r).toFixed(6)), date: j.date };
+        return { from, to, amount, rate: Number(r.toFixed(6)), result: Number((amount * r).toFixed(6)), date: j.date, source: ECB_FX_SOURCE };
       } catch (e) {
-        // Diverse fallback: Frankfurter is volunteer-run and shares fate with
-        // nothing we control; open.er-api.com (exchangerate-api.com's keyless
-        // open endpoint) is independent infrastructure. Only a Frankfurter
-        // UPSTREAM failure (502/504 from getJson) falls through; input 4xx
-        // (an unknown code: v2 answers 422, v1 answered 404) keeps today's
-        // semantics. NB: ER-API rates update once a day vs
-        // Frankfurter's ECB business-day reference — acceptable staleness for
-        // a fallback. ER-API has no from/to conversion params, only a full
-        // rate table per base (/v6/latest/<FROM>), so the cross-rate is
-        // computed client-side from that table. Response shape is identical
-        // to the Frankfurter path; `date` is ER-API's last-update day (UTC).
-        // fetch-guard relabels the upstream refusal as a 422 "check the URL",
-        // which blames a URL the buyer never saw (corpus, 2026-09-06). Name
-        // the input instead.
+        // The ECB reference rates are the one source. An input 4xx keeps its
+        // meaning: an unknown code (v2 answers 422, v1 answered 404) is named
+        // as the input, since fetch-guard relabels the upstream refusal as a
+        // 422 "check the URL" that blames a URL the buyer never saw (corpus,
+        // 2026-09-06). Every other failure of the read (a 5xx, a timeout, a
+        // host refusing this server with a 403 or a 429) is the source being
+        // unavailable: fxSourceUnavailable answers 503 with Retry-After.
         if (isUnknownCurrency(e)) throw unknownPair();
         if (e.statusCode === 400) throw e;
-        if (e.statusCode !== 502 && e.statusCode !== 504) throw e;
-        console.warn(`[fx-rate] frankfurter failed (${e.message}) - falling back to open.er-api.com`);
-        // Identity branch mirrors the Frankfurter one: touch the upstream (USD
-        // table) purely so `date` is upstream-sourced, never `new Date()`.
-        const j2 = await getJson(`https://open.er-api.com/v6/latest/${from === to ? "USD" : from}`);
-        if (j2?.result !== "success" || !j2.rates || !j2.time_last_update_unix) {
-          throw bad(`fx upstreams unavailable - frankfurter: ${e.message}; er-api: ${j2?.["error-type"] || "unexpected shape"}`, 502);
-        }
-        const date = new Date(j2.time_last_update_unix * 1000).toISOString().slice(0, 10);
-        if (from === to) return { from, to, amount, rate: 1, result: amount, date };
-        const r = j2.rates[to];
-        if (typeof r !== "number" || !(r > 0)) throw bad(`unsupported currency pair ${from}/${to}`, 502);
-        return { from, to, amount, rate: Number(r.toFixed(6)), result: Number((amount * r).toFixed(6)), date };
+        console.warn(`[fx-rate] ECB reference rates read failed (${e.message})`);
+        throw fxSourceUnavailable(e);
       }
     },
   },
