@@ -201,6 +201,16 @@ export const REPEAT_HANGUP_REASONS = Object.freeze(["payer budget", "ip budget",
 export const REPEAT_HANGUP_HOLD =
   "disconnected past the hang-up forgiveness budget (or before the reason was recorded) - review, then set include_repeat_hangups to repay";
 
+/** An EVM transaction hash is hex, so two spellings of one hash (or of one
+ *  `<tx>#<nonce>` key) are one payment; any other id is kept as given. */
+const EVM_HEX_EVIDENCE = /^0[xX][0-9a-fA-F]{64}(#0[xX][0-9a-fA-F]{64})?$/;
+export const evmEvidenceKey = (evidence) => {
+  const t = String(evidence ?? "").trim();
+  return EVM_HEX_EVIDENCE.test(t) ? t.toLowerCase() : null;
+};
+export const DUPLICATE_EVIDENCE_HOLD =
+  "same payment as an earlier owed row (its transaction hash in another case) - refunded once under the earliest row; void this one with a note";
+
 export const REVIEW_HOLD =
   "held for review by the route that recorded it (the note says why) - review each, then set include_review_holds (REFUND_INCLUDE_REVIEW_HOLDS=true) to repay";
 /** A row whose own note says it is held for review (see planRefunds). */
@@ -256,8 +266,22 @@ export function planRefunds(rawRows, {
   const hold = (reason, row) => { (held[reason] ||= []).push(row); };
   let total = 0;
   const perPayer = new Map();   // payer -> usd already planned this run
+  // ONE REFUND A PAYMENT. Owed rows whose evidence is one EVM hash in two
+  // spellings (written before the ledger keyed such hashes in lowercase) are
+  // one payment: the earliest row (lowest id, else first listed) is planned,
+  // every other is held by name, before any filter or cap.
+  const firstOfKey = new Map(); // lowercased EVM key -> the row planned for it
   for (const row of rows) {
     if (row.status && row.status !== "owed") continue;
+    const key = evmEvidenceKey(row.evidence);
+    if (!key) continue;
+    const have = firstOfKey.get(key);
+    if (!have || (Number.isFinite(Number(row.id)) && Number.isFinite(Number(have.id)) && Number(row.id) < Number(have.id))) firstOfKey.set(key, row);
+  }
+  for (const row of rows) {
+    if (row.status && row.status !== "owed") continue;
+    const evmKey = evmEvidenceKey(row.evidence);
+    if (evmKey && firstOfKey.get(evmKey) !== row) { hold(DUPLICATE_EVIDENCE_HOLD, row); continue; }
     if (onlyChain && row.network !== onlyChain) { hold("filtered by chain", row); continue; }
     if (row.synthetic && !includeSynthetic) { hold("synthetic (our own canary - opt in to refund it)", row); continue; }
     // A disconnect on a route whose effect outlives the answer: the handler

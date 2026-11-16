@@ -8,7 +8,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.REFUND_DB_DIR = process.env.TMPDIR || "/tmp";
 import { recordRefundOwed, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, __resetRefunds } from "../src/refund-ledger.js";
-import { planRefunds, familyOf, ourPayToSet, LASTING_HANGUP_HOLD, isLastingEffectHangup, REPEAT_HANGUP_HOLD, isRepeatHangup, refundMemo, refundMemoHex } from "./refund-run.js";
+import { planRefunds, DUPLICATE_EVIDENCE_HOLD, familyOf, ourPayToSet, LASTING_HANGUP_HOLD, isLastingEffectHangup, REPEAT_HANGUP_HOLD, isRepeatHangup, refundMemo, refundMemoHex } from "./refund-run.js";
 import { LASTING_EFFECT_SLUG_LIST } from "../src/hangup-forgiveness.js";
 import { readFileSync } from "node:fs";
 
@@ -72,6 +72,21 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
 {
   const p = planRefunds([mk({ id: 1 }), mk({ id: 2, priceUsd: 0.002 })], { senders: SENDERS });
   ok(p.send.length === 2 && p.totalUsd === 0.003, `sends both and sums the total ($${p.totalUsd})`);
+}
+
+// 6a. Two owed rows whose evidence is one EVM hash in two spellings are one
+// payment: the row with the lowest id is planned, the other held with a
+// reason. A Solana signature in two cases is two ids and is never folded.
+{
+  const h = "0x" + "aB".repeat(32);
+  const p = planRefunds([mk({ id: 7, evidence: h.toLowerCase() }), mk({ id: 3, evidence: h }), mk({ id: 9, evidence: h.toUpperCase().replace(/^0X/, "0x") })], { senders: SENDERS });
+  ok(p.send.length === 1 && p.send[0].id === 3, `one payment under three spellings is planned once, the earliest row (sent ${p.send.map((r) => r.id)})`);
+  ok((p.held[DUPLICATE_EVIDENCE_HOLD] || []).map((r) => r.id).sort().join() === "7,9", "the later spellings are held with the duplicate-evidence reason");
+  const sol = "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW";
+  const s2 = planRefunds([mk({ id: 1, network: "eip155:8453", evidence: sol }), mk({ id: 2, network: "eip155:8453", evidence: sol.toLowerCase() })], { senders: SENDERS });
+  ok(s2.send.length === 2 && !s2.held[DUPLICATE_EVIDENCE_HOLD], "ids that are not EVM hex hashes are never folded together");
+  const k = planRefunds([mk({ id: 1, evidence: `${h}#0x${"11".repeat(32)}` }), mk({ id: 2, evidence: `${h}#0x${"22".repeat(32)}` })], { senders: SENDERS });
+  ok(k.send.length === 2, "two payments settled in one transaction (two nonces) stay two debts");
 }
 
 // 6b. A row carrying the SALES LEDGER's short chain name plans exactly like
