@@ -469,6 +469,7 @@ import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
+import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
@@ -13284,17 +13285,19 @@ else console.log(`[posthog] disabled (${posthogInit.reason || "unknown"})`);
 // origins pulled from public x402 registries (Coinbase CDP Bazaar, etc.).
 // selfOrigin is passed so the discovery feeder skips our own listings. Fire-and-
 // forget so a slow upstream can't delay boot or /health.
-// X402_INDEX_CRAWL=off skips it entirely. Two reasons this switch exists: a
-// test that must attribute outbound traffic to a specific handler cannot do so
-// while a background crawler is dialling thousands of origins, and CI booted a
-// server on every run and crawled the whole third-party index for nothing -
-// outbound load on other people's hosts that no test ever looked at.
+// It runs on a production boot only (src/crawl-switch.js): NODE_ENV=production
+// or Railway's production environment, never under CI or FREE_MODE, unless
+// X402_INDEX_CRAWL=on says so (a test crawling a local stub); =off always
+// skips it. Every CI server, spawned test server and local boot used to crawl
+// the whole third-party index, each one a full pass over other people's hosts
+// that nothing read.
 // The tool directory in the state database (INDEX_LISTINGS_STORE=pg; off by
 // default): configured before the warm start, so every origin it loads is
 // written as it lands and this server's own origin is never listed.
 if (configureListingsStore({ excludeOrigin: BASE_URL })) console.log("[index] tool directory served from the state database (INDEX_LISTINGS_STORE=pg)");
-if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
-  console.log("[index] crawler disabled (X402_INDEX_CRAWL=off)");
+const x402Crawl = crawlSwitch("X402_INDEX_CRAWL");
+if (!x402Crawl.on) {
+  console.log(`[index] crawler off (${x402Crawl.reason})`);
   loadRemovedOrigins(); // the operator's removals load regardless, so a removal never saves over a list nobody read
 } else {
   // Once the warm start is in, the index snapshot, the seller summaries and
@@ -13332,10 +13335,11 @@ if (shadowLedgerEnabled()) {
 // MPP Index crawler: an independent seller directory for the MPP protocol,
 // parallel to the x402 crawler above but a different seller population.
 // Seeds come from the public mpp.dev services registry, live-verified before
-// ever being shown (src/mpp-index.js). Same reasoning for the disable switch
-// as X402_INDEX_CRAWL - outbound load on third-party hosts that no test looks at.
-if (String(process.env.MPP_INDEX_CRAWL || "").toLowerCase() === "off") {
-  console.log("[mpp-index] crawler disabled (MPP_INDEX_CRAWL=off)");
+// ever being shown (src/mpp-index.js). Same rule as the x402 crawler
+// (src/crawl-switch.js): a production boot, or MPP_INDEX_CRAWL=on.
+const mppCrawl = crawlSwitch("MPP_INDEX_CRAWL");
+if (!mppCrawl.on) {
+  console.log(`[mpp-index] crawler off (${mppCrawl.reason})`);
 } else {
   startMppCrawler();
   // MPP leaderboard: on-chain ranking of the verified sellers above by inbound

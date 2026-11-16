@@ -1481,7 +1481,7 @@ jobs:
 
       - name: OCR language data for the OCR suites (pinned, hash-checked; the server never downloads it)
         run: node scripts/fetch-tessdata.js tessdata eng spa fra deu
-      - name: Offline suites (23 scripts, one process each)
+      - name: Offline suites (24 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a4 3
 
       - name: Socket supply-chain scan (dependency behaviour, not just versions)

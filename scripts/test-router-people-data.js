@@ -208,7 +208,7 @@ const pool = await import("../src/router-pool.js");
   writeFileSync(join(dir, "x402-index-cache.ndjson"), [JSON.stringify({ savedAt: now, format: "ndjson-v1", origins: 1 }), JSON.stringify(sellerEntry)].join("\n") + "\n");
   const port = await getFreePort();
   const proc = spawn(process.execPath, ["src/server.js"], {
-    env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), LEADERBOARD_SNAPSHOT_FILE: lbFile, ROUTER_WORKERS: "1", HUNTER_API_KEY: "test-placeholder", APOLLO_API_KEY: "test-placeholder" },
+    env: { ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"), LEADERBOARD_SNAPSHOT_FILE: lbFile, ROUTER_WORKERS: "1", HUNTER_API_KEY: "test-placeholder", APOLLO_API_KEY: "test-placeholder" },
     stdio: ["ignore", "ignore", "inherit"],
   });
   procs.add(proc);
