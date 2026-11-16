@@ -14,8 +14,8 @@ Payments:
   split each count it once, as an outside sale of that tool, at the price its
   buyer paid.
 - On the transactions page, a marketplace sale settled on chain is counted once,
-  and the paying wallets figure counts the buyer who paid for it rather than the
-  marketplace's payment contract.
+  and the paying wallets figure counts the buyer who paid for it, not the
+  payment contract the marketplace uses.
 
 ### 2026-11-16 (test and CI servers no longer crawl seller hosts)
 Operations:

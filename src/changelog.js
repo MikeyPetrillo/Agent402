@@ -11,7 +11,7 @@ const ENTRIES = [
     title: "Marketplace sales count in our figures",
     items: [
       "Payments: A sale made through a marketplace listing of one of our tools now counts in the public sales figures: the sales summary, the served-call counters, the tool rankings, the bestsellers feed, the buyer scorecard and the per-network split each count it once, as an outside sale of that tool, at the price its buyer paid.",
-      "Payments: On the transactions page, a marketplace sale settled on chain is counted once, and the paying wallets figure counts the buyer who paid for it rather than the marketplace's payment contract.",
+      "Payments: On the transactions page, a marketplace sale settled on chain is counted once, and the paying wallets figure counts the buyer who paid for it, not the payment contract the marketplace uses.",
     ],
   },
   {
