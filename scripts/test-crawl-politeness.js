@@ -92,11 +92,13 @@ const index = readFileSync(new URL("../src/x402-index.js", import.meta.url), "ut
 // their PREVIOUS verdict - diluting the fraction with stale OKs in the unsafe
 // direction, so an egress outage could still clear the 0.5 floor and release
 // submission slots.
-ok(/const fraction = cycleOkFraction\(due\);/.test(index) && /releaseDeadSubmissions\(fraction\)/.test(index) && !/cycleOkFraction\(ordered\)/.test(index),
-   "the outage guard scores the crawled set, not the full seed list");
+// The crawled set is the due list less the origins whose load controls held
+// them back this cycle (src/seller-load.js): a held origin read nothing.
+ok(/const crawled = skipped\.size \? due\.filter\(\(o\) => !skipped\.has\(o\)\) : due;/.test(index) && /const fraction = cycleOkFraction\(crawled\);/.test(index) && /releaseDeadSubmissions\(fraction\)/.test(index) && !/cycleOkFraction\((ordered|due)\)/.test(index),
+   "the outage guard scores the crawled set, not the full seed list nor the origins held back");
 ok(/const due = originsDueThisCycle\(ordered, crawlCycle\)/.test(index),
    "runCrawl actually applies the per-operator filter");
-ok(/runPool\(due, CRAWL_CONCURRENCY, crawlSeller\)/.test(index),
+ok(/runPool\(due, CRAWL_CONCURRENCY, async \(origin\) => \{\n\s+const skip = await crawlScheduled\(origin\);/.test(index) && /await crawlSeller\(origin, \{ scheduled: true/.test(index),
    "and crawls the FILTERED list, not the full one");
 
 // THE ROTATION INDEX SURVIVES A RESTART. The cycle number picks which slice of

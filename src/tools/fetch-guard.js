@@ -3,16 +3,15 @@ import { isIP } from "node:net";
 import { Agent, buildConnector } from "undici";
 import { checkServerIdentity } from "../tls-distrust.js";
 import { capByCeiling, ceilingPassed, ceilingLeftMs, assertBeforeCeiling } from "../run-ceiling.js";
+// Who we say we are (src/user-agents.js, one string per component, each
+// pointing at /crawler). safeFetch sends the caller-driven fetch string unless
+// its caller names another (the index crawler passes its own), and
+// probePublicUrl sends the probe string unless its caller names another (the
+// router passes its own).
+import { FETCH_UA, PROBE_UA } from "../user-agents.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
-// Points at the page that explains the crawl and offers removal, not at the
-// code repo: an operator who finds this string in their logs wants to know
-// what we read and how to stop us, and a link to a source tree answers
-// neither. src/crawler-page.js is the page, and it imports this string; the
-// index crawler's raw 402 probes (x402-index.js, mpp-index.js) send it too.
-export const USER_AGENT =
-  "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools/crawler)";
 
 const SSRF_BLOCK_CODE = "ESSRFBLOCKED";
 
@@ -344,9 +343,12 @@ export function upstreamFailure(upstreamStatus, { retryAfter = null, host = null
       { statusCode: 422, upstreamStatus, attribution: "caller" }
     );
   }
+  // A 5xx's Retry-After rides along under its own name, for the index
+  // crawler's back-off (src/seller-load.js); the answer to a caller (its
+  // status, message and retry fields) is unchanged.
   return Object.assign(
     new Error(`Source URL's host returned HTTP ${upstreamStatus} - upstream issue, try again later`),
-    { statusCode: 502, upstreamStatus, attribution: "upstream" }
+    { statusCode: 502, upstreamStatus, attribution: "upstream", ...(retryAfter ? { upstreamRetryAfter: retryAfter } : {}) }
   );
 }
 
@@ -541,13 +543,14 @@ async function assertCallerUrl(rawUrl) {
  * through this guard: assertPublicUrl refuses a non-public target before the
  * request, ssrfDispatcher re-checks the resolved address at connect (a DNS
  * answer that changed since the check), and redirect: "manual" keeps the
- * request on the validated host. Sends the crawler User-Agent.
+ * request on the validated host. Sends the probe User-Agent unless the
+ * caller names its own (the router does).
  */
-export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, body, timeoutMs = 8000 } = {}) {
+export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, body, timeoutMs = 8000, userAgent = PROBE_UA } = {}) {
   await assertPublicUrl(rawUrl);
   return fetch(rawUrl, {
     method,
-    headers: { "User-Agent": USER_AGENT, ...headers },
+    headers: { "User-Agent": userAgent, ...headers },
     ...(body !== undefined ? { body } : {}),
     dispatcher: ssrfDispatcher,
     redirect: "manual",
@@ -606,7 +609,7 @@ export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"])
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
-export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream } = {}) {
+export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream, userAgent = FETCH_UA } = {}) {
   const url = await assertPublicUrl(rawUrl).catch((err) => { throw ownUpstream ? asOwnUpstreamRefusal(err) : err; });
   // `ownUpstream`: the URL is one this server chose (a kit's fixed API host),
   // not one the caller supplied, so a host that does not resolve is our 503.
@@ -643,7 +646,7 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       // Caller headers still win, so an explicit If-None-Match is never
       // overwritten by a stale stored one.
       headers: {
-        "User-Agent": USER_AGENT,
+        "User-Agent": userAgent,
         Accept: "text/html,application/xhtml+xml,*/*",
         ...(validators?.etag ? { "If-None-Match": validators.etag } : {}),
         ...(validators?.lastModified ? { "If-Modified-Since": validators.lastModified } : {}),

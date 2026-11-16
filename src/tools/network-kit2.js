@@ -16,6 +16,7 @@ import { isIP } from "node:net";
 import { assertPublicUrl, ssrfDispatcher, safeFetch } from "./fetch-guard.js";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { normalizeHost } from "./network-kit.js";
+import { FETCH_UA } from "../user-agents.js";
 
 const USER_AGENT =
   (process.env.NETWORK_KIT_USER_AGENT || "").trim() ||
@@ -254,7 +255,7 @@ async function httpHeadersHandler(body) {
       signal: controller.signal,
       redirect: "follow",
       dispatcher: ssrfDispatcher,
-      headers: { "User-Agent": USER_AGENT, Accept: "*/*" },
+      headers: { "User-Agent": FETCH_UA, Accept: "*/*" },
     });
   } catch (err) {
     if (err.name === "AbortError") throw bad("Target did not respond within 10s", 504);
@@ -398,7 +399,7 @@ async function techStackHandler(body) {
         signal: controller.signal,
         redirect: "follow",
         dispatcher: ssrfDispatcher,
-        headers: { "User-Agent": USER_AGENT, Accept: "*/*" },
+        headers: { "User-Agent": FETCH_UA, Accept: "*/*" },
       });
       for (const [k, v] of r.headers.entries()) headers[k.toLowerCase()] = v;
     } finally { clearTimeout(timer); }

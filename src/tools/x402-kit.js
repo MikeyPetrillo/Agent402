@@ -40,6 +40,7 @@ async function boundedText(res, maxBytes = X402_MAX_BODY_BYTES) {
   return Buffer.concat(chunks).toString("utf8");
 }
 import { assertPublicUrl, ssrfDispatcher } from "./fetch-guard.js";
+import { FETCH_UA } from "../user-agents.js";
 import { redactSecrets } from "./redact.js";
 import { leaderboardCadence } from "../refresh-cadence.js";
 import { createPublicClient, custom } from "viem";
@@ -325,7 +326,7 @@ export const X402_TOOLS = [
         res = await fetch(url, {
           method, redirect: "follow", dispatcher: ssrfDispatcher,
           signal: AbortSignal.timeout(15000),
-          headers: { Accept: "application/json", "User-Agent": "Agent402-x402-quote/1.0" },
+          headers: { Accept: "application/json", "User-Agent": FETCH_UA },
           ...(method === "POST" ? { body: "{}" } : {}),
         });
       } catch (e) {
@@ -575,7 +576,7 @@ export const X402_TOOLS = [
         res = await fetch(url, {
           method, redirect: "follow", dispatcher: ssrfDispatcher,
           signal: AbortSignal.timeout(15000),
-          headers: { Accept: "application/json", "User-Agent": "Agent402-x402-audit/1.0" },
+          headers: { Accept: "application/json", "User-Agent": FETCH_UA },
           ...(method === "POST" ? { body: "{}" } : {}),
         });
       } catch (e) {

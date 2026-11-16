@@ -39,3 +39,6 @@ export const SLOW_ORIGIN_EVERY_CYCLES = 12; // 12 x 30 minutes = every 6 hours
 export function isSlowOrigin(origin) {
   return SLOW_ORIGINS.has(String(origin || "").replace(/\/+$/, ""));
 }
+
+/** "every 6 hours": the slower cycle an operator can ask us for (CRAWL_SLOW_ORIGINS). */
+export const slowOriginIntervalLabel = () => everyLabel(CRAWL_INTERVAL_MS * SLOW_ORIGIN_EVERY_CYCLES);

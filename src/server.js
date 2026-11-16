@@ -466,6 +466,8 @@ import { setAlgorandCrawlSources, makeIndexerInboundCount } from "./algorand-sel
 import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-index.js";
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
+import { sellerLoad, sellerLoadStatus } from "./seller-load.js";
+import { ROUTER_UA } from "./user-agents.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
@@ -2034,12 +2036,22 @@ async function resolveExternalSeller(task, { cap, chain = "base", limit = 1, wan
       // validated host.
       // The bound probe is a second round trip before any payment on a loop
       // that runs candidates in turn, so it gets half the bare probe's time.
-      const probeAt = (u, timeoutMs = 6000) => probePublicUrl(u, {
-        method: probeMethod,
-        headers: { Accept: "application/json", ...(!isQueryMethod(probeMethod) ? { "Content-Type": "application/json" } : {}) },
-        ...(!isQueryMethod(probeMethod) ? { body: "{}" } : {}),
-        timeoutMs,
-      });
+      // It is the first leg of a paying caller's purchase, so it says so
+      // (the router's User-Agent and X-Agent402-Via), is counted against the
+      // seller host's day and is never held back (src/seller-load.js); a 429
+      // or 503 it reads holds that host's unpaid crawl probes, not this buy.
+      const probeAt = async (u, timeoutMs = 6000) => {
+        await sellerLoad.takeBudget(u, "router-probe", { essential: true });
+        const p = await probePublicUrl(u, {
+          method: probeMethod,
+          headers: { Accept: "application/json", "X-Agent402-Via": "router", ...(!isQueryMethod(probeMethod) ? { "Content-Type": "application/json" } : {}) },
+          ...(!isQueryMethod(probeMethod) ? { body: "{}" } : {}),
+          timeoutMs,
+          userAgent: ROUTER_UA,
+        });
+        if (p.status === 429 || p.status === 503) await sellerLoad.noteThrottle(u, p.status, p.headers.get("retry-after"));
+        return p;
+      };
       let probe = await probeAt(r.url);
       if (isQueryMethod(probeMethod) && (probe.status === 400 || probe.status === 422)) {
         let boundUrl;
@@ -2301,11 +2313,13 @@ async function diagnoseExternalSeller(task, { cap }) {
     let probe = null;
     if (passesFilters) {
       try {
+        await sellerLoad.takeBudget(r.url, "router-probe", { essential: true });
         const p = await probePublicUrl(r.url, {
           method: (r.method || "POST").toUpperCase(),
-          headers: { Accept: "application/json", ...((r.method || "POST").toUpperCase() !== "GET" ? { "Content-Type": "application/json" } : {}) },
+          headers: { Accept: "application/json", "X-Agent402-Via": "router", ...((r.method || "POST").toUpperCase() !== "GET" ? { "Content-Type": "application/json" } : {}) },
           ...((r.method || "POST").toUpperCase() !== "GET" ? { body: "{}" } : {}),
           timeoutMs: 6000,
+          userAgent: ROUTER_UA,
         });
         probe = { status: p.status, live: p.status === 402 };
       } catch (e) { probe = { error: String(e?.message || e).slice(0, 120) }; }
@@ -6905,6 +6919,13 @@ app.get("/__operator/shadow-ledger.json", (req, res) => {
 app.get("/__operator/quote-probes.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store").json(quoteProbeStatsSnapshot());
+});
+// What our own requests cost sellers' hosting: the revisit back-off, the
+// per-host daily budget and the Retry-After holds (src/seller-load.js).
+// Counts only, never an origin or a host.
+app.get("/__operator/seller-load.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "no-store").json(sellerLoadStatus());
 });
 app.get("/__operator/successions.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);

@@ -42,9 +42,11 @@ import { ssrfDispatcher, assertPublicUrl, isSsrfBlock, isPrivateIp, UNRESOLVED_O
 import { parseRobots, robotsAllows } from "./kit.js";
 import { markUntrusted } from "./provenance.js";
 
-export const CRAWL_USER_AGENT = "Agent402Bot/1.0 (+https://agent402.tools)";
-// The robots.txt user-agent product token (RFC 9309) this crawler matches on.
-const ROBOTS_UA_PRODUCT = "Agent402Bot";
+// Its own string and robots.txt product token (RFC 9309), from the one list
+// of our User-Agents (src/user-agents.js).
+import { SITE_CRAWL_UA, SITE_CRAWL_TOKEN } from "../user-agents.js";
+export const CRAWL_USER_AGENT = SITE_CRAWL_UA;
+const ROBOTS_UA_PRODUCT = SITE_CRAWL_TOKEN;
 
 const MAX_REDIRECTS = 5;
 const MAX_URL_LEN = 2048;

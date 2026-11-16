@@ -46,7 +46,7 @@ for (const t of CRAWL_TOOLS) {
   ok(d && d.bodyType === "json" && d.input && d.inputSchema && d.output?.example, `${t.slug}: full discovery envelope`);
   ok(!/\u2014/.test(t.description), `${t.slug}: description has no em dash`);
 }
-ok(CRAWL_USER_AGENT === "Agent402Bot/1.0 (+https://agent402.tools)", "user-agent string");
+ok(CRAWL_USER_AGENT === "Agent402Bot/1.0 (+https://agent402.tools/crawler)", "user-agent string: its own token, linking to /crawler");
 
 // ----------------------------------------------------------------------------
 // Pure helpers

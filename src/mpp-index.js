@@ -31,6 +31,8 @@ import { trackStoreReady, leased } from "./state-db.js";
 const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
+import { CRAWLER_UA } from "./user-agents.js";
+import { sellerLoad } from "./seller-load.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { fetchLlmsExamples, attachInputExamples } from "./mpp-input-examples.js";
@@ -194,7 +196,7 @@ export function __testResetSubmitted() { submittedSeeds.clear(); submittedHints.
 export const discoverMppRegistry = leased("mpp-index-discover-registry", { ttlMs: 10 * 60_000, failOpen: true }, discoverMppRegistryUnleased);
 async function discoverMppRegistryUnleased() {
   try {
-    const { html } = await safeFetch(MPP_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" } });
+    const { html } = await safeFetch(MPP_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" }, userAgent: CRAWLER_UA });
     const parsed = JSON.parse(html);
     const services = Array.isArray(parsed?.services) ? parsed.services : [];
     let added = 0, skippedPathScoped = 0;
@@ -306,7 +308,7 @@ async function discoverMppScanUnleased() {
   let added = 0, total = 0, error = null, source = "api";
   try {
     for (let page = 0; page < MPPSCAN_MAX_PAGES; page++) {
-      const { html } = await safeFetch(mppScanListUrl(page), { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" } });
+      const { html } = await safeFetch(mppScanListUrl(page), { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "application/json" }, userAgent: CRAWLER_UA });
       const { total: t, rows } = parseMppScanList(html);
       total = t;
       for (const row of rows) {
@@ -323,7 +325,7 @@ async function discoverMppScanUnleased() {
     source = "page";
     error = String(e?.message || e).slice(0, 200);
     try {
-      const { html } = await safeFetch(MPPSCAN_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "text/html" } });
+      const { html } = await safeFetch(MPPSCAN_DISCOVERY_URL, { maxBytes: MAX_REGISTRY_BYTES, headers: { Accept: "text/html" }, userAgent: CRAWLER_UA });
       for (const o of parseMppScanOrigins(html)) {
         seen.add(o);
         if (!discoveredSeeds.has(o)) { added++; if (!seedSource.has(o)) seedSource.set(o, "mppscan"); }
@@ -365,7 +367,9 @@ async function discoveryProbeTarget(origin) {
   if (hit && Date.now() - hit.at < DISCOVERY_DOC_TTL_MS) return hit.target;
   let target = null;
   try {
-    const { html } = await safeFetch(`${origin}/openapi.json`, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS });
+    // Counted against the host's day (src/seller-load.js), as the x402 crawl is.
+    await sellerLoad.takeBudget(origin, "mpp-crawler", { essential: true });
+    const { html } = await safeFetch(`${origin}/openapi.json`, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA });
     const t = probeTargetFromDiscovery(JSON.parse(html));
     if (t) target = { method: t.method, url: `${origin}${t.path}` };
   } catch { target = null; }
@@ -444,6 +448,7 @@ async function resolveProbeTarget(origin, svc) {
  *  probe is specifically trying to observe, and doesn't expose headers. */
 async function probeMppChallenge({ method, url }) {
   try {
+    await sellerLoad.takeBudget(url, "mpp-probe", { essential: true });
     const res = await probePublicUrl(url, {
       method,
       headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },

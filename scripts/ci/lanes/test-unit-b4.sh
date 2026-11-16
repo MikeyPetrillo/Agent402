@@ -164,6 +164,12 @@ t node scripts/test-index-slim-manifest.js
 t node scripts/test-seller-payto-precedence.js
 # Crawl load is per operator, not per origin; the register global cap is a backstop (offline)
 t node scripts/test-crawl-politeness.js
+# Seller load controls: unchanged documents double the revisit wait to a cap, per-host daily budget, Retry-After holds, store-down floor (offline)
+t node scripts/test-seller-load.js
+# The real crawl backs off unchanged origins, waits out Retry-After and a spent budget, never touches a skipped entry, never holds the router (offline)
+t node scripts/test-crawl-revisit.js
+# Each component sends its own User-Agent: crawler, probe, router, caller-driven fetch tools; none sends the bare Agent402/1.0 (offline)
+t node scripts/test-user-agents.js
 # Index warm-start is incremental (NDJSON twin parsed a batch per turn; no event-loop hold; legacy fallback — offline)
 t node scripts/test-index-ndjson-warmstart.js
 # A large seller's entry splits into parts and assembles deep-equal; one changed part; shrink to one row; a mix of two saves refused (offline)

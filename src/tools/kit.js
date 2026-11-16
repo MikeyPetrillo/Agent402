@@ -7,6 +7,7 @@ import { createHash, createHmac, randomBytes, randomUUID, randomInt } from "node
 import { resolveMx, Resolver } from "node:dns/promises";
 import { markEndsAtCeiling, capByCeiling, atCeiling, ceilingPassed, ceilingCutError, assertBeforeCeiling } from "../run-ceiling.js";
 import { isIP } from "node:net";
+import { FETCH_UA } from "../user-agents.js";
 import tls from "node:tls";
 import { assertQueryableName } from "./dns-name-filter.js";
 import { Worker } from "node:worker_threads";
@@ -2158,7 +2159,7 @@ const networkTools = [
           redirect: "follow",
           signal: controller.signal,
           dispatcher: ssrfDispatcher,
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)" },
+          headers: { "User-Agent": FETCH_UA },
         });
         const latencyMs = Date.now() - started;
         res.body?.cancel?.();

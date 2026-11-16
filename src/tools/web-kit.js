@@ -27,8 +27,8 @@ import { loadJsdom } from "./lazy-deps.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { ssrfDispatcher, safeFetch, assertPublicUrl, isSsrfBlock, retryTransient } from "./fetch-guard.js";
 
-import { REPO_URL } from "../repo-link.js";
-const USER_AGENT = `Mozilla/5.0 (compatible; Agent402/1.0; +${REPO_URL})`;
+// A tool fetching for its caller says so (src/user-agents.js).
+import { FETCH_UA as USER_AGENT } from "../user-agents.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
