@@ -185,5 +185,35 @@ ok(exact > 0 && exact <= 13, `an exact one-term slug match stays within the docu
   cache.clear();
 }
 
+// A brand-cased name keeps its whole token (2026-11-16 review): reading
+// "GitHub" as git + hub in place of github cost our own tools their
+// name-match points (github-repo 39 -> 21 on its own name's words) and let a
+// two-letter fragment score ("ai" of OpenAI). The case parts are extra words
+// for coverage only, so a brand-cased name scores exactly as its lower-cased
+// twin, and a fragment scores nothing.
+{
+  const tool = (slug, name) => [`POST /api/${slug}`, { route: `POST /api/${slug}`, slug, name, description: "x", price: "$0.002", tags: [], category: "x", discovery: { input: {} }, handler: async () => ({}) }];
+  const rows = [
+    ["github-repo", "GitHub repository enrichment", "github repository enrichment"],
+    ["v1-chat", "Chat completions (OpenAI-compatible)", "openai compatible chat completions"],
+    ["defi-tvl", "DeFi protocol TVL", "defi protocol tvl"],
+    ["openapi-lint", "OpenAPI agent-readiness lint", "openapi agent readiness lint"],
+    ["li-profile", "LinkedIn profile", "linkedin profile"],
+    ["pptx-to-pdf", "PowerPoint to PDF", "powerpoint to pdf"],
+  ];
+  const cased = Object.fromEntries(rows.map(([s, n]) => tool(s, n)));
+  const folded = Object.fromEntries(rows.map(([s, n]) => tool(s, n.toLowerCase())));
+  const score = (catalog, q, slug) => routeQuery({ query: q, top: 10, include: "local", ...CTX, catalog, toolCount: rows.length }).results.find((r) => r.slug === slug)?.score ?? 0;
+  for (const [slug, , q] of rows) {
+    const a = score(cased, q, slug), b = score(folded, q, slug);
+    ok(a === b && a > 0, `"${q}": ${slug} scores ${a} on its brand-cased name, as on its lower-cased name (${b})`);
+  }
+  for (const q of ["ai", "de", "fi", "in", "hub"]) {
+    const a = routeQuery({ query: q, top: 10, include: "local", ...CTX, catalog: cased, toolCount: rows.length }).results.map((r) => `${r.slug}:${r.score}`).join(",");
+    const b = routeQuery({ query: q, top: 10, include: "local", ...CTX, catalog: folded, toolCount: rows.length }).results.map((r) => `${r.slug}:${r.score}`).join(",");
+    ok(a === b, `"${q}": a case part scores nothing a lower-cased name would not (${a || "none"})`);
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

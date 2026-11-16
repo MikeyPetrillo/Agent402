@@ -10,8 +10,9 @@
 //
 // Rules:
 //   - a run of letters/digits is a term (Unicode letters count; case-folded);
-//   - splitTokens (seller-written names) also splits a run at its camelCase
-//     and acronym boundaries; queryTerms folds the buyer's run whole;
+//   - splitTokens folds a run whole; caseRuns (seller-written names) also
+//     reads a run's camelCase and acronym parts, as extra words beside the
+//     whole run, never in place of it; queryTerms folds the buyer's run whole;
 //   - a run of CJK ideographs / kana / hangul carries no word boundaries, so it
 //     is emitted as CHARACTER BIGRAMS (中国供应商 -> 中国, 国供, 供应, 应商) plus
 //     the whole run, which is the usual n-gram treatment for unsegmented
@@ -30,6 +31,11 @@ export function isCjkTerm(term) {
   return typeof term === "string" && term.length > 0 && [...term].every((ch) => CJK_RE.test(ch));
 }
 
+/** Split a string into alphanumeric runs, Unicode-aware, lower-cased. */
+export function splitTokens(str) {
+  return String(str || "").toLowerCase().split(NON_TOKEN_RE).filter(Boolean);
+}
+
 // Word boundaries inside one run, read BEFORE case-folding. Seller names are
 // often an OpenAPI operationId ("webPageToMarkdown", "getUSDCPrice"); folded
 // first they were one opaque token, so a multi-word query never covered the
@@ -41,29 +47,45 @@ export function isCjkTerm(term) {
 //   - before the last capital of an acronym when a lower-case word of two or
 //     more letters follows ("getUSDCPrice" -> get usdc price), so a plural
 //     acronym ("APIs", "IPv4") is not cut.
-// snake_case and kebab-case already split on the separator. Inserting a space
-// and folding the whole string afterwards keeps the fold identical to before
-// for every character, including the ones whose lower case adds a mark.
+// The parts are EXTRA words: the whole folded run stays the name's word (a
+// brand-cased "GitHub", "OpenAI", "DeFi" keeps its own token and its word
+// count), and the router reads the parts only to decide that a query covers
+// the name, so a fragment ("ai", "de", "fi") never scores on its own.
 export const CASE_SPLIT_MAX_CHARS = 256;
 const CASE_BOUNDARY_RE = /(?<=[\p{L}\p{N}]\p{Ll})(?=\p{Lu})|(?<=\p{N})(?=\p{Lu}\p{Ll})|(?<=\p{Lu}{2})(?=\p{Lu}\p{Ll}{2})/gu;
 
-/** Split a string into alphanumeric runs, Unicode-aware, lower-cased, with
- *  camelCase and acronym boundaries inside a run read as separators. */
-export function splitTokens(str) {
-  const s = String(str || "");
-  const lower = s.toLowerCase();
-  // Already folded (every haystack the routers build): no case to read.
-  if (lower === s) return lower.split(NON_TOKEN_RE).filter(Boolean);
-  // A long string (a seller can publish names up to its document's size) is
-  // folded whole: reading case costs per character, and a name over ten words
-  // earns no slug credit anyway, so only short names are split.
-  if (s.length > CASE_SPLIT_MAX_CHARS) return lower.split(NON_TOKEN_RE).filter(Boolean);
-  return s.replace(CASE_BOUNDARY_RE, " ").toLowerCase().split(NON_TOKEN_RE).filter(Boolean);
+/** A run's camelCase / acronym parts, lower-cased, or null when the run has
+ *  no boundary. */
+export function caseParts(run) {
+  const s = String(run || "");
+  if (s.length > CASE_SPLIT_MAX_CHARS || s.toLowerCase() === s) return null;
+  const parts = s.replace(CASE_BOUNDARY_RE, " ").toLowerCase().split(NON_TOKEN_RE).filter(Boolean);
+  return parts.length > 1 ? parts : null;
 }
 
-/** Fold first, then split: a camelCase run stays one token. The query side. */
-function foldedRuns(str) {
-  return String(str || "").toLowerCase().split(NON_TOKEN_RE).filter(Boolean);
+/**
+ * A seller-written name as words: `toks` is splitTokens (the whole folded
+ * runs, which are the name's word count), and `parts` is null when no run has
+ * a case boundary, else an array aligned with `toks` holding each run's parts
+ * (or null). A long string (a seller can publish names up to its document's
+ * size) is not case-read: reading case costs per character, and a name over
+ * ten words earns no slug credit anyway.
+ */
+export function caseRuns(str) {
+  const s = String(str || "");
+  const toks = splitTokens(s);
+  if (s.length > CASE_SPLIT_MAX_CHARS || s.toLowerCase() === s) return { toks, parts: null };
+  const raw = s.split(NON_TOKEN_RE).filter(Boolean);
+  // A fold that changes the run structure (a capital whose lower case adds a
+  // combining mark) is not case-read: the parts must line up with the runs.
+  if (raw.length !== toks.length) return { toks, parts: null };
+  let parts = null;
+  for (let i = 0; i < raw.length; i++) {
+    const p = caseParts(raw[i]);
+    if (!p || p.join("") !== toks[i]) continue;
+    (parts ||= new Array(toks.length).fill(null))[i] = p;
+  }
+  return { toks, parts };
 }
 
 /** Expand one alphanumeric run into terms: a Latin/other-script run is one
@@ -105,8 +127,8 @@ export function queryTerms(q, { max = 32 } = {}) {
   // The buyer's words are folded whole, as before: splitting them would turn
   // field names in a pasted description ("marketCap", "yieldToMaturity") into
   // extra common words and move rankings. The case split is for seller-written
-  // names (splitTokens), which a lower-case multi-word query then covers.
-  for (const run of foldedRuns(q)) {
+  // names (caseRuns), which a lower-case multi-word query then covers.
+  for (const run of splitTokens(q)) {
     for (const t of expandRun(run)) {
       if (seen.has(t)) continue;
       seen.add(t); out.push(t);
@@ -121,5 +143,5 @@ export function queryTerms(q, { max = 32 } = {}) {
  *  whole-token for a short Latin term (the 2026-08-28 "ip" rule). */
 export function termMatcher(term) {
   if (term.length >= 3 || isCjkTerm(term)) return (str) => str.includes(term);
-  return (str) => foldedRuns(str).includes(term);
+  return (str) => splitTokens(str).includes(term);
 }

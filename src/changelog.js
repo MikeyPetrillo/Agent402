@@ -10,7 +10,7 @@ const ENTRIES = [
     date: "2026-11-16",
     title: "CamelCase seller names are read as words",
     items: [
-      "Router: /api/route reads a camelCase seller name as words: an operationId such as webPageToMarkdown or getUSDCPrice splits at its capitals (get usdc price), so a multi-word query covers the name as it covers a snake_case or kebab-case one. Query words are read as before.",
+      "Router: /api/route also reads a camelCase seller name as words: an operationId such as webPageToMarkdown or getUSDCPrice splits at its capitals (get usdc price), so a multi-word query covers the name as it covers a snake_case or kebab-case one. The parts are extra words beside the whole name: a brand-cased name (GitHub, OpenAI, DeFi) still matches as one word and scores as before, and a fragment of two letters scores nothing on its own. Query words are read as before.",
     ],
   },
   {
