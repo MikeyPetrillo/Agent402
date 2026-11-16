@@ -138,6 +138,11 @@ for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS 
 // the whole table on every /revenue and /api/stats build (2026-09-25 audit).
 for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_wire_ts ON sales (wire, ts)"); } catch { /* exists */ } }
 for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_ts ON sales (ts)"); } catch { /* exists */ } }
+// A private rail's rows over a window (the operator's referral reconciliation,
+// up to 90 days) are a small share of the table: read through (rail, ts), not
+// a scan of every row in the window (measured at 400k rows: about 0.5 s held).
+// Built once on an existing file at boot; the in-memory mirror builds it empty.
+for (const h of [db, fileDb]) if (h) { try { h.exec("CREATE INDEX IF NOT EXISTS idx_sales_rail_ts ON sales (rail, ts)"); } catch { /* exists */ } }
 // Additive column: the path the paid call arrived on (src/sale-path.js):
 // "mcp", a client package's User-Agent product token, or "http". NULL on rows
 // recorded before it existed and on sales no request carried (card checkout,
@@ -1734,6 +1739,11 @@ function* salesSummarySteps({ days = 30, detailed = false } = {}) {
   }
   totals.external.revenueUsd = nanoToUsd4(nanoBySide.external);
   totals.internal.revenueUsd = nanoToUsd4(nanoBySide.internal);
+  // What revenueUsd counts a sale at, where it differs from the on-chain
+  // revenue figures (src/revenue-ledger.js), which count what reached the
+  // wallet: a marketplace sale counts here at what its buyer paid.
+  totals.revenueBasis = { marketplace: "buyer price" };
+  totals.revenueNote = "revenueUsd counts each sale at the price its buyer paid; for a marketplace sale the on-chain revenue figures count the payout this server received for it, so the two totals can differ.";
   const recordingSince = qFirstTs.get()?.ts ?? null;
   // Counts, never rosters or rankings: enough to show the market is real
   // without naming a single buyer or ranking a single tool.
@@ -2209,9 +2219,11 @@ const qScorecardPage = db.prepare(`
          SUM(CASE WHEN tx IS NOT NULL AND (wire IS NULL OR wire <> '${GATEWAY_WIRE}') THEN 1 ELSE 0 END) AS with_tx
   ${SCORECARD_ROWS} AND ts >= ? AND ts < ?
   GROUP BY payer, network, day`);
+// (A sample is a direct sale's own settlement: a marketplace sale's
+// transaction is the split contract's, and is never published as a sample.)
 const qScorecardTxPage = db.prepare(`
   SELECT ts, network, tx ${SCORECARD_ROWS} AND ts >= ? AND ts < ?
-    AND tx IS NOT NULL AND (wire IS NULL OR wire <> '${GATEWAY_WIRE}')
+    AND tx IS NOT NULL AND (wire IS NULL OR wire <> '${GATEWAY_WIRE}') AND ${PUBLIC_RAIL_SQL}
   ORDER BY id`);
 const qAllIdSpan = db.prepare("SELECT MIN(id) AS lo, MAX(id) AS hi FROM sales");
 function* buyerScorecardSteps({ now = Date.now(), months = 7, minGroup = 3, samples = 3, sampleOk = () => true, networkKey = canonRail } = {}) {

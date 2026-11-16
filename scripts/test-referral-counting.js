@@ -50,6 +50,7 @@ const text = JSON.stringify(sum);
 ok(sum.totals.external.sales === 3 && near(sum.totals.external.revenueUsd, +GROSS_EXT.toFixed(4)), `the summary counts each outside referral sale once, at the gross (${sum.totals.external.sales} sales, $${sum.totals.external.revenueUsd})`);
 ok(sum.totals.byRail["external:marketplace"] === 2 && sum.totals.byRail["external:usdc"] === 1 && sum.totals.byRail["internal:marketplace"] === 1 && !/referral/.test(text), `its rail split names the marketplace, never the private rail (${JSON.stringify(sum.totals.byRail)})`);
 ok(!/0\.00075|0\.0075/.test(text) && sum.totals.internal.sales === 1, "no net amount reaches the summary, and our own referral buy is internal");
+ok(sum.totals.revenueBasis?.marketplace === "buyer price" && /buyer paid/.test(sum.totals.revenueNote || "") && /on-chain/.test(sum.totals.revenueNote || "") && !/\d/.test(sum.totals.revenueNote || ""), `the summary says a marketplace sale counts at its buyer's price, and that the on-chain figures count the payout received, with no figure (${JSON.stringify(sum.totals.revenueBasis)}: ${sum.totals.revenueNote})`);
 ok(sum.distinctExternalBuyers === 3 && sum.distinctToolsSoldExternal === 2, `distinct outside buyers and tools include the referral buyers (${sum.distinctExternalBuyers} buyers, ${sum.distinctToolsSoldExternal} tools)`);
 ok(paidExternalSettlements(sum) === 3, `the host entry's settlement count includes them (${paidExternalSettlements(sum)})`);
 const det = salesSummary({ days: 30, detailed: true });
@@ -66,6 +67,18 @@ ok(net.base?.settlements === 3 && net.base?.buyers === 3, `the per-network split
 const sc = buyerScorecard({ months: 2, minGroup: 1 });
 const scCalls = sc.months.reduce((a, m) => a + m.calls, 0), scUsd = sc.months.reduce((a, m) => a + m.usd, 0);
 ok(scCalls === 3 && near(+scUsd.toFixed(4), +GROSS_EXT.toFixed(4)) && sc.months.reduce((a, m) => a + m.wallets, 0) === 3, `the scorecard counts it once at the gross (${scCalls} calls, $${scUsd})`);
+const scTx = sc.months.flatMap((m) => (m.samples || []).map((x) => x.tx));
+ok(scTx.includes(TD) && !scTx.some((t) => [T1, T2, T3].includes(t)), `the scorecard's sample transactions are direct sales only: a marketplace sale's transaction is never a sample (${scTx.join(",")})`);
+
+// --- the reconciliation's window reads through (rail, ts), not every row in the window ---
+{
+  const Database = (await import("better-sqlite3")).default;
+  const f = new Database(process.env.SALES_LEDGER_DB, { readonly: true });
+  try {
+    const plan = f.prepare("EXPLAIN QUERY PLAN SELECT slug, internal, COUNT(*) AS n FROM sales WHERE rail = ? AND ts >= ? AND ts < ? GROUP BY slug, internal").all("referral", 0, Date.now()).map((r) => r.detail);
+    ok(plan.some((d) => /USING INDEX idx_sales_rail_ts \(rail=\? AND ts>\? AND ts<\?\)/.test(d)), `a private rail's window seeks idx_sales_rail_ts (${plan.join(" | ")})`);
+  } finally { f.close(); }
+}
 
 // --- readers that stay on the direct routes ---
 ok(payerHasPaidSale(B) === false && payerHasPaidSale(A) === true, "a referral buyer is not a direct paying buyer to the allowance and gate logic");
