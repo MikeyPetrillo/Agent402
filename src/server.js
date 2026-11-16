@@ -5253,6 +5253,9 @@ if (humanCheckoutEnabled()) {
     // re-driven shortly after boot - the buyer may have closed the tab.
     const _sweep = setTimeout(() => { _humanCheckout.recoverAbandoned().catch(() => {}); }, 45_000);
     _sweep.unref?.();
+    // Owed refunds paid by hand in the Stripe dashboard are read back and
+    // recorded (leased, unref'd; src/card-refund-readback.js).
+    _humanCheckout.start();
     app.get("/__operator/human-checkout.json", async (req, res) => {
       if (!operatorAuthed(req)) return operatorNotFound(req, res);
       res.set("Cache-Control", "no-store").json({ ...(await _humanCheckout.listIssues()), compositeUsage: compositeUsageSnapshot(), compositeGuard: _compositeGuardState(), stripeWebhooks: _subs?.webhookStats?.() || null });

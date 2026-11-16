@@ -1,12 +1,17 @@
 import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
+import { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } from "./mpp-subscription-retention.js";
+import { READBACK_FIRST_MS, READBACK_INTERVAL_MS } from "./card-refund-readback.js";
+
+// A timer figure as an entry prints it, read from the module that runs it.
+const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a minute" : `${n} minutes`; };
 
 const ENTRIES = [
   {
     date: "2026-11-16",
     title: "A card refund made by hand is recorded",
     items: [
-      "Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded, so the report shows the payment refunded and leaves the owed refund alarm.",
-      "Payments: The sweep that deletes an unpaid wallet subscription offer's email, subject and signing key runs a minute after the server starts, as well as every ten minutes, so a restart does not hold the deletion back.",
+      `Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded, and a check that runs every ${mins(READBACK_INTERVAL_MS)}, first ${mins(READBACK_FIRST_MS)} after the server starts, reads back every payment still owed a refund without issuing one, so a refund made by hand after the retries stop also shows the payment refunded and leaves the owed refund alarm.`,
+      `Payments: The sweep that deletes an unpaid wallet subscription offer's email, subject and signing key runs ${mins(OFFER_SWEEP_FIRST_MS)} after the server starts, as well as every ${mins(OFFER_SWEEP_INTERVAL_MS)}, so a restart does not hold the deletion back.`,
     ],
   },
   {

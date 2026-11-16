@@ -29,8 +29,11 @@ export function endedRecordRetentionPublic() {
 // email and subject asked for) and a signing key. The challenge is payable for
 // CHALLENGE_TTL_MS; the offer sweep drops an offer OFFER_SWEEP_AFTER_MS after
 // its mint, and runs on a timer every OFFER_SWEEP_INTERVAL_MS (first run
-// OFFER_SWEEP_FIRST_MS after a start) as well as in front of every mint, so an
-// unpaid offer's data is gone within OFFER_SWEEP_AFTER_MS + one interval.
+// OFFER_SWEEP_FIRST_MS after a start) as well as in front of every mint, under
+// a lease of OFFER_SWEEP_LEASE_TTL_MS. The worst case (offerWorstCaseMs) adds
+// the first run after a restart and a dead container's lease to the sweep
+// delay and one interval; /privacy prints OFFER_DELETED_WITHIN_MS, a ceiling
+// with slack above that worst case for the sweep's own time.
 /** How long a minted subscribe challenge stays payable. */
 export const CHALLENGE_TTL_MS = 10 * 60_000;
 /** An unpaid offer is swept this long after its mint (past the challenge's life). */
@@ -39,9 +42,19 @@ export const OFFER_SWEEP_AFTER_MS = 2 * CHALLENGE_TTL_MS;
 export const OFFER_SWEEP_INTERVAL_MS = 10 * 60_000;
 /** The timer's first run after a start. */
 export const OFFER_SWEEP_FIRST_MS = 60_000;
+/** The offer sweep's lease (a container that dies holding it blocks others this long). */
+export const OFFER_SWEEP_LEASE_TTL_MS = 5 * 60_000;
+/** The ceiling /privacy prints for an unpaid offer's deletion. */
+export const OFFER_DELETED_WITHIN_MS = 60 * 60_000;
+/** Sweep delay + one interval + the first run after a restart + a dead holder's lease. */
+export function offerWorstCaseMs() {
+  return OFFER_SWEEP_AFTER_MS + OFFER_SWEEP_INTERVAL_MS + OFFER_SWEEP_FIRST_MS + OFFER_SWEEP_LEASE_TTL_MS;
+}
 
-/** The unpaid-offer figures /privacy prints: payable for, swept every, deleted within (minutes). */
+/** The unpaid-offer figures /privacy prints: payable for and swept every (minutes), and the deletion ceiling in words. */
 export function offerRetentionPublic() {
   const min = (ms) => Math.ceil(ms / 60_000);
-  return { payableMinutes: min(CHALLENGE_TTL_MS), sweepMinutes: min(OFFER_SWEEP_INTERVAL_MS), deletedWithinMinutes: min(OFFER_SWEEP_AFTER_MS + OFFER_SWEEP_INTERVAL_MS) };
+  const hours = OFFER_DELETED_WITHIN_MS / 3_600_000;
+  const deletedWithin = hours === 1 ? "an hour" : Number.isInteger(hours) ? `${hours} hours` : `${min(OFFER_DELETED_WITHIN_MS)} minutes`;
+  return { payableMinutes: min(CHALLENGE_TTL_MS), sweepMinutes: min(OFFER_SWEEP_INTERVAL_MS), deletedWithin };
 }

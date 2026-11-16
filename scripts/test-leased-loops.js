@@ -45,6 +45,7 @@ try {
     "src/mpp-index.js": "mpp-index-crawl", "src/x402-index.js": "x402-index-crawl", "src/revenue-ledger.js": "revenue-ledger-tick",
     "src/backup.js": "backup-nightly", "src/monitor-scheduler.js": "monitor-scheduler",
     "src/mpp-subscriptions.js": "mpp-subscription-ended-sweep",
+    "src/human-checkout.js": "human-checkout-refund-readback",
   };
   for (const [file, name] of Object.entries(expect)) {
     const src = readFileSync(new URL("../" + file, import.meta.url), "utf8");

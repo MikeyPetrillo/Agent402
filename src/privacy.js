@@ -212,7 +212,7 @@ so every claim below is verifiable in code.</p>
   A monitor subscription paid over MPP is different: its record holds the paying wallet together with the
   subject you asked us to watch, the email you give for delivery (optional), and a signing key our server
   made for that subscription. A subscription you ask for and do not pay keeps the email, the subject and the key
-  while its offer can be paid (${mppOffer.payableMinutes} minutes), and a check that runs every ${mppOffer.sweepMinutes} minutes deletes all three within ${mppOffer.deletedWithinMinutes} minutes of your request. Your signed authorization lets that key send one payment per period from your
+  while its offer can be paid (${mppOffer.payableMinutes} minutes), and a check that runs every ${mppOffer.sweepMinutes} minutes deletes all three within ${mppOffer.deletedWithin} of your request (a nightly backup made before then holds a copy until that backup is deleted, see Backups below). Your signed authorization lets that key send one payment per period from your
   account, in one token, to our address, up to the subscription price, until the expiry you signed. The
   key is kept only while a later payment can still be taken: it is deleted from our records when you cancel,
   when the expiry you signed passes, or when the subscription ends for any other reason (a nightly backup

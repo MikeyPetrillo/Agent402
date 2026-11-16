@@ -99,7 +99,7 @@ import { shortPayer } from "./verify-failure-log.js";
 import { assertSigningAllowed } from "./signing-halt.js";
 import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { leaseOwnerId, leased, stateDbEnabled, stateDbSchema, stateQuery, trackStoreReady, withLease } from "./state-db.js";
-import { ENDED_RECORD_KEEP_MS, ENDED_SWEEP_INTERVAL_MS, ENDED_SWEEP_MAX_PER_RUN, CHALLENGE_TTL_MS, OFFER_SWEEP_AFTER_MS, OFFER_SWEEP_INTERVAL_MS, OFFER_SWEEP_FIRST_MS } from "./mpp-subscription-retention.js";
+import { ENDED_RECORD_KEEP_MS, ENDED_SWEEP_INTERVAL_MS, ENDED_SWEEP_MAX_PER_RUN, CHALLENGE_TTL_MS, OFFER_SWEEP_AFTER_MS, OFFER_SWEEP_INTERVAL_MS, OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_LEASE_TTL_MS } from "./mpp-subscription-retention.js";
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { Challenge, Credential, Method, Receipt } from "mppx";
@@ -172,7 +172,7 @@ export const CANARY_SWEEP_AFTER_MS = Number(process.env.MPP_CANARY_SWEEP_AFTER_M
 export const SUBSCRIPTION_TERM_MS = 365 * 24 * 60 * 60 * 1000;
 // How long a minted subscribe challenge stays payable, and when an unpaid
 // offer is swept: defined in src/mpp-subscription-retention.js, which /privacy reads.
-export { CHALLENGE_TTL_MS, OFFER_SWEEP_AFTER_MS, OFFER_SWEEP_INTERVAL_MS, OFFER_SWEEP_FIRST_MS };
+export { CHALLENGE_TTL_MS, OFFER_SWEEP_AFTER_MS, OFFER_SWEEP_INTERVAL_MS, OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_LEASE_TTL_MS };
 // Dunning: a period that never clears within this window ends the subscription.
 export const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 export const CHARGE_BACKOFF_MS = 60 * 60_000;
@@ -1481,7 +1481,7 @@ export function createMppSubscriptions({
   // The offer sweep also runs on a timer, not only in front of a mint: an
   // offer's marker carries the buyer's email and target, and with no mint
   // after it they would otherwise stay until the next one.
-  const sweepOffersLeased = leased("mpp-subscription-offer-sweep", { ttlMs: 5 * 60_000, log }, () => sweepOffers());
+  const sweepOffersLeased = leased("mpp-subscription-offer-sweep", { ttlMs: OFFER_SWEEP_LEASE_TTL_MS, log }, () => sweepOffers());
   let sweepTimer = null, sweepFirst = null, offerTimer = null, offerFirst = null;
   /** Start the ended-subscription and offer sweeps' timers (unref'd; the first ended run is held back off the boot path). */
   function start({ intervalMs = ENDED_SWEEP_INTERVAL_MS, firstMs = 2 * 60_000, offerIntervalMs = OFFER_SWEEP_INTERVAL_MS, offerFirstMs = OFFER_SWEEP_FIRST_MS } = {}) {

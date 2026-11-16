@@ -332,6 +332,14 @@ async function mintSigned(engine, target, email) {
   await new Promise((r) => setTimeout(r, 200));
   engine.stop();
   ok(markersFor(engine, sE.addr).length === 1 && holdsKey(engine, sE.addr), "control: with the first run held back, nothing sweeps before it");
+  // stop() clears the first-run timer as well as the intervals: a stopped
+  // engine (shutdown, a test) runs no sweep after it.
+  const sF = await mintSigned(engine, "privacy-f.example.org", "f@example.com");
+  clock += OFFER_SWEEP_AFTER_MS + 1000;
+  engine.start({ offerIntervalMs: 3_600_000, offerFirstMs: 30, firstMs: 3_600_000 });
+  engine.stop();
+  await new Promise((r) => setTimeout(r, 200));
+  ok(markersFor(engine, sF.addr).length === 1 && holdsKey(engine, sF.addr), "stop() clears the offer sweep's first-run timer: nothing sweeps after it");
   const { OFFER_SWEEP_FIRST_MS, OFFER_SWEEP_INTERVAL_MS } = await import("../src/mpp-subscription-retention.js");
   ok(OFFER_SWEEP_FIRST_MS > 0 && OFFER_SWEEP_FIRST_MS < OFFER_SWEEP_INTERVAL_MS, `the default first offer sweep (${OFFER_SWEEP_FIRST_MS} ms) comes before the first interval (${OFFER_SWEEP_INTERVAL_MS} ms)`);
 
