@@ -271,6 +271,7 @@ console.log("\nunresolved host: caller URL vs our own upstream:");
     const kits = {
       "weather-current": [(await import("../src/tools/weather-kit.js")).WEATHER_TOOLS, { lat: 40.71, lon: -74.01 }],
       "public-holidays": [(await import("../src/tools/data-kit.js")).DATA_TOOLS, { country: "FR", year: 2031 }],
+      "weather-forecast": [(await import("../src/tools/data-kit.js")).DATA_TOOLS, { lat: 40.71, lon: -74.01 }],
       "earthquakes": [(await import("../src/tools/gov-kit.js")).GOV_TOOLS, { minMag: "2.5", period: "week" }],
       "fx-historical": [(await import("../src/tools/macro-kit.js")).MACRO_TOOLS, { from: "USD", to: "JPY", date: "2024-03-04" }],
       "reverse-geocode": [(await import("../src/tools/geo-kit.js")).GEO_TOOLS, { lat: 48.8584, lon: 2.2945 }],
@@ -288,6 +289,26 @@ console.log("\nunresolved host: caller URL vs our own upstream:");
       ok(`${slug}: its own upstream not resolving answers 503 with retryAfter`);
     }
   } finally { undo(); }
+  // The connect-time pin: a host that passes the up-front check and is
+  // refused when the connection looks it up again (its answer turned
+  // private). Nothing leaves the process: the pin refuses before connecting.
+  for (const [own, label] of [[false, "a caller URL"], [true, "our own upstream"]]) {
+    const seen = new Map();
+    const undoPin = stubGuardResolver((host, family) => {
+      if (family !== 4) throw resolverError("ENODATA", host);
+      const n = (seen.get(host) || 0) + 1; seen.set(host, n);
+      return n === 1 ? ["93.184.215.14"] : ["10.0.0.5"];
+    });
+    try {
+      await safeFetch(`https://pin-${own ? "own" : "caller"}.example/x`, own ? { ownUpstream: true } : {});
+      fail(`${label} refused at connect must throw`);
+    } catch (e) {
+      if (own && (e.statusCode !== 503 || !Number.isInteger(e.retryAfter) || e.attribution !== "ours")) fail(`${label} refused at connect: expected our 503 with retryAfter, got ${e.statusCode} ${e.message}`);
+      if (!own && (e.statusCode !== 400 || e.message !== UNRESOLVED_OR_PRIVATE)) fail(`${label} refused at connect: expected the 400 refusal, got ${e.statusCode} ${e.message}`);
+    } finally { undoPin(); }
+    if ((seen.get(`pin-${own ? "own" : "caller"}.example`) || 0) < 2) fail(`${label}: the connect-time lookup did not run (the refusal came from the up-front check)`);
+    ok(`${label} refused at connect answers ${own ? "our 503 with retryAfter" : "the caller's 400"}`);
+  }
 }
 
 console.log("\ntest-fetch-guard: ALL PASS");

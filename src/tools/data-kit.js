@@ -226,6 +226,9 @@ export const DATA_TOOLS = [
         if (err.upstreamStatus === 404) {
           throw bad("location not covered - weather.gov serves US locations only", 400);
         }
+        // Our own side (this server could not look up weather.gov's host): the
+        // 503 with its Retry-After and attribution goes out unchanged.
+        if (err.statusCode === 503 && err.attribution === "ours") throw err;
         console.warn(`[weather-forecast] weather.gov /points failed: ${err.message ?? err}`);
         throw bad(`weather.gov upstream error - ${err.message ?? "unreachable"}`, 502);
       }
