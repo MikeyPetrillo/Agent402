@@ -40,6 +40,7 @@ import {
   fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
+  createAnswerWatch, EMPTY_REFUSAL_MESSAGE,
   refuseCostVariants, checkBlockCacheControl, meteredQuoteForProbe, meteredBoundFor,
   assertUpstreamBody, reasoningProfile, REASONING_EFFORTS, refuseUnsupportedParams, defaultModelFor, aliasModelFor, defaultModelCompatNote, smallBudgetEffort,
   stripBilling, fitEffortToBudget, fitBudgetForAnswer, lowestEffortFor, reasoningAdjustedNote, recoveryRunAffordable, retryEmptyAtLowestEffort,
@@ -451,6 +452,40 @@ export function isEmptyMaxTokens(data) {
   return !blocks.some((b) => (b?.type === "text" && typeof b.text === "string" && b.text.trim() !== "") || b?.type === "tool_use");
 }
 
+/** Content block and delta types that carry no answer on this wire. */
+const MESSAGES_NON_ANSWER_BLOCKS = new Set(["thinking", "redacted_thinking"]);
+const MESSAGES_NON_ANSWER_DELTAS = new Set(["thinking_delta", "signature_delta"]);
+/** The Messages stream's answer watch (streamOpenRouterTo holdUntilAnswer):
+ *  an answer is a non-blank text delta, or any block or delta other than
+ *  thinking (a tool use, a server tool, a citation); a text block's empty
+ *  start is not. The ending is the buffered path's isEmptyMaxTokens and empty
+ *  refusal rule: max_tokens or refusal with nothing said is a 502, an
+ *  end_turn, stop_sequence, tool_use or pause_turn is served. */
+export function createMessagesAnswerWatch() {
+  return createAnswerWatch({
+    onFrame(f, w) {
+      if (f.type === "error" || f.error) w.errored = true;
+      if (f.type === "message_delta" && f.delta?.stop_reason) w.finish = String(f.delta.stop_reason);
+      if (f.type === "message_start" && f.message?.stop_reason) w.finish = String(f.message.stop_reason);
+      if (f.type === "content_block_start") {
+        const b = f.content_block || {};
+        if (b.type === "text") { if (typeof b.text === "string" && b.text.trim() !== "") w.answered = true; }
+        else if (!MESSAGES_NON_ANSWER_BLOCKS.has(b.type)) w.answered = true;
+      } else if (f.type === "content_block_delta") {
+        const d = f.delta || {};
+        if (d.type === "text_delta") { if (typeof d.text === "string" && d.text.trim() !== "") w.answered = true; }
+        else if (!MESSAGES_NON_ANSWER_DELTAS.has(d.type)) w.answered = true;
+      }
+    },
+    ending(w) {
+      if (!w.errored && ["end_turn", "stop_sequence", "tool_use", "pause_turn"].includes(w.finish)) return null;
+      if (w.finish === "refusal") return EMPTY_REFUSAL_MESSAGE;
+      if (w.finish === "max_tokens") return EMPTY_MAX_TOKENS_MESSAGE;
+      return "Upstream stream ended before producing any content";
+    },
+  });
+}
+
 /** The end-to-end empty answer's 502 on this wire (not settled). */
 export const EMPTY_MAX_TOKENS_MESSAGE = "Upstream produced no content within max_tokens (thinking consumed it, after any effort or budget fit and lowest-depth retry by the gateway) - raise max_tokens, lower effort or thinking.budget_tokens, or disable thinking";
 
@@ -574,9 +609,11 @@ export function makeMessagesHandler(routeTier) {
           let lastErr;
           const timeouts = timedOutBudget();
           const client = streamClientWatch(res);
+          let emptyModel = null; // as the buffered path's refusedModel
           try {
             for (const { model, flex } of attempts) {
               client.assertPresent();
+              if (model === emptyModel) continue;
               let outbound;
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
               const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
@@ -585,12 +622,13 @@ export function makeMessagesHandler(routeTier) {
               setReasoningAdjustedHeader(res, outbound[REASONING_ADJUSTED]);
               try {
                 return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
-                  url: OPENROUTER_MESSAGES_URL, timeoutMs,
+                  url: OPENROUTER_MESSAGES_URL, timeoutMs, holdUntilAnswer: createMessagesAnswerWatch,
                   onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.message?.model || model, frame?.usage?.service_tier || (flex ? "flex" : "default")),
                 }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
               } catch (e) {
                 if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
                 lastErr = e;
+                if (e?.emptyAnswer) emptyModel = model;
                 timeouts.note(e, attemptStarted, timeoutMs);
                 if (timeouts.spent()) throw e;
               }

@@ -227,6 +227,8 @@ for (const [name, w] of Object.entries(WIRES)) {
   const budget = tier.price * MARGIN;
   ok(recoveryRunAffordable(probe, tier, 0, 0) === (worst <= budget) && recoveryRunAffordable(probe, tier, 0, budget) === false && recoveryRunAffordable(probe, tier, 0, budget - worst + budget / 1e3) === false, "the price check is the margin clamp's own budget: the empty run's cost plus one worst-case run must fit under it");
   ok(recoveryRunAffordable(probe, tier, 0, undefined) === (2 * worst <= budget) && recoveryRunAffordable(probe, tier, 0, NaN) === (2 * worst <= budget) && recoveryRunAffordable(probe, tier, 0, -1) === (2 * worst <= budget), "an unreported cost counts as a worst-case run");
+  const half = (budget - worst) / 2;
+  ok(half > 0 && recoveryRunAffordable(probe, tier, 0, half, undefined, half * 0.9) === true && recoveryRunAffordable(probe, tier, 0, half, undefined, half * 1.1) === false && recoveryRunAffordable(probe, tier, 0, 0, undefined, NaN) === (2 * worst <= budget), "an earlier discarded answer's cost (a direct empty answer) is counted with the empty run's; an unreadable one counts as a worst-case run");
   // retryEmptyAtLowestEffort: once per call, and never when a condition fails
   const once = { used: false };
   let runs = 0;
@@ -270,8 +272,8 @@ for (const [name, w] of Object.entries(WIRES)) {
 {
   const sse = {
     chat: 'data: {"id":"c","choices":[{"index":0,"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n',
-    messages: 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
-    responses: 'event: response.created\ndata: {"type":"response.created","response":{"id":"r"}}\n\nevent: response.completed\ndata: {"type":"response.completed","response":{"id":"r"}}\n\n',
+    messages: 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
+    responses: 'event: response.created\ndata: {"type":"response.created","response":{"id":"r"}}\n\nevent: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\nevent: response.completed\ndata: {"type":"response.completed","response":{"id":"r"}}\n\n',
   };
   for (const [name, w] of Object.entries(WIRES)) {
     const run = async (body) => {

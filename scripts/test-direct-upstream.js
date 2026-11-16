@@ -275,6 +275,21 @@ for (const [label, extra] of [
   or.plan = (req, res, b) => (b.reasoning?.effort === "none" ? thinker(false) : (rq, rs, bb) => thinker(false)(rq, rs, { ...bb, reasoning: undefined }))(req, res, b);
   const out = await base.handler({ model: QWEN, messages: msgs, max_tokens: 512 });
   ok(or.hits.length === 2 && or.hits[1].body?.reasoning?.effort === "none" && out?.choices?.[0]?.message?.content === "answer" && out?.agent402_reasoning_adjusted?.used === "none", `an empty answer at the default effort is retried once on the same model at "none" (efforts sent ${or.hits.map((h) => h.body?.reasoning?.effort).join(",")})`);
+  // A direct empty answer, then an OpenRouter empty answer: the recovery run
+  // is weighed against both runs' costs. A direct run that cost the whole
+  // call's price leaves no room for a third run; a cheap one does (control).
+  const emptyDirect = (micro) => (req, res, b) => json(res, 200, { id: "q", object: "chat.completion", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: "" }, finish_reason: "length" }], usage: { prompt_tokens: 3, completion_tokens: b.max_tokens, total_tokens: 3 + b.max_tokens }, x_vendor: { charged_micro: micro } });
+  const orEmptyUnlessNone = (req, res, b) => (b.reasoning?.effort === "none" ? thinker(false) : (rq, rs, bb) => thinker(false)(rq, rs, { ...bb, reasoning: undefined }))(req, res, b);
+  for (const [label, micro, retried] of [["cheap", 1, true], ["costing the whole price", Math.ceil(K.TIERS["v1-chat"].price * 1e6), false]]) {
+    setEnv(ON);
+    reset();
+    direct.plan = emptyDirect(micro);
+    or.plan = orEmptyUnlessNone;
+    let r = null, e = null;
+    try { r = await base.handler({ model: QWEN, messages: msgs, max_tokens: 512 }); } catch (x) { e = x; }
+    const efforts = or.hits.filter((h) => h.body?.model === QWEN).map((h) => h.body?.reasoning?.effort);
+    ok(direct.hits.length === 1 && (retried ? (efforts.length === 2 && efforts[1] === "none" && r?.choices?.[0]?.message?.content === "answer") : (efforts.length === 1 && !efforts.includes("none"))), `a direct empty answer ${label}, then an OpenRouter empty one: the recovery run is ${retried ? "taken" : "not taken"} (efforts sent ${efforts.join(",")}${e ? `; ${e.statusCode}` : ""})`);
+  }
   setEnv(ON);
 }
 

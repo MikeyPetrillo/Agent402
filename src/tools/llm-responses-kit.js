@@ -30,6 +30,7 @@ import {
   fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
   rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
+  createAnswerWatch, EMPTY_REFUSAL_MESSAGE,
   validateReasoning, reasoningForLink, lowestEffortRetry, recoveryRunAffordable, retryEmptyAtLowestEffort,
   setReasoningAdjustedHeader, REASONING_ADJUSTED, LINK_PROBE,
   refuseCostVariants, refuseUnsupportedParams, defaultModelFor, aliasModelFor, defaultModelCompatNote,
@@ -370,6 +371,40 @@ function saidAnything(data) {
   return out.some((o) => o?.type === "function_call" || (o?.type === "message" && Array.isArray(o.content) && o.content.some((c) => c?.type === "output_text" && typeof c.text === "string" && c.text.trim() !== "")));
 }
 
+/** Responses stream events that carry no answer: the lifecycle, reasoning,
+ *  an empty message item or text part opening, and the closing events. */
+const RESPONSES_NON_ANSWER_EVENTS = new Set([
+  "response.created", "response.in_progress", "response.queued", "response.completed", "response.incomplete", "response.failed",
+  "response.output_item.added", "response.output_item.done", "response.content_part.added", "response.content_part.done",
+  "response.output_text.done", "response.output_text.annotation.added",
+]);
+/** The Responses stream's answer watch (streamOpenRouterTo holdUntilAnswer):
+ *  an answer is a non-blank output text delta, a function call, or any event
+ *  outside the reasoning and lifecycle ones; an item or part that opens empty
+ *  is not. The ending is the buffered path's isEmptyIncomplete and
+ *  isEmptyFilteredIncomplete rule: incomplete for max_output_tokens or
+ *  content_filter with nothing said is a 502, a completed response is served. */
+export function createResponsesAnswerWatch() {
+  return createAnswerWatch({
+    onFrame(f, w) {
+      const t = String(f.type || "");
+      if (t === "error" || t === "response.failed" || f.error) w.errored = true;
+      if (f.response && typeof f.response === "object" && f.response.status) { w.finish = String(f.response.status); w.reason = f.response.incomplete_details?.reason || null; }
+      if (t === "response.output_text.delta") { if (typeof f.delta === "string" && f.delta.trim() !== "") w.answered = true; return; }
+      if (t === "response.output_item.added" || t === "response.output_item.done") { const it = f.item || {}; if (it.type && it.type !== "message" && it.type !== "reasoning") w.answered = true; return; }
+      if (t === "response.content_part.added" || t === "response.content_part.done") { const p = f.part || {}; if (typeof p.text === "string" && p.text.trim() !== "") w.answered = true; return; }
+      if (t.startsWith("response.reasoning")) return;
+      if (t && !RESPONSES_NON_ANSWER_EVENTS.has(t) && t !== "error") w.answered = true;
+    },
+    ending(w) {
+      if (!w.errored && w.finish === "completed") return null;
+      if (w.finish === "incomplete" && w.reason === "content_filter") return EMPTY_REFUSAL_MESSAGE;
+      if (w.finish === "incomplete" && w.reason === "max_output_tokens") return EMPTY_INCOMPLETE_MESSAGE;
+      return "Upstream stream ended before producing any content";
+    },
+  });
+}
+
 /** The end-to-end empty answer's 502 on this wire (not settled). */
 export const EMPTY_INCOMPLETE_MESSAGE = "Upstream produced no output within max_output_tokens (reasoning consumed it, after any effort fit and lowest-effort retry by the gateway) - raise max_output_tokens, lower reasoning.effort, or pick a non-reasoning model";
 
@@ -444,9 +479,11 @@ export function makeResponsesHandler(routeTier) {
           let lastErr;
           const timeouts = timedOutBudget();
           const client = streamClientWatch(res);
+          let emptyModel = null; // as the buffered path's refusedModel
           try {
             for (const { model, flex } of attempts) {
               client.assertPresent();
+              if (model === emptyModel) continue;
               let outbound;
               try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
               const timeoutMs = paymentWindowTimeoutMs(req, STREAM_TIMEOUT_MS);
@@ -455,12 +492,13 @@ export function makeResponsesHandler(routeTier) {
               setReasoningAdjustedHeader(res, outbound[REASONING_ADJUSTED]);
               try {
                 return await retryRateLimited(() => streamOpenRouterTo(outbound, res, {
-                  url: OPENROUTER_RESPONSES_URL, timeoutMs,
+                  url: OPENROUTER_RESPONSES_URL, timeoutMs, holdUntilAnswer: createResponsesAnswerWatch,
                   onUsage: (usage, cost, frame) => recordUsage(usage, cost, frame?.response?.model || model, frame?.response?.service_tier || (flex ? "flex" : "default")),
                 }), { delays: rateLimitDelaysFor(flex), canRetry: () => !res.headersSent && !client.gone() });
               } catch (e) {
                 if (res.headersSent || ![502, 503, 504].includes(e?.statusCode)) throw e;
                 lastErr = e;
+                if (e?.emptyAnswer) emptyModel = model;
                 timeouts.note(e, attemptStarted, timeoutMs);
                 if (timeouts.spent()) throw e;
               }
