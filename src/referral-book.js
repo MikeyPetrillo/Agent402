@@ -745,17 +745,23 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         const all = Object.values(dropped).sort((a, b) => {
           const ea = t > expiredAt(a), eb = t > expiredAt(b);
           if (ea !== eb) return ea ? -1 : 1;
-          // (Within each group the least recently read first, then the earliest
-          // expiry: when reads are slow, every record is reached in turn and a
-          // later-expiring one is never left behind the same earlier few.)
-          return (a.checkedAt || 0) - (b.checkedAt || 0) || (Number(a.validBefore) || 0) - (Number(b.validBefore) || 0);
+          // (Within each group the least recently read first, by the book's own
+          // read sequence, not the clock: two passes in one millisecond, or a
+          // clock that steps back, never put the same earlier few first again;
+          // then the earliest expiry. Every record is reached in turn.)
+          return (Number(a.readSeq) || 0) - (Number(b.readSeq) || 0) || (a.checkedAt || 0) - (b.checkedAt || 0) || (Number(a.validBefore) || 0) - (Number(b.validBefore) || 0);
         });
+        const seqBase = Object.values(dropped).reduce((m, g) => Math.max(m, Number(g.readSeq) || 0), 0);
         const graveNow = all.slice(0, SWEEP_DROPPED_MAX);
         const forget = [], seen = [], back = [], late = [], giveUp = [];
+        // Each record read takes the next number of the read sequence, in the
+        // pass's read order: the next pass takes up the ones read longest ago.
+        const readSeq = new Map();
         let readNow = 0;
         for (const g of graveNow) {
           // (At least one dropped record is read every pass, whatever the budget.)
           if (readNow > 0 && budgetSpent()) break;
+          readSeq.set(g.key, seqBase + 1 + readNow);
           readNow++;
           let st;
           try { st = await chain.state({ from: g.payer, nonce: g.nonce, payTo, amount: g.amount, fromBlock: g.fromBlock, minNet: minNetOf(g), productId: productIdOf(g) }); } catch { st = { used: null, paid: null, transaction: null, complete: false }; }
@@ -783,8 +789,8 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             for (const k of forget) delete graves[k];
             for (const g of giveUp) if (graves[g.key]) { delete graves[g.key]; gaveUp.push(g); }
             if (gaveUp.length) noteDropped(done, "unresolved", gaveUp.length, t);
-            for (const k of seen) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t };
-            for (const k of late) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t, lateReads: (Number(graves[k].lateReads) || 0) + 1 };
+            for (const k of seen) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t, readSeq: Math.max(Number(graves[k].readSeq) || 0, readSeq.get(k) || 0) };
+            for (const k of late) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t, readSeq: Math.max(Number(graves[k].readSeq) || 0, readSeq.get(k) || 0), lateReads: (Number(graves[k].lateReads) || 0) + 1 };
             for (const { g, tx, booked } of back) {
               if (!graves[g.key]) continue;
               delete graves[g.key];

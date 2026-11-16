@@ -2,7 +2,8 @@
 // The referral settlement book's sweep and write queue (src/referral-book.js),
 // offline against a memory document and a stub chain:
 //   - the refused entries' share of a pass's reads, its spread and its cap;
-//   - dropped records read in turn (least recently read first) when reads are slow;
+//   - dropped records read in turn (least recently read first) when reads are slow,
+//     and when passes come faster than the clock moves;
 //   - a dropped record is given up only on reads the chain ANSWERED (a nonce
 //     read as unused, or spent with its receipt read or its search complete);
 //   - an expired dropped record pushed out at the cap is logged;
@@ -61,6 +62,18 @@ const entry = (tag, i, validBefore = nowS() + 900) => ({ key: `referral:${tag}-$
   const chain = { state: async ({ nonce }) => { await wait(30); if (dropped.has(nonce)) read.push(nonce); return { used: false, paid: false, transaction: null, complete: true }; } };
   for (let i = 0; i < 3; i++) { await b.sweep({ chain, bookSale: async () => true, payTo: PAY_TO, chainBudgetMs: 1 }); await wait(5); }
   ok(dropped.size === 3 && read.length === 3 && new Set(read).size === 3, `with one read a pass, three unexpired dropped records are each read once in three passes, not the earliest-expiring one three times (${new Set(read).size} distinct of ${read.length} reads)`);
+}
+{
+  // Forty dropped records, 25 read a pass, every pass in the same millisecond (a frozen clock): each is read in turn.
+  const frozen = Date.now() + 30 * 60_000;
+  const b = newBook({ maxEntries: 1, maxDropped: 100, now: () => frozen });
+  for (let i = 0; i < 41; i++) { const e = entry("T", i, nowS() + 600 - i * 10); await b.intent(e); await b.resolve(e.key, { state: "refused", at: 100 + i }); }
+  const reads = new Map();
+  const chain = { state: async ({ nonce }) => { reads.set(nonce, (reads.get(nonce) || 0) + 1); return { used: null, paid: null, transaction: null, complete: false }; } };
+  const nonces = b.droppedRefused().records.map((r) => r.nonce);
+  for (let i = 0; i < 8; i++) await b.sweep({ chain, bookSale: async () => true, payTo: PAY_TO });
+  const counts = nonces.map((n) => reads.get(n) || 0);
+  ok(nonces.length === 40 && Math.min(...counts) === 5 && Math.max(...counts) === 5, `forty dropped records read 25 a pass, eight passes in one millisecond: each is read five times, by the book's own read order, not the clock (fewest ${Math.min(...counts)}, most ${Math.max(...counts)})`);
 }
 {
   let skew = 0;
