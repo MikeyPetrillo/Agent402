@@ -77,6 +77,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { chainOf, routeSellsOn, walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
+import { buyFits, usdMicros } from "./lib/keepalive-plan.js";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
@@ -131,6 +132,10 @@ const UPSTREAM_FREE_EXTRA = new Set((process.env.UPSTREAM_FREE_EXTRA || "memory-
 const costsNothingUpstream = (t) =>
   t.computePayable || [...UPSTREAM_FREE_EXTRA].some((p) => t.slug === p || t.slug.startsWith(p));
 const SLUGS_FILTER = process.env.SLUGS ? new Set(process.env.SLUGS.split(",").map(s => s.trim())) : null;
+// REQUIRE_SLUGS=1: a caller that passes a computed list (the tail pass, the
+// deploy job's price-change buy) refuses to run on an empty one, which would
+// otherwise mean "no filter" and sweep every route under the price ceiling.
+const REQUIRE_SLUGS = /^(1|true|yes)$/i.test(process.env.REQUIRE_SLUGS || "");
 // Missing-mode chain filter: `--chain solana` (or MISSING_CHAIN) counts a route
 // as missing until a Bazaar row for it carries that chain's accept, so a row
 // harvested before the chain was offered is refreshed, not just an absent row.
@@ -437,6 +442,10 @@ export async function runMissingMode({ sweep = false } = {}) {
 
   const payFetch = await buildPayFetch();
   console.log(`Spending up to $${estCost.toFixed(3)} …`);
+  // The cap holds during the pass too, not only on the estimate: a buy that
+  // would take what the pass has settled over MAX_SPEND_USD is not sent.
+  const capMicros = usdMicros(MAX_SPEND_USD);
+  let spentMicros = 0;
 
   // `bought` records the paths whose settlement we actually observed, so the
   // post-check below can tell "the harvester hasn't ingested it yet" apart from
@@ -445,6 +454,13 @@ export async function runMissingMode({ sweep = false } = {}) {
   for (let i = 0; i < missing.length; i++) {
     const t = missing[i];
     const key = `${t.method} ${t.path}`;
+    if (!buyFits(spentMicros, usdMicros(t.priceUsd), capMicros)) {
+      console.error(`  CAP ${key} (${t.price}) not bought: the pass has settled $${(spentMicros / 1e6).toFixed(3)} of its $${MAX_SPEND_USD} cap.`);
+      results.fail++;
+      results.errors.push(`${t.path}: spend cap`);
+      results.failedPaths.push(t.path);
+      continue;
+    }
     let lastStatus = 0;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -453,6 +469,7 @@ export async function runMissingMode({ sweep = false } = {}) {
         lastStatus = res.status;
         if (res.status === 200) {
           results.ok++;
+          spentMicros += usdMicros(t.priceUsd);
           results.bought.add(t.path);
           if (i % 50 === 0 || i === missing.length - 1 || res.job) console.log(`  [${i + 1}/${missing.length}] OK ${key} (${t.price})${res.job ? " as a job" : ""}`);
           break;
@@ -664,6 +681,10 @@ function loadKey() {
 }
 
 async function main() {
+  if (REQUIRE_SLUGS && !(SLUGS_FILTER && [...SLUGS_FILTER].some(Boolean))) {
+    console.error("refresh-bazaar: REQUIRE_SLUGS is set and SLUGS is empty; refusing to sweep every route.");
+    process.exit(2);
+  }
   if (MODE === "missing") {
     process.exit(await runMissingMode());
   }

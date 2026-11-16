@@ -22,8 +22,8 @@
 # The ceiling is $0.10 a route: a fixed-price route up to that price has no
 # other scheduled buyer, and at the earlier $0.05 one priced above it reached
 # the 30-day removal with only hand-run passes between. Routes above the
-# ceiling (report products, premium tiers) are not bought here and remain
-# findable via the live 402. The per-batch spend cap is $2: a batch refuses to
+# ceiling (report products, premium tiers) are not bought here: their own
+# pass runs twice a month (bazaar-keepalive-tail.yml). The per-batch spend cap is $2: a batch refuses to
 # start when its estimate is over the cap, and with every selected route due
 # at once a batch at this ceiling comes to a little over $1.
 name: Bazaar keep-alive

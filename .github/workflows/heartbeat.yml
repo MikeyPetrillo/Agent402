@@ -323,14 +323,20 @@ jobs:
       # Canary burner balance watch: an empty burner once read as a settlement
       # outage on the status page. Warn before it runs dry. Public RPC, no keys;
       # an unreadable balance warns loudly rather than silently passing.
+      # The mark is one full keep-alive pass above the ceiling plus a margin
+      # (scripts/keepalive-plan.js low-water, from the live catalog), never
+      # under the repo var CANARY_BURNER_LOW_USD, which is also the mark when
+      # the catalog cannot be read.
       - name: Canary burner balance watch (Base USDC)
         if: always()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           BURNER: "0x902dCf34E53695bDEA2fFB354b1a2e58bD598256"
-          WARN_USD: ${{ vars.CANARY_BURNER_LOW_USD || '1' }}
+          FLOOR_USD: ${{ vars.CANARY_BURNER_LOW_USD || '1' }}
         run: |
+          WARN_USD=$(TARGET_URL=https://agent402.tools GH_TOKEN="" node scripts/keepalive-plan.js low-water 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+)?$' | tail -1)
+          [ -n "$WARN_USD" ] || { WARN_USD="$FLOOR_USD"; echo "::warning::keep-alive pass total unreadable; burner low-water is the repo var alone"; }
           DATA="0x70a08231000000000000000000000000${BURNER#0x}"
           BAL=$(curl -s --max-time 15 https://mainnet.base.org -H 'Content-Type: application/json'             -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_call\",\"params\":[{\"to\":\"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\",\"data\":\"$DATA\"},\"latest\"]}"             | jq -re '.result' 2>/dev/null) || { echo "::warning::burner balance UNREADABLE — not silently skipping, investigate"; exit 0; }
           USD=$(node -e "console.log((parseInt('$BAL',16)/1e6).toFixed(4))")
@@ -340,7 +346,7 @@ jobs:
           LOW=$(node -e "console.log($USD < $WARN_USD ? 1 : 0)")
           if [ "$LOW" = "1" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The paid canary's Base burner ($BURNER) is below its configured low-water mark (repo var CANARY_BURNER_LOW_USD). Top up before it runs dry: an empty burner now files as a funding issue rather than an outage, but a funded one is better."
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The paid canary's Base burner ($BURNER) is below its low-water mark: one full keep-alive pass above the ceiling plus a margin, never under the repo var CANARY_BURNER_LOW_USD. Top up before it runs dry: an empty burner now files as a funding issue rather than an outage, but a funded one is better."
             else
               gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still low at $(date -u +%FT%TZ)."
             fi

@@ -1,0 +1,103 @@
+# Keep the routes priced above the weekly keep-alive's ceiling listed.
+#
+# bazaar-keepalive.yml buys fixed-price routes up to $0.10 each. A route priced
+# above that (report products, premium tiers) had no scheduled buyer, so its
+# listing reached the 30-day removal unless a buyer or a hand pass settled it.
+# This pass buys each of them on the 1st and 15th of the month (at most 17 days
+# apart against the 30-day rule), with the same script, burner and per-signature
+# cap as the hand passes (scripts/refresh-bazaar.js, MODE=sweep, Base).
+#
+# Selection is scripts/lib/keepalive-plan.js: every route above the ceiling
+# that is not quoted, model-priced or a route-execute tier
+# (scripts/mint-bazaar-rows.js buys those). The plan step reads the live
+# catalog and refuses the whole pass when its total is over the pass cap; the
+# buy step runs the pass in ONE process, which refuses again on the estimate
+# and stops buying once what it has settled would pass the cap.
+name: Bazaar keep-alive (above the ceiling)
+
+on:
+  schedule:
+    # 1st and 15th, 14:41 UTC: clear of the daily (05:37) and Tuesday (04:17)
+    # passes, which share this concurrency group and the burner.
+    - cron: "41 14 1,15 * *"
+  workflow_dispatch:
+    inputs:
+      max_spend_usd:
+        description: "Hard cap for the whole pass (USD). The pass refuses to start above it."
+        default: "25"
+      stale_days:
+        description: "Only pay for listings with no settlement in N days (any settlement counts). 0 = buy every selected route."
+        default: "7"
+
+permissions:
+  contents: read
+  issues: write
+
+# One group with bazaar-keepalive.yml: one burner, never two passes at once.
+concurrency:
+  group: bazaar-keepalive
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-24.04
+    # Report products answer through a job of up to a few minutes each; one
+    # process keeps the pass cap whole, so the job bound is the pass's.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Plan the pass (reads the live catalog, pays nothing)
+        id: plan
+        env:
+          TARGET_URL: https://agent402.tools
+          MAX_SPEND_USD: ${{ inputs.max_spend_usd || '25' }}
+        run: node scripts/keepalive-plan.js tail
+      - name: Install the x402 client
+        if: steps.plan.outputs.slugs != ''
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+      - name: Refresh settlements
+        if: steps.plan.outputs.slugs != ''
+        env:
+          TARGET_URL: https://agent402.tools
+          MODE: sweep
+          PAY_NETWORK: base
+          SLUGS: ${{ steps.plan.outputs.slugs }}
+          REQUIRE_SLUGS: "1"
+          MAX_PRICE_USD: ${{ steps.plan.outputs.max_price }}
+          STALE_DAYS: ${{ inputs.stale_days || '7' }}
+          MAX_SPEND_USD: ${{ inputs.max_spend_usd || '25' }}
+          BATCH_COUNT: "1"
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          # Signs X-Heartbeat-Token so these self-buys are booked as ours.
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the keep-alive cannot pay, and listings will age out in 30 days"; exit 1; }
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          echo "::add-mask::$BURNER_KEY"
+          node scripts/refresh-bazaar.js
+
+  report:
+    needs: sweep
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Page if the pass failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SWEEP: ${{ needs.sweep.result }}
+        run: |
+          TITLE="Bazaar keep-alive above the ceiling FAILED - listings will age out"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          if [ "$SWEEP" != "success" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The keep-alive pass over the routes priced above the weekly ceiling did not complete (result: $SWEEP). CDP removes a resource after 30 days without a settlement. The run log names a refused plan (over the pass cap), a failed buy or a missing key. Re-run: \`gh workflow run bazaar-keepalive-tail.yml --ref main\`."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ)."
+            fi
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Pass completed at $(date -u +%FT%TZ)."
+          fi

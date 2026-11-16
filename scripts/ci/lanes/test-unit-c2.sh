@@ -13,6 +13,8 @@ t node scripts/test-rail-restore.js
 t node scripts/test-verify-failover.js
 # The Bazaar keep-alive is actually scheduled, fails loudly without a key, and pages (CDP removes a resource after 30 days without a settlement)
 t node scripts/test-bazaar-keepalive.js
+# The keep-alive above the ceiling and the price-change buy: route selection, changed-price detection, spend-cap refusals, the burner low-water figure (offline, stub catalog, DRY_RUN)
+t node scripts/test-keepalive-plan.js
 # verify_failed carries a DERIVED payer id (never an address), so a retry loop can be told from many clients (offline)
 t node scripts/test-verify-failed-payer-key.js
 t node scripts/test-svm-payer.js
