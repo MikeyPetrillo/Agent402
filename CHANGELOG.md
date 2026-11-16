@@ -6,6 +6,18 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (late Solana and Algorand payments are repaid)
+Payments:
+- A payment that reaches the chain after its call was refused is found and
+  repaid on Solana and Algorand as on EVM: a settlement that failed while
+  naming its transaction is followed on chain, and once it lands it is
+  recorded as owed to the buyer, once. On EVM, a settlement refused as already
+  submitted whose chain read failed is followed the same way, and a
+  transaction that never appears is closed as not landed only after the
+  payment's authorization reads unused, so a transfer sent in another
+  transaction is still repaid. On Solana and Algorand one settled transaction
+  answers one request.
+
 ### 2026-11-15 (access keys and card tokens are judged per payer)
 Payments:
 - A Tempo pull credential signed by an access key runs only once the chain

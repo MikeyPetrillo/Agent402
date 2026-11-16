@@ -50,6 +50,11 @@ const transferLog = (from, to, amount, token = TOKEN) => ({ address: token, topi
 
 // The chain: receipts by tx; null = not mined; "fail" = the RPC errors.
 const receipts = new Map();
+// EIP-3009 authorizationState by nonce (true = used, "fail" = the read
+// errors), and the transaction whose AuthorizationUsed log names each nonce.
+const authState = new Map();
+const authTx = new Map();
+const AUTH_STATE_SELECTOR = "0xe94a0102";
 const fetchImpl = async (_url, opts) => {
   const { method, params } = JSON.parse(opts.body);
   const answer = (result) => ({ ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) });
@@ -58,7 +63,19 @@ const fetchImpl = async (_url, opts) => {
     if (r === "fail") return { ok: false, status: 503, json: async () => ({}) };
     return answer(r ?? null);
   }
+  if (method === "eth_call" && String(params[0]?.data || "").startsWith(AUTH_STATE_SELECTOR)) {
+    const nonce = `0x${String(params[0].data).slice(-64)}`;
+    const s = authState.get(nonce);
+    if (s === "fail") return { ok: false, status: 503, json: async () => ({}) };
+    return answer(`0x${(s === true ? 1 : 0).toString(16).padStart(64, "0")}`);
+  }
   if (method === "eth_call") return answer("0x6"); // decimals() = 6
+  if (method === "eth_blockNumber") return answer("0x186a0");
+  if (method === "eth_getBlockByNumber") return answer({ timestamp: `0x${Math.floor(clock / 1000).toString(16)}` });
+  if (method === "eth_getLogs") {
+    const nonce = String(params[0]?.topics?.[2] || "");
+    return answer(authTx.has(nonce) ? [{ address: TOKEN, transactionHash: authTx.get(nonce), removed: false }] : []);
+  }
   return answer(null);
 };
 
@@ -586,6 +603,298 @@ await check("a booking recorded nowhere still pages after a restart, until an op
   assert.equal(await after.alarmStatus({ ttlMs: 0 }), "unresolved", "the unrecorded booking outlives the process that saw it");
   assert.equal((await after.acknowledgeUnrecorded({ note: "checked the alarm line" })).acknowledged, 1);
   assert.equal(await mk().alarmStatus({ ttlMs: 0 }), "ok", "an acknowledgement clears it for every later process");
+});
+
+// ---- A settle refused as "already on chain" with no transaction named, whose
+// chain read then fails: the authorization is booked, so a transfer that did
+// land is owed once (never zero, never twice).
+const owedFor = async (tx) => listRefunds({ status: "owed", limit: 1000 }).filter((r) => r.evidence === tx);
+const alreadyOnChainErr = () => Object.assign(new Error("authorization nonce already submitted; transaction already on-chain"), { name: "SettleError", errorReason: "unexpected_settle_error", errorMessage: "authorization nonce already submitted; transaction already on-chain", transaction: "" });
+async function withChainFetch(fake, fn) {
+  const real = globalThis.fetch;
+  globalThis.fetch = fake;
+  try { return await fn(); } finally { globalThis.fetch = real; }
+}
+const deadFetch = async () => { throw new Error("connect ECONNREFUSED"); };
+function onChainHost(book) {
+  claims.__resetSettlementClaims();
+  const { server, request } = fullHost();
+  claims.registerSettlementClaimHooks(server);
+  registerFacilitatorFailureHooks(server, null, null, {});
+  claims.registerSettlementClaimRelease(server);
+  registerLateSettleHook(server, async () => book);
+  return request;
+}
+process.env.EVM_RPC_4663 = RPC;
+
+await check("an already-on-chain refusal naming no transaction, whose chain read fails, books the authorization; the landed transfer is owed once", async () => {
+  const book = makeBook({ recordOwed: recordRefundOwed, owedRecorded: async (tx) => !!(await refundByEvidenceFresh(tx)) });
+  const request = onChainHost(book);
+  const nonce = txh(9401);
+  const r = await withChainFetch(deadFetch, () => request(reqCtx(41, nonce), alreadyOnChainErr()));
+  assert.ok(r.refused, "nothing recovered: the buyer is refused");
+  const booked = book.list();
+  assert.equal(booked.length, 1, "one entry, keyed by the authorization");
+  assert.equal(booked[0].tx, null);
+  assert.equal(booked[0].nonce, nonce);
+  const resend = await withChainFetch(deadFetch, () => request(reqCtx(41, nonce), alreadyOnChainErr()));
+  assert.equal(resend.aborted, claims.DUPLICATE_AUTHORIZATION, "the claim is kept while the authorization may have landed");
+  // The chain later shows the authorization used by our transfer.
+  authState.set(nonce, true);
+  authTx.set(nonce, txh(41));
+  receipts.set(txh(41), { status: "0x1", logs: [transferLog(payer(41), TREASURY, 2500)] });
+  clock += 60_000;
+  await book.reconcile();
+  clock += 60_000;
+  await book.reconcile();
+  assert.equal((await owedFor(txh(41))).length, 1, "owed exactly once");
+  assert.equal(book.list().length, 0);
+});
+
+await check("an already-on-chain refusal the chain answers as a transfer to someone else, or a replay another request owns, books nothing", async () => {
+  const book = makeBook();
+  const request = onChainHost(book);
+  const nonce = txh(9402);
+  const chain = async (_u, opts) => {
+    const { method } = JSON.parse(opts.body);
+    const res = (result) => ({ ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result }) });
+    if (method === "eth_blockNumber") return res("0x10");
+    if (method === "eth_getLogs") return res([{ address: TOKEN, transactionHash: txh(42) }]);
+    if (method === "eth_getTransactionReceipt") return res({ status: "0x1", logs: [transferLog(payer(42), OTHER, 2500)] });
+    return res(null);
+  };
+  const r = await withChainFetch(chain, () => request(reqCtx(42, nonce), alreadyOnChainErr()));
+  assert.ok(r.refused);
+  assert.equal(book.list().length, 0, "the chain proved the transfer is not ours: nothing to book");
+  // A replay: another request holds the authorization.
+  claims.__resetSettlementClaims();
+  const { server, request: req2 } = fullHost();
+  registerFacilitatorFailureHooks(server, null, null, {});
+  claims.registerSettlementClaimRelease(server);
+  registerLateSettleHook(server, async () => book);
+  const ctx = reqCtx(43, txh(9403));
+  ctx.transportContext.request.adapter.req.__a402SettleClaim = { seenAt: Date.now(), id: "replay", nonceKey: null, nonceKeys: [] };
+  await claims.claimSettlementKey(claims.nonceClaimKey(RH, txh(9403), payer(43)), "the-original");
+  const r2 = await withChainFetch(deadFetch, () => req2(ctx, alreadyOnChainErr()));
+  assert.ok(r2.refused);
+  assert.equal(book.list().length, 0, "the request that owns the authorization answers for it");
+});
+
+await check("a transaction never mined whose authorization another transaction used is owed on that transaction, not closed as not landed", async () => {
+  const book = makeBook({ recordOwed: recordRefundOwed, owedRecorded: async (tx) => !!(await refundByEvidenceFresh(tx)) });
+  const nonce = txh(9410);
+  assert.equal(await book.book(entry(50, { nonce })), true);
+  authState.set(nonce, true);
+  authTx.set(nonce, txh(51));
+  receipts.set(txh(51), { status: "0x1", logs: [transferLog(payer(50), TREASURY, 2500)] });
+  clock += WINDOW_MS + 2 * 60_000;
+  const r = await book.reconcile();
+  assert.equal(r.absent, 0, "a used authorization is never closed as not landed");
+  assert.equal(r.owed, 1);
+  assert.equal((await owedFor(txh(51))).length, 1, "owed once, on the transaction that used it");
+  assert.equal(book.list().length, 0);
+});
+
+await check("a transaction never mined whose authorization is unused still closes; one whose authorization read fails is kept", async () => {
+  const book = makeBook({ recordOwed: async () => { throw new Error("nothing is owed"); } });
+  await book.book(entry(52, { nonce: txh(9412) }));
+  authState.set(txh(9413), "fail");
+  await book.book(entry(53, { nonce: txh(9413) }));
+  clock += WINDOW_MS + 2 * 60_000;
+  const r = await book.reconcile();
+  assert.equal(r.absent, 1, "unused and expired: closed as not landed");
+  assert.deepEqual(book.list().map((e) => e.tx), [txh(53)], "an unread authorization is kept");
+});
+
+await check("the settle hook carries the authorization's nonce onto a transaction-keyed entry", async () => {
+  const c = lateSettleCandidate(ctxFor(54, pendingErr(txh(54))));
+  assert.equal(c.nonce, txh(9054));
+});
+
+// ---- Solana and Algorand: a failed settle naming a broadcast transaction in
+// the chain's own id format is booked and read by the rails' own verifier.
+const { base58Encode } = await import("../src/svm-payer.js");
+const b58 = (len, seed) => base58Encode(Uint8Array.from({ length: len }, (_, i) => (i * 7 + seed * 13 + 1) % 256));
+const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+const SOL_RPC = "http://sol.stub.invalid";
+const MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const SOL_PAYTO = b58(32, 1);
+const solPayer = (i) => b58(32, 100 + i);
+const solSig = (i) => b58(64, 200 + i);
+const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k";
+const IDX = "http://idx.stub.invalid";
+const ALGOD = "http://algod.stub.invalid";
+const A32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+const algoId = (i) => Array.from({ length: 52 }, (_, k) => A32[(k * 5 + i) % 32]).join("");
+const algoAddr = (i) => Array.from({ length: 58 }, (_, k) => A32[(k * 3 + i) % 32]).join("");
+const ALGO_PAYTO = algoAddr(1);
+const solTxs = new Map(); // sig -> getTransaction result | "fail"
+const blockhashValid = new Map();
+const algoTxs = new Map(); // id -> indexer transaction | "fail"
+let algoRound = 1000;
+const railFetch = async (url, opts) => {
+  const u = String(url);
+  const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body, headers: { get: () => "application/json" } });
+  if (u.startsWith(SOL_RPC)) {
+    const { method, params } = JSON.parse(opts.body);
+    if (method === "getTransaction") {
+      const t = solTxs.get(params[0]);
+      if (t === "fail") return json(503, {});
+      return json(200, { jsonrpc: "2.0", id: 1, result: t ?? null });
+    }
+    if (method === "isBlockhashValid") return json(200, { jsonrpc: "2.0", id: 1, result: { context: { slot: 1 }, value: blockhashValid.get(params[0]) ?? true } });
+    return json(200, { jsonrpc: "2.0", id: 1, result: null });
+  }
+  if (u.startsWith(`${IDX}/v2/transactions/`)) {
+    const t = algoTxs.get(decodeURIComponent(u.slice(`${IDX}/v2/transactions/`.length)));
+    if (t === "fail") return json(503, {});
+    return t ? json(200, { transaction: t }) : json(404, { message: "no transaction found" });
+  }
+  if (u === `${ALGOD}/v2/status`) return json(200, { "last-round": algoRound });
+  return fetchImpl(url, opts);
+};
+const railBook = (over = {}) => makeBook({ fetchImpl: railFetch, svmRpcs: [SOL_RPC], avmIndexers: [IDX], avmAlgods: [ALGOD], recordOwed: recordRefundOwed, owedRecorded: async (tx) => !!(await refundByEvidenceFresh(tx)), ...over });
+const solEntry = (i, over = {}) => ({ network: SOL, tx: solSig(i), payer: solPayer(i), payTo: SOL_PAYTO, asset: MINT, amount: "2500", resource: "https://agent402.tools/api/stock-history", blockhash: b58(32, 300 + i), via: "primary", ...over });
+const algoEntry = (i, over = {}) => ({ network: ALGO, tx: algoId(i), payer: algoAddr(10 + i), payTo: ALGO_PAYTO, asset: "31566704", amount: "2500", resource: "https://agent402.tools/api/stock-history", lastValid: 1500, via: "primary", ...over });
+const solLanded = (i, amount = 2500, to = SOL_PAYTO) => ({
+  meta: {
+    err: null,
+    preTokenBalances: [{ owner: solPayer(i), mint: MINT, uiTokenAmount: { amount: "10000", decimals: 6 } }, { owner: to, mint: MINT, uiTokenAmount: { amount: "0", decimals: 6 } }],
+    postTokenBalances: [{ owner: solPayer(i), mint: MINT, uiTokenAmount: { amount: String(10000 - amount), decimals: 6 } }, { owner: to, mint: MINT, uiTokenAmount: { amount: String(amount), decimals: 6 } }],
+  },
+});
+const algoLanded = (i) => ({ id: algoId(i), "confirmed-round": 1200, sender: algoAddr(10 + i), "asset-transfer-transaction": { "asset-id": 31566704, receiver: ALGO_PAYTO, amount: 2500 } });
+
+await check("a Solana settle failure naming a broadcast signature is booked and, once it lands, owed once under that exact signature", async () => {
+  const book = railBook();
+  assert.equal(await book.book(solEntry(60)), true, "a base58 signature is booked");
+  assert.equal(await book.book(solEntry(60)), true);
+  assert.equal(book.list().length, 1, "one entry");
+  assert.equal(book.list()[0].tx, solSig(60), "kept exactly as signed, never case-folded");
+  clock += 60_000;
+  let r = await book.reconcile();
+  assert.equal(r.pending, 1, "not found yet: kept");
+  solTxs.set(solSig(60), solLanded(60));
+  clock += 10 * 60_000;
+  r = await book.reconcile();
+  assert.equal(r.owed, 1);
+  await book.reconcile();
+  const rows = await owedFor(solSig(60));
+  assert.equal(rows.length, 1, "owed exactly once");
+  assert.equal(rows[0].network, SOL);
+  assert.equal(rows[0].payer, solPayer(60));
+  assert.equal(book.list().length, 0);
+});
+
+await check("an Algorand settle failure naming a broadcast transaction id is booked and, once it lands, owed once", async () => {
+  const book = railBook();
+  assert.equal(await book.book(algoEntry(61)), true, "a 52-character id is booked");
+  algoTxs.set(algoId(61), algoLanded(61));
+  clock += 60_000;
+  const r = await book.reconcile();
+  assert.equal(r.owed, 1);
+  assert.equal((await owedFor(algoId(61))).length, 1);
+  assert.equal(book.list().length, 0);
+});
+
+await check("Solana and Algorand transactions never found close only once they can no longer land; unreadable or still valid ones are kept", async () => {
+  const book = railBook({ recordOwed: async () => { throw new Error("nothing is owed"); } });
+  await book.book(solEntry(62));                       // blockhash expired: closes
+  await book.book(solEntry(63));                       // blockhash still valid: kept
+  await book.book(solEntry(64, { blockhash: undefined })); // no lifetime known: kept
+  await book.book(algoEntry(65));                      // past lastValid: closes
+  await book.book(algoEntry(66, { lastValid: 999_999 })); // still valid: kept
+  solTxs.set(solSig(67), "fail");
+  await book.book(solEntry(67));                       // reads fail: kept
+  blockhashValid.set(b58(32, 362), false);
+  blockhashValid.set(b58(32, 367), false);
+  algoRound = 2000;
+  clock += WINDOW_MS + 2 * 60_000;
+  const r = await book.reconcile();
+  assert.equal(r.absent, 2);
+  assert.deepEqual(book.list().map((e) => e.tx).sort(), [solSig(63), solSig(64), algoId(66), solSig(67)].sort());
+});
+
+await check("a Solana transaction that failed on chain or paid someone else closes with nothing owed", async () => {
+  const book = railBook({ recordOwed: async () => { throw new Error("nothing is owed"); } });
+  await book.book(solEntry(68));
+  await book.book(solEntry(69));
+  solTxs.set(solSig(68), { meta: { err: { InstructionError: [0, { Custom: 1 }] } } });
+  solTxs.set(solSig(69), solLanded(69, 2500, b58(32, 9)));
+  clock += 60_000;
+  const r = await book.reconcile();
+  assert.equal(r.reverted, 1);
+  assert.equal(r.notOurs, 1);
+  assert.equal(book.list().length, 0);
+});
+
+await check("the settle hook books a Solana or Algorand failure that names a transaction in its own format; malformed ids are not booked", async () => {
+  const book = railBook();
+  const { server, fail } = hookHost();
+  registerLateSettleHook(server, async () => book);
+  const solCtx = (tx) => ({ requirements: { scheme: "exact", network: SOL, payTo: SOL_PAYTO, asset: MINT, amount: "2500" }, paymentPayload: { resource: { url: "https://agent402.tools/api/x" }, payload: { transaction: "" } }, error: Object.assign(new Error("settle timed out"), { name: "SettleError", errorReason: "unexpected_settle_error", transaction: tx, payer: solPayer(70) }) });
+  const algoCtx = (tx) => ({ requirements: { scheme: "exact", network: ALGO, payTo: ALGO_PAYTO, asset: "31566704", amount: "2500" }, paymentPayload: { resource: { url: "https://agent402.tools/api/x" }, payload: {} }, error: Object.assign(new Error("settle timed out"), { name: "SettleError", errorReason: "unexpected_settle_error", transaction: tx, payer: algoAddr(71) }) });
+  await fail(solCtx(solSig(70)));
+  await fail(algoCtx(algoId(71)));
+  await fail(solCtx("0OIl"));
+  await fail(algoCtx(algoId(72).toLowerCase()));
+  assert.deepEqual(book.list().map((e) => e.tx).sort(), [solSig(70), algoId(71)].sort());
+});
+
+await check("the Solana hook reads the signed transaction's blockhash; a durable-nonce transaction carries none, so it never closes on a clock", async () => {
+  const { svmLifetimeBlockhash } = await import("../src/svm-payer.js");
+  const hash = Uint8Array.from({ length: 32 }, (_, i) => 200 - i);
+  // A legacy wire transaction: one signature, header, two static keys (a
+  // signer and the System program), the blockhash, one instruction.
+  const wire = (tag) => Buffer.from([1, ...new Array(64).fill(7), 1, 0, 1, 2, ...new Array(32).fill(9), ...new Array(32).fill(0), ...hash, 1, 1, 0, 4, tag, 0, 0, 0]).toString("base64");
+  assert.equal(svmLifetimeBlockhash(wire(2)), base58Encode(hash), "a blockhash transaction names its blockhash");
+  assert.equal(svmLifetimeBlockhash(wire(4)), null, "AdvanceNonceAccount first: a durable nonce, no expiry");
+  assert.equal(svmLifetimeBlockhash("not base64 at all"), null);
+  const book = railBook();
+  const { server, fail } = hookHost();
+  registerLateSettleHook(server, async () => book);
+  await fail({ requirements: { scheme: "exact", network: SOL, payTo: SOL_PAYTO, asset: MINT, amount: "2500" }, paymentPayload: { resource: { url: "https://agent402.tools/api/x" }, payload: { transaction: wire(2) } }, error: Object.assign(new Error("settle timed out"), { name: "SettleError", errorReason: "unexpected_settle_error", transaction: solSig(73), payer: solPayer(73) }) });
+  assert.deepEqual(book.list().map((e) => [e.tx, e.blockhash]), [[solSig(73), base58Encode(hash)]]);
+});
+
+// ---- One transaction answers one request on Solana and Algorand too.
+function afterSettleHost() {
+  const h = { beforeVerify: [], beforeSettle: [], after: [] };
+  const server = { onBeforeVerify: (f) => h.beforeVerify.push(f), onBeforeSettle: (f) => h.beforeSettle.push(f), onAfterSettle: (f) => h.after.push(f), onSettleFailure: () => {} };
+  // @x402/core: a success runs every afterSettle hook; an AfterSettleAbortError fails the settle.
+  const settled = async (network, tx) => {
+    const ctx = { requirements: { network }, paymentPayload: { payload: {} }, transportContext: { request: { adapter: { req: {} } } } };
+    for (const f of h.beforeVerify) await f(ctx);
+    for (const f of h.beforeSettle) { const r = await f(ctx); if (r?.abort) return { aborted: r.reason }; }
+    const result = { success: true, transaction: tx, network };
+    for (const f of h.after) {
+      try { await f({ ...ctx, result }); } catch (e) { if (e?.name === "AfterSettleAbortError") return { refused: e.reason }; throw e; }
+    }
+    return { served: true };
+  };
+  return { server, settled };
+}
+
+await check("a Solana or Algorand transaction a facilitator answers twice serves one request; ids are claimed exactly as written", async () => {
+  claims.__resetSettlementClaims();
+  const { server, settled } = afterSettleHost();
+  claims.registerSettlementClaimHooks(server);
+  for (const [net, tx] of [[SOL, solSig(80)], [ALGO, algoId(80)]]) {
+    assert.deepEqual(await settled(net, tx), { served: true }, `${net}: the first request is served`);
+    const again = await settled(net, tx);
+    assert.equal(again.refused, claims.TX_SERVED_ELSEWHERE, `${net}: the same transaction never answers a second request`);
+  }
+  // Base58 is case-sensitive: a signature differing only in case is another transaction.
+  const s = solSig(81);
+  const flipped = s.replace(/[a-z]/, (c) => c.toUpperCase());
+  assert.notEqual(flipped, s);
+  assert.notEqual(claims.txClaimKey(SOL, s), claims.txClaimKey(SOL, flipped));
+  assert.deepEqual(await settled(SOL, s), { served: true });
+  assert.deepEqual(await settled(SOL, flipped), { served: true });
+  // EVM unchanged: hex is claimed lowercased, and the afterSettle claim never refuses there.
+  assert.equal(claims.txClaimKey(RH, txh(82).toUpperCase().replace("0X", "0x")), claims.txClaimKey(RH, txh(82)));
+  assert.deepEqual(await settled(RH, txh(82)), { served: true });
+  assert.deepEqual(await settled(RH, txh(82)), { served: true }, "EVM keeps its nonce claim before settle as the guard");
 });
 
 console.log(`test-late-settlements: ${failures ? `FAILED (${failures})` : "all passed"}`);
