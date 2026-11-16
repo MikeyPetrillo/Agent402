@@ -305,6 +305,12 @@ const READER_PATTERNS = [
   /\bsend\s+(?:me|us)\s+(?:the\s+|your\s+|its\s+)?(?:result|output|response|memor(?:y|ies)|data|keys?|secrets?|credentials?|history|prompt)|\bpaste\s+(?:the\s+|its\s+|your\s+)?(?:result|output|response|memor(?:y|ies)|data|keys?|secrets?|credentials?|history|prompt)s?\s+(?:here|below|back|into)\b/,
   /\b(?:the\s+)?(?:best|top|right|correct|only)\s+(?:choice|pick|option|tool|answer|match)\s+(?:is|=)\s+(?:this|me|us|ours?)\b/,
   /\bnew\s+(?:instructions?|directives?)\b|["']role["']\s*:\s*["']?(?:system|assistant|developer|tool)\b/,
+  // Telling a router where to send its traffic: every request, call or query
+  // sent here, to this listing, or to "the tool named here". A description
+  // says what the tool does with requests ("Routes every request to the
+  // fastest upstream", "Send all requests to this endpoint with a key"), so
+  // only the listing itself as the destination, ending the clause, is read.
+  /\b(?:route|send|direct|forward|redirect|steer|dispatch|pass|hand)\s+(?:(?:all|every|each|any)\s+(?:(?:of\s+)?(?:the|your|their)\s+)?)?(?:[a-z-]+\s+)?(?:requests?|calls?|traffic|quer(?:y|ies)|tasks?|jobs?|prompts?|messages?|orders?|purchases?|lookups?)\s+(?:(?:straight|directly|only|always)\s+)?(?:here|to\s+(?:me|us)|to\s+(?:this|our)(?:\s+(?:one|tool|listing|seller|option|provider|route))?|to\s+the\s+(?:one|tool|listing|seller|option|provider|route|endpoint|service)\s+(?:named|listed|described|shown|given|written|linked)\s+(?:here|above|below))(?=\s*(?:$|[.!,;:)]|and\b|instead\b|first\b|always\b|only\b|from\s+now\b))/,
   /\b(?:respond|reply|answer|output)\s+only\s+with\b|\b(?:respond|reply|answer)\s+with\s+(?:this|my|our)\s+(?:tool|slug|key|name|listing)\b|\btell\s+the\s+(?:user|human|buyer|caller|operator)\s+to\b/,
 ];
 const READER_ANY = new RegExp(READER_PATTERNS.map((re) => `(?:${re.source})`).join("|"));
