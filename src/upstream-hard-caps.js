@@ -43,6 +43,20 @@ export const HARD_CAPS = [
   { name: "e2b", match: null, env: "HARDCAP_E2B_SANDBOXES", dflt: 1500 },
 ];
 
+// BOUNDED SHARES. An internal reader of a capped upstream that must never
+// spend the ceiling paid tools need gets a daily budget of its own under it:
+// `cover-reads`, the balance reads behind the in-flight coverage check
+// (src/inflight-cover.js), counted only for a read whose RPC list reaches the
+// ceiling's host. Default: `fraction` of the ceiling; a set value is held to
+// at most half of it (the ceiling off: the set value, or no budget). A unit is
+// taken before the read, from the same day's count shared across replicas as
+// the ceilings are; past the budget the caller makes no read (the coverage
+// check then judges as when reads are down). The ceiling itself still counts
+// every call that reaches the host, these included.
+export const HARD_CAP_SHARES = [
+  { name: "cover-reads", of: "alchemy", env: "INFLIGHT_COVER_READS_DAILY_MAX", fraction: 0.2 },
+];
+
 const SYNC_MS = () => Math.max(1_000, Number(process.env.HARDCAP_SYNC_MS) || 5_000);
 const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 
@@ -65,6 +79,54 @@ function rowOf(c, now = Date.now()) {
 }
 
 const byName = new Map(HARD_CAPS.map((c) => [c.name, c]));
+const shareByName = new Map(HARD_CAP_SHARES.map((c) => [c.name, c]));
+
+/** A share's daily budget: a number (0 makes no read), or null (no budget). */
+export function hardCapShareOf(sh, env = process.env) {
+  const ceiling = hardCapOf(byName.get(sh.of), env);
+  const raw = String(env[sh.env] ?? "").trim();
+  const n = raw === "" ? NaN : Number(raw);
+  const own = Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+  if (ceiling === null) return own;
+  return own === null ? Math.floor(ceiling * sh.fraction) : Math.min(own, Math.floor(ceiling / 2));
+}
+
+/**
+ * Take one unit of share `name` for a call that reaches the capped upstream
+ * `capName` (null or another upstream: nothing to take, true). False when the
+ * day's share is spent (counted as a refusal). Synchronous.
+ */
+export function takeHardCapShare(name, capName, now = Date.now()) {
+  const sh = shareByName.get(name);
+  if (!sh || !capName || sh.of !== capName) return true;
+  const budget = hardCapShareOf(sh);
+  if (budget === null) return true;
+  const s = rowOf(sh, now);
+  if (seenToday(s) >= budget) { s.refused++; return false; }
+  s.local++; s.unflushed++;
+  return true;
+}
+
+/** Give back a share unit taken at `takenAt` for a call that was not made. */
+export function releaseHardCapShare(name, capName, takenAt = Date.now(), now = Date.now()) {
+  const sh = shareByName.get(name);
+  if (!sh || !capName || sh.of !== capName || hardCapShareOf(sh) === null) return false;
+  const s = rowOf(sh, now);
+  if (utcDay(takenAt) !== s.day || s.local <= 0) return false;
+  s.local--; s.unflushed--; s.released++;
+  return true;
+}
+
+/** Counts only, for the operator view: each share's day. */
+export function hardCapShareStatus(now = Date.now()) {
+  const rows = {};
+  for (const sh of HARD_CAP_SHARES) {
+    const s = rowOf(sh, now);
+    const budget = hardCapShareOf(sh);
+    rows[sh.name] = { of: sh.of, usedToday: seenToday(s), budget, refusedToday: s.refused, releasedToday: s.released, status: budget === null ? "unbounded" : seenToday(s) >= budget ? "spent" : "ok" };
+  }
+  return rows;
+}
 const hostCache = new Map(); // host -> cap entry or null
 const HOST_CACHE_MAX = 4000;
 function capForHost(host) {
@@ -175,7 +237,7 @@ export function hardCapError() {
 
 /** Flush local increments to the shared counter and read the day's total back. */
 export async function syncHardCaps(now = Date.now()) {
-  for (const c of HARD_CAPS) {
+  for (const c of [...HARD_CAPS, ...HARD_CAP_SHARES]) {
     const s = rowOf(c, now);
     if (!s.store.enabled) continue;
     const n = s.unflushed;

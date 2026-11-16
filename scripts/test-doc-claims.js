@@ -117,19 +117,51 @@ for (const [doc, re, pkg, why] of CLAIMS) {
   ok(row.includes("${COVER_GOOD_READ_MINUTES} minutes") && row.includes("up to ${COVER_UNREAD_MAX} calls at once (${COVER_UNREAD_PAID_MAX} with a payment on record)") && row.includes("(the code-run tools: ${CODE_RUN_PER_PAYER_MAX} runs at once per EVM payer, credits key or Tempo sender, and ${CODE_RUN_PER_IP_MAX} per client address for other payers)") && !/\b\d+ calls at once|\bpast \d+ minutes|\b\d+ runs at once|\b\d+ per client address/.test(row),
     "src/guides.js coverage row quotes the derived figures and types none");
 }
-// What the coverage check keeps, and for how long (src/inflight-cover.js): a
-// kept balance read is only dropped when a later paid call arrives (or on a
-// restart), so the privacy page and payment.dataHandling say "used for at most
-// N minutes, and dropped at the next paid call after that or on restart", read
-// the figures from the code, and never promise a hard retention bound.
+// What the coverage check keeps, and for how long (src/inflight-cover.js). A
+// reservation lives for its call, and at most the shared window when a server
+// stops mid-call. A kept balance read is used for at most GOOD_READ_MAX_MS; it
+// stays while the wallet keeps calling (even with its balance unreadable) and
+// is dropped by walletOf's bounded cleanup once the wallet is idle that long,
+// sooner past the store's cap, or on restart. The privacy page and
+// payment.dataHandling say exactly that, read every figure from the code, and
+// never promise a hard bound on the read or "dropped at the next paid call".
 {
   const priv = (read("src/privacy.js") || "").replace(/\s+/g, " ");
   const disc = read("src/discovery.js") || "";
-  const DROP = "and dropped at the next paid call after that or on restart";
-  ok(priv.includes(`held in the server's memory, used for at most \${COVER_KEEP_MINUTES} minutes, ${DROP}`) && priv.includes("kept in our shared store for the life of the call") && priv.includes("kept there for ${COVER_SETTLED_MARK_MINUTES} minutes") && /const COVER_KEEP_MINUTES = Math\.round\(GOOD_READ_MAX_MS \/ 60_000\);/.test(priv) && /const COVER_SETTLED_MARK_MINUTES = Math\.round\(SETTLED_MARK_MS \/ 60_000\);/.test(priv) && !/neither is kept longer than/.test(priv),
-    "src/privacy.js: the kept balance read is used for a derived time and dropped at the next paid call or on restart; reservations live for the call; the settled mark's time is derived");
-  ok(disc.includes(`used for at most \${Math.round(GOOD_READ_MAX_MS / 60000)} minutes, ${DROP}`) && disc.includes("kept there ${Math.round(SETTLED_MARK_MS / 60000)} minutes") && !/neither longer than/.test(disc),
+  const cover = await import("../src/inflight-cover.js");
+  const src = read("src/inflight-cover.js") || "";
+  // Control: the cleanup the wording describes is the one in the code.
+  ok(/if \(\+\+looked > 8\) break;/.test(src) && /if \(!over && now - v\.touched < GOOD_READ_MAX_MS\) break;/.test(src) && /if \(v\.open > 0 \|\| ledger\.has\(k\)\)/.test(src) && cover.COVER_WALLETS_MAX === 50_000 && Math.round(cover.sharedWindowMs() / 60_000) === 15,
+    "control: walletOf clears at most eight of the longest idle wallets per call, by last touch, never one with a call in flight; the cap and the shared window read from the code");
+  ok(priv.includes("kept in our shared store for the life of the call, and at most ${COVER_RESERVATION_MAX_MINUTES} minutes when a server stops mid-call") && /const COVER_RESERVATION_MAX_MINUTES = Math\.round\(\(2 \* sharedWindowMs\(\)\) \/ 60_000\);/.test(priv) && priv.includes("held in the server's memory and used for at most ${COVER_KEEP_MINUTES} minutes") && priv.includes("kept while the wallet goes on making paid calls, including while its balance cannot be read") && priv.includes("dropped when the wallet has been idle ${COVER_IDLE_MINUTES} minutes (with no paid call in flight), at a later paid call to the server, which clears the longest idle wallets a few at a time; sooner when the server holds ${COVER_WALLETS_MAX.toLocaleString(\"en-US\")} wallets (the longest idle first); or on restart") && priv.includes("kept there for ${COVER_SETTLED_MARK_MINUTES} minutes") && /const COVER_KEEP_MINUTES = Math\.round\(GOOD_READ_MAX_MS \/ 60_000\);/.test(priv) && /const COVER_IDLE_MINUTES = Math\.round\(GOOD_READ_MAX_MS \/ 60_000\);/.test(priv) && /const COVER_SETTLED_MARK_MINUTES = Math\.round\(SETTLED_MARK_MS \/ 60_000\);/.test(priv) && !/dropped at the next paid call/.test(priv) && !/neither is kept longer than/.test(priv),
+    "src/privacy.js: a reservation for the call's life and at most the shared window; the kept read used for a derived time, kept while the wallet calls, dropped when idle by the bounded cleanup, sooner at the cap, or on restart; every figure derived");
+  ok(disc.includes("for the life of the call, and at most ${Math.round((2 * sharedWindowMs()) / 60000)} minutes when a server stops mid-call") && disc.includes("used for at most ${Math.round(GOOD_READ_MAX_MS / 60000)} minutes, kept while the wallet goes on making paid calls (including while its balance cannot be read), and dropped when the wallet has been idle ${Math.round(GOOD_READ_MAX_MS / 60000)} minutes with no paid call in flight") && disc.includes("sooner when the server holds ${COVER_WALLETS_MAX} wallets") && disc.includes("kept there ${Math.round(SETTLED_MARK_MS / 60000)} minutes") && !/dropped at the next paid call/.test(disc) && !/neither longer than/.test(disc),
     "src/discovery.js dataHandling says the same, with the figures read from the code");
+  // The changelog line that tells of that wording says the same, its figures
+  // the code's: twice the shared window (each add renews the window key's
+  // expiry, src/shared-limits.js WINDOW_ADD), the kept read's time, the cap.
+  {
+    const res = Math.round((2 * cover.sharedWindowMs()) / 60_000), keep = Math.round(cover.GOOD_READ_MAX_MS / 60_000), cap = cover.COVER_WALLETS_MAX.toLocaleString("en-US");
+    const line = `a reservation per call in flight is kept for the life of the call, and at most ${res} minutes when a server stops mid-call, and that the last balance read is held in memory, used for at most ${keep} minutes, and dropped once the wallet has been idle ${keep} minutes, sooner when the server holds ${cap} wallets, or on restart`;
+    const limits = read("src/shared-limits.js") || "";
+    ok(/redis\.call\('PEXPIRE', KEYS\[1\], ARGV\[2\]\)/.test(limits), "control: a window add renews its key's expiry, so a stopped server's reservation can outlast one window");
+    for (const f of ["CHANGELOG.md", "src/changelog.js"]) {
+      const t = (read(f) || "").replace(/\s+/g, " ");
+      ok(t.includes(line) && !/dropped at the next paid call/.test(t), `${f}: the retention line reads the derived figures (${res} and ${keep} minutes, ${cap} wallets)`);
+    }
+  }
+  // The admission's wait: about a second, and up to the admission wait plus
+  // the read timeout when a settlement lands during the read.
+  const secs = cover.ADMIT_SETTLED_READ_MAX_MS / 1000;
+  ok(secs === 3.5 && /export const ADMIT_SETTLED_READ_MAX_MS = ADMIT_WAIT_MS \+ READ_TIMEOUT_MS;/.test(src), `control: the longest admission when a settlement lands during the read is the wait plus the read timeout (${secs} s)`);
+  const guide = read("src/guides.js") || "";
+  const QUAL = `up to about ${secs} seconds when a settlement lands during the`;
+  ok(/const COVER_SETTLED_READ_SECONDS = \(Number\(inflightCover\.ADMIT_SETTLED_READ_MAX_MS\)/.test(guide) && guide.includes("(either takes up to about ${COVER_SETTLED_READ_SECONDS} seconds when a settlement lands during the read)"), "src/guides.js qualifies the one-second wait with the derived figure");
+  for (const f of ["wiki/Buying-at-Volume.md", "wiki/Self-Hosting.md", "CHANGELOG.md", "src/changelog.js"]) {
+    const t = (read(f) || "").replace(/\s+/g, " ");
+    const seconds = (t.match(/about a second/g) || []).length;
+    ok(seconds > 0 && t.includes(QUAL), `${f}: "about a second" carries the ${secs} s qualifier`);
+  }
 }
 // A 429 on a catalog operation is not charged on x402 only: a Tempo transfer
 // sent before the call is recorded as owed. The OpenAPI 429 every catalog
