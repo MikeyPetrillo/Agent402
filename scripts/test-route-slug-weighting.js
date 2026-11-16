@@ -182,6 +182,11 @@ ok(exact > 0 && exact <= 13, `an exact one-term slug match stays within the docu
   const px = top("get usdc price");
   ok(px[0]?.startsWith("getUSDCPrice:"), `"get usdc price": an acronym inside camelCase splits at its last capital (${px.join(", ")})`);
   ok(top("webpagetomarkdown")[0]?.startsWith("webPageToMarkdown:"), "the operationId typed as one word still matches the slug exactly");
+  // The NAME alone carries the case: a one-run camelCase name is still a name
+  // in slug form, read through its parts.
+  cache.set("https://camel.example", entry("https://camel.example", [{ slug: "md_convert", name: "webPageToMarkdown", description: "" }]));
+  const named = top("web page to markdown");
+  ok(named[0]?.startsWith("md_convert:"), `"web page to markdown": a camelCase NAME over a plain slug is covered too (${named.join(", ")})`);
   cache.clear();
 }
 
