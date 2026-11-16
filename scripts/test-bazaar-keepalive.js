@@ -71,6 +71,31 @@ ok(/SLUGS:\s*\$\{\{\s*inputs\.slugs\s*\}\}/.test(wf), "a dispatch can name exact
 ok(/BATCH_COUNT/.test(wf) && /BATCH_INDEX/.test(wf), "batches the pass so one run cannot time out mid-catalog");
 ok(/max-parallel:\s*1/.test(wf), "batches run sequentially - one burner address, concurrent buys race their own nonces");
 
+// The matrix is fixed, the batch count is an input: with fewer batches than
+// matrix jobs, the extra jobs must select nothing. A clamped index made every
+// extra job repeat the last batch, so each route was bought once per matrix job.
+{
+  const { inBatch, batchIndexOf } = await import("./refresh-bazaar.js");
+  const matrix = [...(wf.match(/batch:\s*\[([^\]]*)\]/) || [, ""])[1].matchAll(/\d+/g)].map((m) => batchIndexOf(m[0]));
+  ok(matrix.length >= 2, "reads the fixed sweep matrix from the workflow");
+  let once = true;
+  for (let count = 1; count <= matrix.length; count++) {
+    for (let i = 0; i < 9; i++) {
+      const picks = matrix.filter((idx) => inBatch(i, count, idx)).length;
+      if (picks !== 1) once = false;
+    }
+  }
+  ok(once, "every route is bought by exactly one matrix job for every batch count up to the matrix size");
+  const rsrc = await readFile(new URL("./refresh-bazaar.js", import.meta.url), "utf8");
+  ok(/const BATCH_INDEX = batchIndexOf\(process\.env\.BATCH_INDEX\);/.test(rsrc) && /inBatch\(i, BATCH_COUNT, BATCH_INDEX\)/.test(rsrc), "the sweep uses the unclamped index and the tested selector");
+  const { batchCountFits } = await import("./refresh-bazaar.js");
+  const envSize = Number((wf.match(/BATCH_MATRIX_SIZE:\s*"?(\d+)"?/) || [])[1]);
+  ok(envSize === matrix.length, "the workflow tells the sweep its matrix size, and it matches the matrix");
+  ok(batchCountFits(4, 4) && batchCountFits(1, 4) && !batchCountFits(5, 4) && batchCountFits(9, 0), "a batch count above the matrix size is refused; no size means no check");
+  ok(/if \(!batchCountFits\(BATCH_COUNT, BATCH_MATRIX_SIZE\)\)[\s\S]{0,300}process\.exit\(2\)/.test(rsrc), "the sweep exits before buying when the batch count does not fit the matrix");
+  ok(batchIndexOf("3") === 3 && batchIndexOf("") === 0 && batchIndexOf("x") === 0 && batchIndexOf("-2") === 0, "the batch index is read as given, never clamped to the batch count");
+}
+
 // A missing key must FAIL, never skip: a silent skip is indistinguishable from
 // success for 30 days, and then the catalog is gone.
 ok(/BURNER_KEY is not set/.test(wf) && /exit 1/.test(wf), "a missing burner key fails the run loudly, never skips");

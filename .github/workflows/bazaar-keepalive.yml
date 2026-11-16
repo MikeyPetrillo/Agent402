@@ -122,6 +122,8 @@ jobs:
           MAX_SPEND_USD: ${{ inputs.max_spend_usd || '2' }}
           BATCH_COUNT: ${{ inputs.batches || '4' }}
           BATCH_INDEX: ${{ matrix.batch }}
+          # The matrix above has this many jobs; more batches would leave routes unbought.
+          BATCH_MATRIX_SIZE: "4"
           BURNER_KEY: ${{ secrets.BURNER_KEY }}
           # Signs X-Heartbeat-Token so these self-buys are booked as ours.
           POW_SECRET: ${{ secrets.POW_SECRET }}
