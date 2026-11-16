@@ -24,25 +24,33 @@ export const IN_PROCESS_CALLER = "in-process";
 /** Every caller key a request carries, strongest first: the identity payer
  *  (identityPayerOf: null in FREE_MODE, where no payment header is verified,
  *  so a header a caller typed never chooses a key there), a credits key, a
- *  Tempo sender, then the client address. One caller is all of them at once:
- *  a per-caller admission rule counts a place under each, so a party that
- *  signs with several wallets from one address, or one wallet from several
- *  addresses, is still one caller (src/caller-places.js). */
+ *  Tempo sender, then the client address (left out when a CDN request
+ *  carries no proof of it). A per-caller admission rule counts a place under
+ *  each and decides by the first (src/caller-places.js): buyers behind one
+ *  address stay separate callers, one wallet from several addresses is one
+ *  caller, and an unsigned caller is told apart by its address. */
 export function callerKeysOf(req) {
+  return keysOf(req, false);
+}
+
+function keysOf(req, withUnprovenAddress) {
   if (!req || typeof req !== "object") return [];
   const keys = [];
   const payer = identityPayerOf(req);
   if (payer) keys.push(`payer:${payer}`);
   if (req.creditsKeyId) keys.push(`credits:${req.creditsKeyId}`);
   if (req.mppTempoSender) keys.push(`tempo:${String(req.mppTempoSender).toLowerCase()}`);
-  if (req.ip) keys.push(`ip:${limiterKey(String(req.ip))}`);
+  // A CDN request without proof of its client's address (src/cdn-client-ip.js
+  // cdnUnproven) has the edge's address, shared by every client behind it.
+  if (req.ip && (withUnprovenAddress || req.cdnUnproven !== true)) keys.push(`ip:${limiterKey(String(req.ip))}`);
   return keys;
 }
 
-/** The caller key of a request (its strongest, callerKeysOf), or null when
- *  it names none. */
+/** The caller key of a request (its strongest), or null when it names none.
+ *  A concurrency cap keyed on it (src/tools/code-run-kit.js) still counts an
+ *  unproven CDN request under the edge's address, never under no key. */
 export function callerKeyOf(req) {
-  return callerKeysOf(req)[0] || null;
+  return keysOf(req, true)[0] || null;
 }
 
 /** The caller key the current request-less call runs for, or null. */

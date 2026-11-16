@@ -339,34 +339,62 @@ async function call(input) {
     ok(typeof rc === "function" && __ocrLargeTest.state().holder === C, "then the second's");
     rc();
     ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every place is released");
-    // One caller is every key its request carries (the signed payer, a
-    // credits key, a Tempo sender AND the client address): three wallets
-    // signed from one address hold one caller's places, so a newcomer from
-    // another address takes the last queued one instead of being refused.
+    // Shared egress: buyers behind one address (a NAT, a hosted agent
+    // platform, an IPv6 /64) share its ip: key, but each is its own caller.
+    // Whether a queued place may be taken is decided by its caller's
+    // strongest signed key (payer, credits, Tempo sender), the address only
+    // for an unsigned caller, so a newcomer never takes a paying buyer's only
+    // place because a different buyer signs from the same address.
     {
       const { callerKeysOf, admissionCallerOf } = await import("../src/dispatch-caller.js");
       const X = "198.51.100.77";
-      const paid = (n) => ({ ip: X, headers: {}, creditsKeyId: `k${n}` });
+      const paid = (n, ip = X) => ({ ip, headers: {}, creditsKeyId: `k${n}` });
       ok(JSON.stringify(callerKeysOf(paid(1))) === JSON.stringify(["credits:k1", `ip:${X}`]), `a request's caller keys are its credential and its address (${JSON.stringify(callerKeysOf(paid(1)))})`);
       ok(JSON.stringify(admissionCallerOf(paid(1))) === JSON.stringify(callerKeysOf(paid(1))), "admission holds a place under every one of them");
-      const [k1, k2, k3] = [1, 2, 3].map((n) => admissionCallerOf(paid(n)));
-      const r1 = await __ocrLargeTest.acquire(50, k1);
-      const q2 = __ocrLargeTest.acquire(5_000, k2).then((rel) => rel, (e) => e);
-      const q3 = __ocrLargeTest.acquire(5_000, k3).then((rel) => rel, (e) => e);
-      ok(__ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX && __ocrLargeTest.state().holder === "credits:k1", "three credentials from one address fill the slot and both queued places");
-      const other = __ocrLargeTest.acquire(5_000, admissionCallerOf({ ip: "198.51.100.78", headers: {}, creditsKeyId: "k9" })).then((rel) => rel, (e) => e);
-      const shed3 = await Promise.race([q3, new Promise((r) => setTimeout(() => r("still queued"), 200))]);
-      ok(shed3?.statusCode === 503 && shed3.retryAfter === 60 && !/charged/i.test(shed3.message), `a caller from another address takes the newest place the shared address holds (that one answered ${shed3?.statusCode ?? shed3})`);
-      // The same address under a fourth credential holds a place already, so
-      // it never takes one from anyone.
-      const fourth = await __ocrLargeTest.acquire(5_000, admissionCallerOf(paid(4))).then(() => null, (e) => e);
-      ok(fourth?.statusCode === 503, `a fourth credential from the same address is answered busy, not given another caller's place (got ${fourth?.statusCode})`);
-      r1();
-      const r2 = await q2; r2();
-      const ro = await other;
-      ok(typeof ro === "function" && __ocrLargeTest.state().holder === "credits:k9", "the newcomer's image is read in its turn");
-      ro();
+      // A holds the slot and B waits, two buyers behind X; C waits from Y.
+      const [kA, kB, kC, kD] = [admissionCallerOf(paid(1)), admissionCallerOf(paid(2)), admissionCallerOf(paid(3, "198.51.100.88")), admissionCallerOf(paid(4, "198.51.100.99"))];
+      const rA = await __ocrLargeTest.acquire(50, kA);
+      const qB = __ocrLargeTest.acquire(5_000, kB).then((rel) => rel, (e) => e);
+      const qC = __ocrLargeTest.acquire(5_000, kC).then((rel) => rel, (e) => e);
+      ok(__ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX && __ocrLargeTest.state().holder === "credits:k1", "two buyers behind one address and a third elsewhere fill the slot and both queued places");
+      // D, a fourth buyer from Z, finds every queued place a buyer's only one.
+      const dRes = await __ocrLargeTest.acquire(5_000, kD).then(() => null, (e) => e);
+      ok(dRes?.statusCode === 503 && dRes.retryAfter === 60, `a newcomer is answered busy rather than take a buyer's only place shared with another buyer's address (got ${dRes?.statusCode})`);
+      const bStill = await Promise.race([qB, new Promise((r) => setTimeout(() => r("still queued"), 100))]);
+      ok(bStill === "still queued" && __ocrLargeTest.state().waiting === OCR_LARGE_QUEUE_MAX, `B keeps its queued place (${bStill?.statusCode ?? bStill})`);
+      rA();
+      const rB = await qB;
+      ok(typeof rB === "function" && __ocrLargeTest.state().holder === "credits:k2", "B's image is read in its turn");
+      rB();
+      const rC = await qC; rC();
       ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every key's place is released");
+      // One credential is still one caller from several addresses: its
+      // second place is taken by a newcomer, newest first.
+      const r1 = await __ocrLargeTest.acquire(50, admissionCallerOf(paid(5, "198.51.100.10")));
+      const q1 = __ocrLargeTest.acquire(5_000, admissionCallerOf(paid(5, "198.51.100.11"))).then((rel) => rel, (e) => e);
+      const q2 = __ocrLargeTest.acquire(5_000, admissionCallerOf(paid(5, "198.51.100.12"))).then((rel) => rel, (e) => e);
+      const nu = __ocrLargeTest.acquire(5_000, admissionCallerOf(paid(6, "198.51.100.13"))).then((rel) => rel, (e) => e);
+      const shed5 = await Promise.race([q2, new Promise((r) => setTimeout(() => r("still queued"), 200))]);
+      ok(shed5?.statusCode === 503 && !/charged/i.test(shed5.message), `one credential used from several addresses is one caller: its newest place is taken (${shed5?.statusCode ?? shed5})`);
+      r1(); const s1 = await q1; s1(); const sn = await nu; sn();
+      // Unsigned callers are told apart by address alone: two on one address
+      // are one caller, and its second place is taken.
+      const u0 = await __ocrLargeTest.acquire(50, admissionCallerOf({ ip: "203.0.113.50", headers: {} }));
+      const u1 = __ocrLargeTest.acquire(5_000, admissionCallerOf({ ip: "203.0.113.51", headers: {} })).then((rel) => rel, (e) => e);
+      const u2 = __ocrLargeTest.acquire(5_000, admissionCallerOf({ ip: "203.0.113.51", headers: {} })).then((rel) => rel, (e) => e);
+      const un = __ocrLargeTest.acquire(5_000, admissionCallerOf({ ip: "203.0.113.52", headers: {} })).then((rel) => rel, (e) => e);
+      const shedU = await Promise.race([u2, new Promise((r) => setTimeout(() => r("still queued"), 200))]);
+      ok(shedU?.statusCode === 503, `an unsigned address's second queued place is taken (${shedU?.statusCode ?? shedU})`);
+      u0(); const v1 = await u1; v1(); const vn = await un; vn();
+      // An unsigned caller's only place is not taken because a signed buyer
+      // holds a place from its address.
+      const p0 = await __ocrLargeTest.acquire(50, admissionCallerOf(paid(7, "203.0.113.60")));
+      const pu = __ocrLargeTest.acquire(5_000, admissionCallerOf({ ip: "203.0.113.60", headers: {} })).then((rel) => rel, (e) => e);
+      const po = __ocrLargeTest.acquire(5_000, admissionCallerOf({ ip: "203.0.113.61", headers: {} })).then((rel) => rel, (e) => e);
+      const pn = await __ocrLargeTest.acquire(5_000, admissionCallerOf({ ip: "203.0.113.62", headers: {} })).then(() => null, (e) => e);
+      ok(pn?.statusCode === 503, `an unsigned caller's only place is kept though a buyer signs from its address (got ${pn?.statusCode})`);
+      p0(); const w1 = await pu; w1(); const w2 = await po; w2();
+      ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every place is released after the shared-egress cases");
     }
     // The caller is read from the request: a signed payer first, else the address.
     let seen = null;
