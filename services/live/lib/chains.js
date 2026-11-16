@@ -26,3 +26,9 @@ export const TEMPO = {
 
 // A single payment above this is not an agent calling an API; it is left out.
 export const MAX_PAYMENT_USD = Number(process.env.LIVE_MAX_PAYMENT_USD || 50);
+
+// Split contracts a referral network pays sellers through (comma list, none
+// by default): a buyer's payment goes to the contract, which pays each
+// seller's share on in the same transaction. A settlement to one of these is
+// drawn as a payment to the seller the contract paid in that transaction.
+export const REFERRAL_ROUTERS = new Set((process.env.LIVE_REFERRAL_ROUTERS || "").toLowerCase().split(",").map((s) => s.trim()).filter((a) => /^0x[0-9a-f]{40}$/.test(a)));

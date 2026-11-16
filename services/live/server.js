@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startBase } from "./lib/base.js";
 import { startTempo } from "./lib/tempo.js";
-import { makeDirectory, INTERNAL_PAYERS } from "./lib/directory.js";
+import { makeDirectory, INTERNAL_PAYERS, AGENT402_PAYTOS } from "./lib/directory.js";
 import { makeLogoCache } from "./lib/logos.js";
 import { makeStore } from "./lib/store.js";
 import { BASE, TEMPO } from "./lib/chains.js";
@@ -290,7 +290,7 @@ server.listen(PORT, () => {
   console.log(`[live] listening on :${server.address().port}`);
   if (OFFLINE) return;
   directory.refresh().catch((e) => console.warn(`[live:directory] ${e.message}`)).finally(() => {
-    ingest.base = startBase({ onEvents });
+    ingest.base = startBase({ onEvents, sellers: AGENT402_PAYTOS });
     ingest.tempo = startTempo({ onEvents, recipients: () => directory.mppRecipients() });
   });
   const t = setInterval(() => directory.refresh().catch(() => {}), DIRECTORY_REFRESH_MS);
