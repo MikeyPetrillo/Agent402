@@ -13,10 +13,11 @@ const ENTRIES = [
     title: "Price reads keep their weekly clock, and the router never uses up a seller's crawl",
     items: [
       `Index: A paid route priced in a seller's manifest and listed without a price in its /openapi.json is read live once and then again after ${span(LIVE_QUOTE_MAX_AGE_MS)}, as every other route is; until now every crawl asked it again, because the merge of the two documents dropped the mark that the price was the seller's own.`,
-      `Index: A route priced above everything the router buys is asked at most once in ${span(LIVE_QUOTE_MAX_AGE_MS)}, and when its seller registers again; the check that a seller's routes still ask for payment uses its cheapest paid route.`,
+      `Index: A route priced above everything the router buys is asked at most once in ${span(LIVE_QUOTE_MAX_AGE_MS)}, and when its seller registers again; the check that a seller's routes still ask for payment uses its cheapest paid route, and runs at most once in ${span(LIVE_QUOTE_MAX_AGE_MS)} for a seller whose paid routes are all priced that high.`,
       `Index: Every robots.txt group that names Agent402 or Agent402-Crawler is read as one (RFC 9309), so a Disallow in any of them holds whatever another allows.`,
       `Index: The MPP index's reads of a seller count against the same daily allowance, wait out the same Retry-After holds, and follow the slower cycle (${slowOriginIntervalLabel()}) a site asked for.`,
-      `Operations: The seller load controls decide from each server's own memory and read the shared store once per crawl cycle, so a slow store no longer slows the crawl or a buyer's purchase, and a crawl cycle's health counts the sites waiting on unchanged documents as the good reads they were.`,
+      `Operations: The seller load controls decide from each server's own memory and read the shared store once per crawl cycle, so a slow store no longer slows the crawl or a buyer's purchase. A crawl cycle's health counts the sites waiting on unchanged documents as the cycle's reads of sites last read well came out, so a few dark sites still read as theirs and an outage of ours as ours.`,
+      `Operations: The request log behind /__operator/seller-load.json also counts the catalog's fetches, the site-crawl tool and the router's purchases per host.`,
     ],
   },
   {

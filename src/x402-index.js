@@ -4657,9 +4657,12 @@ export function paywallVerdictExpired(pw, now = Date.now(), windowMs = PAYWALL_F
  *  re-registration (bounded upstream by the per-origin forced-crawl window);
  *  an expired failure spends the per-cycle re-check budget; otherwise the
  *  rotation decides. */
-function paywallProbeTurn(prev, { force = false, now = Date.now() } = {}) {
+function paywallProbeTurn(prev, { force = false, now = Date.now(), tools = null } = {}) {
   if (PAYWALL_PROBES_PER_CYCLE === 0) return false;
   if (force) return true;
+  // Read once a week, like its price reads, whatever the rotation or an
+  // expired failure would make due (readThisWeekAboveRouterCaps).
+  if (tools && paywallReadThisWeekAboveRouterCaps(prev, tools, now)) return false;
   if (paywallRecheckBudget > 0 && paywallVerdictExpired(prev?.paywall, now)) { paywallRecheckBudget--; return true; }
   return paywallProbeDue();
 }
@@ -5623,15 +5626,10 @@ export function isMppChallenge(wwwAuthHeaderValue) {
   return !!wwwAuthHeaderValue && /^Payment\b/i.test(String(wwwAuthHeaderValue).trim());
 }
 
-async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) {
-  // A cached tool row has NO `url` field — the callable URL is derived as
-  // seller + route, the same way routeQuery builds it (see the `url:` mapping
-  // further down this file). The first version of this filtered on
-  // `typeof t.url === "string"`, which no producer ever sets, so the probe
-  // returned null for every seller and `paywall` was permanently null. It read
-  // as "not probed yet" and was really "never probes anything" — the same
-  // inert-feature defect this module's own header warns about, one field over.
-  const paid = (Array.isArray(tools) ? tools : []).filter(
+/** The routes the paywall probe may ask: this seller's priced, callable,
+ *  never-ourselves routes. */
+function paywallCandidates(tools) {
+  return (Array.isArray(tools) ? tools : []).filter(
     (t) => t
       && typeof t.seller === "string" && t.seller !== LOCAL_SELLER  // never probe ourselves
       && typeof t.route === "string" && t.route.startsWith("/")
@@ -5645,6 +5643,30 @@ async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) 
       // parameter and files it as a broken paywall.
       && !URL_TEMPLATE_RE.test(t.route)
   );
+}
+/** Is every route the paywall probe could ask priced above every route-execute
+ *  tier (so the router never buys from this seller), and was the stored
+ *  verdict taken within the quote window? Such a seller's paywall is then not
+ *  asked again by the automatic crawl until the window passes, as its price
+ *  reads are not (readThisWeekAboveRouterCaps); a re-registration still asks. */
+export function paywallReadThisWeekAboveRouterCaps(prev, tools, now = Date.now()) {
+  const at = Number(prev?.paywall?.at);
+  if (!(at > 0) || now - at >= QUOTE_MAX_AGE_MS) return false;
+  const paid = paywallCandidates(tools);
+  return paid.length > 0 && paid.every((t) => {
+    const usd = priceUsdOf(t?.originDeclaredPrice) ?? priceUsdOf(t?.price);
+    return usd > 0 && routeExecuteHint(usd) == null;
+  });
+}
+async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) {
+  // A cached tool row has NO `url` field — the callable URL is derived as
+  // seller + route, the same way routeQuery builds it (see the `url:` mapping
+  // further down this file). The first version of this filtered on
+  // `typeof t.url === "string"`, which no producer ever sets, so the probe
+  // returned null for every seller and `paywall` was permanently null. It read
+  // as "not probed yet" and was really "never probes anything" — the same
+  // inert-feature defect this module's own header warns about, one field over.
+  const paid = paywallCandidates(tools);
   // Prefer a GET: no body to guess, and a wrong body shape would produce a 400
   // that says nothing about the paywall. Among those, the cheapest: an unpaid
   // request to a seller's dearest product (a report priced in the thousands)
@@ -5703,7 +5725,7 @@ const PAYWALL_NOT_SENT = Symbol("paywall-not-sent");
 /** The paywall verdict a crawl stores: a fresh probe on this seller's turn,
  *  else (or when the probe was held back) the last reading carried forward. */
 async function paywallForCrawl(prev, tools, { redirectedTo, force, pastDeadline, gated }) {
-  if (pastDeadline() || !paywallProbeTurn(prev, { force })) return prev?.paywall ?? null;
+  if (pastDeadline() || !paywallProbeTurn(prev, { force, tools })) return prev?.paywall ?? null;
   const v = await probePaywall(tools, { redirectedTo, gated });
   return v === PAYWALL_NOT_SENT ? (prev?.paywall ?? null) : v;
 }
@@ -6074,10 +6096,10 @@ export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller
 /** One origin's turn in a scheduled crawl cycle: its load controls
  *  (src/seller-load.js) decide whether it is read; null when it was, else why
  *  it waits ("throttled", "budget" or "unchanged"). */
-async function crawlScheduled(origin) {
+async function crawlScheduled(origin, outcome = { ours: false }) {
   const plan = await sellerLoad.crawlPlan(origin);
   if (plan.skip) return plan.skip;
-  await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs });
+  await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
   return null;
 }
 export async function __crawlScheduledForTest(originUrl) { return crawlScheduled(originUrl); }
@@ -6127,14 +6149,16 @@ function closeCrawlCycleTally() {
 export function __setLastCycleOursShareForTest(x) { lastCycleOursShare = Number(x) || 0; crawlCycleTally = { done: 0, ours: 0 }; }
 /** May this failed crawl keep `prev` as it was? Only an entry whose last
  *  completed crawl succeeded with a catalog the origin itself served. */
-export function crawlHoldsLastGood(prev, now = Date.now()) {
+/** `holdFromAt`: when the window starts, if later than the last completed
+ *  read (the end of a revisit wait, src/seller-load.js). */
+export function crawlHoldsLastGood(prev, now = Date.now(), holdFromAt = 0) {
   if (!prev || typeof prev !== "object" || prev.error || prev.originResponded === false) return false;
   const h = prev.history;
   if (!Array.isArray(h) || !h.length || h[h.length - 1] !== 1) return false;
   if (!Array.isArray(prev.tools) || !prev.tools.length) return false;
   if (lastCycleOursShare >= CRAWL_OURS_SIDE_SHARE) return true;
-  const at = Number(prev.fetchedAt);
-  return Number.isFinite(at) && now - at <= CRAWL_HOLD_MS;
+  const at = Math.max(Number(prev.fetchedAt) || 0, Number(holdFromAt) || 0);
+  return at > 0 && now - at <= CRAWL_HOLD_MS;
 }
 /** What the ?seller= detail and the index rows say about a read of ours that
  *  did not complete: the time, and that the listing from the last completed
@@ -6364,8 +6388,7 @@ function oncePerCrawl() {
   };
 }
 
-async function crawlSeller(originUrl, opts = {}) {
-  const outcome = { ours: false };
+async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
   try { return await crawlSellerOnce(originUrl, opts, outcome); }
   finally { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; }
 }
@@ -6561,9 +6584,14 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       if (!oursFailed) return false;
       outcome.ours = true;
       // An origin on a revisit back-off was last read up to that long ago by
-      // our own choice, so the hold window counts from the end of that wait.
-      if (!crawlHoldsLastGood(prev, Date.now() - revisitIntervalMs)) return false;
-      cache.set(originUrl, heldEntry(prev, e?.message || e));
+      // our own choice, so the hold window counts from the end of that wait,
+      // and keeps counting from there on the failed reads that follow (the
+      // first one put the origin back on the cycle, with no wait of its own).
+      const holdFromAt = revisitIntervalMs > 0
+        ? Math.min(Date.now(), (Number(prev?.fetchedAt) || 0) + revisitIntervalMs)
+        : (Number(prev?.holdFromAt) || 0);
+      if (!crawlHoldsLastGood(prev, Date.now(), holdFromAt)) return false;
+      cache.set(originUrl, { ...heldEntry(prev, e?.message || e), ...(holdFromAt > 0 ? { holdFromAt } : {}) });
       return true;
     };
     try {
@@ -6695,6 +6723,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         // (a seller that shrank from 77,000 tools to 6,000 reads 6,000).
         ...freshListBase(prev),
         readIncomplete: undefined,
+        holdFromAt: undefined,
         manifest,
         openapiSummary: openapi ? { paths: Object.keys(openapi.paths || {}).length } : prev?.openapiSummary ?? null,
         tools,
@@ -6753,6 +6782,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     cache.set(originUrl, {
       ...(prev || {}),
       readIncomplete: undefined,
+      holdFromAt: undefined,
       // Whether a read of ours failed (a timeout, a connection that never
       // completed): the record then says our read did not complete, not that
       // the seller's document failed.
@@ -7345,26 +7375,30 @@ async function runCrawl() {
     // budget, or backed off because its documents have not changed. A skipped
     // origin keeps its entry exactly as it is and casts no vote below.
     const skipped = new Map();
+    // Which origins' last read was a good one, before this cycle reads any.
+    const prevGood = new Set(due.filter((o) => entryReadGood(cache.get(o))));
     // What other containers recorded for these origins, read in one batch
     // before any is decided (bounded: a slow store costs the cycle its wait).
     await sellerLoad.prefetch(due);
+    const oursByOrigin = new Map();
     await runPool(due, CRAWL_CONCURRENCY, async (origin) => {
-      const skip = await crawlScheduled(origin);
-      if (skip) skipped.set(origin, skip);
+      const outcome = { ours: false };
+      const skip = await crawlScheduled(origin, outcome);
+      if (skip) skipped.set(origin, skip); else oursByOrigin.set(origin, outcome.ours);
     });
     const crawled = skipped.size ? due.filter((o) => !skipped.has(o)) : due;
-    // An origin backed off because its documents did not change was read, and
-    // read well, within its wait (a failed read resets the back-off), so it
-    // votes as a healthy read that did not fail on our side. Left out, the
-    // cycle's health was measured on little but the origins that keep
-    // failing: with healthy sellers backed off, a few dark ones read as a
-    // cycle 0% healthy (no dead submission ever released) and 100% failing on
-    // our side (the hold on a dark seller's listing never aging out). An
-    // outage of ours still shows: a backed-off origin is read again within
-    // its wait, a failed read puts it back on every cycle, and a release
-    // needs a seller idle for days, never one read well hours ago.
+    // An origin backed off because its documents did not change votes as the
+    // origins read this cycle whose last read was good: an outage of ours
+    // fails those reads, so a backed-off origin votes failed and failing on
+    // our side; a few dark sellers never read well, so they do not move the
+    // rate, and a backed-off origin votes as it did when every origin was
+    // read. A cycle that read no such origin votes at the last measured rate.
     const backedOff = skipped.size ? due.filter((o) => skipped.get(o) === "unchanged") : [];
-    crawlCycleTally.done += backedOff.length;
+    const rates = measureBackedOffVote(crawled.filter((o) => prevGood.has(o)), oursByOrigin);
+    if (backedOff.length && rates) {
+      crawlCycleTally.done += backedOff.length;
+      crawlCycleTally.ours += backedOff.length * rates.ours;
+    }
     const oursShare = closeCrawlCycleTally();
     // Each step is guarded on its own: a throw in one used to skip the release
     // silently for every later cycle, and the slots it should have freed stayed
@@ -7372,13 +7406,17 @@ async function runCrawl() {
     try { recordSubmittedSellerObservations(); } catch (e) { console.log(`[x402-index] observation pass failed: ${String(e?.message || e).slice(0, 160)}`); }
     let rowsAdded = 0;
     try { const known = registeredOrigins(); rowsAdded = ensureSellerRegistrations([...submittedSeeds].filter((o) => !known.has(o))); } catch { /* counted as 0 */ }
-    // `due`, not `ordered`: cycleOkFraction's own contract is that it measures
+    // This pass's reads (and the backed-off origins at the rate this pass
+    // measured), not `ordered`: cycleOkFraction's own contract is that it measures
     // THIS pass. Once the per-operator cap made the crawled set a subset, passing
     // the full list let every origin held back this cycle contribute its previous
     // cached verdict - diluting the denominator with stale OKs in the UNSAFE
     // direction, so during an egress outage the fraction could stay above the
     // 0.5 floor and slots would be released anyway.
-    const fraction = cycleOkFraction(backedOff.length ? [...crawled, ...backedOff] : crawled);
+    const okCounts = cycleOkCounts(crawled);
+    const fraction = backedOff.length && rates
+      ? (okCounts.ok + backedOff.length * rates.ok) / (okCounts.seen + backedOff.length)
+      : (okCounts.seen ? okCounts.ok / okCounts.seen : null);
     let release;
     try { release = releaseDeadSubmissions(fraction); } catch (e) { release = { released: 0, reason: `error: ${String(e?.message || e).slice(0, 120)}` }; }
     const skippedBy = {};
@@ -7515,7 +7553,11 @@ export function selectReleasableOrigins({
 // intended outcome and not an oversight: releasing it frees the slot AND
 // stops us fetching them, which is what their robots.txt asked for.)
 export function cycleOkFraction(visited = [], lookup = (o) => cache.get(o)) {
-  if (!visited.length) return null;
+  const { ok, seen } = cycleOkCounts(visited, lookup);
+  return seen ? ok / seen : null;
+}
+/** cycleOkFraction's votes: `seen` origins with a verdict, `ok` of them good. */
+export function cycleOkCounts(visited = [], lookup = (o) => cache.get(o)) {
   let ok = 0, seen = 0;
   for (const origin of visited) {
     const entry = lookup(origin);
@@ -7523,9 +7565,27 @@ export function cycleOkFraction(visited = [], lookup = (o) => cache.get(o)) {
     if (entry.robotsBlocked) continue;  // their choice, not our outage
     seen++;
     // A held entry (our read did not complete) is not a read that worked.
-    if (!entry.error && !entry.readIncomplete) ok++;
+    if (entryReadGood(entry)) ok++;
   }
-  return seen ? ok / seen : null;
+  return { ok, seen };
+}
+/** Was this entry's last read a good one (a verdict, no error, not held)? */
+function entryReadGood(entry) {
+  return Boolean(entry) && !entry.robotsBlocked && !entry.error && !entry.readIncomplete;
+}
+// The rates a backed-off origin votes at (see runCrawl): of this cycle's reads
+// of origins whose last read was good, the share that read good again and the
+// share that ended on our side. Kept for a cycle that reads none of them.
+let lastBackedOffVote = null;
+function measureBackedOffVote(readAfterGood, oursByOrigin) {
+  if (!readAfterGood.length) return lastBackedOffVote;
+  let ok = 0, ours = 0;
+  for (const o of readAfterGood) {
+    if (entryReadGood(cache.get(o))) ok++;
+    if (oursByOrigin.get(o)) ours++;
+  }
+  lastBackedOffVote = { ok: ok / readAfterGood.length, ours: ours / readAfterGood.length };
+  return lastBackedOffVote;
 }
 
 // The release pass's health floor (see selectReleasableOrigins' outage guard).

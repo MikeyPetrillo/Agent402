@@ -9,7 +9,10 @@
 //     amount keeps its age (and is not due), a different amount stays due;
 //   * a route priced above every router tier is read at most once a week
 //     whatever else makes it due, and a re-registration still reads it;
-//   * the paywall probe asks the seller's cheapest paid route.
+//   * the paywall probe asks the seller's cheapest paid route, and a seller
+//     whose paid routes are all above every router tier has its paywall asked
+//     at most once a week too (the rotation and the failed-verdict re-check
+//     included), while a re-registration still asks it.
 // Offline: no network, no server.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ownStoreEnv } from "./lib/own-stores.js";
@@ -60,9 +63,9 @@ const asked = (host, path) => probes.some((p) => urlMatches(p.split(" ")[1], hos
 const quoteReads = () => Number(sellerLoad.status().budget.requests.quote || 0);
 // The OpenAPI lists every route with no price; the manifest prices each with
 // one entry per path (the shape that met the OpenAPI rows in the merge).
-function serve(O) {
-  docs.set(`${O}/.well-known/x402`, JSON.stringify({ x402Version: 2, name: "Seller", resources: ROUTES.map(([p, usd, amt]) => ({ resource: `${O}${p}`, method: "GET", description: `Route ${p}`, price: `$${usd}`, accepts: accepts(amt) })) }));
-  docs.set(`${O}/openapi.json`, JSON.stringify({ openapi: "3.1.0", info: { title: "Seller" }, servers: [{ url: O }], paths: Object.fromEntries(ROUTES.map(([p]) => [p, { get: { operationId: p.slice(5), summary: `Route ${p}` } }])) }));
+function serve(O, routes = ROUTES) {
+  docs.set(`${O}/.well-known/x402`, JSON.stringify({ x402Version: 2, name: "Seller", resources: routes.map(([p, usd, amt]) => ({ resource: `${O}${p}`, method: "GET", description: `Route ${p}`, price: `$${usd}`, accepts: accepts(amt) })) }));
+  docs.set(`${O}/openapi.json`, JSON.stringify({ openapi: "3.1.0", info: { title: "Seller" }, servers: [{ url: O }], paths: Object.fromEntries(routes.map(([p]) => [p, { get: { operationId: p.slice(5), summary: `Route ${p}` } }])) }));
 }
 const rowsOf = (O) => idx._cacheForTests().get(O)?.tools || [];
 
@@ -136,6 +139,37 @@ const rowsOf = (O) => idx._cacheForTests().get(O)?.tools || [];
   await idx.__crawlSellerForTest(O, { forcePaywall: true });
   ok(probes.length === 1 && probes[0] === `GET ${O}/api/cheap`, `the paywall probe asks the cheapest paid route (${probes.join(", ")})`);
   ok(probes.every((p) => isHost(p.split(" ")[1], "paywall.example")), "and only the seller's host");
+}
+
+// ---- the paywall of a seller priced above every router tier: weekly ---------------
+{
+  const paywallReads = () => Number(sellerLoad.status().budget.requests.paywall || 0);
+  // Every crawl below is the seller's turn on the rotation (cursor 0), as it
+  // is about every 45 hours in production.
+  const crawl = async (O, opts) => { idx.__resetPaywallProbeForTest({ cursor: 0 }); await idx.__crawlSellerForTest(O, opts); };
+  const DEAR = "https://dear-paywall.example", ROUTABLE = "https://routable-paywall.example";
+  serve(DEAR, [ROUTES[0]]);
+  serve(ROUTABLE, [ROUTES[1]]);
+  await crawl(DEAR); await crawl(ROUTABLE);
+  let before = paywallReads();
+  await crawl(ROUTABLE);
+  ok(paywallReads() - before === 1, "control: a routable seller's paywall is asked on its rotation turn");
+  before = paywallReads();
+  for (let i = 0; i < 4; i++) await crawl(DEAR);
+  ok(paywallReads() - before === 0, `a seller whose paid routes are all above every router tier is not asked again inside the week, though its turn comes (${paywallReads() - before})`);
+  // A failed verdict a day old: the re-check would ask it; inside the week it does not.
+  const e = idx._cacheForTests().get(DEAR);
+  idx._cacheForTests().set(DEAR, { ...e, paywall: { ...e.paywall, ok: false, status: 404, at: Date.now() - 25 * 3_600_000 } });
+  before = paywallReads();
+  await crawl(DEAR);
+  ok(paywallReads() - before === 0, "nor when its stored verdict is a failure a day old");
+  idx._cacheForTests().set(DEAR, { ...idx._cacheForTests().get(DEAR), paywall: { ...e.paywall, at: Date.now() - 8 * DAY } });
+  before = paywallReads();
+  await crawl(DEAR);
+  ok(paywallReads() - before === 1, "a week on, it is asked again");
+  before = paywallReads();
+  await crawl(DEAR, { forcePaywall: true });
+  ok(paywallReads() - before === 1, "and a re-registration asks it whatever its clock");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

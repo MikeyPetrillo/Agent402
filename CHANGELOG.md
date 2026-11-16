@@ -14,7 +14,8 @@ Index:
   documents dropped the mark that the price was the seller's own.
 - A route priced above everything the router buys is asked at most once in a
   week, and when its seller registers again; the check that a seller's routes
-  still ask for payment uses its cheapest paid route.
+  still ask for payment uses its cheapest paid route, and runs at most once in
+  a week for a seller whose paid routes are all priced that high.
 - Every robots.txt group that names Agent402 or Agent402-Crawler is read as
   one (RFC 9309), so a Disallow in any of them holds whatever another allows.
 - The MPP index's reads of a seller count against the same daily allowance,
@@ -23,8 +24,11 @@ Index:
 Operations:
 - The seller load controls decide from each server's own memory and read the
   shared store once per crawl cycle, so a slow store no longer slows the crawl
-  or a buyer's purchase, and a crawl cycle's health counts the sites waiting
-  on unchanged documents as the good reads they were.
+  or a buyer's purchase. A crawl cycle's health counts the sites waiting on
+  unchanged documents as the cycle's reads of sites last read well came out,
+  so a few dark sites still read as theirs and an outage of ours as ours.
+- The request log behind /__operator/seller-load.json also counts the
+  catalog's fetches, the site-crawl tool and the router's purchases per host.
 
 ### 2026-11-16 (our requests to sellers name themselves and back off)
 Index:
@@ -56,6 +60,7 @@ Operations:
   requests and refusals per kind, the hosts past their day and the Retry-After
   holds, without naming a seller; with ?host= it lists the requests we sent
   that host per component and minute over the last 2 days.
+
 ### 2026-11-16 (a card refund made by hand is recorded)
 Payments:
 - A failed card report whose payment was already refunded outside the server

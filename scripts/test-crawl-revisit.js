@@ -162,6 +162,19 @@ const turn = async (o) => idx.__crawlScheduledForTest(o);
   ok((await turn(O)) === null, "the origin is read when its 12 hour wait ends");
   const after = idx._cacheForTests().get(O);
   ok(after && !after.error && after.readIncomplete && after.tools?.length === 1, "a read of ours that did not complete keeps the listing, though the entry is 10 hours old");
+  // The failed read put the origin back on the cycle; a second failed read of
+  // ours half an hour later still holds it, for the same window from the end
+  // of the wait (as an origin read every cycle is held six hours).
+  clock += CYCLE;
+  ok((await turn(O)) === null, "the origin is read again on the next cycle");
+  const again = idx._cacheForTests().get(O);
+  ok(again && !again.error && again.readIncomplete && again.tools?.length === 1, "a second read of ours that did not complete in a row keeps the listing too");
+  // Past the window, counted from the end of the wait, the hold ends.
+  idx._cacheForTests().set(O, { ...again, holdFromAt: Date.now() - 7 * H });
+  clock += CYCLE;
+  await turn(O);
+  const late = idx._cacheForTests().get(O);
+  ok(late && late.error, "seven hours after the wait ended, a read of ours that did not complete no longer holds it");
 }
 
 // ---- Retry-After ---------------------------------------------------------------
