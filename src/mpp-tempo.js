@@ -996,7 +996,7 @@ export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlM
   const nextSlot = () => { if (!slotFreed) slotFreed = new Promise((r) => { wakeSlot = r; }); return slotFreed; };
   const freeSlot = () => { if (wakeSlot) { const w = wakeSlot; slotFreed = null; wakeSlot = null; w(); } };
   const stateOf = (v) => (v === true || v === "active" ? "active" : typeof v === "string" ? v : "inactive");
-  return async function verifyKeychainSender(keychain, now = Date.now()) {
+  const verify = async function verifyKeychainSender(keychain, now = Date.now()) {
     const account = lcAddress(keychain?.account);
     const accessKey = lcAddress(keychain?.accessKey);
     if (!account || !accessKey) return null;
@@ -1032,6 +1032,9 @@ export function createKeychainSenderVerifier({ check = tempoAccessKeyState, ttlM
     }
     return decide(await p);
   };
+  /** Reads under way now (one per account and key), for tests and status. */
+  verify.readsInFlight = () => inFlight.size;
+  return verify;
 }
 const verifyTempoKeychainSenderDefault = createKeychainSenderVerifier();
 /** The production keychain check (TEMPO_RPC_URL, cached). */

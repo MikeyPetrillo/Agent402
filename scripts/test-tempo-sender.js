@@ -517,10 +517,14 @@ async function listen(app) {
     const savedT = process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS;
     process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS = "400";
     let freeAll; const stuck = new Promise((res) => { freeAll = res; });
-    keychainAnswer = createKeychainSenderVerifier({ maxInFlight: 16, check: async ({ account }) => (account === victim ? (await stuck, "absent") : "active") });
+    const flooded = createKeychainSenderVerifier({ maxInFlight: 16, check: async ({ account }) => (account === victim ? (await stuck, "absent") : "active") });
+    keychainAnswer = flooded;
     const flood = [];
     for (let i = 0; i < 16; i++) flood.push(get("/plain", oxKeychain({ account: victim, key: generatePrivateKey() })));
-    await sleep(50);
+    // Every slot held before the genuine key is sent (the requests above are
+    // read in the server as they arrive, which a loaded machine can delay).
+    for (let i = 0; i < 500 && flooded.readsInFlight() < 16; i++) await sleep(10);
+    ok(flooded.readsInFlight() === 16, `C: precondition: 16 key reads in flight hold every slot (${flooded.readsInFlight()})`);
     const tq = Date.now();
     const full = await get("/plain", TX_AGENT);
     const fullMs = Date.now() - tq;
