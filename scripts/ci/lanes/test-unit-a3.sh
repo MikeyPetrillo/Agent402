@@ -23,7 +23,7 @@ t node scripts/test-mcp-limits.js
 t node scripts/test-mcp-answer-bound.js
 # Hosted connector and revenue view error text: a configured key or a database URL's password an error quotes never reaches an answer, the reason stays (offline, bare express + mountMcp)
 t node scripts/test-mcp-error-redaction.js
-# x402 MCP transport codec: payment-required result with MPP _meta kept byte for byte, _meta payment reader refuses malformed input as 400, PAYMENT-SIGNATURE and PAYMENT-RESPONSE round trips through @x402/core, the official @x402/mcp client pays against it (offline, in-memory)
+# x402 MCP transport codec: payment-required and invalid-payment results with MPP _meta kept byte for byte (x402/ keys never merged), _meta payment reader refuses malformed input as 400 with size and depth bounded before serialization, PAYMENT-SIGNATURE and PAYMENT-RESPONSE round trips through @x402/core, the official @x402/mcp client (installed --no-save by the step before) pays and re-signs against it (offline, in-memory)
 t node scripts/test-mcp-x402.js
 
 # @step 2: Offline suites (13 scripts, one process each)
