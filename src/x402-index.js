@@ -7702,8 +7702,8 @@ export function indexWarmStartInProgress() { return warmStartInProgress; }
  *    - the volume carries no cache at all (first deploy of a new volume, an
  *      unreadable file), so the cache is empty until the first crawl lands -
  *      the first cycle is deferred 30 s and a full pass takes minutes;
- *    - the crawler is switched off entirely (X402_INDEX_CRAWL=off: CI, and any
- *      test that needs to attribute outbound traffic).
+ *    - the crawler is not running (src/crawl-switch.js: every boot that is not
+ *      production, unless X402_INDEX_CRAWL=on; or X402_INDEX_CRAWL=off).
  *  The consumer is a seller's automated checker, which reads "not found" as
  *  "we are not listed" - the same misreading the paging fix of the same day was
  *  written for, one branch away in the same handler.

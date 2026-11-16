@@ -65,6 +65,7 @@ ok(pubBody?.xSearchAuthors?.status === "ok" && Object.keys(pubBody.xSearchAuthor
 ok(opBody?.xSearchAuthors?.status === "ok" && typeof opBody?.xSearchAuthors?.authorReadsToday === "number" && typeof opBody?.xSearchAuthors?.alertAbove === "number", `the operator view of xSearchAuthors carries the day's count and the mark (${JSON.stringify(opBody?.xSearchAuthors)})`);
 ok(opBody?.subscriptionRenewals?.status === "off", `the operator view reads the same word without a subscription engine (${JSON.stringify(opBody?.subscriptionRenewals)})`);
 ok(pubBody?.directUpstream?.status === "off" && Object.keys(pubBody.directUpstream).join(",") === "status" && opBody?.directUpstream?.status === "off" && Object.keys(opBody.directUpstream).join(",") === "status", `directUpstream publishes its word only, on both views (${JSON.stringify(pubBody?.directUpstream)})`);
+for (const k of ["directUpstreamSpend", "directUpstreamBalance"]) ok(pubBody?.[k]?.status === "off" && Object.keys(pubBody[k]).join(",") === "status" && opBody?.[k]?.status === "off", `${k} publishes its word only (${JSON.stringify(pubBody?.[k])})`);
 
 // --- tool and upstream failure words: one word each publicly, rows for the operator ---
 for (const k of ["toolFailures", "upstreamHealth"]) {

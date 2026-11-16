@@ -65,6 +65,7 @@ import { authorizationUsed, findAuthorizationTx, blockNear } from "./robinhood-o
 import { ownFirstAttemptOf } from "./robinhood-order.js";
 import { pendingNotedTxsFor, takePendingAnswers, peekPendingAnswers, receiptUsesAuthorization } from "./pending-settle.js";
 import { stripControlChars as oneLine } from "./prepayment-refusal.js";
+import { x402McpEntryOf, mcpX402SlugOfToolName } from "./mcp-x402-routes.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -134,6 +135,23 @@ export const RESOLUTIONS_KEPT = 500;
 export const OPERATOR_OUTCOMES = Object.freeze(["booked_owed", "paid", "dismissed"]);
 const KEY_RE = /^(?:eip155:[0-9]{1,12}\|(?:0x[0-9a-f]{64}|auth\|0x[0-9a-f]{40}\|0x[0-9a-f]{64})|solana:[-_a-zA-Z0-9]{1,64}\|[1-9A-HJ-NP-Za-km-z]{64,88}|algorand:[-_a-zA-Z0-9=+/]{1,64}\|[A-Z2-7]{52})$/;
 
+const SLUG_RE = /^[a-z0-9][a-z0-9._/-]{0,119}$/i;
+
+/** The catalog slug of a connector x402 twin's payment
+ *  (src/mcp-x402-routes.js), or null: read from the request the twin gate
+ *  flagged, else, for a payment whose resource is the connector itself, from
+ *  the MCP tool name its discovery extension carries. A twin's resource URL
+ *  is `${BASE_URL}/mcp`, which names no tool. */
+export function lateSlugOfTwin(ctx) {
+  try {
+    const twin = x402McpEntryOf(ctx?.transportContext?.request?.adapter?.req);
+    if (twin) return twin.slug;
+    const url = ctx?.paymentPayload?.resource?.url;
+    if (typeof url !== "string" || new URL(url).pathname.replace(/\/+$/, "") !== "/mcp") return null;
+    return mcpX402SlugOfToolName(ctx?.paymentPayload?.extensions?.bazaar?.info?.input?.toolName);
+  } catch { return null; }
+}
+
 /** The route slug a refund row names, from the resource URL the buyer paid. */
 function slugOf(resourceUrl) {
   try {
@@ -190,6 +208,7 @@ export function lateSettleCandidate(ctx) {
       network: String(req.network || ""), tx: null, nonce: String(la.nonce), payer: String(la.payer || auth.from || ""),
       payTo: String(req.payTo || ""), asset: String(req.asset || ""), amount: String(req.amount ?? ""),
       resource: ctx?.paymentPayload?.resource?.url || null, validBefore: validBeforeOf(la.validBefore ?? auth.validBefore), via: la.via || "ambiguous facilitator",
+      ...(lateSlugOfTwin(ctx) ? { slug: lateSlugOfTwin(ctx) } : {}),
     };
   }
   if (!txOk(req.network, tx)) return null;
@@ -205,6 +224,7 @@ export function lateSettleCandidate(ctx) {
     asset: String(req.asset || ""),
     amount: String(req.amount ?? ""),
     resource: ctx?.paymentPayload?.resource?.url || null,
+    ...(lateSlugOfTwin(ctx) ? { slug: lateSlugOfTwin(ctx) } : {}),
     validBefore: validBeforeOf(auth.validBefore ?? auth.deadline),
     // A payment our relayer settled first (the facilitator read dry) named
     // its transaction as the primary's answer: the entry says whose it is.
@@ -422,7 +442,7 @@ export function createLateSettleBook({
         ...(!byAuth && rail === "evm" && NONCE.test(String(c.nonce || "")) ? { nonce: String(c.nonce).toLowerCase() } : {}),
         ...(lastValid != null ? { lastValid } : {}), ...(blockhash ? { blockhash } : {}),
         payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
-        amount: String(c.amount), validBefore: validBeforeOf(c.validBefore), slug: slugOf(c.resource), via: String(c.via || "primary").slice(0, 60),
+        amount: String(c.amount), validBefore: validBeforeOf(c.validBefore), slug: typeof c.slug === "string" && SLUG_RE.test(c.slug) ? c.slug : slugOf(c.resource), via: String(c.via || "primary").slice(0, 60),
         ...(!byAuth && NONCE.test(String(c.authNonce || "")) ? { authNonce: String(c.authNonce).toLowerCase() } : {}),
         at: t, nextCheckAt: t + FIRST_CHECK_MS, checks: 0, unreadable: 0, failures: 0, state: "pending",
       };

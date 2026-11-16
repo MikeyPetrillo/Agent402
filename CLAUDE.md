@@ -20,9 +20,9 @@ LLC: credit the entity, never a personal name.
 - `src/mcp-http.js`: hosted MCP connector at `/mcp` (dotted tool names: `catalog.search`,
   `catalog.find`, `catalog.call`, `payment.info`, `server.describe`, `sellers.list`,
   `demand.request`, flagship aliases). Old snake names remain CallTool aliases only.
-- `src/mcp-mpp.js`, `src/mcp-tasks.js`, `src/mcp-skills.js`, `src/mcp-x402.js`: connector payments,
-  long calls as tasks, skill packs, the x402 MCP codec (pure, not yet wired to `/mcp`; see
-  `.claude/rules/mcp.md`).
+- `src/mcp-mpp.js`, `src/mcp-tasks.js`, `src/mcp-skills.js`, `src/mcp-x402.js`, `src/mcp-x402-routes.js`:
+  connector payments, long calls as tasks, skill packs, the x402 MCP codec and the internal x402 twins of
+  flagships (both not yet wired to `/mcp`; see `.claude/rules/mcp.md`).
 - `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js`, `src/mpp-subscriptions.js`: MPP
   wire support. x402 keeps sole settlement authority on the evm path; the shim only translates.
 - `src/credits.js`: prepaid card credits (hold at authorize, debit on a final 200).
@@ -324,3 +324,6 @@ Actions secrets), never in the repo. Rollout switches are generally "key present
 bucket credentials (`BACKUP_S3_*`) live on Railway only, shown by `railway bucket credentials` and pasted by the operator
 into the service variables, never in Actions: the deploy job's variable upsert must not name a
 variable whose source of truth is Railway (`scripts/test-ci-secretless-install.js`).
+The direct inference upstream's daily spend alarm reads `DIRECT_UPSTREAM_DAILY_ALERT_USD`
+(Railway; `0` or `off` turns it off; `src/direct-upstream-spend.js`): an alarm only, it never
+refuses, caps or reroutes a call.

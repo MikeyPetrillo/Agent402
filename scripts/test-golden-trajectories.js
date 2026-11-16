@@ -222,7 +222,7 @@ const proc = spawn(process.execPath, ["--import", "./scripts/lib/golden-preload.
     SOR_MULTI_TENANT_PAYTOS: [walletOf("shared"), walletOf("shared_busy")].join(","), SOR_SHARED_PAYTOS_FILE: join(dir, "shared-paytos.json"),
     SOR_SELF_FUNDING_CLEARED_FILE: join(dir, "self-funding-cleared.json"), SOR_ROUTER_PURCHASES_FILE: join(dir, "router-purchases.json"),
     LEADERBOARD_FUNDING_SCAN: "off", LEADERBOARD_SNAPSHOT_FILE: lbFile, SANCTIONS_PAYOUT_FILE: sanctionsFile,
-    X402_ECONOMY_DB: join(dir, "econ.db"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "",
+    X402_ECONOMY_DB: join(dir, "econ.db"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999", X402_INDEX_CRAWL: "on",
     MPP_INDEX_CRAWL: "off", X402_PAYWALL_PROBES_PER_CYCLE: "0", ROUTER_WORKERS: "0", LOAD_SHED: "off",
     MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", FIRST_CALL_ALLOWANCE: "", SLOW_SYNC_WINDOW_SECONDS: "off",
     GOLDEN_SELLER_PORT: String(SELLER_PORT), GOLDEN_CTL_FILE: ctlFile,

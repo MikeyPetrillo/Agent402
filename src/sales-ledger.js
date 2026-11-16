@@ -1734,7 +1734,7 @@ const qExtByPathPayer = db.prepare(`
   GROUP BY via, payer`);
 /**
  * { [path]: { sales, revenueUsd, payers, versions } } over the window: path is
- * "mcp", "http", a client package name, or "unknown" (rows recorded before the
+ * "x402-mcp", "mcp", "http", a client package name, or "unknown" (rows recorded before the
  * path existed, and sales no request carried). `versions` counts sales per
  * stored product token for the package paths.
  */

@@ -70,6 +70,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, mkdtempSync
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { cdnSyncLeftMs } from "./cdn-sync-window.js";
+import { x402McpEntryOf, MCP_X402_SALE_PATH } from "./mcp-x402-routes.js";
 import { GATEWAY_KIND_NAME, GATEWAY_PENDING_BOOKED, GATEWAY_WIRE, SETTLEMENT_FAILED_REASON, SETTLEMENT_PENDING_REASON, isGatewayBatchedPayment } from "./gateway-wire.js";
 
 export { GATEWAY_KIND_NAME, GATEWAY_WIRE, SETTLEMENT_PENDING_REASON, isGatewayBatchedPayment, isGatewayBatchedHeader, isGatewayBatchedRequest, settlementKindOf } from "./gateway-wire.js";
@@ -350,13 +351,25 @@ async function resumeCheck(paymentPayload, requirements, kinds) {
 
 /** The route a batched payment paid for, as the pending book keeps it:
  *  the request's method and path (no query), read from the request this
- *  server is answering, never from the buyer's payload. Null without one. */
+ *  server is answering, never from the buyer's payload. Null without one.
+ *  A connector x402 twin (src/mcp-x402-routes.js) names the public route it
+ *  runs, not its internal path; gatewayArrivalOf keeps it apart. */
 export function gatewayResourceOf(req) {
   if (!req || typeof req !== "object" || typeof req.method !== "string") return null;
+  const twin = x402McpEntryOf(req);
+  if (twin) return `${twin.method.toUpperCase()} ${twin.path}`.slice(0, 300);
   const url = String(req.originalUrl || req.url || "");
   if (!url.startsWith("/")) return null;
   return `${req.method.toUpperCase()} ${url.split("?")[0].slice(0, 280)}`;
 }
+
+/** The arrival a pending booking must be resent on: "x402-mcp" for a
+ *  connector x402 twin, null for the HTTP route. A twin's pending payment is
+ *  never served on the HTTP route, nor the route's on a twin. */
+export function gatewayArrivalOf(req) {
+  return x402McpEntryOf(req) ? MCP_X402_SALE_PATH : null;
+}
+const arrivalOf = (v) => (v === MCP_X402_SALE_PATH ? { arrival: v } : {});
 
 /** The first machine reason in an error body ({errors:[{reason}]} or {errorReason}), or a status code. */
 function reasonFromErrorBody(data, status) {
@@ -561,7 +574,7 @@ export class GatewayNanopaymentsClient {
     if (this._onPending) {
       const entry = {
         payer, network, nonce: auth?.nonce, amount: String(paymentRequirements?.amount ?? ""), payTo: paymentRequirements?.payTo,
-        resource: gatewayResourceOf(store?.req), validBefore: auth?.validBefore,
+        resource: gatewayResourceOf(store?.req), ...arrivalOf(gatewayArrivalOf(store?.req)), validBefore: auth?.validBefore,
         origin: cause === SETTLEMENT_PENDING_REASON ? "pending" : "ambiguous", cause,
       };
       let booked = false;
@@ -700,7 +713,7 @@ export function installGatewayRouting(server, client, networks, { pendingBook = 
     // The resend must be for the route the entry was booked on (method and
     // path): a pending payment never buys a different route at the same
     // price. Refused before Gateway is read; the entry stays pending.
-    if ((entry.resource ?? null) !== gatewayResourceOf(req)) return { outcome: "mismatch", key };
+    if ((entry.resource ?? null) !== gatewayResourceOf(req) || (entry.arrival ?? null) !== gatewayArrivalOf(req)) return { outcome: "mismatch", key };
     const found = await client.transferByAuthorization({ payer: a.from, payTo: requirements?.payTo, amount: requirements?.amount, nonce: a.nonce, network });
     if (found.state === "failed") {
       try { await pendingBook.resolve(key, { outcome: "not_charged", note: "Gateway reports the transfer failed" }); } catch { /* the entry stays; nothing is served either way */ }
@@ -1047,7 +1060,7 @@ export function notePendingLost(entry, log = console.error) {
     // What the book needs to take it on a retry.
     booking: {
       payer: entry?.payer, network: entry?.network, nonce: entry?.nonce, amount: entry?.amount, payTo: entry?.payTo, resource: entry?.resource,
-      slug: entry?.slug, validBefore: entry?.validBefore, origin: entry?.origin, cause: entry?.cause,
+      slug: entry?.slug, validBefore: entry?.validBefore, origin: entry?.origin, cause: entry?.cause, ...arrivalOf(entry?.arrival),
     },
   };
   // Logged first, so a line naming the booking always comes before any
@@ -1160,13 +1173,13 @@ export function createGatewayPendingBook({ file = gatewayPendingFile(), now = ()
      * the store did not take it and the journal did (the resolver lands it
      * later), false when it is refused as malformed or kept nowhere.
      */
-    async book({ payer, network, nonce, amount, payTo, resource, slug, validBefore, origin, cause } = {}, { quiet = false, at = null } = {}) {
+    async book({ payer, network, nonce, amount, payTo, resource, slug, validBefore, origin, cause, arrival } = {}, { quiet = false, at = null } = {}) {
       if (!ADDR.test(String(payer || "")) || !B32.test(String(nonce || "")) || !/^eip155:[0-9]{1,12}$/.test(String(network || ""))) return false;
       const key = pendingKey(network, payer, nonce);
       const entry = {
         key, network, payer: lc(payer), nonce: lc(nonce), amount: UINT.test(String(amount ?? "")) ? String(amount) : null,
         payTo: ADDR.test(String(payTo || "")) ? lc(payTo) : null, resource: typeof resource === "string" ? resource.slice(0, 300) : null,
-        slug: typeof slug === "string" && /^[a-z0-9][a-z0-9._/-]{0,119}$/i.test(slug) ? slug : null,
+        slug: typeof slug === "string" && /^[a-z0-9][a-z0-9._/-]{0,119}$/i.test(slug) ? slug : null, ...arrivalOf(arrival),
         validBefore: UINT.test(String(validBefore ?? "")) ? String(validBefore) : null,
         origin: origin === "ambiguous" ? "ambiguous" : "pending", cause: typeof cause === "string" ? safeReason(cause, "unknown") : null,
         // A retry of a booking held outside the book keeps when it happened.

@@ -17,6 +17,8 @@ t node scripts/test-llm-timed-out-budget.js
 t node scripts/test-direct-upstream.js
 # Direct upstream price guard (offline): a per-call eligibility check against the listed prices of both routes and a private threshold; fails closed; measured backstop; word-only
 t node scripts/test-direct-upstream-cost-guard.js
+# Direct upstream daily spend and balance words: alarms only, a 402 balance refusal served by OpenRouter, pagers (offline stubs)
+t node scripts/test-direct-upstream-spend.js
 t node scripts/test-gateway-resilience.js
 t node scripts/test-upstream-refusal.js
 t node scripts/test-llm-kit-spend.js

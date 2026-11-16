@@ -1,5 +1,7 @@
 // Which path a paid call arrived on, for the sales ledger's operator split.
 //
+//   "x402-mcp"       the hosted connector's x402 twin of a flagship
+//                    (src/mcp-x402-routes.js), set only by its internal gate
 //   "mcp"            the hosted connector's paid loopback replay (/mcp ->
 //                    src/mcp-mpp.js), proved by the marker on a local socket
 //   "<pkg>/<version>" one of our client or adapter packages, read from the
@@ -11,6 +13,7 @@
 // digits, dots, slashes and hyphens), never the full User-Agent, never an
 // address. Rows recorded before the column existed read "unknown".
 import { isMcpLoopback } from "./unpaid-quote-budget.js";
+import { isX402McpRequest, MCP_X402_SALE_PATH } from "./mcp-x402-routes.js";
 
 /** Our published packages whose User-Agent product token names them. */
 export const CLIENT_PACKAGES = Object.freeze([
@@ -41,19 +44,20 @@ export function clientTokenOf(userAgent) {
   return PACKAGE_SET.has(name) ? token : null;
 }
 
-/** The path value recorded for this request: "mcp", a package token, or "http". */
+/** The path value recorded for this request: "x402-mcp", "mcp", a package token, or "http". */
 export function salePathOf(req) {
   try {
+    if (isX402McpRequest(req)) return MCP_X402_SALE_PATH;
     if (isMcpLoopback(req)) return "mcp";
     return clientTokenOf(req?.headers?.["user-agent"]) || "http";
   } catch { return "http"; }
 }
 
-/** A stored value (or NULL) as its group: "mcp", "http", "unknown", or the package name. */
+/** A stored value (or NULL) as its group: "x402-mcp", "mcp", "http", "unknown", or the package name. */
 export function salePathGroup(via) {
   if (via == null || via === "") return "unknown";
   const s = String(via);
-  if (s === "mcp" || s === "http" || s === "unknown") return s;
+  if (s === "mcp" || s === MCP_X402_SALE_PATH || s === "http" || s === "unknown") return s;
   const name = s.split("/")[0].toLowerCase();
   return PACKAGE_SET.has(name) ? name : "unknown";
 }
@@ -62,6 +66,6 @@ export function salePathGroup(via) {
 export function cleanSalePath(via) {
   if (via == null) return null;
   const s = String(via);
-  if (s === "mcp" || s === "http") return s;
+  if (s === "mcp" || s === MCP_X402_SALE_PATH || s === "http") return s;
   return clientTokenOf(s);
 }
