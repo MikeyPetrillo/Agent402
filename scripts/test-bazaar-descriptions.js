@@ -29,6 +29,10 @@ for (const must of ["search", "answer", "extract", "render", "vin-decode", "geo-
 // curated copy says what a read returns and whose namespace it reads.
 {
   const mr = BAZAAR_DESCRIPTIONS["memory-read"] || "";
+  {
+    const cutOpen = bazaarCapDescription("Pack runs 3 underlying tools (alpha-tool, beta-tool, gamma-tool, delta-tool); partial-success per step and more words here.", 70);
+    ok(!/\([^)]*$/.test(cutOpen) && /tools\.$/.test(cutOpen), `a cut never leaves a bracket open (${cutOpen})`);
+  }
   ok(bazaarCapDescription(mr) === mr && /paying wallet/.test(mr) && /omit it to list/.test(mr) && /own namespace by default/.test(mr) && /granted/.test(mr) && !/\?[a-z]+=/.test(mr), "memory-read: curated copy reads whole and names the key read, the key list, the payer's own namespace and a granted one");
 }
 // The cut runs in linear time: long runs of whitespace, separators or hints

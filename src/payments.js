@@ -1204,7 +1204,11 @@ export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   const sentenceEnd = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), head.endsWith(".") ? head.length - 1 : -1);
   if (sentenceEnd >= Math.floor(max * 0.5)) return head.slice(0, sentenceEnd + 1).trim();
   const wordEnd = head.lastIndexOf(" ");
-  return (wordEnd > 0 ? head.slice(0, wordEnd) : head).trim().replace(/[,;:\-]+$/, "") + ".";
+  let cut = (wordEnd > 0 ? head.slice(0, wordEnd) : head).trim();
+  // A cut inside a bracket leaves it open ("runs 3 tools (a, b."): end before it.
+  const open = cut.lastIndexOf("(");
+  if (open > 0 && open > cut.lastIndexOf(")")) cut = cut.slice(0, open).trim();
+  return cut.replace(/[,;:\-]+$/, "") + ".";
 }
 
 // The listing icon: the 512px PNG mark (server.js), on a path whose extension
