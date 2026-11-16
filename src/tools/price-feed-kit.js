@@ -9,6 +9,7 @@
 
 import { protocols as llamaProtocols } from "./defi-kit.js";
 import { cgTake, cgRefusal, isCoinGeckoHost } from "./coingecko-rate.js";
+import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
@@ -54,11 +55,11 @@ async function feedFetch(url, opts = {}) {
 // or a thrown refusal (never cached).
 async function feedLoad(url, host, { timeout = FEED_READ_MS, step = "data" } = {}) {
   const headers = { Accept: "application/json" };
-  // CoinGecko demo key rides along when configured (call-time read, same header
-  // as crypto-kit's jsonGet). Keyless CoinGecko is metered per IP — and our
+  // CoinGecko key rides along when configured (call-time read; header per
+  // tier from coingecko-endpoint.js, same as crypto-kit's jsonGet). Keyless CoinGecko is metered per IP — and our
   // egress IP is shared with every other Railway tenant.
   if (isCoinGeckoHost(host)) {
-    if (process.env.COINGECKO_API_KEY) headers["x-cg-demo-api-key"] = process.env.COINGECKO_API_KEY;
+    Object.assign(headers, cgKeyHeaders());
     // The key's minute budget is ONE bucket shared with crypto-kit and
     // crypto-markets-kit (coingecko-rate.js). This kit sent the same key with
     // no bucket at all (the 2026-08-28 fix reached the other two kits only), so
@@ -140,7 +141,7 @@ export const PRICE_FEED_TOOLS = [
         ? i.vsCurrency.trim().toLowerCase()
         : "usd";
       const wantChange = i.include24hChange === true;
-      const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(",")}&vs_currencies=${vs}&include_last_updated_at=true` +
+      const url = `${cgBase()}/simple/price?ids=${ids.join(",")}&vs_currencies=${vs}&include_last_updated_at=true` +
         (wantChange ? `&include_24hr_change=true` : "");
       const data = await feedFetch(url, { step: "simple price" });
       const prices = ids.map((id) => {

@@ -9,10 +9,10 @@
 // exchange rates, full-text search and the full coin list with platform
 // contracts. Same slug-style ids as the rest of the catalog.
 //
-// Upstream: api.coingecko.com/api/v3 (fixed host; every caller-supplied value
-// rides as an encoded path segment or query parameter, never a URL). The Demo
-// API key (`COINGECKO_API_KEY`, read at call time, sent as
-// `x-cg-demo-api-key`) moves metering from a shared per-IP bucket to our own
+// Upstream: CoinGecko API v3 (fixed host per tier; every caller-supplied value
+// rides as an encoded path segment or query parameter, never a URL). The API
+// key (`COINGECKO_API_KEY`, read at call time; host and header per
+// `COINGECKO_API_TIER`, src/tools/coingecko-endpoint.js) moves metering from a shared per-IP bucket to our own
 // quota: 30 calls/min, 10k calls/month. That monthly budget is the reason
 // every response is cached in-process (60s for prices, 5 min for lists and
 // profiles, 10 min for the coin list): a second identical call inside the
@@ -32,7 +32,7 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-export const CG_BASE = "https://api.coingecko.com/api/v3";
+import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 const SOURCE = "coingecko";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
@@ -58,11 +58,10 @@ function userAgent() {
 }
 
 function headers() {
-  const key = (process.env.COINGECKO_API_KEY || "").trim();
   return {
     "User-Agent": userAgent(),
     Accept: "application/json",
-    ...(key ? { "x-cg-demo-api-key": key } : {}),
+    ...cgKeyHeaders(),
   };
 }
 
@@ -80,7 +79,7 @@ import { createCgCache } from "./coingecko-cache.js";
 export { resetCgRateLimit };
 
 async function cgGet(path, params, ttlMs) {
-  const url = new URL(CG_BASE + path);
+  const url = new URL(cgBase() + path);
   for (const [k, v] of Object.entries(params || {})) {
     if (v === undefined || v === null || v === "") continue;
     url.searchParams.set(k, String(v));
