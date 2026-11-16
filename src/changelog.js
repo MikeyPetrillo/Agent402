@@ -15,6 +15,13 @@ const ENTRIES = [
   },
   {
     date: "2026-11-16",
+    title: "Test and CI servers no longer crawl seller hosts",
+    items: [
+      "Operations: Test and CI servers no longer crawl seller hosts: the x402 and MPP index crawlers start on a production boot only (NODE_ENV=production, which the image sets, or the platform's production environment), never under FREE_MODE or CI, unless X402_INDEX_CRAWL=on or MPP_INDEX_CRAWL=on says so. Before, a local, test or CI server without the switch set ran its own pass over every indexed seller.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "A card refund made by hand is recorded",
     items: [
       `Payments: A failed card report whose payment was already refunded outside the server records that refund: when Stripe refuses a new refund, the refund already made for the payment is read back and its id recorded once Stripe reports it succeeded (a refund still pending leaves the payment owed until it does), and a check that runs every ${mins(READBACK_INTERVAL_MS)}, first ${mins(READBACK_FIRST_MS)} after the server starts, reads back every payment still owed a refund without issuing one, so a refund made by hand after the retries stop also shows the payment refunded and leaves the owed refund alarm.`,

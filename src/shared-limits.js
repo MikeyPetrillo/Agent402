@@ -416,7 +416,8 @@ export function createSharedDailySpend(name, control, { day = (now) => new Date(
     book(usd, now = Date.now()) {
       if (!sharedLimitsEnabled()) return;
       const m = micro(usd);
-      if (m) void sharedWrite(control, shared.counterAdd(name, day(now), m, TTL_MS));
+      // The write's settled result (never rejects), for a caller that keeps one in flight.
+      return m ? sharedWrite(control, shared.counterAdd(name, day(now), m, TTL_MS)) : undefined;
     },
     /** The shared total for the day in the caller's unit, or null. */
     async today(now = Date.now()) {
