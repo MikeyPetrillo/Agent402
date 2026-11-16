@@ -162,5 +162,28 @@ ok(exact > 0 && exact <= 13, `an exact one-term slug match stays within the docu
   ok(routeQuery({ query: "currency", top: 20, include: "local", ...ctx }).results.find((x) => x.slug === "fx-noted")?.description?.endsWith(notice) === true, "the answer still carries the full description");
 }
 
+// A camelCase operationId is a name in slug form like any other (2026-11-16,
+// reported by a seller). Its name was folded before it was split, so
+// "webPageToMarkdown" was one token: a multi-word query never covered it and
+// a kebab-case rival carrying fewer of the query's words outranked it.
+{
+  cache.clear();
+  cache.set("https://camel.example", entry("https://camel.example", [
+    { slug: "webPageToMarkdown", name: "webPageToMarkdown", description: "" },
+    { slug: "getUSDCPrice", name: "getUSDCPrice", description: "" },
+  ]));
+  cache.set("https://kebab.example", entry("https://kebab.example", [
+    { slug: "page-to-markdown", name: "Page to markdown", description: "web" },
+    { slug: "usdc-price", name: "USDC price", description: "get" },
+  ]));
+  const top = (q) => routeQuery({ query: q, top: 5, include: "external", ...CTX }).results.map((r) => `${r.slug}:${r.score}`);
+  const md = top("web page to markdown");
+  ok(md[0]?.startsWith("webPageToMarkdown:"), `"web page to markdown": the camelCase seller covers every word and ranks first (${md.join(", ")})`);
+  const px = top("get usdc price");
+  ok(px[0]?.startsWith("getUSDCPrice:"), `"get usdc price": an acronym inside camelCase splits at its last capital (${px.join(", ")})`);
+  ok(top("webpagetomarkdown")[0]?.startsWith("webPageToMarkdown:"), "the operationId typed as one word still matches the slug exactly");
+  cache.clear();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -24,6 +24,19 @@ ok(eq(queryTerms("a—b–c"), ["a", "b", "c"]), "dashes of every width separate
 ok(queryTerms("x".repeat(5) + " " + "y".repeat(5), { max: 1 }).length === 1, "the term cap is honoured");
 ok(eq(queryTerms("csv csv CSV"), ["csv"]), "terms are deduplicated");
 ok(eq(splitTokens("Gzip, HTML-strip"), ["gzip", "html", "strip"]), "splitTokens is the lower-cased token list");
+// camelCase and acronym boundaries are read before folding (2026-11-16).
+ok(eq(splitTokens("webPageToMarkdown"), ["web", "page", "to", "markdown"]), "a camelCase operationId splits at each capital");
+ok(eq(splitTokens("getTokenPrice"), ["get", "token", "price"]), "getTokenPrice -> get token price");
+ok(eq(splitTokens("getUSDCPrice"), ["get", "usdc", "price"]), "an acronym ends before the capital that opens the next word");
+ok(eq(splitTokens("get_token_price"), ["get", "token", "price"]) && eq(splitTokens("web-page-to-markdown"), ["web", "page", "to", "markdown"]), "snake_case and kebab-case are unchanged");
+ok(eq(splitTokens("XMLHttpRequest erc20Token"), ["xml", "http", "request", "erc20", "token"]), "a leading acronym and a digit before a capitalized word are boundaries");
+ok(eq(splitTokens("iPhone eBay APIs IPv4 OAuth P2P 3D JSON"), ["iphone", "ebay", "apis", "ipv4", "oauth", "p2p", "3d", "json"]), "a one-letter lower-case prefix, a plural acronym, a version suffix and an all-caps word stay whole");
+ok(eq(splitTokens("İstanbul"), "İstanbul".toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)), "the fold is the same as before for a character whose lower case adds a mark");
+ok(eq(splitTokens("getIDsByName"), ["get", "ids", "by", "name"]), "a plural acronym inside camelCase keeps its s");
+// The query side is folded whole: a buyer's words and a pasted description's
+// field names ("marketCap") stay one term, so no ranking moves for them.
+ok(eq(queryTerms("getTokenPrice marketCap"), ["gettokenprice", "marketcap"]), "queryTerms folds a camelCase word whole, as before");
+ok(termMatcher("to")("webpagetomarkdown") === false && termMatcher("to")("page to markdown") === true, "the short-term matcher reads a folded haystack as before");
 ok(isCjkTerm("中国") && !isCjkTerm("ip") && !isCjkTerm("中国x"), "isCjkTerm is true only for all-CJK terms");
 
 // --- matching --------------------------------------------------------------------
