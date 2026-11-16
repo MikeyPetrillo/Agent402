@@ -154,7 +154,7 @@ const HOST_CHECK_MS = 10 * 60_000;
 let hostCheckedAt = 0;
 async function checkHost(url) {
   if (Date.now() - hostCheckedAt < HOST_CHECK_MS) return;
-  await assertPublicUrl(url);
+  await assertPublicUrl(url, { ownUpstream: true });
   hostCheckedAt = Date.now();
 }
 

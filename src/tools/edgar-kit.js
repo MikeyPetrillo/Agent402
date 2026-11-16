@@ -57,7 +57,7 @@ async function edgarGetJson(url) {
 }
 
 async function edgarGetJsonOnce(url) {
-  const safeUrl = await assertPublicUrl(url);
+  const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   // The read runs under its own cap and the handler budget
   // (src/upstream-deadline.js): without a bound of its own a caller-side
   // deadline (the programmatic pages use 12 s) frees its concurrency slot
@@ -794,7 +794,7 @@ async function fetchInformationTableUrl(cikInt, accession) {
 }
 
 async function fetchXmlText(url) {
-  const safeUrl = await assertPublicUrl(url);
+  const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   const ctx = { label: "EDGAR", step: "XML attachment", timeoutMs: EDGAR_FETCH_TIMEOUT_MS, tag: "[edgar]" };
   const res = await upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: "application/xml,text/xml,*/*" } }, ctx);
   if (!res.ok) {

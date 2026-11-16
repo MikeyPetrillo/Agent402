@@ -152,10 +152,23 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
     }
     // the model upstream
     if (path.startsWith("/llm")) {
+      // A streamed Messages or Responses call: st.llmStreamFrames(j, wire).
+      if (req.method === "POST" && /\/api\/v1\/(messages|responses)$/.test(path) && j.stream === true && typeof st.llmStreamFrames === "function") {
+        st.completions++;
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        for (const f of st.llmStreamFrames(j, path.endsWith("/messages") ? "messages" : "responses")) res.write(f);
+        return res.end();
+      }
       if (req.method === "POST" && /chat\/completions/.test(path)) {
         st.completions++;
         await sleep(st.llmDelayMs);
         if (st.llmStatus >= 400) return reply(st.llmStatus, { error: { message: "stub upstream error", code: st.llmStatus } });
+        // A streamed call: st.llmStreamFrames(j) gives the SSE frames (strings).
+        if (j.stream === true && typeof st.llmStreamFrames === "function") {
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          for (const f of st.llmStreamFrames(j, "chat")) res.write(f);
+          return res.end();
+        }
         const content = typeof st.llmContent === "function" ? st.llmContent(j) : "stub answer";
         return reply(200, { id: "gen-" + st.completions, object: "chat.completion", created: Math.floor(Date.now() / 1000), model: j.model || "x", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, cost: 0.000001 } });
       }

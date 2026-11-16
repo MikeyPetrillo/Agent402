@@ -28,6 +28,7 @@
 import { newStripeClient } from "./stripe-api-version.js";
 import { sharedClaimRequired } from "./replay-topology.js";
 import { drainSignal } from "./drain-abort.js";
+import { usdToBaseUnits, usdToTokenDecimalString } from "./base-units.js";
 import { Challenge, Credential, Expires, Method } from "mppx";
 import { receiptHeader as stripeReceiptHeader, txFromReceiptHeader as stripeTxFromReceiptHeader } from "./mpp-receipt.js";
 import { stripe as stripeMethods } from "mppx/server";
@@ -82,7 +83,8 @@ function stripeMethod() {
   return cachedMethod;
 }
 
-const usdToCents = (usd) => Math.round(Number(usd) * 100);
+// Integer cents by the same half-up rule every rail uses (src/base-units.js).
+const usdToCents = (usd) => Number(usdToBaseUnits(Number(usd), 2));
 
 /** Mint one stripe/charge challenge for a route priced >= $0.50. Returns the
  *  WWW-Authenticate "Payment id=…" value, or null when disabled/underpriced.
@@ -103,7 +105,7 @@ export function mintStripeChallenge({ priceUsd, description, realm, secretKey } 
       realm: realm || realmDefault(),
       expires: new Date(Date.now() + CHALLENGE_TIMEOUT_SECONDS * 1000),
       request: {
-        amount: amount.toFixed(2),
+        amount: usdToTokenDecimalString(amount, 2),
         currency: "usd",
         decimals: 2,
         networkId: stripeProfileId(),

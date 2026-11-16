@@ -112,7 +112,7 @@ let indexCache = { at: 0, rows: null };
 export function _resetIndexCache() { indexCache = { at: 0, rows: null }; }
 
 async function edgarText(url, accept) {
-  const safeUrl = await assertPublicUrl(url);
+  const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   const ctx = { label: "SEC", step: "data-set listing", timeoutMs: FETCH_TIMEOUT_MS, tag: "[edgar-13f]" };
   const res = await upstreamFetch(safeUrl, { headers: { "User-Agent": edgarUserAgent(), Accept: accept } }, ctx);
   const text = await bodyUnderDeadline(res.text(), ctx);
@@ -137,7 +137,7 @@ export async function listDataSets({ force = false } = {}) {
 // ---------------------------------------------------------------------------
 /** One Range GET. Requires a 206; a 200 (Range ignored) is refused with the body cancelled. */
 export async function rangeBytes(url, start, end, { fetchImpl = fetch } = {}) {
-  const safeUrl = await assertPublicUrl(url);
+  const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   const ctx = { label: "SEC", step: "range read", timeoutMs: FETCH_TIMEOUT_MS, tag: "[edgar-13f]", fetchImpl };
   const res = await upstreamFetch(safeUrl, {
     headers: { "User-Agent": edgarUserAgent(), Accept: "application/octet-stream", Range: `bytes=${start}-${end}` },
@@ -157,7 +157,7 @@ export async function rangeBytes(url, start, end, { fetchImpl = fetch } = {}) {
 
 /** Content-Length via HEAD (sec.gov answers it); used to place the tail read. */
 async function contentLength(url, { fetchImpl = fetch } = {}) {
-  const safeUrl = await assertPublicUrl(url);
+  const safeUrl = await assertPublicUrl(url, { ownUpstream: true });
   const res = await upstreamFetch(safeUrl, { method: "HEAD", headers: { "User-Agent": edgarUserAgent() } }, { label: "SEC", step: "archive size", timeoutMs: FETCH_TIMEOUT_MS, tag: "[edgar-13f]", fetchImpl });
   if (res.status === 404) throw bad("That data set is no longer at the URL the SEC's listing gave for it", 422);
   if (!res.ok) throw Object.assign(bad(`SEC upstream HTTP ${res.status}`, 502), { upstreamStatus: res.status });

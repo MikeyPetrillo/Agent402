@@ -54,8 +54,9 @@ const ALL_SENDERS = { evm: true, stellar: true, algorand: true, tempo: true, sol
   const noKeys = planRefunds(ROWS(), { senders: { evm: true }, maxEachUsd: 0.25, maxTotalUsd: 2, maxPerPayerUsd: 0.5 });
   ok(noKeys.send.length === 1 && Object.keys(noKeys.held).some((k) => /no sender\/key for tempo/.test(k)) && Object.keys(noKeys.held).some((k) => /no sender\/key for solana/.test(k)), "without their keys they hold, the debt kept, the reason named");
   const caps = planRefunds([
-    { ...ROWS()[0], id: 10, priceUsd: 0.3 },
-    { ...ROWS()[0], id: 11, priceUsd: 0.2 }, { ...ROWS()[0], id: 12, priceUsd: 0.2 }, { ...ROWS()[0], id: 13, priceUsd: 0.2 },
+    // One payment each (its own settle transaction): the ledger holds one row per evidence.
+    { ...ROWS()[0], id: 10, priceUsd: 0.3, evidence: hex64("a") },
+    { ...ROWS()[0], id: 11, priceUsd: 0.2, evidence: hex64("b") }, { ...ROWS()[0], id: 12, priceUsd: 0.2, evidence: hex64("c") }, { ...ROWS()[0], id: 13, priceUsd: 0.2, evidence: hex64("d") },
     { ...ROWS()[1], id: 14, priceUsd: 0.2 },
   ], { senders: ALL_SENDERS, maxEachUsd: 0.25, maxTotalUsd: 0.5, maxPerPayerUsd: 0.4 });
   const reasons = Object.keys(caps.held).join(" | ");

@@ -12,6 +12,28 @@ const ENTRIES = [
   },
   {
     date: "2026-11-16",
+    title: "One claim per payment, one amount per price",
+    items: [
+      "Payments: Two requests carrying one payment are claimed once when the shared store answers one of them and not the other: the request whose claim lands in the store reads the claim this server already holds and is answered 409 (X-Payment-Replay: inflight), uncharged. A claim taken while the store did not answer is written there once this server reaches the store again, without waiting for the claim's 30-second renewal, so a container serving beside this one reads that payment in flight.",
+      "Payments: A dollar price becomes a token or card amount by integer arithmetic where a challenge is minted and where a payment is checked against its price, so the two name the same amount at any token decimals: a Tempo credential that pays exactly its challenge is accepted when the token carries 18 decimals, and the card challenge and its check, the published offer amounts, the subscription amounts and the payment proofs on every chain and Circle Gateway read the same figure.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "An empty streamed answer is not charged",
+    items: [
+      "Gateway: A streamed answer on the chat completions, Messages or Responses routes that ends with no answer (every token spent on reasoning or thinking, or an empty refusal) is answered 502 before any byte is sent and is not charged, as a non-streamed call already is; a payment sent before the call is recorded as owed back. The next model in the chain is tried first. A streamed answer with content is sent from its first answer token, with the reasoning before it, so it arrives as fast as before. On a connection that ends a response with no byte for about 100 seconds, a reasoning phase that outlasts that window starts sending before it closes, and is then served and charged as before.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "Own sources that do not resolve are ours",
+    items: [
+      "Tools: when a source a tool reads on its own does not resolve, the answer is a 503, uncharged, never the 400 a URL you supply gets when it does not resolve. The weather, geocoding, holiday, government, Treasury debt and average-rate, FX history, World Bank, FRED, crypto market, SEC filing, market data and npm registry reads answer 503 with Retry-After 5, attribution ours and hint our-egress, so the same call can be sent again; the Treasury yield-curve tools, fx-rate and fx-dashboard keep their own 503 with Retry-After for a source they cannot read.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Late Solana and Algorand payments are repaid",
     items: [
       "Payments: A payment that reaches the chain after its call was refused is found and repaid on Solana and Algorand as on EVM: a settlement that failed while naming its transaction is followed on chain, and once it lands it is recorded as owed to the buyer, once. On EVM, a settlement refused as already submitted whose chain read failed is followed the same way, and a transaction that never appears is closed as not landed only after an exact payment's signed authorization reads unused, so a transfer sent in another transaction is still repaid. On Solana and Algorand one settled transaction answers one request.",

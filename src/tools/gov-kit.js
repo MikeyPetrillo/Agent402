@@ -60,7 +60,7 @@ async function getJson(url, opts = {}) {
   // wasn't dead, this loop just didn't give it the same second chance.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024, ...opts }));
+      ({ html } = await safeFetch(url, { maxBytes: 5 * 1024 * 1024, ...opts, ownUpstream: true }));
       break;
     } catch (e) {
       // An upstream 404 is an ANSWER for openFDA (no matches) - never retried,
