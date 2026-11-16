@@ -549,6 +549,17 @@ const SENDERS = { evm: true, stellar: true, algorand: true, solana: false };
   ok(listRefunds().filter((r) => r.slug === "legacy").length === 1, "one row for the legacy payment");
   ok(refundByEvidence(legacyHex.toLowerCase())?.evidence === legacyHex && refundsByTransaction(legacyHex.toUpperCase()).length === 1, "the legacy mixed-case row is read under the lowercase spelling");
   ok(voidOwedOnClaim(legacyHex.toUpperCase(), "served on the resend") === true && refundByEvidence(legacyHex)?.status === "void", "an owed-row change reaches the legacy mixed-case row");
+  // Every owed-row change keyed on evidence reaches the row under another spelling.
+  const { renoteOwedRefund, restateOwedAsHandlerFailure, voidOwedForServe, reopenHeldClaim, promoteOwedToHangup, renoteVoidRefund } = await import("../src/refund-ledger.js");
+  const h = `0x${"9a8B7c6D5e4F3a2b".repeat(4)}`, H = h.toUpperCase().replace(/^0X/, "0x");
+  recordRefundOwed({ ...base, slug: "changes", tx: h.toLowerCase(), note: "n1" });
+  ok(renoteOwedRefund(H, "n1", "n2") === true, "renote reaches the row under another spelling");
+  ok(restateOwedAsHandlerFailure(H, { from: "n2", httpStatus: 502, append: "failed" }) === true, "restate reaches the row under another spelling");
+  ok(voidOwedForServe(H, "held") === true && refundByEvidence(h)?.status === "void", "the serve hold reaches the row under another spelling");
+  ok(reopenHeldClaim(H, { held: refundByEvidence(h)?.note, httpStatus: 502, note: "n3" }) === true && refundByEvidence(h)?.status === "owed", "reopen reaches the row under another spelling");
+  ok(promoteOwedToHangup(H, { from: "n3", hangupReason: "payer budget", append: "hung up" }) === true && refundByEvidence(h)?.httpStatus === 499, "promote reaches the row under another spelling");
+  voidOwedForServe(h, "held2");
+  ok(renoteVoidRefund(H, refundByEvidence(h)?.note, "served") === true && refundByEvidence(h)?.note === "served", "renote of a void row reaches it under another spelling");
 }
 
 __resetRefunds();
