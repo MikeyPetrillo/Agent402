@@ -1123,6 +1123,21 @@ jobs:
           E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
+      # The official x402 MCP client, for test-mcp-x402.js alone. It is not in
+      # package.json: mppx names it as an optional peer, so a dev dependency
+      # would be kept by `npm ci --omit=dev` and ship in the production image.
+      # Pinned, scripts off, keys shadowed as in the install above; it runs on
+      # a cache hit too. The suite fails when it is missing.
+      - name: Install the x402 MCP test client (secretless)
+        timeout-minutes: 3
+        env:
+          UPSTREAM_COSTS_JSON: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @x402/mcp@2.30.0
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
       # the reveal suite, burger-aria-label, compare-scroll,
@@ -1466,7 +1481,7 @@ jobs:
 
       - name: OCR language data for the OCR suites (pinned, hash-checked; the server never downloads it)
         run: node scripts/fetch-tessdata.js tessdata eng spa fra deu
-      - name: Offline suites (23 scripts, one process each)
+      - name: Offline suites (36 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a4 3
 
       - name: Socket supply-chain scan (dependency behaviour, not just versions)
@@ -3513,7 +3528,7 @@ jobs:
           for i in $(seq 1 40); do curl -sf http://127.0.0.1:3000/health >/dev/null 2>&1 && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/health >/dev/null || { echo "server never became healthy"; tail -40 /tmp/unit-c-srv.log; exit 1; }
 
-      - name: Offline suites (16 scripts, one process each)
+      - name: Offline suites (18 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-c2 1
 
   publish-gate:

@@ -57,6 +57,8 @@ The full walkthrough - tiers, selection mechanics, chain matching, and a real pr
 2. **Operator seeds** - origins listed in the `X402_INDEX_SEEDS` env (comma-separated) get crawled every 30 minutes.
 3. **Auto-discovery** - every hour, the indexer pulls public x402 discovery registries (the list is `discoverySources` on [`/api/index`](https://agent402.tools/api/index)) and adds new origins to the crawl set, capped at 50,000 sellers as a sanity guard. Crawls run through a worker pool with a concurrency limit (`CRAWL_CONCURRENCY = 25`) so a large seed list never floods outbound.
 
+The crawler runs on a production boot only (`NODE_ENV=production`, which the image sets, or Railway's production environment), never under `FREE_MODE` or `CI`; `X402_INDEX_CRAWL=on` starts it on any other boot and `off` keeps it off. The MPP index reads `MPP_INDEX_CRAWL` the same way. A local or test server crawls nothing by default.
+
 Each crawl fetches `<origin>/.well-known/x402` plus the seller's `openapi.json`
 when present, runs every request through the SSRF guard (`safeFetch`), caps
 response sizes, and records the outcome in a **rolling 5-entry history** per

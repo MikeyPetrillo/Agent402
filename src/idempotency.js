@@ -7,6 +7,7 @@ import { IDEM_MAX_BODY_BYTES } from "./idempotency-limits.js";
 import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS, INFLIGHT_MAX_MS } from "./idempotency-store.js";
 import { onResponseEnd } from "./hangup-settlement.js";
 import { allowanceServed } from "./allowance-state.js";
+import { isX402McpRequest } from "./mcp-x402-routes.js";
 
 // A stored answer is the body as served, or, when it was charged but never
 // delivered (the buyer left while the payment settled), the body under this
@@ -140,7 +141,11 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     // is one, so a query-less key hashes exactly as before.
     const url = String(req.originalUrl || req.url || "");
     const qs = url.includes("?") ? `\n?${url.slice(url.indexOf("?") + 1)}` : "";
-    return { key: createHash("sha256").update(`${req.method} ${req.path}${qs}\n${idem}\n${cred}\n${bodyHash}`).digest("hex"), kind, implicit };
+    // A connector x402 twin (src/mcp-x402-routes.js) runs on the tool's own
+    // path but quotes another resource: bound apart, so one payment's answer
+    // on one is never served as the other's.
+    const wire = isX402McpRequest(req) ? "x402-mcp " : "";
+    return { key: createHash("sha256").update(`${wire}${req.method} ${req.path}${qs}\n${idem}\n${cred}\n${bodyHash}`).digest("hex"), kind, implicit };
   };
   return async (req, res, next) => {
     if (!isCatalogRoute(req)) return next();

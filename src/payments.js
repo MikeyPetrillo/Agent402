@@ -64,6 +64,7 @@ import { verifyFailureLine, payerNamedBy } from "./verify-failure-log.js";
 import { createRailRecheck, railRecheckSettings } from "./rail-recheck.js";
 import { bootReadSettings, readSupportedAtBoot } from "./boot-supported-read.js";
 import { svmPaymentAuthority, isSvmNetwork } from "./svm-payer.js";
+import { mcpX402Dispatch, mcpX402Knows } from "./mcp-x402-routes.js";
 
 // Supported networks. EVM chains use eip155: CAIP-2 IDs; Solana uses the
 // solana: genesis-hash CAIP-2. Adding a chain = register its scheme + list
@@ -1328,7 +1329,7 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
   "asset-transfers": "Token and native transfer history for any EVM address across major chains: direction, counterparty, asset, exact decimal value, block and transaction hash, filterable by category and block range with a cursor for paging. Use it to reconstruct what an address actually did, rather than only what it holds now.",
 });
 
-export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, catalog, extraRoutes = {} }) {
+export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, catalog, extraRoutes = {}, mcpRoutes = [] }) {
   routeSlugOf = (route) => {
     const def = typeof route === "string" && catalog && Object.prototype.hasOwnProperty.call(catalog, route) ? catalog[route] : null;
     return typeof def?.slug === "string" ? def.slug : null;
@@ -2835,6 +2836,39 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     };
   }
 
+  // The hosted connector's x402 twins (src/mcp-x402-routes.js): keyed by the
+  // HTTP route they stand beside, quoting that route's own accepts builder
+  // (the same price on every chain, rebuilt with it when a rail is restored)
+  // with the resource named `${baseUrl}/mcp` and an MCP discovery extension.
+  // A second HTTP resource server over the SAME core server serves them, so
+  // every verify and settle hook is the one the HTTP route runs; a request
+  // reaches it only when the twin gate flagged it.
+  const mcpRouteConfigs = {};
+  const mcpAcceptsBuilders = new Map();
+  for (const spec of Array.isArray(mcpRoutes) ? mcpRoutes : []) {
+    const httpCfg = spec && routes[spec.route];
+    const build = httpCfg && acceptsBuilders.get(spec.route);
+    if (!build || !spec.extensions?.bazaar) continue;
+    const ext = { ...spec.extensions };
+    for (const key of [PAYMENT_IDENTIFIER, BUILDER_CODE]) if (httpCfg.extensions?.[key] !== undefined) ext[key] = httpCfg.extensions[key];
+    mcpAcceptsBuilders.set(spec.route, build);
+    mcpRouteConfigs[spec.route] = {
+      accepts: build(),
+      description: httpCfg.description,
+      serviceName: httpCfg.serviceName,
+      tags: httpCfg.tags,
+      mimeType: httpCfg.mimeType,
+      resource: `${baseUrl}/mcp`,
+      iconUrl: httpCfg.iconUrl,
+      extensions: ext,
+    };
+  }
+  const mcpHttpServer = Object.keys(mcpRouteConfigs).length ? new x402HTTPResourceServer(server, mcpRouteConfigs) : null;
+  const mcpVendorMw = mcpHttpServer ? withBazaarHidden(mcpRouteConfigs, () => paymentMiddlewareFromHTTPServer(mcpHttpServer, undefined, undefined, false)) : null;
+  // A flagged request this server does not price runs the HTTP route's own
+  // paywall: never passed on unpaid.
+  const withMcpTwins = (main, mcp) => mcpX402Dispatch({ main, mcp, knows: mcpHttpServer ? mcpX402Knows(mcpHttpServer) : () => false });
+
   // X402_SYNC_ON_START=false skips the facilitator handshake at boot —
   // only for local testing where the facilitator is unreachable.
   //
@@ -2864,7 +2898,8 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
   const httpServer = new x402HTTPResourceServer(server, routes);
   const vendorMw = withBazaarHidden(routes, () => paymentMiddlewareFromHTTPServer(httpServer, undefined, undefined, false));
   scheduleBazaarRouteCheck(routes);
-  if (!syncOnStart) return vendorMw;
+  if (mcpHttpServer) scheduleBazaarRouteCheck(mcpRouteConfigs);
+  if (!syncOnStart) return withMcpTwins(vendorMw, mcpVendorMw);
   const init = createGuardedInit(httpServer);
 
   // ---- A rail dropped on a FAILED /supported read rejoins the offer live ----
@@ -2892,6 +2927,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     stellarCaip2 = configuredRails.stellar.filter((c) => live.has(c));
     avmCaip2 = configuredRails.avm.filter((c) => live.has(c));
     for (const [route, build] of acceptsBuilders) routes[route].accepts = build();
+    for (const [route, build] of mcpAcceptsBuilders) mcpRouteConfigs[route].accepts = build();
   };
   const restoreRail = (caip2, { client, label, supported }) => {
     if (caip2 === ARC_CAIP2) return false;
@@ -2949,7 +2985,7 @@ export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, 
     railRecheck.start();
     console.log(`[payments] rail re-read: ${candidates.join(", ")} dropped on a failed /supported read; ${failedReads.map((f) => f.label).join(", ")} read again in ${Math.round(recheck.firstMs / 1000)} s, then on a backoff up to ${Math.round(recheck.maxMs / 1000)} s`);
   }
-  return withGuardedInit(vendorMw, init, httpServer);
+  return withMcpTwins(withGuardedInit(vendorMw, init, httpServer), mcpVendorMw && withGuardedInit(mcpVendorMw, init, mcpHttpServer));
 }
 
 /**

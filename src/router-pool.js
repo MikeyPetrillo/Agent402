@@ -35,16 +35,17 @@ import {
   _routerStoresForReplica, _routerReplicaEntryOf, _routerReplicaQualityOf, routeQueryAsyncInThread,
 } from "./x402-index.js";
 import { observationsVersion, observationsSnapshot } from "./response-observation.js";
+import { crawlSwitch } from "./crawl-switch.js";
 
 const WORKER_FILE = fileURLToPath(new URL("./router-worker-thread.js", import.meta.url));
 const envInt = (k, d) => { const n = parseInt(process.env[k], 10); return Number.isFinite(n) && n >= 0 ? n : d; };
 /** Workers configured: ROUTER_WORKERS (default 1; 0 or "off" keeps queries on this thread).
- *  With the crawler off the index holds nothing a worker could serve, so the
- *  default there is 0 unless ROUTER_WORKERS is set. */
+ *  With the crawler off (src/crawl-switch.js) the index holds nothing a worker
+ *  could serve, so the default there is 0 unless ROUTER_WORKERS is set. */
 export function configuredRouterWorkers(env = process.env) {
   const raw = String(env.ROUTER_WORKERS ?? "").trim().toLowerCase();
   if (raw === "off") return 0;
-  if (raw === "") return String(env.X402_INDEX_CRAWL || "").toLowerCase() === "off" ? 0 : 1;
+  if (raw === "") return crawlSwitch("X402_INDEX_CRAWL", env).on ? 1 : 0;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n >= 0 ? Math.min(n, 4) : 1;
 }
