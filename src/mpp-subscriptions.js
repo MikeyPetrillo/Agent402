@@ -929,6 +929,7 @@ export function checkSubscriptionBinding(authorizationHeader, { secretKey, realm
  * @param {(a:object)=>void} [deps.onCharge]   accounting hook, called once per CONFIRMED period transfer
  * @param {function} [deps.activate]  injected activation charge (tests); default settles on-chain via mppx
  * @param {function} [deps.chargePeriod] injected renewal charge (tests); default is mppx's renewSubscription
+ * @param {object} [deps.refunds]   the refund ledger calls (recordOwed, voidForServe, reopenHeld, byEvidence); default src/refund-ledger.js
  * @param {()=>number} [deps.now]
  */
 /** Everything an RPC/mppx failure actually carries, for OUR LOG ONLY.
@@ -1004,6 +1005,7 @@ export function createMppSubscriptions({
   activate: injectedActivate = null, chargePeriod: injectedChargePeriod = null,
   findRenewalOnChain: injectedFindRenewal = null,
   screen = { addresses: screenAddresses, funding: screenFunding },
+  refunds = null,
   now = () => Date.now(), log = console.log,
 } = {}) {
   // Fail closed on the inputs the binding rests on. A subscription engine that
@@ -1286,6 +1288,22 @@ export function createMppSubscriptions({
       const addr = String(marker?.accessKeyAddress || "").toLowerCase();
       if (live.has(addr)) { await kv.delete(key); continue; }   // paid: the key belongs to a subscription now
       if (now() - Number(marker?.at || 0) < OFFER_SWEEP_AFTER_MS) { open++; continue; }
+      // A first payment mppx settled for this offer while no record of ours
+      // was written (the process died in between, or the write failed and the
+      // buyer never retried): the subscription is rebuilt from the offer and
+      // mppx's record, or, when it cannot be, booked owed before the key goes.
+      // Neither landing keeps the offer and its key for the next sweep.
+      const settled = settledRecordFor(addr, snap);
+      if (settled) {
+        let outcome = null;
+        try { outcome = await recoverSettledOffer(settled, marker, addr); }
+        catch (e) { log(`[mpp-subs] offer sweep: settled first payment for ${shortPayer(addr)} not recovered yet: ${String(e?.message || e).slice(0, 160)}`); }
+        if (!outcome) continue;
+        await kv.delete(key);
+        if (outcome === "rebuilt") continue;   // the key bills the rebuilt subscription
+        await destroyAccessKey(addr, snap);
+        continue;
+      }
       await kv.delete(key);
       // Delete the access-key records by MATCHING THEIR CONTENT, never by
       // rebuilding mppx's key names: it stores the same record twice, once by
@@ -1312,7 +1330,16 @@ export function createMppSubscriptions({
     for (const [k2, v2] of Object.entries(snap)) {
       if (v2 && typeof v2 === "object" && v2.privateKey && String(v2.accessKeyAddress || "").toLowerCase() === addr) { await kv.delete(k2); n++; }
     }
+    // The offer's marker goes with the key: it carries the binding (and email).
+    await dropOfferMarkers(addr, snap);
     return n;
+  }
+  /** Delete the offer markers naming one access key (an offer that was paid or whose key went). */
+  async function dropOfferMarkers(address, snap = kv._snapshot()) {
+    const addr = String(address || "").toLowerCase();
+    for (const [k, v] of Object.entries(snap)) {
+      if (k.startsWith("a402:offer:") && String(v?.accessKeyAddress || "").toLowerCase() === addr && (await kv.get(k))) await kv.delete(k);
+    }
   }
 
   // --- the end of a subscription ----------------------------------------------
@@ -1531,7 +1558,9 @@ export function createMppSubscriptions({
     }
     const offerNonce = randomBytes(12).toString("hex");
     const ak = await subStore.getOrCreateAccessKey(`offer:${offerNonce}`);
-    await kv.put(OFFER_KEY(offerNonce), { at: nowMs, accessKeyAddress: ak.accessKeyAddress });
+    // The binding rides on the marker too, so a payment that settles with no
+    // record of ours can be rebuilt by the sweep after the challenge expires.
+    await kv.put(OFFER_KEY(offerNonce), { at: nowMs, accessKeyAddress: ak.accessKeyAddress, product: String(product), target: t, email: mail });
 
     // Whole seconds only: mppx rejects a subscriptionExpires that is not
     // representable as whole seconds (measured), because the key authorization
@@ -1685,16 +1714,13 @@ export function createMppSubscriptions({
       // "nothing was charged"; the buyer paid, so our record is rebuilt from
       // mppx's and the subscription is handed back.
       if (already.subscriptionId) {
-        const rebuilt = houseRecordFrom(already, { b, payer, lookupKey, receipt: null });
-        if (already.canceledAt) { rebuilt.status = "canceled"; rebuilt.canceledAt = String(already.canceledAt); }
-        // Created only when absent: a concurrent retry (or the activation
-        // still writing it) that got there first keeps its record and its
-        // booking, and this call books nothing.
-        const w = await writeRecIfAbsent(rebuilt);
-        if (!w.won) return { ...publicView(w.value), replay: true };
-        bookCharge(w.value, w.value.lastChargedPeriod, w.value.lastChargeTx);
-        log(`[mpp-subs] rebuilt ${rebuilt.subId} from its settled first payment (${rebuilt.product} -> ${rebuilt.target}) payer=${shortPayer(payer)} tx=${rebuilt.lastChargeTx || "?"}`);
-        return { ...publicView(w.value), manageToken: manageToken(rebuilt.subId), replay: true };
+        const r = await rebuildFromSettled(already, { b, payer, lookupKey });
+        if (r.refused) {
+          const e = new Error("A refund of this first subscription payment is already under way. Request a fresh challenge to subscribe again.");
+          e.statusCode = 409; throw e;
+        }
+        if (!r.w.won) return { ...publicView(r.w.value), replay: true };
+        return { ...publicView(r.w.value), manageToken: manageToken(r.w.value.subId), replay: true };
       }
     }
 
@@ -1726,14 +1752,30 @@ export function createMppSubscriptions({
     // mirrors ITS billing anchor and period counter. mppx is the authority on
     // what has been charged, and duplicating that arithmetic is how the two
     // silently disagree.
-    const mppxRec = await subStore.getByKey(lookupKey);
-    if (!mppxRec) { const e = new Error("subscription did not persist after settlement"); e.statusCode = 500; throw e; }
-
-    const rec = houseRecordFrom(mppxRec, { b, payer, lookupKey, receipt });
+    // From here on the first period has settled: a failure books it owed
+    // (once, keyed on its settlement) before the buyer is answered, so a
+    // buyer who does not retry is refunded. A retry that rebuilds the
+    // subscription voids that debt (rebuildFromSettled).
+    let mppxRec = null, rec, w;
+    try {
+      mppxRec = await subStore.getByKey(lookupKey);
+      if (!mppxRec) throw new Error("subscription did not persist after settlement");
+      rec = houseRecordFrom(mppxRec, { b, payer, lookupKey, receipt });
+      // Created only when absent: a retry of this credential that rebuilt the
+      // record while this activation was settling already booked the period.
+      w = await writeRecIfAbsent(rec);
+    } catch (err) {
+      log(`[mpp-subs] first payment settled for ${b.product} but no record was written: ${diagnoseError(err, 300)}`);
+      let stored = null;
+      try { stored = mppxRec ? await findBySubscriptionId(mppxRec.subscriptionId) : null; } catch { stored = null; }
+      if (stored) return { ...publicView(stored), replay: true };
+      await oweFirstPayment({ product: b.product, payer, priceUsd: b.productDef.price / 100, tx: receipt?.reference || mppxRec?.reference || null, lookupKey, why: "its record was not written" });
+      const e = new Error("The first subscription payment settled, but the subscription could not be recorded. Send this same request again to receive it; otherwise the payment is booked for refund.");
+      e.statusCode = 500; throw e;
+    }
     const subId = rec.subId;
-    // Created only when absent: a retry of this credential that rebuilt the
-    // record while this activation was settling already booked the period.
-    const w = await writeRecIfAbsent(rec);
+    // Paid: the offer's marker has done its job (its key bills the subscription).
+    try { await dropOfferMarkers(b.accessKeyAddress); } catch { /* the offer sweep drops it */ }
     if (w.won) {
       bookCharge(w.value, w.value.lastChargedPeriod, w.value.lastChargeTx);
       log(`[mpp-subs] activated ${subId} (${rec.product} -> ${rec.target}) payer=${shortPayer(payer)} tx=${rec.lastChargeTx || "?"}`);
@@ -1783,6 +1825,98 @@ export function createMppSubscriptions({
 
   async function findBySubscriptionId(mppxId) {
     return readRec(`${SUB_PREFIX}${mppxId}`);
+  }
+
+  // --- a settled first payment with no record of ours --------------------------
+  // The refund ledger, read on first use (an injected one in tests).
+  let _ledger = refunds;
+  async function ledger() {
+    if (_ledger) return _ledger;
+    const m = await import("./refund-ledger.js");
+    _ledger = { recordOwed: m.recordRefundOwed, voidForServe: m.voidOwedForServe, reopenHeld: m.reopenHeldClaim, byEvidence: (ev) => m.refundByEvidenceFresh(ev) };
+    return _ledger;
+  }
+  const REBUILD_HELD_NOTE = "mpp subscription rebuilt from its settled first payment";
+  /** The evidence a first payment's debt is keyed on: its settlement reference, else its lookup key. */
+  const firstPaymentEvidence = (tx, lookupKey) => (typeof tx === "string" && tx.trim() ? tx.trim() : `mpp-sub-activation:${lookupKey}`);
+  /** Book a settled first payment that has no subscription as owed, once.
+   *  Resolves true when the ledger holds a row for it (this one or earlier). */
+  async function oweFirstPayment({ product, payer, priceUsd, tx, lookupKey, why }) {
+    const evidence = firstPaymentEvidence(tx, lookupKey);
+    try {
+      const L = await ledger();
+      await L.recordOwed({ slug: String(product || "mpp-subscription"), network: "tempo", payer, priceUsd, tx: evidence, httpStatus: 500, synthetic: isCanaryProduct(product), wire: "mpp-tempo-subscription", note: `first subscription payment settled; ${why}` });
+      if (await L.byEvidence(evidence)) {
+        log(`[mpp-subs] first payment booked owed (${why}) payer=${shortPayer(payer)} evidence=${evidence.slice(0, 80)}`);
+        return true;
+      }
+    } catch (e) { log(`[mpp-subs] owed booking failed: ${String(e?.message || e).slice(0, 160)}`); }
+    log(`[mpp-subs] first payment NOT booked owed (${why}) payer=${shortPayer(payer)} evidence=${evidence.slice(0, 80)}`);
+    return false;
+  }
+  async function reopenFirstPaymentDebts(voided, note) {
+    if (!voided.length) return;
+    const L = await ledger();
+    for (const ev of voided) { try { await L.reopenHeld(ev, { held: REBUILD_HELD_NOTE, httpStatus: 500, note }); } catch { /* the row stays void; logged below */ } }
+    log(`[mpp-subs] reopened ${voided.length} first-payment debt(s): ${note}`);
+  }
+  /**
+   * Hand back the subscription a settled first payment bought, from mppx's
+   * record. A debt booked for that payment is voided FIRST, so the buyer is
+   * never both served and refunded; a debt already being sent or paid
+   * refuses the rebuild ({ refused: true }). A record write that fails
+   * reopens what was voided. Created only when absent: a concurrent retry
+   * (or the activation still writing it) that got there first keeps its
+   * record and its booking, and this call books nothing.
+   */
+  async function rebuildFromSettled(mppxRec, { b, payer, lookupKey }) {
+    const L = await ledger();
+    const voided = [];
+    for (const ev of new Set([firstPaymentEvidence(mppxRec.reference, lookupKey), firstPaymentEvidence(null, lookupKey)])) {
+      if (await L.voidForServe(ev, REBUILD_HELD_NOTE)) { voided.push(ev); continue; }
+      const row = await L.byEvidence(ev);
+      if (row && row.status !== "void") {
+        await reopenFirstPaymentDebts(voided, "a refund of this first payment is under way");
+        return { refused: true };
+      }
+    }
+    const rebuilt = houseRecordFrom(mppxRec, { b, payer, lookupKey, receipt: null });
+    if (mppxRec.canceledAt) { rebuilt.status = "canceled"; rebuilt.canceledAt = String(mppxRec.canceledAt); }
+    let w;
+    try { w = await writeRecIfAbsent(rebuilt); }
+    catch (e) { await reopenFirstPaymentDebts(voided, "rebuilding its subscription record failed"); throw e; }
+    try { await dropOfferMarkers(b.accessKeyAddress); } catch { /* the offer sweep drops it */ }
+    if (w.won) {
+      bookCharge(w.value, w.value.lastChargedPeriod, w.value.lastChargeTx);
+      log(`[mpp-subs] rebuilt ${rebuilt.subId} from its settled first payment (${rebuilt.product} -> ${rebuilt.target}) payer=${shortPayer(payer)} tx=${rebuilt.lastChargeTx || "?"}`);
+    }
+    return { w };
+  }
+  /** mppx's record of a settled subscription for one access key, in a store snapshot (matched by content). */
+  function settledRecordFor(address, snap) {
+    const suffix = `|${String(address || "").toLowerCase()}`;
+    for (const [k, v] of Object.entries(snap)) {
+      if (k.startsWith("a402:") || !v || typeof v !== "object" || Array.isArray(v) || v.privateKey) continue;
+      if (typeof v.subscriptionId === "string" && typeof v.lookupKey === "string" && v.lookupKey.toLowerCase().endsWith(suffix)) return v;
+    }
+    return null;
+  }
+  /** An expired offer whose first payment settled: rebuilt from the binding
+   *  the offer kept ("rebuilt"), else booked owed ("owed"); null when neither
+   *  landed (the sweep keeps the offer and tries again). */
+  async function recoverSettledOffer(mppxRec, marker, address) {
+    const lookupKey = String(mppxRec.lookupKey);
+    const payer = lookupKey.split("|")[0].toLowerCase();
+    const productDef = productDefFor(marker?.product);
+    const target = typeof marker?.target === "string" ? marker.target : "";
+    if (productDef && target && /^0x[0-9a-f]{40}$/.test(payer)) {
+      const b = { product: String(marker.product), productDef, target, email: typeof marker.email === "string" ? marker.email : null, accessKeyAddress: address, subscriptionExpires: mppxRec.subscriptionExpires };
+      const r = await rebuildFromSettled(mppxRec, { b, payer, lookupKey });
+      if (!r.refused) return "rebuilt";
+    }
+    const atomic = Number(mppxRec.amount);
+    const priceUsd = productDef ? productDef.price / 100 : (Number.isFinite(atomic) ? atomic / 10 ** decimals : 0);
+    return (await oweFirstPayment({ product: marker?.product || null, payer, priceUsd, tx: mppxRec.reference, lookupKey, why: "found by the offer sweep" })) ? "owed" : null;
   }
 
   // --- period accounting -----------------------------------------------------
