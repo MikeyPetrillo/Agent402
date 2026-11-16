@@ -5,10 +5,12 @@
 //   2. Each weather tool, with a stubbed fetch and resolver: the URL it fetched
 //      (host and key), and an answer whose `source` names the public host only.
 //   3. A 429 on the keyed host is a 503 (no charge), fetched once: no retry and
-//      no second try on the public host. A 401/403 there (a refused key, or an
-//      API the key does not cover) is our 503, marked shed so it is not counted
-//      as a tool failure, with the reason in one operator log line. A 5xx keeps
-//      its one retry on the keyed host.
+//      no second try on the public host. A 401/403 there, or a 400 whose
+//      reason names the key or a plan (Open-Meteo's answer to an invalid or
+//      revoked key), is our 503: not charged, not shed (the tool-failure
+//      monitor counts it), one operator log line, the openMeteo word reads
+//      refused for 15 minutes. A 400 for a real bad input stays the buyer's
+//      4xx. A 5xx keeps its one retry on the keyed host.
 //   4. No error message, error field or console line carries the key or the
 //      keyed host name, and redactSecrets drops an apikey query value from any
 //      URL in text, configured or not.
@@ -31,7 +33,7 @@ for (const m of ["log", "info", "warn", "error", "debug"]) {
 
 const KEY = "omk" + "Zx7Qp2Lw9Rt4Vb8Nc3";
 delete process.env.OPEN_METEO_API_KEY;
-const { WEATHER_TOOLS, openMeteoRequest } = await import("../src/tools/weather-kit.js");
+const { WEATHER_TOOLS, openMeteoRequest, openMeteoStatus, _resetOpenMeteoStatus, OPEN_METEO_REFUSED_WINDOW_MS } = await import("../src/tools/weather-kit.js");
 const { redactSecrets } = await import("../src/tools/redact.js");
 
 const restoreResolver = stubGuardResolver((host, family) => (/(^|\.)open-meteo\.com$/.test(host) ? (family === 4 ? ["93.184.216.34"] : []) : undefined));
@@ -108,13 +110,25 @@ ok(e?.statusCode === 503 && e.upstreamStatus === 429 && e.retryAfter === 7, "key
 ok(fetched.length === 1 && fetched.every((u) => new URL(u).host === "customer-api.open-meteo.com"), "keyed 429: one fetch, no retry, no public-host fallback");
 ok(!errorText(e).includes(KEY) && !errorText(e).includes("customer-"), "keyed 429: error carries neither key nor keyed host");
 
-for (const st of [401, 403]) {
+ok(openMeteoStatus().status === "ok" && openMeteoStatus({ env: {} }).status === "off", "openMeteo word: ok with a key and no refusal, off without a key");
+const ourRefusal = (e2) => e2?.statusCode === 503 && e2.attribution === "ours" && e2.shed !== true && /service problem on our side/.test(e2.message) && !/key|plan|professional|enterprise|subscription/i.test(errorText(e2));
+for (const [st, reason, label] of [
+  [401, `echo apikey=${KEY}`, "401"],
+  [403, `echo apikey=${KEY}`, "403"],
+  [400, "The supplied API key is invalid.", "400 invalid key"],
+  [400, "Your subscription plan does not include this API", "400 plan"],
+  [403, "This API requires the API Professional or Enterprise plan", "403 plan"],
+]) {
+  _resetOpenMeteoStatus({ logs: true });
   const before = captured.length;
-  e = await failing(st);
-  ok(e?.statusCode === 503 && e.attribution === "ours" && e.shed === true && fetched.length === 1, `keyed ${st} -> our 503 (shed, not a tool failure), one fetch`);
-  ok(!errorText(e).includes(KEY) && !errorText(e).includes("customer-"), `keyed ${st}: error is clean`);
-  ok(captured.slice(before).some((l) => l.includes("[open-meteo] keyed request refused") && l.includes(`HTTP ${st}`)), `keyed ${st}: one operator log line names the refusal`);
+  e = await failing(st, {}, reason);
+  ok(ourRefusal(e) && fetched.length === 1 && new URL(fetched[0]).host === "customer-api.open-meteo.com", `keyed ${label} -> our 503 (not charged, not shed: counted as a tool failure), one fetch on the keyed host`);
+  ok(!errorText(e).includes(KEY) && !errorText(e).includes("customer-") && !("upstreamBody" in JSON.parse(JSON.stringify({ ...e }))), `keyed ${label}: error is clean and carries no upstream body`);
+  ok(captured.slice(before).some((l) => l.includes("[open-meteo] keyed request refused") && l.includes(`HTTP ${st}`)), `keyed ${label}: one operator log line names the refusal`);
+  ok(openMeteoStatus().status === "refused", `keyed ${label}: the openMeteo word reads refused`);
 }
+ok(openMeteoStatus({ now: Date.now() + OPEN_METEO_REFUSED_WINDOW_MS + 1000 }).status === "ok", "openMeteo word: refused clears to ok once the window passes with no new refusal");
+ok(OPEN_METEO_REFUSED_WINDOW_MS === 15 * 60_000, "the refused window is 15 minutes");
 // The keyed host refusing an API the key does not cover: the body names the
 // plan; the buyer gets our 503 (never a 502), and the operator line its reason.
 {
@@ -122,7 +136,7 @@ for (const st of [401, 403]) {
   fetched.length = 0;
   reply = () => new Response(JSON.stringify({ error: true, reason: "This API requires the API Professional or Enterprise plan" }), { status: 403 });
   try { await tool("weather-air-quality").handler({ lat: 1, lon: 2 }); e = null; } catch (x) { e = x; }
-  ok(e?.statusCode === 503 && e.statusCode !== 502 && e.shed === true && e.attribution === "ours" && fetched.length === 1, "keyed plan refusal (403) -> 503 uncharged, shed, one fetch, no public-host fallback");
+  ok(ourRefusal(e) && fetched.length === 1, "keyed plan refusal (403) -> 503 uncharged, not shed, one fetch, no public-host fallback");
   ok(!/plan|professional|enterprise/i.test(errorText(e)), "keyed plan refusal: the buyer's answer names no plan");
   ok(captured.slice(before).some((l) => /\[open-meteo\] keyed request refused \(HTTP 403\) for the airQuality API .*does not cover/.test(l)), "keyed plan refusal: operator log line gives the reason");
 }
@@ -134,8 +148,17 @@ for (const st of [401, 403]) {
 e = await failing(500);
 ok(e?.statusCode === 502 && fetched.length === 2 && fetched.every((u) => new URL(u).host === "customer-api.open-meteo.com"), "keyed 500 -> 502 after one retry on the keyed host");
 ok(!errorText(e).includes(KEY) && !errorText(e).includes("customer-"), "keyed 500: error is clean");
-e = await failing(400);
-ok(e?.statusCode === 422 && !errorText(e).includes(KEY) && !errorText(e).includes("customer-"), "keyed 400 -> 422, clean");
+for (const reason of ["Parameter 'start_date' is out of allowed range from 1940-01-01 to 2026-11-11", "Cannot initialize WeatherVariable from invalid String value nope"]) {
+  _resetOpenMeteoStatus();
+  e = await failing(400, {}, reason);
+  ok(e?.statusCode === 422 && e.attribution === "caller" && !errorText(e).includes(KEY) && !errorText(e).includes("customer-"), `keyed 400 for a bad input stays the buyer's 4xx (422), clean: ${reason.slice(0, 30)}`);
+  ok(openMeteoStatus().status === "ok", "a bad-input 400 leaves the openMeteo word ok");
+}
+// Without a key, a 400 naming a key is not ours to judge: the public host has no key.
+delete process.env.OPEN_METEO_API_KEY;
+e = await failing(400, {}, "The supplied API key is invalid.");
+ok(e?.statusCode === 422 && openMeteoStatus().status === "off", "no key: a 400 is the buyer's 4xx and the word reads off");
+process.env.OPEN_METEO_API_KEY = KEY;
 
 // A transport failure whose text quotes the full request URL is scrubbed too.
 fetched.length = 0;

@@ -292,6 +292,25 @@ export function retryAfterSeconds(header) {
   return secs > 0 && secs <= 86400 ? secs : null;
 }
 
+/** Up to `max` bytes of a failed response's body as text ("" when it cannot
+ *  be read); the rest is cancelled, never buffered. */
+async function readErrorBodyHead(response, max) {
+  const reader = response.body?.getReader?.();
+  if (!reader) return "";
+  const chunks = [];
+  let got = 0;
+  try {
+    while (got < max) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value.subarray(0, max - got));
+      got += Math.min(value.length, max - got);
+    }
+  } catch { /* the head read so far */ }
+  try { await reader.cancel(); } catch { /* already closed */ }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+}
+
 /** The host of a URL, for an error message. Never throws, never returns a path
  *  or a query - a refused URL can carry a caller's token in either. */
 function safeHostOf(u) {
@@ -606,7 +625,7 @@ export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"])
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
-export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream } = {}) {
+export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream, errorBodyMaxBytes = 0 } = {}) {
   const url = await assertPublicUrl(rawUrl).catch((err) => { throw ownUpstream ? asOwnUpstreamRefusal(err) : err; });
   // `ownUpstream`: the URL is one this server chose (a kit's fixed API host),
   // not one the caller supplied, so a host that does not resolve is our 503.
@@ -697,10 +716,18 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   // both cases the message names the upstream status so the agent knows what to
   // do next (fix the URL vs. retry later).
   if (!response.ok) {
-    throw upstreamFailure(response.status, {
+    const failure = upstreamFailure(response.status, {
       retryAfter: retryAfterSeconds(response.headers.get("retry-after")),
       host: safeHostOf(response.url),
     });
+    // A caller that asked for it gets the head of the refusal's body, for its
+    // own judgment of the refusal: non-enumerable, so no answer or log line
+    // that spreads the error carries it.
+    if (errorBodyMaxBytes > 0) {
+      const head = await readErrorBodyHead(response, Math.min(errorBodyMaxBytes, 16 * 1024));
+      Object.defineProperty(failure, "upstreamBody", { value: head, enumerable: false });
+    }
+    throw failure;
   }
 
   const reader = response.body.getReader();

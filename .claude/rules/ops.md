@@ -118,7 +118,9 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   `xSearchAuthors` alert (ok; see the X search author alarm below), `mppSubscriptions` failed (on,
   off: the MPP subscription engine is configured but did not build at boot, including an installed
   mppx with no subscription method; `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`;
-  `subscriptionRenewals` then reads unknown). `coverageReads` pages like `sharedLimits`, on its
+  `subscriptionRenewals` then reads unknown), `openMeteo` refused (ok, off: a keyed Open-Meteo request was
+  refused, by 401, 403 or a 400 whose reason names the key or a plan, in the last 15 minutes;
+  `openMeteoStatus` in `src/tools/weather-kit.js`; buyers got an uncharged 503). `coverageReads` pages like `sharedLimits`, on its
   second word only: `alert: sustained` (paid calls started or refused without a balance read made
   for them in 3 or more separate minutes of the last 10, for 3 or more accounts;
   `coverageReadsVerdict` in `src/inflight-cover.js`). `status` ok and off close; `status: degraded`

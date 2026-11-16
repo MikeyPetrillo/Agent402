@@ -1110,6 +1110,15 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot (the installed mppx has no subscription method, or the build threw or refused), so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off.",
   },
   {
+    // The weather kit's Open-Meteo reads (openMeteo, server.js): refused
+    // pages (a keyed request was refused in the last 15 minutes); ok and off
+    // clear; unknown and absent do neither. Title and body match heartbeat.yml's.
+    title: "Open-Meteo keyed reads REFUSED",
+    verdict: ({ gateway: b }) => wordVerdict(b.openMeteo?.status, ["refused"], ["ok", "off"]),
+    body: () =>
+      "/api/gateway-status reports openMeteo.status=refused: Open-Meteo refused a keyed request from the weather tools in the last fifteen minutes (the key was not accepted, or does not cover that API), so those calls answered a temporary service error. Read the [open-meteo] keyed request refused line in the server log on Railway, then check OPEN_METEO_API_KEY and the Open-Meteo account. Auto-closes when the word reads ok or off.",
+  },
+  {
     title: "State database DEGRADED (Postgres)",
     verdict: ({ gateway: b }) => wordVerdict(b.stateDb?.status, ["degraded"], ["on"]),
     body: () =>

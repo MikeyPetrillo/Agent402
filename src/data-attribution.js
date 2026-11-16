@@ -17,7 +17,15 @@
 // cited as the source of its reference rates
 // (https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html),
 // in src/tools/frankfurter.js; the U.S. Treasury's yield curve (a U.S.
-// government work, credit requested) in src/tools/macro-kit.js.
+// government work, credit requested) in src/tools/macro-kit.js. Open-Meteo's
+// air quality and reanalysis data come from Copernicus services, whose
+// licences ask for their own credit beside Open-Meteo's: the air quality API
+// docs (open-meteo.com/en/docs/air-quality-api) require attribution to the
+// CAMS ENSEMBLE data provider, and the Copernicus licence behind the archive's
+// ERA5 reanalysis (open-meteo.com/en/licence, C3S) asks for "Contains modified
+// Copernicus Climate Change Service information" where the data is processed.
+// Those tools carry a combined key (Open-Meteo's sentence, then the
+// Copernicus one), so the run of sentences stays one tail.
 export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
 export const COINGECKO_ATTRIBUTION = "Data provided by CoinGecko.";
 export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
@@ -26,6 +34,8 @@ export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0
 export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD.";
 export const ECB_ATTRIBUTION = "Source: European Central Bank.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
+export const CAMS_ATTRIBUTION = "Generated using Copernicus Atmosphere Monitoring Service information.";
+export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
 
 /** Source key (a tool's `attribution` field) -> the sentence its terms require. */
 export const ATTRIBUTIONS = Object.freeze({
@@ -37,6 +47,8 @@ export const ATTRIBUTIONS = Object.freeze({
   nvd: NVD_NOTICE,
   ecb: ECB_ATTRIBUTION,
   "us-treasury": US_TREASURY_ATTRIBUTION,
+  "open-meteo-cams": `${OPEN_METEO_ATTRIBUTION} ${CAMS_ATTRIBUTION}`,
+  "open-meteo-c3s": `${OPEN_METEO_ATTRIBUTION} ${C3S_ATTRIBUTION}`,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */
@@ -77,7 +89,9 @@ export function packAttributions(toolSlugs, toolBySlug) {
     const key = toolBySlug(slug)?.attribution;
     if (key && ATTRIBUTIONS[key] && !keys.includes(key)) keys.push(key);
   }
-  return keys.map((k) => ATTRIBUTIONS[k]);
+  const sentences = keys.map((k) => ATTRIBUTIONS[k]);
+  // A combined key holds a shorter one's sentence: keep only the longer.
+  return sentences.filter((x) => !sentences.some((y) => y !== x && y.includes(x)));
 }
 
 /** `text` followed by each of `sentences` it does not already end with. */
@@ -94,6 +108,7 @@ export function withAttributions(text, sentences) {
  *  matches a tool by its notice. */
 export function withoutAttributions(text) {
   let s = String(text ?? "");
-  for (const t of ATTRIBUTION_TAILS) if (s.includes(t)) s = s.split(t).join(" ");
+  // Longest first, so a combined sentence leaves no part of itself behind.
+  for (const t of [...ATTRIBUTION_TAILS].sort((a, b) => b.length - a.length)) if (s.includes(t)) s = s.split(t).join(" ");
   return s;
 }
