@@ -3,6 +3,14 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "Settled subscription payments are never lost",
+    items: [
+      "Payments: A wallet subscription whose first payment settled but whose record could not be written is booked as owed to the buyer, once, and the buyer is told the payment settled. Sending the same request again hands the subscription back and cancels that debt; a refund already being sent refuses it instead, so a buyer is never both served and refunded. A first payment left with no record after its challenge expires is found before its signing key is deleted: the subscription is rebuilt from the offer, or the payment is booked as owed.",
+      "Payments: An owed card report refund is counted from the report's own record, so the refund alarm reads it even when the list of open issues missed it, and stops reading it once the record shows the refund was sent.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Late Solana and Algorand payments are repaid",
     items: [
       "Payments: A payment that reaches the chain after its call was refused is found and repaid on Solana and Algorand as on EVM: a settlement that failed while naming its transaction is followed on chain, and once it lands it is recorded as owed to the buyer, once. On EVM, a settlement refused as already submitted whose chain read failed is followed the same way, and a transaction that never appears is closed as not landed only after an exact payment's signed authorization reads unused, so a transfer sent in another transaction is still repaid. On Solana and Algorand one settled transaction answers one request.",

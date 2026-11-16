@@ -6,6 +6,20 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (settled subscription payments are never lost)
+Payments:
+- A wallet subscription whose first payment settled but whose record could
+  not be written is booked as owed to the buyer, once, and the buyer is told
+  the payment settled. Sending the same request again hands the subscription
+  back and cancels that debt; a refund already being sent refuses it instead,
+  so a buyer is never both served and refunded. A first payment left with no
+  record after its challenge expires is found before its signing key is
+  deleted: the subscription is rebuilt from the offer, or the payment is
+  booked as owed.
+- An owed card report refund is counted from the report's own record, so the
+  refund alarm reads it even when the list of open issues missed it, and
+  stops reading it once the record shows the refund was sent.
+
 ### 2026-11-16 (late Solana and Algorand payments are repaid)
 Payments:
 - A payment that reaches the chain after its call was refused is found and
