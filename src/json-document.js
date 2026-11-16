@@ -47,6 +47,7 @@
 // flushJsonDocuments() sends what is waiting (the shutdown flush).
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdir, open, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { documents, imports, onStateDbRecovered, setUnloadedStoresProbe, setUnsavedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery, withImportSlot } from "./state-db.js";
 import { envPositive as envMs } from "./env-num.js";
@@ -113,6 +114,21 @@ function writeJsonFile(file, body) {
   renameSync(tmp, file);
   return raw;
 }
+// The off-loop writer behind saveSerialized(): each piece is encoded and
+// written on its own, so no turn handles more than one piece.
+let piecesTmpSeq = 0;
+async function writeJsonPiecesAsync(file, pieces) {
+  await mkdir(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.p${++piecesTmpSeq}.tmp`;
+  try {
+    const fh = await open(tmp, "w");
+    try { for (const p of pieces) await fh.write(p); } finally { await fh.close(); }
+    await rename(tmp, file);
+  } catch (e) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw e;
+  }
+}
 
 /** Documents made once per file name, for a module that keeps several: the
  *  first `docFor(file)` creates the document (quiet log) and later calls return
@@ -160,6 +176,8 @@ export function createJsonDocument({ name = null, file = null, log = console.war
   // burst of persist() calls costs one write.
   let inFlight = null;
   let pendingBody = undefined;
+  // saveSerialized()'s file writes, chained so they land in call order.
+  let fileWrites = Promise.resolve(true);
   const say = (m) => { try { log(`[json-document] ${docName}: ${m}`); } catch { /* logging never throws */ } };
   // An unread body and a held save are named even when the store's own log is
   // quiet: the operator's clue to a store that is not persisting.
@@ -461,6 +479,25 @@ export function createJsonDocument({ name = null, file = null, log = console.war
       return startSaving();
     },
     /**
+     * Replace the whole body, already serialized: `pieces` is an array of
+     * strings whose concatenation is exactly JSON.stringify(body), built by
+     * the caller across turns for a body too large to serialize in one. The
+     * file backend writes the pieces in order off the event loop (a temp
+     * file renamed over the store, one write at a time in call order), so
+     * neither the serialization nor a stalled disk holds the loop; the
+     * database and memory backends store `body` as save() does. Resolves
+     * true once written. A document saved this way is saved only this way.
+     */
+    saveSerialized(body, pieces) {
+      if (usePg || !file) return api.save(body);
+      const run = fileWrites.then(() => writeJsonPiecesAsync(file, pieces)).then(
+        () => { lastError = null; return true; },
+        (e) => { lastError = String(e?.message || e).slice(0, 160); say(`save failed: ${lastError}`); return false; },
+      );
+      fileWrites = run;
+      return run;
+    },
+    /**
      * Synchronous save for the file and memory backends (true when written).
      * On the Postgres backend the write is queued and true means "queued".
      */
@@ -481,6 +518,7 @@ export function createJsonDocument({ name = null, file = null, log = console.war
      * for its retry is sent now. Resolves true when nothing is left unsaved.
      */
     async flush() {
+      await fileWrites;
       if (usePg && pendingBody !== undefined && !inFlight) void startSaving();
       while (inFlight) await inFlight;
       return pendingBody === undefined;

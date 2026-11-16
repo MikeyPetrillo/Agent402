@@ -14,18 +14,36 @@
 // served as "no match" makes every query on earth come back clean.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
-import { readFileSync, mkdtempSync } from "node:fs";
+import fsModule, { readFileSync, mkdtempSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { sdnCryptoAddresses, sdnNames, sdnCryptoAddressSteps, sdnNameSteps, lookupAddress, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
-import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, sdnEvmAddressesAsync, runSliced, sortSteps, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests, __holdSdnListForTests, __parseSdnResponseForTests, SDN_ENTRY_MAX_CHARS } from "../src/ofac-sdn.js";
+import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, sdnEvmAddressesAsync, runSliced, runWhole, sortSteps, storedBodySteps, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests, __holdSdnListForTests, __parseSdnResponseForTests, SDN_ENTRY_MAX_CHARS } from "../src/ofac-sdn.js";
 import { bound, gapMeter, leastOurs, OURS_READING } from "./lib/ours-clock.js";
+import { createJsonDocument } from "../src/json-document.js";
 // The payout map a load stores goes to a scratch file, never the shared default.
 process.env.SANCTIONS_PAYOUT_FILE = join(mkdtempSync(join(tmpdir(), "sanctions-")), "payout.json");
 
 let n = 0;
 const ok = (c, m) => { assert.ok(c, m); n++; };
 const eq = (a, b, m) => { assert.deepEqual(a, b, m); n++; };
+
+// A busy disk: every synchronous write or rename under `dirs` holds the thread
+// `ms` (a runner whose disk was busy with other writes held one such write
+// for a 97 ms turn). The node:fs exports are swapped and synced to every
+// module's named imports; node:fs/promises is left alone, so a store that
+// writes off the loop never waits on it.
+function stallSyncWrites(dirs, ms) {
+  const orig = { writeFileSync: fsModule.writeFileSync, renameSync: fsModule.renameSync };
+  let stalls = 0;
+  const hit = (p) => dirs.some((d) => String(p).startsWith(d));
+  const spin = () => { stalls++; const t = performance.now(); while (performance.now() - t < ms); };
+  fsModule.writeFileSync = function (p, ...a) { if (hit(p)) spin(); return orig.writeFileSync.call(this, p, ...a); };
+  fsModule.renameSync = function (p, ...a) { if (hit(p)) spin(); return orig.renameSync.call(this, p, ...a); };
+  syncBuiltinESMExports();
+  return { get stalls() { return stalls; }, restore() { Object.assign(fsModule, orig); syncBuiltinESMExports(); } };
+}
 
 // Miniature SDN.XML exports in the real format (scripts/fixtures). The sample
 // has several addresses per entry, mixed assets, a non-currency id holding an
@@ -334,18 +352,44 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   // A server 15 s past boot has long since loaded the fetch and stream
   // machinery; its first use in this process is not the loader's cost.
   await new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([60])); c.close(); } })).text();
+  // The tools' listener (registered by the import above, as in production)
+  // adopts the list and writes its payout copy; that write is inside the
+  // window, on a disk where a synchronous write stalls (the control shows a
+  // synchronous store write takes the stall).
+  const kitMod = await import("../src/tools/sanctions-kit.js");
+  kitMod.__resetSanctionsForTests();
+  const payoutDir = dirname(process.env.SANCTIONS_PAYOUT_FILE);
+  const disk = stallSyncWrites([payoutDir], turn.ms * 2);
+  const ctl = leastOurs(() => createJsonDocument({ file: join(payoutDir, "control.json"), log: () => {} }).saveSync({ v: 1 }), { attempts: 1 });
+  ok(ctl.ms > turn.ms, `control: a synchronous store write on the stalled disk holds the loop ${Math.round(ctl.ms)} ms (${turn.note})`);
+  const stallsBefore = disk.stalls;
   await settle();
   const loadMeter = gapMeter(1);
   const loaded = await loadSdnList({ fetchImpl: async () => chunked() });
+  const payoutStored = await kitMod.__payoutWriteForTests();
   await settle();
   const loadGap = loadMeter.stop();
+  const loadStalls = disk.stalls - stallsBefore;
+  disk.restore();
   ok(loaded.entries.length === 20000 && loadGap.worst < turn.ms, `loadSdnList parses a production-sized export across turns (worst turn ${Math.round(loadGap.worst)} ms; ${turn.note})`);
+  ok(payoutStored === true && loadStalls === 0 && JSON.parse(readFileSync(process.env.SANCTIONS_PAYOUT_FILE, "utf8")).addresses.length === 40000,
+    `the tools' payout copy is stored in that window, written off the loop (${loadStalls} synchronous writes)`);
   eq({ entries: loaded.entries, digitalCurrencyIds: loaded.digitalCurrencyIds, publishDate: loaded.publishDate }, whole.value, "loadSdnList reads the streamed export exactly as parseSdnXml reads the whole string");
 
   // The sliced builders give the one-turn builders' sets exactly.
   eq(await runSliced(sdnCryptoAddressSteps(loaded)), sdnCryptoAddresses(loaded), "the sliced address map equals sdnCryptoAddresses");
   eq(await runSliced(sdnNameSteps(loaded)), sdnNames(loaded), "the sliced name list equals sdnNames");
   eq(await sdnEvmAddressesAsync(loaded), sdnEvmAddresses(loaded), "the sliced EVM set equals sdnEvmAddresses");
+  // The stored copies' sliced serialization is JSON.stringify's text exactly,
+  // at sizes off the step width, with an undefined and a null in the head.
+  for (const size of [0, 1, 2047, 2048, 2049, 4096 + 5]) {
+    const items = Array.from({ length: size }, (_, i) => (i % 3 ? { a: `x${i}`, q: "\u00e9\"" } : `s${i}`));
+    const head = { v: 1, at: size, gone: undefined, publishDate: null, perAsset: { ETH: size } };
+    const { body, pieces } = await runSliced(storedBodySteps(head, "addresses", items));
+    eq(pieces.join(""), JSON.stringify({ ...head, addresses: items }), `the sliced stored body serializes as JSON.stringify on ${size} rows`);
+    eq(body, { ...head, addresses: items }, `and its body is the same object on ${size} rows`);
+    eq(runWhole(storedBodySteps({}, "k", items.slice(0, 3), (v) => [v])).pieces.join(""), JSON.stringify({ k: items.slice(0, 3).map((v) => [v]) }), "an empty head and a row mapper serialize the same way");
+  }
   // The sliced sort orders exactly as Array#sort, at sizes off the run width.
   for (const size of [0, 1, 4095, 4097, 40_000 + 3]) {
     const xs = Array.from({ length: size }, (_, i) => ["0x", "0X", "ab", "\u00e9", "\ud83d\ude00", ""][i % 6] + ((i * 7919) % 104729).toString(36));
@@ -388,14 +432,18 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   const wide = { entries: loaded.entries.map((e, i) => ({ ...e, addresses: Array.from({ length: 20 }, (_, k) => ({ asset: "ETH", address: "0x" + String(((i * 100 + k) * 7919) % 2_000_003).padStart(40, "0") })) })), digitalCurrencyIds: 400000, publishDate: "11/14/2026", bytes: 0 };
   const wideTurn = leastOurs(() => { sdnCryptoAddresses(wide); sdnNames(wide); sdnEvmAddresses(wide); }).ms;
   ok(wideTurn > turn.ms, `control: the builders in one turn on a ${wide.entries.length * 20} address list hold the loop ${Math.round(wideTurn)} ms (${turn.note})`);
+  const refreshDisk = stallSyncWrites([payoutDir, dirname(process.env.SANCTIONS_SCREEN_FILE)], turn.ms * 2);
   await settle();
   const refreshMeter = gapMeter(1);
   const [screened] = await Promise.all([
     screen.refreshSanctionsScreen({ fetchImpl: async () => chunked(), log: () => {} }),
     kit.loadSanctions({ fetchImpl: async () => chunked(), force: true }),
   ]);
+  await kit.__payoutWriteForTests();
   await settle();
   const refreshGap = refreshMeter.stop();
+  refreshDisk.restore();
+  ok(refreshDisk.stalls === 0, `both stored copies are written off the loop (${refreshDisk.stalls} synchronous writes)`);
   const st = kit.sanctionsStatus();
   ok(screened.ok && screened.evmAddresses === 40000 && st.addresses === 40000 && st.entries === 20000 && st.payoutScreen.addresses === 40000,
     `one refresh feeds the screen (${screened.evmAddresses} EVM addresses), the tools (${st.addresses} addresses, ${st.entries} names) and the payout map (${st.payoutScreen.addresses})`);
@@ -422,15 +470,9 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
   clearInterval(probe); look();
   ok(seen.size >= 2 && [...seen].every((v) => v === "40000/20000/40000" || v === "30000/15000/30000"), `a screen during adoption reads one whole list (seen: ${[...seen].join(", ")})`);
 
-  // Both readers adopt the wide list (held as fetched). The stored copies are
-  // left out of this run: each is one serialization sized by the address
-  // count (this list is about 400x production's), written on its own turn
-  // after the swap, and timed at production size below. The payout map is
-  // seeded newer so the tools write none; the screen gets a stand-in store.
+  // Both readers adopt the wide list (held as fetched), stored copies
+  // included: each is serialized across turns and written off the loop.
   kit.__resetSanctionsForTests(); screen.__resetSanctionsScreenForTests();
-  kit.__seedPayoutListForTests(undefined, { fetchedAt: Date.now() + 3600_000 });
-  let wideSaved = null;
-  screen.__setSanctionsScreenStoreForTests({ save: async (b) => { wideSaved = b.addresses.length; return true; }, read: async () => ({ ok: false }), lastError: null });
   __holdSdnListForTests({ ...wide, fetchedAt: Date.now() });
   await settle();
   const wideMeter = gapMeter(1);
@@ -438,11 +480,34 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
     screen.refreshSanctionsScreen({ maxAgeMs: 3600_000, log: () => {} }),
     kit.loadSanctions({ force: true }),
   ]);
+  const wideStored = await kit.__payoutWriteForTests();
   await settle();
   const wideGap = wideMeter.stop();
-  console.log(`test-sanctions: control list, builders ${Math.round(wideTurn)} ms in one turn, worst turn ${Math.round(wideGap.worst)} ms with both readers adopting it sliced`);
-  ok(wideScreened.evmAddresses === 400000 && kit.sanctionsStatus().addresses === 400000 && wideSaved === 400000 && wideGap.worst < turn.ms,
-    `both readers adopt the wide list without holding the loop past ${turn.ms} ms (worst turn ${Math.round(wideGap.worst)} ms; ${turn.note})`);
+  console.log(`test-sanctions: control list, builders ${Math.round(wideTurn)} ms in one turn, worst turn ${Math.round(wideGap.worst)} ms with both readers adopting and storing it sliced`);
+  const wideScreenFile = JSON.parse(readFileSync(process.env.SANCTIONS_SCREEN_FILE, "utf8"));
+  const widePayoutFile = JSON.parse(readFileSync(process.env.SANCTIONS_PAYOUT_FILE, "utf8"));
+  ok(wideScreened.evmAddresses === 400000 && kit.sanctionsStatus().addresses === 400000 && wideStored === true && wideScreenFile.addresses.length === 400000 && widePayoutFile.addresses.length === 400000 && wideGap.worst < turn.ms,
+    `both readers adopt and store the wide list without holding the loop past ${turn.ms} ms (worst turn ${Math.round(wideGap.worst)} ms; ${turn.note})`);
+  // The stored copies' serializer runs sliced. Control: rows enough that one
+  // JSON.stringify of them holds the loop past the bound on this machine
+  // (doubled until it does); the sliced serializer over the same rows stays
+  // under it.
+  {
+    let size = 400_000, rows, onePass;
+    for (;;) {
+      rows = Array.from({ length: size }, (_, i) => ({ address: "0x" + String(i).padStart(40, "0"), asset: "ETH", entity: `ENTITY ${i} & CO`, sdnId: String(i) }));
+      onePass = leastOurs(() => JSON.stringify({ v: 1, addresses: rows }), { attempts: 2, giveUp: turn.ms * 1.5 }).ms;
+      if (onePass > turn.ms * 1.5 || size >= 3_200_000) break;
+      size *= 2;
+    }
+    ok(onePass > turn.ms, `control: ${size} stored rows serialized in one pass hold the loop ${Math.round(onePass)} ms (${turn.note})`);
+    await settle();
+    const m = gapMeter(1);
+    const { pieces } = await runSliced(storedBodySteps({ v: 1 }, "addresses", rows));
+    await settle();
+    const g = m.stop();
+    ok(pieces.length > 2 && g.worst < turn.ms, `the stored copies' serializer takes the same ${size} rows across turns (worst turn ${Math.round(g.worst)} ms; ${turn.note})`);
+  }
   // The stored copy's serialization at production size (about 1,000 EVM
   // addresses; 20,000 here, so 20x) stays inside one bound.
   {

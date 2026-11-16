@@ -21,7 +21,7 @@
 // A MISS IS NEVER A CLEARANCE - see src/tools/sanctions-core.js for why the
 // verdict vocabulary has no word in it that reads as permission.
 import { sdnCryptoAddressSteps, sdnNameSteps, screenName, normalizeAddress, lookupAddress, SANCTIONS_VERDICTS } from "./sanctions-core.js";
-import { loadSdnList, onSdnList, runSliced } from "../ofac-sdn.js";
+import { loadSdnList, onSdnList, runSliced, storedBodySteps } from "../ofac-sdn.js";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { createJsonDocument } from "../json-document.js";
@@ -108,14 +108,23 @@ export function startSanctionsPayoutStore() {
   return payoutReady;
 }
 
+// The stored copy is built and serialized across turns (storedBodySteps) and
+// written off the loop (saveSerialized): at tens of thousands of addresses
+// one JSON.stringify and a synchronous file write held the loop, and a disk
+// busy with other writes held it for seconds. One write at a time, in the
+// order the maps were adopted, so an older map never lands over a newer one.
+let payoutWrite = Promise.resolve(true);
 function storePayout() {
-  const rows = [];
-  for (const v of payout.addresses.values()) rows.push({ address: v.address, asset: v.asset, entity: v.entity, sdnId: v.sdnId });
-  const body = { v: 1, fetchedAt: payout.fetchedAt, publishDate: payout.publishDate, addresses: rows };
-  return getPayoutDoc().save(body).then((ok) => {
-    if (!ok) console.warn(`[sanctions] payout list loaded but not stored: ${String(getPayoutDoc().lastError || "save refused").slice(0, 120)}`);
-    return ok;
-  }, () => false);
+  const snap = payout;
+  const head = { v: 1, fetchedAt: snap.fetchedAt, publishDate: snap.publishDate };
+  const toRow = (v) => ({ address: v.address, asset: v.asset, entity: v.entity, sdnId: v.sdnId });
+  payoutWrite = payoutWrite.then(() => runSliced(storedBodySteps(head, "addresses", snap.addresses.values(), toRow)))
+    .then(({ body, pieces }) => getPayoutDoc().saveSerialized(body, pieces))
+    .then((ok) => {
+      if (!ok) console.warn(`[sanctions] payout list loaded but not stored: ${String(getPayoutDoc().lastError || "save refused").slice(0, 120)}`);
+      return ok;
+    }, () => false);
+  return payoutWrite;
 }
 
 /** Build this kit's maps from a parsed list (src/ofac-sdn.js). Rejects on a
@@ -392,6 +401,8 @@ export function __seedPayoutListForTests(rows = [{ address: "0x5a5a5a5a5a5a5a5a5
   for (const r of rows) { const key = normalizeAddress(r.address); if (key && !addresses.has(key)) addresses.set(key, { asset: r.asset, address: r.address, entity: r.entity, sdnId: r.sdnId }); }
   payout = { addresses, fetchedAt, publishDate, source: "test" };
 }
+/** Test seam: the payout store write last started (resolves once it is written). */
+export function __payoutWriteForTests() { return payoutWrite; }
 /** Test seam: forget the downloaded list too. */
 export function __resetSanctionsForTests() { state = { addresses: new Map(), names: [], fetchedAt: null, error: null, loading: null, bytes: 0, publishDate: null }; lastAttemptAt = 0; adoptChain = Promise.resolve(); adopting = null; __resetPayoutListForTests(); }
 
