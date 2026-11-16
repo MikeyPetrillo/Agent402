@@ -21,8 +21,8 @@
 // refund costs a delay and is visible in the ledger, while paying an unreal
 // one costs money and is invisible.
 
-const SOLANA_RPCS = (process.env.REFUND_SOLANA_RPCS || "https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com").split(",").map((x) => x.trim()).filter(Boolean);
-const ALGORAND_INDEXERS = (process.env.REFUND_ALGORAND_INDEXERS || "https://mainnet-idx.4160.nodely.dev").split(",").map((x) => x.trim()).filter(Boolean);
+export const SOLANA_RPCS = (process.env.REFUND_SOLANA_RPCS || "https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com").split(",").map((x) => x.trim()).filter(Boolean);
+export const ALGORAND_INDEXERS = (process.env.REFUND_ALGORAND_INDEXERS || "https://mainnet-idx.4160.nodely.dev").split(",").map((x) => x.trim()).filter(Boolean);
 
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 // TIP-20 TransferWithMemo(address indexed from, address indexed to, uint256 amount, bytes32 indexed memo):
@@ -42,6 +42,11 @@ export const GATEWAY_API_BASE_URL = "https://gateway-api.circle.com";
 const GATEWAY_MAX_BODY_BYTES = 64 * 1024;
 
 const fail = (reason) => ({ verified: false, reason });
+// A verdict read from a transaction the chain holds (it was mined, and it is
+// not this payment's transfer, or it failed): the late-settlement reconcile
+// closes such an entry. `absent`: every source answered and none holds the
+// transaction. Any other failure is unread.
+const minedFail = (reason, extra = {}) => ({ ...fail(reason), mined: true, ...extra });
 const pass = (detail) => ({ verified: true, ...detail });
 
 /** 32-byte topic -> 0x-prefixed lowercase address (EVM is case-insensitive,
@@ -192,6 +197,8 @@ async function verifyTempo({ tx, payer, payToSet, amountUsd, tokens, rpcUrl, fet
  */
 async function verifySolana({ tx, payer, payToSet, amountUsd, asset, rpcs, fetchImpl, timeoutMs }) {
   if (typeof tx !== "string" || tx.length < 40) return fail("no usable Solana signature recorded");
+  const mint = String(asset || "");
+  if (!mint) return fail("no mint for this network");
   let txn = null, lastErr = "";
   for (const url of rpcs) {
     try {
@@ -199,29 +206,27 @@ async function verifySolana({ tx, payer, payToSet, amountUsd, asset, rpcs, fetch
       if (txn) break;
     } catch (e) { lastErr = e.message; }
   }
-  if (!txn) return fail(`transaction not found on chain${lastErr ? ` (${lastErr})` : ""}`);
+  if (!txn) return { ...fail(`transaction not found on chain${lastErr ? ` (${lastErr})` : ""}`), ...(lastErr || !rpcs.length ? {} : { absent: true }) };
   const meta = txn.meta || {};
   // A failed Solana transaction moves no tokens - exactly what our own best
   // customer's wallet produced when it ran dry (insufficient funds, 2026-08-03).
-  if (meta.err) return fail(`transaction failed on chain (${JSON.stringify(meta.err).slice(0, 60)})`);
+  if (meta.err) return minedFail(`transaction failed on chain (${JSON.stringify(meta.err).slice(0, 60)})`, { failedOnChain: true });
 
-  const mint = String(asset || "");
-  if (!mint) return fail("no mint for this network");
   const sum = (rows, owner) => (rows || [])
     .filter((b) => b && b.owner === owner && b.mint === mint)
     .reduce((a, b) => a + BigInt(b.uiTokenAmount?.amount || "0"), 0n);
   const decimals = Number(((meta.postTokenBalances || []).find((b) => b?.mint === mint) || {}).uiTokenAmount?.decimals);
-  if (!Number.isFinite(decimals)) return fail("token decimals unreadable from the transaction");
+  if (!Number.isFinite(decimals)) return minedFail("token decimals unreadable from the transaction");
 
   const credited = [...payToSet].reduce(
     (a, w) => a + (sum(meta.postTokenBalances, w) - sum(meta.preTokenBalances, w)), 0n);
-  if (credited <= 0n) return fail("our payTo was not credited in that transaction");
+  if (credited <= 0n) return minedFail("our payTo was not credited in that transaction");
   const debited = sum(meta.preTokenBalances, payer) - sum(meta.postTokenBalances, payer);
-  if (debited <= 0n) return fail("this payer was not debited in that transaction");
+  if (debited <= 0n) return minedFail("this payer was not debited in that transaction");
 
   const expected = BigInt(Math.round(Number(amountUsd) * 10 ** decimals));
   if (expected <= 0n) return fail("expected amount is zero");
-  if (credited < expected) return fail(`transfer is short: credited ${credited} < expected ${expected} (atomic)`);
+  if (credited < expected) return minedFail(`transfer is short: credited ${credited} < expected ${expected} (atomic)`);
   return pass({ movedAtomic: credited.toString(), decimals, tx });
 }
 
@@ -235,31 +240,33 @@ async function verifyAlgorand({ tx, payer, payToSet, amountUsd, asset, indexers,
   const assetId = Number(String(asset || "").replace(/[^0-9]/g, ""));
   if (!Number.isFinite(assetId) || assetId <= 0) return fail("no ASA id for this network");
 
-  let body = null, lastErr = "";
+  let body = null, lastErr = "", notFound = 0;
   for (const base of indexers) {
     try {
       const res = await fetchImpl(`${String(base).replace(/\/+$/, "")}/v2/transactions/${encodeURIComponent(tx)}`, {
         signal: AbortSignal.timeout(timeoutMs),
       });
+      if (res.status === 404) notFound++;
       if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
       body = await res.json();
       if (body) break;
     } catch (e) { lastErr = e.message; }
   }
   const t = body?.transaction;
-  if (!t) return fail(`transaction not found on chain${lastErr ? ` (${lastErr})` : ""}`);
+  // The indexer answers 404 for a transaction it does not hold.
+  if (!t) return { ...fail(`transaction not found on chain${lastErr ? ` (${lastErr})` : ""}`), ...(indexers.length && notFound === indexers.length ? { absent: true } : {}) };
   if (!t["confirmed-round"]) return fail("transaction is not confirmed");
 
   const ax = t["asset-transfer-transaction"];
-  if (!ax) return fail("not an asset-transfer transaction");
-  if (Number(ax["asset-id"]) !== assetId) return fail(`wrong asset (${ax["asset-id"]} != ${assetId})`);
-  if (t.sender !== payer) return fail("sender is not the payer we would repay");
-  if (![...payToSet].includes(ax.receiver)) return fail("receiver is not a wallet we control");
+  if (!ax) return minedFail("not an asset-transfer transaction");
+  if (Number(ax["asset-id"]) !== assetId) return minedFail(`wrong asset (${ax["asset-id"]} != ${assetId})`);
+  if (t.sender !== payer) return minedFail("sender is not the payer we would repay");
+  if (![...payToSet].includes(ax.receiver)) return minedFail("receiver is not a wallet we control");
   // USDC on Algorand is 6-decimal; the amount is already in atomic units.
   const expected = BigInt(Math.round(Number(amountUsd) * 1e6));
   const moved = BigInt(ax.amount || 0);
   if (expected <= 0n) return fail("expected amount is zero");
-  if (moved < expected) return fail(`transfer is short: moved ${moved} < expected ${expected} (atomic)`);
+  if (moved < expected) return minedFail(`transfer is short: moved ${moved} < expected ${expected} (atomic)`);
   return pass({ movedAtomic: moved.toString(), decimals: 6, tx });
 }
 

@@ -69,7 +69,15 @@ export const requiredSecondsFor = (slug) => SLOW_TOOL_SECONDS[slug] ?? DEFAULT_R
 export function lastValidFromPaymentHeader(headerValue) {
   if (typeof headerValue !== "string" || !headerValue) return null;
   try {
-    const payload = decodePaymentHeader(headerValue);
+    return lastValidFromPayload(decodePaymentHeader(headerValue));
+  } catch {
+    return null;
+  }
+}
+
+/** lastValid (bigint) of the buyer's payment txn in a decoded x402 payload, or null. */
+export function lastValidFromPayload(payload) {
+  try {
     const network = String(payload?.network || "");
     if (network && !network.startsWith("algorand:")) return null;
     const group = payload?.payload?.paymentGroup;
