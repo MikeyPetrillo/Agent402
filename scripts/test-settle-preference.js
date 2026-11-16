@@ -97,7 +97,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 }
 
 // ---------------------------------------------------------------------------
-// Booted: the production order against two stubs.
+// Booted: the production order against two stubs. Each stub names its own
+// transactions (a Solana transaction answers one request).
 function stubFacilitator(port, feePayer) {
   const state = { verify: [], settle: [], feePayer };
   const srv = createServer((req, res) => {
@@ -116,7 +117,7 @@ function stubFacilitator(port, feePayer) {
       }
       let parsed = {}; try { parsed = body ? JSON.parse(body) : {}; } catch { /* keep {} */ }
       if (req.url === "/verify") { state.verify.push(parsed); return reply({ isValid: true, payer: SOL_PAYTO }); }
-      if (req.url === "/settle") { state.settle.push(parsed); return reply({ success: true, transaction: `sig-${state.settle.length}`, network: parsed?.paymentRequirements?.network || SOL, payer: SOL_PAYTO }); }
+      if (req.url === "/settle") { state.settle.push(parsed); return reply({ success: true, transaction: `sig-${feePayer.slice(0, 8)}-${state.settle.length}`, network: parsed?.paymentRequirements?.network || SOL, payer: SOL_PAYTO }); }
       res.writeHead(404, { Connection: "close" }); res.end();
     });
   });
