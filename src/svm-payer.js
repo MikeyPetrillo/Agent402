@@ -204,6 +204,32 @@ function readMessage(txBase64) {
   return { bytes, sigCount: sigs.value, sigsAt: sigs.next, messageStart, messageEnd: bytes.length, numRequiredSignatures, keyCount: keys.value, keyBytes, instructions };
 }
 
+// The System program, and its AdvanceNonceAccount instruction tag.
+const SYSTEM_PROGRAM = "11111111111111111111111111111111";
+const IX_ADVANCE_NONCE = 4;
+
+/**
+ * The recent blockhash a wire transaction's lifetime rests on, as base58, or
+ * null: the bytes do not parse, the message is v1, or the transaction is a
+ * durable-nonce one (its first instruction advances a nonce account), whose
+ * "blockhash" is a nonce value that never expires on a clock. A blockhash
+ * transaction cannot land once that blockhash has expired.
+ * @param {string} txBase64
+ */
+export function svmLifetimeBlockhash(txBase64) {
+  try {
+    const bytes = wireBytesOf(txBase64);
+    if (!bytes || bytes[0] === 0x81) return null;
+    const m = readMessage(txBase64);
+    if (!m) return null;
+    const first = m.instructions[0];
+    if (first && first.program < m.keyCount && base58Encode(m.keyBytes(first.program)) === SYSTEM_PROGRAM && first.tag === IX_ADVANCE_NONCE) return null;
+    // The blockhash sits right after the static keys: key slot `keyCount`.
+    const hash = m.keyBytes(m.keyCount);
+    return hash.length === 32 ? base58Encode(hash) : null;
+  } catch { return null; }
+}
+
 /** A TransferChecked of a token program (its program id is always a static key). */
 function isTransferChecked(m, ix) {
   return ix.tag === IX_TRANSFER_CHECKED && ix.accountIdx.length >= 4

@@ -31,10 +31,23 @@
 // AuthorizationUsed(payer, nonce) log, and one EIP-3009 nonce is used once, so
 // one authorization is never owed twice, whichever of its transactions lands.
 //
-// Only EVM networks with a configured RPC (src/evm-rpcs.js) are booked; any
-// other network is skipped and the skip logged. Tempo is left to its own
-// confirm path (src/tempo-confirm.js); Arc's pending answers carry no hash and
-// are booked by src/circle-pending.js.
+// A transaction-keyed EVM entry also carries its EIP-3009 authorization's
+// nonce: before a transaction never found is closed as not landed, the
+// authorization's state is read. Used means another transaction (a
+// rebroadcast, another facilitator's) moved it: that transaction is found
+// and judged like the booked one; a read that fails keeps the entry.
+//
+// EVM networks with a configured RPC (src/evm-rpcs.js) are booked, and so are
+// Solana and Algorand failures that name a broadcast transaction in the
+// chain's own id format (a base58 signature, a 52-character Algorand id; kept
+// exactly as written, never case-folded). Those are read by the rails' own
+// verifier (verifyInboundPayment, src/payment-verify.js), and a transaction
+// never found closes only once it can no longer land: its recent blockhash
+// reads expired (Solana; a durable-nonce transaction never closes), or the
+// chain's round is past its lastValid (Algorand). Any other network is
+// skipped and the skip logged. Tempo is left to its own confirm path
+// (src/tempo-confirm.js); Arc's pending answers carry no hash and are booked
+// by src/circle-pending.js.
 //
 // Stored in the state database when one is configured, in the file otherwise
 // (src/json-document.js), the same way as the Arc pending book. The reconcile
@@ -45,7 +58,7 @@
 import { createJsonDocument } from "./json-document.js";
 import { shortPayer } from "./verify-failure-log.js";
 import { trackStoreReady } from "./state-db.js";
-import { rpc, evmTransferredInReceipt } from "./payment-verify.js";
+import { rpc, evmTransferredInReceipt, verifyInboundPayment, SOLANA_RPCS, ALGORAND_INDEXERS } from "./payment-verify.js";
 import { evmRpcFor } from "./evm-rpcs.js";
 import { authorizationUsed, findAuthorizationTx, blockNear } from "./robinhood-outage.js";
 import { ownFirstAttemptOf } from "./robinhood-order.js";
@@ -55,6 +68,33 @@ import { stripControlChars as oneLine } from "./prepayment-refusal.js";
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const TEMPO_NETWORK = "eip155:4217";
+// Solana: a base58 signature (64 bytes) and base58 addresses (32 bytes).
+const SVM_SIG = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
+const SVM_ADDR = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+// Algorand: a 52-character base32 transaction id, 58-character addresses, a numeric asset id.
+const AVM_TX = /^[A-Z2-7]{52}$/;
+const AVM_ADDR = /^[A-Z2-7]{58}$/;
+const AVM_ASSET = /^[0-9]{1,20}$/;
+// The rails' USDC: 6 decimals on Solana and Algorand alike.
+const RAIL_USDC_DECIMALS = 6;
+
+/** The rail a network settles on: evm, svm (Solana), avm (Algorand), or null. */
+export function railOf(network) {
+  const n = String(network || "");
+  if (n.startsWith("eip155:")) return "evm";
+  if (n.startsWith("solana:")) return "svm";
+  if (n.startsWith("algorand:")) return "avm";
+  return null;
+}
+/** A transaction id in its chain's own format. */
+const txOk = (network, tx) => {
+  const r = railOf(network), t = String(tx || "");
+  return r === "evm" ? TX.test(t) : r === "svm" ? SVM_SIG.test(t) : r === "avm" ? AVM_TX.test(t) : false;
+};
+const addrOk = (rail, a) => (rail === "evm" ? ADDR : rail === "svm" ? SVM_ADDR : AVM_ADDR).test(String(a || ""));
+const assetOk = (rail, a) => (rail === "evm" ? ADDR : rail === "svm" ? SVM_ADDR : AVM_ASSET).test(String(a || ""));
+/** Hex is case-insensitive and is lowercased; base58 and base32 ids are kept exactly. */
+const txKeyOf = (network, tx) => (railOf(network) === "evm" ? String(tx).toLowerCase() : String(tx));
 
 export const SETTLED_AFTER_402 = "settled_after_402";
 /** The bound on OPEN (pending) entries. Unresolved entries wait for a human
@@ -91,7 +131,7 @@ const UNRECORDED_KEPT = 200;
 export const RESOLUTIONS_KEPT = 500;
 /** What an operator may resolve an unresolved entry as. */
 export const OPERATOR_OUTCOMES = Object.freeze(["booked_owed", "paid", "dismissed"]);
-const KEY_RE = /^eip155:[0-9]{1,12}\|(?:0x[0-9a-f]{64}|auth\|0x[0-9a-f]{40}\|0x[0-9a-f]{64})$/;
+const KEY_RE = /^(?:eip155:[0-9]{1,12}\|(?:0x[0-9a-f]{64}|auth\|0x[0-9a-f]{40}\|0x[0-9a-f]{64})|solana:[-_a-zA-Z0-9]{1,64}\|[1-9A-HJ-NP-Za-km-z]{64,88}|algorand:[-_a-zA-Z0-9=+/]{1,64}\|[A-Z2-7]{52})$/;
 
 /** The route slug a refund row names, from the resource URL the buyer paid. */
 function slugOf(resourceUrl) {
@@ -116,7 +156,7 @@ export function validBeforeOf(v) {
 }
 const authorizationExpired = (validBefore, t) => validBefore != null && Number(validBefore) > 0 && t > Number(validBefore) * 1000;
 
-export const lateKey = (network, tx) => `${String(network)}|${String(tx).toLowerCase()}`;
+export const lateKey = (network, tx) => `${String(network)}|${txKeyOf(network, tx)}`;
 /** An entry booked by AUTHORIZATION (no transaction known yet): the one an
  *  ambiguous facilitator failure leaves (src/robinhood-outage.js). */
 export const lateAuthKey = (network, payer, nonce) => `${String(network)}|auth|${String(payer).toLowerCase()}|${String(nonce).toLowerCase()}`;
@@ -151,10 +191,14 @@ export function lateSettleCandidate(ctx) {
       resource: ctx?.paymentPayload?.resource?.url || null, validBefore: validBeforeOf(la.validBefore ?? auth.validBefore), via: la.via || "ambiguous facilitator",
     };
   }
-  if (!TX.test(tx)) return null;
+  if (!txOk(req.network, tx)) return null;
+  // The EIP-3009 nonce (an exact payment), read before a transaction never
+  // found is closed: another transaction may have used the authorization.
+  const nonce = railOf(req.network) === "evm" && ctx?.paymentPayload?.payload?.authorization && NONCE.test(String(auth.nonce || "")) ? String(auth.nonce).toLowerCase() : null;
   return {
     network: String(req.network || ""),
     tx,
+    ...(nonce ? { nonce } : {}),
     payer: String(auth.from || ctx?.error?.payer || ""),
     payTo: String(req.payTo || ""),
     asset: String(req.asset || ""),
@@ -201,6 +245,10 @@ export function createLateSettleBook({
   wasServed = async () => false,
   rpcFor = evmRpcFor,
   fetchImpl = fetch,
+  // Solana RPCs, Algorand indexers and algod bases the rail reads use.
+  svmRpcs = SOLANA_RPCS,
+  avmIndexers = ALGORAND_INDEXERS,
+  avmAlgods = null,
   now = () => Date.now(),
   log = console.warn,
   maxEntries = MAX_ENTRIES,
@@ -350,22 +398,30 @@ export function createLateSettleBook({
      *  it is booked (or already was). */
     async book(c = {}) {
       const network = String(c.network || "");
-      if (!network.startsWith("eip155:") || network === TEMPO_NETWORK) {
+      const rail = railOf(network);
+      if (!rail || network === TEMPO_NETWORK) {
         log(`[late-settle] ${network || "unknown network"} settlement ${c.tx || ""} failed naming a transaction; no receipt reader for this network, not booked`);
         return false;
       }
-      if (!rpcFor(network)) {
+      if (rail === "evm" && !rpcFor(network)) {
         log(`[late-settle] ${network} settlement ${c.tx} failed naming a transaction; no RPC configured, not booked`);
         return false;
       }
-      const byAuth = !c.tx && NONCE.test(String(c.nonce || ""));
-      if ((!byAuth && !TX.test(String(c.tx || ""))) || !ADDR.test(String(c.payer || "")) || !ADDR.test(String(c.payTo || "")) || !ADDR.test(String(c.asset || "")) || !/^[0-9]{1,30}$/.test(String(c.amount || ""))) return false;
+      const byAuth = rail === "evm" && !c.tx && NONCE.test(String(c.nonce || ""));
+      if ((!byAuth && !txOk(network, c.tx)) || !addrOk(rail, c.payer) || !addrOk(rail, c.payTo) || !assetOk(rail, c.asset) || !/^[0-9]{1,30}$/.test(String(c.amount || ""))) return false;
       const key = byAuth ? lateAuthKey(network, c.payer, c.nonce) : lateKey(network, c.tx);
       await refresh();
       if (state.pending[key]) return true;
       const t = now();
+      // What proves a rail transaction can no longer land: its recent
+      // blockhash (Solana) or its lastValid round (Algorand).
+      const lastValid = rail === "avm" && /^[0-9]{1,15}$/.test(String(c.lastValid ?? "")) ? Number(c.lastValid) : null;
+      const blockhash = rail === "svm" && SVM_ADDR.test(String(c.blockhash || "")) ? String(c.blockhash) : null;
       const entry = {
-        key, network, tx: byAuth ? null : String(c.tx).toLowerCase(), ...(byAuth ? { nonce: String(c.nonce).toLowerCase() } : {}), payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
+        key, network, tx: byAuth ? null : txKeyOf(network, c.tx), ...(byAuth ? { nonce: String(c.nonce).toLowerCase() } : {}),
+        ...(!byAuth && rail === "evm" && NONCE.test(String(c.nonce || "")) ? { nonce: String(c.nonce).toLowerCase() } : {}),
+        ...(lastValid != null ? { lastValid } : {}), ...(blockhash ? { blockhash } : {}),
+        payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
         amount: String(c.amount), validBefore: validBeforeOf(c.validBefore), slug: slugOf(c.resource), via: String(c.via || "primary").slice(0, 60),
         ...(!byAuth && NONCE.test(String(c.authNonce || "")) ? { authNonce: String(c.authNonce).toLowerCase() } : {}),
         at: t, nextCheckAt: t + FIRST_CHECK_MS, checks: 0, unreadable: 0, failures: 0, state: "pending",
@@ -456,8 +512,8 @@ export function createLateSettleBook({
       const e = KEY_RE.test(k) && Object.hasOwn(state.pending, k) ? state.pending[k] : null;
       if (!e) return { ok: false, error: "no such entry" };
       if (e.state !== "unresolved") return { ok: false, error: "the entry is still pending: the reconcile pass resolves it" };
-      const given = tx == null || tx === "" ? null : String(tx).toLowerCase();
-      if (given != null && !TX.test(given)) return { ok: false, error: "tx must be a 0x-prefixed 32-byte transaction hash" };
+      const given = tx == null || tx === "" ? null : txKeyOf(e.network, String(tx).trim());
+      if (given != null && !txOk(e.network, given)) return { ok: false, error: "tx must be a transaction id in the network's own format (0x-prefixed 32-byte hash on EVM)" };
       if (outcome === "paid" && !given) return { ok: false, error: "paid needs tx: the refund transfer" };
       let evidence = null;
       if (outcome === "booked_owed") {
@@ -465,6 +521,7 @@ export function createLateSettleBook({
         if (!evidence) return { ok: false, error: "booked_owed needs tx: the transfer that landed (the entry names none)" };
         let dec = decimals == null || decimals === "" ? null : Number(decimals);
         if (dec != null && !(Number.isInteger(dec) && dec >= 0 && dec <= 36)) return { ok: false, error: "decimals must be an integer from 0 to 36" };
+        if (dec == null && railOf(e.network) !== "evm") return { ok: false, error: "pass decimals for a transfer on this network" };
         if (dec == null) {
           try {
             const url = rpcFor(e.network);
@@ -549,6 +606,8 @@ export function createLateSettleBook({
       return out;
     },
     async _one(e0, out) {
+      const rail = railOf(e0.network);
+      if (rail === "svm" || rail === "avm") return this._oneRail(e0, out, rail);
       const url = rpcFor(e0.network);
       let e = e0;
       let receipt;
@@ -556,27 +615,34 @@ export function createLateSettleBook({
       // A used authorization is never closed as not landed, whatever this pass
       // could read of its transaction.
       let usedAuth = false;
+      // Used means the transaction that used it is found and judged like any
+      // other booked transaction (`e.tx` becomes that one).
+      const readAuthorization = async () => {
+        if (!url) throw new Error("no RPC");
+        const c = (m, p) => call(url, m, p);
+        if (!(await authorizationUsed(c, e.asset, e.payer, e.nonce))) return false;
+        usedAuth = true;
+        const { head, from } = await blockNear(c, e.at - AUTH_LOOKBACK_MS);
+        const start = Number.isFinite(e.scanFrom) ? e.scanFrom : from;
+        const f = await findAuthorizationTx(c, { token: e.asset, authorizer: e.payer, nonce: e.nonce, fromBlock: start, toBlock: head });
+        if (f.tx) e = { ...e, tx: f.tx };
+        else await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], scanFrom: f.scannedTo + 1 }; });
+        return !!f.tx;
+      };
       if (!e.tx && e.nonce) {
-        // Booked by authorization: unused means nothing has landed (yet); used
-        // means the transaction that used it is found and judged like any
-        // other booked transaction.
-        try {
-          if (!url) throw new Error("no RPC");
-          const c = (m, p) => call(url, m, p);
-          if (await authorizationUsed(c, e.asset, e.payer, e.nonce)) {
-            usedAuth = true;
-            const { head, from } = await blockNear(c, e.at - AUTH_LOOKBACK_MS);
-            const start = Number.isFinite(e.scanFrom) ? e.scanFrom : from;
-            const f = await findAuthorizationTx(c, { token: e.asset, authorizer: e.payer, nonce: e.nonce, fromBlock: start, toBlock: head });
-            if (f.tx) e = { ...e, tx: f.tx };
-            else {
-              await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], scanFrom: f.scannedTo + 1 }; });
-            }
-          }
-        } catch { readable = false; }
+        // Booked by authorization: unused means nothing has landed (yet).
+        try { await readAuthorization(); } catch { readable = false; }
       }
       if (readable && e.tx) {
         try { receipt = url ? await call(url, "eth_getTransactionReceipt", [e.tx]) : undefined; } catch { readable = false; }
+      }
+      // A booked transaction not found: its authorization may have been used
+      // by another transaction (a rebroadcast, another facilitator's), so its
+      // state is read before the entry can ever close as not landed.
+      if (readable && url && !receipt && e0.tx && NONCE.test(String(e0.nonce || ""))) {
+        try {
+          if (await readAuthorization() && e.tx !== e0.tx) receipt = await call(url, "eth_getTransactionReceipt", [e.tx]);
+        } catch { readable = false; }
       }
       if (!url) readable = false;
       const drop = async () => change((p) => { delete p[e.key]; });
@@ -602,42 +668,58 @@ export function createLateSettleBook({
           log(`[late-settle] ${e.network} tx ${e.tx} mined without this payment's transfer (moved ${moved} of ${e.amount}); nothing owed`);
           return;
         }
-        if (await wasServed({ tx: e.tx, network: e.network, key: e.key })) {
-          await drop();
-          out.served++;
-          return;
-        }
         // decimals() is read, never assumed (src/payment-verify.js).
-        const decimals = Number(BigInt(await call(url, "eth_call", [{ to: e.asset, data: "0x313ce567" }, "latest"]) || "0x0"));
-        if (!Number.isFinite(decimals) || decimals > 36) throw new Error("token decimals unreadable");
-        await recordOwed({
-          slug: e.slug, network: e.network, payer: e.payer, priceUsd: Number(e.amount) / 10 ** decimals,
-          tx: e.tx, httpStatus: 402, wire: "x402",
-          note: `${SETTLED_AFTER_402}: the transfer landed on chain after the buyer was refused`,
+        await this._owe(e, out, async () => {
+          const decimals = Number(BigInt(await call(url, "eth_call", [{ to: e.asset, data: "0x313ce567" }, "latest"]) || "0x0"));
+          if (!Number.isFinite(decimals) || decimals > 36) throw new Error("token decimals unreadable");
+          return decimals;
         });
-        // Dropped only once the ledger holds the debt (a new row or one
-        // already there for this tx); a write that did not land is retried.
-        if (await owedRecorded(e.tx).catch(() => false)) {
-          await drop();
-          out.owed++;
-          log(`[late-settle] ${e.network} tx ${e.tx} landed after a 402; booked owed (${SETTLED_AFTER_402})`);
-        } else {
-          await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], failures: 0, nextCheckAt: now() + FIRST_CHECK_MS, ...(p[e.key].state === "unresolved" ? { recheckAt: now() + FIRST_CHECK_MS } : {}) }; });
-          out.pending++;
-        }
         return;
       }
-      const checks = e.checks + 1;
-      const unreadable = readable ? e.unreadable : e.unreadable + 1;
-      const t = now();
       // Absent can be closed only once the chain answered (this read) AND the
       // authorization can no longer move money: past the window and past its
       // validBefore, a transaction mined later reverts.
-      const authExpired = authorizationExpired(e.validBefore, t);
-      if (t - e.at >= WINDOW_MS && readable && authExpired && !usedAuth) {
+      const authExpired = authorizationExpired(e.validBefore, now());
+      await this._notFound(e, out, { readable, canClose: authExpired && !usedAuth, why: "its authorization has expired" });
+    },
+    // A transaction the chain holds that is this payment's transfer: owed,
+    // unless it was served after all. `decimalsOf()` reads the token's.
+    async _owe(e, out, decimalsOf) {
+      const drop = async () => change((p) => { delete p[e.key]; });
+      if (await wasServed({ tx: e.tx, network: e.network, key: e.key })) {
         await drop();
+        out.served++;
+        return;
+      }
+      const decimals = await decimalsOf();
+      await recordOwed({
+        slug: e.slug, network: e.network, payer: e.payer, priceUsd: Number(e.amount) / 10 ** decimals,
+        tx: e.tx, httpStatus: 402, wire: "x402",
+        note: `${SETTLED_AFTER_402}: the transfer landed on chain after the buyer was refused`,
+      });
+      // Dropped only once the ledger holds the debt (a new row or one
+      // already there for this tx); a write that did not land is retried.
+      if (await owedRecorded(e.tx).catch(() => false)) {
+        await drop();
+        out.owed++;
+        log(`[late-settle] ${e.network} tx ${e.tx} landed after a 402; booked owed (${SETTLED_AFTER_402})`);
+      } else {
+        await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], failures: 0, nextCheckAt: now() + FIRST_CHECK_MS, ...(p[e.key].state === "unresolved" ? { recheckAt: now() + FIRST_CHECK_MS } : {}) }; });
+        out.pending++;
+      }
+    },
+    // A transaction not found (or not readable) this pass: closed as not
+    // landed only once the chain answered, the window has passed and
+    // `canClose` (it can no longer land); otherwise kept with a backoff, and
+    // past MAX_AGE_MS left unresolved for a human.
+    async _notFound(e, out, { readable, canClose, why }) {
+      const checks = e.checks + 1;
+      const unreadable = readable ? e.unreadable : e.unreadable + 1;
+      const t = now();
+      if (t - e.at >= WINDOW_MS && readable && canClose) {
+        await change((p) => { delete p[e.key]; });
         out.absent++;
-        log(`[late-settle] ${e.network} ${labelOf(e)} never mined within ${Math.round(WINDOW_MS / 60_000)} min and its authorization has expired; closed as not landed`);
+        log(`[late-settle] ${e.network} ${labelOf(e)} never mined within ${Math.round(WINDOW_MS / 60_000)} min and ${why}; closed as not landed`);
         return;
       }
       if (e.state === "unresolved") {
@@ -658,7 +740,88 @@ export function createLateSettleBook({
       await change((p) => { if (p[e.key]) p[e.key] = { ...p[e.key], checks, unreadable, failures: 0, nextCheckAt: now() + backoff(checks) }; });
       if (readable) out.pending++; else out.unreadable++;
     },
+    // A Solana or Algorand transaction, read by the rails' own verifier.
+    async _oneRail(e, out, rail) {
+      const v = await verifyInboundPayment({
+        network: e.network, payer: e.payer, amountUsd: Number(e.amount) / 10 ** RAIL_USDC_DECIMALS, tx: e.tx,
+        acceptsFor: () => ({ payTo: e.payTo, asset: e.asset }), payToSetFor: () => [e.payTo],
+        solanaRpcs: svmRpcs, algorandIndexers: avmIndexers, fetchImpl, timeoutMs: RPC_TIMEOUT_MS,
+      });
+      const drop = async () => change((p) => { delete p[e.key]; });
+      if (v.verified === true) {
+        await this._owe(e, out, async () => {
+          const d = Number(v.decimals);
+          if (!Number.isInteger(d) || d < 0 || d > 36) throw new Error("token decimals unreadable");
+          return d;
+        });
+        return;
+      }
+      if (v.mined === true) {
+        await drop();
+        if (v.failedOnChain === true) out.reverted++; else out.notOurs++;
+        log(`[late-settle] ${e.network} tx ${e.tx} ${v.failedOnChain === true ? "failed on chain; nothing moved" : `is not this payment's transfer (${String(v.reason || "").slice(0, 80)})`}; nothing owed`);
+        return;
+      }
+      let readable = v.absent === true;
+      let canClose = false;
+      if (readable && now() - e.at >= WINDOW_MS) {
+        try { canClose = await railExpired(e, rail); } catch { readable = false; }
+      }
+      await this._notFound(e, out, { readable, canClose, why: rail === "svm" ? "its blockhash has expired" : "the chain is past its last valid round" });
+    },
   };
+  // Can a Solana or Algorand transaction no longer land? Throws when the
+  // chain cannot be read. No lifetime known (a durable nonce, an unreadable
+  // payload) means it may still land: never closed.
+  async function railExpired(e, rail) {
+    if (rail === "svm") {
+      if (!SVM_ADDR.test(String(e.blockhash || ""))) return false;
+      let lastErr = null;
+      for (const url of svmRpcs) {
+        try {
+          const r = await rpc(url, "isBlockhashValid", [e.blockhash, { commitment: "finalized" }], fetchImpl, RPC_TIMEOUT_MS, []);
+          if (typeof r?.value === "boolean") return r.value === false;
+        } catch (err) { lastErr = err; }
+      }
+      throw lastErr || new Error("isBlockhashValid unreadable");
+    }
+    if (!Number.isSafeInteger(e.lastValid)) return false;
+    const bases = avmAlgods || (await import("./revenue-live.js")).ALGORAND_ALGOD_BASES;
+    for (const base of bases) {
+      try {
+        const res = await fetchImpl(`${String(base).replace(/\/+$/, "")}/v2/status`, { signal: AbortSignal.timeout(RPC_TIMEOUT_MS) });
+        if (!res.ok) continue;
+        const round = Number((await res.json())?.["last-round"]);
+        if (Number.isSafeInteger(round) && round > 0) return round > e.lastValid;
+      } catch { /* the next base */ }
+    }
+    throw new Error("algod status unreadable");
+  }
+}
+
+/**
+ * What a Solana or Algorand candidate needs from the signed payment: its
+ * payer (read from the payment itself, else the facilitator's answer), and
+ * what proves it can no longer land (the recent blockhash, the lastValid
+ * round). Unreadable parts are left out.
+ */
+async function withRailHints(c, ctx) {
+  const rail = railOf(c.network);
+  if (rail !== "svm" && rail !== "avm") return c;
+  const payload = ctx?.paymentPayload;
+  try {
+    if (rail === "svm") {
+      const { svmLifetimeBlockhash, svmPaymentAuthority } = await import("./svm-payer.js");
+      const blockhash = svmLifetimeBlockhash(payload?.payload?.transaction);
+      const payer = svmPaymentAuthority(payload, { feePayer: ctx?.requirements?.extra?.feePayer });
+      return { ...c, ...(blockhash ? { blockhash } : {}), ...(payer ? { payer } : {}) };
+    }
+    const { lastValidFromPayload } = await import("./avm-validity.js");
+    const { avmSender } = await import("./non-evm-payer.js");
+    const lv = lastValidFromPayload(payload);
+    const payer = await avmSender(payload);
+    return { ...c, ...(lv != null ? { lastValid: String(lv) } : {}), ...(payer ? { payer } : {}) };
+  } catch { return c; }
 }
 
 /**
@@ -672,7 +835,7 @@ export function registerLateSettleHook(server, bookFor) {
       const all = lateSettleCandidates(ctx);
       if (!all.length) return;
       const b = await bookFor();
-      if (b) for (const c of all) await b.book(c);
+      if (b) for (const c of all) await b.book(await withRailHints(c, ctx));
       // The notes have been booked: a later read of this payment starts clean.
       takePendingAnswers(ctx?.paymentPayload);
     } catch { /* booking never breaks the settle path */ }

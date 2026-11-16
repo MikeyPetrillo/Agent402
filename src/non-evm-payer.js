@@ -34,7 +34,7 @@ function networkOf(payload) {
 }
 
 /** Algorand: the sender of the signed payment transaction, or null. */
-async function avmSender(payload) {
+export async function avmSender(payload) {
   try {
     const group = payload?.payload?.paymentGroup;
     if (!Array.isArray(group) || group.length === 0 || group.length > 16) return null;
