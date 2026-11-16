@@ -120,6 +120,46 @@ const flat = (s) => { let out = "", inTag = false; for (const ch of s) { if (inT
   const unnamed = TOMBSTONE_FIELDS.filter((k) => !WORDS[k] || !printed.includes(WORDS[k]));
   ok(printed.length > 0 && unnamed.length === 0, `every field the reduced record keeps is named by words in the /privacy sentence (${unnamed.join(", ") || "none unnamed"})`);
   ok(!/aside from short-lived caches that make repeated identical calls cheaper, not retained/.test(t), "/terms no longer says outputs are kept in caches only");
+
+  // An unpaid subscription offer: its marker (email, subject) and key go when
+  // the offer sweep drops it, OFFER_SWEEP_AFTER_MS after the mint plus at
+  // most one OFFER_SWEEP_INTERVAL_MS tick; after a restart the first run
+  // comes OFFER_SWEEP_FIRST_MS in, and a container that died holding the
+  // sweep's lease blocks it for OFFER_SWEEP_LEASE_TTL_MS. The page prints
+  // OFFER_DELETED_WITHIN_MS, a ceiling that must cover that whole worst case.
+  const R = await import("../src/mpp-subscription-retention.js");
+  const engineMod = await import("../src/mpp-subscriptions.js");
+  const o = R.offerRetentionPublic();
+  const worstMs = R.OFFER_SWEEP_AFTER_MS + R.OFFER_SWEEP_INTERVAL_MS + R.OFFER_SWEEP_FIRST_MS + R.OFFER_SWEEP_LEASE_TTL_MS;
+  ok(engineMod.CHALLENGE_TTL_MS === R.CHALLENGE_TTL_MS && engineMod.OFFER_SWEEP_AFTER_MS === R.OFFER_SWEEP_AFTER_MS && engineMod.OFFER_SWEEP_INTERVAL_MS === R.OFFER_SWEEP_INTERVAL_MS && engineMod.OFFER_SWEEP_LEASE_TTL_MS === R.OFFER_SWEEP_LEASE_TTL_MS,
+    "the engine runs with the offer figures /privacy reads (one definition)");
+  const subsSrc = readFileSync(new URL("../src/mpp-subscriptions.js", import.meta.url), "utf8");
+  ok(/leased\("mpp-subscription-offer-sweep", \{ ttlMs: OFFER_SWEEP_LEASE_TTL_MS\b/.test(subsSrc), "the offer sweep's lease is the TTL the worst case counts");
+  ok(R.OFFER_SWEEP_AFTER_MS >= R.CHALLENGE_TTL_MS && R.OFFER_SWEEP_FIRST_MS > 0 && R.OFFER_SWEEP_FIRST_MS <= R.OFFER_SWEEP_INTERVAL_MS,
+    "an offer is swept only after its challenge expires, and the first sweep after a start comes no later than one interval");
+  ok(R.offerWorstCaseMs() === worstMs && worstMs <= R.OFFER_DELETED_WITHIN_MS,
+    `the printed ceiling (${R.OFFER_DELETED_WITHIN_MS / 60_000} minutes) covers sweep delay + interval + first run + lease TTL (${worstMs / 60_000} minutes)`);
+  ok(R.OFFER_DELETED_WITHIN_MS <= 60 * 60_000 && o.deletedWithin === "an hour", `an unpaid offer's email, subject and key are deleted within an hour (printed: ${o.deletedWithin})`);
+  ok(o.payableMinutes === Math.ceil(R.CHALLENGE_TTL_MS / 60_000) && o.sweepMinutes === Math.ceil(R.OFFER_SWEEP_INTERVAL_MS / 60_000),
+    `the offer figures /privacy prints are the engine's (${o.payableMinutes} payable, every ${o.sweepMinutes})`);
+  ok(flatP.includes(`A subscription you ask for and do not pay keeps the email, the subject and the key while its offer can be paid (${o.payableMinutes} minutes), and a check that runs every ${o.sweepMinutes} minutes deletes all three within ${o.deletedWithin} of your request (a nightly backup made before then holds a copy until that backup is deleted, see Backups below).`)
+    && !flatP.includes("only until its offer expires"),
+    `/privacy prints the unpaid offer's ceiling and the backup copy (${o.deletedWithin})`);
+}
+
+// --- /changelog: the claim-replay line names each rail's refusal -------------
+// x402 answers a second request carrying an in-flight payment 409 with
+// X-Payment-Replay: inflight; the card and Tempo gates refuse it as an
+// invalid challenge (402). One sentence saying "409" for every rail is wrong.
+{
+  const { CHANGELOG_ENTRIES } = await import("../src/changelog.js");
+  const md = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const item = CHANGELOG_ENTRIES.flatMap((e) => e.items || []).find((x) => x.includes("Two requests carrying one payment are claimed once")) || "";
+  for (const [where, text] of [["/changelog", item], ["CHANGELOG.md", md]]) {
+    ok(text.includes("answered 409 (X-Payment-Replay: inflight) on x402") && text.includes("refused as an invalid challenge (402) on a card or Tempo payment")
+      && !text.includes("answered 409 (X-Payment-Replay: inflight), uncharged"),
+      `${where}: the claim-replay line names 409 for x402 and a 402 invalid challenge for card and Tempo`);
+  }
 }
 
 // --- wiki/Self-Hosting.md: every payTo variable, and BASE_URL -------------------

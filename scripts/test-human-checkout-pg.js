@@ -48,7 +48,12 @@ let refundFail = false;
 let genCalls = 0;
 const stripe = {
   checkout: { sessions: { retrieve: async (id) => { await wait(15); const s = sessions[id]; if (!s) throw new Error("No such session"); return s; } } },
-  refunds: { create: async (args) => { if (refundFail) throw new Error("stripe refund down"); refunds.push(args); return { id: "re_" + refunds.length }; } },
+  refunds: {
+    create: async (args) => { if (refundFail) throw new Error("stripe refund down"); refunds.push(args); return { id: "re_" + refunds.length, status: "succeeded" }; },
+    // A payment refunded by hand in the Stripe dashboard (read back, never re-refunded).
+    list: async ({ payment_intent }) => ({ data: payment_intent === "pi_cap" ? [{ id: "re_cap", status: "succeeded", created: 1 }] : payment_intent === "pi_cap_part" ? [{ id: "re_cap_part", status: "succeeded", created: 1 }] : [] }),
+  },
+  paymentIntents: { retrieve: async (id) => ({ id, latest_charge: { refunded: id === "pi_cap" } }) },
 };
 const sales = [];
 const generate = async (kind, slug, input) => {
@@ -151,6 +156,23 @@ try {
   await B.setPublic("cs_paid", false);
   ok((await B.listIssues()).refundOwed.some((x) => x.id === "cs_unidx2"), "a write by this container drops its cache at once");
   await putRow("cs_unidx2", { ...unidx, paymentIntent: "pi_unidx2", refundId: "re_y", refundOwed: false });
+  clock += 6_000;
+
+  // ---- (4c) the background read-back past the retry cap ---------------------
+  // Rows at refundAttempts 6 are no longer retried on a poll; the read-back
+  // records a dashboard refund on the row and leaves a partial one owed,
+  // issuing no refund itself.
+  await putRow("cs_cap", { ...unidx, refundAttempts: 6, paymentIntent: "pi_cap" });
+  await putRow("cs_cap_part", { ...unidx, refundAttempts: 6, paymentIntent: "pi_cap_part" });
+  clock += 6_000;
+  const createsBefore = refunds.length;
+  const rb = await A.readBackOwedRefunds();
+  ok(rb.recorded === 1 && refunds.length === createsBefore, `the read-back records one dashboard refund and issues none (${JSON.stringify(rb)})`);
+  ok((await row("cs_cap"))?.refundId === "re_cap" && (await row("cs_cap"))?.refundOwed === false && !(await row("cs_cap_part"))?.refundId, "the dashboard-refunded row is recorded on the database; the partial one stays owed");
+  clock += 6_000;
+  const owedAfter = (await B.owedRefunds()).map((x) => x.id);
+  ok(!owedAfter.includes("cs_cap") && owedAfter.includes("cs_cap_part"), `the other container's owed list drops it (${JSON.stringify(owedAfter)})`);
+  await putRow("cs_cap_part", { ...unidx, refundAttempts: 6, paymentIntent: "pi_cap_part", refundId: "re_cap_part", refundOwed: false });
   clock += 6_000;
 
   // ---- (5) the public toggle updates the row and the mirror -----------------

@@ -45,10 +45,17 @@ try {
     "src/mpp-index.js": "mpp-index-crawl", "src/x402-index.js": "x402-index-crawl", "src/revenue-ledger.js": "revenue-ledger-tick",
     "src/backup.js": "backup-nightly", "src/monitor-scheduler.js": "monitor-scheduler",
     "src/mpp-subscriptions.js": "mpp-subscription-ended-sweep",
+    "src/human-checkout.js": "human-checkout-refund-readback",
   };
   for (const [file, name] of Object.entries(expect)) {
     const src = readFileSync(new URL("../" + file, import.meta.url), "utf8");
     ok(src.includes(`"${name}"`), `${file} names its lease ${name}`);
+  }
+  // A leased loop that is never started never runs: the server starts the
+  // owed card refund read-back (code, not a comment that names the call).
+  {
+    const serverSrc = readFileSync(new URL("../src/server.js", import.meta.url), "utf8").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+    ok(/^\s*_humanCheckout\.start\(\);/m.test(serverSrc), "src/server.js starts the owed card refund read-back (_humanCheckout.start())");
   }
   // Fail-open (running without the lease when the database cannot answer) is
   // opt-in, and only loops whose effects stay inside our own state take it:

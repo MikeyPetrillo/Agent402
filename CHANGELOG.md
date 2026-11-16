@@ -6,6 +6,20 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (a card refund made by hand is recorded)
+Payments:
+- A failed card report whose payment was already refunded outside the server
+  records that refund: when Stripe refuses a new refund, the refund already
+  made for the payment is read back and its id recorded once Stripe reports it
+  succeeded (a refund still pending leaves the payment owed until it does), and
+  a check that runs every 30 minutes, first 5 minutes after the server starts,
+  reads back every payment still owed a refund without issuing one, so a refund
+  made by hand after the retries stop also shows the payment refunded and
+  leaves the owed refund alarm.
+- The sweep that deletes an unpaid wallet subscription offer's email, subject
+  and signing key runs a minute after the server starts, as well as every 10
+  minutes, so a restart does not hold the deletion back.
+
 ### 2026-11-16 (settled subscription payments are never lost)
 Payments:
 - A wallet subscription whose first payment settled but whose record could
@@ -28,11 +42,12 @@ Payments:
 Payments:
 - Two requests carrying one payment are claimed once when the shared store
   answers one of them and not the other: the request whose claim lands in the
-  store reads the claim this server already holds and is answered 409
-  (X-Payment-Replay: inflight), uncharged. A claim taken while the store did
-  not answer is written there once this server reaches the store again,
-  without waiting for the claim's 30-second renewal, so a container serving
-  beside this one reads that payment in flight.
+  store reads the claim this server already holds and is refused uncharged:
+  answered 409 (X-Payment-Replay: inflight) on x402, and refused as an
+  invalid challenge (402) on a card or Tempo payment. A claim taken while the
+  store did not answer is written there once this server reaches the store
+  again, without waiting for the claim's 30-second renewal, so a container
+  serving beside this one reads that payment in flight.
 - A dollar price becomes a token or card amount by integer arithmetic where a
   challenge is minted and where a payment is checked against its price, so
   the two name the same amount at any token decimals: a Tempo credential that

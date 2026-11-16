@@ -58,7 +58,7 @@ hookStatements(pool, async (sql, values, run) => {
 let gens = 0, genHook = null, failGen = false;
 const refunds = [], sales = [];
 const stripe = {
-  refunds: { create: async (o, opts) => { refunds.push({ pi: o.payment_intent, key: opts?.idempotencyKey }); return { id: `re_${refunds.length}` }; } },
+  refunds: { create: async (o, opts) => { refunds.push({ pi: o.payment_intent, key: opts?.idempotencyKey }); return { id: `re_${refunds.length}`, status: "succeeded" }; } },
   checkout: { sessions: { retrieve: async (id) => ({ id, mode: "payment", payment_status: "paid", payment_intent: `pi_${id}`, amount_total: 200, customer_details: { email: id.includes("mail") ? "buyer@example.test" : null }, metadata: { product: "dossier", input: "MSFT" } }) } },
 };
 const hc = createHumanCheckout({ stripe, baseUrl: "https://example.test", storeDir: DIR, log: () => {}, onSale: (s) => sales.push(s.sessionId),

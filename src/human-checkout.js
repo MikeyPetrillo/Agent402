@@ -56,7 +56,8 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, unlinkS
 import { createHash } from "node:crypto";
 import { join, basename } from "node:path";
 import { sendReportReadyEmail } from "./email.js";
-import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady } from "./state-db.js";
+import { stateDbEnabled, stateDbSchema, stateQuery, importOnce, imports, trackStoreReady, leased } from "./state-db.js";
+import { READBACK_FIRST_MS, READBACK_INTERVAL_MS, READBACK_MAX_PER_PASS, READBACK_CALL_TIMEOUT_MS, READBACK_LEASE_TTL_MS } from "./card-refund-readback.js";
 import { retryingLoad } from "./store-retry.js";
 import { createDeadLetter, everyMs } from "./ledger-mirror.js";
 
@@ -403,7 +404,7 @@ if (USE_PG) {
  * @param {()=>number} [deps.now]
  * @param {(s:string)=>void} [deps.log]
  */
-export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS, owedRetryWaitMs = OWED_RETRY_WAIT_MS, owedRetryAbandonMs = OWED_RETRY_ABANDON_MS, sessionReadWaitMs = SESSION_READ_WAIT_MS, sessionReadAbandonMs = SESSION_READ_ABANDON_MS }) {
+export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSale, onDelivered = null, onFailed = null, now = () => Date.now(), log = console.log, owedResolveTimeoutMs = OWED_RESOLVE_TIMEOUT_MS, owedResolveRetryMs = OWED_RESOLVE_RETRY_MS, owedListWaitMs = OWED_LIST_WAIT_MS, owedRetryWaitMs = OWED_RETRY_WAIT_MS, owedRetryAbandonMs = OWED_RETRY_ABANDON_MS, sessionReadWaitMs = SESSION_READ_WAIT_MS, sessionReadAbandonMs = SESSION_READ_ABANDON_MS, readbackCallTimeoutMs = READBACK_CALL_TIMEOUT_MS }) {
   const dir = storeDir || DEFAULT_DIR();
   try { mkdirSync(dir, { recursive: true }); } catch { /* best-effort; writes will fail loudly below */ }
   const INFLIGHT = join(dir, "_inflight.json");   // sessionId -> claimedAt (ms)
@@ -710,11 +711,48 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
         // the same payment (a retry whose reply was lost, or one started
         // after an earlier call stopped being waited for) returns the first
         // one instead of failing or doubling.
-        const r = await stripe.refunds.create({ payment_intent: piId }, { idempotencyKey: `agent402-refund-${piId}` });
-        return r.id;
+        try {
+          const r = await stripe.refunds.create({ payment_intent: piId }, { idempotencyKey: `agent402-refund-${piId}` });
+          if (r?.status === "succeeded" && typeof r.id === "string") return r.id;
+          // A refund Stripe has not finished (pending, or one that failed) is
+          // not recorded as made: the payment stays owed. The key replays this
+          // same answer on a retry, so the refund's current state is read
+          // back from the payment's refund list instead.
+          log(`[human-checkout] refund not yet succeeded (${String(r?.status || "unknown").slice(0, 24)}): kept owed`);
+          return await existingRefundId(piId, null);
+        } catch (e) {
+          log(`[human-checkout] refund failed: ${String(e?.message || e).slice(0, 160)}`);
+          return await existingRefundId(piId, e);
+        }
       }
     } catch (e) { log(`[human-checkout] refund failed: ${String(e?.message || e).slice(0, 160)}`); }
     return null;
+  }
+  // A payment already refunded outside this code (an operator's refund in the
+  // Stripe dashboard) makes refunds.create fail for good, and the key above
+  // replays a first failure as well: read the refund that exists, and take it
+  // when the charge is fully refunded (Stripe's already-refunded refusal says
+  // so; any other refusal is checked on the charge). Only a succeeded refund
+  // counts: while any refund of the payment is still pending (or waits on an
+  // action) the payment stays owed, since Stripe can still fail it, and the
+  // read-back pass reads it again later. Null when there is none.
+  async function existingRefundId(piId, err) {
+    try {
+      const listed = await stripe.refunds.list({ payment_intent: piId, limit: 100 });
+      const rows = (listed?.data || []).filter((r) => r && typeof r.id === "string");
+      if (rows.some((r) => r.status === "pending" || r.status === "requires_action")) return null;
+      const live = rows.filter((r) => r.status === "succeeded");
+      if (!live.length) return null;
+      let full = err?.code === "charge_already_refunded";
+      if (!full) {
+        const pi = await stripe.paymentIntents.retrieve(piId, { expand: ["latest_charge"] });
+        full = pi?.latest_charge?.refunded === true;
+      }
+      if (!full) return null;
+      const r = live.reduce((a, b) => ((b.created || 0) > (a.created || 0) ? b : a));
+      log(`[human-checkout] refund already made for ${piId.slice(0, 12)}: recorded ${r.id}`);
+      return r.id;
+    } catch (e) { log(`[human-checkout] existing refund lookup failed: ${String(e?.message || e).slice(0, 160)}`); return null; }
   }
   // Persist an error outcome; an unrefunded one is OWED (indexed, retried).
   // `intent`: the record written BEFORE a refund is issued (database mode):
@@ -863,6 +901,59 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     // A retry that fails after its poll stopped waiting has no caller left.
     entry.done.catch((e) => { if (entry.slow) log(`[human-checkout] owed refund retry stopped: ${String(e?.message || e).slice(0, 160)}`); });
     return awaitOwedRetry(entry, rec);
+  }
+
+  // ---- background read-back of owed refunds ---------------------------------
+  // A buyer's poll retries an owed refund at most MAX_REFUND_ATTEMPTS times,
+  // and only while the buyer polls, so a refund an operator makes by hand in
+  // the Stripe dashboard afterwards would leave the record owed for good.
+  // This pass (its own timer, under a lease, never on a status read) reads
+  // each owed record's payment back (existingRefundId: refunds.list and the
+  // charge, never refunds.create) and records the refund when the charge is
+  // fully refunded by refunds that succeeded. At most READBACK_MAX_PER_PASS records per pass, taken in
+  // turn from a rotating start, each read waited for readbackCallTimeoutMs.
+  let readbackStart = 0;
+  async function readBackOwedRefunds({ max = READBACK_MAX_PER_PASS } = {}) {
+    const owed = ((await listIssues()).refundOwed || []).filter((x) => SESSION_RE.test(String(x?.id))).sort((a, b) => (a.id < b.id ? -1 : 1));
+    let checked = 0, recorded = 0;
+    const from = owed.length ? readbackStart % owed.length : 0;
+    let i = 0;
+    for (; i < owed.length && checked < max; i++) {
+      const id = owed[(from + i) % owed.length].id;
+      if (owedRetrying.has(id) || (USE_PG && pendingFinals.has(id))) continue;
+      let rec = null;
+      try { rec = await readRec(id); } catch { continue; }
+      if (!rec || rec.status !== "error" || rec.refundId || !rec.refundOwed || typeof rec.paymentIntent !== "string" || !rec.paymentIntent) continue;
+      checked++;
+      let timer = null;
+      const waited = new Promise((resolve) => { timer = setTimeout(() => resolve(null), readbackCallTimeoutMs); timer.unref?.(); });
+      let refundId = null;
+      try { refundId = await Promise.race([existingRefundId(rec.paymentIntent, null), waited]); } finally { clearTimeout(timer); }
+      // A poll's retry that started meanwhile records its own outcome.
+      if (!refundId || owedRetrying.has(id)) continue;
+      const product = typeof rec.product === "string" ? rec.product : owedReport.get(id);
+      await recordError(id, { payment_intent: rec.paymentIntent, metadata: { product } }, refundId, String(rec.error || "We couldn't complete this report.").replace(/ Your refund is being processed\.$/, ""));
+      if (owedRefunded.size >= OWED_RETRY_MAX_OPEN) owedRefunded.clear();
+      owedRefunded.add(id);
+      recorded++;
+    }
+    readbackStart = owed.length ? (from + i) % owed.length : 0;
+    if (recorded) log(`[human-checkout] owed refund read-back: ${recorded} of ${checked} checked recorded as refunded`);
+    return { checked, recorded };
+  }
+  const readBackLeased = leased("human-checkout-refund-readback", { ttlMs: READBACK_LEASE_TTL_MS, log }, () => readBackOwedRefunds());
+  let readbackTimer = null, readbackFirst = null;
+  /** Start the owed-refund read-back's timers (unref'd; the first run is held back off the boot path). */
+  function start({ intervalMs = READBACK_INTERVAL_MS, firstMs = READBACK_FIRST_MS } = {}) {
+    if (readbackTimer) return;
+    const run = () => { readBackLeased().catch((e) => log(`[human-checkout] owed refund read-back failed: ${String(e?.message || e).slice(0, 160)}`)); };
+    readbackTimer = setInterval(run, intervalMs); readbackTimer.unref?.();
+    readbackFirst = setTimeout(run, firstMs); readbackFirst.unref?.();
+  }
+  function stop() {
+    if (readbackTimer) clearInterval(readbackTimer);
+    if (readbackFirst) clearTimeout(readbackFirst);
+    readbackTimer = null; readbackFirst = null;
   }
 
   const failKeyOf = (session) => {
@@ -1328,5 +1419,5 @@ export function createHumanCheckout({ stripe, generate, baseUrl, storeDir, onSal
     if (USE_PG) return (async () => { await readyP(); await pgClear(); pub.idx = {}; pub.recs = new Map(); })();
   }
 
-  return { createSession, fulfill, peek, recoverAbandoned, listIssues, owedRefunds, setPublic, _count, _reset, ready: () => readyP(), backend: USE_PG ? "pg" : "file" };
+  return { createSession, fulfill, peek, recoverAbandoned, listIssues, owedRefunds, readBackOwedRefunds, start, stop, setPublic, _count, _reset, ready: () => readyP(), backend: USE_PG ? "pg" : "file" };
 }

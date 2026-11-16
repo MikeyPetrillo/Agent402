@@ -52,7 +52,7 @@ const stripe = {
     create: async (args) => { stripe._last = args; return { id: "cs_new", url: "https://checkout.stripe.com/pay/cs_new" }; },
     retrieve: async (id) => { retrieves++; const s = sessions[id]; if (!s) throw new Error("No such session"); return s; },
   } },
-  refunds: { create: async (args) => { if (refundFail) throw new Error("stripe refund down"); refunds.push(args); return { id: "re_" + refunds.length }; } },
+  refunds: { create: async (args) => { if (refundFail) throw new Error("stripe refund down"); refunds.push(args); return { id: "re_" + refunds.length, status: "succeeded" }; } },
 };
 const sales = [];
 const generate = async (kind, slug, input, ctx) => {
@@ -338,7 +338,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
       creates.push({ pi: args.payment_intent, key: opts?.idempotencyKey });
       if (!stripeAnswers) return new Promise((resolve, reject) => late.set(args.payment_intent, { resolve, reject }));
       sent.push(args.payment_intent);
-      return Promise.resolve({ id: `re_${args.payment_intent}` });
+      return Promise.resolve({ id: `re_${args.payment_intent}`, status: "succeeded" });
     } },
   };
   let t = clock;
@@ -370,7 +370,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
     ok(!h.listIssues().refundOwed.some((x) => x.id === id), `later, Stripe answering (${id}): the debt leaves the owed list`);
   }
   // The first calls answer late: one as Stripe replays a keyed refund, one as a failure.
-  late.get("pi_pollA").resolve({ id: "re_pi_pollA" });
+  late.get("pi_pollA").resolve({ id: "re_pi_pollA", status: "succeeded" });
   late.get("pi_pollB").reject(new Error("stripe: connection lost"));
   await wait(50);
   t += 31_000;
@@ -417,7 +417,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
       if (answers) return Promise.resolve(paid(id));
       return new Promise((resolve, reject) => { open.set(id, [...(open.get(id) || []), { resolve, reject }]); });
     } } },
-    refunds: { create: (args) => { refunded.push(args.payment_intent); return Promise.resolve({ id: `re_${args.payment_intent}` }); } },
+    refunds: { create: (args) => { refunded.push(args.payment_intent); return Promise.resolve({ id: `re_${args.payment_intent}`, status: "succeeded" }); } },
   };
   let t = clock;
   const ABANDON_MS = 300_000;
@@ -530,7 +530,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
   t += ABANDON_MS + 1_000;
   await slowPoll("cs_lateB");
   ok(calls.get("pi_lateB").length === 2, "second record: two refund calls, the first given up");
-  calls.get("pi_lateB")[0].resolve({ id: "re_pi_lateB" });
+  calls.get("pi_lateB")[0].resolve({ id: "re_pi_lateB", status: "succeeded" });
   ok(await until(() => h.peek("cs_lateB").refundId === "re_pi_lateB"), "the given-up retry's late refund is recorded");
   calls.get("pi_lateB")[1].reject(new Error("stripe: connection lost"));
   await until(() => h.peek("cs_lateB").refundId !== "re_pi_lateB", 1_000);
