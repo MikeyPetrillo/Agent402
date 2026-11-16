@@ -1227,8 +1227,9 @@ export function createReferralGate({
   // What this process has seen since boot, ahead of the book's write: the
   // sales under the stop floor per slug (so the stop holds from the moment a
   // short sale is seen), the slugs with a sale that arrived at or above the
-  // floor (their rate is proven), and the calls in flight per slug.
-  const rate = { deep: new Map(), proven: new Set(), inflight: new Map(), product: new Map() };
+  // floor (their rate is proven), the calls in flight per slug, and the
+  // sales a cold slug has charged that its bound still counts (`sold`).
+  const rate = { deep: new Map(), proven: new Set(), inflight: new Map(), sold: new Map(), product: new Map() };
   // PROVEN SURVIVES A RESTART. A slug with a receipt-proven sale at or above
   // its floor is recorded in the book with a fingerprint of everything that
   // proof was judged against: the slug's commission and the fee, its stop
@@ -1250,6 +1251,7 @@ export function createReferralGate({
   };
   const markProven = (slug) => {
     rate.proven.add(slug);
+    rate.sold.delete(slug);
     if (typeof book.noteProven === "function") Promise.resolve().then(() => book.noteProven(slug, rateFingerprint(slug))).catch(() => {});
   };
   const markCold = (slug) => {
@@ -1322,21 +1324,29 @@ export function createReferralGate({
     return seen >= bound;
   };
   /** A RESERVATION, not a count after the fact: until one sale on a slug has
-   *  arrived at or above its stop floor in this process, no more calls are
-   *  in flight on it than the slug's bound, so a burst cannot all be served
-   *  under the floor before the first receipt is read. null (free), "hold",
-   *  or "taken" (with `take`: one in-flight place, given back by rateLeave). */
+   *  arrived at or above its stop floor in this process, the calls in flight
+   *  on it AND the sales it has charged together stay within the slug's
+   *  bound, so a burst cannot be served under the floor before a receipt is
+   *  read, however its calls are spaced: a place is taken at admission and
+   *  given back only when the call ends with no charge (rateLeave); a charged
+   *  call keeps it until the slug's rate is proven or an operator clears the
+   *  slug. null (free), "hold", or "taken" (with `take`: one place). */
   const rateGate = (slug, take, payer = null) => {
     const bound = stopAfter(slug);
     if (!bound || isProven(slug)) return null;
     // A payer with a paid sale on the books is not held to a cold slug's bound.
     if (payer) { try { if (payerHasPaid(payer) === true) return null; } catch { /* held to the bound */ } }
     const n = rate.inflight.get(slug) || 0;
-    if (n >= bound) return "hold";
+    if (n + (rate.sold.get(slug) || 0) >= bound) return "hold";
     if (take) rate.inflight.set(slug, n + 1);
     return take ? "taken" : null;
   };
-  const rateLeave = (slug) => { const n = (rate.inflight.get(slug) || 0) - 1; if (n > 0) rate.inflight.set(slug, n); else rate.inflight.delete(slug); };
+  const rateLeave = (slug, charged = false) => {
+    const n = (rate.inflight.get(slug) || 0) - 1;
+    if (n > 0) rate.inflight.set(slug, n); else rate.inflight.delete(slug);
+    // (A sale whose receipt already proved the rate keeps nothing.)
+    if (charged && !isProven(slug)) rate.sold.set(slug, (rate.sold.get(slug) || 0) + 1);
+  };
   /** The product id the routed event must name for this slug, or null (not bound). */
   const productOf = (slug) => (config.productIds && Object.hasOwn(config.productIds, slug) ? config.productIds[slug] : null);
   /** Close a book entry, trying again when the write does not land: a
@@ -2565,6 +2575,7 @@ export function createReferralGate({
     let routeProbe = false;
     let newSlot = false;
     let ratePlace = false;
+    let rateCharged = false;
     let ranEntry = null;
     res.once("close", () => { if (!res.writableFinished) gone = true; });
     const clientGone = () => gone || res.destroyed === true || req.socket?.destroyed === true;
@@ -2763,6 +2774,7 @@ export function createReferralGate({
       settleSent = true;
       ranEntry = entry;
       const outcome = await settleEntry(entry, req);
+      if (outcome === "charged") rateCharged = true;
       settledHooks(outcome === "charged");
       // The buyer left while the settle was in flight: the entry carries the
       // hang-up from now, whatever the outcome reads yet, so a payment that
@@ -2791,7 +2803,7 @@ export function createReferralGate({
       if (probing && own.streak >= config.ownFaultMax && now() >= own.blockedUntil) own.probeUntil = 0;
       laneLeave(laneKeys);
       if (routeProbe) routeProbeEnd(ranEntry?.contradicted === true || ranEntry?.unprovenSettle === true);
-      if (ratePlace) rateLeave(def.slug);
+      if (ratePlace) rateLeave(def.slug, rateCharged);
       if (holdsSlot) settling.delete(key);
       // The ticket's end: abandoned (its price spent from the forgiveness
       // budgets) when the buyer left and no answer went out, whether the
@@ -2989,13 +3001,13 @@ export function createReferralGate({
     if (!ok && inProcess) { try { await book.resolveNote({ slug, outcome: "short-net-cleared", note: note.trim() }); } catch { /* cleared all the same */ } ok = true; }
     // An operator's clear makes the slug cold again, whether or not a stop stood.
     markCold(slug);
-    if (ok) { rate.deep.delete(slug); rate.product.delete(slug); }
+    if (ok) { rate.deep.delete(slug); rate.product.delete(slug); rate.sold.delete(slug); }
     return ok ? { ok: true, slug } : { ok: false, error: "no short-net record stands for that slug, or the book could not be written" };
   }
 
   return {
     handler, sweepOnce, statusWord, resolveByHand, resolveManyByHand, acknowledge, reopenByHand, clearShortByHand, shortSales: () => shortNow(),
-    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: (relaxStoreHold(now()), storeHold.blockedUntil > 0), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
+    stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: (relaxStoreHold(now()), storeHold.blockedUntil > 0), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), coldSold: Object.fromEntries(rate.sold), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
     slugs: () => [...defs.keys()],
   };
 }

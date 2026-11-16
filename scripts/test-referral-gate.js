@@ -3019,12 +3019,13 @@ try {
         fac.mode.settleDelayMs = 150;
         const settlesBefore = settles();
         const burstModel = await Promise.all(Array.from({ length: 20 }, () => payOn(appB, "mb")));
-        const burstPlain = await Promise.all(Array.from({ length: 20 }, () => payOn(appB, "list")));
+        // Spaced 60 ms apart, so the first calls end (their places given back) while later ones arrive: the stop counts sales started, not calls in flight.
+        const burstPlain = await Promise.all(Array.from({ length: 20 }, async (_, i) => { await wait(i * 60); return payOn(appB, "list"); }));
         fac.mode.settleDelayMs = 0;
         await wait(60);
         const nextModel = await payOn(appB, "mb");
         ok(burstModel.filter((c) => c.status === 200).length === 1 && burstModel.filter((c) => c.status === 503 && c.reason === "rate_under_review").length === 19 && nextModel.status === 503 && nextModel.retry === "300" && bookB.shortSales().mb?.deep === 1, `twenty buyers at once on a model-backed tool whose rate is far above the map: ONE is served under the floor, nineteen are refused before anything runs, and the slug is stopped (${tally(burstModel)})`);
-        ok(burstPlain.filter((c) => c.status === 200).length === 3 && burstPlain.filter((c) => c.status === 503).length === 17 && settles() - settlesBefore === 4, `on a tool that is not model-backed the same burst serves three (its bound), not twenty; only the calls served were settled (${tally(burstPlain)}; ${settles() - settlesBefore} settles)`);
+        ok(burstPlain.filter((c) => c.status === 200).length === 3 && burstPlain.filter((c) => c.status === 503).length === 17 && settles() - settlesBefore === 4, `on a tool that is not model-backed twenty buyers 60 ms apart are served three (its bound), not twenty: the stop counts sales started, kept after a 200, so a call that ends never frees a place for another sale under the floor; only the calls served were settled (${tally(burstPlain)}; ${settles() - settlesBefore} settles)`);
         // A slug whose rate has proven is not held to its bound: a burst is served.
         chainPays(1234);
         await payOn(appB, "exa");
@@ -4100,7 +4101,7 @@ try {
         for (let i = 0; i < 41; i++) { await tb.intent(mk(i, nowS + 900 - i * 10)); await tb.resolve(`referral:r14-${i}`, { state: "refused", at: 100 + i }); }
         const asked = [];
         let mode = "inconclusive";
-        const chain = { state: async ({ from }) => { asked.push(Number(String(from).slice(2))); if (mode === "throw") throw new Error("rpc down"); if (mode === "unused-complete") return { used: false, paid: false, transaction: null, complete: true }; return { used: true, paid: null, transaction: null, complete: false }; } };
+        const chain = { state: async ({ from }) => { asked.push(Number(String(from).slice(2))); if (mode === "throw") throw new Error("rpc down"); if (mode === "unused-complete") return { used: false, paid: false, transaction: null, complete: true }; return { used: true, paid: null, transaction: `0x${"ab".repeat(32)}`, complete: false, receiptRead: true }; } };
         const sweepIt = () => tb.sweep({ chain, bookSale: async () => true, payTo: PAY_TO });
         const before = tb.droppedRefused().count;
         await sweepIt();
@@ -4108,7 +4109,7 @@ try {
         ok(before === 40 && bookMod.SWEEP_DROPPED_MAX === 25 && firstPass.length >= 25 && firstPass.slice(0, 25).every((i) => i >= 15) && firstPass[0] === 39, `the sweep reads the dropped records nearest their expiry first (${bookMod.SWEEP_DROPPED_MAX} a pass; first read: record ${firstPass[0]}, the earliest to expire)`);
         // Past expiry, reads that reach no verdict (no answer, an error, an incomplete search) forget nothing: not after
         // many reads, and not after many hours with few reads. A record is given up only when BOTH have happened, and
-        // only reads the chain ANSWERED (here: the nonce spent, the search incomplete) count toward it.
+        // only reads the chain ANSWERED (here: the nonce spent, its receipt read in full and not recognized) count toward it.
         skew.ms = skew0 + 20 * 60_000;
         mode = "throw";
         for (let i = 0; i < 6; i++) await sweepIt();
@@ -4118,7 +4119,7 @@ try {
         const tl = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r15-late`, log: () => {} }), log, maxEntries: 1, maxDropped: 10, now: () => Date.now() + skew.ms });
         skew.ms = skew0;
         for (let i = 0; i < 3; i++) { await tl.intent(mk(800 + i, nowS + 60)); await tl.resolve(`referral:r14-${800 + i}`, { state: "refused", at: 100 + i }); }
-        const sweepL = () => tl.sweep({ chain: { state: async () => ({ used: true, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
+        const sweepL = () => tl.sweep({ chain: { state: async () => ({ used: true, paid: null, transaction: `0x${"ab".repeat(32)}`, complete: false, receiptRead: true }) }, bookSale: async () => true, payTo: PAY_TO });
         skew.ms = skew0 + bookMod.DROPPED_GIVE_UP_MS + 10 * 60_000;
         for (let i = 0; i < 3; i++) await sweepL(); // seven hours on, three reads only
         const afterManyHours = tl.droppedRefused();
@@ -4155,7 +4156,7 @@ try {
           try {
             skew.ms = skew0;
             for (let i = 0; i < 3; i++) { await tf.intent(mk(500 + i, nowS + 60)); await tf.resolve(`referral:r14-${500 + i}`, { state: "refused", at: 100 + i }); }
-            const sweepF = () => tf.sweep({ chain: { state: async () => ({ used: true, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
+            const sweepF = () => tf.sweep({ chain: { state: async () => ({ used: true, paid: null, transaction: `0x${"ab".repeat(32)}`, complete: false, receiptRead: true }) }, bookSale: async () => true, payTo: PAY_TO });
             skew.ms = skew0 + 10 * 60_000;
             for (let i = 0; i < 5; i++) await sweepF(); // five reads with no verdict
             const wordBefore = appF.gate.statusWord();
@@ -4562,7 +4563,7 @@ try {
           // Two records expire now, two more a minute later.
           for (let i = 0; i < 5; i++) { await tn.intent(mk(i, nowS + (i < 2 ? 60 : 120))); await tn.resolve(`referral:r16n-${i}`, { state: "refused", at: 100 + i }); }
           await tn.resolve("referral:r16n-4", null);
-          const sweepN = () => tn.sweep({ chain: { state: async () => ({ used: true, paid: null, transaction: null, complete: false }) }, bookSale: async () => true, payTo: PAY_TO });
+          const sweepN = () => tn.sweep({ chain: { state: async () => ({ used: true, paid: null, transaction: `0x${"ab".repeat(32)}`, complete: false, receiptRead: true }) }, bookSale: async () => true, payTo: PAY_TO });
           skew.ms = skew0 + 10 * 60_000;
           for (let i = 0; i < 5; i++) await sweepN();
           skew.ms = skew0 + bookMod.DROPPED_GIVE_UP_MS + 90_000; // six hours past the first two only
