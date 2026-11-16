@@ -60,6 +60,21 @@ export function lookupUnavailable(cause) {
   });
 }
 
+/** The answer when a host this server reads on its own (a kit's fixed API,
+ *  never a URL the caller supplied) does not resolve, or resolves to an
+ *  address the guard refuses: our side, retryable. The caller's URL refusal
+ *  (the 400 above) would tell the buyer to fix an input that is not theirs. */
+export const OWN_UPSTREAM_UNRESOLVED = "A source this tool reads could not be reached: this server's DNS lookup for its host failed; this is on our side, not your input - retry shortly";
+export function ownUpstreamUnresolved(cause) {
+  return Object.assign(new Error(OWN_UPSTREAM_UNRESOLVED), {
+    statusCode: 503,
+    attribution: "ours",
+    hint: "our-egress",
+    retryAfter: LOOKUP_RETRY_AFTER_S,
+    ...(cause ? { cause } : {}),
+  });
+}
+
 // The retryable lookup failure, wherever it sits on a thrown fetch error's cause chain.
 function lookupUnavailableIn(err) {
   let e = err;
@@ -462,7 +477,18 @@ export async function hostIsPublic(hostname) {
  * Validate that a URL is http(s) and does not resolve to a private address.
  * Returns the parsed URL. Shared by the plain fetcher and the browser renderer.
  */
-export async function assertPublicUrl(rawUrl) {
+export async function assertPublicUrl(rawUrl, { ownUpstream = false } = {}) {
+  if (!ownUpstream) return assertCallerUrl(rawUrl);
+  // A host this server chose (a kit's fixed API), not one the caller
+  // supplied: a refusal of its name is our 503, never the caller's 400.
+  try {
+    return await assertCallerUrl(rawUrl);
+  } catch (err) {
+    if (err?.statusCode === 400 && err.message === UNRESOLVED_OR_PRIVATE) throw ownUpstreamUnresolved(err);
+    throw err;
+  }
+}
+async function assertCallerUrl(rawUrl) {
   // Inside a run whose ceiling has passed (src/run-ceiling.js) no lookup starts.
   assertBeforeCeiling();
   let url;
@@ -580,8 +606,10 @@ export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"])
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
-export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false } = {}) {
-  const url = await assertPublicUrl(rawUrl);
+export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream = false } = {}) {
+  // `ownUpstream`: the URL is one this server chose (a kit's fixed API host),
+  // not one the caller supplied, so a host that does not resolve is our 503.
+  const url = await assertPublicUrl(rawUrl, { ownUpstream });
   // Inside a run whose ceiling has passed (src/run-ceiling.js) nothing starts:
   // no lookup (assertPublicUrl refuses first) and no request.
   assertBeforeCeiling();
@@ -625,7 +653,7 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   } catch (err) {
     // Every hop, the first included: a refused connection (no answer for the
     // name, or a private one) is one 400 with one sentence.
-    if (isSsrfBlock(err)) throw badRequest(UNRESOLVED_OR_PRIVATE);
+    if (isSsrfBlock(err)) throw ownUpstream ? ownUpstreamUnresolved(err) : badRequest(UNRESOLVED_OR_PRIVATE);
     const unavailable = lookupUnavailableIn(err);
     if (unavailable) throw lookupUnavailable(unavailable.cause);
     const timedOut = err.name === "AbortError";

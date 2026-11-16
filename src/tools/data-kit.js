@@ -34,7 +34,7 @@ async function getJson(url, { allowEmpty = false } = {}) {
   // convention as gov-kit/finance-kit getJson.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      ({ html } = await safeFetch(url, { maxBytes: 3 * 1024 * 1024 }));
+      ({ html } = await safeFetch(url, { maxBytes: 3 * 1024 * 1024, ownUpstream: true }));
       break;
     } catch (e) {
       // No second attempt once a run's ceiling has passed (src/run-ceiling.js; never on a direct route).

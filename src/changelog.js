@@ -2,6 +2,13 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 
 const ENTRIES = [
   {
+    date: "2026-11-16",
+    title: "Own sources that do not resolve are ours",
+    items: [
+      "Tools: when a source a tool reads on its own (the weather, geocoding, holiday, government, Treasury, FX, World Bank, FRED, crypto market, SEC filing, market data and npm registry reads) does not resolve, the answer is 503 with Retry-After 5, attribution ours and hint our-egress, uncharged, so the same call can be sent again. A URL you supply that does not resolve still answers 400.",
+    ],
+  },
+  {
     date: "2026-11-15",
     title: "Access keys and card tokens are judged per payer",
     items: [

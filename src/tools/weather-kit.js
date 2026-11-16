@@ -21,7 +21,7 @@ function bad(message, statusCode = 400) {
 // zero retries previously; api.open-meteo.com answered fine on a later
 // attempt). retryTransient never retries a deterministic 4xx.
 async function getJson(url) {
-  const { html } = await retryTransient(() => safeFetch(url, { maxBytes: 2 * 1024 * 1024 }));
+  const { html } = await retryTransient(() => safeFetch(url, { maxBytes: 2 * 1024 * 1024, ownUpstream: true }));
   try {
     return JSON.parse(html);
   } catch {

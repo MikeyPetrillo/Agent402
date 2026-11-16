@@ -6,6 +6,15 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (own sources that do not resolve are ours)
+Tools:
+- When a source a tool reads on its own (the weather, geocoding, holiday,
+  government, Treasury, FX, World Bank, FRED, crypto market, SEC filing,
+  market data and npm registry reads) does not resolve, the answer is 503 with
+  Retry-After 5, attribution ours and hint our-egress, uncharged, so the same
+  call can be sent again. A URL you supply that does not resolve still answers
+  400.
+
 ### 2026-11-15 (access keys and card tokens are judged per payer)
 Payments:
 - A Tempo pull credential signed by an access key runs only once the chain
