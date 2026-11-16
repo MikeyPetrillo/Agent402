@@ -696,7 +696,7 @@ if (isMainThread && typeof process.send === "function") {
 const port = await getFreePort();
 const proc = spawn(process.execPath, ["src/server.js"], {
   env: {
-    ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
+    ...process.env, FREE_MODE: "true", PORT: String(port), X402_INDEX_CRAWL: "on", INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
     ROUTE_INDEX_WARM_DELAY_MS: "0", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", ROUTER_WORKERS: "0",
     AGENT402_OPERATOR_TOKEN: TOKEN, STATS_DB_DIR: dir, LOOP_LAG_TICK_MS: "5", LAZY_DEPS_WARM: "off",
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ""} --import ${JSON.stringify(HOLD_PROBE).slice(1, -1)}`.trim(),

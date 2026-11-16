@@ -275,7 +275,17 @@ const COUNTED = new Set(DIRECT_BREAKER_COUNTED);
 const blankBreaker = () => ({ fails: 0, openUntil: 0, opens: 0, trialAt: 0, trialId: 0 });
 let breaker = blankBreaker();
 let breakerNow = Date.now;
-export function _resetDirectBreakerForTest() { breaker = blankBreaker(); breakerNow = Date.now; directUnanswered.clear(); }
+export function _resetDirectBreakerForTest() { breaker = blankBreaker(); breakerNow = Date.now; directUnanswered.clear(); balance = blankBalance(); }
+// The upstream's balance refusals (HTTP 402, bucket "quota"; a prepaid balance
+// that ran out) against its served answers, for the directUpstreamBalance word
+// (src/direct-upstream-spend.js): exhausted while the latest of the two is a
+// refusal. Per process, like the breaker.
+const blankBalance = () => ({ lastRefusalAt: 0, lastServedAt: 0, refusals: 0 });
+let balance = blankBalance();
+/** { exhausted, refusals, lastRefusalAt, lastServedAt } (epoch ms, 0 for none). */
+export function directBalanceState() {
+  return { exhausted: balance.lastRefusalAt > 0 && balance.lastRefusalAt >= balance.lastServedAt, ...balance };
+}
 export function _setDirectBreakerNowForTest(fn) { breakerNow = typeof fn === "function" ? fn : Date.now; }
 /** True when a direct attempt may be made now. Once the open period ends one
  *  caller takes the trial; a trial that never reports holds it for at most
@@ -330,6 +340,8 @@ export function directHeavyOutput(body) {
  *  window cut it), and a timeout on it counts nowhere: neither the
  *  single-caller count nor the unanswered rule. */
 export function noteDirectOutcome(ok, reason, caller = undefined, { heavy = false, clamped = false } = {}) {
+  if (ok) balance.lastServedAt = breakerNow();
+  else if (String(reason) === "quota") { balance.lastRefusalAt = breakerNow(); balance.refusals++; }
   if (ok) { directUnanswered.clear(); breaker.fails = 0; breaker.openUntil = 0; breaker.trialAt = 0; return; }
   const timeout = String(reason) === "timeout";
   if (timeout && !heavy && !clamped) {

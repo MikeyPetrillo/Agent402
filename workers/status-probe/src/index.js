@@ -806,6 +806,27 @@ Auto-closes when nothing is owed.`,
     body: () => "/api/gateway-status reports directUpstream.status=degraded. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
   },
   {
+    // The direct upstream's spend for the UTC day (directUpstreamSpend,
+    // src/direct-upstream-spend.js) reached DIRECT_UPSTREAM_DAILY_ALERT_USD:
+    // high pages, ok and off clear, anything else (unknown: the shared day
+    // not read yet) does neither. An alarm only: every call is still served.
+    // Title matches heartbeat.yml's.
+    title: "directUpstreamSpend: the direct upstream's daily spend is high",
+    verdict: ({ gateway: b }) => wordVerdict(b.directUpstreamSpend?.status, ["high"], ["ok", "off"]),
+    body: () => "/api/gateway-status reports directUpstreamSpend.status=high. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
+  },
+  {
+    // The direct upstream refused on its balance (HTTP 402) and has served
+    // nothing since (directUpstreamBalance, src/direct-upstream-spend.js):
+    // exhausted pages, ok and off clear, anything else (starting: a new
+    // process has seen neither outcome yet) does neither, so a deploy never
+    // closes it while the balance is still empty. Those calls were served by
+    // OpenRouter. Title matches heartbeat.yml's.
+    title: "directUpstreamBalance: the direct upstream's prepaid balance is exhausted",
+    verdict: ({ gateway: b }) => wordVerdict(b.directUpstreamBalance?.status, ["exhausted"], ["ok", "off"]),
+    body: () => "/api/gateway-status reports directUpstreamBalance.status=exhausted. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
+  },
+  {
     // Paid 200s whose body is empty or error-shaped (toolAnswers,
     // src/answer-shape.js): degraded pages, ok clears, unknown does neither.
     // Title matches heartbeat.yml's.

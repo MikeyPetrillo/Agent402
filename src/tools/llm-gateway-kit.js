@@ -55,6 +55,7 @@ import { clientGoneSignal } from "../drain-abort.js";
 import { heavyInput, ourKeyRefusedError } from "../upstream-deadline.js";
 import { directUpstreamConfig, withDirectAttempts, directBodyFrom, directShareDraw, directCostUsd, stripVendorExtensions, noteDirectAb, noteDirectSkip, noteDirectAnomaly, failureBucket, directModelFor, directBreakerTake, directBreakerRelease, noteDirectOutcome, directHeavyOutput } from "../gateway-direct-upstream.js";
 import { directPriceDecision, noteDirectMeasure } from "../gateway-direct-pricebook.js";
+import { noteDirectSpend } from "../direct-upstream-spend.js";
 import { readBytesCapped, declaredLength, discardBody } from "../capped-body.js";
 import { clientGoneError } from "../hangup-settlement.js";
 import { evmCredentialSettleableMs } from "../evm-validity.js";
@@ -3327,6 +3328,10 @@ export async function callDirectUpstream(body, { timeoutMs, servedModel, cfg = d
     if (data.error) throw directFailure("Direct upstream answered 200 with an error", 502, "late_error");
     if (!hasChatMessage(data)) throw directFailure("Direct upstream returned no message", 502, "malformed");
     const cost = directCostUsd(data, res.headers);
+    // The day's direct spend (an alarm only, src/direct-upstream-spend.js):
+    // every answer the upstream billed, served or later discarded as empty;
+    // one without a cost is estimated from its tokens before it walks on.
+    noteDirectSpend(servedModel || body?.model, data.usage, cost);
     if (cost === null) throw directFailure("Direct upstream reported no cost", 502, "no_cost");
     stripVendorExtensions(data);
     if (!data.usage || typeof data.usage !== "object") data.usage = {};
@@ -3343,7 +3348,9 @@ export async function callDirectUpstream(body, { timeoutMs, servedModel, cfg = d
 export async function streamDirectUpstreamTo(body, res, { onUsage, timeoutMs, cfg = directUpstreamConfig(), modelAs, holdUntilAnswer = false } = {}) {
   try {
     return await streamOpenRouterTo(body, res, {
-      onUsage, timeoutMs, vendorKeys: true, errorFrameFails: true, modelAs, holdUntilAnswer,
+      // Each streamed answer's usage books the day's direct spend (an alarm only).
+      onUsage: (usage, cost, frame) => { noteDirectSpend(modelAs?.[1] || body?.model, usage, cost); return onUsage?.(usage, cost, frame); },
+      timeoutMs, vendorKeys: true, errorFrameFails: true, modelAs, holdUntilAnswer,
       fetchUpstream: async (b, { signal }) => {
         const r = await fetchDirectUpstream(b, { signal, cfg });
         if (!r.ok) { discardBody(r); throw directStatusFailure(r.status); }
