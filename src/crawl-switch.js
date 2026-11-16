@@ -2,10 +2,9 @@
 // x402 index under X402_INDEX_CRAWL, the MPP index under MPP_INDEX_CRAWL).
 //
 // The crawlers are a production job: one service, a pass every 30 minutes.
-// They used to start on every boot unless the switch read "off", so each CI
-// server, each test that spawned src/server.js and each local or agent boot
-// ran its own full pass over every indexed seller's host, and sellers saw
-// that as crawl traffic from dozens of addresses an hour.
+// They used to start on every boot unless the switch read "off", so a CI
+// server, a test that spawned src/server.js or a local boot without the
+// switch ran its own full pass over every indexed seller's host.
 //
 // The rule, in order:
 //   1. the switch "off" (or false/0)  -> off

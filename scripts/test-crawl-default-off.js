@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // The seller crawlers (x402 index, MPP index) run on a production boot only.
 //
-// Every CI server, every test that spawned src/server.js and every local boot
-// used to start both crawlers unless a switch said "off", and each one ran a
-// full pass over every indexed seller's host: sellers saw crawl traffic from
-// dozens of addresses an hour while production's own crawl is one service.
+// A CI server, a test that spawned src/server.js or a local boot used to start
+// both crawlers unless a switch said "off", and each one ran a full pass over
+// every indexed seller's host.
 // src/crawl-switch.js now starts them only on a production boot or an explicit
 // X402_INDEX_CRAWL=on / MPP_INDEX_CRAWL=on, and never under CI by default.
 //
