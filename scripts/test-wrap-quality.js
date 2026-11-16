@@ -337,7 +337,13 @@ async function settle(page) {
     for (let y = 0, k = 0; y < document.documentElement.scrollHeight && k < 600; y += step, k++) { scrollTo(0, y); await new Promise((r) => setTimeout(r, 40)); }
     scrollTo(0, document.documentElement.scrollHeight); await new Promise((r) => setTimeout(r, 150));
     scrollTo(0, 0); await new Promise((r) => setTimeout(r, 100));
+    // A page that draws its content from an API (report pages) shows a spinner
+    // until it lands, then binds widows after its own fonts load. Wait for the
+    // spinner to go (bounded), then for fonts, then one frame, so the audit
+    // measures the bound text and never a page whose content has not arrived.
+    for (let k = 0; k < 150 && document.querySelector("#app[data-api] > .status .spin"); k++) await new Promise((r) => setTimeout(r, 100));
     await document.fonts.ready;
+    await new Promise((r) => requestAnimationFrame(() => r()));
   });
 }
 

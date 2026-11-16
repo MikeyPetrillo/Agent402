@@ -1129,6 +1129,7 @@ jobs:
       # Pinned, scripts off, keys shadowed as in the install above; it runs on
       # a cache hit too. The suite fails when it is missing.
       - name: Install the x402 MCP test client (secretless)
+        timeout-minutes: 3
         env:
           UPSTREAM_COSTS_JSON: ""
           BRAVE_API_KEY: ""
