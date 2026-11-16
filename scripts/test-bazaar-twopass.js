@@ -83,11 +83,13 @@ const DISAGREE = [PASS1, PASS2, PASS3];
   check("disagreeing passes: the run completes in DRY_RUN", r.code === 0 && !r.thrown, r.thrown?.message || r.out);
   check("disagreeing passes take a third walk", r.walks === 3, `walks=${r.walks}`);
   check("missing count is the routes absent from every pass", /missing: 2\b/.test(r.out), r.out);
-  check("d and e are listed for purchase", /POST \/api\/d /.test(r.out) && /POST \/api\/e /.test(r.out), r.out);
-  check("b (pass 1 only) is not bought", !/POST \/api\/b /.test(r.out), r.out);
-  check("c (pass 2 only) is not bought", !/POST \/api\/c /.test(r.out), r.out);
-  check("a (every pass) is not bought", !/POST \/api\/a /.test(r.out), r.out);
-  check("the estimate is the agreed set's ($0.070)", /\$0\.070\b/.test(r.out), r.out);
+  check("d and e are listed for purchase", /POST \/api\/d$/m.test(r.out) && /POST \/api\/e$/m.test(r.out), r.out);
+  check("b (pass 1 only) is not bought", !/POST \/api\/b$/m.test(r.out), r.out);
+  check("c (pass 2 only) is not bought", !/POST \/api\/c$/m.test(r.out), r.out);
+  check("a (every pass) is not bought", !/POST \/api\/a$/m.test(r.out), r.out);
+  // The estimate is checked, not printed (the run logs are public): it is the
+  // agreed set's, 2 routes, within this run's cap.
+  check("the estimate is the agreed set's (2 routes, within the cap)", /The 2 routes' list prices together are within the MAX_SPEND_USD cap/.test(r.out) && !/\$\s?\d/.test(r.out), r.out);
   check("each pass's total and our-row count are printed", /5 rows \/ 2 ours, 5 rows \/ 2 ours, 4 rows \/ 1 ours/.test(r.out), r.out);
   check("the disagreement is said out loud", /passes disagree/.test(r.out), r.out);
   const pass1Offsets = offsetsSeen.filter((o) => o.walk === 1).map((o) => o.offset);
@@ -96,11 +98,12 @@ const DISAGREE = [PASS1, PASS2, PASS3];
 
 {
   // The agreed set costs $0.070. Pass 1 alone would have read c, d, e missing
-  // ($0.270) and pass 2 alone b, d, e ($0.170); the refusal must quote the
-  // agreed figure, not either single pass.
+  // ($0.270) and pass 2 alone b, d, e ($0.170); the cap is held against the
+  // agreed set (a $0.08 cap passes it), and the refusal names its route count
+  // with no figure.
   const r = await run({ maxSpend: 0.05, feeds: DISAGREE });
   check("the refusal fires on the agreed estimate", r.code === 2, r.out);
-  check("the refusal quotes $0.070, not a single pass's figure", /\$0\.070\b/.test(r.out) && !/\$0\.270|\$0\.170/.test(r.out), r.out);
+  check("the refusal names the agreed set's 2 routes and prints no figure", /The 2 routes' list prices together are over the MAX_SPEND_USD cap/.test(r.out) && !/\$\s?\d/.test(r.out), r.out);
   const ok = await run({ maxSpend: 0.08, feeds: DISAGREE });
   check("a ceiling the agreed set fits under is not refused", ok.code === 0 && !/Refusing/.test(ok.out), ok.out);
 }

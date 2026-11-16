@@ -4794,6 +4794,26 @@ jobs:
           echo "$RESP"
           echo "$RESP" | jq -e '.data.variableCollectionUpsert' >/dev/null || { echo "Variable upsert failed"; exit 1; }
 
+      # The live fixed prices before this build ships, so the step after the
+      # Bazaar validation can buy once each route whose price this deploy
+      # changed (scripts/keepalive-plan.js). Reads /api/pricing only; an
+      # unreadable catalog leaves no snapshot and the later step buys nothing.
+      - name: Snapshot the live fixed prices before the deploy
+        env:
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          WALLET_ADDRESS: ""
+        run: |
+          node scripts/keepalive-plan.js snapshot "$RUNNER_TEMP/prices-before.json" \
+            || { rm -f "$RUNNER_TEMP/prices-before.json"; echo "::warning::could not read the live catalog before the deploy; no price-change buy on this run"; }
+
       - name: Trigger deploy of latest commit
         id: trigger
         run: |
@@ -5355,3 +5375,54 @@ jobs:
             2) echo "::warning::The Bazaar validator could not be read on any run (CDP-side); no listing verdict for this build." ;;
             *) echo "::error::No Bazaar validator run was clean against the new build: $INVALID of $i run(s) read a checked route INVALID, the rest could not be read.$HINT"; exit 1 ;;
           esac
+
+      # A route whose fixed price this deploy changed is bought once, so the
+      # Bazaar listing shows the new price instead of the old one until a buyer
+      # settles it. Quoted and model-priced routes, and every route whose effect
+      # outlives the answer (it spends our own wallet or buys from an outside
+      # seller: src/lasting-effect-slugs.js), are exempt
+      # (scripts/lib/keepalive-plan.js). Same buyer as the keep-alive
+      # (scripts/refresh-bazaar.js, the burner, Base), the whole set capped by
+      # BAZAAR_PRICE_CHANGE_MAX_USD and by MAX_ROUTES routes: over either,
+      # nothing is bought and the warning names the hand pass. Never fails the
+      # deploy, which has already shipped (continue-on-error, its own timeout);
+      # a refusal or a failed buy is a warning on the run. The logs carry route
+      # counts and slugs, never a total or a cap.
+      - name: Buy each route whose fixed price changed
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 18
+        env:
+          DATABENTO_API_KEY: ""
+          RAILWAY_API_TOKEN: ""
+          CDP_KEY_ID: ""
+          CDP_KEY_SECRET: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          MPP_SECRET_KEY: ""
+          X_BEARER_TOKEN: ""
+          WALLET_ADDRESS: ""
+          TARGET_URL: https://agent402.tools
+          MAX_SPEND_USD: ${{ vars.BAZAAR_PRICE_CHANGE_MAX_USD || '5' }}
+          MAX_ROUTES: "25"
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+        run: |
+          [ -n "$BURNER_KEY" ] && echo "::add-mask::$BURNER_KEY"
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          if [ ! -s "$RUNNER_TEMP/prices-before.json" ]; then echo "No snapshot from before the deploy: nothing to compare."; exit 0; fi
+          set +e
+          OUT=$(GITHUB_OUTPUT="$RUNNER_TEMP/price-change.out" BURNER_KEY="" POW_SECRET="" node scripts/keepalive-plan.js changed "$RUNNER_TEMP/prices-before.json" 2>&1); CODE=$?
+          set -e
+          echo "$OUT"
+          if [ "$CODE" = "3" ]; then echo "::warning::Price-change buy refused: the changed routes are over the cap (spend or route count). Run bazaar-keepalive.yml with those slugs, stale_days=0 and a max_spend_usd that covers them."; exit 0; fi
+          if [ "$CODE" != "0" ]; then echo "::warning::Price-change plan could not run (exit $CODE); no buy on this run."; exit 0; fi
+          SLUGS=$(sed -n 's/^slugs=//p' "$RUNNER_TEMP/price-change.out" | tail -1)
+          MAXP=$(sed -n 's/^max_price=//p' "$RUNNER_TEMP/price-change.out" | tail -1)
+          if [ -z "$SLUGS" ]; then echo "No fixed price changed in this deploy."; exit 0; fi
+          if [ -z "$BURNER_KEY" ]; then echo "::warning::BURNER_KEY is not set: the routes whose price changed ($SLUGS) were not bought."; exit 0; fi
+          set +e
+          MODE=sweep PAY_NETWORK=base SLUGS="$SLUGS" REQUIRE_SLUGS=1 MAX_PRICE_USD="$MAXP" STALE_DAYS=0 BATCH_COUNT=1 node scripts/refresh-bazaar.js; RB=$?
+          set -e
+          [ "$RB" = "0" ] || echo "::warning::A price-change buy did not complete (exit $RB): $SLUGS. Run bazaar-keepalive.yml with those slugs and stale_days=0."
