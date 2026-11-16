@@ -701,8 +701,17 @@ async function buildPayFetch(budget = null) {
   const baseUsd = acceptCapUsd();
   const maxUsd = budget ? () => budget.signCapUsd(baseUsd) : baseUsd;
   // Only a refusal by amount marks the attempt (the guard also logs the
-  // accepts on chains this pass does not pay on, which is no refusal).
-  const log = (m) => { if (budget && /over the cap|no positive cap/.test(String(m))) budget.refused = m; console.error(m); };
+  // accepts on chains this pass does not pay on, which is no refusal). Under a
+  // budget the guard's cap is what is left of it, so the line carries no
+  // amount: only that the accept was over the cap.
+  const log = (m) => {
+    const s = String(m);
+    if (budget && /over the cap|no positive cap/.test(s)) {
+      budget.refused = s;
+      return console.error(s.replace(/: (?:\d+ base units over the cap|no positive cap)[\s\S]*$/, ": over the cap"));
+    }
+    console.error(s);
+  };
   const countSigned = () => {
     if (!budget) return;
     client.onAfterPaymentCreation(async (ctx) => { budget.record(signedMicrosOf(ctx, usdMicros(baseUsd))); });

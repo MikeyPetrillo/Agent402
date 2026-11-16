@@ -227,6 +227,16 @@ async function signedPass({ routes, cap, maxPrice = "2" }) {
   // Cap $1.00: the retry itself would take the signed total to $1.20, so it is refused.
   const clamp = await signedPass({ routes: [{ slug: "r1", list: "$0.60", ask: 600_000, failFirst: true }], cap: "1" });
   ok(clamp.signed.length === 1 && clamp.total === 600_000, `a retry that would sign past the cap is refused before signing (signed ${JSON.stringify(clamp.signed)})`);
+  // Cap $25: 95 routes at $0.26 sign $24.70, then a route listed at $0.29
+  // (the plan estimate stays under the cap) whose 402 asks $0.50 meets the
+  // guard with $0.30 left. The refusal line says it was over the cap and
+  // names no amount, in dollars or base units.
+  const fillers = Array.from({ length: 95 }, (_, i) => ({ slug: `f${i}`, list: "$0.26", ask: 260_000 }));
+  const left = await signedPass({ routes: fillers.concat([{ slug: "probe", list: "$0.29", ask: 500_000 }]), cap: "25" });
+  const refusals = left.out.split("\n").filter((l) => /over the cap/.test(l));
+  const BASE_UNITS = /\d+\s*base units|\d+ at \d+ decimals|no positive cap \(/;
+  ok(left.total === 24_700_000 && !left.signed.some(([s]) => s === "probe") && refusals.length >= 1, `the guard refuses the probe with $0.30 left (signed ${left.signed.length}, refusals ${refusals.length})`);
+  ok(!refusals.some((l) => BASE_UNITS.test(l) || /over the cap \(/.test(l)) && !BASE_UNITS.test(left.out) && !DOLLAR_FIGURE.test(left.out), `a budgeted refusal names no amount (${refusals.join(" | ")})`);
 }
 
 // --- the workflows wire it ---------------------------------------------------
@@ -262,8 +272,13 @@ async function signedPass({ routes, cap, maxPrice = "2" }) {
   ok(warnings.length >= 3 && !warnings.some((l) => DOLLAR_FIGURE.test(l) || /\$OUT\b/.test(l) || /\$MAXP\b|\$MAX_SPEND_USD\b/.test(l)), "no warning in the price-change step echoes a figure, the cap or the plan's output");
   const tailWf = read(".github/workflows/bazaar-keepalive-tail.yml");
   ok(!/removes a resource|30-day (removal|rule)|rank|quality/i.test(tailWf) && /observed to leave the Bazaar listing after about 30 days/.test(tailWf) && /keep (them|those routes) listed/.test(tailWf), "the tail workflow and its issue state the 30-day behavior as observed and the purpose as keeping routes listed");
+  const weeklyWf = read(".github/workflows/bazaar-keepalive.yml");
+  const CDP_RULE = /CDP(?:'s)?\s+(?:own\s+)?(?:seller\s+)?docs|CDP\s+(?:removes|culls|deletes)|removes a resource|30-day (?:removal|rule)|\bcull\b/i;
+  ok(![tailWf, weeklyWf].some((t) => CDP_RULE.test(t)) && /observed to leave the Bazaar listing after about 30 days/.test(weeklyWf) && /keep(s)? (them|routes) listed/.test(weeklyWf), `neither keep-alive workflow states the 30-day removal as a CDP rule (${[tailWf, weeklyWf].map((t) => (t.match(CDP_RULE) || [""])[0]).join(" | ")})`);
 
   const hb = read(".github/workflows/heartbeat.yml");
+  const burnerRun = String(Object.values(load(hb).jobs || {}).flatMap((j) => j.steps || []).find((st) => /Canary burner balance watch/.test(st.name || ""))?.run || "");
+  ok(/\$WARN_USD/.test(burnerRun) && !burnerRun.split("\n").some((l) => /(?:echo|--body)\s+["']?[^"'\n]*\$\{?WARN_USD\b/.test(l)), "the burner balance step never echoes its derived mark");
   ok(/keepalive-plan\.js low-water/.test(hb) && /FLOOR_USD: \$\{\{ vars\.CANARY_BURNER_LOW_USD/.test(hb) && /WARN_USD="\$FLOOR_USD"/.test(hb), "the burner alarm reads the derived mark, floored by the repo variable, which also stands in when the catalog is unreadable");
   const claude = read("CLAUDE.md");
   ok(/`BAZAAR_PRICE_CHANGE_MAX_USD`/.test(claude) && /`CANARY_BURNER_LOW_USD`[^\n]*floor/.test(claude), "CLAUDE.md documents both repo variables");
