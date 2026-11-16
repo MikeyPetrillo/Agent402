@@ -154,7 +154,10 @@ try {
     const rs = await Promise.all(OUTSIDE.map((route, i) => rig.send(route, creds[i])));
     rig.st.llmDelayMs = 0;
     for (let i = 0; i < OUTSIDE.length; i++) {
-      await ok(rs[i].status === 429 && /does not cover this one as well/.test(rs[i].json?.error || "") && /You have not been charged\./.test(rs[i].json.error) && rs[i].headers.get("retry-after") === "30", `${OUTSIDE[i].method} ${OUTSIDE[i].path.split("?")[0]}: refused 429 before its handler while the wallet's balance is held by a call in flight (${rs[i].status})`);
+      // (Retry-After 30 on a read made for the call; on the record of an
+      // earlier call's read, inside the read gap, the time left in the gap.)
+      const ra = Number(rs[i].headers.get("retry-after"));
+      await ok(rs[i].status === 429 && /does not cover this one as well/.test(rs[i].json?.error || "") && /You have not been charged\./.test(rs[i].json.error) && (ra === 30 || (ra >= 1 && ra <= 10)), `${OUTSIDE[i].method} ${OUTSIDE[i].path.split("?")[0]}: refused 429 before its handler while the wallet's balance is held by a call in flight (${rs[i].status})`);
     }
     await ok((await held).status === 200, "the call in flight is served and settled");
     // Control and burst on the memory family (it answers offline).

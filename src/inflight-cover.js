@@ -207,11 +207,13 @@ const READ_DOWN_MS = 10_000;
 const READ_DOWN_WAIT_MS = 25;
 /** While an account's reads are failing, the gap between reads made for it. */
 const READ_FAIL_GAP_MS = 1_000;
+/** Past the day's read budget, one read per wallet this often. */
+const BUDGET_SPENT_WALLET_GAP_MS = 60_000;
 /** A balance record this young is judged on without another read. */
 const FRESH_ENOUGH_MS = 1_000;
 /** THE READ GAP: a wallet's admission reads are at least this far apart
- *  (INFLIGHT_COVER_READ_GAP_MS, default 10 s, never under FRESH_ENOUGH_MS nor
- *  over GOOD_READ_MAX_MS). Inside it a judgment that its record does not
+ *  (INFLIGHT_COVER_READ_GAP_MS, default and most 10 s, the read cache's
+ *  length, past which a gap would change nothing; never under FRESH_ENOUGH_MS). Inside it a judgment that its record does not
  *  cover is decided on that record as it is (the rule FRESH_ENOUGH_MS had),
  *  so a wallet sending call after call past its balance costs one read per
  *  gap, not one per call. Not held back by it: a read a judgment needs
@@ -220,7 +222,7 @@ const FRESH_ENOUGH_MS = 1_000;
  *  budget (src/upstream-hard-caps.js, `cover-reads`) bounds those. */
 export function readGapMs() {
   const n = Number(process.env.INFLIGHT_COVER_READ_GAP_MS);
-  return Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, FRESH_ENOUGH_MS), 15 * 60_000) : 10_000;
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, FRESH_ENOUGH_MS), CACHE_MS) : CACHE_MS;
 }
 const READS_DOWN_MAX_KEYS = 20_000;
 /** The admission wait on the report and media routes (what it always was). */
@@ -396,7 +398,7 @@ const SETTLED = Symbol("a402.inflightCoverSettled");
 // in flight, or a balance read that covers the sum) or "unread" (the balance
 // could not be read; inside the small unread allowance). The mark is
 // COVER_STATE (src/inflight-cover-state.js).
-const stats = { admittedAtOnceOnKeptRead: 0, readsOverBudget: 0, admitted: 0, foreignSettlementsSeen: 0, backgroundReadsSkipped: 0, admittedPastKeptRead: 0, backgroundReads: 0, readsWentDown: 0, admittedOnKeptRead: 0, refusedOnKeptRead: 0, judgedAfterSettlement: 0, reservationsWrittenBack: 0, readsDropped: 0, deadReservationsIgnored: 0, settledReleases: 0, admittedByRead: 0, admittedUnread: 0, admittedTrusted: 0, refusedSettling: 0, freshReads: 0, readsTimedOut: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, withdrawals: 0, putBackMisses: 0, sharedMisses: 0, foreignReads: 0 };
+const stats = { refusedInReadGap: 0, readsPastBudget: 0, admittedAtOnceOnKeptRead: 0, readsOverBudget: 0, admitted: 0, foreignSettlementsSeen: 0, backgroundReadsSkipped: 0, admittedPastKeptRead: 0, backgroundReads: 0, readsWentDown: 0, admittedOnKeptRead: 0, refusedOnKeptRead: 0, judgedAfterSettlement: 0, reservationsWrittenBack: 0, readsDropped: 0, deadReservationsIgnored: 0, settledReleases: 0, admittedByRead: 0, admittedUnread: 0, admittedTrusted: 0, refusedSettling: 0, freshReads: 0, readsTimedOut: 0, refused: 0, refusedUnread: 0, settleWaits: 0, foreignWaits: 0, withdrawals: 0, putBackMisses: 0, sharedMisses: 0, foreignReads: 0 };
 
 /**
  * The OTHER runs a shared window read reports: everything but this run's own
@@ -740,7 +742,12 @@ function balanceFor(coverKey, terms, now, minSeq = 0, background = false) {
   // no read is made, and the caller is judged as when reads are down (the
   // kept read, or the allowance).
   const unitAt = Date.now();
-  if (!takeHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt)) { stats.readsOverBudget++; return null; }
+  if (!takeHardCapShare("cover-reads", terms?.ceiling ?? null, unitAt)) {
+    // Spent: still one read per wallet per BUDGET_SPENT_WALLET_GAP_MS, so a
+    // funded wallet judged on the allowance recovers within a minute.
+    if (now - (w.pastBudgetAt || 0) < BUDGET_SPENT_WALLET_GAP_MS) { stats.readsOverBudget++; return null; }
+    w.pastBudgetAt = now; stats.readsPastBudget++;
+  }
   w.readAt = now;
   let held = false;
   const gen = laneGen, network = networkOf(coverKey);
@@ -1031,7 +1038,7 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
         // begun now settles it, whichever way.
         // A record younger than the read gap is taken as it is: a wallet that
         // sends call after call past its balance costs no read per refusal.
-        if (!kept && rec.seq <= seqAtStart && Date.now() - rec.at > readGapMs()) { stats.freshReads++; freshAfter = eventSeq; continue; }
+        if (!kept && rec.seq <= seqAtStart && Date.now() - rec.at >= readGapMs()) { stats.freshReads++; freshAfter = eventSeq; continue; }
         // A fresh read left it undecided with nothing settling: a settlement
         // landed while it was under way. Read once more, and let that read
         // finish (bounded by the read timeout) before deciding.
@@ -1078,6 +1085,15 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
           if (back && me.left !== leftAtWait) continue;
         }
       }
+      // Decided on a record from before this judgment that is still inside
+      // the read gap (no read was made for this call): a retry before the gap
+      // ends is judged on the same record, so Retry-After is the time left in
+      // the gap. (A refusal on a read this judgment made says 30 s, which is
+      // past the gap: that retry is read again.)
+      const gapLeftMs = rec && !kept && rec.seq <= seqAtStart ? readGapMs() - (Date.now() - rec.at) : 0;
+      const gapHeld = !asBefore && (block === "short" || block === "beside") && gapLeftMs > 0;
+      const addFunds = !asBefore && (block === "short" || block === "beside");
+      if (gapHeld) stats.refusedInReadGap++;
       stats.refused++;
       if (block === "unread") stats.refusedUnread++;
       if (block === "settling") stats.refusedSettling++;
@@ -1092,8 +1108,8 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
         : undecided
         ? `Another call from this wallet is still settling, and until it has, the wallet's balance cannot be confirmed to cover this one as well. Your input is fine: retry the same call after Retry-After, once that call has settled. You have not been charged.`
         : cur.count <= 0
-          ? `This wallet's balance no longer covers this run: another paid run from this wallet settled after this payment was checked, and the balance left does not cover this one too. Your input is fine: add funds to this wallet, then retry the same call. You have not been charged.`
-          : `This wallet already has ${cur.count} paid runs in progress here, and its balance does not cover this one as well. Each payment is checked on its own, but settling them all needs the sum. Your input is fine: ${block === "short" || block === "beside" ? "add funds to this wallet, then retry the same call" : "retry the same call after Retry-After, once one of them has settled, or add funds"}. You have not been charged.`);
+          ? `This wallet's balance no longer covers this run: another paid run from this wallet settled after this payment was checked, and the balance left does not cover this one too. Your input is fine: add funds to this wallet, then retry ${addFunds ? "after Retry-After" : "the same call"}. You have not been charged.`
+          : `This wallet already has ${cur.count} paid runs in progress here, and its balance does not cover this one as well. Each payment is checked on its own, but settling them all needs the sum. Your input is fine: ${addFunds ? "add funds to this wallet, then retry after Retry-After" : block === "short" || block === "beside" ? "add funds to this wallet, then retry the same call" : "retry the same call after Retry-After, once one of them has settled, or add funds"}. You have not been charged.`);
       e.statusCode = 429;
       // The refusal's class, for the tool log (src/refusal-reason.js).
       e.coverRefusal = block;
@@ -1110,10 +1126,16 @@ export async function admitCoveredRun(req, { now = Date.now(), expensive = false
       // the window together, so it does not clear by waiting).
       e.attribution = "ours";
       e.hint = `cover-${block}`;
-      e.fix = block === "short" || block === "beside" || (block === "kept" && cur.count <= 0)
+      e.fix = addFunds
+        ? "Your input is fine. Add funds to this wallet, then retry after Retry-After."
+        : block === "short" || block === "beside" || (block === "kept" && cur.count <= 0)
         ? "Your input is fine. Add funds to this wallet, then retry the same call."
         : "Your input is fine. Retry the same call after Retry-After, when a paid call this wallet has in flight has settled.";
-      e.retryAfter = asBefore ? 30 : block === "short" || block === "beside" ? 30 : 5;
+      // A refusal on a record inside the read gap: a retry before the gap
+      // ends is judged on the same record, so Retry-After is the time left in
+      // it (at least a second, at most the gap); funds added meanwhile count
+      // at that retry.
+      e.retryAfter = asBefore ? 30 : gapHeld ? Math.min(Math.max(1, Math.ceil(gapLeftMs / 1000)), Math.ceil(readGapMs() / 1000)) : block === "short" || block === "beside" ? 30 : 5;
       throw e;
     }
     admitted = true;
@@ -1273,7 +1295,7 @@ export function inflightCoverStatus() {
 }
 
 /** Test-only: every kept read is made `ms` older. */
-export function _ageKeptReadsForTest(ms) { for (const w of wallets.values()) { if (w.good) w.good.at -= ms; w.touched -= ms; } }
+export function _ageKeptReadsForTest(ms, { pastBudget = false } = {}) { for (const w of wallets.values()) { if (w.good) w.good.at -= ms; w.touched -= ms; if (pastBudget && w.pastBudgetAt) w.pastBudgetAt -= ms; } }
 /** Test-only. */
 export function _resetInflightCoverForTest() {
   ledger.clear(); wallets.clear(); downLogged.clear(); ownReservations.clear(); lastBeatAt = 0; unreadMinutes.clear(); pendingReads.clear(); queuedReads.clear(); lastForeign.clear(); judging.clear(); liveSeen.clear(); readsDown.clear(); lastDecidedUnreadAt = 0; laneGen++; for (const l of lanes.values()) for (const w of [...l.waiters.splice(0), ...l.bgWaiters.splice(0)]) w(); lanes.clear(); netFailedAt.clear(); reader = readBalance;

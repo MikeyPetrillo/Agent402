@@ -193,18 +193,24 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   read waited for (`admittedAtOnceOnKeptRead`); only before the judgment asked for a read of its
   own, and only on a read begun after another container's view when one holds a run. A run that
   read does not cover, or an older read, is judged as before (the one-price mirror still refuses).
-  *The read gap:* a wallet's reads are at least `INFLIGHT_COVER_READ_GAP_MS` apart (default 10 s,
-  1 s to 15 min); inside it a judgment its record does not cover is decided on that record as it
-  is (`short`, no read), so a wallet funded within the gap is recognized when it ends (the short
-  429's Retry-After is 30). Not held back by the gap: a read needed because another container holds
+  *The read gap:* a wallet's reads are at least `INFLIGHT_COVER_READ_GAP_MS` apart (default and
+  most 10 s, the read cache's length, past which a gap changes nothing; least 1 s); inside it a
+  judgment its record does not cover is decided on that record as it is (`short`, no read), so a
+  wallet funded within the gap is recognized when it ends. A `short` or `beside` refusal on a
+  record from before the judgment says so: `Retry-After` is the time left in the gap (at least 1 s,
+  at most the gap; `refusedInReadGap`), and one on a read made for the call keeps 30 s, past the gap;
+  either says "add funds to this wallet, then retry after Retry-After". Not held back by the gap: a read needed because another container holds
   a run, the follow-up read after a settlement counted twice, a wallet with no record.
   *The daily budget:* a read whose RPC list reaches a capped host (`ceilingOfRead`: EVM, Solana and
   Tempo lists; `AGENT402_BASE_RPC` for Base) takes a unit of the `cover-reads` share in
   `src/upstream-hard-caps.js` (`HARD_CAP_SHARES`, shared across replicas like the ceilings):
   `INFLIGHT_COVER_READS_DAILY_MAX`, default a fifth of `HARDCAP_ALCHEMY_CALLS`, a set value held to
   half of it (the ceiling off: the set value, or none). A read dropped unmade gives its unit back.
-  Past it no read is made (`readsOverBudget`) and the call is judged exactly as when reads are
-  down (the kept read, or the allowance; nothing waits), so paid tools keep the rest of the ceiling.
+  Past it a wallet still gets one read a minute (`BUDGET_SPENT_WALLET_GAP_MS`, `readsPastBudget`), so
+  a funded wallet held to the allowance recovers within a minute instead of at midnight; any other
+  read is not made (`readsOverBudget`) and the call is judged exactly as when reads are down (the
+  kept read, or the allowance; nothing waits). Any payer's calls spend the budget, a call that ends
+  4xx included; past it the per-wallet minute bounds each wallet, not the number of wallets.
   Counts on the operator view (`inflightCover.readBudget`, `readGapMs`). The longest admission off
   the report and media routes is `ADMIT_SETTLED_READ_MAX_MS` (the wait plus the read timeout,
   3.5 s), when a settlement lands during the read.

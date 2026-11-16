@@ -8,11 +8,11 @@ carries its own version on npm.
 
 ### 2026-11-15 (kept balance reads judged at once)
 Payments:
-- A wallet whose last balance read is under 5 minutes old, and covers every
-  paid call it has in flight plus the new one less what its payments took
-  since, has the new call started at once, with no wait for another read. A
-  call that read does not cover, or a wallet whose read is older, is judged on
-  a new read as before.
+- On routes other than the report and media routes, a wallet whose last
+  balance read is under 5 minutes old, and covers every paid call it has in
+  flight plus the new one less what its payments took since, has the new call
+  started at once, with no wait for another read. A call that read does not
+  cover, or a wallet whose read is older, is judged on a new read as before.
 - A Solana payment whose transfer names an account through an address lookup
   table is covered with the wallet's calls in flight too: it is judged on what
   the paying wallet holds of the token across its accounts.
@@ -25,9 +25,10 @@ Payments:
   in place of the tool's input schema and example. The privacy page and
   payment.dataHandling in /.well-known/x402 say that each paid call reads the
   paying wallet's public balance, that a reservation per call in flight is
-  kept for the life of the call, and that the last balance read is held in
-  memory, used for at most 15 minutes, and dropped at the next paid call after
-  that or on restart.
+  kept for the life of the call, and at most 30 minutes when a server stops
+  mid-call, and that the last balance read is held in memory, used for at most
+  15 minutes, and dropped once the wallet has been idle 15 minutes, sooner
+  when the server holds 50,000 wallets, or on restart.
 
 ### 2026-11-15 (refund lookup lists every refund of a transaction)
 Refunds:

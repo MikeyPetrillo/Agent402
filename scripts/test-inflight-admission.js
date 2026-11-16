@@ -249,7 +249,7 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   ok(r3.release && reads === 1, `a third run fits what the record still shows after one settlement is taken off: no read (${reads})`);
   const r4 = await admit(W(0x33));
   ok(r4.err?.statusCode === 429 && reads === 2 && /does not cover this one as well/.test(r4.err.message) && r4.err.retryAfter === 30, `a fourth does not: one fresh read decides, and it is refused as short (${r4.err?.statusCode}, reads ${reads})`);
-  { const f = toolErrorFields(r4.err); ok(f.attribution === "ours" && f.hint === "cover-short" && f.reason === "cover_short" && f.retryAfterSeconds === 30 && f.fix === "Your input is fine. Add funds to this wallet, then retry the same call." && /add funds to this wallet, then retry the same call\./.test(r4.err.message), `the short refusal's answer fields name its class and the next step (${JSON.stringify(f)})`); }
+  { const f = toolErrorFields(r4.err); ok(f.attribution === "ours" && f.hint === "cover-short" && f.reason === "cover_short" && f.retryAfterSeconds === 30 && f.fix === "Your input is fine. Add funds to this wallet, then retry after Retry-After." && /add funds to this wallet, then retry after Retry-After\./.test(r4.err.message), `the short refusal's answer fields name its class and the next step (${JSON.stringify(f)})`); }
   balance = PRICE * 3n; // a top-up
   const r4b = await admit(W(0x33));
   ok(r4b.err?.statusCode === 429 && reads === 2, "within a second of that read the record is reused: no further read");
@@ -303,7 +303,7 @@ const fresh = () => { _resetInflightCoverForTest(); _resetPaidRecordForTest(); }
   const long = await admit(W(0x81));
   let refused = 0;
   const t0 = Date.now();
-  for (let i = 0; i < 60; i++) { const x = await admit(W(0x81)); if (x.err?.statusCode === 429 && x.err.retryAfter === 30) refused++; }
+  for (let i = 0; i < 60; i++) { const x = await admit(W(0x81)); if (x.err?.statusCode === 429 && x.err.coverRefusal === "short" && x.err.retryAfter >= 1 && x.err.retryAfter <= 30) refused++; }
   ok(refused === 60 && reads <= Math.ceil((Date.now() - t0) / 1000) + 1, `sixty refusals in ${Date.now() - t0} ms cost ${reads} balance read(s): a record under a second old is reused`);
   await sleep(1100);
   const inGap = await admit(W(0x81));
@@ -893,6 +893,27 @@ for (const readMs of [600, 450]) {
   long.release();
 }
 
+// ---- a refusal on a record inside the read gap says when the funds will count ----
+{
+  fresh();
+  let reads = 0, balance = PRICE;
+  _setBalanceReaderForTest(async () => { reads++; return balance; });
+  _setPaidRecordForTest(() => true);
+  const held = await admit(W(0xf8)); // one call in flight
+  const first = await admit(W(0xf8)); // refused on a read of one price
+  ok(first.err?.coverRefusal === "short" && first.err.retryAfter === 30 && reads === 1 && first.err.fix === "Your input is fine. Add funds to this wallet, then retry after Retry-After.", `a one-price wallet's second call is refused on a fresh read, Retry-After 30 (past the gap: that retry is read again) (${first.err?.retryAfter})`);
+  balance = PRICE * 10n; // the buyer adds funds
+  await sleep(2000);
+  const early = await admit(W(0xf8)); // inside the gap: judged on the same record
+  const f = early.err ? toolErrorFields(early.err) : {};
+  const ra = early.err?.retryAfter;
+  ok(early.err?.coverRefusal === "short" && reads === 1 && ra >= 1 && ra <= 8 && f.retryAfterSeconds === ra && f.fix === "Your input is fine. Add funds to this wallet, then retry after Retry-After." && /add funds to this wallet, then retry after Retry-After\./.test(early.err.message) && inflightCoverStatus().refusedInReadGap === 1, `funded 2 s later, a retry inside the read gap is refused with Retry-After the time left in the gap (${ra} s, fields ${f.retryAfterSeconds}), no read`);
+  await sleep(ra * 1000);
+  const onTime = await admit(W(0xf8));
+  ok(onTime.release && coveredRunStateOf(onTime.req) === "covered" && reads === 2, `the retry made exactly at that Retry-After is read again and admitted (${onTime.err?.coverRefusal || "admitted"}, reads ${reads})`);
+  for (const x of [held, onTime]) x.release?.();
+}
+
 // ---- admission reads have their own daily budget under the on-chain data ceiling ----
 {
   const caps = await import("../src/upstream-hard-caps.js");
@@ -908,16 +929,28 @@ for (const readMs of [600, 450]) {
   _setPaidRecordForTest(() => false);
   for (const who of [W(0xe7), W(0xe8)]) { const a = await admit(who), b = await admit(who); ok(a.release && b.release && coveredRunStateOf(b.req) === "covered", "a second call in flight is read and covered"); a.release(); b.release(); }
   ok(reads === 2 && caps.hardCapShareStatus()["cover-reads"].usedToday === 2 && caps.hardCapShareStatus()["cover-reads"].status === "spent", `two reads spend a budget of two (${reads} reads, ${JSON.stringify(caps.hardCapShareStatus()["cover-reads"])})`);
-  // Spent: a wallet never read gets the allowance at once, as when reads are down; no read is made.
+  // Spent: still one read per wallet a minute, so a funded wallet is not
+  // held to the allowance until midnight: a new wallet holding 40 prices
+  // sends 20 at once and all are admitted on that one read.
   const t0 = Date.now();
-  const six = await Promise.all(Array.from({ length: 6 }, () => admit(W(0xe9))));
-  ok(reads === 2 && six.filter((x) => x.release).length === 4 && six.filter((x) => x.err).every((x) => x.err.coverRefusal === "unread") && Date.now() - t0 < 150 && inflightCoverStatus().readsOverBudget >= 5, `budget spent, a wallet never read: the allowance of four at once and the rest refused as unread, no read made (${six.filter((x) => x.release).length} admitted, ${Date.now() - t0} ms)`);
-  for (const x of six) x.release?.();
-  // Spent: a wallet with a kept read is judged on it, as when reads are down.
+  const twenty = await Promise.all(Array.from({ length: 20 }, () => admit(W(0xe9))));
+  ok(reads === 3 && twenty.every((x) => x.release && coveredRunStateOf(x.req) === "covered") && inflightCoverStatus().readsPastBudget === 1 && Date.now() - t0 < 300, `budget spent, a new wallet holding 40 prices: 20 at once all admitted on the one read a wallet gets a minute past the budget (${twenty.filter((x) => x.release).length} admitted, ${reads - 2} read)`);
+  for (const x of twenty) x.release();
+  // Inside that minute no further read: a wallet with a kept read is judged on it, as when reads are down.
   _ageKeptReadsForTest(KEPT_AT_ONCE_MS + 60_000);
-  const three = await Promise.all(Array.from({ length: 12 }, () => admit(W(0xe7))));
-  ok(reads === 2 && three.every((x) => x.release && coveredRunStateOf(x.req) === "covered") && inflightCoverStatus().admittedOnKeptRead === 11, `budget spent, a funded wallet read before: 12 at once all admitted on its kept read, no read made (${inflightCoverStatus().admittedOnKeptRead} on the kept read)`);
-  for (const x of three) x.release();
+  const kept12 = await Promise.all(Array.from({ length: 12 }, () => admit(W(0xe9))));
+  ok(reads === 3 && kept12.every((x) => x.release && coveredRunStateOf(x.req) === "covered") && inflightCoverStatus().admittedOnKeptRead === 11 && inflightCoverStatus().readsOverBudget >= 11, `budget spent, inside the wallet's minute: 12 at once all admitted on its kept read, no read made (${inflightCoverStatus().admittedOnKeptRead} on the kept read)`);
+  for (const x of kept12) x.release();
+  // Each new wallet gets its own read past the budget.
+  const e = await Promise.all(Array.from({ length: 6 }, () => admit(W(0xeb))));
+  const e2 = await Promise.all(Array.from({ length: 6 }, () => admit(W(0xec))));
+  ok(reads === 5 && e.every((x) => x.release) && e2.every((x) => x.release), "control: two more new wallets each get their one read past the budget");
+  for (const x of [...e, ...e2]) x.release();
+  // A minute on, the wallet is read again.
+  _ageKeptReadsForTest(KEPT_AT_ONCE_MS + 60_000, { pastBudget: true });
+  const again = await Promise.all(Array.from({ length: 4 }, () => admit(W(0xe9))));
+  ok(reads === 6 && again.every((x) => x.release), `a minute later the wallet's next read past the budget is made (${reads - 5})`);
+  for (const x of again) x.release();
   ok(caps.hardCapStatus().upstreams[share.of].usedToday === 0 && caps.hardCapStatus().upstreams[share.of].refusedToday === 0, "the ceiling paid tools draw on is untouched by the share's own count");
   // A read that reaches no capped host is not counted: the same calls on another network are read.
   delete process.env.AGENT402_BASE_RPC;

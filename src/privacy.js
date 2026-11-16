@@ -30,6 +30,11 @@ import { GOOD_READ_MAX_MS, SETTLED_MARK_MS, COVER_WALLETS_MAX, sharedWindowMs } 
 // lasts in the shared store (src/inflight-cover.js).
 const COVER_KEEP_MINUTES = Math.round(GOOD_READ_MAX_MS / 60_000);
 const COVER_IDLE_MINUTES = Math.round(GOOD_READ_MAX_MS / 60_000);
+// A stopped server's reservation is pruned once it is older than the shared
+// window, at the next write or read of that wallet's window; with none, the
+// window's key expires one window after its last write, which can renew it
+// while the reservation is inside the window: twice the window at most.
+const COVER_RESERVATION_MAX_MINUTES = Math.round((2 * sharedWindowMs()) / 60_000);
 const COVER_SETTLED_MARK_MINUTES = Math.round(SETTLED_MARK_MS / 60_000);
 const DAYS = (ms) => Math.round(ms / 86_400_000);
 export function privacyPage(baseUrl) {
@@ -296,7 +301,7 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   from a node of its chain${gatewayBatched ? " (for a batched payment, from the payment network's balance service)" : ""}, which receives the
   wallet address, to check that the balance covers every paid call the wallet has in flight. A reservation for each
   of those calls (the wallet address and the amount) is kept in our shared store for the life of the call, and at
-  most ${Math.round(sharedWindowMs() / 60_000)} minutes when a server stops mid-call, with a mark of when the wallet's last paid call settled, kept
+  most ${COVER_RESERVATION_MAX_MINUTES} minutes when a server stops mid-call, with a mark of when the wallet's last paid call settled, kept
   there for ${COVER_SETTLED_MARK_MINUTES} minutes. The last balance read for the wallet is held in the server's memory and used for at most
   ${COVER_KEEP_MINUTES} minutes. It is kept while the wallet goes on making paid calls, including while its balance cannot be read,
   and dropped when the wallet has been idle ${COVER_IDLE_MINUTES} minutes (with no paid call in flight), at a later paid call to
