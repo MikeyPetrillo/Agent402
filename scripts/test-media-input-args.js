@@ -203,11 +203,13 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
 // The transcription routes hold their decode place for the request's caller:
 // the identity payer (never a typed x-payment, which nothing verified in
 // FREE_MODE), else the address with an IPv6 one folded to its /64; a step run
-// with no request is keyed on the caller that dispatched it.
+// with no request is keyed on the caller that dispatched it. A place is held
+// under every key the caller carries (src/dispatch-caller.js callerKeysOf).
 {
   const { prepareAudioWithinCap, __setMeasureForTest, __setTranscodeForTest } = await import("../src/tools/stt-kit.js");
   const { runAsCallerOf, IN_PROCESS_CALLER } = await import("../src/dispatch-caller.js");
   let seen = [];
+  const keysOf = (w) => [].concat(w).join(",");
   __setMeasureForTest(async (buf, opts) => { seen.push(opts?.who); return { unavailable: "stub" }; });
   __setTranscodeForTest(async (buf, opts) => { seen.push(opts?.who); return { unavailable: "stub" }; });
   const ogg = Buffer.concat([Buffer.from("OggS", "latin1"), Buffer.alloc(200)]);
@@ -219,13 +221,17 @@ if (calls[0]) checkInput(calls[0], "asf", "ffprobe on an ASF (WMA) file");
     process.env.FREE_MODE = "true";
     const plain = await whoFor({ ip: "198.51.100.40", headers: {} });
     const forgedSeen = await whoFor(withHeader("198.51.100.40"));
-    ok(plain.length > 0 && plain.every((w) => w === "ip:198.51.100.40") && forgedSeen.length > 0 && forgedSeen.every((w) => w === "ip:198.51.100.40"), `a forged x-payment does not change the decode place's key (${plain} / ${forgedSeen})`);
+    ok(plain.length > 0 && plain.every((w) => keysOf(w) === "ip:198.51.100.40") && forgedSeen.length > 0 && forgedSeen.every((w) => keysOf(w) === "ip:198.51.100.40"), `a forged x-payment does not change the decode place's key (${plain} / ${forgedSeen})`);
     const v6 = await whoFor({ ip: "2001:db8:5:6::99", headers: {} });
-    ok(v6.length > 0 && v6.every((w) => w === "ip:2001:db8:5:6::/64"), `an IPv6 caller's decode place is keyed on its /64 (${v6})`);
+    ok(v6.length > 0 && v6.every((w) => keysOf(w) === "ip:2001:db8:5:6::/64"), `an IPv6 caller's decode place is keyed on its /64 (${v6})`);
     const step = await whoFor(null, (fn) => runAsCallerOf({ ip: "203.0.113.9", headers: {} }, fn));
-    ok(step.length > 0 && step.every((w) => w === "ip:203.0.113.9"), `a step inside runAsCallerOf is keyed on its dispatcher (${step})`);
+    ok(step.length > 0 && step.every((w) => keysOf(w) === "ip:203.0.113.9"), `a step inside runAsCallerOf is keyed on its dispatcher (${step})`);
+    delete process.env.FREE_MODE;
+    const paid = await whoFor(withHeader("198.51.100.40"));
+    ok(paid.length > 0 && paid.every((w) => keysOf(w) === `payer:0x${"ab".repeat(20)},ip:198.51.100.40`), `on a paid deployment the decode place is held under the payer and the address together (${paid.map(keysOf)})`);
+    process.env.FREE_MODE = "true";
     const none = await whoFor(null);
-    ok(none.length > 0 && none.every((w) => w === IN_PROCESS_CALLER), `a call with no caller at all is held under the shared key (${none})`);
+    ok(none.length > 0 && none.every((w) => keysOf(w) === IN_PROCESS_CALLER), `a call with no caller at all is held under the shared key (${none})`);
   } finally {
     if (had === undefined) delete process.env.FREE_MODE; else process.env.FREE_MODE = had;
     __setMeasureForTest(null); __setTranscodeForTest(null);
