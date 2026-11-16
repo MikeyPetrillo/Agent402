@@ -55,7 +55,8 @@ const ok = (cond, msg) => {
   ok(rdapSaysNotFound(404, "application/rdap+json"), "a 404 with an RDAP body is not registered");
 ok(rdapSaysNotFound(404, "application/json; charset=utf-8"), "a 404 with a JSON body is not registered");
 ok(!rdapSaysNotFound(404, "text/html"), "a 404 web page is an outage, not an answer (a whole TLD answered so on 2026-11-16)");
-ok(!rdapSaysNotFound(404, null), "a 404 with no type is an outage");
+ok(rdapSaysNotFound(404, null, ""), "a bare 404 with no type and no body is not registered (one registry answers so)");
+ok(!rdapSaysNotFound(404, null, "<html>404</html>"), "a 404 with an untyped page is an outage");
 ok(!rdapSaysNotFound(200, "application/rdap+json"), "a 200 is not a not-found");
   ok(parseRdapBootstrap(null).size === 0, "null input → empty map");
   ok(parseRdapBootstrap({}).size === 0, "missing services → empty map");

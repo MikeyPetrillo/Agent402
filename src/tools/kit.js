@@ -2096,9 +2096,14 @@ export function parseRdapBootstrap(json) {
 const RDAP_BOOTSTRAP_TTL_MS = 24 * 60 * 60 * 1000; // IANA's registry list changes rarely
 const RDAP_BOOTSTRAP_RETRY_MS = 10 * 60 * 1000; // after a failed refresh, back off before asking IANA again
 /** True when an RDAP answer is the registry's own "not registered": a 404
- *  carrying an RDAP (JSON) body. A 404 page of any other type is an outage. */
-export function rdapSaysNotFound(status, contentType) {
-  return status === 404 && String(contentType || "").toLowerCase().includes("json");
+ *  carrying an RDAP (JSON) body, or a bare 404 with no type and no body (one
+ *  registry answers an unregistered domain so). A 404 that carries a page of
+ *  any other type is a server that is down, not an answer. */
+export function rdapSaysNotFound(status, contentType, body = "") {
+  if (status !== 404) return false;
+  const type = String(contentType || "").toLowerCase();
+  if (type.includes("json")) return true;
+  return !type && !String(body || "").trim();
 }
 let rdapBootstrap = { at: 0, map: null };
 
@@ -2351,7 +2356,11 @@ const networkTools = [
           // domain with a web server's 404 page (seen on a whole TLD); that is
           // an outage, not an answer, so it falls through like any failure.
           if (res.status === 404) {
-            if (rdapSaysNotFound(res.status, res.headers.get("content-type"))) throw Object.assign(new Error("Domain not found in RDAP"), { statusCode: 404 });
+            // Only an untyped 404 needs its body read, and only a short one.
+            const typed = Boolean(res.headers.get("content-type"));
+            const len = Number(res.headers.get("content-length"));
+            const body = typed ? "x" : Number.isFinite(len) && len > 1024 ? "x" : (await res.text().catch(() => "x")).slice(0, 1024);
+            if (rdapSaysNotFound(res.status, res.headers.get("content-type"), body)) throw Object.assign(new Error("Domain not found in RDAP"), { statusCode: 404 });
             throw Object.assign(new Error("RDAP upstream answered HTTP 404 without an RDAP body (registry server unavailable)"), { statusCode: 502, upstreamStatus: 404 });
           }
           if (!res.ok) throw Object.assign(new Error(`RDAP returned HTTP ${res.status}`), { statusCode: 502, upstreamStatus: res.status });
