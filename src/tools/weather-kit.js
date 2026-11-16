@@ -18,15 +18,17 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-// Each Open-Meteo API this kit reads, by its public host. With
-// OPEN_METEO_API_KEY set, a request goes to the same API's keyed host (the
-// public host with a "customer-" prefix) and carries the key as `apikey`;
-// without it, the public host and no key, so a self-hosted server with no
-// key reads exactly what it read before.
-const OPEN_METEO_HOSTS = Object.freeze({
-  forecast: "api.open-meteo.com",
-  archive: "archive-api.open-meteo.com",
-  airQuality: "air-quality-api.open-meteo.com",
+// Each Open-Meteo API this kit reads, by its public host, and whether a key
+// moves it to the keyed host. With OPEN_METEO_API_KEY set, a keyed API is
+// read on its keyed host (the public host with a "customer-" prefix) with the
+// key as `apikey`; without the key, or for an API marked keyed: false, the
+// public host and no key, so a self-hosted server with no key reads exactly
+// what it read before. The archive stays on the public host: the keyed
+// archive host refuses this key (HTTP 403).
+const OPEN_METEO_APIS = Object.freeze({
+  forecast: { host: "api.open-meteo.com", keyed: true },
+  archive: { host: "archive-api.open-meteo.com", keyed: false },
+  airQuality: { host: "air-quality-api.open-meteo.com", keyed: true },
 });
 
 function openMeteoKey(env = process.env) {
@@ -36,25 +38,39 @@ function openMeteoKey(env = process.env) {
 /** The one place an Open-Meteo URL is built. Returns the URL to fetch, the
  *  public host (the only host any message names) and the host fetched. */
 export function openMeteoRequest(api, path, params, env = process.env) {
-  const publicHost = OPEN_METEO_HOSTS[api];
-  if (!publicHost) throw new Error(`unknown Open-Meteo API: ${api}`);
-  const key = openMeteoKey(env);
+  const spec = OPEN_METEO_APIS[api];
+  if (!spec) throw new Error(`unknown Open-Meteo API: ${api}`);
+  const publicHost = spec.host;
+  const key = spec.keyed ? openMeteoKey(env) : "";
   const q = new URLSearchParams(params);
   if (key) q.set("apikey", key);
   const host = key ? `customer-${publicHost}` : publicHost;
-  return { url: `https://${host}${path}?${q}`, host, publicHost, keyed: Boolean(key) };
+  return { api, url: `https://${host}${path}?${q}`, host, publicHost, keyed: Boolean(key) };
+}
+
+// The operator's line for a keyed refusal, at most one a minute per API and status.
+const refusalLoggedAt = new Map();
+function logKeyedRefusal(req, status) {
+  const now = Date.now();
+  const k = `${req.api} ${status}`;
+  if (now - (refusalLoggedAt.get(k) ?? 0) < 60_000) return;
+  refusalLoggedAt.set(k, now);
+  console.warn(`[open-meteo] keyed request refused (HTTP ${status}) for the ${req.api} API (${req.publicHost}): OPEN_METEO_API_KEY is not accepted there or does not cover that API; answered 503, not charged`);
 }
 
 // A failed read, restated so no message, field or log line built from it
 // names the keyed host or carries the key. A 429 stays what safeFetch makes
 // it, a 503 (the call is not charged) with Retry-After, and retryTransient
 // does not retry it: keyed traffic is never sent on to the public host. A
-// 401 or 403 on the keyed host is our key refused, a 503 on our side.
+// 401 or 403 on the keyed host (the key refused, or an API the key does not
+// cover) is our 503: not charged, not counted as a tool failure (`shed`),
+// with the reason in the operator's log line.
 function openMeteoFailure(err, req) {
   const up = err?.upstreamStatus;
   if (req.keyed && (up === 401 || up === 403)) {
-    return Object.assign(new Error(`Open-Meteo refused this server's request (HTTP ${up}); this is on our side, not your input - retry later`), {
-      statusCode: 503, upstreamStatus: up, attribution: "ours", noRetry: true,
+    logKeyedRefusal(req, up);
+    return Object.assign(new Error("Open-Meteo is unavailable to this server right now; this is on our side, not your input - retry later"), {
+      statusCode: 503, upstreamStatus: up, attribution: "ours", noRetry: true, shed: true, retryAfter: 60,
     });
   }
   if (!req.keyed || !(err instanceof Error)) return err;
