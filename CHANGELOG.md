@@ -6,6 +6,14 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (CoinGecko answers carry the source credit)
+Tools:
+- Every answer from a tool that serves CoinGecko data carries a credit field,
+  "Data provided by CoinGecko" with a link to the CoinGecko API page, and each
+  such tool's description ends with the same linked sentence. A market tick
+  answer that includes a coin figure carries it too, and a skill pack that
+  runs a CoinGecko tool prints it once, on the pack's answer.
+
 ### 2026-11-16 (a card refund made by hand is recorded)
 Payments:
 - A failed card report whose payment was already refunded outside the server

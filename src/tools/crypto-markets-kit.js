@@ -12,16 +12,16 @@
 // Upstream: CoinGecko API v3 (fixed host per tier; every caller-supplied value
 // rides as an encoded path segment or query parameter, never a URL). The API
 // key (`COINGECKO_API_KEY`, read at call time; host and header per
-// `COINGECKO_API_TIER`, src/tools/coingecko-endpoint.js) moves metering from a shared per-IP bucket to our own
-// quota: 30 calls/min, 10k calls/month. That monthly budget is the reason
-// every response is cached in-process (60s for prices, 5 min for lists and
-// profiles, 10 min for the coin list): a second identical call inside the
-// window costs the buyer the same and costs the quota nothing. Live-verified
-// 2026-08-22: every endpoint below answers on the Demo plan; the
-// gainers/losers endpoint is paid-plan only (401, error 10005) and is not
-// offered; history/ohlc/range are limited to the past 365 days on this plan
-// (401, error 10012), which the handlers enforce locally so a buyer gets a
-// 400 with the rule instead of a wasted round-trip.
+// `COINGECKO_API_TIER`, src/tools/coingecko-endpoint.js) moves metering from
+// a shared per-IP bucket to the key's own per-minute and monthly quota, whose
+// size depends on the plan (the shared minute bucket is in coingecko-rate.js).
+// That monthly quota is the reason every response is cached in-process (60s
+// for prices, 5 min for lists and profiles, 10 min for the coin list): a
+// second identical call inside the window costs the buyer the same and costs
+// the quota nothing. Every endpoint below was live-verified on 2026-08-22;
+// the gainers/losers endpoint is not offered; history/ohlc/range are held to
+// the past 365 days (MAX_HISTORY_DAYS), which the handlers enforce locally so
+// a buyer gets a 400 with the rule instead of a wasted round-trip.
 //
 // Error mapping (never relays an upstream body): 404 / unknown id -> 422,
 // 429 -> 503 with a retry hint, 5xx -> 502, 401/403 -> 422 (plan limit),
@@ -67,14 +67,14 @@ function headers() {
 
 // One upstream GET with the cache in front. `ttlMs` picks the cache class.
 // Returns { data, fetchedAt, cached }.
-// Demo plan allows 30 requests a minute for the whole deployment, so paid
+// The key's per-minute limit covers the whole deployment, so paid
 // traffic has to be paced here rather than discovered at the upstream 429. A
 // caller that arrives with an empty bucket gets 503 (capacity) and is not
 // charged; a cache hit never takes a token.
 // The bucket is SHARED with crypto-kit since 2026-09-03 (src/tools/coingecko-rate.js):
-// one Demo key, one minute budget, whichever kit spends it.
+// one key, one minute budget, whichever kit spends it.
 import { cgTake, cgRefusal, resetCgRateLimit } from "./coingecko-rate.js";
-import { attribute } from "../data-attribution.js";
+import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 export { resetCgRateLimit };
 
@@ -100,8 +100,8 @@ async function cgLoad(key, path) {
   const ctxOf = new WeakMap();
   const attempt = () => { const c = { label: "Market data upstream", step: stepOf(path), timeoutMs: TIMEOUT_MS, tag: "[crypto-markets]" }; return upstreamFetch(key, { headers: headers() }, c).then((r) => { ctxOf.set(r, c); return r; }); };
   let res = await attempt();
-  // One retry on 429/5xx after a short backoff: the Demo bucket is 30/min and
-  // a chained agent call can brush it; a second failure of the same class maps
+  // One retry on 429/5xx after a short backoff: the key's minute bucket is
+  // shared and a chained agent call can brush it; a second failure of the same class maps
   // below.
   // The retry is a second request, so it takes its own token.
   // The retry is taken only when the handler budget can hold the backoff and
@@ -213,7 +213,7 @@ function takeContracts(raw, max = 25) {
 }
 
 const DAY_MS = 86_400_000;
-const MAX_HISTORY_DAYS = 365; // Demo-plan window, enforced locally
+const MAX_HISTORY_DAYS = 365; // history window, enforced locally
 
 // Accepts unix seconds (number or numeric string) or an ISO-8601 / YYYY-MM-DD
 // string. Returns unix seconds.
@@ -1204,8 +1204,9 @@ const RWA_TOOLS = [
 ];
 CRYPTO_MARKETS_TOOLS.push(...RWA_TOOLS);
 // Every tool here reads CoinGecko, whose terms require the attribution (see
-// COINGECKO_ATTRIBUTION in coingecko-rate.js).
-for (const t of CRYPTO_MARKETS_TOOLS) attribute(t, "coingecko");
+// COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
+// `credit` field of every answer.
+for (const t of CRYPTO_MARKETS_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS, takeRwaType, shapeRwaMarket };
 

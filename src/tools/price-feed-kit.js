@@ -10,7 +10,7 @@
 import { protocols as llamaProtocols } from "./defi-kit.js";
 import { cgTake, cgRefusal, isCoinGeckoHost } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
-import { attribute } from "../data-attribution.js";
+import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
@@ -56,8 +56,9 @@ async function feedFetch(url, opts = {}) {
 async function feedLoad(url, host, { timeout = FEED_READ_MS, step = "data" } = {}) {
   const headers = { Accept: "application/json" };
   // CoinGecko key rides along when configured (call-time read; header per
-  // tier from coingecko-endpoint.js, same as crypto-kit's jsonGet). Keyless CoinGecko is metered per IP — and our
-  // egress IP is shared with every other Railway tenant.
+  // tier from coingecko-endpoint.js, same as crypto-kit's jsonGet). Keyless
+  // CoinGecko is metered per IP, and our egress IP is shared with every other
+  // Railway tenant.
   if (isCoinGeckoHost(host)) {
     Object.assign(headers, cgKeyHeaders());
     // The key's minute budget is ONE bucket shared with crypto-kit and
@@ -278,8 +279,9 @@ export const PRICE_FEED_TOOLS = [
   },
 ];
 // price-coingecko reads CoinGecko, whose terms require the attribution (see
-// COINGECKO_ATTRIBUTION in coingecko-rate.js).
-for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") attribute(t, "coingecko");
+// COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
+// `credit` field of every answer.
+for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 // Every handler runs under one budget (src/upstream-deadline.js): the 20 s
 // data-kit budget, except defi-tvl, whose protocol document keeps its 25 s

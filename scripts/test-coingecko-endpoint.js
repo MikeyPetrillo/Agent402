@@ -16,6 +16,10 @@ import { cgTier, cgBase, cgKeyHeaders, CG_DEMO_BASE, CG_PRO_BASE } from "../src/
 import { CRYPTO_TOOLS, clearCryptoCache } from "../src/tools/crypto-kit.js";
 import { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache, resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
 import { PRICE_FEED_TOOLS, clearPriceFeedCache } from "../src/tools/price-feed-kit.js";
+import { MARKET_TICK_TOOLS, __setMarketTickSources, clearMarketTickCache } from "../src/tools/market-tick-kit.js";
+import { buildSkillTools } from "../src/tools/skill-runner.js";
+import { SKILL_PACKS } from "../src/skills.js";
+import { COINGECKO_CREDIT, COINGECKO_ATTRIBUTION, COINGECKO_API_URL, attributionTailOf, creditAnswers, withCredit } from "../src/data-attribution.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
@@ -128,6 +132,130 @@ for (const [mod, call] of MODULES) {
   }
 }
 ok(!printed.some((line) => line.includes(KEY)), "key never printed to the console");
+
+// ---------------------------------------------------------------------------
+// The shared jsonGet also reads a non-CoinGecko host (crypto-orderbook reads
+// Coinbase Exchange): a keyed call there carries no x-cg-* header in either
+// tier, while the same key rides a CoinGecko call made beside it.
+// ---------------------------------------------------------------------------
+const orderbook = tool(CRYPTO_TOOLS, "crypto-orderbook");
+for (const tier of [undefined, "pro"]) {
+  const keep = { ...process.env };
+  process.env.COINGECKO_API_KEY = KEY;
+  if (tier) process.env.COINGECKO_API_TIER = tier; else delete process.env.COINGECKO_API_TIER;
+  resetAll();
+  respond = (u) => (u.hostname === "api.exchange.coinbase.com"
+    ? jsonRes(200, { bids: [["100.5", "1.25", 3]], asks: [["100.6", "0.5", 2]], sequence: 1 })
+    : okBody(u));
+  let out = null, err = null;
+  try { out = await orderbook({ pair: "BTC-USD", depth: 1 }); } catch (e) { err = e; }
+  const ex = calls.filter((c) => c.url.hostname === "api.exchange.coinbase.com");
+  ok(!err && ex.length >= 1, `crypto-orderbook / key, tier ${tier || "default"}: answers from the exchange host${err ? ` (${err.statusCode} ${err.message})` : ""}`);
+  ok(ex.length >= 1 && ex.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k)) && !Object.values(c.headers).some((v) => String(v).includes(KEY))),
+    `crypto-orderbook / key, tier ${tier || "default"}: no x-cg-* header and no key on the exchange request`);
+  ok(out && !Object.hasOwn(out, "credit"), `crypto-orderbook / key, tier ${tier || "default"}: an exchange answer carries no CoinGecko credit`);
+  resetAll();
+  await tool(CRYPTO_TOOLS, "crypto-price")({ coins: "BTC" });
+  ok(calls.some((c) => Object.keys(c.headers).some((k) => /^x-cg-/i.test(k))), `control / tier ${tier || "default"}: the same key rides a CoinGecko call from the same helper`);
+  for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k];
+  Object.assign(process.env, keep);
+}
+
+// ---------------------------------------------------------------------------
+// Source credit: CoinGecko's API terms ask for "Data provided by CoinGecko"
+// with a link to its API page, next to the data. Every CoinGecko-backed tool
+// ends its description with the linked sentence, publishes it as `credit` in
+// its example, and every answer carries it.
+// ---------------------------------------------------------------------------
+ok(COINGECKO_API_URL === "https://www.coingecko.com/en/api", "credit link is CoinGecko's API page");
+ok(COINGECKO_CREDIT === `Data provided by CoinGecko (${COINGECKO_API_URL}).` && COINGECKO_ATTRIBUTION === COINGECKO_CREDIT, "credit: the sentence with its link, the same text the descriptions end with");
+const CG_TOOLS = [
+  ...CRYPTO_TOOLS.filter((t) => t.slug !== "crypto-orderbook"),
+  ...CRYPTO_MARKETS_TOOLS,
+  ...PRICE_FEED_TOOLS.filter((t) => t.slug === "price-coingecko"),
+];
+ok(CG_TOOLS.length >= 24, `the CoinGecko-backed tools are read from the kits (${CG_TOOLS.length})`);
+for (const t of CG_TOOLS) {
+  ok(t.attribution === "coingecko" && attributionTailOf(t.description) === COINGECKO_CREDIT && t.description.includes(COINGECKO_API_URL), `${t.slug}: description ends with the linked credit`);
+  ok(t.credit === COINGECKO_CREDIT && t.discovery?.output?.example?.credit === COINGECKO_CREDIT, `${t.slug}: published example carries the credit with the link`);
+}
+for (const t of [...CRYPTO_TOOLS, ...PRICE_FEED_TOOLS].filter((x) => !CG_TOOLS.includes(x))) {
+  ok(t.credit === undefined && !Object.hasOwn(t.discovery?.output?.example || {}, "credit") && t.attribution !== "coingecko", `${t.slug}: not CoinGecko data, no CoinGecko credit`);
+}
+// Answers: the stubbed modules above, each with the credit and every field
+// the handler returned.
+for (const [mod, call] of MODULES) {
+  resetAll();
+  respond = okBody;
+  const out = await call(n++);
+  ok(out?.credit === COINGECKO_CREDIT, `${mod}: the answer carries the credit with the link`);
+}
+{
+  resetAll();
+  respond = (u) => (u.pathname.endsWith("/search/trending")
+    ? jsonRes(200, { coins: [{ item: { id: "bitcoin", name: "Bitcoin", symbol: "BTC", market_cap_rank: 1, score: 0 } }] })
+    : okBody(u));
+  const out = await tool(CRYPTO_TOOLS, "crypto-trending")({});
+  ok(out?.credit === COINGECKO_CREDIT && Array.isArray(out.coins) && out.coins.length === 1, "crypto-trending: the answer keeps its fields and carries the credit");
+}
+// The wrapper: additive, idempotent, never on a non-object answer.
+{
+  const t = { slug: "zz", description: "d", discovery: { output: { example: { a: 1 } } }, handler: async (i) => ({ a: i.a, nested: { b: 2 } }) };
+  creditAnswers(t, "Credit (https://example.test).");
+  const inner = t.handler;
+  creditAnswers(t, "Credit (https://example.test).");
+  ok(t.handler === inner, "creditAnswers: a second call does not wrap again");
+  const out = await t.handler({ a: 7 });
+  ok(JSON.stringify(out) === JSON.stringify({ a: 7, nested: { b: 2 }, credit: "Credit (https://example.test)." }), "creditAnswers: every field kept, credit added");
+  ok(JSON.stringify(t.discovery.output.example) === JSON.stringify({ a: 1, credit: "Credit (https://example.test)." }), "creditAnswers: example gains the credit");
+  ok(JSON.stringify(withCredit([1], "c")) === "[1]" && withCredit(null, "c") === null && withCredit({ credit: "own" }, "c").credit === "own", "withCredit: arrays, null and an answer with its own credit are left as they are");
+}
+
+// Market tick: an answer that serves a coin figure carries the credit; an
+// equities-only answer does not.
+{
+  const tick = MARKET_TICK_TOOLS[0];
+  ok(tick.discovery.output.example.credit === COINGECKO_CREDIT, "market-tick: published example (BTC, ETH, AAPL) carries the credit");
+  __setMarketTickSources({
+    crypto: async ({ coins }) => ({ currency: "usd", coins: Object.fromEntries(String(coins).split(",").map((id) => [id, { price: 1, change24hPct: 0, lastUpdated: "2026-11-16T00:00:00.000Z" }])), credit: COINGECKO_CREDIT }),
+    equity: async ({ symbol }) => ({ symbol, price: 2, previousClose: 2, change: 0, changePct: 0, currency: "USD", asOf: "2026-11-13" }),
+  });
+  clearMarketTickCache();
+  const mixed = await tick.handler({ symbols: "BTC,AAPL" });
+  ok(mixed.credit === COINGECKO_CREDIT && mixed.items.length === 2, "market-tick: a coin figure in the answer brings the credit");
+  clearMarketTickCache();
+  const eq = await tick.handler({ symbols: "AAPL" });
+  ok(!Object.hasOwn(eq, "credit"), "market-tick: an equities-only answer carries no CoinGecko credit");
+  __setMarketTickSources(null);
+  clearMarketTickCache();
+}
+
+// Skill packs: the credit is printed once on the envelope, not per step.
+{
+  const catalog = Object.fromEntries([...CRYPTO_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...PRICE_FEED_TOOLS].map((t) => [t.route, t]));
+  const packs = buildSkillTools({ getCatalog: () => catalog });
+  const cgSlugs = new Set(CG_TOOLS.map((t) => t.slug));
+  const runsCg = new Set(SKILL_PACKS.filter((p) => p.toolSlugs.some((s) => cgSlugs.has(s))).map((p) => `skill-${p.slug}`));
+  const withCg = packs.filter((p) => runsCg.has(p.slug));
+  ok(withCg.length >= 3, `packs that run a CoinGecko tool are read from their steps (${withCg.length})`);
+  for (const p of withCg) {
+    const ex = p.discovery.output.example;
+    ok(ex.credit === COINGECKO_CREDIT && ex.steps.every((s) => !Object.hasOwn(s.result || {}, "credit")), `${p.slug}: published example carries the credit once`);
+    ok(p.description.split(COINGECKO_CREDIT).length === 2, `${p.slug}: description prints the credit once`);
+  }
+  for (const p of packs.filter((x) => !withCg.includes(x))) ok(!Object.hasOwn(p.discovery.output.example, "credit"), `${p.slug}: no CoinGecko tool, no credit`);
+  const dossier = packs.find((p) => p.slug === "skill-crypto-dossier") || withCg[0];
+  resetAll();
+  respond = (u) => {
+    if (u.pathname.endsWith("/search/trending")) return jsonRes(200, { coins: [{ item: { id: "bitcoin", name: "Bitcoin", symbol: "BTC", market_cap_rank: 1, score: 0 } }] });
+    if (u.pathname.endsWith("/global")) return jsonRes(200, { data: { total_market_cap: { usd: 1 }, total_volume: { usd: 1 }, market_cap_percentage: { btc: 50 }, active_cryptocurrencies: 1, markets: 1, market_cap_change_percentage_24h_usd: 0, updated_at: 1700000000 } });
+    return okBody(u);
+  };
+  const env = await dossier.handler({ coin: "BTC" }, null);
+  const okCg = env.steps.filter((s) => s.ok && !s.skipped && cgSlugs.has(s.slug));
+  ok(okCg.length >= 2, `${dossier.slug}: at least two CoinGecko steps answered (${okCg.map((s) => s.slug).join(",")})`);
+  ok(env.credit === COINGECKO_CREDIT && env.steps.every((s) => !Object.hasOwn(s.result || {}, "credit")), `${dossier.slug}: the answer prints the credit once, on the envelope`);
+}
 
 // ---------------------------------------------------------------------------
 // Guard: the helper is the only src/ file that names a CoinGecko API host or

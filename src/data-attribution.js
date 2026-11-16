@@ -19,7 +19,13 @@
 // in src/tools/frankfurter.js; the U.S. Treasury's yield curve (a U.S.
 // government work, credit requested) in src/tools/macro-kit.js.
 export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
-export const COINGECKO_ATTRIBUTION = "Data provided by CoinGecko.";
+// CoinGecko's API terms ask for the credit with a link to its API page,
+// shown next to the data: the description sentence carries the link, and
+// every CoinGecko-backed answer carries the same sentence as `credit`
+// (creditAnswers below).
+export const COINGECKO_API_URL = "https://www.coingecko.com/en/api";
+export const COINGECKO_ATTRIBUTION = `Data provided by CoinGecko (${COINGECKO_API_URL}).`;
+export const COINGECKO_CREDIT = COINGECKO_ATTRIBUTION;
 export const JUPITER_ATTRIBUTION = "Powered by Jupiter.";
 export const OSM_ATTRIBUTION = "Data © OpenStreetMap contributors, ODbL (openstreetmap.org/copyright).";
 export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0).";
@@ -96,4 +102,31 @@ export function withoutAttributions(text) {
   let s = String(text ?? "");
   for (const t of ATTRIBUTION_TAILS) if (s.includes(t)) s = s.split(t).join(" ");
   return s;
+}
+
+const isPlainAnswer = (v) => v !== null && typeof v === "object" && !Array.isArray(v) && !v.__binary;
+
+/** `answer` with `credit` added as its `credit` field: a plain-object answer
+ *  that does not already carry one gets a copy with the field; anything else
+ *  is returned as it is. */
+export function withCredit(answer, credit) {
+  if (!isPlainAnswer(answer) || Object.hasOwn(answer, "credit")) return answer;
+  return { ...answer, credit };
+}
+
+/** Mark `tool` as one whose answers carry `credit` (a source's credit
+ *  sentence with its link): set `tool.credit`, add the field to the published
+ *  example, and wrap the handler so every answer carries it. Additive: no
+ *  field of the answer is changed or removed. Idempotent per tool. */
+export function creditAnswers(tool, credit) {
+  if (typeof credit !== "string" || !credit) throw new Error("creditAnswers: credit must be a sentence");
+  if (tool.credit === credit) return tool;
+  tool.credit = credit;
+  const ex = tool.discovery?.output?.example;
+  if (isPlainAnswer(ex) && !Object.hasOwn(ex, "credit")) tool.discovery.output.example = { ...ex, credit };
+  const inner = tool.handler;
+  if (typeof inner === "function") {
+    tool.handler = async function credited(...args) { return withCredit(await inner.apply(this, args), credit); };
+  }
+  return tool;
 }

@@ -28,6 +28,7 @@ import { CRYPTO_TOOLS, isKnownCryptoSymbol, resolveCoinId } from "./crypto-kit.j
 import { FINANCE_TOOLS } from "./finance-kit.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { partialFields } from "../partial-answer.js";
+import { COINGECKO_CREDIT } from "../data-attribution.js";
 import { MARKET_TICK_SLUG, marketTickEnabled } from "../market-tick-switch.js";
 
 function bad(message, statusCode = 400) {
@@ -176,6 +177,9 @@ async function tick(input, ctx) {
     items: ordered,
     ...partialFields(wants.length, served.length),
     ...(failed.length ? { failed: failed.map((f) => f.symbol) } : {}),
+    // A coin figure is crypto-price's answer, CoinGecko data, so an answer
+    // that serves one carries that source's credit (src/data-attribution.js).
+    ...(served.some((i) => i.kind === "crypto") ? { credit: COINGECKO_CREDIT } : {}),
   };
 }
 
@@ -187,7 +191,7 @@ export const MARKET_TICK_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      `Last price for up to ${MAX_SYMBOLS} symbols in one flat-priced call, crypto and US equities together, built for a loop that polls a price. Nothing is read from a new source: each coin figure is the crypto-price tool's answer (last price and 24h change in USD) and each equity figure is the stock-quote tool's answer (end-of-day close, previous close and the change between them; no intraday print), called in-process with their own caches, budgets and deadlines. Figures are cached server-side per symbol for up to ${CACHE_SECONDS} seconds, so a loop polling the same symbols costs one source read per symbol per window; cached says whether this answer came from that cache and every item names its source tool. A bare symbol the coin map knows (BTC, ETH, SOL and the other top coins by market cap) reads as crypto and anything else as a US equity ticker; a crypto: or equity: prefix forces the kind. At most ${MAX_EQUITIES} equity tickers per call. A symbol a source cannot answer is listed with its error and the answer carries the partial fields (returned, matched, complete); when no symbol answers, the call is refused with the source's status.`,
+      `Last price for up to ${MAX_SYMBOLS} symbols in one flat-priced call, crypto and US equities together, built for a loop that polls a price. Nothing is read from a new source: each coin figure is the crypto-price tool's answer (last price and 24h change in USD) and each equity figure is the stock-quote tool's answer (end-of-day close, previous close and the change between them; no intraday print), called in-process with their own caches, budgets and deadlines. Figures are cached server-side per symbol for up to ${CACHE_SECONDS} seconds, so a loop polling the same symbols costs one source read per symbol per window; cached says whether this answer came from that cache and every item names its source tool. A bare symbol the coin map knows (BTC, ETH, SOL and the other top coins by market cap) reads as crypto and anything else as a US equity ticker; a crypto: or equity: prefix forces the kind. At most ${MAX_EQUITIES} equity tickers per call. A symbol a source cannot answer is listed with its error and the answer carries the partial fields (returned, matched, complete); when no symbol answers, the call is refused with the source's status. An answer that serves a coin figure carries the coin source's credit in a credit field.`,
     tags: ["market-data", "price", "crypto", "stocks", "quote", "tick", "polling", "bitcoin", "ethereum"],
     discovery: {
       input: { symbols: "BTC,ETH,AAPL" },
@@ -212,6 +216,7 @@ export const MARKET_TICK_TOOLS = [
           matched: 3,
           complete: true,
           truncated: false,
+          credit: COINGECKO_CREDIT,
         },
       },
     },

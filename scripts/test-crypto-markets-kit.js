@@ -12,15 +12,22 @@ import { readFileSync } from "node:fs";
 // is the examples themselves (every example answers live; see test-all).
 
 import { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache, __test , resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
+import { COINGECKO_CREDIT } from "../src/data-attribution.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
 // The Demo-plan token bucket is a live guard (25/min); an offline suite makes
 // dozens of stubbed calls, so refill before each one. The bucket itself is
 // covered by its own case below.
+// Every answer is read for the source credit (CoinGecko's terms: the
+// sentence with its link, next to the data).
+const answeredSlugs = new Set(), uncredited = [];
 const h = (slug) => {
   const fn = CRYPTO_MARKETS_TOOLS.find((t) => t.slug === slug).handler;
-  return (...args) => { resetCgRateLimit(); return fn(...args); };
+  return (...args) => {
+    resetCgRateLimit();
+    return fn(...args).then((r) => { answeredSlugs.add(slug); if (r?.credit !== COINGECKO_CREDIT) uncredited.push(slug); return r; });
+  };
 };
 
 async function throws(promise, status, label, re) {
@@ -460,6 +467,10 @@ ok(calls.length === __test.MAX_ENTRIES + 6, "cache: bounded (oldest entry evicte
   ok(/sentiment_votes_up_percentage/.test(src) && /watchlist_portfolio_users/.test(src),
     "sentiment and watchlist come from the TOP-LEVEL fields that survive the removal");
 }
+
+ok(answeredSlugs.size === CRYPTO_MARKETS_TOOLS.length, `every tool answered at least once here (${answeredSlugs.size}/${CRYPTO_MARKETS_TOOLS.length})`);
+ok(uncredited.length === 0, `every answer carries the CoinGecko credit with its link (${[...new Set(uncredited)].join(", ") || "all credited"})`);
+for (const t of CRYPTO_MARKETS_TOOLS) ok(t.discovery.output.example.credit === COINGECKO_CREDIT, `${t.slug}: published example carries the credit`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

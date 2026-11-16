@@ -22,7 +22,7 @@ const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
-import { attribute } from "../data-attribution.js";
+import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { upstreamErrorText } from "./redact.js";
 
@@ -628,8 +628,9 @@ export const CRYPTO_TOOLS = [
   },
 ];
 // The CoinGecko-backed tools carry the attribution its terms require (see
-// COINGECKO_ATTRIBUTION in coingecko-rate.js); crypto-orderbook reads an exchange.
-for (const t of CRYPTO_TOOLS) if (t.slug !== "crypto-orderbook") attribute(t, "coingecko");
+// COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
+// `credit` field of every answer; crypto-orderbook reads an exchange.
+for (const t of CRYPTO_TOOLS) if (t.slug !== "crypto-orderbook") creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(CRYPTO_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
