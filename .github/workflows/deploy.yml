@@ -1123,6 +1123,21 @@ jobs:
           E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
+      # The official x402 MCP client, for test-mcp-x402.js alone. It is not in
+      # package.json: mppx names it as an optional peer, so a dev dependency
+      # would be kept by `npm ci --omit=dev` and ship in the production image.
+      # Pinned, scripts off, keys shadowed as in the install above; it runs on
+      # a cache hit too. The suite fails when it is missing.
+      - name: Install the x402 MCP test client (secretless)
+        timeout-minutes: 3
+        env:
+          UPSTREAM_COSTS_JSON: ""
+          BRAVE_API_KEY: ""
+          FRED_API_KEY: ""
+          FRED_API_KEY_V2: ""
+          E2B_API_KEY: ""
+          COINGECKO_API_KEY: ""
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @x402/mcp@2.30.0
       # NO Playwright in this lane on purpose: it runs no browser-driven
       # script. All eight (csp-violations, css-tokens-resolve, focus-visible,
       # the reveal suite, burger-aria-label, compare-scroll,
