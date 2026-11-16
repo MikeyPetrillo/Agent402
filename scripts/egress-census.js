@@ -3,7 +3,7 @@
 //
 //   node scripts/egress-census.js                 # local (most vendors blind)
 //   railway run node scripts/egress-census.js     # the run that counts
-//   (add X402_INDEX_CRAWL=on MPP_INDEX_CRAWL=on to include the crawlers, which
+//   (set X402_INDEX_CRAWL and MPP_INDEX_CRAWL to "on" to include the crawlers, which
 //    contact every indexed seller's host)
 //
 // WHY THIS EXISTS: three separate cost leaks were found by an invoice rather
@@ -146,7 +146,7 @@ const child = spawn(process.execPath, ["src/server.js"], {
     ...process.env,
     PORT, FREE_MODE: "true", X402_SYNC_ON_START: "false",
     // The crawlers run on a production boot only (src/crawl-switch.js). To
-    // attribute crawl traffic, run with X402_INDEX_CRAWL=on MPP_INDEX_CRAWL=on
+    // attribute crawl traffic, set X402_INDEX_CRAWL and MPP_INDEX_CRAWL to "on"
     // in the environment; they reach every indexed seller's host.
     DATA_DIR,
     INDEX_CACHE_FILE: join(DATA_DIR, "x402-index-cache.json"),
