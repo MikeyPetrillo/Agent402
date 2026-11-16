@@ -1,0 +1,72 @@
+# Checks our own listing in the Bazaar's search, every week.
+#
+# scripts/bazaar-rank-monitor.js sends each of our queries (the two flagship
+# queries, web search and chat completion, then the next eight tools by our own
+# demand from /api/stats topTools) to the CDP discovery search and asks only
+# whether a route of ours comes back. Nothing about the search is printed,
+# published or kept: no position, no count, no other resource, no history
+# between runs.
+#
+# ONE issue under a fixed title names, by query text only, each query of ours
+# that returns none of our routes. It opens when one appears, is edited and
+# gets a comment only when that set changes, and closes when none is left. A
+# query in the repository variable BAZAAR_RANK_ACK (comma list) never pages. A
+# run that cannot read the search changes nothing and says "not measured this
+# week" in its own job summary. Spends nothing, needs no key.
+name: Bazaar listing check (weekly)
+
+on:
+  schedule:
+    - cron: "37 7 * * 1" # Mondays 07:37 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: bazaar-rank
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    # The script stops starting fetches after 8 minutes (WORST_CASE_MS in the
+    # script, pinned under this by scripts/test-bazaar-rank-monitor.js).
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TITLE: Bazaar listing check
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      BAZAAR_RANK_ACK: ${{ vars.BAZAAR_RANK_ACK }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Check and update the one issue
+        run: |
+          # Only an open issue with exactly this title, opened by the workflow
+          # bot, is ours; an issue anyone else opens under it is ignored.
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title,author --jq '[.[] | select(.title == env.TITLE) | select((.author.login // "" | ascii_downcase) as $a | $a == "github-actions[bot]" or $a == "app/github-actions")][0].number // empty')
+          if [ -n "$OPEN" ]; then
+            gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body > open-issue.md
+            node scripts/bazaar-rank-monitor.js --issue-body open-issue.md --out out
+          else
+            node scripts/bazaar-rank-monitor.js --out out
+          fi
+          ACTION=$(cat out/action.txt)
+          case "$ACTION" in
+            open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file out/body.md ;;
+            update)
+              gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file out/body.md
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "The set of absent queries changed; the description lists the current set. Run: $RUN_URL" ;;
+            close) gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "No query of ours is absent. Run: $RUN_URL" ;;
+          esac
+          if [ "$(cat out/status.txt)" = "measured" ]; then
+            echo "Measured this week." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Not measured this week." >> "$GITHUB_STEP_SUMMARY"
+          fi
