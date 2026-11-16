@@ -24,9 +24,11 @@
 //   - an MPP credential beside an x402 payment: MPP decides, x402 is not read;
 //   - a free tool at its rate limit offers its x402 challenge, and a client
 //     that pays is served past the limit;
-//   - a tools/call carrying a payment skips the per-IP transport limiter, an
-//     unpaid one does not;
-//   - a twin's sale books the arrival path x402-mcp.
+//   - a tools/call carrying a payment that decodes meets its own, larger
+//     per-IP transport limit, every other call the normal one;
+//   - a twin's sale books the arrival path x402-mcp;
+//   - the instructions, a paid tool's first ask, the rate-limit text and
+//     payment.info name only the wires offered (in-process mounts too).
 // The official client is installed --no-save (see test-mcp-x402.js); missing
 // or another version fails.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -161,6 +163,76 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 }
 
+// ---- in-process half: the copy names only the wires this boot offers ---------------
+// The initialize instructions, a paid tool's first ask, a free tool at its
+// rate limit and payment.info, on three wirings: x402 alone, neither (the
+// FREE_MODE boot: no paywall, no MPP gates) and MPP gates whose 402 carries
+// no challenge. The booted half below checks both wires on.
+{
+  const { mountMcp } = await import("../src/mcp-http.js");
+  const accepted = { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } };
+  const offerFor = (slug) => ({ x402Version: 2, error: "Payment required", resource: { url: `http://localhost/api/${slug}`, description: slug, mimeType: "application/json" }, accepts: [accepted] });
+  // The x402 paywall: every unpaid call answers the route's offer.
+  const x402Fetch = async (url) => {
+    const slug = String(url).split("/api/")[1]?.split(/[?#]/)[0] || "paid-x";
+    return new Response(JSON.stringify({ error: "Payment required" }), { status: 402, headers: { "content-type": "application/json", "payment-required": encodePaymentRequiredHeader(offerFor(slug)) } });
+  };
+  // MPP gates that mint no challenge: a bare 402, no WWW-Authenticate.
+  const bareFetch = async () => new Response(JSON.stringify({ error: "Payment required" }), { status: 402, headers: { "content-type": "application/json" } });
+  const CAT = {
+    "POST /api/paid-x": { route: "POST /api/paid-x", slug: "paid-x", name: "paid-x", category: "test", price: "$0.001", description: "paid-x test tool", tags: ["paid-x"], discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => { throw new Error("ran in-process"); } },
+    "POST /api/free-x": { route: "POST /api/free-x", slug: "free-x", name: "free-x", category: "test", price: "$0.001", description: "free-x test tool", tags: ["free-x"], discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => ({ ok: true }) },
+  };
+  const wirings = {
+    "x402 only": { x402Loopback: createMcpMppLoopback({ port: 1, fetchImpl: x402Fetch }), mppLoopback: null },
+    "neither (FREE_MODE)": { x402Loopback: null, mppLoopback: null },
+    "MPP gates, no challenge": { x402Loopback: null, mppLoopback: createMcpMppLoopback({ port: 1, fetchImpl: bareFetch }) },
+  };
+  const texts = (r) => (r?.content || []).map((c) => c.text || "").join("\n");
+  for (const [label, loops] of Object.entries(wirings)) {
+    const app = express();
+    app.use(express.json({ limit: "1mb" }));
+    mountMcp(app, CAT, { baseUrl: "http://localhost", isComputePayable: (def) => def.slug === "free-x", ...loops });
+    const httpSrv = app.listen(0, "127.0.0.1");
+    await new Promise((r) => httpSrv.once("listening", r));
+    const raw = new Client({ name: `copy-${label}`, version: "0.0.0" });
+    try {
+      await raw.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${httpSrv.address().port}/mcp`)));
+      const x402 = Boolean(loops.x402Loopback);
+      const mpp = Boolean(loops.mppLoopback);
+      const wires = [x402 && "x402", mpp && "MPP"].filter(Boolean);
+      const instructions = String(raw.getInstructions() || "");
+      const hosted = instructions.split("\n").find((l) => l.startsWith("Hosted connector")) || "";
+      ok(hosted.includes(wires.length ? `other tools paid in the call over ${wires.join(" or ")} from a wallet)` : "others need a wallet on the npm package)"),
+        `${label}: the instructions' hosted line names ${wires.join(" and ") || "no in-call wire"} (${hosted.slice(0, 120)})`);
+      const ask = await raw.callTool({ name: "catalog.call", arguments: { slug: "paid-x", params: {} } });
+      const askText = texts(ask);
+      ok(ask.isError === true && (x402 ? /Pay it RIGHT HERE over x402/.test(askText) && Array.isArray(ask.structuredContent?.accepts) : !/RIGHT HERE/.test(askText) && !/x402\/payment/.test(askText))
+        && !/over MPP|org\.paymentauth/.test(askText) && /npx agent402-mcp/.test(askText),
+        `${label}: a paid tool's first ask names ${x402 ? "x402 in the call" : "no in-call wire"} and never MPP (${askText.slice(0, 160)})`);
+      let limited = null;
+      for (let i = 0; i < 40 && !limited; i++) {
+        const r = await raw.callTool({ name: "catalog.call", arguments: { slug: "free-x", params: {} } });
+        if (/rate limit reached/i.test(texts(r))) limited = r;
+      }
+      const limitText = texts(limited);
+      ok(limited?.isError === true && (x402 ? /pay this call over x402/.test(limitText) && /x402\/payment/.test(limitText) && Array.isArray(limited.structuredContent?.accepts) : !/x402\/payment|pay this call over x402/.test(limitText) && !limited.structuredContent?.accepts)
+        && !/MPP|org\.paymentauth/.test(limitText),
+        `${label}: the rate-limit text names ${x402 ? "x402 in the call" : "no in-call wire"} (${limitText.slice(0, 200)})`);
+      const info = await raw.callTool({ name: "payment.info", arguments: {} });
+      const how = String(info.structuredContent?.freeTier?.how ?? JSON.parse(info.content?.[0]?.text || "{}").freeTier?.how ?? "");
+      ok(how && (x402 ? /over x402/.test(how) && how.includes("x402/payment") : !/over x402|x402\/payment/.test(how)) && (mpp ? /over MPP/.test(how) : !/over MPP|org\.paymentauth/.test(how)),
+        `${label}: payment.info names ${[x402 && "x402", mpp && "MPP"].filter(Boolean).join(" and ") || "no in-call wire"} (${how.slice(0, 160)})`);
+    } catch (e) {
+      ok(false, `${label}: ${e?.stack || String(e)}`);
+    } finally {
+      try { await raw.close(); } catch { /* closed */ }
+      httpSrv.closeAllConnections?.();
+      await new Promise((r) => httpSrv.close(r));
+    }
+  }
+}
+
 // ---- booted half -------------------------------------------------------------------
 const BASE_NET = "eip155:8453";
 const TMP = mkdtempSync(join(tmpdir(), "mcp-x402-conn-"));
@@ -238,6 +310,14 @@ try {
   const mppAsk = ask._meta?.[MCP_PAYMENT_REQUIRED_META];
   ok(mppAsk?.httpStatus === 402 && Array.isArray(mppAsk.challenges) && mppAsk.challenges.some((c) => c.method === "evm" && c.intent === "charge"), `the MPP challenges ride unchanged in _meta (${(mppAsk?.challenges || []).map((c) => c.method).join(",")})`);
   ok(/agent402-mcp|credits/.test(JSON.stringify(ask.content.slice(1))), "the readable text naming the ways to pay follows the JSON block");
+  // The copy names both wires this boot offers.
+  const askText = ask.content.slice(1).map((c) => c.text || "").join("\n");
+  ok(/Pay it RIGHT HERE over x402/.test(askText) && /Or pay it here over MPP/.test(askText), `the first ask's text names x402 first, then MPP (${askText.slice(0, 200)})`);
+  const hostedLine = String(plain.client.getInstructions() || "").split("\n").find((l) => l.startsWith("Hosted connector")) || "";
+  ok(hostedLine.includes("other tools paid in the call over x402 or MPP from a wallet)"), `the initialize instructions name x402 and MPP (${hostedLine.slice(0, 120)})`);
+  const infoRes = await plain.client.callTool({ name: "payment.info", arguments: {} });
+  const howBoth = String((infoRes.structuredContent || JSON.parse(infoRes.content?.[0]?.text || "{}")).freeTier?.how || "");
+  ok(/payable in the call on this connector over x402/.test(howBoth) && howBoth.includes("_meta[\"x402/payment\"]") && /and over MPP/.test(howBoth), `payment.info names x402 and MPP (${howBoth.slice(0, 160)})`);
   const httpOffer = JSON.parse(Buffer.from((await fetch(`${B}/api/memory?key=x`)).headers.get("payment-required") || "", "base64").toString("utf8"));
   ok(JSON.stringify(pr.accepts) === JSON.stringify(httpOffer.accepts), "the twin's accepts are the HTTP route's");
   const catAsk = await plain.client.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key } } });
@@ -317,6 +397,8 @@ try {
     const limited = runs[2];
     ok(limited.isError === true && limited.structuredContent?.x402Version === 2 && limited.structuredContent.resource?.url === "https://agent402.tools/api/uuid" && /rate limit reached/i.test(JSON.stringify(limited.content)),
       `at its limit it offers the route's x402 challenge with the limit text (${limited.structuredContent?.resource?.url})`);
+    const limitedText = (limited.content || []).map((c) => c.text || "").join("\n");
+    ok(/pay this call over x402/.test(limitedText) && limitedText.includes("_meta[\"x402/payment\"]"), `the limit text says how to pay this call over x402 (${limitedText.slice(0, 200)})`);
     const payer = await connect("203.0.113.30", A);
     c0 = { ...counts };
     const paid = await payer.client.callTool("catalog.call", { slug: "uuid", params: {} });

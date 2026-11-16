@@ -1049,7 +1049,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // the x402 offer alone when there is one, else the paid-access
           // instructions rather than an empty ask.
           const x402Only = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true, mpp: false }) }) : null;
-          return x402Only || { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
+          return x402Only || { content: [{ type: "text", text: walletRequiredText(entry.def, { mpp: false }) }], isError: true };
         }
         const problem = problemOf(r.json);
         // mppx's wire: -32042 (no credential presented) / -32043 (the caller
