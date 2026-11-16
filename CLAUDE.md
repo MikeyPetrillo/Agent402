@@ -216,6 +216,10 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   never on a push, and keeps one issue open while it fails (a cost row under its dearest live
   endpoint, or more than 15% above it for every servable model the row owns); its output is
   redacted before log or issue (`scripts/test-model-drift-redaction.js`).
+- `bazaar-rank.yml` checks weekly that our own routes answer our main discovery queries
+  (`scripts/bazaar-rank-monitor.js`) and keeps one issue open naming each absent query; a query
+  text in the repo variable `BAZAAR_RANK_ACK` (comma list, unset by default) does not page, and a
+  week whose search cannot be read records "not measured" and never pages or closes the issue.
 - Other workflows gate on their own `.github/trigger-*` path filters, independent of deploy.yml.
 
 ## Splitting work across agents
