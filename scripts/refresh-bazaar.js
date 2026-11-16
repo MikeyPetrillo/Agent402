@@ -153,6 +153,10 @@ export const batchIndexOf = (raw) => Math.max(0, parseInt(raw || "0", 10) || 0);
 /** True when work-list position i belongs to batch idx of count. */
 export const inBatch = (i, count, idx) => i % count === idx;
 const BATCH_INDEX = batchIndexOf(process.env.BATCH_INDEX);
+/** A batch count above the number of matrix jobs leaves the routes of the
+ *  missing batches unbought; refuse it rather than end green. */
+export const batchCountFits = (count, matrixSize) => !(matrixSize > 0) || count <= matrixSize;
+const BATCH_MATRIX_SIZE = parseInt(process.env.BATCH_MATRIX_SIZE || "0", 10) || 0;
 const BAZAAR_URL = BAZAAR_REGISTRY_URL;
 const HOST = new URL(TARGET).host;
 
@@ -414,7 +418,8 @@ export async function runMissingMode({ sweep = false } = {}) {
     .sort((a, b) => (sweep ? a.priceUsd - b.priceUsd : b.priceUsd - a.priceUsd))
     // Batch stride (applied after sort so each batch is a price-balanced slice).
     .filter((_, i) => inBatch(i, BATCH_COUNT, BATCH_INDEX));
-  const batchNote = BATCH_COUNT > 1 ? ` · batch ${BATCH_INDEX + 1}/${BATCH_COUNT}` : "";
+  const batchNote = BATCH_INDEX >= BATCH_COUNT ? " · job past the batch count, nothing selected"
+    : BATCH_COUNT > 1 ? ` · batch ${BATCH_INDEX + 1}/${BATCH_COUNT}` : "";
   const chainNote = MISSING_CHAIN ? ` (rows carrying ${MISSING_CHAIN.name}, ${catalog.filter((t) => t.onChain).length} routes sold there)` : "";
   console.log(
     sweep
@@ -669,6 +674,10 @@ function loadKey() {
 }
 
 async function main() {
+  if (!batchCountFits(BATCH_COUNT, BATCH_MATRIX_SIZE)) {
+    console.error(`BATCH_COUNT ${BATCH_COUNT} is above the ${BATCH_MATRIX_SIZE} matrix jobs: routes in the missing batches would not be bought. Use ${BATCH_MATRIX_SIZE} or fewer.`);
+    process.exit(2);
+  }
   if (MODE === "missing") {
     process.exit(await runMissingMode());
   }

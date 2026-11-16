@@ -88,6 +88,11 @@ ok(/max-parallel:\s*1/.test(wf), "batches run sequentially - one burner address,
   ok(once, "every route is bought by exactly one matrix job for every batch count up to the matrix size");
   const rsrc = await readFile(new URL("./refresh-bazaar.js", import.meta.url), "utf8");
   ok(/const BATCH_INDEX = batchIndexOf\(process\.env\.BATCH_INDEX\);/.test(rsrc) && /inBatch\(i, BATCH_COUNT, BATCH_INDEX\)/.test(rsrc), "the sweep uses the unclamped index and the tested selector");
+  const { batchCountFits } = await import("./refresh-bazaar.js");
+  const envSize = Number((wf.match(/BATCH_MATRIX_SIZE:\s*"?(\d+)"?/) || [])[1]);
+  ok(envSize === matrix.length, "the workflow tells the sweep its matrix size, and it matches the matrix");
+  ok(batchCountFits(4, 4) && batchCountFits(1, 4) && !batchCountFits(5, 4) && batchCountFits(9, 0), "a batch count above the matrix size is refused; no size means no check");
+  ok(/if \(!batchCountFits\(BATCH_COUNT, BATCH_MATRIX_SIZE\)\)[\s\S]{0,300}process\.exit\(2\)/.test(rsrc), "the sweep exits before buying when the batch count does not fit the matrix");
   ok(batchIndexOf("3") === 3 && batchIndexOf("") === 0 && batchIndexOf("x") === 0 && batchIndexOf("-2") === 0, "the batch index is read as given, never clamped to the batch count");
 }
 
