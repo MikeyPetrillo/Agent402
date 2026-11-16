@@ -27,7 +27,7 @@ const { Challenge, Credential } = await import("mppx");
 const { privateKeyToAccount, generatePrivateKey } = await import("viem/accounts");
 const viemTempo = await import("viem/tempo");
 const TempoAccount = viemTempo.Account;
-const { keccak256 } = await import("viem");
+const { keccak256, encodeFunctionResult, decodeFunctionData } = await import("viem");
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
@@ -62,7 +62,10 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   const acct = (id) => { if (!accounts.has(id)) accounts.set(id, { balance: 10n ** 15n, readable: true, shown: null }); return accounts.get(id); };
   // payment blob -> { id, amount }: which account a settle call draws on.
   const payments = new Map();
-  const st = { verifyDelayMs: 0, settleDelayMs: 250, readDelayMs: 0, readDelayFor: null, llmDelayMs: 0, llmStatus: 0, images: 0, captures: 0, expired: 0, stripeCapture: "decline", verifies: 0, settleAttempts: 0, settled: 0, refused: 0, completions: 0, reads: 0, byAccount: new Map() };
+  // Access keys the chain holds, "account:key" (lowercase); a getKey read of
+  // any other pair answers the empty record. st.keyReadDelayMs delays it.
+  const chainKeys = new Set();
+  const st = { keyReadDelayMs: 0, keyReads: 0, verifyDelayMs: 0, settleDelayMs: 250, readDelayMs: 0, readDelayFor: null, llmDelayMs: 0, llmStatus: 0, images: 0, captures: 0, expired: 0, stripeCapture: "decline", verifies: 0, settleAttempts: 0, settled: 0, refused: 0, completions: 0, reads: 0, byAccount: new Map() };
   const tally = (id, k) => { const t = st.byAccount.get(id) || { attempts: 0, settled: 0, refused: 0 }; t[k]++; st.byAccount.set(id, t); };
   // The most settle calls one account had under way at once (each is a
   // handler that has just answered), outside the tallies.
@@ -97,6 +100,14 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
       if (j.method === "eth_call" && data.startsWith("0x70a08231")) {
         const v = await readOf(`${path === "/rpc" ? "evm" : "tempo"}:0x${data.slice(-40).toLowerCase()}`);
         return v == null ? reply(500, {}) : reply(200, { jsonrpc: "2.0", id: j.id ?? 1, result: "0x" + v.toString(16) });
+      }
+      if (path === "/tempo-rpc" && j.method === "eth_call" && String(j?.params?.[0]?.to || "").toLowerCase() === viemTempo.Addresses.accountKeychain.toLowerCase()) {
+        st.keyReads++;
+        if (st.keyReadDelayMs) await sleep(st.keyReadDelayMs);
+        const { args } = decodeFunctionData({ abi: viemTempo.Abis.accountKeychain, data });
+        const k = `${String(args[0]).toLowerCase()}:${String(args[1]).toLowerCase()}`;
+        const rec = chainKeys.has(k) ? { signatureType: 0, keyId: args[1], expiry: BigInt(Math.floor(Date.now() / 1000) + 3600), enforceLimits: false, isRevoked: false } : { signatureType: 0, keyId: "0x0000000000000000000000000000000000000000", expiry: 0n, enforceLimits: false, isRevoked: false };
+        return reply(200, { jsonrpc: "2.0", id: j.id ?? 1, result: encodeFunctionResult({ abi: viemTempo.Abis.accountKeychain, functionName: "getKey", result: rec }) });
       }
       return reply(200, { jsonrpc: "2.0", id: j.id ?? 1, result: path === "/rpc" ? "0x0" : null });
     }
@@ -228,10 +239,15 @@ export async function bootPaidWires({ label = "paid-wires", env = {}, operatorTo
   // `signer`: another token account of the same Solana wallet (authority).
   // `accessKeyOf`: a Tempo wallet whose transactions are signed by a new
   // access key of that wallet's account (a keychain signature): the same
-  // account, the same balance, another key.
-  async function wallet(wire, { signer = null, accessKeyOf = null } = {}) {
+  // account, the same balance, another key, which the chain holds for that
+  // account. `forgedKeyOf`: transactions that NAME that wallet's account but
+  // are signed by a key the chain does not hold for it; a relay that does not
+  // check the key would still draw on the named account, so the stub does.
+  // `unregistered`: a genuine-looking access key the chain has no record of.
+  async function wallet(wire, { signer = null, accessKeyOf = null, forgedKeyOf = null, unregistered = false } = {}) {
+    if (wire === "tempo" && forgedKeyOf) { const a = TempoAccount.fromSecp256k1(generatePrivateKey(), { access: forgedKeyOf.address }); return { wire, id: forgedKeyOf.id, address: forgedKeyOf.address, account: a, keychain: true }; }
     if (wire === "evm" || wire === "mpp-evm") { const a = privateKeyToAccount(generatePrivateKey()); return { wire, id: `evm:${a.address.toLowerCase()}`, address: a.address }; }
-    if (wire === "tempo" && accessKeyOf) { const a = TempoAccount.fromSecp256k1(generatePrivateKey(), { access: accessKeyOf.root }); return { wire, id: accessKeyOf.id, address: accessKeyOf.address, account: a, keychain: true }; }
+    if (wire === "tempo" && accessKeyOf) { const a = TempoAccount.fromSecp256k1(generatePrivateKey(), { access: accessKeyOf.root }); if (!unregistered) chainKeys.add(`${accessKeyOf.address.toLowerCase()}:${a.accessKeyAddress.toLowerCase()}`); return { wire, id: accessKeyOf.id, address: accessKeyOf.address, account: a, keychain: true }; }
     if (wire === "tempo") { const k = generatePrivateKey(); const a = privateKeyToAccount(k); return { wire, id: `tempo:${a.address.toLowerCase()}`, address: a.address, account: a, root: TempoAccount.fromSecp256k1(k) }; }
     if (wire === "svm") { const s = signer || await kit.generateKeyPairSigner(); const source = (await kit.generateKeyPairSigner()).address; return { wire, id: `svm:${source}`, address: s.address, signer: s, source }; }
     if (wire === "avm") { const a = algosdk.generateAccount(); return { wire, id: `avm:${a.addr.toString()}`, address: a.addr.toString(), account: a }; }

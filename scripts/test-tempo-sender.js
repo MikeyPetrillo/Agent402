@@ -385,7 +385,7 @@ async function listen(app) {
     pushSender: async () => null, // offline: never the real Tempo RPC
   }));
   app.use(paywallStub);
-  const handler = (req, res) => res.json({ sender: req.mppTempoSender ?? null, key: gatewaySettleBreakerKey({ ...req, headers: {}, header: () => undefined, ip: "198.51.100.7", mppTempoSender: req.mppTempoSender }) });
+  const handler = (req, res) => res.json({ pull: req.mppTempoPull?.sender ?? null, sender: req.mppTempoSender ?? null, key: gatewaySettleBreakerKey({ ...req, headers: {}, header: () => undefined, ip: "198.51.100.7", mppTempoSender: req.mppTempoSender }) });
   app.get("/spend", handler);
   app.get("/plain", handler);
   const { server, url } = await listen(app);
@@ -440,28 +440,41 @@ async function listen(app) {
   r = await get("/spend", null, { push: true });
   ok(r.status === 200 && r.body.sender === null && seen.validate === v0 + 1, "C: a push credential is not subject to the sender check (its transfer settles before the handler)");
 
-  // Ordinary route: served; bounds key on the IP unless the sender is proven.
+  // Ordinary route: a multisig or fee-payer-slot sender is served, keyed on
+  // the client IP. A keychain envelope runs only once the chain read has
+  // confirmed its key is the named account's (waited for, bounded); else it is
+  // refused before the handler, uncharged, and books nothing against the
+  // named account.
   keychainAnswer = async () => null;
-  for (const [name, raw] of [["a forged keychain envelope", TX_FORGED_KEYCHAIN], ["a multisig envelope", TX_MULTISIG], ["a fee-payer-slot sender", TX_FEE_SLOT_VICTIM]]) {
+  for (const [name, raw] of [["a multisig envelope", TX_MULTISIG], ["a fee-payer-slot sender", TX_FEE_SLOT_VICTIM]]) {
     r = await get("/plain", raw);
-    ok(r.status === 200 && r.body.sender === null && r.body.key === "ip:198.51.100.7", `C: ${name} on an ordinary route is served, keyed on the client IP (${JSON.stringify(r.body)})`);
+    ok(r.status === 200 && r.body.sender === null && r.body.pull === null && r.body.key === "ip:198.51.100.7", `C: ${name} on an ordinary route is served, keyed on the client IP, booked against no account (${JSON.stringify(r.body)})`);
+  }
+  // The chain read answers "not this account's key" before or after validation.
+  for (const ms of [0, 100]) {
+    validateDelayMs = ms;
+    r = await get("/plain", TX_FORGED_KEYCHAIN);
+    ok(r.status === 402 && r.body.details?.reason === "sender-unverified" && r.body.details?.charged === false, `C: a forged keychain envelope naming another account is refused on an ordinary route before the handler, uncharged (validate ${ms} ms; ${r.status}, ${r.body.details?.reason})`);
   }
   keychainAnswer = async (kc) => (kc.account === lc(root.address) ? kc.account : null);
-  validateDelayMs = 40; // a relay validation takes a network round trip; the read is local here
+  validateDelayMs = 40;
   r = await get("/plain", TX_AGENT);
-  ok(r.status === 200 && r.body.sender === lc(root.address), "C: an access-key credential the chain vouches for (answered before validation) keys on the account on an ordinary route");
+  ok(r.status === 200 && r.body.sender === lc(root.address) && r.body.pull === lc(root.address), `C: an access-key credential the chain vouches for keys on the account and is booked against it on an ordinary route (${JSON.stringify(r.body)})`);
+  validateDelayMs = 0;
   keychainAnswer = () => new Promise((resolve) => setTimeout(() => resolve(lc(root.address)), 300));
-  const t = Date.now();
+  let t = Date.now();
   r = await get("/plain", TX_AGENT);
-  ok(r.status === 200 && r.body.sender === null && Date.now() - t < 280, `C: a chain read slower than validation is not waited for on an ordinary route: served at once, keyed on the IP (${Date.now() - t} ms)`);
-  ok(ledger.at(-1) === null, `C: ...and a read still pending at settlement is not waited for by the ledger either: the row names nobody (${ledger.at(-1)})`);
-  // The read answers after validation but before the broadcast returns: the
-  // bounds already keyed on the IP, the ledger books the proven account.
-  keychainAnswer = () => new Promise((resolve) => setTimeout(() => resolve(lc(root.address)), 120));
-  broadcastDelayMs = 300;
+  ok(r.status === 200 && r.body.sender === lc(root.address) && r.body.pull === lc(root.address) && Date.now() - t >= 280, `C: a chain read slower than validation is waited for: served once it vouches, keyed on the account (${Date.now() - t} ms)`);
+  ok(ledger.at(-1) === lc(root.address), `C: ...and the ledger books the proven account (${ledger.at(-1)})`);
+  // A read that does not answer within TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS: refused, uncharged.
+  const savedTimeout = process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS;
+  process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS = "250";
+  keychainAnswer = () => new Promise(() => {});
+  t = Date.now();
   r = await get("/plain", TX_AGENT);
-  broadcastDelayMs = 0;
-  ok(r.status === 200 && r.body.sender === null && ledger.at(-1) === lc(root.address), `C: a keychain read that answers before settlement attributes the sale to the proven account (bounds: ${r.body.key}, ledger: ${ledger.at(-1)})`);
+  const waited = Date.now() - t;
+  if (savedTimeout === undefined) delete process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS; else process.env.TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS = savedTimeout;
+  ok(r.status === 402 && r.body.details?.reason === "sender-unverified" && r.body.details?.charged === false && waited >= 240 && waited < 1500, `C: a chain read that never answers is waited for only up to its timeout, then refused before the handler, uncharged (${r.status}, ${waited} ms)`);
   server.close();
 }
 

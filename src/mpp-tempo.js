@@ -1600,17 +1600,24 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
     // own authorization carried inline), started here beside relay validation.
     // A route that spends before the buyer's payment settles
     // (verifiedSenderRequired) waits for that proof and refuses a pull
-    // credential without it, before any relay call. Every other route keys its
-    // bounds on the keychain account only if the read has answered by the time
-    // validation has, else on the client IP: no added latency, and never an
-    // unverified sender.
+    // credential without it, before any relay call. Every other route waits
+    // for it after validation (the read runs beside validation, bounded by
+    // TEMPO_ACCESS_KEY_CHECK_TIMEOUT_MS) and refuses a keychain credential the
+    // read did not vouch for, before the handler and uncharged: the run is
+    // booked against the named account's balance only once the chain has
+    // confirmed the key is that account's, so a key that is not cannot hold
+    // another account's calls back. Never an unverified sender.
     const isPull = binding.payloadType === "transaction";
     const senderInfo = isPull ? inspectTempoSender(auth) : null;
     const signedSender = senderInfo?.verified || null;
     let keychainSender = null;
     let keychainRead = null;
     if (isPull && !signedSender && senderInfo.keychain && typeof verifyKeychainSender === "function") {
-      keychainRead = Promise.resolve().then(() => verifyKeychainSender(senderInfo.keychain)).then((a) => lcAddress(a), () => null);
+      // Bounded here as well, whatever verifier is configured: no answer in
+      // time reads as no proof.
+      let timer = null;
+      const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), accessKeyTimeoutMs()); timer.unref?.(); });
+      keychainRead = Promise.race([Promise.resolve().then(() => verifyKeychainSender(senderInfo.keychain)).then((a) => lcAddress(a), () => null), late]).finally(() => clearTimeout(timer));
       keychainRead.then((a) => { keychainSender = a; });
     }
     const SENDER_REFUSED = Symbol("sender-refused");
@@ -1653,6 +1660,21 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
         // whose body now says verification-failed with the reason class.
         markMppProblem(req, res, tempoRefusalProblem(cls, v.reason));
         return next();
+      }
+
+      // A keychain credential (signed by an access key) runs only once the
+      // chain has confirmed that key is the named account's: its account is
+      // what the run is booked against below. No proof in time, or a key that
+      // is not that account's: refused here, before any claim, nothing charged.
+      if (isPull && !signedSender && senderInfo?.keychain) {
+        const proven = keychainRead ? await keychainRead : null;
+        if (!proven) {
+          logTempoRefusal(req, { cls: TEMPO_SENDER_UNVERIFIED.cls, amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `after validate: keychain envelope, ${senderInfo.reason || "no sender"}; the chain read did not vouch for the key` });
+          noteTempoRefusal(req);
+          markMppProblem(req, res, mppProblem(TEMPO_SENDER_UNVERIFIED.kind, TEMPO_SENDER_UNVERIFIED.detail, { hint: TEMPO_SENDER_UNVERIFIED.hint, details: { reason: TEMPO_SENDER_UNVERIFIED.cls, charged: false } }));
+          return next();
+        }
+        keychainSender = proven;
       }
 
       // Claim the credential's identity BEFORE the handler runs — the whole
@@ -1723,19 +1745,14 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
       // A pull credential is settled AFTER the handler, from the sender's
       // balance: what it draws on, for the check that a wallet's runs in
       // flight are covered together (src/inflight-cover.js). The account it
-      // draws on: the sender the gate verified, or, for a transaction signed
-      // by an access key, the account that key signs for (whether or not the
-      // chain read of the key has answered yet). The transaction moves that
-      // account's balance whoever signed it, and the relay just simulated it
-      // against the chain, so its runs are judged on that balance together
-      // with the account's own; keyed on the access key, or left unjudged,
-      // a burst through one key could start runs the account cannot pay for.
-      // The per-buyer bounds still key on mppTempoSender (verified only). A
-      // push credential is final already and has none.
+      // draws on is the verified sender: for a transaction signed by an access
+      // key, the account the chain confirmed that key belongs to (above), so a
+      // burst through one key is judged on the account's balance together
+      // with the account's own calls. A push credential is final already and
+      // has none.
       if (binding.payloadType === "transaction") presentChallengeWindow(req, binding.expiresAtMs);
-      const drawsOn = binding.payloadType === "transaction" ? (req.mppTempoSender || lcAddress(senderInfo?.keychain?.account) || null) : null;
-      if (drawsOn) {
-        req.mppTempoPull = { sender: drawsOn, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
+      if (binding.payloadType === "transaction" && req.mppTempoSender) {
+        req.mppTempoPull = { sender: req.mppTempoSender, currency: String(binding.challenge?.request?.currency || ""), amountAtomic: String(binding.amountAtomic) };
       }
       // The tempo credential is the ONLY payment evidence on this request.
       // Drop any x402 payment header that rode alongside it: the dispatcher

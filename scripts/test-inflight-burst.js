@@ -140,6 +140,30 @@ try {
     const rs = await Promise.all(creds.map((c) => rig.send(SQL, c)));
     const o = rig.outcomesOf(acct);
     await ok(o.attempts === 1 && o.settled === 1 && tallyOf(rs)[429] === 5, `tempo: the account key and an access key sending at once are judged on the account's one balance (${JSON.stringify(tallyOf(rs))}, ${JSON.stringify(o)})`);
+
+    // A key that is NOT the account's, naming a funded account: every call is
+    // refused before the handler, uncharged, and books nothing against that
+    // account, whose own calls at the same moment are all admitted.
+    const victim = await rig.wallet("tempo");
+    rig.fund(victim, price * 5n);
+    const forger = await rig.wallet("tempo", { forgedKeyOf: victim });
+    const [forged, own] = await Promise.all([rig.burst(forger, SQL, 10), rig.burst(victim, SQL, 5)]);
+    const ov = rig.outcomesOf(victim);
+    await ok(forged.every((r) => r.status === 402 && r.json?.details?.reason === "sender-unverified" && r.json?.details?.charged === false), `tempo: 10 pulls signed by a key that is not the named account's are refused 402 before the handler, uncharged (${JSON.stringify(tallyOf(forged))})`);
+    await ok(tallyOf(own)[200] === 5 && ov.attempts === 5 && ov.settled === 5, `tempo: the named account's own 5 calls at the same moment are all admitted and settled (${JSON.stringify(tallyOf(own))}, ${JSON.stringify(ov)})`);
+    // An access key the chain holds no record of, and a key read that does
+    // not answer in time: refused, uncharged.
+    const lone = await rig.wallet("tempo"); rig.fund(lone, price * 3n);
+    const stray = await rig.wallet("tempo", { accessKeyOf: lone, unregistered: true });
+    const rStray = await rig.pay(stray, SQL);
+    await ok(rStray.status === 402 && rStray.json?.details?.reason === "sender-unverified" && rig.outcomesOf(lone).attempts === 0, `tempo: an access key the chain holds no record of is refused before the handler (${rStray.status}, ${rStray.json?.details?.reason})`);
+    const slowKey = await rig.wallet("tempo", { accessKeyOf: lone });
+    rig.st.keyReadDelayMs = 4000;
+    const t0 = Date.now();
+    const rSlow = await rig.pay(slowKey, SQL);
+    const took = Date.now() - t0;
+    rig.st.keyReadDelayMs = 0;
+    await ok(rSlow.status === 402 && rSlow.json?.details?.reason === "sender-unverified" && rSlow.json?.details?.charged === false && rig.outcomesOf(lone).attempts === 0 && took < 3800, `tempo: a key read that does not answer within its timeout is refused before the handler, uncharged (${rSlow.status}, ${took} ms)`);
   }
 
   // A model-backed route: the upstream is called once per run that can be paid for.
