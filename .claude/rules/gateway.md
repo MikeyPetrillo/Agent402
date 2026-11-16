@@ -172,11 +172,17 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   stream's `onUsage` in `streamDirectUpstreamTo`) books its cost to the UTC day: the upstream's own
   reported charge, else its usage tokens at the private table's model row (longest prefix), else it
   counts as unpriced. The day is this process's and a shared day counter's
-  (`createSharedDailySpend("direct-upstream-day")`), the word reads the larger.
-  `directUpstreamSpend`: off (unconfigured, or `DIRECT_UPSTREAM_DAILY_ALERT_USD` 0/off), ok, high
-  (at or past the threshold, default 5; malformed reads the default). `directUpstreamBalance`: off
-  (unconfigured or share 0), ok, exhausted (the latest of a 402 balance refusal and a served direct
-  answer is the refusal; per process, `directBalanceState`). A 402 is a counted breaker failure:
+  (`createSharedDailySpend("direct-upstream-day")`), the word reads the larger; one shared write
+  is in flight at a time, later bookings are carried behind it (a hung store holds one command).
+  `directUpstreamSpend`: off (unconfigured, or `DIRECT_UPSTREAM_DAILY_ALERT_USD` 0/off), unknown
+  (a shared store whose day this process has not read yet), ok, high (at or past the threshold,
+  default 5; malformed reads the default). `directUpstreamBalance`: off (unconfigured or share 0),
+  starting (no served direct answer and no 402 in this process yet), ok, exhausted (the latest of a
+  402 balance refusal and a served direct answer is the refusal; per process,
+  `directBalanceState`). The pagers page on high and exhausted, close on ok and off, and do neither
+  on unknown or starting, so a deploy never closes a balance issue the new process cannot judge.
+  Rollback: a build before these words publishes neither field, so the pagers do nothing for them
+  and an open spend or balance issue stays open until closed by hand. A 402 is a counted breaker failure:
   the call walks to OpenRouter and is served, and three in a row open the breaker
   (`directUpstream` degraded). Neither word refuses, caps or reroutes anything. Words publicly;
   figures on the operator view and `/__operator/direct-upstream.json`. Suite:

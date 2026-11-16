@@ -10,12 +10,16 @@
 //   - the word reads ok under the threshold, high at it, off unconfigured or
 //     with the alarm off, and publishes the word alone; and high never refuses,
 //     caps or reroutes a call: the next calls still go direct and are served;
+//   - a new process reads directUpstreamBalance starting (neither outcome
+//     seen; a failure of another kind does not decide it), so a deploy never
+//     closes an open balance issue;
 //   - a prepaid balance that ran out (402 from the direct stub): every call is
 //     served by OpenRouter, directUpstreamBalance reads exhausted, three in a
 //     row open the breaker (directUpstream degraded) and the next calls go to
 //     OpenRouter at once; a served direct answer clears both;
 //   - the status Worker and heartbeat.yml page each word under one title with
-//     a body that carries no figure, and close on ok and off.
+//     a body that carries no figure, close on ok and off, and do neither on
+//     unknown or starting.
 // The cost table is the format example's placeholder rows; every figure is
 // derived from a stub's own charge or a placeholder row, never typed.
 // Offline: no network, no real keys, no spend.
@@ -175,7 +179,10 @@ let clock = Date.now();
 D._setDirectBreakerNowForTest(() => clock);
 direct.plan = directBroke;
 const bal = () => S.directUpstreamBalanceStatus().status;
-ok(bal() === "ok" && PB.directUpstreamStatus().status === "ok", "before any refusal: balance ok, directUpstream ok");
+ok(bal() === "starting" && PB.directUpstreamStatus().status === "ok", "before any outcome: balance starting (neither pages nor closes), directUpstream ok");
+D.noteDirectOutcome(false, "upstream_5xx");
+ok(bal() === "starting", "a failure that is not a balance refusal leaves it starting");
+D._resetDirectBreakerForTest(); D._setDirectBreakerNowForTest(() => clock);
 const served = [];
 for (let i = 0; i < 3; i++) { const r = await call(); served.push(r?.choices?.[0]?.message?.content); }
 ok(served.every((c) => c === "hello") && direct.hits.length === 3 && or.hits.length === 3, `three 402 balance refusals: each buyer is served by OpenRouter (${served.join(",")})`);
@@ -199,7 +206,7 @@ D._setDirectBreakerNowForTest(null);
 
 // ---- pagers -------------------------------------------------------------------
 const WORDS = [
-  ["directUpstreamSpend: the direct upstream's daily spend is high", "directUpstreamSpend", "high", "/api/gateway-status"],
+  ["directUpstreamSpend: the direct upstream's daily spend is high", "directUpstreamSpend", "high", "/__operator/direct-upstream.json"],
   ["directUpstreamBalance: the direct upstream's prepaid balance is exhausted", "directUpstreamBalance", "exhausted", "/__operator/direct-upstream.json"],
 ];
 const { ALARMS, judge } = await import("../workers/status-probe/src/index.js");
@@ -209,7 +216,7 @@ for (const [T, field, bad, endpointPath] of WORDS) {
   if (!a) continue;
   const j = (gw) => judge({ gateway: gw })[T];
   ok(j({ [field]: { status: bad } }) === "bad" && j({ [field]: { status: "ok" } }) === "good" && j({ [field]: { status: "off" } }) === "good", `${field}: ${bad} pages, ok and off clear`);
-  ok(["unknown", "<b>"].every((w) => j({ [field]: { status: w } }) === "quiet") && j({}) === "quiet", `${field}: unknown, anything new and absent do neither`);
+  ok(["unknown", "starting", "<b>"].every((w) => j({ [field]: { status: w } }) === "quiet") && j({}) === "quiet", `${field}: unknown, starting, anything new and absent do neither`);
   const body = a.body({ gateway: { [field]: { status: "<b>", spentUsd: 7.5, alertUsd: 5 } } });
   ok(body === `/api/gateway-status reports ${field}.status=${bad}. The detail is on the operator endpoint, ${endpointPath} (operator token). Auto-closes when the word is ok.` && !/\d/.test(body.replace(/\.status=/, "")), `${field}: the body names the word and the operator endpoint, no figure`);
 }
@@ -244,7 +251,7 @@ printf '%s\\x1f' "$@" >> "$GH_LOG"; printf '\\x1e' >> "$GH_LOG"
       calls = hb({ [field]: { status: w } }, T);
       ok(calls.filter((c) => c[1] === "close" && c[2] === "41").length === 1, `heartbeat: ${field}=${w} closes it`);
     }
-    for (const g of [{ [field]: { status: "unknown" } }, {}]) {
+    for (const g of [{ [field]: { status: "unknown" } }, { [field]: { status: "starting" } }, {}]) {
       calls = hb(g, T);
       ok(!calls.some((c) => c[1] === "close" || c[1] === "create"), `heartbeat: ${field} ${JSON.stringify(g[field] || "absent")} does neither`);
     }

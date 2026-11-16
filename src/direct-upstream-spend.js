@@ -11,23 +11,31 @@
 // answer neither prices is counted as unpriced on the operator view. The day
 // is kept in this process and in a shared day counter (src/shared-limits.js)
 // every replica adds to; the word is built from the larger of the two, so a
-// new process on a day already past the threshold reads high.
+// new process on a day already past the threshold reads high. With a shared
+// store the word reads unknown until that day has been read once (a new
+// process whose read has not answered cannot say ok). The shared write is one
+// at a time: while one is in flight (a store that hangs) later answers add to
+// a carried amount sent when it settles, so a stalled store holds one command
+// and a number, never a queue.
 //
 //   DIRECT_UPSTREAM_DAILY_ALERT_USD   the threshold, USD per UTC day (default 5;
 //                                     a blank or malformed value reads the default;
 //                                     0 or off turns the alarm off).
 //
 // Word directUpstreamSpend: off (the upstream is unconfigured, or the alarm is
-// off), ok, high (the day's spend reached the threshold; every call is still
-// served). high pages; ok and off close. The figures (spend, threshold, the
+// off), unknown (the shared day not read yet), ok, high (the day's spend
+// reached the threshold; every call is still served). high pages; ok and off
+// close; unknown does neither. The figures (spend, threshold, the
 // reported, estimated and unpriced counts) are on the operator view only.
 //
 // BALANCE. Word directUpstreamBalance: off (unconfigured, or a share of 0),
-// ok, exhausted: the upstream's last answer of either kind was a 402 (its
-// balance refusal) and no direct answer has been served since. Each such call
-// already walked to OpenRouter and was served there; the breaker keeps the
-// next calls off the direct link. exhausted pages; ok and off close. Per
-// process, like the breaker it sits beside.
+// starting (this process has had neither a served direct answer nor a 402
+// yet), ok, exhausted: the upstream's last answer of either kind was a 402
+// (its balance refusal) and no direct answer has been served since. Each such
+// call already walked to OpenRouter and was served there; the breaker keeps
+// the next calls off the direct link. exhausted pages; ok and off close;
+// starting does neither, so a restart never closes an issue for a balance
+// still empty. Per process, like the breaker it sits beside.
 import { createSharedDailySpend } from "./shared-limits.js";
 import { createSharedCeilingView } from "./daily-ceilings.js";
 import { upstreamCosts, rowRateAt } from "./upstream-costs.js";
@@ -51,6 +59,23 @@ const roll = (now) => { const d = utcDay(now); if (spend.day !== d) spend = blan
 
 const shared = createSharedDailySpend("direct-upstream-day", "direct-upstream");
 const view = createSharedCeilingView(shared);
+let viewDay = ""; // the UTC day of the last shared read that answered
+// One shared write in flight at a time; what arrives meanwhile is carried.
+const carry = { day: "", micro: 0, at: 0 };
+let pendingWrite = null;
+function flushShared() {
+  if (pendingWrite || !carry.micro) return;
+  const usd = carry.micro / 1e6, at = carry.at;
+  carry.micro = 0;
+  pendingWrite = Promise.resolve(shared.book(usd, at)).catch(() => null).finally(() => { pendingWrite = null; flushShared(); });
+}
+function bookShared(m, now) {
+  if (!shared.enabled || !m) return;
+  const d = utcDay(now);
+  if (carry.day !== d) { carry.day = d; carry.micro = 0; } // a stalled day's remainder stays in this process's count only
+  carry.micro += m; carry.at = now;
+  flushShared();
+}
 
 /** USD for `usage` at the cost table's row for `model` (longest prefix), or null. */
 export function directSpendEstimateUsd(model, usage) {
@@ -80,19 +105,23 @@ export function noteDirectSpend(model, usage, reportedUsd, now = Date.now()) {
     }
     const m = Math.round(usd * 1e6);
     spend.micro += m;
-    if (m) shared.book(usd, now);
+    bookShared(m, now);
   } catch { /* an alarm never fails a served call */ }
 }
 
 /** One bounded read of the shared day for the word; never rejects. */
-export function refreshDirectSpendShared(now = Date.now()) { return view.refresh(now); }
+export function refreshDirectSpendShared(now = Date.now()) {
+  return view.refresh(now).then((read) => { if (read) viewDay = utcDay(now); return read; });
+}
 
 /** { status } publicly; the operator view adds the day's figures. */
 export function directUpstreamSpendStatus({ full = false, now = Date.now(), env = process.env } = {}) {
   roll(now);
   const alert = directSpendAlertUsd(env);
-  const micro = Math.max(spend.micro, view.micro(now));
-  const status = !directUpstreamConfig(env) || alert === null ? "off" : micro >= Math.round(alert * 1e6) ? "high" : "ok";
+  const viewed = shared.enabled && viewDay === spend.day;
+  const micro = Math.max(spend.micro, viewed ? view.micro(now) : 0);
+  const on = !!directUpstreamConfig(env) && alert !== null;
+  const status = !on ? "off" : micro >= Math.round(alert * 1e6) ? "high" : shared.enabled && !viewed ? "unknown" : "ok";
   if (!full) return { status };
   return { status, day: spend.day, spentUsd: micro / 1e6, alertUsd: alert, answers: spend.answers, reported: spend.reported, estimated: spend.estimated, unpriced: spend.unpriced, shared: shared.enabled };
 }
@@ -101,10 +130,12 @@ export function directUpstreamSpendStatus({ full = false, now = Date.now(), env 
 export function directUpstreamBalanceStatus({ full = false, env = process.env } = {}) {
   const cfg = directUpstreamConfig(env);
   const b = directBalanceState();
-  const status = !cfg || cfg.share <= 0 ? "off" : b.exhausted ? "exhausted" : "ok";
+  const status = !cfg || cfg.share <= 0 ? "off" : b.exhausted ? "exhausted" : b.lastServedAt || b.lastRefusalAt ? "ok" : "starting";
   if (!full) return { status };
   return { status, refusals: b.refusals, lastRefusalAt: b.lastRefusalAt ? new Date(b.lastRefusalAt).toISOString() : null, lastServedAt: b.lastServedAt ? new Date(b.lastServedAt).toISOString() : null };
 }
 
 /** Test seam. */
-export function _resetDirectSpendForTest() { spend = blank(); view.reset(); shared.reset(); }
+export function _resetDirectSpendForTest() { spend = blank(); view.reset(); viewDay = ""; carry.micro = 0; shared.reset(); }
+/** Test seam: whether a shared write is in flight, and the micro-dollars carried behind it. */
+export function _directSpendSharedForTest() { return { pending: !!pendingWrite, carriedMicro: carry.micro }; }

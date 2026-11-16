@@ -904,6 +904,8 @@ for (const [name, over, detail] of failCases) {
       for (const w of ["unknown", "something-new"]) assert.equal(judge({ gateway: { [field]: { status: w } } })[T], "quiet", `${field}=${w}`);
       assert.equal(judge({ gateway: {} })[T], "quiet", `${field} absent`);
     }
+    // A new process's balance word reads starting: a deploy never closes the issue.
+    assert.equal(judge({ gateway: { directUpstreamBalance: { status: "starting" } } })["directUpstreamBalance: the direct upstream's prepaid balance is exhausted"], "quiet", "directUpstreamBalance=starting");
     const D = "MPP reconciliation MISMATCH";
     assert.equal(judge({ gateway: { mppReconcile: { status: "mismatch" } } })[D], "bad");
     assert.equal(judge({ gateway: { mppReconcile: { status: "ok" } } })[D], "good");
