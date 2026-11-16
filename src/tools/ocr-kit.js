@@ -419,8 +419,10 @@ export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OU
 // Admission is per caller (every key its request carries: the signed payer, a
 // credits key, a Tempo sender and the client address; for a step an
 // in-process executor runs, those of the call that dispatched it,
-// src/dispatch-caller.js), counted under each key (src/caller-places.js), so
-// several wallets from one address are one caller: a caller with nothing in the slot or its queue
+// src/dispatch-caller.js), counted under each key (src/caller-places.js). A
+// queued place is taken back only by the holder's strongest key (its signed
+// payer, credits key or Tempo sender; the address only for a caller that signs
+// nothing), so buyers who share an address never bump each other: a caller with nothing in the slot or its queue
 // is never refused for want of room while a queued place belongs to a caller
 // that already holds the slot or another place. That place goes to it, and
 // the caller it was taken from is answered 503 (not charged), so one caller's

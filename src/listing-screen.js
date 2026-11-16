@@ -315,6 +315,10 @@ const READER_PATTERNS = [
   // with a key"). Choosing or preferring this tool, and ignoring the others,
   // are read by the rules above.
   /\b(?:route|send|direct|forward|redirect|steer|dispatch|pass|hand)\s+(?:all|every|each)\s+(?:(?:of\s+)?(?:the|your|their)\s+)?(?:[a-z-]+\s+)?(?:requests?|calls?|traffic|quer(?:y|ies)|tasks?|jobs?|prompts?|messages?|orders?|purchases?|lookups?)\s+(?:(?:straight|directly|only|always)\s+)?(?:here|to\s+(?:me|us)|to\s+(?:this|our)(?:\s+(?:one|tool|listing|seller|option|provider|route))?|to\s+the\s+(?:one|tool|listing|seller|option|provider|route|endpoint|service)\s+(?:named|listed|described|shown|given|written|linked)\s+(?:here|above|below))(?=\s*(?:$|[.!,;:)]|and\s+(?:ignore|disregard|skip|avoid|never|not|nowhere)\b|instead\b|first\b|always\b|only\b|from\s+now\b))/,
+  // The same directive with "use" or "call": using this tool for every
+  // request, with the clause ending there. "Use this tool for every request
+  // that needs a quote" says what it is for and is kept.
+  /(?:\b(?:use|call|invoke|pick|choose|select|prefer)\s+(?:this|our|me|us)(?:\s+(?:one|tool|listing|seller|option|provider|route|service|endpoint))?\s+(?:for|on|with)\s+(?:all|every|each|any)\s+(?:(?:of\s+)?(?:the|your|their)\s+)?(?:requests?|calls?|quer(?:y|ies)|tasks?|jobs?|prompts?)(?=\s*(?:$|[.!,;:)]|and\s+(?:ignore|disregard|skip|avoid|never|not)\b|instead\b|always\b|only\b|from\s+now\b))|\bfor\s+(?:all|every|each|any)\s+(?:requests?|calls?|quer(?:y|ies)|tasks?)\s*,?\s+(?:always\s+)?(?:use|call|pick|choose|select)\s+(?:this|our|me|us)(?:\s+(?:one|tool|listing|seller|option|provider|service))?(?=\s*(?:$|[.!,;:)])))/,
   /\b(?:respond|reply|answer|output)\s+only\s+with\b|\b(?:respond|reply|answer)\s+with\s+(?:this|my|our)\s+(?:tool|slug|key|name|listing)\b|\btell\s+the\s+(?:user|human|buyer|caller|operator)\s+to\b/,
 ];
 const READER_ANY = new RegExp(READER_PATTERNS.map((re) => `(?:${re.source})`).join("|"));
