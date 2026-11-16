@@ -43,8 +43,9 @@
 // exactly as written, never case-folded). Those are read by the rails' own
 // verifier (verifyInboundPayment, src/payment-verify.js), and a transaction
 // never found closes only once it can no longer land: its recent blockhash
-// reads expired (Solana; a durable-nonce transaction never closes), or the
-// chain's round is past its lastValid (Algorand). Any other network is
+// reads expired (Solana; a durable-nonce transaction never closes), or every
+// indexer that answered "not found" has indexed past its lastValid round
+// (Algorand), so an indexer that lags never closes a landed transfer. Any other network is
 // skipped and the skip logged. Tempo is left to its own confirm path
 // (src/tempo-confirm.js); Arc's pending answers carry no hash and are booked
 // by src/circle-pending.js.
@@ -245,10 +246,9 @@ export function createLateSettleBook({
   wasServed = async () => false,
   rpcFor = evmRpcFor,
   fetchImpl = fetch,
-  // Solana RPCs, Algorand indexers and algod bases the rail reads use.
+  // Solana RPCs and Algorand indexers the rail reads use.
   svmRpcs = SOLANA_RPCS,
   avmIndexers = ALGORAND_INDEXERS,
-  avmAlgods = null,
   now = () => Date.now(),
   log = console.warn,
   maxEntries = MAX_ENTRIES,
@@ -742,6 +742,14 @@ export function createLateSettleBook({
     },
     // A Solana or Algorand transaction, read by the rails' own verifier.
     async _oneRail(e, out, rail) {
+      // Algorand: the indexer's 404 proves absence only up to the round it
+      // has indexed, so every indexer's own round is read BEFORE the
+      // transaction (a transfer indexed in between is then seen) and must be
+      // past the entry's lastValid for the entry to close.
+      let avmIndexedPast = false;
+      if (rail === "avm" && now() - e.at >= WINDOW_MS) {
+        try { avmIndexedPast = await indexersPast(e); } catch { avmIndexedPast = null; }
+      }
       const v = await verifyInboundPayment({
         network: e.network, payer: e.payer, amountUsd: Number(e.amount) / 10 ** RAIL_USDC_DECIMALS, tx: e.tx,
         acceptsFor: () => ({ payTo: e.payTo, asset: e.asset }), payToSetFor: () => [e.payTo],
@@ -765,37 +773,40 @@ export function createLateSettleBook({
       let readable = v.absent === true;
       let canClose = false;
       if (readable && now() - e.at >= WINDOW_MS) {
-        try { canClose = await railExpired(e, rail); } catch { readable = false; }
+        if (rail === "avm") { if (avmIndexedPast === null) readable = false; else canClose = avmIndexedPast; }
+        else { try { canClose = await railExpired(e); } catch { readable = false; } }
       }
-      await this._notFound(e, out, { readable, canClose, why: rail === "svm" ? "its blockhash has expired" : "the chain is past its last valid round" });
+      await this._notFound(e, out, { readable, canClose, why: rail === "svm" ? "its blockhash has expired" : "the indexers are past its last valid round" });
     },
   };
-  // Can a Solana or Algorand transaction no longer land? Throws when the
-  // chain cannot be read. No lifetime known (a durable nonce, an unreadable
-  // payload) means it may still land: never closed.
-  async function railExpired(e, rail) {
-    if (rail === "svm") {
-      if (!SVM_ADDR.test(String(e.blockhash || ""))) return false;
-      let lastErr = null;
-      for (const url of svmRpcs) {
-        try {
-          const r = await rpc(url, "isBlockhashValid", [e.blockhash, { commitment: "finalized" }], fetchImpl, RPC_TIMEOUT_MS, []);
-          if (typeof r?.value === "boolean") return r.value === false;
-        } catch (err) { lastErr = err; }
-      }
-      throw lastErr || new Error("isBlockhashValid unreadable");
-    }
-    if (!Number.isSafeInteger(e.lastValid)) return false;
-    const bases = avmAlgods || (await import("./revenue-live.js")).ALGORAND_ALGOD_BASES;
-    for (const base of bases) {
+  // Can a Solana transaction no longer land? Throws when the chain cannot
+  // be read. No blockhash known (a durable nonce, an unreadable payload)
+  // means it may still land: never closed.
+  async function railExpired(e) {
+    if (!SVM_ADDR.test(String(e.blockhash || ""))) return false;
+    let lastErr = null;
+    for (const url of svmRpcs) {
       try {
-        const res = await fetchImpl(`${String(base).replace(/\/+$/, "")}/v2/status`, { signal: AbortSignal.timeout(RPC_TIMEOUT_MS) });
-        if (!res.ok) continue;
-        const round = Number((await res.json())?.["last-round"]);
-        if (Number.isSafeInteger(round) && round > 0) return round > e.lastValid;
-      } catch { /* the next base */ }
+        const r = await rpc(url, "isBlockhashValid", [e.blockhash, { commitment: "finalized" }], fetchImpl, RPC_TIMEOUT_MS, []);
+        if (typeof r?.value === "boolean") return r.value === false;
+      } catch (err) { lastErr = err; }
     }
-    throw new Error("algod status unreadable");
+    throw lastErr || new Error("isBlockhashValid unreadable");
+  }
+  // Has every Algorand indexer indexed past the entry's lastValid round (a
+  // transaction valid only up to it can no longer land, and is held by an
+  // indexer that is past it)? No lastValid known: never. Throws when an
+  // indexer's round cannot be read.
+  async function indexersPast(e) {
+    if (!Number.isSafeInteger(e.lastValid) || !avmIndexers.length) return false;
+    for (const base of avmIndexers) {
+      const res = await fetchImpl(`${String(base).replace(/\/+$/, "")}/health`, { signal: AbortSignal.timeout(RPC_TIMEOUT_MS) });
+      if (!res.ok) throw new Error(`indexer health HTTP ${res.status}`);
+      const round = Number((await res.json())?.round);
+      if (!Number.isSafeInteger(round) || round <= 0) throw new Error("indexer round unreadable");
+      if (round <= e.lastValid) return false;
+    }
+    return true;
   }
 }
 

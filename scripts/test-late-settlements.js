@@ -723,7 +723,6 @@ const solPayer = (i) => b58(32, 100 + i);
 const solSig = (i) => b58(64, 200 + i);
 const ALGO = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k";
 const IDX = "http://idx.stub.invalid";
-const ALGOD = "http://algod.stub.invalid";
 const A32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const algoId = (i) => Array.from({ length: 52 }, (_, k) => A32[(k * 5 + i) % 32]).join("");
 const algoAddr = (i) => Array.from({ length: 58 }, (_, k) => A32[(k * 3 + i) % 32]).join("");
@@ -731,11 +730,14 @@ const ALGO_PAYTO = algoAddr(1);
 const solTxs = new Map(); // sig -> getTransaction result | "fail"
 const blockhashValid = new Map();
 const algoTxs = new Map(); // id -> indexer transaction | "fail"
-let algoRound = 1000;
+let algoRound = 1000; // the indexer's own indexed round
+// Each stub is matched on its parsed host, never on a string prefix.
+const hostOf = (x) => new URL(x).host;
 const railFetch = async (url, opts) => {
   const u = String(url);
+  const at = new URL(u);
   const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body, headers: { get: () => "application/json" } });
-  if (u.startsWith(SOL_RPC)) {
+  if (at.host === hostOf(SOL_RPC)) {
     const { method, params } = JSON.parse(opts.body);
     if (method === "getTransaction") {
       const t = solTxs.get(params[0]);
@@ -745,15 +747,15 @@ const railFetch = async (url, opts) => {
     if (method === "isBlockhashValid") return json(200, { jsonrpc: "2.0", id: 1, result: { context: { slot: 1 }, value: blockhashValid.get(params[0]) ?? true } });
     return json(200, { jsonrpc: "2.0", id: 1, result: null });
   }
-  if (u.startsWith(`${IDX}/v2/transactions/`)) {
-    const t = algoTxs.get(decodeURIComponent(u.slice(`${IDX}/v2/transactions/`.length)));
+  if (at.host === hostOf(IDX) && at.pathname.startsWith("/v2/transactions/")) {
+    const t = algoTxs.get(decodeURIComponent(at.pathname.slice("/v2/transactions/".length)));
     if (t === "fail") return json(503, {});
     return t ? json(200, { transaction: t }) : json(404, { message: "no transaction found" });
   }
-  if (u === `${ALGOD}/v2/status`) return json(200, { "last-round": algoRound });
+  if (at.host === hostOf(IDX) && at.pathname === "/health") return json(200, { round: algoRound, "is-migrating": false });
   return fetchImpl(url, opts);
 };
-const railBook = (over = {}) => makeBook({ fetchImpl: railFetch, svmRpcs: [SOL_RPC], avmIndexers: [IDX], avmAlgods: [ALGOD], recordOwed: recordRefundOwed, owedRecorded: async (tx) => !!(await refundByEvidenceFresh(tx)), ...over });
+const railBook = (over = {}) => makeBook({ fetchImpl: railFetch, svmRpcs: [SOL_RPC], avmIndexers: [IDX], recordOwed: recordRefundOwed, owedRecorded: async (tx) => !!(await refundByEvidenceFresh(tx)), ...over });
 const solEntry = (i, over = {}) => ({ network: SOL, tx: solSig(i), payer: solPayer(i), payTo: SOL_PAYTO, asset: MINT, amount: "2500", resource: "https://agent402.tools/api/stock-history", blockhash: b58(32, 300 + i), via: "primary", ...over });
 const algoEntry = (i, over = {}) => ({ network: ALGO, tx: algoId(i), payer: algoAddr(10 + i), payTo: ALGO_PAYTO, asset: "31566704", amount: "2500", resource: "https://agent402.tools/api/stock-history", lastValid: 1500, via: "primary", ...over });
 const solLanded = (i, amount = 2500, to = SOL_PAYTO) => ({
@@ -813,6 +815,29 @@ await check("Solana and Algorand transactions never found close only once they c
   const r = await book.reconcile();
   assert.equal(r.absent, 2);
   assert.deepEqual(book.list().map((e) => e.tx).sort(), [solSig(63), solSig(64), algoId(66), solSig(67)].sort());
+});
+
+await check("an Algorand transaction an indexer still lagging behind its lastValid reports not found is kept, then owed once it shows up", async () => {
+  const book = railBook();
+  await book.book(algoEntry(74, { lastValid: 1500 }));
+  algoRound = 1400; // the indexer has not reached lastValid: its 404 proves nothing yet
+  clock += WINDOW_MS + 2 * 60_000;
+  let r = await book.reconcile();
+  assert.equal(r.absent, 0, "a lagging indexer's not found never closes the entry");
+  assert.equal(book.list().length, 1);
+  algoTxs.set(algoId(74), algoLanded(74));
+  algoRound = 1600;
+  clock += 20 * 60_000;
+  r = await book.reconcile();
+  assert.equal(r.owed, 1);
+  assert.equal((await owedFor(algoId(74))).length, 1, "owed exactly once");
+});
+
+await check("the rail stubs answer only their own host: a look-alike host is not served as the Solana RPC", async () => {
+  solTxs.set(solSig(75), solLanded(75));
+  const ask = async (base) => (await (await railFetch(base, { method: "POST", body: JSON.stringify({ method: "getTransaction", params: [solSig(75)] }) })).json())?.result;
+  assert.ok(await ask(SOL_RPC), "control: the stub's own host answers");
+  assert.equal(await ask("http://sol.stub.invalid.evil.example/"), null, "a host that only starts with the stub's name is not the stub");
 });
 
 await check("a Solana transaction that failed on chain or paid someone else closes with nothing owed", async () => {
