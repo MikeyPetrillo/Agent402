@@ -1,19 +1,19 @@
-# Where our routes rank in the Bazaar's search, every week.
+# Checks our own listing in the Bazaar's search, every week.
 #
-# scripts/bazaar-rank-monitor.js sends each query (the two flagship queries,
-# web search and chat completion, then the next eight tools by our own demand
-# from /api/stats topTools) to the CDP discovery search, which returns at most
-# 20 resources ranked by relevance and quality, and records the position of our
-# first route. It reports our own routes only: another resource is reduced to
-# "not ours" before anything is kept or printed.
+# scripts/bazaar-rank-monitor.js sends each of our queries (the two flagship
+# queries, web search and chat completion, then the next eight tools by our own
+# demand from /api/stats topTools) to the CDP discovery search and asks only
+# whether a route of ours comes back. Nothing about the search is printed,
+# published or kept: no position, no count, no other resource, no history
+# between runs.
 #
-# History is the previous successful run's artifact plus this week, carried
-# forward as one artifact (nothing is committed). ONE issue under a fixed
-# title opens when a flagship query returns none of our routes, when our best
-# rank on a query falls DROP places or more since last week, or when the search
-# cannot be read; it gets a comment each week it stays open and closes on a
-# clean week. Spends nothing, needs no key, two GETs to our own host.
-name: Bazaar rank monitor (weekly)
+# ONE issue under a fixed title names, by query text only, each query of ours
+# that returns none of our routes. It opens when one appears, is edited and
+# gets a comment only when that set changes, and closes when none is left. A
+# query in the repository variable BAZAAR_RANK_ACK (comma list) never pages. A
+# run that cannot read the search changes nothing and says "not measured this
+# week" in its own job summary. Spends nothing, needs no key.
+name: Bazaar listing check (weekly)
 
 on:
   schedule:
@@ -23,19 +23,22 @@ on:
 permissions:
   contents: read
   issues: write
-  actions: read
 
 concurrency:
   group: bazaar-rank
   cancel-in-progress: false
 
 jobs:
-  rank:
+  check:
     runs-on: ubuntu-24.04
+    # The script stops starting fetches after 8 minutes (WORST_CASE_MS in the
+    # script, pinned under this by scripts/test-bazaar-rank-monitor.js).
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      BAZAAR_RANK_DROP: "5"
+      TITLE: Bazaar listing check
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      BAZAAR_RANK_ACK: ${{ vars.BAZAAR_RANK_ACK }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,58 +46,25 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - name: Last week's history (previous successful run's artifact)
+      - name: Check and update the one issue
         run: |
-          ID=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow bazaar-rank.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)
-          if [ -n "$ID" ]; then
-            gh run download "$ID" --repo "$GITHUB_REPOSITORY" --name bazaar-rank-history --dir prev || echo "no history artifact on run $ID; starting a new history"
-          else
-            echo "no previous successful run; starting a new history"
-          fi
-      - name: Measure
-        id: m
-        run: |
-          set +e
-          node scripts/bazaar-rank-monitor.js --history prev/history.json --out out
-          code=$?
-          echo "exit=$code" >> "$GITHUB_OUTPUT"
-          exit 0
-      - name: Keep the history
-        if: steps.m.outputs.exit == '0'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: bazaar-rank-history
-          path: out/history.json
-          retention-days: 90
-          if-no-files-found: error
-      - name: Page (open / update / close the issue)
-        if: always()
-        env:
-          RESULT: ${{ steps.m.outputs.exit }}
-        run: |
-          TITLE="Bazaar rank monitor"
-          RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq "[.[] | select(.title == \"$TITLE\")][0].number // empty")
-          if [ "$RESULT" != "0" ]; then
-            STATE=page
-            REPORT="The weekly measurement did not complete (the discovery search or our own catalog could not be read); the run log has the reason."
+          if [ -n "$OPEN" ]; then
+            gh issue view "$OPEN" --repo "$GITHUB_REPOSITORY" --json body --jq .body > open-issue.md
+            node scripts/bazaar-rank-monitor.js --issue-body open-issue.md --out out
           else
-            STATE=$(cat out/page.txt)
-            REPORT=$(cat out/report.md)
+            node scripts/bazaar-rank-monitor.js --out out
           fi
-          if [ "$STATE" = "page" ]; then
-            if [ -n "$OPEN" ]; then
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still paging at $(date -u +%FT%TZ). Run: $RUN
-
-          $REPORT"
-            else
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The weekly Bazaar rank monitor (scripts/bazaar-rank-monitor.js) pages when a flagship query returns none of our routes in the discovery search's top 20, when our best rank on a query falls $BAZAAR_RANK_DROP places or more since last week, or when the search cannot be read. Run: $RUN
-
-          $REPORT"
-            fi
-          elif [ -n "$OPEN" ]; then
-            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Clean at $(date -u +%FT%TZ). Run: $RUN
-
-          $REPORT"
+          ACTION=$(cat out/action.txt)
+          case "$ACTION" in
+            open) gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file out/body.md ;;
+            update)
+              gh issue edit "$OPEN" --repo "$GITHUB_REPOSITORY" --body-file out/body.md
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "The set of absent queries changed; the description lists the current set. Run: $RUN_URL" ;;
+            close) gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "No query of ours is absent. Run: $RUN_URL" ;;
+          esac
+          if [ "$(cat out/status.txt)" = "measured" ]; then
+            echo "Measured this week." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Not measured this week." >> "$GITHUB_STEP_SUMMARY"
           fi
-          if [ "$RESULT" != "0" ]; then exit 1; fi

@@ -13,7 +13,7 @@ t node scripts/test-rail-restore.js
 t node scripts/test-verify-failover.js
 # The Bazaar keep-alive is actually scheduled, fails loudly without a key, and pages (CDP removes a resource after 30 days without a settlement)
 t node scripts/test-bazaar-keepalive.js
-# Weekly Bazaar rank monitor: query list from demand, our rank only, week-over-week drop and the one-issue page (offline fixtures)
+# Weekly check of our own Bazaar listing: query list from demand, ours by exact host and route, unreadable never pages, the one-issue page with an ack list (offline fixtures)
 t node scripts/test-bazaar-rank-monitor.js
 # verify_failed carries a DERIVED payer id (never an address), so a retry loop can be told from many clients (offline)
 t node scripts/test-verify-failed-payer-key.js
