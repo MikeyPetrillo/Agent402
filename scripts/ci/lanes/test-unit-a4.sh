@@ -174,7 +174,7 @@ t node scripts/test-leaderboard-page.js
 # MPP index self-serve registration + snapshot honesty tests (offline)
 t node scripts/test-mpp-index.js
 
-# @step 3: Offline suites (24 scripts, one process each)
+# @step 3: Offline suites (36 scripts, one process each)
 # Ledger-backed rail transfers (empty ledger must fall back, never render zero)
 t node scripts/test-ledger-recent.js
 # The shared HTML escapers escape the single quote; leaderboard notes are escaped per note

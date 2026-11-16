@@ -143,6 +143,8 @@ const child = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env,
     PORT, FREE_MODE: "true", X402_SYNC_ON_START: "false",
+    // The census attributes crawl traffic, so it turns both crawlers on.
+    X402_INDEX_CRAWL: "on", MPP_INDEX_CRAWL: "on",
     DATA_DIR,
     INDEX_CACHE_FILE: join(DATA_DIR, "x402-index-cache.json"),
     NODE_OPTIONS: `--require ${PRELOAD}`,
