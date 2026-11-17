@@ -158,6 +158,26 @@ const ok = (c, m) => { c ? pass++ : fail++; console.log(`${c ? "ok" : "FAIL"} - 
     release4();
     await Promise.all([...held4, past, direct, otherNet]);
     ok((await elsewhere)?.statusCode === 429, "the same /64 is still one caller while its runs hold every place");
+    // A request that carries no caller key (a CDN request with no proof of
+    // its client's address and no signed key) still opens a scope, so the
+    // request-less runs its steps make are counted and capped.
+    {
+      const { currentDispatchCaller, ANONYMOUS_CALLER, IN_PROCESS_CALLER } = await import("../src/dispatch-caller.js");
+      const unproven = (ip) => ({ ...req(ip), headers: {}, cdnUnproven: true });
+      const seenKey = await runAsCallerOf(unproven("203.0.113.90"), async () => currentDispatchCaller());
+      ok(typeof ANONYMOUS_CALLER === "string" && seenKey === ANONYMOUS_CALLER, `a request with no caller key runs its steps under the anonymous key (${seenKey})`);
+      ok((await runAsCallerOf(undefined, async () => currentDispatchCaller())) === IN_PROCESS_CALLER, "a dispatch with no request and no enclosing caller runs under the shared in-process key");
+      ok((await runAsCallerOf(v6(1), () => runAsCallerOf(undefined, async () => currentDispatchCaller()))) === "ip:2001:db8:1:2::/64", "a nested dispatch with no request keeps the enclosing caller");
+      let release5; const gate5 = new Promise((r) => { release5 = r; });
+      behavior = { create: async () => sandbox(async () => { await gate5; return { logs: { stdout: ["ok\n"], stderr: [] }, text: null, error: null }; }) };
+      const step = (n) => runAsCallerOf(unproven(`203.0.113.${90 + n}`), () => run({ code: `u${n}` }));
+      const held5 = Array.from({ length: __test.PER_PAYER_MAX_CONCURRENT }, (_, k) => step(k));
+      await new Promise((r) => setTimeout(r, 10));
+      const over = step(9).catch((x) => x);
+      e = await Promise.race([over, new Promise((r) => setTimeout(() => r("still running"), 50))]);
+      ok(e?.statusCode === 429 && /too many concurrent runs/i.test(e.message), `request-less runs for requests with no caller key are capped (got ${e?.statusCode ?? e})`);
+      release5(); await Promise.all([...held5, over]);
+    }
   } finally {
     __test.setSandbox(undefined);
     if (realKey === undefined) delete process.env.E2B_API_KEY; else process.env.E2B_API_KEY = realKey;

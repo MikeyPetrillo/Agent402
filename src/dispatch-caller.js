@@ -20,6 +20,13 @@ const scope = new AsyncLocalStorage();
 /** The key every request-less call with no caller of its own shares, so its
  *  places are still counted (and one caller's run of them stays visible). */
 export const IN_PROCESS_CALLER = "in-process";
+/** The key of a request that names no caller: no signed key, and an address
+ *  that is the CDN edge's, not its client's. Its places and runs are counted
+ *  under this key, but it identifies no one: a per-caller admission rule
+ *  treats each such request as a newcomer (src/caller-places.js), so one of
+ *  them holding places never locks the others out. */
+export const ANONYMOUS_CALLER = "anonymous";
+const isRequest = (req) => !!req && typeof req === "object";
 
 /** Every caller key a request carries, strongest first: the identity payer
  *  (identityPayerOf: null in FREE_MODE, where no payment header is verified,
@@ -64,18 +71,25 @@ export function currentDispatchCallerKeys() {
 }
 
 /** The keys a per-caller admission rule holds a place under: the request's
- *  (callerKeysOf), else those an in-process executor runs this call for,
- *  else the one shared key, so a place is never held uncounted. */
+ *  (callerKeysOf); for a request that names no caller, the anonymous key;
+ *  with no request, those an in-process executor runs this call for, else
+ *  the one shared key, so a place is never held uncounted. */
 export function admissionCallerOf(req) {
   const keys = callerKeysOf(req);
   if (keys.length) return keys;
+  if (isRequest(req)) return [ANONYMOUS_CALLER];
   return currentDispatchCallerKeys() || [IN_PROCESS_CALLER];
 }
 
-/** Run `fn` with the caller of `req` (or the enclosing dispatch's caller)
- *  held for the request-less handler calls inside it. */
+const ANONYMOUS_KEYS = Object.freeze([ANONYMOUS_CALLER]);
+const IN_PROCESS_KEYS = Object.freeze([IN_PROCESS_CALLER]);
+/** Run `fn` with the caller of `req` held for the request-less handler calls
+ *  inside it: the request's keys; the anonymous key for a request that names
+ *  no caller; with no request, the enclosing dispatch's caller, else the
+ *  shared in-process key. A scope is always open, so a per-caller cap a
+ *  request-less step reads (src/tools/code-run-kit.js) always has a key. */
 export function runAsCallerOf(req, fn) {
   const own = callerKeysOf(req);
-  const keys = own.length ? Object.freeze(own) : currentDispatchCallerKeys();
-  return keys ? scope.run(keys, fn) : fn();
+  const keys = own.length ? Object.freeze(own) : isRequest(req) ? ANONYMOUS_KEYS : (currentDispatchCallerKeys() || IN_PROCESS_KEYS);
+  return scope.run(keys, fn);
 }
