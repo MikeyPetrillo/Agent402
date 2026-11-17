@@ -162,5 +162,85 @@ ok(exact > 0 && exact <= 13, `an exact one-term slug match stays within the docu
   ok(routeQuery({ query: "currency", top: 20, include: "local", ...ctx }).results.find((x) => x.slug === "fx-noted")?.description?.endsWith(notice) === true, "the answer still carries the full description");
 }
 
+// A camelCase operationId is a name in slug form like any other (2026-11-16,
+// reported by a seller). Its name was folded before it was split, so
+// "webPageToMarkdown" was one token: a multi-word query never covered it and
+// a kebab-case rival carrying fewer of the query's words outranked it.
+{
+  cache.clear();
+  cache.set("https://camel.example", entry("https://camel.example", [
+    { slug: "webPageToMarkdown", name: "webPageToMarkdown", description: "" },
+    { slug: "getUSDCPrice", name: "getUSDCPrice", description: "" },
+  ]));
+  cache.set("https://kebab.example", entry("https://kebab.example", [
+    { slug: "page-to-markdown", name: "Page to markdown", description: "web" },
+    { slug: "usdc-price", name: "USDC price", description: "get" },
+  ]));
+  const top = (q) => routeQuery({ query: q, top: 5, include: "external", ...CTX }).results.map((r) => `${r.slug}:${r.score}`);
+  const md = top("web page to markdown");
+  ok(md[0]?.startsWith("webPageToMarkdown:"), `"web page to markdown": the camelCase seller covers every word and ranks first (${md.join(", ")})`);
+  const px = top("get usdc price");
+  ok(px[0]?.startsWith("getUSDCPrice:"), `"get usdc price": an acronym inside camelCase splits at its last capital (${px.join(", ")})`);
+  ok(top("webpagetomarkdown")[0]?.startsWith("webPageToMarkdown:"), "the operationId typed as one word still matches the slug exactly");
+  // The NAME alone carries the case: a one-run camelCase name is still a name
+  // in slug form, read through its parts.
+  cache.set("https://camel.example", entry("https://camel.example", [{ slug: "md_convert", name: "webPageToMarkdown", description: "" }]));
+  const named = top("web page to markdown");
+  ok(named[0]?.startsWith("md_convert:"), `"web page to markdown": a camelCase NAME over a plain slug is covered too (${named.join(", ")})`);
+  cache.clear();
+}
+
+// A brand-cased name keeps its whole token (2026-11-16 review): reading
+// "GitHub" as git + hub in place of github cost our own tools their
+// name-match points (github-repo 39 -> 21 on its own name's words) and let a
+// two-letter fragment score ("ai" of OpenAI). The case parts are extra words
+// for coverage only, so a brand-cased name scores exactly as its lower-cased
+// twin, and a fragment scores nothing.
+{
+  const tool = (slug, name) => [`POST /api/${slug}`, { route: `POST /api/${slug}`, slug, name, description: "x", price: "$0.002", tags: [], category: "x", discovery: { input: {} }, handler: async () => ({}) }];
+  const rows = [
+    ["github-repo", "GitHub repository enrichment", "github repository enrichment"],
+    ["v1-chat", "Chat completions (OpenAI-compatible)", "openai compatible chat completions"],
+    ["defi-tvl", "DeFi protocol TVL", "defi protocol tvl"],
+    ["openapi-lint", "OpenAPI agent-readiness lint", "openapi agent readiness lint"],
+    ["li-profile", "LinkedIn profile", "linkedin profile"],
+    ["pptx-to-pdf", "PowerPoint to PDF", "powerpoint to pdf"],
+  ];
+  const cased = Object.fromEntries(rows.map(([s, n]) => tool(s, n)));
+  const folded = Object.fromEntries(rows.map(([s, n]) => tool(s, n.toLowerCase())));
+  const score = (catalog, q, slug) => routeQuery({ query: q, top: 10, include: "local", ...CTX, catalog, toolCount: rows.length }).results.find((r) => r.slug === slug)?.score ?? 0;
+  for (const [slug, , q] of rows) {
+    const a = score(cased, q, slug), b = score(folded, q, slug);
+    ok(a === b && a > 0, `"${q}": ${slug} scores ${a} on its brand-cased name, as on its lower-cased name (${b})`);
+  }
+  for (const q of ["ai", "de", "fi", "in", "hub"]) {
+    const a = routeQuery({ query: q, top: 10, include: "local", ...CTX, catalog: cased, toolCount: rows.length }).results.map((r) => `${r.slug}:${r.score}`).join(",");
+    const b = routeQuery({ query: q, top: 10, include: "local", ...CTX, catalog: folded, toolCount: rows.length }).results.map((r) => `${r.slug}:${r.score}`).join(",");
+    ok(a === b, `"${q}": a case part scores nothing a lower-cased name would not (${a || "none"})`);
+  }
+}
+
+// A one-word brand name is not a slug alias (2026-11-16 re-review): an
+// outside seller named only "GitHub" scored 10 on "github" through its
+// camelCase parts and outranked our github-repo; main scored it 3. And a long
+// camelCase sentence counts its parts against the ten-word limit.
+{
+  const ext = (q, name, slug = "brandrow") => {
+    cache.clear();
+    cache.set("https://brand.example", entry("https://brand.example", [{ slug, name, description: "" }]));
+    const r = routeQuery({ query: q, top: 5, include: "external", ...CTX }).results.find((x) => x.slug === slug)?.score ?? 0;
+    cache.clear();
+    return r;
+  };
+  for (const [q, cased] of [["github", "GitHub"], ["openai", "OpenAI"], ["defi", "DeFi"], ["github hub", "GitHub"]]) {
+    const folded = cased.toLowerCase(), a = ext(q, cased), b = ext(q, folded);
+    ok(a === b, `"${q}": a seller named only "${cased}" scores as one named "${folded}" (${a} = ${b})`);
+  }
+  const sentence = "whichStocks areSetUp toBuyToday andWhichOnes shouldYouSell rightNow forProfit";
+  const s1 = ext("which stocks are set up to buy today", sentence);
+  const s2 = ext("which stocks are set up to buy today", sentence.replace(/([A-Z])/g, " $1").toLowerCase());
+  ok(s1 <= s2, `a camelCase sentence over ten words gets no slug credit (${s1} <= spaced ${s2})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

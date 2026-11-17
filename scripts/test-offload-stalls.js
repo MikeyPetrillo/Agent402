@@ -14,7 +14,7 @@
 // service key and template matching (1e), the Base board's registry walk
 // (1f), and the cache files written without a state database (1g).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { oursMs, leastOurs } from "./lib/ours-clock.js";
+import { oursMs, leastOurs, timeOurs, OURS_READING } from "./lib/ours-clock.js";
 import "./lib/uncapped-sellers.js"; // seeds a 30,000-tool seller past the per-seller cap
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -119,31 +119,28 @@ const digest = (r) => createHash("sha256").update(JSON.stringify([r.total, r.mat
   {
     // The operator heap read's byte estimate: sampled, so it stays cheap at
     // production scale, and close to the whole cache serialized.
-    // The fastest of three reads: one collector pause does not decide the bound.
-    let sampled = null, readMs = Infinity;
-    for (let k = 0; k < 3; k++) {
-      const t0 = performance.now();
-      const r = x.indexMemoryFigures({ sampleBytes: true });
-      const ms = performance.now() - t0;
-      if (ms < readMs) { readMs = ms; sampled = r; }
-    }
     // Timed against serializing every entry's tools on the same machine, so a
     // slow runner slows both: the sampled read must stay a small fraction of
-    // the whole (the median of three serializes, so one pause on either side
-    // does not decide it), under a generous absolute cap. A read that walked
-    // every entry would take about all of it.
-    let whole = 0;
+    // the whole, under a generous absolute cap. A read that walked every entry
+    // would take about all of it.
+    // Each read is timed beside a whole serialize, three pairs across one
+    // stretch, on the ours clock (scripts/lib/ours-clock.js): three reads back
+    // to back last about as long as one serialize, so one burst from the host
+    // or the collector covered all three while the serializes, timed after
+    // it, ran clear, and the fastest read was compared with a baseline taken
+    // under other conditions. The fastest read against the median serialize.
+    let sampled = null, readMs = Infinity, whole = 0;
     const wholeRuns = [];
     for (let k = 0; k < 3; k++) {
-      const t1 = performance.now();
-      whole = 0;
-      for (const e of cache.values()) whole += JSON.stringify(e.tools || []).length;
-      wholeRuns.push(performance.now() - t1);
+      const r = timeOurs(() => x.indexMemoryFigures({ sampleBytes: true }));
+      if (r.ms < readMs) { readMs = r.ms; sampled = r.value; }
+      const w = timeOurs(() => { let bytes = 0; for (const e of cache.values()) bytes += JSON.stringify(e.tools || []).length; return bytes; });
+      whole = w.value; wholeRuns.push(w.ms);
     }
     const wholeMs = wholeRuns.sort((a, b) => a - b)[1];
     const readBound = Math.min(500, Math.max(20, wholeMs * 0.4));
     const wholeMb = whole / 1048576, est = sampled.jsonMbEstimate;
-    ok(est && est.sampledEntries > 50 && est.sampledEntries <= 2 * 120 && readMs < readBound, `the sampled heap read reads ${est?.sampledEntries} entries in ${readMs.toFixed(1)} ms (whole serialize ${wholeMs.toFixed(1)} ms; bound ${Math.round(readBound)} ms: 40% of it, under 500 ms)`);
+    ok(est && est.sampledEntries > 50 && est.sampledEntries <= 2 * 120 && readMs < readBound, `the sampled heap read reads ${est?.sampledEntries} entries in ${readMs.toFixed(1)} ms (whole serialize ${wholeMs.toFixed(1)} ms; bound ${Math.round(readBound)} ms: 40% of it, under 500 ms; read as ${OURS_READING})`);
     ok(Math.abs(est.tools - wholeMb) <= Math.max(2, wholeMb * 0.25), `...and its tool-row estimate (${est.tools} MB) is within 25% of the whole serialized (${wholeMb.toFixed(1)} MB)`);
     ok(sampled.routeIndex?.tokens > 0 && sampled.routeIndex.postingRefs >= sampled.routeIndex.tokens, `...and it counts the route index (${sampled.routeIndex?.tokens} tokens, ${sampled.routeIndex?.postingRefs} postings)`);
     ok(!("jsonMbEstimate" in figs), "the plain read stays counts only");
