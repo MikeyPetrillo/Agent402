@@ -61,12 +61,16 @@ idx.__setCrawlFetchForTest(async (url, opts) => {
   const d = docs.get(url);
   if (!d) throw Object.assign(new Error(`Upstream returned HTTP 404 for ${url}`), { statusCode: 422, upstreamStatus: 404 });
   if (d.throw) throw d.throw();
+  if (d.status) throw Object.assign(new Error(`Upstream returned HTTP ${d.status} for ${url}`), { statusCode: 422, upstreamStatus: d.status, retryAfter: d.retryAfter });
   return { html: d.body, finalUrl: url, validators: {} };
 });
 const probes = [];
+const probeAnswers = new Map(); // url -> { status, retryAfter }
 idx.__setProbeFetchForTest(async (url, opts) => {
   await resolved(url, opts);
   probes.push(url);
+  const a = probeAnswers.get(url);
+  if (a) return new Response("{}", { status: a.status, headers: { "retry-after": String(a.retryAfter) } });
   return new Response("{}", { status: 402, headers: { "payment-required": Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64") } });
 });
 function serve(o) {
@@ -241,6 +245,37 @@ const entry = (o) => idx._cacheForTests().get(o);
   ok(own?.listed === true && !own.held, "the seller's own first registration from another address is read and listed");
 }
 
+// ---- a registration's 429 never holds another operator's crawl ----------------------
+{
+  // A registrant names a URL on a seller's host that answers 429 with a day's
+  // Retry-After: the seller's scheduled crawl and probes go on.
+  clock = Date.parse("2026-12-04T10:00:00Z");
+  const R = "https://heldrival.example";
+  serve(R);
+  docs.set(`${R}/busy/.well-known/x402`, { status: 429, retryAfter: 86_400 });
+  docs.set(`${R}/busy/openapi.json`, { status: 429, retryAfter: 86_400 });
+  const first = await idx.registerOrigin(`${R}/busy`, { registrant: "198.51.100.7" });
+  ok(first?.listed === false && readsOf(`${R}/busy`) > 0, "control: the registration's read was sent, met the 429 and listed nothing");
+  ok(!(await sellerLoad.throttledUntil(R)), "the 429 holds nothing on the host");
+  const r0 = readsOf(R);
+  ok((await turn(R)) === null && readsOf(R) > r0 && entry(R)?.tools?.length === 1, "the seller's scheduled crawl reads and lists it");
+  const second = await idx.registerOrigin(`${R}/busy`, { registrant: "198.51.100.7" });
+  ok(second?.held === true && second.retryAfterSeconds > 0 && /Retry-After/.test(second.error), "the same registrant is told to wait out the Retry-After");
+  const other = await idx.registerOrigin(R, { registrant: "203.0.113.70" });
+  ok(other?.listed === true && !other.held, "another registrant's registration is read and listed");
+  // A probe sent where another operator's documents moved meets a 429 there.
+  const A = "https://moved-here-from.example";
+  probeAnswers.set(`${R}/api/thing`, { status: 429, retryAfter: 86_400 });
+  await idx.probeSellerRoute(`${R}/api/thing`, { load: { kind: "quote", gate: true, chargeTo: A } }).catch(() => null);
+  probeAnswers.delete(`${R}/api/thing`);
+  ok(!(await sellerLoad.throttledUntil(R)) && (await sellerLoad.crawlPlan(R)).skip !== "throttled", "a 429 met on another operator's behalf never holds the landing host");
+  ok((await sellerLoad.probeRefusal(`${R}/api/thing`, "quote", { chargeTo: A })) === "throttled", "it holds that operator's probes there");
+  probeAnswers.set(`${R}/api/thing`, { status: 429, retryAfter: 60 });
+  await idx.probeSellerRoute(`${R}/api/thing`, { load: { kind: "quote", gate: true, chargeTo: R } }).catch(() => null);
+  probeAnswers.delete(`${R}/api/thing`);
+  ok((await sellerLoad.throttledUntil(R)) > clock, "control: a 429 to the seller's own scheduled probe holds its host");
+}
+
 // ---- names that resolve to one address share its day -------------------------------
 {
   // Names under a suffix whose owners point them anywhere (sslip.io): each is
@@ -263,10 +298,17 @@ const entry = (o) => idx._cacheForTests().get(o);
   ok(a > 0 && b > 0 && a + b <= 60, `two names on one address share its day: ${a} + ${b} requests of 60`);
   const held = answers.filter((r) => r?.held && /address this host resolves to/.test(r.error));
   ok(held.length > 0 && held.every((r) => r.retryAfterSeconds > 0 && r.retryAfterSeconds <= 86_400), `a registration past it is told when to retry (${held.length} held by the address)`);
-  // A scheduled crawl meets the same day: the name's turn waits, nothing sent.
+  // Registrations have a day of their own per address: the scheduled crawl
+  // of a name on it keeps the scheduled reads' day.
   const b0 = sentTo(B);
-  const r = await turn(B);
-  ok(sentTo(B) === b0 && r === "budget", `a scheduled turn past the address's day sends nothing (${r})`);
+  ok((await turn(B)) === null && sentTo(B) > b0, "registrations never spend the address's day for a scheduled turn");
+  // The scheduled reads meet their own day: past it a name's turn waits.
+  const D = "https://delta.sslip.io";
+  serve(D);
+  for (let i = 0; i < 60; i++) await sellerLoad.takeAddressBudget(`${A}/x`, [{ address: "203.0.113.7", family: 4 }], "crawler");
+  const d0 = sentTo(D);
+  const r = await turn(D);
+  ok(sentTo(D) === d0 && r === "budget", `a scheduled turn past the address's scheduled day sends nothing (${r})`);
   const c0 = sentTo(C);
   const other = await idx.registerOrigin(`${C}/x`);
   ok(sentTo(C) > c0 && !other?.held, "a name on another address keeps its own day");

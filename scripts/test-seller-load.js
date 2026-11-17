@@ -415,6 +415,57 @@ function fresh(opts = {}) {
   ok((await load.crawlPlan(V)).skip === "budget", "control: the scheduled crawl's own reads still spend the day");
 }
 
+// ---- a registration's Retry-After holds only its registrant --------------------------
+{
+  // Anyone may register any URL: the 429 or 503 its read meets says nothing
+  // about the origins the scheduled crawl reads on that host.
+  const { load, now, step } = fresh();
+  const V = "https://rival.example", P = "https://rival.example:8443";
+  const as = (who, fn) => runAsRegistrant(who, fn);
+  const read = (who, url) => as(who, () => load.takeBudget(url, "crawler", { essential: true, unscheduled: true }));
+  const until = await as("198.51.100.1", () => load.noteThrottle(`${P}/any/path`, 429, 86_400));
+  ok(until === now() + 86_400_000, "a registration's 429 is recorded with its Retry-After");
+  await load.noteThrottle(`${V}/other`, 503, 86_400, { unscheduled: true });
+  ok(!(await load.throttledUntil(V)) && !(await load.throttledUntil(P)) && (await load.crawlPlan(V)).skip === null && (await load.crawlPlan(P)).skip === null,
+    "a registration's 429 or 503 never holds the host's scheduled crawl");
+  ok((await load.probeRefusal(`${V}/x`, "paywall")) === null && (await load.probeRefusal(`${P}/x`, "quote")) === null, "nor its unpaid probes");
+  const again = await read("198.51.100.1", `${P}/any/path/.well-known/x402`);
+  ok(again.ok === false && again.heldBy === "seller-retry-after" && again.retryAfterSeconds === 86_400, `it holds that registrant's own reads of that origin (${again.retryAfterSeconds} s)`);
+  ok((await read("203.0.113.9", `${P}/.well-known/x402`)).ok, "another registrant's read of the origin is sent");
+  ok((await read("198.51.100.1", `${V}/.well-known/x402`)).ok, "the same registrant's read of another origin on the host is sent");
+  step(86_400_000 + 1000);
+  ok((await read("198.51.100.1", `${P}/any/path/.well-known/x402`)).ok, "the hold expires");
+  await load.noteThrottle(`${V}/z`, 429, "60");
+  ok((await load.crawlPlan(V)).skip === "throttled", "control: a scheduled read's 429 still holds the host");
+}
+
+// ---- a Retry-After met through another operator's redirect holds only that operator --
+{
+  const { load } = fresh();
+  const B = "https://landed-on.example", A = "https://redirector.example", A2 = "https://other-mover.example";
+  await load.noteThrottle(`${B}/api/x`, 429, 86_400, { chargeTo: A });
+  ok(!(await load.throttledUntil(B)) && (await load.crawlPlan(B)).skip === null && (await load.probeRefusal(`${B}/api/x`, "quote")) === null,
+    "a 429 to a probe sent for another operator's moved origin never holds the landing host's crawl or probes");
+  ok((await load.probeRefusal(`${B}/api/x`, "quote", { chargeTo: A })) === "throttled", "it holds the requesting operator's probes there");
+  ok((await load.probeRefusal(`${B}/api/x`, "quote", { chargeTo: A2 })) === null, "and no other operator's");
+  await load.noteThrottle("https://api.samehost.example/x", 429, 60, { chargeTo: "https://www.samehost.example" });
+  ok((await load.crawlPlan("https://api.samehost.example")).skip === "throttled", "control: a move inside one operator's domain holds the host as before");
+}
+
+// ---- registrations never spend an address's scheduled day ---------------------------
+{
+  const { load } = fresh({ dailyBudget: 4 });
+  const ip = [{ address: "203.0.113.20", family: 4 }];
+  const regs = [];
+  for (let i = 0; i < 6; i++) regs.push(await runAsRegistrant(`198.51.100.${i}`, () => load.takeAddressBudget(`https://r${i}.sslip.io/.well-known/x402`, ip, "crawler")));
+  ok(regs.filter((b) => b.ok).length === 4 && regs[5].heldBy === "address-day", "registration reads of names on one address stop at a day of their own");
+  ok((await load.takeAddressBudget("https://r9.sslip.io/x", ip, "crawler", { unscheduled: true })).ok === false, "one flagged unscheduled is counted on it too");
+  const own = [];
+  for (let i = 0; i < 4; i++) own.push(await load.takeAddressBudget("https://victim.sslip.io/.well-known/x402", ip, "crawler"));
+  ok(own.every((b) => b.ok), "the scheduled reads of a name on that address keep their whole day");
+  ok((await load.takeAddressBudget("https://victim.sslip.io/openapi.json", ip, "crawler")).ok === false, "control: the scheduled reads still stop at theirs");
+}
+
 // ---- shared hosting: each tenant has its own day ------------------------------------
 {
   const { load } = fresh({ dailyBudget: 2, probeShare: 1 });

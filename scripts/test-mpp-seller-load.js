@@ -91,6 +91,36 @@ const sentTo = (host) => sent.filter((u) => isHost(u, host)).length;
   ok((await sellerLoad.throttledUntil(D)) > clock, "a 503 on /openapi.json holds the host");
 }
 
+// ---- a registration's 429 holds only its registrant ---------------------------------
+{
+  // Anyone may register any origin: the 429 or 503 its reads meet never
+  // holds the host's crawl, only that registrant's own later reads of it.
+  mpp.__testReset();
+  const V = "https://mpp-rival.example";
+  const verify = (o) => mpp.verifyMppSeller(o, { probe, fetchDoc, fetchText });
+  answer = { status: 429, headers: { "retry-after": "86400" } };
+  const first = await mpp.registerMppOrigin(V, { verify, registrant: "198.51.100.7" });
+  await sellerLoad.flush();
+  ok(first?.listed === false && sentTo("mpp-rival.example") === 2, "control: the registration's reads were sent and met the 429");
+  ok(!(await sellerLoad.throttledUntil(V)), "the 429 holds nothing on the host");
+  const doc503 = async (url) => { sent.push(url); throw Object.assign(new Error("Upstream returned HTTP 503"), { statusCode: 422, upstreamStatus: 503, retryAfter: 86_400 }); };
+  await mpp.registerMppOrigin("https://doc-rival.example", { verify: (o) => mpp.verifyMppSeller(o, { probe, fetchDoc: doc503, fetchText }), registrant: "198.51.100.7" });
+  await sellerLoad.flush();
+  ok(!(await sellerLoad.throttledUntil("https://doc-rival.example")), "nor does a 503 on a registration's /openapi.json read");
+  await mpp.verifyMppSeller("https://direct-rival.example", { probe, fetchDoc, fetchText });
+  await sellerLoad.flush();
+  ok(!(await sellerLoad.throttledUntil("https://direct-rival.example")), "nor a 429 to a read the seller asked for outside a registrant's run");
+  answer = { status: 402, headers: { "www-authenticate": challenge } };
+  const n = sentTo("mpp-rival.example");
+  await mpp.verifyMppSeller(V, { probe, fetchDoc, fetchText, gate: true });
+  ok(sentTo("mpp-rival.example") > n, "the host's scheduled probe is sent");
+  mpp.__testReset();
+  const again = await mpp.registerMppOrigin(V, { verify, registrant: "198.51.100.7" });
+  ok(again?.held === true && again.retryAfterSeconds > 0 && /Retry-After/.test(again.error), "the same registrant is told to wait out the Retry-After");
+  const other = await mpp.registerMppOrigin(V, { verify, registrant: "203.0.113.70" });
+  ok(other?.listed === true, "another registrant's registration is read and listed");
+}
+
 // ---- CRAWL_SLOW_ORIGINS ---------------------------------------------------------------
 {
   mpp.__testReset();

@@ -366,7 +366,9 @@ const discoveryDocCache = new Map(); // origin -> { at, target|null }
 // request (`gate`) waits while the seller's host is held by a Retry-After or
 // past its day's budget, and is counted when sent; a request the seller asked
 // for (a registration) is counted on a day count of its own, never the one the
-// crawl reads, and never held. A 429 or 503 holds the host.
+// crawl reads, and never held by the host's hold. A 429 or 503 to a crawl's
+// request holds the host; one to a registration's read holds only that
+// registrant's later registration reads of that origin.
 class MppRequestHeld extends Error {
   constructor(reason) { super(`not sent: ${reason}`); this.sellerLoadSkip = reason; }
 }
@@ -379,12 +381,12 @@ async function loadGate(url, kind, gate) {
     if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
   }
 }
-function noteHold(url, status, retryAfter) {
-  if (status === 429 || status === 503) void Promise.resolve().then(() => sellerLoad.noteThrottle(url, status, retryAfter)).catch(() => {});
+function noteHold(url, status, retryAfter, gate) {
+  if (status === 429 || status === 503) void Promise.resolve().then(() => sellerLoad.noteThrottle(url, status, retryAfter, { unscheduled: !gate })).catch(() => {});
 }
 // A redirect hop is counted before it is sent, and one onto another operator's
 // host is not sent past that host's landed allowance (landingGate).
-const fetchDiscoveryDoc = (url, { unscheduled = false } = {}) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler", { unscheduled }), onResolved: addressGate("mpp-crawler") });
+const fetchDiscoveryDoc = (url, { unscheduled = false } = {}) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler", { unscheduled }), onResolved: addressGate("mpp-crawler", { unscheduled }) });
 
 /** Fetch `${origin}/openapi.json` (guarded, capped, cached 1h) and derive a
  *  probe target. null on any failure; throws only when the load controls held
@@ -403,7 +405,7 @@ async function discoveryProbeTarget(origin, { gate = false, fetchDoc = fetchDisc
     // A hop that was not sent is no answer: nothing is cached.
     if (e?.requestHeld) throw e;
     if (e?.landingHeld) throw new MppRequestHeld("budget");
-    noteHold(url, Number(e?.upstreamStatus), e?.retryAfter ?? e?.upstreamRetryAfter ?? null);
+    noteHold(url, Number(e?.upstreamStatus), e?.retryAfter ?? e?.upstreamRetryAfter ?? null, gate);
     target = null;
   }
   discoveryDocCache.set(origin, { at: Date.now(), target });
@@ -553,7 +555,7 @@ export async function verifyMppSeller(origin, { probe, fetchText, fetchDoc, gate
     if (e?.sellerLoadSkip || e?.requestHeld) return cache.get(origin) || null;
     throw e;
   }
-  noteHold(target.url, Number(result?.status), result?.retryAfter ?? null);
+  noteHold(target.url, Number(result?.status), result?.retryAfter ?? null, gate);
   noteProbeOutcome(origin, result.ok);
   const prior = cache.get(origin);
   const history = [...(prior?.history || []), result.ok ? 1 : 0].slice(-HEALTH_WINDOW);
@@ -651,7 +653,9 @@ async function registerMppOriginNow(origin, { verify, path, method } = {}) {
 }
 
 function mppRegistrationHeld(origin, secs, heldBy = "registration-hour") {
-  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests" : "this caller has had this hour's registration reads of this host";
+  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests"
+    : heldBy === "seller-retry-after" ? "this origin answered this caller's last registration read with a Retry-After"
+      : "this caller has had this hour's registration reads of this host";
   return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 

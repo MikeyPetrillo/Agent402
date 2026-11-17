@@ -486,28 +486,32 @@ export class ProbeSkipped extends Error {
 // crawled: a probe sent to the origin its documents moved to (probeOriginOf) is
 // counted on the key's own day, never on the day of the host it lands on, and
 // is not sent past a day's allowance of such landings on that host. A 429 or
-// 503 answer holds the host.
+// 503 answer to a scheduled probe of the host's own origin holds the host; one
+// to a probe sent for another operator's origin holds only that operator's
+// probes there, and one to a registration's probe only that registrant's
+// (src/seller-load.js noteThrottle).
 // A probe whose host's address has had its day (seller-load addressGate) is
 // not sent, as a probe past the host's own day is not.
-const probeAddressGate = (kind) => {
-  const gate = addressGate(kind);
+const probeAddressGate = (kind, unscheduled = false) => {
+  const gate = addressGate(kind, { unscheduled });
   return async (addresses, url) => {
     try { await gate(addresses, url); } catch (e) { if (e?.requestHeld) throw new ProbeSkipped("budget"); throw e; }
   };
 };
 async function probeOnce(target, opts, load) {
+  const unscheduled = readIsUnscheduled();
+  const chargeTo = load?.chargeTo || null;
   if (load?.kind) {
-    const chargeTo = load.chargeTo || null;
     if (load.gate) {
       const refusal = await sellerLoad.probeRefusal(target, load.kind, { chargeTo });
       if (refusal) throw new ProbeSkipped(refusal);
     } else {
-      const b = await sellerLoad.takeBudget(target, load.kind, { essential: true, chargeTo, unscheduled: readIsUnscheduled() });
+      const b = await sellerLoad.takeBudget(target, load.kind, { essential: true, chargeTo, unscheduled });
       if (b?.ok === false) throw new ProbeSkipped("budget");
     }
   }
-  const res = await probeFetch(target, load?.kind ? { ...opts, onResolved: probeAddressGate(load.kind) } : opts);
-  if (load?.kind && (res?.status === 429 || res?.status === 503)) await sellerLoad.noteThrottle(target, res.status, res.headers?.get?.("retry-after"));
+  const res = await probeFetch(target, load?.kind ? { ...opts, onResolved: probeAddressGate(load.kind, unscheduled) } : opts);
+  if (load?.kind && (res?.status === 429 || res?.status === 503)) await sellerLoad.noteThrottle(target, res.status, res.headers?.get?.("retry-after"), { chargeTo, unscheduled });
   return res;
 }
 
@@ -1738,7 +1742,9 @@ export async function registerOrigin(origin, { crawl, replaces = null, deadlineM
 /** A registration whose reads the host's hourly ceiling held back: nothing
  *  was listed or changed, and the registrant retries after `secs`. */
 function registrationHeld(origin, secs, heldBy = "registration-hour") {
-  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests" : "this caller has had this hour's registration reads of this host";
+  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests"
+    : heldBy === "seller-retry-after" ? "this origin answered this caller's last registration read with a Retry-After"
+      : "this caller has had this hour's registration reads of this host";
   return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 
@@ -6138,11 +6144,12 @@ async function crawlRead(url, opts) {
   const b = await sellerLoad.takeBudget(url, "crawler", { essential: true, unscheduled });
   if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
   try {
-    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }), onResolved: addressGate("crawler") });
+    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }), onResolved: addressGate("crawler", { unscheduled }) });
   } catch (e) {
     if (e?.landingHeld) throw e;
     const st = Number(e?.upstreamStatus);
-    if (st === 429 || st === 503) await sellerLoad.noteThrottle(url, st, Number(e?.retryAfter || e?.upstreamRetryAfter) || null);
+    // A registration's read holds only its registrant's reads (seller-load).
+    if (st === 429 || st === 503) await sellerLoad.noteThrottle(url, st, Number(e?.retryAfter || e?.upstreamRetryAfter) || null, { unscheduled });
     throw e;
   }
 }

@@ -37,7 +37,12 @@
 //   3. Retry-After. A 429 or 503 from a seller to the crawler or a probe holds
 //      that host's crawl and probes until its Retry-After (or THROTTLE_DEFAULT_MS
 //      when it names none), never past THROTTLE_MAX_MS. A router purchase is
-//      never held.
+//      never held. Only a read we scheduled of an origin on that host holds the
+//      host: the answer to a registration's read (a URL its caller named) holds
+//      only that registrant's later registration reads of that origin, and the
+//      answer to a request sent on another operator's behalf (its documents
+//      moved there) holds only that operator's requests to the host. Either
+//      hold expires like any other.
 //   4. A request log: how many requests each component sent each host per
 //      minute, kept REQUEST_LOG_KEEP_MS (two days), for the operator view a
 //      seller's question is checked against. Every component /crawler lists is
@@ -114,6 +119,8 @@ export function runAsRegistrant(registrant, fn) {
   return registrantScope.run(key, fn);
 }
 const currentRegistrant = () => registrantScope.getStore() || "-";
+/** Is this request made inside a registration (runAsRegistrant)? */
+const inRegistration = () => registrantScope.getStore() !== undefined;
 /** The requests that ceiling counts: the ones any registration of any origin
  *  sends (the document reads and the paywall check). The price checks of the
  *  routes a seller's own documents list keep their own per-origin allowance
@@ -141,6 +148,7 @@ export const PROBE_KINDS = Object.freeze(["crawler", "paywall", "quote", "router
 
 const REVISIT = "seller-revisit";      // window per origin: one member, the state
 const THROTTLE = "seller-throttle";    // flag per hostname: held until
+const THROTTLE_SCOPED = "seller-throttle-scoped"; // flag per registrant or requesting operator, and target: held until
 const BUDGET = "seller-probe-day";     // counter per day and operator
 const SLOW = "seller-slow-read";       // flag per lane and slow origin: its next scheduled read waits until
 const STATE_KEEP_MS = 14 * DAY_MS;     // a revisit state not written for this long is forgotten
@@ -239,7 +247,7 @@ export function createSellerLoad({
     unchangedReads: 0, changedReads: 0,
     skipped: { unchanged: 0, throttled: 0, budget: 0, landing: 0, slow: 0 },
     resets: {},
-    throttles: { noted: 0, withRetryAfter: 0 },
+    throttles: { noted: 0, withRetryAfter: 0, scoped: 0 },
     requests: {}, refused: {},
     prefetch: { cycles: 0, timedOut: 0, merged: 0 },
   };
@@ -306,6 +314,19 @@ export function createSellerLoad({
 
   // ---- the day's counts --------------------------------------------------------
   const budgetKey = (origin, t) => `${dayOf(t)}|${operatorKey(origin)}`;
+  /** Whose hold a request's answer sets and reads: a registration's read
+   *  (`unscheduled`, or made inside runAsRegistrant) its registrant's, for
+   *  that origin; a request sent for `chargeTo` to another operator's host
+   *  that operator's, for that host; null for a read we scheduled of the
+   *  host's own origin (the host-wide hold). */
+  function throttleScope(url, { chargeTo = null, unscheduled = false } = {}) {
+    const target = originOf(url);
+    if (!target) return null;
+    if (unscheduled || inRegistration()) return { registration: true, key: `reg|${currentRegistrant()}|${target}` };
+    const cause = chargeTo ? originOf(chargeTo) : null;
+    if (cause && operatorKey(cause) !== operatorKey(target)) return { registration: false, key: `via|${operatorKey(cause)}|${hostnameOf(url)}` };
+    return null;
+  }
   const registrantHourKey = (target, t) => `${hourOf(t)}|${operatorKey(target)}|registration|${currentRegistrant()}`;
   const paced = new Map();   // operator -> when its next paced registration read may go
   /** Raise this process's count of `key` to `value` when another container's
@@ -518,18 +539,29 @@ export function createSellerLoad({
       return true;
     },
 
-    /** Until when the host of `url` asked us to wait (ms), or 0. */
-    async throttledUntil(url) {
+    /** Until when the host of `url` asked us to wait (ms), or 0. With
+     *  `chargeTo` (a request sent on that origin's behalf) or `unscheduled` (a
+     *  registration's read), the hold that scope's own answers set counts
+     *  too; a registration's read never waits on the host-wide hold. */
+    async throttledUntil(url, { chargeTo = null, unscheduled = false } = {}) {
       const host = hostnameOf(url);
       if (!host) return 0;
-      const r = await local.flagGet(THROTTLE, host, { now: clock() });
-      return Number(r?.until) > clock() ? Number(r.until) : 0;
+      const scoped = throttleScope(url, { chargeTo, unscheduled });
+      const t = clock();
+      const hostUntil = scoped?.registration ? 0 : Number((await local.flagGet(THROTTLE, host, { now: t }))?.until) || 0;
+      const scopeUntil = scoped ? Number((await local.flagGet(THROTTLE_SCOPED, scoped.key, { now: t }))?.until) || 0 : 0;
+      const until = Math.max(hostUntil, scopeUntil);
+      return until > t ? until : 0;
     },
 
     /** A 429 or 503 from a seller's host: hold its crawl and probes until its
      *  Retry-After (seconds or an HTTP date), or the default. Any other status
-     *  is ignored. Never throws. */
-    async noteThrottle(url, status, retryAfter = null) {
+     *  is ignored. Never throws. The answer to a registration's read
+     *  (`unscheduled`, or any read inside runAsRegistrant) holds only that
+     *  registrant's registration reads of that origin; the answer to a request
+     *  sent for `chargeTo` on another operator's host holds only `chargeTo`'s
+     *  operator's requests there. Neither holds the host. */
+    async noteThrottle(url, status, retryAfter = null, { chargeTo = null, unscheduled = false } = {}) {
       const st = Number(status);
       if (st !== 429 && st !== 503) return 0;
       const host = hostnameOf(url);
@@ -539,6 +571,14 @@ export function createSellerLoad({
       const until = clock() + holdMs;
       counts.throttles.noted++;
       if (secs) counts.throttles.withRetryAfter++;
+      const scoped = throttleScope(url, { chargeTo, unscheduled });
+      if (scoped) {
+        counts.throttles.scoped++;
+        const theirs = Number((await local.flagGet(THROTTLE_SCOPED, scoped.key, { now: clock() }))?.until) || 0;
+        if (theirs >= until) return theirs;
+        await local.flagSet(THROTTLE_SCOPED, scoped.key, until, { now: clock() });
+        return until;
+      }
       const held = await this.throttledUntil(url).catch(() => 0);
       if (held >= until) return held;
       await local.flagSet(THROTTLE, host, until, { now: clock() });
@@ -590,6 +630,13 @@ export function createSellerLoad({
       // is held to a landed allowance of its own there, apart from the one
       // the scheduled reads of moved origins share.
       if (unscheduled) {
+        // A Retry-After the target answered this registrant's earlier read
+        // with holds this registrant's reads of that origin, no one else's.
+        const heldUntil = await this.throttledUntil(url, { unscheduled: true });
+        if (heldUntil) {
+          bump(counts.refused, `${k}:registration-retry-after`);
+          return { ok: false, used: 0, budget: dailyBudget, unscheduled: true, heldBy: "seller-retry-after", retryAfterSeconds: Math.max(1, Math.ceil((heldUntil - t) / 1000)) };
+        }
         // One registrant sends the host the request reaches at most
         // registrationHourlyMax of them an hour, however many origins on it
         // it registers; another registrant's allowance is its own.
@@ -679,13 +726,16 @@ export function createSellerLoad({
      *  (addressSetByName): however many such names point at one address, it
      *  is sent at most the day's budget of them, every reason for a request
      *  counted. `{ ok, used, budget, heldBy?, retryAfterSeconds? }`. */
-    async takeAddressBudget(url, addresses, kind) {
+    async takeAddressBudget(url, addresses, kind, { unscheduled = false } = {}) {
       if (dailyBudget <= 0 || !addressSetByName(url)) return { ok: true, used: 0, budget: dailyBudget };
       const list = Array.isArray(addresses) ? addresses : [];
       const ip = (list.find((a) => a?.family === 4) || list[0])?.address;
       if (!ip) return { ok: true, used: 0, budget: dailyBudget };
       const t = clock();
-      const key = `${dayOf(t)}|address|${String(ip).toLowerCase()}`;
+      // A registration's reads (anyone may register any name) are counted on
+      // a day of their own per address, so they never spend the day the
+      // scheduled reads of the names on that address share.
+      const key = `${dayOf(t)}|address|${String(ip).toLowerCase()}${unscheduled || inRegistration() ? "|unscheduled" : ""}`;
       const used = await countLocal(key);
       if (used > dailyBudget) {
         await countLocal(key, -1);
@@ -798,7 +848,7 @@ export function createSellerLoad({
      *  against the day's budget (of `chargeTo`, see takeBudget) when it may be. */
     async probeRefusal(url, kind, { chargeTo = null } = {}) {
       try {
-        if (await this.throttledUntil(url)) { bump(counts.refused, `${kind}:throttled`); return "throttled"; }
+        if (await this.throttledUntil(url, { chargeTo })) { bump(counts.refused, `${kind}:throttled`); return "throttled"; }
         const b = await this.takeBudget(url, kind, { chargeTo });
         return b.ok ? null : "budget";
       } catch { return null; }
@@ -854,15 +904,19 @@ export function createSellerLoad({
 }
 
 /** A request our own limit did not send: a registration's read past the
- *  host's hourly ceiling (`registration-hour`), or a read of a host whose
- *  address has had its day (`address-day`). Read like LandingHeld wherever a
+ *  host's hourly ceiling (`registration-hour`), one inside the Retry-After
+ *  the origin answered this registrant's earlier read with
+ *  (`seller-retry-after`), or a read of a host whose address has had its day
+ *  (`address-day`). Read like LandingHeld wherever a
  *  crawl meets one (`landingHeld`): nothing was asked, so the entry stays as
  *  it was. `retryAfterSeconds`: when the request may go. */
 export class RequestHeld extends Error {
   constructor(heldBy, retryAfterSeconds = 0) {
     super(heldBy === "registration-hour"
       ? `not sent: this caller's registration reads of that host are spent for this hour; retry in ${retryAfterSeconds} s`
-      : `not sent: the day's requests to that host's address are spent; retry in ${retryAfterSeconds} s`);
+      : heldBy === "seller-retry-after"
+        ? `not sent: that origin asked this caller's registration reads to wait; retry in ${retryAfterSeconds} s`
+        : `not sent: the day's requests to that host's address are spent; retry in ${retryAfterSeconds} s`);
     this.landingHeld = true;
     this.landingHost = null;
     this.requestHeld = true;
@@ -905,9 +959,9 @@ export class LandingHeld extends Error {
  *  (safeFetch and probePublicUrl `onResolved`): the request is counted on
  *  the address's day (takeAddressBudget), past which it throws RequestHeld
  *  and nothing is sent. */
-export function addressGate(kind, { load = sellerLoad } = {}) {
+export function addressGate(kind, { load = sellerLoad, unscheduled = false } = {}) {
   return async (addresses, url) => {
-    const b = await load.takeAddressBudget(url, addresses, kind);
+    const b = await load.takeAddressBudget(url, addresses, kind, { unscheduled });
     if (b?.ok === false) throw new RequestHeld(b.heldBy || "address-day", b.retryAfterSeconds);
   };
 }
