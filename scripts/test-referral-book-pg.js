@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { requireTestPg } from "./lib/test-pg.js";
+import { childJson } from "./lib/child-json.js";
 
 const WORKER = process.argv[2] === "--worker";
 const OLD_WORKER = process.argv[2] === "--old-worker";
@@ -216,7 +217,8 @@ try {
       const p = spawn(process.execPath, [fileURLToPath(import.meta.url), "--worker", "150", String(startAt)], { env: process.env, stdio: ["ignore", "pipe", "inherit"] });
       let out = "";
       p.stdout.on("data", (d) => { out += d; });
-      p.on("exit", () => { try { resolve(JSON.parse(out.trim().split("\n").pop())); } catch { resolve({ stood: 0, lost: -1, keys: [] }); } });
+      // The result line wherever it lands among the child's own log lines, read once its output has closed.
+      p.on("close", () => { try { resolve(childJson(out)); } catch { resolve({ stood: 0, lost: -1, keys: [] }); } });
     });
     const [a, b] = await Promise.all([run(), run()]);
     const rs = new Map((await rowsOf()).map((r) => [r.id, r.body.b]));
