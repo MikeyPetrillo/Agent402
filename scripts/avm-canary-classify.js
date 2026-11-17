@@ -99,6 +99,10 @@ export const isBuyerUnfunded = (status, body) => FUNDING_REASONS.has(refusalReas
 // Terminal shape of one paid attempt:
 // "ok" | "empty" | "breaker" | "unfunded" | "fast-402" | "throttle" | "slow-402" | "no-answer" | "other".
 //
+// `empty` is a 200 whose body is blank or could not be read (the sweep reads a
+// failed body read as ""). A 200 is the settled status, so `empty` is a CHARGE
+// with nothing delivered: see nextStep.
+//
 // `breaker` and `unfunded` are tested BEFORE the 402 shapes and before
 // isThrottle, because they are the outcomes that say nothing about the tool
 // under test: the request was refused before its handler ran (our breaker), or
@@ -192,6 +196,29 @@ export async function settledChainReading({ read, sleep, polls = 4, pollMs = 400
   let v = await read();
   for (let i = 1; i < polls && v === "pending"; i++) { await sleep(pollMs); v = await read(); }
   return v;
+}
+
+/**
+ * What the sweep does after one paid attempt's outcome (outcomeOf). The only
+ * outcomes that sign again on sight are HTTP error answers: a >=400 cancels
+ * settlement, so a fresh signature costs nothing unless it succeeds.
+ *   - "ok"        -> "done";
+ *   - "empty"     -> "charged-empty": a 200 is the settled status, so the
+ *     payment was taken and nothing came back. The spend is counted, nothing
+ *     is signed again (a retry that answered would be a second charge with one
+ *     counted), and the run fails;
+ *   - "unfunded"  -> "stop": the same wallet cannot pass;
+ *   - "no-answer" -> "read-chain": the payment's fate decides (noAnswerVerdict);
+ *   - a name this function does not know -> "stop": nothing is signed on an
+ *     outcome nobody classified;
+ *   - every HTTP error answer -> "retry": one fresh signature.
+ */
+const RESIGNABLE = new Set(["breaker", "fast-402", "throttle", "slow-402", "other"]);
+export function nextStep(out) {
+  if (out === "ok") return "done";
+  if (out === "empty") return "charged-empty";
+  if (out === "no-answer") return "read-chain";
+  return RESIGNABLE.has(out) ? "retry" : "stop";
 }
 
 /**

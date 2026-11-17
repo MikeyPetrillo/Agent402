@@ -6,7 +6,7 @@
 // upstream vendor 5xx was booked as a broken tool on first sight.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
-import { outcomeOf, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
+import { outcomeOf, nextStep, transportAttempt, avmPaymentTxid, readPaymentOnChain, settledChainReading, noAnswerVerdict, recheckVerdict, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
@@ -16,6 +16,22 @@ const R = (status, body = "", elapsedMs = 6000) => ({ status, body, elapsedMs })
 // ---- outcomeOf ----
 ok(outcomeOf(R(200, '{"x":1}')) === "ok", "200 with a body is ok");
 ok(outcomeOf(R(200, "   ")) === "empty", "200 with a blank body is empty");
+ok(outcomeOf(R(200, "")) === "empty" && outcomeOf({ status: 200, elapsedMs: 10 }) === "empty" && outcomeOf(R(200, "", 10)) === "empty",
+  "200 with no body, or one that could not be read (the sweep reads it as \"\"), is empty at any speed");
+
+// ---- nextStep: what is signed again, every branch ----
+// A 200 is the settled status: an empty one is a charge, never a retry (a
+// retry that answered would be two charges with one counted and exit 0).
+ok(nextStep("empty") === "charged-empty", "a 200 with an empty body is charged-empty");
+ok(nextStep(outcomeOf(R(200, ""))) !== "retry" && nextStep(outcomeOf(R(200, " \n"))) !== "retry", "...so an empty or unreadable 200 is NEVER signed again");
+ok(nextStep("ok") === "done", "a delivered payload is done");
+ok(nextStep("no-answer") === "read-chain", "no answer: the chain decides before anything is signed");
+ok(nextStep("unfunded") === "stop", "an unfunded wallet stops, no retry");
+for (const o of ["breaker", "fast-402", "throttle", "slow-402", "other"]) ok(nextStep(o) === "retry", `an HTTP error answer (${o}) cancels settlement: one fresh retry`);
+ok(nextStep("something-new") === "stop" && nextStep(undefined) === "stop", "an outcome nobody classified signs nothing");
+// Every outcome outcomeOf can name is decided, and only >=400 answers retry.
+for (const [a, want] of [[R(200, "x"), "done"], [R(200, ""), "charged-empty"], [R(402, "{}", 85), "retry"], [R(402, "{}", 5629), "retry"], [R(429, ""), "retry"], [R(500, "x"), "retry"], [transportAttempt(new Error("socket hang up"), 10, "T"), "read-chain"]])
+  ok(nextStep(outcomeOf(a)) === want, `status ${a.status} -> ${want}`);
 ok(outcomeOf(R(402, "{}", 85)) === "fast-402", "a sub-1.5s 402 is fast-402 (never reached the chain)");
 ok(outcomeOf(R(402, "{}", 5629)) === "slow-402", "a 5.6s 402 is slow-402 (a genuine settlement attempt)");
 ok(outcomeOf(R(402, '{"error":"Payment rejected","reason":"requirements-mismatch","hint":"..."}', 40)) === "slow-402",
@@ -189,11 +205,26 @@ ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", 
      "each attempt gets its own deadline: a signal built once left the retry already aborted");
   ok(/const first = out === "no-answer" \? await settleNoAnswer\(a, false\) : "retry";\s*if \(first === "retry"\) \{\s*a = await attempt\(\);/.test(src),
      "a no-answer is settled on chain BEFORE the retry signs, and only `retry` signs again");
+  // An empty 200 is a charge: the retry block is entered on the classifier's
+  // word alone, and there is no other attempt anywhere in the sweep.
+  ok(/const step = nextStep\(out\);\s*if \(step === "retry" \|\| step === "read-chain"\) \{/.test(src), "the retry block is entered only on nextStep's retry or read-chain");
+  ok((src.match(/await attempt\(\)/g) || []).length === 2 && !/if \(out !== "ok"\) \{/.test(src) && !/nextStep\([^)]*\) (!==|===) "(done|charged-empty)"/.test(src),
+     "...and the sweep holds exactly two attempts: the first, and the one inside that block");
+  {
+    const block = /const step = nextStep\(out\);[\s\S]*?\n    \}\n/.exec(src)?.[0] || "";
+    ok(block.includes("a = await attempt();") && src.replace(block, "").match(/await attempt\(\)/g)?.length === 1, "the second attempt sits inside the gated block");
+  }
+  ok(/\} else if \(out === "empty"\) \{[^}]*\s*report\.chargedEmpty\.push\(\{ key, slug: t\.slug, usd, tx: a\.tx \|\| null,[^\n]*\n\s*report\.spentUsd \+= usd;/.test(src),
+     "an empty 200 is recorded as charged with an empty answer (tool, receipt transaction id) and counted in the spend");
+  ok(/CHARGED, empty answer: 200 with [^\n]*\$\{t\.slug\}\$\{a\.tx \? ` · tx \$\{a\.tx\}`/.test(src), "its line names the tool and the receipt's transaction id");
+  ok(!/report\.toolFail\.push\([^\n]*empty body/.test(src), "an empty 200 is never booked as an uncharged tool failure");
+  ok(/const bad = [^;]*\+ noAnswerBad \+ report\.chargedEmpty\.length;/.test(src), "a charge with an empty answer FAILS the run");
+  ok(/const body = await paid\.text\(\)\.catch\(\(\) => \{ unreadable = true; return ""; \}\);/.test(src), "a body that cannot be read is an empty one");
   ok(/const chain = x\.txid \? await chainReading\(x\.txid\) : "unreadable";\s*const verdict = noAnswerVerdict\(\{ chain, retried: wasRetry \}\);/.test(src),
      "the verdict is the classifier's, on the chain's reading; a payment with no id is unreadable");
   ok(/if \(verdict === "charged"\) \{\s*report\.chargedNoAnswer\.push\(row\);\s*report\.spentUsd \+= usd;/.test(src), "a landed payment is counted in the spend and recorded as charged without an answer");
   ok(/if \(out === "no-answer"\) \{ await sleep\(THROTTLE_BACKOFF_MS\); await settleNoAnswer\(a, true\); \}/.test(src), "a retry with no answer is settled the same way, and there is no third attempt");
-  ok(/const noAnswerBad = report\.chargedNoAnswer\.length \+ report\.chargeUnverified\.length \+ report\.noAnswer\.length;\s*const bad = [^;]*\+ noAnswerBad;/.test(src),
+  ok(/const noAnswerBad = report\.chargedNoAnswer\.length \+ report\.chargeUnverified\.length \+ report\.noAnswer\.length;\s*const bad = [^;]*\+ noAnswerBad[;\s+]/.test(src),
      "charged, not ruled out, and unanswered on the last attempt each FAIL the run");
   ok(!/report\.upstreamFail\.push\([^)]*answerOf|a\.status \? "not charged/.test(src) && !/answerOf/.test(src), "a no-answer never reaches the upstream bucket, whose header says the buyer was not charged");
   ok(/for \(const p of absentPayments\) \{\s*const waitMs = p\.failedAt \+ CHARGE_RECHECK_MS - Date\.now\(\);\s*if \(waitMs > 0\) await sleep\(waitMs\);/.test(src)
@@ -203,7 +234,7 @@ ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", 
   ok(src.indexOf("for (const p of absentPayments)") < src.indexOf("const noAnswerBad =") && src.indexOf("for (const p of absentPayments)") > src.indexOf("await sleep(DELAY_MS);"),
      "...after the sweep and before the verdict");
   ok(/if \(paid\.status === 200 && signed\.txid\) deliveredTxids\.add\(signed\.txid\);/.test(src), "an id that answered 200 is remembered as delivered");
-  ok(/NEVER EXIT 0 AFTER A POSSIBLE\s*\/\/\s*CHARGE/.test(src), "the rule is stated in the script header");
+  ok(/NEVER EXIT 0 AFTER A POSSIBLE\s*\/\/\s*CHARGE, and never sign again after one\./.test(src) && /A 200 WITH AN EMPTY OR UNREADABLE BODY/.test(src), "the rule is stated in the script header, the empty 200 included");
 }
 
 // ---- and the SWEEP acts on it ---------------------------------------------
