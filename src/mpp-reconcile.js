@@ -377,6 +377,11 @@ export async function fetchTransfersFromRpc({ rpcFn, recipients, fromMs, toMs, c
 
 // ---------------------------------------------------------------------------
 
+// The longest a reconciler may go without a finished run before its run word
+// reads stale, and the time one run may hold its lease.
+const RUN_GAP_MS = 36 * 3600e3;
+const RUN_LEASE_MS = 1_200_000;
+
 /**
  * createMppReconciler(deps) -> { runOnce, status, publicStatus, detail, start, stop }
  *
@@ -418,6 +423,11 @@ export function createMppReconciler({
   const explainedMap = () => new Map(explainedEntries.map((e) => [explainTxKey(e.tx), { note: e.note, at: e.at }]));
   let running = null;
   let timer = null, firstTimer = null;
+  // From start() until the first check after boot has finished (or the time
+  // a run is allowed has passed, so a first run that never ends still reads
+  // stale): a stored run older than the gap says nothing yet about a
+  // reconciler that was just switched on or was stopped for days.
+  let bootCheckUntil = 0;
 
   // With the database the other container may have run (and stored) a day
   // this one has not: a run starts from the row, and its save writes only
@@ -438,7 +448,7 @@ export function createMppReconciler({
       const moves = !!d && advances && (!row.lastDay || d >= row.lastDay);
       return {
         ...row, days,
-        ...(newer ? { window: moves ? mine.window : row.window, lastRunAt: mine.lastRunAt, lastError: mine.lastError, ...(moves ? { lastDay: d } : {}) } : {}),
+        ...(newer ? { window: moves ? mine.window : row.window, lastRunAt: mine.lastRunAt, lastError: mine.lastError, failingSince: mine.failingSince || null, ...(moves ? { lastDay: d } : {}) } : {}),
         runs: Math.max(Number(row.runs) || 0, Number(mine.runs) || 0),
       };
     }, { fallback: null }).then((r) => { if (r.ok) absorb(r.body); return r.ok; });
@@ -483,7 +493,7 @@ export function createMppReconciler({
    *  at that day's end. Concurrent calls share one run. */
   // Under a lease: two containers (a deploy's overlap, a second replica)
   // never run this tick at once; without a database it is the plain tick.
-  const runOnce = leased("mpp-reconcile-run", { ttlMs: 1200000, log: log, failOpen: true }, runOnceUnleased);
+  const runOnce = leased("mpp-reconcile-run", { ttlMs: RUN_LEASE_MS, log: log, failOpen: true }, runOnceUnleased);
   async function runOnceUnleased({ day = null } = {}) {
     if (running) return running;
     running = (async () => {
@@ -513,17 +523,21 @@ export function createMppReconciler({
         for (const k of Object.keys(state.days).sort().slice(0, -keepDays)) delete state.days[k];
         state.lastRunAt = new Date(t).toISOString();
         state.lastError = null;
+        state.failingSince = null;
         state.runs = (state.runs || 0) + 1;
         await persist(d, advances);
         log(`[mpp-reconcile] ${d}: ${daySum.mismatchTotal} mismatch(es), chain ${daySum.sources.chain.source || "-"}${daySum.sources.chain.complete ? "" : " (incomplete)"}; 7d ${winSum.mismatchTotal}`);
         return { ok: true, day: d, summary: state.days[d], window: win };
       } catch (e) {
+        // A run that threw did not finish: lastRunAt stays on the last run
+        // that did, so days of failing runs read stale, not ok. A reconciler
+        // that has never finished one counts its gap from the first failure.
         state.lastError = String(e?.message || e).slice(0, 200);
-        state.lastRunAt = new Date(t).toISOString();
-        await persist();
+        state.failingSince = state.failingSince || new Date(t).toISOString();
+        try { await persist(); } catch { /* the words follow memory */ }
         log(`[mpp-reconcile] run failed: ${state.lastError}`);
         return { ok: false, error: state.lastError };
-      } finally { running = null; }
+      } finally { running = null; bootCheckUntil = 0; }
     })();
     return running;
   }
@@ -557,7 +571,7 @@ export function createMppReconciler({
     const s = latestDay();
     const t = now();
     let word = statusWordFor(s);
-    const stale = !state.lastRunAt || t - Date.parse(state.lastRunAt) > 36 * 3600e3;
+    const stale = !state.lastRunAt || t - Date.parse(state.lastRunAt) > RUN_GAP_MS;
     if (stale && word === "ok") word = "unknown";
     let cf = { total: 0, internal: 0, external: 0 };
     try {
@@ -573,8 +587,15 @@ export function createMppReconciler({
     // of unknown pages nothing, so a reconciler that stopped would go unseen.
     // off with the switch off, unknown before a first run, stale once the
     // last run is past the gap, ok otherwise.
+    // A run that threw is not a run: the gap is counted from the last run
+    // that finished, or from the first failure when none ever has. Between
+    // start() and the first check after boot, a gap already past reads
+    // unknown (neither pager opens nor closes on it).
+    const since = Date.parse(state.lastRunAt || state.failingSince || "");
+    const pastGap = Number.isFinite(since) && t - since > RUN_GAP_MS;
     const run = String(process.env.MPP_RECONCILE || "").toLowerCase() === "off" ? "off"
-      : !state.lastRunAt ? "unknown" : stale ? "stale" : "ok";
+      : !pastGap ? (state.lastRunAt ? "ok" : "unknown")
+      : t < bootCheckUntil ? "unknown" : "stale";
     const base = {
       status: word,
       day: s?.day || null,
@@ -603,7 +624,7 @@ export function createMppReconciler({
   /** Full detail for the operator route. Still no payer addresses: the
    *  summaries never held one. */
   function detail() {
-    return { lastRunAt: state.lastRunAt, lastError: state.lastError, runs: state.runs, lastDay: state.lastDay || null, day: latestDay(), window: state.window, days: Object.keys(state.days).sort(), explained: explainedEntries.map((e) => ({ tx: e.tx, note: e.note, at: e.at })) };
+    return { lastRunAt: state.lastRunAt, lastError: state.lastError, failingSince: state.failingSince || null, runs: state.runs, lastDay: state.lastDay || null, day: latestDay(), window: state.window, days: Object.keys(state.days).sort(), explained: explainedEntries.map((e) => ({ tx: e.tx, note: e.note, at: e.at })) };
   }
 
   const itemTxs = (sum) => [...(sum?.mismatches || []), ...(sum?.info || [])].map((m) => (m?.tx ? normTx(m.tx) : null));
@@ -672,7 +693,13 @@ export function createMppReconciler({
   function start({ firstDelayMs = Number(process.env.MPP_RECONCILE_FIRST_DELAY_MS) || 5 * 60_000, everyMs = 60 * 60_000 } = {}) {
     if (String(process.env.MPP_RECONCILE || "").toLowerCase() === "off") { log("[mpp-reconcile] disabled (MPP_RECONCILE=off)"); return null; }
     const due = () => state.lastDay !== utcDay(now() - DAY_MS);
-    firstTimer = setTimeout(() => { if (due()) runOnce().catch(() => {}); }, firstDelayMs);
+    bootCheckUntil = now() + firstDelayMs + RUN_LEASE_MS;
+    firstTimer = setTimeout(() => {
+      // A check that finds nothing due, or a run another container holds,
+      // has finished; a run of this one ends the wait in its own finally.
+      // (A run the other container holds keeps the wait: its row is read within a minute.)
+      Promise.resolve(due() ? runOnce() : null).then((r) => { if (!r?.skipped) bootCheckUntil = 0; }, () => { bootCheckUntil = 0; });
+    }, firstDelayMs);
     firstTimer.unref?.();
     timer = setInterval(() => { if (due()) runOnce().catch(() => {}); }, everyMs);
     timer.unref?.();

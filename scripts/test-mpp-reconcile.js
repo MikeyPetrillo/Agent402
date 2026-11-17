@@ -172,6 +172,72 @@ ok((await createMppReconciler({ file: join(dir, "none.json"), log: () => {} }).s
   try { ok((await staleRec.status()).run === "off" && (await staleRec.status()).stale === true, "...and off with MPP_RECONCILE=off, whatever its age"); }
   finally { if (before === undefined) delete process.env.MPP_RECONCILE; else process.env.MPP_RECONCILE = before; }
 }
+// A run that throws is not a run: lastRunAt stays on the last one that
+// finished, so a reconciler failing for days reads stale, and each failure
+// logs once.
+{
+  let clock = END + 3600e3, fail = false;
+  const lines = [];
+  const R = createMppReconciler({
+    file: join(dir, "failing.json"), log: (l) => lines.push(l), now: () => clock, recipients: () => [RECIPIENT], currencies: () => [USDCE],
+    ledgerRows: () => [row(1)], refunds: () => [],
+    fetchTransfers: async () => { if (fail) throw new Error("chain read refused"); return { complete: true, source: "rpc", rows: [xfer(1)] }; },
+  });
+  await R.runOnce();
+  const finishedAt = (await R.status()).lastRunAt;
+  fail = true;
+  for (let h = 1; h <= 3; h++) { clock = END + 3600e3 + h * 13 * 3600e3; await R.runOnce(); }
+  const st = await R.status();
+  ok(st.lastRunAt === finishedAt && R.detail().lastError === "chain read refused", `a run that throws leaves lastRunAt on the last finished run (${st.lastRunAt})`);
+  ok(st.run === "stale" && st.status === "unknown" && st.stale === true, `39 h of failing runs read stale, not ok (run ${st.run}, status ${st.status})`);
+  ok(lines.filter((l) => /run failed: chain read refused/.test(l)).length === 3, "each failed run logs once");
+  fail = false; await R.runOnce();
+  ok((await R.status()).run === "ok" && R.detail().failingSince === null, "a finished run reads ok again");
+  // Never finished one: unknown inside the gap, stale past it, counted from the first failure.
+  let c2 = END + 3600e3;
+  const N = createMppReconciler({ file: join(dir, "never.json"), log: () => {}, now: () => c2, recipients: () => [RECIPIENT], ledgerRows: () => [row(1)], refunds: () => [], fetchTransfers: async () => { throw new Error("down"); } });
+  await N.runOnce();
+  ok((await N.status()).run === "unknown" && (await N.status()).lastRunAt === null, "a reconciler whose only run failed reads unknown inside the gap");
+  c2 += 37 * 3600e3; await N.runOnce();
+  ok((await N.status()).run === "stale", "...and stale once it has failed for longer than the gap");
+}
+// From start() until the first check after boot has finished, a stored run
+// older than the gap reads unknown (the pagers neither open nor close on it):
+// the switch was just lifted, or the service was stopped for days.
+{
+  let clock = END + 60 * 3600e3, fail = false;
+  const mk = (file) => createMppReconciler({
+    file: join(dir, file), log: () => {}, now: () => clock, recipients: () => [RECIPIENT], currencies: () => [USDCE], ledgerRows: () => [row(1)], refunds: () => [],
+    fetchTransfers: async () => { if (fail) throw new Error("down"); return { complete: true, source: "rpc", rows: [xfer(1)] }; },
+  });
+  const tick = () => new Promise((r) => setTimeout(r, 60));
+  const { copyFileSync } = await import("node:fs");
+  copyFileSync(join(dir, "clean.json"), join(dir, "boot-a.json")); copyFileSync(join(dir, "clean.json"), join(dir, "boot-b.json")); copyFileSync(join(dir, "clean.json"), join(dir, "boot-c.json"));
+  const A = mk("boot-a.json");
+  ok((await A.status()).run === "stale", "a stored run older than the gap reads stale on a reconciler that was never started");
+  A.start({ firstDelayMs: 20, everyMs: 3600e3 });
+  ok((await A.status()).run === "unknown", "...and unknown from start() until the first check");
+  await tick();
+  ok((await A.status()).run === "ok", "the first check ran and finished: ok");
+  A.stop();
+  fail = true;
+  const B = mk("boot-b.json");
+  B.start({ firstDelayMs: 20, everyMs: 3600e3 });
+  ok((await B.status()).run === "unknown", "a second boot waits the same way");
+  await tick();
+  ok((await B.status()).run === "stale", "the first check ran and failed: stale");
+  B.stop();
+  // A first run that never ends stops being waited for once a run's time has passed.
+  let release; const hang = new Promise((r) => { release = r; });
+  const C = createMppReconciler({ file: join(dir, "boot-c.json"), log: () => {}, now: () => clock, recipients: () => [RECIPIENT], ledgerRows: () => [row(1)], refunds: () => [], fetchTransfers: () => hang.then(() => { throw new Error("late"); }) });
+  C.start({ firstDelayMs: 20, everyMs: 3600e3 });
+  await tick();
+  ok((await C.status()).run === "unknown", "a first run still in flight reads unknown");
+  clock += 21 * 60_000;
+  ok((await C.status()).run === "stale", "...and stale once the time one run may take has passed");
+  C.stop(); release(); await tick();
+  fail = false;
+}
 const blindRec = createMppReconciler({ file: join(dir, "blind.json"), log: () => {}, now: () => END + 3600e3, recipients: () => [RECIPIENT], ledgerRows: () => [row(1)], refunds: () => [], fetchTransfers: async () => ({ complete: false, source: "rpc", rows: [], error: "unreadable" }) });
 await blindRec.runOnce();
 ok((await blindRec.status()).status === "unknown", "reconciler with an unreadable chain reports unknown");
