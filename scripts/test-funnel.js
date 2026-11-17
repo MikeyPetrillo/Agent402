@@ -28,6 +28,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { bootServer } from "./lib/boot-server.js";
+import { childJson } from "./lib/child-json.js";
 
 const SELF = fileURLToPath(import.meta.url);
 const DAY = 86_400_000;
@@ -233,7 +234,7 @@ const sl = await import("../src/sales-ledger.js");
 {
   const file = join(TMP, "perf.db");
   const r = spawnSync(process.execPath, ["--expose-gc", SELF, "--perf", file], { env: { ...process.env, SALES_LEDGER_DB: file }, encoding: "utf8", timeout: 300_000 });
-  let m = null; try { m = JSON.parse(String(r.stdout).trim().split("\n").pop()); } catch { m = null; }
+  let m = null; try { m = childJson(r.stdout); } catch { m = null; }
   ok(r.status === 0 && m, `the 400k-row read ran (${m ? JSON.stringify(m) : String(r.stderr).slice(-400)})`);
   if (m) {
     ok(m.rows === 400_000 && m.days === 30 && m.wallets > 0, "it read 30 days of the 400k rows");
