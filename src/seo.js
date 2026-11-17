@@ -283,6 +283,7 @@ export function sitemapXml(baseUrl, catalog) {
     { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
+    { loc: `${baseUrl}/press`, priority: "0.5" },
     { loc: `${baseUrl}/proof`, priority: "0.7" },
     { loc: `${baseUrl}/scorecard`, priority: "0.7" },
     { loc: `${baseUrl}/terms`, priority: "0.3" },
@@ -369,6 +370,7 @@ function pageUrls(baseUrl, catalog) {
     { loc: `${baseUrl}/trust`, priority: "0.6" },
     { loc: `${baseUrl}/crawler`, priority: "0.5" },
     { loc: `${baseUrl}/company`, priority: "0.7" },
+    { loc: `${baseUrl}/press`, priority: "0.5" },
     { loc: `${baseUrl}/scorecard`, priority: "0.7" },
     { loc: `${baseUrl}/glossary`, priority: "0.8" },
     { loc: `${baseUrl}/101`, priority: "0.9" },
@@ -641,6 +643,7 @@ ${flatTiersLine()}
 - [/api/mpp-leaderboard](${baseUrl}/api/mpp-leaderboard): on-chain ranking of MPP sellers by inbound USDC.e transfers on Tempo to their live recipient (window, distinct payers, volume; \`routable\` = the router will pay them)
 - [/.well-known/x402](${baseUrl}/.well-known/x402): one-fetch service manifest (identity, payment options, capability map, MCP, trust signals)
 - [/.well-known/agent-card.json](${baseUrl}/.well-known/agent-card.json): our A2A AgentCard (also at /.well-known/agent.json) - name, skills, transport. It declares HTTP+JSON rather than the spec's default JSONRPC because that is what we actually serve
+- [/mcp/server-card](${baseUrl}/mcp/server-card): our MCP server card (also at /.well-known/mcp/server-card.json) - name, version and the streamable HTTP endpoint at /mcp, as the connector reports them at initialize
 - [/.well-known/agent-registration.json](${baseUrl}/.well-known/agent-registration.json): our ERC-8004 registration file. ${erc8004AgentId(baseUrl) ? `The identity is agent ${erc8004AgentId(baseUrl)} in the registry at ${ERC8004_IDENTITY_REGISTRY.chain}:${ERC8004_IDENTITY_REGISTRY.address}, owned by the wallet our 402s name as payTo, and the` : "The"} file lists every way to reach us with x402Support declared
 - [/api/reliability](${baseUrl}/api/reliability): structured reliability / SLA report with a verification URL per claim
 - [/api/scorecard](${baseUrl}/api/scorecard): buyer scorecard per UTC month from our sales ledger: outside paying wallets, returning and multi-day wallets, settled paid calls and USD by network; our own wallets and test traffic left out, counts of 1 or 2 read "<3" (page: [/scorecard](${baseUrl}/scorecard))
@@ -684,6 +687,7 @@ ${toolSections}
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
 - [Trust](${baseUrl}/trust): subprocessors, what is stored and where, encryption, nightly backups and restore tests, incident response
 - [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
+- [Press](${baseUrl}/press): press kit: how to write the name, logo and social card files, the press contact
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it
 - [Test your x402 client](${baseUrl}/x402-test): point any client at a real paid route and read why it was refused - which field differs from what was advertised, which schemes and networks are offered, whether the amount or the validity window is wrong. Refusals are free (an error status cancels settlement); every reason this server emits is listed there

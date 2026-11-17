@@ -33,6 +33,3 @@ export const REPO_NAMESPACE = `io.github.${REPO_SLUG.split("/")[0]}`;
 
 /** A path inside the repository: repoUrl("issues"), repoUrl("wiki/Security-Model"). */
 export const repoUrl = (path = "") => (path ? `${REPO_URL}/${String(path).replace(/^\/+/, "")}` : REPO_URL);
-
-/** Brand profiles for Organization JSON-LD `sameAs`: repo, npm package, X. */
-export const ORG_SAME_AS = [REPO_URL, "https://www.npmjs.com/package/agent402-mcp", "https://x.com/Agent402Tools"];

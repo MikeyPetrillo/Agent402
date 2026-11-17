@@ -66,6 +66,7 @@ const PAGES = [
   { path: "/trust",       titleSubstr: "Trust" },
   { path: "/crawler",     titleSubstr: "crawler" },
   { path: "/company",     titleSubstr: "Havok Holdings" },
+  { path: "/press",       titleSubstr: "press kit" },
   { path: "/reports/sample/dossier", titleSubstr: "sample" },
   { path: "/proof",       titleSubstr: "Receipts" },
   { path: "/glossary",    titleSubstr: "glossary" },

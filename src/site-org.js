@@ -4,7 +4,7 @@
 // that operates it (`${baseUrl}/#org`, defined in full on /company) as its
 // parent. ledgerShell emits the entity on every page, so a reference always
 // resolves inside the page that carries it.
-import { REPO_URL } from "./repo-link.js";
+import { ORG_SAME_AS } from "./org-profiles.js";
 
 export const SITE_ORG_NAME = "Agent402";
 export const COMPANY_NAME = "Havok Holdings LLC";
@@ -26,6 +26,7 @@ export function mppOffered(env = process.env) {
 /** The site entity in full. `mpp` defaults to this server's MPP switch
  *  (mppOffered); false leaves MPP out of knowsAbout. */
 export function siteOrgLd(baseUrl, { mpp = mppOffered() } = {}) {
+  const host = (() => { try { return new URL(baseUrl).host; } catch { return String(baseUrl || ""); } })();
   return {
     "@context": "https://schema.org",
     "@type": "Organization",
@@ -33,10 +34,12 @@ export function siteOrgLd(baseUrl, { mpp = mppOffered() } = {}) {
     name: SITE_ORG_NAME,
     alternateName: ["Agent402.Tools", "Agent402 Tools", "agent402.tools"],
     url: baseUrl,
+    description: `Agent402.Tools is a pay-per-call catalog of 500+ tools for AI agents, paid per request over x402${mpp ? " or MPP" : ""}, operated by ${COMPANY_NAME}.`,
+    disambiguatingDescription: `The tool catalog and MCP server for AI agents at ${host}, operated by ${COMPANY_NAME}.`,
     knowsAbout: ["Agentic Finance", "AIFI", "x402", ...(mpp ? ["Machine Payments Protocol (MPP)"] : []), "agentic payments", "AI agents"],
     logo: { "@type": "ImageObject", url: `${baseUrl}/logo.png` },
     email: "mike@agent402.tools",
     parentOrganization: { "@type": "Organization", "@id": companyOrgId(baseUrl), name: COMPANY_NAME, url: COMPANY_URL },
-    sameAs: [REPO_URL, "https://x.com/Agent402Tools", "https://www.npmjs.com/package/agent402-mcp", "https://www.npmjs.com/package/agent402-client", "https://www.npmjs.com/package/agent402-tollbooth", "https://pypi.org/project/agent402-langchain/"],
+    sameAs: [...ORG_SAME_AS],
   };
 }

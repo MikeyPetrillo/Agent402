@@ -123,6 +123,11 @@ export const FLAGSHIP_WRITERS = new Set(["memory-write", "decide-execute"]);
 export function mcpServerDescription({ mpp = true } = {}) {
   return `${leadSentence({ mpp })} Flagships: live web search and cited answers, news, browser render, market data, speech-to-text and wallet-keyed memory; the rest via catalog.find. Settle in USDC via ${mpp ? "x402 or MPP (Machine Payments Protocol) on the same 402" : "x402"}, or free via proof-of-work. The applied layer of Agentic Finance. Maintained by Havok Holdings LLC.`;
 }
+/** The short description (100 characters at most) the MCP Registry entry
+ *  (mcp/server.json) and the server card carry. */
+export function mcpShortDescription({ mpp = true } = {}) {
+  return `Agentic Finance: 500+ agent tools, multi-chain USDC over ${mpp ? "x402 or MPP" : "x402"}, or free via proof-of-work`;
+}
 /** The published description (both wires), identical to the stdio package's. */
 export const MCP_SERVER_DESCRIPTION = mcpServerDescription();
 
