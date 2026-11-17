@@ -8,6 +8,7 @@ import { createIdempotencyStore, IDEM_TTL_MS, INFLIGHT_RENEW_MS, INFLIGHT_MAX_MS
 import { onResponseEnd } from "./hangup-settlement.js";
 import { allowanceServed } from "./allowance-state.js";
 import { isX402McpRequest } from "./mcp-x402-routes.js";
+import { MAX_SETTLED_VALIDITY_HOLD_MS, paymentReplayKey } from "./replay-guard.js";
 
 // A stored answer is the body as served, or, when it was charged but never
 // delivered (the buyer left while the payment settled), the body under this
@@ -23,23 +24,42 @@ const unwrapStored = (hit) => (hit && typeof hit === "object" && !Array.isArray(
 // (src/settlement-claims.js). Sent again, it used to run the handler again
 // and then meet that claim at settle (duplicate_authorization), which the
 // settle breaker reads as the buyer's fault. That answer is kept here under
-// the payment credential itself (any route or body: one authorization is
-// one payment) and the same payment sent again gets it back before the
+// the payment's identity (any route or body: one authorization is one
+// payment): for an EVM payment its network, signed payer and nonce
+// (paymentNonceIdentityOf), so the same authorization re-encoded or naming
+// another `resource` is the same payment; for any other rail the identity the
+// replay guard reads from what its chain consumes (paymentReplayKey), else
+// the credential text. The same payment sent again gets it back before the
 // paywall: no handler run, no verify, no settle, nothing counted against the
 // wallet. Kept until the authorization's validBefore (past it the
 // authorization can no longer move money, and a new one is safe) plus a
-// minute, at least a minute, at most a day.
+// minute, at least a minute, at most MAX_SETTLED_VALIDITY_HOLD_MS (30 days);
+// a payment that names no validBefore (Solana, Stellar, Algorand), a day.
 const UNCONFIRMED = "__a402Unconfirmed";
 const UNCONFIRMED_MIN_MS = 60_000;
-const UNCONFIRMED_MAX_MS = 24 * 3600_000;
+const UNCONFIRMED_NO_EXPIRY_MS = 24 * 3600_000;
 /** How long an unconfirmed answer is kept for an authorization whose
- *  validBefore is `validBefore` (unix seconds; unreadable reads as the most). */
+ *  validBefore is `validBefore` (unix seconds; none or unreadable reads as a
+ *  payment that names no validBefore). */
 export function unconfirmedReplayMs(validBefore, now = Date.now()) {
-  const vb = Number(validBefore);
-  if (!Number.isFinite(vb) || vb <= 0 || vb > 10_000_000_000) return UNCONFIRMED_MAX_MS;
-  return Math.min(UNCONFIRMED_MAX_MS, Math.max(UNCONFIRMED_MIN_MS, vb * 1000 - now + UNCONFIRMED_MIN_MS));
+  const vb = validBefore === null || validBefore === undefined || validBefore === "" ? NaN : Number(validBefore);
+  if (!Number.isFinite(vb) || vb <= 0) return UNCONFIRMED_NO_EXPIRY_MS;
+  return Math.min(MAX_SETTLED_VALIDITY_HOLD_MS, Math.max(UNCONFIRMED_MIN_MS, vb * 1000 - now + UNCONFIRMED_MIN_MS));
 }
-const unconfirmedKeyOf = (cred) => createHash("sha256").update(`unconfirmed-settle\n${cred}`).digest("hex");
+/** The key an unconfirmed answer is kept under for this request's payment. */
+export function unconfirmedKeyOf(req, cred) {
+  let id = null;
+  const n = paymentNonceIdentityOf(req);
+  if (n) id = `nonce\n${n.network}\n${n.from}\n${n.nonce}`;
+  else {
+    let k = null;
+    try { k = paymentReplayKey(req); } catch { k = null; }
+    // "<kind>:<identity>:<legacy>": the identity half is what the chain
+    // consumes; a raw-credential key ("c:") is the text itself.
+    if (typeof k === "string" && !k.startsWith("c:")) id = `replay\n${k.split(":").slice(0, 2).join(":")}`;
+  }
+  return createHash("sha256").update(`unconfirmed-settle\n${id || `cred\n${cred}`}`).digest("hex");
+}
 
 /** Whether a re-sent x402 payment on `def`'s route may replay its first
  *  answer implicitly (src/server.js mounts it as `implicitReplay`): never on a
@@ -202,7 +222,7 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
   return async (req, res, next) => {
     if (!isCatalogRoute(req)) return next();
     const cred = freeMode ? null : paymentHeaderOf(req);
-    const uKey = cred ? unconfirmedKeyOf(cred) : null;
+    const uKey = cred ? unconfirmedKeyOf(req, cred) : null;
     const bound = idemHashKey(req);
     if (!bound && !uKey) return next();
     const [uHit, hit0] = await Promise.all([
