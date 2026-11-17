@@ -1363,22 +1363,23 @@ jobs:
 
       # Operator-token guessing: the per-IP limiter caps one source; this is the
       # aggregate. "elevated" = OPERATOR_AUTH_FAIL_ALERT (default 100) wrong
-      # operator credentials in the last hour. Counts only; rotate the token if
-      # it persists. "ok"/"unknown" never page.
+      # operator credentials in the last hour. The public word only: the count
+      # and the threshold are operator-only (a live counter on a public surface
+      # is a tuning aid for a slow guess), so neither is read or printed here.
+      # Rotate the token if it persists. "ok"/"unknown" never page.
       - name: Operator token guessing check (alarm when wrong-credential rate is elevated)
         if: always()
         continue-on-error: true
         run: |
           STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.operatorAuth.status // "unknown"' 2>/dev/null || echo unknown)
-          FAILS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.operatorAuth.failures1h // "?"' 2>/dev/null || echo "?")
-          echo "operator auth: $STATUS ($FAILS wrong credentials in the last hour)"
+          echo "operator auth: $STATUS"
           TITLE="Operator token guessing ELEVATED"
           OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
           if [ "$STATUS" = "elevated" ]; then
             if [ -z "$OPEN" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports operatorAuth.status=elevated: $FAILS wrong operator credentials in the last hour (threshold OPERATOR_AUTH_FAIL_ALERT). The per-IP limiter caps each source; this is the aggregate. If it persists, rotate AGENT402_OPERATOR_TOKEN on Railway and in Actions secrets. Auto-closes when the rate drops." >/dev/null 2>&1 || echo "issue create failed"
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports operatorAuth.status=elevated: wrong operator credentials in the last hour are at or above OPERATOR_AUTH_FAIL_ALERT (the operator view of the same route has the count). The per-IP limiter caps each source; this is the aggregate. If it persists, rotate AGENT402_OPERATOR_TOKEN on Railway and in Actions secrets. Auto-closes when the rate drops." >/dev/null 2>&1 || echo "issue create failed"
             else
-              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still elevated at $(date -u +%FT%TZ): $FAILS in the last hour." >/dev/null 2>&1 || true
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still elevated at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
             fi
           elif [ "$STATUS" = "ok" ] && [ -n "$OPEN" ]; then
             gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Recovered: wrong-credential rate back under the threshold at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
