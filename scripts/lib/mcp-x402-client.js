@@ -1,0 +1,73 @@
+// A small client for the hosted connector's x402 MCP wire, for the listing
+// scripts: connect to `${target}/mcp` over Streamable HTTP, ask a tool for its
+// x402 offer (an unpaid tools/call), and buy one MCP tool listing exactly once.
+// The MCP SDK is loaded lazily, so a dry run needs no install.
+import { mcpOfferProblems } from "./mcp-listings.js";
+
+export const X402_PAYMENT_META = "x402/payment";
+export const X402_PAYMENT_RESPONSE_META = "x402/payment-response";
+
+/** Connect to the connector. `headers()` is read for every request (the
+ *  keep-alive's heartbeat token is minted per minute). Returns
+ *  { callTool(name, args, meta?), close() }. */
+export async function connectMcp(target, { headers = () => ({}), name = "agent402-listing-scripts", fetchImpl = fetch, timeoutMs = 240_000 } = {}) {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const withHeaders = (url, init = {}) => {
+    const h = new Headers(init.headers || {});
+    for (const [k, v] of Object.entries(headers() || {})) h.set(k, v);
+    return fetchImpl(url, { ...init, headers: h });
+  };
+  const client = new Client({ name, version: "1.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${String(target).replace(/\/+$/, "")}/mcp`), { fetch: withHeaders }));
+  return {
+    callTool: (toolName, args, meta) => client.callTool({ name: toolName, arguments: args || {}, ...(meta ? { _meta: meta } : {}) }, undefined, { timeout: timeoutMs }),
+    close: async () => { try { await client.close(); } catch { /* closed */ } },
+  };
+}
+
+const textOf = (r) => (Array.isArray(r?.content) ? r.content : []).map((c) => (typeof c?.text === "string" ? c.text : "")).join(" ").replace(/\s+/g, " ").trim();
+
+/** The x402 offer an unpaid call of a tool answers:
+ *  { offer } (the PaymentRequired), or { offer: null, why }. */
+export async function askMcpOffer(callTool, toolName, args) {
+  const ask = await callTool(toolName, args);
+  const pr = ask?.structuredContent;
+  if (ask?.isError === true && pr && typeof pr === "object" && Array.isArray(pr.accepts)) return { offer: pr };
+  if (ask?.isError !== true) return { offer: null, why: "the tool answered without asking for a payment" };
+  return { offer: null, why: `the tool's refusal carries no x402 offer (${textOf(ask).slice(0, 120) || "no text"})` };
+}
+
+/**
+ * Buy one MCP tool listing, once: ask for the offer, refuse it unless it is
+ * that tool's MCP listing offer on `origin` at the list price, sign one
+ * payment (`signPayment`, the capped x402 client's createPaymentPayload) and
+ * send it once in _meta["x402/payment"]. Nothing is sent twice: a paid call
+ * that fails or times out is reported, never retried, since a payment that
+ * was sent may still settle.
+ * Returns { ok, signed, sent, why?, receipt? }.
+ */
+export async function buyMcpListing({ callTool, signPayment, route, args = {}, origin }) {
+  let asked;
+  try { asked = await askMcpOffer(callTool, route.toolName, args); } catch (e) {
+    return { ok: false, signed: false, sent: false, why: `the offer could not be read (${String(e?.message || e).slice(0, 120)})` };
+  }
+  if (!asked.offer) return { ok: false, signed: false, sent: false, why: asked.why };
+  const problems = mcpOfferProblems(asked.offer, { toolName: route.toolName, origin, micros: route.micros });
+  if (problems.length) return { ok: false, signed: false, sent: false, why: `the offer is not this tool's MCP listing offer: ${problems.join("; ")}` };
+  let payment;
+  try { payment = await signPayment(asked.offer); } catch (e) {
+    return { ok: false, signed: false, sent: false, why: `no payment was signed (${String(e?.message || e).slice(0, 160)})` };
+  }
+  let paid;
+  try { paid = await callTool(route.toolName, args, { [X402_PAYMENT_META]: payment }); } catch (e) {
+    return { ok: false, signed: true, sent: true, why: `the paid call did not answer (${String(e?.message || e).slice(0, 120)}); it may still have settled, and it is not sent again` };
+  }
+  const receipt = paid?._meta?.[X402_PAYMENT_RESPONSE_META] || null;
+  if (paid?.isError !== true && receipt?.success === true) return { ok: true, signed: true, sent: true, receipt };
+  const settled = receipt?.success === true;
+  return {
+    ok: false, signed: true, sent: true, receipt,
+    why: `${settled ? "the payment settled but the tool answered an error" : "the payment did not settle"} (${textOf(paid).slice(0, 160) || "no text"}); not sent again`,
+  };
+}

@@ -33,7 +33,7 @@
 // Run: BURNER_KEY=0x... node scripts/refresh-bazaar.js
 //   or KEY_FILE=/tmp/agent-key node scripts/refresh-bazaar.js
 // Optional env:
-//   MODE              "stale" (default), "missing", or "sweep" (pay EVERY route
+//   MODE              "stale" (default), "missing", "mcp" (below), or "sweep" (pay EVERY route
 //                     priced <= MAX_PRICE_USD once — for settlement-driven
 //                     registration on PAY_NETWORK, e.g. PayAI's Solana index)
 //   PAY_NETWORK       "base" (default, BURNER_KEY) or "solana"
@@ -55,6 +55,26 @@
 //   EXPECT_NAME       (default "Agent402.tools")
 //   MAX_SPEND_USD     missing-mode cost ceiling (default 5)
 //   DRY_RUN=1         list the work without paying
+//
+// MODE=mcp buys MCP tool listings (scripts/lib/mcp-listings.js): the hosted
+// connector's fixed-price flagship tools, each listed as an MCP tool beside its
+// HTTP route. A listing is minted and refreshed only by a payment made through
+// the connector's x402 MCP transport (the offer's resource is `${origin}/mcp`
+// with an extension of type "mcp"), so this mode pays there, on Base, from the
+// burner. It takes an explicit slug list and nothing else:
+//   SLUGS             required; each slug must be one of the MCP tool listings,
+//                     live in the catalog and not an exempt kind. Any other
+//                     slug refuses the whole run; a slug named twice is bought
+//                     once. No price, prefix, staleness or batch filter applies.
+//   DRY_RUN=1         prints each listing with its list price and the total,
+//                     signs and sends nothing. With CHECK_OFFER=1 it also asks
+//                     each tool for its offer (an unpaid call) and reports
+//                     whether it is that tool's MCP listing offer.
+//   LISTING_ORIGIN    the origin the offer's resource must name (default
+//                     TARGET_URL).
+// Each listing is bought exactly once: one offer read, one signature held to
+// the listing's list price, one paid call. Nothing is retried, since a payment
+// that was sent may still settle; a failed buy is named and the run exits 1.
 //
 // Exit codes: 0 = no work remaining OF OURS (includes "every buy settled, the
 // Bazaar harvester just hasn't ingested them yet" — that lag is theirs, not a
@@ -78,7 +98,9 @@ import { readFileSync, existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { chainOf, routeSellsOn, walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
-import { usdMicros } from "./lib/keepalive-plan.js";
+import { usdMicros, passMicros, spendCapVerdict } from "./lib/keepalive-plan.js";
+import { selectMcpListings, isMcpFeedRow, mcpOfferProblems, usdText, MCP_LISTING_TOOLS } from "./lib/mcp-listings.js";
+import { connectMcp, askMcpOffer, buyMcpListing } from "./lib/mcp-x402-client.js";
 // viem + @x402/* are loaded lazily so DRY_RUN works without them installed.
 
 const TARGET = process.env.TARGET_URL || "https://agent402.tools";
@@ -200,6 +222,9 @@ export async function expectedServiceNamesByPath(endpoints) {
   return new Map(list.map((e) => [e.path, nameFor(e)]));
 }
 
+/** The feed rows stale mode reads: every row of ours but the MCP tool listings. */
+export const staleCandidates = (items) => (items || []).filter((it) => !isMcpFeedRow(it));
+
 async function loadStaleRoutes() {
   // serviceName is PER TOOL since 2026-08-31 ("Extract article", not
   // "Agent402.tools"), because 168 identical rows in a 14,000-row index answer
@@ -221,12 +246,15 @@ async function loadStaleRoutes() {
   // A path seen with the expected name in any pass is not stale: only a drift
   // every pass agrees on is paid for.
   const current = new Set();
-  for (const it of feed.items) {
+  // An MCP tool listing (resource /mcp#<tool>) is not a catalog route: it has
+  // no path of its own to compare or to pay, so it is never read as stale here.
+  const httpRows = staleCandidates(feed.items);
+  for (const it of httpRows) {
     const p = pathOf(it);
     if (p && it.serviceName === wantFor(p)) current.add(p);
   }
   const stale = new Map();
-  for (const it of feed.items) {
+  for (const it of httpRows) {
     const p = pathOf(it);
     if (!p || current.has(p) || stale.has(p)) continue;
     stale.set(p, { slug: p.replace(/^\/api\//, ""), path: p, serviceName: it.serviceName || "(null)" });
@@ -704,9 +732,14 @@ function signedMicrosOf({ paymentRequired, selectedRequirements, paymentPayload 
 // One pay-capable fetch for whichever chain PAY_NETWORK selects. With a
 // `budget` (signedSpendBudget), every signature is capped by it and counted.
 async function buildPayFetch(budget = null) {
+  const { wrapFetchWithPayment } = await import("@x402/fetch");
+  return wrapFetchWithPayment(fetch, await buildPayClient(budget));
+}
+
+// The capped x402 client behind it (MODE=mcp signs with it directly).
+async function buildPayClient(budget = null) {
   assertOwnPaidTarget(TARGET, "refresh-bazaar");
   const { x402Client } = await import("@x402/core/client");
-  const { wrapFetchWithPayment } = await import("@x402/fetch");
   const client = disableVendorSpendControls(new x402Client());
   const baseUsd = acceptCapUsd();
   const maxUsd = budget ? () => budget.signCapUsd(baseUsd) : baseUsd;
@@ -749,7 +782,98 @@ async function buildPayFetch(budget = null) {
     countSigned();
     console.log(`Paying via Base from ${account.address} …`);
   }
-  return wrapFetchWithPayment(fetch, client);
+  return client;
+}
+
+/** MODE=mcp: buy the named MCP tool listings through the connector's x402
+ *  transport, once each. Returns the exit code. Every dependency is
+ *  injectable so scripts/test-mcp-listing-tools.js runs it against a local
+ *  server. */
+export async function runMcpMode({
+  env = process.env, target = TARGET, log = console.log, err = console.error,
+  fetchJson = async (url) => { const r = await fetch(url, { signal: AbortSignal.timeout(30_000) }); if (!r.ok) throw new Error(`${new URL(url).pathname} HTTP ${r.status}`); return r.json(); },
+  connect = connectMcp, payClient = buildPayClient,
+} = {}) {
+  const dryRun = env.DRY_RUN === "1" || env.DRY_RUN === "true";
+  const origin = String(env.LISTING_ORIGIN || target).replace(/\/+$/, "");
+  const asked = String(env.SLUGS || "").split(",").map((x) => x.trim()).filter(Boolean);
+  if (!asked.length) {
+    err(`refresh-bazaar: MODE=mcp needs an explicit SLUGS list (the MCP tool listings are: ${Object.keys(MCP_LISTING_TOOLS).join(", ")}). Nothing is bought without one.`);
+    return 2;
+  }
+  if ((env.PAY_NETWORK || "base").toLowerCase() !== "base") {
+    err("refresh-bazaar: MODE=mcp pays on Base only.");
+    return 2;
+  }
+  let pricing, spec;
+  try {
+    [pricing, spec] = await Promise.all([fetchJson(`${target}/api/pricing`), fetchJson(`${target}/openapi.json`)]);
+  } catch (e) {
+    err(`refresh-bazaar: could not read the catalog (${String(e?.message || e).slice(0, 120)}). Nothing bought.`);
+    return 2;
+  }
+  const sel = selectMcpListings(pricing, asked);
+  if (sel.refused.length) {
+    for (const r of sel.refused) err(`  refused ${JSON.stringify(r.slug)}: ${r.why}`);
+    err(`refresh-bazaar: ${sel.refused.length} of the ${sel.asked.length} slugs asked cannot be bought as an MCP tool listing. Refusing the whole run; nothing bought.`);
+    return 2;
+  }
+  const routes = sel.routes;
+  const cap = env.MAX_SPEND_USD === undefined || env.MAX_SPEND_USD === "" ? MAX_SPEND_USD : env.MAX_SPEND_USD;
+  const verdict = spendCapVerdict(routes, cap);
+  if (!verdict.ok) {
+    err(`The ${routes.length} listings' list prices together are over the MAX_SPEND_USD cap (${verdict.reason}). Refusing to run; nothing bought.`);
+    return 2;
+  }
+  const examples = examplesFromSpec(spec);
+  const argsOf = (r) => examples.get(`${r.method} ${r.path}`) || {};
+  log(`MCP tool listings to buy through ${target}/mcp (x402 MCP transport, Base, one buy each): ${routes.length}`);
+  // A dry run names each price and the total (the catalog's own list prices);
+  // a paying run's log carries tool names and counts only.
+  for (const r of routes) log(`  ${r.toolName} (${r.slug})${dryRun ? ` ${usdText(r.micros)}` : ""}`);
+  if (dryRun) {
+    log(`Total: ${routes.length} listing${routes.length === 1 ? "" : "s"}, ${usdText(passMicros(routes))}`);
+    log("DRY_RUN=1: nothing signed, nothing sent.");
+    if (!(env.CHECK_OFFER === "1" || env.CHECK_OFFER === "true")) return 0;
+    let bad = 0;
+    const mcp = await connect(target, { headers: heartbeatHeaders });
+    try {
+      for (const r of routes) {
+        let why = null;
+        try {
+          const a = await askMcpOffer(mcp.callTool, r.toolName, argsOf(r));
+          const problems = a.offer ? mcpOfferProblems(a.offer, { toolName: r.toolName, origin, micros: r.micros }) : [a.why];
+          if (problems.length) why = problems.join("; ");
+        } catch (e) { why = `the offer could not be read (${String(e?.message || e).slice(0, 120)})`; }
+        if (why) bad++;
+        log(`  offer ${r.toolName}: ${why ? `NOT the MCP listing offer: ${why}` : "the MCP listing offer, at the list price"}`);
+      }
+    } finally { await mcp.close(); }
+    return bad ? 1 : 0;
+  }
+  log("The listings' list prices together are within the MAX_SPEND_USD cap.");
+  // The pass can sign the listings' list prices together and no more: each
+  // signature is held to its listing's price, and the total to their sum.
+  const budget = signedSpendBudget(Math.min(usdMicros(cap), passMicros(routes)) / 1e6);
+  const client = await payClient(budget);
+  const mcp = await connect(target, { headers: heartbeatHeaders });
+  const failed = [];
+  let okCount = 0;
+  try {
+    for (const r of routes) {
+      if (!budget.fits(r.micros / 1e6)) { failed.push(r.toolName); err(`  CAP ${r.toolName} not bought: what the run has signed plus this listing is over its cap.`); continue; }
+      budget.forRoute(r.micros / 1e6);
+      const out = await buyMcpListing({ callTool: mcp.callTool, signPayment: (offer) => client.createPaymentPayload(offer), route: r, args: argsOf(r), origin });
+      if (out.ok) { okCount++; log(`  OK ${r.toolName}`); }
+      else { failed.push(r.toolName); err(`  FAIL ${r.toolName}: ${out.why}`); }
+    }
+  } finally {
+    budget.forRoute(null);
+    await mcp.close();
+  }
+  log(`\nMCP listing pass complete: ${okCount} ok, ${failed.length} failed, ${budget.signatures} signature(s).`);
+  if (failed.length) err(`Failed buys (${failed.length}): ${failed.join(", ")}`);
+  return failed.length ? 1 : 0;
 }
 
 function loadKey() {
@@ -766,6 +890,9 @@ async function main() {
     console.error(`BATCH_COUNT ${BATCH_COUNT} is above the ${BATCH_MATRIX_SIZE} matrix jobs: routes in the missing batches would not be bought. Use ${BATCH_MATRIX_SIZE} or fewer.`);
     process.exit(2);
   }
+  if (MODE === "mcp") {
+    process.exit(await runMcpMode());
+  }
   if (REQUIRE_SLUGS && !(SLUGS_FILTER && [...SLUGS_FILTER].some(Boolean))) {
     console.error("refresh-bazaar: REQUIRE_SLUGS is set and SLUGS is empty; refusing to sweep every route.");
     process.exit(2);
@@ -777,7 +904,7 @@ async function main() {
     process.exit(await runMissingMode({ sweep: true }));
   }
   if (MODE !== "stale") {
-    console.error(`Unknown MODE="${MODE}". Use "stale", "missing", or "sweep".`);
+    console.error(`Unknown MODE="${MODE}". Use "stale", "missing", "sweep", or "mcp".`);
     process.exit(2);
   }
   const stale = await loadStaleRoutes();

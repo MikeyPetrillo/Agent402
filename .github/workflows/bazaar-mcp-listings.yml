@@ -1,0 +1,114 @@
+# Buy the hosted connector's MCP tool listings, once each.
+#
+# The connector's fixed-price flagship tools are listed on the Bazaar as MCP
+# tools beside their HTTP routes (scripts/lib/mcp-listings.js). A listing is
+# minted and refreshed only by a payment made through the connector's x402 MCP
+# transport, so the HTTP keep-alive passes do not reach it. Listings have been
+# observed to leave the Bazaar listing after about 30 days without a
+# settlement; the purpose of this pass is to keep those tools listed.
+#
+# Two ways in, both through scripts/refresh-bazaar.js MODE=mcp, which takes an
+# explicit slug list, refuses the whole run on any slug that is not an MCP tool
+# listing, and buys each listing exactly once (one signature held to its list
+# price, one paid call, no retry):
+#   dispatch   `slugs` is the explicit list; an empty one buys nothing.
+#   schedule   the 1st and 15th, only while the repo variable
+#              BAZAAR_MCP_KEEPALIVE is "on"; the list is the plan's
+#              (scripts/keepalive-plan.js mcp: every MCP tool listing live in
+#              the catalog, exempt kinds left out).
+# The logs carry tool names and counts, never a total or a cap.
+name: Bazaar MCP tool listings
+
+on:
+  schedule:
+    # 1st and 15th, 15:23 UTC: after the pass above the ceiling (14:41), which
+    # shares this concurrency group and the burner.
+    - cron: "23 15 1,15 * *"
+  workflow_dispatch:
+    inputs:
+      slugs:
+        description: "Explicit comma list of MCP listing slugs to buy once each (search, search-news, answer, stock-quote, render, memory-read). Empty buys nothing."
+        default: ""
+      max_spend_usd:
+        description: "Hard cap for the whole pass (USD). The pass refuses to start above it."
+        default: "1"
+
+permissions:
+  contents: read
+  issues: write
+
+# One group with the keep-alive passes: one burner, never two passes at once.
+concurrency:
+  group: bazaar-keepalive
+  cancel-in-progress: false
+
+jobs:
+  buy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Plan the pass (reads the live catalog, pays nothing)
+        id: plan
+        env:
+          TARGET_URL: https://agent402.tools
+          MAX_SPEND_USD: ${{ inputs.max_spend_usd || '1' }}
+          EVENT: ${{ github.event_name }}
+          ASKED: ${{ inputs.slugs }}
+          ENABLED: ${{ vars.BAZAAR_MCP_KEEPALIVE }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ -z "$ASKED" ]; then echo "No slugs given: nothing bought."; exit 0; fi
+            # Matched as one string (a newline never passes), then written as one line.
+            [[ "$ASKED" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || { echo "::error::slugs must be a comma list of MCP listing slugs"; exit 1; }
+            echo "slugs=$ASKED" >> "$GITHUB_OUTPUT"
+          elif [ "$ENABLED" = "on" ]; then
+            node scripts/keepalive-plan.js mcp
+          else
+            echo "The scheduled MCP listings pass is off (the repo variable BAZAAR_MCP_KEEPALIVE is not on). Nothing bought."
+          fi
+      - name: Install the x402 client
+        if: steps.plan.outputs.slugs != ''
+        run: npm ci --ignore-scripts && npm install --no-save --ignore-scripts @x402/fetch@2.30.0 @x402/core@2.30.0 @x402/evm@2.30.0 viem@2.52.2
+      - name: Buy the MCP tool listings
+        if: steps.plan.outputs.slugs != ''
+        env:
+          TARGET_URL: https://agent402.tools
+          MODE: mcp
+          PAY_NETWORK: base
+          SLUGS: ${{ steps.plan.outputs.slugs }}
+          MAX_SPEND_USD: ${{ inputs.max_spend_usd || '1' }}
+          BURNER_KEY: ${{ secrets.BURNER_KEY }}
+          # Signs X-Heartbeat-Token so these self-buys are booked as ours.
+          POW_SECRET: ${{ secrets.POW_SECRET }}
+        run: |
+          [ -n "$BURNER_KEY" ] || { echo "::error::BURNER_KEY is not set - the pass cannot pay, and the MCP tool listings may leave the Bazaar listing"; exit 1; }
+          [ -n "$POW_SECRET" ] && echo "::add-mask::$POW_SECRET"
+          echo "::add-mask::$BURNER_KEY"
+          node scripts/refresh-bazaar.js
+
+  report:
+    needs: buy
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Page if the pass failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUY: ${{ needs.buy.result }}
+        run: |
+          TITLE="Bazaar MCP tool listings pass FAILED"
+          OPEN=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty')
+          if [ "$BUY" != "success" ]; then
+            if [ -z "$OPEN" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "The pass that buys the hosted connector's MCP tool listings did not complete (result: $BUY). Listings have been observed to leave the Bazaar listing after about 30 days without a settlement, so this pass keeps those tools listed. The run log names a refused list, a failed buy or a missing key; a buy is never sent twice, so a failed one is bought again only by a new run. Re-run: \`gh workflow run bazaar-mcp-listings.yml --ref main -f slugs=<slug>\`."
+            else
+              gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still failing at $(date -u +%FT%TZ)."
+            fi
+          elif [ -n "$OPEN" ]; then
+            gh issue close "$OPEN" --repo "$GITHUB_REPOSITORY" --comment "Pass completed at $(date -u +%FT%TZ)."
+          fi

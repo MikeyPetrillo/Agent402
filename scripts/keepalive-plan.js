@@ -14,9 +14,15 @@
 //       changed, exempt kinds left out. Refuses (exit 3) over MAX_SPEND_USD or
 //       over MAX_ROUTES routes (default 25). Writes slugs= and max_price= to
 //       $GITHUB_OUTPUT.
+//   node scripts/keepalive-plan.js mcp
+//       The MCP tool listings pass (scripts/lib/mcp-listings.js): the
+//       connector's fixed-price flagship tools live in the catalog, exempt
+//       kinds left out. Refuses (exit 3) over MAX_SPEND_USD. Writes slugs=,
+//       max_price= and count= to $GITHUB_OUTPUT; the buy is
+//       scripts/refresh-bazaar.js MODE=mcp with that explicit list.
 //   node scripts/keepalive-plan.js low-water
-//       Prints the burner low-water mark in whole USD: one tail pass plus the
-//       margin, never under FLOOR_USD.
+//       Prints the burner low-water mark in whole USD: one tail pass and one
+//       MCP listings pass plus the margin, never under FLOOR_USD.
 //
 // Env: TARGET_URL (default https://agent402.tools), MAX_SPEND_USD, MAX_ROUTES,
 // FLOOR_USD.
@@ -32,6 +38,11 @@ import {
   aboveCeilingRoutes, passMicros, microsToUsd, spendCapVerdict, routeCountVerdict,
   priceSnapshot, changedPriceRoutes, burnerLowWaterUsd, PRICE_CHANGE_MAX_ROUTES,
 } from "./lib/keepalive-plan.js";
+import { mcpListingRoutes } from "./lib/mcp-listings.js";
+
+/** The MCP listings pass: every MCP tool listing live in the catalog that is
+ *  priced and not an exempt kind. */
+export const mcpPassRoutes = (pricing) => mcpListingRoutes(pricing).filter((r) => !r.exempt && r.micros > 0);
 
 async function readPricing(target) {
   const r = await fetch(`${target.replace(/\/+$/, "")}/api/pricing`, { signal: AbortSignal.timeout(30_000) });
@@ -53,8 +64,8 @@ function writeOutputs(env, routes) {
 export async function run(argv, { env = process.env, log = console.log, err = console.error, fetchPricing = readPricing } = {}) {
   const [cmd, file] = argv;
   const target = env.TARGET_URL || "https://agent402.tools";
-  if (!["tail", "snapshot", "changed", "low-water"].includes(cmd) || ((cmd === "snapshot" || cmd === "changed") && !file)) {
-    err("usage: keepalive-plan.js tail | snapshot <file> | changed <file> | low-water");
+  if (!["tail", "snapshot", "changed", "low-water", "mcp"].includes(cmd) || ((cmd === "snapshot" || cmd === "changed") && !file)) {
+    err("usage: keepalive-plan.js tail | snapshot <file> | changed <file> | low-water | mcp");
     return 2;
   }
   let pricing;
@@ -63,7 +74,7 @@ export async function run(argv, { env = process.env, log = console.log, err = co
     return 2;
   }
   if (cmd === "low-water") {
-    const pass = microsToUsd(passMicros(aboveCeilingRoutes(pricing)));
+    const pass = microsToUsd(passMicros(aboveCeilingRoutes(pricing)) + passMicros(mcpPassRoutes(pricing)));
     log(String(burnerLowWaterUsd(pass, { floorUsd: Number(env.FLOOR_USD) || 0 })));
     return 0;
   }
@@ -76,6 +87,9 @@ export async function run(argv, { env = process.env, log = console.log, err = co
   if (cmd === "tail") {
     routes = aboveCeilingRoutes(pricing);
     log(`Routes priced above the keep-alive ceiling, exempt kinds left out: ${routes.length}.`);
+  } else if (cmd === "mcp") {
+    routes = mcpPassRoutes(pricing);
+    log(`MCP tool listings live in the catalog, exempt kinds left out: ${routes.length}${routes.length ? ` (${routes.map((r) => r.toolName).join(", ")})` : ""}.`);
   } else {
     let before;
     try { before = JSON.parse(readFileSync(file, "utf8")); } catch {
