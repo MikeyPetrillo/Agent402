@@ -4091,6 +4091,31 @@ try {
           ok(t2.count === 2 && t2.evictedEarly === 2 && t2.records.map((r) => r.key).sort().join() === "referral:r13-2,referral:r13-3" && logLines.some((l) => /record\(s\) of refused settles dropped at capacity were themselves dropped before their authorization expired/.test(l)), `at most the bound of such records is kept: an older one dropped before its authorization expired is counted for the operator and logged (${t2.count} kept, ${t2.evictedEarly} dropped early)`);
         } finally { skew.ms = skew0; await app.close(); }
       }
+      // R6. A refused entry dropped at capacity whose payment reached the split contract and is no proof of a sale
+      // (the buyer's own transfer, nothing routed) is never given up: back in the book, the gross owed, the transaction named.
+      {
+        const small = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r16-dropped-moved`, log: () => {} }), log, maxEntries: 3, maxDropped: 4, now: () => Date.now() + skew.ms });
+        const app = await mount({}, { book: small });
+        const skew0 = skew.ms;
+        try {
+          fac.mode.settle = refusing;
+          const first = await payOn(app);
+          const kM = gateMod.referralReplayKey(first.p.authorization);
+          for (let i = 0; i < 3; i++) await payOn(app);
+          const wasDropped = small.get(kM) === null && small.droppedRefused().records.some((r) => r.key === kM);
+          const txM = fac.land(first.p.authorization, null, "noevent");
+          const validFor = Number(first.p.authorization.validBefore) * 1000 - Date.now();
+          skew.ms = skew0 + Math.max(0, validFor) + bookMod.DROPPED_GIVE_UP_MS + 3600_000; // seven hours past its expiry
+          const linesBefore = logLines.length;
+          for (let i = 0; i < 7; i++) await app.gate.sweepOnce();
+          await quietLedger();
+          const eM = small.get(kM);
+          const rowsM = owed.filter((o) => o.tx === txM);
+          const gaveUpLines = logLines.slice(linesBefore).filter((l) => /its record is given up/.test(l) && l.includes(first.p.authorization.nonce.toLowerCase().slice(0, 10)));
+          ok(wasDropped && eM?.state === "in-doubt" && eM.unproven === true && eM.moved === true && eM.seenTx === txM && eM.debtAt > 0 && small.droppedRefused().records.every((r) => r.key !== kM) && gaveUpLines.length === 0, `a dropped refused record whose receipt shows the buyer's own transfer into the split contract is written back as an open entry and never given up, seven hours and seven reads past its expiry (${eM?.state}/${eM?.unproven}; ${gaveUpLines.length} given up)`);
+          ok(rowsM.length === 1 && rowsM[0].priceUsd === 0.03 && rowsM[0].wire === "referral-operator" && rowsM[0].payer === first.p.authorization.from.toLowerCase() && !sales.some((x) => x.tx === txM), `its buyer is owed the gross back once, behind that transfer, and no sale is booked (${rowsM.length} row)`);
+        } finally { skew.ms = skew0; await app.close(); }
+      }
       // G1. A dropped entry's record is forgotten only on a CONCLUSIVE read; the ones nearest their expiry are read first.
       {
         const tb = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r14-graves`, log: () => {} }), log, maxEntries: 1, maxDropped: 100, now: () => Date.now() + skew.ms });
@@ -4129,7 +4154,7 @@ try {
         for (let i = 0; i < 2; i++) await sweepIt();
         const given = tb.droppedRefused();
         const lines = logLines.slice(linesBefore).filter((l) => /could not be read to a verdict in 5 or more reads over 6 hours after its authorization's expiry/.test(l));
-        ok(afterManyReads.count === 40 && afterManyReads.unresolved === 0 && afterManyHours.count === 2 && afterManyHours.unresolved === 0 && bookMod.DROPPED_GIVE_UP_MS === 6 * 3600_000 && bookMod.DROPPED_GIVE_UP_READS === 5 && given.count === 0 && given.unresolved === 40 && lines.length === 40 && lines.every((l) => /\(echo payer=0x[0-9a-f]{4} nonce=0x[0-9a-f]{8} amount=30000\); if a payment landed for it, it was not found/.test(l)), `an expired record is kept through reads that reach no verdict: ten reads in twenty minutes give none up, nor do seven hours with three reads; one is given up only six hours past expiry AND after five such reads, by name (slug, short payer, nonce prefix, amount), counted once (${afterManyReads.count} kept after ten reads; ${afterManyHours.count} kept after seven hours; ${given.unresolved} given up, ${lines.length} lines)`);
+        ok(afterManyReads.count === 40 && afterManyReads.unresolved === 0 && afterManyHours.count === 2 && afterManyHours.unresolved === 0 && bookMod.DROPPED_GIVE_UP_MS === 6 * 3600_000 && bookMod.DROPPED_GIVE_UP_READS === 5 && given.count === 0 && given.unresolved === 40 && lines.length === 40 && lines.every((l) => /\(echo payer=0x[0-9a-f]{4} nonce=0x[0-9a-f]{8} amount=30000 tx=0x(ab){32}\); if a payment landed for it, it was not found/.test(l)), `an expired record is kept through reads that reach no verdict: ten reads in twenty minutes give none up, nor do seven hours with three reads; one is given up only six hours past expiry AND after five such reads, by name (slug, short payer, nonce prefix, amount, and the transaction its last read named), counted once (${afterManyReads.count} kept after ten reads; ${afterManyHours.count} kept after seven hours; ${given.unresolved} given up, ${lines.length} lines)`);
         // The reviewer's outage: 125 records, the landed payment among the first to expire, the chain down for five passes.
         {
           const to = createReferralBook({ doc: createJsonDocument({ name: `referral-test-${process.pid}-r15-outage`, log: () => {} }), log, maxEntries: 1, maxDropped: 500, now: () => Date.now() + skew.ms });

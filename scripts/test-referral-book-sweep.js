@@ -107,6 +107,34 @@ const entry = (tag, i, validBefore = nowS() + 900) => ({ key: `referral:${tag}-$
   ok(kept.count === 2 && kept.unresolved === 0 && after.count === 0 && after.unresolved === 2, `a chain outage longer than six hours, or a nonce read as spent whose search or receipt read failed, gives up no dropped record (only reads the chain answered count): ${kept.count} kept after 30 such passes; given up after five answered reads with no verdict: ${after.unresolved}`);
 }
 {
+  // A dropped record whose receipt, read in full, shows the buyer's own transfer into the split contract (`moved`),
+  // or the contract's routed event naming this merchant (`routedToUs`), and is no proof: never given up. It goes
+  // back to the book as an open entry naming the transaction, and is handed to the caller (onHeld) like an open one.
+  for (const shape of ["moved", "routedToUs"]) {
+    let skew = 0;
+    const b = newBook({ maxEntries: 1, maxDropped: 10, now: () => Date.now() + skew });
+    const made = [];
+    for (let i = 0; i < 3; i++) { const e = entry("H", i, nowS() + 60); made.push(e); await b.intent(e); await b.resolve(e.key, { state: "refused", at: 100 + i }); }
+    const droppedKeys = b.droppedRefused().records.map((r) => r.key);
+    const txOfNonce = new Map(made.map((e) => [e.nonce, hex(32)]));
+    const chain = { state: async ({ nonce }) => ({ used: true, paid: null, transaction: txOfNonce.get(nonce), complete: false, receiptRead: true, [shape]: true, why: "no payout to this merchant" }) };
+    const held = [];
+    const before = lines.length;
+    const sweep = () => b.sweep({ chain, bookSale: async () => true, payTo: PAY_TO, onHeld: (e, st) => held.push({ key: e.key, tx: st.transaction, flag: st[shape] === true }) });
+    skew = bookMod.DROPPED_GIVE_UP_MS + 3 * 3600_000; // nine hours past expiry
+    await sweep();
+    // (Handed on by the pass that wrote it back, not only by a later pass's read of the open entry.)
+    const handedAtOnce = droppedKeys.every((k) => held.some((h) => h.key === k));
+    for (let i = 0; i < 7; i++) await sweep();
+    const after = b.droppedRefused();
+    const back = droppedKeys.map((k) => b.get(k));
+    const nonceOf = new Map(made.map((e) => [e.key, e.nonce]));
+    ok(droppedKeys.length === 2 && after.count === 0 && after.unresolved === 0 && !lines.slice(before).some((l) => /its record is given up/.test(l)) && b.resolvedByHand().every((r) => r.key !== "dropped:unresolved"), `a dropped record whose receipt shows ${shape} is never given up, however many answered reads and hours pass (${after.count} records left, ${after.unresolved} given up)`);
+    ok(back.every((e) => e && e.state === "in-doubt" && e.seenTx === txOfNonce.get(nonceOf.get(e.key)).toLowerCase() && e.amount === "30000" && e.slug === "echo" && e.nonce === nonceOf.get(e.key) && (shape !== "routedToUs" || e.routedToUs === true)), `it is written back as an open entry in doubt that names the transaction (${back.map((e) => `${e?.state}/${String(e?.seenTx).slice(0, 6)}`).join(", ")})`);
+    ok(handedAtOnce && droppedKeys.every((k) => held.some((h) => h.key === k && h.flag && h.tx === txOfNonce.get(nonceOf.get(k)))) && lines.slice(before).filter((l) => /dropped at capacity .* written back as an open entry/.test(l)).length === 2, `and handed to the caller with its reading by the pass that wrote it back, with a line that names it (at once: ${handedAtOnce}; ${held.length} handed on)`);
+  }
+}
+{
   // An expired record pushed out at the cap leaves a line.
   const b = newBook({ maxEntries: 1, maxDropped: 1 });
   const before = lines.length;

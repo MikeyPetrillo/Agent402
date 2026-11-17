@@ -755,7 +755,8 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
         });
         const seqBase = Object.values(dropped).reduce((m, g) => Math.max(m, Number(g.readSeq) || 0), 0);
         const graveNow = all.slice(0, SWEEP_DROPPED_MAX);
-        const forget = [], seen = [], back = [], late = [], giveUp = [];
+        const forget = [], seen = [], back = [], late = [], giveUp = [], restore = [];
+        const lastTx = new Map();
         // Each record read takes the next number of the read sequence, in the
         // pass's read order: the next pass takes up the ones read longest ago.
         const readSeq = new Map();
@@ -775,20 +776,37 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             out.landed++;
             say("error", `CHARGED-BUT-NOT-SERVED: a refused settle whose entry was dropped at capacity landed on chain (${g.slug} payer=${String(g.payer).slice(0, 6)} tx=${st.transaction})${booked ? ", sale booked" : ", sale NOT booked"}`);
           } else if (verdict === "unpaid" || verdict === "expired-unused") forget.push(g.key);
+          // A receipt read in full that is no proof and shows the BUYER'S OWN
+          // TRANSFER into the split contract (`moved`), or the contract's routed
+          // event naming OUR merchant: the reading an open entry is kept for,
+          // never closed by itself. The record is never given up on it: it is
+          // written back as an open entry in doubt that names the transaction,
+          // and handed to the caller as an open one is (onHeld: the refund the
+          // gate writes for a buyer who paid, the operator's hold for the rest).
+          else if (st?.used === true && st.paid === null && TX.test(String(st.transaction || "")) && st.receiptRead === true && (st.moved === true || st.routedToUs === true)) restore.push({ g, st });
           // Only a read the chain ANSWERED counts toward giving a record up: the
           // nonce read as unspent, or as spent with its receipt read in full or
           // its search complete. A chain that does not answer, however long, or
           // a spent nonce whose log search or receipt read failed, never gives
           // up a record whose payment may have landed.
-          else if (t > expiredAt(g) && (st?.used === false || (st?.used === true && (st.receiptRead === true || st.complete === true)))) { if ((Number(g.lateReads) || 0) + 1 >= DROPPED_GIVE_UP_READS && t > (Number(g.validBefore) || 0) * 1000 + DROPPED_GIVE_UP_MS) giveUp.push(g); else late.push(g.key); }
+          else if (t > expiredAt(g) && (st?.used === false || (st?.used === true && (st.receiptRead === true || st.complete === true)))) { if (TX.test(String(st.transaction || ""))) lastTx.set(g.key, String(st.transaction).toLowerCase()); if ((Number(g.lateReads) || 0) + 1 >= DROPPED_GIVE_UP_READS && t > (Number(g.validBefore) || 0) * 1000 + DROPPED_GIVE_UP_MS) giveUp.push(g); else late.push(g.key); }
           else seen.push(g.key);
         }
         out.droppedUnread = Math.max(0, all.length - readNow);
-        if (forget.length || seen.length || back.length || late.length || giveUp.length) {
-          let gaveUp = [];
+        if (forget.length || seen.length || back.length || late.length || giveUp.length || restore.length) {
+          let gaveUp = [], restored = [];
           const wrote = await change((cur, _kept, done, _gone, _shut, _under, _warm, _marks, graves) => {
             gaveUp = [];
+            restored = [];
             for (const k of forget) delete graves[k];
+            for (const { g, st } of restore) {
+              if (!graves[g.key]) continue;
+              delete graves[g.key];
+              // (An entry written again for the same payment stands as it is.)
+              if (cur[g.key]) continue;
+              cur[g.key] = { key: g.key, slug: g.slug, payer: g.payer, nonce: g.nonce, amount: g.amount, validBefore: g.validBefore, fromBlock: g.fromBlock ?? null, at: g.at || t, state: "in-doubt", checks: 1, checkedAt: t, seenTx: String(st.transaction).toLowerCase(), ...(st.routedToUs === true ? { routedToUs: true } : {}), why: String(st.why || "").slice(0, 160), restoredAt: t, updatedAt: t };
+              restored.push({ e: cur[g.key], st });
+            }
             for (const g of giveUp) if (graves[g.key]) { delete graves[g.key]; gaveUp.push(g); }
             if (gaveUp.length) noteDropped(done, "unresolved", gaveUp.length, t);
             for (const k of seen) if (graves[k]) graves[k] = { ...graves[k], checkedAt: t, readSeq: Math.max(Number(graves[k].readSeq) || 0, readSeq.get(k) || 0) };
@@ -801,9 +819,14 @@ export function createReferralBook({ doc = null, file = defaultFile(), now = Dat
             return undefined;
           });
           // Counted and logged once, when the write that removed the record stood.
+          if (wrote) for (const { e, st } of restored) {
+            out.restored = (out.restored || 0) + 1;
+            say("error", `a refused settle dropped at capacity was spent on chain by a transaction whose receipt, read in full, is not one the proof rule accepts and ${st.moved === true ? "shows the buyer's own transfer into the split contract" : "was routed to THIS merchant by the split contract"} (${e.slug} payer=${String(e.payer).slice(0, 6)} tx=${e.seenTx}: ${e.why}); written back as an open entry, never given up`);
+            try { onHeld(e, st); } catch { /* the caller's note only */ }
+          }
           if (wrote) for (const g of gaveUp) {
             droppedUnresolved++;
-            say("error", `a refused settle dropped at capacity could not be read to a verdict in ${DROPPED_GIVE_UP_READS} or more reads over ${Math.round(DROPPED_GIVE_UP_MS / 3600_000)} hours after its authorization's expiry (no answer, or a search that was not complete): its record is given up (${g.slug} payer=${String(g.payer).slice(0, 6)} nonce=${String(g.nonce).slice(0, 10)} amount=${g.amount}); if a payment landed for it, it was not found`);
+            say("error", `a refused settle dropped at capacity could not be read to a verdict in ${DROPPED_GIVE_UP_READS} or more reads over ${Math.round(DROPPED_GIVE_UP_MS / 3600_000)} hours after its authorization's expiry (no answer, or a search that was not complete): its record is given up (${g.slug} payer=${String(g.payer).slice(0, 6)} nonce=${String(g.nonce).slice(0, 10)} amount=${g.amount}${lastTx.has(g.key) ? ` tx=${lastTx.get(g.key)}` : ""}); if a payment landed for it, it was not found`);
           }
         }
       }
