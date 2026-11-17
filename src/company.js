@@ -6,7 +6,8 @@ import { ledgerShell, ledgerFooterCompact, esc } from "./ledger-chrome.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 
-import { REPO_URL, ORG_SAME_AS, repoUrl } from "./repo-link.js";
+import { REPO_URL, repoUrl } from "./repo-link.js";
+import { ORG_SAME_AS } from "./org-profiles.js";
 import { ERC8004_IDENTITY_REGISTRY, erc8004AgentId } from "./tools/a2a-card.js";
 import { companyPostalLine } from "./email.js";
 const usd0 = (cents) => `$${(cents / 100).toFixed(0)}`;

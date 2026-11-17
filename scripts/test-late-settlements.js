@@ -448,7 +448,8 @@ await check("a booking neither the store nor the journal takes leaves the paymen
   await h2.fail(ctx2);
   assert.equal(ctx2.__a402LateBooked, true, "control: a booking that lands is marked booked");
   assert.ok(/booked as owed/.test(unconfirmedSettleRefusal({ network: RH, transactions: [txh(24)], booked: true }).detail), "control: the booked answer promises the owed record");
-  const terms = rf(new URL("../src/terms.js", import.meta.url), "utf8").replace(/\s+/g, " ");
+  // The sentence lives in src/refund-terms.js (the clause /terms renders).
+  const terms = ["../src/terms.js", "../src/refund-terms.js"].map((f) => rf(new URL(f, import.meta.url), "utf8")).join("\n").replace(/\s+/g, " ");
   assert.ok(/settlement-unconfirmed \(its settlement ended without showing whether the transfer was sent\), that answer says when the payment was recorded for an on-chain check \(it says so only then\); when it was and its transfer then lands/.test(terms),
     "the terms promise the owed record for an unconfirmed EIP-3009 payment only when its answer says it was recorded");
 });

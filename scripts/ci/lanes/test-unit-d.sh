@@ -276,6 +276,8 @@ t node scripts/test-referral-counting.js
 t node scripts/test-mpp-agents-weekly.js
 # Arrival path per sale (mcp, client package, http) on the operator surfaces; sweep/burst cohorts; the Gateway test buyer is ours
 t node scripts/test-sale-path.js
+# Paid-call funnel per day and arrival path (probes, 402s served, attempts, settlements, refusal classes, callers that never came back), the ledger half and weekly figures, a 400k-row cost bound, operator-only /__operator/funnel.json (paid boot, stub facilitator)
+t node scripts/test-funnel.js
 # The connector's internal x402 twins of six flagships: 404 without the loopback secret, resource /mcp with a valid MCP Bazaar extension, the route's accepts on every chain, settle on the final 200 only, no payment spent on both, sales booked x402-mcp (paid boot, stub facilitator)
 t node scripts/test-mcp-x402-routes.js
 # First-call allowance returning payers (operator view): granted wallets with a later outside paid sale, and within 7 days; one batched ledger read, cached (offline, temp SQLite ledger)

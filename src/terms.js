@@ -11,6 +11,8 @@ import { answerShareEnabled, sharePagesMayBeLive } from "./answer-share.js";
 import { publicIndexTermsText, withPublicIndexDate } from "./facilitator-public-index.js";
 import { referralOffered } from "./referral-gate.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
+import { refundClauseText } from "./refund-terms.js";
+import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { connectorWires } from "./connector-pay.js";
 export function termsPage(baseUrl) {
   // Prepaid credits wording follows the sales switch and the purchase limit.
@@ -34,6 +36,9 @@ export function termsPage(baseUrl) {
   // pointed to only while a chain is listed; the printed date then follows
   // FACILITATOR_PUBLIC_INDEX_SINCE when that is later (withPublicIndexDate).
   const publicIndex = publicIndexTermsText();
+  // The refund sentences, from the one source the conformance document's
+  // refundTerms also reads (src/refund-terms.js).
+  const clause = (id) => refundClauseText(id, { gatewayBatched });
   // The wires the hosted connector takes in the call on this boot
   // (src/connector-pay.js): none in FREE_MODE, x402 alone without the MPP gates.
   const connectorWire = connectorWires().phrase;
@@ -147,23 +152,13 @@ infringers.</p>
 <h2>Payments</h2>
 <p><b>On-chain (x402 / MPP).</b> Paid calls settle on public blockchains${gatewayBatched ? " (except Circle Gateway batched payments, below)" : ""} - USDC on Base and the other
 chains listed at <a href="/pricing">/pricing</a>, USDG on Robinhood Chain, and MPP settlement on Base,
-Celo or Tempo. An x402 payment on our own routes settles only after your call returns a successful response; if the call
-returns an error, the payment is not settled and you are not charged. Some payments are final before the
-call runs, such as an MPP payment sent as a Tempo transfer; if that call then fails, or if your connection
-closes after a payment has settled and before the response is delivered, we record the amount as owed
-back to the paying wallet, and repay it as described under refunds below. If an x402 payment on an EVM
-chain, Solana or Algorand whose failed settlement named its transaction, or a Tempo transaction, lands on chain after we
-answered the call with an error, we record the amount as owed back to the paying wallet and repay it the same way. If an
-x402 payment signed as an EIP-3009 authorization on an EVM chain is answered settlement-unconfirmed (its settlement ended
-without showing whether the transfer was sent), that answer says when the payment was recorded for an on-chain check
-(it says so only then); when it was and its transfer then lands on chain, we record the amount as owed back to the
-paying wallet and repay it the same way. Micropayments are per call and, once settled on-chain, are final and
-non-refundable except as described in these terms or where required by law. Metered routes quote a ceiling before
+Celo or Tempo. ${clause("settle-after-success")} ${clause("final-before-call")}
+${clause("late-landing")} ${clause("unconfirmed-eip3009")}
+${clause("finality")} Metered routes quote a ceiling before
 payment and settle at or under it. You are responsible for your own wallet and keys; we never receive or
 hold your private key.${publicIndex ? ` ${publicIndex}` : ""}</p>${gatewayBatched ? `
 <p><b>Circle Gateway batched payments.</b> A Circle Gateway batched payment settles off chain at Gateway.
-If Gateway settles one after its request was answered pending and the request is never served, we record
-the amount as owed and repay it on chain after confirming it in Gateway's records.</p>` : ""}
+${clause("gateway-pending")}</p>` : ""}
 ${referralOn ? `<p id="referral-links"><b>Referral links.</b> A tool bought through a referral link is sold by Agent402 under these terms,
 at the price listed for the same call on our own route. The payment is made to the referral network's
 payment contract, which pays part to us and part to the reviewer. The network's own terms apply to its links,
@@ -183,24 +178,14 @@ send, hold or exchange funds for you on these routes, and you have no account wi
 Where a route returns part of a payment as a service credit (for example the unspent budget of
 <code>/api/decide/execute</code>), that credit is redeemable only for Agent402 services, for the period
 stated on that route.</p>
-<p><b>Refunds on-chain.</b> Because an x402 payment settles only after a call succeeds, the ordinary
-failure case costs nothing and needs no refund. Where a defect on our side means you were charged for
-something that did not deliver, we record the amount as owed and repay the wallet that paid, on the
-chain it paid on. Repayment is not instant: we review the amounts owed and send them in batches, and we
-check larger amounts by hand before they are sent. Each batch is started and approved by hand, and it
-sends the repayment on every chain we accept payment on: the EVM chains, Tempo, Solana, Stellar and
-Algorand. Before a repayment is sent we confirm on that chain that your payment reached us${gatewayBatched ? " (for a Circle Gateway batched payment, in Gateway's records)" : ""}; on Tempo and
-Solana we also confirm the repayment itself before recording it as paid. An amount
-owed because a connection closed is reviewed before it is repaid, and is not repaid when the call's effect
-outlives the response and was delivered (a memory write, or a purchase we made from another seller for
-you). A payment whose paying wallet cannot be identified from its own settlement cannot be repaid. Before a
-repayment is sent we check the receiving address against the published sanctions lists; we do not send to
-a listed address, and a repayment waits while that check cannot be made. None of this reduces a right you
-have by law.</p>
+<p><b>Refunds on-chain.</b> ${clause("ordinary-failure")} ${clause("charged-but-failed")}
+${clause("repayment-process")} ${clause("repayment-proof")}
+${clause("connection-closed-review")} ${clause("unidentified-payer")}
+${clause("sanctions-before-repayment")} ${clause("rights-by-law")}
+A machine-readable copy of these refund terms is published at <a href="${CONFORMANCE_PATH}"><code>${CONFORMANCE_PATH}</code></a>
+(its <code>refundTerms</code>); where the two differ, these terms govern.</p>
 <p><b>By card.</b> Card payments for reports and monitors, for pay-per-call purchases made with a card over MPP, and for prepaid credits are processed by
-<a href="https://stripe.com" rel="noopener">Stripe</a> under Stripe's terms; we never see card numbers. A
-report is generated only against a paid, Stripe-verified session, once; if generation fails, the charge
-is refunded automatically. A report that was delivered is final. Prepaid credits are consumed as you
+<a href="https://stripe.com" rel="noopener">Stripe</a> under Stripe's terms; we never see card numbers. ${clause("card-report")} A report that was delivered is final. Prepaid credits are consumed as you
 call tools and are non-refundable except where required by law, with one exception: an unspent balance
 under $10 on a key is refunded to its card on request to the email on the purchase. A refunded or
 disputed purchase disables the key that purchase issued. One buyer may buy at most $${creditsLimitUsd} of

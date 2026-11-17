@@ -17,7 +17,8 @@ import { chainMark, CHAIN_ORDER } from "./chain-logos.js";
 import { routerPayChains } from "./tools/route-execute.js";
 import { railKey, chainDisplayName } from "./rails.js";
 import { tempoEnabled } from "./mpp-tempo.js";
-import { HUMAN_PRODUCTS } from "./human-checkout.js";
+import { HUMAN_PRODUCTS, humanCheckoutEnabled } from "./human-checkout.js";
+import { creditsSalesEnabled } from "./credits-sales.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { MAX_FULL_PER_SUB_30D } from "./monitor-scheduler.js";
 
@@ -99,6 +100,34 @@ function decideRowHtml() {
 // `proof` is the hero's first-party figures (src/home-proof.js
 // homeProofFigures), read from caches by the server so the page never waits on
 // a source; a figure the server has no value for is simply absent.
+/** What a card pays for, read from the switches that sell it: any paid tool
+ *  while prepaid credits are on sale, otherwise the report and monitor
+ *  storefront, otherwise nothing ("" leaves card out of the copy). */
+export function cardPayClause({ credits = creditsSalesEnabled(), storefront = humanCheckoutEnabled() } = {}) {
+  if (credits) return "or by card";
+  if (storefront) return "reports and monitors also by card";
+  return "";
+}
+
+/** The social card's subtitle and rail tag (/card.png, /card.svg): the card
+ *  clause is scoped by cardPayClause, like the meta description. */
+export function socialCardText(toolCount, opts) {
+  const card = cardPayClause(opts);
+  const pay = card === "or by card" ? ", or by card" : card ? `; ${card}` : "";
+  return {
+    subtitle: `${Number(toolCount).toLocaleString("en-US")} tools priced in cents. USDC over x402 / MPP${pay}.`,
+    railsTag: card ? "x402 · MPP · card" : "x402 · MPP",
+  };
+}
+
+/** The home meta description: the snippet most listings copy, so its card
+ *  clause is scoped by cardPayClause. */
+export function homeDescription(opts) {
+  const card = cardPayClause(opts);
+  const pay = card === "or by card" ? ", or by card" : card ? `; ${card}` : "";
+  return `Agentic Finance for AI agents: 500+ pay-per-call tools, metered models and finished reports over x402 and MPP${pay}. No signup, no API keys. Sell your API for USDC per call.`;
+}
+
 export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, skillPacks, { settledOnChain = 0, external = null, proof = [], chainsOffered, mpp = true } = {}) {
   const tools = toolList(catalog);
   const count = tools.length;
@@ -149,7 +178,7 @@ export function ledgerHomePage(baseUrl, catalog, stats, _leaderboardSnapshot, sk
   // snippet is written to fit so nothing is cut). Counts stay evergreen.
   const title = `Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP`;
   // The exact live count (fmtNum(count)) stays out of the snippet on purpose: marketing counts are evergreen.
-  const description = `Agentic Finance for AI agents: 500+ pay-per-call tools, metered models and finished reports over x402 and MPP, or by card. No signup, no API keys. Sell your API for USDC per call.`;
+  const description = homeDescription();
 
   const orgLd = siteOrgLd(baseUrl);
   const websiteLd = { "@type": "WebSite", "@id": `${baseUrl}/#website`, name: "Agent402", alternateName: ["Agent402.Tools", "Agent402 Tools", "Agent402 - applied layer of Agentic Finance"], url: baseUrl, publisher: { "@id": `${baseUrl}/#organization` }, description: "The applied layer of Agentic Finance: open index, Smart Order Router and on-chain ranking for agents paying and getting paid over x402 and MPP.", about: { "@type": "DefinedTerm", name: "Agentic Finance", alternateName: "AIFI", url: `${baseUrl}/agentic-finance` }, potentialAction: { "@type": "SearchAction", target: `${baseUrl}/api/find?q={search_term_string}`, "query-input": "required name=search_term_string" } };
