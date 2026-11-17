@@ -30,7 +30,7 @@ It's also **the open x402 index**: a single integration gives a buyer three prim
 | [[Paying with x402]] | USDC payments: the 402 flow, code, spend controls, Stripe's `purl` |
 | [[Paying with MPP]] | The Machine Payments Protocol wire: `WWW-Authenticate: Payment`, mppx clients, Base/Celo, native Tempo settlement, cards over MPP, native MPP on the `/mcp` connector |
 | [[Paying with Compute]] | The proof-of-work tier: spec + reference solver |
-| [[MCP Connector]] | Hosted connector (dotted tools: `catalog.find`, `catalog.call`, `web.search`, …, payable over MPP in the call) + the `agent402-mcp` npm server (wallet or prepaid credits) |
+| [[MCP Connector]] | Hosted connector (dotted tools: `catalog.find`, `catalog.call`, `web.search`, …, payable in the call over x402 or MPP) + the `agent402-mcp` npm server (wallet or prepaid credits) |
 | [[Adapters]] | Drop-in tools for OpenAI / Anthropic / AI SDK / LangChain / LlamaIndex |
 | [[Decide]] | Describe a job in plain language; get a call-ready plan over this catalog and outside x402 sellers, run it yourself or through Agent402 |
 | [[Tool Catalog]] | What the 500+ tools are and how agents discover them |

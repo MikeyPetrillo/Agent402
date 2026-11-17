@@ -1,5 +1,6 @@
 import { ledgerShell, ledgerFooterCompact } from "./ledger-chrome.js";
 import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
+import { connectorWires } from "./connector-pay.js";
 
 export function quickstartPage(baseUrl) {
   const canonical = `${baseUrl}/quickstart`;
@@ -68,7 +69,7 @@ export function quickstartPage(baseUrl) {
 <!-- Panel: Claude / MCP -->
 <div class="qs-panel active" id="panel-mcp" role="tabpanel">
 <h2>Add to Claude Code</h2>
-<p class="qs-oneliner">Start with the hosted connector: no install, no wallet. Free tools run with proof-of-work; paid tools answer with their price and a pointer to payment.info.</p>
+<p class="qs-oneliner">Start with the hosted connector: no install, no wallet. Free tools run with proof-of-work; paid tools answer with their price${connectorWires().names.length ? `, payable in the call over ${connectorWires().phrase} from a client with a wallet` : " and a pointer to payment.info"}.</p>
 
 <span class="qs-label">1. Hosted connector (no install)</span>
 <div class="ml-code" style="margin:0 0 20px"><pre><code>claude mcp add --transport http agent402 https://agent402.tools/mcp</code></pre></div>

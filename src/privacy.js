@@ -367,9 +367,10 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
 </ul>
 
 <h2>The MCP connector (${baseUrl}/mcp)</h2>
-<p>The hosted connector is anonymous: requests carry no identity beyond the connecting IP, which is used
-for rate limiting and the hashed records described above. Tool calls made through it are processed
-exactly like the HTTP API.</p>
+<p>The hosted connector takes no account. An unpaid call carries no identity beyond the connecting IP,
+which is used for rate limiting and the hashed records described above. A paid call (over x402 or MPP)
+also carries the paying wallet's address, which is recorded as it is for any paid call to the HTTP API.
+Tool calls made through it are processed exactly like the HTTP API.</p>
 
 <h2>Retention</h2>
 <p>Operational logs are kept for our hosting platform's default log retention. Rate-limit counters
