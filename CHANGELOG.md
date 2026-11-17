@@ -25,8 +25,12 @@ Site:
   breadcrumb sits on the line of its links.
 Tools:
 - seller-dossier names each route's delivery record responseDelivery, as the
-  index's rows do (it was ourPaidCalls), and its delivery summary says the
-  count includes our router's unpaid non-answers.
+  index's rows do; ourPaidCalls stays beside it with the same value and is
+  deprecated. Its delivery summary says the count includes our router's
+  unpaid non-answers.
+Surfaces:
+- /openapi.json names the service Agent402.tools in its title, the name
+  directories show for it; the tagline moves into its description.
 
 ### 2026-11-16 (marketplace answers arrive whole or are not settled)
 Payments:

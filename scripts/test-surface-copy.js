@@ -90,7 +90,8 @@ ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) ||
   const home = read("src/ledger-home.js");
   ok(/const title = `Agent402: /.test(home) && !/const title = `[^`]*AIFI/.test(home), "homepage <title> leads with the brand word Agent402 (the entity Google must tie to this domain) and carries no AIFI acronym");
   ok(!/<h1[^>]*>[^<]*Agentic Finance/.test(home), "homepage hero H1 is not the category name");
-  ok(/title: "Agent402: /.test(read("src/pages.js")), "openapi.json title leads with the brand word Agent402");
+  ok(/title: "Agent402\.tools",/.test(read("src/pages.js")), "openapi.json title is the plain product name Agent402.tools");
+  ok(/Agent402\.tools: 500\+ pay-per-call tools for AI agents over x402 \+ MPP\./.test(read("src/pages.js")), "openapi.json description keeps the tagline");
   ok(!/AIFI/.test(HOSTED_DESC) && HOSTED_DESC.startsWith("Agent402"), "MCP serverInfo.description leads with Agent402, no acronym");
   for (const d of pkgDirs) ok(!/AIFI/.test(JSON.parse(read(`${d}/package.json`)).description), `${d} description carries no AIFI acronym`);
   ok(!/AIFI/.test(serverJson.description), "mcp/server.json description carries no AIFI acronym");
