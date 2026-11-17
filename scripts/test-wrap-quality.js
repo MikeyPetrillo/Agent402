@@ -423,7 +423,7 @@ try {
       if (!caught || !clean) failures++;
     }
     for (const width of WIDTHS) {
-      const ctx = await browser.newContext({ viewport: { width, height: width >= 900 ? 900 : 860 }, reducedMotion: "reduce", colorScheme: "light" });
+      const ctx = await browser.newContext({ viewport: { width, height: width >= 900 ? 900 : 860 }, reducedMotion: "reduce", colorScheme: process.env.WRAP_COLOR_SCHEME === "dark" ? "dark" : "light" });
       await ctx.addInitScript(() => { try { localStorage.setItem("a402-theme", "light"); } catch {} });
       const pool = await Promise.all(Array.from({ length: Math.min(CONCURRENCY, PAGES.length) }, () => ctx.newPage()));
       const free = pool.slice();

@@ -558,12 +558,23 @@ curl -s https://agent402.tools/v1/models \\
 | 402 | the quote, or a refused payment; the first-contact 402 body carries the offer, \`howToCall\` and, on a job route, \`async\` | pay, or fund the wallet the refusal names |
 | 409 | the same keyed call is still running | wait \`Retry-After\`, then resend the same key with the same payment header to get its answer |
 | 422 | the tool cannot serve this input (an image too large to read, a body that is not an image), or a URL you supplied answered with a 4xx (\`attribution: "caller"\`) or refused this server's access (\`attribution: "upstream-access"\`) | read \`error\` and the \`howToCall\` note; not charged on x402 |
-| 429 | one of the limits above; a wallet whose balance does not cover its paid calls in flight is told so with \`attribution: "ours"\`, a \`hint\` (\`cover-short\`, \`cover-settling\`, \`cover-unread\`, \`cover-kept\`, \`cover-beside\`), the matching \`reason\` (\`cover_short\` and so on) and \`fix\`, and no input schema: the input is fine | wait \`Retry-After\` and retry the same call, or add funds when \`fix\` says so; not charged on x402 |
+| 429 | one of the limits above, or a wallet whose balance does not cover its paid calls in flight (below); the input is fine | wait \`Retry-After\` and retry the same call, or add funds when \`fix\` says so; not charged on x402 |
 | 503 | busy or briefly paused; image-ocr reading another image over ${OCR_LARGE_PIXELS / 1e6} megapixels answers \`hint: "large-image-busy"\` | wait \`Retry-After\`, or send a smaller image, which is read at once |
 | 502, 503 with \`attribution: "upstream"\` | a source the tool reads answered with a failure (its own status rides in \`upstreamStatus\`) | not your input: retry later or pick another source; not charged on x402 |
-| 502, 503, 504 with \`attribution: "ours"\` | our side: our time limit passed (\`hint: "our-deadline"\` or \`"budget-spent"\`), our DNS lookup failed (\`"our-egress"\`), the source refused our own key (\`"our-key"\`), our own allowance or pacing (\`"our-allowance"\`, \`"our-pacing"\`), or a defect in our own code (\`"internal"\`); \`hint: "smaller-input"\` means an input this long outlasts the limit | retry the same call, or send a shorter input when the hint says so; not charged on x402 |
+| 502, 503, 504 with \`attribution: "ours"\` | our side; \`hint\` is \`"our-deadline"\`, \`"budget-spent"\`, \`"our-egress"\`, \`"our-key"\`, \`"our-allowance"\`, \`"our-pacing"\`, \`"internal"\` or \`"smaller-input"\` (below) | retry the same call, or send a shorter input when the hint says so; not charged on x402 |
 | 502, 503 with \`attribution: "unknown"\` and \`hint: "connect-failed"\` | the connection to a source failed before any answer (refused, reset or unreachable), and nothing shows which side failed | retry the same call later; not charged on x402 |
 | 504 with \`hint: "source-timeout"\` or \`"source-unreachable"\` | a URL you supplied did not answer within our limit, or could not be connected to (\`attribution: "unknown"\`) | check that the URL is correct and publicly reachable, or retry; not charged on x402 |
+
+A 429 for a wallet whose balance does not cover its paid calls in flight
+carries \`attribution: "ours"\`, a \`hint\` (\`cover-short\`, \`cover-settling\`,
+\`cover-unread\`, \`cover-kept\`, \`cover-beside\`), the matching \`reason\`
+(\`cover_short\` and so on) and \`fix\`, and no input schema.
+
+A 502, 503 or 504 with \`attribution: "ours"\` carries a \`hint\`: our time limit
+passed (\`our-deadline\` or \`budget-spent\`), our DNS lookup failed
+(\`our-egress\`), the source refused our own key (\`our-key\`), our own allowance
+or pacing (\`our-allowance\`, \`our-pacing\`), or a defect in our own code
+(\`internal\`); \`smaller-input\` means an input this long outlasts the limit.
 
 A loop that honors all of it, shown with plain \`fetch\` (pass your payment
 \`fetch\` in its place):
