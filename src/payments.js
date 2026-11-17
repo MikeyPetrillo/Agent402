@@ -7,7 +7,7 @@ import { scheduleBazaarRouteCheck, withBazaarHidden } from "./bazaar-route-check
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { installAcceptOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, acceptOutputSchemaEnabled } from "./accept-output-schema.js";
 import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, startAvmSponsorshipRefresher, REFRESH_MS as AVM_SPONSORSHIP_REFRESH_MS } from "./avm-sponsorship.js";
-import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal } from "./payment-reject.js";
+import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal, unconfirmedSettleRefusal, unconfirmedSettleReceipt, railTxOf } from "./payment-reject.js";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
@@ -43,6 +43,7 @@ import { ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementCl
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
+import { RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, settleSentWhileConnected, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, ARC_PROFILE, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_NETWORKS, CIRCLE_EVM_FALLBACK_PROFILES, circleEvmFallbackEnabled, circleEvmFallbackFromEnv } from "./circle-facilitator.js";
@@ -1329,6 +1330,8 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
 });
 
 export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, catalog, extraRoutes = {}, mcpRoutes = [] }) {
+  // The origin an unconfirmed settle's refund lookup names (markUnconfirmedStop).
+  publicOrigin = typeof baseUrl === "string" && baseUrl ? baseUrl.replace(/\/+$/, "") : null;
   routeSlugOf = (route) => {
     const def = typeof route === "string" && catalog && Object.prototype.hasOwnProperty.call(catalog, route) ? catalog[route] : null;
     return typeof def?.slug === "string" ? def.slug : null;
@@ -3999,7 +4002,13 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           { const o = await settleAfterFallbackPending(ctx, refusal, name); if (o) return o; }
           if (!own) { const o = await settleAfterAmbiguous(ctx, refusal, name, outageFor); if (o) return o; }
           { const o = await readPassedOn(); if (o) return o; }
-          noteLateTx(ctx, result?.transaction, name);
+          // Our own relayer's refusal before it signed anything (nothingSent)
+          // proves nothing of ours can land, and a graceful verdict about the
+          // buyer's payment that names no transaction is a decided answer:
+          // the earlier refusal stands, nothing booked. Anything else is how
+          // the chain ended (markUnconfirmedStop).
+          if ((own && result?.nothingSent === true && !String(result?.transaction || "")) || isDecidedSettleVerdict(result)) return;
+          await markUnconfirmedStop(ctx, refusal, name);
           return;
         }
         // A recovered settlement fires no afterSettle hook (the vendor returns
@@ -4035,16 +4044,229 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           { const o = await settleAfterFallbackPending(ctx, err, name); if (o) return o; }
           if (!own) { const o = await settleAfterAmbiguous(ctx, err, name, outageFor); if (o) return o; }
           { const o = await readPassedOn(); if (o) return o; }
-          noteLateTx(ctx, err?.transaction, name);
+          // An HTTP 4xx (not a time limit or a rate limit) whose body is a
+          // decided verdict on the buyer's payment and names no transaction
+          // reads like the same verdict answered gracefully: the earlier
+          // refusal stands, nothing booked. Any other HTTP error is how the
+          // chain ended.
+          if (isDecidedHttpSettleVerdict(err)) return;
+          await markUnconfirmedStop(ctx, err, name);
           return;
         }
         if (!passedOn) revertOnly = !isPreBroadcastSettleRejection(err);
       }
     }
     // Every listed facilitator after a passed-on refusal refused too (or none
-    // was left): that refusal is read on chain now.
-    return readPassedOn();
+    // was left): that refusal is read on chain now. A FALLBACK's passed-on
+    // refusal the read did not settle is how the chain ended.
+    { const o = await readPassedOn(); if (o) return o; }
+    if (passedOn && passedOn.err !== ctx?.error) await markUnconfirmedStop(ctx, passedOn.err, passedOn.via);
+    return undefined;
   });
+}
+
+/**
+ * A fallback's graceful failed answer (HTTP 200, success:false) that decides
+ * the payment: it names no transaction and its reason is a verdict about the
+ * buyer's payment (src/settle-verdict.js isPaymentVerdictReason: a signature,
+ * the balance, an expired or not-yet-valid window, a payload or scheme the
+ * facilitator does not take, as a code or in words). Never a used or canceled
+ * authorization (a transfer may have used it), and never an HTTP error or a
+ * transport failure (those reach the catch branch, not this one).
+ */
+export function isDecidedSettleVerdict(result) {
+  if (!result || typeof result !== "object" || result.success === true) return false;
+  if (String(result.transaction || "").trim()) return false;
+  const reason = String(result.errorReason || "").trim();
+  if (!reason || isUsedAuthorizationReason(reason)) return false;
+  return isPaymentVerdictReason(reason);
+}
+
+/**
+ * A fallback's HTTP 4xx settle refusal that decides the payment: a parsed
+ * settle body (@x402/core SettleError: statusCode, errorReason, transaction)
+ * whose reason is a decided verdict on the buyer's payment
+ * (isDecidedSettleVerdict) and that names no transaction. Never a 408 or a
+ * 429 (the facilitator did not decide anything), never a 5xx, and never an
+ * error with no parsed body (an unreadable or transport failure).
+ */
+export function isDecidedHttpSettleVerdict(err) {
+  if (!err || typeof err !== "object") return false;
+  const status = Number(err.statusCode ?? err.status);
+  if (!Number.isInteger(status) || status < 400 || status > 499 || status === 408 || status === 429) return false;
+  if (typeof err.errorReason !== "string" || !err.errorReason.trim()) return false;
+  return isDecidedSettleVerdict({ success: false, errorReason: err.errorReason, transaction: err.transaction });
+}
+
+/** A facilitator answer @x402/core could not read as a settle response (its
+ *  FacilitatorResponseError: an HTTP 200 with invalid JSON or invalid data).
+ *  The facilitator may have settled before it answered. */
+export function isUnreadableSettleAnswer(err) {
+  return !!err && typeof err === "object" && (err.name === "FacilitatorResponseError" || err.constructor?.name === "FacilitatorResponseError");
+}
+
+// This server's public origin, for the refund lookup an unconfirmed answer
+// names (set by buildPaymentMiddleware).
+let publicOrigin = null;
+
+/**
+ * The settle chain was opened by a refusal made before sending (the
+ * primary's billing refusal, an HTTP 402, a reverted transfer, a listed
+ * facilitator's graceful refusal with no verdict) and a FALLBACK then ended
+ * it on an answer that does not prove nothing was sent: an HTTP error other
+ * than a 402, a time limit, a dropped connection, an unreadable answer, a
+ * failure naming a transaction, a graceful failed answer that is not a
+ * verdict about the buyer's payment, or a listed fallback's passed-on
+ * refusal no chain read settled. The earlier refusal no longer describes
+ * the payment, so:
+ *  - a named transaction is noted for the late-settlement book (noteLateTx);
+ *    with none named, an EIP-3009 authorization itself is
+ *    (`ctx.__a402LateAuth`, src/late-settlements.js), so a transfer that
+ *    lands is found and owed once, and the authorization stays claimed
+ *    meanwhile (src/settlement-claims.js namesUnsettledTx). A Permit2 or
+ *    non-EVM payment with no transaction has nothing the book reads, and the
+ *    answer then promises no record;
+ *  - the answer is restated (explainUnconfirmedStop): no "nothing was
+ *    charged", no other way to pay, the transaction to watch when named, the
+ *    time the signed authorization stops being usable, and a receipt reading
+ *    settlement_unconfirmed, which the settle breaker counts as not the
+ *    buyer's (src/settle-fault.js).
+ */
+async function markUnconfirmedStop(ctx, err, via) {
+  if (!ctx || typeof ctx !== "object" || isBatchedCtx(ctx)) return;
+  try { ctx.__a402UnconfirmedExpiry = await paymentExpiryOf(ctx); } catch { ctx.__a402UnconfirmedExpiry = null; }
+  noteLateTx(ctx, err?.transaction, via);
+  const named = ctx.__a402LateTx?.transaction || null;
+  if (!named && !ctx.__a402LateAuth?.nonce) {
+    const la = lateAuthOf(ctx);
+    if (la) ctx.__a402LateAuth = { ...la, via };
+  }
+  ctx.__a402UnconfirmedStop = { via, transaction: named };
+  const network = ctx?.requirements?.network;
+  console.warn(`[payments] ${network} settle chain ended unconfirmed at ${via}${named ? ` (tx ${named})` : ""}: ${ctx.__a402LateAuth?.nonce ? "the authorization goes to the late-settlement book" : named ? "the transaction goes to the late-settlement book" : "nothing the late-settlement book reads"}; the answer names no other way to pay`);
+  explainUnconfirmedStop(ctx, network, named ? [named] : []);
+}
+
+const validBeforeOfPayload = (payload) => payload?.payload?.authorization?.validBefore ?? payload?.payload?.permit2Authorization?.deadline ?? null;
+
+// A Solana transaction lands only while its recent blockhash is valid: about
+// 60 to 90 seconds after that blockhash, which is older than the request.
+// Counted from the moment the chain stopped, with room for slow slots, it is
+// a time after which the signed transaction can no longer land.
+const SVM_BLOCKHASH_BOUND_SECONDS = 120;
+
+/**
+ * The point after which this payment can no longer move money, for the
+ * unconfirmed answer (src/payment-reject.js unconfirmedSettleRefusal):
+ * `validBefore` (an EIP-3009 authorization's validBefore or a Permit2
+ * deadline; on Solana the blockhash bound above), `lastValidRound` (an
+ * Algorand transaction's lastValid round) or `expirationLedger` (the latest
+ * ledger a Stellar payer's signed authorization entries expire at). Null when
+ * the payment carries none the server can read: the answer then makes no
+ * time promise.
+ */
+export async function paymentExpiryOf(ctx) {
+  const payload = ctx?.paymentPayload;
+  const network = typeof ctx?.requirements?.network === "string" ? ctx.requirements.network : "";
+  if (network.startsWith("eip155:")) { const vb = validBeforeOfPayload(payload); return vb != null ? { validBefore: vb } : null; }
+  if (network.startsWith("solana:")) return payload?.payload?.transaction ? { validBefore: Math.floor(Date.now() / 1000) + SVM_BLOCKHASH_BOUND_SECONDS } : null;
+  if (network.startsWith("algorand:")) {
+    const { lastValidFromPayload } = await import("./avm-validity.js");
+    const lv = lastValidFromPayload(payload);
+    return lv != null ? { lastValidRound: String(lv) } : null;
+  }
+  if (network.startsWith("stellar:")) {
+    const ledger = await stellarAuthExpiryLedgerOf(payload);
+    return ledger ? { expirationLedger: String(ledger) } : null;
+  }
+  return null;
+}
+
+/** The latest signatureExpirationLedger among the address-credential
+ *  authorization entries of a Stellar payment's signed envelope, or null. */
+async function stellarAuthExpiryLedgerOf(payload) {
+  try {
+    const xdr = payload?.payload?.transaction;
+    if (typeof xdr !== "string" || !xdr || xdr.length > 40_000) return null;
+    const sdk = await import("@stellar/stellar-sdk");
+    const env = sdk.xdr.TransactionEnvelope.fromXDR(xdr, "base64");
+    const kind = env.switch().name;
+    const tx = kind === "envelopeTypeTx" ? env.v1().tx() : kind === "envelopeTypeTxFeeBump" ? env.feeBump().tx().innerTx().v1().tx() : null;
+    let max = 0;
+    for (const op of tx ? tx.operations() : []) {
+      if (op.body().switch().name !== "invokeHostFunction") continue;
+      for (const entry of op.body().invokeHostFunctionOp().auth()) {
+        const cred = entry.credentials();
+        if (cred.switch().name !== "sorobanCredentialsAddress") continue;
+        const n = Number(cred.address().signatureExpirationLedger());
+        if (Number.isSafeInteger(n) && n > max) max = n;
+      }
+    }
+    return max > 0 ? max : null;
+  } catch { return null; }
+}
+
+/**
+ * Restate this request's settle-failure 402 for a chain that ended
+ * unconfirmed (src/payment-reject.js unconfirmedSettleRefusal). The send is
+ * wrapped, like explainPendingRefusal's and after the verify hint shaped the
+ * body, so a JSON 402 body gets the reason, the retry verb, the network, any
+ * named transaction, the authorization's validBefore and the hint, and the
+ * PAYMENT-RESPONSE receipt (the primary's refusal as the library wrote it) is
+ * replaced by one whose errorReason is settlement_unconfirmed. The refusal is
+ * built at send time: the late-settlement hook has said by then whether
+ * anything was recorded (`ctx.__a402LateBooked`), and only then does the hint
+ * promise a repayment record. The facilitator's own words the receipt guard
+ * kept for the settle breaker (RAW_SETTLE_RECEIPT) are put back after the
+ * restated receipt passes the guard. A pending explanation already set for
+ * the request keeps its body (it names every noted transaction); the receipt
+ * is restated either way. The answer as sent is left on the request
+ * (`__a402UnconfirmedAnswer`) for the replay of the same payment
+ * (src/idempotency.js).
+ */
+function explainUnconfirmedStop(ctx, network, txs) {
+  const req = ctx?.transportContext?.request?.adapter?.req;
+  const res = req?.res;
+  if (!res || typeof res.send !== "function") return;
+  req.__a402UnconfirmedStop = { ctx, transactions: txs, transaction: txs[0] || null, network };
+  if (res.__a402UnconfirmedStopWrapped) return;
+  res.__a402UnconfirmedStopWrapped = true;
+  const origSend = res.send;
+  res.send = function unconfirmedStopSend(chunk) {
+    try {
+      const u = req.__a402UnconfirmedStop;
+      if (u && res.statusCode === 402 && !res.headersSent) {
+        const pending = req.__a402PendingRefusal || null;
+        const kept = req[RAW_SETTLE_RECEIPT];
+        let receiptHeader = null;
+        for (const name of ["PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE"]) {
+          const h = res.getHeader(name);
+          if (typeof h !== "string" || !h) continue;
+          let receipt = null;
+          try { receipt = JSON.parse(Buffer.from(h, "base64").toString("utf8")); } catch { receipt = null; }
+          const restated = unconfirmedSettleReceipt(receipt, { transaction: u.transaction || pending?.transactions?.[0] || null, network: u.network });
+          if (restated) { receiptHeader = Buffer.from(JSON.stringify(restated)).toString("base64"); res.setHeader(name, receiptHeader); }
+        }
+        if (kept) { try { Object.defineProperty(req, RAW_SETTLE_RECEIPT, { value: kept, configurable: true, writable: true, enumerable: false }); } catch { /* bookkeeping only */ } }
+        if (typeof chunk === "string" && chunk.trimStart().startsWith("{")) {
+          let body = JSON.parse(chunk);
+          if (body && typeof body === "object" && !Array.isArray(body)) {
+            if (!pending) {
+              const exp = u.ctx?.__a402UnconfirmedExpiry || {};
+              const refusal = unconfirmedSettleRefusal({ network: u.network, transactions: u.transactions, booked: u.ctx?.__a402LateBooked === true, validBefore: exp.validBefore ?? null, lastValidRound: exp.lastValidRound ?? null, expirationLedger: exp.expirationLedger ?? null, origin: publicOrigin });
+              body = withPendingSettleRefusal(body, refusal);
+              chunk = JSON.stringify(body);
+              req.__paymentRejectReason = refusal.reason;
+            }
+            // The pending explanation (its wrapper runs after this one) shapes
+            // the body the same way for the copy kept for a replay.
+            req.__a402UnconfirmedAnswer = { body: pending ? withPendingSettleRefusal(body, pending) : body, receipt: receiptHeader, validBefore: validBeforeOfPayload(u.ctx?.paymentPayload) };
+          }
+        }
+      }
+    } catch { /* an explanation must never break the answer */ }
+    return origSend.call(this, chunk);
+  };
 }
 
 /**
@@ -4111,7 +4333,9 @@ const PENDING_REFUSAL_SILENT = new Set(["notApplicable", "alreadySold", "heldEls
  * noted transactions. It runs last, after the verify hint and the PoW hint
  * shaped the body, so a primary's quota explanation ("nothing was charged")
  * never stands beside a transfer that may still land. The PAYMENT-RESPONSE
- * header is not touched, and any other status goes out unchanged.
+ * header is not touched, and any other status goes out unchanged. The answer
+ * as sent is left on the request (`__a402UnconfirmedAnswer`) for the replay
+ * of the same payment (src/idempotency.js).
  */
 function explainPendingRefusal(ctx, network, txs) {
   const req = ctx?.transportContext?.request?.adapter?.req;
@@ -4129,8 +4353,18 @@ function explainPendingRefusal(ctx, network, txs) {
       if (r && res.statusCode === 402 && !res.headersSent && typeof chunk === "string" && chunk.trimStart().startsWith("{")) {
         const body = JSON.parse(chunk);
         if (body && typeof body === "object" && !Array.isArray(body)) {
-          chunk = JSON.stringify(withPendingSettleRefusal(body, r));
+          const explained = withPendingSettleRefusal(body, r);
+          chunk = JSON.stringify(explained);
           req.__paymentRejectReason = r.reason;
+          // The answer as sent is kept for the same payment sent again, as an
+          // unconfirmed stop's is (src/idempotency.js): its authorization
+          // stays claimed while the transfer may land, so a re-send that ran
+          // would only meet that claim. An unconfirmed stop's wrapper, when
+          // it ran first, already kept the answer with its restated receipt.
+          if (!req.__a402UnconfirmedAnswer) {
+            const h = res.getHeader("PAYMENT-RESPONSE") ?? res.getHeader("X-PAYMENT-RESPONSE");
+            req.__a402UnconfirmedAnswer = { body: explained, receipt: typeof h === "string" && h ? h : null, validBefore: validBeforeOfPayload(ctx?.paymentPayload) };
+          }
         }
       }
     } catch { /* an explanation must never break a 402 */ }
@@ -4222,15 +4456,30 @@ async function settleAfterAmbiguous(ctx, err, via, outageFor) {
   console.warn(`[payments] ${network} after ${via}'s ambiguous failure: refused (${r.reason})${r.lateAuth ? "; the authorization is booked until it is read on chain" : ""}`);
   return undefined;
 }
-const lateAuthOf = (ctx) => {
-  const a = ctx?.paymentPayload?.payload?.authorization;
-  return a && a.from && a.nonce ? { payer: a.from, nonce: a.nonce, validBefore: a.validBefore ?? null, via: "ambiguous facilitator" } : null;
+/**
+ * The EIP-3009 authorization a refused payment is booked under, or null. Only
+ * a `from` the payer signed: a Permit2 payment is verified on its
+ * permit2Authorization, and an `authorization` block riding beside it is
+ * never checked, so its `from` would book an unsigned address (filling that
+ * address's per-payer bound and promising it an owed record). Such a payment
+ * books nothing here (src/payer.js payerFromRequest reads it the same way).
+ */
+export const lateAuthOf = (ctx) => {
+  const inner = ctx?.paymentPayload?.payload;
+  if (!inner || typeof inner !== "object" || inner.permit2Authorization != null) return null;
+  const a = inner.authorization;
+  if (!a || typeof a !== "object" || typeof a.from !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(a.from) || typeof a.nonce !== "string" || !a.nonce) return null;
+  const vb = typeof a.validBefore === "string" || typeof a.validBefore === "number" ? a.validBefore : null;
+  return { payer: a.from, nonce: a.nonce, validBefore: vb, via: "ambiguous facilitator" };
 };
 
 /** The transaction a stopping fallback named, for the late-settlement hook
  *  registered after this one (it reads the same failure context). */
 function noteLateTx(ctx, transaction, via) {
-  if (ctx && typeof transaction === "string" && /^0x[0-9a-fA-F]{64}$/.test(transaction)) ctx.__a402LateTx = { transaction, via };
+  // In the rail's own format: a Solana signature or an Algorand id is kept
+  // exactly as written (src/payment-reject.js railTxOf).
+  const tx = ctx ? railTxOf(String(ctx?.requirements?.network || ""), transaction) : null;
+  if (tx) ctx.__a402LateTx = { transaction: tx, via };
 }
 
 /**
@@ -4266,6 +4515,9 @@ function noteLateTx(ctx, transaction, via) {
 export function isPreBroadcastSettleRejection(err) {
   if (!err || typeof err !== "object") return false;
   if (typeof err.transaction === "string" && err.transaction.trim()) return false;
+  // An answer that could not be read is never a refusal, whatever words its
+  // excerpt carries.
+  if (isUnreadableSettleAnswer(err)) return false;
   if (err.status === 402 || err.statusCode === 402) return true;
   const msg = String(err.message || "");
   if (/settle failed \(402\)/i.test(msg)) return true;

@@ -8,6 +8,16 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
+    title: "An unconfirmed settlement is answered as unconfirmed",
+    items: [
+      "Payments: When a backup settler ends a settlement on an answer that does not show whether the transfer was sent (an HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction), the call is answered 402 with reason settlement-unconfirmed: the answer says not to sign a new authorization for that call before the expiry the payment carries (an authorization's validBefore, a time by which a Solana transaction's blockhash has expired, an Algorand lastValid round or a Stellar expiration ledger), or when it carries none, until the paying wallet shows whether the transfer landed, names the transaction to watch and its refund lookup when there is one (retry watch-transaction, otherwise check-wallet), carries no new offer, and its receipt reads settlement_unconfirmed.",
+      "Payments: Such a payment signed as an EIP-3009 authorization is recorded for the on-chain read, so a transfer that lands is booked once as owed to the paying wallet and repaid after on-chain proof. The same payment sent again, in any encoding, gets the same answer back without the call running, and these answers never count against the paying wallet or its report and media runs.",
+      "Payments: A facilitator's pending answer whose transaction is not confirmed within the wait is kept the same way, so the same payment sent again gets that answer back. A backup settler's HTTP 4xx refusal that names a verdict on the buyer's payment and no transaction keeps the earlier answer, as the same verdict answered without an HTTP error does.",
+      "Surfaces: /agents.md lists the retry verbs a refused payment names under its recovery lines, and /.well-known/x402 lists the reads an unconfirmed settlement makes: the authorization recorded for the on-chain read, the expiry each payment names, and the stored answer with a digest of the payer's signature.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "A non-streamed model call paid on x402 EVM may run to 110 seconds",
     items: [
       "Gateway: A non-streamed call on the chat completions, Messages or Responses routes paid with an x402 EVM authorization waits on the model for 10 seconds plus one second per 30 tokens of its max_tokens (the tier's default output cap when none is sent), at least 90 seconds and at most 110, inside the published 120 second client timeout; the payment window and the time a connection through the CDN waits for an answer still end it sooner. Every other payment method keeps 90 seconds.",

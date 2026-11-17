@@ -141,6 +141,18 @@ await check("ambiguous means no transaction, no verdict, not pre-broadcast and n
   assert.equal(isAmbiguousSettleFailure(ambiguous5xx(), { isPreBroadcast: () => true }), false);
 });
 
+await check("a Permit2 payment carrying an unverified authorization block is not handled; the same block alone is (control)", async () => {
+  __resetSettlementClaims();
+  const p = payment(); const relayer = makeRelayer("settles", p);
+  const outage = outageWith(relayer, 50);
+  const permit2 = { ...p.paymentPayload, payload: { ...p.paymentPayload.payload, permit2Authorization: { from: p.payer, nonce: "1", deadline: String(Math.floor(Date.now() / 1000) + 300) } } };
+  assert.equal(await outage.handle({ requirements: p.requirements, paymentPayload: permit2, error: ambiguous5xx() }), null, "Permit2 beside an authorization block is not ours to settle");
+  assert.equal(relayer.sends, 0, "our relayer never sends for it");
+  const control = await outage.handle({ requirements: p.requirements, paymentPayload: p.paymentPayload, error: ambiguous5xx() });
+  assert.ok(control && (control.served || control.refused), `the same authorization without Permit2 is handled (${JSON.stringify(control)?.slice(0, 120)})`);
+  __resetSettlementClaims();
+});
+
 await check("facilitator 5xx, the authorization lands within the wait with our transfer -> served once, our relayer never sends", async () => {
   __resetSettlementClaims();
   const p = payment(); const relayer = makeRelayer("settles", p);

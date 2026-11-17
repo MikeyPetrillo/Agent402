@@ -12,6 +12,7 @@
 // prose claim is the evergreen "500+". No secrets, no strategy - this is a
 // public instruction sheet an agent will read verbatim.
 import { REPO_URL } from "./repo-link.js";
+import { UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { isComputePayable, POW_DIFFICULTY, powCostPhrase } from "./pow.js";
 import { RAILS } from "./rails.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
@@ -249,6 +250,7 @@ ${meteredCurl(baseUrl)}
   transfer that lands after a timed-out settle, a disconnect during settle, or a
   settle the facilitator answered as pending whose receipt was not read in time,
   is booked as a refund owed and repaid after on-chain proof.
+  ${UNCONFIRMED_RECEIPT_EXCEPTION}
 - **400** - your input failed validation; the body says what to fix. Not charged on x402.
 - **413** - wallet-keyed memory quota full. Not charged on x402.
 - **502/503** - upstream or capacity failure. Not charged on x402 (settlement runs
@@ -279,7 +281,7 @@ of the response you hold, without trusting this document.
 |-------|-------|-----|
 | 402 after paying with PoW | You sent the \`challenge\` instead of the \`token\`, or reused a solution | Submit \`<token>:<nonce>\`; each challenge is single-use and slug-scoped |
 | "no supported rail" from an MPP client | Client parsed \`WWW-Authenticate\` only and bailed | Both headers are always present; check \`PAYMENT-REQUIRED\` too, or use an x402 client |
-| 402 with \`success: false\` receipt | Facilitator rejected settlement (empty wallet, wrong chain, expired auth) | Fund the wallet / pick a chain from \`accepts\`; you were not charged on x402 |
+| 402 with \`success: false\` receipt | Facilitator rejected settlement (empty wallet, wrong chain, expired auth) | Fund the wallet / pick a chain from \`accepts\`; you were not charged on x402. ${UNCONFIRMED_RECEIPT_EXCEPTION} |
 | Tool not found by \`/api/find\` | Wording too broad | Rephrase with the concrete input/output; browse ${baseUrl}/api/pricing; or request it via \`/api/wish\` |
 | 413 on \`/api/memory*\` | Namespace quota (10k keys / 32MB) | Delete keys or use another wallet namespace |
 | LLM gateway 400 "over budget" | Prompt too large for the tier's flat price | Send it to the metered route (\`/v1/metered/chat/completions\`, quoted from the body), use a higher tier (${tierFix || "see /api/pricing"}) or shorten the input |

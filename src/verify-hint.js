@@ -24,7 +24,7 @@
 // gets a BUCKET, never an address.
 import { createHash } from "node:crypto";
 import { encodeFunctionData, decodeFunctionResult } from "viem";
-import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint, notCheckedRefusal } from "./payment-reject.js";
+import { classifyPaymentRejection, classifySettlementRefusal, unclassifiedPaymentShape, unclassifiedPaymentHint, notCheckedRefusal, RETRY_SAME_PAYMENT } from "./payment-reject.js";
 import { classifySvmFundingRefusal, fundingHint, fundingPayerOf, POW_SENTENCE } from "./svm-funding-refusal.js";
 import { classifySettlementPending, isGatewayBatchedPayment, isGatewayBatchedRequest, PENDING_RETRY_AFTER_SECONDS, SETTLEMENT_FAILED_DETAIL, SETTLEMENT_PENDING_DETAIL } from "./gateway-wire.js";
 import { decodePaymentHeader } from "./payment-header.js";
@@ -251,7 +251,7 @@ export function hintFor({ reason, balanceUsd, priceUsd, network, payer, gateway 
   // A Circle Gateway batched payment resent while Gateway is still settling
   // it (src/gateway-nanopayments.js): the same payment, later; never a new
   // signature. Read before every other word.
-  if (/^settlement_pending$/.test(r)) return { reason: "settlement-pending", retry: "same-payment", retryAfterSeconds: PENDING_RETRY_AFTER_SECONDS, hint: SETTLEMENT_PENDING_DETAIL };
+  if (/^settlement_pending$/.test(r)) return { reason: "settlement-pending", retry: RETRY_SAME_PAYMENT, retryAfterSeconds: PENDING_RETRY_AFTER_SECONDS, hint: SETTLEMENT_PENDING_DETAIL };
   if (/^settlement_failed$/.test(r)) return { reason: "settlement-failed", retry: "fresh-authorization", hint: SETTLEMENT_FAILED_DETAIL };
   const price = Number.isFinite(priceUsd) ? `$${priceUsd.toFixed(priceUsd < 0.01 ? 4 : 3)}` : "the listed price";
   // The wallet the hint is about: the payer the credential names, shortened,
