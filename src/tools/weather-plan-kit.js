@@ -62,8 +62,10 @@ const RULE_VARIABLES = Object.freeze({
   uv_index: { field: "uv_index", unit: "index" },
 });
 const RULE_NAMES = Object.keys(RULE_VARIABLES);
-const OPS = Object.freeze({ ">=": (v, x) => v >= x, ">": (v, x) => v > x, "<=": (v, x) => v <= x, "<": (v, x) => v < x });
-const OP_ALIASES = Object.freeze({ gte: ">=", gt: ">", lte: "<=", lt: "<", above: ">", below: "<" });
+// Own keys only (no prototype): an operator is one of the four listed, never a
+// name every object inherits.
+const OPS = Object.freeze(Object.assign(Object.create(null), { ">=": (v, x) => v >= x, ">": (v, x) => v > x, "<=": (v, x) => v <= x, "<": (v, x) => v < x }));
+const OP_ALIASES = Object.freeze(Object.assign(Object.create(null), { gte: ">=", gt: ">", lte: "<=", lt: "<", above: ">", below: "<" }));
 const unitText = (unit, tempUnit) => (unit === "temp" ? (tempUnit === "fahrenheit" ? "°F" : "°C") : unit === "wind" ? (tempUnit === "fahrenheit" ? "mph" : "km/h") : unit);
 
 function rulesOf(raw) {

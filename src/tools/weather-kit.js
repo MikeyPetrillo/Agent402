@@ -154,6 +154,26 @@ const COUNTRY_ALIASES = { uk: "gb", usa: "us", "u.s.": "us", "u.s.a.": "us", "un
 const fold = (v) => String(v ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/\./g, "").trim().toLowerCase();
 export const PLACE_QUERY_MAX = 100;
 
+// A place read is kept in this process for a short time, a name that matched
+// nothing included, so a list of names sent again (a board of cities, a pack's
+// stops) reads each name upstream once. Only an upstream answer is kept, never
+// a failed read; the oldest entry leaves first once the set is full.
+export const PLACE_CACHE_TTL_MS = 10 * 60_000;
+export const PLACE_CACHE_MAX = 2000;
+const placeCache = new Map(); // key -> { at, rows }
+export function _resetPlaceCache() { placeCache.clear(); }
+async function placeRows(params) {
+  const key = [params.get("name").toLowerCase(), params.get("count"), params.get("language"), params.get("countryCode") ?? ""].join("\n");
+  const kept = placeCache.get(key);
+  if (kept && Date.now() - kept.at < PLACE_CACHE_TTL_MS) return kept.rows;
+  const data = await openMeteoJson("geocoding", "/v1/search", params);
+  const rows = (Array.isArray(data?.results) ? data.results : []).map(placeRow).filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
+  placeCache.delete(key);
+  placeCache.set(key, { at: Date.now(), rows });
+  while (placeCache.size > PLACE_CACHE_MAX) placeCache.delete(placeCache.keys().next().value);
+  return rows;
+}
+
 function placeRow(r) {
   const postcodes = Array.isArray(r.postcodes) ? r.postcodes.map(String) : [];
   return {
@@ -203,8 +223,7 @@ export async function lookupPlaces({ q, count = 5, country, language } = {}) {
   if (!/^[a-z]{2}$/.test(lang)) throw bad('"language" must be a two-letter language code, for example en');
   const params = new URLSearchParams({ name, count: qualifiers.length ? 25 : n, language: lang, format: "json" });
   if (cc) params.set("countryCode", cc);
-  const data = await openMeteoJson("geocoding", "/v1/search", params);
-  let rows = (Array.isArray(data?.results) ? data.results : []).map(placeRow).filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
+  let rows = await placeRows(params);
   for (const token of qualifiers) rows = rows.filter((r) => qualifierMatches(r, token));
   return { query, name, results: rows.slice(0, n) };
 }

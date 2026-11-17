@@ -153,10 +153,12 @@ const numberOf = (v, name) => {
   return n;
 };
 
-const OPS = Object.freeze({
+// Own keys only (no prototype): an operator is one of the four listed, never a
+// name every object inherits.
+const OPS = Object.freeze(Object.assign(Object.create(null), {
   ">=": (v, x) => v >= x, ">": (v, x) => v > x, "<=": (v, x) => v <= x, "<": (v, x) => v < x,
-});
-const OP_ALIASES = Object.freeze({ gte: ">=", gt: ">", lte: "<=", lt: "<", above: ">", below: "<", atleast: ">=", atmost: "<=" });
+}));
+const OP_ALIASES = Object.freeze(Object.assign(Object.create(null), { gte: ">=", gt: ">", lte: "<=", lt: "<", above: ">", below: "<", atleast: ">=", atmost: "<=" }));
 
 /** The condition a probability is asked for: { op, value } or { min, max }
  *  (a range, both ends included; either end may be open). */
@@ -553,7 +555,11 @@ async function boardCities(raw) {
     try { brackets = bracketsOf(entry.brackets, { required: false }); } catch (e) { throw bad(`cities[${idx}]: ${e.message}`); }
     return { entry, coords, brackets };
   });
-  return Promise.all(parsed.map(async ({ entry, coords, brackets }, idx) => {
+  // Names are resolved one after another and the first that matches nothing
+  // ends the run, so a list with an unknown name never reads the names after
+  // it; each name read is kept briefly (weather-kit.js), hit or miss.
+  const out = [];
+  for (const [idx, { entry, coords, brackets }] of parsed.entries()) {
     let loc = coords;
     if (!loc) {
       try { loc = await resolveLocation({ place: entry.place, country: entry.country }); } catch (e) {
@@ -562,8 +568,9 @@ async function boardCities(raw) {
       }
     }
     const label = entry.label === undefined || entry.label === null || entry.label === "" ? (loc.place?.name ?? `${loc.lat},${loc.lon}`) : String(entry.label).slice(0, 80);
-    return { label, lat: loc.lat, lon: loc.lon, ...(loc.place ? { place: loc.place } : {}), brackets };
-  }));
+    out.push({ label, lat: loc.lat, lon: loc.lon, ...(loc.place ? { place: loc.place } : {}), brackets });
+  }
+  return out;
 }
 
 // Every upstream wait in these handlers is a safeFetch through the weather

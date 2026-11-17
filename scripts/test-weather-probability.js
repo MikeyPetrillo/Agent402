@@ -29,7 +29,7 @@ let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.error(`FAIL - ${msg}`); } };
 
 delete process.env.OPEN_METEO_API_KEY;
-const { WEATHER_TOOLS, lookupPlaces, resolveLocation } = await import("../src/tools/weather-kit.js");
+const { WEATHER_TOOLS, lookupPlaces, resolveLocation, _resetPlaceCache, PLACE_CACHE_MAX } = await import("../src/tools/weather-kit.js");
 const P = await import("../src/tools/weather-probability-kit.js");
 const PLAN = await import("../src/tools/weather-plan-kit.js");
 const { GEONAMES_ATTRIBUTION, ATTRIBUTIONS, attributionTailOf } = await import("../src/data-attribution.js");
@@ -85,6 +85,26 @@ reply = (u) => (u.host === "geocoding-api.open-meteo.com" ? json(u.searchParams.
     ok(e?.statusCode === 400 && e.message.includes(`"${field}"`), `place-lookup: ${JSON.stringify(bad).slice(0, 40)} is a 400 naming ${field}`);
   }
   ok(fetched.length === 0, "place-lookup: a refused input makes no upstream read");
+  // A place read is kept briefly, hit or miss: the same name asked again makes no upstream read.
+  _resetPlaceCache();
+  fetched.length = 0;
+  await lookup({ q: "Springfield", count: 2 }); await lookup({ q: "springfield", count: 2 });
+  ok(fetched.length === 1, `place-lookup: the same name asked twice is one upstream read (${fetched.length})`);
+  await lookup({ q: "Nowhere" }); const again = await lookup({ q: "Nowhere" });
+  ok(fetched.length === 2 && again.found === false, `place-lookup: a name with no match is remembered too (${fetched.length} reads)`);
+  await lookup({ q: "Springfield", count: 3 }); await lookup({ q: "Springfield", count: 2, country: "US" });
+  ok(fetched.length === 4, "place-lookup: another count or country is another entry");
+  reply = () => json({}, 503);
+  const failed = await errOf(() => lookup({ q: "Outage City" }));
+  reply = (u) => json(u.searchParams.get("name") === "Nowhere" ? {} : { results: PLACES });
+  const after = await lookup({ q: "Outage City" });
+  ok(failed && failed.statusCode >= 500 && after.found === true, "place-lookup: a failed read is not remembered");
+  _resetPlaceCache();
+  for (let k = 0; k < PLACE_CACHE_MAX + 5; k++) await lookup({ q: `Town ${k}` });
+  fetched.length = 0;
+  await lookup({ q: "Town 0" }); await lookup({ q: `Town ${PLACE_CACHE_MAX + 4}` });
+  ok(fetched.length === 1, `place-lookup: the kept set is bounded at ${PLACE_CACHE_MAX}, oldest dropped first`);
+  _resetPlaceCache();
   const t = tool("place-lookup");
   ok(t.attribution === "geonames" && attributionTailOf(t.description) === ATTRIBUTIONS.geonames && t.price === "$0.001", "place-lookup: GeoNames attribution on the listing, listed at its decided price");
 }
@@ -94,6 +114,7 @@ reply = (u) => (u.host === "geocoding-api.open-meteo.com" ? json(u.searchParams.
 // ---------------------------------------------------------------------------
 {
   const FORECAST = { current: { time: "2026-01-01T00:00", temperature_2m: 1, weather_code: 0 } };
+  _resetPlaceCache();
   reply = (u) => (u.host === "geocoding-api.open-meteo.com" ? json(u.searchParams.get("name") === "Nowhere" ? {} : { results: PLACES }) : json(FORECAST));
   fetched.length = 0;
   let out = await tool("weather-current").handler({ lat: 1, lon: 2, place: "Springfield" });
@@ -152,6 +173,13 @@ const GEFS = [39.4, 39.6, 44, 45];          // 4 members
   ok(out.members.meeting === 2, "weather-probability: rounding is applied before the range (39.6 -> 40 is in, 39.4 -> 39 is out)");
   out = await prob({ lat: 1, lon: 2, op: "lt", value: 39 });
   ok(out.members.meeting === 1 && out.condition.op === "<", "weather-probability: the spelled comparison lt reads as <");
+  // The operator is matched against the four listed ones only: a name every object inherits is not one.
+  fetched.length = 0;
+  for (const op of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf", "="]) {
+    const e = await errOf(() => prob({ lat: 1, lon: 2, op, value: 40 }));
+    ok(e?.statusCode === 400 && e.message.includes('"op"'), `weather-probability: op=${op} is a 400 naming op (${e?.statusCode ?? "answered 200"})`);
+  }
+  ok(fetched.length === 0, "weather-probability: an unknown operator makes no upstream read");
   // max / min / mean aggregate the member's own hours.
   const ramp = Array.from({ length: 24 }, (_, h) => h);
   reply = () => json(ensembleBody("temperature_2m", [ramp], [ramp]));
@@ -212,9 +240,10 @@ const RATING_WORDS = /\b(edge|mispric\w*|underpric\w*|overpric\w*|undervalu\w*|o
 // ---------------------------------------------------------------------------
 {
   const board = tool("weather-market-board").handler;
+  _resetPlaceCache();
   const cityBody = (shift) => ensembleBody("temperature_2m", ECMWF.map((v) => v + shift), GEFS.map((v) => v + shift), { tz: "America/New_York" });
   reply = (u) => {
-    if (u.host === "geocoding-api.open-meteo.com") return json({ results: PLACES });
+    if (u.host === "geocoding-api.open-meteo.com") return json(u.searchParams.get("name") === "Nowhere" ? {} : { results: PLACES });
     const n = u.searchParams.get("latitude").split(",").length;
     return json(n === 1 ? cityBody(0) : Array.from({ length: n }, (_, k) => cityBody(k)));
   };
@@ -235,11 +264,25 @@ const RATING_WORDS = /\b(edge|mispric\w*|underpric\w*|overpric\w*|undervalu\w*|o
   ok(out.cities[0].label === "Mine" && out.cities[0].place?.region === "Illinois" && out.cities[1].label === "10,20" && out.cities[1].brackets.length === 1 && out.cities[1].brackets[0].forecastProbability === 1 && out.cities[1].brackets[0].marketPrice === 0.5, "weather-market-board: a city's own brackets and prices replace the built ladder for that city only");
   ok(out.cities[0].brackets.slice(1, -1).every((b) => b.max - b.min === 4), "weather-market-board: width sets the built ladder's step");
   fetched.length = 0;
-  for (const [bad, word] of [[{ cities: [] }, "cities"], [{ cities: Array.from({ length: P.MAX_BOARD_CITIES + 1 }, () => ({ lat: 1, lon: 2 })) }, "at most"], [{ cities: [{ label: "x" }] }, "cities[0]"], [{ cities: [{ lat: 95, lon: 0 }] }, "cities[0]"], [{ cities: [{ lat: 1, lon: 2, brackets: [{ min: 1, price: 7 }] }] }, "cities[0]"], [{ width: 0 }, "width"], [{ variable: "snow" }, "variable"]]) {
+  for (const [bad, word] of [[{ cities: [] }, "cities"], [{ cities: Array.from({ length: 21 }, () => ({ lat: 1, lon: 2 })) }, "at most 20"], [{ cities: [{ label: "x" }] }, "cities[0]"], [{ cities: [{ lat: 95, lon: 0 }] }, "cities[0]"], [{ cities: [{ lat: 1, lon: 2, brackets: [{ min: 1, price: 7 }] }] }, "cities[0]"], [{ width: 0 }, "width"], [{ variable: "snow" }, "variable"]]) {
     const e = await errOf(() => board(bad));
     ok(e?.statusCode === 400 && e.message.includes(word), `weather-market-board: ${JSON.stringify(bad).slice(0, 45)} is a 400 (${word})`);
   }
   ok(fetched.length === 0, "weather-market-board: a refused input makes no upstream read, a place lookup included");
+  ok(P.MAX_BOARD_CITIES === 20 && (await board({ cities: Array.from({ length: 20 }, (_, k) => ({ lat: k, lon: 2 })) })).count === 20, "weather-market-board: twenty cities is the most one call takes, and twenty are answered");
+  // A name that matches nothing ends the place reads there, and both the hits and the miss are remembered.
+  _resetPlaceCache();
+  fetched.length = 0;
+  const named = Array.from({ length: 20 }, (_, k) => ({ place: k === 2 ? "Nowhere" : `Named City ${k}` }));
+  let miss = await errOf(() => board({ cities: named }));
+  ok(miss?.statusCode === 404 && miss.message.includes("cities[2]") && fetched.length === 3 && fetched.every((x) => new URL(x).host === "geocoding-api.open-meteo.com"), `weather-market-board: a name with no match is a 404 naming the entry, and no place after it is read (${fetched.length} reads)`);
+  miss = await errOf(() => board({ cities: named }));
+  ok(miss?.statusCode === 404 && fetched.length === 3, `weather-market-board: the same list sent again makes no upstream read (${fetched.length - 3} more)`);
+  fetched.length = 0;
+  const lastMiss = [...Array.from({ length: 19 }, (_, k) => ({ place: `Good City ${k}` })), { place: "Nowhere" }];
+  await errOf(() => board({ cities: lastMiss })); await errOf(() => board({ cities: lastMiss })); await errOf(() => board({ cities: lastMiss }));
+  ok(fetched.length === 19, `weather-market-board: 19 known names and one unknown, sent three times, read each known name once and the unknown never again (${fetched.length} reads)`);
+  _resetPlaceCache();
   const ladder = P.ladderFor([0, 0, 0, 0.2, 3, 12], 5, { floorZero: true });
   ok(ladder[0].min === 0 && ladder.at(-1).max === null, "ladderFor: a value that cannot go below zero gets no bracket under zero");
   ok(tool("weather-market-board").price === "$0.10", "weather-market-board: listed at its decided price");
@@ -300,6 +343,10 @@ const RATING_WORDS = /\b(edge|mispric\w*|underpric\w*|overpric\w*|undervalu\w*|o
   for (const [bad, word] of [[{ lat: 1, lon: 2 }, "rules"], [{ lat: 1, lon: 2, rules: [{ variable: "vibes", op: ">", value: 1 }] }, "rules[0].variable"], [{ lat: 1, lon: 2, rules: [{ variable: "humidity", op: "=", value: 1 }] }, "rules[0].op"], [{ lat: 1, lon: 2, rules: [{ variable: "humidity", op: ">" }] }, "rules[0].value"], [{ lat: 1, lon: 2, rules: Array.from({ length: PLAN.MAX_RULES + 1 }, () => ({ variable: "humidity", op: ">", value: 1 })) }, "at most"], [{ lat: 1, lon: 2, hours: 500, rules: [{ variable: "humidity", op: ">", value: 1 }] }, "hours"]]) {
     const e = await errOf(() => thr(bad));
     ok(e?.statusCode === 400 && e.message.includes(word), `weather-thresholds: ${JSON.stringify(bad).slice(15, 60)} is a 400 (${word})`);
+  }
+  for (const op of ["constructor", "__proto__", "toString", "valueOf"]) {
+    const e = await errOf(() => thr({ lat: 1, lon: 2, rules: [{ variable: "humidity", op, value: 1 }] }));
+    ok(e?.statusCode === 400 && e.message.includes("rules[0].op"), `weather-thresholds: op=${op} is a 400 naming rules[0].op (${e?.statusCode ?? "answered 200"})`);
   }
   ok(fetched.length === 0, "weather-thresholds: a refused input makes no upstream read");
   ok(tool("weather-window").price === "$0.004" && tool("weather-thresholds").price === "$0.003", "weather-window and weather-thresholds: listed at their planned prices");
