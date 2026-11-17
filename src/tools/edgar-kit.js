@@ -356,10 +356,12 @@ export const EDGAR_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "All XBRL concepts reported by a company. Default returns a compact summary per tag (label, unit, latest value, latest end date) - typically a few hundred KB. Pass tags=Revenues,Assets,NetIncomeLoss to get full time-series for just those concepts. Source: data.sec.gov/api/xbrl/companyfacts. ?ticker=AAPL",
+      "All XBRL concepts reported by a company. Default returns a compact summary per tag (label, unit, latest value, latest end date) - typically a few hundred KB. Pass tags=Revenues,Assets,NetIncomeLoss to get full time-series for just those concepts. Source: data.sec.gov/api/xbrl/companyfacts. ?ticker=AAPL&tags=Revenues,Assets",
     tags: ["edgar", "sec", "xbrl", "financials", "fundamentals", "facts", "company"],
     discovery: {
-      input: { ticker: "AAPL" },
+      // The published example names two concepts: its answer is tens of KB,
+      // where the summary of every tag (no `tags`) is over a hundred.
+      input: { ticker: "AAPL", tags: "Revenues,Assets" },
       inputSchema: {
         properties: {
           ticker: { type: "string", description: "US stock ticker (alternative to cik)" },
@@ -372,8 +374,9 @@ export const EDGAR_TOOLS = [
         example: {
           cik: "0000320193",
           entityName: "Apple Inc.",
-          mode: "summary",
-          taxonomies: { "us-gaap": { count: 312, sample: { Revenues: { label: "Revenues", unit: "USD", latestEnd: "2024-09-28", latestVal: 391035000000, observations: 48 } } } },
+          mode: "full",
+          tagsFilter: ["Revenues", "Assets"],
+          taxonomies: { "us-gaap": { Revenues: { label: "Revenues", units: { USD: [{ end: "2018-09-29", val: 265595000000, fy: 2018, fp: "FY", form: "10-K" }] } } } },
         },
       },
     },

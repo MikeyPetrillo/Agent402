@@ -6,6 +6,26 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (marketplace answers arrive whole or are not settled)
+Payments:
+- An input a tool refuses on a call bought through a marketplace listing is
+  answered with the tool's expected fields, required fields and example, as on
+  the direct route, and this server does not settle the payment.
+- An answer larger than a marketplace passes on whole (64,000 bytes) is refused
+  with status 413 before the payment is settled, so we do not settle
+  it: the refusal gives the answer's size and the limit and names the tool's
+  own input fields that narrow the request. No answer is cut to fit, and a tool
+  whose published example answer is over the limit is not offered there.
+- The wait for a marketplace settlement to answer is 60 seconds by default,
+  which covers the longest that settlement takes to answer. A call whose run
+  was slow waits less, so its answer starts before the connection's own time
+  limit; a settlement still unanswered then is read from the chain, and the
+  answer is kept for the same payment sent again.
+Tools:
+- The published example for edgar-company-facts asks for two named concepts
+  (tags=Revenues,Assets), an answer of a few tens of KB. Every input answers as
+  it did before.
+
 ### 2026-11-16 (marketplace sales count in our figures)
 Payments:
 - A sale made through a marketplace listing of one of our tools now counts in
