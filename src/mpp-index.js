@@ -32,7 +32,7 @@ const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { CRAWLER_UA } from "./user-agents.js";
-import { sellerLoad, landingGate, SLOW_READ_INTERVAL_MS } from "./seller-load.js";
+import { sellerLoad, landingGate, RequestHeld, SLOW_READ_INTERVAL_MS } from "./seller-load.js";
 import { isSlowOrigin } from "./crawl-cadence.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
@@ -375,7 +375,8 @@ async function loadGate(url, kind, gate) {
     const refusal = await sellerLoad.probeRefusal(url, kind);
     if (refusal) throw new MppRequestHeld(refusal);
   } else {
-    await sellerLoad.takeBudget(url, kind, { essential: true, unscheduled: true });
+    const b = await sellerLoad.takeBudget(url, kind, { essential: true, unscheduled: true });
+    if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
   }
 }
 function noteHold(url, status, retryAfter) {
@@ -400,6 +401,7 @@ async function discoveryProbeTarget(origin, { gate = false, fetchDoc = fetchDisc
     if (t) target = { method: t.method, url: `${origin}${t.path}` };
   } catch (e) {
     // A hop that was not sent is no answer: nothing is cached.
+    if (e?.requestHeld) throw e;
     if (e?.landingHeld) throw new MppRequestHeld("budget");
     noteHold(url, Number(e?.upstreamStatus), e?.retryAfter ?? e?.upstreamRetryAfter ?? null);
     target = null;
@@ -542,8 +544,10 @@ export async function verifyMppSeller(origin, { probe, fetchText, fetchDoc, gate
     result = await (probe || probeMppChallenge)(target);
   } catch (e) {
     // Held back by the load controls: nothing was asked, so the entry stays
-    // exactly as the last completed probe left it.
-    if (e?.sellerLoadSkip) return cache.get(origin) || null;
+    // exactly as the last completed probe left it. A registration's read held
+    // by the host's hourly ceiling goes back to the registration.
+    if (e?.requestHeld && !gate) throw e;
+    if (e?.sellerLoadSkip || e?.requestHeld) return cache.get(origin) || null;
     throw e;
   }
   noteHold(target.url, Number(result?.status), result?.retryAfter ?? null);
@@ -603,13 +607,23 @@ export async function registerMppOrigin(origin, { verify, path, method } = {}) {
   }
   const hint = validateProbeHint({ path, method });
   if (hint.error) return { listed: false, origin, error: hint.error };
+  // One host is sent at most an hour's ceiling of registration reads
+  // (src/seller-load.js): past it the registrant is told when to retry.
+  const heldFor = await sellerLoad.registrationHeldFor(origin);
+  if (heldFor > 0) return mppRegistrationHeld(origin, heldFor);
   // Stage the hint so this verification probes it; keep it only if it verifies
   // (a wrong hint must not stick to an origin for the crawler to re-probe forever).
   const priorHint = submittedHints.get(origin);
   if (hint.path || hint.method) submittedHints.set(origin, hint);
   const doVerify = verify || verifyMppSeller;
   let entry;
-  try { entry = await doVerify(origin); } catch (e) { entry = { verified: false, lastProbeError: String(e?.message || e) }; }
+  try { entry = await doVerify(origin); } catch (e) {
+    if (e?.heldBy === "registration-hour") {
+      if (priorHint) submittedHints.set(origin, priorHint); else submittedHints.delete(origin);
+      return mppRegistrationHeld(origin, e.retryAfterSeconds || 60);
+    }
+    entry = { verified: false, lastProbeError: String(e?.message || e) };
+  }
   if (!entry?.verified) { if (priorHint) submittedHints.set(origin, priorHint); else submittedHints.delete(origin); }
   // Own the cache write here rather than relying on doVerify's own side effect
   // (the real verifyMppSeller() already writes it; an injected test verifier
@@ -626,6 +640,10 @@ export async function registerMppOrigin(origin, { verify, path, method } = {}) {
     return { listed: true, origin, seller: mppSellerSummary(cache.get(origin)) };
   }
   return { listed: false, origin, error: entry?.lastProbeError || "no MPP challenge (WWW-Authenticate: Payment) found on the probed endpoint" };
+}
+
+function mppRegistrationHeld(origin, secs) {
+  return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `this host has had this hour's registration reads; nothing was listed or changed, register again in ${secs} s` };
 }
 
 function mppSellerSummary(v) {

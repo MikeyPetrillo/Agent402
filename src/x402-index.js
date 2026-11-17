@@ -306,7 +306,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
-import { sellerLoad, bodyHash, landingGate } from "./seller-load.js";
+import { sellerLoad, bodyHash, landingGate, RequestHeld } from "./seller-load.js";
 // Reads made for a registration (anyone may register any origin, with no proof
 // of control) run inside this scope: they are counted on a day count of their
 // own (src/seller-load.js takeBudget `unscheduled`), never on the day the
@@ -1725,6 +1725,12 @@ export async function registerOrigin(origin, { crawl, replaces = null, deadlineM
   return { listed: false, pending: true, origin, status: "verifying", note: REGISTER_PENDING_NOTE, retryAfterSeconds: 60 };
 }
 
+/** A registration whose reads the host's hourly ceiling held back: nothing
+ *  was listed or changed, and the registrant retries after `secs`. */
+function registrationHeld(origin, secs) {
+  return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `this host has had this hour's registration reads; nothing was listed or changed, register again in ${secs} s` };
+}
+
 async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 0 } = {}) {
   // Evaluated lazily: the claimant has to be in the cache before its payTo can
   // be compared, so this is re-read at each record site rather than up front.
@@ -1863,10 +1869,20 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
     return { listed: false, origin, error: `submission list is full - a slot frees up ${Math.round(RELEASE_AFTER_MS / 86400000)} days after its origin's last successful probe (${Math.round(SETTLED_RELEASE_AFTER_MS / 86400000)} for a seller that has settled payments, ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)} for a quick tunnel); open a GitHub issue to get seeded sooner` };
   }
-  const doCrawl = crawl || (async (o, opts) => { const read = await crawlSeller(o, opts); return cache.get(o) || (read?.landingHeld ? { error: read.error } : undefined); });
+  // One host is sent at most an hour's ceiling of registration reads
+  // (src/seller-load.js), whoever registers which origin on it: past it the
+  // registrant is told when to retry, and nothing is sent.
+  const heldFor = await sellerLoad.registrationHeldFor(origin);
+  if (heldFor > 0) return registrationHeld(origin, heldFor);
+  const doCrawl = crawl || (async (o, opts) => {
+    const read = await crawlSeller(o, opts);
+    if (read?.heldBy === "registration-hour" && !cache.has(o)) return { error: read.error, registrationHeldFor: read.retryAfterSeconds || 60 };
+    return cache.get(o) || (read?.landingHeld ? { error: read.error } : undefined);
+  });
   let v;
   // A first registration reads the paywall on its first crawl, as a re-registration does.
   try { v = await doCrawl(origin, { deadlineAt, forcePaywall: true }); } catch (e) { v = { error: String(e?.message || e) }; }
+  if (v?.registrationHeldFor > 0) return registrationHeld(origin, v.registrationHeldFor);
   // Injected test crawlers return the entry directly; the real path re-reads cache.
   if (v && !v.error && (v.tools?.length || v.manifest)) {
     submittedSeeds.add(origin);
@@ -6108,7 +6124,8 @@ export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "functio
  *  landed allowance and is not sent past it (LandingHeld, landingGate). */
 async function crawlRead(url, opts) {
   const unscheduled = readIsUnscheduled();
-  await sellerLoad.takeBudget(url, "crawler", { essential: true, unscheduled });
+  const b = await sellerLoad.takeBudget(url, "crawler", { essential: true, unscheduled });
+  if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
   try {
     return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }) });
   } catch (e) {
@@ -6142,7 +6159,7 @@ async function crawlScheduled(origin, outcome = { ours: false }) {
   landingHeldOn.delete(origin);
   sellerLoad.noteSlowRead(origin, "x402");
   const read = await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
-  if (read?.landingHeld) { noteTurnNotRead(origin); return "landing"; }
+  if (read?.landingHeld) { noteTurnNotRead(origin); return read.heldBy ? "budget" : "landing"; }
   return null;
 }
 // When an origin's scheduled turn last passed without a read because of a
@@ -6461,7 +6478,7 @@ async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
     read = false;
     clearValidatorsFor(originUrl);
     noteLandingHeld(originUrl, e.landingHost);
-    return { landingHeld: e.landingHost || true, error: String(e.message || e) };
+    return { landingHeld: e.landingHost || true, error: String(e.message || e), ...(e.heldBy ? { heldBy: e.heldBy, retryAfterSeconds: e.retryAfterSeconds || 0 } : {}) };
   }
   finally { if (read) { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; } }
 }

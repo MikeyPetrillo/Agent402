@@ -9284,6 +9284,13 @@ app.post("/api/index/register", async (req, res) => {
     regLimiter.giveBack(slot);
     return res.status(503).set("Retry-After", "30").json(result);
   }
+  // The host has had this hour's registration reads (src/seller-load.js):
+  // nothing was sent, so the global slot goes back, and the caller is told
+  // when to retry.
+  if (result?.held) {
+    regLimiter.giveBackGlobal(slot);
+    return res.status(429).set("Retry-After", String(result.retryAfterSeconds || 60)).json(result);
+  }
   // Verification outlasted the registration's deadline: answered now (202),
   // and the listing completes in the background (registerOrigin).
   if (result?.pending) return res.status(202).set("Retry-After", String(result.retryAfterSeconds || 60)).json(result);
@@ -9311,6 +9318,10 @@ app.post("/api/mpp-index/register", async (req, res) => {
   // Optional probe hint: the priced path (and GET/POST) the seller's 402 lives
   // on, for sellers not yet in the registry (validated in registerMppOrigin).
   const result = await registerMppOrigin(v.origin, { path: req.body?.path, method: req.body?.method });
+  if (result?.held) {
+    mppRegLimiter.giveBackGlobal(taken.slot);
+    return res.status(429).set("Retry-After", String(result.retryAfterSeconds || 60)).json(result);
+  }
   res.json(result);
 });
 const computeRoute = async (q, k, include, net, scoredMemo = null, meter = null) => {

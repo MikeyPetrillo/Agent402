@@ -113,5 +113,29 @@ const sentTo = (host) => sent.filter((u) => isHost(u, host)).length;
   ok(!sellerLoad.slowWaiting(S, "x402"), "the x402 crawl's slow cycle is its own");
 }
 
+// ---- a host's hourly ceiling of registration reads ---------------------------------
+{
+  // Anyone may register any origin: three hundred registrations of names on
+  // one operator's host send it at most the hour's ceiling, and each one past
+  // it is answered with when to retry, never an error of ours.
+  mpp.__testReset();
+  const onFlood = () => sent.filter((u) => new URL(u).hostname.endsWith("flood.example")).length;
+  const verify = (o) => mpp.verifyMppSeller(o, { probe, fetchDoc, fetchText });
+  const answers = [];
+  for (let i = 0; i < 300; i++) answers.push(await mpp.registerMppOrigin(`https://q${i}.flood.example`, { verify }));
+  const max = sellerLoad.status().budget.registrationReadsPerOperatorPerHour;
+  const held = answers.filter((r) => r?.held);
+  ok(max === 20 && onFlood() <= max && onFlood() >= max - 1, `the host is sent at most the hour's ceiling of registration reads (${onFlood()} of ${max})`);
+  ok(held.length >= 280 && held.every((r) => r.listed === false && r.retryAfterSeconds > 0 && r.retryAfterSeconds <= 3600 && /register again/.test(r.error)),
+    `every registration past it is told when to retry (${held.length} held)`);
+  ok(answers.filter((r) => r?.listed).length >= 1, "control: the registrations inside the ceiling are read and listed");
+  const other = await mpp.registerMppOrigin("https://elsewhere.example", { verify });
+  ok(other?.listed === true, "another operator's host keeps its own ceiling");
+  clock += 3_600_000;
+  const n = onFlood();
+  const later = await mpp.registerMppOrigin("https://q500.flood.example", { verify });
+  ok(later?.listed === true && onFlood() > n, "the next hour a registration on the host is read again");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

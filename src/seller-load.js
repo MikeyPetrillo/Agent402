@@ -18,7 +18,9 @@
 //      unpaid probes skip that host until the day rolls; the unpaid probes take
 //      at most PROBE_SHARE of it, so the document reads keep the rest. A read
 //      made for a registration (`unscheduled`) is counted apart and never
-//      spends the day. The router's probe for
+//      spends the day; one operator's host is sent at most
+//      REGISTRATION_HOURLY_MAX of them an hour (SELLER_REGISTRATION_HOURLY_MAX,
+//      default 20), past which the read is not sent (RequestHeld). The router's probe for
 //      a paying caller is counted on a day count of its own, never skipped and
 //      never counted against the crawl's budget. A request that reaches a host
 //      through another operator's redirect (a document read following it, or
@@ -80,6 +82,11 @@ export const REVISIT_BASE_MS = CRAWL_INTERVAL_MS;
 const REVISIT_SLACK_MS = 2 * 60_000;
 /** Requests per operator per UTC day before unpaid probes skip it (0 = no budget). */
 export const DAILY_BUDGET = countKnob("SELLER_PROBE_DAILY_BUDGET", 200);
+/** Requests made for registrations (`unscheduled`) that one operator's host
+ *  is sent per clock hour, whoever registers which origin on it: past it a
+ *  registration's read is not sent and the registrant is told when to retry
+ *  (RequestHeld). 0 = no ceiling. */
+export const REGISTRATION_HOURLY_MAX = countKnob("SELLER_REGISTRATION_HOURLY_MAX", 20);
 /** The share of a day's budget the unpaid price and paywall probes may use, so
  *  the document reads always keep the rest. */
 export const PROBE_SHARE = 0.5;
@@ -127,6 +134,8 @@ function originOf(u) {
   try { return new URL(String(u)).origin; } catch { return null; }
 }
 const dayOf = (t) => new Date(t).toISOString().slice(0, 10);
+const hourOf = (t) => new Date(t).toISOString().slice(0, 13);
+const secondsToNextHour = (t) => Math.max(1, Math.ceil((HOUR_MS - (t % HOUR_MS)) / 1000));
 /** Seconds from a Retry-After value (a number, delta-seconds or an HTTP date
  *  read against `now`), or null when it names no wait. */
 export function retryAfterSecondsAt(value, now) {
@@ -184,6 +193,7 @@ export function createSellerLoad({
   prefetchWaitMs = PREFETCH_WAIT_MS,
   probeShare = PROBE_SHARE,
   slowReadIntervalMs = SLOW_READ_INTERVAL_MS,
+  registrationHourlyMax = REGISTRATION_HOURLY_MAX,
 } = {}) {
   const probeCap = Math.max(1, Math.floor(dailyBudget * probeShare));
   let clock = now;
@@ -535,22 +545,33 @@ export function createSellerLoad({
       }
       // A read we did not schedule (a registration's, which anyone can ask
       // for any origin) is counted on a day count of its own, the crawled
-      // origin's, and never refused: it never spends the day the scheduled
-      // crawl and its probes read. One that lands on another operator's host
+      // origin's: it never spends the day the scheduled crawl and its probes
+      // read. It is refused only past the host's hourly ceiling. One that lands on another operator's host
       // is held to a landed allowance of its own there, apart from the one
       // the scheduled reads of moved origins share.
       if (unscheduled) {
+        // The host the request reaches is sent at most registrationHourlyMax
+        // of them an hour, however many origins on it are registered, and by
+        // however many callers.
+        const hourKey = registrationHourlyMax > 0 ? `${hourOf(t)}|${operatorKey(target)}|registration` : null;
+        if (hourKey && (await countLocal(hourKey)) > registrationHourlyMax) {
+          await countLocal(hourKey, -1);
+          bump(counts.refused, `${k}:registration-hour`);
+          return { ok: false, used: 0, budget: dailyBudget, unscheduled: true, heldBy: "registration-hour", retryAfterSeconds: secondsToNextHour(t) };
+        }
         const key = `${budgetKey(origin, t)}|unscheduled`;
         if (moved && dailyBudget > 0) {
           const landedKey = `${budgetKey(target, t)}|landed-unscheduled`;
           const landed = await countLocal(landedKey);
           if (landed > dailyBudget) {
             await countLocal(landedKey, -1);
+            if (hourKey) await countLocal(hourKey, -1);
             bump(counts.refused, `${k}:landed-unscheduled`);
             return { ok: false, used: 0, budget: dailyBudget, unscheduled: true };
           }
           countShared(landedKey);
         }
+        if (hourKey) countShared(hourKey);
         const used = await countLocal(key);
         countShared(key);
         bump(counts.requests, `${k}:unscheduled`);
@@ -595,6 +616,16 @@ export function createSellerLoad({
       noteRequest(url, k);
       hostDay.set(key, used); bounded(hostDay);
       return { ok: true, used, budget: dailyBudget };
+    },
+
+    /** Seconds until a registration's reads may reach the host of `url`
+     *  again, or 0 when this hour's ceiling (registrationHourlyMax) has room. */
+    async registrationHeldFor(url) {
+      const target = originOf(url);
+      if (!target || registrationHourlyMax <= 0) return 0;
+      const t = clock();
+      const r = await local.counterGet(BUDGET, `${hourOf(t)}|${operatorKey(target)}|registration`, { now: t });
+      return (Number(r?.value) || 0) >= registrationHourlyMax ? secondsToNextHour(t) : 0;
     },
 
     /** Note one request to the host of `url` in the request log only: no
@@ -731,7 +762,7 @@ export function createSellerLoad({
       for (const [, at] of backedOff) if (at > t) backedOffNow++;
       return {
         revisit: { capHours: revisitCapMs / HOUR_MS, firstWaitMinutes: revisitIntervalMs(1, { baseMs: revisitBaseMs, capMs: revisitCapMs }) / 60_000, originsBackedOff: backedOffNow, unchangedReads: counts.unchangedReads, changedReads: counts.changedReads, resets: { ...counts.resets } },
-        budget: { perOperatorPerDay: dailyBudget, probesPerOperatorPerDay: probeCap, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused }, routerProbesCountedApart: true },
+        budget: { perOperatorPerDay: dailyBudget, probesPerOperatorPerDay: probeCap, registrationReadsPerOperatorPerHour: registrationHourlyMax, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused }, routerProbesCountedApart: true },
         throttle: { defaultMinutes: THROTTLE_DEFAULT_MS / 60_000, maxHours: THROTTLE_MAX_MS / HOUR_MS, ...counts.throttles },
         crawlsSkipped: { ...counts.skipped },
         prefetch: { ...counts.prefetch, waitMs: prefetchWaitMs },
@@ -741,6 +772,24 @@ export function createSellerLoad({
       };
     },
   };
+}
+
+/** A request our own limit did not send: a registration's read past the
+ *  host's hourly ceiling (`registration-hour`), or a read of a host whose
+ *  address has had its day (`address-day`). Read like LandingHeld wherever a
+ *  crawl meets one (`landingHeld`): nothing was asked, so the entry stays as
+ *  it was. `retryAfterSeconds`: when the request may go. */
+export class RequestHeld extends Error {
+  constructor(heldBy, retryAfterSeconds = 0) {
+    super(heldBy === "registration-hour"
+      ? `not sent: this hour's registration reads of that host are spent; retry in ${retryAfterSeconds} s`
+      : `not sent: the day's requests to that host's address are spent`);
+    this.landingHeld = true;
+    this.landingHost = null;
+    this.requestHeld = true;
+    this.heldBy = heldBy;
+    this.retryAfterSeconds = Number(retryAfterSeconds) || 0;
+  }
 }
 
 /** One probe the router sends for a paying caller (src/server.js): counted on
@@ -776,6 +825,7 @@ export class LandingHeld extends Error {
 export function landingGate(chargeTo, kind, { load = sellerLoad, unscheduled = false } = {}) {
   return async (nextUrl) => {
     const b = await load.takeBudget(nextUrl, kind, { essential: true, chargeTo, unscheduled });
+    if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
     if (b?.ok === false) throw new LandingHeld(hostnameOf(nextUrl));
   };
 }

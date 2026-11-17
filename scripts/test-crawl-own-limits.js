@@ -79,7 +79,8 @@ const entry = (o) => idx._cacheForTests().get(o);
 {
   const V = "https://victim.example";
   serve(V);
-  for (let i = 0; i < 50; i++) await idx.registerOrigin(`${V}/p${i}`).catch(() => null);
+  // An hour apart, inside the host's hourly ceiling of registration reads.
+  for (let i = 0; i < 50; i++) { await idx.registerOrigin(`${V}/p${i}`).catch(() => null); clock += H; }
   const sent = readsOf(V) + probesOf(V);
   ok(sent >= 50, `control: fifty registrations under the domain were read (${sent} requests)`);
   ok((await sellerLoad.budgetSpent(V)).used === 0, "none of their reads is counted on the domain's day");
@@ -190,6 +191,30 @@ const entry = (o) => idx._cacheForTests().get(o);
   ok(droppedAt > 0 && droppedAt - start <= 6 * H + 2 * 6 * H,
     `a slow origin that stays dark drops after the hold (${droppedAt ? ((droppedAt - start) / H).toFixed(1) + " h" : "never"} after its last good read)`);
   ok(fineKept, "a working slow origin waiting the same turns keeps its listing for three days");
+}
+
+// ---- a host's hourly ceiling of registration reads ---------------------------------
+{
+  // Three hundred registrations of path origins on one host, in one hour:
+  // the host is sent at most the hour's ceiling, and each registration past
+  // it is answered with when to retry, nothing listed or changed.
+  clock = Date.parse("2026-12-02T10:00:00Z");
+  const V2 = "https://victim2.example";
+  serve(V2);
+  const sent0 = readsOf(V2) + probesOf(V2);
+  const answers = [];
+  for (let i = 0; i < 300; i++) answers.push(await idx.registerOrigin(`${V2}/q${i}`).catch((e) => ({ thrown: String(e?.message || e) })));
+  const sent = readsOf(V2) + probesOf(V2) - sent0;
+  const max = sellerLoad.status().budget.registrationReadsPerOperatorPerHour;
+  const held = answers.filter((r) => r?.held);
+  ok(max === 20 && sent > 0 && sent <= max, `the host is sent at most the hour's ceiling of registration reads (${sent} of ${max})`);
+  ok(held.length >= 280 && held.every((r) => r.listed === false && r.retryAfterSeconds > 0 && r.retryAfterSeconds <= 3600 && /register again/.test(r.error)),
+    `every registration past it is told when to retry (${held.length} held)`);
+  ok(!answers.some((r) => r?.thrown), "and none of them throws");
+  clock += H;
+  const before = readsOf(V2);
+  const later = await idx.registerOrigin(V2);
+  ok(later?.listed === true && readsOf(V2) > before, "the next hour a registration on the host is read and listed");
 }
 
 Date.now = realNow;
