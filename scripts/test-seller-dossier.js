@@ -224,7 +224,7 @@ check("a refusal memo on a chain is surfaced with the chain and time", () => {
   assert.ok(plain.flags.some((f) => /noted two refusals .* on base/.test(f)) && !plain.flags.some((f) => /paid retries/.test(f)));
 });
 
-// --- our own paid calls -------------------------------------------------------
+// --- our router's calls to the seller ---------------------------------------------
 check("delivery observations attach to their route and a low keep rate is flagged, a 1-of-1 is not", () => {
   const d = new Map([["POST /api/a", { calls: 5, kept: 3, keptRate: 0.6, lastMissing: ["result"], lastSeenAt: "2026-09-07T00:00:00.000Z" }], ["POST /api/b", { calls: 1, kept: 1, keptRate: 1, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }]]);
   const r = base({ deliveries: d });
@@ -232,6 +232,21 @@ check("delivery observations attach to their route and a low keep rate is flagge
   assert.equal(r.delivery.calls, 6);
   assert.ok(r.flags.some((f) => /delivered less than 80%.*\/api\/a/.test(f)));
   assert.ok(!r.flags.some((f) => /\/api\/b/.test(f) && /delivered less/.test(f)));
+  // The row carries the record under the index's name for it, and the summary
+  // says the record counts more than paid calls.
+  const rowA = r.catalog.tools.find((t) => t.route === "/api/a");
+  assert.equal(rowA.responseDelivery.calls, 5);
+  // The earlier published name stays beside it with the same value (deprecated).
+  assert.ok("ourPaidCalls" in rowA, "the deprecated ourPaidCalls field is still in the row");
+  assert.deepEqual(rowA.ourPaidCalls, rowA.responseDelivery);
+  const rowB = r.catalog.tools.find((t) => t.route === "/api/b");
+  assert.deepEqual(rowB.ourPaidCalls, rowB.responseDelivery);
+  const bare = base({}).catalog.tools[0];
+  if (bare) assert.ok("ourPaidCalls" in bare && "responseDelivery" in bare && bare.ourPaidCalls === bare.responseDelivery, "a row with no record carries both fields as null");
+  assert.match(r.delivery.source, /unpaid non-answers included/);
+  // The record counts unpaid non-answers too, so no flag says "we paid".
+  assert.ok(!r.flags.some((f) => /we paid/.test(f)), "a delivery flag never says every counted call was paid");
+  assert.ok(r.flags.some((f) => /route\(s\) our router called delivered less than 80%/.test(f)));
 });
 check("answers past our read limit that could not be checked are counted and flagged, never read as kept", () => {
   const d = new Map([["POST /api/a", { calls: 2, kept: 2, keptRate: 1, unverifiable: 4, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }], ["POST /api/b", { calls: 0, kept: 0, keptRate: null, unverifiable: 1, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }]]);
@@ -240,6 +255,13 @@ check("answers past our read limit that could not be checked are counted and fla
   assert.equal(r.delivery.kept, 2);
   assert.ok(r.flags.some((f) => /past our read limit.*\/api\/a/.test(f)));
   assert.ok(!r.flags.some((f) => /past our read limit.*\/api\/b/.test(f)));
+  assert.ok(r.flags.some((f) => /route\(s\) our router called answered past our read limit/.test(f)) && !r.flags.some((f) => /we paid/.test(f)));
+});
+check("the tool description names the delivery record truthfully and the deprecated field", () => {
+  const d = buildSellerDossierTool({}).description;
+  assert.ok(!/times our (own )?router (actually )?paid it/.test(d), "the description does not say every recorded call was paid");
+  assert.match(d, /when our router called it, paid calls and the unpaid non-answers it refused to resell alike/);
+  assert.match(d, /each catalog row's responseDelivery; ourPaidCalls carries the same value and is deprecated/);
 });
 
 // --- identity / health flags -------------------------------------------------

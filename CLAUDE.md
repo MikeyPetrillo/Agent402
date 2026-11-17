@@ -22,7 +22,7 @@ LLC: credit the entity, never a personal name.
   `demand.request`, flagship aliases). Old snake names remain CallTool aliases only.
 - `src/mcp-mpp.js`, `src/mcp-tasks.js`, `src/mcp-skills.js`, `src/mcp-x402.js`, `src/mcp-x402-routes.js`:
   connector payments, long calls as tasks, skill packs, the x402 MCP codec and the internal x402 twins of
-  flagships (both not yet wired to `/mcp`; see `.claude/rules/mcp.md`).
+  flagships (both wired to `/mcp` through `x402Loopback`, off in FREE_MODE; see `.claude/rules/mcp.md`).
 - `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js`, `src/mpp-subscriptions.js`: MPP
   wire support. x402 keeps sole settlement authority on the evm path; the shim only translates.
 - `src/credits.js`: prepaid card credits (hold at authorize, debit on a final 200).
@@ -227,7 +227,9 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   burner low-water mark counts the pass only then). The plan job holds no key and joins no
   concurrency group; only a run on main buys. One issue records the listings a pass did not buy
   and closes when a run buys them (`scripts/mcp-listings-issue.js`). The presence check reads the
-  listings (`/mcp#<tool>`), pages on one that was listed and left, and never buys one;
+  listings (`/mcp#<tool>`), names in its log each one that was listed and left, pages on one
+  missing two checks in a row under its own issue (fixed text, never the route issue) whatever
+  that switch says, and never buys one;
   `bazaar-validate.js --mcp` checks the offers.
 - The heartbeat also pages (one issue) on a security advisory in triage longer than the repo
   variable `ADVISORY_TRIAGE_MAX_HOURS` (default 24), and on a read it cannot make

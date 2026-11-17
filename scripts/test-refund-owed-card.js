@@ -15,24 +15,27 @@
 // second poll starts no second refund call.
 import "./lib/file-mode.js";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { ownStoreEnv } from "./lib/own-stores.js";
 import { getFreePort } from "./lib/free-port.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
 
-const DIR = join(existsSync("/data") ? "/data" : "/tmp", "human-checkout");
+// The server's report store is this suite's own directory (HUMAN_CHECKOUT_DIR
+// from ownStoreEnv), never the shared /tmp/human-checkout another run reads.
+const STORES = ownStoreEnv("refund-owed-card");
+const DIR = STORES.HUMAN_CHECKOUT_DIR;
 const ISSUES = join(DIR, "_issues.json");
 mkdirSync(DIR, { recursive: true });
-const kept = existsSync(ISSUES) ? readFileSync(ISSUES) : null;
-const restore = () => { try { if (kept) writeFileSync(ISSUES, kept); else rmSync(ISSUES, { force: true }); } catch { /* best effort */ } };
+const restore = () => { try { rmSync(dirname(DIR), { recursive: true, force: true }); } catch { /* best effort */ } };
 const seed = (entries) => writeFileSync(ISSUES, JSON.stringify(entries));
 
 const PORT = await getFreePort();
 const TOKEN = "owed-card-test-operator-token-0123456789";
 const child = spawn(process.execPath, ["--import", "./scripts/lib/stripe-hang-preload.js", "src/server.js"], {
-  env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
+  env: { ...process.env, ...STORES, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", X402_SYNC_ON_START: "false",
          AGENT402_OPERATOR_TOKEN: TOKEN, STRIPE_SECRET_KEY: "sk_test_offline_never_called" },
   stdio: ["ignore", "pipe", "pipe"],
 });

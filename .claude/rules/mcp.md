@@ -24,13 +24,16 @@ Loaded when a connector or front-door file is read.
   route; the first ask carries the x402 PaymentRequired (JSON in the first text block, never
   `structuredContent`: every paid tool lists an `outputSchema`, and the SDK client checks any
   structuredContent against it, error results included) beside the MPP `_meta` challenges; a
-  settlement-pending result carries its fields in `_meta["org.agent402/settlement-pending"]`; MPP wins when
+  settlement-pending result carries its fields in `_meta["org.agent402/settlement-pending"]`; a fixed-price
+  unpaid offer (a twin's first ask, a free tool's at its limit) is read once per route and reused for 30 s
+  (bounded, `offerCacheMax`), a route priced per request every time; MPP wins when
   both are sent; x402 is blocking only (a slow route is refused before the payment is presented; it
   is paid in the call over MPP as a task, and public copy says so). Every text the connector writes
   about paying in the call reads `payWires` (`connectorWires()`, src/connector-pay.js, never in
   FREE_MODE), the account the pages read (`scripts/test-connector-pay-copy.js`).
   A tools/call whose `_meta` holds a plausible payment (`metaCarriesPayment`: an MPP credential that
-  decodes, or an x402 payment on an offered network) is counted on its own per-IP transport bucket
+  decodes within the HTTP header limit, checked before it is serialized or decoded, or an x402 payment on an
+  offered network) is counted on its own per-IP transport bucket
   (`AGENT402_MCP_PAID_REQ_PER_MIN`/`_HOUR`, default 5x the normal one); unless the call then reaches a
   paywall replay (`reachesPaidReplay`), the handler also holds it to the normal bucket, so a credential
   on a discovery tool buys nothing. A free tool at its limit offers its route's x402 challenge. A 402
