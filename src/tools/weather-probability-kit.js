@@ -424,7 +424,12 @@ export const WEATHER_PROBABILITY_TOOLS = [
       `One date, many cities: per city, the ensemble spread of a daily weather value (82 members, ECMWF IFS and NOAA GEFS) and the forecast probability of each bracket on a ladder. Default: 13 large US cities. Or send up to ${MAX_BOARD_CITIES} cities by name or lat/lon, with your own brackets and the market prices you hold, shown beside each probability. This tool reads no market feed and gives facts only, no rating or recommendation. Raw model output, not station-calibrated. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "probability", "ensemble", "prediction-market", "cities", "temperature", "board"],
     discovery: {
-      input: { variable: "temperature_max", units: "fahrenheit" },
+      // Three cities keep the published call light; with no `cities` the
+      // board covers DEFAULT_BOARD_CITIES.
+      input: {
+        variable: "temperature_max", units: "fahrenheit",
+        cities: [{ label: "New York", lat: 40.7128, lon: -74.006 }, { label: "Chicago", lat: 41.8781, lon: -87.6298 }, { label: "Miami", lat: 25.7617, lon: -80.1918 }],
+      },
       inputSchema: {
         properties: {
           date: DATE_PROPERTY,
@@ -451,7 +456,7 @@ export const WEATHER_PROBABILITY_TOOLS = [
       },
       output: {
         example: {
-          date: "2026-11-18", variable: "temperature_max", unit: "°F", rounding: "integer", count: 13,
+          date: "2026-11-18", variable: "temperature_max", unit: "°F", rounding: "integer", count: 3,
           cities: [
             {
               label: "New York", lat: 40.7128, lon: -74.006, timezone: "America/New_York",
