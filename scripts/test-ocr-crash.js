@@ -395,6 +395,42 @@ async function call(input) {
       ok(pn?.statusCode === 503, `an unsigned caller's only place is kept though a buyer signs from its address (got ${pn?.statusCode})`);
       p0(); const w1 = await pu; w1(); const w2 = await po; w2();
       ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every place is released after the shared-egress cases");
+      // A buyer that shares an address with a caller holding the slot and
+      // every queued place under its own credential is a newcomer like any
+      // other: it takes that caller's newest queued place, and is not refused
+      // because the shared address already holds one.
+      const S = "198.51.100.120";
+      const h0 = await __ocrLargeTest.acquire(50, admissionCallerOf(paid(8, S)));
+      const h1 = __ocrLargeTest.acquire(5_000, admissionCallerOf(paid(8, S))).then((rel) => rel, (e) => e);
+      const h2 = __ocrLargeTest.acquire(5_000, admissionCallerOf(paid(8, S))).then((rel) => rel, (e) => e);
+      const nb = __ocrLargeTest.acquire(5_000, admissionCallerOf(paid(9, S))).then((rel) => rel, (e) => e);
+      const shedH = await Promise.race([h2, nb.then((v) => (typeof v === "function" ? "still queued" : v)), new Promise((r) => setTimeout(() => r("still queued"), 200))]);
+      const nbNow = await Promise.race([nb, new Promise((r) => setTimeout(() => r("queued"), 50))]);
+      ok(shedH?.statusCode === 503 && nbNow === "queued", `a buyer sharing an address with a caller that holds every place takes that caller's newest queued place (holder's newest: ${shedH?.statusCode ?? shedH}; newcomer: ${nbNow?.statusCode ?? nbNow})`);
+      // The same buyer's second call, now that it holds a place, takes none.
+      const nb2 = await __ocrLargeTest.acquire(5_000, admissionCallerOf(paid(9, S))).then(() => null, (e) => e);
+      ok(nb2?.statusCode === 503, `...and holding a place, its next call takes none (got ${nb2?.statusCode})`);
+      h0(); const hh1 = await h1; if (typeof hh1 === "function") hh1(); const hn = await nb; if (typeof hn === "function") hn(); const hh2 = await h2; if (typeof hh2 === "function") hh2();
+      ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every place is released after the shared-address newcomer");
+      // A CDN request with no proof of its client's address and no signed
+      // key names no caller. Such requests share no holding key: each is a
+      // newcomer, so one of them holding every place does not lock out the
+      // rest, and a keyed newcomer still takes its newest queued place.
+      const { ANONYMOUS_CALLER } = await import("../src/dispatch-caller.js");
+      const anon = (edge) => ({ ip: edge, headers: {}, cdnUnproven: true });
+      ok(typeof ANONYMOUS_CALLER === "string" && JSON.stringify(admissionCallerOf(anon("203.0.113.70"))) === JSON.stringify([ANONYMOUS_CALLER]) && JSON.stringify(admissionCallerOf(undefined)) !== JSON.stringify([ANONYMOUS_CALLER]), `an unproven, unsigned request is admitted as an anonymous caller, apart from request-less work (${JSON.stringify(admissionCallerOf(anon("203.0.113.70")))})`);
+      const a0 = await __ocrLargeTest.acquire(50, admissionCallerOf(anon("203.0.113.70")));
+      const a1 = __ocrLargeTest.acquire(5_000, admissionCallerOf(anon("203.0.113.70"))).then((rel) => rel, (e) => e);
+      const a2 = __ocrLargeTest.acquire(5_000, admissionCallerOf(anon("203.0.113.70"))).then((rel) => rel, (e) => e);
+      const an = __ocrLargeTest.acquire(5_000, admissionCallerOf(anon("203.0.113.71"))).then((rel) => rel, (e) => e);
+      const shedA = await Promise.race([a2, new Promise((r) => setTimeout(() => r("still queued"), 200))]);
+      const anNow = await Promise.race([an, new Promise((r) => setTimeout(() => r("queued"), 50))]);
+      ok(shedA?.statusCode === 503 && anNow === "queued", `another unproven request is not refused because one of them holds every place (hog's newest: ${shedA?.statusCode ?? shedA}; newcomer: ${anNow?.statusCode ?? anNow})`);
+      const keyed = __ocrLargeTest.acquire(5_000, admissionCallerOf(paid(10, "198.51.100.130"))).then((rel) => rel, (e) => e);
+      const shedK = await Promise.race([an, new Promise((r) => setTimeout(() => r("still queued"), 200))]);
+      ok(shedK?.statusCode === 503, `a keyed newcomer takes the anonymous callers' newest queued place (${shedK?.statusCode ?? shedK})`);
+      a0(); for (const q of [a1, keyed, a2, an]) { const rel = await q; if (typeof rel === "function") rel(); }
+      ok(!__ocrLargeTest.state().busy && __ocrLargeTest.state().callers === 0, "every place is released after the anonymous cases");
     }
     // The caller is read from the request: a signed payer first, else the address.
     let seen = null;

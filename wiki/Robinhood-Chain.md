@@ -70,7 +70,8 @@ unmodified client that takes the first accept it can pay settles on Base. The pr
   deadline leaves no time, or the CDN window is shorter than the settler's
   lock wait plus receipt wait. When the chain cannot be read, or a decision
   cannot be made, the buyer gets a 402 and the authorization is watched, so a
-  transfer that lands later is recorded as owed.
+  transfer that lands later is recorded as owed and repaid after on-chain
+  proof.
 - **Tollbooth (≥ 0.4.0)**: `TOLLBOOTH_NETWORK=eip155:4663 TOLLBOOTH_ASSET=USDG`
   quotes crawlers in USDG. To settle it, use the library API -
   `createTollbooth({ x402: paymentMiddleware(...) })` with a scheme your

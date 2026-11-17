@@ -177,7 +177,8 @@ live service ([agent402.tools](https://agent402.tools)) you can pay right now.
 
 Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
 authorization from its own wallet and retries, and the server settles only when
-the response succeeds, so a failed x402 call is not charged. The headers, step
+the response succeeds, so a failed x402 call is not charged (a payment that lands late is repaid after on-chain proof).
+The headers, step
 by step: [how x402 works](/learn/x402).
 
 ## See a quote (free)
@@ -357,7 +358,7 @@ before any payment is taken, and the last column says how long to wait.
 | Payments that verified and then failed to settle for a reason about the payment itself (its balance, its signature, or an authorization already used or expired), per wallet and per network | refused on that network at ${SETTLE_BREAKER_MAX_FAILS} in ${Math.round(SETTLE_BREAKER_WINDOW_MS / 60_000)} minutes (${SETTLE_BREAKER_UNKNOWN_MAX} for failures whose cause the settlement did not name, refused in words that blame no one) while they are more than half of the wallet's outcomes there, or at ${SETTLE_BREAKER_HARD_MAX} whatever it settled | 429 naming the network and when it lifts (\`refusedNetwork\`, \`retryAfterSeconds\`, \`retry: "other-network"\`); the same wallet can pay on another network the route offers at once |
 | Report and media runs that failed to settle or failed after the run, per buyer | blocked for ${Math.round(COMPOSITE_GUARD.BLOCK_MS / 60_000)} minutes at ${COMPOSITE_GUARD.MAX_FAILS} in ${Math.round(COMPOSITE_GUARD.WINDOW_MS / 60_000)} minutes while they are more than ${failShareWords(COMPOSITE_GUARD.MIN_FAIL_SHARE)} of the buyer's outcomes there, or at ${COMPOSITE_GUARD.HARD_MAX_FAILS} whatever it settled | 429 without \`Retry-After\`; the block lifts on its own |
 | Unpaid requests with a body over ${Math.round(UNPAID_BODY_MAX_BYTES / 1024)} KB to a route that reads its price from the body | ${LARGE_BODY_UNPAID_PER_MIN} a minute and ${LARGE_BODY_UNPAID_PER_HOUR.toLocaleString("en-US")} an hour per client address, the same once that address has paid | 429, \`Retry-After: 60\` |
-| A wallet's paid calls in flight, on every paid route that is not free through proof-of-work, other than the report and media routes | the wallet's balance of the paying token covers every call it has in flight plus the new one, however many: the coverage check sets no other limit on calls at once, and a route's own limit still applies (the code-run tools: ${CODE_RUN_PER_PAYER_MAX} runs at once per EVM payer, credits key or Tempo sender, and ${CODE_RUN_PER_IP_MAX} per client address for other payers). The balance is read inside about a second, and a call refused while another call from the wallet is settling answers within about a second (either takes up to about ${COVER_SETTLED_READ_SECONDS} seconds when a settlement lands during the read). While it cannot be read, the call is started if the last balance this server read for that wallet in the past ${COVER_GOOD_READ_MINUTES} minutes, less what the wallet's payments have taken and its calls in progress hold since, covers it; otherwise, and for a wallet with no read that recent, the wallet runs up to ${COVER_UNREAD_MAX} calls at once (${COVER_UNREAD_PAID_MAX} with a payment on record) | 429: \`Retry-After: 30\` when the balance read does not cover the call (the seconds left until the wallet is read again, at most ${COVER_READ_GAP_SECONDS}, when it was judged on an earlier call's read); \`Retry-After: 5\` when another call from the wallet is still settling and cover cannot be confirmed yet, and when the balance cannot be read and the kept read or the calls-at-once figure does not admit the call |
+| A wallet's paid calls in flight, on every paid route that is not free through proof-of-work, other than the report and media routes | the wallet's balance of the paying token covers every call it has in flight plus the new one, however many: the coverage check sets no other limit on calls at once, and a route's own limit still applies (the code-run tools: ${CODE_RUN_PER_PAYER_MAX} runs at once per EVM payer, credits key or Tempo sender; any other paid call counts only itself, and a call with no payment ${CODE_RUN_PER_IP_MAX} per client address). The balance is read inside about a second, and a call refused while another call from the wallet is settling answers within about a second (either takes up to about ${COVER_SETTLED_READ_SECONDS} seconds when a settlement lands during the read). While it cannot be read, the call is started if the last balance this server read for that wallet in the past ${COVER_GOOD_READ_MINUTES} minutes, less what the wallet's payments have taken and its calls in progress hold since, covers it; otherwise, and for a wallet with no read that recent, the wallet runs up to ${COVER_UNREAD_MAX} calls at once (${COVER_UNREAD_PAID_MAX} with a payment on record) | 429: \`Retry-After: 30\` when the balance read does not cover the call (the seconds left until the wallet is read again, at most ${COVER_READ_GAP_SECONDS}, when it was judged on an earlier call's read); \`Retry-After: 5\` when another call from the wallet is still settling and cover cannot be confirmed yet, and when the balance cannot be read and the kept read or the calls-at-once figure does not admit the call |
 | A wallet's paid calls in flight on the report and media routes | the wallet's balance covers every call in flight plus the new one, with the balance read given a few seconds; while it cannot be read, ${COVER_UNREAD_MAX} calls at once per wallet | 429, \`Retry-After: 30\` |
 | Jobs per client address | ${ASYNC_JOBS_PER_CLIENT} running at once | 429, \`Retry-After: 30\` |
 
@@ -436,8 +437,9 @@ the rest the rows mark. Send the paid call with \`Prefer: respond-async\` and it
 answers 202 at once with a \`Location\` job link. Poll \`GET /api/jobs/{id}\`
 (free), waiting \`Retry-After\` between polls, until \`status\` is \`completed\` or
 \`failed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` say where it is. The
-payment settles only when the result is ready, and on x402 a failed run is not
-charged. A row whose block carries \`preferWait\` also takes
+payment settles only when the result is ready, except a Tempo transfer sent
+before the call, which is repaid after on-chain proof if the run fails;
+on x402 a failed run is not charged. A row whose block carries \`preferWait\` also takes
 \`Prefer: wait=<maxSeconds>\` to wait on the connection, and a paid call there
 with neither header is answered 400 before any payment.
 
@@ -1489,7 +1491,7 @@ provenance stays explicit.
 
 - **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller
   down - cancels your settlement, and a Tempo transfer sent before the call is
-  recorded as owed. You pay only for delivered results.
+  recorded as owed and repaid after on-chain proof. So is a payment that settles after your connection closed.
 - **Spend is bounded on our side** by per-window budgets and per-quote caps,
   so the router cannot be drained into misbehavior.
 - **Receipts are recomputable.** Paid EVM calls carry a \`callRef\` derived
@@ -1669,7 +1671,7 @@ proof-of-work tier, are unaffected.
 
 ## What doesn't change per chain
 
-The settlement rule is the same everywhere: a call that answers an error
+The x402 settlement rule is the same everywhere: a call that answers an error
 status, or whose payment does not match the offer, is not settled, on any of
 the {{railCount}} chains. Chain choice changes *where* the USDC moves, not the rule
 that decides *whether* it moves.
@@ -2612,7 +2614,7 @@ receipt shape:
 Why pay here, in one section with the proof links:
 [agent402.tools/docs#why](https://agent402.tools/docs#why). The short version: usage is
 priced under a ceiling you see before you pay, a failed x402 call is not charged and the
-receipt shows it, a keyed retry never pays twice, and uptime and transactions are published from
+receipt shows it (a payment that lands late is repaid after on-chain proof), a keyed retry never pays twice, and uptime and transactions are published from
 outside production.
 `,
   },

@@ -4268,7 +4268,7 @@ app.get("/api/gateway-status", async (req, res) => {
     loopLag: full ? loopLagStatus() : publicLoopLag(loopLagStatus()),
     // Daily MPP reconciliation (src/mpp-reconcile.js): status words + counts,
     // never an address; the itemized rows are /__operator/mpp-reconcile.json.
-    mppReconcile: await mppReconciler.status({ full }).catch(() => ({ status: "unknown", chargedFailedStatus: "unknown" })),
+    mppReconcile: await mppReconciler.status({ full }).catch(() => ({ status: "unknown", chargedFailedStatus: "unknown", run: "unknown" })),
     // The server tweet queue (src/tweet-queue.js): one word publicly, so the
     // status Worker can page on halted / no_credentials / refused / in_doubt;
     // the operator also gets the mode and counts. Never an id or text.

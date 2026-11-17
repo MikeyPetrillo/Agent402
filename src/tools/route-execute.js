@@ -24,7 +24,7 @@ import { maySpend, noteSpend, adjustSpend, reserveSpend } from "../external-spen
 import { nonEvmPayerFromRequest } from "../non-evm-payer.js";
 import { ALGORAND_MAINNET_CAIP2, ALGORAND_MAINNET_LEGACY_CAIP2 } from "../avm-network.js";
 import { findTools } from "../find.js";
-import { judgeTool, decide, orderByJudgment } from "../tool-judge.js";
+import { judgeTool, decide, orderByJudgment, CRITERION_NAME_MAX, CRITERION_DESC_MAX, CRITERION_TAG_MAX, CRITERION_TAGS_MAX } from "../tool-judge.js";
 import { judgeReadableListing, looksLikeListingInjection } from "../listing-screen.js";
 import { stripHiddenCharacters } from "../hidden-chars.js";
 import { observeDelivery, unpaidNonAnswerReason } from "../response-observation.js";
@@ -260,7 +260,10 @@ export function judgedOverrideAllowed(task, candidates, chosen) {
  *  reads). A listing the listing screen flags whole reaches the judge with no
  *  description or tags; every sentence written to the reader is dropped from
  *  the rest; the host, slug and tags are screened each alone and read
- *  together, so a sentence split across tags is read whole. */
+ *  together, so a sentence split across tags is read whole, and the name,
+ *  description and tags are read side by side as the judge's object writes
+ *  them, bounded as it bounds them, so a sentence cut across two fields is
+ *  read whole too. */
 export function sellerJudgeListing(r) {
   const raw = String(r?.description || r?.name || "");
   const clean = !looksLikeListingInjection(raw);
@@ -270,8 +273,8 @@ export function sellerJudgeListing(r) {
     host,
     slug: String(r?.slug || ""),
     description: clean ? raw : "",
-    tags: clean && Array.isArray(r?.tags) ? r.tags.map(String) : [],
-  }, { links: false });
+    tags: clean && Array.isArray(r?.tags) ? r.tags.filter((t) => typeof t === "string") : [],
+  }, { links: false, max: CRITERION_DESC_MAX, nameMax: CRITERION_NAME_MAX, tagMax: CRITERION_TAG_MAX, shownTags: CRITERION_TAGS_MAX });
 }
 /** What /api/route's judge reads of one row: the same screened listing
  *  (sellerJudgeListing; our own rows under the host "agent402"), and the
