@@ -170,7 +170,7 @@ ${section("rule", `
   ${eyebrow("01 / THE RULE")}
   ${h2("One handshake, and one rule about money.")}
   ${p(`The handshake is two requests. The first carries no payment and gets a 402 with the terms. The second is the identical request plus one header holding the payment, and it gets the answer plus a receipt header. Nothing on the way asks for an account, a key or a person.`)}
-  ${p(`The rule is the order of operations: <strong style="color:var(--ink);font-weight:700;">the handler runs first, and the payment settles only after a response below 400 is ready.</strong> On x402, on MPP's evm method, on a Tempo charge, on a card and on credits, a 4xx or 5xx cancels settlement and nothing is charged; a 200 is charged only if its settlement then succeeds, and if it does not, the answer is withheld and you get a 402 instead of a result you paid for.`)}
+  ${p(`The rule is the order of operations: <strong style="color:var(--ink);font-weight:700;">the handler runs first, and the payment settles only after a response below 400 is ready</strong> (a Tempo push transfer is the exception, below). On x402, on MPP's evm method, on a Tempo charge, on a card and on credits, a 4xx or 5xx cancels settlement and nothing is charged; a 200 is charged only if its settlement then succeeds, and if it does not, the answer is withheld and you get a 402 instead of a result you paid for.`)}
   ${p(`One exception is stated wherever it applies below: a Tempo <em>push</em> transfer is already on chain before the request arrives, so on that path an undelivered answer is a debt to you, recorded in the refund ledger and repaid after on-chain proof. ${link("/proof", "/proof")} shows settled receipts next to their quotes.`)}
 `)}
 

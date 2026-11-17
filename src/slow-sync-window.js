@@ -139,7 +139,7 @@ export function slowSyncWindowMiddleware({ asyncRouteOf, wantsAsync, carriesPaym
       prefer: "respond-async",
       preferWait: `wait=${budget}`,
       statusUrl: "/api/jobs/{id}",
-      hint: `This route can take up to ${budget} s, longer than many clients wait. Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once, and payment settles only when the result is ready. To wait on this connection instead, send Prefer: wait=${budget} and keep the connection open for at least ${budget + 30} s. This call was refused before any payment was taken${push ? PUSH_EXCEPTION : ""}.`,
+      hint: `This route can take up to ${budget} s, longer than many clients wait. Send the paid call again with the header Prefer: respond-async: it answers 202 with a job link at once${push ? "" : ", and payment settles only when the result is ready"}. To wait on this connection instead, send Prefer: wait=${budget} and keep the connection open for at least ${budget + 30} s. This call was refused before any payment was taken${push ? PUSH_EXCEPTION : ""}.`,
     };
     if (push) {
       log(`[slow-sync-window] ${def.slug} refusal deferred to the Tempo gate (push credential, run budget ${budget} s over ${window} s)`);

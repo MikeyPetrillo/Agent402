@@ -25,7 +25,10 @@ Loaded when a media, document or worker-pool tool file is read.
   wait up to `OCR_LARGE_WAIT_MS` (15 s) and the next is a 503 with Retry-After (no upstream call);
   admission is per caller (signed payer, credits key, Tempo sender, else the client address,
   `ocrCallerOf` in `src/tools/ocr-kit.js`): a caller holding nothing is never refused while a
-  queued place belongs to a caller that holds another, which loses that place with a 503. On the
+  queued place belongs to a caller that holds another, which loses that place with a 503. A
+  caller is its strongest key, for admission as for eviction, so buyers who share an address are
+  separate callers; a request that names none (unsigned, behind a CDN edge with no proof of its
+  client) is always a newcomer (`ANONYMOUS_CALLER`, `src/dispatch-caller.js`). On the
   free tier the caller is the client address. Suite: `scripts/test-ocr-crash.js`. PDF transforms
   (`src/tools/pdf-ops.js`) run in a fresh worker thread per call (`pdf-offthread.js`,
   `pdf-worker.js`) with a heap limit, a decoded-stream cap and a deadline that terminates it
