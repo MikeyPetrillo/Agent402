@@ -22,7 +22,7 @@ LLC: credit the entity, never a personal name.
   `demand.request`, flagship aliases). Old snake names remain CallTool aliases only.
 - `src/mcp-mpp.js`, `src/mcp-tasks.js`, `src/mcp-skills.js`, `src/mcp-x402.js`, `src/mcp-x402-routes.js`:
   connector payments, long calls as tasks, skill packs, the x402 MCP codec and the internal x402 twins of
-  flagships (both not yet wired to `/mcp`; see `.claude/rules/mcp.md`).
+  flagships (both wired to `/mcp` through `x402Loopback`, off in FREE_MODE; see `.claude/rules/mcp.md`).
 - `src/mpp-shim.js`, `src/mpp-tempo.js`, `src/mpp-stripe.js`, `src/mpp-subscriptions.js`: MPP
   wire support. x402 keeps sole settlement authority on the evm path; the shim only translates.
 - `src/credits.js`: prepaid card credits (hold at authorize, debit on a final 200).

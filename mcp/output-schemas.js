@@ -541,7 +541,12 @@ export function mcpInstallHints(baseUrl) {
  * server.describe. Keep tool names listed-only (dotted Smithery form) (self-consistency) and lead
  * with search/answer as the front door.
  */
-export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false } = {}) {
+// The wires the hosted connector at agent402.tools takes in the call (x402
+// and MPP): this package describes that service, so its hosted line names
+// both, as src/mcp-flagship.js renders it for a boot with both wires on.
+export const HOSTED_CONNECTOR_WIRES = Object.freeze({ x402: true, mpp: true });
+
+export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, x402 = false } = {}) {
   const install = mcpInstallHints(baseUrl);
   const hosted = install.hostedUrl;
   return [
@@ -553,7 +558,7 @@ export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false
     ...(decide ? ["Multi-step jobs: decide.plan returns a call-ready plan (tools, order, fallbacks, inputs); decide.execute runs it. The plan fee is credited toward the run."] : []),
     "Also: server.describe (connector details), payment.info (wallet and payment setup), demand.request (report a missing tool).",
     `Install (npm package, pinned): ${install.claudeCodeNpm}`,
-    `${mpp ? "Hosted connector (proof-of-work tools free; other tools payable over MPP from a wallet)" : "Hosted connector (proof-of-work tools free; others need a wallet on the npm package)"}: ${install.claudeCodeHosted}`,
+    `Hosted connector (proof-of-work tools free; ${x402 || mpp ? `other tools paid in the call over ${[x402 && "x402", mpp && "MPP"].filter(Boolean).join(" or ")} from a wallet` : "others need a wallet on the npm package"}): ${install.claudeCodeHosted}`,
     `Cursor mcp.json: { "mcpServers": { "agent402": { "url": "${hosted}" } } }`,
     `Docs: ${baseUrl}/llms.txt · status ${baseUrl}/status`,
   ].join("\n");

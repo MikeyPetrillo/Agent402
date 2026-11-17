@@ -150,6 +150,15 @@ for (const boot of BOOTS) {
     ok(boot.x402 && boot.mpp ? /A call that carries both is settled over MPP/.test(learn) : !/carries both/.test(learn), `${boot.label}: it states which wire settles a call that carries both only when both are on`);
     if (!boot.x402 && !boot.mpp) ok(/free mode, with no paywall/.test(learn), `${boot.label}: it says the instance is in free mode`);
 
+    // /terms: the access item names the wires this boot's connector takes, and none in FREE_MODE.
+    {
+      const r = await get("/terms");
+      const t = plain(r.text).replace(/\s+/g, " ");
+      const item = (t.match(/The hosted MCP connector runs the pure-CPU tools free, rate-limited[^.]*\./) || [""])[0];
+      ok(r.status === 200 && (wires0(boot) ? item.endsWith(`, and a wallet can pay the other tools through it in the call, over ${wires0(boot)}.`) : item === "The hosted MCP connector runs the pure-CPU tools free, rate-limited."),
+        `${boot.label}: /terms names ${want} for paying on the connector (${item.slice(60)})`);
+    }
+
     // The agent-hosts guide.
     const guide = plain((await get("/guides/agent-hosts")).text).replace(/\s+/g, " ");
     const sentence = (guide.match(/Wallet-only tools, the flagship web and market tools among them, ([^.]*?), and a call that carries no payment/) || [])[1] || "";
@@ -255,7 +264,17 @@ await new Promise((r) => facilitator.close(r));
   const named = (para.match(/called by its listed name \(([^)]*)\)/) || [])[1] || "";
   ok(named.split(", ").map((x) => x.replace(/`/g, "")).sort().join() === [...listed].sort().join(), `the tools it says quote the resource /mcp are the server's twins (${named})`);
   ok(/Updated 2026-11-16: the same answer now carries an x402 payment offer/.test(readFileSync(join(ROOT, "src/blog.js"), "utf8")), "the dated connector post carries its update note");
-  // The npm package's own text is left to a package release (mcp/): it is not read here.
+  // README's connector paragraph names the wires the server mounts on the hosted
+  // connector: x402 on a paid boot (x402Loopback), MPP while the gates are on (mppLoopback).
+  const server = readFileSync(join(ROOT, "src/server.js"), "utf8");
+  const mounted = connectorWires({ x402: /\bx402Loopback: FREE_MODE \? null : create\w+\(/.test(server), mpp: /\bmppLoopback: connectorWires\(\)\.mpp \? create\w+\(/.test(server) });
+  ok(mounted.names.length === 2, `src/server.js mounts both connector wires (${mounted.phrase})`);
+  const readmeLine = flatOf("README.md").match(/The pure-CPU tools run free there\. A wallet-only tool is payable in the same call over ([^,]+), from an MCP client that holds a wallet/);
+  ok(readmeLine && readmeLine[1] === mounted.phrase, `README.md's connector paragraph names the wires the server mounts (${readmeLine ? readmeLine[1] : "sentence missing"})`);
+  // The project map says the codec and the twins are wired to /mcp, off in FREE_MODE.
+  const map = flatOf("CLAUDE.md");
+  ok(!/not yet wired/.test(map) && /the internal x402 twins of flagships \(both wired to `\/mcp` through `x402Loopback`, off in FREE_MODE/.test(map), "CLAUDE.md says the x402 codec and twins are wired to /mcp through x402Loopback, off in FREE_MODE");
+  // The npm package's own text is read by scripts/test-surface-copy.js (its hosted line matches this one).
 }
 
 console.log(`\n${pass} passed, ${failed} failed`);

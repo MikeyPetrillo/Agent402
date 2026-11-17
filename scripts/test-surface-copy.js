@@ -80,6 +80,21 @@ ok(hi === si, "hosted and stdio initialize instructions are byte-identical");
   ok(hd === sd && /decide\.plan/.test(hd) && /decide\.execute/.test(hd), "with the decide tools listed, both instruction copies name decide.plan and decide.execute, identically");
   ok(!/decide\.plan/.test(hi), "without them, the instructions never name a tool the connector does not list");
 }
+// The published package describes the hosted service: its hosted line is the
+// one the hosted connector renders for the same wires, and the package renders
+// it with the wires the hosted service takes in the call (both).
+{
+  const { HOSTED_CONNECTOR_WIRES } = await import("../mcp/output-schemas.js");
+  const hostedLine = (t) => t.split("\n").find((l) => l.startsWith("Hosted connector")) || "";
+  for (const x402 of [false, true]) for (const mpp of [false, true]) {
+    ok(hostedLine(hostedInstructions("https://example.test", { x402, mpp })) === hostedLine(stdioInstructions("https://example.test", { x402, mpp })),
+      `the stdio package's hosted line matches the hosted connector's with x402 ${x402 ? "on" : "off"} and MPP ${mpp ? "on" : "off"}`);
+  }
+  ok(HOSTED_CONNECTOR_WIRES.x402 === true && HOSTED_CONNECTOR_WIRES.mpp === true, "the package names both wires for the hosted service");
+  const published = hostedLine(stdioInstructions("https://example.test", HOSTED_CONNECTOR_WIRES));
+  ok(published.includes("other tools paid in the call over x402 or MPP from a wallet)") && !/wallet on the npm package/.test(published), `the published hosted line names both wires (${published.slice(0, 100)})`);
+  ok(/const INIT_INSTRUCTIONS = mcpInitializeInstructions\(BASE, HOSTED_CONNECTOR_WIRES\);/.test(read("mcp/index.js")), "the stdio server renders its instructions with the hosted service's wires");
+}
 ok(/positioning: `\$\{leadSentence\(\{ mpp: mppMethodsSummary\(\)\.enabled \}\)\} It is the applied layer of Agentic Finance/.test(read("src/mcp-http.js")), "hosted describe_server carries a positioning field that leads with the lead sentence and names Agentic Finance");
 ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) || []).length >= 2, "stdio describe payloads (both aliases) carry Agentic Finance + MPP positioning");
 
