@@ -5685,6 +5685,7 @@ async function funnelView(days) {
       challenges: "402 answers served, to probes and to refused credentials",
       attempts: "requests that carried a payment credential",
       settled: "attempts answered 2xx with a settlement receipt",
+      errorAnswered: "attempts answered a 4xx other than 402, or a 5xx (on a Tempo push credential the transfer was final before the call and is booked owed)",
       refusal: "why an attempt got a 402: unfundedWallet, wrongNetwork, verifyRefused (payload or authorization faults), ourSide (not checked, quota, unconfirmed), unclassified, noReason",
       neverRetried: "callers whose first probe in a 30-minute window was followed by no credential from them inside it (per replica)",
       sales: "outside sales from the sales ledger (our own wallets and signed probes excluded), dollars at the buyer's price",
