@@ -136,34 +136,6 @@
       }
     },
     {
-      "slug": "reverse-geocode",
-      "name": "Tokyo station",
-      "input": {
-        "lat": 35.6812,
-        "lon": 139.7671
-      },
-      "expect": {
-        "matches": {
-          "displayName": "Tokyo|東京|Chiyoda|千代田"
-        },
-        "populated": [
-          "address",
-          "source"
-        ]
-      }
-    },
-    {
-      "slug": "reverse-geocode",
-      "name": "open ocean is an honest miss, not a 500",
-      "input": {
-        "lat": -45,
-        "lon": -150
-      },
-      "expect": {
-        "status": 404
-      }
-    },
-    {
       "slug": "barcode-lookup",
       "name": "a well-known EAN",
       "input": {

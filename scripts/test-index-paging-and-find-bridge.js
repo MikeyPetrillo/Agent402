@@ -124,7 +124,7 @@ const get = async (p) => (await fetch(`${base}${p}`)).json();
 {
   const { markWeakMatches } = await import("../src/find.js");
   const link = "https://agent402.tools/api/route?q=book%20a%20flight&include=external";
-  const out = markWeakMatches({ query: "book a flight", count: 2, results: [{ slug: "perp-orderbook" }, { slug: "crypto-orderbook" }], hint: "old" }, link);
+  const out = markWeakMatches({ query: "book a flight", count: 2, results: [{ slug: "perp-orderbook" }, { slug: "crypto-price" }], hint: "old" }, link);
   ok(out.weakMatches === true && out.results.every((r) => r.weak === true), "every row a weak answer carries is marked weak, with weakMatches on the envelope");
   ok(out.results.length === 2 && out.results[0].slug === "perp-orderbook", "...and the rows stay, so a client reading results keeps working");
   ok(out.routeAcross === link && /does this task; an indexed seller does - call routeAcross/.test(out.hint), "the hint leads with the router link");

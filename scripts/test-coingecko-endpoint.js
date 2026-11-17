@@ -16,6 +16,7 @@ import { UPSTREAM_BUDGETS } from "../src/upstream-budgets.js";
 import { cgTier, cgBase, cgKeyHeaders, CG_DEMO_BASE, CG_PRO_BASE } from "../src/tools/coingecko-endpoint.js";
 import { CRYPTO_TOOLS, clearCryptoCache } from "../src/tools/crypto-kit.js";
 import { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache, resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
+import { CRYPTO_SCREENS_TOOLS } from "../src/tools/crypto-screens-kit.js";
 import { PRICE_FEED_TOOLS, clearPriceFeedCache } from "../src/tools/price-feed-kit.js";
 import { MARKET_TICK_TOOLS, __setMarketTickSources, clearMarketTickCache } from "../src/tools/market-tick-kit.js";
 import { buildSkillTools } from "../src/tools/skill-runner.js";
@@ -137,34 +138,6 @@ for (const [mod, call] of MODULES) {
 ok(!printed.some((line) => line.includes(KEY)), "key never printed to the console");
 
 // ---------------------------------------------------------------------------
-// The shared jsonGet also reads a non-CoinGecko host (crypto-orderbook reads
-// Coinbase Exchange): a keyed call there carries no x-cg-* header in either
-// tier, while the same key rides a CoinGecko call made beside it.
-// ---------------------------------------------------------------------------
-const orderbook = tool(CRYPTO_TOOLS, "crypto-orderbook");
-for (const tier of [undefined, "pro"]) {
-  const keep = { ...process.env };
-  process.env.COINGECKO_API_KEY = KEY;
-  if (tier) process.env.COINGECKO_API_TIER = tier; else delete process.env.COINGECKO_API_TIER;
-  resetAll();
-  respond = (u) => (u.hostname === "api.exchange.coinbase.com"
-    ? jsonRes(200, { bids: [["100.5", "1.25", 3]], asks: [["100.6", "0.5", 2]], sequence: 1 })
-    : okBody(u));
-  let out = null, err = null;
-  try { out = await orderbook({ pair: "BTC-USD", depth: 1 }); } catch (e) { err = e; }
-  const ex = calls.filter((c) => c.url.hostname === "api.exchange.coinbase.com");
-  ok(!err && ex.length >= 1, `crypto-orderbook / key, tier ${tier || "default"}: answers from the exchange host${err ? ` (${err.statusCode} ${err.message})` : ""}`);
-  ok(ex.length >= 1 && ex.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k)) && !Object.values(c.headers).some((v) => String(v).includes(KEY))),
-    `crypto-orderbook / key, tier ${tier || "default"}: no x-cg-* header and no key on the exchange request`);
-  ok(out && !Object.hasOwn(out, "credit"), `crypto-orderbook / key, tier ${tier || "default"}: an exchange answer carries no CoinGecko credit`);
-  resetAll();
-  await tool(CRYPTO_TOOLS, "crypto-price")({ coins: "BTC" });
-  ok(calls.some((c) => Object.keys(c.headers).some((k) => /^x-cg-/i.test(k))), `control / tier ${tier || "default"}: the same key rides a CoinGecko call from the same helper`);
-  for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k];
-  Object.assign(process.env, keep);
-}
-
-// ---------------------------------------------------------------------------
 // Source credit: CoinGecko's API terms ask for "Data provided by CoinGecko"
 // with a link to its API page, next to the data. Every CoinGecko-backed tool
 // ends its description with the linked sentence, publishes it as `credit` in
@@ -173,8 +146,9 @@ for (const tier of [undefined, "pro"]) {
 ok(COINGECKO_API_URL === "https://www.coingecko.com/en/api", "credit link is CoinGecko's API page");
 ok(COINGECKO_CREDIT === `Data provided by CoinGecko (${COINGECKO_API_URL}).` && COINGECKO_ATTRIBUTION === COINGECKO_CREDIT, "credit: the sentence with its link, the same text the descriptions end with");
 const CG_TOOLS = [
-  ...CRYPTO_TOOLS.filter((t) => t.slug !== "crypto-orderbook"),
+  ...CRYPTO_TOOLS,
   ...CRYPTO_MARKETS_TOOLS,
+  ...CRYPTO_SCREENS_TOOLS,
   ...PRICE_FEED_TOOLS.filter((t) => t.slug === "price-coingecko"),
 ];
 ok(CG_TOOLS.length >= 24, `the CoinGecko-backed tools are read from the kits (${CG_TOOLS.length})`);

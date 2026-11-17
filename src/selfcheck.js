@@ -35,7 +35,7 @@ export const SELFCHECK_SLUGS = [
   "company-financials",    // SEC EDGAR — the priciest tool ($0.02)
   "edgar-company-lookup",  // SEC EDGAR
   "price-coingecko",       // CoinGecko price
-  "defi-tvl",              // DeFiLlama
+  "lending-rates",         // Aave v3 + Compound v3 contract reads (public RPC)
   "gas-estimate",          // on-chain gas (public RPC)
   "crypto-global",         // crypto market globals
   // FDA + NHTSA federal-data pack — monitored with semantic invariants (a fixed

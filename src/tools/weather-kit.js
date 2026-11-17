@@ -6,16 +6,19 @@
 //   weather-hourly      48-hour hourly forecast (temp, precip, wind, clouds)
 //   weather-history     historical daily weather for a date range (up to 1 year)
 //   weather-air-quality current air quality index + pollutant breakdown
+//   place-lookup        a city or place name -> coordinates, country, timezone
+// Every weather tool takes lat/lon or a `place` name; a name is resolved by
+// the same geocoding read place-lookup serves (resolveLocation below).
 // Complements the US-only NWS tools (weather-forecast, weather-alerts) in
 // data-kit and gov-kit by covering every location worldwide.
 // Source: Open-Meteo (CC BY 4.0); air quality from Copernicus CAMS and the
 // archive from Copernicus C3S reanalysis, each credited (src/data-attribution.js).
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling } from "../run-ceiling.js";
-import { OPEN_METEO_ATTRIBUTION, ATTRIBUTIONS, CAMS_CREDIT, C3S_CREDIT } from "../data-attribution.js";
+import { OPEN_METEO_ATTRIBUTION, ATTRIBUTIONS, CAMS_CREDIT, C3S_CREDIT, GEONAMES_ATTRIBUTION } from "../data-attribution.js";
 import { redactSecrets } from "./redact.js";
 
-function bad(message, statusCode = 400) {
+export function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
@@ -29,6 +32,8 @@ const OPEN_METEO_APIS = Object.freeze({
   forecast: { host: "api.open-meteo.com", keyed: true },
   archive: { host: "archive-api.open-meteo.com", keyed: true },
   airQuality: { host: "air-quality-api.open-meteo.com", keyed: true },
+  geocoding: { host: "geocoding-api.open-meteo.com", keyed: true },
+  ensemble: { host: "ensemble-api.open-meteo.com", keyed: true },
 });
 
 function openMeteoKey(env = process.env) {
@@ -122,23 +127,170 @@ export async function openMeteoJson(api, path, params, env = process.env) {
     throw openMeteoFailure(err, req);
   }
   if (req.keyed) noteKeyedSuccess();
+  let data;
   try {
-    return JSON.parse(html);
+    data = JSON.parse(html);
   } catch {
     throw bad("Upstream returned non-JSON", 502);
   }
+  // Every answer read here is an object or a list of them. A body that parses
+  // to anything else (null, a string, a number) is an upstream failure.
+  if (data === null || typeof data !== "object") throw bad("Upstream returned an unexpected body", 502);
+  return data;
 }
 
-function requireCoords(i) {
-  const lat = Number(i.lat);
-  const lon = Number(i.lon);
+export function requireCoords(i) {
+  // A string of spaces is not a coordinate: Number(" ") is 0, which would
+  // answer for 0,0 and be charged. It reads like any other non-number.
+  const blank = (v) => v === undefined || v === null || v === "" || (typeof v === "string" && v.trim() === "");
+  const lat = blank(i?.lat) ? NaN : Number(i.lat);
+  const lon = blank(i?.lon) ? NaN : Number(i.lon);
   if (!Number.isFinite(lat) || lat < -90 || lat > 90) throw bad('"lat" must be a number between -90 and 90');
   if (!Number.isFinite(lon) || lon < -180 || lon > 180) throw bad('"lon" must be a number between -180 and 180');
   return { lat, lon };
 }
 
+// --- Place names (Open-Meteo geocoding; place data from GeoNames, CC BY 4.0) ---
+// The geocoding API matches a NAME (a city, town, region or postal code), not
+// a street address. "Austin, TX" is read as the name "Austin" plus a
+// qualifier: a result is kept only when the qualifier names its country,
+// region or district, so a qualified name never resolves to another place of
+// the same name without saying so.
+const US_STATES = { AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California", CO: "Colorado", CT: "Connecticut", DE: "Delaware", DC: "District of Columbia", FL: "Florida", GA: "Georgia", HI: "Hawaii", ID: "Idaho", IL: "Illinois", IN: "Indiana", IA: "Iowa", KS: "Kansas", KY: "Kentucky", LA: "Louisiana", ME: "Maine", MD: "Maryland", MA: "Massachusetts", MI: "Michigan", MN: "Minnesota", MS: "Mississippi", MO: "Missouri", MT: "Montana", NE: "Nebraska", NV: "Nevada", NH: "New Hampshire", NJ: "New Jersey", NM: "New Mexico", NY: "New York", NC: "North Carolina", ND: "North Dakota", OH: "Ohio", OK: "Oklahoma", OR: "Oregon", PA: "Pennsylvania", RI: "Rhode Island", SC: "South Carolina", SD: "South Dakota", TN: "Tennessee", TX: "Texas", UT: "Utah", VT: "Vermont", VA: "Virginia", WA: "Washington", WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming" };
+const COUNTRY_ALIASES = { uk: "gb", usa: "us", "u.s.": "us", "u.s.a.": "us", "united states of america": "us", "great britain": "gb", england: "gb", scotland: "gb", wales: "gb", uae: "ae" };
+const fold = (v) => String(v ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/\./g, "").trim().toLowerCase();
+export const PLACE_QUERY_MAX = 100;
+
+// A place read is kept in this process for a short time, a name that matched
+// nothing included, so a list of names sent again (a board of cities, a pack's
+// stops) reads each name upstream once. Only an upstream answer is kept, never
+// a failed read; the oldest entry leaves first once the set is full.
+export const PLACE_CACHE_TTL_MS = 10 * 60_000;
+export const PLACE_CACHE_MAX = 2000;
+const placeCache = new Map(); // key -> { at, rows }
+// One spelling per name, for the upstream read and the key alike: Unicode
+// compatibility forms folded (NFKC: full-width letters, a no-break space, a
+// letter and its combining mark as one), runs of whitespace as one space, and
+// the key also folds case. No character that can be part of a place name is
+// dropped from the name that is sent: "!", "'", "." and "-" stay wherever
+// they sit ("Westward Ho!", "St. John's"), so a name is never read as another
+// place's. Only a trailing semicolon, colon or question mark leaves a name,
+// and a comma separates it from its qualifiers. Qualifiers are compared here
+// and never sent, so their trailing punctuation is dropped.
+const plainText = (s) => String(s ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
+const plainName = (s) => s.replace(/[\s;:?]+$/u, "").trim();
+const plainQualifier = (s) => s.replace(/[\s.,;:!?]+$/u, "").trim();
+// A sentence's closing "." or "!" after a name ("Paris."): tried only when
+// the name as given matched nothing.
+const withoutClosingMark = (s) => s.replace(/[\s.!]+$/u, "").trim();
+export function _resetPlaceCache() { placeCache.clear(); }
+async function placeRows(params) {
+  const key = [params.get("name").toLowerCase(), params.get("count"), params.get("language"), params.get("countryCode") ?? ""].join("\n");
+  const kept = placeCache.get(key);
+  if (kept && Date.now() - kept.at < PLACE_CACHE_TTL_MS) return kept.rows;
+  const data = await openMeteoJson("geocoding", "/v1/search", params);
+  const rows = (Array.isArray(data?.results) ? data.results : []).filter((r) => r && typeof r === "object").map(placeRow).filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
+  placeCache.delete(key);
+  placeCache.set(key, { at: Date.now(), rows });
+  while (placeCache.size > PLACE_CACHE_MAX) placeCache.delete(placeCache.keys().next().value);
+  return rows;
+}
+
+function placeRow(r) {
+  const postcodes = Array.isArray(r.postcodes) ? r.postcodes.map(String) : [];
+  return {
+    name: r.name ?? null,
+    lat: r.latitude ?? null,
+    lon: r.longitude ?? null,
+    country: r.country ?? null,
+    countryCode: r.country_code ?? null,
+    region: r.admin1 ?? null,
+    district: r.admin2 ?? null,
+    timezone: r.timezone ?? null,
+    population: r.population ?? null,
+    elevation: r.elevation ?? null,
+    featureCode: r.feature_code ?? null,
+    postcodeCount: postcodes.length,
+    postcodes: postcodes.slice(0, 20),
+  };
+}
+
+function qualifierMatches(row, token) {
+  const t = fold(token);
+  if (!t) return true;
+  const cc = fold(row.countryCode);
+  if (t === cc || COUNTRY_ALIASES[t] === cc) return true;
+  if (t === fold(row.country) || t === fold(row.region) || t === fold(row.district)) return true;
+  const state = US_STATES[t.toUpperCase()];
+  return Boolean(state) && cc === "us" && fold(row.region) === fold(state);
+}
+
+/** Places matching a name, best first. `q` may carry qualifiers after a
+ *  comma ("Paris, France", "Austin, TX"); `country` is an ISO 3166-1 alpha-2
+ *  filter. Returns { query, name, results } with at most `count` rows. */
+export async function lookupPlaces({ q, count = 5, country, language } = {}) {
+  if (q !== undefined && q !== null && typeof q !== "string" && typeof q !== "number") throw bad('"q" must be a place name (text)');
+  const query = String(q ?? "").trim();
+  if (query.length < 2) throw bad('"q" must be a place name of at least 2 characters');
+  if (query.length > PLACE_QUERY_MAX) throw bad(`"q" must be at most ${PLACE_QUERY_MAX} characters`);
+  const parts = plainText(query).split(",");
+  const at = parts.findIndex((p) => plainName(p));
+  let name = at < 0 ? "" : plainName(parts[at]);
+  let qualifiers = at < 0 ? [] : parts.slice(at + 1).map(plainQualifier).filter(Boolean);
+  // "Pittsburgh PA": a trailing US state code with no comma is a qualifier too.
+  const tail = qualifiers.length ? null : /^(.{2,}?)\s+([A-Z]{2})[.!]*$/.exec(name);
+  if (tail && Object.hasOwn(US_STATES, tail[2])) { name = tail[1].trim(); qualifiers = [tail[2]]; }
+  if (!name || name.length < 2) throw bad('"q" must start with a place name of at least 2 characters');
+  const n = Math.min(Math.max(parseInt(count, 10) || 5, 1), 10);
+  const cc = String(country ?? "").trim().toUpperCase();
+  if (cc && !/^[A-Z]{2}$/.test(cc)) throw bad('"country" must be a two-letter ISO 3166-1 country code, for example US');
+  const lang = String(language ?? "en").trim().toLowerCase();
+  if (!/^[a-z]{2}$/.test(lang)) throw bad('"language" must be a two-letter language code, for example en');
+  const params = new URLSearchParams({ name, count: qualifiers.length ? 25 : n, language: lang, format: "json" });
+  if (cc) params.set("countryCode", cc);
+  let rows = await placeRows(params);
+  const bare = rows.length ? name : withoutClosingMark(name);
+  if (bare !== name && bare.length >= 2) {
+    params.set("name", bare);
+    rows = await placeRows(params);
+    if (rows.length) name = bare;
+  }
+  for (const token of qualifiers) rows = rows.filter((r) => qualifierMatches(r, token));
+  return { query, name, results: rows.slice(0, n) };
+}
+
+/** What a place answer says about itself. */
+export const PLACE_SOURCE = "geocoding-api.open-meteo.com (GeoNames, CC BY 4.0)";
+
+/** A tool's location: `lat` and `lon` when both are given (they win), else
+ *  the best match for `place`. A resolved place rides the answer as `place`
+ *  (name, country, region, timezone, the GeoNames credit). */
+export async function resolveLocation(i) {
+  const blank = (v) => v === undefined || v === null || v === "";
+  if (!blank(i?.lat) || !blank(i?.lon)) return requireCoords(i);
+  if (blank(i?.place)) throw bad('Give "lat" and "lon", or a "place" name such as "Paris" or "Austin, TX"');
+  if (typeof i.place !== "string") throw bad('"place" must be a place name (text)');
+  const { query, results } = await lookupPlaces({ q: i.place, count: 1, country: i.country });
+  const hit = results[0];
+  if (!hit) throw bad(`No place matched "${query.slice(0, PLACE_QUERY_MAX)}". Give a city, town or region name (not a street address), or pass "lat" and "lon"`, 404);
+  return {
+    lat: hit.lat, lon: hit.lon,
+    place: { query, name: hit.name, country: hit.country, countryCode: hit.countryCode, region: hit.region, timezone: hit.timezone, lat: hit.lat, lon: hit.lon, source: PLACE_SOURCE, credit: GEONAMES_ATTRIBUTION },
+  };
+}
+
+/** The location fields every weather answer starts with. */
+export const locationFields = (loc) => ({ lat: loc.lat, lon: loc.lon, ...(loc.place ? { place: loc.place } : {}) });
+
+/** The three location inputs, for a tool's inputSchema. */
+export const LOCATION_PROPERTIES = Object.freeze({
+  lat: { type: "number", description: "Latitude, -90 to 90 (with lon; wins over place)" },
+  lon: { type: "number", description: "Longitude, -180 to 180 (with lat)" },
+  place: { type: "string", description: 'A city, town or region name instead of lat/lon, for example "Paris" or "Austin, TX" (not a street address); the answer echoes the place it resolved to' },
+});
+
 // WMO weather interpretation codes → human-readable condition string.
-const WMO_CODES = {
+export const WMO_CODES = {
   0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
   45: "Fog", 48: "Depositing rime fog",
   51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
@@ -152,7 +304,7 @@ const WMO_CODES = {
   95: "Thunderstorm", 96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail",
 };
 
-function weatherCondition(code) {
+export function weatherCondition(code) {
   return WMO_CODES[code] ?? `Unknown (${code})`;
 }
 
@@ -160,7 +312,7 @@ function weatherCondition(code) {
 // units: "celsius" (default) | "fahrenheit", with the spellings buyers reach
 // for. An unknown value is a 400 - the first cut served celsius for
 // units:"imperial" and the buyer could not tell (corpus, 2026-09-06).
-function tempUnitOf(raw) {
+export function tempUnitOf(raw) {
   const u = String(raw ?? "").trim().toLowerCase();
   if (u === "" || u === "celsius" || u === "c" || u === "metric") return "celsius";
   if (u === "fahrenheit" || u === "f" || u === "imperial") return "fahrenheit";
@@ -188,17 +340,16 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `Current weather conditions for any location on Earth: temperature, feels-like, humidity, wind speed/direction/gusts, precipitation, cloud cover, pressure, and human-readable condition. Global coverage; no account needed. ?lat=48.86&lon=2.35. ${OPEN_METEO_ATTRIBUTION}`,
+      `Current weather conditions for any location on Earth: temperature, feels-like, humidity, wind speed/direction/gusts, precipitation, cloud cover, pressure, and human-readable condition. Global coverage by coordinates or place name; no account needed. ?lat=48.86&lon=2.35 or ?place=Paris. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "current", "temperature", "wind", "global"],
     discovery: {
       input: { lat: 48.8566, lon: 2.3522 },
       inputSchema: {
         properties: {
-          lat: { type: "number", description: "Latitude, -90 to 90" },
-          lon: { type: "number", description: "Longitude, -180 to 180" },
+          ...LOCATION_PROPERTIES,
           units: { type: "string", description: "Temperature unit: celsius (default) or fahrenheit" },
         },
-        required: ["lat", "lon"],
+        required: [],
       },
       output: {
         example: {
@@ -218,7 +369,8 @@ export const WEATHER_TOOLS = [
       },
     },
     handler: async (i) => {
-      const { lat, lon } = requireCoords(i);
+      const loc = await resolveLocation(i);
+      const { lat, lon } = loc;
       const tempUnit = tempUnitOf(i.units);
       const params = new URLSearchParams({
         latitude: lat, longitude: lon,
@@ -231,7 +383,7 @@ export const WEATHER_TOOLS = [
       if (!data?.current) throw bad("Open-Meteo returned no current data", 502);
       const c = data.current;
       return {
-        lat, lon,
+        ...locationFields(loc),
         current: {
           time: c.time ?? null,
           temperature: c.temperature_2m ?? null,
@@ -261,18 +413,17 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `7-day daily weather forecast for any location: high/low temp, precipitation sum and probability, max wind, UV index, sunrise/sunset. Global coverage; no account needed. ?lat=35.68&lon=139.69. ${OPEN_METEO_ATTRIBUTION}`,
+      `7-day daily weather forecast for any location: high/low temp, precipitation sum and probability, max wind, UV index, sunrise/sunset. Global coverage by coordinates or place name; no account needed. ?lat=35.68&lon=139.69 or ?place=Tokyo. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "forecast", "daily", "global"],
     discovery: {
       input: { lat: 35.6762, lon: 139.6503 },
       inputSchema: {
         properties: {
-          lat: { type: "number", description: "Latitude, -90 to 90" },
-          lon: { type: "number", description: "Longitude, -180 to 180" },
+          ...LOCATION_PROPERTIES,
           days: { type: "number", description: "Forecast days, 1-16 (default 7)" },
           units: { type: "string", description: "Temperature unit: celsius (default) or fahrenheit" },
         },
-        required: ["lat", "lon"],
+        required: [],
       },
       output: {
         example: {
@@ -291,7 +442,8 @@ export const WEATHER_TOOLS = [
       },
     },
     handler: async (i) => {
-      const { lat, lon } = requireCoords(i);
+      const loc = await resolveLocation(i);
+      const { lat, lon } = loc;
       const days = Math.min(Math.max(parseInt(i.days, 10) || 7, 1), 16);
       const tempUnit = tempUnitOf(i.units);
       const params = new URLSearchParams({
@@ -321,7 +473,7 @@ export const WEATHER_TOOLS = [
         sunrise: d.sunrise?.[idx]?.split("T")[1] ?? null,
         sunset: d.sunset?.[idx]?.split("T")[1] ?? null,
       }));
-      return { lat, lon, days: result, source: "api.open-meteo.com (CC BY 4.0)" };
+      return { ...locationFields(loc), days: result, source: "api.open-meteo.com (CC BY 4.0)" };
     },
   },
   {
@@ -332,18 +484,17 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `48-hour hourly weather forecast for any location: temperature, precipitation probability and amount, wind, cloud cover, humidity. Global coverage; no account needed. ?lat=-33.87&lon=151.21. ${OPEN_METEO_ATTRIBUTION}`,
+      `48-hour hourly weather forecast for any location: temperature, precipitation probability and amount, wind, cloud cover, humidity. Global coverage by coordinates or place name; no account needed. ?lat=-33.87&lon=151.21 or ?place=Sydney. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "forecast", "hourly", "global"],
     discovery: {
       input: { lat: -33.8688, lon: 151.2093 },
       inputSchema: {
         properties: {
-          lat: { type: "number", description: "Latitude, -90 to 90" },
-          lon: { type: "number", description: "Longitude, -180 to 180" },
+          ...LOCATION_PROPERTIES,
           hours: { type: "number", description: "Forecast hours, 1-168 (default 48)" },
           units: { type: "string", description: "Temperature unit: celsius (default) or fahrenheit" },
         },
-        required: ["lat", "lon"],
+        required: [],
       },
       output: {
         example: {
@@ -361,7 +512,8 @@ export const WEATHER_TOOLS = [
       },
     },
     handler: async (i) => {
-      const { lat, lon } = requireCoords(i);
+      const loc = await resolveLocation(i);
+      const { lat, lon } = loc;
       const hours = Math.min(Math.max(parseInt(i.hours, 10) || 48, 1), 168);
       const tempUnit = tempUnitOf(i.units);
       const params = new URLSearchParams({
@@ -389,7 +541,7 @@ export const WEATHER_TOOLS = [
         windDirection: h.wind_direction_10m?.[idx] ?? null,
         windUnit: tempUnit === "fahrenheit" ? "mph" : "km/h",
       }));
-      return { lat, lon, hours: result, source: "api.open-meteo.com (CC BY 4.0)" };
+      return { ...locationFields(loc), hours: result, source: "api.open-meteo.com (CC BY 4.0)" };
     },
   },
   {
@@ -400,19 +552,18 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `Historical daily weather for any location and date range (up to 1 year): high/low temp, precipitation, wind, conditions. Global archive from 1940 to the most recent days (reanalysis, with weather-model data for the latest days); no account needed. ?lat=51.51&lon=-0.13&start=2025-06-01&end=2025-06-07. ${ATTRIBUTIONS["open-meteo-c3s"]}`,
+      `Historical daily weather for any location and date range (up to 1 year): high/low temp, precipitation, wind, conditions. Global archive from 1940 to the most recent days (reanalysis, with weather-model data for the latest days); by coordinates or place name; no account needed. ?lat=51.51&lon=-0.13&start=2025-06-01&end=2025-06-07 (or ?place=London). ${ATTRIBUTIONS["open-meteo-c3s"]}`,
     tags: ["weather", "historical", "archive", "climate", "global"],
     discovery: {
       input: { lat: 51.5074, lon: -0.1278, start: "2025-06-01", end: "2025-06-07" },
       inputSchema: {
         properties: {
-          lat: { type: "number", description: "Latitude, -90 to 90" },
-          lon: { type: "number", description: "Longitude, -180 to 180" },
+          ...LOCATION_PROPERTIES,
           start: { type: "string", description: "Start date, YYYY-MM-DD" },
           end: { type: "string", description: "End date, YYYY-MM-DD (max 1 year from start)" },
           units: { type: "string", description: "Temperature unit: celsius (default) or fahrenheit" },
         },
-        required: ["lat", "lon", "start", "end"],
+        required: ["start", "end"],
       },
       output: {
         example: {
@@ -430,7 +581,8 @@ export const WEATHER_TOOLS = [
       },
     },
     handler: async (i) => {
-      const { lat, lon } = requireCoords(i);
+      const loc = await resolveLocation(i);
+      const { lat, lon } = loc;
       const start = String(i.start ?? "").trim();
       const end = String(i.end ?? "").trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) throw bad('"start" must be YYYY-MM-DD');
@@ -464,7 +616,7 @@ export const WEATHER_TOOLS = [
         windMax: d.wind_speed_10m_max?.[idx] ?? null,
         windUnit: tempUnit === "fahrenheit" ? "mph" : "km/h",
       }));
-      return { lat, lon, days: result, source: "archive-api.open-meteo.com (CC BY 4.0)", credit: C3S_CREDIT };
+      return { ...locationFields(loc), days: result, source: "archive-api.open-meteo.com (CC BY 4.0)", credit: C3S_CREDIT };
     },
   },
   {
@@ -475,16 +627,15 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `Air quality index and current pollutant concentrations for any location: US AQI, PM2.5, PM10, ozone, NO2, SO2, CO. Global coverage; no account needed. ?lat=28.61&lon=77.23. ${ATTRIBUTIONS["open-meteo-cams"]}`,
+      `Air quality index and current pollutant concentrations for any location: US AQI, PM2.5, PM10, ozone, NO2, SO2, CO. Global coverage by coordinates or place name; no account needed. ?lat=28.61&lon=77.23 or ?place=Delhi. ${ATTRIBUTIONS["open-meteo-cams"]}`,
     tags: ["weather", "air-quality", "aqi", "pollution", "pm25", "global"],
     discovery: {
       input: { lat: 28.6139, lon: 77.2090 },
       inputSchema: {
         properties: {
-          lat: { type: "number", description: "Latitude, -90 to 90" },
-          lon: { type: "number", description: "Longitude, -180 to 180" },
+          ...LOCATION_PROPERTIES,
         },
-        required: ["lat", "lon"],
+        required: [],
       },
       output: {
         example: {
@@ -504,7 +655,8 @@ export const WEATHER_TOOLS = [
       },
     },
     handler: async (i) => {
-      const { lat, lon } = requireCoords(i);
+      const loc = await resolveLocation(i);
+      const { lat, lon } = loc;
       const params = new URLSearchParams({
         latitude: lat, longitude: lon,
         current: "us_aqi,pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone",
@@ -523,7 +675,7 @@ export const WEATHER_TOOLS = [
         else category = "Hazardous";
       }
       return {
-        lat, lon,
+        ...locationFields(loc),
         airQuality: {
           time: c.time ?? null,
           usAqi: aqi,
@@ -541,10 +693,60 @@ export const WEATHER_TOOLS = [
       };
     },
   },
+  {
+    route: "GET /api/place-lookup",
+    name: "Place lookup (worldwide)",
+    slug: "place-lookup",
+    attribution: "geonames",
+    category: "data",
+    price: "$0.001",
+    description:
+      `Resolve a city, town, region or postal-code name to coordinates worldwide: latitude and longitude, country, region, timezone, population, elevation and postcodes, best match first. Add a qualifier after a comma ("Austin, TX", "Paris, France") or a two-letter country filter. It finds places (cities, towns, regions and postal codes), not street addresses: a street address answers found: false. ?q=Pittsburgh&country=US. ${GEONAMES_ATTRIBUTION}`,
+    tags: ["place", "geocode", "city", "coordinates", "timezone", "location"],
+    discovery: {
+      input: { q: "Pittsburgh", country: "US" },
+      inputSchema: {
+        properties: {
+          q: { type: "string", description: 'Place name, optionally with a qualifier after a comma: "Pittsburgh", "Austin, TX", "Paris, France"' },
+          count: { type: "number", description: "Results to return, 1-10 (default 5)" },
+          country: { type: "string", description: "Two-letter ISO 3166-1 country code to search within, for example US" },
+          language: { type: "string", description: "Two-letter language code for names (default en)" },
+        },
+        required: ["q"],
+      },
+      output: {
+        example: {
+          query: "Pittsburgh", found: true, count: 1,
+          results: [
+            {
+              name: "Pittsburgh", lat: 40.44062, lon: -79.99589,
+              country: "United States", countryCode: "US", region: "Pennsylvania", district: "Allegheny County",
+              timezone: "America/New_York", population: 304391, elevation: 233, featureCode: "PPLA2",
+              postcodeCount: 73, postcodes: ["15201", "15202", "15203"],
+            },
+          ],
+          source: PLACE_SOURCE,
+          credit: GEONAMES_ATTRIBUTION,
+        },
+      },
+    },
+    handler: async (i) => {
+      const { query, results } = await lookupPlaces({ q: i.q ?? i.place ?? i.name, count: i.count ?? i.limit, country: i.country, language: i.language });
+      return {
+        query,
+        found: results.length > 0,
+        count: results.length,
+        results,
+        ...(results.length ? {} : { note: "No place matched. Give a city, town, region or postal-code name (not a street address); a qualifier after a comma must name the place's country, region or district." }),
+        source: PLACE_SOURCE,
+        credit: GEONAMES_ATTRIBUTION,
+      };
+    },
+  },
 ];
 
 // These handlers' every upstream wait is a safeFetch (through this kit's own
 // read helper and its retry), which ends at a run's ceiling when one is set
 // (src/run-ceiling.js): a caller that stops waiting at a deadline of its own
 // can serve them. A handler that gains another kind of wait leaves this list.
-markEndsAtCeiling(WEATHER_TOOLS, ["weather-air-quality", "weather-current", "weather-daily", "weather-history", "weather-hourly"]);
+markEndsAtCeiling(WEATHER_TOOLS, ["place-lookup", "weather-air-quality", "weather-current", "weather-daily", "weather-history", "weather-hourly"]);

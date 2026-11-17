@@ -21,8 +21,53 @@
 // listed only with a key, or listed here. Retiring a route without an entry
 // here fails that test.
 
-/** Tools: /api/<slug>. `replacement` is a live catalog slug or null. */
+/** Tools: /api/<slug>. `replacement` is a live catalog slug or null; an
+ *  optional `note` (one sentence, plain text) is added to the 410's hint when
+ *  a live tool answers a narrower question than the retired route did. */
 export const RETIRED_TOOLS = Object.freeze({
+  // A replacement is named only when it answers the SAME question as the
+  // retired route (the same quantity for the same subject, possibly over a
+  // stated narrower range). A tool that answers a neighboring question is not
+  // one: that route retires with no pointer.
+  //
+  // 2026-11-17: the three open-map geocoding tools. geocode took a street
+  // address; place-lookup finds places (cities, towns, regions), and answers
+  // a street address found: false, so it is not a replacement. Nothing live
+  // turns coordinates into a postal address or searches points of interest.
+  geocode: { retiredAt: "2026-11-17", replacement: null },
+  "reverse-geocode": { retiredAt: "2026-11-17", replacement: null },
+  "place-search": { retiredAt: "2026-11-17", replacement: null },
+  // 2026-11-17: the three second-provider search tools; the first-party
+  // search, answer and extract tools serve the same questions.
+  "exa-search": { retiredAt: "2026-11-17", replacement: "search" },
+  "exa-answer": { retiredAt: "2026-11-17", replacement: "answer" },
+  "exa-contents": { retiredAt: "2026-11-17", replacement: "extract" },
+  // 2026-11-16: the routes that read an open DeFi analytics source, and the
+  // spot exchange order book. The DEX volume ranking ranked DEXes across every
+  // chain over periods up to all time; dex-volume-board ranks one network's
+  // DEXes over 24 hours from its top pools, a narrower question, so the route
+  // names none and its `note` (read in the 410's hint) says what is live. The stablecoin list ranked every
+  // peg by circulating supply, per chain; the depeg watch carries no supply
+  // figure and covers USD pegs only, so it is not a replacement. Locked
+  // value (by protocol, chain or rollup), pool yields and their history,
+  // protocol fees, supply history, on-chain options volume and a spot order
+  // book have none: the market-cap screens, lending rates and the perpetual
+  // book answer different questions, so those routes name no replacement.
+  "defi-yields": { retiredAt: "2026-11-16", replacement: null },
+  "defi-yield-history": { retiredAt: "2026-11-16", replacement: null },
+  "defi-protocols": { retiredAt: "2026-11-16", replacement: null },
+  "defi-protocol": { retiredAt: "2026-11-16", replacement: null },
+  "defi-chains": { retiredAt: "2026-11-16", replacement: null },
+  "defi-chain-tvl-history": { retiredAt: "2026-11-16", replacement: null },
+  "stablecoins": { retiredAt: "2026-11-16", replacement: null },
+  "stablecoin-supply-history": { retiredAt: "2026-11-16", replacement: null },
+  "defi-fees": { retiredAt: "2026-11-16", replacement: null },
+  "defi-dex-volume": { retiredAt: "2026-11-16", replacement: null, note: "dex-volume-board ranks one network's DEXes by their share of 24h volume across its top pools; nothing live ranks DEXes across every chain or over 7 days or longer." },
+  "defi-tvl": { retiredAt: "2026-11-16", replacement: null },
+  "dex-top-pools": { retiredAt: "2026-11-16", replacement: null },
+  "l2-tvl": { retiredAt: "2026-11-16", replacement: null },
+  "options-volume": { retiredAt: "2026-11-16", replacement: null },
+  "crypto-orderbook": { retiredAt: "2026-11-16", replacement: null },
   // 2026-09-24: the Polymarket tools. The nearest live question is a Kalshi
   // read; a Kalshi market is a different venue, so each names the closest tool.
   "polymarket-search": { retiredAt: "2026-09-24", replacement: "kalshi-markets" },

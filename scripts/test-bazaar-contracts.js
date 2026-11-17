@@ -407,7 +407,7 @@ try {
   }
   console.log(`listing fields on ${rows.length} routes: ${Object.entries(has).map(([k, v]) => `${k} ${v}`).join(", ")}`);
   console.log(`sample outputs: ${has.output} real, ${has.outputPointer} /openapi.json pointers (schemas: ${has.outputSchema} real, ${has.outputSchemaPointer} for a pointer)`);
-  // FRED, CoinGecko, Jupiter, OpenStreetMap, Open-Meteo and NVD routes, and the packs that run them.
+  // FRED, CoinGecko, Jupiter, GeoNames, Open-Meteo and NVD routes, and the packs that run them.
   if (attributedSeen.size < 60 || ![...attributedSeen].some((s) => s.startsWith("skill-"))) fail("catalog", `checked the attribution on ${attributedSeen.size} listings, packs included (expected 60 or more)`);
   if (trimSeen !== TRIM_ROUTES.size) fail("catalog", `checked ${trimSeen} of ${TRIM_ROUTES.size} transcription listings for the cut-answer fields`);
   if (wholeListingSeen !== WHOLE_LISTING_ROUTES.size) fail("catalog", `checked ${wholeListingSeen} of ${WHOLE_LISTING_ROUTES.size} typed-judgment listings`);

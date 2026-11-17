@@ -6,6 +6,84 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (weather probabilities, place names, and six retired routes)
+Tools:
+- weather-probability gives the chance that a day's high, low, mean
+  temperature, rain total or peak wind meets a threshold or falls in a range,
+  as the share of up to 82 ensemble forecast members (ECMWF IFS and NOAA GEFS),
+  with each model's count and the spread, for any place up to 15 days ahead:
+  all 82 reach about 13 days ahead, and the last days answer from the 31 NOAA
+  GEFS members, with the model left out named in the answer.
+  weather-market-brackets takes the brackets of a weather market and the price
+  the caller holds for each and returns each bracket's forecast probability
+  with that price beside it, and weather-market-board does the same for many
+  cities on one date (13 large US cities by default, or up to 20 the caller
+  names). The caller supplies every bracket and price: the tools read no market
+  feed, compare nothing and give no rating or recommendation, and each answer
+  says the figures are raw model output, not calibrated to a station.
+- place-lookup resolves a city, town, region or postal-code name to
+  coordinates, country, region, timezone, population and postcodes worldwide,
+  with a qualifier after a comma ("Austin, TX", "Paris, France") or a country
+  filter; it resolves place names, not street addresses, and credits GeoNames.
+  weather-current, weather-daily, weather-hourly, weather-history and
+  weather-air-quality take a place name in place of lat and lon and echo the
+  place they resolved to; lat and lon still win when given.
+- weather-window finds the stretches of hours in the next 1 to 16 days that
+  meet the caller's limits on rain chance, rain amount, wind, gusts,
+  temperature and daylight, or names the limit that ruled out the most hours;
+  weather-thresholds checks up to 8 rules against the hourly forecast and gives
+  the first and last hour each is met. Five calculators run on the free
+  proof-of-work tier with no data source behind them: sun-times,
+  heat-index-calc, aqi-calc, degree-days-calc and wmo-weather-code.
+- geocode, reverse-geocode and place-search are retired and answer 410, and
+  name none: place-lookup finds places (cities, towns, regions and postal
+  codes), not street addresses, and nothing live turns coordinates into an
+  address or searches points of interest.
+  exa-search, exa-answer and exa-contents are retired and answer 410 naming
+  search, answer and extract. /api/gateway-status no longer carries exaSpend or
+  exaAllowance.
+- The global weather tools and place-lookup answer a repeated identical request
+  from a short-lived cache (ten minutes for forecasts, a day for places).
+
+Packs:
+- skill-trip-planner and skill-location-intel run on place-lookup and the
+  worldwide daily forecast. location-intel takes a place name (a city, town or
+  region) in place of an address, adds the US county and state for a US place,
+  and skips its two US-only steps elsewhere; its nearby-places step is gone.
+  trip-planner resolves stops by name and forecasts any stop in the world.
+  Each pack's price follows its new parts, so both cost more.
+
+### 2026-11-16 (computed market answers replace the DeFi analytics routes)
+Tools:
+- Eight new tools answer with figures computed per call: funding-screener (one
+  coin's perpetual funding and basis across every listed venue, with
+  dispersion and annualized carry), stablecoin-depeg-watch (every USD
+  stablecoin above a size floor, its deviation now, over 24 hours and over 7
+  days), exchange-spread (one coin's price on each venue against the
+  cross-venue median), dex-pool-health (one pool's liquidity, turnover, trade
+  sizes and wallet mix, with a price-impact estimate), defi-screener,
+  dex-volume-board, chain-board, and lending-rates (Aave v3 and Compound v3
+  supply and borrow rates read from the lending contracts on five networks).
+  The seven market-data tools carry the CoinGecko credit in every answer;
+  lending-rates reads on-chain state only. dex-pool-health and
+  dex-volume-board answer on a deployment that holds a market-data key.
+  Each market-data listing states how often its figures are refreshed: every
+  5 minutes for exchange-spread and for a pool's recent trades, every 15 for
+  stablecoin-depeg-watch, and every 30 for the rest.
+- Fifteen routes are retired and answer 410 Gone with a Sunset date, and name
+  none: defi-dex-volume, defi-yields, defi-yield-history, defi-protocols,
+  defi-protocol, defi-chains, defi-chain-tvl-history, stablecoins,
+  stablecoin-supply-history, defi-fees, defi-tvl, dex-top-pools, l2-tvl,
+  options-volume and crypto-orderbook. The 410 for defi-dex-volume adds that
+  dex-volume-board ranks one network's DEXes by their share of 24-hour volume
+  across its top pools, and that nothing live ranks DEXes across every chain
+  or over longer periods.
+
+Skill packs:
+- defi-protocol-scanner reads the token's supply and valuation profile
+  (coin-profile) where it read locked value, and defi-dashboard reads the DeFi
+  market cap and dominance (global-defi); each pack's price follows its parts.
+
 ### 2026-11-17 (Live in the header, sample reports served whole)
 Site:
 - The header bar carries Live, the live view of x402 and MPP payments as they

@@ -1,27 +1,25 @@
 // Dex kit — Uniswap V3 pool reads on every Alchemy-supported chain. Resolve a
-// pool by (tokenA, tokenB, fee), read its on-chain state, get a spot quote
-// from sqrtPriceX96, and surface top pools by TVL via DeFiLlama (keyless).
+// pool by (tokenA, tokenB, fee), read its on-chain state, and get a spot quote
+// from sqrtPriceX96.
 //
 // Honest scoping: dex-quote is a SPOT quote at the current tick — no multi-
 // tick swap simulation. Deeper sims are a future kit. We name it accordingly.
 //
-// All 4 tools are wallet-only: 3 read through chain-kit's RPC transport
+// All 3 tools are wallet-only: they read through chain-kit's RPC transport
 // (Alchemy first when the key is set, then keyless public nodes), so they
-// share its quota; dex-top-pools shares DeFiLlama's per-IP limit.
+// share its quota.
 //
 // Covered by scripts/test-dex-kit.js (offline) and the daily paid-canary
 // (which probes Alchemy end-to-end via gas-snapshot).
 
-import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
+import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { pickNetwork as pickChainNetwork, publicJsonRpc } from "./chain-kit.js";
 
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so dex-pool's two rounds of parallel reads still
 // answer inside it; a read that outlives its cap is a 503 naming the upstream
-// and the step, never a 504. The yields document answered in 0.5 to 0.7 s when
-// measured (2026-10-14); the node reads (chain-kit's transport, its own
+// and the step, never a 504. The node reads (chain-kit's transport, its own
 // per-endpoint cap) are normally well under a second.
-const LLAMA_READ_MS = 10_000;
 
 // Uniswap V3 deployments. Ethereum/Polygon/Arbitrum/Optimism share the
 // canonical factory; Base has a Coinbase-deployed factory at a different
@@ -361,81 +359,6 @@ export const DEX_TOOLS = [
         spotPrice_1per0: spotPrice,
         amountOut,
         note: "spot quote at current tick - no multi-tick swap simulation",
-      };
-    },
-  },
-
-  // ===========================================================================
-  // dex-top-pools — top DEX pools by TVL via DeFiLlama Yields (keyless).
-  // ===========================================================================
-  {
-    route: "POST /api/dex-top-pools",
-    name: "Top DEX pools by TVL",
-    slug: "dex-top-pools",
-    category: "crypto",
-    price: "$0.001",
-    description:
-      "Top DEX pools (Uniswap, Sushi, Curve, Aerodrome, etc.) ranked by current TVL - filterable by chain and project. Sourced from an open DeFi analytics yields API (keyless). Each row carries chain, project slug, symbol pair, TVL in USD, current APY, and pool ID for follow-up queries.",
-    tags: ["crypto", "dex", "tvl", "pools", "yield"],
-    discovery: {
-      bodyType: "json",
-      input: { chain: "Base", project: "uniswap-v3", limit: 5 },
-      inputSchema: {
-        properties: {
-          chain: { type: "string", description: "Chain name as the source uses it (Ethereum, Base, Polygon, Arbitrum, Optimism, etc.). Case-insensitive. Omit for all chains." },
-          project: { type: "string", description: "Project slug substring (uniswap-v3, aerodrome-v1, curve-dex, etc.). Case-insensitive substring match. Omit for all DEXes." },
-          limit: { type: "number", description: "Max pools to return (1-50, default 10)." },
-        },
-      },
-      output: {
-        example: {
-          source: "defillama-yields",
-          chain: "Base",
-          project: "uniswap-v3",
-          count: 5,
-          pools: [
-            { pool: "abc123", chain: "Base", project: "uniswap-v3", symbol: "WETH-USDC", tvlUsd: 45000000, apy: 12.3 },
-          ],
-        },
-      },
-    },
-    handler: async (i) => {
-      const limit = Math.max(1, Math.min(50, Number.parseInt(i.limit, 10) || 10));
-      const chain = typeof i.chain === "string" ? i.chain.trim() : "";
-      const project = typeof i.project === "string" ? i.project.trim().toLowerCase() : "";
-
-      const ctx = { label: "DeFiLlama", step: "pools", timeoutMs: LLAMA_READ_MS, tag: "[dex]" };
-      const res = await upstreamFetch("https://yields.llama.fi/pools", {}, ctx);
-      if (res.status === 429) throw bad("DeFiLlama rate limit reached upstream - retry shortly", 503);
-      if (!res.ok) throw bad(`DeFiLlama upstream error (HTTP ${res.status})`, 502);
-      let json;
-      try { json = await bodyUnderDeadline(res.json(), ctx); }
-      catch (err) { if (err?.statusCode) throw err; throw bad("DeFiLlama upstream returned non-JSON", 502); }
-      let pools = Array.isArray(json.data) ? json.data : [];
-
-      if (chain) {
-        const want = chain.toLowerCase();
-        pools = pools.filter((p) => String(p.chain || "").toLowerCase() === want);
-      }
-      if (project) {
-        pools = pools.filter((p) => String(p.project || "").toLowerCase().includes(project));
-      }
-      pools.sort((a, b) => (Number(b.tvlUsd) || 0) - (Number(a.tvlUsd) || 0));
-      const top = pools.slice(0, limit).map((p) => ({
-        pool: p.pool,
-        chain: p.chain,
-        project: p.project,
-        symbol: p.symbol,
-        tvlUsd: Number(p.tvlUsd) || 0,
-        apy: typeof p.apy === "number" ? p.apy : null,
-      }));
-
-      return {
-        source: "defillama-yields",
-        chain: chain || null,
-        project: project || null,
-        count: top.length,
-        pools: top,
       };
     },
   },

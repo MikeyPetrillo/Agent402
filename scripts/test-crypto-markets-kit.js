@@ -198,6 +198,19 @@ reset();
 routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(502, "<html>SECRET-UPSTREAM-TEXT</html>") };
 await throws(h("coin-ohlc")({ coin: "bitcoin", days: 1 }), 502, "persistent 5xx -> 502", /^((?!SECRET).)*$/);
 reset();
+// A 200 whose body is JSON but not a document (null, a string, a number) is an
+// upstream failure, never a 500, and is not kept.
+for (const [label, text] of [["null", "null"], ["a string", '"busy"'], ["a number", "7"]]) {
+  routes = { "/api/v3/": jsonRes(200, text) };
+  for (const [slug, input] of [["coin-ohlc", { coin: "bitcoin", days: 1 }], ["coin-profile", { coin: "bitcoin" }], ["global-defi", {}], ["rwa-asset", { id: "gold" }], ["exchange-rates", {}]]) {
+    reset();
+    await throws(h(slug)(input), 502, `${slug}: a 200 whose body is ${label} -> 502`, /unexpected shape/);
+  }
+}
+reset();
+routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(200, [[1787319000000, 1, 2, 0.5, 1.5]]) };
+ok((await h("coin-ohlc")({ coin: "bitcoin", days: 1 })).count === 1, "an unusable body is not kept: the next read answers");
+reset();
 routes = { "/api/v3/coins/bitcoin/history": jsonRes(401, { error: { status: { error_code: 10012, error_message: "SECRET-UPSTREAM-TEXT" } } }) };
 await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 10 }), 422, "401 (plan limit) -> 422", /^((?!SECRET).)*$/);
 reset();
@@ -332,7 +345,40 @@ const histByDate = await h("coin-history")({ coin: "bitcoin", date: expectDate }
 ok(histByDate.cached === true && histByDate.date === expectDate, "coin-history: explicit date hits the same cache entry as daysAgo");
 reset();
 routes = { "/api/v3/coins/bitcoin/history": jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin" }) };
-await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 5 }), 422, "coin-history: no market_data on that date -> 422");
+await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 5 }), 422, "coin-history: no market_data on that date -> 422 (free, never a charged empty answer)");
+{
+  // The miss is kept per coin and date: a repeat answers the same 422 with no
+  // upstream read, even once the 5-minute read cache has dropped the document.
+  const reads = calls.length;
+  ok(reads === 1 && __test.historyMissSize() === 1, `coin-history: the miss read upstream once and was kept (${reads} reads)`);
+  await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 5 }), 422, "coin-history: a repeated miss is still 422");
+  ok(calls.length === reads, "coin-history: a repeated miss reads nothing upstream");
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 10 * 60_000; // past the read cache, inside the day
+    await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 5 }), 422, "coin-history: a miss past the read cache is still 422");
+  } finally { Date.now = realNow; }
+  ok(calls.length === reads, "coin-history: the miss memo outlives the read cache (no read after 10 minutes)");
+  // Another date for the same coin is its own key and is read.
+  routes["/api/v3/coins/bitcoin/history"] = jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin", market_data: { current_price: { usd: 1 }, market_cap: {}, total_volume: {} } });
+  const other = await h("coin-history")({ coin: "bitcoin", daysAgo: 6 });
+  ok(other.price === 1 && !("recorded" in other) && calls.length === reads + 1, "coin-history: another date is read and answered");
+  // The memo lasts a day: once it lapses the pair is read again.
+  try {
+    Date.now = () => realNow() + 86_400_000 + 60_000;
+    calls.length = 0;
+    const again = await h("coin-history")({ coin: "bitcoin", date: new Date(realNow() - 5 * 86_400_000).toISOString().slice(0, 10) });
+    ok(again.price === 1 && calls.length === 1, "coin-history: a miss older than a day is read again");
+  } finally { Date.now = realNow; }
+  // Bounded: a flood of distinct misses never holds more than HISTORY_MISS_MAX.
+  reset();
+  routes = { "/api/v3/coins/bitcoin/history": jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin" }) };
+  const { HISTORY_MISS_MAX } = await import("../src/tools/crypto-markets-kit.js");
+  for (let k = 1; k <= 365; k++) await h("coin-history")({ coin: "bitcoin", daysAgo: k }).catch(() => {});
+  ok(__test.historyMissSize() === Math.min(365, HISTORY_MISS_MAX) && HISTORY_MISS_MAX >= 365 && HISTORY_MISS_MAX <= 10_000, `coin-history: miss memo bounded (${__test.historyMissSize()} kept, max ${HISTORY_MISS_MAX})`);
+  reset();
+  ok(__test.historyMissSize() === 0, "coin-history: clearing the cache clears the miss memo");
+}
 
 reset();
 routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(200, [[1787319000000, 100, 110, 90, 105], [1787320800000, 105, 120, 100, 115], [1787322600000, 115, 118, 95, 98], ["junk"]]) };

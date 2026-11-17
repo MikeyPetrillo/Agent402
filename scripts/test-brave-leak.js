@@ -228,29 +228,5 @@ ok(!/caller = "unknown"/.test(searchSrc),
 }
 
 
-// 8. EXA is the same shape, guarded BEFORE it can happen rather than after.
-//    Brave leaked three times, E2B once and CoinGecko once, and every one of
-//    them was a paid key that sat at test-job scope while a sweep quietly
-//    reached a handler. Exa is structurally safe TODAY for one reason only:
-//    EXA_KEY is not a GitHub Actions secret, so CI cannot spend it. That is an
-//    accident of configuration, not a guarantee - the day somebody adds the
-//    secret (to run a keyed corpus pass in CI, say) the sweeps would start
-//    buying searches on every push with nothing to stop them.
-//
-//    So: the three Exa slugs must stay in METERED_SLUGS, which is what excludes
-//    them from BOTH catalog sweeps. If a future change lists them for the
-//    sweeps, this fails first.
-{
-  const nonMetered = readFileSync(new URL("../src/metered-slugs.js", import.meta.url), "utf8"); // METERED_SLUGS lives in src/
-  for (const slug of ["exa-search", "exa-answer", "exa-contents"]) {
-    ok(new RegExp(`"${slug}"`).test(nonMetered), `${slug} is in METERED_SLUGS, so neither catalog sweep can buy it`);
-  }
-  const exaSrc = readFileSync(new URL("../src/tools/exa-kit.js", import.meta.url), "utf8");
-  // Env-gated listing is the second belt: with no key the kit lists nothing,
-  // so a sweep cannot reach a route that does not exist.
-  ok(/export function exaEnabled\(\)/.test(exaSrc), "the Exa kit is env-gated, so an unkeyed CI boot lists no Exa route at all");
-  ok(/EXA_DAILY_MAX_USD/.test(exaSrc), "and a daily spend cap bounds the damage even where a key IS present");
-}
-
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

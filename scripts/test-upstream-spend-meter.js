@@ -19,8 +19,6 @@ process.env.POSTHOG_TEST_CAPTURE = "1";
 delete process.env.POSTHOG_API_KEY;
 process.env.OPENAI_API_KEY = "sk-test-not-real";
 process.env.OPENROUTER_API_KEY = "test-key";
-process.env.EXA_API_KEY = "exa-test-not-real";
-process.env.EXA_DAILY_MAX_USD = "100"; // the fake card is dollars, not cents; the daily cap is not under test here
 process.env.X_BEARER_TOKEN = "x-test-not-real";
 delete process.env.TYPESAFE_API_KEY;
 
@@ -32,7 +30,6 @@ const { IMAGE_GEN_TOOLS } = await import("../src/tools/image-gen-kit.js");
 const { EMBED_TOOLS } = await import("../src/tools/embed-kit.js");
 const { LLM_GATEWAY_TOOLS, EMBEDDINGS_PRICE } = await import("../src/tools/llm-gateway-kit.js");
 const { judge, decisions, JUDGE_PRICE_USD, DECISION_ONE } = await import("../src/tools/judge-kit.js");
-const { EXA_TOOLS } = await import("../src/tools/exa-kit.js");
 const { X_DATA_TOOLS } = await import("../src/tools/x-data-kit.js");
 
 let pass = 0, fail = 0;
@@ -66,7 +63,7 @@ const T = {
   media: { "fake/image-model": { worstCaseUsd: 1, listedMaxUsd: 1 }, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 1, listedMaxUsd: 1 } },
   fees: { webSearchPerUse: 0.25, groundedPerCall: 0.125, rerankPerUnit: 5, settlementPerCall: 0.5 },
   meter: { markup: 1.25 },
-  vendor: { exa: { search: 0.5, instant: 0.25, lite: 0.25, answer: 1, content: 0.125 }, x: { postRead: 0.5, userRead: 0.25 }, decisions: { luna: 1, decisionOne: 1, gemini: 1, jev: 1, maxShare: 0.9 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } },
+  vendor: { x: { postRead: 0.5, userRead: 0.25 }, decisions: { luna: 1, decisionOne: 1, gemini: 1, jev: 1, maxShare: 0.9 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } },
 };
 U.setUpstreamCostsForTest(T);
 ok(U.upstreamCostsStatus() === "ok", "the fake table is complete (every key a serving path reads)");
@@ -240,21 +237,6 @@ try {
     U.setUpstreamCostsForTest(T);
     ok(g.decision === "continue" && g.model === DECISION_ONE, "loop-gate answered on Decision-1");
     recorded(await take(), { source: "judge", usd: (gateTokens / 1e6) * T.vendor.decisions.decisionOne, tier: "loop-gate", model: DECISION_ONE, priceUsd: LOOP_GATE_PRICE_USD }, "loop-gate on Decision-1");
-  }
-  // ---- exa-answer: what Exa says the call cost (costDollars), a vendor fee row, no margin event ----
-  {
-    const cost = 0.37;
-    stub(() => json({ answer: "Forty-two.", citations: [], costDollars: { total: cost } }));
-    const out = await bySlug(EXA_TOOLS, "exa-answer").handler({ query: "the answer?" });
-    restore();
-    const { m, e } = await take();
-    ok(out.answer === "Forty-two." && m.length === 1 && m[0].source === "exa" && near(m[0].usd, cost) && e.length === 0, `exa-answer metered Exa's own figure on "exa" (got ${JSON.stringify(m)})`);
-    // No costDollars: the card's estimate is what is metered.
-    stub(() => json({ answer: "Still forty-two.", citations: [] }));
-    await bySlug(EXA_TOOLS, "exa-answer").handler({ query: "the answer?" });
-    restore();
-    const again = await take();
-    ok(again.m.length === 1 && near(again.m[0].usd, T.vendor.exa.answer), `without costDollars the answer card rate is metered (got ${JSON.stringify(again.m)})`);
   }
   // ---- x-user: items returned x the user-read rate ----
   {

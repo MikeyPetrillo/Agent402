@@ -946,12 +946,6 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (not charged on x402) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
   },
   {
-    title: "Exa prepaid allowance LOW",
-    verdict: ({ gateway: b }) => wordVerdict(b.exaAllowance?.status, ["low"], ["ok", "unconfigured"]),
-    body: () =>
-      "`/api/gateway-status.exaAllowance` reports **low**: cumulative spend on that upstream has passed the configured share of its funded total. Top up in the upstream's console and raise `EXA_CREDITS_USD` on Railway to the new funded total. Note the counter is in memory and resets on deploy, so real remaining credit is at or below what is reported.",
-  },
-  {
     title: "X data daily spend OVER its ceiling",
     // over: past the alarm ceiling and still serving. capped: the hard
     // ceiling refuses, or refused a call within the last hour. off is the
@@ -959,14 +953,6 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     verdict: ({ gateway: b }) => wordVerdict(b.xDataSpend?.status, ["over", "capped"], ["ok", "off"]),
     body: () =>
       "`/api/gateway-status.xDataSpend` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `X_DATA_DAILY_HARD_MAX_USD` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `X_DATA_DAILY_MAX_USD`, otherwise the next UTC day.",
-  },
-  {
-    title: "Exa daily spend OVER its ceiling",
-    // Same words as xDataSpend (src/daily-ceilings.js); apart from the
-    // prepaid allowance alarm above, which reads exaAllowance.
-    verdict: ({ gateway: b }) => wordVerdict(b.exaSpend?.status, ["over", "capped"], ["ok", "off"]),
-    body: () =>
-      "`/api/gateway-status.exaSpend` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed `EXA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `EXA_DAILY_HARD_MAX_USD` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; `exaAllowance` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `EXA_DAILY_MAX_USD`, otherwise the next UTC day.",
   },
   {
     title: "Router spend per minute OVER its ceiling",

@@ -11,10 +11,10 @@ import { ledgerShell, ledgerFooterCompact, esc, codeBlock } from "./ledger-chrom
 import { failedCallFootnote } from "./settlement-footnote.js";
 import { FEED_TTL_MS, META_TTL_MS as SIGNALS_META_TTL_MS } from "./tools/crypto-signals-kit.js";
 import { META_TTL_MS as DERIV_META_TTL_MS } from "./tools/derivatives-kit.js";
-import { CACHE_TTL_MS as DEFI_CACHE_TTL_MS } from "./tools/defi-kit.js";
+import { SCREENS_MAX_TTL_MS } from "./tools/crypto-screens-kit.js";
 // The longest a reading on this page can sit in a shared cache, read from the
 // kits' own TTLs. The page said "a minute" while every one of them is longer.
-const MAX_CACHE_MIN = Math.round(Math.max(FEED_TTL_MS, SIGNALS_META_TTL_MS, DERIV_META_TTL_MS, DEFI_CACHE_TTL_MS) / 60_000);
+const MAX_CACHE_MIN = Math.round(Math.max(FEED_TTL_MS, SIGNALS_META_TTL_MS, DERIV_META_TTL_MS, SCREENS_MAX_TTL_MS) / 60_000);
 
 
 /** Group definitions: slug order is the display order. Copy is what the tool
@@ -23,11 +23,11 @@ const GROUPS = [
   { id: "pulse", h: "Market pulse and signals", p: "Breadth, news and indicators for the whole market in one call each.",
     slugs: ["crypto-market-pulse", "crypto-news", "crypto-indicators"] },
   { id: "perps", h: "Perpetual futures", p: "Funding, open interest, basis, books and candles across every listed perp.",
-    slugs: ["perp-markets", "perp-funding", "perp-funding-screener", "perp-open-interest", "perp-basis", "perp-orderbook", "perp-klines"] },
-  { id: "options", h: "Options", p: "Chains, greeks, implied volatility and onchain options volume.",
-    slugs: ["options-summary", "crypto-options-chain", "options-ticker", "options-volume"] },
-  { id: "defi", h: "DeFi and stablecoins", p: "Yields, TVL, fees, DEX volume and stablecoin supply, current and historical.",
-    slugs: ["defi-yields", "defi-yield-history", "defi-protocols", "defi-protocol", "defi-chains", "defi-chain-tvl-history", "stablecoins", "stablecoin-supply-history", "defi-fees", "defi-dex-volume"] },
+    slugs: ["perp-markets", "perp-funding", "perp-funding-screener", "funding-screener", "perp-open-interest", "perp-basis", "perp-orderbook", "perp-klines"] },
+  { id: "options", h: "Options", p: "Chains, greeks and implied volatility.",
+    slugs: ["options-summary", "crypto-options-chain", "options-ticker"] },
+  { id: "defi", h: "DeFi and stablecoins", p: "Lending rates read on chain, token and DEX screens, pool health, venue spreads and stablecoin peg watch, computed per call.",
+    slugs: ["lending-rates", "defi-screener", "dex-volume-board", "dex-pool-health", "chain-board", "stablecoin-depeg-watch", "exchange-spread"] },
 ];
 export const MARKETS_HERO_SLUG = "crypto-market-pulse";
 export const MARKETS_SLUGS = GROUPS.flatMap((g) => g.slugs);
