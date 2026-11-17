@@ -8,6 +8,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "Large seller indexes and sanctions list copies no longer hold the server",
+    items: [
+      "Operations: The seller index reads a very large seller's networks and signing domains across turns, in the same order as before, so a seller with tens of thousands of listed routes no longer holds other requests while its index answer is built.",
+      "Operations: The stored copies of the sanctions lists are serialized across turns and written to disk off the event loop, one write at a time in the order the lists were loaded, so a large list or a busy disk no longer holds other requests.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Weather data reliability and Copernicus credits",
     items: [
       "Tools: The weather tools read their data on a reserved service lane when the server holds a weather data key, and a refusal of that key answers a temporary error that names our side, not the buyer's input, while /api/gateway-status reports openMeteo (off, unknown, ok or refused) and the operator is paged on refused.",
