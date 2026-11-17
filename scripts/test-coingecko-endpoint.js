@@ -12,6 +12,7 @@ import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, no
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { UPSTREAM_BUDGETS } from "../src/upstream-budgets.js";
 import { cgTier, cgBase, cgKeyHeaders, CG_DEMO_BASE, CG_PRO_BASE } from "../src/tools/coingecko-endpoint.js";
 import { CRYPTO_TOOLS, clearCryptoCache } from "../src/tools/crypto-kit.js";
 import { CRYPTO_MARKETS_TOOLS, clearCryptoMarketsCache, resetCgRateLimit } from "../src/tools/crypto-markets-kit.js";
@@ -310,7 +311,13 @@ const offenders = [];
   }
 })(join(root, "src"));
 ok(offenders.length === 0, `no src/ file outside ${HELPER} names a CoinGecko API host or key header${offenders.length ? `: ${offenders.join(", ")}` : ""}`);
-ok("pro-api.coingecko.com".endsWith("api.coingecko.com"), "upstream budget suffix match covers the pro host");
+{
+  // The daily call budget finds CoinGecko hosts by its own suffix rule: both
+  // hosts the endpoint helper can name must fall under it.
+  const cgBudget = UPSTREAM_BUDGETS.find((x) => x.name === "coingecko");
+  const hosts = [CG_PRO_BASE, CG_DEMO_BASE].map((u) => new URL(u).host);
+  ok(Boolean(cgBudget) && hosts.every((h) => h.endsWith(cgBudget.match)), `the upstream budget's host rule covers the demo and the pro host (${hosts.join(", ")})`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
