@@ -41,6 +41,17 @@ for (const decide of [false, true]) {
   const at = plain.indexOf(want[0]);
   ok(at >= 0 && want.every((w, i) => plain[at + i] === w), `the bar lists Pricing, Company, Status as plain links${tag} (plain links: ${plain.join(", ")})`);
   ok(["/pricing", "/company", "/status"].every((h) => hrefs(page.mobile).has(h)), `the tap menu lists them too${tag}`);
+  // The live payments view is a top-level link in the bar, right after Status, and stays in the tap menu.
+  const items = [...row.slice(0, row.indexOf("</div>")).matchAll(/<a class="(ml-nav-link[^"]*)" href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => ({ cls: m[1], href: m[2], text: m[3].replace(/<[^>]+>/g, "").trim() }));
+  const st = items.findIndex((i) => i.href === "/status");
+  const live = items[st + 1];
+  ok(st >= 0 && live && live.href === "https://live.agent402.tools" && live.text === "Live" && /ml-nav-live/.test(live.cls), `the bar's link row carries Live (live.agent402.tools) right after Status${tag} (row: ${items.map((i) => i.text).join(", ")})`);
+  ok(hrefs(page.mobile).has("https://live.agent402.tools"), `the tap menu keeps the live payments view${tag}`);
+  ok(/^<nav aria-label="Main"/.test(page.nav), `the header landmark is labeled Main${tag}`);
+  // Each dropdown trigger names its panel and starts collapsed.
+  const triggers = [...page.desktop.matchAll(/<a class="ml-nav-link[^"]*" href="[^"]+"[^>]*aria-expanded="false" aria-controls="([^"]+)"/g)].map((m) => m[1]);
+  const panels = (page.desktop.match(/class="mlnav-dd"/g) || []).length;
+  ok(panels > 0 && triggers.length === panels && triggers.every((id) => page.desktop.includes(`<span class="mlnav-dd" id="${id}">`)), `every dropdown trigger carries aria-expanded="false" and aria-controls naming its panel${tag} (${triggers.join(", ")}; ${panels} panels)`);
 
   // Exactly one primary action: one destination and label, in the bar and
   // (for phones, where the bar has no room) first in the tap menu.

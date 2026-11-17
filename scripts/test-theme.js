@@ -54,7 +54,7 @@ const rootNames = [...rootBlock.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]).f
 const darkNames = new Set([...darkBlock.matchAll(/--([a-z0-9-]+):/g)].map((m) => m[1]));
 const missing = rootNames.filter((n) => !darkNames.has(n));
 ok(missing.length === 0, `every default token has a dark counterpart${missing.length ? ` - MISSING: ${missing.map((n) => "--" + n).join(", ")}` : ""}`);
-ok(!/prefers-color-scheme/.test(LEDGER_CSS) && !html.includes("prefers-color-scheme"), "no OS preference media query decides the palette (light is the default, the user flips it)");
+ok(!/prefers-color-scheme/.test(LEDGER_CSS) && !html.includes("prefers-color-scheme"), "no OS preference media query in the CSS: theme-init.js reads it before first paint, so the toggle can override it");
 
 // --- theme-specific surfaces go through tokens, never hardcoded hex -------------
 for (const name of ["--btn-bg", "--btn-fg", "--nav-bg", "--brand-mark", "--milled-bg", "--obsidian-bg", "--chip-bg", "--card-inset", "--on-accent"]) {
@@ -72,7 +72,22 @@ const headOnly = html.slice(html.indexOf("<head>"), html.indexOf("</head>"));
 const themeInitJs = readFileSync(new URL("../assets/js/theme-init.js", import.meta.url), "utf8");
 ok(/<script src="\/js\/theme-init\.js\?v=[a-z0-9]+"><\/script>/.test(headOnly) && headOnly.indexOf("theme-init.js") < headOnly.indexOf("<style>"), "theme-init.js is in <head>, synchronous and before the styles, so the stored theme applies before first paint");
 ok(/<script src="\/js\/site-chrome\.js\?v=[a-z0-9]+" defer><\/script>/.test(headOnly), "site-chrome.js loads deferred (it never blocks the first paint)");
-ok(/localStorage\.getItem\('a402-theme'\)/.test(themeInitJs) && /setAttribute\('data-theme','dark'\)/.test(themeInitJs) && themeInitJs.length < 1200, "theme-init.js applies a stored dark preference and nothing else");
+ok(/localStorage\.getItem\('a402-theme'\)/.test(themeInitJs) && /setAttribute\('data-theme','dark'\)/.test(themeInitJs) && themeInitJs.length < 1200, "theme-init.js reads the stored choice and stamps dark, nothing else");
+// Run theme-init.js for real: a stored choice wins; with none stored, the OS
+// dark preference stamps dark; a storage that throws still follows the OS.
+{
+  const { runInNewContext } = await import("node:vm");
+  const themeFor = (stored, osDark) => {
+    let attr = null;
+    const localStorage = { getItem: (k) => { if (stored === "throw") throw new Error("blocked"); return k === "a402-theme" ? stored : null; } };
+    const window = { matchMedia: (q) => ({ matches: osDark && q === "(prefers-color-scheme: dark)" }) };
+    runInNewContext(themeInitJs, { localStorage, window, document: { documentElement: { setAttribute: (n, v) => { if (n === "data-theme") attr = v; } } } });
+    return attr;
+  };
+  ok(themeFor(null, true) === "dark" && themeFor(null, false) === null, "with no stored choice, the OS dark preference decides (dark when the OS asks for it)");
+  ok(themeFor("light", true) === null && themeFor("dark", false) === "dark", "a stored choice wins over the OS preference either way");
+  ok(themeFor("throw", true) === "dark" && themeFor("throw", false) === null, "a storage read that throws still follows the OS preference");
+}
 ok(!/localStorage\.getItem\('a402-theme'\)/.test(siteChromeJs), "the deferred site-chrome.js no longer stamps the theme (it would be after first paint)");
 ok(/\.ml-theme-toggle/.test(siteChromeJs) && /localStorage\.setItem\('a402-theme'/.test(siteChromeJs) && siteChromeJs.includes("addEventListener('click'"), "site-chrome.js wires the toggle via addEventListener and stores the choice");
 ok(!html.includes("a402ToggleTheme"), "no global toggle function is referenced from markup");

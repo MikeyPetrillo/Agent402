@@ -20,7 +20,8 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { WHY_POINTS, WHY_COMPARE, whyHomeClaims, whyJsonLd } from "../src/why.js";
+import { WHY_POINTS, WHY_COMPARE, whyHomeClaims, whyJsonLd, whyDocsSectionHtml } from "../src/why.js";
+import { llmsFullTxt } from "../src/seo.js";
 import { USE_CASES, useCaseCost } from "../src/use-cases.js";
 import { BADGE_STYLES } from "../src/badges.js";
 import { esc } from "../src/ledger-chrome.js";
@@ -325,6 +326,14 @@ try {
     const eight = named();
     WHY_POINTS.pop();
     ok(/^Why pay here: eight things /.test(eight), `the ItemList's count follows the points it lists ("${eight}")`);
+    // The section's lead and the llms.txt line count the points too.
+    const lead = () => (whyDocsSectionHtml().match(/<p [^>]*>([A-Z][a-z]+) claims, each linked/) || [])[1];
+    const llms = () => (llmsFullTxt("https://agent402.tools", {}).match(/Why pay here \(([a-z]+) first-party differences/) || [])[1];
+    ok(lead() === "Seven" && llms() === "seven", `/docs#why and llms-full.txt count the seven points ("${lead()}", "${llms()}")`);
+    WHY_POINTS.push({ ...WHY_POINTS[0], id: "x" });
+    const [lead8, llms8] = [lead(), llms()];
+    WHY_POINTS.pop();
+    ok(lead8 === "Eight" && llms8 === "eight", `the lead and llms-full.txt follow the points they list ("${lead8}", "${llms8}")`);
   }
   for (const w of WHY_POINTS) {
     ok(why.includes(`id="why-${w.id}"`) && why.includes(`<h3>${esc(w.t)}</h3>`), `/docs#why carries the ${w.id} row heading`);
@@ -395,7 +404,7 @@ try {
 {
   for (const p of ["/", "/pricing", "/docs", "/company", "/reports"]) {
     const html = await (await fetch(`${BASE}${p}`)).text();
-    const navHtml = (html.match(/<nav style="border-bottom[\s\S]*?<\/nav>/) || [""])[0];
+    const navHtml = (html.match(/<nav aria-label="Main" style="border-bottom[\s\S]*?<\/nav>/) || [""])[0];
     const footHtml = (html.match(/<footer[\s\S]*?<\/footer>/) || [""])[0];
     ok(navHtml.length > 1000 && footHtml.length > 500, `${p} renders the site nav and footer`);
     const chrome = navHtml + footHtml;
@@ -403,7 +412,7 @@ try {
     ok(!/href="\/(docs)?#why"/.test(navHtml), `${p} nav carries no why pay here link`);
     ok(!/why pay here|WHY PAY HERE/i.test(navHtml), `${p} nav has no Why entry`);
     ok(!/For people|FOR PEOPLE/.test(navHtml), `${p} nav has no "For people" item`);
-    ok(/<a class="ml-nav-link[^"]*" href="\/tools">Tools /.test(navHtml), `${p} nav names /tools "Tools"`);
+    ok(/<a class="ml-nav-link[^"]*" href="\/tools"[^>]*>Tools /.test(navHtml), `${p} nav names /tools "Tools"`);
     ok(/href="\/tools" style="color:var\(--muted\);text-decoration:none;">tools<\/a>/.test(footHtml), `${p} footer names /tools "tools"`);
     ok(!/>catalog</.test(chrome), `${p} nav/footer never label /tools "catalog"`);
     // Company is a plain top-level header link (with Pricing and Status), not a footer row.

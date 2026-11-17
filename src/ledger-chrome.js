@@ -132,9 +132,10 @@ html { overflow-x: clip; }
 /* TWO themes, light is the DEFAULT (2026-08-22, second pass): the light "milled"
    palette sits directly on bare :root so the first paint is already light - no
    flash, no pre-paint inline script (CSP forbids inline scripts anyway). The
-   obsidian dark palette is an override under :root[data-theme="dark"], set by /js/site-chrome.js
-   (synchronous in <head>) from the stored preference BEFORE body paints, and
-   toggled by the .ml-theme-toggle button. No OS media query decides the theme.
+   obsidian dark palette is an override under :root[data-theme="dark"], set by /js/theme-init.js
+   (synchronous in <head>) BEFORE body paints, from the stored choice or, with
+   none stored, the OS dark preference, and toggled by the .ml-theme-toggle
+   button. No CSS media query decides the theme, so the toggle always wins.
    Every page-level class that needs a theme-specific surface (milled card,
    obsidian panel, primary button, nav glass, brand mark) goes through the
    tokens below - never a hardcoded hex - so both themes render every page. */
@@ -349,6 +350,9 @@ body { transition: background-color .18s ease, color .18s ease; }
 @media (max-width:900px){
 }
 @media (min-width:1101px){ .ml-mobile-menu { display:none !important; } }
+/* From 1101px up to where the container's full width is free, the bar's words sit closer, so every word
+   (Decide included when it is live), the theme toggle and the primary action fit on one row. */
+@media (min-width:1101px) and (max-width:1240px){ .ml-nav-in { gap:20px !important; } .ml-nav-links { gap:16px !important; margin-left:0 !important; } }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body { background: var(--paper); font-family: var(--font-body); color: var(--ink); -webkit-font-smoothing: antialiased; }
@@ -384,17 +388,20 @@ body { overflow-wrap: break-word; }
 .ml-crumb-nav { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--faint); margin: 0 0 18px; }
 .ml-crumb-nav a { color: var(--accent); }
 .ml-crumb a { white-space: nowrap; text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px; }
-/* The current page's name is one line: a title longer than the row ends in an ellipsis. */
-.ml-crumb-cur { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+/* The current page's name is one line: a title longer than the row ends in an ellipsis. overflow: clip (not
+   hidden) keeps its text on the trail's baseline: a hidden-overflow inline block sits on its bottom edge instead. */
+.ml-crumb-cur { display: inline-block; max-width: 100%; white-space: nowrap; overflow: clip; text-overflow: ellipsis; vertical-align: baseline; }
 @media (max-width: 640px) { .ml-crumb-cur { display: none; } }
 /* The legal pages' date line is a sentence, set in the body face so it wraps as prose. */
 .pv-updated, .tm-updated { font-family: var(--font-body) !important; }
-/* Footer link rows: wrap as whole links; on a phone, a two-column list so no row ends on one stray link. */
-.ml-foot-links { display: flex; gap: 6px 16px; flex-wrap: wrap; }
-.ml-foot-links > a { white-space: nowrap; display: inline-flex; align-items: center; min-height: 24px; min-width: 24px; }
-.ml-foot-links > button { white-space: nowrap; font: inherit; color: var(--muted); background: none; border: 0; padding: 0; min-height: 24px; cursor: pointer; text-align: left; }
+/* Footer link rows: whole links as inline atoms in a balanced text block, so a row that wraps splits into even
+   lines (never one stray link under a full row); on a phone, a two-column list. */
+.ml-foot-links { display: block; text-wrap: balance; line-height: 30px; }
+.ml-foot-links > a { white-space: nowrap; display: inline-flex; align-items: center; vertical-align: middle; min-height: 24px; min-width: 24px; margin-right: 16px; }
+.ml-foot-links > :last-child { margin-right: 0; }
+.ml-foot-links > button { white-space: nowrap; font: inherit; color: var(--muted); background: none; border: 0; padding: 0; min-height: 24px; vertical-align: middle; cursor: pointer; text-align: left; }
 .ml-foot-links > button[hidden] { display: none; }
-@media (max-width: 600px) { .ml-foot-links { display: grid; grid-template-columns: repeat(2, max-content); gap: 8px 28px; width: 100%; } }
+@media (max-width: 600px) { .ml-foot-links { display: grid; grid-template-columns: repeat(2, max-content); gap: 8px 28px; width: 100%; line-height: normal; } .ml-foot-links > a { margin-right: 0; } }
 /* The legal line: the entity and the contact address are two whole items, joined by a dot on one row and stacked when the row is too narrow, so neither breaks inside itself. */
 .ml-foot-legal { display: flex; flex-wrap: wrap; gap: 4px 0; }
 .ml-foot-legal > span { white-space: nowrap; }
@@ -441,6 +448,8 @@ a { color: inherit; }
 .mlnav-g > .mlnav-dd { display: none; position: absolute; top: 100%; left: -18px; padding-top: 13px; z-index: 60; }
 .mlnav-g:hover > .mlnav-dd, .mlnav-g:focus-within > .mlnav-dd { display: block; }
 .mlnav-g--end > .mlnav-dd { left: auto; right: -18px; }
+/* Escape closes an open panel until the pointer or focus leaves its group (site-chrome.js). */
+.mlnav-g.mlnav-shut > .mlnav-dd { display: none; }
 .mlnav-cols { display: grid; grid-template-columns: 1fr 1fr; }
 .mlnav-cols > span + span { border-left: 1px solid var(--hairline); }
 .mlnav-row { display:flex;justify-content:space-between;gap:12px;padding:9px 16px;text-decoration:none;color:var(--ink); }
@@ -453,6 +462,9 @@ a { color: inherit; }
 .ml-nav-link:hover { color: var(--ink); border-bottom-color: var(--dash); }
 .ml-nav-link-on { color: var(--ink); font-weight: 500; border-bottom-color: var(--ink); }
 .ml-nav-link-on:hover { border-bottom-color: var(--accent); }
+/* The Live link's dot: the accent, pulsing; still under reduced motion. */
+.ml-nav-live { display: inline-flex; align-items: center; gap: 6px; }
+.ml-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; animation: ml-pulse 2s ease-in-out infinite; }
 .ml-nav-glyph { display: inline-block; vertical-align: -2px; margin-right: 1px; opacity: .8; }
 .ml-nav-link-on .ml-nav-glyph, .ml-nav-link:hover .ml-nav-glyph { opacity: 1; }
 .mlr-row { transition: background-color .12s ease; }
@@ -605,6 +617,7 @@ main:focus, main:focus-visible { outline: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .ml-stagger > * { opacity: 1; transform: none; animation: none; }
   .ml-nav-link, .ml-cta, .mlr-row, .ml-chip, .ml-faq-mark { transition: none !important; }
+  .ml-live-dot { animation: none; }
   .ml-cta:hover { transform: none; }
   .ml-reveal, .ml-reveal.ml-reveal-in { opacity: 1 !important; transform: none !important; transition: none !important; }
 }
@@ -703,6 +716,8 @@ const NAV_ZONES = [
     { href: "/pricing", label: "Pricing" },
     { href: "/company", label: "Company" },
     { href: "/status", label: "Status" },
+    // The live payments view (its own host): every x402 and MPP settlement as it lands.
+    { href: "https://live.agent402.tools", label: "Live", live: true },
   ],
 ];
 
@@ -799,7 +814,6 @@ function marketPanelNav(chainInfo) {
                 <a href="/mpp-marketplace" class="mlnav-row"><span style="font-weight:700;">MPP marketplace</span><span class="mlnav-faint">verified sellers</span></a>
                 <a href="/leaderboard" class="mlnav-row"><span style="font-weight:700;">leaderboard</span><span class="mlnav-faint">settled on-chain</span></a>
                 <a href="/revenue" class="mlnav-row"><span style="font-weight:700;">transactions</span><span class="mlnav-faint">every settlement on our rails</span></a>
-                <a href="https://live.agent402.tools" class="mlnav-row"><span style="font-weight:700;">live payments</span><span class="mlnav-faint">x402 and MPP, as they settle</span></a>
                 <a href="/marketplace/tools" class="mlnav-row mlnav-row--sep"><span style="font-weight:700;">every tool indexed</span><span class="mlnav-faint">ours + third-party</span></a>
                 <a href="/marketplace" class="mlnav-row"><span style="font-weight:700;">Marketplace by chain</span><span class="mlnav-faint">every chain, one directory</span></a>
                 <a href="/guides/smart-order-router" style="display:flex;justify-content:space-between;gap:12px;padding:11px 16px;text-decoration:none;background:var(--panel);color:var(--on-panel);"><span style="font-weight:700;">route a task to a proven seller</span><span style="opacity:.7;">→</span></a>
@@ -875,18 +889,23 @@ const PANEL_HTML = { marketplace: marketPanelNav, sell: sellPanelHtml, tools: ()
 
 function directLinkHtml(l, activePath) {
   const active = l.href === activePath;
+  if (l.live) return `<a class="ml-nav-link ml-nav-live" href="${l.href}"><span class="ml-live-dot" aria-hidden="true"></span>${l.label}</a>`;
   return `<a class="ml-nav-link${active ? " ml-nav-link-on" : ""}" href="${l.href}">${l.label}</a>`;
 }
 
 // Storefront glyph marking a nav word as a MARKETPLACE (x402 / MPP indexes).
 const MARKET_GLYPH = `<svg class="ml-nav-glyph" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2 6.5 3.2 3h9.6L14 6.5"/><path d="M2 6.5c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2"/><path d="M3.5 8.5V13h9V8.5"/><path d="M6.5 13V10.5h3V13"/></svg>`;
 
+// A trigger names the panel it opens (aria-controls) and says whether it is
+// open (aria-expanded): /js/site-chrome.js keeps the state in step with the
+// hover and focus that show the panel, and Escape closes it.
 function groupTriggerHtml(item, active, panelHtml) {
   const glyph = item.icon === "market" ? `${MARKET_GLYPH} ` : "";
   const title = item.title ? ` title="${esc(item.title)}" aria-label="${esc(item.title)}"` : "";
+  const id = `mlnav-dd-${item.panel}`;
   return `<span class="mlnav-g${item.align === "end" ? " mlnav-g--end" : ""}" style="display:inline-flex;">
-        <a class="ml-nav-link${active ? " ml-nav-link-on" : ""}${item.icon ? " ml-nav-link-market" : ""}" href="${item.href}"${title}>${glyph}${item.label} <span style="font-size:var(--fs-2xs);">▾</span></a>
-        ${panelHtml}
+        <a class="ml-nav-link${active ? " ml-nav-link-on" : ""}${item.icon ? " ml-nav-link-market" : ""}" href="${item.href}"${title} aria-expanded="false" aria-controls="${id}">${glyph}${item.label} <span aria-hidden="true" style="font-size:var(--fs-2xs);">▾</span></a>
+        ${panelHtml.replace('<span class="mlnav-dd">', `<span class="mlnav-dd" id="${id}">`)}
       </span>`;
 }
 
@@ -990,7 +1009,7 @@ function nav(activePath) {
   const cta = activePath === "" ? "" : `<a class="btn btn-primary btn-sm ml-nav-cta" href="${esc(NAV_PRIMARY_ACTION.href)}">${esc(NAV_PRIMARY_ACTION.label)}</a>`;
   const divider = `<span style="width:1px;height:15px;background:var(--hairline);flex:none;"></span>`;
 
-  return `<nav style="border-bottom:1px solid var(--hairline);background:var(--nav-bg);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);position:sticky;top:0;z-index:50;">
+  return `<nav aria-label="Main" style="border-bottom:1px solid var(--hairline);background:var(--nav-bg);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);position:sticky;top:0;z-index:50;">
   <div class="ml-nav-in" style="max-width:1180px;margin:0 auto;padding:15px 30px;display:flex;align-items:center;gap:26px;">
     <a href="/" style="display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--ink);">
       ${brandMark(24, "n")}

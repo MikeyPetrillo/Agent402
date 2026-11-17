@@ -98,6 +98,7 @@ const CARVE_OUTS = [
   "rag: a block that is one code literal and nothing else (an example value in a cell) wraps where the literal allows",
   "split: one unbroken token longer than 24 characters (a CAIP-2 id, a hash, an address) may break; it has no word boundary",
   "split: a link inside a sentence (a <p> in a page's <header> hero) is prose, not a nav label",
+  "split: a row of links (four or more, nothing else) is read as a row by the lone rule; each link in it is still a label",
   "lone: a paragraph of prose with links in it is not a row; a row holds items and separators only",
   "break: a camelCase seam is a word boundary; a run of more than 24 letters and digits may break anywhere",
 ];
@@ -225,9 +226,13 @@ function audit({ exclude, width, ragFrac, ragWords }) {
   }
 
   // 2. Split labels.
+  const ROW_ITEM = "a, button, .btn, [class*='chip'], [class*='pill'], [class*='badge'], [class*='tag']";
+  const isLinkRow = (el) => { const kids = [...el.children].filter((c) => !c.matches("script, style, template, br")); return kids.length >= 4 && kids.every((c) => c.matches(ROW_ITEM)) && [...el.childNodes].every((n) => n.nodeType !== 3 || /^[\s·|/•,→-]*$/.test(n.nodeValue)); };
   const isLabel = (el, s) => {
     // A link inside a sentence (a <p> in a page's <header> hero) is prose, not a nav label.
     if (el.matches("button, .btn, [class*='chip'], [class*='pill'], [class*='badge'], [class*='kicker'], [class*='eyebrow'], .ml-meta > span, .ml-items > *, nav a, header a:not(p a), [role='tab']")) return true;
+    // A row of links wraps between its links: the lone rule reads the row, and each link is a label of its own.
+    if (isLinkRow(el)) return false;
     // A link in a row of links (the parent holds links and separators, no wording of its own).
     if (el.matches("a") && el.parentElement && el.parentElement.children.length >= 2 && [...el.parentElement.children].every((c) => c.matches("a, span")) && [...el.parentElement.childNodes].every((n) => n.nodeType !== 3 || /^[\s·|/•,→-]*$/.test(n.nodeValue))) return true;
     const fs = parseFloat(s.fontSize);
