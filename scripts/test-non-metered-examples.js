@@ -153,6 +153,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // (/api/reliability); re-exported here for the scripts that import it.
 import { METERED_SLUGS, meteredPackSlugs } from "../src/metered-slugs.js";
 import { isFredMaintenancePage, fredMaintenanceError } from "../src/tools/macro-kit.js";
+import { upstreamOutageVerdict } from "./lib/upstream-outage.js";
 export { METERED_SLUGS };
 
 const BROWSER_SLUGS = new Set(["render", "screenshot", "page-speed", "html-frames"]);
@@ -417,7 +418,9 @@ async function callExample(path, method, op, slug) {
     init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(example) };
   }
 
+  let lastStart = 0;
   const attempt = async () => {
+    lastStart = Date.now();
     try {
       const res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeout) });
       const ct = res.headers.get("content-type") || "";
@@ -460,7 +463,7 @@ async function callExample(path, method, op, slug) {
     r = await attempt();
     attempts = 2;
     retryStats.push({ slug, attempts, recovered: isStrictPass(r.status, r.body) });
-    return { ...r, attempts };
+    return { ...r, attempts, t0: lastStart, t1: Date.now() };
   }
   if (!isStrictPass(r.status, r.body) && shouldRetry(r.status, r.body, r.threw, slug)) {
     await sleep(RETRY_BACKOFF_MS[0]);
@@ -479,7 +482,8 @@ async function callExample(path, method, op, slug) {
     }
   }
   if (attempts > 1) retryStats.push({ slug, attempts, recovered: isStrictPass(r.status, r.body) });
-  return { ...r, attempts };
+  // The last attempt's window: the upstream failure log is read inside it.
+  return { ...r, attempts, t0: lastStart, t1: Date.now() };
 }
 
 async function mapPool(items, n, fn) {
@@ -527,7 +531,7 @@ async function boot() {
 
   // Examples that fetch this server's own /samples/ and /fixtures/ files are
   // answered by this server, never production (the CI boot loads the same).
-  srv = spawn("node", ["--import", "./scripts/lib/own-examples-preload.js", "src/server.js"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
+  srv = spawn("node", ["--import", "./scripts/lib/own-examples-preload.js", "--import", "./scripts/lib/upstream-failure-log-preload.js", "src/server.js"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
   srv.stdout.on("data", (d) => { srvLog += d; if (srvLog.length > 200_000) srvLog = srvLog.slice(-100_000); });
   srv.stderr.on("data", (d) => { srvLog += d; if (srvLog.length > 200_000) srvLog = srvLog.slice(-100_000); });
   for (let i = 0; i < 120; i++) {
@@ -943,6 +947,17 @@ async function main() {
     if (verdict === "runner") {
       skippedRunnerUnreachable++;
       console.log(`\nskip - ${t.slug}: ${probeLabel} does not answer this runner directly either (upstream refusing or unreachable from here; not our defect)`);
+      return;
+    }
+    // Any keyless public upstream (scripts/lib/upstream-outage.js): the
+    // shared fetch helper's upstream-error answer, a failed request to a host
+    // the tool's own definition names recorded during this call by the
+    // server's preload, and the runner's direct read of that same request
+    // failing too. If the upstream answers the runner, this fails below.
+    const outage = await upstreamOutageVerdict({ slug: t.slug, status: r.status, body: r.body, t0: r.t0, t1: r.t1 });
+    if (outage.verdict === "upstream") {
+      skippedRunnerUnreachable++;
+      console.log(`\nskip - ${t.slug}: ${outage.evidence} (upstream outage, not our defect)`);
       return;
     }
 
