@@ -320,12 +320,47 @@ function fresh(opts = {}) {
   ok(load.status().budget.probesPerOperatorPerDay === 200 && load.status().budget.refused["quote:probe-share"] >= 1, "the operator view states the share and counts the refusals");
 }
 
+// ---- a host's hourly ceiling of registration reads ----------------------------------
+{
+  const { load, step, now } = fresh({ dailyBudget: 20, registrationHourlyMax: 5 });
+  const V = "https://victim.example";
+  const take = (i) => load.takeBudget(`${V}/p${i}/.well-known/x402`, "crawler", { essential: true, unscheduled: true });
+  const first = [];
+  for (let i = 0; i < 5; i++) first.push(await take(i));
+  ok(first.every((b) => b.ok), "a host's registration reads are sent up to the hour's ceiling");
+  ok((await load.registrationHeldFor(`${V}/p9`)) > 0, "then a registration on it is held before it starts");
+  const over = await take(5);
+  const toHour = Math.ceil((3_600_000 - (now() % 3_600_000)) / 1000);
+  ok(over.ok === false && over.heldBy === "registration-hour" && over.retryAfterSeconds === toHour, `past it a read is not sent, with when to retry (${over.retryAfterSeconds} s)`);
+  ok((await load.takeBudget(`${V}/x`, "crawler", { essential: true })).ok, "the host's scheduled reads are not held by it");
+  ok((await load.takeBudget("https://other.example/.well-known/x402", "crawler", { essential: true, unscheduled: true })).ok, "another operator's host keeps its own ceiling");
+  ok((load.status().budget.refused["crawler:registration-hour"] || 0) === 1, "the refusal is counted in the operator view");
+  step(3_600_000);
+  ok((await take(6)).ok && (await load.registrationHeldFor(V)) === 0, "the next hour the host is read again");
+}
+
+// ---- names that resolve to one address share its day -------------------------------
+{
+  const { load, step } = fresh({ dailyBudget: 4 });
+  const ip = [{ address: "203.0.113.7", family: 4 }];
+  const sent = [];
+  for (let i = 0; i < 4; i++) sent.push(await load.takeAddressBudget(`https://n${i}.sslip.io/.well-known/x402`, ip, "crawler"));
+  ok(sent.every((b) => b.ok), "names on one address are read up to its day");
+  const over = await load.takeAddressBudget("https://n9.duckdns.org/.well-known/x402", ip, "crawler");
+  ok(over.ok === false && over.heldBy === "address-day" && over.retryAfterSeconds > 0, "another such name on the same address is held past it");
+  ok((await load.takeAddressBudget("https://n9.sslip.io/x", [{ address: "203.0.113.8", family: 4 }], "crawler")).ok, "a name on another address keeps its own day");
+  ok((await load.takeAddressBudget("https://shop.example/x", ip, "crawler")).ok, "a name on its own registrable domain is not counted per address");
+  step(24 * 3_600_000);
+  ok((await load.takeAddressBudget("https://n0.sslip.io/x", ip, "crawler")).ok, "the next UTC day the address is read again");
+}
+
 // ---- reads for a registration never spend the origin's day -------------------------
 {
   // Anyone may register any origin (path origins under one domain included):
   // those reads are counted on a day count of their own, never refused, and
   // never read by the scheduled crawl's plan.
-  const { load } = fresh({ dailyBudget: 20 });
+  // (The hourly ceiling on a host's registration reads is its own section.)
+  const { load } = fresh({ dailyBudget: 20, registrationHourlyMax: 0 });
   const V = "https://victim.example";
   let allSent = true;
   for (let i = 0; i < 50; i++) {

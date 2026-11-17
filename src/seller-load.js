@@ -19,8 +19,9 @@
 //      at most PROBE_SHARE of it, so the document reads keep the rest. A read
 //      made for a registration (`unscheduled`) is counted apart and never
 //      spends the day; one operator's host is sent at most
-//      REGISTRATION_HOURLY_MAX of them an hour (SELLER_REGISTRATION_HOURLY_MAX,
-//      default 20), past which the read is not sent (RequestHeld). The router's probe for
+//      REGISTRATION_HOURLY_MAX of its document reads and paywall checks an
+//      hour (SELLER_REGISTRATION_HOURLY_MAX, default 20), past which the
+//      request is not sent (RequestHeld). The router's probe for
 //      a paying caller is counted on a day count of its own, never skipped and
 //      never counted against the crawl's budget. A request that reaches a host
 //      through another operator's redirect (a document read following it, or
@@ -87,6 +88,12 @@ export const DAILY_BUDGET = countKnob("SELLER_PROBE_DAILY_BUDGET", 200);
  *  registration's read is not sent and the registrant is told when to retry
  *  (RequestHeld). 0 = no ceiling. */
 export const REGISTRATION_HOURLY_MAX = countKnob("SELLER_REGISTRATION_HOURLY_MAX", 20);
+/** The requests that ceiling counts: the ones any registration of any origin
+ *  sends (the document reads and the paywall check). The price checks of the
+ *  routes a seller's own documents list keep their own per-origin allowance
+ *  and per-call cap (src/x402-index.js), so a seller's re-registration still
+ *  re-checks its routes at once. */
+const REGISTRATION_CEILING_KINDS = new Set(["crawler", "mpp-crawler", "paywall", "mpp-probe"]);
 /** The share of a day's budget the unpaid price and paywall probes may use, so
  *  the document reads always keep the rest. */
 export const PROBE_SHARE = 0.5;
@@ -554,7 +561,7 @@ export function createSellerLoad({
         // The host the request reaches is sent at most registrationHourlyMax
         // of them an hour, however many origins on it are registered, and by
         // however many callers.
-        const hourKey = registrationHourlyMax > 0 ? `${hourOf(t)}|${operatorKey(target)}|registration` : null;
+        const hourKey = registrationHourlyMax > 0 && REGISTRATION_CEILING_KINDS.has(k) ? `${hourOf(t)}|${operatorKey(target)}|registration` : null;
         if (hourKey && (await countLocal(hourKey)) > registrationHourlyMax) {
           await countLocal(hourKey, -1);
           bump(counts.refused, `${k}:registration-hour`);
