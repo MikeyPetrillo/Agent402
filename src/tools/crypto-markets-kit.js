@@ -122,7 +122,8 @@ async function cgLoad(key, path, reduce = null) {
   }
   if (!res.ok) {
     const s = res.status;
-    if (s === 404) throw bad("Unknown id: the coin, exchange or platform is not tracked upstream", 422);
+    // `unknownId` marks the one 422 that is the upstream's verdict on the id itself.
+    if (s === 404) throw Object.assign(bad("Unknown id: the coin, exchange or platform is not tracked upstream", 422), { unknownId: true });
     if (s === 429) throw bad("Market data upstream rate-limited this request - retry in about 60 seconds", 503);
     if (s === 401 || s === 403) {
       // Plan/range codes are about the request; any other 401/403 is this

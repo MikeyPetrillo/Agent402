@@ -338,8 +338,13 @@ const depegWatch = {
     const capAssessed = sum(assessed.map((c) => c.cap));
     const rows = assessed.map((c) => {
       const dev = bps(c.price);
-      const d24 = worstBps(c.low24, c.high24);
-      const d7 = worstBps(c.low7, c.high7);
+      // Each window holds the one inside it: the 24 hours include the price
+      // now, and the 7 days include the last 24 hours (the 7-day series is
+      // hourly, so a wick inside an hour shows only in the 24-hour range).
+      const range24 = worstBps(c.low24, c.high24);
+      const d24 = range24 == null ? null : Math.max(range24, Math.abs(dev));
+      const range7 = worstBps(c.low7, c.high7);
+      const d7 = range7 == null ? null : Math.max(range7, d24 ?? Math.abs(dev));
       const flags = [];
       if (Math.abs(dev) >= threshold) flags.push("off-peg-now");
       if (d24 != null && d24 >= threshold) flags.push("off-peg-24h");
@@ -678,6 +683,16 @@ const reducePoolPage = {
   },
 };
 
+// A network id the upstream does not know is remembered for a short time, so
+// the same id sent again makes no upstream read. Only the upstream's own
+// "unknown id" answer is remembered, never a failed read; the oldest id leaves
+// first once the set is full.
+export const UNKNOWN_NETWORK_TTL_MS = TTL.list;
+export const UNKNOWN_NETWORK_MAX = 500;
+const unknownNetworks = new Map(); // network id -> remembered until (ms)
+export function resetUnknownNetworks() { unknownNetworks.clear(); }
+const unknownNetwork = (network) => bad(`No pools are tracked for network "${network}" - check the network id`, 422);
+
 const dexVolumeBoard = {
   route: "GET /api/dex-volume-board",
   name: "DEX volume board by network",
@@ -713,9 +728,22 @@ const dexVolumeBoard = {
     const want = takeInt(i.pools, "pools", { min: POOLS_PER_PAGE, max: 100, dflt: 60 });
     if (want % POOLS_PER_PAGE !== 0) throw bad('"pools" must be 20, 40, 60, 80 or 100');
     const limit = takeInt(i.limit, "limit", { min: 1, max: 50, dflt: 15 });
-    const pages = Array.from({ length: want / POOLS_PER_PAGE }, (_, k) => k + 1);
-    const reads = await Promise.all(pages.map((page) => cgGet(`/onchain/networks/${encodeURIComponent(network)}/pools`, { include: "dex", sort: "h24_volume_usd_desc", page }, TTL.list, reducePoolPage)));
-    const names = Object.assign({}, ...reads.map((r) => r.data.names));
+    if ((unknownNetworks.get(network) ?? 0) > Date.now()) throw unknownNetwork(network);
+    const readPage = (page) => cgGet(`/onchain/networks/${encodeURIComponent(network)}/pools`, { include: "dex", sort: "h24_volume_usd_desc", page }, TTL.list, reducePoolPage);
+    // The first page is read alone: an unknown network, or one with no pools,
+    // ends there, whatever `pools` asks for.
+    let first;
+    try { first = await readPage(1); } catch (err) {
+      if (!err?.unknownId) throw err;
+      unknownNetworks.delete(network);
+      unknownNetworks.set(network, Date.now() + UNKNOWN_NETWORK_TTL_MS);
+      while (unknownNetworks.size > UNKNOWN_NETWORK_MAX) unknownNetworks.delete(unknownNetworks.keys().next().value);
+      throw unknownNetwork(network);
+    }
+    if (first.data.pools.length === 0) throw unknownNetwork(network);
+    const later = Array.from({ length: want / POOLS_PER_PAGE - 1 }, (_, k) => k + 2);
+    const reads = [first, ...(await Promise.all(later.map(readPage)))];
+    const names = Object.assign(Object.create(null), ...reads.map((r) => r.data.names));
     const seen = new Set();
     const pools = [];
     for (const r of reads) for (const [dex, address, name, vol, liq, buys, sells] of r.data.pools) {
@@ -723,7 +751,6 @@ const dexVolumeBoard = {
       seen.add(address);
       pools.push({ dex, address, name, vol: vol ?? 0, liq: liq ?? 0, buys: buys ?? 0, sells: sells ?? 0 });
     }
-    if (pools.length === 0) throw bad(`No pools are tracked for network "${network}" - check the network id`, 422);
     const by = new Map();
     for (const p of pools) { if (!by.has(p.dex)) by.set(p.dex, []); by.get(p.dex).push(p); }
     const volTotal = sum(pools.map((p) => p.vol)), liqTotal = sum(pools.map((p) => p.liq));

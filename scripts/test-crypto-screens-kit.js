@@ -17,7 +17,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 //   - wording: no advice, rating or trade-direction words in any description,
 //     flag or published example.
 
-import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, __test } from "../src/tools/crypto-screens-kit.js";
+import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, UNKNOWN_NETWORK_MAX, resetUnknownNetworks, __test } from "../src/tools/crypto-screens-kit.js";
 import { clearCryptoMarketsCache, resetCgRateLimit, TTL } from "../src/tools/crypto-markets-kit.js";
 import { COINGECKO_CREDIT, COINGECKO_API_URL, attributionTailOf } from "../src/data-attribution.js";
 import { METERED_SLUGS } from "../src/metered-slugs.js";
@@ -55,7 +55,7 @@ globalThis.fetch = async (url, init) => {
   return jsonRes(404, { error: "not found" });
 };
 const path = (p) => (u) => u.pathname === `/api/v3${p}`;
-const reset = () => { calls.length = 0; clearCryptoMarketsCache(); resetCgRateLimit(); };
+const reset = () => { calls.length = 0; clearCryptoMarketsCache(); resetCgRateLimit(); resetUnknownNetworks(); };
 for (const k of ["COINGECKO_API_KEY", "COINGECKO_API_TIER", "COINGECKO_MAX_PER_MIN", "COINGECKO_DAILY_MAX"]) delete process.env[k];
 
 // ----------------------------------------------------------------------------
@@ -161,28 +161,34 @@ const STABLES = [
   coin("euro-coin", "xeur", 1.09, 4e8, 1.1, 1.08, flat(1.09)),                                  // another currency: not assessed
   coin("no-series", "nusd", 1.001, 3e8, 1.002, 1.0, []),                                        // no 7-day series: judged on the price
   coin("small-usd", "susd", 0.95, 5e7, 0.96, 0.94, flat(1.0)),                                  // under the default floor
+  coin("spike-usd", "kusd", 1.0, 6e8, 1.004925, 0.9999, [...flat(1.0, 100), 0.996136, ...flat(1.0, 67)]), // a 24h wick the hourly 7-day series missed
+  coin("now-usd", "qusd", 0.99, 7e8, 0.9995, 0.9992, flat(0.9993)),                             // a price now outside both ranges
 ];
 routes = [[(u) => u.pathname === "/api/v3/coins/markets" && u.searchParams.get("category") === "stablecoins", () => jsonRes(200, STABLES)]];
 reset();
 {
   const out = await h("stablecoin-depeg-watch")({});
   ok(calls.length === 1 && calls[0].url.searchParams.get("sparkline") === "true" && calls[0].url.searchParams.get("per_page") === "250", "one read of the stablecoin page with its 7-day series");
-  ok(out.minMarketCapUsd === 100_000_000 && out.thresholdBps === 50 && out.screened === 6 && out.assessed === 5, "the floor leaves six, five of them USD-pegged");
+  ok(out.minMarketCapUsd === 100_000_000 && out.thresholdBps === 50 && out.screened === 8 && out.assessed === 7, "the floor leaves eight, seven of them USD-pegged");
   ok(out.notAssessed.count === 1 && out.notAssessed.coins[0].symbol === "XEUR" && near(out.notAssessed.coins[0].distanceFromUsdPct, 9) && /2% from \$1/.test(out.notAssessed.reason), "the non-USD coin is listed apart, with its distance and the rule");
   const by = Object.fromEntries(out.coins.map((c) => [c.symbol, c]));
   ok(near(by.XUSD.deviationBps, -100) && near(by.XUSD.maxDeviation24hBps, 150) && near(by.XUSD.maxDeviation7dBps, 200) && by.XUSD.status === "stressed" && by.XUSD.flags.length === 3, "deviation now, over 24 hours and over 7 days, with all three flags");
   ok(near(by.WUSD.deviationBps, 1) && near(by.WUSD.maxDeviation7dBps, 300) && by.WUSD.flags.join() === "off-peg-7d" && by.WUSD.status === "on-peg", "a coin on peg now carries only the 7-day flag");
   ok(near(by.BUSD2.deviationBps, -3000) && by.BUSD2.status === "depegged", "a coin that lost its peg inside the week is assessed, not dropped");
   ok(by.NUSD.maxDeviation7dBps === null && by.NUSD.flags.length === 0, "no 7-day series reads null, never a perfect peg");
+  // The 7 days include the last 24 hours, and the 24 hours include now: a wider window never reads a smaller worst deviation.
+  ok(near(by.KUSD.maxDeviation24hBps, 49.25) && near(by.KUSD.maxDeviation7dBps, 49.25), `a 24h wick wider than the 7-day series is the 7-day worst too (24h ${by.KUSD.maxDeviation24hBps}, 7d ${by.KUSD.maxDeviation7dBps})`);
+  ok(near(by.QUSD.deviationBps, -100) && near(by.QUSD.maxDeviation24hBps, 100) && near(by.QUSD.maxDeviation7dBps, 100) && by.QUSD.flags.length === 3, `a price now outside both ranges is the worst of each (24h ${by.QUSD.maxDeviation24hBps}, 7d ${by.QUSD.maxDeviation7dBps})`);
+  ok(out.coins.every((c) => c.maxDeviation24hBps === null || (c.maxDeviation24hBps >= Math.abs(c.deviationBps) - 1e-9 && (c.maxDeviation7dBps === null || c.maxDeviation7dBps >= c.maxDeviation24hBps))), "for every coin: now <= worst over 24 hours <= worst over 7 days");
   ok(out.coins[0].symbol === "BUSD2" && out.coins[1].symbol === "XUSD" && out.coins[0].rank === 1 && out.coins.at(-1).flags.length === 0, "flagged coins first, widest deviation first");
-  ok(out.flaggedCount === 3 && out.worstNow.symbol === "BUSD2", "flagged count and the worst deviation now");
-  const capAll = 150e9 + 2e9 + 1e9 + 5e8 + 3e8;
-  ok(near(out.onPegMarketCapSharePct, +(((150e9 + 1e9 + 3e8) / capAll) * 100).toFixed(2)) && near(by.USDT.marketCapSharePct, +((150e9 / capAll) * 100).toFixed(2)), "share of watched market cap on peg, and each coin's share");
-  ok(out.matched === 5 && out.returned === 5 && out.complete === true && !("coverage" in out), "list fields say the answer is whole");
+  ok(out.flaggedCount === 4 && out.worstNow.symbol === "BUSD2", "flagged count and the worst deviation now");
+  const capAll = 150e9 + 2e9 + 1e9 + 5e8 + 3e8 + 6e8 + 7e8;
+  ok(near(out.onPegMarketCapSharePct, +(((150e9 + 1e9 + 3e8 + 6e8) / capAll) * 100).toFixed(2)) && near(by.USDT.marketCapSharePct, +((150e9 / capAll) * 100).toFixed(2)), "share of watched market cap on peg, and each coin's share");
+  ok(out.matched === 7 && out.returned === 7 && out.complete === true && !("coverage" in out), "list fields say the answer is whole");
   ok(!JSON.stringify(out).includes("sparkline") && !("price" in by.USDT) && !("marketCap" in by.USDT), "no upstream row or series is passed through");
 
   const wide = await h("stablecoin-depeg-watch")({ minMarketCapUsd: 1000000, thresholdBps: 400, limit: 2 });
-  ok(wide.screened === 7 && wide.assessed === 6 && wide.coins.length === 2 && wide.truncated === true && wide.matched === 6, "a lower floor and a cap: the list says it is partial");
+  ok(wide.screened === 9 && wide.assessed === 8 && wide.coins.length === 2 && wide.truncated === true && wide.matched === 8, "a lower floor and a cap: the list says it is partial");
   ok(wide.flaggedCount === 2 && wide.coins.map((c) => c.symbol).join() === "BUSD2,SUSD", "a wider threshold flags only the widest deviations");
   ok(calls.length === 1, "the second answer came from the cached reduced document");
   await throws(h("stablecoin-depeg-watch")({ minMarketCapUsd: 5 }), 400, "a floor under the minimum", /minMarketCapUsd/);
@@ -323,6 +329,33 @@ reset();
   await throws(h("dex-volume-board")({ network: "a/b" }), 400, "a path-shaped network never reaches the URL");
   routes = [[(u) => u.pathname.startsWith("/api/v3/onchain/networks/empty/"), () => jsonRes(200, { data: [] })]];
   await throws(h("dex-volume-board")({ network: "empty", pools: 20 }), 422, "a network with no pools", /network id/);
+  // The first page is read alone: an unknown network costs one upstream read, whatever `pools` asks for,
+  // and is remembered for a short time, so the same id sent again costs none.
+  reset();
+  routes = [[(u) => u.pathname === "/api/v3/onchain/networks/base/pools", (u) => jsonRes(200, u.searchParams.get("page") === "1" ? PAGE1 : PAGE2)]];
+  await throws(h("dex-volume-board")({ network: "nope-net", pools: 100 }), 422, "an unknown network", /network "nope-net"/);
+  ok(calls.length === 1 && calls[0].url.searchParams.get("page") === "1", `an unknown network with pools=100 is one upstream read (${calls.length})`);
+  await throws(h("dex-volume-board")({ network: "nope-net", pools: 100 }), 422, "the same unknown network again", /network "nope-net"/);
+  await throws(h("dex-volume-board")({ network: "NOPE-NET", pools: 20 }), 422, "the same unknown network in another case", /network "nope-net"/);
+  ok(calls.length === 1, `an unknown network sent again makes no upstream read (${calls.length - 1} more)`);
+  const known = await h("dex-volume-board")({ network: "base", pools: 100 });
+  ok(known.poolsRead === 4 && calls.length === 6, `a known network is still read in full: five pages for pools=100 (${calls.length - 1})`);
+  // An upstream failure is not a verdict on the network id: nothing is remembered.
+  reset();
+  routes = [[(u) => u.pathname.startsWith("/api/v3/onchain/networks/flaky/"), () => jsonRes(500, {})]];
+  await throws(h("dex-volume-board")({ network: "flaky", pools: 100 }), 502, "an upstream failure on the first page");
+  const afterFail = calls.length;
+  routes = [[(u) => u.pathname.startsWith("/api/v3/onchain/networks/flaky/"), (u) => jsonRes(200, u.searchParams.get("page") === "1" ? PAGE1 : { data: [] })]];
+  ok((await h("dex-volume-board")({ network: "flaky", pools: 20 })).poolsRead === 3 && calls.length === afterFail + 1, "a network whose read failed upstream is read again");
+  // The remembered set is bounded.
+  reset();
+  routes = [];
+  for (let k = 0; k < UNKNOWN_NETWORK_MAX + 3; k++) await h("dex-volume-board")({ network: `ghost-${k}`, pools: 20 }).catch(() => {});
+  calls.length = 0;
+  await h("dex-volume-board")({ network: "ghost-0", pools: 20 }).catch(() => {});
+  await h("dex-volume-board")({ network: `ghost-${UNKNOWN_NETWORK_MAX + 2}`, pools: 20 }).catch(() => {});
+  ok(calls.length === 1, `the remembered set holds ${UNKNOWN_NETWORK_MAX} ids, oldest dropped first`);
+  reset();
 }
 
 // ----------------------------------------------------------------------------
