@@ -6,11 +6,11 @@ carries its own version on npm.
 
 ## Unreleased
 
-### 2026-11-16 (marketplace answers arrive whole or are not charged)
+### 2026-11-16 (marketplace answers arrive whole or are not settled)
 Payments:
 - An input a tool refuses on a call bought through a marketplace listing is
   answered with the tool's expected fields, required fields and example, as on
-  the direct route, and is not charged.
+  the direct route, and this server does not settle the payment.
 - An answer larger than a marketplace passes on whole (64,000 bytes) is refused
   with status 413 before the payment is settled, so we do not settle
   it: the refusal gives the answer's size and the limit and names the tool's

@@ -929,7 +929,7 @@ try {
       const runsBefore = appB.gate.stats().runs;
       const over = await callBig("big", { n: fits + 1 }, pOver);
       // The WHOLE body, field by field and to the last character: nothing may ride after the sentence.
-      const text413 = (bytes, fields) => `This call's answer is ${bytes} bytes, over the ${BOUND} bytes one answer may be on this route, so this server did not settle the payment. A narrower request gets an answer: ${fields ? `ask for less with this tool's own input fields (${fields})` : "ask for less in one call"}, and sign a new authorization.`;
+      const text413 = (bytes, fields) => `This call's answer is ${bytes} bytes, over the ${BOUND} bytes one answer may be on this route, so this server did not settle the payment. Narrow the request: ${fields ? `ask for less with this tool's own input fields (${fields})` : "ask for less in one call"}, and sign a new authorization.`;
       const is413 = (r, slug, bytes, fields) => r.status === 413 && r.text === JSON.stringify({ error: text413(bytes, fields.join(", ")), tool: slug, reason: "answer_too_large", answerBytes: bytes, maxAnswerBytes: BOUND, narrowWith: fields });
       ok(is413(over, "big", BOUND + 1, ["n"]) && !/charged/i.test(over.text) && Buffer.byteLength(over.text) < 1024, `one byte more is refused 413: the body is exactly the plain reason, both sizes and the tool's own input fields by name (a key that is not a field name left out), with no part of the answer and no claim about a charge (${over.status} ${over.text.slice(0, 260)})`);
       ok(settles() === 1 && sales.length === 1 && appB.gate.stats().runs === runsBefore + 1 && appB.gate.stats().answerTooLarge === 1 && appB.book.get(gateMod.referralReplayKey(pOver.authorization)) == null && fac.of("/settle").every((c) => c.json?.paymentPayload?.payload?.authorization?.nonce !== pOver.authorization.nonce) && appB.gate.statusWord().status === "ok", `it ran and was never sent to /settle: no settlement, no sale, no book entry, counted (${settles()} settle, ${sales.length} sale, answerTooLarge ${appB.gate.stats().answerTooLarge})`);
@@ -1734,6 +1734,43 @@ try {
       const clean = await call11(newAccount(), freshIp());
       ok(firstFresh.status === 402 && secondFresh.status === 429 && paidSecond.status === 402 && clean.status === 402, `with 2 distinct failing payers, a never-paid wallet is held after ONE unsettled run (${secondFresh.status}); one that has paid before keeps its three (${paidSecond.status}); a wallet with none is served (${clean.status})`);
     } finally { await app11.close(); }
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // An answer over the size bound is not a payment that failed to settle: it counts for the wallet that asked
+    // (its own repeats end at REFERRAL_UNSETTLED_MAX) and for nobody else, on the status word or in the lane.
+    const appL = await mount({ REFERRAL_UNSETTLED_GLOBAL_MAX: "12", REFERRAL_MAX_ANSWER_BYTES: "" });
+    try {
+      const big = async (acct, n, ip = freshIp()) => send(`${appL.url}/ref/big`, { body: { n }, headers: { "payment-signature": (await signPayment(accept, { account: acct })).header, "x-test-ip": ip } });
+      const wide = (w) => w.reasons.some((x) => /unsettled runs came from/.test(x));
+      const twelve = Array.from({ length: 12 }, () => newAccount());
+      const first = [];
+      for (const a of twelve) first.push(await big(a, 70_000));
+      const word12 = appL.gate.statusWord();
+      ok(first.every((r) => r.status === 413) && word12.status === "ok" && !wide(word12) && settles() === 0, `twelve wallets with one oversized answer each leave the status word ok (${first.map((r) => r.status).join()}; ${word12.status}: ${word12.reasons.join("|").slice(0, 120) || "no reasons"})`);
+      const thirteenth = newAccount(), ip13 = freshIp();
+      const over13 = await big(thirteenth, 70_000, ip13);
+      const narrowed13 = await big(thirteenth, 10, ip13);
+      const narrowedOne = await big(twelve[0], 10);
+      ok(over13.status === 413 && narrowed13.status === 200 && narrowedOne.status === 200 && settles() === 2, `a thirteenth never-paid wallet is served: its own 413 and then a narrowed request answers 200, as does one of the twelve (${over13.status} then ${narrowed13.status}; ${narrowedOne.status})`);
+      const hogL = newAccount(), hogLIp = freshIp();
+      const hogs = [];
+      for (let i = 0; i < 4; i++) hogs.push((await big(hogL, 70_000 + i, hogLIp)).status);
+      ok(hogs.join() === "413,413,413,429", `one wallet's fourth oversized request is still refused 429 (${hogs.join()})`);
+      // CONTROL: payments that DO fail to settle from twelve wallets raise the word and the never-paid rule;
+      // a never-paid wallet whose one unsettled run was an oversized answer is still admitted under it.
+      const sized = newAccount(), sizedIp = freshIp();
+      const sizedOver = await big(sized, 70_000, sizedIp);
+      fac.mode.settle = () => ({ status: 200, body: { success: false, errorReason: "invalid_payment" } });
+      for (let i = 0; i < 12; i++) await big(newAccount(), 10);
+      const wordFail = appL.gate.statusWord();
+      const runsL = appL.gate.stats().runs;
+      const sizedNarrow = await big(sized, 10, sizedIp);
+      const struck = newAccount(), struckIp = freshIp();
+      const struckFirst = await big(struck, 10, struckIp);
+      const struckSecond = await big(struck, 10, struckIp);
+      ok(sizedOver.status === 413 && wordFail.status === "attention" && wide(wordFail) && sizedNarrow.status === 402 && struckFirst.status === 402 && struckSecond.status === 429 && appL.gate.stats().runs === runsL + 2, `control: twelve wallets whose settles were refused raise the word and hold a never-paid wallet after one refused settle (${struckSecond.status}), while a never-paid wallet with one oversized answer still runs (${sizedNarrow.status}; ${appL.gate.stats().runs - runsL} runs)`);
+    } finally { await appL.close(); }
   }
   fac.reset(); sales.length = 0;
   {

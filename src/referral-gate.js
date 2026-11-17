@@ -479,7 +479,7 @@ const REQUIRED_VARS = ["REFERRAL_PAY_TO", "REFERRAL_FACILITATOR_URL", "REFERRAL_
  *   REFERRAL_PRODUCT_IDS        (none) `<slug>:<0x 32-byte id>,...`: the product id the split
  *                               contract's routed event must name for that slug's payment to count
  *   REFERRAL_MAX_ANSWER_BYTES   (64000) the most bytes of one answer the network passes on to a
- *                               buyer: a larger answer is refused 413 before settlement, uncharged,
+ *                               buyer: a larger answer is refused 413 before settlement (not settled),
  *                               and a slug whose published example answer is larger is not served
  *   REFERRAL_SEND_IDLE_MS       (15000) an answer's send with no progress for this long is ended
  *   REFERRAL_SEND_MAX_MS        (120000) an answer's send is ended this long after it began
@@ -1006,12 +1006,16 @@ export function createReferralGate({
   //     the window and no paid sale on the books) is held at one unsettled
   //     outcome instead of `unsettledMax`. It tightens only never-paid
   //     wallets and refuses nobody for others' outcomes alone.
+  //   - an answer over the size bound (413) is not a payment that failed to
+  //     settle: it counts in the payer's and the address's own figures (so one
+  //     wallet's repeats end at `unsettledMax`), and neither in the
+  //     service-wide count of payers nor toward the never-paid rule.
   //   - runs in flight are bounded per payer apart from all of this, at a
   //     figure honest concurrency does not reach (`payerInflightMax`).
   // Retry-After is when the oldest unsettled outcome that holds the refusal
   // leaves the window.
   const MIN_FAIL_SHARE = 0.5;
-  const lane = new Map(); // key -> { inflight, fails: [[t, tag]], oks: [t] }
+  const lane = new Map(); // key -> { inflight, fails: [[t, tag, oversize]], oks: [t] }
   const LANE_MAX_KEYS = 20_000;
   const laneOf = (key, create) => {
     let l = lane.get(key);
@@ -1030,7 +1034,7 @@ export function createReferralGate({
   /** Distinct payers with an unsettled outcome in the window (the service-wide reading). */
   const failingPayers = (t) => {
     let n = 0;
-    for (const [k, l] of lane) { if (!k.startsWith("payer:")) continue; trimLane(l, t); if (l.fails.length) n++; }
+    for (const [k, l] of lane) { if (!k.startsWith("payer:")) continue; trimLane(l, t); if (l.fails.some((f) => !f[2])) n++; }
     return n;
   };
   /** THE SERVICE-WIDE RULE, on the run slots too. While `globalMax` distinct
@@ -1059,8 +1063,9 @@ export function createReferralGate({
     if (a && a.inflight >= config.payerInflightMax * REFERRAL_ADDRESS_FACTOR) return { retryAfterSeconds: 5, inflight: true };
     if (pFails > 0) {
       const neverPaid = pOks === 0 && !payerHasPaid(payerKey.slice(6));
-      const max = neverPaid && failingPayers(t) >= config.globalMax ? 1 : config.unsettledMax;
-      if (pFails >= config.unsettledHardMax || (pFails >= max && pFails > MIN_FAIL_SHARE * (pFails + pOks))) return { retryAfterSeconds: wait(p.fails) };
+      // The never-paid rule reads payments that did not settle only (an oversized answer is not one).
+      const oneStrike = neverPaid && p.fails.some((f) => !f[2]) && failingPayers(t) >= config.globalMax;
+      if (pFails >= config.unsettledHardMax || ((oneStrike || pFails >= config.unsettledMax) && pFails > MIN_FAIL_SHARE * (pFails + pOks))) return { retryAfterSeconds: wait(p.fails) };
       // The address counts only against a payer that has failed itself.
       if (a && a.fails.length >= config.unsettledMax * REFERRAL_ADDRESS_FACTOR) return { retryAfterSeconds: wait(a.fails) };
     }
@@ -1070,7 +1075,7 @@ export function createReferralGate({
   const laneLeave = (keys) => { for (const key of keys) { const l = lane.get(key); if (l && l.inflight > 0) l.inflight--; } };
   /** Slugs whose published example run ended 413 (this process's own record). */
   const exampleTooLarge = new Map();
-  const laneNote = (keys, tag = null) => { const t = now(); for (const key of keys) { const l = laneOf(key, true); if (tag && l.fails.some((n) => n[1] === tag)) continue; l.fails.push([t, tag]); } };
+  const laneNote = (keys, tag = null, oversize = false) => { const t = now(); for (const key of keys) { const l = laneOf(key, true); if (tag && l.fails.some((n) => n[1] === tag)) continue; l.fails.push([t, tag, oversize]); } };
   const laneClear = (keys, tag) => { if (!tag) return; for (const key of keys) { const l = lane.get(key); if (l) l.fails = l.fails.filter((n) => n[1] !== tag); } };
   const laneOk = (keys) => { const t = now(); for (const key of keys) laneOf(key, true).oks.push(t); };
 
@@ -2857,16 +2862,18 @@ export function createReferralGate({
         settledHooks(false);
         counters.answerTooLarge++;
         // A run that was served and not settled: it counts in the payer's
-        // and the address's lane as any unsettled run does, so the same
-        // bound (REFERRAL_UNSETTLED_MAX) ends a wallet that keeps asking for
-        // answers this route cannot carry.
-        laneNote(laneKeys, key);
+        // and the address's own lane, so the same bound
+        // (REFERRAL_UNSETTLED_MAX) ends a wallet that keeps asking for
+        // answers this route cannot carry. Marked oversize: not a payment
+        // that failed to settle, so it stays out of the service-wide count
+        // of payers (and the status word) and out of the never-paid rule.
+        laneNote(laneKeys, key, true);
         // The published example itself is over the bound: every empty
         // request on this slug is refused, so the status word names it.
         if (req.__a402ReferralExample === true) exampleTooLarge.set(def.slug, { at: now(), bytes: outBytes });
         // The tool's own input fields, by name, are how a request is narrowed.
         const fields = Object.keys(def.discovery?.inputSchema?.properties || {}).filter((f) => /^[A-Za-z_][A-Za-z0-9_.-]{0,40}$/.test(f)).slice(0, 24);
-        return res.status(413).json({ error: `This call's answer is ${outBytes} bytes, over the ${config.maxAnswerBytes} bytes one answer may be on this route, so this server did not settle the payment. A narrower request gets an answer: ${fields.length ? `ask for less with this tool's own input fields (${fields.join(", ")})` : "ask for less in one call"}, and sign a new authorization.`, tool: def.slug, reason: "answer_too_large", answerBytes: outBytes, maxAnswerBytes: config.maxAnswerBytes, narrowWith: fields });
+        return res.status(413).json({ error: `This call's answer is ${outBytes} bytes, over the ${config.maxAnswerBytes} bytes one answer may be on this route, so this server did not settle the payment. Narrow the request: ${fields.length ? `ask for less with this tool's own input fields (${fields.join(", ")})` : "ask for less in one call"}, and sign a new authorization.`, tool: def.slug, reason: "answer_too_large", answerBytes: outBytes, maxAnswerBytes: config.maxAnswerBytes, narrowWith: fields });
       }
       if (req.__a402ReferralExample === true && exampleTooLarge.size) exampleTooLarge.delete(def.slug);
       // What a hang-up from here on is recorded as (the refund run's words):
