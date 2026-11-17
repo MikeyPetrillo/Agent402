@@ -578,10 +578,15 @@ export function referralTimingWarnings(config, { cdnSyncMs = null } = {}) {
   // Through the CDN proxy (`cdnSyncMs`: its answer window, when the proxy is
   // on) a run that uses its whole verify, handler and intent-write budgets
   // leaves the settle less than the configured wait (referralSettleWaitMs).
+  // The defaults leave such a run less than the facilitator's answer time
+  // too, by design (the in-doubt path reads that settle from the chain), so
+  // the warning is for settings that leave LESS than the defaults do.
   if (config && Number.isFinite(cdnSyncMs) && cdnSyncMs > 0) {
+    const D = REFERRAL_DEFAULTS;
     const worst = referralSettleWaitMs(config.settleMs, cdnSyncMs - config.verifyMs - config.deadlineMs - config.storeWriteMs, config.receiptWaitMs);
-    if (worst < config.settleMs && worst < REFERRAL_SETTLE_ANSWER_MS) {
-      out.push(`through the CDN proxy (an answer within ${Math.round(cdnSyncMs / 1000)} s) a run that uses all of REFERRAL_VERIFY_MS, REFERRAL_DEADLINE_MS and REFERRAL_STORE_WRITE_MS leaves /settle ${Math.round(worst / 1000)} s, under the ${REFERRAL_SETTLE_ANSWER_MS / 1000} s the facilitator's /settle may take to answer: a settle answered after it is read from the chain instead, and its answer is held until then`);
+    const byDefault = referralSettleWaitMs(D.settleMs, cdnSyncMs - D.verifyMs - D.deadlineMs - D.storeWriteMs, D.receiptWaitMs);
+    if (worst < config.settleMs && worst < REFERRAL_SETTLE_ANSWER_MS && worst < byDefault) {
+      out.push(`through the CDN proxy (an answer within ${Math.round(cdnSyncMs / 1000)} s) a run that uses all of REFERRAL_VERIFY_MS, REFERRAL_DEADLINE_MS and REFERRAL_STORE_WRITE_MS leaves /settle ${Math.round(worst / 1000)} s, under the ${Math.round(byDefault / 1000)} s the default settings leave and the ${REFERRAL_SETTLE_ANSWER_MS / 1000} s the facilitator's /settle may take to answer: a settle answered after it is read from the chain instead, and its answer is held until then`);
     }
   }
   if (config && Number.isFinite(config.settleMs) && config.settleMs < REFERRAL_SETTLE_ANSWER_MS) {

@@ -406,7 +406,12 @@ if (ONLY_PART !== "2") {
       const dflt = referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "", REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_SETTLE_MS: "", REFERRAL_VERIFY_MS: "", REFERRAL_RECEIPT_WAIT_MS: "" });
       const viaCdn = referralTimingWarnings(dflt, { cdnSyncMs: CDN });
       const roomy = referralTimingWarnings(referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "20000", REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_SETTLE_MS: "", REFERRAL_VERIFY_MS: "5000", REFERRAL_RECEIPT_WAIT_MS: "" }), { cdnSyncMs: CDN });
-      ok(viaCdn.length === 1 && /^through the CDN proxy \(an answer within 90 s\) a run that uses all of REFERRAL_VERIFY_MS, REFERRAL_DEADLINE_MS and REFERRAL_STORE_WRITE_MS leaves \/settle 45 s, under the 55 s the facilitator's \/settle may take to answer: /.test(viaCdn[0]) && roomy.length === 0 && referralTimingWarnings(dflt, { cdnSyncMs: null }).length === 0 && referralTimingWarnings(dflt, { cdnSyncMs: 200_000 }).length === 0, `the boot warning is the same rule: with the proxy on it names the settle wait a slow run is left with when that is under 55 s, and says nothing when the budgets leave 55 s or no proxy is in front (${viaCdn[0]?.slice(0, 80)})`);
+      // Both sides of the warning: one second more of handler budget than the default leaves /settle 44 s (warned);
+      // the defaults, and one second less, leave 45 s or more (silent).
+      const tighter = referralTimingWarnings(referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: String(D.deadlineMs + 1000), REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_SETTLE_MS: "", REFERRAL_VERIFY_MS: "", REFERRAL_RECEIPT_WAIT_MS: "" }), { cdnSyncMs: CDN });
+      const looser = referralTimingWarnings(referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: String(D.deadlineMs - 1000), REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_SETTLE_MS: "", REFERRAL_VERIFY_MS: "", REFERRAL_RECEIPT_WAIT_MS: "" }), { cdnSyncMs: CDN });
+      const longWait = referralTimingWarnings(referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "", REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_SETTLE_MS: "", REFERRAL_VERIFY_MS: "", REFERRAL_RECEIPT_WAIT_MS: String(D.receiptWaitMs + 2000) }), { cdnSyncMs: CDN });
+      ok(viaCdn.length === 0 && looser.length === 0 && tighter.length === 1 && longWait.length === 1 && /^through the CDN proxy \(an answer within 90 s\) a run that uses all of REFERRAL_VERIFY_MS, REFERRAL_DEADLINE_MS and REFERRAL_STORE_WRITE_MS leaves \/settle 44 s, under the 45 s the default settings leave and the 55 s the facilitator's \/settle may take to answer: /.test(tighter[0]) && /leaves \/settle 43 s, under the 45 s/.test(longWait[0]) && roomy.length === 0 && referralTimingWarnings(dflt, { cdnSyncMs: null }).length === 0 && referralTimingWarnings(dflt, { cdnSyncMs: 200_000 }).length === 0, `the boot warning is the same rule: with the proxy on the default settings start with no warning (a slow run's 45 s is covered by the in-doubt path), settings that leave a slow run less than that are named with the wait they leave, and nothing is said when the budgets leave as much or more, or no proxy is in front (${tighter[0]?.slice(0, 80)})`);
     }
     // The documented defaults are the code's.
     {
@@ -978,6 +983,23 @@ try {
       const stillUp = appB.gate.statusWord().status;
       const cleared = appB.gate.clearExampleByHand("exbig", { note: "the example input was narrowed" });
       ok(noNote.ok === false && wrongSlug.ok === false && stillUp === "attention" && cleared.ok === true && appB.gate.statusWord().status === "ok" && appB.gate.exampleTooLarge().length === 0, `it stays until the operator clears that slug with a note (${stillUp} then ${appB.gate.statusWord().status})`);
+      // THE MARK CLEARS ITSELF when an example run of the slug fits again: set by an empty-request 413, then the
+      // published example (narrowed) answers 200 on an empty request and the word returns to ok.
+      const exAgain = await callBig("exbig", {}, await signPayment(exAccept, { account: newAccount() }));
+      const wordAgain = appB.gate.statusWord();
+      const exRows = TOOLS.exbig.discovery.input.rows;
+      let ownFit, wordOwnFit, exFit, wordFit;
+      try {
+        // A buyer's own fitting request is not an example run: the mark stays.
+        ownFit = await callBig("exbig", { rows: 10 }, await signPayment(exAccept, { account: newAccount() }));
+        wordOwnFit = appB.gate.statusWord();
+        TOOLS.exbig.discovery.input.rows = 10;
+        const quoteFit = await call(`${appB.url}/ref/exbig`, { body: {}, headers: { "x-test-ip": freshIp() } });
+        exFit = await callBig("exbig", {}, await signPayment(quoteFit.json?.accepts?.[0] || exAccept, { account: newAccount() }));
+        wordFit = appB.gate.statusWord();
+      } finally { TOOLS.exbig.discovery.input.rows = exRows; }
+      ok(exAgain.status === 413 && wordAgain.status === "attention" && ownFit.status === 200 && wordOwnFit.status === "attention" && appB.gate.exampleTooLarge().length === 0 && exFit.status === 200 && exFit.json?.blob === "a".repeat(10) && wordFit.status === "ok", `the mark set by an empty-request 413 stays through a buyer's own fitting request and clears when an empty request's example run fits: the word returns to ok (${exAgain.status} ${wordAgain.status}; own ${ownFit.status} ${wordOwnFit.status}; example ${exFit.status} ${wordFit.status})`);
+      responses413.push([exAgain.text, "exbig"]);
 
       // THE CDN WINDOW, on the wire. A slow verify (1.2 s) and a slow handler (2.5 s) on a request that must be
       // answered within 9 s, and a /settle that never answers inside its 20 s wait: the settle is given what
