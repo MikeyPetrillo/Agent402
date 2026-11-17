@@ -42,6 +42,18 @@ export const SHARED_HOSTING_SUFFIXES = [
   "azurestaticapps.net", "azurecontainerapps.io", "azure-api.net",
   "pythonanywhere.com", "lovable.app", "fly.io", "vercel.run",
 ];
+// Shared suffixes above whose names each point wherever their owner says
+// (wildcard and dynamic DNS): one server can sit behind any number of them,
+// each its own operator here. The crawl's requests to such a name are also
+// counted per address it resolves to (src/seller-load.js takeAddressBudget),
+// so those names share one day at one address.
+export const OWNER_ADDRESSED_SUFFIXES = ["sslip.io", "duckdns.org"];
+/** Does `origin`'s name sit under OWNER_ADDRESSED_SUFFIXES? */
+export function addressSetByName(origin) {
+  let host;
+  try { host = new URL(origin).hostname.toLowerCase(); } catch { return false; }
+  return OWNER_ADDRESSED_SUFFIXES.some((suffix) => host.endsWith(`.${suffix}`));
+}
 export function operatorKey(origin) {
   let host;
   try { host = new URL(origin).hostname.toLowerCase(); } catch { return String(origin).toLowerCase(); }

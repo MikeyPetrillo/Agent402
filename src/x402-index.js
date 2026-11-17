@@ -306,7 +306,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
-import { sellerLoad, bodyHash, landingGate, RequestHeld } from "./seller-load.js";
+import { sellerLoad, bodyHash, landingGate, addressGate, RequestHeld } from "./seller-load.js";
 // Reads made for a registration (anyone may register any origin, with no proof
 // of control) run inside this scope: they are counted on a day count of their
 // own (src/seller-load.js takeBudget `unscheduled`), never on the day the
@@ -487,6 +487,14 @@ export class ProbeSkipped extends Error {
 // counted on the key's own day, never on the day of the host it lands on, and
 // is not sent past a day's allowance of such landings on that host. A 429 or
 // 503 answer holds the host.
+// A probe whose host's address has had its day (seller-load addressGate) is
+// not sent, as a probe past the host's own day is not.
+const probeAddressGate = (kind) => {
+  const gate = addressGate(kind);
+  return async (addresses, url) => {
+    try { await gate(addresses, url); } catch (e) { if (e?.requestHeld) throw new ProbeSkipped("budget"); throw e; }
+  };
+};
 async function probeOnce(target, opts, load) {
   if (load?.kind) {
     const chargeTo = load.chargeTo || null;
@@ -498,7 +506,7 @@ async function probeOnce(target, opts, load) {
       if (b?.ok === false) throw new ProbeSkipped("budget");
     }
   }
-  const res = await probeFetch(target, opts);
+  const res = await probeFetch(target, load?.kind ? { ...opts, onResolved: probeAddressGate(load.kind) } : opts);
   if (load?.kind && (res?.status === 429 || res?.status === 503)) await sellerLoad.noteThrottle(target, res.status, res.headers?.get?.("retry-after"));
   return res;
 }
@@ -1727,8 +1735,9 @@ export async function registerOrigin(origin, { crawl, replaces = null, deadlineM
 
 /** A registration whose reads the host's hourly ceiling held back: nothing
  *  was listed or changed, and the registrant retries after `secs`. */
-function registrationHeld(origin, secs) {
-  return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `this host has had this hour's registration reads; nothing was listed or changed, register again in ${secs} s` };
+function registrationHeld(origin, secs, heldBy = "registration-hour") {
+  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests" : "this host has had this hour's registration reads";
+  return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 
 async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 0 } = {}) {
@@ -1876,13 +1885,13 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
   if (heldFor > 0) return registrationHeld(origin, heldFor);
   const doCrawl = crawl || (async (o, opts) => {
     const read = await crawlSeller(o, opts);
-    if (read?.heldBy === "registration-hour" && !cache.has(o)) return { error: read.error, registrationHeldFor: read.retryAfterSeconds || 60 };
+    if (read?.heldBy && !cache.has(o)) return { error: read.error, registrationHeldFor: read.retryAfterSeconds || 60, heldBy: read.heldBy };
     return cache.get(o) || (read?.landingHeld ? { error: read.error } : undefined);
   });
   let v;
   // A first registration reads the paywall on its first crawl, as a re-registration does.
   try { v = await doCrawl(origin, { deadlineAt, forcePaywall: true }); } catch (e) { v = { error: String(e?.message || e) }; }
-  if (v?.registrationHeldFor > 0) return registrationHeld(origin, v.registrationHeldFor);
+  if (v?.registrationHeldFor > 0) return registrationHeld(origin, v.registrationHeldFor, v.heldBy);
   // Injected test crawlers return the entry directly; the real path re-reads cache.
   if (v && !v.error && (v.tools?.length || v.manifest)) {
     submittedSeeds.add(origin);
@@ -6127,7 +6136,7 @@ async function crawlRead(url, opts) {
   const b = await sellerLoad.takeBudget(url, "crawler", { essential: true, unscheduled });
   if (b?.ok === false && b.heldBy) throw new RequestHeld(b.heldBy, b.retryAfterSeconds);
   try {
-    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }) });
+    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }), onResolved: addressGate("crawler") });
   } catch (e) {
     if (e?.landingHeld) throw e;
     const st = Number(e?.upstreamStatus);

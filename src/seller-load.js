@@ -52,7 +52,7 @@
 // sellerLoadStatus(), on /__operator/seller-load.json.
 import { createHash } from "node:crypto";
 import { shared as sharedLimits, createMemoryLimits, noteSharedLimitsDegraded } from "./shared-limits.js";
-import { operatorKey } from "./operator-key.js";
+import { operatorKey, addressSetByName } from "./operator-key.js";
 import { CRAWL_INTERVAL_MS, SLOW_ORIGIN_EVERY_CYCLES, isSlowOrigin } from "./crawl-cadence.js";
 
 const HOUR_MS = 3_600_000;
@@ -135,6 +135,7 @@ function originOf(u) {
 }
 const dayOf = (t) => new Date(t).toISOString().slice(0, 10);
 const hourOf = (t) => new Date(t).toISOString().slice(0, 13);
+const secondsToNextDay = (t) => Math.max(1, Math.ceil((DAY_MS - (t % DAY_MS)) / 1000));
 const secondsToNextHour = (t) => Math.max(1, Math.ceil((HOUR_MS - (t % HOUR_MS)) / 1000));
 /** Seconds from a Retry-After value (a number, delta-seconds or an HTTP date
  *  read against `now`), or null when it names no wait. */
@@ -618,6 +619,29 @@ export function createSellerLoad({
       return { ok: true, used, budget: dailyBudget };
     },
 
+    /** Count one request to the address the host of `url` resolved to
+     *  (`addresses`, from the SSRF check that read them, src/tools/fetch-guard.js
+     *  onResolved) and decide it. Only for a name whose owner sets its address
+     *  (addressSetByName): however many such names point at one address, it
+     *  is sent at most the day's budget of them, every reason for a request
+     *  counted. `{ ok, used, budget, heldBy?, retryAfterSeconds? }`. */
+    async takeAddressBudget(url, addresses, kind) {
+      if (dailyBudget <= 0 || !addressSetByName(url)) return { ok: true, used: 0, budget: dailyBudget };
+      const list = Array.isArray(addresses) ? addresses : [];
+      const ip = (list.find((a) => a?.family === 4) || list[0])?.address;
+      if (!ip) return { ok: true, used: 0, budget: dailyBudget };
+      const t = clock();
+      const key = `${dayOf(t)}|address|${String(ip).toLowerCase()}`;
+      const used = await countLocal(key);
+      if (used > dailyBudget) {
+        await countLocal(key, -1);
+        bump(counts.refused, `${String(kind || "other")}:address-day`);
+        return { ok: false, used: used - 1, budget: dailyBudget, heldBy: "address-day", retryAfterSeconds: secondsToNextDay(t) };
+      }
+      countShared(key);
+      return { ok: true, used, budget: dailyBudget };
+    },
+
     /** Seconds until a registration's reads may reach the host of `url`
      *  again, or 0 when this hour's ceiling (registrationHourlyMax) has room. */
     async registrationHeldFor(url) {
@@ -783,7 +807,7 @@ export class RequestHeld extends Error {
   constructor(heldBy, retryAfterSeconds = 0) {
     super(heldBy === "registration-hour"
       ? `not sent: this hour's registration reads of that host are spent; retry in ${retryAfterSeconds} s`
-      : `not sent: the day's requests to that host's address are spent`);
+      : `not sent: the day's requests to that host's address are spent; retry in ${retryAfterSeconds} s`);
     this.landingHeld = true;
     this.landingHost = null;
     this.requestHeld = true;
@@ -822,6 +846,17 @@ export class LandingHeld extends Error {
  *  each hop (safeFetch `beforeRedirect`): the hop is counted on `chargeTo`'s
  *  day, and one onto another operator's host also on that host's landed
  *  allowance, past which it throws LandingHeld and nothing is sent. */
+/** The check a read of a seller makes once its host's addresses are known
+ *  (safeFetch and probePublicUrl `onResolved`): the request is counted on
+ *  the address's day (takeAddressBudget), past which it throws RequestHeld
+ *  and nothing is sent. */
+export function addressGate(kind, { load = sellerLoad } = {}) {
+  return async (addresses, url) => {
+    const b = await load.takeAddressBudget(url, addresses, kind);
+    if (b?.ok === false) throw new RequestHeld(b.heldBy || "address-day", b.retryAfterSeconds);
+  };
+}
+
 export function landingGate(chargeTo, kind, { load = sellerLoad, unscheduled = false } = {}) {
   return async (nextUrl) => {
     const b = await load.takeBudget(nextUrl, kind, { essential: true, chargeTo, unscheduled });

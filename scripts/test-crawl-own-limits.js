@@ -49,7 +49,14 @@ const openapi = (o) => ({ openapi: "3.1.0", info: { title: "Seller" }, servers: 
 
 const docs = new Map();      // url -> { body } | { throw: Error }
 const reads = [];
-idx.__setCrawlFetchForTest(async (url) => {
+// The address each stub host resolves to, handed to the read's onResolved as
+// the SSRF check hands it (src/tools/fetch-guard.js): two names on one address.
+const ADDRESS = new Map([["alpha.sslip.io", "203.0.113.7"], ["beta.sslip.io", "203.0.113.7"], ["gamma.sslip.io", "203.0.113.8"]]);
+const resolved = async (url, opts) => {
+  if (typeof opts?.onResolved === "function") await opts.onResolved([{ address: ADDRESS.get(new URL(url).hostname) || "203.0.113.7", family: 4 }], url);
+};
+idx.__setCrawlFetchForTest(async (url, opts) => {
+  await resolved(url, opts);
   reads.push(url);
   const d = docs.get(url);
   if (!d) throw Object.assign(new Error(`Upstream returned HTTP 404 for ${url}`), { statusCode: 422, upstreamStatus: 404 });
@@ -57,7 +64,8 @@ idx.__setCrawlFetchForTest(async (url) => {
   return { html: d.body, finalUrl: url, validators: {} };
 });
 const probes = [];
-idx.__setProbeFetchForTest(async (url) => {
+idx.__setProbeFetchForTest(async (url, opts) => {
+  await resolved(url, opts);
   probes.push(url);
   return new Response("{}", { status: 402, headers: { "payment-required": Buffer.from(JSON.stringify({ x402Version: 2, accepts })).toString("base64") } });
 });
@@ -215,6 +223,41 @@ const entry = (o) => idx._cacheForTests().get(o);
   const before = readsOf(V2);
   const later = await idx.registerOrigin(V2);
   ok(later?.listed === true && readsOf(V2) > before, "the next hour a registration on the host is read and listed");
+}
+
+// ---- names that resolve to one address share its day -------------------------------
+{
+  // Names under a suffix whose owners point them anywhere (sslip.io): each is
+  // its own operator, so each has its own day, but the requests to one
+  // address are counted together, from the address the SSRF check read.
+  const A = "https://alpha.sslip.io", B = "https://beta.sslip.io", C = "https://gamma.sslip.io";
+  for (const o of [A, B, C]) serve(o);
+  const sentTo = (o) => readsOf(o) + probesOf(o);
+  const s0 = { A: sentTo(A), B: sentTo(B), C: sentTo(C) };
+  const start = Date.parse("2026-12-05T00:00:00Z");
+  const answers = [];
+  for (let h = 0; h < 12; h++) {
+    clock = start + h * H;
+    for (let i = 0; i < 6; i++) {
+      answers.push(await idx.registerOrigin(`${A}/h${h}p${i}`));
+      answers.push(await idx.registerOrigin(`${B}/h${h}p${i}`));
+    }
+  }
+  const a = sentTo(A) - s0.A, b = sentTo(B) - s0.B;
+  ok(a > 0 && b > 0 && a + b <= 60, `two names on one address share its day: ${a} + ${b} requests of 60`);
+  const held = answers.filter((r) => r?.held && /address this host resolves to/.test(r.error));
+  ok(held.length > 0 && held.every((r) => r.retryAfterSeconds > 0 && r.retryAfterSeconds <= 86_400), `a registration past it is told when to retry (${held.length} held by the address)`);
+  // A scheduled crawl meets the same day: the name's turn waits, nothing sent.
+  const b0 = sentTo(B);
+  const r = await turn(B);
+  ok(sentTo(B) === b0 && r === "budget", `a scheduled turn past the address's day sends nothing (${r})`);
+  const c0 = sentTo(C);
+  const other = await idx.registerOrigin(`${C}/x`);
+  ok(sentTo(C) > c0 && !other?.held, "a name on another address keeps its own day");
+  clock = start + 24 * H;
+  const a0 = sentTo(A);
+  await idx.registerOrigin(`${A}/nextday`);
+  ok(sentTo(A) > a0, "the next UTC day the address is read again");
 }
 
 Date.now = realNow;

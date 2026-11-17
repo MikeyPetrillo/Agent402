@@ -32,7 +32,7 @@ const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { CRAWLER_UA } from "./user-agents.js";
-import { sellerLoad, landingGate, RequestHeld, SLOW_READ_INTERVAL_MS } from "./seller-load.js";
+import { sellerLoad, landingGate, addressGate, RequestHeld, SLOW_READ_INTERVAL_MS } from "./seller-load.js";
 import { isSlowOrigin } from "./crawl-cadence.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
@@ -384,7 +384,7 @@ function noteHold(url, status, retryAfter) {
 }
 // A redirect hop is counted before it is sent, and one onto another operator's
 // host is not sent past that host's landed allowance (landingGate).
-const fetchDiscoveryDoc = (url, { unscheduled = false } = {}) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler", { unscheduled }) });
+const fetchDiscoveryDoc = (url, { unscheduled = false } = {}) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler", { unscheduled }), onResolved: addressGate("mpp-crawler") });
 
 /** Fetch `${origin}/openapi.json` (guarded, capped, cached 1h) and derive a
  *  probe target. null on any failure; throws only when the load controls held
@@ -486,6 +486,7 @@ async function probeMppChallenge({ method, url }) {
       headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
       ...(method !== "GET" ? { body: "{}" } : {}),
       timeoutMs: PROBE_TIMEOUT_MS,
+      onResolved: addressGate("mpp-probe"),
     });
     const challenge = res.headers.get("www-authenticate");
     const mpp = isMppChallenge(challenge);
@@ -495,6 +496,8 @@ async function probeMppChallenge({ method, url }) {
     const offers = mpp ? await parseOffers(challenge) : [];
     return { ok: mpp && statusOk, status: res.status, url, at: Date.now(), offers, retryAfter: res.headers.get("retry-after"), error: mpp ? null : "no WWW-Authenticate: Payment challenge on the probed endpoint" };
   } catch (e) {
+    // Not sent by our own limit (the address's day): no answer, so no verdict.
+    if (e?.requestHeld) throw e;
     return { ok: false, status: 0, url, at: Date.now(), offers: [], error: String(e?.message || e).slice(0, 160) };
   }
 }
@@ -618,9 +621,9 @@ export async function registerMppOrigin(origin, { verify, path, method } = {}) {
   const doVerify = verify || verifyMppSeller;
   let entry;
   try { entry = await doVerify(origin); } catch (e) {
-    if (e?.heldBy === "registration-hour") {
+    if (e?.requestHeld) {
       if (priorHint) submittedHints.set(origin, priorHint); else submittedHints.delete(origin);
-      return mppRegistrationHeld(origin, e.retryAfterSeconds || 60);
+      return mppRegistrationHeld(origin, e.retryAfterSeconds || 60, e.heldBy);
     }
     entry = { verified: false, lastProbeError: String(e?.message || e) };
   }
@@ -642,8 +645,9 @@ export async function registerMppOrigin(origin, { verify, path, method } = {}) {
   return { listed: false, origin, error: entry?.lastProbeError || "no MPP challenge (WWW-Authenticate: Payment) found on the probed endpoint" };
 }
 
-function mppRegistrationHeld(origin, secs) {
-  return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `this host has had this hour's registration reads; nothing was listed or changed, register again in ${secs} s` };
+function mppRegistrationHeld(origin, secs, heldBy = "registration-hour") {
+  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests" : "this host has had this hour's registration reads";
+  return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 
 function mppSellerSummary(v) {

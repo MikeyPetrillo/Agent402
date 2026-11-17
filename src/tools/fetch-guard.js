@@ -499,18 +499,20 @@ export async function hostIsPublic(hostname) {
  * Validate that a URL is http(s) and does not resolve to a private address.
  * Returns the parsed URL. Shared by the plain fetcher and the browser renderer.
  */
-export async function assertPublicUrl(rawUrl, { ownUpstream = false } = {}) {
-  if (!ownUpstream) return assertCallerUrl(rawUrl);
+export async function assertPublicUrl(rawUrl, { ownUpstream = false, sink = null } = {}) {
+  if (!ownUpstream) return assertCallerUrl(rawUrl, sink);
   // A host this server chose (a kit's fixed API), not one the caller
   // supplied: a refusal of its name is our 503, never the caller's 400.
-  return assertCallerUrl(rawUrl).catch((err) => { throw asOwnUpstreamRefusal(err); });
+  return assertCallerUrl(rawUrl, sink).catch((err) => { throw asOwnUpstreamRefusal(err); });
 }
 /** The up-front refusal of a host name, re-stated as our 503 for a host this
  *  server chose; any other error (a malformed URL, a ceiling) unchanged. */
 function asOwnUpstreamRefusal(err) {
   return err?.statusCode === 400 && err.message === UNRESOLVED_OR_PRIVATE ? ownUpstreamUnresolved(err) : err;
 }
-async function assertCallerUrl(rawUrl) {
+/** `sink`: when given, `sink.addresses` is set to the addresses the check
+ *  read for the host ([{ address, family }]; a literal IP as itself). */
+async function assertCallerUrl(rawUrl, sink = null) {
   // Inside a run whose ceiling has passed (src/run-ceiling.js) no lookup starts.
   assertBeforeCeiling();
   let url;
@@ -552,7 +554,8 @@ async function assertCallerUrl(rawUrl) {
     if (resolved.some((a) => isPrivateIp(a.address))) {
       throw badRequest(UNRESOLVED_OR_PRIVATE);
     }
-  }
+    if (sink) sink.addresses = resolved;
+  } else if (sink) sink.addresses = [{ address: host, family: isIP(host) }];
   return url;
 }
 
@@ -566,8 +569,12 @@ async function assertCallerUrl(rawUrl) {
  * request on the validated host. Sends the probe User-Agent unless the
  * caller names its own (the router does).
  */
-export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, body, timeoutMs = 8000, userAgent = PROBE_UA } = {}) {
-  await assertPublicUrl(rawUrl);
+export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, body, timeoutMs = 8000, onResolved = null, userAgent = PROBE_UA } = {}) {
+  const sink = {};
+  await assertPublicUrl(rawUrl, { sink });
+  // `onResolved(addresses, url)`: the addresses the check above read, before
+  // anything is sent; whatever it throws is thrown, with nothing sent.
+  if (typeof onResolved === "function") await onResolved(sink.addresses || [], String(rawUrl));
   return fetch(rawUrl, {
     method,
     headers: { "User-Agent": userAgent, ...headers },
@@ -633,8 +640,14 @@ const CROSS_ORIGIN_DROPPED_HEADERS = new Set(["authorization", "proxy-authorizat
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
-export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream, userAgent = FETCH_UA, errorBodyMaxBytes = 0, beforeRedirect = null } = {}) {
-  const url = await assertPublicUrl(rawUrl).catch((err) => { throw ownUpstream ? asOwnUpstreamRefusal(err) : err; });
+export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream, userAgent = FETCH_UA, errorBodyMaxBytes = 0, beforeRedirect = null, onResolved = null } = {}) {
+  const sink = {};
+  const url = await assertPublicUrl(rawUrl, { sink }).catch((err) => { throw ownUpstream ? asOwnUpstreamRefusal(err) : err; });
+  // `onResolved(addresses, url)`: the addresses the check above read for the
+  // host (the index crawler counts its requests per address,
+  // src/seller-load.js takeAddressBudget), before anything is sent; whatever
+  // it throws is thrown as it is, with nothing sent.
+  if (typeof onResolved === "function") await onResolved(sink.addresses || [], String(url));
   // `ownUpstream`: the URL is one this server chose (a kit's fixed API host),
   // not one the caller supplied, so a host that does not resolve is our 503.
   // Inside a run whose ceiling has passed (src/run-ceiling.js) nothing starts:
