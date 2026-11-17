@@ -216,7 +216,7 @@ header instead of a payment.
    \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is
    \`completed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` show where it
    is. Payment settles only on the answer, except a Tempo transfer sent before
-   the call, which is recorded as owed if the run fails.
+   the call, which is repaid after on-chain proof if the run fails.
 
 ### Request Templates
 

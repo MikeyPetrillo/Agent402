@@ -21,10 +21,15 @@
  *  Tempo push credential can reach the route: its transfer is final before
  *  the call, so such a refusal books the transfer as owed instead. Read by
  *  the MCP connector's slow-call refusal and the HTTP sync windows. */
-export const PUSH_EXCEPTION = ", except a Tempo transfer sent before the call, which is recorded as owed";
+/** How an amount recorded as owed is repaid, in the words every surface that
+ *  says "recorded as owed" uses (scripts/test-copy-absolutes.js reads for a
+ *  repayment beside the phrase). The refund run pays a row only after it has
+ *  read the payment on chain (src/payment-verify.js). */
+export const OWED_REPAID = "recorded as owed and repaid after on-chain proof";
+export const PUSH_EXCEPTION = `, except a Tempo transfer sent before the call, which is ${OWED_REPAID}`;
 /** The same exception after "payment settles only when the result is ready":
  *  that transfer is final before the run, and is owed back when the run fails. */
-export const JOB_PUSH_EXCEPTION = `${PUSH_EXCEPTION} if the run fails`;
+export const JOB_PUSH_EXCEPTION = ", except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails";
 
 export const PUSH_INPUT_REFUSED_NOTE = "push unclaimed: input refused";
 // A finalize whose answer was lost (a connection dropped after the request

@@ -170,7 +170,7 @@ for (const [doc, re, pkg, why] of CLAIMS) {
 {
   const pages = read("src/pages.js") || "";
   const api = read("wiki/API-Reference.md") || "";
-  const SCOPE = "Not charged on x402; a Tempo transfer sent before the call is recorded as owed.";
+  const SCOPE = "Not charged on x402; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof.";
   const o429 = (pages.match(/const OPENAPI_429 = Object\.freeze\(\{ description: "([^"]*)" \}\);/) || [])[1] || "";
   const row = api.split("\n").find((l) => l.startsWith("| `429` |")) || "";
   ok(o429.includes("one of the documented limits") && o429.includes(SCOPE) && !/\band not charged\b|\bnever charged\b/i.test(o429) && /429: OPENAPI_429,/.test(pages),

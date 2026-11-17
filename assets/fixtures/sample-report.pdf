@@ -12,7 +12,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
 endobj
 5 0 obj
-<< /Length 895 >>
+<< /Length 988 >>
 stream
 BT /F1 20 Tf 72 720 Td (Paying for Tools per Request) Tj ET
 BT /F1 12 Tf 72 672 Td (An agent that needs one answer should be able to buy one answer.) Tj ET
@@ -21,8 +21,9 @@ BT /F1 12 Tf 72 636 Td (ask for payment in the HTTP 402 response, and serve the 
 BT /F1 12 Tf 72 618 Td (the payment is proven. No account is created and no key is shared.) Tj ET
 BT /F1 12 Tf 72 582 Td (The buyer sends a request and receives a price. It signs a payment) Tj ET
 BT /F1 12 Tf 72 564 Td (for that exact amount and sends the request again. The server checks) Tj ET
-BT /F1 12 Tf 72 546 Td (the signature, runs the tool, and settles the payment only when the) Tj ET
-BT /F1 12 Tf 72 528 Td (tool succeeded. A failed x402 call is not charged.) Tj ET
+BT /F1 12 Tf 72 546 Td (the signature, runs the tool, and settles an x402 payment only when) Tj ET
+BT /F1 12 Tf 72 528 Td (the tool succeeded. A failed x402 call is not charged; a payment) Tj ET
+BT /F1 12 Tf 72 510 Td (that lands late is repaid after on-chain proof.) Tj ET
 BT /F1 9 Tf 72 60 Td (Agent402 sample report, page 1 of 3) Tj ET
 endstream
 endobj
@@ -67,13 +68,13 @@ xref
 0000000138 00000 n 
 0000000208 00000 n 
 0000000334 00000 n 
-0000001280 00000 n 
-0000001406 00000 n 
-0000002115 00000 n 
-0000002241 00000 n 
-0000002772 00000 n 
+0000001373 00000 n 
+0000001499 00000 n 
+0000002208 00000 n 
+0000002334 00000 n 
+0000002865 00000 n 
 trailer
 << /Size 11 /Root 1 0 R /Info 10 0 R>>
 startxref
-2851
+2944
 %%EOF

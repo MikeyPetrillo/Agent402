@@ -23,11 +23,18 @@
 // claiming a transfer. On a claimed transfer this wrapper then replaces that
 // whole sentence, exception included, with the note below, so the payer reads
 // one statement of what is owed.
-import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
+import { PUSH_EXCEPTION, OWED_REPAID } from "./tempo-push-debts.js";
 
 /** The sentence a push payer reads in place of "not charged". */
 const NOTE_BODY = "The Tempo transfer this credential names was claimed before the call ran, so this failure is recorded as a refund owed to the sending wallet; a retry is a new payment";
 export const PUSH_FAILURE_NOTE = `${NOTE_BODY}.`;
+/** The same for a transfer the gate refused WITHOUT claiming it and booked as
+ *  owed (a route with no Tempo offer, a refused finalize): the refusal nests
+ *  `refundOwed` under `details` (src/mpp-tempo.js). */
+export const PUSH_UNCLAIMED_OWED_NOTE = `The Tempo transfer this credential names was sent before the call and was not claimed for it, so for the sending wallet it is ${OWED_REPAID}; a retry is a new payment.`;
+/** A transfer the gate neither claimed nor booked: the answer says what it
+ *  still pays for, so the summary points there and claims nothing. */
+export const PUSH_UNCLAIMED_NOTE = "The Tempo transfer this credential names was not claimed for this call; error.body says what it still pays for.";
 
 // A whole sentence that says nothing was charged. Replaced by the note, with
 // the sentence's own terminator kept ("; resend ..." stays a clause).

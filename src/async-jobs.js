@@ -38,20 +38,34 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
 import { NOT_CHARGED } from "./not-charged.js";
-import { PUSH_FAILURE_NOTE } from "./push-refusal-body.js";
+import { PUSH_FAILURE_NOTE, PUSH_UNCLAIMED_OWED_NOTE, PUSH_UNCLAIMED_NOTE } from "./push-refusal-body.js";
 import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { PROGRESS_HEADER, registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
 
 /** What a failed run's job says about the charge. The loopback answer is the
- *  source: a body the Tempo push gate rewrote (src/push-refusal-body.js) says
- *  the transfer was claimed and is owed, and the summary says the same; any
- *  other failed run was not settled. Exported for tests. */
+ *  source, read at the top level and under `details` (the Tempo gate's
+ *  problem documents nest their payment fields there, src/mpp-tempo.js):
+ *   - a body the push gate rewrote (src/push-refusal-body.js) says the
+ *     transfer was claimed and is owed;
+ *   - a refusal that booked an unclaimed transfer (`refundOwed`) says it is
+ *     owed and how it is repaid;
+ *   - a refusal about a transfer that was sent and neither claimed nor booked
+ *     (`transferClaimed` false or null with no `charged: false` beside it, or
+ *     the gate's own `payment` sentence) points at the answer;
+ *   - any other failed run was not settled.
+ *  Exported for tests. */
 export function failedRunSummary(status, body) {
-  const pushOwed = !!body && typeof body === "object" && (body.transferClaimed === true || body.refundOwed === true || body.charged === true);
-  if (pushOwed) return `The call ended with HTTP ${status}. ${PUSH_FAILURE_NOTE} The answer is in error.body.`;
+  const obj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const levels = obj(body) ? [body, ...(obj(body.details) ? [body.details] : [])] : [];
+  const head = status === 402 ? "The payment was not accepted, so the call did not run." : `The call ended with HTTP ${status}.`;
+  if (levels.some((l) => l.transferClaimed === true || l.charged === true)) return `The call ended with HTTP ${status}. ${PUSH_FAILURE_NOTE} The answer is in error.body.`;
+  if (levels.some((l) => l.refundOwed === true)) return `${head} ${PUSH_UNCLAIMED_OWED_NOTE} The answer is in error.body.`;
+  const gateNote = obj(body) && typeof body.payment === "string" && /\btransfer\b/i.test(body.payment) ? body.payment.slice(0, 600) : "";
+  if (gateNote) return `${head} ${gateNote}`;
+  if (levels.some((l) => (l.transferClaimed === false || l.transferClaimed === null) && l.charged !== false)) return `${head} ${PUSH_UNCLAIMED_NOTE}`;
   return status === 402
-    ? `The payment was not accepted, so the call did not run. ${NOT_CHARGED} The 402 is in error.body.`
-    : `The call ended with HTTP ${status}. ${NOT_CHARGED}`;
+    ? `${head} ${NOT_CHARGED} The 402 is in error.body.`
+    : `${head} ${NOT_CHARGED}`;
 }
 
 export const LOOPBACK_HEADER = "x-agent402-async-loopback";

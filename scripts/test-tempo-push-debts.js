@@ -213,6 +213,14 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   const r = await post(pushCred(h), { text: "x" });
   const rows = rowsFor(h);
   ok(r.status === 402 && r.body.details?.refundOwed === true && rows.length === 1 && rows[0].status === "owed" && rows[0].payer === SENDER, `finalize refused: 402 with the debt booked (${JSON.stringify(rows)})`);
+  {
+    // The async job's summary of this same answer (src/async-jobs.js reads it
+    // from the loopback body): the gate nests refundOwed under details.
+    const { failedRunSummary } = await import("../src/async-jobs.js");
+    const { PUSH_UNCLAIMED_OWED_NOTE } = await import("../src/push-refusal-body.js");
+    const said = failedRunSummary(r.status, r.body);
+    ok(r.body.refundOwed === undefined && said.includes(PUSH_UNCLAIMED_OWED_NOTE) && /repaid after on-chain proof/.test(said) && !/nothing was charged|not charged/i.test(said), `a job whose run got this refusal says the transfer is owed and repaid, never that nothing was charged (${said})`);
+  }
   ok(failures.length === 1 && failures[0].status === PUSH_FINALIZE_FAILURE_STATUS && failures[0].status !== 402, `finalize refused: one charged failure, recorded with a status the genuine count includes (${JSON.stringify(failures)})`);
   // The same hash refused on input earlier, then refused at finalize: still
   // one row, and counted once when it becomes a finalize failure.
@@ -460,7 +468,7 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
      && rewriteNotChargedForPush("Nothing was charged. You were not charged; resend it.") === `${NOTE} resend it.`,
      "a message that makes the claim twice states the owed note once");
   ok(rewriteNotChargedForPush("Nothing was charged because the input was refused. Retry.") === "The transfer you sent is recorded as owed because the input was refused. Retry.", "a clause restated at the head of a sentence keeps its capital");
-  ok(malformed("A. the transfer you sent is recorded as owed, except a Tempo transfer sent before the call, which is recorded as owed. B.", "push") !== null && malformed("A. Nothing was charged.", "push") !== null, "control: the malformed check catches a doubled clause and a standing claim");
+  ok(malformed("A. the transfer you sent is recorded as owed, except a Tempo transfer sent before the call, which is recorded as owed and repaid after on-chain proof. B.", "push") !== null && malformed("A. Nothing was charged.", "push") !== null, "control: the malformed check catches a doubled clause and a standing claim");
   // The refund run holds the claim: server.js answers its own refunded 402, untouched.
   const h2 = hashFor(42);
   const cred2 = pushCred(h2);
@@ -526,6 +534,13 @@ for (const [label, headers, status, error, tail] of [
   const r = await postTo("/long", cred, { text: "x" });
   ok(r.status === 402 && r.body.details?.reason === "method-unsupported" && r.body.details.charged === false && r.body.details.transferClaimed === false && r.body.details.refundOwed === true && handlerRuns === runs,
     `long-running route: a push credential is refused 402 at the binding check, transfer unclaimed, owed, handler not run (${JSON.stringify(r.body.details)})`);
+  {
+    // The same refusal as a job's run ends it (src/async-jobs.js).
+    const { failedRunSummary } = await import("../src/async-jobs.js");
+    const { PUSH_UNCLAIMED_OWED_NOTE } = await import("../src/push-refusal-body.js");
+    const said = failedRunSummary(r.status, r.body);
+    ok(said.includes(PUSH_UNCLAIMED_OWED_NOTE) && !/nothing was charged|not charged/i.test(said), `a job summary of this refusal says the transfer is owed (${said})`);
+  }
   ok(/runs longer than a Tempo credential/.test(r.body.detail) && /has not been claimed and is recorded as owed/.test(r.body.detail) && /pays for no further request/.test(r.body.detail),
     `...and the detail says why, that the transfer is owed and to be refunded, and that the credential is spent (${r.body.detail})`);
   const rows = rowsFor(h);
@@ -795,6 +810,46 @@ for (const [label, i, firstBody, fail] of [["an unanswered finalize", 76, { text
   ok(out.reads > 3 && pagesAfterYield > 0, `a callback queued before the tick runs while it walks ${out.reads} pages: the walk yields between pages (${pagesAfterYield} pages read after it ran)`);
 }
 
+// END TO END: the same push credential sent with Prefer: respond-async to the
+// long-running route, through the real async job middleware (src/async-jobs.js)
+// whose loopback runs the call against the real gate above. The transfer is
+// booked as owed, and the job's message says so: never "Nothing was charged".
+{
+  const { createAsyncJobs } = await import("../src/async-jobs.js");
+  const { createTaskStore } = await import("../src/mcp-tasks.js");
+  const { PUSH_UNCLAIMED_OWED_NOTE } = await import("../src/push-refusal-body.js");
+  const jobStore = createTaskStore({ dir: mkdtempSync(join(tmpdir(), "a402-push-jobs-")), log: () => {}, label: "push-jobs", limits: { pollMs: 50 } });
+  const jobs = createAsyncJobs({ port: server.address().port, store: jobStore, log: () => {}, asyncRouteOf: (req) => (req.path === "/long" ? { slug: "long-tool", price: "$0.05", asyncProfile: { slow: true, maxSeconds: 180 } } : null) });
+  const front = express();
+  front.use(express.json());
+  front.use(jobs.middleware);
+  front.get("/api/jobs/:id", jobs.statusHandler);
+  const fsrv = front.listen(0);
+  await new Promise((r) => fsrv.once("listening", r));
+  const FB = `http://127.0.0.1:${fsrv.address().port}`;
+  const h = hashFor(987654);
+  const runs = handlerRuns;
+  const accepted = await fetch(`${FB}/long`, { method: "POST", headers: { "content-type": "application/json", Authorization: pushCred(h), Prefer: "respond-async" }, body: JSON.stringify({ text: "x" }) });
+  const job = await accepted.json();
+  ok(accepted.status === 202 && typeof job.statusUrl === "string", `a push credential with Prefer: respond-async on the long-running route is taken as a job (${accepted.status})`);
+  let doc = null;
+  for (let i = 0; i < 100; i++) { doc = await (await fetch(`${FB}${job.statusUrl}`)).json(); if (doc.status === "failed" || doc.status === "completed") break; await new Promise((r) => setTimeout(r, 50)); }
+  const rows = rowsFor(h);
+  ok(doc?.status === "failed" && doc.error?.httpStatus === 402 && doc.error?.body?.details?.refundOwed === true && rows.length === 1 && rows[0].status === "owed" && handlerRuns === runs,
+    `the job's run is refused 402 by the gate, the transfer booked as owed once, the handler not run (${JSON.stringify(doc?.error?.body?.details)})`);
+  ok(String(doc?.message).includes(PUSH_UNCLAIMED_OWED_NOTE) && /recorded as owed and repaid after on-chain proof/.test(doc.message) && !/nothing was charged|not charged/i.test(doc.message),
+    `the job message says the transfer is recorded as owed and how it is repaid, never that nothing was charged (${doc?.message})`);
+  // Control: a credential whose transfer the relay does not confirm books
+  // nothing, and its job still says nothing was charged.
+  validateNext = { ok: false, cls: "unknown" };
+  const bad = await fetch(`${FB}/long`, { method: "POST", headers: { "content-type": "application/json", Authorization: pushCred(hashFor(987655)), Prefer: "respond-async" }, body: JSON.stringify({ text: "x" }) });
+  if (bad.status === 202) {
+    const bj = await bad.json(); let bd = null;
+    for (let i = 0; i < 100; i++) { bd = await (await fetch(`${FB}${bj.statusUrl}`)).json(); if (bd.status === "failed" || bd.status === "completed") break; await new Promise((r) => setTimeout(r, 50)); }
+    ok(bd?.status === "failed" && /Nothing was charged\./.test(bd.message || "") && rowsFor(hashFor(987655)).length === 0, `control: a job whose credential names no confirmed transfer books nothing and says nothing was charged (${bd?.message})`);
+  } else ok(false, `control: the unconfirmed credential was not taken as a job (${bad.status})`);
+  await new Promise((r) => fsrv.close(r));
+}
 server.close();
 console.log(`\n${pass} passed, 0 failed`);
 process.exit(0);

@@ -1854,7 +1854,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           } finally { releaseReplay(); }
           logTempoRefusal(req, { cls: "input-invalid", amountAtomic: binding.amountAtomic, timings: { validate: tValidated - t0, total: Date.now() - tStart }, detail: `push credential, transfer not claimed (${owed ? "booked as owed until claimed" : "no debt booked"}): ${String(bad.body?.error || "").slice(0, 160)}` });
           res.setHeader("Cache-Control", "no-store");
-          return res.status(bad.status).json({ ...bad.body, charged: false, transferClaimed: false, payment: `The transfer you sent has not been claimed. Send this request again ${bad.retry || "with a corrected body"} and the same credential before the challenge expires (${binding.challenge?.expires || "see the challenge"}) and it pays for that request.${owed ? " Until then it is recorded as owed to the sender." : ""}` });
+          return res.status(bad.status).json({ ...bad.body, charged: false, transferClaimed: false, payment: `The transfer you sent has not been claimed. Send this request again ${bad.retry || "with a corrected body"} and the same credential before the challenge expires (${binding.challenge?.expires || "see the challenge"}) and it pays for that request.${owed ? " Until then it is recorded as owed to the sender, and repaid after on-chain proof if it is never claimed." : ""}` });
         }
         // A transfer whose debt is already being refunded (or was) no longer
         // pays for a request: claiming it now would serve AND refund it.
@@ -1921,7 +1921,7 @@ export function createTempoGate({ validate = validateTempoCredential, broadcast 
           if (fcls === "replay" && typeof pushRowOf === "function" && pushHash) {
             try { owed = (await pushRowOf(pushHash))?.status === "owed"; } catch { owed = false; }
           }
-          return sendMppProblem(res, mppProblem(fc.kind, `The transfer this credential names could not be claimed for this request: ${fc.detail}${owed ? " The transfer was received and is recorded as owed to the sender." : ""}`, { status: 402, hint: fc.hint, details: { reason: fcls, ...(owed ? { refundOwed: true } : {}) } }));
+          return sendMppProblem(res, mppProblem(fc.kind, `The transfer this credential names could not be claimed for this request: ${fc.detail}${owed ? " The transfer was received and is recorded as owed to the sender, repaid after on-chain proof." : ""}`, { status: 402, hint: fc.hint, details: { reason: fcls, ...(owed ? { refundOwed: true } : {}) } }));
         }
         const receiptHeader = tempoReceiptHeader(f.receipt);
         if (receiptHeader) res.setHeader("Payment-Receipt", receiptHeader);

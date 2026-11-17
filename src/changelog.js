@@ -10,11 +10,14 @@ const ENTRIES = [
     date: "2026-11-16",
     title: "Settlement wording per rail, and a page for a stopped reconciliation",
     items: [
-      "Payments: Every sentence that said a payment settles only on a delivered result names the rail it holds on or its exception: a Tempo transfer sent before the call is final before the run and is recorded as owed if the run fails. This covers the tool pages, llms.txt, skill.md, the async job answers and hints, the buying-at-volume guide, the webhooks page, the wiki and the client and MCP package READMEs.",
-      "Payments: A failed async job paid with a Tempo transfer sent before the call says the transfer is recorded as owed; any other failed job says nothing was charged.",
+      "Payments: Every sentence that said a payment settles only on a delivered result names the rail it holds on or its exception: a Tempo transfer sent before the call is final before the run and, if the run fails, is repaid after on-chain proof. This covers the tool pages, llms.txt, skill.md, the async job answers and hints, the buying-at-volume guide, the webhooks page, the wiki and the client and MCP package READMEs.",
+      "Payments: A failed async job paid with a Tempo transfer sent before the call says the transfer is recorded as owed and repaid after on-chain proof, whether the transfer was claimed for the run or refused before it; any other failed job says nothing was charged.",
+      "Payments: Wherever a page, a guide, an error answer or the wiki says an amount is recorded as owed, it also says how it is repaid; and where it says a failed x402 call is not charged, it says a payment that lands late is repaid after on-chain proof.",
+      "Payments: A slow route's refusal of a call sent without Prefer: respond-async names the Tempo transfer once, and only to a caller that sent one.",
       "Payments: The /terms refunds paragraph names x402 where it says a payment settles only after a call succeeds; the payments paragraph above it already stated the payments that are final before a call.",
-      "Operations: /api/gateway-status reports mppReconcile.run (ok, stale, off or unknown) beside the reconciliation's result, and the operator is paged when the daily MPP reconciliation has run before and stops completing runs.",
-      "Operations: Relayed upstream error text is cleared of configured endpoint values whose variable names carry a suffix after RPC or URL, such as a chain id; a setting that only shares the word is left as written.",
+      "Payments: The reports wiki page says an x402 or MPP evm payment settles on a delivered report; a storefront card is charged at checkout and refunded when the report fails, as the page already said.",
+      "Operations: /api/gateway-status reports mppReconcile.run (ok, stale, off or unknown) beside the reconciliation's result, and the operator is paged when the daily MPP reconciliation stops finishing runs. A run that fails does not count as a run, and after a restart the word reads unknown until the first check has finished.",
+      "Operations: Relayed upstream error text is cleared of configured endpoint values whose variable names carry a suffix after RPC or URL, such as a chain id, including a proxy URL of any scheme that carries a password; a setting that only shares the word is left as written.",
     ],
   },
   {

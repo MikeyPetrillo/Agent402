@@ -171,7 +171,8 @@ live service ([agent402.tools](https://agent402.tools)) you can pay right now.
 
 Your client calls a paid endpoint and gets a \`402\` quote; it signs a USDC
 authorization from its own wallet and retries, and the server settles only when
-the response succeeds, so a failed x402 call is not charged. The headers, step
+the response succeeds, so a failed x402 call is not charged (a payment that lands late is repaid after on-chain proof).
+The headers, step
 by step: [how x402 works](/learn/x402).
 
 ## See a quote (free)
@@ -431,7 +432,7 @@ answers 202 at once with a \`Location\` job link. Poll \`GET /api/jobs/{id}\`
 (free), waiting \`Retry-After\` between polls, until \`status\` is \`completed\` or
 \`failed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` say where it is. The
 payment settles only when the result is ready, except a Tempo transfer sent
-before the call, which is recorded as owed if the run fails;
+before the call, which is repaid after on-chain proof if the run fails;
 on x402 a failed run is not charged. A row whose block carries \`preferWait\` also takes
 \`Prefer: wait=<maxSeconds>\` to wait on the connection, and a paid call there
 with neither header is answered 400 before any payment.
@@ -1473,7 +1474,7 @@ provenance stays explicit.
 
 - **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller
   down - cancels your settlement, and a Tempo transfer sent before the call is
-  recorded as owed. So is a payment that settles after your connection closed.
+  recorded as owed and repaid after on-chain proof. So is a payment that settles after your connection closed.
 - **Spend is bounded on our side** by per-window budgets and per-quote caps,
   so the router cannot be drained into misbehavior.
 - **Receipts are recomputable.** Paid EVM calls carry a \`callRef\` derived
@@ -2596,7 +2597,7 @@ receipt shape:
 Why pay here, in one section with the proof links:
 [agent402.tools/docs#why](https://agent402.tools/docs#why). The short version: usage is
 priced under a ceiling you see before you pay, a failed x402 call is not charged and the
-receipt shows it, a keyed retry never pays twice, and uptime and transactions are published from
+receipt shows it (a payment that lands late is repaid after on-chain proof), a keyed retry never pays twice, and uptime and transactions are published from
 outside production.
 `,
   },

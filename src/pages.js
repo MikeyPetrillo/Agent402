@@ -764,7 +764,7 @@ ${ledgerFooterCompact()}`;
 const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
 // The 429 every catalog operation can answer: the unpaid-request limits, and
 // the in-flight coverage check on paid calls (src/inflight-cover.js).
-const OPENAPI_429 = Object.freeze({ description: "Refused before the tool runs: one of the documented limits, such as a rate limit or a wallet whose balance does not cover its paid calls in flight. Not charged on x402; a Tempo transfer sent before the call is recorded as owed. Retry after Retry-After when present." });
+const OPENAPI_429 = Object.freeze({ description: "Refused before the tool runs: one of the documented limits, such as a rate limit or a wallet whose balance does not cover its paid calls in flight. Not charged on x402; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof. Retry after Retry-After when present." });
 
 // Inlined, not a $ref: naive dereferencers that crawl this document resolve
 // every pointer from the root (see the components note below).
