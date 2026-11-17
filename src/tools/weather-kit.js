@@ -1,5 +1,6 @@
-// Weather kit — global weather data, keyless and deterministic.
-// Wraps Open-Meteo (open-source weather API, no key, global coverage):
+// Weather kit: global weather data, deterministic; the buyer needs no key.
+// Wraps Open-Meteo (open-source weather API, global coverage; read with
+// OPEN_METEO_API_KEY when it is set, see openMeteoRequest below):
 //   weather-current     current conditions for any lat/lon on Earth
 //   weather-daily       7-day daily forecast (highs, lows, precip, wind, UV)
 //   weather-hourly      48-hour hourly forecast (temp, precip, wind, clouds)
@@ -7,21 +8,120 @@
 //   weather-air-quality current air quality index + pollutant breakdown
 // Complements the US-only NWS tools (weather-forecast, weather-alerts) in
 // data-kit and gov-kit by covering every location worldwide.
-// Source: api.open-meteo.com (CC BY 4.0).
+// Source: Open-Meteo (CC BY 4.0); air quality from Copernicus CAMS and the
+// archive from Copernicus C3S reanalysis, each credited (src/data-attribution.js).
 import { safeFetch, retryTransient } from "./fetch-guard.js";
 import { markEndsAtCeiling } from "../run-ceiling.js";
-import { OPEN_METEO_ATTRIBUTION } from "../data-attribution.js";
+import { OPEN_METEO_ATTRIBUTION, ATTRIBUTIONS, CAMS_CREDIT, C3S_CREDIT } from "../data-attribution.js";
+import { redactSecrets } from "./redact.js";
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
+// Each Open-Meteo API this kit reads, by its public host, and whether a key
+// moves it to the keyed host. With OPEN_METEO_API_KEY set, a keyed API is
+// read on its keyed host (the public host with a "customer-" prefix) with the
+// key as `apikey`; without the key, or for an API marked keyed: false, the
+// public host and no key, so a self-hosted server with no key reads exactly
+// what it read before.
+const OPEN_METEO_APIS = Object.freeze({
+  forecast: { host: "api.open-meteo.com", keyed: true },
+  archive: { host: "archive-api.open-meteo.com", keyed: true },
+  airQuality: { host: "air-quality-api.open-meteo.com", keyed: true },
+});
+
+function openMeteoKey(env = process.env) {
+  return String(env.OPEN_METEO_API_KEY ?? "").trim();
+}
+
+/** The one place an Open-Meteo URL is built. Returns the URL to fetch, the
+ *  public host (the only host any message names) and the host fetched. */
+export function openMeteoRequest(api, path, params, env = process.env) {
+  const spec = OPEN_METEO_APIS[api];
+  if (!spec) throw new Error(`unknown Open-Meteo API: ${api}`);
+  const publicHost = spec.host;
+  const key = spec.keyed ? openMeteoKey(env) : "";
+  const q = new URLSearchParams(params);
+  if (key) q.set("apikey", key);
+  const host = key ? `customer-${publicHost}` : publicHost;
+  return { api, url: `https://${host}${path}?${q}`, host, publicHost, keyed: Boolean(key) };
+}
+
+// The operator's line for a keyed refusal, at most one a minute per API and status.
+const refusalLoggedAt = new Map();
+function logKeyedRefusal(req, status) {
+  const now = Date.now();
+  const k = `${req.api} ${status}`;
+  if (now - (refusalLoggedAt.get(k) ?? 0) < 60_000) return;
+  refusalLoggedAt.set(k, now);
+  console.warn(`[open-meteo] keyed request refused (HTTP ${status}) for the ${req.api} API (${req.publicHost}): OPEN_METEO_API_KEY is not accepted there or does not cover that API; answered 503, not charged`);
+}
+
+// The openMeteo word on /api/gateway-status, from the last keyed outcome in
+// this process (production runs one replica): off (no key); unknown until the
+// first keyed outcome (a fresh process has not tried the key yet, so the
+// pagers neither open nor close on it); ok after a keyed success; refused
+// after two keyed refusals in a row, or at once on a 400 whose reason names
+// the API key. A word changes only on the next keyed outcome, never with time.
+let keyedOutcome = null; // null | "ok" | "refused"
+let refusalRun = 0;
+export function openMeteoStatus({ env = process.env } = {}) {
+  if (!openMeteoKey(env)) return { status: "off" };
+  return { status: keyedOutcome ?? "unknown" };
+}
+function noteKeyedSuccess() { keyedOutcome = "ok"; refusalRun = 0; }
+function noteKeyedRefusal(namesKey) {
+  refusalRun += 1;
+  if (namesKey || refusalRun >= 2) keyedOutcome = "refused";
+}
+export function _resetOpenMeteoStatus({ logs = false } = {}) { keyedOutcome = null; refusalRun = 0; if (logs) refusalLoggedAt.clear(); }
+
+// Open-Meteo answers a key it does not accept (unknown, revoked, or a plan
+// that does not cover the API) with 400 and a JSON reason naming the key or
+// the plan, not 401/403. Any other 400 is the buyer's input.
+const KEY_REFUSAL_REASON_RE = /\bapi[ _-]?key\b|\bapikey\b|\bplan\b|\bsubscription\b/i;
+const NAMES_KEY_RE = /\bapi[ _-]?key\b|\bapikey\b/i;
+function refusalReason(body) {
+  try { return String(JSON.parse(String(body || ""))?.reason ?? ""); } catch { return ""; }
+}
+
+// A failed read, restated so no message, field or log line built from it
+// names the keyed host or carries the key. A 429 stays what safeFetch makes
+// it, a 503 (the call is not charged) with Retry-After, and retryTransient
+// does not retry it: keyed traffic is never sent on to the public host. A
+// 401 or 403 on the keyed host, or a 400 whose reason names the key or a
+// plan, is our refusal: a 503 (not charged) that says so without naming a
+// key or plan, an operator log line, and a refusal toward the openMeteo word.
+// It is not marked shed, so the tool-failure monitor counts it.
+function openMeteoFailure(err, req) {
+  const up = err?.upstreamStatus;
+  const reason = up === 400 ? refusalReason(err?.upstreamBody) : "";
+  if (req.keyed && (up === 401 || up === 403 || (up === 400 && KEY_REFUSAL_REASON_RE.test(reason)))) {
+    noteKeyedRefusal(up === 400 && NAMES_KEY_RE.test(reason));
+    logKeyedRefusal(req, up);
+    return Object.assign(new Error("Weather data is temporarily unavailable because of a service problem on our side, not your input - retry later"), {
+      statusCode: 503, upstreamStatus: up, attribution: "ours", noRetry: true, retryAfter: 60,
+    });
+  }
+  if (!req.keyed || !(err instanceof Error)) return err;
+  err.message = redactSecrets(String(err.message).split(req.host).join(req.publicHost));
+  return err;
+}
+
 // One retry on a transient 502/503/504 - added 2026-08-12 after
 // weather-hourly hit exactly this shape live in CI (a plain 15s timeout,
 // zero retries previously; api.open-meteo.com answered fine on a later
-// attempt). retryTransient never retries a deterministic 4xx.
-async function getJson(url) {
-  const { html } = await retryTransient(() => safeFetch(url, { maxBytes: 2 * 1024 * 1024, ownUpstream: true }));
+// attempt). retryTransient never retries a deterministic 4xx or a 429.
+export async function openMeteoJson(api, path, params, env = process.env) {
+  const req = openMeteoRequest(api, path, params, env);
+  let html;
+  try {
+    ({ html } = await retryTransient(() => safeFetch(req.url, { maxBytes: 2 * 1024 * 1024, ownUpstream: true, errorBodyMaxBytes: req.keyed ? 2048 : 0 })));
+  } catch (err) {
+    throw openMeteoFailure(err, req);
+  }
+  if (req.keyed) noteKeyedSuccess();
   try {
     return JSON.parse(html);
   } catch {
@@ -73,6 +173,10 @@ function tempUnitOf(raw) {
 // names the API and the licence; the vendor-name check in
 // scripts/test-no-third-party-names.js allows it in the descriptions only.
 // The sentence lives in src/data-attribution.js (key "open-meteo").
+// weather-air-quality and weather-history serve Copernicus data through
+// Open-Meteo and carry the combined keys "open-meteo-cams" and
+// "open-meteo-c3s": the description ends with both credits, and the answer
+// carries the Copernicus one as `credit`.
 export { OPEN_METEO_ATTRIBUTION };
 
 export const WEATHER_TOOLS = [
@@ -84,7 +188,7 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `Current weather conditions for any location on Earth: temperature, feels-like, humidity, wind speed/direction/gusts, precipitation, cloud cover, pressure, and human-readable condition. No key, global. ?lat=48.86&lon=2.35. ${OPEN_METEO_ATTRIBUTION}`,
+      `Current weather conditions for any location on Earth: temperature, feels-like, humidity, wind speed/direction/gusts, precipitation, cloud cover, pressure, and human-readable condition. Global coverage; no account needed. ?lat=48.86&lon=2.35. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "current", "temperature", "wind", "global"],
     discovery: {
       input: { lat: 48.8566, lon: 2.3522 },
@@ -123,7 +227,7 @@ export const WEATHER_TOOLS = [
         wind_speed_unit: tempUnit === "fahrenheit" ? "mph" : "kmh",
         timezone: "auto",
       });
-      const data = await getJson(`https://api.open-meteo.com/v1/forecast?${params}`);
+      const data = await openMeteoJson("forecast", "/v1/forecast", params);
       if (!data?.current) throw bad("Open-Meteo returned no current data", 502);
       const c = data.current;
       return {
@@ -157,7 +261,7 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `7-day daily weather forecast for any location: high/low temp, precipitation sum and probability, max wind, UV index, sunrise/sunset. No key, global. ?lat=35.68&lon=139.69. ${OPEN_METEO_ATTRIBUTION}`,
+      `7-day daily weather forecast for any location: high/low temp, precipitation sum and probability, max wind, UV index, sunrise/sunset. Global coverage; no account needed. ?lat=35.68&lon=139.69. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "forecast", "daily", "global"],
     discovery: {
       input: { lat: 35.6762, lon: 139.6503 },
@@ -198,7 +302,7 @@ export const WEATHER_TOOLS = [
         timezone: "auto",
         forecast_days: days,
       });
-      const data = await getJson(`https://api.open-meteo.com/v1/forecast?${params}`);
+      const data = await openMeteoJson("forecast", "/v1/forecast", params);
       const d = data?.daily;
       if (!d?.time?.length) throw bad("Open-Meteo returned no daily data", 502);
       const result = d.time.map((date, idx) => ({
@@ -228,7 +332,7 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.002",
     description:
-      `48-hour hourly weather forecast for any location: temperature, precipitation probability and amount, wind, cloud cover, humidity. No key, global. ?lat=-33.87&lon=151.21. ${OPEN_METEO_ATTRIBUTION}`,
+      `48-hour hourly weather forecast for any location: temperature, precipitation probability and amount, wind, cloud cover, humidity. Global coverage; no account needed. ?lat=-33.87&lon=151.21. ${OPEN_METEO_ATTRIBUTION}`,
     tags: ["weather", "forecast", "hourly", "global"],
     discovery: {
       input: { lat: -33.8688, lon: 151.2093 },
@@ -268,7 +372,7 @@ export const WEATHER_TOOLS = [
         timezone: "auto",
         forecast_hours: hours,
       });
-      const data = await getJson(`https://api.open-meteo.com/v1/forecast?${params}`);
+      const data = await openMeteoJson("forecast", "/v1/forecast", params);
       const h = data?.hourly;
       if (!h?.time?.length) throw bad("Open-Meteo returned no hourly data", 502);
       const result = h.time.map((time, idx) => ({
@@ -292,11 +396,11 @@ export const WEATHER_TOOLS = [
     route: "GET /api/weather-history",
     name: "Historical weather (global)",
     slug: "weather-history",
-    attribution: "open-meteo",
+    attribution: "open-meteo-c3s",
     category: "data",
     price: "$0.002",
     description:
-      `Historical daily weather for any location and date range (up to 1 year): high/low temp, precipitation, wind, conditions. Historical archive, no key, global. Data from 1940 to 5 days ago. ?lat=51.51&lon=-0.13&start=2025-06-01&end=2025-06-07. ${OPEN_METEO_ATTRIBUTION}`,
+      `Historical daily weather for any location and date range (up to 1 year): high/low temp, precipitation, wind, conditions. Global archive from 1940 to the most recent days (reanalysis, with weather-model data for the latest days); no account needed. ?lat=51.51&lon=-0.13&start=2025-06-01&end=2025-06-07. ${ATTRIBUTIONS["open-meteo-c3s"]}`,
     tags: ["weather", "historical", "archive", "climate", "global"],
     discovery: {
       input: { lat: 51.5074, lon: -0.1278, start: "2025-06-01", end: "2025-06-07" },
@@ -320,7 +424,8 @@ export const WEATHER_TOOLS = [
               precipSum: 3.2, windMax: 18.4, windUnit: "km/h",
             },
           ],
-          source: "api.open-meteo.com (CC BY 4.0)",
+          source: "archive-api.open-meteo.com (CC BY 4.0)",
+          credit: C3S_CREDIT,
         },
       },
     },
@@ -345,7 +450,7 @@ export const WEATHER_TOOLS = [
         wind_speed_unit: tempUnit === "fahrenheit" ? "mph" : "kmh",
         timezone: "auto",
       });
-      const data = await getJson(`https://archive-api.open-meteo.com/v1/archive?${params}`);
+      const data = await openMeteoJson("archive", "/v1/archive", params);
       const d = data?.daily;
       if (!d?.time?.length) throw bad("Open-Meteo returned no historical data", 502);
       const result = d.time.map((date, idx) => ({
@@ -359,18 +464,18 @@ export const WEATHER_TOOLS = [
         windMax: d.wind_speed_10m_max?.[idx] ?? null,
         windUnit: tempUnit === "fahrenheit" ? "mph" : "km/h",
       }));
-      return { lat, lon, days: result, source: "api.open-meteo.com (CC BY 4.0)" };
+      return { lat, lon, days: result, source: "archive-api.open-meteo.com (CC BY 4.0)", credit: C3S_CREDIT };
     },
   },
   {
     route: "GET /api/weather-air-quality",
     name: "Air quality (global)",
     slug: "weather-air-quality",
-    attribution: "open-meteo",
+    attribution: "open-meteo-cams",
     category: "data",
     price: "$0.002",
     description:
-      `Current air quality index and pollutant concentrations for any location: US AQI, PM2.5, PM10, ozone, NO2, SO2, CO. Air quality API, no key, global. ?lat=28.61&lon=77.23. ${OPEN_METEO_ATTRIBUTION}`,
+      `Air quality index and current pollutant concentrations for any location: US AQI, PM2.5, PM10, ozone, NO2, SO2, CO. Global coverage; no account needed. ?lat=28.61&lon=77.23. ${ATTRIBUTIONS["open-meteo-cams"]}`,
     tags: ["weather", "air-quality", "aqi", "pollution", "pm25", "global"],
     discovery: {
       input: { lat: 28.6139, lon: 77.2090 },
@@ -394,6 +499,7 @@ export const WEATHER_TOOLS = [
             units: { pm: "μg/m³", gases: "μg/m³" },
           },
           source: "air-quality-api.open-meteo.com (CC BY 4.0)",
+          credit: CAMS_CREDIT,
         },
       },
     },
@@ -403,7 +509,7 @@ export const WEATHER_TOOLS = [
         latitude: lat, longitude: lon,
         current: "us_aqi,pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone",
       });
-      const data = await getJson(`https://air-quality-api.open-meteo.com/v1/air-quality?${params}`);
+      const data = await openMeteoJson("airQuality", "/v1/air-quality", params);
       if (!data?.current) throw bad("Open-Meteo returned no air quality data", 502);
       const c = data.current;
       const aqi = c.us_aqi ?? null;
@@ -431,6 +537,7 @@ export const WEATHER_TOOLS = [
           units: { pm: "μg/m³", gases: "μg/m³" },
         },
         source: "air-quality-api.open-meteo.com (CC BY 4.0)",
+        credit: CAMS_CREDIT,
       };
     },
   },

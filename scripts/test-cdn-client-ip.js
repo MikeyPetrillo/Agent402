@@ -89,6 +89,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok(d.req.ip === "104.16.0.5" && d.req.viaCdn === false && !(ORIGIN_AUTH_HEADER in d.req.headers), "middleware on: a wrong secret is ignored and removed");
   const e = run("104.16.0.5", { "cf-connecting-ip": "198.51.100.9", [ORIGIN_AUTH_HEADER]: "" }, { enabled: true, secret: "" });
   ok(e.req.ip === "104.16.0.5" && e.req.viaCdn === false, "middleware on with no secret configured: the header is never trusted");
+  // A CDN peer with no proof of its client's address (no valid origin
+  // secret) is flagged, and a per-caller admission key never uses that edge
+  // address, which every client behind the edge shares
+  // (src/dispatch-caller.js callerKeysOf).
+  {
+    const { callerKeysOf, callerKeyOf } = await import("../src/dispatch-caller.js");
+    ok(c.req.cdnUnproven === true && d.req.cdnUnproven === true && e.req.cdnUnproven === true, "middleware on: a CDN peer without a valid secret is marked unproven");
+    ok(b.req.cdnUnproven !== true && a.req.cdnUnproven !== true && off.req.cdnUnproven === undefined, "a CDN peer with the secret, a direct peer and the resolver off are not");
+    c.req.creditsKeyId = "k1";
+    ok(JSON.stringify(callerKeysOf(c.req)) === JSON.stringify(["credits:k1"]), `an unproven CDN request's caller keys leave out the edge address (${JSON.stringify(callerKeysOf(c.req))})`);
+    ok(callerKeysOf(d.req).length === 0, "an unsigned unproven CDN request carries no address key");
+    ok(callerKeyOf(d.req) === "ip:104.16.0.5", "a concurrency cap's single key still counts it under the edge address, never under none");
+    ok(JSON.stringify(callerKeysOf(b.req)) === JSON.stringify(["ip:198.51.100.9"]) && JSON.stringify(callerKeysOf(a.req)) === JSON.stringify(["ip:203.0.113.7"]), "a proven CDN client and a direct peer keep their address key");
+  }
   // The status word: CDN-range peers without a valid secret read
   // unauthenticated for an hour once they reach the alert count; a direct
   // peer without one, or a CDN peer with it, does not count; off while the

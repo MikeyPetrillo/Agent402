@@ -12,6 +12,10 @@ const ENTRIES = [
     items: [
       "Surfaces: The hosted MCP connector at /mcp accepts x402 in the call, over the x402 MCP transport: the first ask for a paid tool carries an x402 PaymentRequired beside the MPP challenges, a client sends the signed payment in _meta[\"x402/payment\"], and a paid answer carries the settle receipt in _meta[\"x402/payment-response\"]. Six flagship tools (web.search, web.news, web.answer, market.quote, browser.render and memory.read) are offered with resource /mcp, and catalog.call and the other flagships with the tool's own HTTP route; that route's x402 paywall verifies the payment, runs the tool and settles only a successful answer.",
       "Surfaces: On the hosted MCP connector, a payment whose settlement is not decided yet (a Circle Gateway batched payment still settling, or a broadcast transfer not yet confirmed) is answered with the paid route's explanation and no new offer, so a client does not sign a second payment for one call. A free tool at its rate limit offers its x402 challenge, so a client that pays is served past the limit. A call carrying a payment has its own, larger per-client request limit when it reaches a paid route; any other call keeps the normal one.",
+    title: "Weather data reliability and Copernicus credits",
+    items: [
+      "Tools: The weather tools read their data on a reserved service lane when the server holds a weather data key, and a refusal of that key answers a temporary error that names our side, not the buyer's input, while /api/gateway-status reports openMeteo (off, unknown, ok or refused) and the operator is paged on refused.",
+      "Tools: weather-air-quality credits the Copernicus Atmosphere Monitoring Service and weather-history credits the Copernicus Climate Change Service, each with the Copernicus disclaimer, in each tool's description and in a credit field on each answer, beside the Open-Meteo credit; weather-history states its range as 1940 to the most recent days.",
     ],
   },
   {
