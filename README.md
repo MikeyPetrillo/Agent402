@@ -117,6 +117,8 @@ Pick whichever fits. They are all free and need no wallet:
 https://agent402.tools/mcp
 ```
 
+The pure-CPU tools run free there. A wallet-only tool is payable in the same call over x402 or MPP, from an MCP client that holds a wallet ([MCP Connector](https://github.com/MikeyPetrillo/Agent402/wiki/MCP-Connector)).
+
 **2. One command - run the MCP server locally** (the pure-CPU tools work with no key; it pays the tiny proof-of-work for you):
 
 ```bash

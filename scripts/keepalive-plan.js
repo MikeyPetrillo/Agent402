@@ -14,12 +14,22 @@
 //       changed, exempt kinds left out. Refuses (exit 3) over MAX_SPEND_USD or
 //       over MAX_ROUTES routes (default 25). Writes slugs= and max_price= to
 //       $GITHUB_OUTPUT.
+//   node scripts/keepalive-plan.js mcp
+//       The MCP tool listings pass (scripts/lib/mcp-listings.js): the
+//       connector's fixed-price flagship tools live in the catalog, exempt
+//       kinds left out. Refuses (exit 3) over MAX_SPEND_USD. Writes slugs=,
+//       max_price= and count= to $GITHUB_OUTPUT; the buy is
+//       scripts/refresh-bazaar.js MODE=mcp with that explicit list. With
+//       ASKED set (a dispatched comma list of catalog slugs or dotted tool
+//       names) the plan is that list, mapped to catalog slugs; an entry that
+//       names no MCP tool listing refuses the whole list (exit 2).
 //   node scripts/keepalive-plan.js low-water
-//       Prints the burner low-water mark in whole USD: one tail pass plus the
+//       Prints the burner low-water mark in whole USD: one tail pass (and
+//       one MCP listings pass while BAZAAR_MCP_KEEPALIVE is "on") plus the
 //       margin, never under FLOOR_USD.
 //
 // Env: TARGET_URL (default https://agent402.tools), MAX_SPEND_USD, MAX_ROUTES,
-// FLOOR_USD.
+// FLOOR_USD, ASKED, BAZAAR_MCP_KEEPALIVE.
 //
 // The run logs are public: nothing here prints a total, a cap or a price, only
 // route counts, slugs and whether a cap held (the low-water mark goes to the
@@ -32,6 +42,11 @@ import {
   aboveCeilingRoutes, passMicros, microsToUsd, spendCapVerdict, routeCountVerdict,
   priceSnapshot, changedPriceRoutes, burnerLowWaterUsd, PRICE_CHANGE_MAX_ROUTES,
 } from "./lib/keepalive-plan.js";
+import { mcpListingRoutes, mcpListingSlugsOf, selectMcpListings, MCP_LISTING_TOOLS } from "./lib/mcp-listings.js";
+
+/** The MCP listings pass: every MCP tool listing live in the catalog that is
+ *  priced and not an exempt kind. */
+export const mcpPassRoutes = (pricing) => mcpListingRoutes(pricing).filter((r) => !r.exempt && r.micros > 0);
 
 async function readPricing(target) {
   const r = await fetch(`${target.replace(/\/+$/, "")}/api/pricing`, { signal: AbortSignal.timeout(30_000) });
@@ -53,8 +68,8 @@ function writeOutputs(env, routes) {
 export async function run(argv, { env = process.env, log = console.log, err = console.error, fetchPricing = readPricing } = {}) {
   const [cmd, file] = argv;
   const target = env.TARGET_URL || "https://agent402.tools";
-  if (!["tail", "snapshot", "changed", "low-water"].includes(cmd) || ((cmd === "snapshot" || cmd === "changed") && !file)) {
-    err("usage: keepalive-plan.js tail | snapshot <file> | changed <file> | low-water");
+  if (!["tail", "snapshot", "changed", "low-water", "mcp"].includes(cmd) || ((cmd === "snapshot" || cmd === "changed") && !file)) {
+    err("usage: keepalive-plan.js tail | snapshot <file> | changed <file> | low-water | mcp");
     return 2;
   }
   let pricing;
@@ -63,7 +78,9 @@ export async function run(argv, { env = process.env, log = console.log, err = co
     return 2;
   }
   if (cmd === "low-water") {
-    const pass = microsToUsd(passMicros(aboveCeilingRoutes(pricing)));
+    // The MCP listings pass draws on the burner only while its schedule is on.
+    const mcpOn = String(env.BAZAAR_MCP_KEEPALIVE || "").trim() === "on";
+    const pass = microsToUsd(passMicros(aboveCeilingRoutes(pricing)) + (mcpOn ? passMicros(mcpPassRoutes(pricing)) : 0));
     log(String(burnerLowWaterUsd(pass, { floorUsd: Number(env.FLOOR_USD) || 0 })));
     return 0;
   }
@@ -76,6 +93,29 @@ export async function run(argv, { env = process.env, log = console.log, err = co
   if (cmd === "tail") {
     routes = aboveCeilingRoutes(pricing);
     log(`Routes priced above the keep-alive ceiling, exempt kinds left out: ${routes.length}.`);
+  } else if (cmd === "mcp" && String(env.ASKED || "").trim()) {
+    // A dispatched list: catalog slugs or dotted tool names, mapped to the
+    // slugs the buy takes. Anything else refuses the whole list here, before
+    // any step that holds a key.
+    const names = Object.entries(MCP_LISTING_TOOLS).map(([slug, tool]) => `${slug} (${tool})`).join(", ");
+    const { slugs, unknown } = mcpListingSlugsOf(env.ASKED);
+    if (unknown.length) {
+      err(`keepalive-plan: refusing: ${unknown.length} of the entries asked name no MCP tool listing. A listing is named by its catalog slug or its tool name: ${names}.`);
+      writeOutputs(env, []);
+      return 2;
+    }
+    const sel = selectMcpListings(pricing, slugs);
+    if (sel.refused.length) {
+      for (const r of sel.refused) err(`  refused ${r.slug}: ${r.why}`);
+      err("keepalive-plan: refusing the whole list; nothing is bought.");
+      writeOutputs(env, []);
+      return 2;
+    }
+    routes = sel.routes;
+    log(`MCP tool listings asked for: ${routes.length} (${routes.map((r) => `${r.toolName} = ${r.slug}`).join(", ")}).`);
+  } else if (cmd === "mcp") {
+    routes = mcpPassRoutes(pricing);
+    log(`MCP tool listings live in the catalog, exempt kinds left out: ${routes.length}${routes.length ? ` (${routes.map((r) => r.toolName).join(", ")})` : ""}.`);
   } else {
     let before;
     try { before = JSON.parse(readFileSync(file, "utf8")); } catch {

@@ -336,6 +336,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BURNER: "0x902dCf34E53695bDEA2fFB354b1a2e58bD598256"
           FLOOR_USD: ${{ vars.CANARY_BURNER_LOW_USD || '1' }}
+          # The MCP listings pass counts toward the mark only while its schedule is on.
+          BAZAAR_MCP_KEEPALIVE: ${{ vars.BAZAAR_MCP_KEEPALIVE }}
         run: |
           WARN_USD=$(TARGET_URL=https://agent402.tools GH_TOKEN="" node scripts/keepalive-plan.js low-water 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+)?$' | tail -1)
           FALLBACK=0

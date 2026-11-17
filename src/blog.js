@@ -290,7 +290,7 @@ export const BLOG_POSTS = [
   <li><strong>server.describe</strong> - get platform info and capabilities</li>
 </ul>
 
-<p>The hosted endpoint handles PoW challenges internally, so pure-CPU tools are effectively free through MCP. A wallet-only tool called on the connector without payment answers with a readable tool result that carries the MPP challenges in <code>_meta["org.paymentauth/payment-required"]</code>; an MPP client pays it by retrying with the credential in the call's <code>_meta["org.paymentauth/credential"]</code>. <em>(Updated 2026-10-11 to the connector's current answer; see <a href="/learn/mcp-payments">MCP payments</a>.)</em></p>
+<p>The hosted endpoint handles PoW challenges internally, so pure-CPU tools are effectively free through MCP. A wallet-only tool called on the connector without payment answers with a readable tool result that carries the MPP challenges in <code>_meta["org.paymentauth/payment-required"]</code>; an MPP client pays it by retrying with the credential in the call's <code>_meta["org.paymentauth/credential"]</code>. <em>(Updated 2026-10-11 to the connector's current answer; see <a href="/learn/mcp-payments">MCP payments</a>.)</em> <em>(Updated 2026-11-16: the same answer now carries an x402 payment offer as well, and an x402 MCP client pays it with the signed payment in the call's <code>_meta["x402/payment"]</code>.)</em></p>
 
 <h2>Claude Code setup</h2>
 
