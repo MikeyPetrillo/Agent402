@@ -25,8 +25,12 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 
 // The stand-in for production: every fetch to that origin that reaches it
 // answers a card of a different name, so which layer answered is visible.
+// It routes on the parsed host (scripts/lib/url-host.js), imported by file URL
+// since a data: module has no directory of its own.
+const URL_HOST = new URL("./lib/url-host.js", import.meta.url).href;
 const STAND_IN = "data:text/javascript," + encodeURIComponent(
-  'const real = globalThis.fetch; globalThis.fetch = (input, init) => { const u = typeof input === "string" ? input : input?.url || String(input); if (u.startsWith("https://agent402.tools")) return Promise.resolve(new Response(JSON.stringify({ name: "Production Stand-in", description: "x", url: "https://example.com/a2a", version: "1.0.0", protocolVersion: "0.3.0", capabilities: {}, defaultInputModes: ["text/plain"], defaultOutputModes: ["text/plain"], skills: [{ id: "s", name: "s", description: "s", tags: ["t"] }] }), { status: 200, headers: { "content-type": "application/json" } })); return real(input, init); };',
+  `import { isHost } from ${JSON.stringify(URL_HOST)}; ` +
+  'const real = globalThis.fetch; globalThis.fetch = (input, init) => { if (isHost(input, "agent402.tools")) return Promise.resolve(new Response(JSON.stringify({ name: "Production Stand-in", description: "x", url: "https://example.com/a2a", version: "1.0.0", protocolVersion: "0.3.0", capabilities: {}, defaultInputModes: ["text/plain"], defaultOutputModes: ["text/plain"], skills: [{ id: "s", name: "s", description: "s", tags: ["t"] }] }), { status: 200, headers: { "content-type": "application/json" } })); return real(input, init); };',
 );
 
 const srv = await bootServer({
