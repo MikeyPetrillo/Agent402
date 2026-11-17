@@ -32,6 +32,31 @@ const ENTRIES = [
   },
   {
     date: "2026-11-16",
+    title: "Marketplace answers arrive whole or are not settled",
+    items: [
+      "Payments: An input a tool refuses on a call bought through a marketplace listing is answered with the tool's expected fields, required fields and example, as on the direct route, and this server does not settle the payment.",
+      "Payments: An answer larger than a marketplace passes on whole (64,000 bytes) is refused with status 413 before the payment is settled, so we do not settle it: the refusal gives the answer's size and the limit and names the tool's own input fields that narrow the request. No answer is cut to fit, and a tool whose published example answer is over the limit is not offered there.",
+      "Payments: The wait for a marketplace settlement to answer is 60 seconds by default, which covers the longest that settlement takes to answer. A call whose run was slow waits less, so its answer starts before the connection's own time limit; a settlement still unanswered then is read from the chain, and the answer is kept for the same payment sent again.",
+      "Tools: The published example for edgar-company-facts asks for two named concepts (tags=Revenues,Assets), an answer of a few tens of KB. Every input answers as it did before.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "Marketplace sales count in our figures",
+    items: [
+      "Payments: A sale made through a marketplace listing of one of our tools now counts in the public sales figures: the sales summary, the served-call counters, the tool rankings, the bestsellers feed, the buyer scorecard and the per-network split each count it once, as an outside sale of that tool, at the price its buyer paid.",
+      "Payments: On the transactions page, a marketplace sale settled on chain is counted once, and the paying wallets figure counts the buyer who paid for it, not the payment contract the marketplace uses.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "CoinGecko answers carry the source credit",
+    items: [
+      `Tools: Every answer from a tool that serves CoinGecko data carries a credit field, "Data provided by CoinGecko" with a link to the CoinGecko API page, and each such tool's description ends with the same linked sentence. A market tick answer that includes a coin figure carries it too, and a skill pack that runs a CoinGecko tool prints it once, on the pack's answer.`,
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Large seller indexes and sanctions list copies no longer hold the server",
     items: [
       "Operations: The seller index reads a very large seller's networks and signing domains across turns, in the same order as before, so a seller with tens of thousands of listed routes no longer holds other requests while the router's index of its routes is built.",

@@ -245,6 +245,8 @@ t node scripts/test-index-unloaded-503-pg.js
 t node scripts/test-state-db-overlap.js
 # The file/memory half runs without the database; the Postgres half with it.
 t node scripts/test-json-document.js
+# The referral book as a head row and one row per entry: the old whole-book document folded once, a write the size of its entry, two processes losing no write under the row lock.
+t node scripts/test-referral-book-pg.js
 # web.answer share=true: the page is written only on a settled 200; hostile answers render inert; noindex, 404/410 (paid boot, stub facilitator + stub answer upstream); the
 t node scripts/test-answer-share.js
 
