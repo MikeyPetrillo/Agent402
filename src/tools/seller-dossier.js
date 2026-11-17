@@ -2,8 +2,9 @@
 // seller origin, assembled into a single paid read: identity and crawl history,
 // the catalog with the provenance of every price, the wallets it advertises
 // against the wallets that have been PAID, settlement evidence per chain and
-// per source, the router's own dispatch verdict with its reason, what happened
-// the times our router actually paid it, and a list of plain-English flags.
+// per source, the router's own dispatch verdict with its reason, what each
+// route delivered when our router called it (paid calls and the unpaid
+// non-answers it refused to resell), and a list of plain-English flags.
 //
 // Why it exists (2026-09-08): the ecosystem-data line (bestsellers, demand-
 // radar, x402-trending) has more distinct buyers than anything else we sell,
@@ -56,6 +57,9 @@ export function hostOf(raw) {
 
 const TOOL_ROWS_MAX = 50;
 
+/** What the `delivery` summary counts: our router's calls to the seller's paid routes, the unpaid non-answers included. */
+export const DELIVERY_SOURCE = "route-and-execute calls to paid routes (ours, unpaid non-answers included)";
+
 /**
  * Pure. Assemble the dossier from injected evidence. Every argument may be
  * null/undefined and is reported as absent when it is.
@@ -83,9 +87,6 @@ const TOOL_ROWS_MAX = 50;
  * @param {boolean} a.self
  * @param {number} a.now
  */
-/** What the `delivery` summary counts: our router's calls to the seller's paid routes, the unpaid non-answers included. */
-export const DELIVERY_SOURCE = "route-and-execute calls to paid routes (ours, unpaid non-answers included)";
-
 export function composeSellerDossier(a) {
   const {
     host, detail, entry, dispatch, evidenceBinding, leaderboardRow, bazaar, solana, mpp,
@@ -471,9 +472,9 @@ export function composeSellerDossier(a) {
     rows: observed,
   };
   const lowKeep = observed.filter((o) => o.calls >= 3 && o.keptRate < 0.8);
-  if (lowKeep.length) flags.push(`${lowKeep.length} route(s) we paid delivered less than 80% of the time (${lowKeep.map((o) => o.route).join(", ")})`);
+  if (lowKeep.length) flags.push(`${lowKeep.length} route(s) our router called delivered less than 80% of the time (${lowKeep.map((o) => o.route).join(", ")})`);
   const overLimit = observed.filter((o) => (o.unverifiable || 0) >= 3);
-  if (overLimit.length) flags.push(`${overLimit.length} route(s) we paid answered past our read limit in a form we could not check, 3 or more times (${overLimit.map((o) => o.route).join(", ")})`);
+  if (overLimit.length) flags.push(`${overLimit.length} route(s) our router called answered past our read limit in a form we could not check, 3 or more times (${overLimit.map((o) => o.route).join(", ")})`);
 
   return {
     origin,
@@ -541,7 +542,7 @@ export function buildSellerDossierTool({
     category: "x402",
     price: "$0.05",
     description:
-      "Everything Agent402 knows about one x402 seller origin, in one read: identity and crawl history, the catalog with the provenance of every price (live-402 or manifest, when it was read, whether it is stale or disagrees with the seller's own declaration), advertised wallets against the wallets that were actually paid (own chain evidence, inherited wallets, shared claims), settlement evidence per source (our Base leaderboard, the x402 Bazaar discovery index, Solana SPL credits, MPP transfers), the router's own dispatch verdict per chain with its reason, both lanes it can pay through (proven, and the Base unproven lane for a seller below the settlement floor) with the route-execute tiers that can pay each and any recent refusal, and what happened the times our router paid it (each catalog row's responseDelivery; ourPaidCalls carries the same value and is deprecated). Ends in plain-English flags, never a score. Deterministic and offline: assembled from our crawl, probes, ledger and chain reads, never a live fetch of the seller. Priced above the list endpoints because it is the assembled record, not a listing.",
+      "Everything Agent402 knows about one x402 seller origin, in one read: identity and crawl history, the catalog with the provenance of every price (live-402 or manifest, when it was read, whether it is stale or disagrees with the seller's own declaration), advertised wallets against the wallets that were actually paid (own chain evidence, inherited wallets, shared claims), settlement evidence per source (our Base leaderboard, the x402 Bazaar discovery index, Solana SPL credits, MPP transfers), the router's own dispatch verdict per chain with its reason, both lanes it can pay through (proven, and the Base unproven lane for a seller below the settlement floor) with the route-execute tiers that can pay each and any recent refusal, and what each route delivered when our router called it, paid calls and the unpaid non-answers it refused to resell alike (each catalog row's responseDelivery; ourPaidCalls carries the same value and is deprecated). Ends in plain-English flags, never a score. Deterministic and offline: assembled from our crawl, probes, ledger and chain reads, never a live fetch of the seller. Priced above the list endpoints because it is the assembled record, not a listing.",
     tags: ["x402", "seller", "dossier", "due-diligence", "trust", "reputation", "counterparty", "verify", "price-drift",
       "wallet", "settlement", "evidence", "router", "discovery", "check a seller before paying", "is this seller real",
       "who has paid this seller", "seller background check"],

@@ -244,6 +244,9 @@ check("delivery observations attach to their route and a low keep rate is flagge
   const bare = base({}).catalog.tools[0];
   if (bare) assert.ok("ourPaidCalls" in bare && "responseDelivery" in bare && bare.ourPaidCalls === bare.responseDelivery, "a row with no record carries both fields as null");
   assert.match(r.delivery.source, /unpaid non-answers included/);
+  // The record counts unpaid non-answers too, so no flag says "we paid".
+  assert.ok(!r.flags.some((f) => /we paid/.test(f)), "a delivery flag never says every counted call was paid");
+  assert.ok(r.flags.some((f) => /route\(s\) our router called delivered less than 80%/.test(f)));
 });
 check("answers past our read limit that could not be checked are counted and flagged, never read as kept", () => {
   const d = new Map([["POST /api/a", { calls: 2, kept: 2, keptRate: 1, unverifiable: 4, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }], ["POST /api/b", { calls: 0, kept: 0, keptRate: null, unverifiable: 1, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }]]);
@@ -252,6 +255,13 @@ check("answers past our read limit that could not be checked are counted and fla
   assert.equal(r.delivery.kept, 2);
   assert.ok(r.flags.some((f) => /past our read limit.*\/api\/a/.test(f)));
   assert.ok(!r.flags.some((f) => /past our read limit.*\/api\/b/.test(f)));
+  assert.ok(r.flags.some((f) => /route\(s\) our router called answered past our read limit/.test(f)) && !r.flags.some((f) => /we paid/.test(f)));
+});
+check("the tool description names the delivery record truthfully and the deprecated field", () => {
+  const d = buildSellerDossierTool({}).description;
+  assert.ok(!/times our (own )?router (actually )?paid it/.test(d), "the description does not say every recorded call was paid");
+  assert.match(d, /when our router called it, paid calls and the unpaid non-answers it refused to resell alike/);
+  assert.match(d, /each catalog row's responseDelivery; ourPaidCalls carries the same value and is deprecated/);
 });
 
 // --- identity / health flags -------------------------------------------------

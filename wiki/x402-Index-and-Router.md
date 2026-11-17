@@ -99,7 +99,8 @@ with the provenance of every price, advertised wallets against the wallets that
 were really paid (own evidence, inherited evidence, and who else claims a shared
 payTo), settlement evidence kept per source instead of summed into one
 misleading total, the dispatch verdict per chain with its reason and any recent
-refusal or delivery failure, and what happened the times our own router paid it.
+refusal or delivery failure, and what each route delivered when our router
+called it, paid calls and the unpaid non-answers it refused to resell alike.
 Plain-English flags, no score. Also offline - nothing is fetched from the seller.
 Each catalog row's delivery record is `responseDelivery`; the deprecated
 `ourPaidCalls` carries the same value.
