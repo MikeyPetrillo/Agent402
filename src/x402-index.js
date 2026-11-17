@@ -9998,8 +9998,31 @@ function decoratedRemoteTools(v, origin = null) {
   if (d) return d;
   return decorateRemoteToolsStep(v, Infinity, origin);
 }
+// The seller-level networks and EIP-712 domains are a walk over every row of
+// the entry and the Bazaar's rows for its origin. One 80,000-row seller walked
+// in one turn held the loop for that whole walk inside the first index slice,
+// so the walk is a fold that resumes: rows in order, a time check every 256,
+// the same union in the same order as the one-pass spread it replaced.
+function newDecorationFold(v) {
+  const tools = v.tools || [];
+  const sellerOrigin = tools[0]?.seller || null;
+  return { tools, bazaar: sellerOrigin ? (bazaarToolsByOrigin.get(sellerOrigin) || []) : [], sellerOrigin, j: 0, nets: new Set(), domains: {} };
+}
+// True once every row is folded, false when `until` passed first.
+function foldDecorationContext(f, until = Infinity) {
+  const n = f.tools.length + f.bazaar.length;
+  for (; f.j < n; f.j++) {
+    if ((f.j & 255) === 0 && until !== Infinity && f.j > 0 && performance.now() >= until) return false;
+    const t = f.j < f.tools.length ? f.tools[f.j] : f.bazaar[f.j - f.tools.length];
+    const nets = t.networks || [];
+    if (Array.isArray(nets)) for (const net of nets) f.nets.add(net); else f.nets.add(nets); // flatMap's one level
+    addEvmDomain(f.domains, t);
+  }
+  return true;
+}
 // Seller-level facts every decorated row of one entry shares.
-function decorationContext(v) {
+function decorationContext(v, fold = newDecorationFold(v)) {
+  foldDecorationContext(fold);
   // Seller-level payment networks: the union of every chain this seller's
   // OWN crawled 402s advertise plus the Bazaar's settled view of the same
   // origin - the same union the /api/index seller row carries. A route the
@@ -10013,15 +10036,12 @@ function decorationContext(v) {
   // them. Money-safe: payX402 pins the accept from the LIVE 402 before it
   // signs, so an inferred chain the route does not actually offer fails the
   // buy with nothing spent - inference only decides who gets tried.
-  const sellerOrigin = (v.tools || [])[0]?.seller || null;
-  const sellerNets = [...new Set([
-    ...(v.tools || []).flatMap((t) => t.networks || []),
-    ...(sellerOrigin ? (bazaarToolsByOrigin.get(sellerOrigin) || []) : []).flatMap((t) => t.networks || []),
-  ])];
+  const { sellerOrigin } = fold;
+  const sellerNets = [...fold.nets];
   // Same inheritance for the advertised EIP-712 domain: a row that observed
   // no accepts of its own reads the seller's (a wrong name is set once, in the
   // seller's middleware, so every route on the origin carries it).
-  const sellerDomains = evmDomainUnion([...(v.tools || []), ...(sellerOrigin ? (bazaarToolsByOrigin.get(sellerOrigin) || []) : [])]);
+  const sellerDomains = fold.domains;
   // The seller's own homepage and name are served the way /api/index serves
   // them: only an http(s) homepage is a link, and the name is cleaned, capped
   // and replaced by the bare host when it trips the listing screen.
@@ -10049,7 +10069,12 @@ function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   if (memo) return memo;
   let p = decoratePartial.get(v);
   try {
-    if (!p) { p = { i: 0, out: [], c: decorationContext(v) }; decoratePartial.set(v, p); }
+    if (!p) { p = { i: 0, out: [], fold: newDecorationFold(v), c: null }; decoratePartial.set(v, p); }
+    if (!p.c) {
+      if (!foldDecorationContext(p.fold, until)) return null;
+      p.c = decorationContext(v, p.fold);
+      p.fold = null;
+    }
     const tools = v.tools || [];
     for (; p.i < tools.length; p.i++) {
       if ((p.i & 255) === 0 && until !== Infinity && p.i > 0 && performance.now() >= until) return null;

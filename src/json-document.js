@@ -47,6 +47,7 @@
 // flushJsonDocuments() sends what is waiting (the shutdown flush).
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdir, open, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { documents, imports, onStateDbRecovered, setUnloadedStoresProbe, setUnsavedStoresProbe, stateDbEnabled, stateDbSchema, stateQuery, withImportSlot } from "./state-db.js";
 import { envPositive as envMs } from "./env-num.js";
@@ -113,6 +114,24 @@ function writeJsonFile(file, body) {
   renameSync(tmp, file);
   return raw;
 }
+// The off-loop writer behind saveSerialized(): each piece is encoded, hashed
+// and written on its own, so no turn handles more than one piece. Resolves
+// the sha256 of the bytes written (the write-through sidecar's hash).
+let piecesTmpSeq = 0;
+async function writeJsonPiecesAsync(file, pieces, { makeDir = true } = {}) {
+  if (makeDir) await mkdir(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.p${++piecesTmpSeq}.tmp`;
+  const hash = createHash("sha256");
+  try {
+    const fh = await open(tmp, "w");
+    try { for (const p of pieces) { hash.update(p); await fh.write(p); } } finally { await fh.close(); }
+    await rename(tmp, file);
+  } catch (e) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw e;
+  }
+  return hash.digest("hex");
+}
 
 /** Documents made once per file name, for a module that keeps several: the
  *  first `docFor(file)` creates the document (quiet log) and later calls return
@@ -160,6 +179,12 @@ export function createJsonDocument({ name = null, file = null, log = console.war
   // burst of persist() calls costs one write.
   let inFlight = null;
   let pendingBody = undefined;
+  // The waiting body's JSON text in pieces when saveSerialized() issued it
+  // (undefined for a save() body): it travels with pendingBody.
+  let pendingPieces = undefined;
+  // saveSerialized()'s file writes (the file store, and the database store's
+  // write-through), chained so they land in call order.
+  let fileWrites = Promise.resolve(true);
   const say = (m) => { try { log(`[json-document] ${docName}: ${m}`); } catch { /* logging never throws */ } };
   // An unread body and a held save are named even when the store's own log is
   // quiet: the operator's clue to a store that is not persisting.
@@ -212,10 +237,12 @@ export function createJsonDocument({ name = null, file = null, log = console.war
     inFlight = (async () => {
       let okAll = true;
       while (pendingBody !== undefined) {
-        const next = pendingBody; pendingBody = undefined;
+        const next = pendingBody, pieces = pendingPieces; pendingBody = undefined; pendingPieces = undefined;
         try {
-          const v = await documents.put(docName, next);
-          lastError = null; writeThrough(next, v);
+          // A body serialized by its caller across turns is sent as that text.
+          const v = pieces ? await documents.putText(docName, pieces.join("")) : await documents.put(docName, next);
+          lastError = null;
+          if (pieces) writeThroughPieces(pieces, v); else writeThrough(next, v);
           if (pendingBody === undefined && unsavedDocs.has(api)) {
             unsavedDocs.delete(api);
             alert(`the held save landed after ${saveFailures} failed attempt(s)`);
@@ -225,7 +252,7 @@ export function createJsonDocument({ name = null, file = null, log = console.war
           okAll = false;
           lastError = String(e?.message || e).slice(0, 160);
           // A newer body issued while this one was in flight replaces it.
-          if (pendingBody === undefined) pendingBody = next;
+          if (pendingBody === undefined) { pendingBody = next; pendingPieces = pieces; }
           saveFailures++;
           unsavedDocs.add(api);
           alert(`save failed (attempt ${saveFailures}): ${lastError}; the latest body is kept and re-sent`);
@@ -237,6 +264,23 @@ export function createJsonDocument({ name = null, file = null, log = console.war
       return okAll;
     })();
     return inFlight;
+  }
+
+  /** The database backend's whole-body save: held while the row is unread, else queued (the newest wins). */
+  function queueSave(body, pieces = undefined) {
+    // A body that replaced a row nobody read would erase it: held until a
+    // load succeeds (the store's next load or tick reads the row again).
+    if (loadState === "failed" || loadState === "loading") {
+      lastError = lastError || "not loaded";
+      const m = loadState === "loading"
+        ? "save refused: the first load has not read the stored body yet; it is kept as it is"
+        : "save refused: the stored body was never read (last load failed); it is kept as it is";
+      if (!refusalLogged) { refusalLogged = true; alert(m); } else say(m);
+      return Promise.resolve(false);
+    }
+    pendingBody = body;
+    pendingPieces = pieces;
+    return startSaving();
   }
 
   let writeThroughWarned = false;
@@ -254,6 +298,27 @@ export function createJsonDocument({ name = null, file = null, log = console.war
       if (Number.isFinite(version)) writeJsonFile(rowMarkOf(file), { version, sha256: sha256(raw) });
     }
     catch (e) { if (!writeThroughWarned) { writeThroughWarned = true; say(`write-through to ${file} failed: ${String(e?.message || e).slice(0, 120)}`); } }
+  }
+
+  /**
+   * The same write-through for a body saved as pieces (saveSerialized), off
+   * the event loop: the file and then its sidecar are written with
+   * fs/promises on the fileWrites chain, so they land in save order, a
+   * stalled disk never holds the loop, and flush() waits for them. The
+   * bytes and the sidecar are the ones writeThrough() writes for the same
+   * body. A failure is logged once, as there, and never rejects.
+   */
+  function writeThroughPieces(pieces, version = null) {
+    if (!file || !writeThroughFiles) return;
+    fileWrites = fileWrites.then(async () => {
+      if (!existsSync(dirname(file))) return true;
+      const sha = await writeJsonPiecesAsync(file, pieces, { makeDir: false });
+      if (Number.isFinite(version)) await writeJsonPiecesAsync(rowMarkOf(file), [JSON.stringify({ version, sha256: sha })], { makeDir: false });
+      return true;
+    }).catch((e) => {
+      if (!writeThroughWarned) { writeThroughWarned = true; say(`write-through to ${file} failed: ${String(e?.message || e).slice(0, 120)}`); }
+      return false;
+    });
   }
 
   /**
@@ -447,18 +512,30 @@ export function createJsonDocument({ name = null, file = null, log = console.war
           return Promise.resolve(false);
         }
       }
-      // A body that replaced a row nobody read would erase it: held until a
-      // load succeeds (the store's next load or tick reads the row again).
-      if (loadState === "failed" || loadState === "loading") {
-        lastError = lastError || "not loaded";
-        const m = loadState === "loading"
-          ? "save refused: the first load has not read the stored body yet; it is kept as it is"
-          : "save refused: the stored body was never read (last load failed); it is kept as it is";
-        if (!refusalLogged) { refusalLogged = true; alert(m); } else say(m);
-        return Promise.resolve(false);
-      }
-      pendingBody = body;
-      return startSaving();
+      return queueSave(body);
+    },
+    /**
+     * Replace the whole body, already serialized: `pieces` is an array of
+     * strings whose concatenation is exactly JSON.stringify(body), built by
+     * the caller across turns for a body too large to serialize in one. The
+     * file backend writes the pieces in order off the event loop (a temp
+     * file renamed over the store, one write at a time in call order), so
+     * neither the serialization nor a stalled disk holds the loop. The
+     * database backend sends the pieces' text as the row (no second
+     * serialization), coalesced and retried as save() is, and its
+     * write-through file is written the same way off the loop; the memory
+     * backend keeps `body`. Resolves true once stored (the row, or the
+     * file). A document saved this way is saved only this way.
+     */
+    saveSerialized(body, pieces) {
+      if (usePg) return queueSave(body, pieces);
+      if (!file) return api.save(body);
+      const run = fileWrites.then(() => writeJsonPiecesAsync(file, pieces)).then(
+        () => { lastError = null; return true; },
+        (e) => { lastError = String(e?.message || e).slice(0, 160); say(`save failed: ${lastError}`); return false; },
+      );
+      fileWrites = run;
+      return run;
     },
     /**
      * Synchronous save for the file and memory backends (true when written).
@@ -481,8 +558,10 @@ export function createJsonDocument({ name = null, file = null, log = console.war
      * for its retry is sent now. Resolves true when nothing is left unsaved.
      */
     async flush() {
+      await fileWrites;
       if (usePg && pendingBody !== undefined && !inFlight) void startSaving();
       while (inFlight) await inFlight;
+      await fileWrites; // the write-through a database save queued when it landed
       return pendingBody === undefined;
     },
     /** Cut a backoff short (the database answered again). */
