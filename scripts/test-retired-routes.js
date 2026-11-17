@@ -33,7 +33,7 @@ ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retire
     "exa-search": "search", "exa-answer": "answer", "exa-contents": "extract",
     "defi-yields": null, "defi-yield-history": null, "defi-protocols": null, "defi-protocol": null, "defi-chains": null,
     "defi-chain-tvl-history": null, stablecoins: null, "stablecoin-supply-history": null, "defi-fees": null,
-    "defi-dex-volume": "dex-volume-board", "defi-tvl": null, "dex-top-pools": null, "l2-tvl": null, "options-volume": null, "crypto-orderbook": null,
+    "defi-dex-volume": null, "defi-tvl": null, "dex-top-pools": null, "l2-tvl": null, "options-volume": null, "crypto-orderbook": null,
   };
   const batch = Object.entries(RETIRED_TOOLS).filter(([, e]) => e.retiredAt === "2026-11-16" || e.retiredAt === "2026-11-17");
   const wrong = batch.filter(([slug, e]) => !(slug in POINTERS_2026_11) || e.replacement !== POINTERS_2026_11[slug]).map(([slug, e]) => `${slug} -> ${e.replacement}`);
@@ -43,7 +43,11 @@ ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retire
   // ranked every peg by circulating supply per chain, which the USD depeg watch does not carry.
   ok(RETIRED_TOOLS.geocode.replacement === null && RETIRED_TOOLS.stablecoins.replacement === null, "street-address geocoding and the stablecoin supply ranking name no replacement");
   const named = batch.filter(([, e]) => e.replacement).map(([slug, e]) => `${slug} -> ${e.replacement}`).sort().join(", ");
-  ok(named === "defi-dex-volume -> dex-volume-board, exa-answer -> answer, exa-contents -> extract, exa-search -> search", `four of the 21 name a replacement, seventeen none (${named})`);
+  ok(named === "exa-answer -> answer, exa-contents -> extract, exa-search -> search", `three of the 21 name a replacement, eighteen none (${named})`);
+  // The cross-chain DEX ranking over periods up to all time has no live
+  // equal; the per-network 24h board is named in a note, never as the replacement.
+  ok(RETIRED_TOOLS["defi-dex-volume"].replacement === null && /dex-volume-board/.test(RETIRED_TOOLS["defi-dex-volume"].note || "") && /every chain/.test(RETIRED_TOOLS["defi-dex-volume"].note || ""), "defi-dex-volume names no replacement, and its note says what the live board answers and what it does not");
+  ok(Object.values(RETIRED_TOOLS).every((e) => e.note === undefined || (typeof e.note === "string" && e.note.length <= 240 && !/[<>]/.test(e.note))), "every note is one short plain-text sentence");
   ok(retiredEntryFor("/api/l2-tvl")?.replacement === null && !("Link" in retirementHeaders(RETIRED_TOOLS["l2-tvl"].retiredAt, null)), "such a route answers 410 with a Sunset date and no successor link");
 }
 
@@ -238,7 +242,7 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
   const pointers = due.filter(([, e]) => e.replacement).length;
   ok(items.length >= 2 && problems.length === 0, `each changelog retirement sentence matches the registry (${problems.join("; ") || `${items.length} items`})`);
   ok(unsaid.length === 0, `every route retired since ${SINCE} is announced in a changelog retirement sentence (missing: ${unsaid.join(", ") || "none"})`);
-  ok(due.length === 21 && pointers === 4 && due.length - pointers === 17, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
+  ok(due.length === 21 && pointers === 3 && due.length - pointers === 18, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
   // Controls: each way a sentence can part from the registry is reported.
   const REG = { geocode: { replacement: "place-lookup" }, "reverse-geocode": { replacement: null }, "place-search": { replacement: null }, "exa-search": { replacement: "search" }, "exa-answer": { replacement: "answer" } };
   const good = "geocode, reverse-geocode and place-search are retired and answer 410: geocode names place-lookup as the replacement, and reverse-geocode and place-search name none. exa-search and exa-answer are retired and answer 410 naming search and answer.";
@@ -315,6 +319,19 @@ try {
     const mc = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "skill-checksum-suite", params: {} } } }) });
     const mct = await mc.text();
     ok(/Skill pack checksum-suite was retired on 2026-07-06/.test(mct) && /Use slug checksum instead/.test(mct), `catalog.call on a retired pack slug names the retirement and the replacement (got ${mct.slice(0, 140)})`);
+  }
+  {
+    // A route that names no replacement but carries a note: the 410's hint,
+    // the tool page and catalog.call all state it, and no successor is linked.
+    const r = await fetch(`${base}/api/defi-dex-volume`);
+    const b = await r.json();
+    ok(r.status === 410 && b.replacement === null && b.hint.includes(RETIRED_TOOLS["defi-dex-volume"].note) && successorOf(r) === null, `GET /api/defi-dex-volume is 410 with no replacement and the note in its hint (got ${r.status} ${String(b.hint).slice(0, 160)})`);
+    const page = await fetch(`${base}/tools/defi-dex-volume`);
+    const html = await page.text();
+    ok(page.status === 410 && html.includes("nothing live ranks DEXes across every chain"), `the tool page states the note (got ${page.status})`);
+    const mc = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "defi-dex-volume", params: {} } } }) });
+    const mct = await mc.text();
+    ok(/no direct replacement/.test(mct) && /nothing live ranks DEXes across every chain/.test(mct), `catalog.call states the note (got ${mct.slice(0, 200)})`);
   }
   const get = await fetch(`${base}/api/options-chain`);
   const gb = await get.json();

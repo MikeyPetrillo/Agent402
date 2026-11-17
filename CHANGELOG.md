@@ -69,12 +69,14 @@ Tools:
   Each market-data listing states how often its figures are refreshed: every
   5 minutes for exchange-spread and for a pool's recent trades, every 15 for
   stablecoin-depeg-watch, and every 30 for the rest.
-- Fifteen routes are retired and answer 410 Gone with a Sunset date. One names
-  a replacement that answers the same question: defi-dex-volume
-  (dex-volume-board). The other fourteen name none: defi-yields,
-  defi-yield-history, defi-protocols, defi-protocol, defi-chains,
-  defi-chain-tvl-history, stablecoins, stablecoin-supply-history, defi-fees,
-  defi-tvl, dex-top-pools, l2-tvl, options-volume and crypto-orderbook.
+- Fifteen routes are retired and answer 410 Gone with a Sunset date, and name
+  none: defi-dex-volume, defi-yields, defi-yield-history, defi-protocols,
+  defi-protocol, defi-chains, defi-chain-tvl-history, stablecoins,
+  stablecoin-supply-history, defi-fees, defi-tvl, dex-top-pools, l2-tvl,
+  options-volume and crypto-orderbook. The 410 for defi-dex-volume adds that
+  dex-volume-board ranks one network's DEXes by their share of 24-hour volume
+  across its top pools, and that nothing live ranks DEXes across every chain
+  or over longer periods.
 
 Skill packs:
 - defi-protocol-scanner reads the token's supply and valuation profile

@@ -3975,7 +3975,7 @@ function retiredPage(res, gone) {
   const body = `<div style="max-width:640px;margin:0 auto;padding:96px 26px 80px;text-align:center;">
       <div style="font-family:var(--font-mono);font-weight:500;font-size:var(--fs-hero);line-height:1;letter-spacing:-.03em;color:var(--ink);margin-bottom:14px;">410</div>
       <h1 style="font-weight:800;font-size:var(--fs-2xl);letter-spacing:-.02em;margin:0 0 10px;color:var(--ink);">${escHtml(what)} retired</h1>
-      <p style="color:var(--muted);margin:0 0 28px;font-weight:300;"><code>${escHtml(gone.slug)}</code> was retired on ${escHtml(gone.retiredAt)}.${rep ? ` ${escHtml(rep.name)} answers the nearest question.` : ""}</p>
+      <p style="color:var(--muted);margin:0 0 28px;font-weight:300;"><code>${escHtml(gone.slug)}</code> was retired on ${escHtml(gone.retiredAt)}.${rep ? ` ${escHtml(rep.name)} answers the nearest question.` : gone.note ? ` ${escHtml(gone.note)}` : ""}</p>
       <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
         ${rep ? `<a class="btn btn-secondary" href="${escHtml(repHref)}">${escHtml(rep.name)}</a>` : ""}
         <a class="btn btn-secondary" href="${all.href}">${all.label}</a>
@@ -13183,7 +13183,7 @@ app.use((req, res) => {
         res.set(retirementHeaders(gone.retiredAt, replacement?.url));
         return res.status(410).json({
           ok: false, error: "gone", slug: gone.slug, retiredAt: gone.retiredAt, replacement,
-          hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}`,
+          hint: `${gone.kind === "pack" ? "Skill pack" : "Tool"} ${gone.slug} was retired on ${gone.retiredAt}.${replacement ? ` Use ${replacement.route} instead.` : " There is no direct replacement; the closest live tools are listed, or ask /api/find?q=<task>."}${!replacement && gone.note ? ` ${gone.note}` : ""}`,
           find: `${BASE_URL}/api/find?q=${encodeURIComponent(slug)}`, suggestions,
         });
       }

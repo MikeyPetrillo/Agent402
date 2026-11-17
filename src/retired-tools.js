@@ -21,7 +21,9 @@
 // listed only with a key, or listed here. Retiring a route without an entry
 // here fails that test.
 
-/** Tools: /api/<slug>. `replacement` is a live catalog slug or null. */
+/** Tools: /api/<slug>. `replacement` is a live catalog slug or null; an
+ *  optional `note` (one sentence, plain text) is added to the 410's hint when
+ *  a live tool answers a narrower question than the retired route did. */
 export const RETIRED_TOOLS = Object.freeze({
   // A replacement is named only when it answers the SAME question as the
   // retired route (the same quantity for the same subject, possibly over a
@@ -41,8 +43,10 @@ export const RETIRED_TOOLS = Object.freeze({
   "exa-answer": { retiredAt: "2026-11-17", replacement: "answer" },
   "exa-contents": { retiredAt: "2026-11-17", replacement: "extract" },
   // 2026-11-16: the routes that read an open DeFi analytics source, and the
-  // spot exchange order book. The per-network DEX volume ranking has a live
-  // tool that answers the same question. The stablecoin list ranked every
+  // spot exchange order book. The DEX volume ranking ranked DEXes across every
+  // chain over periods up to all time; dex-volume-board ranks one network's
+  // DEXes over 24 hours from its top pools, a narrower question, so the route
+  // names none and its `note` (read in the 410's hint) says what is live. The stablecoin list ranked every
   // peg by circulating supply, per chain; the depeg watch carries no supply
   // figure and covers USD pegs only, so it is not a replacement. Locked
   // value (by protocol, chain or rollup), pool yields and their history,
@@ -58,7 +62,7 @@ export const RETIRED_TOOLS = Object.freeze({
   "stablecoins": { retiredAt: "2026-11-16", replacement: null },
   "stablecoin-supply-history": { retiredAt: "2026-11-16", replacement: null },
   "defi-fees": { retiredAt: "2026-11-16", replacement: null },
-  "defi-dex-volume": { retiredAt: "2026-11-16", replacement: "dex-volume-board" },
+  "defi-dex-volume": { retiredAt: "2026-11-16", replacement: null, note: "dex-volume-board ranks one network's DEXes by their share of 24h volume across its top pools; nothing live ranks DEXes across every chain or over 7 days or longer." },
   "defi-tvl": { retiredAt: "2026-11-16", replacement: null },
   "dex-top-pools": { retiredAt: "2026-11-16", replacement: null },
   "l2-tvl": { retiredAt: "2026-11-16", replacement: null },
