@@ -114,6 +114,18 @@ export const outcomeOf = (a) =>
           : a.status === 402 ? "slow-402"
             : "other";
 
+// A paid request that THREW (no HTTP answer: a dropped connection, a reset, the
+// request's own deadline) shaped as an attempt, so it takes the same one fresh
+// retry and the same upstream-versus-tool split as an answered failure. Status
+// 0 is "no answer"; the body names the error and its cause code, which is what
+// isUpstreamOutage reads. A throw recorded on first sight, without the retry,
+// failed the weekly gate on one dropped connection.
+export const transportAttempt = (e, elapsedMs = 0) => {
+  const cause = e?.cause?.code || e?.cause?.message || "";
+  const text = `${e?.name && e.name !== "Error" ? `${e.name}: ` : ""}${e?.message || String(e)}${cause ? ` (${cause})` : ""}`;
+  return { status: 0, body: `no HTTP answer: ${text}`.slice(0, 300), tx: null, elapsedMs, retryAfterMs: null };
+};
+
 // ---------------------------------------------------------------------------
 // SUB-CENT BUDGET (2026-09-22). GoPlausible sponsors the Algorand fee on every
 // settlement we serve and gives each payTo a free sponsored sub-cent

@@ -6,7 +6,7 @@
 // upstream vendor 5xx was booked as a broken tool on first sight.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
-import { outcomeOf, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
+import { outcomeOf, transportAttempt, isUpstreamOutage, isThrottle, isOurSettleBreaker, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("ok -", m); } else { fail++; console.error("FAIL -", m); } };
@@ -97,6 +97,30 @@ ok(isOurSettleBreaker(402, BREAKER_BODY) === false, "the text alone is not enoug
 // Ordering: `breaker` is decided before the 402 shapes and before isThrottle,
 // because it is the only outcome that says nothing at all about the tool.
 ok(outcomeOf({ status: 429, body: BREAKER_BODY, elapsedMs: 50 }) === "breaker", "a FAST breaker refusal is still a breaker, not a fast-402 or a throttle");
+
+// ---- a paid request that threw --------------------------------------------
+// No HTTP answer is an attempt, not a verdict: it classifies "other" (so it is
+// retried once with a fresh signature), and what survives the retry is split
+// by the same reader as an answered failure.
+{
+  const dropped = transportAttempt(Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } }), 1200);
+  ok(dropped.status === 0 && dropped.elapsedMs === 1200 && dropped.tx === null, "a thrown request is shaped as an attempt with no status and no receipt");
+  ok(/fetch failed \(UND_ERR_SOCKET\)/.test(dropped.body), "...whose body names the error and its cause code");
+  ok(outcomeOf(dropped) === "other", "...and it classifies `other`, the class that gets one fresh retry");
+  ok(isUpstreamOutage(dropped.status, dropped.body), "a dropped connection that survives the retry is the edge class, reported and not a tool failure");
+  const timedOut = transportAttempt(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }), 90000);
+  ok(outcomeOf(timedOut) === "other" && isUpstreamOutage(timedOut.status, timedOut.body), "the request's own deadline reads the same way");
+  const odd = transportAttempt(new Error("Invalid URL"), 3);
+  ok(outcomeOf(odd) === "other" && !isUpstreamOutage(odd.status, odd.body), "CONTROL: a throw that is not a transport failure still fails the run after the retry");
+  ok(transportAttempt("x".repeat(5000)).body.length <= 300, "the recorded text is bounded");
+
+  const src = readFileSync(new URL("./algorand-rail-canary.js", import.meta.url), "utf8");
+  ok(/try \{ paid = await signed\(\); \} catch \(e\) \{ return transportAttempt\(e, Date\.now\(\) - startedMs\); \}/.test(src),
+     "the sweep shapes a thrown request as an attempt, so it reaches the retry and the split");
+  ok(/const signed = await signOnce\(\);\s*let paid;/.test(src), "...while a throw from signing stays outside that catch and fails on first sight");
+  ok(/return \(\) => fetch\(url, \{\s*\.\.\.reqInit,\s*signal: AbortSignal\.timeout\(/.test(src) && !/const reqInit = \{[^}]*signal:/.test(src),
+     "each attempt gets its own deadline: a signal built once left the retry already aborted");
+}
 
 // ---- and the SWEEP acts on it ---------------------------------------------
 //

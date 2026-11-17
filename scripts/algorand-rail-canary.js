@@ -58,7 +58,7 @@ import { isLongRunningSlug } from "../src/composite-spend-guard.js";
 import { railsReportSubcentPause } from "../src/avm-sponsorship.js";
 import { openapiReader, resolveReplayableInput } from "./lib/replayable-example.js";
 
-import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
+import { FAST_REJECT_MS, isThrottle, isUpstreamOutage, isOurSettleBreaker, outcomeOf, transportAttempt, subcentBudget, rotateSubcent } from "./avm-canary-classify.js";
 
 const TARGET = assertOwnPaidTarget((process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, ""), "algorand-rail-canary");
 const AVM_CAIP2_PREFIX = "algorand:";
@@ -413,7 +413,6 @@ for (const t of tools) {
   const reqInit = {
     method: t.method,
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    signal: AbortSignal.timeout(90000),
   };
   let url = `${TARGET}${t.path}`;
   if (t.method === "POST") reqInit.body = JSON.stringify(exampleInput.body || {});
@@ -428,11 +427,14 @@ for (const t of tools) {
   // attempt can be repeated after a backoff. Each call MUST sign again - an AVM
   // authorization is single-use, so replaying the first payload would be
   // refused by the replay guard rather than retried.
-  const payOnce = async () => {
+  const signOnce = async () => {
     const payload = await client.createPaymentPayload({ ...paymentRequired, accepts });
     const payHeaders = http.encodePaymentSignatureHeader(payload);
-    return fetch(url, {
+    // The deadline is per attempt: one signal shared by both attempts left the
+    // retry of a timed-out first attempt already aborted.
+    return () => fetch(url, {
       ...reqInit,
+      signal: AbortSignal.timeout(90000),
       headers: { ...reqInit.headers, ...payHeaders, ...heartbeatHeaders(), "Access-Control-Expose-Headers": "PAYMENT-RESPONSE,X-PAYMENT-RESPONSE" },
     });
   };
@@ -455,9 +457,15 @@ for (const t of tools) {
   // outage is reported but does NOT fail the run (same posture as the external
   // buyer - "a failed third-party buy never pages"). A persistent failure from
   // OUR OWN handler still fails the run.
+  const answerOf = (x) => (x.status ? `HTTP ${x.status}` : "request threw");
   const attempt = async () => {
     const startedMs = Date.now();
-    const paid = await payOnce();
+    // A throw from the request (no HTTP answer) is an attempt like any other:
+    // it gets the one fresh retry below, then the upstream-versus-tool split. A
+    // throw from SIGNING is not caught here and stays a failure on first sight.
+    const signed = await signOnce();
+    let paid;
+    try { paid = await signed(); } catch (e) { return transportAttempt(e, Date.now() - startedMs); }
     const elapsedMs = Date.now() - startedMs;
     const receiptHdr = paid.headers.get("payment-response") || paid.headers.get("x-payment-response");
     let tx = null;
@@ -489,7 +497,7 @@ for (const t of tools) {
         : out === "throttle" ? `HTTP ${a.status} (upstream throttle)`
           : out === "slow-402" ? `HTTP 402 after ${a.elapsedMs}ms`
             : out === "empty" ? "settled 200 with an empty body"
-              : `HTTP ${a.status}: ${a.body.slice(0, 100)}`;
+              : `${answerOf(a)}: ${a.body.slice(0, 100)}`;
       // The breaker's window is minutes, so it gets the pause IT asks for
       // rather than the burst pause. Bounded, because a long Retry-After on a
       // ~500-tool sweep would otherwise run for hours.
@@ -531,13 +539,13 @@ for (const t of tools) {
       // Persistent third-party / edge failure: their outage, not our defect,
       // and a >=400 cancelled settlement so the buyer was never charged.
       // Reported, does NOT fail the run.
-      report.upstreamFail.push({ key, slug: t.slug, reason: `HTTP ${a.status}: ${a.body.slice(0, 140)}` });
-      console.log(`UPSTREAM ${key.padEnd(41)} HTTP ${a.status} (third-party/edge, not charged, twice)`);
+      report.upstreamFail.push({ key, slug: t.slug, reason: `${answerOf(a)}: ${a.body.slice(0, 140)}` });
+      console.log(`UPSTREAM ${key.padEnd(41)} ${answerOf(a)} (third-party/edge, ${a.status ? "not charged, " : ""}twice)`);
     } else {
       // A >=400 cancels settlement (x402 settles after the handler), so we
       // were NOT charged - our own handler is the fault, the rail is fine.
-      report.toolFail.push({ key, slug: t.slug, reason: `HTTP ${a.status}: ${a.body.slice(0, 160)} (twice)` });
-      console.log(`FAIL ${key.padEnd(46)} HTTP ${a.status} (twice)`);
+      report.toolFail.push({ key, slug: t.slug, reason: `${answerOf(a)}: ${a.body.slice(0, 160)} (twice)` });
+      console.log(`FAIL ${key.padEnd(46)} ${answerOf(a)} (twice)`);
     }
     // Consecutive unmeasurable outcomes: the rail is refusing everything, or
     // our own breaker is, and either way the remaining tools tell us nothing.
