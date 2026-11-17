@@ -356,10 +356,12 @@ export const EDGAR_TOOLS = [
     category: "data",
     price: "$0.005",
     description:
-      "All XBRL concepts reported by a company. Default returns a compact summary per tag (label, unit, latest value, latest end date) - typically a few hundred KB. Pass tags=Revenues,Assets,NetIncomeLoss to get full time-series for just those concepts. Source: data.sec.gov/api/xbrl/companyfacts. ?ticker=AAPL",
+      "All XBRL concepts reported by a company. Default returns a compact summary per tag (label, unit, latest value, latest end date) - typically a few hundred KB. Pass tags=Revenues,Assets,NetIncomeLoss to get full time-series for just those concepts. Source: data.sec.gov/api/xbrl/companyfacts. ?ticker=AAPL&tags=Revenues,Assets",
     tags: ["edgar", "sec", "xbrl", "financials", "fundamentals", "facts", "company"],
     discovery: {
-      input: { ticker: "AAPL" },
+      // The published example names two concepts: its answer is tens of KB,
+      // where the summary of every tag (no `tags`) is over a hundred.
+      input: { ticker: "AAPL", tags: "Revenues,Assets" },
       inputSchema: {
         properties: {
           ticker: { type: "string", description: "US stock ticker (alternative to cik)" },
@@ -372,8 +374,17 @@ export const EDGAR_TOOLS = [
         example: {
           cik: "0000320193",
           entityName: "Apple Inc.",
-          mode: "summary",
-          taxonomies: { "us-gaap": { count: 312, sample: { Revenues: { label: "Revenues", unit: "USD", latestEnd: "2024-09-28", latestVal: 391035000000, observations: 48 } } } },
+          mode: "full",
+          taxonomyFilter: null,
+          tagsFilter: ["Revenues", "Assets"],
+          taxonomies: {
+            dei: {},
+            "us-gaap": {
+              Revenues: { label: "Revenues", description: "Amount of revenue recognized from goods sold...", units: { USD: [{ start: "2017-10-01", end: "2018-09-29", val: 265595000000, accn: "0000320193-18-000145", fy: 2018, fp: "FY", form: "10-K", filed: "2018-11-05", frame: "CY2018" }] } },
+              Assets: { label: "Assets", description: "Amount of asset recognized for present right to economic benefit.", units: { USD: [{ end: "2024-09-28", val: 364980000000, accn: "0000320193-24-000123", fy: 2024, fp: "FY", form: "10-K", filed: "2024-11-01", frame: "CY2024Q3I" }] } },
+            },
+          },
+          source: "SEC EDGAR XBRL company-facts API (public domain)",
         },
       },
     },

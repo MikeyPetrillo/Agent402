@@ -184,6 +184,24 @@
     },
     {
       "slug": "edgar-company-facts",
+      "name": "summary of one taxonomy (no tags)",
+      "input": {
+        "ticker": "AAPL",
+        "taxonomy": "dei"
+      },
+      "expect": {
+        "populated": [
+          "taxonomies",
+          "entityName"
+        ],
+        "equals": {
+          "mode": "summary",
+          "cik": "0000320193"
+        }
+      }
+    },
+    {
+      "slug": "edgar-company-facts",
       "name": "selected tags",
       "input": {
         "ticker": "MSFT",
