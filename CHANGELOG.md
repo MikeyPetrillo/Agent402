@@ -17,10 +17,17 @@ Index:
   still ask for payment uses its cheapest paid route, and runs at most once in
   a week for a seller whose paid routes are all priced that high.
 - Every robots.txt group that names Agent402 or Agent402-Crawler is read as
-  one (RFC 9309), so a Disallow in any of them holds whatever another allows.
+  one (RFC 9309): their rules are combined, and the longest rule that matches
+  a path decides it, whichever group it came from.
 - The MPP index's reads of a seller count against the same daily allowance,
   wait out the same Retry-After holds, and follow the slower cycle (every 6
-  hours) a site asked for.
+  hours) a site asked for. That cycle is timed by the clock from the last read
+  any of our servers made, in both indexes, so a restart never reads such a
+  site early.
+- A site whose scheduled read we put off (its day spent, a Retry-After, the
+  slower cycle) keeps its last good listing through a read of ours that then
+  does not complete, for the same hold window counted from the last turn we
+  put off, so it never leaves the router because we chose not to read it.
 Operations:
 - The seller load controls decide from each server's own memory and read the
   shared store once per crawl cycle, so a slow store no longer slows the crawl
@@ -47,10 +54,13 @@ Index:
   a purchase that did not deliver, or registering again puts it back on the
   regular cycle (every 30 minutes); a waiting origin's listing stays as it
   was.
-- The crawler, the unpaid price checks and the MPP index's reads send at most
-  200 requests a day to one site on its own account, counted per registrable
-  domain or per hostname on shared hosting; past that they wait for the next
-  UTC day. A site whose documents moved to another site is counted on its own
+- The crawler, the unpaid price checks and the MPP index's scheduled reads
+  keep to about 200 requests a day to one site on its own account (a crawl
+  already under way finishes its reads), counted per registrable domain or per
+  hostname on shared hosting (a platform subdomain or a cloud API host); the
+  unpaid price checks take at most half of that, and past it they wait for the
+  next UTC day. The reads a registration of the site asks for are counted
+  apart and never use that allowance. A site whose documents moved to another site is counted on its own
   allowance. Every request that follows such a move to the other site, a
   document read or a price check, is held to 200 more a day there, apart from
   that site's own allowance: past it those requests are not sent until the

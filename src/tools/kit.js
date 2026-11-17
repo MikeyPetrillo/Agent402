@@ -2027,8 +2027,8 @@ export function parseRobots(text) {
 export function robotsAllows(groups, ua, path) {
   const uaLower = ua.toLowerCase();
   // Every group that names us is read as one (RFC 9309 2.2.1: matching groups
-  // are combined), so a Disallow for one of our tokens holds whatever another
-  // group for our other token allows; only with no such group do the `*`
+  // are combined): the longest rule that matches the path decides it, from
+  // whichever of those groups it came; only with no such group do the `*`
   // groups apply, also combined.
   const named = groups.filter((g) => g.agents.some((a) => a && a !== "*" && uaLower.includes(a)));
   const matching = named.length ? named : groups.filter((g) => g.agents.includes("*"));

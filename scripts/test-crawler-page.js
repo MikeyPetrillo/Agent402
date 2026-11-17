@@ -46,7 +46,8 @@ ok(text.includes(`No request to a site in our index, or to a URL a caller names,
   for (const [what, ms] of [["revisit cap", SL.REVISIT_CAP_MS], ["default hold", SL.THROTTLE_DEFAULT_MS], ["longest hold", SL.THROTTLE_MAX_MS], ["request log", SL.REQUEST_LOG_KEEP_MS], ["price re-read", LIVE_QUOTE_MAX_AGE_MS]]) {
     ok(text.includes(spanLabel(ms)), `the page prints the ${what} from code (${spanLabel(ms)})`);
   }
-  ok(text.includes(`at most ${SL.DAILY_BUDGET.toLocaleString("en-US")} requests a day to one site on its own account`) && text.includes(slowOriginIntervalLabel()), "the daily budget and the slow cycle are printed from code");
+  ok(text.includes(`about ${SL.DAILY_BUDGET.toLocaleString("en-US")} requests a day to one site on its own account (a crawl already under way finishes its reads)`) && text.includes(slowOriginIntervalLabel()), "the daily budget and the slow cycle are printed from code");
+  ok(text.includes(`The unpaid price checks take at most ${SL.probeShareLabel()} of that`) && text.includes("counted apart and never use that allowance"), "the probes' share and the registration reads' own count are stated, from code");
   // The rule for requests that follow a redirect onto another site
   // (src/seller-load.js landingGate; scripts/test-crawl-redirect-budget.js
   // holds the code to it): the page states it, with the figure from code.

@@ -186,6 +186,19 @@ const fetcher = (body) => async () => { hits++; if (body instanceof Error) throw
   __resetRobotsCacheForTest();
   const split = async () => "User-agent: Agent402\nAllow: /\n\nUser-agent: Agent402-Crawler\nDisallow: /openapi.json\n";
   ok((await robotsForbids("https://split.example", "/openapi.json", { fetchText: split })) !== null, "the crawl honours that Disallow on its own reads");
+  // Combined, the longest match wins whichever group it came from: a longer
+  // Allow in one group admits a path a shorter Disallow in the other covers.
+  const longer = parseRobots("User-agent: Agent402\nDisallow: /\n\nUser-agent: Agent402-Crawler\nAllow: /openapi.json\n");
+  ok(robotsAllows(longer, "Agent402-Crawler", "/openapi.json").allowed === true, "a longer Allow in the other group admits its path (longest match, RFC 9309)");
+  ok(robotsAllows(longer, "Agent402-Crawler", "/other").allowed === false, "and the Disallow still covers every other path");
+  // The published sentence states that rule, and no longer says a Disallow in
+  // any group holds whatever another allows.
+  const { readFileSync } = await import("node:fs");
+  for (const f of ["src/crawler-page.js", "src/changelog.js", "CHANGELOG.md"]) {
+    const text = readFileSync(new URL(`../${f}`, import.meta.url), "utf8").replace(/\s+/g, " ");
+    ok(!/a (<code>)?Disallow(<\/code>)? in any of them holds/.test(text), `${f}: no claim that a Disallow in any group holds whatever another allows`);
+    ok(/longest rule that matches a path decides it/.test(text), `${f}: states the longest-match rule`);
+  }
 }
 
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
