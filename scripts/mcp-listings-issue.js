@@ -6,8 +6,9 @@
 // (the names the re-run command takes). It closes only when a later run BUYS
 // every listing it names: a run that bought nothing (the schedule's switch
 // off, an empty dispatch, a run off main) or bought other listings leaves it
-// open. A failure that named no listing (a refused list, a missing key before
-// the first buy) closes on the next run that buys at least one listing.
+// open. An issue that names no listing (a refused list, a failed plan job)
+// has nothing to buy: it closes on the next run whose plan passes and whose
+// buy job did not fail, whether or not that run bought anything.
 //
 // Env: PLAN, BUY (the jobs' results), PLANNED, BOUGHT, FAILED (comma lists of
 // catalog slugs), OPEN_ISSUE (its number, or empty), OPEN_ISSUE_BODY_FILE,
@@ -41,7 +42,7 @@ export function issueBody(slugs, runUrl = "") {
     "",
     `Re-run: \`gh workflow run bazaar-mcp-listings.yml --ref main -f slugs=${slugs.length ? slugs.join(",") : "<slug>"}\` (a listing is named by its catalog slug or its tool name).`,
     "",
-    "This issue closes when a run buys every listing named above.",
+    slugs.length ? "This issue closes when a run buys every listing named above." : "This issue names no listing, so it closes on the next run whose plan passes.",
   ].join("\n") + run;
 }
 
@@ -62,7 +63,10 @@ export function decide({ plan, buy, planned, bought, failed, open, openBody }) {
     return slugs.join() === recorded.join() ? { action: "none", slugs } : { action: "update", slugs };
   }
   if (!open) return { action: "none", slugs: [] };
-  // A run that bought nothing never closes the issue.
+  // An issue that names no listing is closed by this clean plan: no later
+  // buy could clear it, and a schedule with nothing due buys nothing.
+  if (!recorded.length) return { action: "close", slugs: [] };
+  // A run that bought nothing never closes an issue that names a listing.
   if (buy !== "success" || !B.length) return { action: "none", slugs: recorded };
   const left = recorded.filter((s) => !B.includes(s));
   if (!left.length) return { action: "close", slugs: [] };

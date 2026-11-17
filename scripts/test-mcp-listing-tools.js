@@ -145,6 +145,13 @@ const offerFor = (toolName, micros, over = {}) => ({
   ok(mcpOfferProblems({ ...good, accepts: [{ ...good.accepts[0], maxTimeoutSeconds: MCP_OFFER_MAX_VALIDITY_SECONDS }] }, args).length === 0 && mcpOfferProblems({ ...good, accepts: [{ ...good.accepts[0], payTo: PAY_TO.toLowerCase() }] }, args).length === 0, "the bound itself and another letter case of the address pass");
   // Other ways to pay on Base ride beside the plain accept (Permit2, a batched authorization with a week-long window): never the ones signed.
   const beside = { ...good, accepts: [{ ...good.accepts[0], scheme: "upto", extra: { assetTransferMethod: "permit2" } }, good.accepts[0], { ...good.accepts[0], maxTimeoutSeconds: 604900, extra: { name: "GatewayWalletBatched", version: "1", verifyingContract: OTHER } }, { ...good.accepts[0], network: "eip155:10" }] };
+  // The Permit2 marker alone (exact, Base, USDC, the same pay-to and window) keeps an accept out.
+  const permit2 = { ...good.accepts[0], extra: { ...good.accepts[0].extra, assetTransferMethod: "permit2" } };
+  const marked = mcpSignableOffer({ ...good, accepts: [permit2, good.accepts[0]] });
+  ok(marked?.accepts.length === 1 && marked.accepts[0] === good.accepts[0] && mcpSignableOffer({ ...good, accepts: [permit2] }) === null && mcpOfferProblems({ ...good, accepts: [permit2, good.accepts[0]] }, args).length === 0,
+    "an exact USDC accept on Base marked Permit2 is never the one signed, and beside the plain accept the offer still passes");
+  const eip3009 = { ...good.accepts[0], extra: { ...good.accepts[0].extra, assetTransferMethod: "eip3009" } };
+  ok(mcpSignableOffer({ ...good, accepts: [eip3009] })?.accepts[0] === eip3009, "control: the same accept marked eip3009 is the one signed");
   const signable = mcpSignableOffer(beside);
   ok(mcpOfferProblems(beside, args).length === 0 && signable?.accepts.length === 1 && signable.accepts[0] === good.accepts[0] && signable.resource === beside.resource && mcpSignableOffer({ ...good, accepts: [] }) === null,
     "beside other Base accepts the plain one is checked, and it alone is handed to the signer");
@@ -683,7 +690,13 @@ try {
     d = decideIssue({ ...base, plan: "failure", buy: "skipped" });
     ok(d.action === "open" && d.slugs.length === 0 && /not recorded/.test(body(d.slugs)) && /-f slugs=<slug>/.test(body(d.slugs)), "a failed plan opens the issue with no listing named");
     const unnamed = { ...base, open: true, openBody: body([]) };
-    ok(decideIssue({ ...unnamed, buy: "skipped" }).action === "none" && decideIssue({ ...unnamed, planned: "search", bought: "search" }).action === "close", "that one closes on the next run that buys a listing, and not on a run that buys nothing");
+    ok(recordedSlugs(body([])).length === 0 && /names no listing, so it closes on the next run whose plan passes/.test(body([])) && !/closes when a run buys/.test(body([])), "its body says what closes it");
+    ok(decideIssue({ ...unnamed, buy: "skipped" }).action === "close" && decideIssue({ ...unnamed, bought: "" }).action === "close" && decideIssue({ ...unnamed, planned: "search", bought: "search" }).action === "close",
+      "that one closes on the next clean plan: a run that bought nothing (the switch off, off main), and a run that bought");
+    ok(decideIssue({ ...unnamed, plan: "failure", buy: "skipped" }).action === "none" && decideIssue({ ...unnamed, plan: "cancelled", buy: "skipped" }).action === "none", "a plan that fails again leaves it open, unchanged");
+    d = decideIssue({ ...unnamed, buy: "failure", planned: "search", bought: "", failed: "search" });
+    ok(d.action === "update" && d.slugs.join() === "search", "a failed buy on the next run names its listing on it instead");
+    ok(decideIssue({ ...base, open: true, openBody: body(["answer"]), buy: "skipped" }).action === "none", "control: an issue that names a listing is not closed by a clean plan that bought nothing");
     ok(decideIssue(base).action === "none" && recordedSlugs("Listings not bought: `search`, `hash`, `../x`").join() === "search", "no issue and a clean run: nothing to do; only listing slugs are read from a body");
     ok(!/\$\s?\d|—/.test(body(["search", "answer"])), "the issue body carries no figure");
   }
