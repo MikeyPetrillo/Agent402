@@ -4,13 +4,15 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (35 scripts, one process each)
+# @step 1: Offline suites (36 scripts, one process each)
 # "Router Sybil resistance (M6 — Attack IV: per-seller diversity cap, metadata-injection listings dropped)"
 t node scripts/test-router-sybil.js
 # Data-kit tests (barcode-lookup, fx-rate, weather-forecast — live keyless APIs)
 t node scripts/test-data-kit.js
 # The sweeps' server answers examples naming its own /samples/ and /fixtures/ files from itself, never production (offline)
 t node scripts/test-own-examples-preload.js
+# A keyless upstream's 5xx is excused only when the runner's direct read of the same request fails too (offline, loopback)
+t node scripts/test-upstream-outage.js
 # The sweeps wait out the server's load-shed answer as it asks and judge every other 503 as it is (offline, loopback)
 t node scripts/test-shed-answer.js
 # Index self-serve registration tests (offline)
