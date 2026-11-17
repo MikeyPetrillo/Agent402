@@ -503,5 +503,30 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   const m = markMissRows({ results: [{ slug: "perp-orderbook" }] });
   ok(m.weakMatches === true && m.results[0].weak === true, "a miss marks every returned row weak");
 }
+// ---- currency words reach the currency converter (2026-11-17) ----
+// "convert currency" ranked the *-convert tools on "convert" ("currency" sits
+// inside "cryptocurrency" across the crypto kits) and read as a miss while
+// fx-rate does the task. Against the real kits that compete for the words.
+{
+  const { KIT } = await import("../src/tools/kit.js");
+  const { KIT2 } = await import("../src/tools/kit2.js");
+  const { DATA_TOOLS } = await import("../src/tools/data-kit.js");
+  const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
+  const { MEDIA_TOOLS } = await import("../src/tools/media-kit.js");
+  const { CRYPTO_MARKETS_TOOLS } = await import("../src/tools/crypto-markets-kit.js");
+  const { PRICE_FEED_TOOLS } = await import("../src/tools/price-feed-kit.js");
+  const C = {};
+  for (const t of [...API_TOOLS, ...CRYPTO_TOOLS, ...KIT, ...KIT2, ...DATA_TOOLS, ...MACRO_TOOLS, ...MEDIA_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...PRICE_FEED_TOOLS]) C[t.route] = t;
+  for (const q of ["convert currency", "convert usd to eur", "convert 100 dollars to euros", "currency converter", "exchange currency"]) {
+    const r = findTools(C, q, {});
+    ok(r.results[0]?.slug === "fx-rate" && r.rarestTermCovered === true, `"${q}" -> fx-rate as a strong match (got ${r.results.slice(0, 3).map((x) => x.slug).join(", ")}, covered ${r.rarestTermCovered})`);
+  }
+  // Controls: crypto and unit phrasings keep their own tools.
+  for (const q of ["convert eth to usd", "bitcoin price in usd", "convert miles to kilometers", "convert php to python", "try base64 decode"]) {
+    const r = findTools(C, q, {});
+    ok(r.results[0]?.slug !== "fx-rate", `"${q}" is not sent to fx-rate (got ${r.results[0]?.slug})`);
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

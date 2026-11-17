@@ -16,7 +16,9 @@ import { UNIT_ALIASES } from "./tools/kit2.js";
 // on purpose — every word here matches many tool descriptions, so dropping it
 // from the query sharpens ranking without affecting recall on the intent words.
 // Words that are values rather than capabilities: anything carrying a digit,
-// a long unbroken token (an encoded payload), or a part of an IANA zone name.
+// a long unbroken token (an encoded payload), a part of an IANA zone name, or
+// a fiat currency code or name ("usd", "euros": the amount's unit, which no
+// tool describes, while the tool that converts it carries "forex").
 const TIMEZONE_WORDS = (() => {
   const set = new Set();
   try {
@@ -26,7 +28,7 @@ const TIMEZONE_WORDS = (() => {
 })();
 export function isValueTerm(term) {
   const t = String(term || "");
-  return /\d/.test(t) || t.length >= 16 || TIMEZONE_WORDS.has(t);
+  return /\d/.test(t) || t.length >= 16 || TIMEZONE_WORDS.has(t) || FIAT_CODES.has(t);
 }
 
 const STOPWORDS = new Set([
@@ -54,6 +56,29 @@ const UNIT_WORDS = new Set(
     ...Object.keys(UNIT_ALIASES),
   ].filter((w) => w.length > 1 && !STOPWORDS.has(w) && w !== "per" && w !== "us")
 );
+
+// Fiat-currency intent, the same mechanism as "units": "convert currency" and
+// "convert usd to eur" ranked the *-convert tools on "convert" ("currency" also
+// sits inside "cryptocurrency" across the crypto kits, so it narrows little)
+// and read as a miss while fx-rate does the task. A query that names money
+// gets the synthetic "forex" term (a curated tag on the fx tools); a verb form
+// of "convert" (or "exchange") also adds "convert" (a curated fx-rate tag). Currency codes and
+// names count only when two appear, and a crypto word anywhere keeps the query
+// with the crypto tools ("convert eth to usd" names one fiat code).
+const CURRENCY_WORDS = new Set(["currency", "currencies", "forex", "fx", "fiat"]);
+const FIAT_CODES = new Set([
+  "usd", "eur", "jpy", "gbp", "chf", "cad", "aud", "nzd", "sek", "nok", "dkk", "pln", "czk", "huf", "ron",
+  "bgn", "isk", "brl", "cny", "hkd", "idr", "ils", "inr", "krw", "mxn", "myr", "sgd", "thb", "zar",
+  "dollar", "dollars", "euro", "euros", "yen", "peso", "pesos", "rupee", "rupees", "yuan", "franc", "francs", "sterling",
+]);
+const CRYPTO_WORDS = new Set(["crypto", "cryptocurrency", "cryptocurrencies", "coin", "coins", "token", "tokens", "bitcoin", "btc", "eth", "ether", "ethereum", "sol", "solana", "usdc", "usdt", "stablecoin", "stablecoins", "onchain", "chain", "wallet"]);
+const CONVERT_FORMS = new Set(["exchange", "converter", "converters", "conversion", "conversions", "converting", "converts", "converted"]);
+function applyCurrencyTerms(terms) {
+  if (terms.some((t) => CRYPTO_WORDS.has(t))) return;
+  if (!terms.some((t) => CURRENCY_WORDS.has(t)) && terms.filter((t) => FIAT_CODES.has(t)).length < 2) return;
+  if (!terms.includes("forex")) terms.push("forex");
+  if (!terms.includes("convert") && terms.some((t) => CONVERT_FORMS.has(t))) terms.push("convert");
+}
 
 // Delegated-purchase intent (see the synthetic "sor" term below). Both sets
 // must hit for the term to be appended - "buy bitcoin price" stays a crypto
@@ -213,6 +238,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // score tie against the other *-convert tools without distorting queries
   // that never mention a unit.
   if (!terms.includes("units") && terms.some((t) => UNIT_WORDS.has(t))) terms.push("units");
+  applyCurrencyTerms(terms);
   // Same mechanism for DELEGATED PURCHASE intent: "buy a tool from another
   // seller", "pay an external api on my behalf" are asking for the Smart Order
   // Router (it resolves a seller, pays them over x402, relays the result), but

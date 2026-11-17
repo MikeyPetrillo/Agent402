@@ -94,9 +94,10 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
 }
 
 // --- the tool search reads weakMatches (run for real in jsdom) ---------------
-// /api/find marks every row weak when no catalog tool does the task (the rows
-// are word matches only). The page must not list them as matches; with an
-// indexed seller that does it (routeAcross), it links the seller search.
+// /api/find marks every row weak when its top row may not do the task (word
+// matches only). The page labels the rows closest matches and never claims no
+// tool does it; with an indexed seller that does it (routeAcross), it links
+// the seller search after the rows.
 {
   const { JSDOM } = await import("jsdom");
   const run = async (answer) => {
@@ -113,10 +114,13 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
   const strong = await run({ results: [row], packs: [] });
   ok(strong.style.display === "block" && strong.querySelector('a[href="/tools/orderbook"]'), "control: a strong answer lists its tool rows");
   const weak = await run({ results: [{ ...row, weak: true }], packs: [], weakMatches: true, routeAcross: "https://agent402.tools/api/route?q=book%20a%20flight&include=external" });
-  ok(weak.style.display === "block" && !weak.querySelector('a[href^="/tools/"]') && /No tool here does "book a flight"/.test(weak.textContent), `weakMatches: no word-match row is listed as a match ("${weak.textContent}")`);
+  ok(weak.style.display === "block" && weak.querySelector('a[href="/tools/orderbook"]') && /closest matches for "book a flight"/.test(weak.textContent) && !/tools matching/.test(weak.textContent), `weakMatches: the rows are listed under a closest-matches label ("${weak.textContent}")`);
+  ok(!/no tool/i.test(weak.textContent), "weakMatches alone never claims that no tool does the task");
+  ok(/tools matching "book a flight"/.test(strong.textContent) && !/closest matches/.test(strong.textContent), "control: a strong answer keeps the matching label");
   ok(weak.querySelector('a[href="/marketplace/tools?q=book%20a%20flight"]'), "weakMatches with routeAcross: links the indexed sellers' search for the same words");
   const miss = await run({ results: [{ ...row, weak: true }], packs: [], weakMatches: true });
-  ok(!miss.querySelector("a"), "weakMatches with no seller: no row and no seller link");
+  ok(miss.querySelector('a[href="/tools/orderbook"]') && !miss.querySelector('a[href^="/marketplace/"]'), "weakMatches with no seller: the closest rows and no seller link");
+  ok(!strong.querySelector('a[href^="/marketplace/"]'), "control: a strong answer carries no seller link");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

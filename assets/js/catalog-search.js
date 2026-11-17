@@ -34,29 +34,17 @@
   function renderResults(data, q) {
     if (!resultsBox) return;
     resultsBox.textContent = '';
-    // weakMatches: no catalog tool does this task; the rows are only word
-    // matches ("book a flight" finds the order-book tools), so none is listed
-    // as a match. When an indexed seller does it (routeAcross), the line links
-    // the seller directory's search for the same words.
-    if (data && data.weakMatches === true) {
-      resultsShown = 1;
-      var line = el('div', 'padding:12px 16px;font-size:var(--fs-md);color:var(--ink);', 'No tool here does "' + q + '".');
-      if (data.routeAcross) {
-        var more = el('a', 'color:var(--accent);', 'Search indexed sellers');
-        more.href = '/marketplace/tools?q=' + encodeURIComponent(q);
-        line.appendChild(document.createTextNode(' '));
-        line.appendChild(more);
-      }
-      resultsBox.appendChild(line);
-      resultsBox.style.display = 'block';
-      applyFilter();
-      return;
-    }
     var tools = (data && data.results) || [];
     var packs = (data && data.packs) || [];
-    resultsShown = tools.length + packs.length;
+    // weakMatches: /api/find found word matches only, which may or may not do
+    // the task, so the rows are labeled closest matches, never as answers.
+    // When an indexed seller does it (routeAcross), a link to the seller
+    // directory's search for the same words follows the rows.
+    var weak = !!(data && data.weakMatches === true);
+    var sellers = weak && data.routeAcross;
+    resultsShown = tools.length + packs.length + (sellers ? 1 : 0);
     if (resultsShown === 0) { resultsBox.style.display = 'none'; applyFilter(); return; }
-    var head = el('div', 'font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:10px 16px;border-bottom:1px solid var(--hairline);', 'tools matching "' + q + '" · GET /api/find');
+    var head = el('div', 'font-family:var(--font-mono);font-size:var(--fs-2xs);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:10px 16px;border-bottom:1px solid var(--hairline);', (weak ? 'closest matches for "' : 'tools matching "') + q + '" · GET /api/find');
     resultsBox.appendChild(head);
     tools.slice(0, 8).forEach(function(t) {
       var row = el('a', 'display:flex;align-items:baseline;gap:12px;padding:10px 16px;text-decoration:none;border-bottom:1px solid var(--hairline);color:var(--ink);');
@@ -79,6 +67,11 @@
       row.appendChild(el('span', 'font-size:var(--fs-sm);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;', tag));
       resultsBox.appendChild(row);
     });
+    if (sellers) {
+      var more = el('a', 'display:block;padding:10px 16px;font-size:var(--fs-sm);color:var(--accent);', 'Search indexed sellers');
+      more.href = '/marketplace/tools?q=' + encodeURIComponent(q);
+      resultsBox.appendChild(more);
+    }
     var last = resultsBox.lastChild;
     if (last) last.style.borderBottom = 'none';
     resultsBox.style.display = 'block';
