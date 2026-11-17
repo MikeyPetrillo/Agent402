@@ -6,6 +6,30 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (press kit, MCP server card and one profile list)
+Site:
+- /press is a press kit: how to write the name, the logo and social card files,
+  the operating company and the press contact. /about answers at /company, the
+  entity page.
+- Structured data on every page lists one set of our profiles for the site and
+  the company (the repository, X, the npm and PyPI packages and the MCP
+  Registry entry) and says what Agent402.Tools is.
+- The home page description says what a card buys: reports and monitors while
+  prepaid credits are not on sale.
+Surfaces:
+- The MCP connector publishes a server card at /mcp/server-card, also at
+  /.well-known/mcp/server-card.json: the name, version, title and streamable
+  HTTP endpoint that /mcp reports, with the tool count.
+
+### 2026-11-17 (seller removal says how a seller returns)
+Operations:
+- Removing a seller from the index can be previewed with a dry run (dryRun:
+  true) that names what the index holds for it and where it is known from, and
+  the removal and its restore say how the seller returns: one listed in a
+  registry or seeded by the operator comes back by itself on the next read and
+  crawl, one only its owner submitted comes back when the owner registers
+  again.
+
 ### 2026-11-17 (a conformance document for every payment rail)
 Payments:
 - /.well-known/agent402-conformance.json lists each payment rail this server

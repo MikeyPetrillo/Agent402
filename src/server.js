@@ -428,6 +428,7 @@ import { markGateMounted } from "./gate-mounts.js";
 import { conformanceDocument, CONFORMANCE_PATH } from "./conformance.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
+import { pressPage } from "./press-page.js";
 import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
 import { createFreeAlerts, alertFormHtml, ALERT_KIND_FOR_REPORT_KIND, hostnameShapedToken } from "./free-alerts.js";
 import { refundLookup, lookupKeys } from "./refund-lookup.js";
@@ -472,7 +473,7 @@ import { priceToMicroUsd, sellerRouteUrl, isUrlTemplateRoute } from "./x402-inde
 import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
-import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
+import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, removalPreview, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
 import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
@@ -1013,7 +1014,7 @@ const CATALOG = {
         example: {
           url: "https://agent402.tools/",
           title: "Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP",
-          description: "Agentic Finance for AI agents: 500+ pay-per-call tools, metered models and finished reports over x402 and MPP, or by card.",
+          description: "Agentic Finance for AI agents: 500+ pay-per-call tools, metered models and finished reports over x402 and MPP; reports and monitors also by card.",
           canonical: "https://agent402.tools/",
           og: { type: "website", site_name: "Agent402", title: "Agent402: 500+ pay-per-call tools for AI agents over x402 and MPP" },
           twitter: { card: "summary_large_image" },
@@ -4627,6 +4628,9 @@ mountShortlinks(app, BASE_URL);
 app.get("/security", (_req, res) => htmlCache(res, 300, 900).send(securityPage(BASE_URL)));
 app.get("/trust", (_req, res) => htmlCache(res, 300, 900).send(trustPage(BASE_URL)));
 app.get("/company", (_req, res) => htmlCache(res, 300, 900).send(companyPage(BASE_URL)));
+// /company is the entity page, so /about answers there rather than as a second, thinner page.
+app.get("/about", (req, res) => { const q = req.originalUrl.indexOf("?"); res.redirect(301, `/company${q >= 0 ? req.originalUrl.slice(q) : ""}`); });
+app.get("/press", (_req, res) => htmlCache(res, 300, 900).send(pressPage(BASE_URL)));
 // Who our crawler is, what it reads, and how to be removed. The crawler's own
 // User-Agent points here (src/tools/fetch-guard.js), so an operator who finds
 // it in their logs lands on the answer rather than on a source tree.
@@ -7196,14 +7200,21 @@ app.post("/__operator/seller-funding", express.json(), async (req, res) => {
 });
 // Remove ONE seller origin from the index and the router, permanently (until
 // restored). Exact origin only - no name matching, no wildcards - so a typo
-// cannot take out a neighbour. Restore only lifts the block; the owner can
-// then register again.
+// cannot take out a neighbour. Restore only lifts the block; how the origin
+// comes back depends on where the index knew it from (`returnsBy`): a seed or
+// a registry listing returns by itself, an owner's submission when the owner
+// registers again. `dryRun: true` answers the same reading and removes nothing.
 app.post("/__operator/sellers/remove", express.json(), (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   if (operatorHeavyLimited(req, res)) return;
+  if (req.body?.dryRun === true) {
+    const p = removalPreview(req.body?.origin);
+    if (p.error) return res.status(400).json({ error: p.error });
+    return res.set("Cache-Control", "no-store").json({ dryRun: true, ...p, removed: false, alreadyRemoved: p.removed });
+  }
   const r = removeOrigin(req.body?.origin, { note: typeof req.body?.note === "string" ? req.body.note : "" });
   if (r.error) return res.status(400).json({ error: r.error });
-  res.set("Cache-Control", "no-store").json({ removed: true, origin: r.origin, removedAt: r.removedAt });
+  res.set("Cache-Control", "no-store").json({ removed: true, origin: r.origin, removedAt: r.removedAt, knownFrom: r.knownFrom, returnsBy: r.returnsBy, afterRestore: r.afterRestore });
 });
 // Operator bulk seed: origins read from another registry are
 // submitted through the SAME registerOrigin path a seller's own /sell call
@@ -7261,7 +7272,7 @@ app.post("/__operator/sellers/restore", express.json(), (req, res) => {
   // retry is the remedy, so say 503 with when to try, not a bad request.
   if (r.notLoaded) return res.status(503).set("Retry-After", "30").set("Cache-Control", "no-store").json({ error: r.error, origin: r.origin, notLoaded: true });
   if (r.error) return res.status(400).json({ error: r.error });
-  res.set("Cache-Control", "no-store").json({ ...r, note: r.restored ? "the owner can register the origin again" : "that origin was not removed" });
+  res.set("Cache-Control", "no-store").json({ ...r, ...(r.restored ? {} : { returnsBy: null }), note: r.restored ? r.afterRestore : "that origin was not removed" });
 });
 // What settlement evidence do we hold for ONE origin, per source, free.
 // Runs the seller-dossier tool's own handler so the operator answer and the
@@ -10466,7 +10477,7 @@ const mcpMountOpts = {
     capturePostHogToolCall({ slug, latencyMs, cached: false, errored, status, synthetic: false, probe: isProbe });
   },
 };
-mountMcp(app, CATALOG, mcpMountOpts);
+mountMcp(app, CATALOG, { ...mcpMountOpts, serverCardAliases: ["/.well-known/mcp/server-card.json"] });
 // ONE-PRODUCT MCP ENDPOINT (2026-09-10): /mcp/sec serves the SEC filings
 // products only - the EDGAR reads and the three filing reports - under their
 // own dotted names, with the catalog meta tools hidden. Same connector, same

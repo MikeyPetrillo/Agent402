@@ -5,7 +5,7 @@
 // rule, JSON-LD honesty, and copy hygiene.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stripTags } from "./lib/html-text.js";
-import { ledgerHomePage } from "../src/ledger-home.js";
+import { ledgerHomePage, cardPayClause, homeDescription } from "../src/ledger-home.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { CATEGORY_LINE, LEAD_SENTENCE } from "../src/positioning.js";
 import { homeProofFigures } from "../src/home-proof.js";
@@ -288,6 +288,20 @@ const catalog = {
   const fail02 = WHY_POINTS.find((w) => w.id === "never-charged");
   ok(/x402/.test(fail02.t) && !fail02.links.some(([h]) => h === "/status"), "the failure claim is scoped to x402 and links a payment check, not uptime");
   ok(!/^No wallet required/.test(WHY_POINTS.find((w) => w.id === "no-wallet").t), "the no-wallet row is not an absolute");
+}
+
+// --- the meta description's card clause reads the switches that sell card ---
+{
+  ok(cardPayClause({ credits: true, storefront: true }) === "or by card" && /over x402 and MPP, or by card\./.test(homeDescription({ credits: true, storefront: true })), "credits on sale: any tool by card");
+  const store = homeDescription({ credits: false, storefront: true });
+  ok(/over x402 and MPP; reports and monitors also by card\./.test(store) && !/, or by card/.test(store), "credits off, storefront on: card scoped to reports and monitors");
+  const none = homeDescription({ credits: false, storefront: false });
+  ok(!/card/i.test(none) && /over x402 and MPP\. No signup/.test(none), "no card sale: no card in the description");
+  const saved = { c: process.env.CREDITS_SALES, s: process.env.STRIPE_SECRET_KEY };
+  delete process.env.CREDITS_SALES; process.env.STRIPE_SECRET_KEY = "sk_test_x";
+  const meta = (ledgerHomePage(BASE_URL, catalog, {}, {}, []).match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
+  ok(/reports and monitors also by card/.test(meta) && !/, or by card/.test(meta), `the rendered home description reads the switches (${meta})`);
+  for (const [k, v] of [["CREDITS_SALES", saved.c], ["STRIPE_SECRET_KEY", saved.s]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
