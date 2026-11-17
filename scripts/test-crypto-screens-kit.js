@@ -171,19 +171,34 @@ reset();
     const whole = __test.reducePerps.fn(JSON.parse(text));
     let worst = 0, last = performance.now();
     const tick = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; }, 1);
+    // Counted, not only timed: the largest text handed to JSON.parse, and how often the loop was yielded.
+    const realParse = JSON.parse, realImmediate = globalThis.setImmediate;
+    let largestParsed = 0, yields = 0;
+    JSON.parse = (t, ...rest) => { largestParsed = Math.max(largestParsed, String(t).length); return realParse(t, ...rest); };
+    globalThis.setImmediate = (fn, ...rest) => { yields++; return realImmediate(fn, ...rest); };
     const started = performance.now();
     const sliced = await __test.reducePerps.fromText(text);
+    JSON.parse = realParse; globalThis.setImmediate = realImmediate;
+    ok(largestParsed > 0 && largestParsed < 4096 && yields >= Math.floor(text.length / __test.LIST_SLICE_CHARS) - 1, `the body is never parsed whole: the largest text parsed is one row (${largestParsed} characters), and the loop is yielded once a slice (${yields} times)`);
     const took = performance.now() - started;
+    worst = Math.max(worst, performance.now() - last); // a read that never yielded is one turn, ending here
     clearInterval(tick);
     ok(text.length > 11_000_000 && JSON.stringify(sliced) === JSON.stringify(whole) && sliced.length === 40_000, `a ${(text.length / 1e6).toFixed(1)} MB document read in slices reduces to the same rows as a whole parse (${sliced.length})`);
     console.log(`# sliced reduce of ${(text.length / 1e6).toFixed(1)} MB: ${took.toFixed(0)} ms in all, longest event-loop turn ${worst.toFixed(1)} ms`);
-    ok(worst < 40, `no turn of the sliced read holds the event loop 40 ms (longest ${worst.toFixed(1)} ms)`);
     const one = await __test.reducePerps.fromText(` \n[ ${JSON.stringify(DERIVATIVES[0])} , 7, "x", null, [1, {"a": 2}], ${JSON.stringify(DERIVATIVES[1])} ]\n`);
     ok(one.length === 2 && one[0][0] === "Alpha Futures" && one[1][0] === "Beta Futures", "whitespace and non-object elements are passed over");
     for (const [badText, why] of [['{"a":1}', "an object"], ["", "an empty body"], ['[{"market":"x"', "a truncated list"], ["<html>", "a page"], ['[{"market":"x"}] trailing', "text after the list"]]) {
       let threw = false; try { await __test.reducePerps.fromText(badText); } catch { threw = true; }
       ok(threw, `${why} is refused, never read as an empty list`);
     }
+    // The same through the tool: the upstream body goes to the sliced reader, never to one parse.
+    reset();
+    routes = [[path("/derivatives"), () => jsonRes(200, text)]];
+    let largestInCall = 0;
+    JSON.parse = (t, ...rest) => { largestInCall = Math.max(largestInCall, String(t).length); return realParse(t, ...rest); };
+    const viaTool = await h("funding-screener")({ coin: "C7", minOpenInterestUsd: 100000 });
+    JSON.parse = realParse;
+    ok(viaTool.venues > 0 && largestInCall < 4096, `funding-screener reads the ${(text.length / 1e6).toFixed(1)} MB document without one whole parse (largest text parsed ${largestInCall} characters)`);
     reset();
     routes = [[path("/derivatives"), () => jsonRes(200, "<html>busy</html>")]];
     await throws(h("funding-screener")({ coin: "ETH" }), 502, "a derivatives body that is not a list");

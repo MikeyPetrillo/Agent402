@@ -953,7 +953,7 @@ export const KEY_ONLY_SCREEN_SLUGS = Object.freeze(["dex-volume-board", "dex-poo
 // `credit` field of every answer.
 for (const t of CRYPTO_SCREENS_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
-export const __test = { median, quantile, stdev, weightedMean, hhi, reducePerps, reduceStables, reduceCategoryPage, reducePlatforms, reducePoolPage, FUNDING_MIN_OI_USD, PEG_CLASS_BAND };
+export const __test = { median, quantile, stdev, weightedMean, hhi, reducePerps, reduceStables, reduceCategoryPage, reducePlatforms, reducePoolPage, FUNDING_MIN_OI_USD, PEG_CLASS_BAND, LIST_SLICE_CHARS };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(CRYPTO_SCREENS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
