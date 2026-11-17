@@ -593,7 +593,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         name: profile?.serverName || "agent402",
         version: VERSION,
         title: "Agent402",
-        description: mcpServerDescription({ mpp: mppMethodsSummary().enabled }),
+        description: mcpServerDescription({ mpp: payWires ? Boolean(payWires.mpp) : mppMethodsSummary().enabled }),
         websiteUrl: baseUrl || MCP_SERVER_WEBSITE,
       },
       {
