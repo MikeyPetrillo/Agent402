@@ -21,6 +21,7 @@ import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 import { HUMAN_PRODUCTS } from "./human-checkout.js";
 import { RAILS_OR, RAILS_PAREN, RAILS_SHORT, railsOrFor, x402EvmOnly } from "./rails.js";
 import { failedCallFootnote } from "./settlement-footnote.js";
+import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumUsdByNetwork as premiumUsdByNetworkName } from "./public-networks.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { defHasLastingEffect } from "./hangup-forgiveness.js";
@@ -417,8 +418,8 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
     facts.push(`Long-running: payment settles after the work finishes, so x402 is offered on EVM chains only${lrMpp ? ` and MPP on ${e(lrMpp)}` : ""}; Tempo is not offered.`);
   }
   if (tool.judgedChoice && toolJudgeEnabled()) facts.push(`A judgment model picks among the shortlisted tools; the chosen tool runs unchanged, so the answer itself is the tool's own.`);
-  if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready.${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
-  else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready.`);
+  if (tool.runSeconds) facts.push(`${tool.asyncProfile?.expectedSeconds ? `Usually answers in about ${e(String(tool.asyncProfile.expectedSeconds))} seconds and takes` : "Takes"} up to ${e(String(tool.runSeconds))} seconds. Send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link at once, then poll <code>GET /api/jobs/{id}</code> for its stage, progress and ETA until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${needsAsyncOrWait(tool.asyncProfile) ? ` To wait on the connection instead, send <code>Prefer: wait=${e(String(tool.runSeconds))}</code> and keep it open that long. A paid call with neither header is answered <code>400</code> before any payment is taken.` : " Or keep the connection open that long."}`);
+  else if (tool.asyncProfile) facts.push(`Runs as a job on request: send the paid call with <code>Prefer: respond-async</code> to get <code>202</code> and a job link instead of waiting on the connection, then poll <code>GET /api/jobs/{id}</code> until it has the answer; payment still settles only when the answer is ready${JOB_PUSH_EXCEPTION}.`);
   if (tool.quoteRange) facts.push(`Priced per request: the 402 quotes this body, between ${e(displayPrice(fromPriceLabel(tool)))} and $${e(String(tool.quoteRange.maxUsd))}.${tool.quoteFormula ? ` The quote is ${e(tool.quoteFormula)}.` : ""}`);
   if (isMeteredChatSlug(tool.slug)) facts.push(e(meteredTimeoutSentence()));
   if (typeof tool.tierQuote === "function") facts.push(e(PRICED_BY_MODEL_NOTE));
@@ -764,7 +765,7 @@ ${ledgerFooterCompact()}`;
 const QUERY_PARAM_TYPES = new Set(["number", "integer", "boolean"]);
 // The 429 every catalog operation can answer: the unpaid-request limits, and
 // the in-flight coverage check on paid calls (src/inflight-cover.js).
-const OPENAPI_429 = Object.freeze({ description: "Refused before the tool runs: one of the documented limits, such as a rate limit or a wallet whose balance does not cover its paid calls in flight. Not charged on x402; a Tempo transfer sent before the call is recorded as owed. Retry after Retry-After when present." });
+const OPENAPI_429 = Object.freeze({ description: "Refused before the tool runs: one of the documented limits, such as a rate limit or a wallet whose balance does not cover its paid calls in flight. Not charged on x402; a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof. Retry after Retry-After when present." });
 
 // Inlined, not a $ref: naive dereferencers that crawl this document resolve
 // every pointer from the root (see the components note below).
@@ -959,7 +960,7 @@ export function openapiSpec(baseUrl, catalog) {
         name: "Prefer",
         in: "header",
         required: false,
-        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting${tool.asyncProfile.maxSeconds ? ` up to ${tool.asyncProfile.maxSeconds} s` : " on the connection"}; or send wait=${tool.asyncProfile.maxSeconds} to hold the connection and get the answer in the same response (a plain call with no Prefer header is refused with 400 before payment); poll GET /api/jobs/{id} (free, honor Retry-After) until status is completed or failed (state succeeded or failed).${tool.asyncProfile.slow ? " Recommended on this route." : ""} Payment settles only when the answer is ready.${needsAsyncOrWait(tool.asyncProfile) ? ` wait=${tool.asyncProfile.maxSeconds}: wait on this connection for the answer instead. A paid call with neither is answered 400 before any payment is taken.` : ""}`,
+        description: `respond-async: a paid call gets 202 and a job link at once (Location, statusUrl) instead of waiting${tool.asyncProfile.maxSeconds ? ` up to ${tool.asyncProfile.maxSeconds} s` : " on the connection"}; or send wait=${tool.asyncProfile.maxSeconds} to hold the connection and get the answer in the same response (a plain call with no Prefer header is refused with 400 before payment); poll GET /api/jobs/{id} (free, honor Retry-After) until status is completed or failed (state succeeded or failed).${tool.asyncProfile.slow ? " Recommended on this route." : ""} Payment settles only when the answer is ready${JOB_PUSH_EXCEPTION}.${needsAsyncOrWait(tool.asyncProfile) ? ` wait=${tool.asyncProfile.maxSeconds}: wait on this connection for the answer instead. A paid call with neither is answered 400 before any payment is taken.` : ""}`,
         schema: needsAsyncOrWait(tool.asyncProfile)
           ? { type: "string", examples: ["respond-async", `wait=${tool.asyncProfile.maxSeconds}`] }
           : { type: "string", enum: ["respond-async"] },

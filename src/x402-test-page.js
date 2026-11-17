@@ -42,7 +42,7 @@ export function x402TestPage(baseUrl) {
       <a href="/" style="color:var(--muted);text-decoration:none;">agent402</a> / <span style="color:var(--ink);">test your x402 client</span>
     </nav>
     <h1 style="font-family:var(--font-display);font-weight:400;letter-spacing:-.01em;font-size:var(--fs-5xl);line-height:.96;margin:0 0 22px;color:var(--ink);max-width:900px;">Test your x402 client against a real endpoint.</h1>
-    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Every refusal here tells you what was actually wrong: which field differs from what was advertised, which schemes and networks the route offers, whether the amount or the validity window is the problem. Refusals are free, because an error status cancels settlement. You pay only when it works, and then it costs ${esc(PROBE_PRICE)}.</p>
+    <p style="font-size:var(--fs-lg);line-height:1.55;color:var(--muted);max-width:820px;margin:0;">Every refusal here tells you what was actually wrong: which field differs from what was advertised, which schemes and networks the route offers, whether the amount or the validity window is the problem. Refusals are free, because an error status cancels an x402 settlement. A call that works costs ${esc(PROBE_PRICE)}.</p>
   </div>
 </header>
 

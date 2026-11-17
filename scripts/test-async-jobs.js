@@ -197,7 +197,31 @@ try {
   const j2 = await (await post({ prefer: "respond-async", "x-forwarded-for": "10.9.0.3", "payment-signature": credential(wallet(2)) })).json();
   await waitFor(async () => ["succeeded", "failed"].includes((await job(j2.statusUrl)).state));
   const g2 = await job(j2.statusUrl);
-  ok(g2.status === "failed" && g2.error?.httpStatus >= 500 && /nothing was charged/.test(g2.message || ""), `a failed run ends the job failed and says not charged (error HTTP ${g2.error?.httpStatus})`);
+  ok(g2.status === "failed" && g2.error?.httpStatus >= 500 && /Nothing was charged\./.test(g2.message || ""), `a failed run ends the job failed and says not charged (error HTTP ${g2.error?.httpStatus})`);
+  {
+    // A failed run's summary is read from the loopback answer: a body the
+    // Tempo push gate rewrote says the transfer is owed, and so does the job.
+    const { failedRunSummary } = await import("../src/async-jobs.js");
+    const { PUSH_FAILURE_NOTE } = await import("../src/push-refusal-body.js");
+    const pushed = failedRunSummary(502, { error: "x", transferClaimed: true, refundOwed: true });
+    ok(pushed.includes(PUSH_FAILURE_NOTE) && !/nothing was charged|not charged/i.test(pushed), "a failed run paid with a claimed Tempo transfer says the transfer is owed, never that nothing was charged");
+    ok(failedRunSummary(502, { error: "x" }) === "The call ended with HTTP 502. Nothing was charged." && /did not run\. Nothing was charged\. The 402 is in error\.body\.$/.test(failedRunSummary(402, {})), "any other failed run, and a refused payment, says nothing was charged in the shared sentence");
+    // The Tempo gate's own refusals nest their payment fields under
+    // `details` (src/mpp-tempo.js): each shape as the gate writes it.
+    const { PUSH_UNCLAIMED_OWED_NOTE, PUSH_UNCLAIMED_NOTE } = await import("../src/push-refusal-body.js");
+    const never = (t) => !/nothing was charged|not charged/i.test(t);
+    const routeRefused = failedRunSummary(402, { type: "x", status: 402, detail: "d", details: { reason: "method-unsupported", charged: false, transferClaimed: false, refundOwed: true } });
+    const finalizeRefused = failedRunSummary(402, { type: "x", status: 402, detail: "d", details: { reason: "finalize", refundOwed: true } });
+    const unanswered = failedRunSummary(503, { type: "x", status: 503, detail: "d", details: { reason: "relay", transferClaimed: null, refundOwed: true } });
+    ok([routeRefused, finalizeRefused, unanswered].every((t) => t.includes(PUSH_UNCLAIMED_OWED_NOTE) && /repaid after on-chain proof/.test(t) && never(t)), `a refusal that booked an unclaimed transfer (details.refundOwed) says it is owed and how it is repaid (${routeRefused})`);
+    const notChecked = failedRunSummary(503, { error: "store did not answer", reason: "replay-store-unavailable", transferClaimed: false });
+    const relayDown = failedRunSummary(503, { type: "x", status: 503, detail: "d", details: { reason: "relay-unavailable", transferClaimed: false } });
+    ok([notChecked, relayDown].every((t) => t.includes(PUSH_UNCLAIMED_NOTE) && never(t)), `a transfer sent and neither claimed nor booked points at the answer (${relayDown})`);
+    const inputRefused = failedRunSummary(400, { error: "Missing required parameter: text", charged: false, transferClaimed: false, payment: "The transfer you sent has not been claimed. Send this request again with a corrected body and the same credential and it pays for that request. Until then it is recorded as owed to the sender." });
+    ok(/The transfer you sent has not been claimed/.test(inputRefused) && never(inputRefused), "an input refusal of a push credential carries the gate's own sentence");
+    ok(failedRunSummary(503, { error: "x", reason: "replay-store-unavailable", charged: false, transferClaimed: false }) === "The call ended with HTTP 503. Nothing was charged." && /Nothing was charged\./.test(failedRunSummary(402, { type: "x", details: { reason: "replay", charged: false } })), "a refusal that says charged: false with no transfer behind it still says nothing was charged");
+    ok(failedRunSummary(500, null) === "The call ended with HTTP 500. Nothing was charged." && failedRunSummary(500, "text") === "The call ended with HTTP 500. Nothing was charged." && /Nothing was charged/.test(failedRunSummary(500, { details: "x" })), "a body that is no object, or whose details is none, reads as before");
+  }
   ok(fac.settle === s2, `a failed run settles nothing (settles ${fac.settle - s2})`);
 
   // 2b. An absolute-form request target ("POST http://host/route") matches the

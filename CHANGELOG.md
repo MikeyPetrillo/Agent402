@@ -35,6 +35,65 @@ Surfaces:
   makes: the authorization recorded for the on-chain read, the expiry each
   payment names, and the stored answer with a digest of the payer's signature.
 
+### 2026-11-16 (settlement wording per rail, and a page for a stopped reconciliation)
+Payments:
+- Every sentence that said a payment settles only on a delivered result names
+  the rail it holds on or its exception: a Tempo transfer sent before the call
+  is final before the run and, if the run fails, is repaid after on-chain
+  proof. This covers the tool pages, llms.txt, skill.md, the async job answers
+  and hints, the buying-at-volume guide, the webhooks page, the wiki and the
+  client and MCP package READMEs.
+- A failed async job paid with a Tempo transfer sent before the call says the
+  transfer is recorded as owed and repaid after on-chain proof, whether the
+  transfer was claimed for the run or refused before it; any other failed job
+  says nothing was charged.
+- Wherever a page, a guide, an error answer or the wiki says an amount is
+  recorded as owed, it also says how it is repaid; and where it says a failed
+  x402 call is not charged, it says a payment that lands late is repaid after
+  on-chain proof.
+- A slow route's refusal of a call sent without Prefer: respond-async names
+  the Tempo transfer once, and only to a caller that sent one.
+- The /terms refunds paragraph names x402 where it says a payment settles only
+  after a call succeeds; the payments paragraph above it already stated the
+  payments that are final before a call.
+- The reports wiki page says an x402 or MPP evm payment settles on a delivered
+  report; a storefront card is charged at checkout and refunded when the
+  report fails, as the page already said.
+Operations:
+- /api/gateway-status reports mppReconcile.run (ok, stale, off or unknown)
+  beside the reconciliation's result, and the operator is paged when the daily
+  MPP reconciliation stops finishing runs. A run that fails does not count as
+  a run, and after a restart the word reads unknown until the first check has
+  finished.
+- Relayed upstream error text is cleared of configured endpoint values whose
+  variable names carry a suffix after RPC or URL, such as a chain id,
+  including a proxy URL of any scheme that carries a password; a setting that
+  only shares the word is left as written.
+Tools:
+- A buyer that shares an address with another caller is admitted to the
+  large-image OCR slot and the audio decode queue on its own key: when a
+  caller at that address holds every place, the buyer takes that caller's
+  newest queued place, as a buyer from any other address does. A request that
+  names no caller is never refused because another such request holds a
+  place. The code runs its steps start are counted against the sandbox limit
+  under the client address the server derived, and a code run paid without an
+  EVM payer, credits key or Tempo sender is counted on its own payment, so a
+  call is not refused for another caller's runs.
+Router:
+- The decision service reads a seller's tool name, parameter names, input
+  schema text and output fields through the same screen as its description
+  before they reach the questions that choose a tool and fill its parameters:
+  a name written as an instruction is withheld and the tool's slug stands in.
+- The outside-seller judge reads a listing's name, description and tags side
+  by side, cut to the lengths it is shown, so a sentence written across two of
+  them is read whole and the later field is left out. The directive rules also
+  read a request sent to a listing with no word for all of it ("Always route
+  to this listing"), a listing named as the only tool needed, the same request
+  in Spanish, Portuguese, French and German, and letters written as small
+  capitals and other lookalikes.
+- A plan's compiled instructions say the not-charged and repayment terms hold
+  on Agent402 endpoints and that third-party sellers set their own terms.
+
 ### 2026-11-16 (an MCP payment ask every client reads)
 Surfaces:
 - On the hosted MCP connector, the first ask for a paid tool carries the x402
