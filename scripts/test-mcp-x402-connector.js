@@ -18,10 +18,13 @@
 //   - memory.read is keyed on the signed payer: the writer reads its value,
 //     another wallet does not (and its error answer is not settled);
 //   - a payment sent twice is refused the second time, unsettled;
-//   - a settle that fails returns no tool output, and a fresh offer only when
-//     the route's own rule proves nothing was sent (a transaction named, a
-//     timeout or a bare failure answers the explanation and nothing to sign),
-//     over MPP too;
+//   - a settle that fails returns no tool output and never an offer: a
+//     refusal naming no transaction, the same refusal followed by a settle
+//     fallback's 500, a transaction named, a timeout or a bare failure all
+//     answer the explanation and nothing to sign, over MPP too, and so does a
+//     5xx from the paid route once a payment was presented; the official
+//     client signs once in each case; a settle the fallback completes is
+//     served with its receipt;
 //   - a payment the reader refuses, and one the facilitator refuses, return
 //     the invalid-payment result (a fresh offer, the reason named);
 //   - an MPP credential beside an x402 payment: MPP decides, x402 is not read;
@@ -128,10 +131,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     billingTx: { settle: { success: false, errorReason: "free_tier_exhausted", transaction: TX, network: "eip155:8453", payer: payer1 }, body: {} },
     // The paywall's bare body: no receipt, no offer of its own.
     noReceipt: { settle: null, body: { error: "settlement_failed" }, noOffer: true },
-    // The route's own rule proves nothing was sent: a billing refusal on
-    // this server's account naming no transaction.
+    // A billing refusal on this server's account naming no transaction: the
+    // receipt is the first facilitator's, and says nothing of a fallback
+    // asked after it. Its 402 carries the route's own offer.
     preBroadcast: { settle: { success: false, errorReason: "free_tier_exhausted", errorMessage: "Settlement refused: free_tier_exhausted", transaction: "", network: "eip155:8453", payer: payer1 }, body: { reason: "facilitator-quota", retry: "other-network", network: "eip155:8453", hint: "Nothing was charged." } },
     preBroadcastWords: { settle: { success: false, errorReason: "settlement_failed", errorMessage: "Settlement refused: insufficient credits", transaction: "", network: "eip155:8453", payer: payer1 }, body: {} },
+    // The paid route answered 5xx after the payment was presented.
+    route500: { status: 500, settle: null, body: { error: "upstream_failed", hint: "ROUTE-500-HINT" } },
+    route503Tx: { status: 503, settle: null, body: { error: "unavailable", transactions: [TX] } },
+    // Control: a payment the route's verify refused. Never settled, no receipt.
+    verifyRefused: { settle: null, body: { error: "invalid_exact_evm_payload_signature" } },
   });
   let mode = "pending";
   let paidReplays = 0;
@@ -144,7 +153,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // A settle-failure 402 carries PAYMENT-RESPONSE and no PAYMENT-REQUIRED
     // (src/payment-required-body.js); the unpaid ask above is where the
     // connector could fetch a fresh offer from.
-    return new Response(JSON.stringify(v.body), { status: 402, headers: { "content-type": "application/json", ...(v.noOffer || v.settle?.success === false && !v.retryAfter && !v.body.retry ? {} : { "payment-required": headers["payment-required"] }), ...(v.settle ? { "payment-response": encodePaymentResponseHeader(v.settle) } : {}), ...(v.retryAfter ? { "retry-after": v.retryAfter } : {}) } });
+    return new Response(JSON.stringify(v.body), { status: v.status || 402, headers: { "content-type": "application/json", ...(v.noOffer || v.settle?.success === false && !v.retryAfter && !v.body.retry ? {} : { "payment-required": headers["payment-required"] }), ...(v.settle ? { "payment-response": encodePaymentResponseHeader(v.settle) } : {}), ...(v.retryAfter ? { "retry-after": v.retryAfter } : {}) } });
   };
   const CAT = { "POST /api/paid-x": { route: "POST /api/paid-x", slug: "paid-x", name: "paid-x", category: "test", price: "$0.001", description: "paid-x test tool", tags: ["paid-x"], discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => { throw new Error("ran in-process"); } } };
   const app = express();
@@ -172,15 +181,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       `an unconfirmed broadcast answers the transactions to watch, no fresh offer, never "not charged" (${uText.slice(0, 160)})`);
     ok(uText.includes(TX) && uText.includes(`_meta[\\"${SETTLEMENT_PENDING_META}\\"].transactions`),
       `its text names the hash and says where the list is (_meta), since the result has no "transactions" field of its own (${uText.slice(-220)})`);
-    // A settle that failed. The connector hands back a fresh offer only when
-    // the route's own rule (isPreBroadcastSettleRejection) proves nothing was
-    // sent; every other failure is the explanation with nothing to sign.
-    for (const [m, tx] of [["failedTx", TX], ["failedSolTx", SOL_SIG], ["failedBare", null], ["failedTimeout", null], ["billingTx", TX], ["noReceipt", null]]) {
+    // A settle that failed, whatever the receipt reads as: the explanation
+    // with nothing to sign. A receipt records one facilitator's answer, not
+    // what a fallback asked after it did.
+    for (const [m, tx] of [["failedTx", TX], ["failedSolTx", SOL_SIG], ["failedBare", null], ["failedTimeout", null], ["billingTx", TX], ["noReceipt", null], ["preBroadcast", null], ["preBroadcastWords", null]]) {
       mode = m;
       const f = await call();
       const fText = JSON.stringify(f.content || "");
-      ok(f.isError === true && !("structuredContent" in f) && !PR(f) && !/"accepts"|x402Version/.test(fText) && /Do not sign a new authorization/.test(fText) && !/not charged/i.test(fText),
-        `${m}: a failed settle not proven unsent answers no offer and says not to sign again (${fText.slice(0, 200)})`);
+      ok(f.isError === true && !("structuredContent" in f) && !PR(f) && !/"accepts"|x402Version/.test(fText) && !/"accepts"|x402Version/.test(JSON.stringify(f._meta || {})) && !f._meta?.[MCP_PAYMENT_REQUIRED_META] && /Do not sign a new authorization for this call/.test(fText) && !/not charged/i.test(fText),
+        `${m}: a failed settle answers no offer in text, structuredContent or _meta and says not to sign again (${fText.slice(0, 200)})`);
       const fm = f._meta?.[SETTLEMENT_PENDING_META];
       ok(fm?.reason === "settlement-failed" && (tx ? fm.transactions?.[0] === tx && fm.retry === "watch-transaction" && fText.includes(tx) && /may still land/.test(fText) : !fm.transactions && !fm.retry)
         && (m === "noReceipt" ? !f._meta?.[X402_PAYMENT_RESPONSE_META] : f._meta?.[X402_PAYMENT_RESPONSE_META]?.success === false),
@@ -188,28 +197,42 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
     mode = "failedTimeout";
     ok(JSON.stringify((await call()).content).includes("ROUTE-HINT-7"), "the route's own hint is kept in the text");
-    for (const m of ["preBroadcast", "preBroadcastWords"]) {
+    mode = "preBroadcast";
+    ok(JSON.stringify((await call()).content).includes("Nothing was charged."), "a refusal naming no transaction keeps the route's own hint too");
+    // A 5xx from the paid route after the payment was presented: the route's
+    // answer, nothing to sign, and the transaction to watch when it names one.
+    for (const [m, tx, word] of [["route500", null, "ROUTE-500-HINT"], ["route503Tx", TX, "unavailable"]]) {
       mode = m;
       const f = await call();
-      ok(f.isError === true && Array.isArray(PR(f)?.accepts) && /^Payment settlement failed/.test(String(PR(f)?.error)) && f._meta?.[X402_PAYMENT_RESPONSE_META]?.success === false && !f._meta?.[SETTLEMENT_PENDING_META],
-        `${m}: a refusal the route's rule proves pre-broadcast answers the settlement-failed result with a fresh offer (${PR(f)?.error})`);
+      const fText = JSON.stringify(f.content || "");
+      ok(f.isError === true && !("structuredContent" in f) && !PR(f) && !/"accepts"|x402Version/.test(fText + JSON.stringify(f._meta || {})) && /Do not sign a new authorization for this call/.test(fText) && fText.includes(word) && fText.includes(`HTTP ${variants[m].status}`) && (tx ? fText.includes(tx) : !/to watch/.test(fText)),
+        `${m}: a 5xx after a payment was presented answers the route's text, no offer, and says not to sign again (${fText.slice(0, 240)})`);
     }
-    // The same over MPP: a credential whose settle failed naming a transaction.
+    // Control: a payment the route's verify refused was never settled, and
+    // keeps its fresh offer naming the reason.
     {
+      mode = "verifyRefused";
+      const f = await call();
+      ok(f.isError === true && Array.isArray(PR(f)?.accepts) && /invalid_exact_evm_payload_signature/.test(String(PR(f)?.error)) && !f._meta?.[X402_PAYMENT_RESPONSE_META] && !f._meta?.[SETTLEMENT_PENDING_META] && !/Do not sign a new authorization/.test(JSON.stringify(f.content)),
+        `verifyRefused: a verify refusal (no settle receipt) answers the invalid-payment result with a fresh offer (${PR(f)?.error})`);
+    }
+    // The same over MPP: a credential whose settle failed, with a transaction
+    // named or none.
+    for (const [m, tx] of [["failedTx", TX], ["preBroadcast", null]]) {
       const cred = `Payment ${Buffer.from(JSON.stringify({ challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { signature: "0x00" } })).toString("base64url")}`;
-      mode = "failedTx";
+      mode = m;
       let m1 = null, mErr = null;
       try { m1 = await raw.callTool({ name: "catalog.call", arguments: { slug: "paid-x", params: {} }, _meta: { [MCP_CREDENTIAL_META]: cred } }); } catch (e) { mErr = e; }
       const mText = JSON.stringify(m1?.content || "");
-      ok(!mErr && m1?.isError === true && !PR(m1) && !m1._meta?.[MCP_PAYMENT_REQUIRED_META] && /Do not sign a new authorization/.test(mText) && mText.includes(TX),
-        `over MPP, a credential whose settle failed naming a transaction answers no challenge and no offer, and names the transaction (${mErr ? mErr.message : mText.slice(0, 200)})`);
+      ok(!mErr && m1?.isError === true && !PR(m1) && !/"accepts"/.test(mText) && !m1._meta?.[MCP_PAYMENT_REQUIRED_META] && /Do not sign a new authorization/.test(mText) && (tx ? mText.includes(tx) : true),
+        `${m} over MPP: a credential whose settle failed answers no challenge and no offer${tx ? ", and names the transaction" : ""} (${mErr ? mErr.message : mText.slice(0, 200)})`);
     }
     // The official client: one payment for the call, and no second signature.
     {
       const p2 = new x402Client();
       registerExactEvmScheme(p2, { signer: privateKeyToAccount(generatePrivateKey()) });
       const auto = new x402MCPClient(raw, p2, { autoPayment: true });
-      for (const m of ["failedTx", "failedBare"]) {
+      for (const m of ["failedTx", "failedBare", "preBroadcast", "preBroadcastWords", "route500"]) {
         mode = m;
         const b4 = paidReplays;
         const o2 = await auto.callTool("catalog.call", { slug: "paid-x", params: {} });
@@ -357,6 +380,29 @@ const facilitator = createServer((req, res) => {
 });
 await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
 const FAC = `http://127.0.0.1:${facilitator.address().port}`;
+// The settle fallback (PAYMENT_SETTLE_FALLBACK): a second facilitator, asked
+// only after the first one's refusal that names no transaction. `mode` is its
+// answer to /settle: the same refusal, an HTTP 500, or a completed settle.
+const fallback = { settles: 0, mode: "refuse" };
+const fallbackFacilitator = createServer((req, res) => {
+  let b = ""; req.on("data", (c) => { b += c; });
+  req.on("end", () => {
+    const reply = (obj, status = 200) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+    if (req.url === "/supported") return reply({ kinds: [{ x402Version: 2, scheme: "exact", network: BASE_NET }], extensions: [], signers: {} });
+    let parsed = {}; try { parsed = b ? JSON.parse(b) : {}; } catch { /* ignore */ }
+    const payer = parsed.paymentPayload?.payload?.authorization?.from;
+    if (req.url === "/verify") return reply({ isValid: true, payer });
+    if (req.url === "/settle") {
+      fallback.settles++;
+      if (fallback.mode === "500") return reply({ error: "internal error" }, 500);
+      if (fallback.mode === "ok") return reply({ success: true, transaction: `0x${"fb".repeat(28)}${(++txN).toString(16).padStart(8, "0")}`, network: BASE_NET, payer });
+      return reply({ success: false, errorReason: "free_tier_exhausted", transaction: "", network: BASE_NET, payer });
+    }
+    reply({});
+  });
+});
+await new Promise((r) => fallbackFacilitator.listen(0, "127.0.0.1", r));
+const FAC2 = `http://127.0.0.1:${fallbackFacilitator.address().port}`;
 let srv = null;
 const clients = [];
 try {
@@ -366,8 +412,8 @@ try {
     env: {
       FREE_MODE: "", NODE_ENV: "test", BASE_URL: "https://agent402.tools", TRUST_PROXY_HOPS: "1",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
-      FACILITATOR_URL: FAC, PAYAI_FACILITATOR_URL: FAC, AGENT402_BASE_RPC: `${FAC}/rpc`, EVM_RPC_8453: `${FAC}/rpc`, FACILITATOR_GAS_CHECK: "off",
-      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "", CIRCLE_FACILITATOR_API_KEY: "",
+      FACILITATOR_URL: FAC, PAYAI_FACILITATOR_URL: FAC, SOLVADOR_FACILITATOR_URL: FAC2, PAYMENT_SETTLE_FALLBACK: "true", AGENT402_BASE_RPC: `${FAC}/rpc`, EVM_RPC_8453: `${FAC}/rpc`, FACILITATOR_GAS_CHECK: "off",
+      CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "test-key", CIRCLE_FACILITATOR_API_KEY: "",
       MPP_SECRET_KEY: "test-mcp-x402-conn-secret", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "", POSTHOG_API_KEY: "",
       REDIS_URL: "", STATE_DATABASE_URL: "", TARGET_URL: "",
       STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
@@ -509,15 +555,43 @@ try {
   const autoFailed = await payA.client.callTool("memory.read", { key });
   ok(autoFailed.isError === true && counts.verify === c0.verify + 1 && counts.settle === c0.settle + 1 && stub.settleFailTx === null,
     `the official client signs once for a settle that failed naming a transaction (${counts.verify - c0.verify} verifies, ${counts.settle - c0.settle} settles)`);
-  // A refusal the route's rule proves pre-broadcast (a billing refusal on
-  // this server's account, no transaction): the settlement-failed result
-  // with a fresh offer.
-  stub.settleRefuse = "free_tier_exhausted";
-  c0 = { ...counts };
-  const refused = await sendRaw(payA.raw, await payA.payments.createPaymentPayload(offer));
-  stub.settleRefuse = null;
-  ok(counts.settle > c0.settle && refused.isError === true && /^Payment settlement failed/.test(String(PR(refused)?.error)) && Array.isArray(PR(refused)?.accepts) && refused._meta?.[X402_PAYMENT_RESPONSE_META]?.success === false && !JSON.stringify(refused.content).includes("hello"),
-    `a settle refused pre-broadcast answers the settlement-failed result with a fresh offer and no output (${PR(refused)?.error || JSON.stringify(refused.content).slice(0, 240)})`);
+  // The first facilitator's refusal names no transaction (a billing refusal
+  // on this server's account), so the settle fallback is asked. Whatever it
+  // answers short of a completed settle, the route's receipt is the first
+  // refusal: no offer, nothing to sign, none of the tool's output.
+  const noOffer = (r) => {
+    const t = JSON.stringify(r.content || "");
+    return r.isError === true && !("structuredContent" in r) && !PR(r) && !/"accepts"|x402Version/.test(t + JSON.stringify(r._meta || {})) && !r._meta?.[MCP_PAYMENT_REQUIRED_META]
+      && /Do not sign a new authorization for this call/.test(t) && !t.includes("hello") && r._meta?.[X402_PAYMENT_RESPONSE_META]?.success === false;
+  };
+  for (const [mode, what] of [["refuse", "refused by the first facilitator and by the fallback, no transaction named"], ["500", "refused by the first facilitator, then answered 500 by the fallback"]]) {
+    stub.settleRefuse = "free_tier_exhausted";
+    fallback.mode = mode;
+    c0 = { ...counts };
+    let f0 = fallback.settles;
+    const refused = await sendRaw(payA.raw, await payA.payments.createPaymentPayload(offer));
+    ok(counts.settle === c0.settle + 1 && fallback.settles === f0 + 1 && noOffer(refused),
+      `a settle ${what} answers no offer in text, structuredContent or _meta, and says not to sign again (${counts.settle - c0.settle} + ${fallback.settles - f0} settle calls; ${JSON.stringify(refused.content).slice(0, 240)})`);
+    // The official client, paying automatically: one signature for the call.
+    c0 = { ...counts };
+    f0 = fallback.settles;
+    const auto = await payA.client.callTool("memory.read", { key });
+    ok(auto.isError === true && counts.verify === c0.verify + 1 && counts.settle === c0.settle + 1 && fallback.settles === f0 + 1 && !JSON.stringify(auto.content).includes("hello"),
+      `the official client signs once for a settle ${what} (${counts.verify - c0.verify} verifies, ${counts.settle - c0.settle} + ${fallback.settles - f0} settle calls)`);
+  }
+  // Control: the fallback is live. The same refusal, completed by the
+  // fallback, is a paid answer with the fallback's receipt.
+  {
+    fallback.mode = "ok";
+    c0 = { ...counts };
+    const f0 = fallback.settles;
+    const recovered = await sendRaw(payA.raw, await payA.payments.createPaymentPayload(offer));
+    stub.settleRefuse = null;
+    fallback.mode = "refuse";
+    const receipt = recovered._meta?.[X402_PAYMENT_RESPONSE_META];
+    ok(recovered.isError !== true && JSON.stringify(recovered.content).includes("hello") && receipt?.success === true && /^0xfb/.test(String(receipt.transaction)) && fallback.settles === f0 + 1,
+      `control: the same refusal completed by the fallback is served with the fallback's receipt in _meta (${JSON.stringify(receipt)})`);
+  }
 
   // 6. Invalid payments: the reader's refusal and the facilitator's.
   c0 = { ...counts };
@@ -626,6 +700,8 @@ try {
   await srv?.stop();
   facilitator.closeAllConnections?.();
   await new Promise((r) => facilitator.close(r));
+  fallbackFacilitator.closeAllConnections?.();
+  await new Promise((r) => fallbackFacilitator.close(r));
   rmSync(TMP, { recursive: true, force: true });
 }
 

@@ -15,7 +15,9 @@
 //   - a settled result carries the SettleResponse in
 //     result._meta["x402/payment-response"];
 //   - a settle that fails after the handler ran returns the payment-required
-//     shape again and none of the tool's output.
+//     shape again and none of the tool's output (the transport's shape,
+//     buildSettlementFailedResult; the hosted connector answers a failed
+//     settle with buildSettlementUnprovenResult instead: no offer).
 //
 // Settlement authority stays with the paid route: the connector re-encodes the
 // payload as the PAYMENT-SIGNATURE header @x402/express reads, replays the call
@@ -313,9 +315,10 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
 const TX_ID = /^(?:0x[0-9a-fA-F]{64}|[1-9A-HJ-NP-Za-km-z]{64,88}|[A-Z2-7]{52})$/;
 
 /**
- * The result for a settle that failed with no proof that nothing was sent: a
- * settle answer naming a transaction, a timeout, a revert, a bare
- * settlement_failed. The transfer may have been broadcast, so it carries NO
+ * The result for a settle that failed, whatever its answer reads as: a
+ * settle answer naming a transaction, a timeout, a revert, a refusal naming
+ * no transaction, a bare settlement_failed. The answer is one facilitator's
+ * and says nothing of a fallback asked after it, so it carries NO
  * PaymentRequired (a client that signed a fresh one could pay twice): the
  * text says not to sign again, names the transaction to watch when the settle
  * answer or the route's body names one, and adds the route's own hint.
@@ -354,6 +357,28 @@ export function buildSettlementUnprovenResult({ label = "Agent402", refusal = {}
     if (copy && copy.success === false) result._meta[X402_PAYMENT_RESPONSE_META] = copy;
   }
   return result;
+}
+
+/**
+ * The result for a paid route that answered 5xx after a payment was
+ * presented: the route's own answer (`detail`, its body as text) and NO
+ * PaymentRequired. The text says not to sign again for this call and names
+ * the transaction to watch when the route's body (`refusal`) names one.
+ * Never throws.
+ */
+export function buildPaidRouteFailedResult({ label = "Agent402", status = 500, detail = "", refusal = {} } = {}) {
+  const r = isPlainObject(refusal) ? refusal : {};
+  const transactions = [];
+  for (const t of Array.isArray(r.transactions) ? r.transactions : []) {
+    if (typeof t === "string" && TX_ID.test(t.trim()) && !transactions.includes(t.trim()) && transactions.length < 8) transactions.push(t.trim());
+  }
+  const code = Number.isInteger(status) && status >= 500 && status <= 599 ? status : 500;
+  const said = typeof detail === "string" && detail.trim() ? `: ${detail.trim().slice(0, 1000)}` : "";
+  const where = transactions.length ? ` Transaction${transactions.length > 1 ? "s" : ""} to watch: ${transactions.join(", ")}.` : "";
+  return {
+    isError: true,
+    content: [{ type: "text", text: `${label} HTTP ${code}${said} The route failed after this payment was presented; settlement runs only after a successful answer. Do not sign a new authorization for this call: to try again, start a new call.${where}` }],
+  };
 }
 
 /** True for a paid route's 402 that says the payment's settlement is not

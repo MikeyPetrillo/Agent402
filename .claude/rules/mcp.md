@@ -35,10 +35,11 @@ Loaded when a connector or front-door file is read.
   paywall replay (`reachesPaidReplay`), the handler also holds it to the normal bucket, so a credential
   on a discovery tool buys nothing. A free tool at its limit offers its route's x402 challenge. A 402
   whose settlement is undecided (retry same-payment or watch-transaction, or settlement_pending) is the
-  pending result: the route's hint, no offer. A settle that failed gets a fresh offer only when the
-  route's own rule proves nothing was sent (`isPreBroadcastSettleRejection` on the receipt); any other
-  failed settle, on either wire, is the explanation with no offer and the transaction to watch when one
-  is named (`buildSettlementUnprovenResult`). A long call is refused before its payment is read. A twin's unpaid offer is reused for 30 s
+  pending result: the route's hint, no offer. A settle that failed never gets an offer: any 402 carrying a settle
+  receipt marked `success: false`, on either wire, is the route's explanation with no offer and the
+  transaction to watch when one is named (`buildSettlementUnprovenResult`), since the receipt does not
+  say how a settle fallback ended; a 5xx after a payment was presented is the route's answer with no offer
+  (`buildPaidRouteFailedResult`). A verify refusal (no settle receipt) keeps its fresh offer. A long call is refused before its payment is read. A twin's unpaid offer is reused for 30 s
   (`scripts/test-mcp-x402-connector.js`).
   The interop suites need the official `@x402/mcp` client, which CI installs with `--no-save` in the
   step before them and `package.json` never lists (an optional peer of mppx would ship in prod).
