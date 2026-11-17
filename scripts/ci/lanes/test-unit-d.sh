@@ -270,6 +270,8 @@ t node scripts/test-code-run-caps.js
 t node scripts/test-safe-regex.js
 # Sales ledger unit tests (named sales, internal/external classification, revenue math — offline)
 t node scripts/test-sales-ledger.js
+# Referral sales in the sales figures: once, outside, under the slug, at the gross (never the net, never named); the on-chain buyer behind the split contract; the operator reconciliation against a seeded book
+t node scripts/test-referral-counting.js
 # Weekly outside MPP agents: counts only, internal excluded, new vs returning over all history, operator-only route
 t node scripts/test-mpp-agents-weekly.js
 # Arrival path per sale (mcp, client package, http) on the operator surfaces; sweep/burst cohorts; the Gateway test buyer is ours

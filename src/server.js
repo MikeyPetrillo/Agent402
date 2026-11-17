@@ -385,7 +385,7 @@ import { isOwnReplay } from "./own-replay.js";
 import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
 import { trustProxyHops, replayClientIpMiddleware, forwardedWithoutHopsWarning } from "./trust-proxy.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
-import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
+import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer, cdnSyncMaxSeconds } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
 import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddleware } from "./slow-routes.js";
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
@@ -746,7 +746,7 @@ import { pageSizeOf, pagingEnvelope, pagingNote } from "./index-paging.js";
 import { usdcDomainVerdict, usdcDomainMismatchDetail, unsignableByStockBuyer } from "./evm-usdc-domain.js";
 import { acceptsFromLive402 } from "./x402-live-quote.js";
 import { spend as sharedSpend, refund as sharedRefund, sharedLimitEnabled } from "./shared-limit.js";
-import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale } from "./sales-ledger.js";
+import { topExternalPayersAsync, answerDigestWindow, recordSale, externalSalesForSlugs, salesSummary, salesSummaryAsync, externalByNetwork, externalByNetworkAsync, salesLedgerReady, externalTempoPayments, mppSales, cardSales, decideSales, SWEEP_DISTINCT_TOOLS_PER_DAY, mppTxHashes, txFromPaymentResponse, tempoDailyRevenue, tempoDailyRecordingSince, proofFeed, externalDailyRevenue, feedbackByTool, badFeedback, mppLedgerRows, mppAgentsWeekly, mppAgentsThisWeek as mppAgentsThisWeekCount, salesLedgerFlush, salesCohorts, payerHasPaidSale, salesLedgerLoaded, firstPaidSaleAfterAsync, buyerScorecardAsync, firstRecordedTs, amendPrivateRailSaleNet, privateRailSaleCount, payerHasPrivateRailSale, privateRailSlugWindow } from "./sales-ledger.js";
 import { createScorecard, scorecardBody, scorecardPage, sampleOk as scorecardSampleOk, scorecardNetworkKey, SCORECARD_MONTHS, SCORECARD_MIN_GROUP, SCORECARD_SAMPLES, scorecardPublishesTx } from "./scorecard.js";
 import { recordShadowSettlement, startShadowLedger, shadowLedgerReport, shadowLedgerEnabled } from "./stripe-shadow-ledger.js";
 import { reconcileSettlements } from "./settlement-reconcile.js";
@@ -910,11 +910,12 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed, allowanceRouteRefusal } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
-import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
+import { referralConfig, referralConfigProblem, referralTimingWarnings, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
 import { createReferralAnswerStore, ANSWER_DIR_NAME as REFERRAL_ANSWER_DIR_NAME } from "./referral-answers.js";
+import { referralReconciliation, reconcileDays } from "./referral-reconcile.js";
 import { join as joinPath, dirname as dirnamePath } from "node:path";
 import { presentRunWindow } from "./evm-validity.js";
 import { withBudgetCeiling } from "./upstream-deadline.js";
@@ -922,7 +923,7 @@ import { settleBreakerOtherLane } from "./gateway-settle-breaker.js";
 import { PAID_QUOTE_TRUST_MINUTES } from "./paid-quote-trust.js";
 import { createTempoPushDebts, startTempoHeldClaimSweep, tempoLedgerPayerPending, whenTempoLedgerPayerKnown } from "./tempo-push-debts.js";
 import { recordRefundOwed, refundByEvidence, refundsByTransaction, refundByEvidenceFresh, voidOwedOnClaim, voidOwedForServe, reopenHeldClaim, renoteVoidRefund, renoteOwedRefund, promoteOwedToHangup, restateOwedAsHandlerFailure, receiptProvesCharge, listRefunds, markRefundPaid, markRefundVoid, claimRefundForSend, releaseStuckSend, refundAlarmStatus, refundTotals, refundsCreatedBetween, refundLedgerFlush } from "./refund-ledger.js";
-import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush } from "./stats.js";
+import { recordServedCall, recordChargedFailure, networkFromPaymentResponse, decodeSettleReceipt, getStats, getOperatorBreakdown, dbHealthy, statsPersistent, getDailyCalls, dailyCallsRecordingSince, getDailyUpstreamCalls, getSellerRegistrations, getDailyUpstreamSpend, chargedFailuresGenuineSince, statsFlush, recordReferralAnswer, referralAnswersByDay } from "./stats.js";
 import { timingSafeEqual, createHash, randomUUID, randomBytes } from "node:crypto";
 import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 import { publicIndexBootWarnings } from "./facilitator-public-index.js";
@@ -2583,6 +2584,7 @@ setIdentityBoundSlugs(new Set(Object.values(CATALOG).filter((d) => d.identityBou
 let REFERRAL_CONFIG = null;
 try { REFERRAL_CONFIG = FREE_MODE ? null : referralConfig(process.env); } catch { REFERRAL_CONFIG = null; }
 if (!FREE_MODE && !REFERRAL_CONFIG) { const why = referralConfigProblem(process.env); if (why) console.warn(`WARNING: referral gate is off: ${why}`); }
+if (REFERRAL_CONFIG) { for (const w of referralTimingWarnings(REFERRAL_CONFIG, { cdnSyncMs: cdnProxyEnabled() ? cdnSyncMaxSeconds() * 1000 : null })) console.warn(`WARNING: referral gate: ${w}`); }
 const isChatTierDef = (def) => def?.category === "llm" && /\/chat\/completions$/.test(String(def.route || ""));
 const REFERRAL_OWN_HOSTS = [...new Set([(() => { try { return new URL(BASE_URL).host; } catch { return ""; } })(), "agent402.tools"].filter(Boolean))];
 /** The path by which the public route gives this call for less than its
@@ -10736,14 +10738,35 @@ app.use(async (req, res, next) => {
 // at its deadline. What it keeps apart: its replay guard is its own
 // instance; a run is marked for the settle breaker's other lane, so the
 // direct routes' breaker, its status word and its counters neither judge nor
-// count it; a settled call is booked on the rail "referral", a private rail
-// (src/paid-rails.js) no public reader of the ledger returns, and is not
-// counted by recordServedCall or the tool-call log. Settlements that are not
+// count it; a settled call is booked once on the rail "referral", a private
+// rail (src/paid-rails.js) that public sales figures count at the buyer's
+// price and name "marketplace", and recordReferralSale counts it as a paid
+// call served (/api/stats); the tool-call log does not. Settlements that are not
 // finished live in a durable book (src/referral-book.js) a leased sweep reads
 // against the chain; its status word (referralSettlement on
 // /api/gateway-status) is paged on by the heartbeat and the status Worker. Operator view:
 // /__operator/referral.json.
 const referralPayerScreen = createX402PayerScreen();
+// A referral sale is a sale of the tool (owner's decision, 2026-11-14): the
+// gate books it once per payment on the private rail "referral" (the sales
+// ledger's public figures count that row at the gross, src/paid-rails.js),
+// and the same booking counts it as one paid call served on Base in the
+// served-call counters (/api/stats: viaUSDC, the per-chain split, the tool
+// ranking, the activity feed) and sends the settlement event the direct
+// routes send. Counted here, at the one booking, so a payment the book holds
+// several entries or re-sends for is still one sale. Our own wallets' buys
+// are internal, as on the direct routes.
+function recordReferralSale(row) {
+  const booked = recordSale(row);
+  try {
+    if (row && row.rail === "referral") {
+      const own = !!row.synthetic || isOwnWallet(row.payer);
+      recordServedCall(row.slug, "usdc", "base", null, { internal: own });
+      capturePostHogSettlement({ slug: row.slug, rail: "referral", network: "base", priceUsd: Number(row.quoteUsd) || Number(row.priceUsd) || 0, synthetic: !!row.synthetic, payer: row.payer || null, wire: "referral", ownWallet: isOwnWallet(row.payer) });
+    }
+  } catch { /* counting never fails a booking */ }
+  return booked;
+}
 let REFERRAL_GATE = null;
 let REFERRAL_BOOK = null;
 if (REFERRAL_ROUTES) {
@@ -10800,7 +10823,7 @@ if (REFERRAL_ROUTES) {
       },
       runAsCaller: runAsCallerOf,
       sendToolError,
-      recordSale,
+      recordSale: recordReferralSale,
       saleBooked: (tx, payer, slug) => privateRailSaleCount(tx, "referral", payer, slug),
       isSynthetic: isSyntheticRequest,
       salePathOf,
@@ -10831,8 +10854,9 @@ if (REFERRAL_ROUTES) {
       // A settled call earns this client address the paid-quote trust window, as a direct one does.
       onSettledSale: (req) => { QUOTE_TRUST.mark(quoteClientKeyOf(req)); },
       // The tool-call event a direct run sends, with the rail named. The
-      // tool-call log, the failure monitor and the served-call counters are
-      // read by public surfaces and are left alone.
+      // tool-call log and the failure monitor are the direct routes' own and
+      // are left alone; the sale itself is counted where it is booked
+      // (recordReferralSale).
       onRun: (req, res, def) => {
         const startedAt = Date.now();
         res.once("close", () => {
@@ -10854,7 +10878,12 @@ if (REFERRAL_GATE) {
   // is an unknown path and answers exactly as one.
   addApiHeaderPrefix("/ref");
   allowCorsPrefix("/ref/");
-  const referralRoute = (req, res) => REFERRAL_GATE.handler(req, res);
+  // Every answer the copy sends (a 200) is tallied per slug and day: the
+  // "served" side of the operator's reconciliation (below).
+  const referralRoute = (req, res) => {
+    res.once("finish", () => { if (res.statusCode === 200) { try { recordReferralAnswer(req.params?.slug); } catch { /* a tally never fails a call */ } } });
+    return REFERRAL_GATE.handler(req, res);
+  };
   app.get("/ref/:slug", referralRoute);
   app.post("/ref/:slug", referralRoute);
   // Open settlements are read against the chain at boot and every minute, under a lease.
@@ -10867,6 +10896,30 @@ app.get("/__operator/referral.json", (req, res) => {
     ? { enabled: true, status: REFERRAL_GATE.statusWord(), routes: REFERRAL_GATE.slugs(), notServed: REFERRAL_ROUTES.refused, sinceBoot: REFERRAL_GATE.stats(), openTotal: REFERRAL_BOOK.list().length, openByState: REFERRAL_BOOK.counts(), bookWrites: REFERRAL_BOOK.writeStats(), droppedRefused: (({ count, evictedEarly, unresolved }) => ({ count, evictedEarly, unresolved }))(REFERRAL_BOOK.droppedRefused()), open: REFERRAL_BOOK.list().slice(0, 500), resolvedByHand: REFERRAL_BOOK.resolvedByHand().slice(-50), retiredAtCapacity: REFERRAL_BOOK.retiredAtCapacity().slice(-50), closedUnrecognized: REFERRAL_BOOK.closedUnrecognized().slice(-50), shortNet: REFERRAL_GATE.shortSales() }
     : { enabled: false });
 });
+// Per tool over one window (?days=, default 30, at most 90): the answers the
+// referral copy served, the sales booked for it in the sales ledger (gross and
+// net) and the entries the referral book holds (src/referral-reconcile.js).
+// Operator only: the net never leaves it.
+app.get("/__operator/referral-reconciliation.json", (req, res) => {
+  if (!operatorAuthed(req)) return operatorNotFound(req, res);
+  res.set("Cache-Control", "private, no-store");
+  try {
+    const days = reconcileDays(req.query?.days);
+    const now = Date.now();
+    const since = now - days * 86_400_000;
+    res.json(referralReconciliation({
+      days, now,
+      enabled: !!REFERRAL_GATE,
+      slugs: REFERRAL_GATE ? REFERRAL_GATE.slugs() : [],
+      served: referralAnswersByDay(new Date(since).toISOString().slice(0, 10), new Date(now).toISOString().slice(0, 10)),
+      sales: privateRailSlugWindow("referral", since, now),
+      open: REFERRAL_BOOK ? REFERRAL_BOOK.list() : [],
+      sold: REFERRAL_BOOK ? REFERRAL_BOOK.soldMarks() : {},
+    }));
+  } catch (err) {
+    res.status(500).json({ error: redactSecrets(String(err?.message || err)).slice(0, 200) });
+  }
+});
 // An operator closes one open referral settlement by hand (a contradicted or
 // flagged one, one nothing on chain can settle, a charged one whose answer the
 // buyer does or does not have), with a note saying what was checked and an
@@ -10878,7 +10931,7 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
   res.set("Cache-Control", "private, no-store");
   if (!REFERRAL_GATE) return res.status(409).json({ error: "the referral gate is off" });
   const { action, key, note, outcome } = req.body || {};
-  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}, or {"action":"clear-short","slug":"<slug>","note":"what was checked"}, or {"action":"acknowledge","what":"retired"|"closed"|"dropped","note":"what was checked"}, or {"action":"resolve-many","state":"<entry state>","reason":"<recorded reason, optional>","outcome":"dismissed"|"delivered","note":"what was checked"}';
+  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}, or {"action":"clear-short","slug":"<slug>","note":"what was checked"}, or {"action":"clear-example","slug":"<slug>","note":"what was checked"}, or {"action":"acknowledge","what":"retired"|"closed"|"dropped","note":"what was checked"}, or {"action":"resolve-many","state":"<entry state>","reason":"<recorded reason, optional>","outcome":"dismissed"|"delivered","note":"what was checked"}';
   // A record closed as unrecognized goes back to the open entries, where resolve works on it.
   // A slug's short-net record (and the stop it may carry) is cleared by hand.
   if (action === "clear-short") {
@@ -10886,6 +10939,11 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
       const r = await REFERRAL_GATE.clearShortByHand(typeof req.body?.slug === "string" ? req.body.slug : "", { note: typeof note === "string" ? note : "" });
       return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
     } catch { return res.status(503).json({ error: "the settlement book could not be written" }); }
+  }
+  // A slug's oversized-example mark (its published example ended 413) is cleared by hand.
+  if (action === "clear-example") {
+    const r = REFERRAL_GATE.clearExampleByHand(typeof req.body?.slug === "string" ? req.body.slug : "", { note: typeof note === "string" ? note : "" });
+    return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
   }
   if (action === "reopen") {
     try {

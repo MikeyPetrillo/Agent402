@@ -329,9 +329,26 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
 - **X posting:** `announce.yml` / `scripts/tweet.js` (workflow dispatch only) and
   `src/tweet-queue.js`; both sign through `src/x-oauth.js`. Tweet copy is never committed.
 - **Referral settlement book:** `src/referral-book.js` keeps the referral gate's unfinished
-  settlements in the `referral-settlements` state document (without a database the file
+  settlements in the `referral-settlements` state document, stored as a head row (the small
+  sections) and one `records` row per open entry, booked-payment mark and dropped record
+  (collection `referral-settlements.rows`, `src/json-rows-document.js`): every write locks the head
+  row (`SELECT ... FOR UPDATE`, 5 s lock wait), reads only the rows written since this process's
+  copy, and writes only the rows it changes (about 600 bytes a paid call's write at 2,000 entries
+  once the mirror is off); a failed write that carried several changes writes each again on its
+  own, once. OVERLAP AND ROLLBACK (this release): every write also puts the whole body in the head
+  (the mirror, marked `__rowsAt` with the head version it wrote), so a build before rows, which
+  reads and writes the book as one document, sees every entry during a deploy's overlap or after a
+  rollback; a head without this build's mark was written last by such a build, and its sections are
+  taken as written (a key it added or changed is written to its row, a row it no longer holds is
+  deleted). The first write folds the old whole-book document into rows the same way. The next
+  release turns the mirror off (`mirror: false`): a write made with it off rewrites a head that
+  still carries a mirror's mark without the mirror, whatever it changed (a mirror left beside a
+  newer version would be read as an older build's book and taken over the rows), so a process with
+  the mirror off runs beside one that still writes it; from then on a rollback past this build reads no
+  open entries: fix forward (`scripts/state-export.js` writes the book back as one document, by the
+  same rule, for a file-mode restore). Without a database it is the file
   `REFERRAL_BOOK_FILE`, else `/data/agent402-referral-settlements.json`, else the same name under
-  the temp directory): an `intent` written before `/settle` (with the chain head read before
+  the temp directory. Its states: an `intent` written before `/settle` (with the chain head read before
   `/verify`, so the proof is searched from there however late it is read), `in-doubt` when the
   call did not say whether the payment moved, `unconfirmed` when the facilitator answered success
   and its receipt was not yet readable (`flagged` after 3 minutes without one), `contradicted`
@@ -355,7 +372,12 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   boot and every `REFERRAL_SWEEP_MS`, default 60000; `contained`) reads up to 50 open entries a
   pass (in-doubt and intent entries first, a reserved fifth of the reads for refused entries, each
   group least recently read first; no read starts after the pass's 40 s chain budget, of which the
-  last fifth is kept for dropped records, and at least one dropped record is read every pass), each
+  last fifth is kept for dropped records, and at least one dropped record is read every pass; the
+  proof reads of unconfirmed entries start only in the budget's first quarter and those of charged
+  ones in its first half; dropped records are read least recently read first (by the book's own read sequence, not the
+  clock), and one is given up
+  only after reads the chain answered (the nonce unspent, or spent with its receipt read or its
+  search complete); one pass at a time per process, lease or not), each
   as it stands at that moment: routed to this
   merchant by its own receipt books the sale once; a nonce spent without paying us, an
   authorization expired unused, or one expired with a complete search that found nothing closes

@@ -69,7 +69,7 @@ const METHOD = Object.freeze({
   usd: "USD settled in the month, at the price paid on the settling chain.",
   networks: "Calls and USD by settlement network; a network with fewer than 3 wallets in the month is folded into other.",
   smallCounts: "A count of 1 or 2 reads \"<3\". A month with fewer than 3 paying wallets publishes that and nothing else.",
-  proof: "settlementsWithTx counts the month's calls that carry a settlement transaction. Sample settlements are the month's first by ledger id on a network an explorer reads, the same pick on every read.",
+  proof: "settlementsWithTx counts the month's calls that carry a settlement transaction. Sample settlements are the month's first direct sales by ledger id on a network an explorer reads, the same pick on every read.",
 });
 
 /** The public (or operator) JSON body from one ledger read. Pure. */

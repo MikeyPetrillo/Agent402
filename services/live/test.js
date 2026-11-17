@@ -1,6 +1,6 @@
 // Offline tests for agent402-live: pure ingest helpers, the directory, the
 // store, and the HTTP surface booted with no network ingest.
-import { pairSettlements } from "./lib/base.js";
+import { pairSettlements, attributeRouted } from "./lib/base.js";
 import { tempoEvents } from "./lib/tempo.js";
 import { bazaarDirectory } from "./lib/directory.js";
 import { isPrivateIp, makeLogoCache } from "./lib/logos.js";
@@ -28,6 +28,25 @@ const A = "0x" + "a".repeat(40), B = "0x" + "b".repeat(40), C = "0x" + "c".repea
   ok(!ev.some((e) => e.amountUsd === 0), "Base: a zero-value transfer (address-poisoning shape) is dropped");
   ok(!ev.some((e) => e.amountUsd > 50), "Base: a transfer above the per-payment ceiling is dropped");
   ok(pairSettlements([], tr).length === 0, "Base: no signed authorization, no payment");
+}
+
+// --- Base: a payment to a referral split contract is drawn as a payment to the seller it paid on
+{
+  const R = "0x" + "e".repeat(40), US = "0x" + "d".repeat(40), OTHER = "0x" + "f".repeat(40);
+  const auth = [{ transactionHash: "0x7", topics: [AUTH_USED_TOPIC, T(A), "0xn"] }, { transactionHash: "0x8", topics: [AUTH_USED_TOPIC, T(C), "0xn"] }];
+  const tr = [
+    { transactionHash: "0x7", logIndex: "0x1", blockNumber: "0x20", topics: [TRANSFER_TOPIC, T(A), T(R)], data: amt(0.01) },
+    { transactionHash: "0x8", logIndex: "0x1", blockNumber: "0x20", topics: [TRANSFER_TOPIC, T(C), T(R)], data: amt(0.02) },
+  ];
+  const payouts = [
+    { transactionHash: "0x7", logIndex: "0x3", blockNumber: "0x20", topics: [TRANSFER_TOPIC, T(R), T(US)], data: amt(0.0075) },
+    { transactionHash: "0x8", logIndex: "0x3", blockNumber: "0x20", topics: [TRANSFER_TOPIC, T(R), T(OTHER)], data: amt(0.015) },
+  ];
+  const ev = attributeRouted(pairSettlements(auth, tr), payouts, { routers: new Set([R]), sellers: new Set([US]) });
+  const ours = ev.find((e) => e.tx === "0x7"), theirs = ev.find((e) => e.tx === "0x8");
+  ok(ev.length === 2 && ours.payTo === US && ours.payer === A && ours.amountUsd === 0.01, "Base: a referral sale is drawn once, to the seller the split contract paid, at what the buyer paid");
+  ok(theirs.payTo === R, "Base: a split-contract payment that paid no seller the page names keeps the contract as its payTo (never dropped)");
+  ok(attributeRouted(pairSettlements(auth, tr), payouts, { routers: new Set(), sellers: new Set([US]) }).every((e) => e.payTo === R), "Base: with no router configured nothing is re-attributed");
 }
 
 // --- Tempo: only transfers to known recipients, never self-transfers
