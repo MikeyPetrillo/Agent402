@@ -569,7 +569,7 @@ async function assertCallerUrl(rawUrl, sink = null) {
  * request on the validated host. Sends the probe User-Agent unless the
  * caller names its own (the router does).
  */
-export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, body, timeoutMs = 8000, onResolved = null, userAgent = PROBE_UA } = {}) {
+export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, body, timeoutMs = 8000, onResolved = null, userAgent: USER_AGENT = PROBE_UA } = {}) {
   const sink = {};
   await assertPublicUrl(rawUrl, { sink });
   // `onResolved(addresses, url)`: the addresses the check above read, before
@@ -577,7 +577,7 @@ export async function probePublicUrl(rawUrl, { method = "GET", headers = {}, bod
   if (typeof onResolved === "function") await onResolved(sink.addresses || [], String(rawUrl));
   return fetch(rawUrl, {
     method,
-    headers: { "User-Agent": userAgent, ...headers },
+    headers: { "User-Agent": USER_AGENT, ...headers },
     ...(body !== undefined ? { body } : {}),
     dispatcher: ssrfDispatcher,
     redirect: "manual",
@@ -637,6 +637,35 @@ const MAX_REDIRECT_HOPS = 20; // as the fetch itself follows
 const CROSS_ORIGIN_DROPPED_HEADERS = new Set(["authorization", "proxy-authorization", "cookie"]);
 
 /**
+ * Follow a redirect answer one hop at a time (safeFetch with `beforeRedirect`).
+ * `beforeRedirect(nextUrl, fromUrl)` decides each hop before it is sent; what
+ * it throws comes back as `refusal`, with the hop not sent and the redirect
+ * answer as the response. `send(hopUrl, headers)` makes one hop's request.
+ * Returns { response, refusal }.
+ */
+async function followRedirectHops(response, fromUrl, headers, { beforeRedirect, send }) {
+  let from = fromUrl;
+  let sendHeaders = headers;
+  for (let hops = 0; REDIRECT_STATUSES.has(response.status); hops++) {
+    const location = response.headers.get("location");
+    if (!location) break;
+    let next;
+    try { next = new URL(location, response.url || from); } catch { throw new TypeError("redirect to an unreadable location"); }
+    if (next.protocol !== "http:" && next.protocol !== "https:") throw new TypeError("redirect to a location that is not http(s)");
+    if (hops >= MAX_REDIRECT_HOPS) throw new TypeError("redirect count exceeded");
+    await response.body?.cancel?.().catch?.(() => {});
+    try { await beforeRedirect(next.href, from); } catch (e) { return { response, refusal: e || new Error("redirect not followed") }; }
+    // A hop to another origin never carries the caller's credentials.
+    if (next.origin !== new URL(from).origin) {
+      sendHeaders = Object.fromEntries(Object.entries(sendHeaders).filter(([k]) => !CROSS_ORIGIN_DROPPED_HEADERS.has(k.toLowerCase())));
+    }
+    response = await send(next, sendHeaders);
+    from = next.href;
+  }
+  return { response, refusal: null };
+}
+
+/**
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
@@ -673,13 +702,19 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   // body only; without the check the fetch follows redirects itself.
   const stepwise = typeof beforeRedirect === "function" && method === "GET" && body === undefined;
   let hopRefusal = null;
+  // The request headers, the caller's last (a hop to another origin passes
+  // them without its credentials, below).
+  const requestHeaders = (callerHeaders) => ({
+    "User-Agent": userAgent,
+    Accept: "text/html,application/xhtml+xml,*/*",
+    ...(validators?.etag ? { "If-None-Match": validators.etag } : {}),
+    ...(validators?.lastModified ? { "If-Modified-Since": validators.lastModified } : {}),
+    ...callerHeaders,
+  });
   try {
   let response;
   try {
-    let target = url;
-    let sendHeaders = headers;
-    for (let hops = 0; ; hops++) {
-    response = await fetch(target, {
+    response = await fetch(url, {
       method,
       // Optional request body (e.g. a JSON POST to a search API). The method and
       // body never change the connection TARGET — assertPublicUrl already pinned
@@ -696,29 +731,19 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       // answer 304 with no body instead of shipping the whole document again.
       // Caller headers still win, so an explicit If-None-Match is never
       // overwritten by a stale stored one.
-      headers: {
-        "User-Agent": userAgent,
-        Accept: "text/html,application/xhtml+xml,*/*",
-        ...(validators?.etag ? { "If-None-Match": validators.etag } : {}),
-        ...(validators?.lastModified ? { "If-Modified-Since": validators.lastModified } : {}),
-        ...sendHeaders,
-      },
+      headers: requestHeaders(headers),
     });
-    if (!stepwise || !REDIRECT_STATUSES.has(response.status)) break;
-    const location = response.headers.get("location");
-    if (!location) break;
-    let next;
-    try { next = new URL(location, response.url || String(target)); } catch { throw new TypeError("redirect to an unreadable location"); }
-    if (next.protocol !== "http:" && next.protocol !== "https:") throw new TypeError("redirect to a location that is not http(s)");
-    if (hops >= MAX_REDIRECT_HOPS) throw new TypeError("redirect count exceeded");
-    await response.body?.cancel?.().catch?.(() => {});
-    try { await beforeRedirect(next.href, String(target)); } catch (e) { hopRefusal = e || new Error("redirect not followed"); break; }
-    // A hop to another origin never carries the caller's credentials.
-    if (next.origin !== new URL(String(target)).origin) {
-      sendHeaders = Object.fromEntries(Object.entries(sendHeaders).filter(([k]) => !CROSS_ORIGIN_DROPPED_HEADERS.has(k.toLowerCase())));
-    }
-    target = next;
-    }
+    if (stepwise) ({ response, refusal: hopRefusal } = await followRedirectHops(response, String(url), headers, {
+      beforeRedirect,
+      // Each hop is its own request: its host passes the same address check
+      // as the first URL before anything is sent to it, and ssrfDispatcher
+      // checks the address again at connect and connects to the one it checked.
+      send: async (hopUrl, hopHeaders) => {
+        assertBeforeCeiling();
+        await resolvePublicAddresses(hopUrl.hostname);
+        return fetch(hopUrl.href, { method: "GET", signal: controller.signal, redirect: "manual", dispatcher: ssrfDispatcher, headers: requestHeaders(hopHeaders) });
+      },
+    }));
   } catch (err) {
     // Every hop, the first included: a refused connection (no answer for the
     // name, or a private one) is one 400 with one sentence.

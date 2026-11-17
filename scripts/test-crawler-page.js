@@ -77,7 +77,7 @@ ok(/const ROBOTS_UA = CRAWLER_TOKEN;/.test(idxSrc) && ROBOTS_TOKEN === UA.CRAWLE
 // which sets the crawler User-Agent; neither index makes a raw fetch to a seller.
 const guardSrc = readFileSync(new URL("../src/tools/fetch-guard.js", import.meta.url), "utf8");
 const probeFn = guardSrc.slice(guardSrc.indexOf("export async function probePublicUrl"), guardSrc.indexOf("export async function retryTransient"));
-ok(/userAgent = PROBE_UA \}/.test(probeFn) && /headers: \{ "User-Agent": userAgent, \.\.\.headers \}/.test(probeFn), "probePublicUrl sends the probe User-Agent unless its caller names another");
+ok(/userAgent: USER_AGENT = PROBE_UA \}/.test(probeFn) && /headers: \{ "User-Agent": USER_AGENT, \.\.\.headers \}/.test(probeFn), "probePublicUrl sends the probe User-Agent unless its caller names another");
 for (const [name, src] of [["x402-index.js", idxSrc], ["mpp-index.js", mppSrc]]) {
   const raw = [...src.matchAll(/await fetch\((target|url), \{/g)].length;
   // x402-index.js routes its per-route probes through probeSellerRoute, whose

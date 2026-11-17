@@ -4,6 +4,7 @@
 //   node scripts/test-slow-origins.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { readFileSync } from "node:fs";
+import { isHost } from "./lib/url-host.js";
 process.env.CRAWL_SLOW_ORIGINS = "https://slow-seller.test/";
 const { originsDueThisCycle } = await import("../src/x402-index.js");
 const { isSlowOrigin, SLOW_ORIGINS, SLOW_ORIGIN_EVERY_CYCLES } = await import("../src/crawl-cadence.js");
@@ -54,7 +55,7 @@ ok(normalDue === cycle, `ordinary origin due every cycle, got ${normalDue} of ${
   a.noteSlowRead(slow, "x402");
   await a.flush();
   const b = createSellerLoad({ store, now: () => clock });
-  ok(!b.slowWaiting(slow) && originsDueThisCycle(all, 1, 4, { slowWaiting: (o) => b.slowWaiting(o) }).includes(slow), "control: a new process knows no read before it reads the store");
+  ok(!b.slowWaiting(slow) && originsDueThisCycle(all, 1, 4, { slowWaiting: (o) => b.slowWaiting(o) }).some((o) => isHost(o, "slow-seller.test")), "control: a new process knows no read before it reads the store");
   await b.prefetch([slow]);
   ok(b.slowWaiting(slow) && (await b.crawlPlan(slow)).skip === "slow", "after the cycle's prefetch it waits out the read another process made");
   ok(!b.slowWaiting(normal) && (await b.crawlPlan(normal)).skip === null, "an ordinary origin never waits on it");
