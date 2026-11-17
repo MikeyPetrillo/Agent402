@@ -454,6 +454,7 @@ import { learnPage, learnIndex } from "./learn.js";
 import { skillMd } from "./skill-md.js";
 import { agentsMd, frontDoor402Json, AGENTS_MD_PATH } from "./front-door.js";
 import { createMcpMppLoopback } from "./mcp-mpp.js";
+import { connectorWires } from "./connector-pay.js";
 import { serviceManifest, reliabilityReport, settlementFacilitatorsPublic } from "./discovery.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { meteredSkip } from "./metered-slugs.js";
@@ -10314,6 +10315,9 @@ const mcpMountOpts = {
   // PAYMENT-SIGNATURE header, so the x402 paywall verifies and settles it.
   // FREE_MODE has no paywall, so nothing to pay.
   x402Loopback: FREE_MODE ? null : createMcpMppLoopback({ port: () => loopbackPort }),
+  // What the connector's own text says it takes in the call: the account the
+  // pages read (src/connector-pay.js), so the two cannot disagree on a boot.
+  payWires: connectorWires(),
   // Hosted leaderboard snapshot powers the new `top_x402_sellers` MCP tool —
   // same data the HTML /leaderboard and /api/leaderboard surfaces use, so
   // agents see the same numbers no matter which surface they hit. Hourly-

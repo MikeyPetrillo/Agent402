@@ -16,7 +16,7 @@ import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens, chainDisplayName }
 import { routerPayChains } from "./tools/route-execute.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE, METERED_MAX_INPUT_CHARS_CEILING } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
-import { mppEvmDiscoveryRails, mppShimEnabled } from "./mpp-shim.js";
+import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";

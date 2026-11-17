@@ -10,7 +10,7 @@
 // official @x402/mcp client over Streamable HTTP:
 //   - a flagship's first ask is one result carrying both wires: the twin's
 //     PaymentRequired (resource /mcp, an MCP discovery extension) as
-//     structuredContent and the MPP challenges in _meta;
+//     first text block (never structuredContent) and the MPP challenges in _meta;
 //   - the official client pays it and gets the tool output and the settle
 //     receipt in _meta["x402/payment-response"]; one verify, one settle;
 //   - catalog.call and a flagship with no twin are paid on the slug's own
@@ -59,7 +59,7 @@ try {
 }
 
 const { carriesPayment } = await import("../src/mcp-http.js");
-const { X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META } = await import("../src/mcp-x402.js");
+const { X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META, SETTLEMENT_PENDING_META, paymentRequiredOfResult: PR } = await import("../src/mcp-x402.js");
 const { MCP_PAYMENT_REQUIRED_META, MCP_CREDENTIAL_META, createMcpMppLoopback } = await import("../src/mcp-mpp.js");
 const { registerOfferedNetworks } = await import("../src/payment-attempt.js");
 const { SETTLEMENT_PENDING_DETAIL } = await import("../src/gateway-wire.js");
@@ -135,16 +135,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     mode = "pending";
     const p = await call();
     const pText = JSON.stringify(p.content || "");
-    ok(p.isError === true && !p.structuredContent?.accepts && !/"accepts"/.test(pText) && !/"x402Version"/.test(String(p.content?.[0]?.text)),
+    ok(p.isError === true && !("structuredContent" in p) && !PR(p) && !/"accepts"/.test(pText) && !/"x402Version"/.test(String(p.content?.[0]?.text)),
       `a Gateway payment still settling answers no fresh offer to sign (${pText.slice(0, 160)})`);
-    ok(pText.includes("Do not sign a new authorization") && p.structuredContent?.retry === "same-payment" && p.structuredContent?.reason === "settlement-pending" && p.structuredContent?.retryAfterSeconds === 10,
-      `it carries the route's hint, retry same-payment and the wait (${JSON.stringify(p.structuredContent)})`);
+    ok(pText.includes("Do not sign a new authorization") && p._meta?.[SETTLEMENT_PENDING_META]?.retry === "same-payment" && p._meta?.[SETTLEMENT_PENDING_META]?.reason === "settlement-pending" && p._meta?.[SETTLEMENT_PENDING_META]?.retryAfterSeconds === 10,
+      `it carries the route's hint, retry same-payment and the wait (${JSON.stringify(p._meta?.[SETTLEMENT_PENDING_META])})`);
     ok(p._meta?.[X402_PAYMENT_RESPONSE_META]?.success === false && p._meta[X402_PAYMENT_RESPONSE_META].errorReason === "settlement_pending" && !/settlement failed/i.test(pText),
       "the pending settle answer rides in _meta, and the result never says the settlement failed");
     mode = "unconfirmed";
     const u = await call();
     const uText = JSON.stringify(u.content || "");
-    ok(u.isError === true && !u.structuredContent?.accepts && u.structuredContent?.retry === "watch-transaction" && u.structuredContent?.transactions?.[0] === TX && /new payment/.test(uText) && !/not charged/.test(uText),
+    ok(u.isError === true && !("structuredContent" in u) && !PR(u) && u._meta?.[SETTLEMENT_PENDING_META]?.retry === "watch-transaction" && u._meta?.[SETTLEMENT_PENDING_META]?.transactions?.[0] === TX && /new payment/.test(uText) && !/not charged/.test(uText),
       `an unconfirmed broadcast answers the transactions to watch, no fresh offer, never "not charged" (${uText.slice(0, 160)})`);
     // The official client: one payment for the call, and no second signature.
     const payer = new x402Client();
@@ -207,7 +207,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         `${label}: the instructions' hosted line names ${wires.join(" and ") || "no in-call wire"} (${hosted.slice(0, 120)})`);
       const ask = await raw.callTool({ name: "catalog.call", arguments: { slug: "paid-x", params: {} } });
       const askText = texts(ask);
-      ok(ask.isError === true && (x402 ? /Pay it RIGHT HERE over x402/.test(askText) && Array.isArray(ask.structuredContent?.accepts) : !/RIGHT HERE/.test(askText) && !/x402\/payment/.test(askText))
+      ok(ask.isError === true && (x402 ? /Pay it RIGHT HERE over x402/.test(askText) && Array.isArray(PR(ask)?.accepts) : !/RIGHT HERE/.test(askText) && !/x402\/payment/.test(askText))
         && !/over MPP|org\.paymentauth/.test(askText) && /npx agent402-mcp/.test(askText),
         `${label}: a paid tool's first ask names ${x402 ? "x402 in the call" : "no in-call wire"} and never MPP (${askText.slice(0, 160)})`);
       let limited = null;
@@ -216,7 +216,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         if (/rate limit reached/i.test(texts(r))) limited = r;
       }
       const limitText = texts(limited);
-      ok(limited?.isError === true && (x402 ? /pay this call over x402/.test(limitText) && /x402\/payment/.test(limitText) && Array.isArray(limited.structuredContent?.accepts) : !/x402\/payment|pay this call over x402/.test(limitText) && !limited.structuredContent?.accepts)
+      ok(limited?.isError === true && (x402 ? /pay this call over x402/.test(limitText) && /x402\/payment/.test(limitText) && Array.isArray(PR(limited)?.accepts) : !/x402\/payment|pay this call over x402/.test(limitText) && !PR(limited)?.accepts)
         && !/MPP|org\.paymentauth/.test(limitText),
         `${label}: the rate-limit text names ${x402 ? "x402 in the call" : "no in-call wire"} (${limitText.slice(0, 200)})`);
       const info = await raw.callTool({ name: "payment.info", arguments: {} });
@@ -301,10 +301,27 @@ try {
   const key = `conn-${Date.now()}`;
 
   // 1. First ask on a flagship: both wires on one result.
+  // The reference SDK client lists the tools first, which arms its check of
+  // every structuredContent against the tool's listed outputSchema (error
+  // results included): each first ask must still be a result it reads.
   const plain = await connect("203.0.113.10");
+  await plain.client.listTools();
+  const lister = await connect("203.0.113.9"), lister2 = await connect("203.0.113.8");
+  await lister2.client.listTools();
+  const listedTools = (await lister.client.listTools()).tools;
+  const strict = listedTools.filter((t) => t.outputSchema && ["web.search", "web.news", "web.answer", "market.quote", "browser.render", "audio.transcribe", "memory.write", "catalog.call"].includes(t.name));
+  const unread = [];
+  let unreadCalls = 0;
+  for (const [name, args] of [["web.search", { q: "x402" }], ["web.news", { q: "x402" }], ["web.answer", { q: "x402" }], ["market.quote", { symbol: "AAPL" }], ["browser.render", { url: "https://example.com" }], ["audio.transcribe", { url: "https://example.com/a.mp3" }], ["memory.write", { key, value: 1 }], ["catalog.call", { slug: "search", params: { q: "x402" } }]]) {
+    try {
+      const r = await (unreadCalls++ < 4 ? lister : lister2).client.callTool({ name, arguments: args });
+      if (!(r.isError === true && !("structuredContent" in r) && Array.isArray(PR(r)?.accepts) && Array.isArray(r._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges))) unread.push(`${name}: ${JSON.stringify(r).slice(0, 120)}`);
+    } catch (e) { unread.push(`${name}: threw ${String(e?.message).slice(0, 120)}`); }
+  }
+  ok(strict.length === 8 && unread.length === 0, `the reference SDK client, tools listed, reads the first ask of every paid tool with an outputSchema: no structuredContent, the offer in the first text block, the MPP challenges in _meta (${unread.join(" | ") || "8 read"})`);
   const ask = await plain.client.callTool({ name: "memory.read", arguments: { key } });
-  const pr = ask.structuredContent;
-  ok(ask.isError === true && pr?.x402Version === 2 && Array.isArray(pr.accepts) && pr.accepts.some((a) => a.network === BASE_NET), `memory.read's first ask is an isError result whose structuredContent is a v2 PaymentRequired (${JSON.stringify(pr).slice(0, 120)})`);
+  const pr = PR(ask);
+  ok(ask.isError === true && !("structuredContent" in ask) && pr?.x402Version === 2 && Array.isArray(pr.accepts) && pr.accepts.some((a) => a.network === BASE_NET), `memory.read's first ask is an isError result whose first text block is a v2 PaymentRequired, with no structuredContent (${JSON.stringify(pr).slice(0, 120)})`);
   ok(pr?.resource?.url === "https://agent402.tools/mcp" && pr.extensions?.bazaar?.info?.input?.type === "mcp" && pr.extensions.bazaar.info.input.toolName === "memory.read", `it is the twin's offer: resource /mcp, an MCP extension for memory.read (${pr?.resource?.url})`);
   ok(JSON.stringify(JSON.parse(ask.content?.[0]?.text || "null")) === JSON.stringify(pr), "content[0].text is the same PaymentRequired as JSON");
   const mppAsk = ask._meta?.[MCP_PAYMENT_REQUIRED_META];
@@ -321,11 +338,12 @@ try {
   const httpOffer = JSON.parse(Buffer.from((await fetch(`${B}/api/memory?key=x`)).headers.get("payment-required") || "", "base64").toString("utf8"));
   ok(JSON.stringify(pr.accepts) === JSON.stringify(httpOffer.accepts), "the twin's accepts are the HTTP route's");
   const catAsk = await plain.client.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key } } });
-  ok(catAsk.isError === true && catAsk.structuredContent?.resource?.url === "https://agent402.tools/api/memory" && Array.isArray(catAsk._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges),
-    `catalog.call's first ask offers the slug's own HTTP challenge (${catAsk.structuredContent?.resource?.url}) beside the MPP challenges`);
+  ok(catAsk.isError === true && PR(catAsk)?.resource?.url === "https://agent402.tools/api/memory" && Array.isArray(catAsk._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges),
+    `catalog.call's first ask offers the slug's own HTTP challenge (${PR(catAsk)?.resource?.url}) beside the MPP challenges`);
 
   // 2. The official client pays: memory.write (no twin: the HTTP route), then memory.read on the twin.
   const payA = await connect("203.0.113.11", A);
+  await payA.raw.listTools(); // output validation armed under the official client too
   let c0 = { ...counts };
   const wrote = await payA.client.callTool("memory.write", { key, value: { hello: "x402" } });
   ok(wrote.paymentMade === true && wrote.isError !== true && wrote.paymentResponse?.success === true && counts.verify === c0.verify + 1 && counts.settle === c0.settle + 1,
@@ -348,7 +366,7 @@ try {
   ok(counts.verify === c0.verify + 1 && counts.settle === c0.settle, `its payment was verified and never settled (${counts.verify - c0.verify}/${counts.settle - c0.settle})`);
 
   // 4. Replay: the same payment sent twice is answered once and refused unsettled.
-  const offer = (await plain.client.callTool({ name: "memory.read", arguments: { key } })).structuredContent;
+  const offer = PR(await plain.client.callTool({ name: "memory.read", arguments: { key } }));
   const once = await payA.payments.createPaymentPayload(offer);
   const sendRaw = (c, payment, args = { key }, name = "memory.read", extraMeta = {}) => c.callTool({ name, arguments: args, _meta: { [X402_PAYMENT_META]: payment, ...extraMeta } });
   c0 = { ...counts };
@@ -363,19 +381,19 @@ try {
   c0 = { ...counts };
   const failedSettle = await sendRaw(payA.raw, await payA.payments.createPaymentPayload(offer));
   const fsText = JSON.stringify(failedSettle.content || "");
-  ok(counts.settle === c0.settle + 1 && failedSettle.isError === true && /^Payment settlement failed/.test(String(failedSettle.structuredContent?.error)) && Array.isArray(failedSettle.structuredContent?.accepts),
-    `a failed settle answers the settlement-failed result (${failedSettle.structuredContent?.error})`);
+  ok(counts.settle === c0.settle + 1 && failedSettle.isError === true && /^Payment settlement failed/.test(String(PR(failedSettle)?.error)) && Array.isArray(PR(failedSettle)?.accepts),
+    `a failed settle answers the settlement-failed result (${PR(failedSettle)?.error})`);
   ok(!fsText.includes("hello") && failedSettle._meta?.[X402_PAYMENT_RESPONSE_META]?.success !== true, "it carries none of the tool's output and no success receipt");
 
   // 6. Invalid payments: the reader's refusal and the facilitator's.
   c0 = { ...counts };
   const badShape = await sendRaw(payA.raw, { ...once, x402Version: 1 });
-  ok(badShape.isError === true && badShape.structuredContent?.error === "unsupported_version" && badShape.structuredContent?.resource?.url === "https://agent402.tools/mcp" && counts.verify === c0.verify,
-    `a payment the reader refuses returns a fresh offer naming the reason, nothing verified (${badShape.structuredContent?.error})`);
+  ok(badShape.isError === true && PR(badShape)?.error === "unsupported_version" && PR(badShape)?.resource?.url === "https://agent402.tools/mcp" && counts.verify === c0.verify,
+    `a payment the reader refuses returns a fresh offer naming the reason, nothing verified (${PR(badShape)?.error})`);
   stub.verifyInvalid = "invalid_exact_evm_payload_signature";
   const badSig = await sendRaw(payA.raw, await payA.payments.createPaymentPayload(offer));
-  ok(badSig.isError === true && Array.isArray(badSig.structuredContent?.accepts) && /invalid/i.test(String(badSig.structuredContent?.error)) && counts.settle === c0.settle,
-    `a payment the facilitator refuses returns the invalid-payment result, unsettled (${badSig.structuredContent?.error})`);
+  ok(badSig.isError === true && Array.isArray(PR(badSig)?.accepts) && /invalid/i.test(String(PR(badSig)?.error)) && counts.settle === c0.settle,
+    `a payment the facilitator refuses returns the invalid-payment result, unsettled (${PR(badSig)?.error})`);
 
   // 7. MPP wins when both ride along: a tampered MPP credential is refused as
   // MPP (-32043) and the x402 payment beside it is never read.
@@ -395,8 +413,8 @@ try {
     for (let i = 0; i < 3; i++) runs.push(await free.client.callTool({ name: "catalog.call", arguments: { slug: "uuid", params: {} } }));
     ok(runs[0].isError !== true && runs[1].isError !== true, "a free tool runs free under its limit");
     const limited = runs[2];
-    ok(limited.isError === true && limited.structuredContent?.x402Version === 2 && limited.structuredContent.resource?.url === "https://agent402.tools/api/uuid" && /rate limit reached/i.test(JSON.stringify(limited.content)),
-      `at its limit it offers the route's x402 challenge with the limit text (${limited.structuredContent?.resource?.url})`);
+    ok(limited.isError === true && PR(limited)?.x402Version === 2 && PR(limited).resource?.url === "https://agent402.tools/api/uuid" && /rate limit reached/i.test(JSON.stringify(limited.content)),
+      `at its limit it offers the route's x402 challenge with the limit text (${PR(limited)?.resource?.url})`);
     const limitedText = (limited.content || []).map((c) => c.text || "").join("\n");
     ok(/pay this call over x402/.test(limitedText) && limitedText.includes("_meta[\"x402/payment\"]"), `the limit text says how to pay this call over x402 (${limitedText.slice(0, 200)})`);
     const payer = await connect("203.0.113.30", A);

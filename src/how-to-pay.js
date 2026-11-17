@@ -17,7 +17,6 @@ import { siteOrgLd } from "./site-org.js";
 import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-chrome.js";
 import { RAILS, railKey, x402EvmOnly, liveRails } from "./rails.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
-import { mppShimEnabled } from "./mpp-shim.js";
 import { connectorWires } from "./connector-pay.js";
 import { mppFlagshipRows, mppFlagshipSnippet, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
 import { STRIPE_MIN_USD } from "./mpp-stripe.js";

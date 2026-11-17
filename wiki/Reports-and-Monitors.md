@@ -47,7 +47,7 @@ curl -i -X POST https://agent402.tools/v1/domain-audit \
   -d '{"domain":"example.com"}'
 ```
 
-Over the MCP connector, `catalog.find` resolves a task like "audit example.com's email security" to the report slug and `catalog.call` runs it; the hosted connector can be paid right in the call, over x402 or MPP (see [[MCP Connector]]).
+Over the MCP connector, `catalog.find` resolves a task like "audit example.com's email security" to the report slug and `catalog.call` runs it; the hosted connector can be paid right in the call (see [[MCP Connector]]). A report runs long, so on the connector it is paid over MPP, where the run comes back as an MCP task to poll; an x402 client pays a report on its HTTP route with `Prefer: respond-async`.
 
 ## Reports for people (`/reports`)
 

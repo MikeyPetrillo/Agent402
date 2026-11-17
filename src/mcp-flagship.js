@@ -478,7 +478,7 @@ export const FLAGSHIP_OUTPUT_SCHEMAS = {
       key: { type: "string" },
       bytes: { type: "integer" },
       updated: { type: "number" },
-      expiresAt: { type: "number" },
+      expiresAt: { type: ["number", "null"], description: "Expiry in unix seconds; null when the key does not expire" },
       owner: { type: "string" },
       persistent: { type: "boolean" },
       deleted: { type: "boolean" },

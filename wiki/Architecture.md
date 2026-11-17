@@ -72,7 +72,7 @@ BEFORE the handler, holds the list price, and debits only on a final `200`. Both
 the x402 payment headers on acceptance and refuse identity-bound routes (memory,
 `my-usage`), where the signed wallet is the identity.
 
-**The hosted MCP connector is payable over x402** (`src/mcp-x402.js`, `src/mcp-x402-routes.js`): a paid call is answered with a tool result whose `structuredContent` is the x402 PaymentRequired, the signed payment rides back in `_meta["x402/payment"]`, and the connector replays it as a `PAYMENT-SIGNATURE` header on a loopback request to its own paid route (a fixed-price flagship's internal twin, which quotes the resource `/mcp`), so the x402 gate above verifies and settles it.
+**The hosted MCP connector is payable over x402** (`src/mcp-x402.js`, `src/mcp-x402-routes.js`): a paid call is answered with a tool result whose first text block is the x402 PaymentRequired as JSON, the signed payment rides back in `_meta["x402/payment"]`, and the connector replays it as a `PAYMENT-SIGNATURE` header on a loopback request to its own paid route (a fixed-price flagship's internal twin, which quotes the resource `/mcp`), so the x402 gate above verifies and settles it. The x402 wire there is blocking only: a long-running tool is paid in the call over MPP, as an MCP task, or on its HTTP route.
 
 **The hosted MCP connector is payable over MPP too, beside x402** (`src/mcp-mpp.js`): a paid call
 is answered with a tool result carrying the challenges in `_meta` (`-32042` on the tasks path, `-32043` for a refused credential), the credential rides back in `_meta`, and the connector

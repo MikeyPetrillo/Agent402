@@ -1,20 +1,24 @@
 // test-mcp-client-check - scripts/mcp-client-check.js (the hosted connector
 // read by an independent @modelcontextprotocol/sdk client) passes against a
-// real FREE_MODE boot, and fails against a connector that drifted.
+// real FREE_MODE boot and against paid boots (x402 and MPP in the call, and
+// x402 alone), and fails against a connector that drifted.
 //
 // The positive half boots src/server.js on PORT=0, reads the bound port back,
 // and runs the check against it: exit 0, every check line ok, the JSON summary
 // written. The negative half is the live control the positive half needs: a
 // stub connector built on the same SDK (the shapes the check reads, nothing
 // else) passes the check unchanged, and each deliberate break (a tool missing
-// from tools/list, an empty description, a wrong free-tool answer) makes the
+// from tools/list, an empty description, a wrong free-tool answer, a payment
+// ask carried as structuredContent on a tool with an outputSchema, a paid tool
+// that runs unpaid) makes the
 // check exit non-zero naming that check. Without the unchanged stub passing,
 // a break's failure would prove nothing about the assertion it targets.
 //
 //   node scripts/test-mcp-client-check.js        (offline: no network, no spend)
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { createServer as createHttpServer } from "node:http";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -24,6 +28,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import { bootServer as bootPaid } from "./lib/boot-server.js";
 import { FLAGSHIP_OUTPUT_SCHEMAS, META_OUTPUT_SCHEMAS, outputSchemaFromExample } from "../src/mcp-flagship.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -130,7 +135,7 @@ async function bootServer() {
     const lines = r.stdout.split("\n").filter((l) => /^(ok|FAIL) - /.test(l));
     ok(lines.length >= 10 && lines.every((l) => l.startsWith("ok - ")), `every check line is ok (${lines.length} lines)`);
     ok(r.summary && r.summary.failed === 0 && r.summary.passed === lines.length && r.summary.target.endsWith("/mcp"), "the JSON summary matches the lines (passed, failed, target)");
-    for (const name of ["initialize", "tools/list", "server.describe", "payment.info", "catalog.search", "catalog.find", "sellers.list", "catalog.call", "web.search without payment", "tasks"]) {
+    for (const name of ["initialize", "tools/list", "server.describe", "payment.info", "catalog.search", "catalog.find", "sellers.list", "catalog.call", "web.search without payment", "memory.write without payment", "catalog.call search without payment", "tasks"]) {
       ok((r.summary?.checks || []).some((c) => c.name.startsWith(name) && c.ok), `summary carries a passing "${name}" check`);
     }
   } catch (err) {
@@ -138,6 +143,55 @@ async function bootServer() {
   } finally {
     if (child) { try { child.kill("SIGKILL"); } catch { /* gone */ } }
   }
+}
+
+// ------------------------------------------------------------ paid boot
+// The same check against a boot WITH a paywall (x402 and MPP in the call, as
+// production runs): there the unpaid asks carry real offers, and each one
+// must still be a result this client reads.
+{
+  const facilitator = createHttpServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      if (req.url === "/supported") return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }));
+      if (req.url === "/rpc") return res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x0" }));
+      res.end("{}");
+    });
+  });
+  await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+  const FAC = `http://127.0.0.1:${facilitator.address().port}`;
+  for (const [label, mppKey] of [["x402 and MPP", randomBytes(24).toString("hex")], ["x402 alone", ""]]) {
+    let srv = null;
+    try {
+      srv = await bootPaid({
+        stores: `mcp-client-check-paid-${mppKey ? "both" : "x402"}`,
+        args: ["--import", "./scripts/lib/loopback-only-preload.js"],
+        env: {
+          NODE_ENV: "test", BASE_URL: "https://agent402.tools", REDIS_URL: "", STATE_DATABASE_URL: "", TARGET_URL: "", POSTHOG_API_KEY: "",
+          STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off",
+          TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "",
+          FREE_MODE: "", TRUST_PROXY_HOPS: "1", MPP_SECRET_KEY: mppKey,
+          WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+          FACILITATOR_URL: FAC, PAYAI_FACILITATOR_URL: FAC, AGENT402_BASE_RPC: `${FAC}/rpc`, EVM_RPC_8453: `${FAC}/rpc`, FACILITATOR_GAS_CHECK: "off",
+          CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "", CIRCLE_FACILITATOR_API_KEY: "",
+          AGENT402_MCP_MAX_PER_MIN: "1000000", AGENT402_MCP_MAX_PER_HOUR: "1000000", AGENT402_SHOW_ROUTER: "1",
+        },
+      });
+      const r = await runCheck(srv.url, `paid-${mppKey ? "both" : "x402"}.json`);
+      ok(r.status === 0, `paid boot (${label}): the check exits 0${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
+      const unpaid = (r.summary?.checks || []).filter((c) => / without payment: /.test(c.name));
+      ok(unpaid.length === 9 && unpaid.every((c) => c.ok), `paid boot (${label}): all eight flagships and catalog.call answer an unpaid ask the client reads (${unpaid.filter((c) => c.ok).length} of ${unpaid.length})`);
+      const offers = r.stdout.split("\n").filter((l) => / without payment: /.test(l));
+      ok(offers.length === 9, `paid boot (${label}): one line per unpaid ask`);
+    } catch (err) {
+      ok(false, `paid boot (${label}): ${err?.stack || err}`);
+    } finally {
+      if (srv) await srv.stop();
+    }
+  }
+  facilitator.closeAllConnections?.();
+  await new Promise((r) => facilitator.close(r));
 }
 
 // ------------------------------------------------------------ stub control
@@ -162,6 +216,9 @@ function stubConnector(brk = null) {
           name,
           description: brk === "empty-description" && name === "catalog.find" ? "" : `${name} on the stub connector.`,
           inputSchema: { type: "object", properties: {}, additionalProperties: true },
+          // The drift that reached review: a tool that lists an outputSchema
+          // and answers its payment ask as structuredContent.
+          ...(brk === "ask-in-structured" && name === "market.quote" ? { outputSchema: { type: "object", properties: { symbol: { type: "string" } }, required: ["symbol"], additionalProperties: false } } : {}),
         })),
     }));
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
@@ -176,7 +233,11 @@ function stubConnector(brk = null) {
         const result = { algo: "sha256", hex: brk === "wrong-answer" ? hex.split("").reverse().join("") : hex };
         return text(result, { structuredContent: { slug: "hash", result } });
       }
-      if (name === "web.search") return { content: [{ type: "text", text: "search needs per-call payment: run npx agent402-mcp with AGENT_KEY." }], isError: true };
+      if (name === "catalog.call" && args.slug === "search" && brk === "paid-runs") return text({ results: [{ title: "ran unpaid" }] });
+      if (FLAGSHIP_TOOLS.includes(name) || name === "catalog.call") {
+        const offer = { x402Version: 2, error: "Payment required", resource: { url: "http://stub/mcp" }, accepts: [{ scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60 }] };
+        return { content: [{ type: "text", text: JSON.stringify(offer) }, { type: "text", text: `${name} needs per-call payment: run npx agent402-mcp with AGENT_KEY.` }], isError: true, ...(brk === "ask-in-structured" && name === "market.quote" ? { structuredContent: offer } : {}) };
+      }
       return { content: [{ type: "text", text: `Unknown tool "${name}".` }], isError: true };
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -193,6 +254,8 @@ const EXPECTED_FAILS = {
   "missing-tool": /^FAIL - tools\/list: .*missing: demand\.request/m,
   "empty-description": /^FAIL - tools\/list: .*catalog\.find: empty description/m,
   "wrong-answer": /^FAIL - catalog\.call: /m,
+  "ask-in-structured": /^FAIL - market\.quote without payment: .*the client could not read the answer/m,
+  "paid-runs": /^FAIL - catalog\.call search without payment: /m,
 };
 
 {

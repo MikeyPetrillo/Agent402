@@ -2,9 +2,14 @@
 // and the paid HTTP route that decides it. Pure: no I/O, no settlement.
 //
 // Wire:
-//   - payment required: a tool RESULT with isError: true, structuredContent =
-//     the PaymentRequired object, content[0].text = JSON.stringify of that same
-//     object (a client without structured content parses it from there);
+//   - payment required: a tool RESULT with isError: true whose
+//     content[0].text is JSON.stringify of the PaymentRequired object (the
+//     form the transport requires, and the one its client falls back to). It
+//     carries NO structuredContent: the transport's copy there is optional,
+//     and a tool that lists an outputSchema has every structuredContent it
+//     returns validated against that schema by the MCP SDK client, error
+//     results included, so a PaymentRequired there fails the whole call
+//     (-32602) for a client that only wanted to read the ask;
 //   - the client retries with the PaymentPayload object in
 //     tools/call params._meta["x402/payment"];
 //   - a settled result carries the SettleResponse in
@@ -26,6 +31,19 @@ import { parsePaymentPayload, parsePaymentRequired } from "@x402/core/schemas";
 export const X402_PAYMENT_META = "x402/payment";
 export const X402_PAYMENT_RESPONSE_META = "x402/payment-response";
 export const X402_PAYMENT_HEADER = "PAYMENT-SIGNATURE";
+/** Where a settlement-pending result carries its fields ({reason, retry,
+ *  retryAfterSeconds, network, transactions, hint}). */
+export const SETTLEMENT_PENDING_META = "org.agent402/settlement-pending";
+/** The PaymentRequired a payment-required, invalid-payment or
+ *  settlement-failed result carries (its first text block), or null. */
+export function paymentRequiredOfResult(result) {
+  if (!isPlainObject(result) || result.isError !== true) return null;
+  const first = Array.isArray(result.content) ? result.content[0] : null;
+  if (!first || first.type !== "text" || typeof first.text !== "string") return null;
+  let parsed;
+  try { parsed = JSON.parse(first.text); } catch { return null; }
+  return isPaymentRequiredV2(parsed) ? parsed : null;
+}
 /** Compact JSON bytes of one payment payload. Its base64 header (4/3 of this)
  *  stays well inside the HTTP parser's 16 KiB header block; a signed EVM
  *  authorization is under 1 KiB and a signed Solana, Stellar or Algorand
@@ -199,7 +217,7 @@ function mergeMeta(into, extra) {
 function requiredShape(paymentRequired, { message, meta, settleReceipt } = {}) {
   const content = [{ type: "text", text: JSON.stringify(paymentRequired) }];
   if (typeof message === "string" && message.trim()) content.push({ type: "text", text: message.trim() });
-  const result = { isError: true, structuredContent: paymentRequired, content };
+  const result = { isError: true, content };
   const merged = mergeMeta({}, meta);
   if (settleReceipt) merged[X402_PAYMENT_RESPONSE_META] = settleReceipt;
   if (Object.keys(merged).length) result._meta = merged;
@@ -278,10 +296,11 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
     hint,
   };
   const resend = retry === "same-payment" ? ` Resend this call with the same _meta["${X402_PAYMENT_META}"]${wait ? ` after about ${wait} s` : ""}.` : "";
-  const result = { isError: true, structuredContent: structured, content: [{ type: "text", text: `${label}: ${hint}${resend}` }] };
+  // The fields ride in _meta, never structuredContent (see the wire note above).
+  const result = { isError: true, content: [{ type: "text", text: `${label}: ${hint}${resend}` }], _meta: { [SETTLEMENT_PENDING_META]: structured } };
   if (isPlainObject(settleResponse) && settleResponse.success === false) {
     const { copy } = jsonCopy(settleResponse, X402_PAYMENT_MAX_BYTES);
-    if (copy && copy.success === false) result._meta = { [X402_PAYMENT_RESPONSE_META]: copy };
+    if (copy && copy.success === false) result._meta[X402_PAYMENT_RESPONSE_META] = copy;
   }
   return result;
 }

@@ -29,8 +29,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { bootServer } from "./lib/boot-server.js";
 
-const { connectorWires, connectorPayText, connectorPayShort, connectorX402Enabled, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY, MPP_MCP_ASK_KEY, MPP_MCP_CREDENTIAL_KEY } = await import("../src/connector-pay.js");
-const { X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META } = await import("../src/mcp-x402.js");
+const { connectorWires, connectorPayText, connectorPayShort, connectorLongCallText, connectorX402Enabled, connectorMppEnabled, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY, MPP_MCP_ASK_KEY, MPP_MCP_CREDENTIAL_KEY } = await import("../src/connector-pay.js");
+const { X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META, paymentRequiredOfResult } = await import("../src/mcp-x402.js");
 const { MCP_PAYMENT_REQUIRED_META, MCP_CREDENTIAL_META } = await import("../src/mcp-mpp.js");
 
 let pass = 0, failed = 0;
@@ -54,6 +54,11 @@ const ORIGIN = "https://agent402.tools";
   ok(connectorWires({ x402: true, mpp: true }).phrase === "x402 or MPP" && connectorWires({ x402: false, mpp: false }).phrase === "" && connectorWires({ x402: false, mpp: true }).names.join() === "MPP", "the phrase lists the wires on");
   ok(connectorPayShort({ x402: true, mpp: true }) === "Wallet-only tools are payable in the call over x402 or MPP (how: /agents.md)" && connectorPayShort({ x402: true, mpp: false }).includes("over x402 (") && /free mode/.test(connectorPayShort({ x402: false, mpp: false })) && Buffer.byteLength(connectorPayShort({ x402: true, mpp: true })) <= 80,
     "the short line names the wires in 80 bytes or fewer and points at /agents.md");
+  ok(connectorMppEnabled({ MPP_SECRET_KEY: "k" }) === true && connectorMppEnabled({}) === false && connectorMppEnabled({ FREE_MODE: "true", MPP_SECRET_KEY: "k" }) === false, "MPP in the call while the gates are on, and never in FREE_MODE");
+  ok(!/structuredContent/.test(both + x) && /first text block is the x402 PaymentRequired as JSON/.test(x), "the x402 ask is described where it rides: the first text block");
+  // The x402 wire is blocking only: a long call is scoped out of the claim.
+  ok(/long-running tool .* is the exception over x402: pay it in the call over MPP, where the run is handed back as an MCP task, or call its HTTP route with Prefer: respond-async\./.test(both) && both.endsWith(connectorLongCallText({ x402: true, mpp: true })), "both wires: a long-running tool is paid in the call over MPP, or on its HTTP route");
+  ok(/long-running tool .* is the exception over x402: call its HTTP route with Prefer: respond-async\./.test(x) && connectorLongCallText({ x402: false, mpp: true }) === "" && !/long-running/.test(m + none), "x402 alone: a long-running tool is paid on its HTTP route; no scope note without x402");
   ok(connectorPayText({ x402: true, mpp: true, code: (s) => `\`${s}\`` }).includes(`\`${X402_MCP_PAYMENT_KEY}\``), "the keys are wrapped as the surface asks");
   ok(![both, x, m, none].some((t) => /—|\$\s?\d/.test(t)), "no em dash and no typed price in any variant");
 }
@@ -88,6 +93,8 @@ const BOOTS = [
   { label: "paid, MPP on", x402: true, mpp: true, args: ["--import", "./scripts/lib/loopback-only-preload.js"], env: { ...PAID("both"), MPP_SECRET_KEY: randomBytes(24).toString("hex") } },
   { label: "paid, no MPP", x402: true, mpp: false, args: ["--import", "./scripts/lib/loopback-only-preload.js"], env: { ...PAID("x402"), MPP_SECRET_KEY: "" } },
   { label: "FREE_MODE", x402: false, mpp: false, args: [], env: { ...QUIET, FREE_MODE: "true", MPP_SECRET_KEY: "" } },
+  // The MPP key set on a boot with no paywall: the connector asks for nothing.
+  { label: "FREE_MODE, MPP key set", x402: false, mpp: false, args: [], env: { ...QUIET, FREE_MODE: "true", MPP_SECRET_KEY: randomBytes(24).toString("hex") } },
 ];
 
 const wires0 = (boot) => [boot.x402 && "x402", boot.mpp && "MPP"].filter(Boolean).join(" or ");
@@ -110,6 +117,7 @@ for (const boot of BOOTS) {
       const r = await get("/agents.md");
       const t = connectorLines(r.text);
       ok(r.status === 200 && claimsX402(t) === boot.x402 && claimsMpp(t) === boot.mpp, `${boot.label}: /agents.md names ${want} for paying on the connector`);
+      ok(/long-running tool/.test(t) === boot.x402 && (!boot.x402 || /in the call over MPP, where the run is handed back as an MCP task/.test(t) === boot.mpp), `${boot.label}: /agents.md scopes the claim: a long-running tool is not paid in the call over x402`);
       if (boot.x402) ok(t.includes(`\`${X402_MCP_PAYMENT_KEY}\``) && t.includes(`\`${X402_MCP_RECEIPT_KEY}\``) && /at the price the HTTP route quotes/.test(t) && /rate limit/.test(t), `${boot.label}: /agents.md says where the payment and the receipt ride, the price rule and the paid way past the rate limit`);
       else ok(/free mode, with no paywall/.test(t) && !/payable in the call/.test(r.text), `${boot.label}: /agents.md says the instance is in free mode and offers no payment on the connector`);
       ok(!/\u2014/.test(t) && !/\$\s?\d/.test(t.split("\n").filter((l) => /MCP, hosted/.test(l)).join("\n")), `${boot.label}: /agents.md's connector line has no em dash and no typed price`);
@@ -136,7 +144,7 @@ for (const boot of BOOTS) {
 
     // The explainer: a section per wire on.
     const learn = plain((await get("/learn/mcp-payments")).text);
-    ok(learn.includes(X402_MCP_PAYMENT_KEY) === boot.x402 && /"structuredContent"/.test(learn) === boot.x402 && learn.includes("org.paymentauth/credential") === boot.mpp && /McpClient\.wrap/.test(learn) === boot.mpp,
+    ok(learn.includes(X402_MCP_PAYMENT_KEY) === boot.x402 && /first text block is the x402 PaymentRequired as JSON/.test(learn) === boot.x402 && !/whose structuredContent/.test(learn) && /long-running tool/.test(learn) === boot.x402 && learn.includes("org.paymentauth/credential") === boot.mpp && /McpClient\.wrap/.test(learn) === boot.mpp,
       `${boot.label}: /learn/mcp-payments explains ${want}`);
     ok(boot.x402 && boot.mpp ? /A call that carries both is settled over MPP/.test(learn) : !/carries both/.test(learn), `${boot.label}: it states which wire settles a call that carries both only when both are on`);
     if (!boot.x402 && !boot.mpp) ok(/free mode, with no paywall/.test(learn), `${boot.label}: it says the instance is in free mode`);
@@ -158,19 +166,41 @@ for (const boot of BOOTS) {
     ok(wires.length ? info.includes(`(payable here, in the call, over ${wires.join(" or ")})`) : !/payable here|pay it here/.test(allDescriptions),
       `${boot.label}: payment.info's listed description names ${want} (${(info.match(/the rest settle[^.]*\./) || [""])[0]})`);
     ok((boot.mpp || !/here[^.]{0,40}over (?:x402 or )?MPP/.test(allDescriptions)) && (boot.x402 || !/here[^.]{0,40}over x402/.test(allDescriptions)), `${boot.label}: no listed description offers a wire in the call that is off`);
+    // Every listed description that offers payment here names this boot's wires, all of them.
+    const hereClaims = tools.flatMap((t) => (String(t.description || "").match(/(?:payable here|pay it here)[^.]*?over (?:x402 or MPP|x402|MPP)/g) || []).map((c) => `${t.name}: ${c}`));
+    const paidFlagships = tools.filter((t) => /^Paid \(/.test(t.description || ""));
+    ok(wires.length ? hereClaims.length >= 3 && hereClaims.every((c) => c.endsWith(`over ${wires.join(" or ")}`)) : hereClaims.length === 0,
+      `${boot.label}: each listed description that offers payment here names ${want} (${hereClaims.filter((c) => !c.endsWith(`over ${wires.join(" or ")}`)).join(" | ") || `${hereClaims.length} read`})`);
+    // A flagship's wallet note rides after its description and is usually cut
+    // by the listing's length bound; where one survives it is read above.
+    ok(paidFlagships.length >= 5 && paidFlagships.every((t) => wires.length || !/pay it here/.test(t.description)), `${boot.label}: no paid flagship's description offers payment here without a wire (${paidFlagships.length} read)`);
+    for (const n of ["catalog.search", "catalog.call"]) {
+      const d = tools.find((t) => t.name === n)?.description || "";
+      ok(wires.length ? d.includes(`over ${wires.join(" or ")}`) : !/payable here/.test(d), `${boot.label}: ${n}'s description names ${want}`);
+    }
+    const found = await client.callTool({ name: "catalog.find", arguments: { task: "hash some text" } });
+    const usage = String((found.structuredContent || JSON.parse(found.content?.[0]?.text || "{}")).usage || "");
+    ok(usage && (wires.length ? usage.includes(`payable here, in the call, over ${wires.join(" or ")},`) : !/payable here|over MPP|over x402/.test(usage)), `${boot.label}: catalog.find's usage line names ${want} (${usage.slice(0, 110)})`);
     const pi = await client.callTool({ name: "payment.info", arguments: {} });
     const how = String((pi.structuredContent || JSON.parse(pi.content?.[0]?.text || "{}")).freeTier?.how || "");
-    ok(how && how.includes('_meta["x402/payment"]') === boot.x402 && /over MPP/.test(how) === boot.mpp, `${boot.label}: payment.info names ${want} (${how.slice(0, 100)})`);
+    ok(how && how.includes('_meta["x402/payment"]') === boot.x402 && /over MPP \(the first ask/.test(how) === boot.mpp && !/structuredContent/.test(how), `${boot.label}: payment.info names ${want} (${how.slice(0, 100)})`);
+    ok(/outlast this connector's blocking wait/.test(how) === boot.x402 && (!boot.x402 || /pay it here over MPP as an MCP task/.test(how) === boot.mpp), `${boot.label}: payment.info scopes a long-running tool out of x402 in the call`);
     const sd = await client.callTool({ name: "server.describe", arguments: {} });
     const sdText = JSON.stringify(sd.structuredContent || sd.content || "");
     ok(boot.x402 || !/x402\/payment/.test(sdText), `${boot.label}: server.describe offers no x402 payment in the call without a paywall`);
     ok(boot.mpp || !/org\.paymentauth/.test(sdText), `${boot.label}: server.describe names no MPP credential key without the gates`);
+    const access = ((sd.structuredContent || {}).startHere?.flagships || []).filter((f) => f.access !== "free here").map((f) => f.access);
+    ok(access.length >= 5 && access.every((a) => (wires.length ? a === `paid: payable here over ${wires.join(" or ")}, or with a wallet on the npm server` : a === "wallet required on this hosted connector")), `${boot.label}: server.describe's flagship access names ${want} (${access[0]})`);
     // And does the same: a paid flagship's first ask.
     const ask = await client.callTool({ name: "memory.read", arguments: {} });
-    const hasOffer = ask.isError === true && Array.isArray(ask.structuredContent?.accepts);
+    const offer = paymentRequiredOfResult(ask);
+    const hasOffer = ask.isError === true && Array.isArray(offer?.accepts);
+    ok(ask.isError !== true || !("structuredContent" in ask), `${boot.label}: the ask carries no structuredContent, so a client that checks the tool's output schema reads it`);
+    const askText = (ask.content || []).map((c) => c.text || "").join("\n");
+    ok(!/structuredContent/.test(askText) && (boot.x402 ? /the JSON in its first text block/.test(askText) : true), `${boot.label}: the ask's text points at where the offer rides`);
     const hasMpp = Array.isArray(ask._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges);
     ok(hasOffer === boot.x402 && hasMpp === boot.mpp, `${boot.label}: a paid tool's first ask carries ${want} (x402 offer ${hasOffer}, MPP challenges ${hasMpp})`);
-    if (boot.x402) ok(ask.structuredContent?.resource?.url === `${ORIGIN}/mcp`, `${boot.label}: a flagship called by name quotes the resource /mcp, as the wiki says`);
+    if (boot.x402) ok(offer?.resource?.url === `${ORIGIN}/mcp`, `${boot.label}: a flagship called by name quotes the resource /mcp, as the wiki says`);
   } catch (e) {
     ok(false, `${boot.label}: ${e?.stack || String(e)}`);
   } finally {
@@ -199,6 +229,19 @@ await new Promise((r) => facilitator.close(r));
   }
   ok(read >= 6, `the static trees hold paragraphs that say the connector is paid in the call (${read} read)`);
   ok(offenders.length === 0, `each one that names MPP names x402 too (${offenders.join(" | ") || "none left"})`);
+  // The reverse order ("payable on the connector over MPP") is read too.
+  const REVERSED = /(?:payable|paid|pay)[^\n.]{0,80}on the (?:hosted )?(?:MCP )?connector[^\n.]{0,40}over MPP/i;
+  const reversed = files.filter((f) => REVERSED.test(readFileSync(join(ROOT, f), "utf8").replace(/\s*\n\s*/g, " ")));
+  ok(reversed.length === 0, `no static page says the connector is payable over MPP alone (${reversed.join(", ") || "none"})`);
+  const flatOf = (f) => readFileSync(join(ROOT, f), "utf8").replace(/\s*\n\s*/g, " ");
+  ok(/wallet-only tools are payable on the connector in the call, over x402 or MPP \(the offer arrives in the tool result, the payment goes back in `_meta`\)/.test(flatOf("docs/ecosystem-listings.md")), "docs/ecosystem-listings.md: the connector is payable in the call over x402 or MPP");
+  const cf = flatOf("docs/cloudflare-agents.md");
+  ok(/are payable on the connector in the call\. Over x402,/.test(cf) && cf.includes('`_meta["x402/payment"]`') && cf.includes('`_meta["x402/payment-response"]`') && /Over MPP, the same result/.test(cf) && !/To pay over x402 instead/.test(cf), "docs/cloudflare-agents.md: both wires in the call, and the npm package is not the only x402 way");
+  ok(/on the hosted MCP connector in the call \(over x402 or MPP\)/.test(flatOf("wiki/Payments-and-x402.md")), "wiki/Payments-and-x402.md: the connector takes x402 or MPP in the call");
+  ok(/The same first answer carries an x402 PaymentRequired for an x402 MCP client; a call that carries both an MPP credential and an x402 payment is settled over MPP\./.test(flatOf("wiki/Paying-with-MPP.md")), "wiki/Paying-with-MPP.md: its connector paragraph names the x402 offer");
+  ok(!files.some((f) => /whose `structuredContent` is the x402|as (?:its|the tool result's) `structuredContent`/.test(flatOf(f))), "no static page says the x402 offer rides in structuredContent");
+  ok(/A report runs long, so on the connector it is paid over MPP/.test(flatOf("wiki/Reports-and-Monitors.md")) && /long-running tool[^.]*is the exception over x402/.test(flatOf("wiki/MCP-Connector.md")), "the wiki scopes long-running tools out of x402 in the call");
+  ok((flatOf("wiki/MCP-Connector.md").match(/\*\*x402 on `\/mcp`\.\*\*/g) || []).length === 1, "the MCP Connector page has one x402 paragraph");
   const wiki = readFileSync(join(ROOT, "wiki/MCP-Connector.md"), "utf8");
   ok(/\*\*x402 on `\/mcp`\.\*\*/.test(wiki) && wiki.includes('`_meta["x402/payment"]`') && wiki.includes('`_meta["x402/payment-response"]`') && /`FREE_MODE` has no paywall, so its connector takes no payment/.test(wiki),
     "the MCP Connector wiki page has the x402 paragraph: where the payment and the receipt ride, and the FREE_MODE scope");

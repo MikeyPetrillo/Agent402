@@ -7,7 +7,7 @@
 import { siteOrgRef } from "./site-org.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
-import { connectorWires, connectorPayText, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY } from "./connector-pay.js";
+import { connectorWires, connectorPayText, connectorLongCallText, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY } from "./connector-pay.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
@@ -128,12 +128,14 @@ const MCP_X402_ASK = `// tools/call on https://agent402.tools/mcp for a wallet-o
     { "type": "text", "text": "{\\"x402Version\\":2,\\"accepts\\":[ ... ]}" },
     { "type": "text", "text": "This tool needs payment ..." }
   ],
-  "structuredContent": {
-    "x402Version": 2,
-    "resource": { "url": "...", "description": "..." },
-    "accepts": [{ "scheme": "exact", "network": "eip155:8453", "amount": "...", "asset": "0x...", "payTo": "0x..." }]
-  },
   "isError": true
+}
+
+// the first text block, parsed: the x402 PaymentRequired
+{
+  "x402Version": 2,
+  "resource": { "url": "...", "description": "..." },
+  "accepts": [{ "scheme": "exact", "network": "eip155:8453", "amount": "...", "asset": "0x...", "payTo": "0x..." }]
 }
 
 // the retry carries the signed payment in params._meta["x402/payment"];
@@ -327,7 +329,7 @@ export const LEARN = [
       ["The hosted connector", [
         P(`On the hosted connector the pure-CPU tools run free (rate-limited). A wallet-only tool called without payment returns a readable tool result, so a host that pays neither wire still shows the user something useful.${CONNECTOR.names.length ? "" : ` ${connectorPayText({ code: C })}`}`),
         ...(CONNECTOR.x402 ? [
-          P(`<strong>Over x402.</strong> That first result is an error result whose ${C("structuredContent")} is the x402 PaymentRequired (the same object as JSON in its first text block). An x402 MCP client signs one of its accepts and calls again with the payment in ${C(X402_MCP_PAYMENT_KEY)}; the paid result carries the settle receipt in ${C(X402_MCP_RECEIPT_KEY)}. A free tool at its rate limit answers with its x402 offer too, so a call that pays is served past the limit.`),
+          P(`<strong>Over x402.</strong> That first result is an error result whose first text block is the x402 PaymentRequired as JSON. An x402 MCP client signs one of its accepts and calls again with the payment in ${C(X402_MCP_PAYMENT_KEY)}; the paid result carries the settle receipt in ${C(X402_MCP_RECEIPT_KEY)}. A free tool at its rate limit answers with its x402 offer too, so a call that pays is served past the limit.${connectorLongCallText({ code: C })}`),
           { code: MCP_X402_ASK },
         ] : []),
         ...(CONNECTOR.mpp ? [

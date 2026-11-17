@@ -21,8 +21,14 @@ Loaded when a connector or front-door file is read.
   invalid-payment and settlement-failed results, `x402/payment-response` out), pure.
   `/mcp` wires both (`x402Loopback`, off in FREE_MODE): a flagship called by its listed name with a twin
   is asked and paid on the twin, `catalog.call` (and a flagship without a twin) on the slug's own HTTP
-  route; the first ask carries the x402 PaymentRequired beside the MPP `_meta` challenges; MPP wins when
-  both are sent; x402 is blocking only (a slow route is refused before the payment is presented).
+  route; the first ask carries the x402 PaymentRequired (JSON in the first text block, never
+  `structuredContent`: every paid tool lists an `outputSchema`, and the SDK client checks any
+  structuredContent against it, error results included) beside the MPP `_meta` challenges; a
+  settlement-pending result carries its fields in `_meta["org.agent402/settlement-pending"]`; MPP wins when
+  both are sent; x402 is blocking only (a slow route is refused before the payment is presented; it
+  is paid in the call over MPP as a task, and public copy says so). Every text the connector writes
+  about paying in the call reads `payWires` (`connectorWires()`, src/connector-pay.js, never in
+  FREE_MODE), the account the pages read (`scripts/test-connector-pay-copy.js`).
   A tools/call whose `_meta` holds a plausible payment (`metaCarriesPayment`: an MPP credential that
   decodes, or an x402 payment on an offered network) is counted on its own per-IP transport bucket
   (`AGENT402_MCP_PAID_REQ_PER_MIN`/`_HOUR`, default 5x the normal one); unless the call then reaches a

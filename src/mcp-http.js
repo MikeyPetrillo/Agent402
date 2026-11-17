@@ -301,7 +301,7 @@ export function mcpPaymentMethods() {
   };
 }
 
-export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS }) {
+export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS }) {
   // sellers.list is listed and answered only when the connector opts in (AGENT402_SHOW_ROUTER=1).
   const sellersListed = Boolean(getLeaderboard) && process.env.AGENT402_SHOW_ROUTER === "1";
   const scoped = profile?.metaTools === false;
@@ -405,7 +405,18 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   const x402TwinSlugs = new Set(x402Loopback ? mcpX402Entries(catalog).map((e) => e.slug) : []);
   // The wires a paid tool is payable over in the call on this mount, for the
   // listed descriptions: "x402 or MPP", "x402", "MPP" or "".
-  const inCallWires = [x402Loopback && "x402", mppLoopback && "MPP"].filter(Boolean).join(" or ");
+  // Every text this connector writes about paying in the call reads these
+  // two, never the loopbacks: `payWires` is the boot's own account
+  // (src/connector-pay.js connectorWires, the source the pages read), so a
+  // FREE_MODE boot that mounts the MPP loopback still offers no payment.
+  const payX402 = Boolean(x402Loopback) && payWires?.x402 !== false;
+  const payMpp = Boolean(mppLoopback) && payWires?.mpp !== false;
+  const inCallWires = [payX402 && "x402", payMpp && "MPP"].filter(Boolean).join(" or ");
+  // What a tool whose run outlasts the blocking wait takes: the x402 wire is
+  // blocking only, so a long call is paid in the call over MPP (as a task).
+  const longCallNote = payX402
+    ? `a tool whose run can outlast this connector's blocking wait (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s) is not paid here over x402: ${payMpp ? "pay it here over MPP as an MCP task, or call" : "call"} its HTTP route with Prefer: respond-async`
+    : "";
   /** The route an x402 payment for this call is replayed to. */
   const x402TargetOf = (def, isNamed) => {
     if (!isNamed || !x402TwinSlugs.has(def.slug) || !flagshipSet.has(def.slug)) return def;
@@ -506,11 +517,11 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
 
   // `x402`: the result this text rides on carries an x402 PaymentRequired;
   // `mpp`: it carries MPP challenges. Each names only the wires on offer.
-  function walletRequiredText(def, { x402 = false, mpp = Boolean(mppLoopback) } = {}) {
+  function walletRequiredText(def, { x402 = false, mpp = payMpp } = {}) {
     const here = x402 || mpp;
     return [
       `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier.`,
-      ...(x402 ? [`Pay it RIGHT HERE over x402: sign one of the accepts in this result's PaymentRequired (its structuredContent, and the JSON block above) and call again with the payment in _meta["x402/payment"] - an x402 MCP client does this automatically; the settle receipt comes back in _meta["x402/payment-response"].`] : []),
+      ...(x402 ? [`Pay it RIGHT HERE over x402: sign one of the accepts in this result's PaymentRequired (the JSON in its first text block) and call again with the payment in _meta["x402/payment"] - an x402 MCP client does this automatically; the settle receipt comes back in _meta["x402/payment-response"].`] : []),
       ...(mpp ? [`${x402 ? "Or pay it here" : "Pay it RIGHT HERE"} over MPP: call again with an MPP credential in _meta["org.paymentauth/credential"] - mppx's McpClient.wrap() does this automatically (USDC on Base/Celo via evm.charge, or native Tempo via tempo.charge); the receipt comes back in _meta["org.paymentauth/receipt"].`] : []),
       `${here ? "Or, from" : "To pay it from"} Claude or any MCP client, run the npm server with a funded wallet:`,
       `npx agent402-mcp with env ${npmEvmSetup} and/or SOLANA_AGENT_KEY=<base58 secret> (USDC on Solana); spend caps: AGENT402_MAX_PER_CALL, AGENT402_BUDGET.`,
@@ -583,7 +594,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // paid call here cannot be settled at all.
           ...(mppLoopback ? { experimental: { payment: { methods: mcpPaymentMethods() } } } : {}),
         },
-        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], mpp: !!mppLoopback, x402: !!x402Loopback, mppOffered: mppMethodsSummary().enabled }),
+        instructions: profile?.instructions || mcpInitializeInstructions(baseUrl, { decide: !!catalog["POST /api/decide"], mpp: payMpp, x402: payX402, mppOffered: mppMethodsSummary().enabled }),
       },
     );
 
@@ -651,7 +662,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Search the Agent402 tool catalog",
           annotations: { title: "Search the Agent402 tool catalog", ...SAFE },
           description:
-            `Keyword search over the Agent402 catalog of 500+ tools (${tools.size} loaded by this connector). Returns { results, workflows }; run one with catalog.call. ${freeCount} pure-CPU tools run free here (proof-of-work). The others are paid per call${mppLoopback ? ", payable here over MPP (credential in _meta; mppx McpClient pays automatically), or" : ", through"} npx agent402-mcp with a wallet.`,
+            `Keyword search over the Agent402 catalog of 500+ tools (${tools.size} loaded by this connector). Returns { results, workflows }; run one with catalog.call. ${freeCount} pure-CPU tools run free here (proof-of-work). The others are paid per call${inCallWires ? `, payable here in the call over ${inCallWires} (the payment rides in _meta), or through` : ", through"} npx agent402-mcp with a wallet.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -690,7 +701,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // the outside world. Hosts read readOnlyHint to skip confirmation.
           annotations: { title: "Run an Agent402 tool", ...CALL_PAID },
           description:
-            `Run an Agent402 tool by slug, with params matching that tool's inputSchema; find slugs with catalog.find or catalog.search. The ${freeCount} pure-CPU tools run free here, rate-limited, through proof-of-work. ${mppLoopback ? "Paid tools are payable here over MPP (the challenges ride in _meta)." : "A paid tool answers with payment setup; see payment.info."} An unknown slug returns an error.`,
+            `Run an Agent402 tool by slug, with params matching that tool's inputSchema; find slugs with catalog.find or catalog.search. The ${freeCount} pure-CPU tools run free here, rate-limited, through proof-of-work. ${inCallWires ? `Paid tools are payable here, in the call, over ${inCallWires} (the first answer carries the ask).` : "A paid tool answers with payment setup; see payment.info."} An unknown slug returns an error.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -706,7 +717,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Payment and wallet setup",
           annotations: { title: "Payment and wallet setup", ...SAFE },
           description:
-            `How paying for Agent402 tools works. This connector holds no wallet: ${freeCount} pure-CPU tools run free through proof-of-work, and the rest settle in USDC over x402${mppLoopback ? " or MPP" : ""}${inCallWires ? ` (payable here, in the call, over ${inCallWires})` : ""}. Covers wallet setup, per-call and session spend caps, the payment rails, and checking a wallet's balance. Returns { connector, freeTier, pay, spendControls, balanceAndHistory }.`,
+            `How paying for Agent402 tools works. This connector holds no wallet: ${freeCount} pure-CPU tools run free through proof-of-work, and the rest settle in USDC over x402${payMpp ? " or MPP" : ""}${inCallWires ? ` (payable here, in the call, over ${inCallWires})` : ""}. Covers wallet setup, per-call and session spend caps, the payment rails, and checking a wallet's balance. Returns { connector, freeTier, pay, spendControls, balanceAndHistory }.`,
           inputSchema: { type: "object", properties: {} },
           outputSchema: META_OUTPUT_SCHEMAS["payment.info"],
         },
@@ -1396,7 +1407,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             // The stated conversion direction and whether any tool serves it (src/find.js).
             ...(r.direction ? { direction: r.direction } : {}),
             ...(weak && !relatedSellers && !plan ? { hint: WISH_HINT_TEXT } : {}),
-            usage: "Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are payable here over MPP or via the agent402-mcp npm server (a wallet, or a prepaid credits key already issued).",
+            usage: `Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are ${inCallWires ? `payable here, in the call, over ${inCallWires}, or` : "paid"} via the agent402-mcp npm server (a wallet, or a prepaid credits key already issued).`,
           });
         }
         if (name === "demand.request") {
@@ -1434,7 +1445,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 mcpName: mcpNameOf(slug),
                 slug,
                 price: tools.get(slug).def.price,
-                access: tools.get(slug).free ? "free here" : mppLoopback ? "paid: payable here over MPP, or with a wallet on the npm server" : "wallet required on this hosted connector",
+                access: tools.get(slug).free ? "free here" : inCallWires ? `paid: payable here over ${inCallWires}, or with a wallet on the npm server` : "wallet required on this hosted connector",
               })),
               llmGateway: `Call a model at ${baseUrl}/v1/metered/chat/completions, the default (also /v1/metered/messages and /v1/metered/responses; model-backed, from ${meteredFromPrice()} a call). ${meteredQuoteSentence().replace(/`/g, "")} No API key: a funded wallet IS the account. ${flatTiersLine().replace(/`/g, "")} Reach the gateway via catalog.call (slugs v1-chat-metered, v1-chat-nano, v1-chat-auto, v1-embeddings) on the npm server.`,
               freeTier: `${freeCount} pure-CPU tools run free right here with no wallet - payable with ~milliseconds of proof-of-work CPU (discover via catalog.find / catalog.search).`,
@@ -1579,9 +1590,10 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               pureCpuToolsFree: freeCount,
               how: [
                 "pure-CPU tools run free here (rate-limited)",
-                ...(x402Loopback ? ["wallet-only tools are payable in the call on this connector over x402 (the first ask is an isError tool result whose structuredContent is an x402 PaymentRequired; send the signed payment in _meta[\"x402/payment\"] and the settle receipt returns in _meta[\"x402/payment-response\"] - an x402 MCP client handles it; a free tool at its rate limit offers the same, so a paying client is served past it)"] : []),
-                ...(mppLoopback ? [`${x402Loopback ? "and" : "wallet-only tools are payable on this connector"} over MPP (the first ask is a tool result whose challenges ride in _meta[\"org.paymentauth/payment-required\"]; on the tasks path the ask is JSON-RPC error -32042, and a presented credential that is refused is -32043; send the credential in _meta[\"org.paymentauth/credential\"], receipt returns in _meta[\"org.paymentauth/receipt\"] - mppx's McpClient.wrap() handles it)`] : []),
-                x402Loopback || mppLoopback ? "or via the npm server with a wallet" : "wallet-only tools are not payable on this connector, so run the npm server with a wallet or call them over HTTP with an x402 client",
+                ...(payX402 ? ["wallet-only tools are payable in the call on this connector over x402 (the first ask is an isError tool result whose first text block is the x402 PaymentRequired as JSON; send the signed payment in _meta[\"x402/payment\"] and the settle receipt returns in _meta[\"x402/payment-response\"] - an x402 MCP client handles it; a free tool at its rate limit offers the same, so a paying client is served past it)"] : []),
+                ...(payMpp ? [`${payX402 ? "and" : "wallet-only tools are payable on this connector"} over MPP (the first ask is a tool result whose challenges ride in _meta[\"org.paymentauth/payment-required\"]; on the tasks path the ask is JSON-RPC error -32042, and a presented credential that is refused is -32043; send the credential in _meta[\"org.paymentauth/credential\"], receipt returns in _meta[\"org.paymentauth/receipt\"] - mppx's McpClient.wrap() handles it)`] : []),
+                ...(longCallNote ? [longCallNote] : []),
+                payX402 || payMpp ? "or via the npm server with a wallet" : "wallet-only tools are not payable on this connector, so run the npm server with a wallet or call them over HTTP with an x402 client",
               ].join("; "),
               proofOfWork: "a walletless client can solve a proof-of-work puzzle instead of paying on eligible tools",
             },
