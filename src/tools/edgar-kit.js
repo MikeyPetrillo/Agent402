@@ -375,16 +375,8 @@ export const EDGAR_TOOLS = [
           cik: "0000320193",
           entityName: "Apple Inc.",
           mode: "full",
-          taxonomyFilter: null,
           tagsFilter: ["Revenues", "Assets"],
-          taxonomies: {
-            dei: {},
-            "us-gaap": {
-              Revenues: { label: "Revenues", description: "Amount of revenue recognized from goods sold...", units: { USD: [{ start: "2017-10-01", end: "2018-09-29", val: 265595000000, accn: "0000320193-18-000145", fy: 2018, fp: "FY", form: "10-K", filed: "2018-11-05", frame: "CY2018" }] } },
-              Assets: { label: "Assets", description: "Amount of asset recognized for present right to economic benefit.", units: { USD: [{ end: "2024-09-28", val: 364980000000, accn: "0000320193-24-000123", fy: 2024, fp: "FY", form: "10-K", filed: "2024-11-01", frame: "CY2024Q3I" }] } },
-            },
-          },
-          source: "SEC EDGAR XBRL company-facts API (public domain)",
+          taxonomies: { "us-gaap": { Revenues: { label: "Revenues", units: { USD: [{ end: "2018-09-29", val: 265595000000, fy: 2018, fp: "FY", form: "10-K" }] } } } },
         },
       },
     },
