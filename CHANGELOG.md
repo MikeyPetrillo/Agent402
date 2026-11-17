@@ -37,6 +37,14 @@ Payments:
   and the paying wallets figure counts the buyer who paid for it, not the
   payment contract the marketplace uses.
 
+### 2026-11-16 (CoinGecko answers carry the source credit)
+Tools:
+- Every answer from a tool that serves CoinGecko data carries a credit field,
+  "Data provided by CoinGecko" with a link to the CoinGecko API page, and each
+  such tool's description ends with the same linked sentence. A market tick
+  answer that includes a coin figure carries it too, and a skill pack that
+  runs a CoinGecko tool prints it once, on the pack's answer.
+
 ### 2026-11-16 (large seller indexes and sanctions list copies no longer hold the server)
 Operations:
 - The seller index reads a very large seller's networks and signing domains
