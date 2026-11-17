@@ -569,11 +569,18 @@ export function createMppReconciler({
     const chargedFailedStatus = cf === null ? "unknown" : cf.total > 0 ? "charged_failed" : "ok";
     const categories = {};
     if (s) for (const k of CATEGORIES) categories[k] = s.counts[k].total > 0 ? "mismatch" : "ok";
+    // The reconciler's own run word, apart from what a run found: a status
+    // of unknown pages nothing, so a reconciler that stopped would go unseen.
+    // off with the switch off, unknown before a first run, stale once the
+    // last run is past the gap, ok otherwise.
+    const run = String(process.env.MPP_RECONCILE || "").toLowerCase() === "off" ? "off"
+      : !state.lastRunAt ? "unknown" : stale ? "stale" : "ok";
     const base = {
       status: word,
       day: s?.day || null,
       lastRunAt: state.lastRunAt,
       stale,
+      run,
       chain: s ? { source: s.sources.chain.source, complete: !!s.sources.chain.complete } : null,
       categories,
       window7d: state.window ? (state.window.mismatchTotal > 0 ? "mismatch" : "ok") : "unknown",

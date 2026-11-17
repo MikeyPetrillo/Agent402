@@ -943,7 +943,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     title: "Upstream hard ceiling REACHED",
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamHardCaps?.status, ["capped"], ["ok"]),
     body: () =>
-      "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (uncharged) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
+      "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (not settled on x402) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
   },
   {
     title: "Exa prepaid allowance LOW",
@@ -958,7 +958,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // owner's switch and does not page.
     verdict: ({ gateway: b }) => wordVerdict(b.xDataSpend?.status, ["over", "capped"], ["ok", "off"]),
     body: () =>
-      "`/api/gateway-status.xDataSpend` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `X_DATA_DAILY_HARD_MAX_USD` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `X_DATA_DAILY_MAX_USD`, otherwise the next UTC day.",
+      "`/api/gateway-status.xDataSpend` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `X_DATA_DAILY_HARD_MAX_USD` was refused 503 (not settled on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `X_DATA_DAILY_MAX_USD`, otherwise the next UTC day.",
   },
   {
     title: "Exa daily spend OVER its ceiling",
@@ -966,7 +966,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // prepaid allowance alarm above, which reads exaAllowance.
     verdict: ({ gateway: b }) => wordVerdict(b.exaSpend?.status, ["over", "capped"], ["ok", "off"]),
     body: () =>
-      "`/api/gateway-status.exaSpend` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed `EXA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `EXA_DAILY_HARD_MAX_USD` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; `exaAllowance` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `EXA_DAILY_MAX_USD`, otherwise the next UTC day.",
+      "`/api/gateway-status.exaSpend` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed `EXA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `EXA_DAILY_HARD_MAX_USD` was refused 503 (not settled on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; `exaAllowance` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `EXA_DAILY_MAX_USD`, otherwise the next UTC day.",
   },
   {
     title: "Router spend per minute OVER its ceiling",
@@ -1168,6 +1168,16 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamCosts?.status, ["missing", "partial"], ["ok"]),
     body: ({ gateway: b }) =>
       `/api/gateway-status reports upstreamCosts.status=${b.upstreamCosts?.status === "partial" ? "partial" : "missing"}. partial: the private cost table loaded but lacks a key a serving path reads (that path refuses with 503, nobody is charged) or has a model row that did not parse. missing: production is running without the private cost table, so the metered tier, embeddings, images, video, Exa and X reads refuse (503, nobody is charged) and the flat chat tiers price at their caps. The boot log line [upstream-costs] names what is missing. Update the UPSTREAM_COSTS_JSON variable on Railway (and the Actions secret). Auto-closes when it reads ok.`,
+  },
+  {
+    // The reconciler's own run word (mppReconcile.run, src/mpp-reconcile.js):
+    // stale pages (it ran before and is past its gap, so the mismatch words
+    // read unknown and page nothing); ok and off clear; unknown (no run yet)
+    // and absent do neither. Title and body match heartbeat.yml's.
+    title: "MPP daily reconciliation is NOT RUNNING",
+    verdict: ({ gateway: b }) => wordVerdict(b.mppReconcile?.run, ["stale"], ["ok", "off"]),
+    body: () =>
+      "/api/gateway-status reports mppReconcile.run=stale: the daily MPP reconciliation (src/mpp-reconcile.js) has run before and has not completed a run inside its allowed gap, so MPP sales are not being checked against the chain and the mismatch alarms read unknown. Read /__operator/mpp-reconcile.json (operator token) and the [mpp-reconcile] lines in the server log on Railway, then start a run from the operator endpoint. Auto-closes when the word reads ok or off.",
   },
   {
     // The daily MPP reconciliation (src/mpp-reconcile.js): the latest

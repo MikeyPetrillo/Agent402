@@ -162,6 +162,16 @@ ok((await cleanFile.status()).status === "ok" && (await cleanFile.status()).char
 ok((await createMppReconciler({ file: join(dir, "none.json"), log: () => {} }).status()).status === "unknown", "never run: unknown");
 const staleRec = createMppReconciler({ file: join(dir, "clean.json"), log: () => {}, now: () => END + 60 * 3600e3, refunds: () => [] });
 ok((await staleRec.status()).status === "unknown" && (await staleRec.status()).stale === true, "an ok older than 36h reads unknown (stale)");
+// The run word: stale once a reconciler that has run before is past its gap,
+// ok inside it, unknown before a first run, off with the switch off.
+ok((await staleRec.status()).run === "stale" && (await cleanFile.status()).run === "ok", "run reads stale past 36 h since the last run, ok inside it");
+ok((await createMppReconciler({ file: join(dir, "none.json"), log: () => {} }).status()).run === "unknown", "...unknown before a first run");
+{
+  const before = process.env.MPP_RECONCILE;
+  process.env.MPP_RECONCILE = "off";
+  try { ok((await staleRec.status()).run === "off" && (await staleRec.status()).stale === true, "...and off with MPP_RECONCILE=off, whatever its age"); }
+  finally { if (before === undefined) delete process.env.MPP_RECONCILE; else process.env.MPP_RECONCILE = before; }
+}
 const blindRec = createMppReconciler({ file: join(dir, "blind.json"), log: () => {}, now: () => END + 3600e3, recipients: () => [RECIPIENT], ledgerRows: () => [row(1)], refunds: () => [], fetchTransfers: async () => ({ complete: false, source: "rpc", rows: [], error: "unreadable" }) });
 await blindRec.runOnce();
 ok((await blindRec.status()).status === "unknown", "reconciler with an unreadable chain reports unknown");

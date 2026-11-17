@@ -122,7 +122,11 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   mppx with no subscription method; `buildMppSubscriptionsEngine` in `src/mpp-subscriptions.js`;
   `subscriptionRenewals` then reads unknown), `openMeteo` refused (ok, off: a keyed Open-Meteo request was
   refused, by 401, 403 or a 400 whose reason names the key or a plan, in the last 15 minutes;
-  `openMeteoStatus` in `src/tools/weather-kit.js`; buyers got an uncharged 503). `coverageReads` pages like `sharedLimits`, on its
+  `openMeteoStatus` in `src/tools/weather-kit.js`; buyers got an uncharged 503), `mppReconcile.run`
+  stale (the daily MPP reconciliation ran before and has not completed a run for 36 hours, so
+  `mppReconcile.status` reads unknown and its mismatch pagers are blind; ok and off close, off being
+  `MPP_RECONCILE=off`; unknown, before a first run, does neither; one issue, "MPP daily
+  reconciliation is NOT RUNNING"). `coverageReads` pages like `sharedLimits`, on its
   second word only: `alert: sustained` (paid calls started or refused without a balance read made
   for them in 3 or more separate minutes of the last 10, for 3 or more accounts;
   `coverageReadsVerdict` in `src/inflight-cover.js`). `status` ok and off close; `status: degraded`
