@@ -34,8 +34,8 @@ Tools:
   proof-of-work tier with no data source behind them: sun-times,
   heat-index-calc, aqi-calc, degree-days-calc and wmo-weather-code.
 - geocode, reverse-geocode and place-search are retired and answer 410: geocode
-  names place-lookup and reverse-geocode names geo-lookup (US county and state
-  from coordinates) as the replacement, and place-search names none.
+  names place-lookup as the replacement, and reverse-geocode and place-search
+  name none.
   exa-search, exa-answer and exa-contents are retired and answer 410 naming
   search, answer and extract. /api/gateway-status no longer carries exaSpend or
   exaAllowance.
@@ -81,15 +81,13 @@ Tools:
   The seven market-data tools carry the CoinGecko credit in every answer;
   lending-rates reads on-chain state only. dex-pool-health and
   dex-volume-board answer on a deployment that holds a market-data key.
-- Fifteen routes are retired and answer 410 Gone with a Sunset date, naming
-  the replacement where one exists: defi-yields (lending-rates),
-  defi-protocols (defi-screener), defi-protocol (coin-profile), defi-chains
-  (chain-board), stablecoins (stablecoin-depeg-watch),
-  stablecoin-supply-history (stablecoin-peg), defi-dex-volume
-  (dex-volume-board), defi-tvl (global-defi), dex-top-pools (dex-pool-health),
-  l2-tvl (l2-gas-comparison), options-volume (options-summary) and
-  crypto-orderbook (perp-orderbook); defi-yield-history,
-  defi-chain-tvl-history and defi-fees name none.
+- Fifteen routes are retired and answer 410 Gone with a Sunset date. Two name
+  a replacement that answers the same question: stablecoins
+  (stablecoin-depeg-watch) and defi-dex-volume (dex-volume-board). The other
+  thirteen name none: defi-yields, defi-yield-history, defi-protocols,
+  defi-protocol, defi-chains, defi-chain-tvl-history,
+  stablecoin-supply-history, defi-fees, defi-tvl, dex-top-pools, l2-tvl,
+  options-volume and crypto-orderbook.
 
 Skill packs:
 - defi-protocol-scanner reads the token's supply and valuation profile

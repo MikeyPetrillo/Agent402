@@ -23,11 +23,16 @@
 
 /** Tools: /api/<slug>. `replacement` is a live catalog slug or null. */
 export const RETIRED_TOOLS = Object.freeze({
-  // 2026-11-17: the three open-map geocoding tools. place-lookup resolves
-  // place names (not street addresses), geo-lookup reads a US county and
-  // state from coordinates; nothing live searches points of interest.
+  // A replacement is named only when it answers the SAME question as the
+  // retired route (the same quantity for the same subject, possibly over a
+  // stated narrower range). A tool that answers a neighboring question is not
+  // one: that route retires with no pointer.
+  //
+  // 2026-11-17: the three open-map geocoding tools. place-lookup resolves a
+  // place name to coordinates (not a street address); nothing live turns
+  // coordinates into a postal address or searches points of interest.
   geocode: { retiredAt: "2026-11-17", replacement: "place-lookup" },
-  "reverse-geocode": { retiredAt: "2026-11-17", replacement: "geo-lookup" },
+  "reverse-geocode": { retiredAt: "2026-11-17", replacement: null },
   "place-search": { retiredAt: "2026-11-17", replacement: null },
   // 2026-11-17: the three second-provider search tools; the first-party
   // search, answer and extract tools serve the same questions.
@@ -35,25 +40,27 @@ export const RETIRED_TOOLS = Object.freeze({
   "exa-answer": { retiredAt: "2026-11-17", replacement: "answer" },
   "exa-contents": { retiredAt: "2026-11-17", replacement: "extract" },
   // 2026-11-16: the routes that read an open DeFi analytics source, and the
-  // exchange order book. Each names the live tool that answers the nearest
-  // question from market data or from the contracts themselves; pool yield
-  // and locked-value history, protocol fees and chain TVL have no live
-  // equivalent and name none.
-  "defi-yields": { retiredAt: "2026-11-16", replacement: "lending-rates" },
+  // spot exchange order book. The stablecoin list and the per-network DEX
+  // volume ranking have a live tool that answers the same question. Locked
+  // value (by protocol, chain or rollup), pool yields and their history,
+  // protocol fees, supply history, on-chain options volume and a spot order
+  // book have none: the market-cap screens, lending rates and the perpetual
+  // book answer different questions, so those routes name no replacement.
+  "defi-yields": { retiredAt: "2026-11-16", replacement: null },
   "defi-yield-history": { retiredAt: "2026-11-16", replacement: null },
-  "defi-protocols": { retiredAt: "2026-11-16", replacement: "defi-screener" },
-  "defi-protocol": { retiredAt: "2026-11-16", replacement: "coin-profile" },
-  "defi-chains": { retiredAt: "2026-11-16", replacement: "chain-board" },
+  "defi-protocols": { retiredAt: "2026-11-16", replacement: null },
+  "defi-protocol": { retiredAt: "2026-11-16", replacement: null },
+  "defi-chains": { retiredAt: "2026-11-16", replacement: null },
   "defi-chain-tvl-history": { retiredAt: "2026-11-16", replacement: null },
   "stablecoins": { retiredAt: "2026-11-16", replacement: "stablecoin-depeg-watch" },
-  "stablecoin-supply-history": { retiredAt: "2026-11-16", replacement: "stablecoin-peg" },
+  "stablecoin-supply-history": { retiredAt: "2026-11-16", replacement: null },
   "defi-fees": { retiredAt: "2026-11-16", replacement: null },
   "defi-dex-volume": { retiredAt: "2026-11-16", replacement: "dex-volume-board" },
-  "defi-tvl": { retiredAt: "2026-11-16", replacement: "global-defi" },
-  "dex-top-pools": { retiredAt: "2026-11-16", replacement: "dex-pool-health" },
-  "l2-tvl": { retiredAt: "2026-11-16", replacement: "l2-gas-comparison" },
-  "options-volume": { retiredAt: "2026-11-16", replacement: "options-summary" },
-  "crypto-orderbook": { retiredAt: "2026-11-16", replacement: "perp-orderbook" },
+  "defi-tvl": { retiredAt: "2026-11-16", replacement: null },
+  "dex-top-pools": { retiredAt: "2026-11-16", replacement: null },
+  "l2-tvl": { retiredAt: "2026-11-16", replacement: null },
+  "options-volume": { retiredAt: "2026-11-16", replacement: null },
+  "crypto-orderbook": { retiredAt: "2026-11-16", replacement: null },
   // 2026-09-24: the Polymarket tools. The nearest live question is a Kalshi
   // read; a Kalshi market is a different venue, so each names the closest tool.
   "polymarket-search": { retiredAt: "2026-09-24", replacement: "kalshi-markets" },

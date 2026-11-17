@@ -24,6 +24,24 @@ throws(() => assertRetiredRegistryConsistent(new Set([...liveSet, "skill-market-
 throws(() => assertRetiredRegistryConsistent(new Set([...liveSet].filter((s) => s !== "crypto-options-chain"))), /names replacement "crypto-options-chain", which is not a live/, "a replacement that is not live fails the boot");
 ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retiredAt)) && Object.values(RETIRED_PACKS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retiredAt)), "every entry carries a retirement date");
 
+// A replacement answers the SAME question as the retired route; a tool that
+// answers a neighboring one is no pointer. The 2026-11-16 and 2026-11-17
+// retirements are pinned whole, so a pointer added back is a decision made here.
+{
+  const POINTERS_2026_11 = {
+    geocode: "place-lookup", "reverse-geocode": null, "place-search": null,
+    "exa-search": "search", "exa-answer": "answer", "exa-contents": "extract",
+    "defi-yields": null, "defi-yield-history": null, "defi-protocols": null, "defi-protocol": null, "defi-chains": null,
+    "defi-chain-tvl-history": null, stablecoins: "stablecoin-depeg-watch", "stablecoin-supply-history": null, "defi-fees": null,
+    "defi-dex-volume": "dex-volume-board", "defi-tvl": null, "dex-top-pools": null, "l2-tvl": null, "options-volume": null, "crypto-orderbook": null,
+  };
+  const batch = Object.entries(RETIRED_TOOLS).filter(([, e]) => e.retiredAt === "2026-11-16" || e.retiredAt === "2026-11-17");
+  const wrong = batch.filter(([slug, e]) => !(slug in POINTERS_2026_11) || e.replacement !== POINTERS_2026_11[slug]).map(([slug, e]) => `${slug} -> ${e.replacement}`);
+  ok(batch.length === Object.keys(POINTERS_2026_11).length && wrong.length === 0, `the 21 routes retired on 2026-11-16 and 2026-11-17 name exactly the reviewed replacements (${wrong.join(", ") || "all match"})`);
+  ok(["l2-tvl", "stablecoin-supply-history", "dex-top-pools", "reverse-geocode"].every((s) => RETIRED_TOOLS[s].replacement === null), "locked value by rollup, supply history, pools by locked value and reverse geocoding name no replacement: no live tool answers them");
+  ok(retiredEntryFor("/api/l2-tvl")?.replacement === null && !("Link" in retirementHeaders(RETIRED_TOOLS["l2-tvl"].retiredAt, null)), "such a route answers 410 with a Sunset date and no successor link");
+}
+
 // The boot guard is CALLED, against the real catalog, before any route is served.
 {
   const { readFileSync } = await import("node:fs");
