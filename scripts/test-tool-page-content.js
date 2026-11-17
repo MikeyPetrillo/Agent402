@@ -57,6 +57,23 @@ const h1Count = (html) => (html.match(/<h1\b/gi) || []).length;
   }
 }
 
+// The page itself: the response table of a rendered tool page gives an object
+// field that way, in the cell (the helper alone is not the page).
+{
+  const totals = { marketCapUsd: 1, turnoverPct: 1, capWeightedChange24hPct: 1, tokensUpSharePct: 1, top10CapSharePct: 1 };
+  const def = {
+    route: "GET /api/fake-fields", method: "GET", path: "/api/fake-fields", slug: "fake-fields", name: "Fake fields tool",
+    category: "crypto", price: "$0.001", tags: ["fake"], description: "Returns totals. Second sentence.",
+    discovery: { inputSchema: { type: "object", properties: {} }, input: {}, output: { example: { categoryTotals: totals, pair: { a: 1, bb: 2 }, note: "n".repeat(100) } } },
+  };
+  const html = toolPage("https://example.test", def, [], {});
+  const cellOf = (field) => { const m = new RegExp(`<tr><td><code>${field}</code></td>(?:<td>[^<]*</td>){2}<td>([^<]*)</td></tr>`).exec(html); return m ? decode(m[1]) : null; };
+  const cell = cellOf("categoryTotals");
+  ok(cell === "5 fields: marketCapUsd, turnoverPct, capWeightedChange24hPct and 2 more" && / and 2 more$/.test(cell), `a rendered tool page gives an object field as whole names and a count (${cell})`);
+  ok(cellOf("pair") === "2 fields: a, bb", `a short object is given whole on the page (${cellOf("pair")})`);
+  ok(cellOf("note") === "n".repeat(77) + "...", "control: a long string is still cut at 80 on the page");
+}
+
 // ---- 1. Offline: a hostile def renders inert. ----
 const hostile = {
   route: "POST /api/fake-html", method: "POST", path: "/api/fake-html", slug: "fake-html", name: "Fake <h1>HTML</h1> tool",
