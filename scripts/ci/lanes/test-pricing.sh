@@ -34,6 +34,8 @@ t node scripts/test-payment-reject.js
 t node scripts/test-x402-v1-accepts.js
 # The 402 JSON body carries the same PaymentRequired object as the PAYMENT-REQUIRED header
 t node scripts/test-payment-required-body.js
+# The compact PAYMENT-REQUIRED header (X-Payment-Compact: 1 or an aiohttp User-Agent): under 7,500 bytes on every route, Bazaar extension and resource untouched, a stock client pays from it, the default header byte-identical (boots a paid server twice, offline)
+t node scripts/test-payment-required-compact.js
 # The three-line front door leads /llms.txt, /agents.md, the MCP server.describe answer and the unpaid 402 body
 t node scripts/test-front-door.js
 # HEAD paywall bypass closed (HEAD on paid GET routes 402s with challenges + empty body; free surfaces untouched — offline)

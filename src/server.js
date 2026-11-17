@@ -82,6 +82,7 @@ import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
 import { meteredTwinSlug, meteredQuoteSentence, isMeteredChatSlug, meteredClientTimeoutField } from "./metered-lead.js";
 import { paymentRequiredBodyMiddleware, decodePaymentRequired } from "./payment-required-body.js";
+import { paymentRequiredCompactMiddleware } from "./payment-required-compact.js";
 import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
 import { mountShortlinks } from "./shortlinks.js";
@@ -2715,6 +2716,12 @@ const app = express();
 // Drop the Express fingerprint header (security audit A402-13): no reason to
 // advertise the stack to every caller.
 app.disable("x-powered-by");
+// The compact PAYMENT-REQUIRED header (src/payment-required-compact.js): its
+// writeHead hook is mounted FIRST so it runs LAST, after every other reader of
+// the header (the MPP shim mints its challenges from the full one). It needs
+// the body mirror, which decides and keeps the full offer in the body.
+const PAYMENT_REQUIRED_COMPACT_ON = process.env.PAYMENT_REQUIRED_COMPACT !== "off" && process.env.PAYMENT_REQUIRED_BODY !== "off";
+if (PAYMENT_REQUIRED_COMPACT_ON) app.use(paymentRequiredCompactMiddleware());
 // Catalog paths are matched exactly by every gate here ("METHOD /path"),
 // while Express routes ignore case and a trailing slash. A request whose path
 // resolves to a catalog path the way the load-shed gate and the unpaid-quote
@@ -11061,7 +11068,10 @@ if (!FREE_MODE) {
   // problem document is merged too; mounted after them, this wrapper would
   // be outer and its merge replaced. It is inner to every res.json wrapper
   // regardless, because res.json always ends in this.send.
-  if (process.env.PAYMENT_REQUIRED_BODY !== "off") app.use(paymentRequiredBodyMiddleware());
+  // With the compact option on, the mirror also picks the compact header for
+  // a request that asks (src/payment-required-compact.js); the header is
+  // swapped by the hook mounted first on the app.
+  if (process.env.PAYMENT_REQUIRED_BODY !== "off") app.use(paymentRequiredBodyMiddleware({ compact: PAYMENT_REQUIRED_COMPACT_ON }));
   // A slow route's 402 recommends Prefer: respond-async (X-Async-Recommended
   // header, `async` block in the JSON body). Mounted after the mirror so its
   // send wrapper runs first and the mirror's protocol keys still win.

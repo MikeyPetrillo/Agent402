@@ -110,6 +110,8 @@ export const CORS_DEFAULT_ALLOW_HEADERS = [
   "X-PAYMENT",
   "Payment-Identifier",
   "Idempotency-Key",
+  // Asks for the compact PAYMENT-REQUIRED header (src/payment-required-compact.js).
+  "X-Payment-Compact",
   "X-Pow-Solution",
   "Mcp-Session-Id",
   "Mcp-Protocol-Version",
