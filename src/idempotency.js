@@ -16,6 +16,31 @@ const STORED = "__a402Stored";
 const wrapStored = (body, charged) => ({ [STORED]: 1, body, charged });
 const unwrapStored = (hit) => (hit && typeof hit === "object" && !Array.isArray(hit) && hit[STORED] === 1 ? { body: hit.body, charged: hit.charged || null } : { body: hit, charged: null });
 
+// THE SAME PAYMENT AFTER AN UNCONFIRMED SETTLE. A payment whose settle chain
+// ended on an answer that does not show whether the transfer was sent is
+// answered 402 settlement-unconfirmed (src/payments.js markUnconfirmedStop),
+// and its authorization stays claimed while the transfer may still land
+// (src/settlement-claims.js). Sent again, it used to run the handler again
+// and then meet that claim at settle (duplicate_authorization), which the
+// settle breaker reads as the buyer's fault. That answer is kept here under
+// the payment credential itself (any route or body: one authorization is
+// one payment) and the same payment sent again gets it back before the
+// paywall: no handler run, no verify, no settle, nothing counted against the
+// wallet. Kept until the authorization's validBefore (past it the
+// authorization can no longer move money, and a new one is safe) plus a
+// minute, at least a minute, at most a day.
+const UNCONFIRMED = "__a402Unconfirmed";
+const UNCONFIRMED_MIN_MS = 60_000;
+const UNCONFIRMED_MAX_MS = 24 * 3600_000;
+/** How long an unconfirmed answer is kept for an authorization whose
+ *  validBefore is `validBefore` (unix seconds; unreadable reads as the most). */
+export function unconfirmedReplayMs(validBefore, now = Date.now()) {
+  const vb = Number(validBefore);
+  if (!Number.isFinite(vb) || vb <= 0 || vb > 10_000_000_000) return UNCONFIRMED_MAX_MS;
+  return Math.min(UNCONFIRMED_MAX_MS, Math.max(UNCONFIRMED_MIN_MS, vb * 1000 - now + UNCONFIRMED_MIN_MS));
+}
+const unconfirmedKeyOf = (cred) => createHash("sha256").update(`unconfirmed-settle\n${cred}`).digest("hex");
+
 /** Whether a re-sent x402 payment on `def`'s route may replay its first
  *  answer implicitly (src/server.js mounts it as `implicitReplay`): never on a
  *  route whose effect outlives the answer, never on an identity-bound route,
@@ -147,13 +172,48 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     const wire = isX402McpRequest(req) ? "x402-mcp " : "";
     return { key: createHash("sha256").update(`${wire}${req.method} ${req.path}${qs}\n${idem}\n${cred}\n${bodyHash}`).digest("hex"), kind, implicit };
   };
+  // The unconfirmed answer of a payment, back for the same payment (above).
+  const replayUnconfirmed = (req, res, rec) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (typeof rec.receipt === "string" && rec.receipt) res.setHeader("PAYMENT-RESPONSE", rec.receipt);
+    res.setHeader("X-Replayed-Answer", "1");
+    req.__paymentRejectReason = typeof rec.body?.reason === "string" ? rec.body.reason : "settlement-unconfirmed";
+    res.status(402).type("application/json");
+    return res.send(JSON.stringify(rec.body));
+  };
+  // Keep this request's unconfirmed answer (set on the request by the
+  // paywall when it sent one) for the same payment sent again.
+  const keepUnconfirmed = (req, res, uKey) => {
+    let done = false;
+    const keep = () => {
+      if (done) return;
+      done = true;
+      const a = req.__a402UnconfirmedAnswer;
+      if (res.statusCode !== 402 || !a || typeof a !== "object" || !a.body || typeof a.body !== "object") return;
+      const rec = { [UNCONFIRMED]: 1, body: a.body, receipt: typeof a.receipt === "string" ? a.receipt : null };
+      let bytes = 0;
+      try { bytes = Buffer.byteLength(JSON.stringify(rec), "utf8"); } catch { bytes = 0; }
+      if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
+      store.set(uKey, rec, bytes, { ttlMs: unconfirmedReplayMs(a.validBefore) }).catch(() => {});
+    };
+    res.once("finish", keep);
+    res.once("close", keep);
+  };
   return async (req, res, next) => {
     if (!isCatalogRoute(req)) return next();
+    const cred = freeMode ? null : paymentHeaderOf(req);
+    const uKey = cred ? unconfirmedKeyOf(cred) : null;
     const bound = idemHashKey(req);
+    if (!bound && !uKey) return next();
+    const [uHit, hit0] = await Promise.all([
+      uKey ? Promise.resolve().then(() => store.get(uKey)).catch(() => null) : null,
+      bound ? Promise.resolve().then(() => store.get(bound.key)).catch(() => null) : null,
+    ]);
+    if (uHit && typeof uHit === "object" && uHit[UNCONFIRMED] === 1 && uHit.body && typeof uHit.body === "object") return replayUnconfirmed(req, res, uHit);
+    if (uKey) keepUnconfirmed(req, res, uKey);
     if (!bound) return next();
     const { key, kind, implicit } = bound;
-    let hit;
-    try { hit = await store.get(key); } catch { hit = null; }
+    let hit = hit0;
     if (hit !== null && hit !== undefined) {
       // Answered here, before the paywall and the dispatcher: no handler, no
       // settlement, and none of the finish-time bookkeeping behind the gates

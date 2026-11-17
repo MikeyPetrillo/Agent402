@@ -110,6 +110,13 @@ export const STATUS_TTL_MS = 10_000;
 export const WINDOW_MS = 60 * 60_000;
 export const FIRST_CHECK_MS = 30_000;
 export const MAX_BACKOFF_MS = 10 * 60_000;
+// The most open entries one EVM payer may hold, per network, from settle
+// chains that ended unconfirmed (src/payments.js markUnconfirmedStop). Past
+// it a new one is kept in the journal (a record that lands once the payer's
+// open entries fall under the bound; the word reads unresolved meanwhile) and
+// a log line names it: never dropped in silence. The book's own bound
+// (MAX_ENTRIES) covers everything else.
+export const UNCONFIRMED_PER_PAYER_MAX = Number(process.env.LATE_SETTLE_UNCONFIRMED_PER_PAYER_MAX) > 0 ? Math.floor(Number(process.env.LATE_SETTLE_UNCONFIRMED_PER_PAYER_MAX)) : 25;
 /** An entry whose absence is never proven becomes unresolved after this. */
 export const MAX_AGE_MS = 24 * 3600_000;
 /** Consecutive passes whose handling of one entry threw. */
@@ -209,6 +216,7 @@ export function lateSettleCandidate(ctx) {
       payTo: String(req.payTo || ""), asset: String(req.asset || ""), amount: String(req.amount ?? ""),
       resource: ctx?.paymentPayload?.resource?.url || null, validBefore: validBeforeOf(la.validBefore ?? auth.validBefore), via: la.via || "ambiguous facilitator",
       ...(lateSlugOfTwin(ctx) ? { slug: lateSlugOfTwin(ctx) } : {}),
+      ...(ctx?.__a402UnconfirmedStop ? { unconfirmed: true } : {}),
     };
   }
   if (!txOk(req.network, tx)) return null;
@@ -229,6 +237,7 @@ export function lateSettleCandidate(ctx) {
     // A payment our relayer settled first (the facilitator read dry) named
     // its transaction as the primary's answer: the entry says whose it is.
     via: ctx?.__a402LateTx?.via || (ownFirstAttemptOf(ctx?.paymentPayload, req.network) ? "own relayer" : "primary"),
+    ...(ctx?.__a402UnconfirmedStop ? { unconfirmed: true } : {}),
   };
 }
 
@@ -272,6 +281,7 @@ export function createLateSettleBook({
   now = () => Date.now(),
   log = console.warn,
   maxEntries = MAX_ENTRIES,
+  unconfirmedPerPayerMax = UNCONFIRMED_PER_PAYER_MAX,
   // Where a booking whose store write failed is kept until it lands: the
   // money journals' dead-letter (local disk, or Redis with
   // LEDGER_JOURNAL_REDIS=on), built on first use.
@@ -380,20 +390,28 @@ export function createLateSettleBook({
     journalImpl = createDeadLetter({ file: `${file}.pending.ndjson`, name: "lateSettlements", journalKey: PG ? `${stateDbSchema()}:lateSettlements` : "" });
     return journalImpl;
   };
+  // An EVM payer's open entries from unconfirmed settle chains on one
+  // network (an EVM address compares without case; the bound is EVM-only).
+  const unconfirmedOf = (p, entry) => {
+    const who = String(entry.payer || "").toLowerCase();
+    return Object.values(p).filter((e) => e?.unconfirmed === true && e.state !== "unresolved" && e.network === entry.network && String(e.payer || "").toLowerCase() === who).length;
+  };
   // One entry into the store: "made" (or already there), "full" (the open
-  // bound is reached), or "failed" (the write did not land).
+  // bound is reached), "payer_full" (this payer's bound on unconfirmed
+  // entries is reached), or "failed" (the write did not land).
   const put = async (entry) => {
     let out = "failed";
     let wrote = false;
     try {
       wrote = await change((p) => {
         if (p[entry.key]) { out = "made"; return; }
+        if (entry.unconfirmed === true && railOf(entry.network) === "evm" && unconfirmedOf(p, entry) >= unconfirmedPerPayerMax) { out = "payer_full"; return; }
         if (openCount(p) >= maxEntries) { out = "full"; return; }
         p[entry.key] = entry;
         out = "made";
       });
     } catch { wrote = false; }
-    if (out === "full") return "full";
+    if (out === "full" || out === "payer_full") return out;
     return out === "made" && wrote === true ? "made" : "failed";
   };
   const journalCount = async () => {
@@ -407,7 +425,9 @@ export function createLateSettleBook({
     let j;
     try { j = await journalOf(); } catch { return 0; }
     if (!j || !(j.size?.() > 0)) return 0;
-    try { return await j.drain(async (e) => (e?.payload?.key ? ((await put(e.payload)) === "made" ? "landed" : "stop") : "drop")); } catch { return 0; }
+    // A record held back by its payer's bound stays until that payer's open
+    // entries fall under it; the others behind it still land.
+    try { return await j.drain(async (e) => { if (!e?.payload?.key) return "drop"; const r = await put(e.payload); return r === "made" ? "landed" : r === "payer_full" ? "keep" : "stop"; }); } catch { return 0; }
   };
   const call = (url, method, params) => rpc(url, method, params, fetchImpl, RPC_TIMEOUT_MS, []);
 
@@ -444,6 +464,7 @@ export function createLateSettleBook({
         payer: String(c.payer), payTo: String(c.payTo), asset: String(c.asset),
         amount: String(c.amount), validBefore: validBeforeOf(c.validBefore), slug: typeof c.slug === "string" && SLUG_RE.test(c.slug) ? c.slug : slugOf(c.resource), via: String(c.via || "primary").slice(0, 60),
         ...(!byAuth && NONCE.test(String(c.authNonce || "")) ? { authNonce: String(c.authNonce).toLowerCase() } : {}),
+        ...(c.unconfirmed === true ? { unconfirmed: true } : {}),
         at: t, nextCheckAt: t + FIRST_CHECK_MS, checks: 0, unreadable: 0, failures: 0, state: "pending",
       };
       const r = await put(entry);
@@ -465,6 +486,10 @@ export function createLateSettleBook({
         saveUnrecorded().catch(() => {});
         alarm(`[late-settle] ${network} ${byAuth ? `auth ${c.payer}/${c.nonce}` : `tx ${c.tx}`} failed and could NOT be recorded (store and journal both refused); if it lands the buyer is owed ${entry.amount} of ${entry.asset} from ${entry.payer}`);
         return false;
+      }
+      if (r === "payer_full") {
+        alarm(`[late-settle] ${network} payer ${shortPayer(c.payer)} holds ${unconfirmedPerPayerMax} open unconfirmed settlements (the per-payer bound); ${byAuth ? `auth ${shortPayer(c.payer)}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}) kept in the journal until one of them closes`);
+        return true;
       }
       log(r === "full"
         ? `[late-settle] book is full (${maxEntries} open); ${network} ${byAuth ? `auth ${shortPayer(c.payer)}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}) kept in the journal until there is room`
@@ -866,7 +891,11 @@ export function registerLateSettleHook(server, bookFor) {
       const all = lateSettleCandidates(ctx);
       if (!all.length) return;
       const b = await bookFor();
-      if (b) for (const c of all) await b.book(await withRailHints(c, ctx));
+      // Whether anything was recorded rides on the context: an unconfirmed
+      // answer promises a repayment record only then (src/payments.js).
+      let booked = false;
+      if (b) for (const c of all) { if ((await b.book(await withRailHints(c, ctx))) === true) booked = true; }
+      if (ctx && typeof ctx === "object") ctx.__a402LateBooked = booked;
       // The notes have been booked: a later read of this payment starts clean.
       takePendingAnswers(ctx?.paymentPayload);
     } catch { /* booking never breaks the settle path */ }

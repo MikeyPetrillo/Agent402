@@ -30,12 +30,14 @@ export const INFLIGHT_RENEW_MS = 30_000;
 export const INFLIGHT_MAX_MS = (() => { const n = Number(process.env.IDEM_INFLIGHT_MAX_MS); return Number.isFinite(n) && n >= 1000 ? n : 2 * 60 * 60 * 1000; })();
 
 export function createLocalIdempotencyStore({ ttlMs = IDEM_TTL_MS, maxEntries = IDEM_MAX_ENTRIES, maxBytes = IDEM_MAX_BYTES } = {}) {
-  const entries = new Map(); // key -> { at, body, bytes }
+  const entries = new Map(); // key -> { at, body, bytes, ttl? }
+  // An entry may carry a life of its own (set's `ttlMs`); the store's otherwise.
+  const lifeOf = (v) => (Number(v?.ttl) > 0 ? Number(v.ttl) : ttlMs);
   const inFlight = new Set();
   let bytes = 0;
   const sweep = setInterval(() => {
-    const cutoff = Date.now() - ttlMs;
-    for (const [k, v] of entries) if (v.at < cutoff) { bytes -= v.bytes; entries.delete(k); }
+    const now = Date.now();
+    for (const [k, v] of entries) if (now - v.at >= lifeOf(v)) { bytes -= v.bytes; entries.delete(k); }
   }, 60_000);
   sweep.unref?.();
   return {
@@ -43,10 +45,10 @@ export function createLocalIdempotencyStore({ ttlMs = IDEM_TTL_MS, maxEntries = 
     async get(key) {
       const hit = entries.get(key);
       if (!hit) return null;
-      if (Date.now() - hit.at >= ttlMs) { bytes -= hit.bytes; entries.delete(key); return null; }
+      if (Date.now() - hit.at >= lifeOf(hit)) { bytes -= hit.bytes; entries.delete(key); return null; }
       return hit.body;
     },
-    async set(key, body, size) {
+    async set(key, body, size, { ttlMs: life = null } = {}) {
       // Evict oldest entries (Map preserves insertion order: FIFO) until we fit.
       while ((entries.size >= maxEntries || bytes + size > maxBytes) && entries.size > 0) {
         const firstKey = entries.keys().next().value;
@@ -54,7 +56,7 @@ export function createLocalIdempotencyStore({ ttlMs = IDEM_TTL_MS, maxEntries = 
         if (ev) bytes -= ev.bytes;
         entries.delete(firstKey);
       }
-      entries.set(key, { at: Date.now(), body, bytes: size });
+      entries.set(key, { at: Date.now(), body, bytes: size, ...(Number(life) > 0 ? { ttl: Number(life) } : {}) });
       bytes += size;
       return true;
     },
@@ -123,11 +125,12 @@ export function createIdempotencyStore({ ttlMs = IDEM_TTL_MS, redis = getSharedR
       }
       return local.get(key);
     },
-    async set(key, body, size) {
-      await local.set(key, body, size);
+    async set(key, body, size, { ttlMs: life = null } = {}) {
+      const px = Number(life) > 0 ? Math.ceil(Number(life)) : ttlMs;
+      await local.set(key, body, size, { ttlMs: px });
       const c = await client();
       if (c) {
-        try { await op(c.set(PREFIX + "b:" + key, JSON.stringify(body), { PX: ttlMs })); }
+        try { await op(c.set(PREFIX + "b:" + key, JSON.stringify(body), { PX: px })); }
         catch { /* the local copy still replays on this container */ }
       }
       return true;

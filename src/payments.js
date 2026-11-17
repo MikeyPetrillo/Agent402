@@ -7,7 +7,7 @@ import { scheduleBazaarRouteCheck, withBazaarHidden } from "./bazaar-route-check
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { installAcceptOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, acceptOutputSchemaEnabled } from "./accept-output-schema.js";
 import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, startAvmSponsorshipRefresher, REFRESH_MS as AVM_SPONSORSHIP_REFRESH_MS } from "./avm-sponsorship.js";
-import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal } from "./payment-reject.js";
+import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal, unconfirmedSettleRefusal, unconfirmedSettleReceipt } from "./payment-reject.js";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
@@ -43,6 +43,7 @@ import { ownSettledStellarTx, registerSettlementClaimHooks, registerSettlementCl
 import { randomUUID } from "node:crypto";
 import { registerFirstCallAllowanceSettleHook } from "./first-call-allowance.js";
 import { registerLateSettleHook } from "./late-settlements.js";
+import { RAW_SETTLE_RECEIPT } from "./settle-fault.js";
 import { chargeCancelledForClientGone, registerSettleSentHook, settleSentWhileConnected, CLIENT_GONE_TEXT } from "./hangup-settlement.js";
 import { markCoveredRunSettled } from "./inflight-cover.js";
 import { ARC_CAIP2, ARC_USDC, ARC_PROFILE, CIRCLE_LABEL, CircleFacilitatorClient, circleClientFromEnv, circleKeyConfigured, withoutArcKinds, arcContractWalletsEnabled, isContractWalletPayment, CIRCLE_EVM_LABEL, CIRCLE_EVM_FALLBACK_NETWORKS, CIRCLE_EVM_FALLBACK_PROFILES, circleEvmFallbackEnabled, circleEvmFallbackFromEnv } from "./circle-facilitator.js";
@@ -1330,6 +1331,8 @@ export const BAZAAR_DESCRIPTIONS = Object.freeze({
 });
 
 export async function buildPaymentMiddleware({ walletAddress, network, baseUrl, catalog, extraRoutes = {}, mcpRoutes = [] }) {
+  // The origin an unconfirmed settle's refund lookup names (markUnconfirmedStop).
+  publicOrigin = typeof baseUrl === "string" && baseUrl ? baseUrl.replace(/\/+$/, "") : null;
   routeSlugOf = (route) => {
     const def = typeof route === "string" && catalog && Object.prototype.hasOwnProperty.call(catalog, route) ? catalog[route] : null;
     return typeof def?.slug === "string" ? def.slug : null;
@@ -4000,7 +4003,13 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           { const o = await settleAfterFallbackPending(ctx, refusal, name); if (o) return o; }
           if (!own) { const o = await settleAfterAmbiguous(ctx, refusal, name, outageFor); if (o) return o; }
           { const o = await readPassedOn(); if (o) return o; }
-          noteLateTx(ctx, result?.transaction, name);
+          // Our own relayer's refusal before it signed anything (nothingSent)
+          // proves nothing of ours can land, and a graceful verdict about the
+          // buyer's payment that names no transaction is a decided answer:
+          // the earlier refusal stands, nothing booked. Anything else is how
+          // the chain ended (markUnconfirmedStop).
+          if ((own && result?.nothingSent === true && !String(result?.transaction || "")) || isDecidedSettleVerdict(result)) return;
+          markUnconfirmedStop(ctx, refusal, name);
           return;
         }
         // A recovered settlement fires no afterSettle hook (the vendor returns
@@ -4036,16 +4045,150 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           { const o = await settleAfterFallbackPending(ctx, err, name); if (o) return o; }
           if (!own) { const o = await settleAfterAmbiguous(ctx, err, name, outageFor); if (o) return o; }
           { const o = await readPassedOn(); if (o) return o; }
-          noteLateTx(ctx, err?.transaction, name);
+          markUnconfirmedStop(ctx, err, name);
           return;
         }
         if (!passedOn) revertOnly = !isPreBroadcastSettleRejection(err);
       }
     }
     // Every listed facilitator after a passed-on refusal refused too (or none
-    // was left): that refusal is read on chain now.
-    return readPassedOn();
+    // was left): that refusal is read on chain now. A FALLBACK's passed-on
+    // refusal the read did not settle is how the chain ended.
+    { const o = await readPassedOn(); if (o) return o; }
+    if (passedOn && passedOn.err !== ctx?.error) markUnconfirmedStop(ctx, passedOn.err, passedOn.via);
+    return undefined;
   });
+}
+
+/**
+ * A fallback's graceful failed answer (HTTP 200, success:false) that decides
+ * the payment: it names no transaction and its reason is a verdict about the
+ * buyer's payment (src/settle-verdict.js isPaymentVerdictReason: a signature,
+ * the balance, an expired or not-yet-valid window, a payload or scheme the
+ * facilitator does not take, as a code or in words). Never a used or canceled
+ * authorization (a transfer may have used it), and never an HTTP error or a
+ * transport failure (those reach the catch branch, not this one).
+ */
+export function isDecidedSettleVerdict(result) {
+  if (!result || typeof result !== "object" || result.success === true) return false;
+  if (String(result.transaction || "").trim()) return false;
+  const reason = String(result.errorReason || "").trim();
+  if (!reason || isUsedAuthorizationReason(reason)) return false;
+  return isPaymentVerdictReason(reason);
+}
+
+/** A facilitator answer @x402/core could not read as a settle response (its
+ *  FacilitatorResponseError: an HTTP 200 with invalid JSON or invalid data).
+ *  The facilitator may have settled before it answered. */
+export function isUnreadableSettleAnswer(err) {
+  return !!err && typeof err === "object" && (err.name === "FacilitatorResponseError" || err.constructor?.name === "FacilitatorResponseError");
+}
+
+// This server's public origin, for the refund lookup an unconfirmed answer
+// names (set by buildPaymentMiddleware).
+let publicOrigin = null;
+
+/**
+ * The settle chain was opened by a refusal made before sending (the
+ * primary's billing refusal, an HTTP 402, a reverted transfer, a listed
+ * facilitator's graceful refusal with no verdict) and a FALLBACK then ended
+ * it on an answer that does not prove nothing was sent: an HTTP error other
+ * than a 402, a time limit, a dropped connection, an unreadable answer, a
+ * failure naming a transaction, a graceful failed answer that is not a
+ * verdict about the buyer's payment, or a listed fallback's passed-on
+ * refusal no chain read settled. The earlier refusal no longer describes
+ * the payment, so:
+ *  - a named transaction is noted for the late-settlement book (noteLateTx);
+ *    with none named, an EIP-3009 authorization itself is
+ *    (`ctx.__a402LateAuth`, src/late-settlements.js), so a transfer that
+ *    lands is found and owed once, and the authorization stays claimed
+ *    meanwhile (src/settlement-claims.js namesUnsettledTx). A Permit2 or
+ *    non-EVM payment with no transaction has nothing the book reads, and the
+ *    answer then promises no record;
+ *  - the answer is restated (explainUnconfirmedStop): no "nothing was
+ *    charged", no other way to pay, the transaction to watch when named, the
+ *    time the signed authorization stops being usable, and a receipt reading
+ *    settlement_unconfirmed, which the settle breaker counts as not the
+ *    buyer's (src/settle-fault.js).
+ */
+function markUnconfirmedStop(ctx, err, via) {
+  if (!ctx || typeof ctx !== "object" || isBatchedCtx(ctx)) return;
+  noteLateTx(ctx, err?.transaction, via);
+  const named = ctx.__a402LateTx?.transaction || null;
+  if (!named && !ctx.__a402LateAuth?.nonce) {
+    const la = lateAuthOf(ctx);
+    if (la) ctx.__a402LateAuth = { ...la, via };
+  }
+  ctx.__a402UnconfirmedStop = { via, transaction: named };
+  const network = ctx?.requirements?.network;
+  console.warn(`[payments] ${network} settle chain ended unconfirmed at ${via}${named ? ` (tx ${named})` : ""}: ${ctx.__a402LateAuth?.nonce ? "the authorization goes to the late-settlement book" : named ? "the transaction goes to the late-settlement book" : "nothing the late-settlement book reads"}; the answer names no other way to pay`);
+  explainUnconfirmedStop(ctx, network, named ? [named] : []);
+}
+
+const validBeforeOfPayload = (payload) => payload?.payload?.authorization?.validBefore ?? payload?.payload?.permit2Authorization?.deadline ?? null;
+
+/**
+ * Restate this request's settle-failure 402 for a chain that ended
+ * unconfirmed (src/payment-reject.js unconfirmedSettleRefusal). The send is
+ * wrapped, like explainPendingRefusal's and after the verify hint shaped the
+ * body, so a JSON 402 body gets the reason, the retry verb, the network, any
+ * named transaction, the authorization's validBefore and the hint, and the
+ * PAYMENT-RESPONSE receipt (the primary's refusal as the library wrote it) is
+ * replaced by one whose errorReason is settlement_unconfirmed. The refusal is
+ * built at send time: the late-settlement hook has said by then whether
+ * anything was recorded (`ctx.__a402LateBooked`), and only then does the hint
+ * promise a repayment record. The facilitator's own words the receipt guard
+ * kept for the settle breaker (RAW_SETTLE_RECEIPT) are put back after the
+ * restated receipt passes the guard. A pending explanation already set for
+ * the request keeps its body (it names every noted transaction); the receipt
+ * is restated either way. The answer as sent is left on the request
+ * (`__a402UnconfirmedAnswer`) for the replay of the same payment
+ * (src/idempotency.js).
+ */
+function explainUnconfirmedStop(ctx, network, txs) {
+  const req = ctx?.transportContext?.request?.adapter?.req;
+  const res = req?.res;
+  if (!res || typeof res.send !== "function") return;
+  req.__a402UnconfirmedStop = { ctx, transactions: txs, transaction: txs[0] || null, network };
+  if (res.__a402UnconfirmedStopWrapped) return;
+  res.__a402UnconfirmedStopWrapped = true;
+  const origSend = res.send;
+  res.send = function unconfirmedStopSend(chunk) {
+    try {
+      const u = req.__a402UnconfirmedStop;
+      if (u && res.statusCode === 402 && !res.headersSent) {
+        const pending = req.__a402PendingRefusal || null;
+        const kept = req[RAW_SETTLE_RECEIPT];
+        let receiptHeader = null;
+        for (const name of ["PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE"]) {
+          const h = res.getHeader(name);
+          if (typeof h !== "string" || !h) continue;
+          let receipt = null;
+          try { receipt = JSON.parse(Buffer.from(h, "base64").toString("utf8")); } catch { receipt = null; }
+          const restated = unconfirmedSettleReceipt(receipt, { transaction: u.transaction || pending?.transactions?.[0] || null, network: u.network });
+          if (restated) { receiptHeader = Buffer.from(JSON.stringify(restated)).toString("base64"); res.setHeader(name, receiptHeader); }
+        }
+        if (kept) { try { Object.defineProperty(req, RAW_SETTLE_RECEIPT, { value: kept, configurable: true, writable: true, enumerable: false }); } catch { /* bookkeeping only */ } }
+        if (typeof chunk === "string" && chunk.trimStart().startsWith("{")) {
+          let body = JSON.parse(chunk);
+          if (body && typeof body === "object" && !Array.isArray(body)) {
+            if (!pending) {
+              const validBefore = validBeforeOfPayload(u.ctx?.paymentPayload);
+              const refusal = unconfirmedSettleRefusal({ network: u.network, transactions: u.transactions, booked: u.ctx?.__a402LateBooked === true, validBefore, origin: publicOrigin });
+              body = withPendingSettleRefusal(body, refusal);
+              chunk = JSON.stringify(body);
+              req.__paymentRejectReason = refusal.reason;
+            }
+            res.setHeader("Cache-Control", "no-store");
+            // The pending explanation (its wrapper runs after this one) shapes
+            // the body the same way for the copy kept for a replay.
+            req.__a402UnconfirmedAnswer = { body: pending ? withPendingSettleRefusal(body, pending) : body, receipt: receiptHeader, validBefore: validBeforeOfPayload(u.ctx?.paymentPayload) };
+          }
+        }
+      }
+    } catch { /* an explanation must never break the answer */ }
+    return origSend.call(this, chunk);
+  };
 }
 
 /**
@@ -4267,6 +4410,9 @@ function noteLateTx(ctx, transaction, via) {
 export function isPreBroadcastSettleRejection(err) {
   if (!err || typeof err !== "object") return false;
   if (typeof err.transaction === "string" && err.transaction.trim()) return false;
+  // An answer that could not be read is never a refusal, whatever words its
+  // excerpt carries.
+  if (isUnreadableSettleAnswer(err)) return false;
   if (err.status === 402 || err.statusCode === 402) return true;
   const msg = String(err.message || "");
   if (/settle failed \(402\)/i.test(msg)) return true;
