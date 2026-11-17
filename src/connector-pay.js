@@ -24,6 +24,15 @@ export const X402_MCP_RECEIPT_KEY = '_meta["x402/payment-response"]';
 export const MPP_MCP_ASK_KEY = '_meta["org.paymentauth/payment-required"]';
 export const MPP_MCP_CREDENTIAL_KEY = '_meta["org.paymentauth/credential"]';
 
+/** The variables this account reads, as `env` holds them (undefined = unset).
+ *  A suite that renders a page module in-process beside a booted server sets
+ *  these to the server's values before it imports the module, so the copy it
+ *  expects is the copy that boot writes. */
+export const CONNECTOR_ENV_KEYS = Object.freeze(["FREE_MODE", "MPP_SECRET_KEY"]);
+export function connectorEnvOf(env = process.env) {
+  return Object.fromEntries(CONNECTOR_ENV_KEYS.map((k) => [k, env[k]]));
+}
+
 /** Whether this boot's connector takes an x402 payment in the call. */
 export function connectorX402Enabled(env = process.env) {
   return env.FREE_MODE !== "true";
