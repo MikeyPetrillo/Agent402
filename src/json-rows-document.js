@@ -37,7 +37,13 @@
 //     build before this one left behind, read once at the first write.
 // The mirror costs a whole-book head write per update while it is on; the
 // release after this one turns it off (`mirror: false`), and the rows alone
-// are written from then on.
+// are written from then on. A head that still carries a mirror (its mark) is
+// rewritten WITHOUT it by the first write made with the mirror off, whatever
+// that write changed: a mirror left beside a newer version would read, to
+// every later reader, as the book an older build wrote, and be taken over
+// the rows. So a process with the mirror off runs safely beside one that
+// still writes it (each such head is rewritten once), and a head written
+// with the mirror off holds neither parts nor mark.
 //
 // WITHOUT A DATABASE the document is a json-document (a file, or memory).
 import { existsSync, readFileSync } from "node:fs";
@@ -82,19 +88,21 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
   const say = (m) => { try { log(`[json-rows-document] ${name}: ${m}`); } catch { /* logging never throws */ } };
   const emptyParts = () => Object.fromEntries(PARTS.map((p) => [p, {}]));
   // This process's copy: the head version it reflects (-1: none read), the
-  // head without the parts (and its text, to tell a change), and the parts.
-  let copy = { version: -1, head: {}, headText: "{}", parts: emptyParts() };
+  // head without the parts (and its text, to tell a change), the parts, and
+  // whether the head body as stored carries the mirror's mark (`marked`).
+  let copy = { version: -1, head: {}, headText: "{}", parts: emptyParts(), marked: false };
   const stats = { updates: 0, rowsWritten: 0, rowsDeleted: 0, headWrites: 0, bytes: 0, refreshes: 0, folded: 0, lastBytes: 0, lastRowBytes: 0 };
   let lastError = null;
 
-  /** The head without the parts and the mark, and the sections an older build wrote (none when the mark is `version`). */
+  /** The head without the parts and the mark, the sections an older build wrote (none when the mark is `version`), and whether the body carried the mark at all. */
   const splitHead = (body, version) => {
     const head = isMap(body) ? { ...body } : {};
-    const mirrored = Object.hasOwn(head, ROWS_MARK) && Number(head[ROWS_MARK]) === Number(version);
+    const marked = Object.hasOwn(head, ROWS_MARK);
+    const mirrored = marked && Number(head[ROWS_MARK]) === Number(version);
     delete head[ROWS_MARK];
     const sections = {};
     for (const p of PARTS) { if (p in head) { if (!mirrored && isMap(head[p])) sections[p] = head[p]; delete head[p]; } }
-    return { head, sections };
+    return { head, sections, marked };
   };
   const assemble = (c) => {
     const body = JSON.parse(c.headText);
@@ -128,11 +136,11 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
       for (const row of all.rows) { const id = String(row.id); const cut = id.indexOf(":"); const p = id.slice(0, cut); if (next[p]) next[p][id.slice(cut + 1)] = Object.freeze(row.b); }
     }
     stats.refreshes++;
-    const { head, sections } = splitHead(headBody, version);
-    if (!Object.keys(sections).length) return { version, head, headText: JSON.stringify(head), parts: next, rows: null };
+    const { head, sections, marked } = splitHead(headBody, version);
+    if (!Object.keys(sections).length) return { version, head, headText: JSON.stringify(head), parts: next, rows: null, marked };
     const taken = { ...next };
     for (const p of Object.keys(sections)) taken[p] = Object.fromEntries(Object.entries(sections[p]).map(([k, v]) => [k, v !== null && typeof v === "object" ? Object.freeze(v) : v]));
-    return { version, head, headText: JSON.stringify(head), parts: taken, rows: next };
+    return { version, head, headText: JSON.stringify(head), parts: taken, rows: next, marked };
   }
   const importBody = () => {
     if (!file || !existsSync(file)) return null;
@@ -170,7 +178,7 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
         });
         if (!c) return fallback;
         // A copy taken from an older build's sections is not the rows' version: the next write brings the rows to it.
-        copy = { version: c.rows ? -1 : c.version, head: c.head, headText: c.headText, parts: c.parts };
+        copy = { version: c.rows ? -1 : c.version, head: c.head, headText: c.headText, parts: c.parts, marked: c.marked === true };
         lastError = null;
         return assemble(copy);
       } catch (e) {
@@ -219,7 +227,8 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
           const headText = JSON.stringify(head);
           const version = c.version + 1;
           // With the mirror on, the head carries the whole body and the mark of this version (header note).
-          const headChanged = mirror || headText !== c.headText || hadSections;
+          // With it off, a head that still carries a mirror's mark is rewritten without the mirror (header note).
+          const headChanged = mirror || headText !== c.headText || hadSections || c.marked === true;
           const bodyText = mirror ? JSON.stringify({ ...head, ...parts2, [ROWS_MARK]: version }) : headText;
           let bytes = 0;
           if (ups.length) {
@@ -232,7 +241,7 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
           const r = await client.query(`UPDATE ${T("documents")} SET version = version + 1, updated_at = now()${headChanged ? ", body = $3::jsonb" : ""} WHERE name = $1 AND version = $2 RETURNING version`, headChanged ? [name, c.version, bodyText] : [name, c.version]);
           // (The row is locked: its version is the one read. A miss is a fault, never a lost change.)
           if (!r.rowCount) throw new Error("the head row moved under its lock");
-          return { c: { version, head, headText, parts: parts2 }, changed: true, ups: ups.length, dels: dels.length, headChanged, bytes, rowBytes: bytes - (headChanged ? bodyText.length : 0), hadSections };
+          return { c: { version, head, headText, parts: parts2, marked: headChanged ? mirror : c.marked === true }, changed: true, ups: ups.length, dels: dels.length, headChanged, bytes, rowBytes: bytes - (headChanged ? bodyText.length : 0), hadSections };
         });
       } catch (e) {
         lastError = String(e?.message || e).slice(0, 160);
@@ -242,7 +251,7 @@ export function createJsonRowsDocument({ name, parts, file = null, log = console
         return { ok: false, error: lastError };
       }
       lastError = null;
-      copy = { version: landed.c.version, head: landed.c.head, headText: landed.c.headText, parts: landed.c.parts };
+      copy = { version: landed.c.version, head: landed.c.head, headText: landed.c.headText, parts: landed.c.parts, marked: landed.c.marked === true };
       if (!landed.changed) return { ok: true, body: assemble(copy), version: copy.version, changed: false, bytes: 0 };
       stats.updates++;
       stats.rowsWritten += landed.ups;

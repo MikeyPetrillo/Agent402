@@ -341,7 +341,10 @@ Loaded when a state, loop, monitor, workflow or worker file is read.
   rollback; a head without this build's mark was written last by such a build, and its sections are
   taken as written (a key it added or changed is written to its row, a row it no longer holds is
   deleted). The first write folds the old whole-book document into rows the same way. The next
-  release turns the mirror off (`mirror: false`); from then on a rollback past this build reads no
+  release turns the mirror off (`mirror: false`): a write made with it off rewrites a head that
+  still carries a mirror's mark without the mirror, whatever it changed (a mirror left beside a
+  newer version would be read as an older build's book and taken over the rows), so a process with
+  the mirror off runs beside one that still writes it; from then on a rollback past this build reads no
   open entries: fix forward (`scripts/state-export.js` writes the book back as one document, by the
   same rule, for a file-mode restore). Without a database it is the file
   `REFERRAL_BOOK_FILE`, else `/data/agent402-referral-settlements.json`, else the same name under

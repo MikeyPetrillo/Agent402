@@ -9,6 +9,9 @@
 //     build closed after this one made it a row is never left open;
 //   - a write at 2,000 entries carries the entry it changes, not the book (mirror off);
 //   - two processes writing one book at once lose no write;
+//   - the mirror turned off beside a process that still writes it: a write of
+//     rows alone leaves no whole body in the head for a later reader to take
+//     as the book, and no entry, mark or record written by either is lost;
 //   - another process's writes and deletions reach this one's copy;
 //   - a change that throws, or edits an entry in place, fails alone.
 // Requires STATE_DATABASE_URL (CI fails without it).
@@ -23,6 +26,7 @@ import { requireTestPg } from "./lib/test-pg.js";
 import { childJson } from "./lib/child-json.js";
 
 const WORKER = process.argv[2] === "--worker";
+const DOC_WORKER = process.argv[2] === "--doc-worker";
 const OLD_WORKER = process.argv[2] === "--old-worker";
 // The last build that kept the book as one whole document (its code is read from git when the clone holds it).
 const OLD_BUILD_REF = "4f4d9c8606f7995de9e18a82d2288f0585cd3039";
@@ -57,7 +61,7 @@ if (OLD_WORKER) {
   process.send({ ready: true });
   await new Promise(() => {}); // (driven by messages until "close")
 }
-if (!WORKER && !OLD_WORKER) requireTestPg({ label: "test-referral-book-pg" });
+if (!WORKER && !OLD_WORKER && !DOC_WORKER) requireTestPg({ label: "test-referral-book-pg" });
 const sdb = await import("../src/state-db.js");
 const { createReferralBook, REFERRAL_BOOK_DOC, REFERRAL_BOOK_PARTS } = await import("../src/referral-book.js");
 const { createJsonRowsDocument, ROWS_MARK } = await import("../src/json-rows-document.js");
@@ -69,10 +73,32 @@ const canon = (v) => JSON.stringify(v, (_k, x) => (x && typeof x === "object" &&
 const nowS = () => Math.floor(Date.now() / 1000);
 const intentOf = (payer = hex(20)) => ({ key: `${hex(32)}#${hex(32)}`, slug: "echo", payer, nonce: hex(32), amount: "10000", validBefore: nowS() + 600 });
 
+if (DOC_WORKER) {
+  // One of two processes on one rows document, its mirror on or off: N changes made in place
+  // (the head's small sections as they were read, so a write carries rows alone), every third one a removal too.
+  const [mirror, name, n, startAt, tag] = [process.argv[3] === "on", process.argv[4], Number(process.argv[5]), Number(process.argv[6]), process.argv[7]];
+  const doc = createJsonRowsDocument({ name, parts: ["items"], mirror, log: () => {} });
+  while (Date.now() < startAt) await new Promise((r) => setTimeout(r, 5));
+  const kept = [], removed = [];
+  let failedWrites = 0;
+  for (let i = 0; i < n; i++) {
+    const k = `${tag}-${i}`;
+    const gone = i % 3 === 2 ? kept.shift() : null;
+    const r = await doc.update((body) => { body.items[k] = { by: tag, i }; if (gone) delete body.items[gone]; });
+    if (!r.ok) { failedWrites++; if (gone) kept.unshift(gone); continue; }
+    kept.push(k);
+    if (gone) removed.push(gone);
+  }
+  process.stdout.write(`${JSON.stringify({ kept, removed, failed: failedWrites, headWrites: doc.rowStats().headWrites })}\n`);
+  await sdb.closeStateDb();
+  process.exit(0);
+}
 if (WORKER) {
   // One of two processes: N paid calls' book writes (the intent, then the charge), eight at a time.
   const n = Number(process.argv[3]), startAt = Number(process.argv[4]);
-  const book = createReferralBook({ file: null, log: quiet, maxEntries: 100_000, maxPerPayer: 100_000 });
+  // (With a mirror word and a document name: a book of its own, the mirror on or off.)
+  const mirrorArg = process.argv[5] || null, docArg = process.argv[6] || null;
+  const book = createReferralBook({ ...(mirrorArg ? { doc: createJsonRowsDocument({ name: docArg, parts: REFERRAL_BOOK_PARTS, mirror: mirrorArg === "on", log: () => {} }) } : { file: null }), log: quiet, maxEntries: 100_000, maxPerPayer: 100_000 });
   await book.ready;
   while (Date.now() < startAt) await new Promise((r) => setTimeout(r, 5));
   let i = 0, lost = 0, stood = 0;
@@ -208,6 +234,101 @@ try {
     const skipped = await doc.update(() => SKIP_UPDATE);
     const body = await doc.load(null);
     ok(r1.ok && inPlace.ok === false && thrown.ok === false && skipped.ok && skipped.changed === false && body.items.a.n === 1 && body.items.b.n === 2 && body.note === "x", `a change that edits a stored entry in place is refused (never written half-seen), one that throws rolls back, and the document is as the last good write left it (${inPlace.error})`);
+  }
+
+  // ---- the mirror turned off: a write of rows alone leaves nothing in the head a reader takes as the book ----
+  {
+    const DOC = "referral-mirror-off-test";
+    const rowsIn = async () => new Map((await sdb.stateQuery(`SELECT id, body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1`, [`${DOC}.rows`])).rows.map((r) => [r.id, r.body.b]));
+    const mk = (mirror) => createReferralBook({ doc: createJsonRowsDocument({ name: DOC, parts: REFERRAL_BOOK_PARTS, mirror, log: () => {} }), log: quiet, maxEntries: 100_000, maxPerPayer: 100_000 });
+    // A process with the mirror on writes the book: two entries and a booked-payment mark.
+    const on = mk(true);
+    await on.ready;
+    const e1 = intentOf(), e2 = intentOf(), e3 = intentOf(), e4 = intentOf(), e5 = intentOf();
+    await on.intent(e1); await on.intent(e2);
+    await on.noteSold(e2.key, { tx: hex(32), payer: e2.payer, slug: "echo" });
+    const headOn = await sdb.documents.get(DOC);
+    // A process with the mirror off writes rows alone: a new entry, a mark, a charge, and it closes one.
+    const off = mk(false);
+    await off.ready;
+    const wroteOff = (await off.intent(e3)) && (await off.resolve(e3.key, { state: "charged-undelivered", tx: hex(32) }));
+    await off.noteSold(e3.key, { tx: hex(32), payer: e3.payer, slug: "echo" });
+    await off.resolve(e1.key, null);
+    const headOff = await sdb.documents.get(DOC);
+    const noStaleBody = !(ROWS_MARK in headOff.body) && REFERRAL_BOOK_PARTS.every((p) => !(p in headOff.body));
+    // A third process (either setting) reads and writes next; then each of the first two writes again.
+    const results = {};
+    for (const mirror of [true, false]) {
+      const next = mk(mirror);
+      await next.ready;
+      const seen = next.get(e3.key)?.state === "charged-undelivered" && next.get(e1.key) === null && !!next.soldMarks()[e3.key];
+      const e = mirror ? e4 : e5;
+      const took = await next.intent(e);
+      const rs = await rowsIn();
+      results[mirror ? "on" : "off"] = seen && took && rs.get(`entries:${e3.key}`)?.state === "charged-undelivered" && rs.has(`sold:${e3.key}`) && rs.has(`sold:${e2.key}`) && rs.has(`entries:${e2.key}`) && !rs.has(`entries:${e1.key}`) && rs.has(`entries:${e.key}`);
+    }
+    await on.ping(); await off.ping();
+    const same = on.size() === 4 && off.size() === 4 && on.get(e1.key) === null && off.get(e1.key) === null && on.get(e3.key)?.state === "charged-undelivered" && off.get(e4.key)?.state === "intent";
+    ok(headOn.body[ROWS_MARK] === headOn.version && wroteOff && noStaleBody && results.on && results.off && same, `after a write with the mirror on, a write of rows alone with the mirror off leaves no whole body in the head, and the next process's write (mirror on or off) keeps the entry, the charge and the mark it wrote and does not bring back the entry it closed (head clean: ${noStaleBody}; next with mirror: ${results.on}, without: ${results.off}; both copies agree: ${same})`);
+
+    // The same at the document itself, where a change made in place leaves the head's text as it was read,
+    // so the write after a read carries rows alone (the book's own head is written in another key order).
+    {
+      const NAME = "rows-mirror-off-test";
+      const itemsIn = async () => new Map((await sdb.stateQuery(`SELECT id, body FROM ${sdb.stateDbSchema()}.records WHERE collection = $1`, [`${NAME}.rows`])).rows.map((r) => [r.id, r.body.b]));
+      const docOn = createJsonRowsDocument({ name: NAME, parts: ["items"], mirror: true, log: () => {} });
+      await docOn.update(() => ({ items: { a: { n: 1 }, b: { n: 2 } }, note: "x" }));
+      const docOff = createJsonRowsDocument({ name: NAME, parts: ["items"], mirror: false, log: () => {} });
+      const w1 = await docOff.update((body) => { body.items.c = { n: 3 }; delete body.items.a; });
+      const w2 = await docOff.update((body) => { body.items.d = { n: 4 }; });
+      const headAfter = await sdb.documents.get(NAME);
+      const clean = !(ROWS_MARK in headAfter.body) && !("items" in headAfter.body) && headAfter.body.note === "x";
+      const third = createJsonRowsDocument({ name: NAME, parts: ["items"], mirror: false, log: () => {} });
+      const read3 = await third.load(null);
+      const w3 = await third.update((body) => { body.items.e = { n: 5 }; });
+      const w4 = await docOn.update((body) => { body.items.f = { n: 6 }; });
+      const w5 = await docOff.update((body) => { body.items.g = { n: 7 }; });
+      const items = await itemsIn();
+      const ids = [...items.keys()].sort().join(",");
+      ok(w1.ok && w2.ok && w3.ok && w4.ok && w5.ok && clean && Object.keys(read3.items).sort().join() === "b,c,d" && ids === "items:b,items:c,items:d,items:e,items:f,items:g" && Object.keys(w5.body.items).sort().join() === "b,c,d,e,f,g" && third.rowStats().folded === 0 && docOff.rowStats().headWrites === 2, `a document's write of rows alone with the mirror off, after a write that carried the mirror, rewrites the head without it, once for each such write (its own later writes carry rows alone): the next reader takes the rows, keeps what was added and does not bring back what was removed (rows: ${ids}; head clean: ${clean}; head writes with the mirror off: ${docOff.rowStats().headWrites})`);
+      const startDocs = Date.now() + 2500;
+      const runDoc = (mirror, tag) => new Promise((resolve) => {
+        const p = spawn(process.execPath, [fileURLToPath(import.meta.url), "--doc-worker", mirror, NAME, "150", String(startDocs), tag], { env: process.env, stdio: ["ignore", "pipe", "inherit"] });
+        let out = "";
+        p.stdout.on("data", (d) => { out += d; });
+        p.on("close", () => { try { resolve(childJson(out)); } catch { resolve({ kept: [], removed: [], failed: -1 }); } });
+      });
+      const [pa, pb] = await Promise.all([runDoc("on", "p"), runDoc("off", "q")]);
+      // (Then the mirror off alone: two more writers, and a reader that never saw the document.)
+      const [pc, pd] = await Promise.all([runDoc("off", "r"), runDoc("off", "s")]);
+      const fresh = await createJsonRowsDocument({ name: NAME, parts: ["items"], mirror: false, log: () => {} }).load(null);
+      const after = await itemsIn();
+      const all = [pa, pb, pc, pd];
+      const keptAll = all.flatMap((x) => x.kept), removedAll = all.flatMap((x) => x.removed);
+      const missing = keptAll.filter((k) => !after.has(`items:${k}`) || !fresh.items[k]).length;
+      const back = removedAll.filter((k) => after.has(`items:${k}`) || fresh.items[k]).length;
+      ok(all.every((x) => x.failed === 0) && keptAll.length === 400 && removedAll.length === 200 && missing === 0 && back === 0 && after.size === 6 + 400 && Object.keys(fresh.items).length === 406, `two processes changing one document at once, one with the mirror on and one with it off, then two with it off: no row either wrote is lost and none either removed returns (${keptAll.length} kept, ${missing} missing; ${removedAll.length} removed, ${back} back; ${after.size} rows)`);
+    }
+
+    // Two processes at once on one book, one with the mirror on and one with it off: no write of either is lost.
+    const startAt = Date.now() + 2500;
+    const run = (mirror) => new Promise((resolve) => {
+      const p = spawn(process.execPath, [fileURLToPath(import.meta.url), "--worker", "120", String(startAt), mirror, DOC], { env: process.env, stdio: ["ignore", "pipe", "inherit"] });
+      let out = "";
+      p.stdout.on("data", (d) => { out += d; });
+      p.on("close", () => { try { resolve(childJson(out)); } catch { resolve({ stood: 0, lost: -1, keys: [] }); } });
+    });
+    const [a, b] = await Promise.all([run("on"), run("off")]);
+    // (Then the mirror is off everywhere: a last process without it writes, and one more reads.)
+    const last = mk(false);
+    await last.ready;
+    const e6 = intentOf();
+    await last.intent(e6);
+    const reader = mk(false);
+    await reader.ready;
+    const rs = await rowsIn();
+    const landed = [...a.keys, ...b.keys].filter((k) => rs.get(`entries:${k}`)?.state === "charged-undelivered" && reader.get(k)?.state === "charged-undelivered").length;
+    ok(a.stood === 120 && b.stood === 120 && a.lost === 0 && b.lost === 0 && a.failed === 0 && b.failed === 0 && landed === 240 && reader.size() === 4 + 240 + 1 && rs.has(`sold:${e3.key}`), `two processes writing one book at once, one with the mirror on and one with it off, then the mirror off alone: every intent and charge of both stands in the rows and in a later reader's copy (${a.stood} + ${b.stood} stood, ${a.lost + b.lost} lost, ${landed} charged rows, ${reader.size()} entries)`);
   }
 
   // ---- two processes writing one book at once lose no write ----
