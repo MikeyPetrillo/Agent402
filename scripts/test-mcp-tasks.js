@@ -330,6 +330,12 @@ ok(readdirSync(STORE_DIR).length === before, "NO task is minted for a call that 
   const whoisBad = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
   const whoisBadText = String(whoisBad.result?.content?.[0]?.text || "");
   ok(whoisBad.result?.isError === true && /HTTP 503 - not charged \(settlement runs only after a successful handler\)/.test(whoisBadText) && whoisBadText.includes(PUSH_EXCEPTION), `a 5xx from a route whose 402 offers Tempo carries it too (${whoisBadText.slice(0, 160)})`);
+  // A 502 after a presented credential can be the route failing to read a
+  // settler's answer, so its line makes no "not charged" claim.
+  plan.whois = { delayMs: 0, res: jsonRes(502, { error: "upstream" }) };
+  const whois502 = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "whois", params: { domain: "example.com" } }, _meta: paidMeta });
+  const whois502Text = String(whois502.result?.content?.[0]?.text || "");
+  ok(whois502.result?.isError === true && /HTTP 502 - settlement normally runs only after a successful handler; check the paying wallet before paying again/.test(whois502Text) && !/not charged \(/.test(whois502Text), `a 502 after a presented credential says to check the wallet, not "not charged" (${whois502Text.slice(0, 160)})`);
   const usageBad = await rpc("tools/call", { name: "catalog.call", arguments: { slug: "my-usage", params: {} }, _meta: paidMeta });
   const usageBadText = String(usageBad.result?.content?.[0]?.text || "");
   ok(usageBad.result?.isError === true && /HTTP 400 - not charged: /.test(usageBadText) && !usageBadText.includes(PUSH_EXCEPTION) && !/Tempo/.test(usageBadText), `a 4xx from an identity-bound route names no Tempo transfer (${usageBadText.slice(0, 160)})`);

@@ -1161,7 +1161,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       }
       if (r.status >= 400) {
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
-        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? ` - not charged${pushClause(entry.def)}` : ` - not charged (settlement runs only after a successful handler)${pushClause(entry.def)}`}: ${detail}` }], isError: true };
+        return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? ` - not charged${pushClause(entry.def)}` : `${Boolean(credentialHeaderFromMeta(meta)) && r.status === 502 ? " - settlement normally runs only after a successful handler; check the paying wallet before paying again" : " - not charged (settlement runs only after a successful handler)"}${pushClause(entry.def)}`}: ${detail}` }], isError: true };
       }
       const receipt = receiptFromHeader(r.headers.get("payment-receipt"));
       const receiptMeta = receipt ? { [MCP_RECEIPT_META]: { ...receipt, ...(challengeIdFromMeta(meta) ? { challengeId: challengeIdFromMeta(meta) } : {}) } } : {};

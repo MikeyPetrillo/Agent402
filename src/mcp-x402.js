@@ -377,7 +377,7 @@ export function buildPaidRouteFailedResult({ label = "Agent402", status = 500, d
   const where = transactions.length ? ` Transaction${transactions.length > 1 ? "s" : ""} to watch: ${transactions.join(", ")}.` : "";
   return {
     isError: true,
-    content: [{ type: "text", text: `${label} HTTP ${code}${said} The route failed after this payment was presented; settlement runs only after a successful answer. Do not sign a new authorization for this call: to try again, start a new call.${where}` }],
+    content: [{ type: "text", text: `${label} HTTP ${code}${said} The route failed after this payment was presented. Settlement normally runs only after a successful answer, so check the paying wallet before paying again. Do not sign a new authorization for this call: to try again, start a new call.${where}` }],
   };
 }
 
