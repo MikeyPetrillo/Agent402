@@ -111,8 +111,8 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | [**market-brief**](https://agent402.tools/skills/market-brief) | $0.009 | Quick crypto snapshot: price for a coin, trending coins, and global market stats in one call. |
 | [**crypto-research**](https://agent402.tools/skills/crypto-research) | $0.054 | Live price, market structure, OHLC history, trending status, global context, and news for a coin. |
 | [**crypto-dossier**](https://agent402.tools/skills/crypto-dossier) | $0.041 | Everything about a coin: live price, 90-day history, trending status, market context, news + top article. |
-| [**defi-protocol-scanner**](https://agent402.tools/skills/defi-protocol-scanner) | $0.025 | Due-diligence a DeFi protocol: live token price, market context, protocol TVL across chains, and recent news. |
-| [**defi-dashboard**](https://agent402.tools/skills/defi-dashboard) | $0.014 | DeFi overview: total TVL, ETH price, Base gas, and global crypto stats. |
+| [**defi-protocol-scanner**](https://agent402.tools/skills/defi-protocol-scanner) | $0.031 | Due-diligence a DeFi protocol: live token price, market context, the token's supply and valuation profile, and recent news. |
+| [**defi-dashboard**](https://agent402.tools/skills/defi-dashboard) | $0.018 | DeFi overview: DeFi market cap and dominance, ETH price, Base gas, and global crypto stats. |
 | [**nft-portfolio**](https://agent402.tools/skills/nft-portfolio) | $0.005 | NFT + wallet snapshot: NFT holdings, native balance, and ETH price for an address. |
 | [**wallet-audit**](https://agent402.tools/skills/wallet-audit) | $0.005 | Full wallet review: balance, recent transactions, and metadata for a token the wallet holds. |
 | [**wallet-readiness**](https://agent402.tools/skills/wallet-readiness) | $0.008 | "Can this wallet pay right now?" USDC on Base + Solana, live Base gas, and an Onramp funding link. |

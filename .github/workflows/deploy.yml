@@ -2159,7 +2159,7 @@ jobs:
 
   test:
     # UPSTREAM AFFINITY, not just time. Balancing by duration alone put suites
-    # that call the SAME free rate-limited providers (CoinGecko, DefiLlama,
+    # that call the SAME free rate-limited providers (CoinGecko,
     # DexScreener, data.gov) into all three lanes. They had been serial in one
     # job; running them concurrently tripled the load on providers that limit by
     # IP, and eight tools failed on 504s in the first real run while both

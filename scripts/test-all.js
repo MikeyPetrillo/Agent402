@@ -81,12 +81,15 @@ const NETWORK = new Set([
   "/api/sanctions/wallet",
   "/api/sanctions/name",
   "/api/cve-lookup",  // cve-kit.js (NVD + EPSS + CISA KEV)
-  "/api/defi-yields", "/api/defi-yield-history", "/api/defi-protocols", "/api/defi-protocol", "/api/defi-chains", "/api/defi-chain-tvl-history", "/api/stablecoins", "/api/stablecoin-supply-history", "/api/defi-fees", "/api/defi-dex-volume",  // defi-kit.js
+  // crypto-screens-kit.js: keyless public market data (a shared per-IP limit);
+  // the two pool tools read endpoints that answer only to a key (503 without).
+  "/api/funding-screener", "/api/stablecoin-depeg-watch", "/api/exchange-spread", "/api/defi-screener", "/api/chain-board", "/api/dex-volume-board", "/api/dex-pool-health",
+  "/api/lending-rates",  // lending-rates-kit.js (contract reads over keyless public nodes)
   "/api/crypto-news", "/api/crypto-indicators", "/api/crypto-market-pulse",  // crypto-signals-kit.js
   "/api/site-map", "/api/site-crawl",  // crawl-kit.js
   "/api/perp-markets", "/api/perp-funding", "/api/perp-funding-screener", "/api/perp-open-interest", "/api/perp-klines", "/api/perp-orderbook", "/api/perp-basis",
   "/api/perp-dexs", "/api/perp-dex-markets", "/api/perp-dex-limits",
-  "/api/options-summary", "/api/crypto-options-chain", "/api/options-ticker", "/api/options-volume",
+  "/api/options-summary", "/api/crypto-options-chain", "/api/options-ticker",
   "/api/token-safety", "/api/sol-token-safety", "/api/sol-token-report", "/api/sol-token-holders", "/api/sol-token-pairs", "/api/sol-token-search", "/api/sol-trending", "/api/sol-price", "/api/sol-swap-quote", "/api/sol-token-lookup",
   "/api/x-search-recent", "/api/x-user", "/api/x-user-tweets", "/api/x-tweet", "/api/x-users-lookup",
   "/api/exa-search", "/api/exa-answer", "/api/exa-contents",
@@ -177,9 +180,8 @@ const NETWORK = new Set([
   "/api/options-chain", "/api/premarket-quote", "/api/stock-dividends",
   // Crypto-kit: CoinGecko public API — keyless, ~30 req/min from a single IP.
   // Tolerate transient 429/502/503/504 (rate limit + Cloudflare hiccups).
-  // crypto-orderbook rides Coinbase Exchange's public API (same lenient posture).
   "/api/crypto-price", "/api/crypto-market", "/api/crypto-history", "/api/crypto-trending", "/api/crypto-global",
-  "/api/crypto-orderbook", "/api/stablecoin-peg",
+  "/api/stablecoin-peg",
   // market-tick reads crypto-price and stock-quote in-process (listed only with MARKET_TICK=on).
   "/api/market/tick",
   // Network-kit: live DNS resolution against 1.1.1.1/8.8.8.8/9.9.9.9. Public
@@ -214,20 +216,20 @@ const NETWORK = new Set([
   // can 403→503 in CI), favicon fetch against a live site (favicon-grab).
   "/api/lei-lookup", "/api/wikidata-entity", "/api/gravatar-check",
   "/api/github-repo", "/api/favicon-grab",
-  // Price-feed-kit: keyless public upstreams (Pyth Hermes, CoinGecko, DeFiLlama).
+  // Price-feed-kit: a keyless public upstream (CoinGecko).
   // CoinGecko's free tier shares a per-IP ~30 rpm limit; tolerate 429/502/503/504.
-  "/api/price-coingecko", "/api/defi-tvl",
+  "/api/price-coingecko",
   // Dex-kit: dex-pair / dex-pool / dex-quote read chain-kit's RPC transport
-  // (Alchemy, then keyless public nodes). dex-top-pools hits DeFiLlama keylessly.
-  "/api/dex-pair", "/api/dex-pool", "/api/dex-quote", "/api/dex-top-pools",
+  // (Alchemy, then keyless public nodes).
+  "/api/dex-pair", "/api/dex-pool", "/api/dex-quote",
   // Prediction-market-kit: Kalshi's keyless public API. Per-IP rate-limited;
   // tolerate transient 429/502/503/504.
   "/api/kalshi-markets", "/api/kalshi-event", "/api/kalshi-live-data", "/api/kalshi-weather-index",
-  // MEV + L2 kit: Flashbots relay (keyless), DeFiLlama (keyless), and Alchemy
+  // MEV + L2 kit: Flashbots relay (keyless) and Alchemy
   // (503 without key). Tolerate transient upstream errors + 4xx from
   // placeholder example inputs (e.g. specific block-number lookups may miss).
   "/api/mev-recent-blocks", "/api/mev-builder-share", "/api/mev-block-payment",
-  "/api/l2-tvl", "/api/l2-gas-comparison",
+  "/api/l2-gas-comparison",
   // Onchain-identity-kit: keyless public APIs (ensideas, Warpcast, EAS
   // indexers). Tolerate transient upstream errors + 4xx from placeholder
   // example inputs (0x000…0 may return null/empty).

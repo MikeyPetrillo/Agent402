@@ -23,6 +23,26 @@
 
 /** Tools: /api/<slug>. `replacement` is a live catalog slug or null. */
 export const RETIRED_TOOLS = Object.freeze({
+  // 2026-11-16: the routes that read an open DeFi analytics source, and the
+  // exchange order book. Each names the live tool that answers the nearest
+  // question from market data or from the contracts themselves; pool yield
+  // and locked-value history, protocol fees and chain TVL have no live
+  // equivalent and name none.
+  "defi-yields": { retiredAt: "2026-11-16", replacement: "lending-rates" },
+  "defi-yield-history": { retiredAt: "2026-11-16", replacement: null },
+  "defi-protocols": { retiredAt: "2026-11-16", replacement: "defi-screener" },
+  "defi-protocol": { retiredAt: "2026-11-16", replacement: "coin-profile" },
+  "defi-chains": { retiredAt: "2026-11-16", replacement: "chain-board" },
+  "defi-chain-tvl-history": { retiredAt: "2026-11-16", replacement: null },
+  "stablecoins": { retiredAt: "2026-11-16", replacement: "stablecoin-depeg-watch" },
+  "stablecoin-supply-history": { retiredAt: "2026-11-16", replacement: "stablecoin-peg" },
+  "defi-fees": { retiredAt: "2026-11-16", replacement: null },
+  "defi-dex-volume": { retiredAt: "2026-11-16", replacement: "dex-volume-board" },
+  "defi-tvl": { retiredAt: "2026-11-16", replacement: "global-defi" },
+  "dex-top-pools": { retiredAt: "2026-11-16", replacement: "dex-pool-health" },
+  "l2-tvl": { retiredAt: "2026-11-16", replacement: "l2-gas-comparison" },
+  "options-volume": { retiredAt: "2026-11-16", replacement: "options-summary" },
+  "crypto-orderbook": { retiredAt: "2026-11-16", replacement: "perp-orderbook" },
   // 2026-09-24: the Polymarket tools. The nearest live question is a Kalshi
   // read; a Kalshi market is a different venue, so each names the closest tool.
   "polymarket-search": { retiredAt: "2026-09-24", replacement: "kalshi-markets" },

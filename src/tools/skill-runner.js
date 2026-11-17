@@ -1252,14 +1252,14 @@ export const PACK_STEPS = {
     ],
   },
 
-  // DeFi protocol scanner: price, market scale, real usage (TVL), news.
+  // DeFi protocol scanner: price, market scale, token fundamentals, news.
   // Independent reads, so fan out.
   "defi-protocol-scanner": {
     mode: "fanout",
     steps: [
       { slug: "crypto-price",  mapInput: (a) => ({ coins: a.protocol, currency: "usd" }) },
       { slug: "crypto-market", mapInput: () => ({ limit: 10, currency: "usd" }) },
-      { slug: "defi-tvl",      mapInput: (a) => ({ protocol: a.protocol }) },
+      { slug: "coin-profile",  mapInput: (a) => ({ coin: a.protocol, currency: "usd" }) },
       { slug: "search",        mapInput: (a) => ({ q: `${a.protocol} defi protocol audit security incident`, count: 5 }) },
     ],
   },
@@ -1334,12 +1334,11 @@ export const PACK_STEPS = {
     ],
   },
 
-  // DeFi dashboard: TVL + ETH price + Base gas + global stats.
-  // defi-tvl requires a protocol slug — "aave" as the default reference protocol.
+  // DeFi dashboard: DeFi market cap and dominance + ETH price + Base gas + global stats.
   "defi-dashboard": {
     mode: "fanout",
     steps: [
-      { slug: "defi-tvl",      mapInput: () => ({ protocol: "aave" }) },
+      { slug: "global-defi",   mapInput: () => ({}) },
       { slug: "crypto-price",  mapInput: () => ({ coins: "ETH", currency: "usd" }) },
       { slug: "gas-snapshot",  mapInput: () => ({ network: "base" }) },
       { slug: "crypto-global", mapInput: () => ({ currency: "usd" }) },

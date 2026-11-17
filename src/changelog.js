@@ -8,6 +8,15 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "Computed market answers replace the DeFi analytics routes",
+    items: [
+      "Tools: Eight new tools answer with figures computed per call: funding-screener (one coin's perpetual funding and basis across every listed venue, with dispersion and annualized carry), stablecoin-depeg-watch (every USD stablecoin above a size floor, its deviation now, over 24 hours and over 7 days), exchange-spread (one coin's price on each venue against the cross-venue median), dex-pool-health (one pool's liquidity, turnover, trade sizes and wallet mix, with a price-impact estimate), defi-screener, dex-volume-board, chain-board, and lending-rates (Aave v3 and Compound v3 supply and borrow rates read from the lending contracts on five networks). The seven market-data tools carry the CoinGecko credit in every answer; lending-rates reads on-chain state only. dex-pool-health and dex-volume-board answer on a deployment that holds a market-data key.",
+      "Tools: Fifteen routes are retired and answer 410 Gone with a Sunset date, naming the replacement where one exists: defi-yields (lending-rates), defi-protocols (defi-screener), defi-protocol (coin-profile), defi-chains (chain-board), stablecoins (stablecoin-depeg-watch), stablecoin-supply-history (stablecoin-peg), defi-dex-volume (dex-volume-board), defi-tvl (global-defi), dex-top-pools (dex-pool-health), l2-tvl (l2-gas-comparison), options-volume (options-summary) and crypto-orderbook (perp-orderbook); defi-yield-history, defi-chain-tvl-history and defi-fees name none.",
+      "Skill packs: defi-protocol-scanner reads the token's supply and valuation profile (coin-profile) where it read locked value, and defi-dashboard reads the DeFi market cap and dominance (global-defi); each pack's price follows its parts.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "CoinGecko answers carry the source credit",
     items: [
       `Tools: Every answer from a tool that serves CoinGecko data carries a credit field, "Data provided by CoinGecko" with a link to the CoinGecko API page, and each such tool's description ends with the same linked sentence. A market tick answer that includes a coin figure carries it too, and a skill pack that runs a CoinGecko tool prints it once, on the pack's answer.`,

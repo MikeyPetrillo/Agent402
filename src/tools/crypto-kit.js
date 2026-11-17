@@ -126,9 +126,8 @@ async function jsonGet(url, host = "CoinGecko") {
   // CoinGecko Demo key (env-gated; keyless works too, just worse): keyless
   // requests are rate-limited PER IP — and Railway egress IPs are shared, so
   // the effective quota is whatever other tenants left. A key moves metering
-  // to our own quota. Gated to CoinGecko hosts only: this shared
-  // helper also hits Coinbase Exchange (crypto-orderbook), and the key must
-  // never ride a request to another host.
+  // to our own quota. Gated to CoinGecko hosts only: the key must never ride
+  // a request to another host.
   const isCg = isCoinGeckoHost(safeUrl.hostname);
   if (!isCg) return (await jsonLoad(safeUrl, host, { isCg })).data;
   const { entry } = await cgCache.through(safeUrl.toString(), CG_CACHE_TTL_MS, () => jsonLoad(safeUrl, host, { isCg }));
@@ -472,94 +471,6 @@ export const CRYPTO_TOOLS = [
   },
 
   {
-    route: "GET /api/crypto-orderbook",
-    name: "Crypto order book",
-    slug: "crypto-orderbook",
-    category: "crypto",
-    price: "$0.001",
-    description:
-      "L2 order-book snapshot for a spot pair: best bid/ask, mid price, spread (absolute + %), and the top N aggregated price levels per side (default 25, max 100). Pairs use BASE-QUOTE format (BTC-USD, ETH-USD, SOL-USDC). Read from a U.S. spot exchange's public market-data API - keyless; coverage is that exchange's listed markets.",
-    tags: ["crypto", "orderbook", "depth", "spread", "trading", "market-data"],
-    discovery: {
-      input: { pair: "BTC-USD" },
-      inputSchema: {
-        properties: {
-          pair: { type: "string", description: "Spot pair as BASE-QUOTE (e.g. BTC-USD, ETH-USD, SOL-USDC)" },
-          depth: { type: "number", description: "Price levels per side to return (1-100, default 25)" },
-        },
-        required: ["pair"],
-      },
-      output: {
-        example: {
-          pair: "BTC-USD",
-          time: "2026-07-14T02:40:51Z",
-          sequence: 132601080491,
-          bestBid: 62489.29,
-          bestAsk: 62490.01,
-          midPrice: 62489.65,
-          spread: 0.72,
-          spreadPct: 0.0012,
-          bids: [{ price: 62489.29, size: 0.81109777, orders: 8 }],
-          asks: [{ price: 62490.01, size: 0.5, orders: 3 }],
-          depth: 1,
-          totalBidLevels: 15653,
-          totalAskLevels: 27473,
-        },
-      },
-    },
-    handler: async (i) => {
-      if (typeof i.pair !== "string" || !i.pair.trim()) throw bad('"pair" is required (e.g. "BTC-USD")');
-      const pair = i.pair.trim().toUpperCase().replace("/", "-");
-      if (!/^[A-Z0-9]{2,12}-[A-Z0-9]{2,12}$/.test(pair)) throw bad('"pair" must be BASE-QUOTE (e.g. "BTC-USD", "ETH-USDC")');
-      let depth = 25;
-      if (i.depth != null && i.depth !== "") {
-        depth = Number.isFinite(i.depth) ? Math.floor(i.depth) : parseInt(String(i.depth), 10);
-        if (!Number.isFinite(depth) || depth < 1 || depth > 100) throw bad('"depth" must be an integer 1-100');
-      }
-      // level=2 returns the FULL aggregated book (tens of thousands of levels
-      // for BTC-USD) — we slice server-side so agents get a bounded payload.
-      const data = await jsonGet(`https://api.exchange.coinbase.com/products/${encodeURIComponent(pair)}/book?level=2`, "Coinbase Exchange");
-      if (!Array.isArray(data?.bids) || !Array.isArray(data?.asks)) throw bad("Coinbase Exchange returned unexpected shape for the order book", 502);
-      // Levels arrive as [price, size, numOrders] string triples, best-first.
-      //
-      // The ELEMENTS are checked, not just the enclosing arrays. Destructuring
-      // a level that is not an array (null, or an object shape) throws a
-      // TypeError, which leaves the handler as an unmapped 500 - i.e. an
-      // upstream sending something unexpected gets reported as OUR server
-      // erroring. Every other upstream condition in this kit maps to 502/503/
-      // 504/422; this was the one path that did not, and a 500 both misreports
-      // whose fault it is and is the shape a caller cannot act on.
-      const mapLevel = (lvl) => {
-        if (!Array.isArray(lvl)) throw bad("Coinbase Exchange returned an unexpected order-book level shape", 502);
-        const [price, size, orders] = lvl;
-        return { price: +price, size: +size, orders: orders ?? null };
-      };
-      const bids = data.bids.slice(0, depth).map(mapLevel);
-      const asks = data.asks.slice(0, depth).map(mapLevel);
-      const bestBid = bids[0]?.price ?? null;
-      const bestAsk = asks[0]?.price ?? null;
-      const mid = bestBid != null && bestAsk != null ? +((bestBid + bestAsk) / 2).toFixed(8) : null;
-      const spread = bestBid != null && bestAsk != null ? +(bestAsk - bestBid).toFixed(8) : null;
-      const spreadPct = spread != null && mid ? +((spread / mid) * 100).toFixed(6) : null;
-      return {
-        pair,
-        time: data.time ?? null,
-        sequence: data.sequence ?? null,
-        bestBid,
-        bestAsk,
-        midPrice: mid,
-        spread,
-        spreadPct,
-        bids,
-        asks,
-        depth,
-        totalBidLevels: data.bids.length,
-        totalAskLevels: data.asks.length,
-      };
-    },
-  },
-
-  {
     route: "GET /api/stablecoin-peg",
     name: "Stablecoin peg monitor",
     slug: "stablecoin-peg",
@@ -629,8 +540,8 @@ export const CRYPTO_TOOLS = [
 ];
 // The CoinGecko-backed tools carry the attribution its terms require (see
 // COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
-// `credit` field of every answer; crypto-orderbook reads an exchange.
-for (const t of CRYPTO_TOOLS) if (t.slug !== "crypto-orderbook") creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
+// `credit` field of every answer.
+for (const t of CRYPTO_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(CRYPTO_TOOLS, PAYMENT_WINDOW_BUDGET_MS);

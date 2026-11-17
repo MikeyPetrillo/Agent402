@@ -47,7 +47,7 @@ const RETRY_BACKOFF_MS = 1500;
 // text plus the fetch time (src/tools/coingecko-cache.js shares it across
 // replicas with the same TTL); the parsed JSON is memoized on the entry, and
 // handlers project from it every time, never mutate it.
-const TTL = Object.freeze({ price: 60_000, list: 300_000, coinList: 600_000 });
+export const TTL = Object.freeze({ price: 60_000, list: 300_000, coinList: 600_000 });
 const MAX_ENTRIES = 256;
 const cache = createCgCache("markets", { max: MAX_ENTRIES, keepParsed: true });
 
@@ -78,21 +78,26 @@ import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.
 import { createCgCache } from "./coingecko-cache.js";
 export { resetCgRateLimit };
 
-async function cgGet(path, params, ttlMs) {
+// `reduce` (optional): { name, fn }. The upstream body is passed through fn
+// once, when it is fetched, and only the reduced value is cached (under its
+// own key, so the same URL read whole elsewhere keeps its own entry): a large
+// document a tool computes over is kept as the few fields it reads.
+export async function cgGet(path, params, ttlMs, reduce = null) {
   const url = new URL(cgBase() + path);
   for (const [k, v] of Object.entries(params || {})) {
     if (v === undefined || v === null || v === "") continue;
     url.searchParams.set(k, String(v));
   }
   const key = url.toString();
-  const { entry, cached } = await cache.through(key, ttlMs, () => cgLoad(key, path));
+  const cacheKey = reduce ? `${key}#${reduce.name}` : key;
+  const { entry, cached } = await cache.through(cacheKey, ttlMs, () => cgLoad(key, path, reduce));
   entry.data ??= JSON.parse(entry.text);
   return { data: entry.data, fetchedAt: entry.fetchedAt, cached };
 }
 
 // One upstream read for cgGet: the body text of a 200 that parses as JSON, or
 // a thrown refusal (never cached).
-async function cgLoad(key, path) {
+async function cgLoad(key, path, reduce = null) {
   const why = await cgTake(Date.now());
   if (why) throw cgRefusal(why, "Market data");
   // The ctx of the read that answered is kept, so its body read runs under
@@ -133,6 +138,10 @@ async function cgLoad(key, path) {
   let text, data;
   try { text = await bodyUnderDeadline(res.text(), ctxOf.get(res) || {}); data = JSON.parse(text); }
   catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned non-JSON", 502); }
+  if (reduce) {
+    try { data = reduce.fn(data); text = JSON.stringify(data); }
+    catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned an unexpected shape", 502); }
+  }
   return { text, data };
 }
 
@@ -678,7 +687,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Global DeFi snapshot: DeFi market cap (USD), ETH market cap, DeFi-to-ETH ratio, 24h DeFi trading volume, DeFi dominance % of the whole crypto market, and the top DeFi coin with its share of DeFi. The DeFi companion of crypto-global (whole-market caps and BTC/ETH dominance) and of defi-tvl (locked value, a different measure). Cached in-process for 5 minutes.",
+      "Global DeFi snapshot: DeFi market cap (USD), ETH market cap, DeFi-to-ETH ratio, 24h DeFi trading volume, DeFi dominance % of the whole crypto market, and the top DeFi coin with its share of DeFi. The DeFi companion of crypto-global (whole-market caps and BTC/ETH dominance); this is token market value, not locked value. Cached in-process for 5 minutes.",
     tags: ["crypto", "defi", "global", "dominance", "market-cap", "macro"],
     discovery: {
       input: {},

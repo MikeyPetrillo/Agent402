@@ -28,7 +28,7 @@ export const PACK_PRICES = {
   "earnings-deep-dive": 0.033, // 4 tools, parts $0.036
   "options-analytics": 0.017, // 4 tools, parts $0.018
   "fixed-income-desk": 0.017, // 5 tools, parts $0.018
-  "defi-protocol-scanner": 0.025, // 4 tools, parts $0.027
+  "defi-protocol-scanner": 0.031, // 4 tools, parts $0.034
   "security-audit": 0.017, // 7 tools, parts $0.018
   "email-deliverability": 0.009, // 6 tools, parts $0.009
   "market-brief": 0.009, // 3 tools, parts $0.01
@@ -74,7 +74,7 @@ export const PACK_PRICES = {
   "yield-dashboard": 0.014, // 3 tools, parts $0.015
   "inflation-check": 0.018, // 4 tools, parts $0.02
   "fx-monitor": 0.009, // 3 tools, parts $0.009
-  "defi-dashboard": 0.014, // 4 tools, parts $0.015
+  "defi-dashboard": 0.018, // 4 tools, parts $0.019
   "nft-portfolio": 0.005, // 3 tools, parts $0.005
   "wallet-audit": 0.005, // 3 tools, parts $0.005
   "gas-optimizer": 0.007, // 3 tools, parts $0.007
@@ -194,21 +194,21 @@ export const SKILL_PACKS = [
     slug: "defi-protocol-scanner",
     title: "DeFi protocol scanner",
     tagline:
-      "Due-diligence a DeFi protocol in one workflow: live token price, market context, protocol TVL across chains, and recent news - the on-chain and off-chain picture together.",
+      "Due-diligence a DeFi protocol in one workflow: live token price, market context, the token's fundamentals (supply, valuation, all-time high and low, links), and recent news - the market and off-chain picture together.",
     useCase:
-      "Evaluating a DeFi protocol or its token before allocating - you want the token price, its scale in the broader market, the protocol's total value locked (the real usage signal), and the latest news, without hopping between explorers and aggregators.",
+      "Evaluating a DeFi protocol or its token before allocating - you want the token price, its scale in the broader market, the token's supply and valuation profile, and the latest news, without hopping between explorers and aggregators.",
     promptArgs: [
-      { name: "protocol", description: "DeFi protocol slug (e.g. aave, uniswap)", required: true, substitute: "aave" },
+      { name: "protocol", description: "The protocol token's coin id (e.g. aave, uniswap)", required: true, substitute: "aave" },
     ],
-    toolSlugs: ["crypto-price", "crypto-market", "defi-tvl", "search"],
+    toolSlugs: ["crypto-price", "crypto-market", "coin-profile", "search"],
     workflow: [
       "Get the token's live price with crypto-price - the current quote and 24h move.",
       "Pull crypto-market for market cap, volume, and rank so you know the token's scale and liquidity.",
-      "Get the protocol's total value locked from defi-tvl - headline TVL across chains is the clearest real-usage signal for a DeFi protocol.",
-      "Search the web for recent news, audits, or incidents the price and TVL don't yet reflect.",
+      "Read the token's fundamentals from coin-profile - circulating, total and max supply, fully diluted value, all-time high and low, categories and project links.",
+      "Search the web for recent news, audits, or incidents the price and the profile don't yet reflect.",
     ],
     claudePrompt:
-      "Scan the aave DeFi protocol using Agent402's defi-protocol-scanner skill pack. (1) Get the token's live price, (2) pull market cap and volume, (3) get the protocol TVL across chains, (4) search for recent news or security incidents. Summarize as a due-diligence note: price and momentum, market scale, real usage (TVL), and any risk flags from the news.",
+      "Scan the aave DeFi protocol using Agent402's defi-protocol-scanner skill pack. (1) Get the token's live price, (2) pull market cap and volume, (3) read the token's supply and valuation profile, (4) search for recent news or security incidents. Summarize as a due-diligence note: price and momentum, market scale, token fundamentals, and any risk flags from the news.",
   },
   {
     slug: "security-audit",
@@ -1756,24 +1756,24 @@ export const SKILL_PACKS = [
     slug: "defi-dashboard",
     title: "DeFi dashboard",
     tagline:
-      "DeFi market overview: total TVL, ETH price, Base gas, and global crypto stats in one call.",
+      "DeFi market overview: DeFi market cap and dominance, ETH price, Base gas, and global crypto stats in one call.",
     useCase:
-      "Quick DeFi health check - TVL trends, ETH price context, gas costs, and market-wide metrics.",
+      "Quick DeFi health check - DeFi market cap, its share of the whole market and 24h volume, ETH price context, gas costs, and market-wide metrics.",
     promptArgs: [],
     toolSlugs: [
-      "defi-tvl",
+      "global-defi",
       "crypto-price",
       "gas-snapshot",
       "crypto-global",
     ],
     workflow: [
-      "Pull total DeFi TVL across all chains.",
+      "Pull the DeFi market cap, its dominance of the whole market and 24h DeFi volume.",
       "Get the live ETH price as the reference asset for DeFi.",
       "Check Base gas for current transaction costs.",
       "Pull global crypto market stats for total cap and dominance context.",
     ],
     claudePrompt:
-      "Give me a DeFi market overview using Agent402's defi-dashboard skill pack. Get (1) total DeFi TVL, (2) ETH price, (3) Base gas tiers, (4) global crypto stats. Summarize the health of DeFi right now.",
+      "Give me a DeFi market overview using Agent402's defi-dashboard skill pack. Get (1) DeFi market cap, dominance and 24h volume, (2) ETH price, (3) Base gas tiers, (4) global crypto stats. Summarize the health of DeFi right now.",
   },
 
   {

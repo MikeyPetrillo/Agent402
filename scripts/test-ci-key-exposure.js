@@ -69,8 +69,6 @@ ok(SAMPLED.size > 10, `read the sampled CoinGecko family from source (${SAMPLED.
 // outbound host, and carries that host as its reason. A future entry must do
 // the same: "it looked fine" is not a reason.
 const NOT_REACHED = new Map([
-  ["crypto-orderbook", "CoinGecko: calls api.exchange.coinbase.com, verified in the handler"],
-  ["defi-tvl", "CoinGecko: calls api.llama.fi, verified in the handler - and test-non-metered already asserts !COINGECKO_SLUGS.has(\"defi-tvl\")"],
 ]);
 const bounded = (slug) => METERED.has(slug) || SAMPLED.has(slug) || NOT_REACHED.has(slug);
 

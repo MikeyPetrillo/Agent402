@@ -218,14 +218,15 @@ export const WALLET_ONLY_SLUGS = new Set([
   "sanctions-wallet",
   "sanctions-name",
   "cve-lookup",  // cve-kit.js (egress: NVD, EPSS, CISA KEV)
-  "defi-yields", "defi-yield-history", "defi-protocols", "defi-protocol", "defi-chains", "defi-chain-tvl-history", "stablecoins", "stablecoin-supply-history", "defi-fees", "defi-dex-volume",  // defi-kit.js (egress)
+  "funding-screener", "stablecoin-depeg-watch", "exchange-spread", "defi-screener", "chain-board", "dex-volume-board", "dex-pool-health",  // crypto-screens-kit.js (egress, keyed plan budget)
+  "lending-rates",  // lending-rates-kit.js (egress: contract reads through chain-kit's transport)
   "crypto-news", "crypto-indicators", "crypto-market-pulse",  // crypto-signals-kit.js (egress)
   "site-map", "site-crawl",  // crawl-kit.js (egress)
   "page-change",  // page-change-kit.js (one fetch of a caller URL: egress)
-  // derivatives-kit (Hyperliquid/Deribit/DefiLlama egress), x-data-kit (X API), b2b-enrich-kit (Hunter/Apollo) - 2026-08-22
+  // derivatives-kit (Hyperliquid/Deribit egress), x-data-kit (X API), b2b-enrich-kit (Hunter/Apollo) - 2026-08-22
   "perp-markets", "perp-funding", "perp-funding-screener", "perp-open-interest", "perp-klines", "perp-orderbook", "perp-basis",
   "perp-dexs", "perp-dex-markets", "perp-dex-limits",  // HIP-3 builder-deployed perp dexs (Hyperliquid info egress) - 2026-09-18
-  "options-summary", "crypto-options-chain", "options-ticker", "options-volume",
+  "options-summary", "crypto-options-chain", "options-ticker",
   "sol-token-safety", "sol-token-report", "sol-token-holders", "sol-token-pairs", "sol-token-search", "sol-trending", "sol-price", "sol-swap-quote", "sol-token-lookup",
   "x-search-recent", "x-user", "x-user-tweets", "x-tweet", "x-users-lookup",
   // Exa: a metered upstream quota, never PoW-eligible.
@@ -266,7 +267,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "company-financials",
   "stock-quote", "stock-history",
   "crypto-price", "crypto-market", "crypto-history", "crypto-trending", "crypto-global",
-  "crypto-orderbook", "stablecoin-peg",
+  "stablecoin-peg",
   "market-tick",  // calls crypto-price + stock-quote in-process (both wallet-only); listed only with MARKET_TICK=on
   // Composite research tools fan out to multiple paid upstreams; PoW would
   // turn 1 free request into 5+ paid roundtrips. Wallet-only.
@@ -351,23 +352,20 @@ export const WALLET_ONLY_SLUGS = new Set([
   // arbitrary caller URLs (unshorten-url). All egress → wallet-only.
   // (search-videos rides with the other Brave routes above.)
   "archive-snapshot", "feed-parse", "unshorten-url",
-  // Price-feed-kit: keyless public upstreams (Pyth Hermes, CoinGecko, DeFiLlama)
-  // but the rate limits are shared per-IP. PoW would let one client exhaust the
+  // Price-feed-kit: a public upstream whose keyless rate limit is shared per-IP. PoW would let one client exhaust the
   // shared quota for every other caller.
-  "price-coingecko", "defi-tvl",
+  "price-coingecko",
   // Dex-kit: 3 on-chain RPC readers (dex-pair, dex-pool, dex-quote read
-  // through chain-kit's transport and share its quota) and 1 DeFiLlama-backed (dex-top-pools
-  // shares the per-IP quota with defi-tvl). All wallet-only for the same
-  // reasons as their underlying upstreams.
-  "dex-pair", "dex-pool", "dex-quote", "dex-top-pools",
+  // through chain-kit's transport and share its quota). All wallet-only for
+  // the same reasons as their underlying upstream.
+  "dex-pair", "dex-pool", "dex-quote",
   // Prediction-market-kit: Kalshi. Keyless but external HTTP; PoW would let
   // one client farm the per-IP rate limits we share with everyone else.
   "kalshi-markets", "kalshi-event", "kalshi-live-data", "kalshi-weather-index",
-  // MEV + L2 kit: Flashbots relay (keyless, per-IP rate-limited), DeFiLlama
-  // (per-IP shared with defi-tvl), and Alchemy (compute-unit quota shared with
-  // chain-kit/dex-kit). All wallet-only for the same reasons.
+  // MEV + L2 kit: Flashbots relay (keyless, per-IP rate-limited) and Alchemy
+  // (compute-unit quota shared with chain-kit/dex-kit). All wallet-only for the same reasons.
   "mev-recent-blocks", "mev-builder-share", "mev-block-payment",
-  "l2-tvl", "l2-gas-comparison",
+  "l2-gas-comparison",
   // Onchain-identity-kit: ensideas (keyless), Neynar API (NEYNAR_API_KEY),
   // EAS GraphQL indexers (keyless). All external HTTP; wallet-only for the
   // same reasons as the other crypto kits.
@@ -385,7 +383,7 @@ export const WALLET_ONLY_SLUGS = new Set([
   "image-ocr",
   // Skill packs (bundled execution endpoints) — premium + standard tiers
   // orchestrate paid-upstream tools (EDGAR / FRED / Alchemy / Brave /
-  // Databento / CoinGecko / DefiLlama / DNS resolvers / Chromium). PoW would
+  // Databento / CoinGecko / DNS resolvers / Chromium). PoW would
   // turn one free request into N paid sub-calls. Light-tier packs that
   // call at least one wallet-only tool must also be listed here — the
   // skill runner calls handlers in-process, bypassing the route paywall.
