@@ -93,5 +93,35 @@ ok(!html.includes("—"), "no em dashes anywhere in the page copy");
   ok(!/curl -i https:\/\/agent402\.tools\/api\/search \\\s+-d/.test(html), "the 402 snippet calls the search route with GET, its catalog method");
 }
 
+// --- the tool search reads weakMatches (run for real in jsdom) ---------------
+// /api/find marks every row weak when its top row may not do the task (word
+// matches only). The page labels the rows closest matches and never claims no
+// tool does it; with an indexed seller that does it (routeAcross), it links
+// the seller search after the rows.
+{
+  const { JSDOM } = await import("jsdom");
+  const run = async (answer) => {
+    const dom = new JSDOM(html.replace('<script src="/js/catalog-search.js"></script>', ""), { runScripts: "outside-only", url: "https://agent402.tools/tools" });
+    dom.window.fetch = async () => ({ ok: true, json: async () => answer });
+    dom.window.eval(catalogSearchScript);
+    const s = dom.window.document.getElementById("cat-search");
+    s.value = "book a flight";
+    s.dispatchEvent(new dom.window.Event("input"));
+    await new Promise((r) => setTimeout(r, 400));
+    return dom.window.document.getElementById("cat-results");
+  };
+  const row = { slug: "orderbook", name: "Order book", route: "POST /api/orderbook", description: "Order book depth", price: "$0.01" };
+  const strong = await run({ results: [row], packs: [] });
+  ok(strong.style.display === "block" && strong.querySelector('a[href="/tools/orderbook"]'), "control: a strong answer lists its tool rows");
+  const weak = await run({ results: [{ ...row, weak: true }], packs: [], weakMatches: true, routeAcross: "https://agent402.tools/api/route?q=book%20a%20flight&include=external" });
+  ok(weak.style.display === "block" && weak.querySelector('a[href="/tools/orderbook"]') && /closest matches for "book a flight"/.test(weak.textContent) && !/tools matching/.test(weak.textContent), `weakMatches: the rows are listed under a closest-matches label ("${weak.textContent}")`);
+  ok(!/no tool/i.test(weak.textContent), "weakMatches alone never claims that no tool does the task");
+  ok(/tools matching "book a flight"/.test(strong.textContent) && !/closest matches/.test(strong.textContent), "control: a strong answer keeps the matching label");
+  ok(weak.querySelector('a[href="/marketplace/tools?q=book%20a%20flight"]'), "weakMatches with routeAcross: links the indexed sellers' search for the same words");
+  const miss = await run({ results: [{ ...row, weak: true }], packs: [], weakMatches: true });
+  ok(miss.querySelector('a[href="/tools/orderbook"]') && !miss.querySelector('a[href^="/marketplace/"]'), "weakMatches with no seller: the closest rows and no seller link");
+  ok(!strong.querySelector('a[href^="/marketplace/"]'), "control: a strong answer carries no seller link");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

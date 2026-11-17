@@ -9,6 +9,10 @@
 t node scripts/test-router-sybil.js
 # Data-kit tests (barcode-lookup, fx-rate, weather-forecast — live keyless APIs)
 t node scripts/test-data-kit.js
+# The sweeps' server answers examples naming its own /samples/ and /fixtures/ files from itself, never production (offline)
+t node scripts/test-own-examples-preload.js
+# The sweeps wait out the server's load-shed answer as it asks and judge every other 503 as it is (offline, loopback)
+t node scripts/test-shed-answer.js
 # Index self-serve registration tests (offline)
 t node scripts/test-index-register.js
 # Path-scoped sellers: an app under a prefix on a shared host (offline, crawl seam)

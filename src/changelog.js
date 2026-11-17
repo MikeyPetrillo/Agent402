@@ -9,6 +9,21 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 
 const ENTRIES = [
   {
+    date: "2026-11-17",
+    title: "Live in the header, sample reports served whole",
+    items: [
+      "Site: The header bar carries Live, the live view of x402 and MPP payments as they settle, after Status at every desktop width; the tap menu keeps it, and the Marketplace menu no longer repeats it.",
+      "Site: With no theme chosen, the site follows the device's dark setting; a choice made with the theme toggle is kept and wins.",
+      "Site: Each header menu tells assistive technology whether it is open, Escape closes an open menu with focus kept on its trigger, and the header is named as the main navigation.",
+      "Site: Sample reports are served as finished pages: the report arrives with the page and reads with no script; its downloads and buy box work as before.",
+      "Site: When /api/find marks its rows as word matches only, the /tools search lists them as closest matches and, when an indexed seller does the task, links the seller directory's search for the same words.",
+      "Site: Footer link rows wrap into even lines, and the current page's name in a breadcrumb sits on the line of its links.",
+      "Tools: seller-dossier names each route's delivery record responseDelivery, as the index's rows do; ourPaidCalls stays beside it with the same value and is deprecated. Its delivery summary says the count includes our router's unpaid non-answers, and its description and flags name the routes our router called rather than routes it paid.",
+      "Surfaces: /openapi.json names the service Agent402.tools in its title; the tagline moves into its description.",
+      "Surfaces: /api/find reads a query that asks to convert a currency (\"convert currency\", \"convert usd to eur\") as a currency conversion and ranks fx-rate first as a strong match; inside a conversion, currency codes and names count as values, not as the task.",
+    ],
+  },
+  {
     date: "2026-11-16",
     title: "Price reads keep their weekly clock, and the router never uses up a seller's crawl",
     items: [

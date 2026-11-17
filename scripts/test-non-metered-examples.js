@@ -525,7 +525,9 @@ async function boot() {
   };
   for (const k of strip) delete env[k];
 
-  srv = spawn("node", ["src/server.js"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
+  // Examples that fetch this server's own /samples/ and /fixtures/ files are
+  // answered by this server, never production (the CI boot loads the same).
+  srv = spawn("node", ["--import", "./scripts/lib/own-examples-preload.js", "src/server.js"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
   srv.stdout.on("data", (d) => { srvLog += d; if (srvLog.length > 200_000) srvLog = srvLog.slice(-100_000); });
   srv.stderr.on("data", (d) => { srvLog += d; if (srvLog.length > 200_000) srvLog = srvLog.slice(-100_000); });
   for (let i = 0; i < 120; i++) {

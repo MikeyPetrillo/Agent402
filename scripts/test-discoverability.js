@@ -27,6 +27,17 @@
 // Natural-language ranking is a softer property and is covered by
 // scripts/test-find.js; this one is about REACHABILITY, and a tool that cannot
 // be reached by its own name is unreachable by anything.
+//
+// Load shedding: every read here is a free request, which the server refuses
+// with its load-shed answer while its event loop is saturated (src/load-shed.js).
+// This suite's own burst did that on a slow runner (run 43828629618: every
+// page and find after the first 216 tools, and every category page after
+// them, read the lag gate's 503). So the burst is kept small, and a shed
+// answer is waited out as it asks (scripts/lib/shed-answer.js, bounded); a
+// read still shed at the bound fails with that named, and any other non-200
+// fails as before.
+import { fetchHonoringShed } from "./lib/shed-answer.js";
+
 const TARGET = (process.env.TARGET_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
 
 let passed = 0, failed = 0;
@@ -34,7 +45,15 @@ const ok = (cond, msg) => {
   if (cond) { passed++; console.log(`ok - ${msg}`); }
   else { failed++; console.error(`FAIL - ${msg}`); }
 };
-const get = async (p) => (await fetch(`${TARGET}${p}`)).text();
+let shedWaits = 0, stillShed = 0;
+const read = async (p) => {
+  const r = await fetchHonoringShed(`${TARGET}${p}`);
+  shedWaits += r.shed;
+  if (r.stillShed) stillShed++;
+  return r;
+};
+const statusOf = (r) => `${r.res.status}${r.stillShed ? " (still shed at the bound)" : ""}`;
+const get = async (p) => (await read(p)).text;
 
 const pricing = JSON.parse(await get("/api/pricing"));
 const catalog = pricing.endpoints || [];
@@ -61,15 +80,16 @@ for (const [surface, missing] of Object.entries(absent)) {
 const sitemapLocs = new Set([...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]));
 const canonicalOf = (html) => (html.match(/<link rel="canonical" href="([^"]+)">/) || [])[1] || null;
 
-// Pages and the resolver, per tool. Batched so 500+ round trips stay quick.
+// Pages and the resolver, per tool. Batched so 500+ round trips stay quick,
+// and small enough that the burst does not saturate the server it reads.
 const chunk = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
 const pageFails = [], findFails = [], sitemapMissing = [];
 let aliasCanonicals = 0;
-for (const batch of chunk(catalog, 24)) {
+for (const batch of chunk(catalog, 8)) {
   await Promise.all(batch.map(async (e) => {
-    const res = await fetch(`${TARGET}/tools/${e.slug}`);
-    if (res.status !== 200) pageFails.push(`${e.slug}:${res.status}`);
-    const canonical = canonicalOf(await res.text());
+    const page = await read(`/tools/${e.slug}`);
+    if (page.res.status !== 200) pageFails.push(`${e.slug}:${statusOf(page)}`);
+    const canonical = canonicalOf(page.text);
     // A tool page is canonical to itself; only a skill-<pack> alias may point
     // at its pack page, so a stray canonical cannot hide a missing tool page.
     const own = canonical && canonical.endsWith(`/tools/${e.slug}`);
@@ -93,12 +113,13 @@ ok(findFails.length === 0, `/api/find returns every tool when asked for it by sl
 const categories = [...new Set(catalog.map((e) => e.category).filter(Boolean))];
 const catFails = [];
 for (const c of categories) {
-  const res = await fetch(`${TARGET}/tools/category/${encodeURIComponent(c)}`);
-  if (res.status !== 200) catFails.push(`${c}:${res.status}`);
+  const page = await read(`/tools/category/${encodeURIComponent(c)}`);
+  if (page.res.status !== 200) catFails.push(`${c}:${statusOf(page)}`);
 }
 ok(catFails.length === 0, `every category in use has a page (${categories.length} categories${catFails.length ? `, failing: ${catFails.join(", ")}` : ""})`);
 ok(Object.keys(pricing.categories || {}).length >= categories.length,
   `every category in use is labelled in /api/pricing (${Object.keys(pricing.categories || {}).length} labels for ${categories.length} categories)`);
 
+console.log(`load-shed answers waited out: ${shedWaits}; reads still shed at the bound: ${stillShed}`);
 console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

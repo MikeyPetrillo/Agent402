@@ -8,9 +8,10 @@
 // for the routes, reading the real default store dir.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, unlinkSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, unlinkSync, readFileSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 import { createHumanCheckout, readPublicReport, listPublicReports } from "../src/human-checkout.js";
 
 let pass = 0;
@@ -27,12 +28,16 @@ ok(reportHeadline({ report: "# NVIDIA CORP (NVDA) — Company Due-Diligence Doss
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The booted server reads DEFAULT_DIR (the same resolver the engine uses), so
-// the record must live there; unique ids + cleanup keep it hermetic.
-const DIR = join(existsSync("/data") ? "/data" : "/tmp", "human-checkout");
+// the record must live there: this suite's own HUMAN_CHECKOUT_DIR (ownStoreEnv),
+// set here for the in-process reads and passed to the server, never the
+// shared /tmp/human-checkout another run reads.
+const STORES = ownStoreEnv("public-reports");
+const DIR = STORES.HUMAN_CHECKOUT_DIR;
+process.env.HUMAN_CHECKOUT_DIR = DIR;
 mkdirSync(DIR, { recursive: true });
 const SID = `cs_pubtest_${Date.now().toString(36)}`;
 const created = [];
-function cleanup() { for (const f of created) { try { unlinkSync(f); } catch { /* gone */ } } }
+function cleanup() { for (const f of created) { try { unlinkSync(f); } catch { /* gone */ } } try { rmSync(dirname(DIR), { recursive: true, force: true }); } catch { /* gone */ } }
 
 const stripe = { checkout: { sessions: { retrieve: async (id) => (id === SID ? { id, payment_status: "paid", mode: "payment", metadata: { product: "domain-audit", input: "example.com" }, customer_details: { email: null } } : null) } }, refunds: { create: async () => ({ id: "re_x", status: "succeeded" }) } };
 const generate = async () => ({ report: "# Domain Security Audit: example.com\n\n**Overall grade: A**\n\n" + "Detail line. ".repeat(400), title: "example.com", sources: [{ n: 1, title: "DNS", url: "https://example.com" }], tables: [{ label: "Checks", columns: ["a"], rows: [["b"]] }] });
@@ -64,7 +69,7 @@ ok(back.publicId === pub.publicId && readPublicReport(pub.publicId, DIR)?.public
 // ---- routes on a FREE_MODE boot with no Stripe ----
 const PORT = await getFreePort();
 const B = `http://127.0.0.1:${PORT}`;
-proc = spawn("node", ["src/server.js"], { env: { ...process.env, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" }, stdio: "ignore" });
+proc = spawn("node", ["src/server.js"], { env: { ...process.env, ...STORES, PORT: String(PORT), FREE_MODE: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", STRIPE_SECRET_KEY: "" }, stdio: "ignore" });
 try {
   for (let i = 0; i < 160; i++) { try { if ((await fetch(`${B}/health`)).ok) break; } catch {} await sleep(500); }
   const page = await fetch(`${B}/reports/public/${pub.publicId}`);
