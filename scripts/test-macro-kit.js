@@ -5,7 +5,7 @@
 // integration is broken, not one upstream).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stubGuardResolver, offlineGuardAnswer } from "./lib/guard-resolver-stub.js";
-import { MACRO_TOOLS, retryTransient, withStaleFallback, parseTreasuryYieldCsv, treasuryYieldCsvUrl, TREASURY_YIELD_SOURCE, _resetTreasuryYieldCacheForTest, refreshTreasuryYields, startTreasuryYieldRefresh, stopTreasuryYieldRefresh } from "../src/tools/macro-kit.js";
+import { MACRO_TOOLS, retryTransient, withStaleFallback, parseTreasuryYieldCsv, treasuryYieldCsvUrl, TREASURY_YIELD_SOURCE, _resetTreasuryYieldCacheForTest, _ageTreasuryYieldCacheForTest, refreshTreasuryYields, startTreasuryYieldRefresh, stopTreasuryYieldRefresh } from "../src/tools/macro-kit.js";
 
 const h = (slug) => MACRO_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
@@ -177,6 +177,26 @@ const ok = (c, m) => { if (c) console.log(`ok - ${m}`); else { assertFail++; con
       ok(pass.failed >= 1 && r.stale === true && typeof r.staleAsOf === "string" && typeof r.spread2s10sBps === "number", `a failed refresh serves the held rows marked stale (${JSON.stringify(r)})`);
       r = await h("treasury-yield-history")({ days: 5 });
       ok(r.count === 5 && r.stale === true, "history from a held year whose refresh failed is marked stale too");
+      // 3b. Warm calls read and parse nothing; a request-started refresh that
+      //     fails fast is not retried on every request, only after the back-off.
+      _resetTreasuryYieldCacheForTest(); failWith = 0; delay = 0;
+      await h("treasury-yield-history")({ days: 250 });
+      let mark = slowReads.length;
+      for (let i = 0; i < 20; i++) await h(["treasury-yield-curve", "yield-curve-spread"][i % 2])({});
+      ok(slowReads.length === mark, `warm calls read (and parse) no file (${slowReads.length - mark} reads in 20 calls)`);
+      _ageTreasuryYieldCacheForTest(31 * 60_000); failWith = 502;
+      const tick = () => new Promise((res) => setTimeout(res, 20));
+      const answers = [];
+      for (let i = 0; i < 6; i++) { answers.push(await h("treasury-yield-curve")({})); await tick(); }
+      ok(slowReads.length === mark + 1, `a failed request-started refresh is not retried per request (${slowReads.length - mark} reads in 6 calls)`);
+      ok(answers.every((a) => a.recordDate && typeof a.yr10 === "number") && answers.slice(1).every((a) => a.stale === true), "the held curve is served meanwhile, marked stale after the failure");
+      _ageTreasuryYieldCacheForTest(61_000);
+      await h("treasury-yield-curve")({}); await tick();
+      ok(slowReads.length === mark + 2, `past the back-off the next request starts one more read (${slowReads.length - mark} reads)`);
+      failWith = 0; _ageTreasuryYieldCacheForTest(61_000);
+      await h("treasury-yield-curve")({}); await tick();
+      r = await h("treasury-yield-curve")({});
+      ok(slowReads.length === mark + 3 && !r.stale, `a refresh that succeeds clears the stale mark (${slowReads.length - mark} reads, stale=${r.stale})`);
       // 4. The background refresh reads with no request: boot pass, single flight.
       _resetTreasuryYieldCacheForTest(); failWith = 0; delay = 50;
       const before = slowReads.length;
