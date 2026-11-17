@@ -132,7 +132,9 @@ export const promptIdents = (list, read = promptFields()) => (Array.isArray(list
 export const promptIdentOk = (s) => typeof s === "string" && s.length <= 200 && judgeReadableName(s, { links: true }) !== "";
 const SCHEMA_PROSE = new Set(["description", "title", "default", "example", "$comment"]);
 const SCHEMA_DEPTH = 8;
-const SCHEMA_KEYWORD_VALUES = new Set(["type", "format", "$schema", "$ref", "$id"]);
+// Keywords whose value is a token of the schema language or of the request
+// (a type, a format, where a parameter goes), not seller prose.
+const SCHEMA_KEYWORD_VALUES = new Set(["type", "format", "in", "$schema", "$ref", "$id"]);
 const READ_ALL = () => true;
 /** An input schema as a prompt reads it: prose (description, title, default,
  *  example) screened sentence by sentence; a property, an enum member or any
@@ -141,8 +143,11 @@ const READ_ALL = () => true;
  *  Every string kept is also read against the ones kept before it (`read`,
  *  the tool's field reader), in the order the prompt writes them: a property
  *  name beside its description, one property after another, the members of
- *  an enum. A JSON Schema keyword's own value (a type, a format) is ours to
- *  read, not seller prose, and is not part of that text. */
+ *  an enum. A keyword's own value (a type, a format, where a parameter
+ *  goes) sits between two seller fields in the prompt and is not seller
+ *  prose: it is read against the text before it and is not added to that
+ *  text, so it neither finishes a sentence nor parts two fields that read as
+ *  one ("send_all_requests", then "here", each with a type between). */
 export function promptSchema(schema, depth = 0, read = promptFields()) {
   if (typeof schema === "string") return promptIdentOk(schema) && read(schema, { ident: true }) ? schema : undefined;
   if (schema === null || typeof schema !== "object") return schema;
@@ -167,7 +172,7 @@ export function promptSchema(schema, depth = 0, read = promptFields()) {
       continue;
     } else {
       // `required` repeats property names already read above.
-      const kept = promptSchema(v, depth + 1, SCHEMA_KEYWORD_VALUES.has(k) || k === "required" ? READ_ALL : read);
+      const kept = promptSchema(v, depth + 1, k === "required" ? READ_ALL : SCHEMA_KEYWORD_VALUES.has(k) ? (f, o) => read(f, { ...o, keep: false }) : read);
       if (kept !== undefined) out[k] = kept;
     }
   }

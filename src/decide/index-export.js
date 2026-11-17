@@ -15,7 +15,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { localToolRow, remoteToolRow } from "./tool-rows.js";
 import { routableRemoteEntriesSliced, looksLikeListingInjection, liveProofAt, mppDualStackOrigins, indexReadiness } from "../x402-index.js";
-import { readsAsRoutingDirective } from "../listing-screen.js";
+import { readsAsRoutingDirective, fieldsAtEdges } from "../listing-screen.js";
 import { unpackRequestContract } from "../request-contract.js";
 import { dispatchable } from "../tools/route-execute.js";
 import { routeExcludedCategory } from "../route-category.js";
@@ -61,11 +61,14 @@ export function fromPrivateNetwork(req) {
  *  (name, description, seller name, category, route) trips the listing
  *  screen: such a listing never reaches decide's planner or its judge. The
  *  fields are read joined, so the same goes for one whose fields together
- *  tell a router where to send all its traffic (a sentence begun in the name
- *  and finished in the description is in neither alone). */
+ *  tell a router where to send all its traffic, or that read as an
+ *  instruction once the marks where the name meets the description are left
+ *  out (a sentence begun in the name and finished in the description is in
+ *  neither alone). */
 export function remoteRowOf(t, ctx = {}) {
   const text = `${t?.name || ""} ${t?.description || ""} ${t?.sellerName || ""} ${t?.category || ""} ${t?.route || ""}`;
-  return remoteToolRow(t, { ...ctx, injected: looksLikeListingInjection(text) || readsAsRoutingDirective(text) });
+  const injected = looksLikeListingInjection(text) || readsAsRoutingDirective(text) || looksLikeListingInjection(fieldsAtEdges(t?.name, t?.description));
+  return remoteToolRow(t, { ...ctx, injected });
 }
 
 /** Rows for every priced local tool, then every routable outside tool. */
