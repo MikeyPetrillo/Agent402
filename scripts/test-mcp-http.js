@@ -1,8 +1,9 @@
 // Exercise the remote MCP connector end to end over real HTTP JSON-RPC:
 // initialize → tools/list → search_tools → find_tool → call_tool (free CPU
-// tool, exact output) → flagship wallet-only tool by name (must refuse with
-// guidance, not execute). Run against a server started with FREE_MODE or paid
-// mode — the /mcp endpoint sits before the paywall either way.
+// tool, exact output) → flagship wallet-only tool by name (must refuse in a
+// shape the connector serves, not execute). Run against a server started with
+// FREE_MODE or paid mode; against a local target it also boots a paid server
+// (paywall and MPP gates) and reads the same refusal there.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHash } from "node:crypto";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
@@ -214,38 +215,128 @@ assert(!callStr.result?.isError && callStrText.includes("26.097590074"), `call_t
 
 // Flagship wallet-only by name → refused, never executed for free.
 //
-// TWO LEGITIMATE REFUSAL SHAPES, because the connector answers differently
-// depending on whether the target has MPP_SECRET_KEY set:
-//
-//   • native MPP (prod): JSON-RPC error -32042 carrying payment challenges, so
-//     the caller can pay in-band.
-//   • no MPP (a FREE_MODE instance, a self-host without the key): a result with
-//     isError and prose pointing at agent402-mcp + AGENT_KEY.
-//
-// This asserted ONLY the second, so it failed against production from the day
-// native MPP landed on /mcp (2026-08-19) and nobody saw it for five days: the
-// deploy step that runs it was continue-on-error, so it printed into a green
-// log. It surfaced within one run of that step becoming a real gate.
-//
-// What both shapes must prove is the SAME thing, and it is the only thing that
-// matters here: the tool did not run for free.
-const paid = await rpc("tools/call", { name: "web.search", arguments: { q: "x402" } });
-const paidText = paid.result?.content?.[0]?.text ?? "";
-const mppRefusal = paid.error?.code === -32042;
-const legacyRefusal = paid.result?.isError === true;
-assert(mppRefusal || legacyRefusal,
-  `flagship wallet-only tool (web.search) is refused on the free tier (got ${JSON.stringify(paid).slice(0, 140)})`);
-if (mppRefusal) {
-  assert(Array.isArray(paid.error?.data?.challenges) && paid.error.data.challenges.length > 0,
-    "the MPP refusal carries payment challenges, so a caller can actually pay it");
-  assert(paid.error.data?.httpStatus === 402, "and reports the 402 it came from");
-} else {
-  assert(paidText.includes("agent402-mcp") && paidText.includes("AGENT_KEY"),
-    "the non-MPP refusal explains the paid path (agent402-mcp + AGENT_KEY)");
+// The refusal's shape follows the wires the target's connector takes in the
+// call (src/mcp-http.js translateMppResponse, src/mcp-x402.js
+// buildPaymentRequiredResult; src/connector-pay.js connectorWires):
+//   • "mpp+x402" (production: a paywall and the MPP gates): a tool result with
+//     isError, the x402 PaymentRequired as JSON in its first text block, and
+//     the MPP challenges in _meta["org.paymentauth/payment-required"]
+//     ({ httpStatus: 402, challenges }).
+//   • "mpp": the same _meta challenges, no x402 offer.
+//   • "x402": the PaymentRequired in the first text block, no MPP _meta.
+//   • "mpp-error": JSON-RPC -32042 carrying { httpStatus: 402, challenges }
+//     (a caller on the tasks path keeps the error form).
+//   • "none" (FREE_MODE, no wire): isError with prose pointing at agent402-mcp
+//     + AGENT_KEY.
+// A refusal of any other shape fails. This assertion is what the deploy job
+// runs against production, so the paid boot below asserts the same function
+// on a local paid server: a shape change fails CI before it reaches main.
+// Whatever the shape, the tool must not have run for free.
+const PAYMENT_REQUIRED_META = "org.paymentauth/payment-required";
+function paidRefusalKind(resp) {
+  if (resp?.error) {
+    const d = resp.error.data;
+    return resp.error.code === -32042 && d?.httpStatus === 402 && Array.isArray(d?.challenges) && d.challenges.length > 0 ? "mpp-error" : null;
+  }
+  const r = resp?.result;
+  if (r?.isError !== true) return null;
+  const texts = (r.content || []).map((c) => (c && typeof c.text === "string" ? c.text : ""));
+  let pr = null;
+  try { pr = JSON.parse(texts[0] || ""); } catch { pr = null; }
+  const x402 = pr?.x402Version === 2 && Array.isArray(pr.accepts) && pr.accepts.length > 0;
+  const m = r._meta?.[PAYMENT_REQUIRED_META];
+  const mpp = m?.httpStatus === 402 && Array.isArray(m.challenges) && m.challenges.length > 0;
+  if (r._meta && Object.hasOwn(r._meta, PAYMENT_REQUIRED_META) && !mpp) return null;
+  if (mpp && x402) return "mpp+x402";
+  if (mpp) return "mpp";
+  if (x402) return "x402";
+  const all = texts.join("\n");
+  return all.includes("agent402-mcp") && all.includes("AGENT_KEY") ? "none" : null;
 }
-// The bypass check, and it holds for either shape: no search results came back.
-assert(!paidText.includes("<html") && !/"results"\s*:/.test(paidText),
-  "wallet-only tool did NOT execute");
+/** The bypass check: no tool output came back, whatever the shape. The x402
+ *  offer's own block is left out: its discovery extension carries an example
+ *  output, which is a description of the tool, not a run of it. */
+function ranForFree(resp) {
+  const texts = (resp?.result?.content || []).map((c) => (c && typeof c.text === "string" ? c.text : ""));
+  let first = null;
+  try { first = JSON.parse(texts[0] || ""); } catch { first = null; }
+  const all = (first?.x402Version === 2 && Array.isArray(first.accepts) ? texts.slice(1) : texts).join("\n");
+  return Boolean(resp?.result?.structuredContent) || all.includes("<html") || /"results"\s*:/.test(all);
+}
+const paid = await rpc("tools/call", { name: "web.search", arguments: { q: "x402" } });
+const paidKind = paidRefusalKind(paid);
+assert(paidKind !== null,
+  `flagship wallet-only tool (web.search) is refused in a shape the connector serves: ${paidKind} (got ${JSON.stringify(paid).slice(0, 200)})`);
+assert(!ranForFree(paid), "wallet-only tool did NOT execute");
+
+// The paid boot: the refusal a server with a paywall and the MPP gates (the
+// production configuration) answers, read by the same function. The target's
+// own wires are asserted only when the caller names them
+// (MCP_HTTP_EXPECT_WIRES, e.g. "mpp+x402": the deploy job's production read),
+// never guessed from the host: a self-host or staging target in FREE_MODE
+// answers no wire. Named, the boot is skipped (it would add nothing to what
+// was just asserted there); unnamed, the paid boot runs whatever the target.
+{
+  const expectWires = String(process.env.MCP_HTTP_EXPECT_WIRES || "").trim();
+  // The deploy job's production read names both wires, so production's are asserted.
+  {
+    const { readFileSync } = await import("node:fs");
+    const deploy = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+    const prodCalls = deploy.split("\n").filter((l) => /TARGET_URL=\$PROD node scripts\/test-mcp-http\.js/.test(l));
+    assert(prodCalls.length > 0 && prodCalls.every((l) => /MCP_HTTP_EXPECT_WIRES=mpp\+x402 /.test(l)), `the deploy job's production read of /mcp names both wires (${prodCalls.length} call(s))`);
+  }
+  if (expectWires) {
+    assert(paidKind === expectWires, `the target's refusal carries the wires named by MCP_HTTP_EXPECT_WIRES (${expectWires}; got ${paidKind})`);
+  } else {
+    const { createServer } = await import("node:http");
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { randomBytes } = await import("node:crypto");
+    const { bootServer } = await import("./lib/boot-server.js");
+    const fac = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(req.url === "/supported" ? { kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} } : req.url === "/rpc" ? { jsonrpc: "2.0", id: 1, result: "0x0" } : {}));
+      });
+    });
+    await new Promise((r) => fac.listen(0, "127.0.0.1", r));
+    const FAC = `http://127.0.0.1:${fac.address().port}`;
+    const TMP = mkdtempSync(join(tmpdir(), "mcp-http-paid-"));
+    let srv = null;
+    try {
+      srv = await bootServer({
+        stores: "mcp-http-paid", args: ["--import", "./scripts/lib/loopback-only-preload.js"],
+        env: {
+          FREE_MODE: "", NODE_ENV: "test", BASE_URL: "https://agent402.tools", TRUST_PROXY_HOPS: "1",
+          WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+          FACILITATOR_URL: FAC, PAYAI_FACILITATOR_URL: FAC, AGENT402_BASE_RPC: `${FAC}/rpc`, EVM_RPC_8453: `${FAC}/rpc`, FACILITATOR_GAS_CHECK: "off",
+          CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "", CIRCLE_FACILITATOR_API_KEY: "",
+          MPP_SECRET_KEY: randomBytes(24).toString("hex"), TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "", POSTHOG_API_KEY: "",
+          REDIS_URL: "", STATE_DATABASE_URL: "", TARGET_URL: "", STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
+          MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off",
+          SALES_LEDGER_DB: join(TMP, "sales.db"), REFUND_DB_DIR: TMP, HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
+        },
+      });
+      const post = async (body) => {
+        const res = await fetch(`${srv.url}/mcp`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify(body) });
+        const text = await res.text();
+        const data = (res.headers.get("content-type") || "").startsWith("text/event-stream") ? text.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("") : text;
+        return JSON.parse(data);
+      };
+      await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test-mcp-http-paid", version: "0.0.0" } } });
+      const ask = await post({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "web.search", arguments: { q: "x402" } } });
+      assert(paidRefusalKind(ask) === "mpp+x402",
+        `paid boot (paywall and MPP gates, as production): web.search's refusal carries the x402 offer and the MPP challenges (${paidRefusalKind(ask)}: ${JSON.stringify(ask).slice(0, 160)})`);
+      assert(!ranForFree(ask), "paid boot: wallet-only tool did NOT execute");
+    } finally {
+      if (srv) await srv.stop();
+      fac.closeAllConnections?.();
+      await new Promise((r) => fac.close(r));
+    }
+  }
+}
 
 // describe_server (+ prior describe_agent402 / about_agent402 aliases).
 for (const aboutName of ["server.describe", "describe_server", "describe_agent402", "about_agent402"]) {

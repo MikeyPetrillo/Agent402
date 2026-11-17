@@ -5140,7 +5140,7 @@ jobs:
           # people learn to ignore. Any other failure still fails the deploy.
           MCP_OK=0; MCP_ONLY_429=1
           for i in $(seq 1 5); do
-            OUT=$(TARGET_URL=$PROD node scripts/test-mcp-http.js 2>&1) && { echo "$OUT"; MCP_OK=1; break; }
+            OUT=$(MCP_HTTP_EXPECT_WIRES=mpp+x402 TARGET_URL=$PROD node scripts/test-mcp-http.js 2>&1) && { echo "$OUT"; MCP_OK=1; break; }
             echo "$OUT" | tail -5
             if echo "$OUT" | grep -q "HTTP 429"; then
               echo "  attempt $i: throttled by OUR OWN /mcp limiter — backing off 65s past the per-minute window…"

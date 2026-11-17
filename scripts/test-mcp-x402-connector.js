@@ -64,7 +64,7 @@ try {
   process.exit(1);
 }
 
-const { carriesPayment } = await import("../src/mcp-http.js");
+const { carriesPayment, MPP_CREDENTIAL_MAX_BYTES } = await import("../src/mcp-http.js");
 const { X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META, SETTLEMENT_PENDING_META, paymentRequiredOfResult: PR } = await import("../src/mcp-x402.js");
 const { MCP_PAYMENT_REQUIRED_META, MCP_CREDENTIAL_META, createMcpMppLoopback } = await import("../src/mcp-mpp.js");
 const { registerOfferedNetworks } = await import("../src/payment-attempt.js");
@@ -93,6 +93,31 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const hostile = call({});
   Object.defineProperty(hostile.params._meta, X402_PAYMENT_META, { enumerable: true, get() { throw new Error("boom"); } });
   ok(carriesPayment(hostile) === false, "a getter that throws reads as no payment");
+  // An MPP credential is replayed to the gate as its Authorization header:
+  // one past the gate's header limit is never plausible, and is refused on
+  // its size before it is serialized or decoded.
+  {
+    const { maxHeaderSize } = await import("node:http");
+    ok(MPP_CREDENTIAL_MAX_BYTES === maxHeaderSize && MPP_CREDENTIAL_MAX_BYTES >= 8192, `the credential cap is the HTTP parser's header limit (${MPP_CREDENTIAL_MAX_BYTES})`);
+    const credOf = (pad) => ({ challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { signature: "0x00", pad } });
+    const asString = (o) => `Payment ${Buffer.from(JSON.stringify(o)).toString("base64url")}`;
+    const fits = credOf("p".repeat(4000));
+    ok(carriesPayment(call({ [MCP_CREDENTIAL_META]: asString(fits) })) && carriesPayment(call({ [MCP_CREDENTIAL_META]: fits })), "control: a credential under the cap, string or object, carries a payment");
+    const big = credOf("p".repeat(90_000));
+    ok(!carriesPayment(call({ [MCP_CREDENTIAL_META]: asString(big) })), "a credential string past the cap does not");
+    ok(!carriesPayment(call({ [MCP_CREDENTIAL_META]: big })), "a credential object past the cap does not");
+    // An object past the cap is never serialized: a field after the padding
+    // is read by the serializer, and the size walk stops before it.
+    let serialized = 0;
+    const watched = { challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { pad: "p".repeat(90_000), get late() { serialized++; return 1; } } };
+    ok(!carriesPayment(call({ [MCP_CREDENTIAL_META]: watched })) && serialized === 0, `an object past the cap is not serialized (${serialized} reads past the padding)`);
+    // Control: under the cap the same field is read when the credential is serialized.
+    const small = { challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { pad: "p", get late() { serialized++; return 1; } } };
+    carriesPayment(call({ [MCP_CREDENTIAL_META]: small }));
+    ok(serialized > 0, `control: a credential under the cap is serialized, reading that field (${serialized} reads)`);
+    const near = credOf("p".repeat(14_000)); // under the cap as an object, past it once base64url-encoded
+    ok(!carriesPayment(call({ [MCP_CREDENTIAL_META]: near })), "an object whose header form is past the cap does not");
+  }
 }
 
 // ---- in-process half: a settle the paid route left pending -------------------------
@@ -347,6 +372,83 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       httpSrv.closeAllConnections?.();
       await new Promise((r) => httpSrv.close(r));
     }
+  }
+}
+
+// ---- in-process half: the fixed-price offer cache -----------------------------------
+// A twin's first ask and a free tool's offer at its limit are fixed-price and
+// the same for every caller: each is read over the loopback once per route
+// and reused for 30 s. A route priced per request is read every time, and the
+// cache holds a bounded number of routes.
+{
+  const { mountMcp } = await import("../src/mcp-http.js");
+  const { MCP_X402_PREFIX } = await import("../src/mcp-x402-routes.js");
+  const accepted = { scheme: "exact", network: "eip155:8453", amount: "1000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", payTo: "0x000000000000000000000000000000000000dEaD", maxTimeoutSeconds: 60, extra: { name: "USD Coin", version: "2" } };
+  const reads = new Map();
+  const fetchCounting = async (url) => {
+    const path = new URL(String(url)).pathname;
+    reads.set(path, (reads.get(path) || 0) + 1);
+    const offer = { x402Version: 2, error: "Payment required", resource: { url: `http://localhost${path}`, description: path, mimeType: "application/json" }, accepts: [accepted] };
+    return new Response(JSON.stringify({ error: "Payment required" }), { status: 402, headers: { "content-type": "application/json", "payment-required": encodePaymentRequiredHeader(offer) } });
+  };
+  const tool = (route, slug, extra = {}) => ({ route, slug, name: slug, category: "test", price: "$0.001", description: `${slug} test tool`, tags: [slug], discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => ({ ok: true }), ...extra });
+  const MANY = 6, CACHE_MAX = 4;
+  const CAT = {
+    "GET /api/search": tool("GET /api/search", "search"),
+    "POST /api/free-x": tool("POST /api/free-x", "free-x"),
+    "POST /api/free-q": tool("POST /api/free-q", "free-q", { quote: () => ({ price: "$0.001" }) }),
+  };
+  for (let i = 0; i < MANY; i++) CAT[`POST /api/free-${i}`] = tool(`POST /api/free-${i}`, `free-${i}`);
+  const app = express();
+  app.use(express.json({ limit: "1mb" }));
+  // Each client its own address (one trusted hop), so the transport limit of one never meets the other's calls.
+  app.set("trust proxy", 1);
+  mountMcp(app, CAT, { baseUrl: "http://localhost", isComputePayable: (def) => def.slug.startsWith("free-"), x402Loopback: createMcpMppLoopback({ port: 1, fetchImpl: fetchCounting }), mppLoopback: null, offerCacheMax: CACHE_MAX });
+  const httpSrv = app.listen(0, "127.0.0.1");
+  await new Promise((r) => httpSrv.once("listening", r));
+  const clientAt = async (ip) => {
+    const c = new Client({ name: `offer-cache-${ip}`, version: "0.0.0" });
+    await c.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${httpSrv.address().port}/mcp`), { requestInit: { headers: { "X-Forwarded-For": ip } } }));
+    return c;
+  };
+  let raw = null, rawB = null;
+  const realNow = Date.now;
+  try {
+    raw = await clientAt("198.51.100.41");
+    rawB = await clientAt("198.51.100.42");
+    const twinPath = `${MCP_X402_PREFIX}search`;
+    const ask = () => raw.callTool({ name: "web.search", arguments: { query: "x" } });
+    const a1 = await ask(), a2 = await ask(), a3 = await ask();
+    ok([a1, a2, a3].every((r) => r.isError === true && Array.isArray(PR(r)?.accepts)) && reads.get(twinPath) === 1,
+      `a twin's first ask reads the offer once and reuses it (${reads.get(twinPath)} reads for 3 asks)`);
+    ok(JSON.stringify(PR(a3)) === JSON.stringify(PR(a1)) && PR(a3) !== PR(a1), "each reuse answers the same offer");
+    // Past the reuse window the offer is read again.
+    Date.now = () => realNow() + 31_000;
+    try { await ask(); } finally { Date.now = realNow; }
+    ok(reads.get(twinPath) === 2, `past 30 s the twin's offer is read again (${reads.get(twinPath)} reads)`);
+    // A free tool at its limit: its offer is read once, then reused.
+    const call = (slug) => rawB.callTool({ name: "catalog.call", arguments: { slug, params: {} } });
+    let limited = null;
+    for (let i = 0; i < 60 && !limited; i++) { const r = await call("free-x"); if (/rate limit reached/i.test(JSON.stringify(r.content))) limited = r; }
+    ok(limited && Array.isArray(PR(limited)?.accepts), "control: the free tool reaches its limit and offers x402");
+    const before = reads.get("/api/free-x") || 0;
+    for (let i = 0; i < 5; i++) await call("free-x");
+    ok(before === 1 && reads.get("/api/free-x") === 1, `a free tool's offer at its limit is read once for 6 calls past the limit (${reads.get("/api/free-x")} reads)`);
+    // A route priced per request is never reused.
+    for (let i = 0; i < 3; i++) await call("free-q");
+    ok(reads.get("/api/free-q") === 3, `a route priced per request is read on every call (${reads.get("/api/free-q")} reads for 3)`);
+    // Bounded: past the cache's size the oldest route is read again.
+    for (let i = 0; i < MANY; i++) await call(`free-${i}`);
+    await call("free-0");
+    await call(`free-${MANY - 1}`);
+    ok(reads.get("/api/free-0") === 2 && reads.get(`/api/free-${MANY - 1}`) === 1, `the cache is bounded: the oldest of ${MANY} routes is read again, the newest is not (${reads.get("/api/free-0")}, ${reads.get(`/api/free-${MANY - 1}`)})`);
+  } catch (e) {
+    ok(false, `offer cache: ${e?.stack || String(e)}`);
+  } finally {
+    Date.now = realNow;
+    for (const c of [raw, rawB]) { try { await c?.close(); } catch { /* closed */ } }
+    httpSrv.closeAllConnections?.();
+    await new Promise((r) => httpSrv.close(r));
   }
 }
 

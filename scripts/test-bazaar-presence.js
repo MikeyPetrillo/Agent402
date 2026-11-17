@@ -230,7 +230,7 @@ const runOnce = async (name, fetchJson, extraEnv = {}) => {
   ok(a.code === 0 && /^slugs=cheap-a$/m.test(a.out) && /^max_price=0\.01$/m.test(a.out) && /^action=none$/m.test(a.out), "run(): the missing route goes to slugs=, another host's row does not count as ours");
   ok(a.lines.some((l) => l.includes("/api/quoted-one") && l.includes("quoted")), "run(): an exempt missing route is named in the log with its reason");
   const b = await runOnce("a", fetchFor({ walks: [pagesOf(without("cheap-a", "quoted-one")), pagesOf(without("cheap-a", "quoted-one"))] }), { OPEN_ISSUE: "" });
-  ok(/^slugs=$/m.test(b.out.split("\n").slice(-4).join("\n")) && /^action=open$/m.test(b.out), "run(): the next check buys nothing and opens the issue");
+  ok(/^slugs=$/m.test(b.out.split("\n").slice(-5).join("\n")) && /^action=open$/m.test(b.out), "run(): the next check buys nothing and opens the issue");
   ok(b.body.includes("/api/cheap-a") && b.body.includes("/api/quoted-one"), "run(): the issue names both repeat misses");
   const u = await runOnce("u", fetchFor({ walks: [], failRegistry: true }));
   ok(u.code === 0 && /^slugs=$/m.test(u.out) && /^action=none$/m.test(u.out), "run(): an unreadable listing writes no slugs and does not page");
