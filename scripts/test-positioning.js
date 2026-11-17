@@ -67,7 +67,7 @@ for (const mpp of [true, false]) {
 ok(mcpServerDescription() === HOSTED_DESC && HOSTED_DESC === STDIO_DESC, "the default description is the published one, identical to the stdio package's");
 {
   const src = read("src/mcp-http.js");
-  ok(/description: mcpServerDescription\(\{ mpp: mppMethodsSummary\(\)\.enabled \}\)/.test(src) && /mppOffered: mppMethodsSummary\(\)\.enabled/.test(src), "the hosted connector passes the MPP switch to its description and instructions");
+  ok(/description: mcpServerDescription\(\{ mpp: mppMethodsSummary\(\)\.enabled \}\)/.test(src) && /mppOffered: (?:payWires \? Boolean\(payWires\.mpp\) : )?mppMethodsSummary\(\)\.enabled/.test(src), "the hosted connector passes the MPP switch to its description and instructions (the instance's own pay wires first when it sets them)");
   ok(/import \{ leadSentence \} from "\.\/positioning\.js";/.test(src) && /positioning: `\$\{leadSentence\(\{ mpp: mppMethodsSummary\(\)\.enabled \}\)\} /.test(src), "hosted server.describe positioning opens with the lead sentence for the MPP switch, read from the module");
   const stdio = read("mcp/index.js");
   const lines = stdio.match(/positioning: `[^`]*`/g) || [];
