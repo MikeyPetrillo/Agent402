@@ -75,7 +75,7 @@ function endpointName(name) {
   const urlWord = !urlEnd && URL_WORD_RE.test(name);
   // A database name can join the word to its prefix (PGURL_REPLICA).
   if (!rpcEnd && !rpcWord && !urlEnd && !urlWord && !DB_URL_NAME_RE.test(name)) return null;
-  return { rpc: rpcEnd || rpcWord, suffixed: !rpcEnd && (rpcWord || !urlEnd) };
+  return { rpc: rpcEnd || rpcWord, suffixed: !rpcEnd && (rpcWord || !urlEnd), urlEnd };
 }
 const PATH_SEGMENT_RE = /^[A-Za-z0-9_-]{16,}$/;
 const BASIC_IN_TEXT_RE = /\b(Basic\s+)([A-Za-z0-9+/]{8,1024}={0,2})(?![A-Za-z0-9+/=])/gi;
@@ -123,15 +123,17 @@ function urlSecrets(name, value) {
   const out = [];
   const kind = endpointName(name);
   if (!kind) return out;
-  const { rpc, suffixed } = kind;
+  const { rpc, suffixed, urlEnd } = kind;
   const db = DB_URL_NAME_RE.test(name);
   for (const entry of value.split(/[\s,]+/)) {
     if (!entry) continue;
     let u = null;
     try { u = new URL(entry); } catch { /* not a URL */ }
-    // Under a suffixed name a database URL keeps its own scheme; any other
-    // entry counts only as an http(s) or ws(s) URL.
-    if (suffixed && !(u && (db || ENDPOINT_PROTOCOLS.has(u.protocol)))) continue;
+    // Under a suffixed name an entry counts only when it is a URL: of any
+    // scheme where the name ends in URL (FOO_RPC_PROXY_URL=socks5://...) or
+    // names a database, or where the URL carries userinfo; otherwise http(s)
+    // or ws(s). A setting that shares the word (a method list) is no URL.
+    if (suffixed && !(u && (db || urlEnd || ENDPOINT_PROTOCOLS.has(u.protocol) || u.password || u.username))) continue;
     const whole = rpc || db;
     const parts = [];
     if (u) {

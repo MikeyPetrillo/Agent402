@@ -117,6 +117,15 @@ const OP_TOKEN = ["op", "Canary", "Token", RUN].join("");
   ok(!r(`connect postgres://app:${SFX("n")}@db2.example.test:5432/app`).includes("db2.example.test"), "a database URL name with a suffix is redacted whole");
   ok(!r(`connect postgres://app:${SFX("o")}@db3.example.test:5432/app`).includes("db3.example.test"), "...and one that joins the word to its prefix (PGURL_<suffix>)");
   for (const plain of ["method eth_getBalance is not allowed", "eth_getTransactionReceipt returned null", "timeout in milliseconds", "see-the-wiki-page", "GET https://warp.example.test/open/path", `GET https://curl.example.test/${OPEN_SEG}`, `dial https://grpc.example.test/${OPEN_SEG}x`]) ok(r(plain) === plain, `a setting that shares the word RPC or URL flags no ordinary text ("${plain}")`);
+  // A URL of any scheme with userinfo is read under these names, as it was
+  // before a suffix was: a proxy URL's password, and the entry itself.
+  process.env.PROBE_RPC_PROXY_URL = `socks5://relay:${SFX("p")}@proxy.example.test:1080`;
+  process.env.PROBE_RPC_TUNNEL_8453 = `socks5h://relay:${SFX("q")}@tunnel.example.test:1080`;
+  process.env.PROBE_RPC_PROXY_URLS = `socks5://proxy2.example.test:1080/${SFX("s")}`;
+  ok(!r(`proxy connect socks5://relay:${SFX("p")}@proxy.example.test:1080 refused`).includes(SFX_TAG) && !r(`auth failed for password ${SFX("p")}`).includes(SFX_TAG), "a proxy URL under *_RPC_PROXY_URL (socks5 with userinfo) loses its password");
+  ok(!r(`tunnel socks5h://relay:${SFX("q")}@tunnel.example.test:1080 closed`).includes(SFX_TAG) && !r(`bad password ${SFX("q")}`).includes(SFX_TAG), "...and so does one under a name that ends in a chain id");
+  ok(!r(`dial socks5://proxy2.example.test:1080/${SFX("s")}`).includes(SFX_TAG), "a name that ends in URLS reads a URL of any scheme");
+  ok(r("method eth_getBalance is not allowed").includes("eth_getBalance") && r("eth_blockNumber failed").includes("eth_blockNumber"), "a method list under *_RPC_METHODS still flags nothing");
   // The name rule runs over every variable name on each call: a long hostile
   // name costs time in its length, not its square.
   {
