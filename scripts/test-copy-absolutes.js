@@ -890,6 +890,20 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   const wrong = MUST_PASS.filter((t) => hits(t) > 0);
   ok(missed.length === 0, `every known phrasing of the class is caught${missed.length ? ` - MISSED: ${missed.join(" | ")}` : ""}`);
   ok(wrong.length === 0, `honest, scoped phrasings are NOT caught${wrong.length ? ` - FALSE POSITIVE: ${wrong.join(" | ")}` : ""}`);
+
+  // The shared exception clauses are read as the sentences they print. A line
+  // that names PUSH_EXCEPTION is scoped by the token (the definitions too), so
+  // the sweep never reads the words behind it: each value is swept here in the
+  // sentence a module builds with it, and must say how the transfer is repaid.
+  const { OWED_REPAID, PUSH_EXCEPTION, JOB_PUSH_EXCEPTION } = await import("../src/tempo-push-debts.js");
+  const REPAID = /\brepaid after on-chain proof\b/;
+  const printed = [
+    ["OWED_REPAID", OWED_REPAID, `A Tempo transfer sent before the call is ${OWED_REPAID}.`],
+    ["PUSH_EXCEPTION", PUSH_EXCEPTION, `This call was refused before any payment was taken${PUSH_EXCEPTION}.`],
+    ["JOB_PUSH_EXCEPTION", JOB_PUSH_EXCEPTION, `Payment settles only when the result is ready${JOB_PUSH_EXCEPTION}.`],
+  ];
+  const unrepaid = printed.filter(([, value, sentence]) => typeof value !== "string" || !REPAID.test(value) || hits(sentence) > 0).map(([name, value]) => `${name}: ${value}`);
+  ok(PUSH_EXCEPTION.includes(OWED_REPAID) && unrepaid.length === 0, `each shared exception clause says how the transfer is repaid, read from its own value${unrepaid.length ? ` - ${unrepaid.join(" | ")}` : ""}`);
 }
 
 // --- a handler's "not charged" is restated for a Tempo push payer at send -----
@@ -902,18 +916,24 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   const PHRASE = /\b(?:not|never) charged\b|\bnothing (?:is|was|has been) charged\b|\bno charge\b/i;
   const SCOPED = /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b|\bMPP\b|\bpush\b|\bowed\b|\bunpaid\b/i;
   const unhandled = [];
+  const unrepaid = [];
   let checked = 0;
   for (const rel of files.filter((f) => /^src\/.*\.js$/.test(f) && f !== "src/push-refusal-body.js")) {
     const text = read(rel) || "";
     for (const line of text.split("\n")) {
       if (/^\s*(?:\/\/|\*|\/\*)/.test(line) || !PHRASE.test(line) || SCOPED.test(line)) continue;
       checked++;
-      if (rewriteNotChargedForPush(line) === line) unhandled.push(`${rel}: ${line.trim().slice(0, 100)}`);
+      const restated = rewriteNotChargedForPush(line);
+      if (restated === line) unhandled.push(`${rel}: ${line.trim().slice(0, 100)}`);
+      else if (/\brecorded as owed\b(?! and repaid after on-chain proof)/.test(restated)) unrepaid.push(`${rel}: ${restated.trim().slice(0, 140)}`);
     }
   }
   ok(rewriteNotChargedForPush("Bad input. Nothing was charged.") !== "Bad input. Nothing was charged." && rewriteNotChargedForPush("This call is not charged on x402.") === "This call is not charged on x402.", "control: the push rewriter restates an unscoped sentence and keeps a scoped one");
   ok(checked >= 40, `the push rewriter was run against ${checked} unscoped handler phrasings (a collapsed count must fail)`);
   ok(unhandled.length === 0, `every unscoped "not charged" a served module throws is one the push gate restates${unhandled.length ? ` - UNHANDLED: ${unhandled.join(" | ")}` : ""}`);
+  const clause = rewriteNotChargedForPush("The upstream did not answer in time, so nothing was charged.");
+  ok(clause === "The upstream did not answer in time, so the transfer you sent is recorded as owed and repaid after on-chain proof." && unrepaid.length === 0,
+    `a restated clause that says the transfer is recorded as owed says how it is repaid (${clause})${unrepaid.length ? ` - NO REPAYMENT: ${unrepaid.join(" | ")}` : ""}`);
 }
 
 // --- a converted module says "not charged" through the shared sentence only ---

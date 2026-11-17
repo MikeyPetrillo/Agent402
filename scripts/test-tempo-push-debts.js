@@ -39,7 +39,7 @@ const { createTempoGate, PUSH_SENDER_WAIT_MS, isTempoPushCredential, tempoOffere
 const { EVM_RUN_SECONDS } = await import("../src/evm-validity.js");
 const { SLOW_ADVISE_SECONDS } = await import("../src/slow-routes.js");
 const { isLongRunningSlug } = await import("../src/composite-spend-guard.js");
-const { createTempoPushDebts, createHeldClaimSweep, PULL_LANDED_AFTER_402_NOTE, PUSH_FINALIZE_UNANSWERED_NOTE, PUSH_RUN_UNFINISHED_NOTE, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
+const { createTempoPushDebts, createHeldClaimSweep, PULL_LANDED_AFTER_402_NOTE, PUSH_FINALIZE_UNANSWERED_NOTE, PUSH_RUN_UNFINISHED_NOTE, PUSH_INPUT_REFUSED_NOTE, PUSH_CLAIMED_NOTE, PUSH_SERVED_NOTE, PUSH_FINALIZE_FAILURE_STATUS, PUSH_HANGUP_AFTER_CLAIM_NOTE, PUSH_HANDLER_FAILED_AFTER_CLAIM_NOTE, PUSH_EXCEPTION, OWED_REPAID, whenTempoLedgerPayerKnown } = await import("../src/tempo-push-debts.js");
 const { withPushExceptionText } = await import("../src/prepayment-refusal.js");
 const { renderRefusal, expectedForPush, malformed } = await import("./lib/push-refusal-render.js");
 const { slowSyncWindowMiddleware, SYNC_WINDOW_RETRY } = await import("../src/slow-sync-window.js");
@@ -436,7 +436,7 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
   const h = hashFor(40);
   const r = await post(pushCred(h), { text: "refuse" });
   ok(r.status === 422 && r.body.charged === true && r.body.transferClaimed === true && r.body.refundOwed === true && r.body.payment === PUSH_FAILURE_NOTE, `push handler refusal: the body carries charged, transferClaimed, refundOwed and the owed note (${JSON.stringify(r.body).slice(0, 160)})`);
-  ok(!/not charged|nothing was charged/i.test(JSON.stringify(r.body)) && /recorded as a refund owed/.test(r.body.error) && /owed a refund/.test(r.body.hint) && /recorded as owed/.test(r.body.problem?.detail), `push handler refusal: every "not charged" sentence, nested ones too, is restated (${r.body.error})`);
+  ok(!/not charged|nothing was charged/i.test(JSON.stringify(r.body)) && /recorded as a refund owed/.test(r.body.error) && /owed a refund/.test(r.body.hint) && r.body.problem?.detail.includes(OWED_REPAID), `push handler refusal: every "not charged" sentence, nested ones too, is restated (${r.body.error})`);
   ok(rowsFor(h).length === 1 && rowsFor(h)[0].status === "owed" && rowsFor(h)[0].httpStatus === 422, "...and the finish path books the debt the sentence names");
   const served = await post(pushCred(hashFor(41)), { text: "x" });
   ok(served.status === 200 && served.body.note === "Nothing was charged for the free part." && served.body.refundOwed === undefined, "a served push answer goes out as written (only a refusal is restated)");
@@ -467,7 +467,7 @@ const rowsFor = (hash) => ledger.listRefunds({ status: "all", limit: 1000 }).fil
      && rewriteNotChargedForPush(`A failed. Nothing was charged${PUSH_EXCEPTION}. Nothing was charged.`) === `A failed. ${NOTE}`
      && rewriteNotChargedForPush("Nothing was charged. You were not charged; resend it.") === `${NOTE} resend it.`,
      "a message that makes the claim twice states the owed note once");
-  ok(rewriteNotChargedForPush("Nothing was charged because the input was refused. Retry.") === "The transfer you sent is recorded as owed because the input was refused. Retry.", "a clause restated at the head of a sentence keeps its capital");
+  ok(rewriteNotChargedForPush("Nothing was charged because the input was refused. Retry.") === `The transfer you sent is ${OWED_REPAID} because the input was refused. Retry.` && /repaid after on-chain proof/.test(OWED_REPAID), "a clause restated at the head of a sentence keeps its capital and says how the transfer is repaid");
   ok(malformed("A. the transfer you sent is recorded as owed, except a Tempo transfer sent before the call, which is recorded as owed and repaid after on-chain proof. B.", "push") !== null && malformed("A. Nothing was charged.", "push") !== null, "control: the malformed check catches a doubled clause and a standing claim");
   // The refund run holds the claim: server.js answers its own refunded 402, untouched.
   const h2 = hashFor(42);

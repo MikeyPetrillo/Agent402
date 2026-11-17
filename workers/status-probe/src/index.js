@@ -416,7 +416,7 @@ export const ALARMS = [
     title: "Gateway credits LOW (OpenRouter)",
     verdict: ({ gateway: b }) => (b.status === "low" ? "bad" : b.status === "ok" ? "good" : "quiet"),
     body: () =>
-      "The OpenRouter balance behind the /v1 gateway is below the low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly USD limit has under 25% left (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so x402 buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402).",
+      "The OpenRouter balance behind the /v1 gateway is below the low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly USD limit has under 25% left (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is canceled, so x402 buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402).",
   },
   {
     title: "Gateway balance UNREADABLE (OpenRouter)",
@@ -943,7 +943,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     title: "Upstream hard ceiling REACHED",
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamHardCaps?.status, ["capped"], ["ok"]),
     body: () =>
-      "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (not settled on x402) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
+      "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (not charged on x402) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
   },
   {
     title: "Exa prepaid allowance LOW",
@@ -958,7 +958,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // owner's switch and does not page.
     verdict: ({ gateway: b }) => wordVerdict(b.xDataSpend?.status, ["over", "capped"], ["ok", "off"]),
     body: () =>
-      "`/api/gateway-status.xDataSpend` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `X_DATA_DAILY_HARD_MAX_USD` was refused 503 (not settled on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `X_DATA_DAILY_MAX_USD`, otherwise the next UTC day.",
+      "`/api/gateway-status.xDataSpend` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `X_DATA_DAILY_HARD_MAX_USD` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `X_DATA_DAILY_MAX_USD`, otherwise the next UTC day.",
   },
   {
     title: "Exa daily spend OVER its ceiling",
@@ -966,7 +966,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // prepaid allowance alarm above, which reads exaAllowance.
     verdict: ({ gateway: b }) => wordVerdict(b.exaSpend?.status, ["over", "capped"], ["ok", "off"]),
     body: () =>
-      "`/api/gateway-status.exaSpend` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed `EXA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `EXA_DAILY_HARD_MAX_USD` was refused 503 (not settled on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; `exaAllowance` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `EXA_DAILY_MAX_USD`, otherwise the next UTC day.",
+      "`/api/gateway-status.exaSpend` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed `EXA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `EXA_DAILY_HARD_MAX_USD` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; `exaAllowance` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `EXA_DAILY_MAX_USD`, otherwise the next UTC day.",
   },
   {
     title: "Router spend per minute OVER its ceiling",

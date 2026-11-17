@@ -42,7 +42,7 @@ const STANDALONE = /(?:Nothing (?:was|is|has been) (?:spent and nothing is )?cha
 // The same claim inside a sentence ("so nothing was charged", "is not
 // charged", "- not charged; retry shortly"). Replaced in place.
 const CLAUSE = [
-  [/\bnothing (?:was|is|has been) charged\b/gi, "the transfer you sent is recorded as owed"],
+  [/\bnothing (?:was|is|has been) charged\b/gi, `the transfer you sent is ${OWED_REPAID}`],
   [/\b(is|are|was|were|be) (?:not|never) charged\b/gi, "$1 owed a refund"],
   [/\b(?:not|never) charged\b/gi, "a refund is owed"],
   [/\bno charge\b/gi, "a refund owed"],

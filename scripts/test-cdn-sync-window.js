@@ -124,16 +124,18 @@ const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date
     });
     const mw = cdnSyncWindowMiddleware({ asyncRouteOf: () => ({ slug: "s", asyncProfile: { maxSeconds: 999 } }), wantsAsync: () => false, carriesPaymentAttempt, isTempoPush: (req) => isTempoPushCredential(req.headers.authorization), maxSeconds: 1, log: () => {} });
     const resStub = () => { const r = { code: null, sent: null, status(s) { r.code = s; return r; }, set() { return r; }, json(b) { r.sent = b; return r; } }; return r; };
+    // The Tempo clause is printed once, and only where a push credential is possible.
+    const tempoClauses = (hint) => (String(hint).match(/Tempo/g) || []).length;
     const pushReq = { viaCdn: true, method: "POST", headers: { authorization: pushCredential(), "content-type": "application/json" } };
     let passed = false; const r1 = resStub();
     mw(pushReq, r1, () => { passed = true; });
     const d = syncWindowRefusalOf(pushReq);
-    ok(passed && r1.sent === null && d?.status === 504 && d.body?.error === "sync_answer_too_slow_for_connection" && d.retry === SYNC_WINDOW_RETRY && d.body.hint.endsWith(`Nothing was charged${PUSH_EXCEPTION}.`),
-      `a push credential passes the CDN window with its 504 deferred to the Tempo gate, hint carrying the push exception (${JSON.stringify(d && { status: d.status, retry: d.retry })})`);
+    ok(passed && r1.sent === null && d?.status === 504 && d.body?.error === "sync_answer_too_slow_for_connection" && d.retry === SYNC_WINDOW_RETRY && d.body.hint.endsWith(`Nothing was charged${PUSH_EXCEPTION}.`) && tempoClauses(d.body.hint) === 1 && !/payment settles only/.test(d.body.hint),
+      `a push credential passes the CDN window with its 504 deferred to the Tempo gate, hint carrying the push exception exactly once (${JSON.stringify(d && { status: d.status, retry: d.retry, hint: d.body?.hint })})`);
     const x402Req = { viaCdn: true, method: "POST", headers: { "payment-signature": Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453" }, payload: {} })).toString("base64"), "content-type": "application/json" } };
     passed = false; const r2 = resStub();
     mw(x402Req, r2, () => { passed = true; });
-    ok(!passed && r2.code === 504 && r2.sent?.hint.endsWith("Nothing was charged.") && syncWindowRefusalOf(x402Req) === null, "an x402 payment is refused by the CDN window itself, nothing deferred, hint without the push clause");
+    ok(!passed && r2.code === 504 && r2.sent?.hint.endsWith("Nothing was charged.") && tempoClauses(r2.sent.hint) === 0 && /, and payment settles only when the result is ready\. /.test(r2.sent.hint) && syncWindowRefusalOf(x402Req) === null, `an x402 payment is refused by the CDN window itself, nothing deferred, hint without any Tempo clause (${r2.sent?.hint})`);
   }
   // Our own loopback replay passes before the async marker exists: the same
   // predicate the slow window reads decides here.

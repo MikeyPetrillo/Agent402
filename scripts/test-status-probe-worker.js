@@ -994,6 +994,31 @@ for (const [name, over, detail] of failCases) {
     assert.ok(n >= 25, `found only ${n} gateway-status titles in heartbeat.yml`);
   });
 
+  // An alarm both observers open reads the same in each: what a refused call
+  // costs the buyer is said in the same words, in US spelling.
+  await acheck("a pager body the Worker and heartbeat.yml both write says the charge in the same words", async () => {
+    const yml = await readFile(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+    const steps = yml.split("\n      - name: ").slice(1);
+    const pairs = [
+      ["Gateway credits LOW (OpenRouter)", "we answer 502, settlement is canceled, so x402 buyers are NOT charged"],
+      ["Upstream hard ceiling REACHED", "answer 503 (not charged on x402) until 00:00 UTC"],
+      ["X data daily spend OVER its ceiling", "was refused 503 (not charged on x402) within the last hour"],
+      ["Exa daily spend OVER its ceiling", "was refused 503 (not charged on x402) within the last hour"],
+    ];
+    for (const [title, words] of pairs) {
+      const alarm = ALARMS.find((x) => x.title === title);
+      assert.ok(alarm, `the Worker has no alarm titled "${title}"`);
+      const step = steps.find((s) => s.includes(`TITLE="${title}"`));
+      assert.ok(step, `heartbeat.yml has no step titled "${title}"`);
+      assert.ok(alarm.body({ gateway: {} }).includes(words), `the Worker's "${title}" body does not say: ${words}`);
+      assert.ok(step.includes(words), `heartbeat.yml's "${title}" body does not say: ${words}`);
+    }
+    const worker = await readFile(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
+    for (const [name, text] of [["worker", worker], ["heartbeat.yml", yml]]) {
+      assert.doesNotMatch(text, /not settled on x402|settlement is cancelled/, `${name} states the charge in other words than its twin`);
+    }
+  });
+
   await acheck("the Postgres body names what the leads database still carries, not the retired waitlist", async () => {
     const b = ALARMS.find((a) => a.title === "Postgres UNREACHABLE (leads/analytics)").body({ gateway: { databases: { leads: { status: "unreachable" }, analytics: { status: "<x>" } } } });
     assert.doesNotMatch(b, /tollbooth/i);
