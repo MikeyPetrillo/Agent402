@@ -403,6 +403,10 @@ export function __seedPayoutListForTests(rows = [{ address: "0x5a5a5a5a5a5a5a5a5
 }
 /** Test seam: the payout store write last started (resolves once it is written). */
 export function __payoutWriteForTests() { return payoutWrite; }
+/** Test seam: start a store write of the payout map held now, as an adoption does. */
+export function __storePayoutForTests() { return storePayout(); }
+/** Test seam: the payout store's document (its flush). */
+export function __payoutDocForTests() { return getPayoutDoc(); }
 /** Test seam: forget the downloaded list too. */
 export function __resetSanctionsForTests() { state = { addresses: new Map(), names: [], fetchedAt: null, error: null, loading: null, bytes: 0, publishDate: null }; lastAttemptAt = 0; adoptChain = Promise.resolve(); adopting = null; __resetPayoutListForTests(); }
 

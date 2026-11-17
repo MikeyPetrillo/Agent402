@@ -14,13 +14,13 @@
 // served as "no match" makes every query on earth come back clean.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
-import fsModule, { readFileSync, mkdtempSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { sdnCryptoAddresses, sdnNames, sdnCryptoAddressSteps, sdnNameSteps, lookupAddress, screenName, foldName, normalizeAddress, SANCTIONS_VERDICTS } from "../src/tools/sanctions-core.js";
 import { parseSdnXml, parseSdnXmlAsync, sdnEvmAddresses, sdnEvmAddressesAsync, runSliced, runWhole, sortSteps, storedBodySteps, loadSdnList, SDN_MAX_BYTES, __resetSdnListForTests, __holdSdnListForTests, __parseSdnResponseForTests, SDN_ENTRY_MAX_CHARS } from "../src/ofac-sdn.js";
 import { bound, gapMeter, leastOurs, OURS_READING } from "./lib/ours-clock.js";
+import { stallSyncWrites } from "./lib/stalled-disk.js";
 import { createJsonDocument } from "../src/json-document.js";
 // The payout map a load stores goes to a scratch file, never the shared default.
 process.env.SANCTIONS_PAYOUT_FILE = join(mkdtempSync(join(tmpdir(), "sanctions-")), "payout.json");
@@ -28,22 +28,6 @@ process.env.SANCTIONS_PAYOUT_FILE = join(mkdtempSync(join(tmpdir(), "sanctions-"
 let n = 0;
 const ok = (c, m) => { assert.ok(c, m); n++; };
 const eq = (a, b, m) => { assert.deepEqual(a, b, m); n++; };
-
-// A busy disk: every synchronous write or rename under `dirs` holds the thread
-// `ms` (a runner whose disk was busy with other writes held one such write
-// for a 97 ms turn). The node:fs exports are swapped and synced to every
-// module's named imports; node:fs/promises is left alone, so a store that
-// writes off the loop never waits on it.
-function stallSyncWrites(dirs, ms) {
-  const orig = { writeFileSync: fsModule.writeFileSync, renameSync: fsModule.renameSync };
-  let stalls = 0;
-  const hit = (p) => dirs.some((d) => String(p).startsWith(d));
-  const spin = () => { stalls++; const t = performance.now(); while (performance.now() - t < ms); };
-  fsModule.writeFileSync = function (p, ...a) { if (hit(p)) spin(); return orig.writeFileSync.call(this, p, ...a); };
-  fsModule.renameSync = function (p, ...a) { if (hit(p)) spin(); return orig.renameSync.call(this, p, ...a); };
-  syncBuiltinESMExports();
-  return { get stalls() { return stalls; }, restore() { Object.assign(fsModule, orig); syncBuiltinESMExports(); } };
-}
 
 // Miniature SDN.XML exports in the real format (scripts/fixtures). The sample
 // has several addresses per entry, mixed assets, a non-currency id holding an
@@ -514,6 +498,21 @@ const XML = SAMPLE.replace("</sdnList>", LONG.slice(LONG.indexOf("<sdnEntry>"), 
     const prodSized = Array.from({ length: 20_000 }, (_, i) => "0x" + String(i).padStart(40, "0"));
     const w = leastOurs(() => JSON.stringify({ v: 1, addresses: prodSized }));
     ok(w.ms < turn.ms, `the stored copy's write at 20x production's address count is one short turn (${Math.round(w.ms)} ms; ${turn.note})`);
+  }
+  // Store writes started together land in order: an older, larger payout map
+  // first, a newer, smaller one second; the newer one stands in the file.
+  {
+    const mkRow = (i) => ({ address: "0x" + String(i).padStart(40, "0"), asset: "ETH", entity: `ENTITY ${i}`, sdnId: String(i) });
+    kit.__resetSanctionsForTests();
+    kit.__seedPayoutListForTests(Array.from({ length: 60_000 }, (_, i) => mkRow(i)), { fetchedAt: 111 });
+    const first = kit.__storePayoutForTests();
+    kit.__seedPayoutListForTests([mkRow(1), mkRow(2), mkRow(3)], { fetchedAt: 222 });
+    const second = kit.__storePayoutForTests();
+    ok((await second) === true && (await first) === true, "two payout store writes started together both resolve true");
+    await kit.__payoutDocForTests().flush();
+    await settle();
+    const f = JSON.parse(readFileSync(process.env.SANCTIONS_PAYOUT_FILE, "utf8"));
+    ok(f.fetchedAt === 222 && f.addresses.length === 3, `the payout map adopted last stands in the file (fetchedAt ${f.fetchedAt}, ${f.addresses.length} addresses), not the older one that took longer to serialize`);
   }
   kit.__resetSanctionsForTests(); screen.__resetSanctionsScreenForTests();
   __resetSdnListForTests();
