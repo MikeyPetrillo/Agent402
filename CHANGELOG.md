@@ -18,19 +18,23 @@ Site:
   as the main navigation.
 - Sample reports are served as finished pages: the report arrives with the
   page and reads with no script; its downloads and buy box work as before.
-- The /tools search no longer lists word matches as tools when no tool does
-  the task: it says so and, when an indexed seller does it, links the seller
-  directory's search for the same words.
+- When /api/find marks its rows as word matches only, the /tools search lists
+  them as closest matches and, when an indexed seller does the task, links the
+  seller directory's search for the same words.
 - Footer link rows wrap into even lines, and the current page's name in a
   breadcrumb sits on the line of its links.
 Tools:
 - seller-dossier names each route's delivery record responseDelivery, as the
   index's rows do; ourPaidCalls stays beside it with the same value and is
   deprecated. Its delivery summary says the count includes our router's
-  unpaid non-answers.
+  unpaid non-answers, and its description and flags name the routes our
+  router called rather than routes it paid.
 Surfaces:
-- /openapi.json names the service Agent402.tools in its title, the name
-  directories show for it; the tagline moves into its description.
+- /openapi.json names the service Agent402.tools in its title; the tagline
+  moves into its description.
+- /api/find reads a query that names a currency ("convert currency", "convert
+  usd to eur") as a currency conversion and ranks fx-rate first as a strong
+  match; currency codes count as values, not as the task.
 
 ### 2026-11-16 (an MCP payment ask every client reads)
 Surfaces:
