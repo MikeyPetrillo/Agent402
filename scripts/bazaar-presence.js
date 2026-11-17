@@ -51,7 +51,12 @@
 //                         like a route and pages on the second check; it is
 //                         never bought here (a payment on the HTTP route does
 //                         not restore it; scripts/refresh-bazaar.js MODE=mcp
-//                         does, through the connector).
+//                         does, through the connector). The listings are
+//                         counted only while that pass runs on its schedule
+//                         (BAZAAR_MCP_KEEPALIVE=on): with the scheduled pass
+//                         off nothing keeps them listed, so one that ages out
+//                         is logged and counts as nothing, and the issue
+//                         stays free to page on a route.
 //   lost state            With no saved state and an issue open, a route the
 //                         issue already lists counts as a repeat miss (never
 //                         bought again, the issue updated), and the issue is
@@ -67,7 +72,8 @@
 // Env: TARGET_URL (default https://agent402.tools), BAZAAR_REGISTRY_URL,
 // STATE_FILE (read and rewritten), OUT_DIR (body.md), OPEN_ISSUE (the number
 // of the open issue, empty when none), OPEN_ISSUE_BODY_FILE (its body),
-// HOLD_BUY, MAX_SPEND_USD, MAX_ROUTES, UNREADABLE_PAGE_AFTER, READ_DEADLINE_MS. Writes slugs=, max_price=, action= to $GITHUB_OUTPUT.
+// HOLD_BUY, MAX_SPEND_USD, MAX_ROUTES, UNREADABLE_PAGE_AFTER, READ_DEADLINE_MS,
+// BAZAAR_MCP_KEEPALIVE ("on" counts the MCP tool listings). Writes slugs=, max_price=, action= to $GITHUB_OUTPUT.
 // Exit: 0 (a refusal and an unreadable listing included), 2 bad usage.
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -161,8 +167,10 @@ export function missingFromEveryPass(catalog, passes) {
  *  catalog could not be read, else { pricing, passes }. `prev` is the state the
  *  last check left ({ missing: { "METHOD path": note }, unreadable }), or null
  *  when none was saved. `issueListed` is the set of keys the open issue lists,
- *  or null when its body could not be read. `hold` buys nothing. */
-export function decide({ reading, prev, openIssue = false, issueListed = new Set(), hold = false, maxSpendUsd = DEFAULT_MAX_SPEND_USD, maxRoutes = DEFAULT_MAX_ROUTES, unreadablePageAfter = UNREADABLE_PAGE_AFTER }) {
+ *  or null when its body could not be read. `hold` buys nothing. `mcpKeepalive`
+ *  counts an MCP tool listing that left (the scheduled MCP pass is on); off,
+ *  an absent listing is only logged (`mcpUncounted`). */
+export function decide({ reading, prev, openIssue = false, issueListed = new Set(), hold = false, mcpKeepalive = false, maxSpendUsd = DEFAULT_MAX_SPEND_USD, maxRoutes = DEFAULT_MAX_ROUTES, unreadablePageAfter = UNREADABLE_PAGE_AFTER }) {
   const lost = !prev || typeof prev !== "object";
   const prevMissing = prev && prev.missing && typeof prev.missing === "object" ? prev.missing : {};
   const prevStreak = Number.isInteger(prev?.unreadable) && prev.unreadable > 0 ? prev.unreadable : 0;
@@ -171,7 +179,7 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
     const streak = prevStreak + 1;
     const page = streak >= unreadablePageAfter;
     return {
-      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [], notYetListed: [],
+      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [], notYetListed: [], mcpUncounted: [],
       state: { missing: prevMissing, unreadable: streak, mcpSeen: prevSeen },
       action: page && !openIssue ? "open" : "none", cause: page ? "unreadable" : null,
     };
@@ -189,7 +197,10 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   const seen = new Set(prevSeen);
   for (const m of mcpRows) if (!absentKeys.has(m.key)) seen.add(m.mcp);
   const notYetListed = absent.filter((m) => m.mcp && !seen.has(m.mcp) && !wasMissing(m));
-  const missing = absent.filter((m) => !notYetListed.includes(m));
+  // With the scheduled MCP pass off, nothing re-buys a listing: one that left
+  // is not counted, so it never holds the issue open over a route.
+  const mcpUncounted = mcpKeepalive ? [] : absent.filter((m) => m.mcp && !notYetListed.includes(m));
+  const missing = absent.filter((m) => !notYetListed.includes(m) && !mcpUncounted.includes(m));
   const repeat = missing.filter(wasMissing);
   const newlyMissing = missing.filter((m) => !wasMissing(m));
   // State lost and the open issue unreadable: no way to tell a repeat, so no buy.
@@ -218,7 +229,7 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   if (refused) for (const m of newlyMissing) if (!Object.hasOwn(state.missing, m.key) && !heldBuy.includes(m)) state.missing[m.key] = "refused";
   // Never close on lost state while a route is missing: the issue may be about it.
   const action = repeat.length ? (openIssue ? "update" : "open") : !openIssue ? "none" : lost && missing.length ? "none" : "close";
-  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, notYetListed, state, action, cause: repeat.length ? "missing" : null };
+  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, notYetListed, mcpUncounted, state, action, cause: repeat.length ? "missing" : null };
 }
 
 const NOTE = {
@@ -271,6 +282,7 @@ export function logLines(d) {
     out.push(`  missing ${m.method} ${m.path}${ex ? ` (not bought: ${ex.why})` : (d.held || []).includes(m) ? " (held: a keep-alive pass is running or queued, or the open issue could not be read)" : ""}`);
   }
   for (const m of d.repeat) if (PATH_RE.test(m.path)) out.push(`  still missing ${m.method} ${m.path}`);
+  if ((d.mcpUncounted || []).length) out.push(`MCP tool listings absent, not counted while the scheduled MCP listings pass is off (BAZAAR_MCP_KEEPALIVE): ${d.mcpUncounted.length}.`);
   if ((d.notYetListed || []).length) out.push(`MCP tool listings not yet listed (never seen in the listing, so not counted as missing): ${d.notYetListed.length}.`);
   if (d.refused) out.push(`Refusing the buy: ${d.refused}. Nothing bought.`);
   else out.push(`Routes to buy: ${d.buy.length}.`);
@@ -348,7 +360,8 @@ export async function run({ env = process.env, log = console.log, fetchJson = ge
   const hold = env.HOLD_BUY === "1";
   if (hold) log("A keep-alive pass is running or queued: this check buys nothing.");
   const reading = await readListing({ target, registryUrl: env.BAZAAR_REGISTRY_URL || BAZAAR_REGISTRY_URL, fetchJson, log, deadlineMs });
-  const d = decide({ reading, prev, openIssue, issueListed, hold, maxSpendUsd, maxRoutes, unreadablePageAfter: pageAfter });
+  const mcpKeepalive = String(env.BAZAAR_MCP_KEEPALIVE || "").trim() === "on";
+  const d = decide({ reading, prev, openIssue, issueListed, hold, mcpKeepalive, maxSpendUsd, maxRoutes, unreadablePageAfter: pageAfter });
   for (const l of logLines(d)) log(l);
   log(`Issue: ${d.action}.`);
   if (env.STATE_FILE) writeFileSync(env.STATE_FILE, JSON.stringify({ v: 1, ...d.state }));

@@ -226,7 +226,8 @@ request, inside its 8-hour lifetime; a write carrying the session cookie needs S
   burner low-water mark counts the pass only then). The plan job holds no key and joins no
   concurrency group; only a run on main buys. One issue records the listings a pass did not buy
   and closes when a run buys them (`scripts/mcp-listings-issue.js`). The presence check reads the
-  listings (`/mcp#<tool>`), pages on one that was listed and left, and never buys one;
+  listings (`/mcp#<tool>`), pages on one that was listed and left only while that switch is on,
+  and never buys one;
   `bazaar-validate.js --mcp` checks the offers.
 - The heartbeat also pages (one issue) on a security advisory in triage longer than the repo
   variable `ADVISORY_TRIAGE_MAX_HOURS` (default 24), and on a read it cannot make
