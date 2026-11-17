@@ -201,7 +201,7 @@ const NEW = `https://api.seller-${TAG}.com`;
     const code = fn.replace(/\/\/[^\n]*/g, "");
     ok(!/assertUrl/.test(code), "and there is no way to switch it off, which is what made CodeQL call the first version critical request-forgery");
     const guard = readFileSync(new URL("../src/tools/fetch-guard.js", import.meta.url), "utf8");
-    ok(/export async function safeFetch\([^)]*\)\s*\{\s*const url = await assertPublicUrl\(rawUrl\)/.test(guard),
+    ok(/export async function safeFetch\([^)]*\)\s*\{\s*(?:const sink = \{\};\s*)?const url = await assertPublicUrl\(rawUrl(?:, \{ sink \})?\)/.test(guard),
        "...and safeFetch itself asserts the URL is public before it fetches, so the guarantee is one hop away and statically visible");
     ok(/dispatcher: ssrfDispatcher/.test(guard), "and pins the connection to the validated IP, re-validating every redirect hop");
     ok(/^import \{ safeFetch(?:, \w+)* \} from "\.\/tools\/fetch-guard\.js";/m.test(src),

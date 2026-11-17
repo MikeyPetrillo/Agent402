@@ -12,6 +12,7 @@
 // passes in any sandbox (CI, local, restricted networks).
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
+import { urlMatches } from "./lib/url-host.js";
 const fail = (m) => { console.error("FAIL:", m); process.exit(1); };
 const ok = (label) => console.log("  ✓", label);
 
@@ -329,7 +330,7 @@ console.log("\nunresolved host: caller URL vs our own upstream:");
       if (sent !== 0) fail(`${label}: a request was sent after onResolved refused it`);
       let got = null;
       await call({ onResolved: async (addresses, url) => { got = { addresses, url }; } });
-      if (sent !== 1 || got?.addresses?.[0]?.address !== "203.0.113.9" || !String(got.url).startsWith("http://203.0.113.9/")) fail(`${label}: control: a passing onResolved lets the request go (${sent})`);
+      if (sent !== 1 || got?.addresses?.[0]?.address !== "203.0.113.9" || !urlMatches(got.url, "203.0.113.9", "/")) fail(`${label}: control: a passing onResolved lets the request go (${sent})`);
       sent = 0;
       ok(`${label} hands onResolved the checked address, and sends nothing when it refuses`);
     }
