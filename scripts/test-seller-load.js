@@ -484,5 +484,35 @@ function fresh(opts = {}) {
   ok(operatorKey("https://api.seller.example") === operatorKey("https://www.seller.example"), "control: two hosts of one registrable domain stay one operator");
 }
 
+// ---- country second-level suffixes: each registrant has its own day -----------------
+{
+  const { load } = fresh({ dailyBudget: 2, probeShare: 1 });
+  for (const [a, b] of [
+    ["https://shop.co.za", "https://other.co.za"],
+    ["https://api.shop.com.tr", "https://www.other.com.tr"],
+    ["https://seller.co.il", "https://buyer.co.il"],
+  ]) {
+    ok(operatorKey(a) !== operatorKey(b), `${new URL(a).hostname} and ${new URL(b).hostname} are different operators`);
+    for (let i = 0; i < 3; i++) await load.takeBudget(`${a}/x`, "quote");
+    ok((await load.crawlPlan(a)).skip === "budget" && (await load.crawlPlan(b)).skip === null, `one spending its day leaves the other's (${new URL(a).hostname})`);
+  }
+  ok(operatorKey("https://api.shop.co.za") === operatorKey("https://www.shop.co.za"), "control: two hosts of one co.za registrant stay one operator");
+  ok(operatorKey("https://a.foo.ck") !== operatorKey("https://b.foo.ck"), "a wildcard suffix rule (*.ck) makes each name below it its own operator");
+  ok(operatorKey("https://x.city.kawasaki.jp") === operatorKey("https://y.city.kawasaki.jp"), "an exception rule (!city.kawasaki.jp) keeps that name one operator");
+  ok(operatorKey("https://1.2.3.4") !== operatorKey("https://9.9.3.4"),"address literals that share trailing octets are different operators");
+}
+
+// ---- one host, one spelling: a trailing dot is the same day -------------------------
+{
+  const { load } = fresh({ dailyBudget: 2, probeShare: 1 });
+  for (const [a, b] of [
+    ["https://example.com", "https://example.com."],
+    ["https://api.example.com", "https://API.Example.com."],
+    ["https://alice.github.io", "https://alice.github.io."],
+  ]) ok(operatorKey(a) === operatorKey(b), `${new URL(b).hostname} is the same operator as ${new URL(a).hostname}`);
+  for (let i = 0; i < 3; i++) await load.takeBudget("https://example.com/x", "quote");
+  ok((await load.crawlPlan("https://example.com.")).skip === "budget", "the dotted spelling has no second day once the host's is spent");
+}
+
 console.log(`\n${fail ? "FAILED" : "PASSED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

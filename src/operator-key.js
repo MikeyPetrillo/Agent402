@@ -3,11 +3,53 @@
 // the per-host daily request budget (src/seller-load.js). A leaf module so
 // both can import it without a cycle.
 
-// Registrable domain, approximately: the last two labels, plus a third for the
-// common multi-part suffixes. It does not need to be a full public-suffix list -
-// getting it wrong groups an operator slightly wider or narrower than ideal, and
-// never causes an origin to be skipped forever.
-const MULTI_PART_TLDS = new Set(["co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "com.au", "com.br", "co.nz", "co.in", "com.cn", "com.mx"]);
+import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
+import { domainToASCII } from "node:url";
+
+// Registrable domain: the public suffix plus one label, from the ICANN section
+// of the Public Suffix List, vendored in src/generated/public-suffixes.json by
+// scripts/gen-public-suffixes.js (read once at import, never fetched). A seller
+// under a country registry's second level (shop.co.za, shop.com.tr) is its own
+// operator, not the whole registry's. A suffix the table lacks falls back to the
+// default rule (the last label), which groups wider than ideal until the table
+// is regenerated; it never causes an origin to be skipped forever.
+const SUFFIX_RULES = new Set();
+const SUFFIX_WILDCARDS = new Set();
+const SUFFIX_EXCEPTIONS = new Set();
+for (const rule of JSON.parse(readFileSync(new URL("./generated/public-suffixes.json", import.meta.url), "utf8")).rules) {
+  if (rule.startsWith("!")) SUFFIX_EXCEPTIONS.add(rule.slice(1));
+  else if (rule.startsWith("*.")) SUFFIX_WILDCARDS.add(rule.slice(2));
+  else SUFFIX_RULES.add(rule);
+}
+
+/** One spelling per host: lowercase, ASCII (punycode), one trailing dot dropped. */
+export function normalizeHost(host) {
+  let h = String(host).toLowerCase();
+  if (h.endsWith(".")) h = h.slice(0, -1);
+  // A URL's hostname is already ASCII; only another spelling needs converting.
+  return /^[\x00-\x7f]*$/.test(h) ? h : domainToASCII(h) || h;
+}
+
+/** The registrable domain of a normalized host name, or the name itself when it is a suffix. */
+export function registrableDomain(host) {
+  // Walk the label boundaries from the left, so the first rule that matches
+  // is the longest one. `start` is where the candidate suffix begins and
+  // `prev` where the label before it begins (the registrable domain's start).
+  let prev = -1;
+  for (let start = 0; start < host.length; ) {
+    const candidate = host.slice(start);
+    const dot = host.indexOf(".", start);
+    if (SUFFIX_EXCEPTIONS.has(candidate)) return candidate;
+    if (SUFFIX_RULES.has(candidate) || (dot >= 0 && SUFFIX_WILDCARDS.has(host.slice(dot + 1)))) {
+      return prev < 0 ? host : host.slice(prev);
+    }
+    if (dot < 0) return prev < 0 ? host : host.slice(prev);
+    prev = start;
+    start = dot + 1;
+  }
+  return host;
+}
 
 // Suffixes where the label BELOW the suffix is a different tenant, not a
 // different host of one operator. Without these, "last two labels" made every
@@ -51,20 +93,21 @@ export const OWNER_ADDRESSED_SUFFIXES = ["sslip.io", "duckdns.org"];
 /** Does `origin`'s name sit under OWNER_ADDRESSED_SUFFIXES? */
 export function addressSetByName(origin) {
   let host;
-  try { host = new URL(origin).hostname.toLowerCase(); } catch { return false; }
+  try { host = normalizeHost(new URL(origin).hostname); } catch { return false; }
   return OWNER_ADDRESSED_SUFFIXES.some((suffix) => host.endsWith(`.${suffix}`));
 }
 export function operatorKey(origin) {
   let host;
-  try { host = new URL(origin).hostname.toLowerCase(); } catch { return String(origin).toLowerCase(); }
+  try { host = normalizeHost(new URL(origin).hostname); } catch { return normalizeHost(origin); }
+  // An address literal has no registrable domain: the address is the operator.
+  if (isIP(host) || host.startsWith("[")) return host;
   const parts = host.split(".").filter(Boolean);
-  if (parts.length <= 2) return host;
+  if (parts.length <= 2) return parts.join(".");
   // Multi-tenant hosting: the tenant is the whole hostname. Grouping two tenants
   // together is not a small inaccuracy - it hands them one budget and lets either
   // one crowd the other out.
   for (const suffix of SHARED_HOSTING_SUFFIXES) {
     if (host === suffix || host.endsWith(`.${suffix}`)) return host;
   }
-  const lastTwo = parts.slice(-2).join(".");
-  return MULTI_PART_TLDS.has(lastTwo) ? parts.slice(-3).join(".") : lastTwo;
+  return registrableDomain(parts.join("."));
 }
