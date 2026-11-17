@@ -1491,8 +1491,8 @@ jobs:
               ;;
           esac
 
-      # EVM settlements that failed naming a transaction or an authorization
-      # (src/late-settlements.js): one word on /api/gateway-status. A landed,
+      # Settlements that failed naming a transaction or an authorization, on an
+      # EVM chain, Solana or Algorand (src/late-settlements.js): one word on /api/gateway-status. A landed,
       # unserved one becomes an owed debt (refundsOwed covers it).
       # unresolved / full page; ok and near_capacity close; unknown does neither.
       - name: Late settlements check (alarm when one needs an operator)
@@ -1506,7 +1506,7 @@ jobs:
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports lateSettlements.status=$WORD. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports lateSettlements.status=$WORD. unresolved: a failed settlement that named a transaction or an authorization, on an EVM chain, Solana or Algorand, could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity." >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi

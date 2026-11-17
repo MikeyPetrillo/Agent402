@@ -2856,8 +2856,10 @@ jobs:
         run: |
           # Raise the MCP rate limit so the full-catalog connector test can sweep
           # every tool (production keeps the default 20/min, 120/hr).
+          # The examples that fetch this server's own /samples/ and /fixtures/ files are
+          # answered by this server, never production (own-examples-preload.js).
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
-            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
+            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/own-examples-preload.js src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Crypto-kit tests (CoinGecko price/market/history/trending/global — keyless live API)
         # Keyless on purpose: the job-scope key is for the sampled sweep only,

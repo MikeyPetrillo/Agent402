@@ -120,13 +120,16 @@ export function shedVerdict(status, threshold, now = Date.now()) {
 
 /** `extra` (optional) adds fields to the body, such as a `reason` naming which
  *  bound refused the call; the error text and Retry-After stay the same. */
+/** The shed answer's sentence: a sweep tells this server's shed answer from an upstream 503 by it (scripts/lib/shed-answer.js). */
+export const SHED_ERROR = "The server is busy; free and discovery requests are paused briefly so paid calls keep flowing.";
+
 export function shedResponse(res, retryAfter = 2, extra = null) {
   // Marked so the 5xx-rate counts leave it out: shedding is deliberate and has its own alarm reason.
   if (res.locals) res.locals.shed = true;
   res.set("Retry-After", String(retryAfter));
   res.set("Cache-Control", "no-store");
   return res.status(503).json({
-    error: "The server is busy; free and discovery requests are paused briefly so paid calls keep flowing.",
+    error: SHED_ERROR,
     retryAfterSeconds: retryAfter,
     ...(extra && typeof extra === "object" ? extra : {}),
   });

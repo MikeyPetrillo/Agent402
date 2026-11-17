@@ -1094,16 +1094,16 @@ export function openapiSpec(baseUrl, catalog) {
   return {
     openapi: "3.1.0",
     info: {
-      // The title/description here are what x402scan, MPPScan and every
-      // OpenAPI-reading directory display as OUR NAME - keep them aligned with
-      // the homepage: both wires (x402 + MPP), not "x402 server".
-      title: "Agent402: 500+ pay-per-call tools for AI agents over x402 + MPP",
+      // The title is what x402scan, MPPScan and every OpenAPI-reading
+      // directory display as OUR NAME, so it is the plain product name; the
+      // tagline (both wires, x402 + MPP) lives in the description below.
+      title: "Agent402.tools",
       version: "2.1.0",
       description:
         // Template literal, not a plain string: this is the spec description
         // every crawler and directory reads, and as a quoted string it shipped
         // a literal ${RAILS_OR} to production.
-        `${frontDoorOneLine(catalog)} The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: 500+ machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
+        `${frontDoorOneLine(catalog)} Agent402.tools: 500+ pay-per-call tools for AI agents over x402 + MPP. The open-source, self-hostable applied layer of Agentic Finance - agents paying and getting paid over x402 and MPP: machine-payable web tools for AI agents in one place (browser, search, PDFs, images, live data, payment helpers) - the whole catalog is open and runnable yourself. Each priced operation is paid per call over x402 (${RAILS_OR}; identity-bound and long-running operations take EVM chains only, and each operation's description names its own rails)${mppShort ? `, or over MPP (Machine Payments Protocol: ${mppShort})` : ""} - no signup, no API keys - the first request returns HTTP 402 carrying ${mppShort ? "both offers, an x402 or mppx client pays" : "the offer, an x402 client pays"} and retries - or free with proof-of-work. Also the open x402 index, Smart Order Router and MPP marketplace. Free discovery: GET /api/pricing, GET /llms.txt. Multi-tool workflows: GET /api/skill-packs.json.`,
       // Email doubles as x402scan's ownership-verification signal; it is the
       // same public maintainer contact the /.well-known/x402 manifest names.
       contact: { name: "Havok Holdings LLC", email: "mike@agent402.tools", url: baseUrl },
