@@ -40,6 +40,18 @@ Operations:
   variable names carry a suffix after RPC or URL, such as a chain id,
   including a proxy URL of any scheme that carries a password; a setting that
   only shares the word is left as written.
+Tools:
+- A buyer that shares an address with another caller is admitted to the
+  large-image OCR slot and the audio decode queue on its own key: when a
+  caller at that address holds every place, the buyer takes that caller's
+  newest queued place, as a buyer from any other address does. A request that
+  names no caller is never refused because another such request holds a place,
+  and the code runs its steps start are counted against the sandbox limit.
+Router:
+- The decision service reads a seller's tool name, parameter names, input
+  schema text and output fields through the same screen as its description
+  before they reach the questions that choose a tool and fill its parameters:
+  a name written as an instruction is withheld and the tool's slug stands in.
 
 ### 2026-11-16 (camelCase seller names are read as words)
 Router:
