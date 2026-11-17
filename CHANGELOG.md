@@ -32,7 +32,7 @@ Tools:
 Surfaces:
 - /openapi.json names the service Agent402.tools in its title; the tagline
   moves into its description.
-- /api/find reads a query that names a currency ("convert currency", "convert
+- /api/find reads a query that asks to convert a currency ("convert currency", "convert
   usd to eur") as a currency conversion and ranks fx-rate first as a strong
   match; inside a conversion, currency codes and names count as values, not as
   the task.
