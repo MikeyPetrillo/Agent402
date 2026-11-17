@@ -101,6 +101,8 @@ payTo), settlement evidence kept per source instead of summed into one
 misleading total, the dispatch verdict per chain with its reason and any recent
 refusal or delivery failure, and what happened the times our own router paid it.
 Plain-English flags, no score. Also offline - nothing is fetched from the seller.
+Each catalog row's delivery record is `responseDelivery`; the deprecated
+`ourPaidCalls` carries the same value.
 
 ### Can it be paid right now (`POST /api/seller-payability`, $0.10)
 

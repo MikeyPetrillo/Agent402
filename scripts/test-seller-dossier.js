@@ -236,7 +236,13 @@ check("delivery observations attach to their route and a low keep rate is flagge
   // says the record counts more than paid calls.
   const rowA = r.catalog.tools.find((t) => t.route === "/api/a");
   assert.equal(rowA.responseDelivery.calls, 5);
-  assert.ok(!("ourPaidCalls" in rowA), "the row's delivery record is named responseDelivery, as on the index's rows");
+  // The earlier published name stays beside it with the same value (deprecated).
+  assert.ok("ourPaidCalls" in rowA, "the deprecated ourPaidCalls field is still in the row");
+  assert.deepEqual(rowA.ourPaidCalls, rowA.responseDelivery);
+  const rowB = r.catalog.tools.find((t) => t.route === "/api/b");
+  assert.deepEqual(rowB.ourPaidCalls, rowB.responseDelivery);
+  const bare = base({}).catalog.tools[0];
+  if (bare) assert.ok("ourPaidCalls" in bare && "responseDelivery" in bare && bare.ourPaidCalls === bare.responseDelivery, "a row with no record carries both fields as null");
   assert.match(r.delivery.source, /unpaid non-answers included/);
 });
 check("answers past our read limit that could not be checked are counted and flagged, never read as kept", () => {
