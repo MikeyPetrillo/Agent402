@@ -122,33 +122,20 @@ export function coingeckoSample(sha = process.env.GITHUB_SHA || "local", size = 
 const CG_LIVE = coingeckoSample();
 let skippedCoingecko = 0;
 
-// OPEN-METEO IS SAMPLED, AND ITS 5xx IS READ AGAINST THE RUNNER.
+// OPEN-METEO'S 5xx IS READ AGAINST THE RUNNER.
 //
 // Production reads Open-Meteo with a paid key (OPEN_METEO_API_KEY); CI never
 // holds it, so this sweep reads the keyless public hosts, whose per-IP budget
 // GitHub runners share. Keyless Open-Meteo answered a runner 503 on every one
 // of four attempts for weather-daily (2026-11-17) and failed main's deploy
-// while production served the same call. The same two rules as CoinGecko and
-// the archive probe below, applied to the whole family:
-//   - TWO of the five weather tools are exercised live per commit (rotating,
-//     deterministic), the rest skipped LOUDLY and named; the lenient sweep
-//     exercises the rest (strictScopeKeys leaves them out of its hand-over).
-//   - A sampled tool's relayed upstream 5xx ("Source URL's host returned HTTP
-//     5xx") is excused only when this runner's own direct request for the same
-//     example also fails (RUNNER_PROBES). If Open-Meteo answers the runner,
-//     the tool failing is ours and it fails, as does any other 5xx of ours.
+// while production served the same call. Every weather tool is swept here on
+// every commit (none sampled out, so none is handed to test-all.js, whose
+// list tolerates a 502/503/504), and a weather tool's relayed upstream 5xx
+// ("Source URL's host returned HTTP 5xx") is excused only when this runner's
+// own direct request for the same example also fails (RUNNER_PROBES,
+// failureVerdict). If Open-Meteo answers the runner, the tool failing is ours
+// and it fails, as does any other 5xx of ours.
 export const OPEN_METEO_SLUGS = new Set(["weather-current", "weather-daily", "weather-hourly", "weather-history", "weather-air-quality"]);
-const OM_SAMPLE_SIZE = Number(process.env.NON_METERED_OM_SAMPLE) || 2;
-/** The Open-Meteo slugs to exercise live on THIS commit. */
-export function openMeteoSample(sha = process.env.GITHUB_SHA || "local", size = OM_SAMPLE_SIZE) {
-  return familySample(OPEN_METEO_SLUGS, sha, size);
-}
-const OM_LIVE = openMeteoSample();
-let skippedOpenMeteo = 0;
-/** A slug sampled out of this run (CoinGecko or Open-Meteo family). */
-export function sampledOut(slug, cgLive = CG_LIVE, omLive = OM_LIVE) {
-  return (COINGECKO_SLUGS.has(slug) && !cgLive.has(slug)) || (OPEN_METEO_SLUGS.has(slug) && !omLive.has(slug));
-}
 
 const escalatedTools = new Set();
 const retryStats = [];
@@ -348,6 +335,16 @@ function fredInMaintenanceForRunner() {
       .catch((e) => { console.log(`\n# runner probe FRED: ${e?.name || "error"} after ${Date.now() - t0} ms (not counted as maintenance)`); return false; });
   }
   return fredProbeMemo;
+}
+/** A failed answer's verdict once the runner probe has been read: "runner"
+ *  (excused: the upstream refuses this runner's own direct request for the
+ *  same example too) or "fail". `answersRunner(label)` resolves true when
+ *  the upstream answers the runner; only an answer runnerProbeLabel names
+ *  ever reaches it, so any other 5xx of ours fails without a probe. */
+export async function failureVerdict(status, body, slug, answersRunner = upstreamAnswersRunner) {
+  const label = runnerProbeLabel(status, body, slug);
+  if (!label) return { verdict: "fail", label: null };
+  return (await answersRunner(label)) ? { verdict: "fail", label } : { verdict: "runner", label };
 }
 const runnerProbeMemo = new Map();
 function upstreamAnswersRunner(label) {
@@ -610,16 +607,9 @@ function runControls() {
       "control: raising the sample past the family size sweeps all of them, so the cap is a budget and not a lock");
   }
 
-  // Open-Meteo sampling and its runner probes: the family is sampled like
-  // CoinGecko, and a sampled tool's relayed upstream 5xx is excused only when
-  // the runner's own request for the same example fails too.
+  // Open-Meteo's runner probes: a weather tool's relayed upstream 5xx is
+  // excused only when the runner's own request for the same example fails too.
   {
-    const s1 = openMeteoSample("abc123");
-    ok(s1.size === 2 && [...s1].join() === [...openMeteoSample("abc123")].join() && [...s1].every((x) => OPEN_METEO_SLUGS.has(x)),
-      `control: the Open-Meteo sample is 2 of the family, deterministic for a commit (${[...s1].join(", ")})`);
-    ok(new Set(["deadbeef", "cafe", "0f0f0f", "12345", "abc"].map((x) => [...openMeteoSample(x)].join())).size > 1, "control: the Open-Meteo sample rotates across commits");
-    ok(openMeteoSample("x", 99).size === OPEN_METEO_SLUGS.size && sampledOut("weather-daily", new Set(), new Set()) && !sampledOut("weather-daily", new Set(), new Set(["weather-daily"])) && !sampledOut("weather-forecast", new Set(), new Set()),
-      "control: raising the sample sweeps the whole family; only Open-Meteo slugs outside the sample are sampled out (weather-forecast is NWS, swept)");
     const weatherKit = readFileSync(join(ROOT, "src/tools/weather-kit.js"), "utf8");
     const toolSlugs = [...weatherKit.matchAll(/slug: "(weather-[a-z-]+)"/g)].map((m) => m[1]).sort();
     ok(toolSlugs.join() === [...OPEN_METEO_SLUGS].sort().join(), `control: the family is every tool in the Open-Meteo kit (${toolSlugs.join(", ")})`);
@@ -741,7 +731,7 @@ export function strictScope(spec, pricing) {
  *  CoinGecko tools sampled out of the run are NOT in the set. */
 export function strictScopeKeys(spec, pricing) {
   const { work } = strictScope(spec, pricing);
-  return new Set(work.filter((t) => !sampledOut(t.slug)).map((t) => `${t.method} ${t.path}`));
+  return new Set(work.filter((t) => !(COINGECKO_SLUGS.has(t.slug) && !CG_LIVE.has(t.slug))).map((t) => `${t.method} ${t.path}`));
 }
 
 /** "METHOD /path" keys of the WHOLE CoinGecko family, sampled or not. The
@@ -757,6 +747,38 @@ export function coingeckoFamilyKeys(spec, pricing) {
   return new Set(work.filter((t) => COINGECKO_SLUGS.has(t.slug)).map((t) => `${t.method} ${t.path}`));
 }
 
+/** Stub controls for failureVerdict: a stub upstream that answers, a stub
+ *  one that refuses, and a stub "tool" that answers each failure shape. */
+export async function runVerdictStubControls() {
+  const { createServer } = await import("node:http");
+  const listen = (handler) => new Promise((resolve) => { const srv = createServer(handler); srv.listen(0, "127.0.0.1", () => resolve(srv)); });
+  const upstreamUp = await listen((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); });
+  const upstreamDown = await listen((req, res) => { res.writeHead(503); res.end("busy"); });
+  const shapes = {
+    "/ours-500": [500, { error: "Internal error" }],
+    "/ours-nonjson": [502, { error: "Upstream returned non-JSON" }],
+    "/relayed": [502, { error: "Source URL's host returned HTTP 503 - upstream issue, try again later" }],
+  };
+  const tool = await listen((req, res) => { const [st, b] = shapes[req.url]; res.writeHead(st, { "content-type": "application/json" }); res.end(JSON.stringify(b)); });
+  const url = (srv, p = "/") => `http://127.0.0.1:${srv.address().port}${p}`;
+  const probeAt = (srv) => async () => { try { return (await fetch(url(srv))).ok; } catch { return false; } };
+  try {
+    for (const slug of OPEN_METEO_SLUGS) {
+      const call = async (p) => { const r = await fetch(url(tool, p)); return [r.status, await r.json()]; };
+      const [s500, b500] = await call("/ours-500");
+      const [sNj, bNj] = await call("/ours-nonjson");
+      const [sRel, bRel] = await call("/relayed");
+      ok((await failureVerdict(sRel, bRel, slug, probeAt(upstreamUp))).verdict === "fail",
+        `control (stub): ${slug} relays an upstream 5xx while the stub upstream answers the runner: it fails`);
+      ok((await failureVerdict(sRel, bRel, slug, probeAt(upstreamDown))).verdict === "runner",
+        `control (stub): ${slug} relays an upstream 5xx and the stub upstream refuses the runner too: excused`);
+      for (const [st, b, what] of [[s500, b500, "a 500"], [sNj, bNj, "a non-JSON parse 502"]]) {
+        ok((await failureVerdict(st, b, slug, probeAt(upstreamDown))).verdict === "fail", `control (stub): ${slug}'s own ${what} fails even when the stub upstream refuses the runner`);
+      }
+    }
+  } finally { for (const s of [upstreamUp, upstreamDown, tool]) s.close(); }
+}
+
 async function main() {
   runControls();
   console.log(`[non-metered] target=${TARGET} external=${EXTERNAL} concurrency=${CONCURRENCY}`);
@@ -768,6 +790,16 @@ async function main() {
   const pricing = await (await fetch(`${TARGET}/api/pricing`)).json();
   const spec = await (await fetch(`${TARGET}/openapi.json`)).json();
   const { work, excluded } = strictScope(spec, pricing);
+  // Every weather tool is swept here on every commit, so test-all.js (which
+  // skips what strictScopeKeys names and tolerates a 502/503/504) never
+  // grades one of them.
+  {
+    const handed = strictScopeKeys(spec, pricing);
+    const weather = work.filter((t) => OPEN_METEO_SLUGS.has(t.slug));
+    ok(weather.length === OPEN_METEO_SLUGS.size && weather.every((t) => handed.has(`${t.method} ${t.path}`)),
+      `every Open-Meteo tool is in this sweep's scope and its hand-over to test-all.js (${weather.map((t) => t.slug).join(", ")})`);
+  }
+  await runVerdictStubControls();
 
   ok(work.length >= MIN_IN_SCOPE,
     `in-scope count is substantial (${work.length} ≥ ${MIN_IN_SCOPE}) — filter is not vacuous`);
@@ -802,12 +834,6 @@ async function main() {
     // because the whole point is not to spend the request.
     if (COINGECKO_SLUGS.has(t.slug) && !CG_LIVE.has(t.slug)) {
       skippedCoingecko++;
-      done++;
-      return;
-    }
-    // Sampled out of this run's keyless Open-Meteo calls (see OPEN_METEO_SLUGS).
-    if (OPEN_METEO_SLUGS.has(t.slug) && !OM_LIVE.has(t.slug)) {
-      skippedOpenMeteo++;
       done++;
       return;
     }
@@ -911,8 +937,8 @@ async function main() {
       return;
     }
 
-    const probeLabel = runnerProbeLabel(r.status, r.body, t.slug);
-    if (probeLabel && !(await upstreamAnswersRunner(probeLabel))) {
+    const { verdict, label: probeLabel } = await failureVerdict(r.status, r.body, t.slug);
+    if (verdict === "runner") {
       skippedRunnerUnreachable++;
       console.log(`\nskip - ${t.slug}: ${probeLabel} does not answer this runner directly either (upstream refusing or unreachable from here; not our defect)`);
       return;
@@ -957,7 +983,7 @@ async function main() {
 
   const softSkipped = skippedBrowser + skippedRateLimit + skippedMediaSource + skippedPriceFeed + skippedClientTimeout + skippedCertTransparency + skippedRunnerUnreachable + skippedFredMaintenance + upstreamRefusals.length;
   // A sampled-out tool was never called: it is not counted as asserted.
-  const asserted = work.length - softSkipped - skippedCoingecko - skippedOpenMeteo;
+  const asserted = work.length - softSkipped - skippedCoingecko;
   ok(liveFails.length === 0,
     liveFails.length
       ? `every in-scope example returns 200 without body.error — ${liveFails.length} FAILED:\n     ${liveFails.slice(0, 30).join("\n     ")}${liveFails.length > 30 ? `\n     …and ${liveFails.length - 30} more` : ""}`
@@ -966,10 +992,6 @@ async function main() {
     console.log(`\nskip - ${skippedCoingecko} CoinGecko tool(s) sampled out of this run (keyless is 30/min shared per IP)`);
     console.log(`  exercised live this commit: ${[...CG_LIVE].join(", ")}`);
     console.log(`  the sample rotates by commit, so the family is covered across runs rather than in one`);
-  }
-  if (skippedOpenMeteo) {
-    console.log(`\nskip - ${skippedOpenMeteo} Open-Meteo tool(s) sampled out of this run (CI reads the keyless hosts, shared per runner IP)`);
-    console.log(`  exercised live this commit: ${[...OM_LIVE].join(", ")}`);
   }
 
   // RETRIES ARE REPORTED, not just spent. A provider that needs three attempts
@@ -1000,9 +1022,9 @@ async function main() {
     `every strict pass carries its documented output keys (${shapeMismatches.length} mismatch(es))`);
   for (const m of shapeMismatches.slice(0, 40)) console.error(`  shape - ${m}`);
 
-  const accounted = asserted + skippedCoingecko + skippedOpenMeteo;
+  const accounted = asserted + skippedCoingecko;
   ok(accounted >= Math.floor(MIN_IN_SCOPE * 0.8),
-    `enough tools were actually asserted (${asserted} run + ${skippedCoingecko + skippedOpenMeteo} deliberately sampled out = ${accounted}), not soft-skipped away`);
+    `enough tools were actually asserted (${asserted} run + ${skippedCoingecko} deliberately sampled out = ${accounted}), not soft-skipped away`);
 
   console.log(`\n${failed ? "FAILED" : "OK"}: ${passed} passed, ${failed} failed — in-scope=${work.length} excluded=${excluded.length}`);
   stop();
