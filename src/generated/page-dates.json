@@ -212,7 +212,7 @@
     "src/what-is-x402.js": "2026-11-12",
     "src/workflows.js": "2026-10-11",
     "src/x402-101.js": "2026-11-05",
-    "src/x402-test-page.js": "2026-11-12"
+    "src/x402-test-page.js": "2026-11-17"
   },
   "toolSources": {
     "a2a-card-fetch": "src/tools/network-kit.js",
