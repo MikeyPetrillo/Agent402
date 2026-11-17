@@ -7,6 +7,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 
 const ENTRIES = [
   {
+    date: "2026-11-17",
+    title: "Seller removal says how a seller returns",
+    items: [
+      "Operations: Removing a seller from the index can be previewed with a dry run (dryRun: true) that names what the index holds for it and where it is known from, and the removal and its restore say how the seller returns: one listed in a registry or seeded by the operator comes back by itself on the next read and crawl, one only its owner submitted comes back when the owner registers again.",
+    ],
+  },
+  {
     date: "2026-11-16",
     title: "Marketplace answers arrive whole or are not settled",
     items: [

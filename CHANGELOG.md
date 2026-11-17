@@ -6,6 +6,15 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (seller removal says how a seller returns)
+Operations:
+- Removing a seller from the index can be previewed with a dry run (dryRun:
+  true) that names what the index holds for it and where it is known from, and
+  the removal and its restore say how the seller returns: one listed in a
+  registry or seeded by the operator comes back by itself on the next read and
+  crawl, one only its owner submitted comes back when the owner registers
+  again.
+
 ### 2026-11-16 (marketplace answers arrive whole or are not settled)
 Payments:
 - An input a tool refuses on a call bought through a marketplace listing is
