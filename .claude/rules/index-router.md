@@ -107,10 +107,16 @@ Loaded when an index, discovery, router or buyer file is read.
   `cycleOkFraction` and the cycle tally, a throttled, budgeted or landing-held one is left out, and an origin read
   after a wait gets the hold window (`INDEX_CRAWL_HOLD_HOURS`) counted from the end of that wait,
   or from the last scheduled turn our limits passed over (`turnNotReadAt`: any skip reason), so a
-  seller is never dropped because we chose not to read it.
+  seller is never dropped because we chose not to read it; once a read has failed
+  (`readIncomplete`), the start stays at `holdFromAt`, so a dark origin drops after the hold.
+  Registration (`unscheduled`) reads: at most `SELLER_REGISTRATION_HOURLY_MAX` (default 20) per
+  operator of the target host per clock hour (`RequestHeld` "registration-hour"; the register routes
+  answer 429 with Retry-After). Names under `OWNER_ADDRESSED_SUFFIXES` (src/operator-key.js) are also
+  counted per resolved address per day (`takeAddressBudget`, fed by safeFetch/probePublicUrl
+  `onResolved` from the SSRF check; "address-day").
   `CRAWL_SLOW_ORIGINS` is by the clock: a slow origin's scheduled read sets a per-lane flag
   (`noteSlowRead`, x402 and mpp) in the shared store, merged at prefetch, and `slowWaiting` /
-  `crawlPlan` skip "slow" until `SLOW_READ_INTERVAL_MS` has passed, so boots and extra cycles never
+  `crawlPlan` skip "slow" until `SLOW_READ_INTERVAL_MS` has passed, so boots and extra cycles do not
   read it early; it applies to the MPP index too (`mppCrawlDue`). Counts on
   `/__operator/seller-load.json`; `?host=` gives the request log (per component and minute, two
   days: one counter per host, minute and component in a shared-store tally per host and hour, so

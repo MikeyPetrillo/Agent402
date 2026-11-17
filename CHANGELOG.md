@@ -22,12 +22,20 @@ Index:
 - The MPP index's reads of a seller count against the same daily allowance,
   wait out the same Retry-After holds, and follow the slower cycle (every 6
   hours) a site asked for. That cycle is timed by the clock from the last read
-  any of our servers made, in both indexes, so a restart never reads such a
+  any of our servers made, in both indexes, so a restart does not read such a
   site early.
 - A site whose scheduled read we put off (its day spent, a Retry-After, the
   slower cycle) keeps its last good listing through a read of ours that then
   does not complete, for the same hold window counted from the last turn we
   put off, so it never leaves the router because we chose not to read it.
+  Once such a read has failed, the turns the site then waits no longer extend
+  the hold, so a site that stays unreachable leaves after it.
+- The reads registrations ask for reach one site at most 20 times an hour,
+  whoever registers which origin on it; a registration past that is answered
+  429 with a Retry-After, and nothing is listed or changed. A name under a
+  wildcard or dynamic DNS service, which points wherever its owner sets, is
+  also counted per address it resolves to: every such name on one address
+  shares one allowance of about 200 requests a day.
 Operations:
 - The seller load controls decide from each server's own memory and read the
   shared store once per crawl cycle, so a slow store no longer slows the crawl
