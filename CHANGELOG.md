@@ -37,6 +37,8 @@ Packages:
   default 10000, then exit 1); the README settle examples run on Base Sepolia
   with the x402.org facilitator. agent402-client, agent402-mcp and
   agent402-tollbooth ship TypeScript declarations.
+- elizaos-plugin-agent402 0.2.11 accepts agent402-client from 0.8.21 up to the
+  next major, 0.9.0 included.
 MCP:
 - The hosted connector counts each message of a JSON-RPC batch against its
   per-client request limit.
