@@ -5,7 +5,7 @@
 // while its English twin ranked three sellers. Offline, synthetic catalog.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 process.env.X402_INDEX_CRAWL = "off";
-import { queryTerms, termMatcher, splitTokens, isCjkTerm } from "../src/query-terms.js";
+import { queryTerms, termMatcher, splitTokens, isCjkTerm, caseParts, caseRuns, CASE_SPLIT_MAX_CHARS } from "../src/query-terms.js";
 const { routeQuery, _cacheForTests, allIndexedTools } = await import("../src/x402-index.js");
 const { findTools } = await import("../src/find.js");
 let pass = 0, fail = 0;
@@ -24,6 +24,34 @@ ok(eq(queryTerms("a—b–c"), ["a", "b", "c"]), "dashes of every width separate
 ok(queryTerms("x".repeat(5) + " " + "y".repeat(5), { max: 1 }).length === 1, "the term cap is honoured");
 ok(eq(queryTerms("csv csv CSV"), ["csv"]), "terms are deduplicated");
 ok(eq(splitTokens("Gzip, HTML-strip"), ["gzip", "html", "strip"]), "splitTokens is the lower-cased token list");
+// camelCase and acronym boundaries are read before folding (2026-11-16), as
+// EXTRA words beside the whole run: splitTokens is unchanged.
+ok(eq(splitTokens("GitHub OpenAI DeFi webPageToMarkdown"), ["github", "openai", "defi", "webpagetomarkdown"]), "splitTokens folds every run whole, brand-cased or camelCase");
+{
+  const huge = "getTokenPrice".repeat(80000); // ~1 MB of camelCase
+  const t0 = performance.now(); const r = caseRuns(huge); const ms = performance.now() - t0;
+  ok(r.toks.length === 1 && r.parts === null && ms < 50, `a name longer than ${CASE_SPLIT_MAX_CHARS} characters is folded whole, not case-read (${ms.toFixed(1)} ms)`);
+  const atLimit = "getTokenPrice".padEnd(CASE_SPLIT_MAX_CHARS, "x");
+  const overLimit = "getTokenPrice".padEnd(CASE_SPLIT_MAX_CHARS + 1, "x");
+  ok(atLimit.length === CASE_SPLIT_MAX_CHARS && (caseParts(atLimit)?.length ?? 0) > 1 && caseRuns(atLimit).parts?.[0]?.length > 1, "a name of exactly the limit is case-read into parts");
+  ok(overLimit.length === CASE_SPLIT_MAX_CHARS + 1 && caseParts(overLimit) === null && caseRuns(overLimit).parts === null && caseRuns(overLimit).toks.length === 1, "a name one character over the limit is folded whole");
+}
+ok(eq(caseParts("webPageToMarkdown"), ["web", "page", "to", "markdown"]), "a camelCase operationId splits at each capital");
+ok(eq(caseParts("getTokenPrice"), ["get", "token", "price"]), "getTokenPrice -> get token price");
+ok(eq(caseParts("getUSDCPrice"), ["get", "usdc", "price"]), "an acronym ends before the capital that opens the next word");
+ok(caseParts("get_token_price") === null && caseRuns("web-page-to-markdown").parts === null, "snake_case and kebab-case carry no case parts");
+ok(eq(caseParts("XMLHttpRequest"), ["xml", "http", "request"]) && eq(caseParts("erc20Token"), ["erc20", "token"]), "a leading acronym and a digit before a capitalized word are boundaries");
+ok(["iPhone", "eBay", "APIs", "IPv4", "OAuth", "P2P", "3D", "JSON"].every((w) => caseParts(w) === null), "a one-letter lower-case prefix, a plural acronym, a version suffix and an all-caps word stay whole");
+ok(eq(caseRuns("İstanbul").toks, splitTokens("İstanbul")) && caseRuns("İstanbul").parts === null, "the fold is the same as before for a character whose lower case adds a mark");
+ok(eq(caseParts("getIDsByName"), ["get", "ids", "by", "name"]), "a plural acronym inside camelCase keeps its s");
+{
+  const r = caseRuns("GitHub repository enrichment");
+  ok(eq(r.toks, ["github", "repository", "enrichment"]) && eq(r.parts, [["git", "hub"], null, null]), "a brand-cased run keeps its whole token and word count; its parts sit beside it");
+}
+// The query side is folded whole: a buyer's words and a pasted description's
+// field names ("marketCap") stay one term, so no ranking moves for them.
+ok(eq(queryTerms("getTokenPrice marketCap"), ["gettokenprice", "marketcap"]), "queryTerms folds a camelCase word whole, as before");
+ok(termMatcher("to")("webpagetomarkdown") === false && termMatcher("to")("page to markdown") === true, "the short-term matcher reads a folded haystack as before");
 ok(isCjkTerm("中国") && !isCjkTerm("ip") && !isCjkTerm("中国x"), "isCjkTerm is true only for all-CJK terms");
 
 // --- matching --------------------------------------------------------------------
