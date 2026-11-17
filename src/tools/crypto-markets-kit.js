@@ -339,7 +339,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.008",
     description:
-      "Full profile of one coin by id: name/symbol, description, categories, contract addresses per platform, links (homepage, explorers, repos, social), hashing algorithm, genesis date, and a market snapshot in your currency: price, rank, market cap, fully diluted valuation, 24h volume, ATH/ATL with dates and distance, circulating/total/max supply, 24h/7d/30d/1y change. One call for the metadata a token-risk or research agent otherwise assembles from five. Cached in-process for 5 minutes.",
+      "Full profile of one coin by id: name/symbol, description, categories, contract addresses per platform, links (homepage, explorers, repos, social), hashing algorithm and genesis date. Adds a market snapshot in your currency: price, rank, market cap, fully diluted valuation, 24h volume, ATH/ATL with dates and distance, circulating/total/max supply, 24h/7d/30d/1y change. One call for the metadata a token-risk or research agent otherwise assembles from five. Cached in-process for 5 minutes.",
     tags: ["crypto", "coin", "profile", "metadata", "market-data", "supply", "ath", "links"],
     discovery: {
       input: { coin: "ethereum", currency: "usd" },
@@ -928,7 +928,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "The complete list of tracked coins (~18k) as {id, symbol, name}, paged: `page` + `perPage` (1-500, default 250). `includePlatforms: true` adds each coin's contract address per platform; `platform` (e.g. base, solana, ethereum) keeps only coins with a contract there; `symbol` keeps one ticker (exact, case-insensitive) across all its namesakes. For bulk id resolution, building a local symbol map, or enumerating every token on one chain; for a single lookup use coin-search. The upstream list is fetched once and cached in-process for 10 minutes, so paging through it costs the shared quota one call.",
+      "The complete list of tracked coins (~18k) as {id, symbol, name}, paged: `page` + `perPage` (1-500, default 250). Set `includePlatforms: true` to add each coin's contract address per platform. Pass `platform` (e.g. base, solana, ethereum) to keep only coins with a contract there, or `symbol` to keep one ticker (exact, case-insensitive) across all its namesakes. For bulk id resolution, building a local symbol map, or enumerating every token on one chain; for a single lookup use coin-search. The upstream list is fetched once and cached in-process for 10 minutes, so paging through it costs the shared quota one call.",
     tags: ["crypto", "coins", "list", "ids", "symbols", "platforms", "contracts", "bulk"],
     discovery: {
       input: { symbol: "usdc", includePlatforms: true },
