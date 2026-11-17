@@ -39,8 +39,12 @@ prompts but is never made primary (OpenClaw would refuse every turn as a
 context overflow). The plugin starts a loopback proxy (`127.0.0.1:8412`) that
 pays Agent402 and forwards; OpenClaw only ever sees a local OpenAI-compatible URL.
 
-The plugin is also on ClawHub: `openclaw plugins install clawhub:agent402-openclaw`
-installs the same package and shows its ClawHub security audit first.
+Each release is published to npm and ClawHub. OpenClaw 2026.11.5 and later
+install a bare name from ClawHub, so the command above takes the ClawHub
+listing there; `openclaw plugins install npm:agent402-openclaw` takes the npm
+package. Earlier hosts install the bare name from npm, and
+`openclaw plugins install clawhub:agent402-openclaw` takes the ClawHub listing
+and shows its security audit first.
 
 OpenClaw 2026.10.1 and later reserve the verified-source badge for plugins in
 OpenClaw's own official inventory, so `openclaw plugins doctor` and `plugins
@@ -53,7 +57,7 @@ trusted plugins.
 
 Tested in CI against real OpenClaw installs (the newest proven release and the
 one before it, plus a daily run against the newest published one): plugin
-install from a packed archive and from the npm registry, doctor, setup, model
+install from a packed archive, the npm registry and ClawHub, doctor, setup, model
 listing, gateway boot and one agent turn (`test-real-install.js`).
 
 No OpenClaw? `agent402-openclaw proxy` runs the proxy alone; point any OpenAI

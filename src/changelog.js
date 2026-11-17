@@ -8,6 +8,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
+    title: "The OpenClaw plugin on OpenClaw 2026.11.5",
+    items: [
+      "Packages: agent402-openclaw 0.5.12 is tested against OpenClaw 2026.11.5 and 2026.11.2. OpenClaw 2026.11.5 installs a bare plugin name from ClawHub, where each release is also published; the README names npm:agent402-openclaw for the npm package on that host, and the real-install test covers the ClawHub and npm installs there.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "An unconfirmed settlement is answered as unconfirmed",
     items: [
       "Payments: When a backup settler ends a settlement on an answer that does not show whether the transfer was sent (an HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction), the call is answered 402 with reason settlement-unconfirmed: the answer says not to sign a new authorization for that call before the expiry the payment carries (an authorization's validBefore, a time by which a Solana transaction's blockhash has expired, an Algorand lastValid round or a Stellar expiration ledger), or when it carries none, until the paying wallet shows whether the transfer landed, names the transaction to watch and its refund lookup when there is one (retry watch-transaction, otherwise check-wallet), carries no new offer, and its receipt reads settlement_unconfirmed.",

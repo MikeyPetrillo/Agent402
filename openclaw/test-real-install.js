@@ -6,7 +6,8 @@
 //   openclaw plugins install <tgz>   (the documented install; 0.1.0-0.2.0 were REFUSED here:
 //                                    "plugin manifest requires configSchema")
 //   openclaw plugins install agent402-openclaw  (the PUBLISHED package by name, as a user
-//                                    runs it; same doctor/trust verdict as the tgz)
+//                                    runs it: npm, or ClawHub from 2026.11.5, plus
+//                                    npm:agent402-openclaw there; same verdict as the tgz)
 //   agent402-openclaw setup --write  (through the symlink, against a stub gateway)
 //   openclaw models list / status    (the provider and primary OpenClaw actually sees)
 //   openclaw gateway run             (the plugin service must start the loopback proxy)
@@ -36,7 +37,7 @@ const pkgDir = fileURLToPath(new URL(".", import.meta.url));
 // that watcher goes red and the plugin has been fixed to match. deploy.yml also
 // runs this file once against the previous pin (OPENCLAW_SPEC), so a raise never
 // drops the host most users still run.
-const OPENCLAW_SPEC = process.env.OPENCLAW_SPEC || "openclaw@2026.11.2";
+const OPENCLAW_SPEC = process.env.OPENCLAW_SPEC || "openclaw@2026.11.5";
 
 // ASYNC spawn only: the stub gateway lives in this process, and a synchronous
 // spawn blocks the event loop so nothing the child asks the stub is answered
@@ -68,7 +69,10 @@ const judgeDoctor = (out, installSource) => {
 // untrusted verdict, more precisely labeled. So an npm install may read either
 // reason; an archive install still reads provenance-invalid, and every other
 // reason fails.
-const TRUST_REASONS = { npm: ["provenance-invalid", "third-party-npm"], archive: ["provenance-invalid"] };
+// 2026.11.5 resolves a bare package name on ClawHub ("ClawHub by default" in
+// `plugins install --help`); npm takes the explicit `npm:` prefix. A ClawHub
+// install of an outside plugin reads provenance-invalid, like an archive.
+const TRUST_REASONS = { npm: ["provenance-invalid", "third-party-npm"], archive: ["provenance-invalid"], clawhub: ["provenance-invalid"] };
 const judgeTrust = (out, installSource) => {
   const m = /^Trust: reason=([a-z-]+);.*installSource="([a-z]+)"/m.exec(out);
   return !m ? { pass: true, verdict: "no trust line on this host" } : { pass: m[2] === installSource && (TRUST_REASONS[installSource] || []).includes(m[1]), verdict: `reason=${m[1]} installSource=${m[2]}` };
@@ -206,18 +210,25 @@ try {
   // install: the provenance notice is the host's word on every outside plugin,
   // not an artifact of installing from a tgz. A TTY user answers two y/N
   // prompts; CI gives the same consent with flags.
-  const regHome = join(work, "home-registry");
-  await sh("mkdir", ["-p", regHome]);
-  const regEnv = { ...env, HOME: regHome, OPENCLAW_STATE_DIR: regHome, OPENCLAW_CONFIG_PATH: join(regHome, "openclaw.json"), AGENT402_OPENCLAW_HOME: regHome };
-  const ri = await sh(oc, ["plugins", "install", "agent402-openclaw", "--force", ...CONSENT], { env: regEnv, cwd: regHome });
-  ok(ri.status === 0 && /Installed plugin: agent402/.test(ri.out), `openclaw plugins install agent402-openclaw (registry) installs (exit ${ri.status}: ${ri.out.trim().replace(/\s+/g, " ").slice(-300)})`);
-  const rinsp = await sh(oc, ["plugins", "inspect", "agent402"], { env: regEnv });
-  ok(/Status: (loaded|enabled)/.test(rinsp.out) && /text-inference: agent402/.test(rinsp.out), `registry install inspects loaded with text-inference (${rinsp.out.trim().replace(/\s+/g, " ").slice(0, 300)})`);
-  const rtj = judgeTrust(rinsp.out, "npm");
-  ok(rtj.pass, `registry install trust verdict: ${rtj.verdict}`);
-  const rdoc = await sh(oc, ["plugins", "doctor"], { env: regEnv });
-  const rdj = judgeDoctor(rdoc.out, "npm");
-  ok(rdj.pass, `openclaw plugins doctor (registry install): ${rdj.verdict}${rdj.other.length ? `; other diagnostics: ${rdj.other.join(" | ").slice(0, 400)}` : ""}`);
+  // The bare name goes where the host sends it: npm through 2026.11.4, ClawHub
+  // from 2026.11.5 (the same release is published to both). On a ClawHub-default
+  // host the npm channel is proven too, with the explicit `npm:` prefix.
+  const bareSource = /ClawHub by default/.test(installHelp.out) ? "clawhub" : "npm";
+  const registryInstalls = [["agent402-openclaw", bareSource], ...(bareSource === "npm" ? [] : [["npm:agent402-openclaw", "npm"]])];
+  for (const [spec, source] of registryInstalls) {
+    const regHome = join(work, `home-registry-${source}`);
+    await sh("mkdir", ["-p", regHome]);
+    const regEnv = { ...env, HOME: regHome, OPENCLAW_STATE_DIR: regHome, OPENCLAW_CONFIG_PATH: join(regHome, "openclaw.json"), AGENT402_OPENCLAW_HOME: regHome };
+    const ri = await sh(oc, ["plugins", "install", spec, "--force", ...CONSENT], { env: regEnv, cwd: regHome });
+    ok(ri.status === 0 && /Installed plugin: agent402/.test(ri.out), `openclaw plugins install ${spec} (${source}) installs (exit ${ri.status}: ${ri.out.trim().replace(/\s+/g, " ").slice(-300)})`);
+    const rinsp = await sh(oc, ["plugins", "inspect", "agent402"], { env: regEnv });
+    ok(/Status: (loaded|enabled)/.test(rinsp.out) && /text-inference: agent402/.test(rinsp.out), `${source} install inspects loaded with text-inference (${rinsp.out.trim().replace(/\s+/g, " ").slice(0, 300)})`);
+    const rtj = judgeTrust(rinsp.out, source);
+    ok(rtj.pass, `${source} install trust verdict: ${rtj.verdict}`);
+    const rdoc = await sh(oc, ["plugins", "doctor"], { env: regEnv });
+    const rdj = judgeDoctor(rdoc.out, source);
+    ok(rdj.pass, `openclaw plugins doctor (${source} install): ${rdj.verdict}${rdj.other.length ? `; other diagnostics: ${rdj.other.join(" | ").slice(0, 400)}` : ""}`);
+  }
 
   // 4. setup --write through the SYMLINK, against the stub gateway.
   const setup = await sh(bin, ["setup", "--write", "--port", String(proxyPort)], { env });
