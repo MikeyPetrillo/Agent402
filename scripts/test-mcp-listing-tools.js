@@ -44,7 +44,7 @@ import {
 } from "./lib/mcp-listings.js";
 import { buyMcpListing, askMcpOffer, signedPaymentProblems, X402_PAYMENT_META, X402_PAYMENT_RESPONSE_META } from "./lib/mcp-x402-client.js";
 import { staleCandidates, buyMcpListings, buildPayClient, signedSpendBudget } from "./refresh-bazaar.js";
-import { decide, issueBody, issueListedKeys, logLines, listingKeyOnHost, mcpCatalogRows, readListing } from "./bazaar-presence.js";
+import { decide, issueBody, mcpIssueBody, ISSUE_TITLE, MCP_ISSUE_TITLE, issueListedKeys, logLines, listingKeyOnHost, mcpCatalogRows, readListing, run as runPresence } from "./bazaar-presence.js";
 import { run as planRun, mcpPassRoutes } from "./keepalive-plan.js";
 import { aboveCeilingRoutes, passMicros, burnerLowWaterUsd, microsToUsd } from "./lib/keepalive-plan.js";
 import { runMcpValidation, mcpListingOfferProblems } from "./bazaar-validate.js";
@@ -311,42 +311,120 @@ const offerFor = (toolName, micros, over = {}) => ({
   const reading = (keys) => ({ pricing, passes: [{ keys: new Set(keys) }, { keys: new Set(keys) }] });
   ok(mcpCatalogRows(pricing).length === 6 && mcpCatalogRows(pricing)[0].key === "MCP /mcp#web.search" && mcpCatalogRows(pricing)[0].slug === "search", "the catalog's MCP listings are read as MCP /mcp#<tool>");
 
-  // Before the first listing buy: none listed, none seen.
-  let d = decide({ reading: reading(httpKeys), prev: { missing: {}, unreadable: 0 } });
-  ok(d.notYetListed.length === 6 && d.newlyMissing.length === 0 && d.repeat.length === 0 && d.buy.length === 0 && d.action === "none" && d.state.mcpSeen.length === 0,
-    "six MCP listings never seen in the listing are not yet listed: not missing, not bought, no page");
-  ok(logLines(d).some((l) => /MCP tool listings not yet listed[^\n]*: 6\./.test(l)), "the log counts them");
-  d = decide({ reading: reading(httpKeys), prev: d.state });
-  ok(d.action === "none" && d.repeat.length === 0, "nor on the check after");
-
-  // Listed: seen and remembered.
-  d = decide({ reading: reading([...httpKeys, ...mcpKeys]), prev: { missing: {}, unreadable: 0 } });
-  ok(d.notYetListed.length === 0 && d.newlyMissing.length === 0 && d.state.mcpSeen.join(",") === [...Object.values(MCP_LISTING_TOOLS)].sort().join(","), `a reading that holds the six listings finds them (${d.state.mcpSeen.join(", ")})`);
-  const seenState = d.state;
-  // One leaves.
-  const without = [...httpKeys, ...mcpKeys.filter((k) => k !== "/mcp#web.answer")];
-  d = decide({ reading: reading(without), prev: seenState });
-  const ex = d.exempt.find((e) => e.key === "MCP /mcp#web.answer");
-  ok(d.newlyMissing.length === 1 && ex?.why === "mcp listing" && d.buy.length === 0 && d.state.missing["MCP /mcp#web.answer"] === "mcp listing" && d.action === "none",
-    "a listing that was seen and leaves is missing, is never bought by this check, and does not page on the first check");
-  ok(d.state.mcpSeen.includes("web.answer"), "it stays remembered as seen");
-  const d2 = decide({ reading: reading(without), prev: d.state });
-  ok(d2.repeat.length === 1 && d2.action === "open" && d2.buy.length === 0, "still missing on the next check: the issue opens, nothing bought");
-  const body = issueBody(d2);
-  ok(/- `MCP \/mcp#web\.answer`: not bought here: an MCP tool listing/.test(body) && /bazaar-mcp-listings\.yml/.test(body) && !/\$\s?\d/.test(body), "the issue names the listing, why it was not bought, and the pass that buys it, with no figure");
-  ok(issueListedKeys(body).has("MCP /mcp#web.answer"), "and the listing is read back from the issue body");
-  // State lost with that issue open: the listing counts as missing before, never as not yet listed.
-  const lost = decide({ reading: reading(without), prev: null, openIssue: true, issueListed: issueListedKeys(body) });
-  ok(lost.repeat.length === 1 && lost.notYetListed.length === 0 && lost.action === "update", "with the state lost, a listing the open issue names is a repeat miss");
-  // It returns: the issue closes.
-  const back = decide({ reading: reading([...httpKeys, ...mcpKeys]), prev: d2.state, openIssue: true });
-  ok(back.action === "close" && back.repeat.length === 0, "the issue closes when the listing is back");
-  // A missing HTTP route is still bought as before, and an MCP listing never rides in the buy.
-  const mixed = decide({ reading: reading([...httpKeys.filter((k) => k !== "/api/hash"), ...mcpKeys.filter((k) => k !== "/mcp#web.search")]), prev: seenState });
-  ok(mixed.buy.map((b) => b.slug).join(",") === "hash" && mixed.exempt.some((e) => e.why === "mcp listing"), "a missing route is bought as before; the MCP listing beside it is not in the buy");
-  // An unreadable check keeps what was seen.
-  const blind = decide({ reading: null, prev: seenState });
-  ok(blind.state.mcpSeen.length === 6 && blind.notYetListed.length === 0, "an unreadable check keeps the seen listings");
+  // The listings are decided apart from the routes, whatever the switch says.
+  for (const sw of [true, false]) {
+    const tag = sw ? "switch on" : "switch off";
+    const dec = (o) => decide({ mcpKeepalive: sw, ...o });
+    // Before the first listing buy: none listed, none seen.
+    let d = dec({ reading: reading(httpKeys), prev: { missing: {}, unreadable: 0 } });
+    ok(d.notYetListed.length === 6 && d.mcpMissing.length === 0 && d.newlyMissing.length === 0 && d.buy.length === 0 && d.action === "none" && d.mcpAction === "none" && d.state.mcpSeen.length === 0,
+      `${tag}: six MCP listings never seen in the listing are not yet listed: not missing, not bought, no page`);
+    ok(logLines(d).some((l) => /MCP tool listings not yet listed[^\n]*: 6\./.test(l)), `${tag}: the log counts them`);
+    d = dec({ reading: reading(httpKeys), prev: d.state });
+    ok(d.action === "none" && d.mcpAction === "none", `${tag}: nor on the check after`);
+    // Listed: seen and remembered.
+    d = dec({ reading: reading([...httpKeys, ...mcpKeys]), prev: { missing: {}, unreadable: 0 } });
+    ok(d.notYetListed.length === 0 && d.mcpMissing.length === 0 && d.state.mcpSeen.join(",") === [...Object.values(MCP_LISTING_TOOLS)].sort().join(","), `${tag}: a reading that holds the six listings finds them`);
+    const seenState = d.state;
+    // One leaves: named in the log, never bought, no page on the first check.
+    const without = [...httpKeys, ...mcpKeys.filter((k) => k !== "/mcp#web.answer")];
+    d = dec({ reading: reading(without), prev: seenState });
+    ok(d.mcpMissing.map((m) => m.key).join() === "MCP /mcp#web.answer" && d.newlyMissing.length === 0 && d.buy.length === 0 && d.mcpAction === "none" && d.action === "none" && d.state.mcpMissing.join() === "MCP /mcp#web.answer" && !Object.hasOwn(d.state.missing, "MCP /mcp#web.answer"),
+      `${tag}: a listing that was seen and leaves is missing apart from the routes, never bought, no page on the first check`);
+    const lines1 = logLines(d);
+    ok(lines1.some((l) => /^  missing MCP \/mcp#web\.answer \(catalog slug answer\)$/.test(l)) && lines1.some((l) => /^::warning::[^\n]*\/mcp#web\.answer/.test(l)) && lines1.some((l) => (sw ? /pass is on/ : /pass is off \(BAZAAR_MCP_KEEPALIVE\), so nothing re-buys/).test(l)),
+      `${tag}: the log names the missing listing and its slug, warns, and says whether the scheduled pass runs (${lines1.filter((l) => /MCP/.test(l)).join(" | ")})`);
+    ok(d.state.mcpSeen.includes("web.answer"), `${tag}: it stays remembered as seen`);
+    // Still missing: its own issue opens; the route issue does not.
+    const d2 = dec({ reading: reading(without), prev: d.state });
+    ok(d2.mcpRepeat.length === 1 && d2.mcpAction === "open" && d2.action === "none" && d2.repeat.length === 0 && d2.buy.length === 0, `${tag}: still missing on the next check: the MCP listing issue opens, the route issue does not, nothing bought`);
+    ok(logLines(d2).some((l) => /^  still missing MCP \/mcp#web\.answer \(catalog slug answer\)$/.test(l)), `${tag}: the log names it as still missing`);
+    // Open and still missing: never edited.
+    const d3 = dec({ reading: reading(without), prev: d2.state, mcpOpenIssue: true });
+    ok(d3.mcpAction === "none" && d3.mcpRepeat.length === 1, `${tag}: with its issue open and the listing still missing, the issue is kept and not edited`);
+    // State lost with that issue open: held as is for that check, the absent listing not recorded.
+    const lost = dec({ reading: reading(without), prev: null, mcpOpenIssue: true });
+    ok(lost.mcpRepeat.length === 0 && lost.mcpMissing.length === 0 && lost.mcpAction === "none" && !lost.state.mcpSeen.includes("web.answer") && lost.state.mcpMissing.length === 0, `${tag}: state lost with the MCP issue open: the issue is held and the absent listing is not recorded as seen or missing`);
+    ok(dec({ reading: reading([...httpKeys, ...mcpKeys]), prev: null, mcpOpenIssue: true }).mcpAction === "close", `${tag}: state lost, every listing back: the MCP issue closes`);
+    // It returns: the issue closes.
+    const back = dec({ reading: reading([...httpKeys, ...mcpKeys]), prev: d2.state, mcpOpenIssue: true });
+    ok(back.mcpAction === "close" && back.mcpMissing.length === 0 && back.state.mcpMissing.length === 0, `${tag}: the MCP issue closes when the listing is back`);
+    // An unreadable check keeps what was seen and missing, and touches no MCP issue.
+    const blind = dec({ reading: null, prev: d2.state, mcpOpenIssue: true });
+    ok(blind.state.mcpSeen.length === 6 && blind.state.mcpMissing.join() === "MCP /mcp#web.answer" && blind.mcpAction === "none", `${tag}: an unreadable check keeps the seen and missing listings`);
+    // A route missing beside the absent listing is bought, then pages under the route issue alone.
+    const routeGone = [...httpKeys.filter((k) => k !== "/api/hash"), ...mcpKeys.filter((k) => k !== "/mcp#web.answer")];
+    const r1 = dec({ reading: reading(routeGone), prev: d.state });
+    const r2 = dec({ reading: reading(routeGone), prev: r1.state });
+    ok(r1.buy.map((b) => b.slug).join() === "hash" && r2.repeat.map((m) => m.key).join() === "POST /api/hash" && r2.action === "open" && [...issueListedKeys(issueBody(r2))].join() === "POST /api/hash" && r2.mcpAction === "open",
+      `${tag}: a route missing beside the absent listing is bought, then pages in the route issue, which never lists the listing`);
+    // The route issue opened over a route closes when the route is back, the listing still absent.
+    const routeBack = dec({ reading: reading(without), prev: r2.state, openIssue: true, mcpOpenIssue: true });
+    ok(routeBack.action === "close" && routeBack.mcpAction === "none", `${tag}: the route issue closes on its own; the MCP issue stays open`);
+  }
+  // State lost while the MCP issue is open: a listing never observed is not made seen or missing.
+  {
+    const onlySearch = [...httpKeys, "/mcp#web.search"];
+    let d = decide({ reading: reading(onlySearch), prev: { missing: {}, unreadable: 0 } });
+    d = decide({ reading: reading(httpKeys), prev: d.state });
+    d = decide({ reading: reading(httpKeys), prev: d.state });
+    ok(d.mcpAction === "open" && d.mcpRepeat.map((m) => m.key).join() === "MCP /mcp#web.search", "only web.search was listed; it leaves twice: the MCP issue opens");
+    const lostHeld = decide({ reading: reading(httpKeys), prev: null, mcpOpenIssue: true });
+    ok(lostHeld.mcpAction === "none" && lostHeld.mcpRepeat.length === 0 && lostHeld.mcpMissing.length === 0 && lostHeld.state.mcpSeen.length === 0 && lostHeld.state.mcpMissing.length === 0,
+      `state lost with the MCP issue open: the issue is held for one check and no absent listing is recorded as seen or missing (seen ${lostHeld.state.mcpSeen.join()}, missing ${lostHeld.state.mcpMissing.join()})`);
+    d = decide({ reading: reading(onlySearch), prev: lostHeld.state, mcpOpenIssue: true });
+    ok(d.mcpAction === "close" && d.mcpRepeat.length === 0 && d.state.mcpSeen.join() === "web.search" && d.state.mcpMissing.length === 0,
+      `after lost state, the listing that was seen is back: the MCP issue closes (action ${d.mcpAction}, repeat ${d.mcpRepeat.map((m) => m.key).join()})`);
+    const lostBack = decide({ reading: reading(onlySearch), prev: null, mcpOpenIssue: true });
+    ok(lostBack.state.mcpSeen.join() === "web.search" && lostBack.state.mcpMissing.length === 0, "state lost, only web.search listed: only the observed listing becomes seen");
+    let after = decide({ reading: reading(onlySearch), prev: lostBack.state, mcpOpenIssue: true });
+    for (let i = 0; i < 3; i++) after = decide({ reading: reading(onlySearch), prev: after.state, mcpOpenIssue: after.mcpAction !== "close" });
+    ok(after.mcpAction === "none" && after.mcpRepeat.length === 0 && after.state.mcpMissing.length === 0, "never-listed listings never become permanent repeats");
+  }
+  // An older state that kept a listing in the route set still counts it as missing before.
+  {
+    const legacy = { missing: { "MCP /mcp#web.answer": "mcp listing" }, unreadable: 0, mcpSeen: [...Object.values(MCP_LISTING_TOOLS)].sort() };
+    const d = decide({ reading: reading([...httpKeys, ...mcpKeys.filter((k) => k !== "/mcp#web.answer")]), prev: legacy });
+    ok(d.mcpRepeat.length === 1 && d.mcpAction === "open" && d.action === "none" && !Object.hasOwn(d.state.missing, "MCP /mcp#web.answer"), "an older state's listing entry counts as missing before, under the MCP issue only");
+  }
+  // The MCP issue's body is fixed text: no listing named, no figure, the pass that buys it.
+  {
+    const b = mcpIssueBody("https://github.com/o/r/actions/runs/1");
+    ok(b === mcpIssueBody("https://github.com/o/r/actions/runs/1") && !/web\.answer|web\.search/.test(b) && /bazaar-mcp-listings\.yml/.test(b) && /BAZAAR_MCP_KEEPALIVE/.test(b) && !/\$\s?\d/.test(b) && /Run: https:\/\/github\.com\/o\/r\/actions\/runs\/1$/.test(b) && issueListedKeys(b).size === 0,
+      "the MCP issue body is fixed text naming no listing and no figure");
+    ok(MCP_ISSUE_TITLE !== ISSUE_TITLE, "the MCP issue has its own title");
+  }
+  // run() reads the switch and the MCP issue from the environment, and writes the MCP action and body.
+  {
+    const seenState = decide({ reading: reading([...httpKeys, ...mcpKeys]), prev: { missing: {}, unreadable: 0 } }).state;
+    const feed = [...httpKeys.map((p) => ({ resource: `${ORIGIN}${p}`, type: "http" })), ...Object.values(MCP_LISTING_TOOLS).filter((t) => t !== "web.answer").map((t) => ({ resource: `${ORIGIN}/mcp#${t}`, type: "mcp" }))];
+    const fj = async (url) => url.endsWith("/api/pricing") ? pricing : { items: Number(new URL(url).searchParams.get("offset") || 0) === 0 ? feed : [], pagination: { total: feed.length, limit: 1000, offset: Number(new URL(url).searchParams.get("offset") || 0) } };
+    const { mkdtempSync, writeFileSync: wf, readFileSync: rf, existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(`${tmpdir()}/presence-mcp-switch-`);
+    const outOf = async (sw, extra = {}) => {
+      const tag = `${sw || "unset"}-${Object.keys(extra).join("")}`;
+      const state = `${dir}/state-${tag}.json`, gho = `${dir}/gho-${tag}.txt`, out = `${dir}/out-${tag}`;
+      wf(state, JSON.stringify({ v: 1, ...seenState })); wf(gho, "");
+      const lines = [];
+      const env = { TARGET_URL: ORIGIN, BAZAAR_REGISTRY_URL: "https://registry.example/resources", STATE_FILE: state, GITHUB_OUTPUT: gho, OUT_DIR: out, BAZAAR_MCP_KEEPALIVE: sw, ...extra };
+      await runPresence({ env, log: (l) => lines.push(l), fetchJson: fj });
+      const first = { lines, state: JSON.parse(rf(state, "utf8")), gho: rf(gho, "utf8") };
+      wf(gho, "");
+      const lines2 = [];
+      await runPresence({ env, log: (l) => lines2.push(l), fetchJson: fj });
+      return { first, second: { lines: lines2, state: JSON.parse(rf(state, "utf8")), gho: rf(gho, "utf8") }, body: existsSync(`${out}/mcp-body.md`) ? rf(`${out}/mcp-body.md`, "utf8") : "" };
+    };
+    for (const sw of ["on", undefined, "off"]) {
+      const r = await outOf(sw);
+      ok(r.first.state.mcpMissing.join() === "MCP /mcp#web.answer" && !Object.hasOwn(r.first.state.missing, "MCP /mcp#web.answer") && r.first.lines.some((l) => /^  missing MCP \/mcp#web\.answer/.test(l)) && /mcp_action=none/.test(r.first.gho) && /\naction=none/.test(`\n${r.first.gho}`),
+        `run() BAZAAR_MCP_KEEPALIVE=${sw}: the absent listing is named in the log and remembered apart from the routes`);
+      ok(/mcp_action=open/.test(r.second.gho) && /(^|\n)action=none/.test(r.second.gho) && r.second.lines.includes("MCP listing issue: open.") && r.body === mcpIssueBody(""),
+        `run() BAZAAR_MCP_KEEPALIVE=${sw}: on the second check the MCP listing issue opens with its fixed body, the route issue does not`);
+    }
+    const kept = await outOf("off", { MCP_OPEN_ISSUE: "12" });
+    ok(/mcp_action=none/.test(kept.second.gho), "run(): with the MCP issue open (MCP_OPEN_ISSUE) and the listing still missing, nothing is edited");
+  }
 
   // The reader finds the six rows in a feed.
   const items = [
@@ -364,7 +442,7 @@ const offerFor = (toolName, micros, over = {}) => ({
   const keys = got?.passes?.[0]?.keys || new Set();
   ok(mcpKeys.every((k) => keys.has(k)) && keys.has("/api/hash") && keys.size === new Set(httpKeys).size + 6, `a feed read holds the six MCP listings of ours beside the routes (${keys.size} keys)`);
   const dRead = decide({ reading: got, prev: { missing: {}, unreadable: 0 } });
-  ok(dRead.state.mcpSeen.length === 6 && dRead.newlyMissing.length === 0, "and the decision over that read finds all six listed");
+  ok(dRead.state.mcpSeen.length === 6 && dRead.newlyMissing.length === 0 && dRead.mcpMissing.length === 0, "and the decision over that read finds all six listed");
 }
 
 // ---- the plan ----------------------------------------------------------------------
@@ -700,15 +778,25 @@ try {
     ok(decideIssue(base).action === "none" && recordedSlugs("Listings not bought: `search`, `hash`, `../x`").join() === "search", "no issue and a clean run: nothing to do; only listing slugs are read from a body");
     ok(!/\$\s?\d|—/.test(body(["search", "answer"])), "the issue body carries no figure");
   }
-  // The presence issue names the slug the re-run takes beside the MCP row.
+  // The route issue never carries an MCP listing line or its re-run.
   {
-    const dec = { cause: "missing", repeat: [{ key: "MCP /mcp#web.search", method: "MCP", path: "/mcp#web.search" }, { key: "GET /api/dns", method: "GET", path: "/api/dns" }], state: { missing: { "MCP /mcp#web.search": "mcp listing", "GET /api/dns": "bought" } } };
+    const dec = { cause: "missing", repeat: [{ key: "GET /api/dns", method: "GET", path: "/api/dns" }], state: { missing: { "GET /api/dns": "bought" } } };
     const text = issueBody(dec, "");
-    ok(/- `MCP \/mcp#web\.search`: [^\n]*\(catalog slug `search`\)/.test(text) && !/- `GET \/api\/dns`[^\n]*catalog slug/.test(text) && [...issueListedKeys(text)].sort().join("|") === "GET /api/dns|MCP /mcp#web.search",
-      "the presence issue names the catalog slug on an MCP listing's line, and its lines still read back as keys");
+    ok(!/MCP \/mcp#|bazaar-mcp-listings\.yml|catalog slug/.test(text) && /MCP tool listings page under their own issue/.test(text) && [...issueListedKeys(text)].join() === "GET /api/dns", "the route issue names no MCP listing and points to the MCP issue");
   }
   const claude = read("CLAUDE.md");
   ok(/`BAZAAR_MCP_KEEPALIVE`/.test(claude) && /bazaar-mcp-listings\.yml/.test(claude), "CLAUDE.md documents the workflow and its switch");
+  ok(/BAZAAR_MCP_KEEPALIVE: \$\{\{ vars\.BAZAAR_MCP_KEEPALIVE \}\}/.test(read(".github/workflows/bazaar-presence.yml")) && /names in its log each one that was listed and left, pages on one missing two checks in a row under its own issue \(fixed text, never the route issue\) whatever that switch says/.test(claude.replace(/\s*\n\s*/g, " ")), "the presence check gets the switch from the repo variable, and CLAUDE.md says the listings page under their own issue whatever it says");
+  {
+    const wf = load(read(".github/workflows/bazaar-presence.yml"));
+    const job = wf.jobs.presence;
+    const check = job.steps.find((s) => s.id === "check");
+    const step = job.steps.find((s) => /--title "\$MCP_TITLE"/.test(s.run || ""));
+    ok(job.env.MCP_TITLE === MCP_ISSUE_TITLE && /select\(\.title == env\.MCP_TITLE\)/.test(check.run) && /MCP_OPEN_ISSUE="\$MCP_OPEN"/.test(check.run) && /echo "mcp_open=\$MCP_OPEN"/.test(check.run),
+      "the workflow finds the open MCP listing issue by its exact title and hands it to the check");
+    ok(step && /always\(\)/.test(step.if) && /steps\.check\.outcome == .success./.test(step.if) && /--body-file out\/mcp-body\.md/.test(step.run) && /gh issue close "\$MCP_OPEN"/.test(step.run) && !/gh issue edit/.test(step.run) && /steps\.check\.outputs\.mcp_action/.test(step.env.MCP_ACTION) && !/BAZAAR_MCP_KEEPALIVE/.test(step.if),
+      "a step of its own opens or closes the MCP listing issue, never edits it, whatever the switch says");
+  }
 }
 
 console.log(`\n${pass} passed, ${failed} failed`);

@@ -503,5 +503,61 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   const m = markMissRows({ results: [{ slug: "perp-orderbook" }] });
   ok(m.weakMatches === true && m.results[0].weak === true, "a miss marks every returned row weak");
 }
+// ---- currency words reach the currency converter (2026-11-17) ----
+// "convert currency" ranked the *-convert tools on "convert" ("currency" sits
+// inside "cryptocurrency" across the crypto kits) and read as a miss while
+// fx-rate does the task. Against the real kits that compete for the words.
+{
+  const { KIT } = await import("../src/tools/kit.js");
+  const { KIT2 } = await import("../src/tools/kit2.js");
+  const { DATA_TOOLS } = await import("../src/tools/data-kit.js");
+  const { MACRO_TOOLS } = await import("../src/tools/macro-kit.js");
+  const { MEDIA_TOOLS } = await import("../src/tools/media-kit.js");
+  const { CRYPTO_MARKETS_TOOLS } = await import("../src/tools/crypto-markets-kit.js");
+  const { PRICE_FEED_TOOLS } = await import("../src/tools/price-feed-kit.js");
+  const { FORECAST_TOOLS } = await import("../src/tools/forecast-kit.js");
+  const { PREDICTION_MARKET_TOOLS } = await import("../src/tools/prediction-market-kit.js");
+  const { FINANCE_MATH_TOOLS } = await import("../src/tools/finance-math-kit.js");
+  const { USAGE_TOOLS } = await import("../src/tools/usage-kit.js");
+  const C = {};
+  for (const t of [...API_TOOLS, ...CRYPTO_TOOLS, ...KIT, ...KIT2, ...DATA_TOOLS, ...MACRO_TOOLS, ...MEDIA_TOOLS, ...CRYPTO_MARKETS_TOOLS, ...PRICE_FEED_TOOLS, ...FORECAST_TOOLS, ...PREDICTION_MARKET_TOOLS, ...FINANCE_MATH_TOOLS, ...USAGE_TOOLS]) C[t.route] = t;
+  for (const q of ["convert currency", "convert usd to eur", "convert 100 dollars to euros", "convert dollars to euros", "currency converter", "exchange currency"]) {
+    const r = findTools(C, q, {});
+    ok(r.results[0]?.slug === "fx-rate" && r.rarestTermCovered === true, `"${q}" -> fx-rate as a strong match (got ${r.results.slice(0, 3).map((x) => x.slug).join(", ")}, covered ${r.rarestTermCovered})`);
+  }
+  // Controls: crypto and unit phrasings keep their own tools.
+  for (const q of ["convert eth to usd", "bitcoin price in usd", "convert miles to kilometers", "convert php to python", "try base64 decode"]) {
+    const r = findTools(C, q, {});
+    ok(r.results[0]?.slug !== "fx-rate", `"${q}" is not sent to fx-rate (got ${r.results[0]?.slug})`);
+  }
+  {
+    const r = findTools(C, "convert yen to dollars", {});
+    ok(/^fx-/.test(r.results[0]?.slug || "") && r.rarestTermCovered === true, `"convert yen to dollars" -> an fx tool as a strong match (got ${r.results[0]?.slug}, covered ${r.rarestTermCovered})`);
+  }
+  // A money word outside a conversion still defines the task: a query whose
+  // only uncovered word is the currency stays a miss, never a confident hit.
+  for (const q of ["yuan devaluation", "jpy volatility", "dollar index", "pay in euros", "gbp interest rate", "invoice total in euros", "sterling exchange rate", "tip calculator dollars", "inflation in euros", "peso inflation argentina", "cpi us dollar"]) {
+    const r = findTools(C, q, {});
+    ok(r.rarestTermCovered === false, `"${q}" stays a weak match (top ${r.results[0]?.slug}, rarest "${r.rarestTerm}", covered ${r.rarestTermCovered})`);
+  }
+  // A crypto word anywhere keeps the currency rule off, even beside two fiat codes.
+  const { applyCurrencyTerms } = await import("../src/find.js");
+  for (const terms of [["crypto", "currency", "converter", "usd", "eur"], ["convert", "eth", "usd", "eur"], ["bitcoin", "dollars", "euros"]]) {
+    const t = [...terms];
+    ok(applyCurrencyTerms(t) === false && !t.includes("forex"), `[${terms.join(" ")}] is not a fiat conversion (terms ${t.join(" ")})`);
+  }
+  for (const q of ["crypto currency converter usd eur", "convert eth to usd and eur", "bitcoin price in dollars and euros"]) {
+    const r = findTools(C, q, {});
+    ok(!/^fx-/.test(r.results[0]?.slug || ""), `"${q}" stays with the crypto tools (got ${r.results[0]?.slug})`);
+  }
+  // Money named without a conversion keeps every word: no synthetic term.
+  for (const terms of [["g10", "fx", "dashboard", "usd"], ["currency", "usd", "eur", "dashboard"]]) {
+    const t = [...terms];
+    ok(applyCurrencyTerms(t) === false && !t.includes("forex"), `[${terms.join(" ")}] asks for no conversion (terms ${t.join(" ")})`);
+  }
+  const named = ["convert", "dollars", "euros"];
+  ok(applyCurrencyTerms(named) === true && named.includes("usd") && named.includes("eur") && named.includes("forex"), `currency names read as their codes in a conversion (terms ${named.join(" ")})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

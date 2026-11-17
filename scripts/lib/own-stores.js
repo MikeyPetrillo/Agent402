@@ -37,5 +37,8 @@ export function ownStoreEnv(label = "server") {
     // The referral gate's open-settlement book (src/referral-book.js).
     REFERRAL_BOOK_FILE: join(dir, "referral-settlements.json"),
     REFERRAL_ANSWER_DIR: join(dir, "referral-answers"),
+    // The card stores' record directories (src/credits.js, src/human-checkout.js).
+    CREDITS_DIR: join(dir, "credits"),
+    HUMAN_CHECKOUT_DIR: join(dir, "human-checkout"),
   };
 }

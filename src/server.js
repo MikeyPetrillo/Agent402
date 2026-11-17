@@ -4625,7 +4625,8 @@ app.get("/reports/sample/:product", (req, res) => {
   if (!meta) return notFoundPage(res, { what: "Sample report", href: "/reports", label: "All reports" });
   htmlCache(res, 300, 900).send(reportDeliveryPage(product, {
     api: "/api/reports/sample/", baseUrl: BASE_URL, robots: "index, follow, max-image-preview:large",
-    waitCopy: "Loading the sample report.", note: "",
+    // Served already drawn: a reader, a crawler and a page check get the report with no API round trip.
+    record: sampleJson(product), note: "",
     title: meta.title, description: meta.description, canonical: meta.canonical, jsonLd: meta.jsonLd,
     // The free alert for the sample's own target (dossier -> filing watch, etc.)
     extraHtml: alertFormHtml({ kind: ALERT_KIND_FOR_REPORT_KIND[sampleJson(product)?.kind], target: sampleJson(product)?.input, source: `/reports/sample/${product}` }),
