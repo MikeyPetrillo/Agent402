@@ -12,15 +12,18 @@ Payments:
   whether the transfer was sent (an HTTP error, a dropped connection, an
   unreadable answer, or a failure naming a transaction), the call is answered
   402 with reason settlement-unconfirmed: the answer says not to sign a new
-  authorization for that call before the authorization's validBefore, names
-  the transaction to watch and its refund lookup when there is one (retry
-  watch-transaction, otherwise check-wallet), carries no new offer, and its
-  receipt reads settlement_unconfirmed.
+  authorization for that call before the expiry the payment carries (an
+  authorization's validBefore, a time by which a Solana transaction's
+  blockhash has expired, an Algorand lastValid round or a Stellar expiration
+  ledger), or when it carries none, until the paying wallet shows whether the
+  transfer landed, names the transaction to watch and its refund lookup when
+  there is one (retry watch-transaction, otherwise check-wallet), carries no
+  new offer, and its receipt reads settlement_unconfirmed.
 - Such a payment signed as an EIP-3009 authorization is recorded for the on-chain
   read, so a transfer that lands is booked once as owed to the paying
-  wallet and repaid after on-chain proof. The same payment sent again gets the
-  same answer back without the call running, and these answers never count
-  against the paying wallet.
+  wallet and repaid after on-chain proof. The same payment sent again, in any
+  encoding, gets the same answer back without the call running, and these
+  answers never count against the paying wallet or its report and media runs.
 
 ### 2026-11-16 (marketplace answers arrive whole or are not settled)
 Payments:

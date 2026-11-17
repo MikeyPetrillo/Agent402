@@ -24,7 +24,7 @@ import { getFreePorts } from "./lib/free-port.js";
 import { BAZAAR_DESCRIPTIONS, isExamplePointer } from "../src/payments.js";
 import {
   FRONT_DOOR_SLUG, AGENTS_MD_PATH, POW_LIST_PATH, RECOVERY_HEADING, RECOVERY_ANCHOR, FIRST_CALL_FREE_COPY,
-  LATE_SETTLE_EXCEPTION, frontDoorMarkdown, frontDoorJson, frontDoor402Json, agentsMd, paidWiresPhrase,
+  LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION, frontDoorMarkdown, frontDoorJson, frontDoor402Json, agentsMd, paidWiresPhrase,
 } from "../src/front-door.js";
 import { RAILS } from "../src/rails.js";
 import { FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
@@ -61,6 +61,8 @@ function listOf(md, heading, label, labels) {
 function assertRecoveryScope(label, rec, { tempo = false } = {}) {
   ok(/x402/.test(rec[0]) && /under 400/.test(rec[0]) && /PAYMENT-RESPONSE/.test(rec[0]) && rec[0].includes(LATE_SETTLE_EXCEPTION),
     `${label}: the not-charged sentence is scoped to x402 and names the late-settle exception`);
+  ok(rec[0].includes(UNCONFIRMED_RECEIPT_EXCEPTION) && rec[0].indexOf(UNCONFIRMED_RECEIPT_EXCEPTION) > rec[0].indexOf("PAYMENT-RESPONSE"),
+    `${label}: the not-charged sentence carries the unconfirmed-receipt clause after its no-receipt claim`);
   ok(/Tempo push payment/.test(rec[0]) === tempo, `${label}: the Tempo push exception appears only while Tempo is offered (${tempo ? "on" : "off"})`);
   ok(/EVM x402/.test(rec[1]) && /same signed payment/.test(rec[1]) && /replay window/.test(rec[1]) && /X-Replayed-Answer: 1/.test(rec[1]) && /identity-bound/.test(rec[1]) && /lasting effect/.test(rec[1]) && /streamed/.test(rec[1]),
     `${label}: the implicit replay is scoped to an EVM x402 payment, with its three exclusions`);

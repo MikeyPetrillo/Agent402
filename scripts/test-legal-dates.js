@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 // (scripts/test-public-index-copy.js).
 const PINS = {
   "src/terms.js": { date: "2026-11-17", sha: "90a8aaa88dbbf952" },
-  "src/privacy.js": { date: "2026-11-17", sha: "7b2582af25820f5c" },
+  "src/privacy.js": { date: "2026-11-17", sha: "7d2544988d97fedf" },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);

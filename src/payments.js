@@ -7,7 +7,7 @@ import { scheduleBazaarRouteCheck, withBazaarHidden } from "./bazaar-route-check
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { installAcceptOutputSchema, withOutputSchemaOnFirstAccept, outputSchemaFromExtensions, acceptOutputSchemaEnabled } from "./accept-output-schema.js";
 import { avmSubcentGateEnabled, installAvmSubcentGate, noteAvmSettleRefusal, startAvmSponsorshipRefresher, REFRESH_MS as AVM_SPONSORSHIP_REFRESH_MS } from "./avm-sponsorship.js";
-import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal, unconfirmedSettleRefusal, unconfirmedSettleReceipt } from "./payment-reject.js";
+import { isBillingRefusalReceipt, pendingSettleRefusal, withPendingSettleRefusal, unconfirmedSettleRefusal, unconfirmedSettleReceipt, railTxOf } from "./payment-reject.js";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { UptoEvmScheme } from "@x402/evm/upto/server";
 import { pinFacilitatorSigners } from "./upto-signer.js";
@@ -4009,7 +4009,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           // the earlier refusal stands, nothing booked. Anything else is how
           // the chain ended (markUnconfirmedStop).
           if ((own && result?.nothingSent === true && !String(result?.transaction || "")) || isDecidedSettleVerdict(result)) return;
-          markUnconfirmedStop(ctx, refusal, name);
+          await markUnconfirmedStop(ctx, refusal, name);
           return;
         }
         // A recovered settlement fires no afterSettle hook (the vendor returns
@@ -4045,7 +4045,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           { const o = await settleAfterFallbackPending(ctx, err, name); if (o) return o; }
           if (!own) { const o = await settleAfterAmbiguous(ctx, err, name, outageFor); if (o) return o; }
           { const o = await readPassedOn(); if (o) return o; }
-          markUnconfirmedStop(ctx, err, name);
+          await markUnconfirmedStop(ctx, err, name);
           return;
         }
         if (!passedOn) revertOnly = !isPreBroadcastSettleRejection(err);
@@ -4055,7 +4055,7 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
     // was left): that refusal is read on chain now. A FALLBACK's passed-on
     // refusal the read did not settle is how the chain ended.
     { const o = await readPassedOn(); if (o) return o; }
-    if (passedOn && passedOn.err !== ctx?.error) markUnconfirmedStop(ctx, passedOn.err, passedOn.via);
+    if (passedOn && passedOn.err !== ctx?.error) await markUnconfirmedStop(ctx, passedOn.err, passedOn.via);
     return undefined;
   });
 }
@@ -4111,8 +4111,9 @@ let publicOrigin = null;
  *    settlement_unconfirmed, which the settle breaker counts as not the
  *    buyer's (src/settle-fault.js).
  */
-function markUnconfirmedStop(ctx, err, via) {
+async function markUnconfirmedStop(ctx, err, via) {
   if (!ctx || typeof ctx !== "object" || isBatchedCtx(ctx)) return;
+  try { ctx.__a402UnconfirmedExpiry = await paymentExpiryOf(ctx); } catch { ctx.__a402UnconfirmedExpiry = null; }
   noteLateTx(ctx, err?.transaction, via);
   const named = ctx.__a402LateTx?.transaction || null;
   if (!named && !ctx.__a402LateAuth?.nonce) {
@@ -4126,6 +4127,63 @@ function markUnconfirmedStop(ctx, err, via) {
 }
 
 const validBeforeOfPayload = (payload) => payload?.payload?.authorization?.validBefore ?? payload?.payload?.permit2Authorization?.deadline ?? null;
+
+// A Solana transaction lands only while its recent blockhash is valid: about
+// 60 to 90 seconds after that blockhash, which is older than the request.
+// Counted from the moment the chain stopped, with room for slow slots, it is
+// a time after which the signed transaction can no longer land.
+const SVM_BLOCKHASH_BOUND_SECONDS = 120;
+
+/**
+ * The point after which this payment can no longer move money, for the
+ * unconfirmed answer (src/payment-reject.js unconfirmedSettleRefusal):
+ * `validBefore` (an EIP-3009 authorization's validBefore or a Permit2
+ * deadline; on Solana the blockhash bound above), `lastValidRound` (an
+ * Algorand transaction's lastValid round) or `expirationLedger` (the latest
+ * ledger a Stellar payer's signed authorization entries expire at). Null when
+ * the payment carries none the server can read: the answer then makes no
+ * time promise.
+ */
+export async function paymentExpiryOf(ctx) {
+  const payload = ctx?.paymentPayload;
+  const network = String(ctx?.requirements?.network || "");
+  if (network.startsWith("eip155:")) { const vb = validBeforeOfPayload(payload); return vb != null ? { validBefore: vb } : null; }
+  if (network.startsWith("solana:")) return payload?.payload?.transaction ? { validBefore: Math.floor(Date.now() / 1000) + SVM_BLOCKHASH_BOUND_SECONDS } : null;
+  if (network.startsWith("algorand:")) {
+    const { lastValidFromPayload } = await import("./avm-validity.js");
+    const lv = lastValidFromPayload(payload);
+    return lv != null ? { lastValidRound: String(lv) } : null;
+  }
+  if (network.startsWith("stellar:")) {
+    const ledger = await stellarAuthExpiryLedgerOf(payload);
+    return ledger ? { expirationLedger: String(ledger) } : null;
+  }
+  return null;
+}
+
+/** The latest signatureExpirationLedger among the address-credential
+ *  authorization entries of a Stellar payment's signed envelope, or null. */
+async function stellarAuthExpiryLedgerOf(payload) {
+  try {
+    const xdr = payload?.payload?.transaction;
+    if (typeof xdr !== "string" || !xdr || xdr.length > 40_000) return null;
+    const sdk = await import("@stellar/stellar-sdk");
+    const env = sdk.xdr.TransactionEnvelope.fromXDR(xdr, "base64");
+    const kind = env.switch().name;
+    const tx = kind === "envelopeTypeTx" ? env.v1().tx() : kind === "envelopeTypeTxFeeBump" ? env.feeBump().tx().innerTx().v1().tx() : null;
+    let max = 0;
+    for (const op of tx ? tx.operations() : []) {
+      if (op.body().switch().name !== "invokeHostFunction") continue;
+      for (const entry of op.body().invokeHostFunctionOp().auth()) {
+        const cred = entry.credentials();
+        if (cred.switch().name !== "sorobanCredentialsAddress") continue;
+        const n = Number(cred.address().signatureExpirationLedger());
+        if (Number.isSafeInteger(n) && n > max) max = n;
+      }
+    }
+    return max > 0 ? max : null;
+  } catch { return null; }
+}
 
 /**
  * Restate this request's settle-failure 402 for a chain that ended
@@ -4173,8 +4231,8 @@ function explainUnconfirmedStop(ctx, network, txs) {
           let body = JSON.parse(chunk);
           if (body && typeof body === "object" && !Array.isArray(body)) {
             if (!pending) {
-              const validBefore = validBeforeOfPayload(u.ctx?.paymentPayload);
-              const refusal = unconfirmedSettleRefusal({ network: u.network, transactions: u.transactions, booked: u.ctx?.__a402LateBooked === true, validBefore, origin: publicOrigin });
+              const exp = u.ctx?.__a402UnconfirmedExpiry || {};
+              const refusal = unconfirmedSettleRefusal({ network: u.network, transactions: u.transactions, booked: u.ctx?.__a402LateBooked === true, validBefore: exp.validBefore ?? null, lastValidRound: exp.lastValidRound ?? null, expirationLedger: exp.expirationLedger ?? null, origin: publicOrigin });
               body = withPendingSettleRefusal(body, refusal);
               chunk = JSON.stringify(body);
               req.__paymentRejectReason = refusal.reason;
@@ -4373,7 +4431,10 @@ const lateAuthOf = (ctx) => {
 /** The transaction a stopping fallback named, for the late-settlement hook
  *  registered after this one (it reads the same failure context). */
 function noteLateTx(ctx, transaction, via) {
-  if (ctx && typeof transaction === "string" && /^0x[0-9a-fA-F]{64}$/.test(transaction)) ctx.__a402LateTx = { transaction, via };
+  // In the rail's own format: a Solana signature or an Algorand id is kept
+  // exactly as written (src/payment-reject.js railTxOf).
+  const tx = ctx ? railTxOf(String(ctx?.requirements?.network || ""), transaction) : null;
+  if (tx) ctx.__a402LateTx = { transaction: tx, via };
 }
 
 /**

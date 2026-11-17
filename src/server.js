@@ -502,6 +502,7 @@ import { fromUsdOf } from "./quoted-from.js";
 import { NETWORKS as PAY_NETWORKS, priceForNetwork, buildPaymentMiddleware, enabledNetworks, isIdentityBoundRoute, railStatus, gatewayBatchedRailStatus, onRailRestored, circlePendingStatus, circlePendingBookForOperator, lateSettleBookForOperator, robinhoodOrderView, robinhoodSettlerStatus, facilitatorSupportReport, facilitatorsByNetworkPublic, setComputePayablePaths, parseNetworkPremiums, paymentRailsLive, payToOverridesForItem, gatewayPendingStatus, gatewayPendingBookForOperator } from "./payments.js";
 import { GATEWAY_WIRE, gatewayBalanceStatus, gatewayOfferPublic, gatewayOfferNetworkNames, gatewayOfferedOn, isGatewayBatchedRequest } from "./gateway-nanopayments.js";
 import { isGatewayWire, isGatewayPendingAnswer } from "./gateway-wire.js";
+import { isSettlementUnconfirmedReceipt } from "./payment-reject.js";
 import { networkFloorUsd } from "./network-floors.js";
 import { createMppShim } from "./mpp-shim.js";
 import { createTempoChallengeAppender, createTempoGate, tempoTxFromReceiptHeader, isTempoPushCredential, configureTempoLateWatches } from "./mpp-tempo.js";
@@ -12817,9 +12818,14 @@ for (const tool of ALL_KIT) {
             // A Circle Gateway batched payment Gateway is still settling is
             // not the buyer's failure (they were told to resend the same
             // payment): it still feeds the burst alarm, never the payer's count.
+            // Nor is a settle chain that ended unconfirmed
+            // (settlement_unconfirmed, src/payments.js): the transfer may
+            // still land and the buyer was told not to pay again, so it
+            // feeds the burst alarm and never the payer's count.
             const st = res.statusCode;
+            const receipt402 = st === 402 ? decodeSettleReceipt(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE")) : null;
             if (st === 200) recordCompositeSpendSuccess(guardKey);
-            else if (st === 402 && isGatewayPendingAnswer(req, decodeSettleReceipt(res.getHeader("PAYMENT-RESPONSE") || res.getHeader("X-PAYMENT-RESPONSE")))) recordCompositeSpendFailure(null, { global: !ownGlobalBound });
+            else if (st === 402 && (isGatewayPendingAnswer(req, receipt402) || isSettlementUnconfirmedReceipt(receipt402))) recordCompositeSpendFailure(null, { global: !ownGlobalBound });
             else if (st === 402 || st >= 500) recordCompositeSpendFailure(guardKey, { global: !ownGlobalBound });
           } catch { /* never break a response */ }
         });

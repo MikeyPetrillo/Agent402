@@ -293,9 +293,12 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   an EIP-3009 authorization on an EVM chain whose settlement was answered unconfirmed (its payer, nonce,
   route, amount and validBefore, kept until the check for a late landing ends: minutes, or while the chain
   cannot be read up to 24 hours and then until we resolve it by hand; past a per-wallet bound on open
-  records it waits in our journal until it fits; a transfer that lands is booked as owed), and the 402
-  answer that payment got, kept under a digest of the payment header until the authorization's validBefore
-  plus one minute (at least one minute, at most a day) so the same payment sent again gets that answer back,
+  records it waits in our journal until it fits; a transfer that lands is booked as owed), the 402 answer
+  and settle receipt of any x402 payment whose settlement was answered unconfirmed (other than a batched
+  payment), kept under a digest of the payment's identity (network, signed payer and nonce on an EVM chain,
+  the transaction its chain consumes on any other) until the authorization's validBefore plus one minute (at
+  least one minute, at most ${settledValidityHoldText()}), or a day for a payment that names no validBefore, so the same payment
+  sent again gets that answer back,
   the payer the settlement receipt names,${referralOn ? " on a referral link the referral token and the buyer agent id (see referral links above)," : ""} and,
   on a refused payment, the resource URL it names (see telemetry above). When a served call's settlement
   fails, we count it per signed authorization (its payer, network and nonce) in our shared store for

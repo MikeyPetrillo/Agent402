@@ -39,7 +39,7 @@ import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { bootServer } from "./lib/boot-server.js";
 
-const { isPreBroadcastSettleRejection, isUnreadableSettleAnswer, isDecidedSettleVerdict } = await import("../src/payments.js");
+const { isPreBroadcastSettleRejection, isUnreadableSettleAnswer, isDecidedSettleVerdict, paymentExpiryOf } = await import("../src/payments.js");
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -50,7 +50,7 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
 
 // ---- module half -------------------------------------------------------------
 {
-  const { unconfirmedSettleRefusal, unconfirmedSettleReceipt, withPendingSettleRefusal, REJECTION_REASONS, SETTLEMENT_UNCONFIRMED } = await import("../src/payment-reject.js");
+  const { unconfirmedSettleRefusal, unconfirmedSettleReceipt, withPendingSettleRefusal, REJECTION_REASONS, SETTLEMENT_UNCONFIRMED, railTxOf } = await import("../src/payment-reject.js");
   const { settleFailureFault } = await import("../src/settle-fault.js");
   const { lateSettleCandidate } = await import("../src/late-settlements.js");
   const { unconfirmedReplayMs } = await import("../src/idempotency.js");
@@ -61,6 +61,53 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
     `no transaction: check-wallet, do not sign again, validBefore, owed when it lands (${none.detail.slice(0, 100)})`);
   const unbooked = unconfirmedSettleRefusal({ network: BASE_NET, booked: false });
   ok(!/owed/.test(unbooked.detail) && /Do not sign a new authorization/.test(unbooked.detail), "nothing recorded (a Permit2 or non-EVM payment with no transaction): no repayment promise, still do not sign again");
+  ok(/^[^]*Check the paying wallet on eip155:8453 first\. Do not sign a new authorization for this call until it shows whether this transfer landed/.test(unbooked.detail) && !/\bbefore \d{4}-|round \d|ledger \d/.test(unbooked.detail) && !("authorizationValidBefore" in unbooked),
+    `a payment that carries no expiry: check the paying wallet first, no time promise (${unbooked.detail.slice(-170)})`);
+  // The rail's own expiry, where the payment carries one.
+  const SOL_NET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const SIG = "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW";
+  const sol = unconfirmedSettleRefusal({ network: SOL_NET, transactions: [SIG, SIG.toLowerCase()], validBefore: 2_000_000_000, booked: true });
+  ok(sol.retry === "watch-transaction" && JSON.stringify(sol.transactions) === JSON.stringify([SIG]) && sol.authorizationValidBefore === "2033-05-18T03:33:20Z" && !("refundStatusUrl" in sol),
+    "Solana: the signature is named as written (never case-folded), the blockhash bound is the time, no EVM refund lookup");
+  const ALGO_NET = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k";
+  const algo = unconfirmedSettleRefusal({ network: ALGO_NET, lastValidRound: "61234567" });
+  ok(algo.lastValidRound === 61234567 && !("authorizationValidBefore" in algo) && /until algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k has passed round 61234567/.test(algo.detail) && !/first\. Do not sign/.test(algo.detail),
+    `Algorand: the lastValid round is named (${algo.detail.slice(170, 330)})`);
+  const xlm = unconfirmedSettleRefusal({ network: "stellar:pubnet", expirationLedger: 55555, transactions: ["AB".repeat(32)] });
+  ok(xlm.expirationLedger === 55555 && /has passed ledger 55555/.test(xlm.detail) && JSON.stringify(xlm.transactions) === JSON.stringify(["ab".repeat(32)]),
+    "Stellar: the expiration ledger is named and the hash is kept");
+  ok(railTxOf(SOL_NET, SIG) === SIG && railTxOf(SOL_NET, TX) === null && railTxOf(BASE_NET, SIG) === null && railTxOf(ALGO_NET, "A".repeat(52)) === "A".repeat(52) && railTxOf(ALGO_NET, "a".repeat(52)) === null && railTxOf(null, TX.toUpperCase().replace("0X", "0x")) === TX,
+    "transaction ids in each rail's own format only");
+  ok(unconfirmedSettleReceipt({ success: false, errorReason: "x", network: SOL_NET }, { transaction: SIG }).transaction === SIG, "the restated Solana receipt keeps the signature as written");
+  {
+    const now = Math.floor(Date.now() / 1000);
+    const svm = await paymentExpiryOf({ requirements: { network: SOL_NET }, paymentPayload: { payload: { transaction: "AQ==" } } });
+    ok(svm && Number(svm.validBefore) >= now + 90 && Number(svm.validBefore) <= now + 125, `Solana: a time past the recent blockhash's life (${svm?.validBefore - now} s)`);
+    const evm = await paymentExpiryOf({ requirements: { network: BASE_NET }, paymentPayload: { payload: { authorization: { validBefore: "2000000000" } } } });
+    ok(evm?.validBefore === "2000000000", "EVM: the authorization's validBefore");
+    const algosdk = (await import("algosdk")).default;
+    const acct = algosdk.generateAccount();
+    const txn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({ sender: acct.addr, receiver: acct.addr, amount: 1, suggestedParams: { fee: 1000, minFee: 1000, firstValid: 100, lastValid: 1100, genesisID: "mainnet-v1.0", genesisHash: new Uint8Array(32), flatFee: true } });
+    const signed = Buffer.from(txn.signTxn(acct.sk)).toString("base64");
+    const avm = await paymentExpiryOf({ requirements: { network: ALGO_NET }, paymentPayload: { payload: { paymentGroup: [signed], paymentIndex: 0 } } });
+    ok(avm?.lastValidRound === "1100", `Algorand: the signed transaction's lastValid round (${JSON.stringify(avm)})`);
+    const sdk = await import("@stellar/stellar-sdk");
+    const NETP = sdk.Networks.PUBLIC;
+    const SAC = new sdk.Asset("USDC", "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN").contractId(NETP);
+    const from = sdk.Keypair.random().publicKey();
+    const args = [new sdk.Address(from).toScVal(), new sdk.Address(sdk.Keypair.random().publicKey()).toScVal(), sdk.nativeToScVal(1000n, { type: "i128" })];
+    const call = new sdk.xdr.InvokeContractArgs({ contractAddress: new sdk.Address(SAC).toScAddress(), functionName: "transfer", args });
+    const entry = new sdk.xdr.SorobanAuthorizationEntry({
+      credentials: sdk.xdr.SorobanCredentials.sorobanCredentialsAddress(new sdk.xdr.SorobanAddressCredentials({ address: new sdk.Address(from).toScAddress(), nonce: sdk.xdr.Int64.fromString("7"), signatureExpirationLedger: 55555, signature: sdk.xdr.ScVal.scvVoid() })),
+      rootInvocation: new sdk.xdr.SorobanAuthorizedInvocation({ function: sdk.xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(call), subInvocations: [] }),
+    });
+    const xdr = new sdk.TransactionBuilder(new sdk.Account(sdk.Keypair.random().publicKey(), "1"), { fee: "100", networkPassphrase: NETP })
+      .addOperation(sdk.Operation.invokeContractFunction({ contract: SAC, function: "transfer", args, auth: [entry] })).setTimeout(300).build().toXDR();
+    const st = await paymentExpiryOf({ requirements: { network: "stellar:pubnet" }, paymentPayload: { payload: { transaction: xdr } } });
+    ok(st?.expirationLedger === "55555", `Stellar: the signed authorization's expiration ledger (${JSON.stringify(st)})`);
+    ok((await paymentExpiryOf({ requirements: { network: "stellar:pubnet" }, paymentPayload: { payload: { transaction: "not-xdr" } } })) === null
+      && (await paymentExpiryOf({ requirements: { network: ALGO_NET }, paymentPayload: { payload: {} } })) === null, "an unreadable payment carries no expiry: the answer makes no time promise");
+  }
   const named = unconfirmedSettleRefusal({ network: BASE_NET, transactions: [TX.toUpperCase().replace("0X", "0x"), "0x12"], booked: true, origin: "https://agent402.tools/" });
   ok(named.retry === "watch-transaction" && JSON.stringify(named.transactions) === JSON.stringify([TX]) && named.refundStatusUrl === `https://agent402.tools/api/refunds?tx=${TX}`,
     `a named transaction: watch-transaction, lowercased, the refund lookup (${named.refundStatusUrl})`);
@@ -86,8 +133,9 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
   const permit2Ctx = { requirements: { network: BASE_NET, payTo: `0x${"11".repeat(20)}`, asset: `0x${"22".repeat(20)}`, amount: "1000" }, paymentPayload: { payload: { permit2Authorization: { from: `0x${"33".repeat(20)}`, deadline: "2000000000" } } }, __a402UnconfirmedStop: { via: "fallback" } };
   ok(lateSettleCandidate(permit2Ctx) === null, "a Permit2 payment with no transaction leaves nothing for the book (its answer promises no record)");
   const now = 1_700_000_000_000;
-  ok(unconfirmedReplayMs(now / 1000 + 300, now) === 360_000 && unconfirmedReplayMs(now / 1000 - 5, now) === 60_000 && unconfirmedReplayMs("2" + "0".repeat(30), now) === 86_400_000,
-    "the replay lasts to validBefore plus a minute, at least a minute, at most a day");
+  ok(unconfirmedReplayMs(now / 1000 + 300, now) === 360_000 && unconfirmedReplayMs(now / 1000 - 5, now) === 60_000 && unconfirmedReplayMs("2" + "0".repeat(30), now) === 30 * 86_400_000
+    && unconfirmedReplayMs(now / 1000 + 10 * 86_400, now) === 10 * 86_400_000 + 60_000 && unconfirmedReplayMs(null, now) === 86_400_000 && unconfirmedReplayMs("garbage", now) === 86_400_000,
+    "the replay lasts to validBefore plus a minute, at least a minute, at most 30 days; a day when no validBefore is named");
   ok(REJECTION_REASONS.some((r) => r.reason === "settlement-unconfirmed" && /check-wallet/.test(r.means) && /watch-transaction/.test(r.means) && /authorizationValidBefore/.test(r.means) && !NOT_CHARGED.test(r.means)), "the published reason names both verbs and the fields");
 }
 
@@ -99,7 +147,8 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
   const file = join(dir, "late.json");
   const lines = [];
   try {
-    const book = createLateSettleBook({ file, rpcFor: () => "http://127.0.0.1:9", log: (l) => lines.push(l), alarm: (l) => lines.push(l), unconfirmedPerPayerMax: 1 });
+    let clock = Date.now();
+    const book = createLateSettleBook({ file, rpcFor: () => "http://127.0.0.1:9", log: (l) => lines.push(l), alarm: (l) => lines.push(l), unconfirmedPerPayerMax: 1, now: () => clock });
     await book.ready;
     const payer = `0x${"aa".repeat(20)}`;
     const base = { network: BASE_NET, payer, payTo: `0x${"bb".repeat(20)}`, asset: `0x${"cc".repeat(20)}`, amount: "1000", validBefore: 2_000_000_000, via: "fallback", unconfirmed: true };
@@ -110,9 +159,18 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
     const open = () => Object.values(JSON.parse(readFileSync(file, "utf8")).pending);
     ok(first === true && second === true && other === true && open().length === 2 && open().every((e) => e.unconfirmed === true),
       `one payer at its bound: the next booking is not in the book, another payer's is (${open().length} open)`);
-    ok(lines.filter((l) => /per-payer bound/.test(l)).length === 1 && existsSync(`${file}.pending.ndjson`) && readFileSync(`${file}.pending.ndjson`, "utf8").includes(nonce(2)),
-      "past the bound the booking is journaled with a line naming the bound, never dropped");
-    ok((await book.alarmStatus({ ttlMs: 0 })) === "unresolved", "the status word reads the journaled booking");
+    ok(lines.filter((l) => /per-payer bound/.test(l)).length === 1 && existsSync(`${file}.held.ndjson`) && readFileSync(`${file}.held.ndjson`, "utf8").includes(nonce(2)) && !existsSync(`${file}.pending.ndjson`),
+      "past the bound the booking is kept in the held journal (not the failed-write one) with a line naming the bound, never dropped");
+    for (let i = 4; i < 9; i++) await book.book({ ...base, nonce: nonce(i) });
+    ok(lines.filter((l) => /per-payer bound/.test(l)).length === 1, `more held bookings inside a minute write no more lines (${lines.filter((l) => /per-payer bound/.test(l)).length})`);
+    clock += 61_000;
+    await book.book({ ...base, nonce: `0x${"e".repeat(64)}` });
+    const perPayer = lines.filter((l) => /per-payer bound/.test(l));
+    ok(perPayer.length === 2 && /6 booking\(s\) kept in the journal since the last line/.test(perPayer[1]), `a minute later one line names how many were held since (${perPayer[1]?.slice(0, 200)})`);
+    ok((await book.alarmStatus({ ttlMs: 0 })) === "ok", "held bookings that drain by themselves do not page");
+    const { journalStates, deadLetterWord } = await import("../src/ledger-mirror.js");
+    ok(!(Number(journalStates().lateSettlements?.total) > 0) && deadLetterWord(Object.values(journalStates()), { now: Date.now() + 3_600_000 }) === "none",
+      "held bookings are not read by the money journals' dead-letter word, however long they wait");
     await book.reconcile();
     ok(open().length === 2, "while the payer is at its bound the journaled booking stays in the journal");
     const doc = JSON.parse(readFileSync(file, "utf8"));
@@ -121,6 +179,51 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
     await book.reconcile();
     ok(open().some((e) => String(e.nonce) === nonce(2) && e.unconfirmed === true) && (await book.alarmStatus({ ttlMs: 0 })) === "ok",
       "once the payer's entry closes, the journaled booking lands in the book and the word clears");
+    clock += 61 * 60_000;
+    ok((await book.alarmStatus({ ttlMs: 0 })) === "unresolved", "a held booking that waited over an hour reads unresolved");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+// ---- the held journal at scale: 1,500 open entries and one payer with 2,000
+// held bookings. A pass writes the book only for what lands, tries at most
+// DRAIN_MAX_PER_PASS bookings, and stays short ------------------------------
+{
+  const { createLateSettleBook, lateAuthKey, DRAIN_MAX_PER_PASS } = await import("../src/late-settlements.js");
+  const fs = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "settle-unconfirmed-scale-"));
+  const file = join(dir, "late.json");
+  const lines = [];
+  try {
+    const t0 = Date.now();
+    const hex = (n, w = 64) => `0x${n.toString(16).padStart(w, "0")}`;
+    const entryOf = (payer, n) => ({ key: lateAuthKey(BASE_NET, payer, hex(n)), network: BASE_NET, tx: null, nonce: hex(n), payer, payTo: `0x${"bb".repeat(20)}`, asset: `0x${"cc".repeat(20)}`, amount: "1000", validBefore: 2_000_000_000, slug: "memory", via: "fallback", unconfirmed: true, at: t0, nextCheckAt: t0 + 3_600_000, checks: 0, unreadable: 0, failures: 0, state: "pending" });
+    const pending = {};
+    for (let i = 0; i < 1500; i++) { const e = entryOf(hex(0x100000 + i, 40), i + 1); pending[e.key] = e; }
+    const P = `0x${"aa".repeat(20)}`;
+    const mine = entryOf(P, 9_000_000); pending[mine.key] = mine;
+    fs.writeFileSync(file, JSON.stringify({ pending }));
+    const heldLine = (e, i) => JSON.stringify({ id: `${t0}-${String(i).padStart(8, "0")}`, kind: "late", payload: e, at: t0 }) + "\n";
+    let nd = "";
+    for (let i = 0; i < 2000; i++) nd += heldLine(entryOf(P, 10_000_000 + i), i);
+    fs.writeFileSync(`${file}.held.ndjson`, nd);
+    const book = createLateSettleBook({ file, rpcFor: () => "http://127.0.0.1:9", log: (l) => lines.push(l), alarm: (l) => lines.push(l), unconfirmedPerPayerMax: 1, maxEntries: 5000 });
+    await book.ready;
+    const before = fs.statSync(file).mtimeMs;
+    const body0 = fs.readFileSync(file, "utf8");
+    const p0 = Date.now();
+    const r = await book.reconcile();
+    const ms = Date.now() - p0;
+    ok(fs.readFileSync(file, "utf8") === body0 && fs.statSync(file).mtimeMs === before && r.journaled === 0, `a pass with 2,000 bookings held by one payer writes the book 0 times (${r.journaled} landed)`);
+    ok(ms < 5_000, `and stays short (${ms} ms)`);
+    ok(lines.filter((l) => /wait in the journal behind 1 payer/.test(l)).length === 1, "one summary line for the pass, not one per held booking");
+    // Another payer's 120 bookings behind them land DRAIN_MAX_PER_PASS a pass.
+    let nd2 = "";
+    for (let i = 0; i < 120; i++) nd2 += heldLine({ ...entryOf(hex(0x900000 + i, 40), 20_000_000 + i) }, 5000 + i);
+    fs.appendFileSync(`${file}.held.ndjson`, nd2);
+    const landed = [];
+    for (let k = 0; k < 6; k++) { const n = (await book.reconcile()).journaled; if (!n) break; landed.push(n); }
+    ok(landed.length >= 3 && landed.every((n) => n <= DRAIN_MAX_PER_PASS) && landed[0] >= DRAIN_MAX_PER_PASS - 1 && landed.reduce((a, b) => a + b, 0) === 120 && Object.keys(JSON.parse(fs.readFileSync(file, "utf8")).pending).length === 1501 + 120,
+      `bookings that can land do so at most ${DRAIN_MAX_PER_PASS} a pass, the rest on the next (${landed.join(", ")})`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -131,13 +234,19 @@ const st = { primary: "billing", fallback: "500" };
 // The chain the late-settlement pass reads. dark: nothing can be read.
 const chain = { dark: true, used: new Map() };
 const word = (n) => `0x${BigInt(n).toString(16).padStart(64, "0")}`;
-const counts = { primary: 0, fallback: 0, verify: 0 };
+const counts = { primary: 0, fallback: 0, verify: 0, images: 0 };
+const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 let txN = 0;
 const stub = (name) => createServer((req, res) => {
   let b = ""; req.on("data", (c) => { b += c; });
   req.on("end", () => {
     const reply = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(typeof obj === "string" ? obj : JSON.stringify(obj)); };
     if (req.url === "/supported") return reply(200, { kinds: name === "primary" ? [{ x402Version: 2, scheme: "exact", network: BASE_NET }] : [], extensions: [], signers: {} });
+    // The image tier's upstream (scripts/lib/openrouter-stub-preload.js sends
+    // every https://openrouter.ai call here): one tiny image per call.
+    const orPath = String(req.url || "").split("?")[0];
+    if (req.method === "GET" && /^\/api\/v1\/images\/models\/.+\/endpoints$/.test(orPath)) return reply(200, { data: { endpoints: [] } });
+    if (req.method === "POST" && orPath === "/api/v1/images") { counts.images++; return reply(200, { created: Math.floor(Date.now() / 1000), data: [{ b64_json: PNG_B64 }], usage: { prompt_tokens: 0, completion_tokens: 0 } }); }
     let parsed = {}; try { parsed = b ? JSON.parse(b) : {}; } catch { /* ignore */ }
     if (req.url === "/rpc") {
       const out = (result) => reply(200, { jsonrpc: "2.0", id: parsed.id ?? 1, result });
@@ -181,13 +290,19 @@ let srv = null;
 try {
   srv = await bootServer({
     stores: "settle-fallback-unconfirmed",
-    args: ["--import", "./scripts/lib/loopback-only-preload.js"],
+    args: ["--import", "./scripts/lib/loopback-only-preload.js", "--import", "./scripts/lib/openrouter-stub-preload.js"],
     env: {
       FREE_MODE: "", NODE_ENV: "test", BASE_URL: "https://agent402.tools", TRUST_PROXY_HOPS: "1",
       WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
       FACILITATOR_URL: PRIMARY, AGENT402_BASE_RPC: `${PRIMARY}/rpc`, EVM_RPC_8453: `${PRIMARY}/rpc`, FACILITATOR_GAS_CHECK: "off",
       SOLVADOR_KEY: "settle-fallback-unconfirmed-key", SOLVADOR_FACILITATOR_URL: urlOf(servers.fallback),
       PAYMENT_SETTLE_FALLBACK: "true", LATE_SETTLE_FILE: LATE,
+      // The image tier (a report or media route under the composite guard)
+      // runs against the stub; the guard's per-buyer bound is 3, and the
+      // settle breaker's is set out of reach so a 429 here is the guard's.
+      OPENROUTER_API_KEY: "test-key-never-used", OPENROUTER_MANAGEMENT_KEY: "", OPENROUTER_STUB_URL: PRIMARY, OPENROUTER_FLEX: "off",
+      COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_MAX: "100",
+      UPSTREAM_COSTS_FILE: process.env.UPSTREAM_COSTS_FILE || join(process.cwd(), "docs/example-upstream-costs.json"),
       LATE_SETTLE_RECONCILE: "", X402_SYNC_ON_START: "", LATE_SETTLE_RECONCILE_MS: "500", LATE_SETTLE_UNCONFIRMED_PER_PAYER_MAX: "5",
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", CIRCLE_FACILITATOR_API_KEY: "",
       MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "", POSTHOG_API_KEY: "",
@@ -207,29 +322,29 @@ try {
     registerExactEvmScheme(payments, { signer: account });
     return { account, payments };
   };
-  const httpOffer = async () => {
-    const r = await fetch(`${B}${PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: bodyOf() });
+  const httpOffer = async (path = PATH, body = bodyOf()) => {
+    const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body });
     await r.arrayBuffer();
     return JSON.parse(Buffer.from(r.headers.get("payment-required") || "", "base64").toString("utf8"));
   };
-  const send = async (header, body = bodyOf()) => {
-    const r = await fetch(`${B}${PATH}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": header }, body });
+  const send = async (header, body = bodyOf(), path = PATH) => {
+    const r = await fetch(`${B}${path}`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": header }, body });
     const text = await r.text();
     let json = null; try { json = JSON.parse(text); } catch { /* not json */ }
     const hdr = r.headers.get("payment-response");
     let receipt = null; try { receipt = hdr ? JSON.parse(Buffer.from(hdr, "base64").toString("utf8")) : null; } catch { /* unreadable */ }
     return { status: r.status, text, body: json, receipt, offered: r.headers.get("payment-required"), replayed: r.headers.get("x-replayed-answer"), cache: r.headers.get("cache-control") };
   };
-  const pay = async ({ signer = null } = {}) => {
+  const pay = async ({ signer = null, path = PATH, body = bodyOf() } = {}) => {
     const sg = signer || signerFor();
-    const payload = await sg.payments.createPaymentPayload(await httpOffer());
+    const payload = await sg.payments.createPaymentPayload(await httpOffer(path, body));
     const header = Buffer.from(JSON.stringify(payload)).toString("base64");
-    const r = await send(header);
+    const r = await send(header, body, path);
     return { ...r, header, payer: sg.account.address, nonce: payload.payload.authorization.nonce, validBefore: payload.payload.authorization.validBefore };
   };
   const isoOf = (v) => new Date(Number(v) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
   const lateEntries = () => { try { return Object.values(JSON.parse(readFileSync(LATE, "utf8")).pending || {}); } catch { return []; } };
-  const journalLines = () => { const f = `${LATE}.pending.ndjson`; return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean) : []; };
+  const journalLines = () => { const f = `${LATE}.held.ndjson`; return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean) : []; };
   const waitFor = async (fn, ms = 4000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await sleep(100); } return !!(await fn()); };
   const bookedFor = (p) => lateEntries().find((e) => String(e.payer || "").toLowerCase() === p.payer.toLowerCase() && String(e.nonce || "").toLowerCase() === String(p.nonce).toLowerCase());
   const snap = () => ({ ...counts });
@@ -306,10 +421,10 @@ try {
     ok(mine().length === 5 && mine().every((e) => e.unconfirmed === true), `the wallet holds its bound of open bookings (${mine().length} of 14)`);
     const held = journalLines().filter((l) => l.toLowerCase().includes(signer.account.address.toLowerCase()));
     ok(held.length === 9, `past the bound each one is journaled, none dropped (${held.length} journaled)`);
-    const lines = srv.log().split("\n").filter((l) => /per-payer bound/.test(l));
-    ok(lines.length === 9, `each past the bound is logged (${lines.length} lines)`);
+    const lines = srv.log().split("\n").filter((l) => /per-payer bound/.test(l) && l.toLowerCase().includes(signer.account.address.slice(0, 6).toLowerCase()));
+    ok(lines.length === 1, `the bookings past the bound are logged once for the wallet inside a minute (${lines.length} lines)`);
     const gs = await (await fetch(`${B}/api/gateway-status`)).json();
-    ok(gs?.lateSettlements?.status === "unresolved", `the status word reads the journaled records (${gs?.lateSettlements?.status})`);
+    ok(gs?.lateSettlements?.status === "ok" && ["none", "off"].includes(gs?.ledgerDeadLetter?.status), `held bookings that drain by themselves page nothing (${gs?.lateSettlements?.status}, ${gs?.ledgerDeadLetter?.status})`);
     st.fallback = "ok";
     const served = await pay({ signer });
     ok(served.status === 200 && served.receipt?.success === true, `after recovery the same wallet is served (${served.status}) ${served.status === 200 ? "" : served.text.slice(0, 200)}`);
@@ -330,8 +445,46 @@ try {
       && r.receipt?.errorReason === "settlement_unconfirmed" && /no-store/.test(String(r.cache)) && r.body.authorizationValidBefore === isoOf(held.validBefore) && /Do not sign a new authorization/.test(r.body.hint)),
       `the same payment sent six times (two bodies): the unconfirmed answer each time (${more.map((r) => `${r.status}/${r.body?.reason}`).join(" ")})`);
     ok(counts.verify === c0.verify && asked(c0) === "0/0", `the same payment sent again: no verify, no handler run, no settle (${counts.verify - c0.verify} verifies, ${asked(c0)} settles)`);
+    // The same authorization in another encoding: keys reordered and spaced,
+    // and with another `resource`. One authorization is one payment.
+    const p = JSON.parse(Buffer.from(held.header, "base64").toString("utf8"));
+    const { payload: signedPart, ...outer } = p;
+    const reencoded = Buffer.from(JSON.stringify({ payload: signedPart, ...outer }, null, 2)).toString("base64");
+    const otherResource = Buffer.from(JSON.stringify({ ...p, resource: { ...(p.resource || {}), url: `${B}/api/other-route?x=1` } })).toString("base64");
+    const c1 = snap();
+    const alt = [await send(reencoded), await send(otherResource), await send(reencoded, bodyOf(7))];
+    ok(reencoded !== held.header && otherResource !== held.header && alt.every((r) => r.status === 402 && r.replayed === "1" && r.body?.reason === "settlement-unconfirmed" && r.receipt?.errorReason === "settlement_unconfirmed" && r.body.authorizationValidBefore === isoOf(held.validBefore)),
+      `the same authorization re-encoded or naming another resource: the stored answer, never a 429 (${alt.map((r) => `${r.status}/${r.replayed}/${r.body?.reason}`).join(" ")})`);
+    ok(counts.verify === c1.verify && asked(c1) === "0/0" && !alt.some((r) => /duplicate_authorization/.test(r.text) || r.receipt?.errorReason === "duplicate_authorization"),
+      `re-encoded re-sends: no verify, no handler run, no settle, never duplicate_authorization (${counts.verify - c1.verify} verifies, ${asked(c1)} settles)`);
     const fresh = await pay();
     ok(fresh.status === 200, `another wallet's new payment is served meanwhile (${fresh.status})`);
+  }
+
+  // 5b. A report or media route (the composite guard): one wallet through
+  // five unconfirmed settles is never refused 429 by the guard; control: a
+  // settle refusal that is not unconfirmed counts against the wallet, and the
+  // guard refuses it at its bound of 3.
+  {
+    const IMG = "/v1/images/fast";
+    const imgBody = () => JSON.stringify({ prompt: "a red fox in the snow" });
+    st.primary = "billing"; st.fallback = "500";
+    const signer = signerFor();
+    const i0 = counts.images;
+    const got = [];
+    for (let i = 0; i < 5; i++) got.push(await pay({ signer, path: IMG, body: imgBody() }));
+    ok(got.every((g) => g.status === 402 && g.body?.reason === "settlement-unconfirmed" && g.receipt?.errorReason === "settlement_unconfirmed") && counts.images - i0 === 5,
+      `a composite route, one wallet, five unconfirmed settles: each ran and was answered unconfirmed, none refused (${got.map((g) => `${g.status}/${g.body?.reason || g.text.slice(0, 60)}`).join(" ")}; ${counts.images - i0} runs)`);
+    st.fallback = "ok";
+    const served = await pay({ signer, path: IMG, body: imgBody() });
+    ok(served.status === 200, `after recovery the same wallet is served on the composite route (${served.status} ${served.status === 200 ? "" : served.text.slice(0, 160)})`);
+    st.primary = "used"; st.fallback = "billing";
+    const ctl = signerFor();
+    const runs = [];
+    for (let i = 0; i < 4; i++) runs.push(await pay({ signer: ctl, path: IMG, body: imgBody() }));
+    ok(runs.slice(0, 3).every((r) => r.status === 402 && r.body?.reason !== "settlement-unconfirmed") && runs[3].status === 429 && /from this buyer/.test(runs[3].text),
+      `control: settle refusals that are not unconfirmed count against the wallet, refused at the guard's bound (${runs.map((r) => `${r.status}/${r.body?.reason || ""}`).join(" ")})`);
+    st.primary = "billing";
   }
 
   // 6. Its transfer lands: the reconcile books it owed, exactly once, and the

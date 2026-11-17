@@ -28,9 +28,10 @@ what went wrong, and a client that reads `error` first reads that instead. `retr
 change helps: `same-payment` means send the same payment again after `Retry-After`, with no new
 signature; `watch-transaction` (the body lists `transactions`) and `check-wallet` (it lists none) mean
 the settlement is not confirmed (`reason: "settlement-unconfirmed"`) and the transfer may still land, so
-do not sign a new authorization for that call before the `authorizationValidBefore` time when the body
-names one, and read `refundStatusUrl` (a free refund lookup) when it is there; the same payment sent
-again gets the same answer without the call running; `fresh-authorization` means sign a new payment;
+do not sign a new authorization for that call before the expiry the body names (`authorizationValidBefore`,
+`lastValidRound` or `expirationLedger`), or, when it names none, before the paying wallet shows whether
+the transfer landed, and read `refundStatusUrl` (a free refund lookup) when it is there; the same payment
+sent again, in any encoding, gets the same answer without the call running; `fresh-authorization` means sign a new payment;
 `fund-wallet` means the paying wallet holds too little of the asset (`reason:
 "insufficient-funds"`) or has no account for it yet (`reason: "no-token-account"`: no USDC token account
 on Solana, no trustline on Stellar, not opted in on Algorand), so a new signature alone is refused the
