@@ -3638,6 +3638,25 @@ try {
       } finally { await app.close(); }
     }
     fac.reset();
+    // A cold slug held by its charged place alone (a success whose receipt is not there yet, nothing in the book's short-net record): named on the word, cleared by hand.
+    {
+      const inner = newBook7("coldplace");
+      const app = await mount({}, { book: inner });
+      try {
+        fac.mode.settle = () => ({ status: 200, body: { success: true, transaction: "0x" + "7c".repeat(32) } });
+        const a = await pay7(app, "mb"), b = await pay7(app, "mb");
+        const word = app.gate.statusWord();
+        const placeReason = /^mb: 1 sale\(s\) charged before its rate was proven hold its place; new calls on it from payers with no paid sale are held$/;
+        const other = await app.gate.clearShortByHand("echo", { note: "nothing is held on this one" });
+        const noNote = await app.gate.clearShortByHand("mb", { note: "" });
+        const held = await pay7(app, "mb");
+        const cleared = await app.gate.clearShortByHand("mb", { note: "the receipt was read by hand" });
+        fac.mode.settle = pays(1234);
+        const after = await pay7(app, "mb");
+        ok(a.status === 200 && b.status === 503 && b.reason === "rate_under_review" && !inner.shortSales().mb && app.gate.stats().coldSold?.mb === undefined && word.status === "attention" && word.reasons.filter((x) => placeReason.test(x)).length === 1 && other.ok === false && noNote.ok === false && held.status === 503 && cleared.ok === true && after.status === 200 && inner.resolvedByHand().filter((r) => r.outcome === "short-net-cleared" && r.slug === "mb" && /read by hand/.test(r.note)).length === 1 && !app.gate.statusWord().reasons.some((x) => /^mb: /.test(x)), `a cold slug held by this process's count of charged sales alone reads attention with a reason naming it, and an operator's clear-short releases it, recorded (${a.status} ${b.status}; word ${word.status}: ${word.reasons.filter((x) => /^mb/.test(x)).join("; ") || "no reason"}; cleared ${cleared.ok}, then ${after.status})`);
+      } finally { await app.close(); }
+    }
+    fac.reset();
     // The default floor of a model-backed tool: the share of its price its upstream cost is kept within.
     {
       const app = await mount({}, { book: newBook7("floor") });
@@ -4139,7 +4158,7 @@ try {
       const wordFn = gateText.slice(gateText.indexOf("  function statusWord() {"), gateText.indexOf("  /** An operator acknowledges having read"));
       const raised = (wordFn.match(/reasons\.push\(/g) || []).length;
       const heartbeat = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"), worker = readFileSync(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
-      const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "under the amount the commission map expects", "product id differs", "under its stop floor", "this server does not serve", "published example answer is over the answer bound", "contradicted successes came from several payers", "unsettled runs from many payers", "answers over the answer bound from one client address", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "failed or were late in the last five minutes", "went without a verdict in the last day", "book is full", "retired at capacity", "closed as unrecognized"];
+      const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "under the amount the commission map expects", "product id differs", "under its stop floor", "charged before its rate was proven", "this server does not serve", "published example answer is over the answer bound", "contradicted successes came from several payers", "unsettled runs from many payers", "answers over the answer bound from one client address", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "failed or were late in the last five minutes", "went without a verdict in the last day", "book is full", "retired at capacity", "closed as unrecognized"];
       const missing = FAMILIES.filter((f) => !heartbeat.includes(f) || !worker.includes(f));
       // The raw tag is never output anywhere (an issue, a comment, the job log): every line that
       // names it is its own assignment, its shape check, or the keyed digest made from it.
@@ -4188,7 +4207,7 @@ try {
         ok(step && existsSync(comments) && runs3.every((r) => r.status === 0) && afterSame.length === 1 && /reasons mark [0-9a-f]{24} /.test(afterSame[0]) && afterNew.length === 2 && afterNew[0] !== afterNew[1] && !/aaaaaaaa|bbbbbbbb/.test(printed), `the heartbeat step, run for three cycles on one reasons tag against an open issue, comments once; a new tag adds one more comment; the raw tag is in no output (${afterSame.length} then ${afterNew.length} comments)`);
       }
       const owedWording = "include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review";
-      ok(raised === 24 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && tokenHashed === false && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with a dedicated mark key (never the operator token, which only reads the operator view), never the tag itself (${missing.join("; ") || "all named"})`);
+      ok(raised === 25 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && tokenHashed === false && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with a dedicated mark key (never the operator token, which only reads the operator view), never the tag itself (${missing.join("; ") || "all named"})`);
     }
     // P7. During a drain a settle ends before the database pool starts closing, with room for its book write.
     {

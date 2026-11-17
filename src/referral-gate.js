@@ -1831,6 +1831,8 @@ export function createReferralGate({
     for (const p of productStops()) reasons.push(`${p.slug}: product id differs: configured ${p.configured}, receipt ${p.received}; new calls on it are held`);
     // A slug held by this process's own count where the book holds no record of it (its write did not land).
     { const recorded = new Set(shortNow().map((r) => r.slug)); for (const [slug, seen] of rate.deep) if (seen.size && !recorded.has(slug) && slugHeld(slug)) reasons.push(`${slug}: ${seen.size} sale(s) under its stop floor were seen and could not be recorded in the book; new calls on it are held`); }
+    // A cold slug whose places are all kept by sales charged and not yet proven (this process's count; no record in the book).
+    for (const [slug, n] of rate.sold) { const bound = stopAfter(slug); if (bound && n >= bound && !isProven(slug) && !slugHeld(slug)) reasons.push(`${slug}: ${n} sale(s) charged before its rate was proven hold its place; new calls on it from payers with no paid sale are held`); }
     if (routeHeld(book.faults())) reasons.push(`settle successes the chain contradicted came from ${REFERRAL_CONTRADICTED_PAYERS} or more payers: new payments are held, one at a time probes`);
     for (const r of shortNow()) reasons.push(`${r.slug}: the split contract paid less than the commission map expects (expected at least ${r.expectedNow}, received ${r.received}, of a gross of ${r.gross}; ${r.count} sale(s)${slugHeld(r.slug) ? "; new calls on it are held" : ""})`);
     if (all.some((e) => e.routedToUs === true && (e.state === "in-doubt" || e.state === "intent"))) reasons.push("a payment the split contract routed to this merchant, which the proof rule does not accept, is open");
@@ -3175,13 +3177,14 @@ export function createReferralGate({
     if (typeof note !== "string" || note.trim().length < 3) return { ok: false, error: "a note saying what was checked is required" };
     // This process's own count too, whether or not the book holds a record
     // (a stop whose record never landed is still cleared, and still recorded).
-    const inProcess = (rate.deep.get(slug)?.size || 0) > 0 || rate.product.has(slug);
+    // A cold slug's places kept by charged sales are this process's count as well.
+    const inProcess = (rate.deep.get(slug)?.size || 0) > 0 || rate.product.has(slug) || (rate.sold.get(slug) || 0) > 0;
     let ok = await book.clearShort(slug, { note: note.trim() });
     if (!ok && inProcess) { try { await book.resolveNote({ slug, outcome: "short-net-cleared", note: note.trim() }); } catch { /* cleared all the same */ } ok = true; }
     // An operator's clear makes the slug cold again, whether or not a stop stood.
     markCold(slug);
     if (ok) { rate.deep.delete(slug); rate.product.delete(slug); rate.sold.delete(slug); }
-    return ok ? { ok: true, slug } : { ok: false, error: "no short-net record stands for that slug, or the book could not be written" };
+    return ok ? { ok: true, slug } : { ok: false, error: "no short-net record or held place stands for that slug, or the book could not be written" };
   }
 
   return {
