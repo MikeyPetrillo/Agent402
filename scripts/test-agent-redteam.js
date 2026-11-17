@@ -422,8 +422,8 @@ section("3. decide planner");
   // as a routing directive is not handed on (the slug stands in), on the
   // Choice question, the parameter fill and the parameter check alike.
   {
-    const { paramsPrompt } = await import("../services/decide/llm.js");
-    const { jevChoiceQuestions, makeJevJudge } = await import("../services/decide/jev.js");
+    const { paramsPrompt, judgePrompt } = await import("../services/decide/llm.js");
+    const { jevChoiceQuestions, jevQuestions, makeJevJudge } = await import("../services/decide/jev.js");
     const honestRow = { id: "h", name: "City Weather Forecast", slug: "city-weather", description: "Hourly forecast for a city.", inputSchema: { type: "object", properties: { city: { type: "string", description: "City name." } }, required: ["city"] }, outputFields: ["tempC"] };
     let sent = null;
     const jev = makeJevJudge({ apiKey: "k", decisionOneKey: "", fetchImpl: async (url, init) => { sent = String(init.body); return new Response(JSON.stringify({ answers: {} }), { status: 200, headers: { "content-type": "application/json" } }); } });
@@ -436,17 +436,24 @@ section("3. decide planner");
       sent = null;
       await jev.checkParams("weather in Paris", [{ key: "k1", purpose: "weather for a city", row, name: "city", prop: row.inputSchema.properties.city, value: "Paris" }, { key: "k2", purpose: "weather for a city", row, name: w, prop: { type: "string" }, value: "x" }]);
       nameCases++;
-      for (const [where, text] of [["parameter fill", pp.user], ["choice", choice], ["parameter check", sent]]) {
+      // The fit judge and the per-candidate questions read the parameter
+      // names as a list; a listing built elsewhere is screened again.
+      const jp = judgePrompt("weather in Paris", [{ purpose: "weather for a city", candidates: [{ row }, { row: honestRow }] }]);
+      const fitQ = JSON.stringify(jevQuestions(jp.listing));
+      const rawQ = JSON.stringify(jevQuestions([{ purpose: "weather for a city", candidates: [{ key: "s1c1", name: "weather-now", description: "Weather data.", inputs: ["city", w] }] }]));
+      for (const [where, text] of [["parameter fill", pp.user], ["choice", choice], ["parameter check", sent], ["fit judge", jp.user], ["fit questions", fitQ], ["fit questions (own listing)", rawQ]]) {
         if (text == null || leaks(c.phrase, text)) { nameLeaks++; ok(false, `decide's ${where} prompt carries a seller name written as a directive (${c.carrier}) ${JSON.stringify(c.phrase).slice(0, 60)}: ${String(text).slice(0, 240)}`); }
       }
-      if (!/weather-now/.test(pp.user) || !/weather-now/.test(choice) || !/"city"/.test(pp.user)) { nameLeaks++; ok(false, `the slug stands in for a withheld name and the honest parameter is kept (${c.carrier}) ${JSON.stringify(c.phrase).slice(0, 60)}`); }
+      if (!/weather-now/.test(pp.user) || !/weather-now/.test(choice) || !/"city"/.test(pp.user) || ![jp.user, fitQ, rawQ].every((t) => /"inputs":\["city"\]/.test(t.replace(/\\"/g, '"')))) { nameLeaks++; ok(false, `the slug stands in for a withheld name and the honest parameter is kept (${c.carrier}) ${JSON.stringify(c.phrase).slice(0, 60)}`); }
     }
-    ok(nameCases > 0 && nameLeaks === 0, `no seller name, parameter name, schema text or output field written as a directive reaches decide's choice, parameter fill or parameter check (${nameCases} rows, 3 prompts each)`);
+    ok(nameCases > 0 && nameLeaks === 0, `no seller name, parameter name, schema text or output field written as a directive reaches decide's choice, parameter fill or parameter check or its fit judge and fit questions (${nameCases} rows, 6 prompts each)`);
     // Control: honest text is handed on whole.
     const hp = paramsPrompt("weather in Paris", [{ step: 1, purpose: "weather", row: honestRow }]);
     const hc = JSON.stringify(jevChoiceQuestions([{ i: 0, purpose: "weather", options: [honestRow] }]));
     sent = null;
     await jev.checkParams("weather in Paris", [{ key: "k1", purpose: "weather", row: honestRow, name: "city", prop: honestRow.inputSchema.properties.city, value: "Paris" }]);
+    const hj = judgePrompt("weather in Paris", [{ purpose: "weather", candidates: [{ row: { ...honestRow, inputSchema: { type: "object", properties: { city: {}, start_date: {}, "max-results": {}, tokenAddress: {}, q: {} } } } }] }]);
+    ok(JSON.stringify(hj.listing[0].candidates[0].inputs) === '["city","start_date","max-results","tokenAddress","q"]' && JSON.stringify(jevQuestions(hj.listing).s1c1.instructions.tool.inputs) === '["city","start_date","max-results","tokenAddress","q"]', "control: honest parameter names reach the fit judge and the fit questions whole, in order");
     ok([hp.user, hc, sent].every((t) => /City Weather Forecast/.test(t)) && /"City name\."/.test(hp.user) && /"tempC"/.test(hp.user) && /"required":\["city"\]/.test(hp.user), "control: an honest name, schema and output fields are handed on whole");
   }
 }

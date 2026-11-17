@@ -145,6 +145,14 @@ export function promptSchema(schema, depth = 0) {
   return out;
 }
 
+/** A tool's parameter names as a prompt that picks between tools reads them:
+ *  the ones that may be handed on as written, at most 200. */
+export function promptInputNames(row) {
+  const props = row?.inputSchema?.properties;
+  if (!props || typeof props !== "object" || Array.isArray(props)) return [];
+  return Object.keys(props).slice(0, 200).filter(promptIdentOk);
+}
+
 /** Candidates carry short keys ("s1c3" = step 1, candidate 3); the planner
  *  maps them back to row ids, so a model can neither invent nor misplace one. */
 export function judgePrompt(task, steps, { guidance = "" } = {}) {
@@ -155,7 +163,7 @@ export function judgePrompt(task, steps, { guidance = "" } = {}) {
     candidates: s.candidates.map((c, j) => {
       const key = `s${i + 1}c${j + 1}`;
       keyToId[key] = c.row.id;
-      return { key, name: promptName(c.row), description: judgeText(c.row.description), inputs: Object.keys(c.row.inputSchema?.properties || {}) };
+      return { key, name: promptName(c.row), description: judgeText(c.row.description), inputs: promptInputNames(c.row) };
     }),
   }));
   return {
