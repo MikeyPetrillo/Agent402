@@ -32,6 +32,15 @@ export const SHARED_HOSTING_SUFFIXES = [
   // until one does.
   "supabase.co", "run.app", "sslip.io", "deno.net", "duckdns.org",
   "ngrok-free.dev", "ngrok.dev", "ts.net",
+  // Cloud and static hosts whose every hostname below the suffix is a
+  // different customer (each is on the public suffix list): an API Gateway or
+  // Lambda URL host, a CloudFront distribution, a GitHub or GitLab Pages site.
+  // Grouped, unrelated sellers would share one day's request budget
+  // (src/seller-load.js) and one seller's load would hold the others' crawls.
+  "amazonaws.com", "on.aws", "cloudfront.net", "awsapprunner.com",
+  "github.io", "gitlab.io", "modal.run", "ondigitalocean.app",
+  "azurestaticapps.net", "azurecontainerapps.io", "azure-api.net",
+  "pythonanywhere.com", "lovable.app", "fly.io", "vercel.run",
 ];
 export function operatorKey(origin) {
   let host;

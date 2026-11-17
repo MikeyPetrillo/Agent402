@@ -15,7 +15,10 @@
 //      reads) is counted per operator (src/operator-key.js: the registrable
 //      domain, or the whole hostname on shared hosting) per UTC day. Past
 //      DAILY_BUDGET (SELLER_PROBE_DAILY_BUDGET, default 200) the crawl and the
-//      unpaid probes skip that host until the day rolls. The router's probe for
+//      unpaid probes skip that host until the day rolls; the unpaid probes take
+//      at most PROBE_SHARE of it, so the document reads keep the rest. A read
+//      made for a registration (`unscheduled`) is counted apart and never
+//      spends the day. The router's probe for
 //      a paying caller is counted on a day count of its own, never skipped and
 //      never counted against the crawl's budget. A request that reaches a host
 //      through another operator's redirect (a document read following it, or
@@ -48,7 +51,7 @@
 import { createHash } from "node:crypto";
 import { shared as sharedLimits, createMemoryLimits, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { operatorKey } from "./operator-key.js";
-import { CRAWL_INTERVAL_MS } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, SLOW_ORIGIN_EVERY_CYCLES, isSlowOrigin } from "./crawl-cadence.js";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -77,6 +80,17 @@ export const REVISIT_BASE_MS = CRAWL_INTERVAL_MS;
 const REVISIT_SLACK_MS = 2 * 60_000;
 /** Requests per operator per UTC day before unpaid probes skip it (0 = no budget). */
 export const DAILY_BUDGET = countKnob("SELLER_PROBE_DAILY_BUDGET", 200);
+/** The share of a day's budget the unpaid price and paywall probes may use, so
+ *  the document reads always keep the rest. */
+export const PROBE_SHARE = 0.5;
+/** PROBE_SHARE as prose: "half". */
+export const probeShareLabel = () => (PROBE_SHARE === 0.5 ? "half" : `${Math.round(PROBE_SHARE * 100)}%`);
+/** The probe kinds held to PROBE_SHARE of the day (a document read is not). */
+const PROBE_SHARE_KINDS = new Set(["paywall", "quote", "mpp-probe"]);
+/** The time between two scheduled reads of an origin its operator asked us to
+ *  read less often (CRAWL_SLOW_ORIGINS), by the clock: one crawl cycle less a
+ *  little, so a cycle that starts a minute early still reads it. */
+export const SLOW_READ_INTERVAL_MS = CRAWL_INTERVAL_MS * SLOW_ORIGIN_EVERY_CYCLES - 2 * 60_000;
 /** A 429 or 503 with no usable Retry-After holds the host this long. */
 export const THROTTLE_DEFAULT_MS = 30 * 60_000;
 /** No Retry-After holds a host longer than this. */
@@ -88,6 +102,7 @@ export const PROBE_KINDS = Object.freeze(["crawler", "paywall", "quote", "router
 const REVISIT = "seller-revisit";      // window per origin: one member, the state
 const THROTTLE = "seller-throttle";    // flag per hostname: held until
 const BUDGET = "seller-probe-day";     // counter per day and operator
+const SLOW = "seller-slow-read";       // flag per lane and slow origin: its next scheduled read waits until
 const STATE_KEEP_MS = 14 * DAY_MS;     // a revisit state not written for this long is forgotten
 
 /** The wait after `streak` unchanged reads in a row: 0 for none, then one
@@ -167,12 +182,15 @@ export function createSellerLoad({
   revisitBaseMs = REVISIT_BASE_MS,
   dailyBudget = DAILY_BUDGET,
   prefetchWaitMs = PREFETCH_WAIT_MS,
+  probeShare = PROBE_SHARE,
+  slowReadIntervalMs = SLOW_READ_INTERVAL_MS,
 } = {}) {
+  const probeCap = Math.max(1, Math.floor(dailyBudget * probeShare));
   let clock = now;
   const shares = store && store !== local;
   const counts = {
     unchangedReads: 0, changedReads: 0,
-    skipped: { unchanged: 0, throttled: 0, budget: 0, landing: 0 },
+    skipped: { unchanged: 0, throttled: 0, budget: 0, landing: 0, slow: 0 },
     resets: {},
     throttles: { noted: 0, withRetryAfter: 0 },
     requests: {}, refused: {},
@@ -182,6 +200,7 @@ export function createSellerLoad({
   // off, and requests counted per operator today. Bounded.
   const backedOff = new Map();     // origin -> nextAt
   const hostDay = new Map();       // `${day}|${operator}` -> count
+  const slowUntil = new Map();     // `${lane}|${origin}` -> the next scheduled read of a slow origin waits until
   const bump = (o, k) => { o[k] = (o[k] || 0) + 1; };
   const bounded = (map, cap = 20_000) => { while (map.size > cap) map.delete(map.keys().next().value); };
 
@@ -362,6 +381,11 @@ export function createSellerLoad({
         if (until > mine) { await local.flagSet(THROTTLE, host, until, { now: clock() }); counts.prefetch.merged++; }
       }) : null,
       originOf(origin) ? shared((s) => s.counterGet(BUDGET, budgetKey(origin, t), { now: t })).then((r) => (r ? mergeCount(budgetKey(origin, t), r.value) : null)) : null,
+      originOf(origin) ? shared((s) => s.counterGet(BUDGET, `${budgetKey(origin, t)}|probes`, { now: t })).then((r) => (r ? mergeCount(`${budgetKey(origin, t)}|probes`, r.value) : null)) : null,
+      ...(isSlowOrigin(key) ? ["x402", "mpp"].map((lane) => shared((s) => s.flagGet(SLOW, `${lane}|${key}`, { now: t })).then((r) => {
+        const until = Number(r?.until) || 0;
+        if (until > (slowUntil.get(`${lane}|${key}`) || 0)) { slowUntil.set(`${lane}|${key}`, until); bounded(slowUntil, 1_000); counts.prefetch.merged++; }
+      })) : []),
     ]);
   }
 
@@ -493,7 +517,7 @@ export function createSellerLoad({
      *  land on a host this way are counted apart, and past a day's budget of
      *  them one more is refused, essential or not.
      *  `{ ok, used, budget }`. */
-    async takeBudget(url, kind, { essential = false, chargeTo = null } = {}) {
+    async takeBudget(url, kind, { essential = false, chargeTo = null, unscheduled = false } = {}) {
       const k = String(kind || "other");
       const target = originOf(url);
       const cause = chargeTo ? originOf(chargeTo) : null;
@@ -509,6 +533,30 @@ export function createSellerLoad({
         noteRequest(url, k);
         return { ok: true, used, budget: dailyBudget, routine: false };
       }
+      // A read we did not schedule (a registration's, which anyone can ask
+      // for any origin) is counted on a day count of its own, the crawled
+      // origin's, and never refused: it never spends the day the scheduled
+      // crawl and its probes read. One that lands on another operator's host
+      // is held to a landed allowance of its own there, apart from the one
+      // the scheduled reads of moved origins share.
+      if (unscheduled) {
+        const key = `${budgetKey(origin, t)}|unscheduled`;
+        if (moved && dailyBudget > 0) {
+          const landedKey = `${budgetKey(target, t)}|landed-unscheduled`;
+          const landed = await countLocal(landedKey);
+          if (landed > dailyBudget) {
+            await countLocal(landedKey, -1);
+            bump(counts.refused, `${k}:landed-unscheduled`);
+            return { ok: false, used: 0, budget: dailyBudget, unscheduled: true };
+          }
+          countShared(landedKey);
+        }
+        const used = await countLocal(key);
+        countShared(key);
+        bump(counts.requests, `${k}:unscheduled`);
+        noteRequest(url, k);
+        return { ok: true, used, budget: dailyBudget, unscheduled: true };
+      }
       if (dailyBudget <= 0) { bump(counts.requests, k); noteRequest(url, k); return { ok: true, used: 0, budget: dailyBudget }; }
       const key = budgetKey(origin, t);
       const used = await countLocal(key);
@@ -517,18 +565,32 @@ export function createSellerLoad({
         bump(counts.refused, k);
         return { ok: false, used: used - 1, budget: dailyBudget };
       }
+      // The unpaid probes take at most PROBE_SHARE of the day, so the
+      // document reads of the scheduled crawl always keep the rest.
+      const probeKey = !essential && PROBE_SHARE_KINDS.has(k) ? `${key}|probes` : null;
+      if (probeKey) {
+        const probes = await countLocal(probeKey);
+        if (probes > probeCap) {
+          await countLocal(probeKey, -1);
+          await countLocal(key, -1);
+          bump(counts.refused, `${k}:probe-share`);
+          return { ok: false, used: used - 1, budget: dailyBudget };
+        }
+      }
       if (moved) {
         const landedKey = `${budgetKey(target, t)}|landed`;
         const landed = await countLocal(landedKey);
         if (landed > dailyBudget) {
           await countLocal(landedKey, -1);
           await countLocal(key, -1);
+          if (probeKey) await countLocal(probeKey, -1);
           bump(counts.refused, `${k}:landed`);
           return { ok: false, used: used - 1, budget: dailyBudget };
         }
         countShared(landedKey);
       }
       countShared(key);
+      if (probeKey) countShared(probeKey);
       bump(counts.requests, k);
       noteRequest(url, k);
       hostDay.set(key, used); bounded(hostDay);
@@ -587,8 +649,9 @@ export function createSellerLoad({
      *  (`landsOn`) whose landed allowance is spent, "unchanged" for a
      *  back-off) or null, and `intervalMs` the back-off the origin is on (0 on
      *  the normal cycle). Never throws, and an unreadable state crawls. */
-    async crawlPlan(origin, { landsOn = null } = {}) {
+    async crawlPlan(origin, { landsOn = null, lane = "x402" } = {}) {
       try {
+        if (this.slowWaiting(origin, lane)) { counts.skipped.slow++; return { skip: "slow", intervalMs: 0 }; }
         const held = await this.hold(origin);
         if (held) { counts.skipped[held]++; return { skip: held, intervalMs: 0 }; }
         for (const to of [].concat(landsOn || [])) {
@@ -598,6 +661,27 @@ export function createSellerLoad({
         if (!due.due) { counts.skipped.unchanged++; return { skip: "unchanged", intervalMs: due.intervalMs }; }
         return { skip: null, intervalMs: due.intervalMs };
       } catch { return { skip: null, intervalMs: 0 }; }
+    },
+
+    /** Does the scheduled read of a slow origin (CRAWL_SLOW_ORIGINS) in `lane`
+     *  ("x402" or "mpp") wait? By the clock, from the last scheduled read any
+     *  container made (merged at prefetch), so a restart never reads it early.
+     *  False for every other origin. Synchronous: this process's view. */
+    slowWaiting(origin, lane = "x402", at = clock()) {
+      const key = normOrigin(origin);
+      if (!isSlowOrigin(key)) return false;
+      return (slowUntil.get(`${lane}|${key}`) || 0) > at;
+    },
+    /** A scheduled read of a slow origin in `lane` starts now: the next one
+     *  waits SLOW_READ_INTERVAL_MS, here and (written behind) in the store. */
+    noteSlowRead(origin, lane = "x402") {
+      const key = normOrigin(origin);
+      if (!isSlowOrigin(key) || slowReadIntervalMs <= 0) return 0;
+      const t = clock();
+      const until = t + slowReadIntervalMs;
+      slowUntil.set(`${lane}|${key}`, until); bounded(slowUntil, 1_000);
+      void behind(`s|${lane}|${key}`, (s) => s.flagSet(SLOW, `${lane}|${key}`, until, { now: t }));
+      return until;
     },
 
     /** Why an unpaid probe to `url` should not be sent, or null; counts it
@@ -647,7 +731,7 @@ export function createSellerLoad({
       for (const [, at] of backedOff) if (at > t) backedOffNow++;
       return {
         revisit: { capHours: revisitCapMs / HOUR_MS, firstWaitMinutes: revisitIntervalMs(1, { baseMs: revisitBaseMs, capMs: revisitCapMs }) / 60_000, originsBackedOff: backedOffNow, unchangedReads: counts.unchangedReads, changedReads: counts.changedReads, resets: { ...counts.resets } },
-        budget: { perOperatorPerDay: dailyBudget, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused }, routerProbesCountedApart: true },
+        budget: { perOperatorPerDay: dailyBudget, probesPerOperatorPerDay: probeCap, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused }, routerProbesCountedApart: true },
         throttle: { defaultMinutes: THROTTLE_DEFAULT_MS / 60_000, maxHours: THROTTLE_MAX_MS / HOUR_MS, ...counts.throttles },
         crawlsSkipped: { ...counts.skipped },
         prefetch: { ...counts.prefetch, waitMs: prefetchWaitMs },
@@ -689,9 +773,9 @@ export class LandingHeld extends Error {
  *  each hop (safeFetch `beforeRedirect`): the hop is counted on `chargeTo`'s
  *  day, and one onto another operator's host also on that host's landed
  *  allowance, past which it throws LandingHeld and nothing is sent. */
-export function landingGate(chargeTo, kind, { load = sellerLoad } = {}) {
+export function landingGate(chargeTo, kind, { load = sellerLoad, unscheduled = false } = {}) {
   return async (nextUrl) => {
-    const b = await load.takeBudget(nextUrl, kind, { essential: true, chargeTo });
+    const b = await load.takeBudget(nextUrl, kind, { essential: true, chargeTo, unscheduled });
     if (b?.ok === false) throw new LandingHeld(hostnameOf(nextUrl));
   };
 }

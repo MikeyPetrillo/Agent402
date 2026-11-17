@@ -76,7 +76,14 @@ Loaded when an index, discovery, router or buyer file is read.
   lengthens it. Every crawler read and probe is counted per operator (`src/operator-key.js`) per
   UTC day; past `SELLER_PROBE_DAILY_BUDGET` (default 200, `off` disables) the scheduled crawl and
   its paywall and quote probes and the MPP index's crawl reads wait, while reads inside a started
-  crawl and a registration's reads are counted and never refused. The router's pre-payment probe
+  crawl are counted and never refused. The unpaid probes (paywall, quote, mpp-probe) take at most
+  `PROBE_SHARE` (half) of the day (`|probes` count), so the document reads keep the rest. A
+  registration's reads (`registerOrigin` runs in the `unscheduledReads` scope; the MPP index's
+  ungated verify) are counted on the origin's `|unscheduled` count, never on its day and never
+  refused, and their redirect landings on a `|landed-unscheduled` allowance of their own, so a
+  registration anyone makes never spends a domain's scheduled crawl (`scripts/test-crawl-own-limits.js`).
+  Shared-hosting suffixes in `src/operator-key.js` (cloud API, CDN and Pages hosts included) key
+  each hostname as its own operator. The router's pre-payment probe
   (`sendRouterProbe`) has its own day count, is never refused and never counts against the crawl's
   budget. A request that reaches another operator's host through a redirect (a probe sent where
   the documents moved, `chargeTo`; a document read's hop, `landingGate` through safeFetch's
@@ -98,8 +105,13 @@ Loaded when an index, discovery, router or buyer file is read.
   one, at most a day), the MPP index's included; a router purchase is never held. A skipped origin
   keeps its entry; one backed off for unchanged documents votes healthy (not our side) in
   `cycleOkFraction` and the cycle tally, a throttled, budgeted or landing-held one is left out, and an origin read
-  after a wait gets the hold window (`INDEX_CRAWL_HOLD_HOURS`) counted from the end of that wait.
-  `CRAWL_SLOW_ORIGINS` applies to the MPP index too (`mppCrawlDue`). Counts on
+  after a wait gets the hold window (`INDEX_CRAWL_HOLD_HOURS`) counted from the end of that wait,
+  or from the last scheduled turn our limits passed over (`turnNotReadAt`: any skip reason), so a
+  seller is never dropped because we chose not to read it.
+  `CRAWL_SLOW_ORIGINS` is by the clock: a slow origin's scheduled read sets a per-lane flag
+  (`noteSlowRead`, x402 and mpp) in the shared store, merged at prefetch, and `slowWaiting` /
+  `crawlPlan` skip "slow" until `SLOW_READ_INTERVAL_MS` has passed, so boots and extra cycles never
+  read it early; it applies to the MPP index too (`mppCrawlDue`). Counts on
   `/__operator/seller-load.json`; `?host=` gives the request log (per component and minute, two
   days: one counter per host, minute and component in a shared-store tally per host and hour, so
   a write never reads the host's history; a process holds a few minutes per host, at most 32

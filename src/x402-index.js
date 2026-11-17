@@ -28,6 +28,7 @@ import { manifestEntryExample, openapiOperationExample, noteProbeExample, probeE
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { createDocumentCache } from "./json-document.js";
@@ -302,10 +303,16 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 // this is the multiplier.
 // 30 min crawl, 1 hr discovery: defined in src/crawl-cadence.js so the pages
 // that quote the cadence read the same constants without importing this file.
-import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
+import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
 import { sellerLoad, bodyHash, landingGate } from "./seller-load.js";
+// Reads made for a registration (anyone may register any origin, with no proof
+// of control) run inside this scope: they are counted on a day count of their
+// own (src/seller-load.js takeBudget `unscheduled`), never on the day the
+// origin's scheduled crawl and its probes read.
+const unscheduledReads = new AsyncLocalStorage();
+const readIsUnscheduled = () => unscheduledReads.getStore() === true;
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { withoutAttributions } from "./data-attribution.js";
@@ -487,7 +494,7 @@ async function probeOnce(target, opts, load) {
       const refusal = await sellerLoad.probeRefusal(target, load.kind, { chargeTo });
       if (refusal) throw new ProbeSkipped(refusal);
     } else {
-      const b = await sellerLoad.takeBudget(target, load.kind, { essential: true, chargeTo });
+      const b = await sellerLoad.takeBudget(target, load.kind, { essential: true, chargeTo, unscheduled: readIsUnscheduled() });
       if (b?.ok === false) throw new ProbeSkipped("budget");
     }
   }
@@ -1703,7 +1710,7 @@ export async function registerOrigin(origin, { crawl, replaces = null, deadlineM
   let run = registrationsInFlight.get(key);
   if (!run) {
     const t0 = Date.now();
-    run = registerOriginNow(origin, { crawl, replaces, deadlineAt: t0 + deadlineMs });
+    run = unscheduledReads.run(true, () => registerOriginNow(origin, { crawl, replaces, deadlineAt: t0 + deadlineMs }));
     registrationsInFlight.set(key, run);
     run.then((r) => {
       const ms = Date.now() - t0;
@@ -6100,9 +6107,10 @@ export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "functio
  *  sent; a hop onto another operator's host is also counted on that host's
  *  landed allowance and is not sent past it (LandingHeld, landingGate). */
 async function crawlRead(url, opts) {
-  await sellerLoad.takeBudget(url, "crawler", { essential: true });
+  const unscheduled = readIsUnscheduled();
+  await sellerLoad.takeBudget(url, "crawler", { essential: true, unscheduled });
   try {
-    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler") });
+    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler", { unscheduled }) });
   } catch (e) {
     if (e?.landingHeld) throw e;
     const st = Number(e?.upstreamStatus);
@@ -6130,10 +6138,23 @@ function noteLandingHeld(origin, host) {
 async function crawlScheduled(origin, outcome = { ours: false }) {
   const landsOn = [cache.get(origin)?.redirectedTo, landingHeldOn.get(origin)].filter(Boolean);
   const plan = await sellerLoad.crawlPlan(origin, { landsOn });
-  if (plan.skip) return plan.skip;
+  if (plan.skip) { noteTurnNotRead(origin); return plan.skip; }
   landingHeldOn.delete(origin);
+  sellerLoad.noteSlowRead(origin, "x402");
   const read = await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
-  return read?.landingHeld ? "landing" : null;
+  if (read?.landingHeld) { noteTurnNotRead(origin); return "landing"; }
+  return null;
+}
+// When an origin's scheduled turn last passed without a read because of a
+// limit of ours (a spent day, a Retry-After, a landing allowance, the slow
+// cycle, a back-off, a shared turn that ended): the hold of its last good
+// listing (crawlHoldsLastGood) counts from then, so a seller is never dropped
+// from the router because we chose not to read it.
+const turnNotReadAt = new Map();   // origin -> ms
+function noteTurnNotRead(origin, at = Date.now()) {
+  turnNotReadAt.delete(origin);
+  turnNotReadAt.set(origin, at);
+  while (turnNotReadAt.size > LANDING_HELD_CAP) turnNotReadAt.delete(turnNotReadAt.keys().next().value);
 }
 export async function __crawlScheduledForTest(originUrl) { return crawlScheduled(originUrl); }
 /** Test seam: one whole crawl cycle (no lease), and the summary it logged. */
@@ -6643,9 +6664,11 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       // our own choice, so the hold window counts from the end of that wait,
       // and keeps counting from there on the failed reads that follow (the
       // first one put the origin back on the cycle, with no wait of its own).
-      const holdFromAt = revisitIntervalMs > 0
+      // A scheduled turn we passed over since that read moves the start to
+      // that turn (turnNotReadAt).
+      const holdFromAt = Math.max(revisitIntervalMs > 0
         ? Math.min(Date.now(), (Number(prev?.fetchedAt) || 0) + revisitIntervalMs)
-        : (Number(prev?.holdFromAt) || 0);
+        : (Number(prev?.holdFromAt) || 0), Number(turnNotReadAt.get(originUrl)) || 0);
       if (!crawlHoldsLastGood(prev, Date.now(), holdFromAt)) return false;
       cache.set(originUrl, { ...heldEntry(prev, e?.message || e), ...(holdFromAt > 0 ? { holdFromAt } : {}) });
       return true;
@@ -7372,7 +7395,7 @@ const CRAWL_ORIGINS_PER_OPERATOR = Math.max(1, Number(process.env.CRAWL_ORIGINS_
 /** At most `cap` origins per operator this cycle, rotating by cycle so every
  *  origin comes up in turn instead of the same few always winning. Input order
  *  is preserved, and anyone at or under the cap is unaffected. */
-export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR) {
+export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_OPERATOR, { slowWaiting = (o) => sellerLoad.slowWaiting(o, "x402") } = {}) {
   const byOperator = new Map();
   for (const o of origins) {
     const k = operatorKey(o);
@@ -7385,9 +7408,10 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
     const offset = (cycle * cap) % list.length;
     for (let i = 0; i < cap; i++) due.add(list[(offset + i) % list.length]);
   }
-  // A slow origin (its operator asked) is due only on every SLOW_ORIGIN_EVERY_CYCLES-th cycle.
-  const slowWait = (o) => isSlowOrigin(o) && cycle % SLOW_ORIGIN_EVERY_CYCLES !== 0;
-  return origins.filter((o) => due.has(o) && !slowWait(o));
+  // A slow origin (its operator asked) waits SLOW_READ_INTERVAL_MS by the
+  // clock from its last scheduled read, whichever container made it and
+  // however many cycles (a boot runs one) came between (src/seller-load.js).
+  return origins.filter((o) => due.has(o) && !slowWaiting(o));
 }
 
 /** The cycle's turns. Origins whose documents are read from one other
@@ -7506,7 +7530,7 @@ async function runCrawl() {
       if (!Array.isArray(turn)) { try { return await takeTurn(turn); } finally { open.n--; } }
       open.n--;
       for (let i = 0; i < turn.length; i++) {
-        if (!groupTurnGoesOn(i, turn.length, open.n)) { for (const o of turn.slice(i)) skipped.set(o, "turn"); break; }
+        if (!groupTurnGoesOn(i, turn.length, open.n)) { for (const o of turn.slice(i)) { skipped.set(o, "turn"); noteTurnNotRead(o); } break; }
         try { await takeTurn(turn[i]); } catch { /* one origin's failure does not end the others' turns */ }
       }
     });

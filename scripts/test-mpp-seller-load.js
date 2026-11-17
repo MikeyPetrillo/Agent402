@@ -48,7 +48,9 @@ const sentTo = (host) => sent.filter((u) => isHost(u, host)).length;
   ok(entry?.verified && sentTo("busy.example") === 2, `a crawl reads the seller's /openapi.json and probes its paid route (${sentTo("busy.example")} requests)`);
   for (let i = 0; i < 3; i++) await mpp.verifyMppSeller(O, { probe, fetchDoc, fetchText, gate: true });
   const before = sentTo("busy.example");
-  ok(before === 4, `the probes stop at the day's budget (${before} of 4)`);
+  // One document read and two probes: the probes take at most half the day
+  // (PROBE_SHARE), so the document reads keep the rest.
+  ok(before === 3, `the probes stop at their half of the day's budget (${before} requests: one document read, two probes)`);
   entry = await mpp.verifyMppSeller(O, { probe, fetchDoc, fetchText, gate: true });
   ok(sentTo("busy.example") === before && entry?.verified === true, "past the budget a crawl sends nothing and the listing stands as it was");
   await mpp.verifyMppSeller(O, { probe, fetchDoc, fetchText });
@@ -94,6 +96,14 @@ const sentTo = (host) => sent.filter((u) => isHost(u, host)).length;
   ok(due(CRAWL_INTERVAL_MS) === N, "one cycle later only the normal origin is due");
   ok(due(5 * 3_600_000) === N, "five hours later the slow origin still waits");
   ok(due(6 * 3_600_000) === `${S},${N}`, "six hours later it is due again");
+  // A boot whose stored listing has not loaded yet (no lastProbeAt) still
+  // waits out the last scheduled read any container recorded in the store.
+  mpp.__testReset();
+  ok(mpp.mppCrawlDue([S, N], clock).length === 2, "control: with no read recorded anywhere the slow origin is due");
+  sellerLoad.noteSlowRead(S, "mpp");
+  ok(mpp.mppCrawlDue([S, N], clock + CRAWL_INTERVAL_MS).join(",") === N, "a scheduled read recorded in the shared store holds the slow origin with no cached probe");
+  ok(mpp.mppCrawlDue([S, N], clock + 6 * 3_600_000).join(",") === `${S},${N}`, "until six hours have passed");
+  ok(!sellerLoad.slowWaiting(S, "x402"), "the x402 crawl's slow cycle is its own");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

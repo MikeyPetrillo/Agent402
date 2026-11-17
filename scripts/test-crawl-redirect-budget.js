@@ -273,12 +273,12 @@ await fiftyOnto(U, "stray", { listed: false });
     const asked = [];
     const probe = async ({ url }) => { asked.push(url); return { ok: true, status: 402, url, at: Date.now(), offers: [], retryAfter: null, error: null }; };
     const at = wire.length;
-    const heldBack = await mpp.verifyMppSeller(MR, { probe, fetchText: async () => ({ html: "" }) });
+    const heldBack = await mpp.verifyMppSeller(MR, { probe, fetchText: async () => ({ html: "" }), gate: true });
     ok(wire.slice(at).some((w) => w.url === `${MR}/openapi.json`) && !wire.slice(at).some((w) => hostOf(w.url) === T) && !asked.length && heldBack === null,
       "the MPP index's document read is not sent on to a host past its landed allowance, and nothing is recorded");
     today += DAY;
     const at2 = wire.length;
-    await mpp.verifyMppSeller(MR, { probe, fetchText: async () => ({ html: "" }) });
+    await mpp.verifyMppSeller(MR, { probe, fetchText: async () => ({ html: "" }), gate: true });
     ok(wire.slice(at2).filter((w) => hostOf(w.url) === T).length === 1 && (await sellerLoad.landedToday(T)) === 1 && asked.includes(`${MR}/paid`),
       `the next day it is, counted on the landed allowance (${await sellerLoad.landedToday(T)})`);
     await idx.__crawlSellerForTest(Q);
@@ -317,6 +317,39 @@ await fiftyOnto(U, "stray", { listed: false });
     const after = wire.slice(m1);
     ok(refused.ok === false && after.some((w) => w.url === `${OLD}${marker}`), "a marker the old origin redirects to another origin proves nothing");
     ok(!after.some((w) => hostOf(w.url) === OFF), `and the redirect is not followed: no request reaches the other origin (${after.filter((w) => hostOf(w.url) === OFF).length})`);
+  } finally { globalThis.fetch = realFetch; }
+}
+
+// ---- every hop the guarded fetch follows itself -------------------------------------
+// A redirect read hop by hop (beforeRedirect) sends each hop through the
+// guard's pinned dispatcher, the later hops included, and a hop to another
+// origin drops the caller's credentials; a hop on the same origin keeps them.
+{
+  const { safeFetch, ssrfDispatcher } = await import("../src/tools/fetch-guard.js");
+  const S = "https://hops-start.example", F = "https://hops-far.example";
+  const chain = new Map([
+    [`${S}/a`, `${S}/b`],          // same origin
+    [`${S}/b`, `${F}/c`],          // to another origin
+    [`${F}/c`, `${F}/d`],          // a later hop on that origin
+  ]);
+  const wire = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    const h = Object.fromEntries(Object.entries(init?.headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
+    wire.push({ url: u, dispatcher: init?.dispatcher, redirect: init?.redirect, auth: h.authorization, cookie: h.cookie });
+    const next = chain.get(u);
+    const r = next ? new Response(null, { status: 302, headers: { location: next } }) : new Response("done", { status: 200 });
+    Object.defineProperty(r, "url", { value: u });
+    return r;
+  };
+  try {
+    const seen = [];
+    const out = await safeFetch(`${S}/a`, { headers: { Authorization: "Bearer caller", Cookie: "c=1" }, beforeRedirect: async (n) => { seen.push(n); } });
+    ok(out.html === "done" && wire.length === 4 && seen.length === 3, `control: the chain is followed hop by hop to its end (${wire.length} requests)`);
+    ok(wire.every((w) => w.dispatcher === ssrfDispatcher && w.redirect === "manual"), "every hop, the later ones included, goes through the guard's pinned dispatcher");
+    ok(wire[1].auth === "Bearer caller" && wire[1].cookie === "c=1", "control: a hop on the same origin keeps the caller's credentials");
+    ok(wire.slice(2).every((w) => w.auth === undefined && w.cookie === undefined), "a hop to another origin, and every hop after it, carries none of them");
   } finally { globalThis.fetch = realFetch; }
 }
 

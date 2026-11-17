@@ -168,6 +168,8 @@ t node scripts/test-crawl-politeness.js
 t node scripts/test-seller-load.js
 # The real crawl backs off unchanged origins, waits out Retry-After and a spent budget, never touches a skipped entry, never holds the router (offline)
 t node scripts/test-crawl-revisit.js
+# A registration never spends a domain's day, a turn we skipped moves the listing hold, a held probe notes nothing, the slow cycle is by the clock (offline)
+t node scripts/test-crawl-own-limits.js
 # Live price reads keep their weekly clock across crawls; a route above every router tier is read weekly at most; the paywall probe asks the cheapest route (offline)
 t node scripts/test-quote-weekly.js
 # An origin whose documents moved to another seller is counted on its own day; the seller they land on keeps its day and its crawl (offline)

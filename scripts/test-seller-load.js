@@ -11,7 +11,8 @@
 //   - a shared store that does not answer leaves this process deciding.
 // Offline, on the memory store, with an injected clock.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-const { createSellerLoad, revisitIntervalMs, bodyHash, REVISIT_CAP_MS, DAILY_BUDGET, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS } = await import("../src/seller-load.js");
+const { createSellerLoad, revisitIntervalMs, bodyHash, REVISIT_CAP_MS, DAILY_BUDGET, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, landingGate } = await import("../src/seller-load.js");
+const { operatorKey } = await import("../src/operator-key.js");
 const { createMemoryLimits } = await import("../src/shared-limits.js");
 const { CRAWL_INTERVAL_MS } = await import("../src/crawl-cadence.js");
 
@@ -77,7 +78,7 @@ function fresh(opts = {}) {
 
 // ---- per-host daily budget ------------------------------------------------------
 {
-  const { load, at } = fresh({ dailyBudget: 5 });
+  const { load, at } = fresh({ dailyBudget: 5, probeShare: 1 });
   const a = "https://a.example.com/x", b = "https://api.example.com/y";
   const results = [];
   for (let i = 0; i < 5; i++) results.push((await load.takeBudget(i % 2 ? a : b, "crawler")).ok);
@@ -269,7 +270,7 @@ function fresh(opts = {}) {
 {
   const down = new Proxy({ mode: "redis" }, { get: (t, k) => (k === "mode" ? "redis" : async () => ({ ok: false, error: "down" })) });
   let t = T0;
-  const load = createSellerLoad({ store: down, now: () => t, dailyBudget: 2 });
+  const load = createSellerLoad({ store: down, now: () => t, dailyBudget: 2, probeShare: 1 }); // the day total alone (the probe share has its own section)
   ok((await load.takeBudget("https://d.example", "quote")).ok && (await load.takeBudget("https://d.example", "quote")).ok && !(await load.takeBudget("https://d.example", "quote")).ok,
     "with the shared store down this process's own count decides");
   await load.noteDiscoveryRead("https://d.example", { manifestHash: "m" });
@@ -279,7 +280,7 @@ function fresh(opts = {}) {
 
 // ---- a request is counted on the day of the origin whose crawl sent it ---------
 {
-  const { load, step } = fresh({ dailyBudget: 5 });
+  const { load, step } = fresh({ dailyBudget: 5, probeShare: 1 });
   const B = "https://stays.example", A1 = "https://moved-one.example", A2 = "https://moved-two.example";
   let sent = 0;
   for (let i = 0; i < 4; i++) if ((await load.takeBudget(`${B}/api/x`, "quote", { chargeTo: A1 })).ok) sent++;
@@ -297,9 +298,70 @@ function fresh(opts = {}) {
   ok((await load.takeBudget(`${B}/api/x`, "router-probe", { essential: true, chargeTo: A1 })).ok && (await load.routerProbesToday(B)) === 1, "the router's probe stays on the host's router count and always goes through");
   step(24 * H);
   ok((await load.takeBudget(`${B}/api/x`, "quote", { chargeTo: A2 })).ok, "the next UTC day opens both allowances again");
-  const own = fresh({ dailyBudget: 5 }).load;
+  const own = fresh({ dailyBudget: 5, probeShare: 1 }).load;
   ok((await own.takeBudget("https://api.stays.example/x", "quote", { chargeTo: "https://www.stays.example" })).ok && (await own.landedToday("https://api.stays.example")) === 0 && (await own.budgetSpent("https://www.stays.example")).used === 1,
     "and such a move counts no landing");
+}
+
+// ---- the probes keep to their share of the day --------------------------------------
+{
+  // A day of 400: the unpaid price and paywall probes stop at half, so the
+  // scheduled crawl's document reads always have the rest.
+  const { load } = fresh({ dailyBudget: 400 });
+  const O = "https://probed.example";
+  let sent = 0;
+  for (let i = 0; i < 400; i++) if ((await load.takeBudget(`${O}/r${i}`, i % 2 ? "quote" : "paywall")).ok) sent++;
+  ok(sent === 200, `the probes stop at half the day (${sent} of 400 sent)`);
+  ok(!(await load.budgetSpent(O)).spent && (await load.crawlPlan(O)).skip === null, "the day is not spent: the scheduled crawl still runs");
+  ok((await load.probeRefusal(`${O}/x`, "quote")) === "budget", "a further probe is refused");
+  let docs = 0;
+  for (let i = 0; i < 200; i++) if ((await load.takeBudget(`${O}/openapi.json`, "crawler", { essential: true })).ok) docs++;
+  ok(docs === 200 && (await load.budgetSpent(O)).spent, "control: the document reads use the rest, and then the day is spent");
+  ok(load.status().budget.probesPerOperatorPerDay === 200 && load.status().budget.refused["quote:probe-share"] >= 1, "the operator view states the share and counts the refusals");
+}
+
+// ---- reads for a registration never spend the origin's day -------------------------
+{
+  // Anyone may register any origin (path origins under one domain included):
+  // those reads are counted on a day count of their own, never refused, and
+  // never read by the scheduled crawl's plan.
+  const { load } = fresh({ dailyBudget: 20 });
+  const V = "https://victim.example";
+  let allSent = true;
+  for (let i = 0; i < 50; i++) {
+    allSent = (await load.takeBudget(`${V}/p${i}/.well-known/x402`, "crawler", { essential: true, unscheduled: true })).ok && allSent;
+    allSent = (await load.takeBudget(`${V}/p${i}/api/x`, "quote", { essential: true, chargeTo: `${V}/p${i}`, unscheduled: true })).ok && allSent;
+  }
+  ok(allSent, "every registration read is sent");
+  ok((await load.budgetSpent(V)).used === 0 && (await load.crawlPlan(V)).skip === null, "a hundred registration reads leave the domain's day untouched: its scheduled crawl runs");
+  ok(load.status().budget.requests["crawler:unscheduled"] === 50 && load.status().budget.requests["quote:unscheduled"] === 50, "they are counted apart in the operator view");
+  const T = "https://landing.example";
+  let landed = 0, held = null;
+  for (let i = 0; i < 30 && !held; i++) {
+    try { await landingGate(`${V}/p${i}`, "crawler", { load, unscheduled: true })(`${T}/doc`); landed++; } catch (e) { held = e; }
+  }
+  ok((await load.landedToday(T)) === 0 && !(await load.landingSpent(`${T}/doc`, "https://other.example")), "nor the landing allowance the scheduled reads of moved origins share");
+  ok(landed === 20 && held?.landingHeld, `those that land on another host are held to an allowance of their own there (${landed} sent)`);
+  for (let i = 0; i < 20; i++) await load.takeBudget(`${V}/openapi.json`, "crawler", { essential: true });
+  ok((await load.crawlPlan(V)).skip === "budget", "control: the scheduled crawl's own reads still spend the day");
+}
+
+// ---- shared hosting: each tenant has its own day ------------------------------------
+{
+  const { load } = fresh({ dailyBudget: 2, probeShare: 1 });
+  for (const [a, b] of [
+    ["https://abc123.execute-api.us-east-1.amazonaws.com", "https://def456.execute-api.us-east-1.amazonaws.com"],
+    ["https://one.lambda-url.us-east-1.on.aws", "https://two.lambda-url.us-east-1.on.aws"],
+    ["https://alice.github.io", "https://bob.github.io"],
+    ["https://d111.cloudfront.net", "https://d222.cloudfront.net"],
+    ["https://app-one.ondigitalocean.app", "https://app-two.ondigitalocean.app"],
+    ["https://one--fn.modal.run", "https://two--fn.modal.run"],
+  ]) {
+    ok(operatorKey(a) !== operatorKey(b), `${new URL(a).hostname} and ${new URL(b).hostname} are different operators`);
+    for (let i = 0; i < 3; i++) await load.takeBudget(`${a}/x`, "quote");
+    ok((await load.crawlPlan(a)).skip === "budget" && (await load.crawlPlan(b)).skip === null, `one spending its day leaves the other's (${new URL(a).hostname.split(".").slice(-2).join(".")})`);
+  }
+  ok(operatorKey("https://api.seller.example") === operatorKey("https://www.seller.example"), "control: two hosts of one registrable domain stay one operator");
 }
 
 console.log(`\n${fail ? "FAILED" : "PASSED"}: ${pass} passed, ${fail} failed`);

@@ -32,8 +32,8 @@ const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { CRAWLER_UA } from "./user-agents.js";
-import { sellerLoad, landingGate } from "./seller-load.js";
-import { CRAWL_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES } from "./crawl-cadence.js";
+import { sellerLoad, landingGate, SLOW_READ_INTERVAL_MS } from "./seller-load.js";
+import { isSlowOrigin } from "./crawl-cadence.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
 import { fetchLlmsExamples, attachInputExamples } from "./mpp-input-examples.js";
@@ -365,7 +365,8 @@ const discoveryDocCache = new Map(); // origin -> { at, target|null }
 // The same load controls as the x402 crawl (src/seller-load.js). A crawl's
 // request (`gate`) waits while the seller's host is held by a Retry-After or
 // past its day's budget, and is counted when sent; a request the seller asked
-// for (a registration) is counted and never held. A 429 or 503 holds the host.
+// for (a registration) is counted on a day count of its own, never the one the
+// crawl reads, and never held. A 429 or 503 holds the host.
 class MppRequestHeld extends Error {
   constructor(reason) { super(`not sent: ${reason}`); this.sellerLoadSkip = reason; }
 }
@@ -374,7 +375,7 @@ async function loadGate(url, kind, gate) {
     const refusal = await sellerLoad.probeRefusal(url, kind);
     if (refusal) throw new MppRequestHeld(refusal);
   } else {
-    await sellerLoad.takeBudget(url, kind, { essential: true });
+    await sellerLoad.takeBudget(url, kind, { essential: true, unscheduled: true });
   }
 }
 function noteHold(url, status, retryAfter) {
@@ -382,7 +383,7 @@ function noteHold(url, status, retryAfter) {
 }
 // A redirect hop is counted before it is sent, and one onto another operator's
 // host is not sent past that host's landed allowance (landingGate).
-const fetchDiscoveryDoc = (url) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler") });
+const fetchDiscoveryDoc = (url, { unscheduled = false } = {}) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler", { unscheduled }) });
 
 /** Fetch `${origin}/openapi.json` (guarded, capped, cached 1h) and derive a
  *  probe target. null on any failure; throws only when the load controls held
@@ -394,7 +395,7 @@ async function discoveryProbeTarget(origin, { gate = false, fetchDoc = fetchDisc
   await loadGate(url, "mpp-crawler", gate);
   let target = null;
   try {
-    const { html } = await fetchDoc(url);
+    const { html } = await fetchDoc(url, { unscheduled: !gate });
     const t = probeTargetFromDiscovery(JSON.parse(html));
     if (t) target = { method: t.method, url: `${origin}${t.path}` };
   } catch (e) {
@@ -657,13 +658,16 @@ async function runPool(items, limit, worker) {
 }
 
 // An origin its operator asked us to read less often (CRAWL_SLOW_ORIGINS) is
-// probed on the slow cycle, as the x402 crawl reads it.
-const SLOW_MPP_INTERVAL_MS = CRAWL_INTERVAL_MS * SLOW_ORIGIN_EVERY_CYCLES - 2 * 60_000;
+// probed on the slow cycle, as the x402 crawl reads it: by the clock, from its
+// last probe (the cache's lastProbeAt) or its last scheduled read recorded in
+// the shared store (src/seller-load.js slowWaiting), whichever is later, so a
+// boot whose stored listing has not loaded yet does not probe it early.
+const SLOW_MPP_INTERVAL_MS = SLOW_READ_INTERVAL_MS;
 /** The seeds a crawl cycle probes: past their failure back-off, and a slow
  *  origin only once its slow interval has passed since its last probe. */
 export function mppCrawlDue(seeds, now = Date.now()) {
   return seeds.filter((o) => probeDue(o, now)
-    && !(isSlowOrigin(o) && now - (Number(cache.get(o)?.lastProbeAt) || 0) < SLOW_MPP_INTERVAL_MS));
+    && !(isSlowOrigin(o) && (now - (Number(cache.get(o)?.lastProbeAt) || 0) < SLOW_MPP_INTERVAL_MS || sellerLoad.slowWaiting(o, "mpp", now))));
 }
 
 export const runMppCrawl = leased("mpp-index-crawl", { ttlMs: 30 * 60_000, failOpen: true }, runMppCrawlUnleased);
@@ -674,9 +678,12 @@ async function runMppCrawlUnleased() {
     // Every cycle, fold in whatever the x402 crawler has detected as
     // dual-stack since last time (its cache keeps moving between our runs).
     discoverFromX402Crawl();
-    const due = mppCrawlDue([...discoveredSeeds]);
-    await sellerLoad.prefetch(due);
-    await runPool(due, MPP_CRAWL_CONCURRENCY, (o) => verifyMppSeller(o, { gate: true }));
+    const listed = mppCrawlDue([...discoveredSeeds]);
+    await sellerLoad.prefetch(listed);
+    // The prefetch brings in the slow origins' last scheduled read from every
+    // container; one read since then waits.
+    const due = listed.filter((o) => !sellerLoad.slowWaiting(o, "mpp"));
+    await runPool(due, MPP_CRAWL_CONCURRENCY, (o) => { sellerLoad.noteSlowRead(o, "mpp"); return verifyMppSeller(o, { gate: true }); });
   } finally {
     crawlInFlight = false;
   }
