@@ -4,13 +4,14 @@
 // it is. Against a loopback stub:
 //   - the server's own shed answer (src/load-shed.js shedResponse) is
 //     recognized, waited out and asked again, and the next 200 is returned;
-//   - a 503 that is not a shed answer (no Retry-After, or a body that does not
-//     carry the same figure) is returned at once, never retried;
+//   - a 503 that is not a shed answer (no Retry-After, a body that does not
+//     carry the same figure, or an upstream 503 whose body is not the server's
+//     shed answer) is returned at once, never retried;
 //   - a shed that lasts is returned at the ask bound, marked stillShed.
 // Offline.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createServer } from "node:http";
-import { shedResponse } from "../src/load-shed.js";
+import { shedResponse, SHED_ERROR } from "../src/load-shed.js";
 import { shedWaitMs, fetchHonoringShed } from "./lib/shed-answer.js";
 
 let pass = 0, fail = 0;
@@ -22,6 +23,9 @@ const asks = {};
 const srv = createServer((req, res) => {
   asks[req.url] = (asks[req.url] || 0) + 1;
   if (req.url === "/plain503") { res.writeHead(503, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: "down" })); }
+  // A tool relaying an upstream 503: Retry-After and a matching figure, but
+  // not the server's own shed answer.
+  if (req.url === "/upstream503") { res.writeHead(503, { "content-type": "application/json", "retry-after": "2" }); return res.end(JSON.stringify({ error: "upstream is busy", retryAfterSeconds: 2 })); }
   if (req.url === "/mismatch") { res.writeHead(503, { "content-type": "application/json", "retry-after": "2" }); return res.end(JSON.stringify({ error: "x", retryAfterSeconds: 5 })); }
   if (asks[req.url] <= (plan[req.url] ?? 0)) {
     // The server's own shed answer, through an Express-shaped shim.
@@ -37,7 +41,7 @@ const slept = [];
 const sleep = (ms) => { slept.push(ms); return Promise.resolve(); };
 
 try {
-  ok(shedWaitMs(503, "2", { retryAfterSeconds: 2 }) === 2000 && shedWaitMs(503, "2", { retryAfterSeconds: 5 }) === null && shedWaitMs(503, null, { retryAfterSeconds: 2 }) === null && shedWaitMs(500, "2", { retryAfterSeconds: 2 }) === null,
+  ok(shedWaitMs(503, "2", { error: SHED_ERROR, retryAfterSeconds: 2 }) === 2000 && shedWaitMs(503, "2", { error: SHED_ERROR, retryAfterSeconds: 5 }) === null && shedWaitMs(503, null, { error: SHED_ERROR, retryAfterSeconds: 2 }) === null && shedWaitMs(500, "2", { error: SHED_ERROR, retryAfterSeconds: 2 }) === null,
     "a shed answer is read from its fields: 503, Retry-After, and the same figure in retryAfterSeconds");
 
   const once = await fetchHonoringShed(`${B}/once`, {}, { sleep });
@@ -48,6 +52,12 @@ try {
   ok(plain.res.status === 503 && plain.shed === 0 && asks["/plain503"] === 1, "control: a 503 that is not a shed answer is returned at once, never asked again");
   const mismatch = await fetchHonoringShed(`${B}/mismatch`, {}, { sleep });
   ok(mismatch.res.status === 503 && asks["/mismatch"] === 1, "control: a body whose figure differs from Retry-After is not a shed answer");
+
+  const up = await fetchHonoringShed(`${B}/upstream503`, {}, { sleep });
+  ok(up.res.status === 503 && up.shed === 0 && asks["/upstream503"] === 1, "an upstream 503 with a matching Retry-After is not waited out: only the server's own shed answer is");
+  ok(shedWaitMs(503, "2", { error: "upstream is busy", retryAfterSeconds: 2 }) === null && shedWaitMs(503, "2", { error: SHED_ERROR, retryAfterSeconds: 2, upstream: "x" }) === null,
+    "a body whose sentence or fields differ from the server's shed answer is not one");
+  ok(shedWaitMs(503, "2", { error: SHED_ERROR, retryAfterSeconds: 2, reason: "discovery-inflight" }) === 2000, "control: the server's shed answer with its reason is one");
 
   const always = await fetchHonoringShed(`${B}/always`, {}, { sleep, maxAsks: 3 });
   ok(always.res.status === 503 && always.stillShed === true && asks["/always"] === 3 && always.shed === 2, `a shed that lasts is returned at the ask bound, marked still shed (${asks["/always"]} asks)`);

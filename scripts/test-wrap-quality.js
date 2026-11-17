@@ -109,6 +109,7 @@ const RAG_MIN_WORDS = 3;
 
 let srv = null;
 let BASE = process.env.TARGET_URL;
+const SCHEME = process.env.WRAP_COLOR_SCHEME === "dark" ? "dark" : "light";
 async function boot() {
   const PORT = await getFreePort();
   srv = spawn(process.execPath, ["src/server.js"], {
@@ -431,8 +432,19 @@ try {
       if (!caught || !clean) failures++;
     }
     for (const width of WIDTHS) {
-      const ctx = await browser.newContext({ viewport: { width, height: width >= 900 ? 900 : 860 }, reducedMotion: "reduce", colorScheme: process.env.WRAP_COLOR_SCHEME === "dark" ? "dark" : "light" });
-      await ctx.addInitScript(() => { try { localStorage.setItem("a402-theme", "light"); } catch {} });
+      const ctx = await browser.newContext({ viewport: { width, height: width >= 900 ? 900 : 860 }, reducedMotion: "reduce", colorScheme: SCHEME });
+      // The saved theme wins over the device setting (assets/js/theme-init.js),
+      // so the saved one is the scheme asked for.
+      await ctx.addInitScript((scheme) => { try { localStorage.setItem("a402-theme", scheme); } catch {} }, SCHEME);
+      {
+        // The scheme asked for is the one the pages draw in.
+        const probe = await ctx.newPage();
+        let drawn = "unread";
+        try { await probe.goto(`${BASE}/`, { waitUntil: "load", timeout: 45000 }); drawn = await probe.evaluate(() => document.documentElement.getAttribute("data-theme") || "light"); } catch {}
+        await probe.close();
+        console.log(`${drawn === SCHEME ? "ok" : "FAIL"} - pages draw in the ${SCHEME} scheme asked for @${width} (home reads ${drawn})`);
+        if (drawn !== SCHEME) failures++;
+      }
       const pool = await Promise.all(Array.from({ length: Math.min(CONCURRENCY, PAGES.length) }, () => ctx.newPage()));
       const free = pool.slice();
       const lines = await mapLimit(PAGES, pool.length, async (path) => {

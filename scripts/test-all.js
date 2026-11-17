@@ -522,7 +522,7 @@ for (const [path, methods] of paths) {
 // (correctly) read as a failure.
 const CONCURRENCY = Math.max(1, Number(process.env.TEST_ALL_CONCURRENCY) || 8);
 let speechFixture = null;
-// The load-shed answer is read from its fields (scripts/lib/shed-answer.js).
+// The load-shed answer is matched whole, sentence and fields (scripts/lib/shed-answer.js).
 async function runTask(t) {
   let status = 0, body = null, threw = null, shed = 0, stillShed = false;
   const _t0 = Date.now();
@@ -534,7 +534,8 @@ async function runTask(t) {
     }
     // A LOAD-SHED answer is admission control, not a wrong example: the
     // server pauses free requests briefly while it is busy (src/load-shed.js:
-    // 503, Retry-After, and the same figure in the body's retryAfterSeconds).
+    // 503, Retry-After, and its own body with the same figure in
+    // retryAfterSeconds; an upstream 503 is not one).
     // The sweep waits that long and asks again, at most SHED_MAX_ASKS asks and
     // SHED_MAX_WAIT_MS of waiting for one route. Any other 503, and a shed
     // that is still there at the bound, is judged as before.
