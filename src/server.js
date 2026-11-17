@@ -7933,7 +7933,7 @@ async function serveCachedDiscovery(path, policy, input, computeFn, analyticsSlu
   try {
     let cacheKey = null;
     if (policy && cacheEnabled()) {
-      cacheKey = cacheKeyFor(path, input, policy.keyFields || []);
+      cacheKey = cacheKeyFor(path, input, policy.keyFields || [], { clockSlotSeconds: policy.clockSlotSeconds });
       const hit = await cacheGet(cacheKey);
       if (hit !== null) {
         cached = true;
@@ -12821,7 +12821,7 @@ for (const tool of ALL_KIT) {
 
       let cacheKey = null;
       if (cachePolicy && cacheEnabled()) {
-        cacheKey = cacheKeyFor(path, input, cachePolicy.keyFields || []);
+        cacheKey = cacheKeyFor(path, input, cachePolicy.keyFields || [], { clockSlotSeconds: cachePolicy.clockSlotSeconds });
         const hit = await cacheGet(cacheKey);
         if (hit !== null) {
           cached = true;

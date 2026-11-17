@@ -62,6 +62,39 @@ ok(k({ url: long + "1" }) !== k({ url: long + "2" }), "two long values sharing a
 ok(k({ ids: ["a", "b"] }) !== k({ ids: ["a", "c"] }), "array values are part of the key");
 ok(cacheKeyFor("/api/x", { q: "a" }, []) !== cacheKeyFor("/api/y", { q: "a" }, []), "the path is part of the key");
 
+// 3. A route whose answer is anchored on the clock (a default date of
+//    tomorrow, a series that starts today or this hour at the place) keys on
+//    the clock slot, so an entry written before a day or hour change never
+//    answers a call made after it. Every UTC offset in use is a multiple of
+//    15 minutes, so every local midnight and hour change is a slot boundary.
+import { targetDate } from "../src/tools/weather-probability-kit.js";
+const CLOCK_ANCHORED = ["/api/weather-probability", "/api/weather-daily", "/api/weather-hourly"];
+const at = (iso) => Date.parse(iso);
+const keyAt = (p, input, now) => cacheKeyFor(p, input, CACHEABLE_ROUTES[p].keyFields, { clockSlotSeconds: CACHEABLE_ROUTES[p].clockSlotSeconds, now });
+for (const p of CLOCK_ANCHORED) {
+  const slot = CACHEABLE_ROUTES[p]?.clockSlotSeconds;
+  ok(Number.isInteger(slot) && slot > 0 && 900 % slot === 0, `${p}: declares a clock slot that divides 15 minutes (${slot})`);
+}
+const probIn = { lat: 41.8781, lon: -87.6298, variable: "temperature_max", op: ">=", value: 40 };
+const beforeUtcMidnight = at("2026-11-17T23:59:30Z"), afterUtcMidnight = at("2026-11-18T00:00:30Z");
+ok(targetDate(undefined, beforeUtcMidnight) !== targetDate(undefined, afterUtcMidnight), "the default probability date moves at UTC midnight (fixture check)");
+ok(keyAt("/api/weather-probability", probIn, beforeUtcMidnight) !== keyAt("/api/weather-probability", probIn, afterUtcMidnight),
+  "a probability call with no date before UTC midnight and one after it get different keys");
+ok(keyAt("/api/weather-probability", probIn, at("2026-11-17T23:46:00Z")) === keyAt("/api/weather-probability", probIn, at("2026-11-17T23:59:00Z")),
+  "two probability calls inside one slot share a key");
+// Local midnight at UTC+05:45 falls at 18:15Z.
+const dailyIn = { place: "Kathmandu", days: 3 };
+ok(keyAt("/api/weather-daily", dailyIn, at("2026-11-17T18:14:00Z")) !== keyAt("/api/weather-daily", dailyIn, at("2026-11-17T18:16:00Z")),
+  "a daily forecast before and after local midnight at a quarter-hour offset gets different keys");
+ok(keyAt("/api/weather-hourly", { lat: 1, lon: 2 }, at("2026-11-17T09:59:00Z")) !== keyAt("/api/weather-hourly", { lat: 1, lon: 2 }, at("2026-11-17T10:01:00Z")),
+  "an hourly forecast before and after the hour gets different keys");
+ok(cacheKeyFor("/api/x", { q: "a" }, [], { now: at("2026-11-17T00:00:00Z") }) === cacheKeyFor("/api/x", { q: "a" }, [], { now: at("2026-11-18T00:00:00Z") }),
+  "a route without a clock slot keys on its input only");
+// The server builds both cache reads through the policy's slot.
+const serverSrc = fs.readFileSync(path.join(root, "src/server.js"), "utf8");
+const keyCalls = serverSrc.match(/cacheKeyFor\([^;]*\)/g) || [];
+ok(keyCalls.length >= 2 && keyCalls.every((c) => /clockSlotSeconds/.test(c)), `every server cache key passes the policy's clock slot (${keyCalls.length} calls)`);
+
 import { cacheTtlFor } from "../src/cache.js";
 // A route with a backup provider declares fallbackSource and fallbackTtl.
 const geoPolicy = { ttl: 86400, keyFields: ["q"], fallbackSource: "photon", fallbackTtl: 600 };
