@@ -155,7 +155,7 @@ const ECMWF = [38, 39, 40, 41, 42, 43];   // 6 members
 const GEFS = [39.4, 39.6, 44, 45];          // 4 members
 {
   const prob = tool("weather-probability").handler;
-  reply = () => json(ensembleBody("temperature_2m", ECMWF, GEFS));
+  P._resetEnsembleCache(); reply = () => json(ensembleBody("temperature_2m", ECMWF, GEFS));
   fetched.length = 0;
   let out = await prob({ lat: 41.9, lon: -87.6, variable: "temperature_max", units: "fahrenheit", op: ">=", value: 40, date: P.targetDate() });
   const u = new URL(fetched[0]);
@@ -182,17 +182,17 @@ const GEFS = [39.4, 39.6, 44, 45];          // 4 members
   ok(fetched.length === 0, "weather-probability: an unknown operator makes no upstream read");
   // max / min / mean aggregate the member's own hours.
   const ramp = Array.from({ length: 24 }, (_, h) => h);
-  reply = () => json(ensembleBody("temperature_2m", [ramp], [ramp]));
+  P._resetEnsembleCache(); reply = () => json(ensembleBody("temperature_2m", [ramp], [ramp]));
   ok((await prob({ lat: 1, lon: 2, variable: "temperature_max", value: 23 })).probability === 1 && (await prob({ lat: 1, lon: 2, variable: "temperature_min", op: "<=", value: 0 })).probability === 1 && (await prob({ lat: 1, lon: 2, variable: "temperature_mean", min: 11.5, max: 11.5 })).probability === 1, "weather-probability: max, min and mean are taken over each member's 24 hours");
   // An incomplete model is left out and named.
-  reply = () => json(ensembleBody("temperature_2m", ECMWF, GEFS, { gefsHours: 10 }));
+  P._resetEnsembleCache(); reply = () => json(ensembleBody("temperature_2m", ECMWF, GEFS, { gefsHours: 10 }));
   out = await prob({ lat: 1, lon: 2, value: 40 });
   ok(out.members.total === 6 && out.members.byModel.length === 1 && out.modelsExcluded?.[0] === "NOAA GEFS ensemble" && typeof out.modelsExcludedNote === "string", "weather-probability: a model whose day is incomplete is left out of the count and named");
-  reply = () => json(ensembleBody("temperature_2m", [hours(null)], [hours(null)]));
+  P._resetEnsembleCache(); reply = () => json(ensembleBody("temperature_2m", [hours(null)], [hours(null)]));
   let e = await errOf(() => prob({ lat: 1, lon: 2, value: 40 }));
   ok(e?.statusCode === 422 && /No ensemble has a complete forecast/.test(e.message), "weather-probability: no complete model for the date is a 422, not an empty probability");
   // Precipitation: a negative hour reads as zero, sums are per member.
-  reply = () => json(ensembleBody("precipitation", [[...hours(0, 23), -0.3], hours(0.5)], [hours(0)]));
+  P._resetEnsembleCache(); reply = () => json(ensembleBody("precipitation", [[...hours(0, 23), -0.3], hours(0.5)], [hours(0)]));
   out = await prob({ lat: 1, lon: 2, variable: "precipitation_sum", op: "<", value: 0 });
   ok(out.probability === 0 && out.distribution.min === 0 && out.distribution.max === 12 && out.unit === "mm", "weather-probability: a negative hourly precipitation reads as zero; the daily value is the sum");
   // Refusals before any read.
@@ -215,7 +215,7 @@ const GEFS = [39.4, 39.6, 44, 45];          // 4 members
 const RATING_WORDS = /\b(edge|mispric\w*|underpric\w*|overpric\w*|undervalu\w*|overvalu\w*|arbitrage|opportunit\w*|buy|sell|bet|wager|should|recommend(?:ed|s)?|advice|advis\w*|rating|signal|alpha|profit\w*|diverg\w*|cheap|expensive|value bet)\b/i;
 {
   const brackets = tool("weather-market-brackets").handler;
-  reply = () => json(ensembleBody("temperature_2m", ECMWF, GEFS));
+  P._resetEnsembleCache(); reply = () => json(ensembleBody("temperature_2m", ECMWF, GEFS));
   const out = await brackets({ lat: 1, lon: 2, units: "fahrenheit", rounding: "integer", brackets: [{ label: "39 or below", max: 39, price: 0.1 }, { min: 40, max: 41, price: 0.35 }, { label: "44 up", min: 44 }] });
   ok(out.brackets.length === 3 && out.brackets[0].membersIn === 3 && out.brackets[0].forecastProbability === 0.3 && out.brackets[1].membersIn === 3 && out.brackets[2].membersIn === 2, `weather-market-brackets: each bracket's member count and share (${out.brackets.map((b) => b.membersIn).join(",")})`);
   ok(out.brackets[0].marketPrice === 0.1 && out.brackets[1].marketPrice === 0.35 && out.brackets[2].marketPrice === null, "weather-market-brackets: the caller's price is echoed beside each share, null where none was sent");
@@ -242,7 +242,7 @@ const RATING_WORDS = /\b(edge|mispric\w*|underpric\w*|overpric\w*|undervalu\w*|o
   const board = tool("weather-market-board").handler;
   _resetPlaceCache();
   const cityBody = (shift) => ensembleBody("temperature_2m", ECMWF.map((v) => v + shift), GEFS.map((v) => v + shift), { tz: "America/New_York" });
-  reply = (u) => {
+  P._resetEnsembleCache(); reply = (u) => {
     if (u.host === "geocoding-api.open-meteo.com") return json(u.searchParams.get("name") === "Nowhere" ? {} : { results: PLACES });
     const n = u.searchParams.get("latitude").split(",").length;
     return json(n === 1 ? cityBody(0) : Array.from({ length: n }, (_, k) => cityBody(k)));
@@ -270,6 +270,37 @@ const RATING_WORDS = /\b(edge|mispric\w*|underpric\w*|overpric\w*|undervalu\w*|o
   }
   ok(fetched.length === 0, "weather-market-board: a refused input makes no upstream read, a place lookup included");
   ok(P.MAX_BOARD_CITIES === 20 && (await board({ cities: Array.from({ length: 20 }, (_, k) => ({ lat: k, lon: 2 })) })).count === 20, "weather-market-board: twenty cities is the most one call takes, and twenty are answered");
+  // Each city's members are kept for ten minutes: the same board again, its cities in another order,
+  // or one of them asked alone makes no upstream read; a new city is the only one read.
+  P._resetEnsembleCache();
+  fetched.length = 0;
+  const five = Array.from({ length: 5 }, (_, k) => ({ label: `c${k}`, lat: 30 + k, lon: -90 - k }));
+  const firstBoard = await board({ cities: five });
+  const sameBoard = await board({ cities: five });
+  const reversed = await board({ cities: [...five].reverse() });
+  ok(fetched.length === 1 && JSON.stringify(sameBoard.cities) === JSON.stringify(firstBoard.cities), `weather-market-board: the same board sent again is answered from the kept members (${fetched.length} upstream read)`);
+  ok(reversed.cities[0].label === "c4" && JSON.stringify(reversed.cities[0].distribution) === JSON.stringify(firstBoard.cities[4].distribution) && fetched.length === 1, "weather-market-board: the same cities in another order read nothing and keep each city's own members");
+  await tool("weather-probability").handler({ lat: 32, lon: -92, units: "fahrenheit", variable: "temperature_max", value: 40, date: firstBoard.date });
+  ok(fetched.length === 1, "weather-probability: a city a board just read is answered from the kept members");
+  await board({ cities: [...five, { label: "new", lat: 10, lon: 10 }, { label: "new again", lat: 10.00001, lon: 10 }] });
+  ok(fetched.length === 2 && new URL(fetched[1]).searchParams.get("latitude") === "10", `weather-market-board: only a city not held is read, once (${new URL(fetched.at(-1)).searchParams.get("latitude")})`);
+  await board({ cities: five, units: "celsius" }); await board({ cities: five, variable: "temperature_min" });
+  ok(fetched.length === 4, "weather-market-board: another unit or variable is another read");
+  const realNow = Date.now;
+  Date.now = () => realNow() + P.ENSEMBLE_CACHE_TTL_MS + 1000;
+  await board({ cities: five, date: firstBoard.date });
+  Date.now = realNow;
+  ok(fetched.length === 5 && P.ENSEMBLE_CACHE_TTL_MS === 600_000 && P.ENSEMBLE_CACHE_MAX === 2000, "weather-market-board: kept members are read again after ten minutes; the kept set is bounded");
+  P._resetEnsembleCache(); reply = () => json({}, 503);
+  const down = await errOf(() => board({ cities: five }));
+  reply = (u) => { const n = u.searchParams.get("latitude").split(",").length; return json(n === 1 ? cityBody(0) : Array.from({ length: n }, (_, k) => cityBody(k))); };
+  ok(down?.statusCode >= 500 && (await board({ cities: five })).count === 5, "weather-market-board: a failed read is not kept");
+  P._resetEnsembleCache();
+  reply = (u) => {
+    if (u.host === "geocoding-api.open-meteo.com") return json(u.searchParams.get("name") === "Nowhere" ? {} : { results: PLACES });
+    const n = u.searchParams.get("latitude").split(",").length;
+    return json(n === 1 ? cityBody(0) : Array.from({ length: n }, (_, k) => cityBody(k)));
+  };
   // A name that matches nothing ends the place reads there, and both the hits and the miss are remembered.
   _resetPlaceCache();
   fetched.length = 0;
@@ -318,7 +349,7 @@ const RATING_WORDS = /\b(edge|mispric\w*|underpric\w*|overpric\w*|undervalu\w*|o
   ok(r.windows[0].from === 14 && r.windows[0].to === 18, "findWindows: hours before the starting index are not searched");
   ok(PLAN.firstHourFrom(T, Date.parse("2031-05-01T09:30:00Z"), 3600) === 10 && PLAN.firstHourFrom(T, Date.parse("2031-06-01T00:00:00Z"), 0) === 48, "firstHourFrom: the first hour at or after the current local hour");
 
-  reply = () => json({ timezone: "Europe/Paris", utc_offset_seconds: 3600, hourly });
+  P._resetEnsembleCache(); reply = () => json({ timezone: "Europe/Paris", utc_offset_seconds: 3600, hourly });
   const win = tool("weather-window").handler;
   let out = await win({ lat: 1, lon: 2, days: 2, minHours: 3 });
   ok(out.found === true && out.count === 3 && out.windows[0].hours === 13 && out.windows[0].start === T[30] && out.windows[0].maxWind === 50 && out.windows[0].tempMin === 16, "weather-window: windows are ranked longest first with their own temperature and wind");

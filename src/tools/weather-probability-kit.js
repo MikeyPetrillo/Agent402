@@ -105,8 +105,44 @@ export function membersOf(body, variable) {
   return { models, excluded };
 }
 
+// One location's members for a date, variable and unit are kept in this
+// process for ten minutes (the models run a few times a day), keyed on the
+// coordinates to four decimals. A board sent again, the same cities in another
+// order, or one of its cities asked alone reads nothing upstream; a call reads
+// only the locations it does not hold, in one upstream call. A failed read and
+// a location with no complete model are never kept; the oldest entry leaves
+// first once the set is full.
+export const ENSEMBLE_CACHE_TTL_MS = 10 * 60_000;
+export const ENSEMBLE_CACHE_MAX = 2000;
+const ensembleCache = new Map(); // key -> { at, value }
+export function _resetEnsembleCache() { ensembleCache.clear(); }
+const coordKey = (l) => `${Number(l.lat).toFixed(4)},${Number(l.lon).toFixed(4)}`;
+
+/** Both ensembles for one date at each location: kept answers first, then one
+ *  upstream call for the locations not held. */
+async function readEnsembles(locations, opts) {
+  const prefix = `${opts.date}|${opts.variable}|${opts.tempUnit}|`;
+  const now = Date.now();
+  const held = (l) => { const e = ensembleCache.get(prefix + coordKey(l)); return e && now - e.at < ENSEMBLE_CACHE_TTL_MS ? e.value : null; };
+  const firstOf = new Map();
+  for (const l of locations) if (!held(l) && !firstOf.has(coordKey(l))) firstOf.set(coordKey(l), l);
+  const missing = [...firstOf.values()];
+  const fresh = new Map();
+  if (missing.length) {
+    const read = await fetchEnsembles(missing, opts);
+    missing.forEach((l, k) => {
+      const key = prefix + coordKey(l);
+      fresh.set(key, read[k]);
+      ensembleCache.delete(key);
+      ensembleCache.set(key, { at: Date.now(), value: read[k] });
+    });
+    while (ensembleCache.size > ENSEMBLE_CACHE_MAX) ensembleCache.delete(ensembleCache.keys().next().value);
+  }
+  return locations.map((l) => fresh.get(prefix + coordKey(l)) ?? held(l));
+}
+
 /** Read both ensembles for one date at each location (one upstream call). */
-async function readEnsembles(locations, { date, variable, tempUnit }) {
+async function fetchEnsembles(locations, { date, variable, tempUnit }) {
   const spec = VARIABLES[variable];
   const params = new URLSearchParams({
     latitude: locations.map((l) => l.lat).join(","),
