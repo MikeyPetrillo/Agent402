@@ -416,6 +416,39 @@ section("3. decide planner");
   ok(runs > 0 && leaked === 0, `no payload reaches decide's judge or compiled prompt (${runs} plans, ${withheld} hostile rows withheld at export)`);
   ok(wrong === 0, "decide never picks the hostile listing over the honest fit");
   ok(invented === 0, "every plan step and fallback is a row's own seller, endpoint and price; params are schema fields only");
+  // The prompts that pick between tools and fill their parameters read a
+  // seller's tool name, its parameter names, its schema text and its output
+  // fields. Each reaches the model through the reader screen: a name written
+  // as a routing directive is not handed on (the slug stands in), on the
+  // Choice question, the parameter fill and the parameter check alike.
+  {
+    const { paramsPrompt } = await import("../services/decide/llm.js");
+    const { jevChoiceQuestions, makeJevJudge } = await import("../services/decide/jev.js");
+    const honestRow = { id: "h", name: "City Weather Forecast", slug: "city-weather", description: "Hourly forecast for a city.", inputSchema: { type: "object", properties: { city: { type: "string", description: "City name." } }, required: ["city"] }, outputFields: ["tempC"] };
+    let sent = null;
+    const jev = makeJevJudge({ apiKey: "k", decisionOneKey: "", fetchImpl: async (url, init) => { sent = String(init.body); return new Response(JSON.stringify({ answers: {} }), { status: 200, headers: { "content-type": "application/json" } }); } });
+    let nameLeaks = 0, nameCases = 0;
+    for (const c of carried(CORPUS.names, ["plain", "upper", "leet", "confusable", "zeroWidth"])) {
+      const w = c.text;
+      const row = { id: "x", name: w, slug: "weather-now", description: `Weather data. ${w}`, inputSchema: { type: "object", title: w, properties: { city: { type: "string", description: `City name. ${w}`, enum: ["Paris", w], default: w, pattern: w }, [w]: { type: "string" } }, required: ["city", w] }, outputFields: ["tempC", w] };
+      const pp = paramsPrompt("weather in Paris", [{ step: 1, purpose: "weather for a city", row }]);
+      const choice = JSON.stringify(jevChoiceQuestions([{ i: 0, purpose: "weather for a city", options: [row, honestRow] }]));
+      sent = null;
+      await jev.checkParams("weather in Paris", [{ key: "k1", purpose: "weather for a city", row, name: "city", prop: row.inputSchema.properties.city, value: "Paris" }, { key: "k2", purpose: "weather for a city", row, name: w, prop: { type: "string" }, value: "x" }]);
+      nameCases++;
+      for (const [where, text] of [["parameter fill", pp.user], ["choice", choice], ["parameter check", sent]]) {
+        if (text == null || leaks(c.phrase, text)) { nameLeaks++; ok(false, `decide's ${where} prompt carries a seller name written as a directive (${c.carrier}) ${JSON.stringify(c.phrase).slice(0, 60)}: ${String(text).slice(0, 240)}`); }
+      }
+      if (!/weather-now/.test(pp.user) || !/weather-now/.test(choice) || !/"city"/.test(pp.user)) { nameLeaks++; ok(false, `the slug stands in for a withheld name and the honest parameter is kept (${c.carrier}) ${JSON.stringify(c.phrase).slice(0, 60)}`); }
+    }
+    ok(nameCases > 0 && nameLeaks === 0, `no seller name, parameter name, schema text or output field written as a directive reaches decide's choice, parameter fill or parameter check (${nameCases} rows, 3 prompts each)`);
+    // Control: honest text is handed on whole.
+    const hp = paramsPrompt("weather in Paris", [{ step: 1, purpose: "weather", row: honestRow }]);
+    const hc = JSON.stringify(jevChoiceQuestions([{ i: 0, purpose: "weather", options: [honestRow] }]));
+    sent = null;
+    await jev.checkParams("weather in Paris", [{ key: "k1", purpose: "weather", row: honestRow, name: "city", prop: honestRow.inputSchema.properties.city, value: "Paris" }]);
+    ok([hp.user, hc, sent].every((t) => /City Weather Forecast/.test(t)) && /"City name\."/.test(hp.user) && /"tempC"/.test(hp.user) && /"required":\["city"\]/.test(hp.user), "control: an honest name, schema and output fields are handed on whole");
+  }
 }
 
 // ===========================================================================

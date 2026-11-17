@@ -95,6 +95,56 @@ export function judgeText(desc, max = 300) {
   return judgeReadableText(desc, { max });
 }
 
+// EVERY seller-written string a prompt reads goes through that screen, not
+// only the fit judge's: the tool's name, its parameter names, the text in its
+// input schema and its output fields. The helpers below are the one way a
+// prompt builder reads them (here and in jev.js).
+const NAME_OPTS = { max: 120, links: true };
+/** A tool's name as a prompt reads it: screened; its slug, screened, when the
+ *  name is withheld; "" when both are. */
+export function promptName(row) {
+  return judgeReadableName(row?.name, NAME_OPTS) || judgeReadableName(row?.slug, NAME_OPTS) || "";
+}
+/** True when an identifier a seller chose (a parameter name, an enum member,
+ *  an output field) may be handed on as written. */
+export const promptIdentOk = (s) => typeof s === "string" && s.length <= 200 && judgeReadableName(s, { links: true }) !== "";
+const SCHEMA_PROSE = new Set(["description", "title", "default", "example", "$comment"]);
+const SCHEMA_DEPTH = 8;
+/** An input schema as a prompt reads it: prose (description, title, default,
+ *  example) screened sentence by sentence; a property, an enum member or any
+ *  other string that reads as addressed to the reader left out, and a
+ *  left-out property dropped from `required`. Structure and types are kept. */
+export function promptSchema(schema, depth = 0) {
+  if (typeof schema === "string") return promptIdentOk(schema) ? schema : undefined;
+  if (schema === null || typeof schema !== "object") return schema;
+  if (depth >= SCHEMA_DEPTH) return undefined;
+  if (Array.isArray(schema)) return schema.slice(0, 200).map((v) => promptSchema(v, depth + 1)).filter((v) => v !== undefined);
+  const out = {};
+  for (const [k, v] of Object.entries(schema).slice(0, 200)) {
+    if (k === "properties" && v && typeof v === "object" && !Array.isArray(v)) {
+      const props = {};
+      for (const [name, sub] of Object.entries(v).slice(0, 200)) {
+        if (!promptIdentOk(name)) continue;
+        const kept = promptSchema(sub, depth + 1);
+        if (kept !== undefined) props[name] = kept;
+      }
+      out.properties = props;
+    } else if (SCHEMA_PROSE.has(k) && typeof v === "string") {
+      const kept = judgeText(v);
+      if (kept) out[k] = kept;
+    } else if (k === "examples" && Array.isArray(v)) {
+      out[k] = v.slice(0, 20).map((x) => (typeof x === "string" ? judgeText(x) : promptSchema(x, depth + 1))).filter((x) => x !== undefined && x !== "");
+    } else if (typeof k === "string" && !promptIdentOk(k) && !/^\$/.test(k)) {
+      continue;
+    } else {
+      const kept = promptSchema(v, depth + 1);
+      if (kept !== undefined) out[k] = kept;
+    }
+  }
+  if (Array.isArray(out.required) && out.properties) out.required = out.required.filter((n) => Object.hasOwn(out.properties, n));
+  return out;
+}
+
 /** Candidates carry short keys ("s1c3" = step 1, candidate 3); the planner
  *  maps them back to row ids, so a model can neither invent nor misplace one. */
 export function judgePrompt(task, steps, { guidance = "" } = {}) {
@@ -105,7 +155,7 @@ export function judgePrompt(task, steps, { guidance = "" } = {}) {
     candidates: s.candidates.map((c, j) => {
       const key = `s${i + 1}c${j + 1}`;
       keyToId[key] = c.row.id;
-      return { key, name: judgeReadableName(c.row.name, { max: 120, links: true }), description: judgeText(c.row.description), inputs: Object.keys(c.row.inputSchema?.properties || {}) };
+      return { key, name: promptName(c.row), description: judgeText(c.row.description), inputs: Object.keys(c.row.inputSchema?.properties || {}) };
     }),
   }));
   return {
@@ -116,8 +166,9 @@ export function judgePrompt(task, steps, { guidance = "" } = {}) {
   };
 }
 
+const outputFieldsOf = (row) => (Array.isArray(row?.outputFields) ? row.outputFields.filter(promptIdentOk) : []);
 export function paramsPrompt(task, picks, { note = "" } = {}) {
-  const listing = picks.map((p) => ({ key: p.key ?? String(p.step), step: p.step, ...(p.backup ? { backup: true } : {}), purpose: p.purpose, dependsOn: p.dependsOn || [], name: p.row.name, inputSchema: p.row.inputSchema, ...(p.row.outputFields?.length ? { outputFields: p.row.outputFields } : {}) }));
+  const listing = picks.map((p) => ({ key: p.key ?? String(p.step), step: p.step, ...(p.backup ? { backup: true } : {}), purpose: p.purpose, dependsOn: p.dependsOn || [], name: promptName(p.row), inputSchema: promptSchema(p.row.inputSchema), ...(outputFieldsOf(p.row).length ? { outputFields: outputFieldsOf(p.row) } : {}) }));
   return {
     system: `For each step, write the input parameters the agent should send to the chosen tool for this task, matching its inputSchema (property names and types; respect enums). Use values the task states. When a value is not in the task but an earlier step produces it (see that step's purpose and outputFields), write exactly "{{step N}}" for it, never an example value. When the call needs a value that neither the task nor an earlier step gives (no URL was given, say), write "<name>" for it so the agent knows to supply it. ${DATA_RULE} Each listing entry is one tool for one step; backups are other tools for the same step and need the same values in their own field names. Key the answer by each entry's key. Return JSON: {"params":{"1":{...},"1.2":{...},"2":{"address":"{{step 1}}"}}}.`,
     user: `Task: ${task}\n${note ? `${note}\n` : ""}<listings>${JSON.stringify(listing)}</listings>`,
