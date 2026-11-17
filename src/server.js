@@ -9855,7 +9855,7 @@ const cardSvg = (width = 1200, height = 630) => {
   <!-- headline -->
   <text x="72" y="238" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.ink}">The web's paid door,</text>
   <text x="72" y="330" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.faint}">finally open.</text>
-  <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${n.toLocaleString("en-US")} tools priced in cents. Reports priced in dollars. USDC over x402 / MPP, or card.</text>
+  <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${n.toLocaleString("en-US")} tools priced in cents. USDC over x402 / MPP; reports and monitors also by card.</text>
   <!-- handshake panel -->
   <rect x="72" y="430" width="1056" height="140" rx="16" fill="url(#panel)" stroke="${BRAND.hairline}" stroke-width="1.5"/>
   <text x="100" y="472" font-size="19" font-family=${mono} fill="${BRAND.faint}">$ curl agent402.tools/api/whois?domain=example.com</text>
