@@ -34,7 +34,7 @@ import { redactSecrets } from "./tools/redact.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 export const REFERRAL_VERIFY_TIMEOUT_MS = 10_000;
-export const REFERRAL_SETTLE_TIMEOUT_MS = 50_000;
+export const REFERRAL_SETTLE_TIMEOUT_MS = 60_000;
 const TX = /^0x[0-9a-fA-F]{64}$/;
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const REASON = /^[a-z][a-z0-9_]{0,63}$/;

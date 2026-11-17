@@ -68,8 +68,10 @@ LLC: credit the entity, never a personal name.
   (`markEndsAtCeiling`, `src/run-ceiling.js`), set beside the handler, slug by slug; the mark is what
   lets `/ref` serve it, so a handler that gains a wait the ceiling cannot end loses the mark in the
   same change (`scripts/test-run-ceiling.js`).
-- A sale on `/ref` is booked on the private rail `referral` (`src/paid-rails.js`): no public reader
-  of the ledger returns it, and the direct routes' breakers, counters and status words do not count it.
+- A sale on `/ref` is booked once on the private rail `referral` (`src/paid-rails.js`): every public
+  sales figure (`/api/sales`, rankings, the scorecard) counts it at the buyer's price and names the rail
+  `marketplace`, `/api/stats` counts it as a paid call, only the operator's margin view reads its net,
+  and the direct routes' settle breaker, status words, tool-call log and failure monitor do not count it.
 - Nothing a `/ref` route answers points a buyer at this server's own surfaces (catalog, prices, docs,
   a direct route), and a `/ref` copy is sold at the price listed for the same call on the public
   route: a slug whose published example names this host, or that the public route gives for less
@@ -320,7 +322,10 @@ file before changing a subsystem it names. The batch procedure is the `/batch` s
 Configuration and secrets are set on Railway (and, where a workflow needs them, as GitHub
 Actions secrets), never in the repo. Rollout switches are generally "key present = feature on"
 (for example `MPP_SECRET_KEY`, `TEMPO_API_KEY`, `STRIPE_SECRET_KEY`, `OPENROUTER_API_KEY`,
-`X_BEARER_TOKEN`). `OPEN_METEO_API_KEY` present = the weather tools read Open-Meteo's keyed
+`X_BEARER_TOKEN`). `COINGECKO_API_TIER` (`demo`, the default, or `pro`) picks the CoinGecko
+host and key header for `COINGECKO_API_KEY` (`src/tools/coingecko-endpoint.js`, the only file
+that names them): a paid key needs `pro`, and a keyless call uses the public host whatever the
+tier. `OPEN_METEO_API_KEY` present = the weather tools read Open-Meteo's keyed
 hosts; unset = its public hosts. Per-variable notes and thresholds live in `CLAUDE.local.md`. The backup
 bucket credentials (`BACKUP_S3_*`) live on Railway only, shown by `railway bucket credentials` and pasted by the operator
 into the service variables, never in Actions: the deploy job's variable upsert must not name a
