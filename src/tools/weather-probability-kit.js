@@ -192,6 +192,8 @@ function distributionOf(values) {
 const numberOf = (v, name) => {
   if (v === undefined || v === null || v === "") return null;
   if (typeof v !== "number" && typeof v !== "string") throw bad(`"${name}" must be a number`);
+  // Number(" ") is 0: a string of spaces is refused, never read as zero.
+  if (typeof v === "string" && v.trim() === "") throw bad(`"${name}" must be a number`);
   const n = Number(v);
   if (!Number.isFinite(n)) throw bad(`"${name}" must be a number`);
   return n;

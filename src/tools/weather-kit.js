@@ -140,7 +140,9 @@ export async function openMeteoJson(api, path, params, env = process.env) {
 }
 
 export function requireCoords(i) {
-  const blank = (v) => v === undefined || v === null || v === "";
+  // A string of spaces is not a coordinate: Number(" ") is 0, which would
+  // answer for 0,0 and be charged. It reads like any other non-number.
+  const blank = (v) => v === undefined || v === null || v === "" || (typeof v === "string" && v.trim() === "");
   const lat = blank(i?.lat) ? NaN : Number(i.lat);
   const lon = blank(i?.lon) ? NaN : Number(i.lon);
   if (!Number.isFinite(lat) || lat < -90 || lat > 90) throw bad('"lat" must be a number between -90 and 90');

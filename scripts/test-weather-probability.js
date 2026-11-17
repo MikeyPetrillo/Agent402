@@ -259,6 +259,13 @@ const GEFS = [39.4, 39.6, 44, 45];          // 4 members
   P._resetEnsembleCache(); reply = () => json(ensembleBody("temperature_2m", ECMWF, GEFS, { gefsHours: 10 }));
   out = await prob({ lat: 1, lon: 2, value: 40 });
   ok(out.members.total === 6 && out.members.byModel.length === 1 && out.modelsExcluded?.[0] === "NOAA GEFS ensemble" && typeof out.modelsExcludedNote === "string", "weather-probability: a model whose day is incomplete is left out of the count and named");
+  // One member of a model cut short leaves the whole model out, though its
+  // other members are complete: a model counts only with every member whole.
+  {
+    const body = ensembleBody("temperature_2m", ECMWF, [39.4, 39.6, [...hours(44, 23), null], 45]);
+    const { models, excluded } = P.membersOf(body, "temperature_max");
+    ok(models.length === 1 && models[0].model === "ECMWF IFS ensemble" && models[0].values.length === 6 && excluded.length === 1 && excluded[0] === "NOAA GEFS ensemble", `membersOf: one truncated member leaves its model out and names it (${JSON.stringify({ kept: models.map((m) => [m.model, m.values.length]), excluded })})`);
+  }
   P._resetEnsembleCache(); reply = () => json(ensembleBody("temperature_2m", [hours(null)], [hours(null)]));
   let e = await errOf(() => prob({ lat: 1, lon: 2, value: 40 }));
   ok(e?.statusCode === 422 && /No ensemble has a complete forecast/.test(e.message), "weather-probability: no complete model for the date is a 422, not an empty probability");
@@ -499,6 +506,36 @@ for (const slug of ["place-lookup", "weather-probability", "weather-market-brack
   ok(horizon.test(tool("weather-probability").description) && horizon.test(surfaces["src/changelog.js"]) && horizon.test(surfaces["CHANGELOG.md"]) && ["weather-probability", "weather-market-brackets", "weather-market-board"].every((s) => horizon.test(tool(s).discovery.inputSchema.properties.date.description)), "where the 15-day range is stated, so is the shorter reach of the full set");
 }
 ok(/reads no market feed/.test(tool("weather-market-brackets").description) && /reads no market feed/.test(tool("weather-market-board").description), "the market tools' listings say the caller supplies brackets and prices and no market feed is read");
+
+// ---------------------------------------------------------------------------
+// A number field sent as spaces is refused, naming the field, before any read:
+// Number(" ") is 0, which answered for 0,0 (or a threshold of 0) and was charged.
+// ---------------------------------------------------------------------------
+{
+  _resetPlaceCache(); P._resetEnsembleCache();
+  reply = () => json({});
+  fetched.length = 0;
+  const cases = [
+    ["weather-current", { lat: " ", lon: " " }, '"lat"'],
+    ["weather-current", { lat: 41.9, lon: "\t " }, '"lon"'],
+    ["weather-daily", { lat: "  ", lon: 2, place: "Paris" }, '"lat"'],
+    ["weather-probability", { lat: 1, lon: 2, value: " " }, '"value"'],
+    ["weather-probability", { lat: 1, lon: 2, min: " ", max: 40 }, '"min"'],
+    ["weather-market-brackets", { lat: 1, lon: 2, brackets: [{ min: 30, max: " ", price: 0.4 }] }, '"brackets[0].max"'],
+    ["weather-window", { lat: 1, lon: 2, maxWind: " " }, '"maxWind"'],
+    ["weather-window", { lat: 1, lon: 2, days: "  " }, '"days"'],
+    ["weather-thresholds", { lat: 1, lon: 2, rules: [{ variable: "humidity", op: ">", value: " " }] }, '"rules[0].value"'],
+  ];
+  for (const [slug, input, field] of cases) {
+    const e = await errOf(() => tool(slug).handler(input));
+    ok(e?.statusCode === 400 && e.message.includes(field), `${slug}: ${JSON.stringify(input)} is a 400 naming ${field} (${e ? `${e.statusCode} ${String(e.message).slice(0, 60)}` : "answered 200"})`);
+  }
+  ok(fetched.length === 0, `a number sent as spaces makes no upstream read (${fetched.length})`);
+  // Control: the same fields as numeric strings are read as numbers.
+  reply = () => json({ current: { time: "2026-01-01T00:00", temperature_2m: 1, weather_code: 0 } });
+  const out = await tool("weather-current").handler({ lat: " 41.9 ", lon: "-87.6" });
+  ok(out.lat === 41.9 && out.lon === -87.6, "control: numeric strings with spaces around them are read as their numbers");
+}
 
 globalThis.fetch = realFetch;
 restoreResolver();
