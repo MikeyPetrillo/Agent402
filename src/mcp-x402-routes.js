@@ -87,7 +87,9 @@ export function mcpX402Knows(httpServer) {
 // RFC 7240 respond-async, as src/async-jobs.js reads it.
 const PREFER_ASYNC_TOKEN = /(^|[\s,;])respond-async(?=$|[\s,;=])/gi;
 
-const isFixedPrice = (def) => typeof def?.quote !== "function" && typeof def?.tierQuote !== "function";
+/** A route priced the same for every request (no per-request quote). */
+export const isFixedPriceDef = (def) => typeof def?.quote !== "function" && typeof def?.tierQuote !== "function";
+const isFixedPrice = isFixedPriceDef;
 
 /** The twins a catalog can serve: [{ slug, toolName, route, method, path, def }].
  *  A slug missing from the catalog (a key-gated tool on this boot) or priced
