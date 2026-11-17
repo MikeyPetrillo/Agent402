@@ -5,7 +5,7 @@
 // Payment: a prepaid credits key (AGENT402_CREDITS_KEY) or an x402 wallet
 // (AGENT402_WALLET_KEY, with @x402/fetch + @x402/evm + viem present). Free-tier
 // tools pay with proof-of-work and need neither. Spend bounds ride with every
-// paid call (AGENT402_MAX_PER_CALL_USD, default $1; AGENT402_DAILY_LIMIT_USD).
+// paid call when set (AGENT402_MAX_PER_CALL_USD, AGENT402_DAILY_LIMIT_USD; both opt-in).
 import { Agent402 } from "agent402-client";
 
 const DEFAULT_BASE = "https://agent402.tools";

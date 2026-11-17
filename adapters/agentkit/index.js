@@ -23,7 +23,7 @@ import { Agent402 } from "agent402-client";
 const DEFAULT_BASE = "https://agent402.tools";
 // Keep in lockstep with package.json: the User-Agent product token that names
 // this package on every call it sends.
-const USER_AGENT = "agent402-agentkit/0.1.10";
+const USER_AGENT = "agent402-agentkit/0.2.0";
 
 // Discovery reads (catalog, find, route, manifest, a proof-of-work challenge)
 // settle nothing, so a 503 the server sheds under load is safe to repeat. It
@@ -76,13 +76,13 @@ async function discoveryFetch(fetchImpl, label, url, init) {
  * @param {string} [opts.baseUrl="https://agent402.tools"]
  * @param {typeof fetch} [opts.fetchImpl]  fetch used for free discovery and as the base of the paying fetch
  * @param {object} [opts.zod]              a zod module (loaded from the host when omitted)
- * @param {number} [opts.maxPerCallUsd=1]  ceiling on one paid call (USD); over it the call is refused before paying
+ * @param {number} [opts.maxPerCallUsd]    opt-in ceiling on one paid call (USD; none unless set); over it the call is refused before paying
  * @param {number} [opts.dailyLimitUsd]    ceiling on rolling-24h paid spend (USD)
  * @param {number} [opts.maxPerHostUsd]    ceiling on rolling-24h paid spend to one seller host (USD)
  * @param {string[]} [opts.payees]         only pay these payTo addresses (lowercased EVM); anything else is refused before signing
  * @param {string} [opts.creditsKey]       prepaid credits key (a402_...); pays wallet-only tools on Agent402's own services without a wallet
  */
-export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = globalThis.fetch, zod, maxPerCallUsd = 1, dailyLimitUsd = null, maxPerHostUsd = null, payees = null, creditsKey = null } = {}) {
+export async function agent402Actions({ baseUrl = DEFAULT_BASE, fetchImpl = globalThis.fetch, zod, maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, payees = null, creditsKey = null } = {}) {
   const z = zod || (await loadZod());
   // ONE client per wallet provider for the life of these actions. The rolling
   // daily and per-host ceilings live in the client's ledger, so a client built

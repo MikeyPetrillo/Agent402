@@ -481,8 +481,8 @@ A refused call throws \`SpendingLimitError\` naming the cap, the quote and the
 list price. A payment that was sent and answered with an error counts as held
 until its authorization can no longer settle.
 
-**agent402-mcp.** The per-call cap is on by default (\`off\` removes it); the
-session budget is opt-in.
+**agent402-mcp.** The per-call cap and the session budget are both opt-in:
+neither is set unless you set it.
 
 \`\`\`bash
 export AGENT_KEY=0x...                # or SOLANA_AGENT_KEY for a Solana wallet
@@ -493,8 +493,7 @@ npx -y agent402-mcp@${AGENT402_MCP_VERSION}
 \`\`\`
 
 **agent402-openclaw.** \`maxPerCallUsd\` in the plugin config, or
-\`AGENT402_MAX_PER_CALL_USD\`, defaults to the metered per-call cap below;
-\`off\` removes it only beside \`allowUncappedPayments: true\`.
+\`AGENT402_MAX_PER_CALL_USD\`, opt-in: no ceiling unless set.
 
 All three refuse an accept that asks for a signing validity longer than a day,
 and refuse to send a payload signed past it.

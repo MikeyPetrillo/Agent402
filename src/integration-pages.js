@@ -510,7 +510,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.14.0
       "`AGENT_KEY` (EVM) or `SOLANA_AGENT_KEY`: the server signs an x402 payment on a chain the tool accepts and retries.",
       `\`AGENT402_CREDITS_KEY\`: ${CREDITS_HELD}, sent as \`Authorization: Bearer a402_...\`; the list price is debited only on a 200.`,
       "Neither: the pure-CPU tools pay with proof-of-work (about 0.2 s of CPU).",
-      "`AGENT402_MAX_PER_CALL` is on by default ($4 per call, `off` disables it) and `AGENT402_BUDGET` is an opt-in session cap; both are enforced on the payment that is signed." + (connectorWires().names.length ? ` The hosted /mcp connector is also payable in the call over ${connectorWires().phrase}, from an MCP client that speaks it.` : ""),
+      "`AGENT402_MAX_PER_CALL` (per call) and `AGENT402_BUDGET` (per session) are opt-in caps; when set, both are enforced on the payment that is signed." + (connectorWires().names.length ? ` The hosted /mcp connector is also payable in the call over ${connectorWires().phrase}, from an MCP client that speaks it.` : ""),
     ],
     tools: ["search", "answer", "search-news", "render", "stock-quote", "transcribe"],
     guides: ["agent-hosts", "x402-and-mpp", "buying-at-volume"],

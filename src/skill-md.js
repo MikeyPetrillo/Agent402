@@ -131,8 +131,8 @@ Generic MCP host config:
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
 
 \`AGENT402_MAX_PER_CALL\` refuses any single call above that price and
-\`AGENT402_BUDGET\` caps total spend for the session. The per-call cap is on
-by default ($4; \`off\` disables it) and the session budget is opt-in; both
+\`AGENT402_BUDGET\` caps total spend for the session. Both are opt-in (no cap
+unless set); when set, both
 are held on the payment that is signed, so set them to your own ceilings.
 
 **Option B - Node SDK (any agent written in JS/TS).**

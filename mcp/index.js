@@ -16,7 +16,7 @@
 //   AGENT_KEY             hex private key of a funded EVM wallet (USDC on Base/Polygon/Arbitrum), optional
 //   SOLANA_AGENT_KEY      base58 (or JSON byte-array) secret key of a funded Solana wallet (USDC on Solana), optional
 //   AGENT402_TOOLS        comma-separated slugs to expose first-class (overrides default)
-//   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (default 4; off disables)
+//   AGENT402_MAX_PER_CALL optional: refuse any single call priced above this many USD (no cap by default)
 //   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...); pays per successful call with no wallet,
 //                         on Agent402's own services only (outside-seller routes need a wallet)
 //   AGENT402_BUDGET       optional hard cap on total USD spent this session (no cap by default)
@@ -161,14 +161,11 @@ const ASYNC_TIMEOUT_MS = Number(process.env.AGENT402_ASYNC_TIMEOUT_MS) > 0 ? Num
 // string bumped by hand. Reading the manifest makes drift impossible.
 const VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
 
-// Spend controls, enforced on the payment that is signed (see getPayFetch), so
-// a confused or runaway model cannot drain the wallet. The per-call cap is on
-// by default, at the dearest list price in the Agent402 catalog rounded up to
-// a whole dollar (mcp/test.js checks it still covers the catalog), and `off`
-// disables it; a malformed value reads as that default, never as off. The
-// session budget is opt-in: unset (or `off`) is no session cap, so a heavy user
-// is never stopped by a default. The per-call cap above still applies.
-const DEFAULT_MAX_PER_CALL_USD = 4;
+// Spend controls, enforced on the payment that is signed (see getPayFetch).
+// Both are opt-in: unset (or `off`) is no cap, so a buyer is never stopped by
+// a default; a number sets one, and a malformed value reads as no cap (and
+// says so). A call a cap refuses names the setting to raise.
+const DEFAULT_MAX_PER_CALL_USD = Infinity;
 const DEFAULT_BUDGET_USD = Infinity;
 const capFromEnv = (name, def) => {
   const raw = String(process.env[name] ?? "").trim().toLowerCase();
@@ -499,7 +496,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     const listUsd = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
     const { usd: price } = await quotedUsd(url, paidInit, listUsd);
     if (price > MAX_PER_CALL) {
-      return { content: [{ type: "text", text: `Refused: "${tool.slug}" is quoted $${price} for this request${price !== listUsd ? ` (list price ${tool.price})` : ""}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}.` }], isError: true };
+      return { content: [{ type: "text", text: `Refused: "${tool.slug}" is quoted $${price} for this request${price !== listUsd ? ` (list price ${tool.price})` : ""}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}. Raise AGENT402_MAX_PER_CALL (or set it to off) on this MCP server to allow it.` }], isError: true };
     }
     if (spentUsd + price > BUDGET) {
       return { content: [{ type: "text", text: `Refused: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request). Raise AGENT402_BUDGET (or set it to off) on this MCP server to continue.` }], isError: true };
@@ -529,7 +526,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     const price = parseFloat(String(tool.price).replace(/[^0-9.]/g, "")) || 0;
     if (price > MAX_PER_CALL) {
       return {
-        content: [{ type: "text", text: `Refused without paying: "${tool.slug}" lists at ${tool.price}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}. Raise the cap on this MCP server to allow it.` }],
+        content: [{ type: "text", text: `Refused without paying: "${tool.slug}" lists at ${tool.price}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}. Raise AGENT402_MAX_PER_CALL (or set it to off) on this MCP server to allow it.` }],
         isError: true,
       };
     }
@@ -629,7 +626,7 @@ function signingRefusal(tool, d) {
     ? `Refused without paying: for "${tool.slug}", ${d.detail}, so the payment was not sent.`
     : d.reason === "validity"
     ? `Refused without paying: for "${tool.slug}", ${d.detail}, so nothing was signed.`
-    : `Refused without paying: "${tool.slug}" asked for $${d.priceUsd} on the paid request, above the $${Number(d.allowanceUsd.toFixed(6))} this server may sign (AGENT402_MAX_PER_CALL ${MAX_PER_CALL === Infinity ? "off" : `$${MAX_PER_CALL}`}, AGENT402_BUDGET ${BUDGET === Infinity ? "off" : `$${BUDGET}`} with $${spentUsd.toFixed(4)} spent). Nothing was signed.`;
+    : `Refused without paying: "${tool.slug}" asked for $${d.priceUsd} on the paid request, above the $${Number(d.allowanceUsd.toFixed(6))} this server may sign (AGENT402_MAX_PER_CALL ${MAX_PER_CALL === Infinity ? "off" : `$${MAX_PER_CALL}`}, AGENT402_BUDGET ${BUDGET === Infinity ? "off" : `$${BUDGET}`} with $${spentUsd.toFixed(4)} spent). Nothing was signed; raise the setting that refused it on this MCP server to allow it.`;
   return { content: [{ type: "text", text }], isError: true };
 }
 

@@ -80,11 +80,13 @@ claude --model claude-sonnet-5
 ```bash
 npm i @x402/fetch @x402/evm viem
 export AGENT402_WALLET_KEY=0x...     # an EVM key holding USDC on Base
-export AGENT402_MAX_PER_CALL_USD=2   # per-call ceiling checked before signing (default 2, the gateway's metered cap)
+export AGENT402_MAX_PER_CALL_USD=2   # optional per-call ceiling checked before signing (none unless set)
 ```
 
 With no credits key present the proxy signs an x402 payment per call from that
-wallet. The key never leaves the machine. The ceiling is checked on the payment
+wallet. The key never leaves the machine. No ceiling is set by default (since
+0.6.0): a call is never refused for its price unless you set one. A ceiling you
+set is checked on the payment
 option that is signed, priced from the known decimals of its asset (USDC or
 USDG on a known network) and from the amount field that option's x402 version
 signs; an option in any other asset is not signed while a ceiling is set. Once
@@ -98,10 +100,9 @@ signed, and a built payment whose expiry (`validBefore` or the Permit2
 refusal happens before the payment leaves the machine, and the call's error
 names the reason.
 
-To run with no ceiling, set `maxPerCallUsd` to `0` or `"off"` together with
-`allowUncappedPayments: true` (or `AGENT402_ALLOW_UNCAPPED_PAYMENTS=true`).
-Without that acknowledgment `off` keeps the default ceiling and the proxy
-logs why.
+Unset, `0` or `"off"` means no ceiling; `allowUncappedPayments` is still
+accepted from earlier configurations and changes nothing. A call a ceiling
+refuses names `maxPerCallUsd` / `AGENT402_MAX_PER_CALL_USD`.
 
 Two ways the wallet can pay a metered call:
 

@@ -39,7 +39,7 @@
         },
         {
           "name": "AGENT402_MAX_PER_CALL",
-          "description": "Max USD price for any single call (default 4; e.g. 0.05; off disables). Enforced on the payment that is signed.",
+          "description": "Optional max USD price for any single call (e.g. 0.05; unset or off = no cap). Enforced on the payment that is signed.",
           "isRequired": false,
           "isSecret": false
         },
