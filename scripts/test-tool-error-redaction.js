@@ -86,6 +86,73 @@ const OP_TOKEN = ["op", "Canary", "Token", RUN].join("");
   ok(!r(`a failed: https://a.example.test/${PATH_KEY}b`).includes(PATH_KEY), "an entry of a *_RPCS list is redacted");
   ok(!r(`b failed: https://b.example.test/rpc?x=${PATH_KEY}c`).includes(PATH_KEY), "...and an RPC query value under any parameter name");
   ok(!r(`dial https://tempo.example.test/${PATH_KEY}d`).includes(PATH_KEY), "a *_RPC value is redacted");
+  // A name that carries a suffix after RPC or URL (a chain id, a chain name,
+  // a role) is read by the same rule; a setting that only shares the word is
+  // not (its value is no endpoint).
+  // Keys of their own: no other variable in this suite holds them.
+  const SFX_TAG = ["Sfx", "Canary", RUN].join("");
+  const SFX = (c) => `${c}9${SFX_TAG}`;
+  process.env.EVM_RPC_57073 = `https://ink.example.test/v2/${SFX("h")}`;
+  process.env.REFUND_RPC_8453 = `https://refund.example.test/${SFX("i")}`;
+  process.env.PROBE_LOGS_RPCS_BASE = `https://l1.example.test/${SFX("j")}, wss://l2.example.test/ws?x=${SFX("k")}`;
+  process.env.PROBE_RPC_FALLBACK_URLS = `https://fb.example.test/${SFX("l")}`;
+  process.env.PROBE_HOOK_URL_8453 = `https://hooks.example.test/services/${SFX("m")}?fmt=json`;
+  process.env.PROBE_DATABASE_URL_REPLICA = `postgres://app:${SFX("n")}@db2.example.test:5432/app`;
+  process.env.PROBE_PGURL_REPLICA = `postgres://app:${SFX("o")}@db3.example.test:5432/app`;
+  process.env.PROBE_RPC_METHODS = "eth_getBalance,eth_blockNumber,eth_getTransactionReceipt";
+  process.env.PROBE_RPC_TIMEOUT_NOTE = "milliseconds";
+  process.env.PROBE_RPC_DOCS = "see-the-wiki-page";
+  process.env.PROBE_WARPCAST_HOST = "https://warp.example.test/open/path";
+  // The word stands alone in the name: CURLS and GRPC only contain it, so a
+  // key-shaped segment under them is not read as a configured endpoint.
+  const OPEN_SEG = ["Open", "Seg", "A1b2C3d4E5f6", RUN].join("");
+  process.env.PROBE_CURLS_8453 = `https://curl.example.test/${OPEN_SEG}`;
+  process.env.PROBE_GRPC_TARGET = `https://grpc.example.test/${OPEN_SEG}x`;
+  ok(!r(`fetch failed: https://ink.example.test/v2/${SFX("h")}`).includes(SFX_TAG) && !r(`dial ink.example.test/v2/${SFX("h")}`).includes(SFX_TAG), "an RPC name ending in a chain id (EVM_RPC_<id>) is redacted whole, and its key segment alone");
+  ok(!r(`refund read https://refund.example.test/${SFX("i")} failed`).includes(SFX_TAG), "REFUND_RPC_<id> is redacted");
+  ok(!r(`a: https://l1.example.test/${SFX("j")}`).includes(SFX_TAG) && !r(`b: wss://l2.example.test/ws?x=${SFX("k")}`).includes(SFX_TAG), "each entry of an RPC list named with a chain suffix is redacted, a websocket one included");
+  ok(!r(`fallback https://fb.example.test/${SFX("l")}`).includes("fb.example.test"), "an RPC name with words after RPC (*_RPC_FALLBACK_URLS) is redacted whole");
+  ok(!r(`post https://hooks.example.test/services/${SFX("m")}?fmt=json`).includes(SFX_TAG), "a *_URL_<suffix> name gives up its key-like path segment");
+  ok(r("post https://hooks.example.test/services/ok?fmt=json").includes("hooks.example.test/services/ok?fmt=json"), "...and the rest of that URL stays readable");
+  ok(!r(`connect postgres://app:${SFX("n")}@db2.example.test:5432/app`).includes("db2.example.test"), "a database URL name with a suffix is redacted whole");
+  ok(!r(`connect postgres://app:${SFX("o")}@db3.example.test:5432/app`).includes("db3.example.test"), "...and one that joins the word to its prefix (PGURL_<suffix>)");
+  for (const plain of ["method eth_getBalance is not allowed", "eth_getTransactionReceipt returned null", "timeout in milliseconds", "see-the-wiki-page", "GET https://warp.example.test/open/path", `GET https://curl.example.test/${OPEN_SEG}`, `dial https://grpc.example.test/${OPEN_SEG}x`]) ok(r(plain) === plain, `a setting that shares the word RPC or URL flags no ordinary text ("${plain}")`);
+  // A URL of any scheme with userinfo is read under these names, as it was
+  // before a suffix was: a proxy URL's password, and the entry itself.
+  process.env.PROBE_RPC_PROXY_URL = `socks5://relay:${SFX("p")}@proxy.example.test:1080`;
+  process.env.PROBE_RPC_TUNNEL_8453 = `socks5h://relay:${SFX("q")}@tunnel.example.test:1080`;
+  process.env.PROBE_RPC_PROXY_URLS = `socks5://proxy2.example.test:1080/${SFX("s")}`;
+  ok(!r(`proxy connect socks5://relay:${SFX("p")}@proxy.example.test:1080 refused`).includes(SFX_TAG) && !r(`auth failed for password ${SFX("p")}`).includes(SFX_TAG), "a proxy URL under *_RPC_PROXY_URL (socks5 with userinfo) loses its password");
+  ok(!r(`tunnel socks5h://relay:${SFX("q")}@tunnel.example.test:1080 closed`).includes(SFX_TAG) && !r(`bad password ${SFX("q")}`).includes(SFX_TAG), "...and so does one under a name that ends in a chain id");
+  ok(!r(`dial socks5://proxy2.example.test:1080/${SFX("s")}`).includes(SFX_TAG), "a name that ends in URLS reads a URL of any scheme");
+  ok(r("method eth_getBalance is not allowed").includes("eth_getBalance") && r("eth_blockNumber failed").includes("eth_blockNumber"), "a method list under *_RPC_METHODS still flags nothing");
+  // A database name is redacted whole whatever else the name holds and
+  // whatever the value looks like: a keyword connection string is no URL,
+  // and the name may carry an RPC word before the database one.
+  process.env.PROBE_RPC_DATABASE_URL = `host=rpcdb.example.test port=5432 dbname=rpcstate user=rpcapp password=${SFX("t")}`;
+  process.env.PROBE_EVM_RPC_PG_URL = `host=evmdb.example.test password=${SFX("u")} sslmode=require`;
+  process.env.PROBE_RPC_REDIS_URL_REPLICA = `rediss://default:${SFX("v")}@cache.example.test:6380`;
+  process.env.PROBE_PLAIN_DATABASE_URL = `host=plaindb.example.test dbname=plainstate password='${SFX("w")}'`;
+  process.env.EVM_RPC_METHODS = "eth_getBalance,eth_blockNumber,eth_getTransactionReceipt";
+  const dsnOut = r(`could not connect: host=rpcdb.example.test port=5432 dbname=rpcstate user=rpcapp password=${SFX("t")}`);
+  ok(!dsnOut.includes(SFX_TAG) && !dsnOut.includes("rpcdb.example.test") && !dsnOut.includes("dbname=rpcstate"), `a keyword connection string under a database name that also holds an RPC word (RPC_DATABASE_URL) is redacted entry by entry (${dsnOut})`);
+  ok(!r(`password authentication failed (${SFX("t")})`).includes(SFX_TAG), "...and its password on its own");
+  ok(!r(`dial host=evmdb.example.test password=${SFX("u")} sslmode=require`).includes(SFX_TAG) && !r(`dial evmdb failed for host=evmdb.example.test`).includes("evmdb.example.test") && !r(`bad password ${SFX("u")}`).includes(SFX_TAG), "...and one under EVM_RPC_PG_URL");
+  ok(!r(`connect rediss://default:${SFX("v")}@cache.example.test:6380 refused`).includes("cache.example.test"), "a URL under such a name is still redacted whole");
+  ok(!r(`connect host=plaindb.example.test dbname=plainstate password='${SFX("w")}'`).includes(SFX_TAG) && !r(`auth failed: ${SFX("w")}`).includes(SFX_TAG), "a keyword connection string under a plain database name loses its quoted password, alone too");
+  ok(r("method eth_getBalance is not allowed") === "method eth_getBalance is not allowed" && r("eth_getTransactionReceipt returned null") === "eth_getTransactionReceipt returned null", "EVM_RPC_METHODS flags nothing");
+  delete process.env.EVM_RPC_METHODS;
+  // The name rule runs over every variable name on each call: a long hostile
+  // name costs time in its length, not its square.
+  {
+    const hostile = ["_RPC".repeat(20000), "RPCS_".repeat(20000), "_URL_RPC_URLS".repeat(8000) + "x", "R".repeat(100000), "_".repeat(100000) + "RPC"];
+    for (const [i, name] of hostile.entries()) process.env[`PROBE_H${i}${name}`] = "plain-value-here";
+    const t0 = performance.now();
+    for (let i = 0; i < 20; i++) r(`line ${i} ordinary words`);
+    const ms = performance.now() - t0;
+    for (const [i, name] of hostile.entries()) delete process.env[`PROBE_H${i}${name}`];
+    ok(ms < 1500, `20 redactions with five 100 KB variable names take ${ms.toFixed(0)} ms (under 1500)`);
+  }
   ok(!r(`post to https://hooks.example.test/services/${PATH_KEY}e failed`).includes(PATH_KEY), "a long key-like path segment of a *_URL is redacted");
   const basicKey = Buffer.from(`fk-${PATH_KEY}f:`).toString("base64");
   const basicPair = Buffer.from(`fk-${PATH_KEY}f:pw123`).toString("base64");

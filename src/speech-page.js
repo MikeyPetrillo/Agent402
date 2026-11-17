@@ -200,10 +200,10 @@ ${section("fallback", `
     return row([
       tdMono(routeLink(live)),
       td(`<span class="ml-codelist">${c.links.map((m) => `<code style="${mono}font-size:var(--fs-sm);color:var(--ink);">${esc(m.split("/").pop())}</code>`).join(" → ")}</span>`),
-      td(c.backups.length ? `<span class="ml-codelist">${c.backups.map((m) => `<code style="${mono}font-size:var(--fs-sm);color:var(--ink);">${esc(m.split("/").pop())}</code>`).join(" → ")}</span>` : "none: one model at one price, and an upstream failure is an uncharged error"),
+      td(c.backups.length ? `<span class="ml-codelist">${c.backups.map((m) => `<code style="${mono}font-size:var(--fs-sm);color:var(--ink);">${esc(m.split("/").pop())}</code>`).join(" → ")}</span>` : "none: one model at one price, and an upstream failure is an error, not charged on x402"),
     ]);
   }).join(""))}
-  ${p(`<strong style="color:var(--ink);font-weight:700;">One paid call is at most one generation.</strong> A link is skipped only after a failure that could not have been billed: a throttle, a server error, or a connection that never opened. A timeout or an empty answer may already have been generated, so it ends the call with an uncharged error instead of a second attempt. The whole walk, backups included, runs inside ${Math.round(TTS_DEADLINE_MS / 1000)} seconds.`)}
+  ${p(`<strong style="color:var(--ink);font-weight:700;">One paid call is at most one generation.</strong> A link is skipped only after a failure that could not have been billed: a throttle, a server error, or a connection that never opened. A timeout or an empty answer may already have been generated, so it ends the call with an error instead of a second attempt (not charged on x402). The whole walk, backups included, runs inside ${Math.round(TTS_DEADLINE_MS / 1000)} seconds.`)}
   ${p(`A backup can have fewer voices and languages than the primary: the standard name you asked for maps to its nearest voice, and a named voice maps back to its standard name first. The price does not change with the link that served you. Read ${code("model")} if your pipeline depends on a particular voice, and retry when it names a backup you would rather not keep.`)}
 `, true)}
 

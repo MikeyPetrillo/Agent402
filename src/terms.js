@@ -56,7 +56,7 @@ export function termsPage(baseUrl) {
 <section>
 <div class="tm-eyebrow">$ GET /terms</div>
 <h1 class="tm-h1">Terms of Service</h1>
-<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-16.</p>
+<p class="tm-updated">Agent402 (agent402.tools) - last updated 2026-11-17.</p>
 </section>
 
 <section>
@@ -175,7 +175,7 @@ send, hold or exchange funds for you on these routes, and you have no account wi
 Where a route returns part of a payment as a service credit (for example the unspent budget of
 <code>/api/decide/execute</code>), that credit is redeemable only for Agent402 services, for the period
 stated on that route.</p>
-<p><b>Refunds on-chain.</b> Because settlement happens only after a call succeeds, the ordinary
+<p><b>Refunds on-chain.</b> Because an x402 payment settles only after a call succeeds, the ordinary
 failure case costs nothing and needs no refund. Where a defect on our side means you were charged for
 something that did not deliver, we record the amount as owed and repay the wallet that paid, on the
 chain it paid on. Repayment is not instant: we review the amounts owed and send them in batches, and we

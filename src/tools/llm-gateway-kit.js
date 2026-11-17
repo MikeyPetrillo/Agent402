@@ -184,7 +184,7 @@ export async function probeOxAlphaAvailability({ fetchImpl } = {}) {
     if (!live) {
       console.warn(
         `WARNING: ${OX_MODEL} is GONE from the live OpenRouter catalog. ${OX_ROUTE} now answers 503 ` +
-        "before any upstream call (a >=400 cancels settlement, so no buyer is charged) and the model is " +
+        "before any upstream call (a >=400 cancels settlement, so an x402 buyer is not charged) and the model is " +
         "dropped from GET /v1/models. This is the EXPECTED end of a stealth listing: set OX_ALPHA_ENABLED=off " +
         "to remove the route from the catalog on the next boot, or repoint the tier at the unmasked model id."
       );

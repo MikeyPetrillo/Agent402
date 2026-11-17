@@ -255,8 +255,8 @@ minutes, longer than many HTTP clients wait. Their `/api/pricing` row carries
 `202` with a job link at once, and the SDK polls `GET /api/jobs/{id}` (free),
 waiting `Retry-After` seconds between polls, until the job has succeeded or
 failed (it reads the job's `state` and falls back to its `status`, working,
-completed or failed, on a server that sends only that). Payment settles only on
-the delivered answer, so a failed job is a failed call; the payment it carried
+completed or failed, on a server that sends only that). The x402 payment settles
+only on the delivered answer, so a failed job is a failed call; the payment it carried
 stays held against the caps (see Spending caps), since only the seller knows
 it was not redeemed.
 
