@@ -78,6 +78,10 @@ Tools:
   dex-volume-board ranks one network's DEXes by their share of 24-hour volume
   across its top pools, and that nothing live ranks DEXes across every chain
   or over longer periods.
+- dex-volume-board is quoted by the pages it reads: up to its default 60 pools
+  at the listed price, and 80 or 100 pools higher, as its listing and its 402
+  state. coin-history answers a date with no market data for the coin with
+  recorded false and null values, where it answered 422.
 
 Skill packs:
 - defi-protocol-scanner reads the token's supply and valuation profile
