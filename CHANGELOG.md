@@ -6,6 +6,19 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (marketplace answers arrive whole or are not charged)
+Payments:
+- An input a tool refuses on a call bought through a marketplace listing is
+  answered with the tool's expected fields, required fields and example, as on
+  the direct route, and is not charged.
+- An answer larger than a marketplace passes on whole (64 KB) is refused with
+  status 413 before the payment is settled, so nothing is charged: the refusal
+  gives the answer's size and the limit and says to ask for less in one call.
+  No answer is cut to fit, and a tool whose published example answer is over
+  the limit is not offered there.
+- The wait for a marketplace settlement to answer is 60 seconds by default,
+  which covers the longest that settlement takes to answer.
+
 ### 2026-11-16 (marketplace sales count in our figures)
 Payments:
 - A sale made through a marketplace listing of one of our tools now counts in

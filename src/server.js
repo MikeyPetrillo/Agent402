@@ -908,7 +908,7 @@ const OX_TRIAL_LIMITS_LABEL = `${OX_TRIAL_PER_HOUR} per hour, ${OX_TRIAL_PER_DAY
 import { createHangupSettlementHook, clientGoneBeforeFirstByte, chargeCancelledForClientGone, settleSentWhileConnected, grantedUnsettled, clientGoneError, isClientGoneAbort, onSettleOutcome, onResponseEnd } from "./hangup-settlement.js";
 import { firstCallAllowanceEnabled, claimFirstCallAllowance, finishFirstCallAllowance, firstCallAllowanceStatus, allowanceServed, allowanceRouteRefusal } from "./first-call-allowance.js";
 import { hangupForgiven, hangupTicketDenial, reserveHangupForgiveness, settleHangupTicket, hangupForgivenessStatus, loadHangupForgiveness, flushHangupForgiveness, hasLastingEffect, defHasLastingEffect } from "./hangup-forgiveness.js";
-import { referralConfig, referralConfigProblem, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
+import { referralConfig, referralConfigProblem, referralTimingWarnings, referralRoutes, referralSlugOfPath, createReferralGate, referralRefundWriter } from "./referral-gate.js";
 import { createReferralSettler } from "./referral-settle.js";
 import { createReferralChainReader } from "./referral-chain.js";
 import { createReferralBook, startReferralBookSweep, referralBookFile } from "./referral-book.js";
@@ -2576,6 +2576,7 @@ setIdentityBoundSlugs(new Set(Object.values(CATALOG).filter((d) => d.identityBou
 let REFERRAL_CONFIG = null;
 try { REFERRAL_CONFIG = FREE_MODE ? null : referralConfig(process.env); } catch { REFERRAL_CONFIG = null; }
 if (!FREE_MODE && !REFERRAL_CONFIG) { const why = referralConfigProblem(process.env); if (why) console.warn(`WARNING: referral gate is off: ${why}`); }
+if (REFERRAL_CONFIG) { for (const w of referralTimingWarnings(REFERRAL_CONFIG)) console.warn(`WARNING: referral gate: ${w}`); }
 const isChatTierDef = (def) => def?.category === "llm" && /\/chat\/completions$/.test(String(def.route || ""));
 const REFERRAL_OWN_HOSTS = [...new Set([(() => { try { return new URL(BASE_URL).host; } catch { return ""; } })(), "agent402.tools"].filter(Boolean))];
 /** The path by which the public route gives this call for less than its

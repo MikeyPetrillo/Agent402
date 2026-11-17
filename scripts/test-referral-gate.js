@@ -336,7 +336,7 @@ const ENV = {
   REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT,
   // The receipt of a settle success is read once in the suite (no waiting on a stub).
   REFERRAL_RECEIPT_WAIT_MS: "0",
-  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,mb,late", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
+  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,mb,late,picky", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
   // Synthetic figures, chosen to be no real rate.
   REFERRAL_COMMISSION_BPS: "default:1234,busy:4321", REFERRAL_FEE_BPS: "0",
   REFERRAL_DEADLINE_MS: "1000", REFERRAL_SETTLE_RESERVE_MS: "1000", REFERRAL_SETTLE_MS: "2000", REFERRAL_VERIFY_MS: "1000",
@@ -347,6 +347,8 @@ const ENV = {
   REFERRAL_HANGUP_KEY_USD: "0.05", REFERRAL_HANGUP_GLOBAL_USD: "1",
   // The service-wide bound has a test of its own (a mount with a small figure).
   REFERRAL_UNSETTLED_GLOBAL_MAX: "10000",
+  // The delivery checks send answers of megabytes; the bound on one answer has a test of its own (a mount with the default).
+  REFERRAL_MAX_ANSWER_BYTES: "8388608",
 };
 
 if (ONLY_PART !== "2") {
@@ -370,11 +372,33 @@ if (ONLY_PART !== "2") {
   ok(/not a usable private key/.test(settlerThrew) && !settlerThrew.includes("0000"), "the settle client's own refusal of such a key names the setting, never the key");
   ok(referralConfig({ ...ENV, REFERRAL_SLUGS: "ok,Bad Slug!" }) === null, "a slug list with a malformed entry: off");
   const d = referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "", REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_SETTLE_MS: "", REFERRAL_VERIFY_MS: "", REFERRAL_UNSETTLED_MAX: "" });
-  ok(d && d.deadlineMs === 25_000 && d.settleMs === 50_000 && d.verifyMs === 10_000 && d.settleReserveMs === 10_000 && d.maxValidityMs === 900_000 && d.verifySigned === true && d.unsettledMax === 3 && d.unsettledWindowMs === 900_000 && d.maxInflight === 24 && d.feeBps === 0, "defaults: 25 s handler, 50 s settle, 10 s verify, 10 s reserve, 15 min validity, verify signed, 3 unsettled runs per 15 min, 24 in flight, 0 fee");
+  ok(d && d.deadlineMs === 25_000 && d.settleMs === 60_000 && d.verifyMs === 10_000 && d.settleReserveMs === 10_000 && d.maxValidityMs === 900_000 && d.verifySigned === true && d.unsettledMax === 3 && d.unsettledWindowMs === 900_000 && d.maxInflight === 24 && d.feeBps === 0, "defaults: 25 s handler, 60 s settle, 10 s verify, 10 s reserve, 15 min validity, verify signed, 3 unsettled runs per 15 min, 24 in flight, 0 fee");
   ok(d.deadlineMs + d.settleReserveMs + d.verifyMs <= 60_000, "the default deadline, settle reserve and verify wait fit the 60 s the 402 asks a buyer to sign for");
   ok(referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "45000", REFERRAL_SETTLE_RESERVE_MS: "10000", REFERRAL_VERIFY_MS: "10000" }) === null, "a deadline, reserve and verify wait past 60 s together: off");
   ok(!("verify" in d) && referralConfig({ ...ENV, REFERRAL_VERIFY: "off" }) !== null && referralConfig({ ...ENV, REFERRAL_VERIFY_SIGNED: "OFF" }).verifySigned === false, "there is no switch that skips /verify; REFERRAL_VERIFY_SIGNED=off is read");
   ok(referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "abc" }).deadlineMs === 25_000, "a malformed timing knob reads as its default");
+  {
+    // Timing against the facilitator's own bound: its /settle answers within 55 s, and the 402 asks for 60 s.
+    const { referralTimingWarnings, REFERRAL_SETTLE_ANSWER_MS, REFERRAL_MAX_TIMEOUT_SECONDS } = gateMod;
+    ok(REFERRAL_SETTLE_ANSWER_MS === 55_000 && REFERRAL_MAX_TIMEOUT_SECONDS === 60 && d.deadlineMs + d.settleReserveMs + d.verifyMs <= REFERRAL_SETTLE_ANSWER_MS && d.settleMs >= REFERRAL_SETTLE_ANSWER_MS && Array.isArray(referralTimingWarnings(d)) && referralTimingWarnings(d).length === 0, `by default the run (deadline, reserve, verify: ${(d.deadlineMs + d.settleReserveMs + d.verifyMs) / 1000} s) fits the 55 s the facilitator's settle answers within and the 60 s a buyer signs for, the settle wait (${d.settleMs / 1000} s) covers that answer, and the boot has nothing to warn about`);
+    const short = referralTimingWarnings(referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "", REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_VERIFY_MS: "", REFERRAL_SETTLE_MS: "50000" }));
+    ok(short.length === 1 && /REFERRAL_SETTLE_MS \(50 s\) is under the 55 s the facilitator's \/settle may take to answer/.test(short[0]) && referralTimingWarnings(referralConfig({ ...ENV, REFERRAL_SETTLE_MS: "55000" })).length === 0, `a settle wait under the facilitator's 55 s is a boot warning that names the setting, and one at 55 s is not (${short[0]})`);
+    // The most one answer may be: the bytes the marketplace passes on to a buyer.
+    const { REFERRAL_DELIVERABLE_BYTES } = gateMod;
+    const noBound = { ...ENV, REFERRAL_MAX_ANSWER_BYTES: "" };
+    ok(REFERRAL_DELIVERABLE_BYTES === 65_536 && referralConfig(noBound).maxAnswerBytes === 65_536 && referralConfig({ ...ENV, REFERRAL_MAX_ANSWER_BYTES: "32768" }).maxAnswerBytes === 32_768 && ["abc", "0", "100", "-5", "99999999999", "1.5"].every((v) => referralConfig({ ...ENV, REFERRAL_MAX_ANSWER_BYTES: v }).maxAnswerBytes === 65_536), "REFERRAL_MAX_ANSWER_BYTES: 65536 by default, read when set, and a malformed or out-of-range value reads as the default (never as no bound)");
+    // A slug whose own published example answer is past the bound is refused at boot, with the sizes.
+    const base = { handler: async () => ({}), price: "$0.01" };
+    const fat = { ...base, slug: "probe-fat", discovery: { input: { q: "x" }, output: { example: { rows: "r".repeat(70_000) } } } };
+    const slim = { ...base, slug: "probe-slim", discovery: { input: { q: "x" }, output: { example: { rows: "r".repeat(60_000) } } } };
+    const whyFat = referralIneligibility(fat, { compute: true });
+    const edge = (n) => ({ ...base, slug: "probe-edge", discovery: { output: { example: { blob: "a".repeat(n) } } } });
+    ok(/^its published example answer \(70\d{3} bytes\) is over the most one answer may be on this route \(65536 bytes\)$/.test(whyFat || "") && referralIneligibility(slim, { compute: true }) === null && referralIneligibility(fat, { compute: true, maxAnswerBytes: 80_000 }) === null && referralIneligibility({ ...base, slug: "probe-none" }, { compute: true }) === null, `a tool whose published example answer is over the bound is not eligible, one under it (or with none published, or under a raised bound) is (${whyFat})`);
+    ok(gateMod.exampleAnswerBytes(edge(65_442)) === 65_536 && referralIneligibility(edge(65_442), { compute: true }) === null && /65537 bytes/.test(referralIneligibility(edge(65_443), { compute: true }) || ""), "the example is measured as it would be delivered (with the settle transaction beside it): exactly the bound is eligible, one byte more is not");
+    const viaRoutes = referralRoutes({ ...referralConfig(noBound), slugs: ["probe-fat", "probe-slim"] }, { a: fat, b: slim }, () => ({ compute: true }));
+    const viaRaised = referralRoutes({ ...referralConfig({ ...ENV, REFERRAL_MAX_ANSWER_BYTES: "80000" }), slugs: ["probe-fat", "probe-slim"] }, { a: fat, b: slim }, () => ({ compute: true }));
+    ok([...viaRoutes.defs.keys()].join() === "probe-slim" && viaRoutes.refused.length === 1 && viaRoutes.refused[0].slug === "probe-fat" && /published example answer/.test(viaRoutes.refused[0].reason) && [...viaRaised.defs.keys()].join() === "probe-fat,probe-slim", "the boot reads the configured bound: the slug is refused with the reason under the default and served once the setting admits its example");
+  }
   // The commission map: required, no built-in rate.
   const m = referralConfig({ ...ENV, REFERRAL_SLUGS: "alpha,beta,gamma", REFERRAL_COMMISSION_BPS: "default:1234, alpha:4321,Beta:2468" });
   ok(m && commissionBpsFor(m, "alpha") === 4321 && commissionBpsFor(m, "beta") === 2468 && commissionBpsFor(m, "gamma") === 1234, "the commission map is read per slug, and a slug it does not name reads its default");
@@ -531,6 +555,8 @@ const TOOLS = {
   list: { slug: "list", name: "List", category: "test", price: "$0.03", handler: async () => [1, 2, 3] },
   owntx: { slug: "owntx", name: "Own", category: "test", price: "$0.03", handler: async () => ({ transaction: "the tool's own field", rows: 1 }) },
   chat: { slug: "chat", name: "Chat", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), handler: async (i, req) => { seen.chat = { stream: i.stream, hasOptions: "stream_options" in i, stash: req.__meteredQuoteUsd }; return { id: "c1", choices: [] }; } },
+  // Refuses its input from inside the handler (a 400 of the caller's own, or a refusal attributed upstream).
+  picky: { slug: "picky", name: "Picky", category: "test", price: "$0.03", discovery: { input: { text: "hello" }, inputSchema: { properties: { text: { type: "string", description: "Text to read" } }, required: ["text"] } }, handler: async (i) => { if (i.upstream) throw Object.assign(new Error("the source refused this server"), { statusCode: 422, attribution: "upstream", upstreamStatus: 403 }); if (typeof i.text !== "string") throw Object.assign(new Error('Missing or invalid "text"'), { statusCode: 400 }); return { read: i.text.length }; } },
   // Tools with a published example: an empty request runs it.
   exa: { slug: "exa", name: "Example", category: "test", price: "$0.03", discovery: { input: { text: "the published example", n: 2 } }, handler: async (i) => { seen.exa = { ...i }; return { got: i.text ?? null, n: i.n ?? null }; } },
   chatx: { slug: "chatx", name: "Chat example", category: "llm", price: "$0.001", quote: (b) => 0.001 * (Number(b?.max_tokens) || 1), discovery: { input: { max_tokens: 3, messages: [{ role: "user", content: "example" }], stream: true } }, handler: async (i, req) => { seen.chatx = { max_tokens: i.max_tokens, stream: i.stream, content: i.messages?.[0]?.content, stash: req.__meteredQuoteUsd }; return { id: "cx", choices: [] }; } },
@@ -823,6 +849,47 @@ try {
     const again = await send(R("boom"), { body: {}, headers: { "payment-signature": p.header } });
     ok(again.status === 409 && runs.boom === 1, `its claim is HELD: the same authorization does not reach the handler again (${again.status}, ${runs.boom} run)`);
   }
+  {
+    // A refusal thrown by the handler for the caller's own input carries what the direct route's carries:
+    // the input schema, the required keys and the example (never a ready-to-run call).
+    const bad = await send(R("picky"), { body: { text: 7 }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+    ok(bad.status === 400 && bad.json?.error === 'Missing or invalid "text"' && bad.json.tool === "picky" && JSON.stringify(bad.json.expected) === JSON.stringify({ text: { type: "string", description: "Text to read" } }) && JSON.stringify(bad.json.required) === '["text"]' && JSON.stringify(bad.json.example) === '{"text":"hello"}' && !("howToCall" in bad.json) && settles() === 0, `an input the handler refuses is answered with the tool's input schema, required keys and example, as on the direct route, and not settled (${bad.status} ${bad.text.slice(0, 160)})`);
+    const up = await send(R("picky"), { body: { text: "x", upstream: true }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+    ok(up.status === 422 && up.json?.tool === "picky" && !("expected" in up.json) && !("required" in up.json) && !("example" in up.json) && settles() === 0, `a refusal that is not the caller's input (attributed upstream) carries no schema to fix (${up.status} ${up.text.slice(0, 120)})`);
+  }
+  fac.reset(); sales.length = 0;
+  {
+    // The marketplace passes on at most 64 KB of an answer: a larger one is refused before settlement, uncharged.
+    const appB = await mount({ REFERRAL_MAX_ANSWER_BYTES: "" });
+    try {
+      const { referralDeliveredBytes } = gateMod;
+      const callBig = async (slug, body, p) => call(`${appB.url}/ref/${slug}`, { body, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      // {"blob":"a...a"} with the settle transaction beside it: n + 94 bytes on the wire.
+      const fits = 65_536 - 94;
+      ok(appB.config.maxAnswerBytes === 65_536 && referralDeliveredBytes(JSON.stringify({ blob: "a".repeat(fits) }), false) === 65_536 && referralDeliveredBytes("[1,2,3]", true) === Buffer.byteLength(`{"result":[1,2,3],"transaction":"0x${"0".repeat(64)}"}`), "the size checked is the body as delivered: the answer with the settle transaction beside it");
+      const pFit = await signPayment(accept, { account: newAccount() });
+      const whole = await callBig("big", { n: fits }, pFit);
+      ok(whole.status === 200 && Buffer.byteLength(whole.text) === 65_536 && whole.json?.blob?.length === fits && /^0x[0-9a-f]{64}$/.test(whole.json.transaction || "") && settles() === 1 && sales.length === 1, `an answer of exactly 65536 bytes is settled and delivered whole (${whole.status}, ${Buffer.byteLength(whole.text)} bytes, ${settles()} settle)`);
+      const pOver = await signPayment(accept, { account: newAccount() });
+      const runsBefore = appB.gate.stats().runs;
+      const over = await callBig("big", { n: fits + 1 }, pOver);
+      ok(over.status === 413 && over.json?.reason === "answer_too_large" && over.json.tool === "big" && over.json.answerBytes === 65_537 && over.json.maxAnswerBytes === 65_536 && /65537 bytes, over the 65536 bytes one answer may be on this route, so it was not settled and nothing was charged\. Ask for less/.test(over.json.error || "") && !("blob" in over.json) && !("transaction" in over.json) && Buffer.byteLength(over.text) < 1024, `one byte more is refused 413 with a plain reason and both sizes, and no part of the answer (${over.status} ${over.text.slice(0, 200)})`);
+      ok(settles() === 1 && sales.length === 1 && appB.gate.stats().runs === runsBefore + 1 && appB.gate.stats().answerTooLarge === 1 && appB.book.get(gateMod.referralReplayKey(pOver.authorization)) == null && fac.of("/settle").every((c) => c.json?.paymentPayload?.payload?.authorization?.nonce !== pOver.authorization.nonce) && appB.gate.statusWord().status === "ok", `it ran and was never sent to /settle: no settlement, no sale, no book entry, counted (${settles()} settle, ${sales.length} sale, answerTooLarge ${appB.gate.stats().answerTooLarge})`);
+      const againOver = await callBig("big", { n: 10 }, pOver);
+      ok(againOver.status === 409 && settles() === 1, `the authorization bought its run: it does not run a second call (${againOver.status})`);
+      // A list answer rides under "result": measured the same way.
+      const pList = await signPayment(accept, { account: newAccount() });
+      const list = await callBig("list", {}, pList);
+      ok(list.status === 200 && JSON.stringify(list.json?.result) === "[1,2,3]", "a small answer of another shape is served as before");
+      // An answer far over the bound (megabytes) is the same refusal, not a truncated 200.
+      const far = await callBig("big", { n: 2_000_000 }, await signPayment(accept, { account: newAccount() }));
+      ok(far.status === 413 && far.json?.answerBytes === 2_000_094 && settles() === 2, `an answer of megabytes is refused the same way (${far.status} ${far.json?.answerBytes})`);
+    } finally { await appB.close(); }
+    // A raised setting admits it (the suite's own mounts run with 8 MB).
+    const wide = await send(R("big"), { body: { n: 70_000 }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
+    ok(wide.status === 200 && wide.json?.blob?.length === 70_000, `with REFERRAL_MAX_ANSWER_BYTES raised the same answer is settled and delivered (${wide.status})`);
+  }
+  fac.reset(); sales.length = 0;
   {
     const p = await signPayment(accept, { account: newAccount() });
     const ip = freshIp();
@@ -4756,6 +4823,7 @@ const BLANK = { REFERRAL_PAY_TO: "", REFERRAL_FACILITATOR_URL: "", REFERRAL_SIGN
     ok(unreadRef.status === 402 && unreadDirect.status === 402 && Array.isArray(unreadRef.json?.accepts), `an unpaid oversized body on the onchain-sql copy is answered its 402 without being read, as on the direct route (${unreadRef.status}, direct ${unreadDirect.status})`);
     const bigHash = await call(`${w.url}/ref/hash`, { body: { text: "x".repeat(150_000) }, headers: at("203.0.113.93", paidShape) });
     ok(bigHash.status === 413, `a copy of a route with no large-body allowance keeps the 100 KB limit (${bigHash.status})`);
+    ok(/Referral gate enabled/.test(w.log()) && !/referral gate: REFERRAL_SETTLE_MS/.test(w.log()), "a boot on the default settle wait logs no timing warning");
     // A non-canonical spelling reaches none of the path-mounted limiters, so it is given nothing.
     const encoded = await call(`${w.url}/ref/v1%2Dchat%2Dmetered`, { body, headers: at("203.0.113.94") });
     const upper = await call(`${w.url}/REF/hash`, { method: "GET", headers: at("203.0.113.95") });
@@ -4893,6 +4961,7 @@ try {
     }
     ok(walked >= served.length * 4 && pointed.length === 0, `no answer of a served /ref route points a buyer at this server's catalog, pricing, docs or direct routes: ${walked} answers of ${served.length} slugs walked (${pointed.slice(0, 6).join("; ") || "none"})`);
   }
+  ok(/WARNING: referral gate: REFERRAL_SETTLE_MS \(3 s\) is under the 55 s the facilitator's \/settle may take to answer/.test(bootLog) && /Referral gate enabled/.test(bootLog), "a settle wait configured under the facilitator's 55 s is a boot warning that names the setting, and the gate still serves");
   ok(/\[referral\] image-gen is not served under \/ref: its own upstream wait \(60 s\) is past the handler deadline \(4 s\)/.test(bootLog), "image-gen is left out at boot: its own upstream wait is past the handler deadline");
   {
     // A slug that is listed and not served is a reason on the status word (the server hands the gate its boot refusals).
@@ -5178,6 +5247,52 @@ try {
     const opHash = (opSales.json?.topExternal || []).find((r) => r.slug === "hash");
     ok(opSales.status === 200 && opHash && opHash.sales >= 1 && (opSales.json?.recentExternal || []).filter((r) => r.rail === "referral").every((r) => r.priceUsd > 0 && r.priceUsd === +r.priceUsd), `the operator's sales summary counts it under its slug (${opHash?.sales} hash sales)`);
   }
+  // A buyer's own request, as the marketplace forwards it (a method, a raw body with its content type, a
+  // query): each shape is run, priced and refused on /ref exactly as the direct route does for the same request.
+  {
+    const directAccept = flat.direct.accept;
+    const payDirect = async () => (await signPayment({ ...directAccept }, { account: newAccount(), to: directAccept.payTo, value: directAccept.amount, primaryType: "TransferWithAuthorization", validBefore: String(Math.floor(Date.now() / 1000) + 300) })).header;
+    const payRef = async () => (await signPayment(refAccept, { account: newAccount() })).header;
+    const J = { "content-type": "application/json" };
+    const shapes = [
+      ["a GET with a query", "GET", "?text=abc", {}, undefined],
+      ["a GET with a query of two fields", "GET", "?text=abc&algorithm=md5", {}, undefined],
+      ["a GET with a repeated query field", "GET", "?text=abc&text=def", {}, undefined],
+      ["a POST of JSON", "POST", "", J, '{"text":"abc","algorithm":"sha512"}'],
+      ["a POST of JSON with a charset", "POST", "", { "content-type": "application/json; charset=utf-8" }, '{"text":"abc"}'],
+      ["a POST of a JSON subtype", "POST", "", { "content-type": "application/vnd.api+json" }, '{"text":"abc"}'],
+      ["a POST with a query and a body", "POST", "?algorithm=md5", J, '{"text":"abc"}'],
+      ["a POST whose body and query name one field", "POST", "?text=query", J, '{"text":"body"}'],
+      ["a POST of an input envelope", "POST", "", J, '{"params":{"text":"abc"}}'],
+      ["a POST of JSON sent as text", "POST", "", { "content-type": "text/plain" }, '{"text":"abc"}'],
+      ["a POST of a form", "POST", "", { "content-type": "application/x-www-form-urlencoded" }, "text=abc"],
+      ["a POST of JSON with no content type", "POST", "", { "content-type": "" }, Buffer.from('{"text":"abc"}')],
+      ["a POST with a query and an unread body", "POST", "?text=abc", { "content-type": "text/plain" }, "ignored"],
+      ["a POST of a JSON array", "POST", "", J, "[1,2]"],
+      ["a POST missing its required field", "POST", "", J, '{"algorithm":"md5"}'],
+      ["a POST naming an algorithm the tool refuses", "POST", "", J, '{"text":"abc","algorithm":"nope"}'],
+      ["a POST whose field has the wrong type", "POST", "", J, '{"text":{"a":1}}'],
+      ["a GET missing its required field", "GET", "?algorithm=md5", {}, undefined],
+    ];
+    // What a refusal on /ref leaves out by rule: the ready-to-run call and every field whose text names this host.
+    // (An input with a required field missing is refused on /ref by the direct routes' pre-payment check, before
+    // the authorization is claimed: the same status and hint fields, in that check's words.)
+    const PRECHECK = "Missing required parameter: text";
+    const comparable = (r, other) => { if (!r.json || typeof r.json !== "object") return r.text; const o = { ...r.json }; delete o.transaction; delete o.howToCall; if (r.json.error === PRECHECK || other?.json?.error === PRECHECK) delete o.error; return JSON.stringify(o); };
+    const differs = [];
+    let ran = 0;
+    for (const [name, method, suffix, headers, body] of shapes) {
+      const d = await fetch(`${srv.url}/api/hash${suffix}`, { method, headers: { ...headers, ...xff(), "payment-signature": await payDirect() }, body });
+      const r = await fetch(`${srv.url}/ref/hash${suffix}`, { method, headers: { ...headers, ...xff(), "payment-signature": await payRef() }, body });
+      const dr = { status: d.status, text: await d.text() }, rr = { status: r.status, text: await r.text() };
+      for (const x of [dr, rr]) { try { x.json = JSON.parse(x.text); } catch { x.json = null; } }
+      if (rr.status === 200) ran++;
+      if (process.env.SHAPE_DEBUG) console.log(`# SHAPE ${name}\n#   D ${dr.status} ${dr.text.slice(0, 260)}\n#   R ${rr.status} ${rr.text.slice(0, 260)}`);
+      if (dr.status !== rr.status || comparable(dr, rr) !== comparable(rr, dr) || (rr.status === 400 && !("expected" in rr.json && "required" in rr.json && "example" in rr.json)) || (rr.status === 200 && !/^0x[0-9a-f]{64}$/.test(rr.json?.transaction || "")) || /\/api\/|howToCall/.test(rr.text)) differs.push(`${name}: direct ${dr.status} ${comparable(dr, rr).slice(0, 90)} | /ref ${rr.status} ${comparable(rr, dr).slice(0, 90)}`);
+    }
+    ok(ran >= 9 && differs.length === 0, `a paid request with the buyer's own input (${shapes.length} shapes of method, body, content type and query; ${ran} ran the tool) gets on /ref the answer or the refusal the direct route gives for it (${differs.join("; ") || "none differ"})`);
+  }
+
   {
     const acc = laneAcc, payers = [lanePayer];
     // The same wallet's direct call is served: the direct breaker holds nothing against it.

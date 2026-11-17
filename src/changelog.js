@@ -8,6 +8,15 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "Marketplace answers arrive whole or are not charged",
+    items: [
+      "Payments: An input a tool refuses on a call bought through a marketplace listing is answered with the tool's expected fields, required fields and example, as on the direct route, and is not charged.",
+      "Payments: An answer larger than a marketplace passes on whole (64 KB) is refused with status 413 before the payment is settled, so nothing is charged: the refusal gives the answer's size and the limit and says to ask for less in one call. No answer is cut to fit, and a tool whose published example answer is over the limit is not offered there.",
+      "Payments: The wait for a marketplace settlement to answer is 60 seconds by default, which covers the longest that settlement takes to answer.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Marketplace sales count in our figures",
     items: [
       "Payments: A sale made through a marketplace listing of one of our tools now counts in the public sales figures: the sales summary, the served-call counters, the tool rankings, the bestsellers feed, the buyer scorecard and the per-network split each count it once, as an outside sale of that tool, at the price its buyer paid.",

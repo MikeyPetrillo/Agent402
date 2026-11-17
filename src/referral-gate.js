@@ -89,6 +89,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { USDC_DOMAIN_BY_NETWORK } from "./evm-usdc-domain.js";
 import { decodePaymentHeader } from "./payment-header.js";
 import { handlerInputOf, withIgnoredParams } from "./handler-input.js";
+import { notCallersInput } from "./tool-error-fields.js";
 import { withLoopTimeout } from "./loop-deadline.js";
 import { binaryTypesOf } from "./tool-media-type.js";
 import { referralLogText } from "./referral-settle.js";
@@ -105,11 +106,19 @@ export const REFERRAL_ASSET = USDC.asset;
 /** What the 402 asks a buyer to sign for. The run, the verify wait and the
  *  settle reserve fit inside it (referralConfig). */
 export const REFERRAL_MAX_TIMEOUT_SECONDS = 60;
+/** The longest the facilitator's /settle takes to answer (it waits for the
+ *  receipt, and answers pending by then). A settle wait under it gives up on
+ *  an answer that was still coming. */
+export const REFERRAL_SETTLE_ANSWER_MS = 55_000;
+/** The most bytes of one answer the referral network passes on to a buyer.
+ *  An answer over it is never settled (REFERRAL_MAX_ANSWER_BYTES). */
+export const REFERRAL_DELIVERABLE_BYTES = 65_536;
 export const REFERRAL_DEFAULTS = Object.freeze({
   // The handler's budget.
   deadlineMs: 25_000,
-  // The facilitator's /settle waits for the receipt.
-  settleMs: 50_000,
+  // The facilitator's /settle waits for the receipt and answers within
+  // REFERRAL_SETTLE_ANSWER_MS: this wait covers that, with the round trip.
+  settleMs: 60_000,
   verifyMs: 10_000,
   // An authorization must still be valid this long after the handler ends,
   // so the settlement is submitted before validBefore.
@@ -423,7 +432,8 @@ const REQUIRED_VARS = ["REFERRAL_PAY_TO", "REFERRAL_FACILITATOR_URL", "REFERRAL_
  * Optional (default):
  *   REFERRAL_FEE_BPS            (0) read ONLY to book the net amount
  *   REFERRAL_DEADLINE_MS        (25000) handler budget
- *   REFERRAL_SETTLE_MS          (50000) /settle timeout
+ *   REFERRAL_SETTLE_MS          (60000) /settle timeout; under the 55 s the facilitator may take
+ *                               to answer, the boot logs a warning (referralTimingWarnings)
  *   REFERRAL_VERIFY_MS          (10000) /verify timeout
  *   REFERRAL_SETTLE_RESERVE_MS  (10000) validity kept for the settlement after the handler
  *   REFERRAL_MAX_VALIDITY_MS    (900000) the furthest ahead an authorization may expire
@@ -447,6 +457,9 @@ const REQUIRED_VARS = ["REFERRAL_PAY_TO", "REFERRAL_FACILITATOR_URL", "REFERRAL_
  *                               answer 503; a slug whose tool is model-backed stops at ONE (0: never, for all)
  *   REFERRAL_PRODUCT_IDS        (none) `<slug>:<0x 32-byte id>,...`: the product id the split
  *                               contract's routed event must name for that slug's payment to count
+ *   REFERRAL_MAX_ANSWER_BYTES   (65536) the most bytes of one answer the network passes on to a
+ *                               buyer: a larger answer is refused 413 before settlement, uncharged,
+ *                               and a slug whose published example answer is larger is not served
  *   REFERRAL_SEND_IDLE_MS       (15000) an answer's send with no progress for this long is ended
  *   REFERRAL_SEND_MAX_MS        (120000) an answer's send is ended this long after it began
  *   REFERRAL_HANGUP_KEY_USD, REFERRAL_HANGUP_GLOBAL_USD, REFERRAL_HANGUP_WINDOW_MS
@@ -495,6 +508,7 @@ export function referralConfig(env = process.env) {
       unconfirmedMax: intKnob(env, "REFERRAL_UNCONFIRMED_MAX", REFERRAL_DEFAULTS.unconfirmedMax, { min: 0, max: 1000 }),
       unrecognizedReads: intKnob(env, "REFERRAL_UNRECOGNIZED_READS", REFERRAL_DEFAULTS.unrecognizedReads, { min: 1, max: 1000 }),
       shortNetMax: intKnob(env, "REFERRAL_SHORT_NET_MAX", REFERRAL_DEFAULTS.shortNetMax, { min: 0, max: 1000 }),
+      maxAnswerBytes: intKnob(env, "REFERRAL_MAX_ANSWER_BYTES", REFERRAL_DELIVERABLE_BYTES, { min: 1024, max: REFERRAL_ANSWER_MAX_BYTES }),
       sendIdleMs: msKnob(env, "REFERRAL_SEND_IDLE_MS", REFERRAL_DEFAULTS.sendIdleMs, { min: 100, max: 600_000 }),
       sendMaxMs: msKnob(env, "REFERRAL_SEND_MAX_MS", REFERRAL_DEFAULTS.sendMaxMs, { min: 100, max: 3_600_000 }),
       deadlineMs, verifyMs, settleReserveMs,
@@ -534,6 +548,39 @@ export function referralConfigProblem(env = process.env) {
   if (!set.length) return null;
   const missing = REQUIRED_VARS.filter((n) => !set.includes(n));
   return missing.length ? `missing ${missing.join(", ")}` : "a value is not usable (an address, an https URL, a 32-byte signer key, a slug list, a commission map that covers every slug, commission plus fee past 10000 bps, a minimum-net map or a product id map that is malformed, a merchant id that is not a number, a payout address that is the pay-to contract, a routed-event topic that is not 32 bytes, or deadline + settle reserve + verify past 60 s)";
+}
+
+/** Timing settings the gate runs with but that do not fit the facilitator's
+ *  own bounds, as boot warnings (names and seconds only). */
+export function referralTimingWarnings(config) {
+  const out = [];
+  if (config && Number.isFinite(config.settleMs) && config.settleMs < REFERRAL_SETTLE_ANSWER_MS) {
+    out.push(`REFERRAL_SETTLE_MS (${Math.round(config.settleMs / 1000)} s) is under the ${REFERRAL_SETTLE_ANSWER_MS / 1000} s the facilitator's /settle may take to answer: a settle answered after it is read from the chain instead, and its answer is held until then`);
+  }
+  return out;
+}
+
+const PLACEHOLDER_TX = `0x${"0".repeat(64)}`;
+/** The body a settled answer goes out as: the tool's JSON with the settle
+ *  transaction beside it (an answer that is not a plain object, or that has a
+ *  `transaction` of its own, rides under `result`). */
+export function referralBodyText(text, wrap, tx) {
+  const tail = `"transaction":${JSON.stringify(tx)}`;
+  if (wrap) return `{"result":${text},${tail}}`;
+  return text === "{}" ? `{${tail}}` : `${text.slice(0, -1)},${tail}}`;
+}
+/** The bytes that body takes on the wire (a transaction hash is always 66 characters). */
+export const referralDeliveredBytes = (text, wrap) => Buffer.byteLength(referralBodyText(text, wrap, PLACEHOLDER_TX));
+/** The bytes a published example answer would take as a delivered answer, or
+ *  0 when the definition publishes none. */
+export function exampleAnswerBytes(def) {
+  const ex = def?.discovery?.output?.example;
+  if (ex === undefined || ex === null) return 0;
+  try {
+    const text = JSON.stringify(ex);
+    if (typeof text !== "string") return 0;
+    return referralDeliveredBytes(text, typeof ex !== "object" || Array.isArray(ex) || Object.hasOwn(ex, "transaction"));
+  } catch { return 0; }
 }
 
 const flatUsdOf = (def) => Number(String(def?.price ?? "").replace(/[^0-9.]/g, "")) || 0;
@@ -621,7 +668,7 @@ export function namesOwnHost(def, hosts = []) {
  * cannot cut off would keep spending upstream after the buyer was told it was
  * not charged.
  */
-export function referralIneligibility(def, { identityBound = false, lastingEffect = false, paysThirdParty = false, longRunning = false, compute = false, clamped = false, ownTimeoutMs = null, deadlineMs = REFERRAL_DEFAULTS.deadlineMs, priceForNetwork = (p) => p, ownHosts = [], cheaperDirect = null, parityGrandfathered = REFERRAL_PARITY_GRANDFATHERED } = {}) {
+export function referralIneligibility(def, { identityBound = false, lastingEffect = false, paysThirdParty = false, longRunning = false, compute = false, clamped = false, ownTimeoutMs = null, deadlineMs = REFERRAL_DEFAULTS.deadlineMs, priceForNetwork = (p) => p, ownHosts = [], cheaperDirect = null, parityGrandfathered = REFERRAL_PARITY_GRANDFATHERED, maxAnswerBytes = REFERRAL_DELIVERABLE_BYTES } = {}) {
   if (!def || typeof def !== "object") return "not in the catalog";
   if (typeof def.handler !== "function") return "in the catalog but has no handler";
   if (identityBound) return "identity-bound route";
@@ -638,6 +685,10 @@ export function referralIneligibility(def, { identityBound = false, lastingEffec
   // path this route lacks (`cheaperDirect` names it) is left out, unless the
   // operator names it in REFERRAL_PARITY_GRANDFATHERED (a line at every boot).
   if (cheaperDirect && !(Array.isArray(parityGrandfathered) && parityGrandfathered.includes(def.slug))) return `the public route can be had for less than the listed price (${cheaperDirect})`;
+  // The network passes on a bounded number of bytes: a tool whose own published
+  // example answer is past it could only be refused on every empty request.
+  const exampleBytes = exampleAnswerBytes(def);
+  if (Number.isFinite(maxAnswerBytes) && exampleBytes > maxAnswerBytes) return `its published example answer (${exampleBytes} bytes) is over the most one answer may be on this route (${maxAnswerBytes} bytes)`;
   if (!compute && !clamped) {
     if (!Number.isFinite(ownTimeoutMs) || !(ownTimeoutMs > 0)) return "declares no upstream timeout the handler deadline can be checked against";
     if (ownTimeoutMs > deadlineMs) return `its own upstream wait (${Math.round(ownTimeoutMs / 1000)} s) is past the handler deadline (${Math.round(deadlineMs / 1000)} s)`;
@@ -660,7 +711,7 @@ export function referralRoutes(config, catalog, flagsOf = () => ({})) {
   for (const slug of config?.slugs || []) {
     const def = bySlug.get(slug);
     let reason;
-    try { reason = referralIneligibility(def, { deadlineMs: config.deadlineMs, parityGrandfathered: config.parityGrandfathered || [], ...(def ? flagsOf(def) : {}) }); }
+    try { reason = referralIneligibility(def, { deadlineMs: config.deadlineMs, maxAnswerBytes: config.maxAnswerBytes, parityGrandfathered: config.parityGrandfathered || [], ...(def ? flagsOf(def) : {}) }); }
     catch { reason = "could not be checked"; }
     if (reason) { refused.push({ slug, reason }); continue; }
     defs.set(slug, def);
@@ -889,7 +940,7 @@ export function createReferralGate({
   const counters = {
     deliveryMarkFailed: 0, bookFaultHeld: 0, newPayerShareRefused: 0, shortNetSales: 0, shortNetHeld: 0, netsCorrected: 0, settleUnproven: 0, refusedUnread: 0, storeHeld: 0, sendsUnconfirmed: 0, debtClaimLost: 0, deliveryLostToDebt: 0, productMismatches: 0, ceilingCuts: 0, partlyServed: 0, unrecognizedClosed: 0, sendsEndedIdle: 0, sendInflightRefused: 0, reopenedByHand: 0, unconfirmedHeld: 0, unconfirmedFlagged: 0, headUnavailable: 0, bookFullRefused: 0, resolvedByHand: 0, alreadyDelivered: 0,
     challenges: 0, refused: 0, signatureRefused: 0, replays: 0, verifyRefused: 0, screened: 0, laneRefused: 0, busy: 0,
-    signerRefused: 0, ownFaultHeld: 0, screenErrors: 0, verifyUnavailable: 0, settleContradicted: 0, unconfirmed: 0, refundsOwed: 0, restoredAnswers: 0, runs: 0, exampleRuns: 0, handlerErrors: 0, timeouts: 0, forgivenHangups: 0, settleRefused: 0, settleInDoubt: 0, landedAfterDoubt: 0, usedUnpaid: 0, intentFailed: 0,
+    signerRefused: 0, ownFaultHeld: 0, screenErrors: 0, verifyUnavailable: 0, settleContradicted: 0, unconfirmed: 0, refundsOwed: 0, restoredAnswers: 0, runs: 0, exampleRuns: 0, handlerErrors: 0, answerTooLarge: 0, timeouts: 0, forgivenHangups: 0, settleRefused: 0, settleInDoubt: 0, landedAfterDoubt: 0, usedUnpaid: 0, intentFailed: 0,
     settled: 0, resent: 0, redelivered: 0, chargedNotServed: 0,
   };
   const line = (level, text) => { try { (log[level] || log.log).call(log, `[referral] ${text}`); } catch { /* a log never breaks a call */ } };
@@ -1926,11 +1977,7 @@ export function createReferralGate({
   }
 
   /** The 200: the tool's answer with the settle transaction at the top level. */
-  function bodyText(entry) {
-    const tail = `"transaction":${JSON.stringify(entry.charged)}`;
-    if (entry.wrap) return `{"result":${entry.text},${tail}}`;
-    return entry.text === "{}" ? `{${tail}}` : `${entry.text.slice(0, -1)},${tail}}`;
-  }
+  const bodyText = (entry) => referralBodyText(entry.text, entry.wrap, entry.charged);
   /**
    * Send a proven-paid answer. The DELIVERED MARK is written to the book
    * before any byte goes out and is what every later reader checks first: an
@@ -2715,8 +2762,15 @@ export function createReferralGate({
         if (!(Number(err?.statusCode) >= 400)) { try { err.statusCode = 500; } catch { /* a frozen error keeps the renderer's default */ } }
         if (!res.headersSent) {
           // The direct route's rendering, with no pointer to a direct route.
+          // A refusal of the caller's own input carries the tool's input
+          // schema, its required keys and its example, as the direct route's
+          // does (never the ready-to-run call, which names a direct route).
           const json = res.json.bind(res);
-          res.json = (body) => json(scrub(body));
+          const status = Number(err?.statusCode);
+          const ownInput = status >= 400 && status < 500 && !notCallersInput(err, 0);
+          res.json = (body) => json(scrub(ownInput && body && typeof body === "object" && !Array.isArray(body)
+            ? { ...body, expected: def.discovery?.inputSchema?.properties || {}, required: def.discovery?.inputSchema?.required || [], example: def.discovery?.input || {} }
+            : body));
           sendToolError(res, err, def.slug);
         }
         return undefined;
@@ -2742,6 +2796,16 @@ export function createReferralGate({
         settledHooks(false);
         counters.handlerErrors++;
         return res.status(500).json({ error: text === null ? "This tool's answer could not be serialized; nothing was charged." : "This tool's answer is too large for this route; nothing was charged.", tool: def.slug });
+      }
+      // The network passes on at most so many bytes of an answer: a larger
+      // one is refused here, before the settlement, so no buyer pays for an
+      // answer that would reach it cut short.
+      const outBytes = referralDeliveredBytes(text, wrap);
+      if (outBytes > config.maxAnswerBytes) {
+        hold(false);
+        settledHooks(false);
+        counters.answerTooLarge++;
+        return res.status(413).json({ error: `This call's answer is ${outBytes} bytes, over the ${config.maxAnswerBytes} bytes one answer may be on this route, so it was not settled and nothing was charged. Ask for less in one call (a narrower query, a lower limit, fewer fields) and sign a new authorization.`, tool: def.slug, reason: "answer_too_large", answerBytes: outBytes, maxAnswerBytes: config.maxAnswerBytes });
       }
       // What a hang-up from here on is recorded as (the refund run's words):
       // the reason no forgiveness ticket was granted (a spent budget: a repeat
