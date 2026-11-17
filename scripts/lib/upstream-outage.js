@@ -17,6 +17,13 @@
 //   4. the runner's own direct read of the same URL, right now, fails too (an
 //      answer of 500 or above, a 429, or no answer). If the upstream answers
 //      the runner, the tool failing is ours and it fails.
+//
+// An access refusal is read the same way, by exact status: our answer that
+// the host refused this server (a 422 naming HTTP 401 or 403, or a 503 naming
+// a 429), a recorded request to a host the tool's definition names that got
+// that same status during the call (keyless, a GET), and the runner's own
+// direct read of that request getting that same status right now. A refusal
+// the runner is not given (it reads 200, or a different status) fails.
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -51,6 +58,22 @@ export function isUpstreamErrorShape(status, body) {
   const msg = String(body?.error || "");
   return UPSTREAM_SHAPES.some(([st, re]) => st === status && re.test(msg));
 }
+
+const ACCESS_SHAPES = [
+  [422, /^The host refused this server's request \(HTTP (401|403)\)/],
+  [503, /^The host rate-limited or timed out this server \(HTTP (429)\)/],
+];
+/** The upstream status our access-refusal answer names (401, 403 or 429), else null. */
+export function accessRefusalStatus(status, body) {
+  const msg = String(body?.error || "");
+  for (const [st, re] of ACCESS_SHAPES) {
+    const m = st === status ? re.exec(msg) : null;
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+/** The statuses the failure-log preload records besides 500 and above. */
+export const ACCESS_STATUSES = new Set([401, 403, 429]);
 
 let kitTexts = null;
 function kits(root) {
@@ -97,30 +120,46 @@ export function failuresBetween(t0, t1, logPath = upstreamFailureLogPath()) {
 }
 
 const RUNNER_UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
-/** The runner's own direct GET of `url`: true when it FAILS (500 or above,
- *  429, or no answer within 10 s). */
-export async function directReadFails(url) {
+/** The runner's own direct GET of `url`: its status, or 0 for no answer
+ *  within 10 s. Sent with the fetch helper's identity and the request's own
+ *  Accept header when the log recorded one. */
+export async function directReadStatus(url, { accept = "application/json,*/*" } = {}) {
   let ua = RUNNER_UA;
   try { ua = (await import("../../src/tools/fetch-guard.js")).USER_AGENT || ua; } catch { /* the default identity */ }
   try {
-    const res = await fetch(url, { headers: { "User-Agent": ua, Accept: "application/json,*/*" }, signal: AbortSignal.timeout(10_000) });
+    const res = await fetch(url, { headers: { "User-Agent": ua, Accept: accept }, signal: AbortSignal.timeout(10_000) });
     try { await res.arrayBuffer(); } catch { /* status is the evidence */ }
-    return res.status >= 500 || res.status === 429;
+    return res.status;
   } catch {
-    return true;
+    return 0;
   }
+}
+/** The runner's own direct GET of `url`: true when it FAILS (500 or above,
+ *  429, or no answer within 10 s). */
+export async function directReadFails(url, opts) {
+  const st = await directReadStatus(url, opts);
+  return st === 0 || st >= 500 || st === 429;
 }
 
 /** The verdict on a failed answer: { verdict: "upstream", evidence } when the
- *  four conditions above hold, else { verdict: "fail", reason }. */
-export async function upstreamOutageVerdict({ slug, status, body, t0, t1, logPath = upstreamFailureLogPath(), readFails = directReadFails, root = ROOT }) {
-  if (!isUpstreamErrorShape(status, body)) return { verdict: "fail", reason: "not an upstream-error answer" };
+ *  conditions above hold (an outage, or an access refusal the runner is given
+ *  too), else { verdict: "fail", reason }. */
+export async function upstreamOutageVerdict({ slug, status, body, t0, t1, logPath = upstreamFailureLogPath(), readFails = directReadFails, readStatus = directReadStatus, root = ROOT }) {
+  const refused = accessRefusalStatus(status, body);
+  if (!refused && !isUpstreamErrorShape(status, body)) return { verdict: "fail", reason: "not an upstream-error answer" };
   const hosts = upstreamHostsForSlug(slug, root);
   if (!hosts.size) return { verdict: "fail", reason: "no upstream host in the tool's definition" };
-  const rows = failuresBetween(t0, t1, logPath).filter((r) => hosts.has(String(r.host).toLowerCase()));
-  if (!rows.length) return { verdict: "fail", reason: "no failed upstream request recorded during the call" };
+  const ofClass = (r) => (refused ? r.status === refused : (r.error || r.status >= 500));
+  const rows = failuresBetween(t0, t1, logPath).filter((r) => hosts.has(String(r.host).toLowerCase()) && ofClass(r));
+  if (!rows.length) return { verdict: "fail", reason: refused ? `no request refused with HTTP ${refused} recorded during the call` : "no failed upstream request recorded during the call" };
   const row = rows[rows.length - 1];
   if (row.keyed || !row.url || row.method !== "GET") return { verdict: "fail", reason: `the failed request to ${row.host} is keyed or not a GET` };
-  if (!(await readFails(row.url))) return { verdict: "fail", reason: `${row.host} answers the runner's direct read of the same request` };
+  const opts = row.accept ? { accept: row.accept } : undefined;
+  if (refused) {
+    const got = await readStatus(row.url, opts);
+    if (got !== refused) return { verdict: "fail", reason: `${row.host} refused the server HTTP ${refused} but answers the runner's direct read of the same request ${got || "nothing"}` };
+    return { verdict: "upstream", evidence: `${row.host} refused the server HTTP ${refused} and refuses the runner's direct read of the same request with HTTP ${refused} too` };
+  }
+  if (!(await readFails(row.url, opts))) return { verdict: "fail", reason: `${row.host} answers the runner's direct read of the same request` };
   return { verdict: "upstream", evidence: `${row.host} answered the server ${row.status || row.error} and refuses the runner's direct read of the same request too` };
 }

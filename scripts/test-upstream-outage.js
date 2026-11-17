@@ -13,8 +13,9 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   isUpstreamErrorShape, isKeyedRequest, upstreamHostsForSlug, failuresBetween,
-  directReadFails, upstreamOutageVerdict,
+  directReadFails, directReadStatus, upstreamOutageVerdict, accessRefusalStatus,
 } from "./lib/upstream-outage.js";
+import { isHost } from "./lib/url-host.js";
 import { runCheck, CHECKS } from "./live-public-data-check.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,6 +26,8 @@ const listen = (handler) => new Promise((resolve) => { const s = createServer(ha
 const up = await listen((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end('{"features":[]}'); });
 const down = await listen((req, res) => { res.writeHead(503); res.end("busy"); });
 const notFound = await listen((req, res) => { res.writeHead(404); res.end("no"); });
+const forbidden = await listen((req, res) => { res.writeHead(403); res.end("blocked"); });
+const unauth = await listen((req, res) => { res.writeHead(401); res.end("who"); });
 const at = (s, p = "/alerts/active?area=CA") => `http://127.0.0.1:${s.address().port}${p}`;
 
 const work = mkdtempSync(join(tmpdir(), "upstream-outage-"));
@@ -76,6 +79,31 @@ try {
   ok(await verdictFor({}) === "fail", "(stub) a keyed request is never re-read and excuses nothing");
   rmSync(log, { force: true }); row({ url: at(down), method: "POST" });
   ok(await verdictFor({}) === "fail", "(stub) a POST is never re-sent and excuses nothing");
+  // ---- an access refusal: excused only when the runner gets the same status
+  const refusedBody = (n) => ({ error: `The host refused this server's request (HTTP ${n}) - this is access, not a bad URL: the resource may require credentials we do not hold, or the host may block this server's requests while serving yours` });
+  ok(accessRefusalStatus(422, refusedBody(403)) === 403 && accessRefusalStatus(422, refusedBody(401)) === 401, "our access-refusal 422 names the upstream status (403, 401)");
+  ok(accessRefusalStatus(503, { error: "The host rate-limited or timed out this server (HTTP 429) - the URL is fine, this is throttling at h; retry later" }) === 429, "our rate-limit 503 names the upstream 429");
+  ok(accessRefusalStatus(503, { error: "The host rate-limited or timed out this server (HTTP 408) - the URL is fine" }) === null && accessRefusalStatus(500, refusedBody(403)) === null && accessRefusalStatus(422, { error: "Source URL returned HTTP 404 - check the URL" }) === null, "a 408, a 500 with the words, or a caller 404 is not an access refusal");
+  const refusedFor = (n, o = {}) => verdictFor({ status: 422, body: refusedBody(n), ...o });
+  rmSync(log, { force: true }); row({ url: at(forbidden), status: 403 });
+  ok(await refusedFor(403) === "upstream", "(stub) a 403 refusal recorded in the call + the runner's direct read refused 403 too: excused");
+  rmSync(log, { force: true }); row({ url: at(up), status: 403 });
+  ok(await refusedFor(403) === "fail", "(stub) a 403 refusal while the host answers the runner's direct read 200: FAILS");
+  rmSync(log, { force: true }); row({ url: at(unauth), status: 403 });
+  ok(await refusedFor(403) === "fail", "(stub) a 403 refusal while the runner's direct read gets a different refusal (401): FAILS");
+  rmSync(log, { force: true }); row({ url: at(down), status: 403 });
+  ok(await refusedFor(403) === "fail", "(stub) a 403 refusal while the runner's direct read gets a 503: FAILS");
+  rmSync(log, { force: true }); row({ url: at(forbidden), status: 503 });
+  ok(await refusedFor(403) === "fail", "(stub) a 403 answer with only a 5xx recorded in the call excuses nothing");
+  rmSync(log, { force: true }); row({ url: at(forbidden), status: 403, method: "POST" });
+  ok(await refusedFor(403) === "fail", "(stub) a refused POST is never re-sent and excuses nothing");
+  rmSync(log, { force: true }); row({ status: 403, keyed: true });
+  ok(await refusedFor(403) === "fail", "(stub) a refused keyed request is never re-read and excuses nothing");
+  rmSync(log, { force: true }); row({ url: at(forbidden), status: 403 });
+  ok(await refusedFor(403, { slug: "other-tool" }) === "fail", "(stub) a refusal on a host the tool's definition does not name excuses nothing");
+  ok(await verdictFor({}) === "fail", "(stub) a relayed 5xx with only a 403 recorded in the call excuses nothing");
+  ok(await directReadStatus(at(forbidden)) === 403 && await directReadStatus("http://127.0.0.1:1/") === 0, "the runner's direct read status: 403 as answered, 0 for no answer");
+
   ok(await directReadFails(at(down)) === true && await directReadFails(at(up)) === false && await directReadFails("http://127.0.0.1:1/") === true, "the runner's direct read: 503 and no answer fail, 200 answers");
 
   // ---- the preload records failed outbound requests, keyed ones without their URL
@@ -86,6 +114,8 @@ try {
     await fetch(${JSON.stringify(at(down, "/x?api_key=SECRETVALUE"))}).catch(() => {});
     await fetch(${JSON.stringify(at(down, "/h"))}, { headers: { Authorization: "Bearer SECRETVALUE" } }).catch(() => {});
     await fetch("http://127.0.0.1:1/").catch(() => {});
+    await fetch(${JSON.stringify(at(forbidden, "/f"))}, { headers: { Accept: "text/html" } }).catch(() => {});
+    await fetch(${JSON.stringify(at(notFound, "/n"))}).catch(() => {});
   `;
   const code = await new Promise((resolve) => {
     const p = spawn(process.execPath, ["--import", join(ROOT, "scripts/lib/upstream-failure-log-preload.js"), "--input-type=module", "-e", child], { env: { ...process.env, UPSTREAM_FAILURE_LOG: plog }, stdio: "inherit" });
@@ -95,8 +125,9 @@ try {
   const text = existsSync(plog) ? readFileSync(plog, "utf8") : "";
   const rows = failuresBetween(0, Date.now() + 1, plog);
   const byUrl = rows.filter((r) => !r.keyed);
-  ok(rows.length === 4, `only failed requests are logged: 503 x3 and one with no answer, never the 200 (${rows.length} rows)`);
-  ok(byUrl.length === 2 && byUrl.some((r) => r.url === at(down) && r.status === 503) && byUrl.some((r) => r.error && r.url.startsWith("http://127.0.0.1:1/")), "a keyless failure is logged with its URL and status or error");
+  ok(rows.length === 5, `only failed requests are logged: 503 x3, one with no answer and one 403, never the 200 or the 404 (${rows.length} rows)`);
+  ok(byUrl.some((r) => r.status === 403 && r.accept === "text/html" && r.url === at(forbidden, "/f")), "a keyless refusal is logged with its URL, status and Accept header");
+  ok(byUrl.length === 3 && byUrl.some((r) => r.url === at(down) && r.status === 503) && byUrl.some((r) => r.error && isHost(r.url, "127.0.0.1") && new URL(r.url).port === "1"), "a keyless failure is logged with its URL and status or error");
   ok(rows.filter((r) => r.keyed).length === 2 && rows.filter((r) => r.keyed).every((r) => !("url" in r)), "a keyed failure (query key or credential header) is logged by host only");
   ok(!text.includes("SECRETVALUE"), "no credential reaches the log");
 
@@ -119,7 +150,7 @@ try {
   const sweep = readFileSync(join(ROOT, "scripts/test-non-metered-examples.js"), "utf8");
   ok(sweep.includes("upstreamOutageVerdict(") && sweep.includes("upstream-failure-log-preload.js"), "the strict sweep reads the outage verdict and boots its own server with the preload");
 } finally {
-  for (const s of [up, down, notFound]) s.close();
+  for (const s of [up, down, notFound, forbidden, unauth]) s.close();
   rmSync(work, { recursive: true, force: true });
 }
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

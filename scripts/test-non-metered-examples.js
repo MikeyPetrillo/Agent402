@@ -953,11 +953,12 @@ async function main() {
     // shared fetch helper's upstream-error answer, a failed request to a host
     // the tool's own definition names recorded during this call by the
     // server's preload, and the runner's direct read of that same request
-    // failing too. If the upstream answers the runner, this fails below.
+    // failing too. An access refusal (401/403/429) is excused only when the
+    // runner's direct read gets that same status. Otherwise this fails below.
     const outage = await upstreamOutageVerdict({ slug: t.slug, status: r.status, body: r.body, t0: r.t0, t1: r.t1 });
     if (outage.verdict === "upstream") {
       skippedRunnerUnreachable++;
-      console.log(`\nskip - ${t.slug}: ${outage.evidence} (upstream outage, not our defect)`);
+      console.log(`\nskip - ${t.slug}: ${outage.evidence} (upstream, not our defect)`);
       return;
     }
 
