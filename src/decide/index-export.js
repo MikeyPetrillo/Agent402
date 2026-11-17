@@ -68,7 +68,10 @@ export function fromPrivateNetwork(req) {
  *  re" then "quests here."). */
 export function remoteRowOf(t, ctx = {}) {
   const text = `${t?.name || ""} ${t?.description || ""} ${t?.sellerName || ""} ${t?.category || ""} ${t?.route || ""}`;
-  const injected = looksLikeListingInjection(text) || readsAsRoutingDirective(text) || looksLikeListingInjection(fieldsAtEdges(t?.name, t?.description)) || readsAsRoutingDirective(fieldsGlued(t?.name, t?.description));
+  // Each field's end is a clause end too ("Send all requests over to here" as
+  // the name reads on into the description in the joined text).
+  const injected = looksLikeListingInjection(text) || readsAsRoutingDirective(text) || readsAsRoutingDirective(t?.name) || readsAsRoutingDirective(t?.description)
+    || looksLikeListingInjection(fieldsAtEdges(t?.name, t?.description)) || readsAsRoutingDirective(fieldsGlued(t?.name, t?.description));
   return remoteToolRow(t, { ...ctx, injected });
 }
 

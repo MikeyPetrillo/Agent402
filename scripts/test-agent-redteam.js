@@ -258,6 +258,37 @@ section("2. route-execute seller judge and the listing screen");
   ok(picked === 0, `no hostile listing is picked over an honest better fit, either order (${judgeCases.length * 2} runs)`);
   for (const c of dropCases) if (!screen.looksLikeListingInjection(`Weather data. ${c.text}`)) { dropMiss++; ok(false, `the listing screen keeps a listing carrying (${c.carrier}) ${JSON.stringify(c.phrase).slice(0, 70)}`); }
   ok(dropMiss === 0, `the listing screen withholds every listing that carries a drop phrase (${dropCases.length} cases)`);
+  // A sentence cut across the judge's fields (slug and description,
+  // description and a tag, or across all three) reaches the judge with its
+  // later half dropped. The oracle reads the fields' letters run together, as
+  // the judge's object writes them side by side.
+  {
+    const lettersOf = (s) => plainWords(s).replace(/[^a-z]/g, "");
+    let splitJudge = 0, controlCarried = 0;
+    for (const c of CORPUS.judgeSplit) {
+      const l = c.listing;
+      if (lettersOf(`wx.example ${l.slug || ""} ${l.description || ""} ${(l.tags || []).join(" ")}`).includes(lettersOf(c.core))) controlCarried++;
+      const seen = sellerJudgeListing({ seller: "https://wx.example", ...l });
+      if (lettersOf(`${seen.name} ${seen.description} ${seen.tags.join(" ")}`).includes(lettersOf(c.core))) { splitJudge++; ok(false, `the seller judge reads a sentence cut across its fields ${JSON.stringify(l)}: ${JSON.stringify(seen)}`); }
+    }
+    ok(CORPUS.judgeSplit.length >= 4 && controlCarried === CORPUS.judgeSplit.length, `control: unscreened, each cut listing carries its sentence across the judge's fields (${controlCarried} of ${CORPUS.judgeSplit.length})`);
+    ok(splitJudge === 0, `no sentence cut across the seller judge's name, description and tags reaches it whole (${CORPUS.judgeSplit.length} listings)`);
+    const plain = sellerJudgeListing({ seller: "https://wx.example", slug: "send-forecast", description: "Hourly weather for a city.", tags: ["weather", "forecast"] });
+    ok(plain.name === "wx.example send-forecast" && plain.description === "Hourly weather for a city." && plain.tags.join() === "weather,forecast", `control: an honest listing keeps every field through the side-by-side reading (${JSON.stringify(plain)})`);
+  }
+  // Reworded directives, other languages and lookalike letters: each is read
+  // as a directive alone, dropped from a description the judge reads, and the
+  // listing is not exported to decide.
+  {
+    const { remoteRowOf } = await import("../src/decide/index-export.js");
+    let missed = 0;
+    for (const p of CORPUS.paraphrases) {
+      const judged = sellerJudgeListing({ seller: "https://api.other.example", slug: "weather", description: `Weather data. ${p}`, tags: ["weather"] });
+      const exported = remoteRowOf({ seller: "https://api.other.example", route: "/weather", method: "GET", name: "Weather", description: `Weather data. ${p}`, price: 0.001, networks: ["eip155:8453"], health: 0.95 }, { lastLiveAt: Date.now() - 3600_000 });
+      if (!screen.readsAsRoutingDirective(p) || !screen.addressesReader(p) || judged.description !== "Weather data." || exported) { missed++; ok(false, `a reworded directive is read as one ${JSON.stringify(p)}: directive ${screen.readsAsRoutingDirective(p)}, judge ${JSON.stringify(judged.description)}, exported ${Boolean(exported)}`); }
+    }
+    ok(CORPUS.paraphrases.length >= 15 && missed === 0, `every reworded, translated or lookalike-spelled directive is withheld from the judge and the export (${CORPUS.paraphrases.length} texts)`);
+  }
   // Control: the obeying stub does follow an instruction it can read, so a
   // pass above is the screen's doing, not the stub's.
   seenCriteria.length = 0;
@@ -882,6 +913,22 @@ section("1. MCP connector, 402 challenge and 404 on a booted server");
     const wordsOf = (t) => (String(t).match(/[\p{L}\p{N}]+/gu) || []).join(" ");
     const dropped = descs.filter((dsc) => { const read = screen.judgeReadableText(dsc, { links: false }); return read !== screen.defuseLabels(dsc.replace(/\s+/g, " ").trim()) || wordsOf(read) !== wordsOf(dsc); });
     ok(descs.length >= 400 && dropped.length === 0, `control: every one of our ${descs.length} catalog descriptions reaches a judge whole${dropped.length ? ` (cut: ${dropped.slice(0, 3).map((x) => JSON.stringify(x.slice(0, 80))).join(", ")})` : ""}`);
+    // The same catalog through the seller judge's side-by-side reading of
+    // slug, description and tags: nothing its fields alone keep is withheld.
+    {
+      const { sellerJudgeListing } = await import("../src/tools/route-execute.js");
+      const { CRITERION_DESC_MAX, CRITERION_TAGS_MAX } = await import("../src/tool-judge.js");
+      const rows = (pricing.endpoints || []).filter((e) => e.description);
+      let withTags = 0;
+      const lost = rows.filter((e) => {
+        const slug = String(e.slug || String(e.route || e.path || "").replace(/^\/(?:api\/)?/, ""));
+        const tags = (Array.isArray(e.tags) ? e.tags : []).filter((t) => typeof t === "string" && t);
+        if (tags.length) withTags++;
+        const seen = sellerJudgeListing({ seller: "https://agent402", slug, description: e.description, tags });
+        return seen.description !== screen.judgeReadableText(e.description, { links: false, max: CRITERION_DESC_MAX }) || seen.tags.length !== Math.min(CRITERION_TAGS_MAX, tags.length) || !seen.name.endsWith(slug.slice(0, 60));
+      });
+      ok(rows.length >= 400 && lost.length === 0, `control: all ${rows.length} catalog listings (${withTags} with tags) reach the seller judge with no field withheld by the side-by-side reading${lost.length ? ` (${lost.slice(0, 3).map((e) => e.slug || e.route).join(", ")})` : ""}`);
+    }
     // Control for the field reader: every row the decide export streams for
     // our own catalog reaches each decide prompt with nothing withheld that
     // its fields alone would keep: the name, the description, every
