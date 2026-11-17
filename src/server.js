@@ -385,7 +385,7 @@ import { isOwnReplay } from "./own-replay.js";
 import { cdnClientIpMiddleware, cdnProxyEnabled, cdnOriginStatus, refreshCdnOriginShared } from "./cdn-client-ip.js";
 import { trustProxyHops, replayClientIpMiddleware, forwardedWithoutHopsWarning } from "./trust-proxy.js";
 import { paidNoStoreMiddleware } from "./paid-no-store.js";
-import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer } from "./cdn-sync-window.js";
+import { cdnSyncDeadlineMiddleware, cdnSyncWindowMiddleware, followsJobAnswer, cdnSyncMaxSeconds } from "./cdn-sync-window.js";
 import { slowSyncWindowMiddleware } from "./slow-sync-window.js";
 import { asyncProfileOf, estimateBasisSeconds, asyncAdvice, asyncAdviceMiddleware } from "./slow-routes.js";
 import { progressMiddleware, reportHandlerStarted } from "./job-progress.js";
@@ -2576,7 +2576,7 @@ setIdentityBoundSlugs(new Set(Object.values(CATALOG).filter((d) => d.identityBou
 let REFERRAL_CONFIG = null;
 try { REFERRAL_CONFIG = FREE_MODE ? null : referralConfig(process.env); } catch { REFERRAL_CONFIG = null; }
 if (!FREE_MODE && !REFERRAL_CONFIG) { const why = referralConfigProblem(process.env); if (why) console.warn(`WARNING: referral gate is off: ${why}`); }
-if (REFERRAL_CONFIG) { for (const w of referralTimingWarnings(REFERRAL_CONFIG)) console.warn(`WARNING: referral gate: ${w}`); }
+if (REFERRAL_CONFIG) { for (const w of referralTimingWarnings(REFERRAL_CONFIG, { cdnSyncMs: cdnProxyEnabled() ? cdnSyncMaxSeconds() * 1000 : null })) console.warn(`WARNING: referral gate: ${w}`); }
 const isChatTierDef = (def) => def?.category === "llm" && /\/chat\/completions$/.test(String(def.route || ""));
 const REFERRAL_OWN_HOSTS = [...new Set([(() => { try { return new URL(BASE_URL).host; } catch { return ""; } })(), "agent402.tools"].filter(Boolean))];
 /** The path by which the public route gives this call for less than its
@@ -10908,7 +10908,7 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
   res.set("Cache-Control", "private, no-store");
   if (!REFERRAL_GATE) return res.status(409).json({ error: "the referral gate is off" });
   const { action, key, note, outcome } = req.body || {};
-  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}, or {"action":"clear-short","slug":"<slug>","note":"what was checked"}, or {"action":"acknowledge","what":"retired"|"closed"|"dropped","note":"what was checked"}, or {"action":"resolve-many","state":"<entry state>","reason":"<recorded reason, optional>","outcome":"dismissed"|"delivered","note":"what was checked"}';
+  const usage = 'pass {"action":"resolve","key":"<entry key>","note":"what was checked","outcome":"refund"|"delivered"|"dismissed"}, or {"action":"reopen","key":"<key of a closedUnrecognized record>","note":"what was checked"}, or {"action":"clear-short","slug":"<slug>","note":"what was checked"}, or {"action":"clear-example","slug":"<slug>","note":"what was checked"}, or {"action":"acknowledge","what":"retired"|"closed"|"dropped","note":"what was checked"}, or {"action":"resolve-many","state":"<entry state>","reason":"<recorded reason, optional>","outcome":"dismissed"|"delivered","note":"what was checked"}';
   // A record closed as unrecognized goes back to the open entries, where resolve works on it.
   // A slug's short-net record (and the stop it may carry) is cleared by hand.
   if (action === "clear-short") {
@@ -10916,6 +10916,11 @@ app.post("/__operator/referral.json", express.json({ limit: "8kb" }), async (req
       const r = await REFERRAL_GATE.clearShortByHand(typeof req.body?.slug === "string" ? req.body.slug : "", { note: typeof note === "string" ? note : "" });
       return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
     } catch { return res.status(503).json({ error: "the settlement book could not be written" }); }
+  }
+  // A slug's oversized-example mark (its published example ended 413) is cleared by hand.
+  if (action === "clear-example") {
+    const r = REFERRAL_GATE.clearExampleByHand(typeof req.body?.slug === "string" ? req.body.slug : "", { note: typeof note === "string" ? note : "" });
+    return res.status(r.ok ? 200 : 400).json({ ...r, status: REFERRAL_GATE.statusWord() });
   }
   if (action === "reopen") {
     try {

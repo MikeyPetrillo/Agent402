@@ -336,7 +336,7 @@ const ENV = {
   REFERRAL_MERCHANT_ID: MERCHANT_ID, REFERRAL_PAYOUT_ADDRESS: PAYOUT,
   // The receipt of a settle success is read once in the suite (no waiting on a stub).
   REFERRAL_RECEIPT_WAIT_MS: "0",
-  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,mb,late,picky", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
+  REFERRAL_SLUGS: "echo, slow,boom,bytes,list,owntx,chat,busy,budgeted,breaker,exa,chatx,scopes,big,exbig,mb,late,picky", REFERRAL_SETUP_URL: "https://setup.example/.well-known/referral",
   // Synthetic figures, chosen to be no real rate.
   REFERRAL_COMMISSION_BPS: "default:1234,busy:4321", REFERRAL_FEE_BPS: "0",
   REFERRAL_DEADLINE_MS: "1000", REFERRAL_SETTLE_RESERVE_MS: "1000", REFERRAL_SETTLE_MS: "2000", REFERRAL_VERIFY_MS: "1000",
@@ -351,6 +351,16 @@ const ENV = {
   REFERRAL_MAX_ANSWER_BYTES: "8388608",
 };
 
+// The 413 bodies the suite collects ([text, slug]): walked for pointers with the served routes' answers.
+const responses413 = [];
+/** Every pointer to this server's own surfaces in an answer of /ref/<slug>: a URL on this host (or the public
+ *  one) that is not the route itself or the refund lookup, and a bare path to pricing, the spec, docs or a direct route. */
+const pointerWalk = (hostOf) => (text, slug) => {
+  const found = [];
+  for (const m of String(text).matchAll(new RegExp(`(?:agent402\\.tools|${hostOf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(\\/[^\\s"'\\\\<>)]*)?`, "gi"))) { const path = m[1] || "/"; if (!path.startsWith(`/ref/${slug}`) && !path.startsWith("/api/refunds?tx=")) found.push(m[0]); }
+  for (const m of String(text).matchAll(/(?:^|[\s"'(])(\/(?:api\/(?!refunds\?tx=)[a-z0-9-]+|v1\/[a-z0-9/-]+|openapi\.json|llms[a-z-]*\.txt|\.well-known\/x402|docs|pricing|crawler|tools|catalog)\b[^\s"']*)/gi)) found.push(m[1]);
+  return found;
+};
 if (ONLY_PART !== "2") {
 // --- configuration ---------------------------------------------------------------
 {
@@ -383,18 +393,53 @@ if (ONLY_PART !== "2") {
     ok(REFERRAL_SETTLE_ANSWER_MS === 55_000 && REFERRAL_MAX_TIMEOUT_SECONDS === 60 && d.deadlineMs + d.settleReserveMs + d.verifyMs <= REFERRAL_SETTLE_ANSWER_MS && d.settleMs >= REFERRAL_SETTLE_ANSWER_MS && Array.isArray(referralTimingWarnings(d)) && referralTimingWarnings(d).length === 0, `by default the run (deadline, reserve, verify: ${(d.deadlineMs + d.settleReserveMs + d.verifyMs) / 1000} s) fits the 55 s the facilitator's settle answers within and the 60 s a buyer signs for, the settle wait (${d.settleMs / 1000} s) covers that answer, and the boot has nothing to warn about`);
     const short = referralTimingWarnings(referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "", REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_VERIFY_MS: "", REFERRAL_SETTLE_MS: "50000" }));
     ok(short.length === 1 && /REFERRAL_SETTLE_MS \(50 s\) is under the 55 s the facilitator's \/settle may take to answer/.test(short[0]) && referralTimingWarnings(referralConfig({ ...ENV, REFERRAL_SETTLE_MS: "55000" })).length === 0, `a settle wait under the facilitator's 55 s is a boot warning that names the setting, and one at 55 s is not (${short[0]})`);
+    // THE CDN WINDOW. A request through the CDN proxy is answered before the proxy's deadline: its settle wait is
+    // what the request has left after its verify, run and intent write, less a margin and the read that follows.
+    {
+      const { referralSettleWaitMs, REFERRAL_CDN_MARGIN_MS, REFERRAL_DEFAULTS: D } = gateMod;
+      const CDN = 90_000;
+      const worstLeft = CDN - D.verifyMs - D.deadlineMs - D.storeWriteMs;
+      const worst = referralSettleWaitMs(D.settleMs, worstLeft, D.receiptWaitMs);
+      ok(REFERRAL_CDN_MARGIN_MS === 3_000 && worst === 45_000 && D.verifyMs + D.deadlineMs + D.storeWriteMs + worst + D.receiptWaitMs === CDN - REFERRAL_CDN_MARGIN_MS, `a slow verify (${D.verifyMs / 1000} s), a slow handler (${D.deadlineMs / 1000} s) and a slow intent write (${D.storeWriteMs / 1000} s) leave the settle ${worst / 1000} s: with the receipt wait the first byte is due ${REFERRAL_CDN_MARGIN_MS / 1000} s before the CDN's ${CDN / 1000} s (never the 102 s the configured waits add up to)`);
+      ok(referralSettleWaitMs(D.settleMs, null, D.receiptWaitMs) === D.settleMs && referralSettleWaitMs(D.settleMs, undefined) === D.settleMs && referralSettleWaitMs(D.settleMs, CDN - 1_000 - 5_000, D.receiptWaitMs) === D.settleMs && referralSettleWaitMs(D.settleMs, 67_000, D.receiptWaitMs) === 60_000 && referralSettleWaitMs(D.settleMs, 66_999, D.receiptWaitMs) === 59_999, "a request that did not come through the CDN, or a quick one that did, keeps the whole configured wait; the cut begins exactly where the wait would pass the window");
+      ok(referralSettleWaitMs(D.settleMs, 2_000, D.receiptWaitMs) === 1_000 && referralSettleWaitMs(D.settleMs, -5_000, 0) === 1_000 && referralSettleWaitMs(20_000, 30_000, 0) === 20_000, "the wait is never under the settler's own 1 s floor and never over the configured one");
+      const dflt = referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "", REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_SETTLE_MS: "", REFERRAL_VERIFY_MS: "", REFERRAL_RECEIPT_WAIT_MS: "" });
+      const viaCdn = referralTimingWarnings(dflt, { cdnSyncMs: CDN });
+      const roomy = referralTimingWarnings(referralConfig({ ...ENV, REFERRAL_DEADLINE_MS: "20000", REFERRAL_SETTLE_RESERVE_MS: "", REFERRAL_SETTLE_MS: "", REFERRAL_VERIFY_MS: "5000", REFERRAL_RECEIPT_WAIT_MS: "" }), { cdnSyncMs: CDN });
+      ok(viaCdn.length === 1 && /^through the CDN proxy \(an answer within 90 s\) a run that uses all of REFERRAL_VERIFY_MS, REFERRAL_DEADLINE_MS and REFERRAL_STORE_WRITE_MS leaves \/settle 45 s, under the 55 s the facilitator's \/settle may take to answer: /.test(viaCdn[0]) && roomy.length === 0 && referralTimingWarnings(dflt, { cdnSyncMs: null }).length === 0 && referralTimingWarnings(dflt, { cdnSyncMs: 200_000 }).length === 0, `the boot warning is the same rule: with the proxy on it names the settle wait a slow run is left with when that is under 55 s, and says nothing when the budgets leave 55 s or no proxy is in front (${viaCdn[0]?.slice(0, 80)})`);
+    }
+    // The documented defaults are the code's.
+    {
+      const envDoc = readFileSync(new URL("../.env.example", import.meta.url), "utf8");
+      const rules = readFileSync(new URL("../.claude/rules/payments.md", import.meta.url), "utf8");
+      const gateDoc = readFileSync(new URL("../src/referral-gate.js", import.meta.url), "utf8");
+      const D = gateMod.REFERRAL_DEFAULTS, B = gateMod.REFERRAL_DELIVERABLE_BYTES;
+      const all = (text, re) => [...text.matchAll(re)].map((m) => Number(m[1]));
+      const same = (list, want) => list.length >= 1 && list.every((n) => n === want);
+      const docs = {
+        "REFERRAL_SETTLE_MS in .env.example": [all(envDoc, /^# REFERRAL_SETTLE_MS=(\d+)/gm), D.settleMs],
+        "REFERRAL_MAX_ANSWER_BYTES in .env.example": [all(envDoc, /^# REFERRAL_MAX_ANSWER_BYTES=(\d+)/gm), B],
+        "REFERRAL_SETTLE_MS in the rules": [all(rules, /`REFERRAL_SETTLE_MS`, default (\d+)/g), D.settleMs],
+        "REFERRAL_MAX_ANSWER_BYTES in the rules": [all(rules, /`REFERRAL_MAX_ANSWER_BYTES`\*\* \((\d+):/g), B],
+        "REFERRAL_MAX_ANSWER_BYTES in the rules' settings list": [all(rules, /`REFERRAL_MAX_ANSWER_BYTES` \((\d+),/g), B],
+        "REFERRAL_SETTLE_MS in the gate's own list": [all(gateDoc, /^ \*   REFERRAL_SETTLE_MS +\((\d+)\)/gm), D.settleMs],
+        "REFERRAL_MAX_ANSWER_BYTES in the gate's own list": [all(gateDoc, /^ \*   REFERRAL_MAX_ANSWER_BYTES +\((\d+)\)/gm), B],
+      };
+      const off = Object.entries(docs).filter(([, [list, want]]) => !same(list, want)).map(([k, [list, want]]) => `${k}: ${list.join("/") || "not found"} (code ${want})`);
+      ok(off.length === 0 && !/\b65536\b|65,536/.test(rules.split("\n").filter((l) => /Referral copies|REFERRAL_MAX_ANSWER_BYTES/.test(l)).join("\n")), `the settle wait and the answer bound documented in .env.example, the rules and the gate's own list are the code's defaults (${off.join("; ") || "7 of 7"})`);
+    }
     // The most one answer may be: the bytes the marketplace passes on to a buyer.
     const { REFERRAL_DELIVERABLE_BYTES } = gateMod;
     const noBound = { ...ENV, REFERRAL_MAX_ANSWER_BYTES: "" };
-    ok(REFERRAL_DELIVERABLE_BYTES === 65_536 && referralConfig(noBound).maxAnswerBytes === 65_536 && referralConfig({ ...ENV, REFERRAL_MAX_ANSWER_BYTES: "32768" }).maxAnswerBytes === 32_768 && ["abc", "0", "100", "-5", "99999999999", "1.5"].every((v) => referralConfig({ ...ENV, REFERRAL_MAX_ANSWER_BYTES: v }).maxAnswerBytes === 65_536), "REFERRAL_MAX_ANSWER_BYTES: 65536 by default, read when set, and a malformed or out-of-range value reads as the default (never as no bound)");
+    ok(REFERRAL_DELIVERABLE_BYTES === 64_000 && referralConfig(noBound).maxAnswerBytes === 64_000 && referralConfig({ ...ENV, REFERRAL_MAX_ANSWER_BYTES: "32768" }).maxAnswerBytes === 32_768 && ["abc", "0", "100", "-5", "99999999999", "1.5"].every((v) => referralConfig({ ...ENV, REFERRAL_MAX_ANSWER_BYTES: v }).maxAnswerBytes === 64_000), "REFERRAL_MAX_ANSWER_BYTES: 64000 by default (the network's 'up to 64 KB' read as the smaller figure), read when set, and a malformed or out-of-range value reads as the default (never as no bound)");
     // A slug whose own published example answer is past the bound is refused at boot, with the sizes.
     const base = { handler: async () => ({}), price: "$0.01" };
     const fat = { ...base, slug: "probe-fat", discovery: { input: { q: "x" }, output: { example: { rows: "r".repeat(70_000) } } } };
     const slim = { ...base, slug: "probe-slim", discovery: { input: { q: "x" }, output: { example: { rows: "r".repeat(60_000) } } } };
     const whyFat = referralIneligibility(fat, { compute: true });
     const edge = (n) => ({ ...base, slug: "probe-edge", discovery: { output: { example: { blob: "a".repeat(n) } } } });
-    ok(/^its published example answer \(70\d{3} bytes\) is over the most one answer may be on this route \(65536 bytes\)$/.test(whyFat || "") && referralIneligibility(slim, { compute: true }) === null && referralIneligibility(fat, { compute: true, maxAnswerBytes: 80_000 }) === null && referralIneligibility({ ...base, slug: "probe-none" }, { compute: true }) === null, `a tool whose published example answer is over the bound is not eligible, one under it (or with none published, or under a raised bound) is (${whyFat})`);
-    ok(gateMod.exampleAnswerBytes(edge(65_442)) === 65_536 && referralIneligibility(edge(65_442), { compute: true }) === null && /65537 bytes/.test(referralIneligibility(edge(65_443), { compute: true }) || ""), "the example is measured as it would be delivered (with the settle transaction beside it): exactly the bound is eligible, one byte more is not");
+    ok(/^its published example answer \(70\d{3} bytes\) is over the most one answer may be on this route \(64000 bytes\)$/.test(whyFat || "") && referralIneligibility(slim, { compute: true }) === null && referralIneligibility(fat, { compute: true, maxAnswerBytes: 80_000 }) === null && referralIneligibility({ ...base, slug: "probe-none" }, { compute: true }) === null, `a tool whose published example answer is over the bound is not eligible, one under it (or with none published, or under a raised bound) is (${whyFat})`);
+    ok(gateMod.exampleAnswerBytes(edge(63_906)) === 64_000 && referralIneligibility(edge(63_906), { compute: true }) === null && /64001 bytes/.test(referralIneligibility(edge(63_907), { compute: true }) || ""), "the example is measured as it would be delivered (with the settle transaction beside it): exactly the bound is eligible, one byte more is not");
     const viaRoutes = referralRoutes({ ...referralConfig(noBound), slugs: ["probe-fat", "probe-slim"] }, { a: fat, b: slim }, () => ({ compute: true }));
     const viaRaised = referralRoutes({ ...referralConfig({ ...ENV, REFERRAL_MAX_ANSWER_BYTES: "80000" }), slugs: ["probe-fat", "probe-slim"] }, { a: fat, b: slim }, () => ({ compute: true }));
     ok([...viaRoutes.defs.keys()].join() === "probe-slim" && viaRoutes.refused.length === 1 && viaRoutes.refused[0].slug === "probe-fat" && /published example answer/.test(viaRoutes.refused[0].reason) && [...viaRaised.defs.keys()].join() === "probe-fat,probe-slim", "the boot reads the configured bound: the slug is refused with the reason under the default and served once the setting admits its example");
@@ -565,7 +610,9 @@ const TOOLS = {
   // Comes back with an answer after the run's ceiling (the deadline less 500 ms) and before the deadline itself.
   late: { slug: "late", name: "Late", category: "test", price: "$0.03", handler: async () => { await wait(750); return { finished: "after the ceiling" }; } },
   // An answer of the size asked (for the delivery checks).
-  big: { slug: "big", name: "Big", category: "test", price: "$0.03", handler: async (i) => ({ blob: "a".repeat(Math.min(Number(i.n) || 0, 7_800_000)) }) },
+  big: { slug: "big", name: "Big", category: "test", price: "$0.03", discovery: { inputSchema: { properties: { n: { type: "number", description: "Bytes of blob" }, "not a field name": { type: "string" } } } }, handler: async (i) => ({ blob: "a".repeat(Math.min(Number(i.n) || 0, 8_600_000)) }) },
+  // Its published example answer is larger than the default bound on one answer (the typed sample output says nothing of it).
+  exbig: { slug: "exbig", name: "Big example", category: "test", price: "$0.03", discovery: { input: { rows: 70_000 }, inputSchema: { properties: { rows: { type: "number", description: "Rows" }, since: { type: "string", description: "Start" } } }, output: { example: { blob: "aaa" } } }, handler: async (i) => ({ blob: "a".repeat(Number(i.rows) || 0) }) },
   // Reports the scopes a run is served in: the caller key and the referral-run mark.
   scopes: { slug: "scopes", name: "Scopes", category: "test", price: "$0.03", handler: async () => ({ caller: currentDispatchCaller(), referral: inReferralRun(), hint: routeHint("call POST /api/scopes", "") }) },
   // Reads the two mechanisms the gate presents its deadline through.
@@ -859,21 +906,32 @@ try {
   }
   fac.reset(); sales.length = 0;
   {
-    // The marketplace passes on at most 64 KB of an answer: a larger one is refused before settlement, uncharged.
-    const appB = await mount({ REFERRAL_MAX_ANSWER_BYTES: "" });
+    // The marketplace passes on at most 64 KB of an answer: a larger one is refused before settlement, and this server does not settle it.
+    const cdnStamp = (req, _res, next) => { const ms = Number(req.headers["x-test-cdn-ms"]); if (ms > 0) req.cdnSyncDeadlineMs = Date.now() + ms; next(); };
+    const settleAsUsual = fac.mode.settle;
+    // The suite's chain reader, with each state read's own options kept (the budget a request hands it).
+    const chainB = createReferralChainReader({ rpcUrl: `${fac.url}/rpc`, publicLanes: [], merchantId: MERCHANT_ID, payoutAddress: PAYOUT, headMaxAgeMs: 0, tries: 2, budgetMs: 1200, pauseMs: 100, timeoutMs: 500 });
+    const stateOpts = [];
+    const appB = await mount({ REFERRAL_MAX_ANSWER_BYTES: "", REFERRAL_DEADLINE_MS: "4000", REFERRAL_VERIFY_MS: "3000", REFERRAL_SETTLE_MS: "20000" }, { appUse: [cdnStamp], chain: { ...chainB, state: (args, opts) => { stateOpts.push({ ...opts }); return chainB.state(args, opts); } } });
     try {
-      const { referralDeliveredBytes } = gateMod;
-      const callBig = async (slug, body, p) => call(`${appB.url}/ref/${slug}`, { body, headers: { "payment-signature": p.header, "x-test-ip": freshIp() } });
+      const { referralDeliveredBytes, referralDeliveredBytesOf } = gateMod;
+      const callBig = async (slug, body, p, ip = freshIp()) => call(`${appB.url}/ref/${slug}`, { body, headers: { "payment-signature": p.header, "x-test-ip": ip } });
       // {"blob":"a...a"} with the settle transaction beside it: n + 94 bytes on the wire.
-      const fits = 65_536 - 94;
-      ok(appB.config.maxAnswerBytes === 65_536 && referralDeliveredBytes(JSON.stringify({ blob: "a".repeat(fits) }), false) === 65_536 && referralDeliveredBytes("[1,2,3]", true) === Buffer.byteLength(`{"result":[1,2,3],"transaction":"0x${"0".repeat(64)}"}`), "the size checked is the body as delivered: the answer with the settle transaction beside it");
+      const BOUND = 64_000;
+      const fits = BOUND - 94;
+      ok(appB.config.maxAnswerBytes === BOUND && referralDeliveredBytes(JSON.stringify({ blob: "a".repeat(fits) }), false) === BOUND && referralDeliveredBytes("[1,2,3]", true) === Buffer.byteLength(`{"result":[1,2,3],"transaction":"0x${"0".repeat(64)}"}`), "the size checked is the body as delivered: the answer with the settle transaction beside it");
+      const shapes = [[{ blob: "é".repeat(40) }, false], [{}, false], [[1, 2, 3], true], ["text", true], [null, true], [{ transaction: "own", rows: 1 }, true], [{ a: 1 }, false]];
+      ok(shapes.every(([v, wrap]) => { const t = JSON.stringify(v); return referralDeliveredBytesOf(Buffer.byteLength(t), wrap, t === "{}") === referralDeliveredBytes(t, wrap); }), "the size taken from the serialized answer's byte length equals the delivered body's, for every shape an answer goes out in");
       const pFit = await signPayment(accept, { account: newAccount() });
       const whole = await callBig("big", { n: fits }, pFit);
-      ok(whole.status === 200 && Buffer.byteLength(whole.text) === 65_536 && whole.json?.blob?.length === fits && /^0x[0-9a-f]{64}$/.test(whole.json.transaction || "") && settles() === 1 && sales.length === 1, `an answer of exactly 65536 bytes is settled and delivered whole (${whole.status}, ${Buffer.byteLength(whole.text)} bytes, ${settles()} settle)`);
+      ok(whole.status === 200 && Buffer.byteLength(whole.text) === BOUND && whole.json?.blob?.length === fits && /^0x[0-9a-f]{64}$/.test(whole.json.transaction || "") && settles() === 1 && sales.length === 1, `an answer of exactly ${BOUND} bytes is settled and delivered whole (${whole.status}, ${Buffer.byteLength(whole.text)} bytes, ${settles()} settle)`);
       const pOver = await signPayment(accept, { account: newAccount() });
       const runsBefore = appB.gate.stats().runs;
       const over = await callBig("big", { n: fits + 1 }, pOver);
-      ok(over.status === 413 && over.json?.reason === "answer_too_large" && over.json.tool === "big" && over.json.answerBytes === 65_537 && over.json.maxAnswerBytes === 65_536 && /65537 bytes, over the 65536 bytes one answer may be on this route, so it was not settled and nothing was charged\. Ask for less/.test(over.json.error || "") && !("blob" in over.json) && !("transaction" in over.json) && Buffer.byteLength(over.text) < 1024, `one byte more is refused 413 with a plain reason and both sizes, and no part of the answer (${over.status} ${over.text.slice(0, 200)})`);
+      // The WHOLE body, field by field and to the last character: nothing may ride after the sentence.
+      const text413 = (bytes, fields) => `This call's answer is ${bytes} bytes, over the ${BOUND} bytes one answer may be on this route, so this server did not settle the payment. A narrower request gets an answer: ${fields ? `ask for less with this tool's own input fields (${fields})` : "ask for less in one call"}, and sign a new authorization.`;
+      const is413 = (r, slug, bytes, fields) => r.status === 413 && r.text === JSON.stringify({ error: text413(bytes, fields.join(", ")), tool: slug, reason: "answer_too_large", answerBytes: bytes, maxAnswerBytes: BOUND, narrowWith: fields });
+      ok(is413(over, "big", BOUND + 1, ["n"]) && !/charged/i.test(over.text) && Buffer.byteLength(over.text) < 1024, `one byte more is refused 413: the body is exactly the plain reason, both sizes and the tool's own input fields by name (a key that is not a field name left out), with no part of the answer and no claim about a charge (${over.status} ${over.text.slice(0, 260)})`);
       ok(settles() === 1 && sales.length === 1 && appB.gate.stats().runs === runsBefore + 1 && appB.gate.stats().answerTooLarge === 1 && appB.book.get(gateMod.referralReplayKey(pOver.authorization)) == null && fac.of("/settle").every((c) => c.json?.paymentPayload?.payload?.authorization?.nonce !== pOver.authorization.nonce) && appB.gate.statusWord().status === "ok", `it ran and was never sent to /settle: no settlement, no sale, no book entry, counted (${settles()} settle, ${sales.length} sale, answerTooLarge ${appB.gate.stats().answerTooLarge})`);
       const againOver = await callBig("big", { n: 10 }, pOver);
       ok(againOver.status === 409 && settles() === 1, `the authorization bought its run: it does not run a second call (${againOver.status})`);
@@ -881,10 +939,97 @@ try {
       const pList = await signPayment(accept, { account: newAccount() });
       const list = await callBig("list", {}, pList);
       ok(list.status === 200 && JSON.stringify(list.json?.result) === "[1,2,3]", "a small answer of another shape is served as before");
-      // An answer far over the bound (megabytes) is the same refusal, not a truncated 200.
+      // An answer far over the bound (megabytes, and past the 8 MB an answer is ever kept at) is the same refusal, not a truncated 200 or a 500.
       const far = await callBig("big", { n: 2_000_000 }, await signPayment(accept, { account: newAccount() }));
-      ok(far.status === 413 && far.json?.answerBytes === 2_000_094 && settles() === 2, `an answer of megabytes is refused the same way (${far.status} ${far.json?.answerBytes})`);
-    } finally { await appB.close(); }
+      const huge = await callBig("big", { n: 8_500_000 }, await signPayment(accept, { account: newAccount() }));
+      ok(is413(far, "big", 2_000_094, ["n"]) && is413(huge, "big", 8_500_094, ["n"]) && 8_500_094 > gateMod.REFERRAL_ANSWER_MAX_BYTES && settles() === 2, `an answer of megabytes, and one over 8 MB, is refused the same way (${far.status} ${far.json?.answerBytes}, ${huge.status} ${huge.json?.answerBytes})`);
+      // NO POINTER: the walk the served routes' answers get (pointerWalk) reads the 413 bodies too.
+      const walk413 = pointerWalk("shop.example");
+      ok(walk413(`${over.text} See https://shop.example/api/pricing`, "big").length === 1 && walk413(`${over.text} or POST /api/big`, "big").length === 1 && !is413({ status: 413, text: over.text.replace('route, so', "route (see /docs), so") }, "big", BOUND + 1, ["n"]), "control: a pointer appended to a 413 body, or set inside its sentence, is found by the walk and fails the body check");
+
+      // ONE WALLET asking for oversized answers again and again: each such run counts in its unsettled lane, and the
+      // bound on unsettled runs (REFERRAL_UNSETTLED_MAX, 3) ends it at the fourth, before the handler and before /verify.
+      const hog = newAccount(), hogIp = freshIp();
+      const hogRuns = appB.gate.stats().runs, hogSettles = settles();
+      const hogged = [];
+      for (let i = 0; i < 3; i++) hogged.push(await callBig("big", { n: 70_000 + i }, await signPayment(accept, { account: hog }), hogIp));
+      const vHog = verifies();
+      const fourthBig = await callBig("big", { n: 70_000 }, await signPayment(accept, { account: hog }), hogIp);
+      const fifthSmall = await callBig("big", { n: 10 }, await signPayment(accept, { account: hog }), hogIp);
+      ok(hogged.every((r) => r.status === 413) && fourthBig.status === 429 && fourthBig.json?.errorReason === "too_many_unsettled_runs" && fifthSmall.status === 429 && Number(fourthBig.headers.get("retry-after")) > 0 && appB.gate.stats().runs === hogRuns + 3 && verifies() === vHog && settles() === hogSettles, `a wallet that keeps asking for answers over the bound gets 3 runs, then 429 before the handler and any facilitator call, like any unsettled run (${hogged.map((r) => r.status).join()} then ${fourthBig.status} ${fourthBig.json?.errorReason}; ${appB.gate.stats().runs - hogRuns} runs, ${settles() - hogSettles} settles)`);
+      const strangerBig = await callBig("big", { n: 10 }, await signPayment(accept, { account: newAccount() }));
+      const hogElsewhere = await callBig("big", { n: 10 }, await signPayment(accept, { account: hog }), freshIp());
+      ok(strangerBig.status === 200 && hogElsewhere.status === 429, `another wallet is served, and the same wallet from another address is still held (${strangerBig.status}, ${hogElsewhere.status})`);
+      for (const r of [far, huge, ...hogged]) responses413.push([r.text, "big"]);
+      responses413.push([over.text, "big"]);
+
+      // THE PUBLISHED EXAMPLE ITSELF is over the bound: an empty request runs it, is refused 413, and the status word
+      // names the slug until the operator clears it (every buyer who sends no input is refused there).
+      const quote = await call(`${appB.url}/ref/exbig`, { body: {}, headers: { "x-test-ip": freshIp() } });
+      const exAccept = quote.json?.accepts?.[0];
+      const own = await callBig("exbig", { rows: 70_000 }, await signPayment(exAccept, { account: newAccount() }));
+      const wordOwn = appB.gate.statusWord();
+      const ex = await callBig("exbig", {}, await signPayment(exAccept, { account: newAccount() }));
+      const wordEx = appB.gate.statusWord();
+      ok(quote.status === 402 && is413(own, "exbig", 70_094, ["rows", "since"]) && wordOwn.status === "ok" && is413(ex, "exbig", 70_094, ["rows", "since"]) && wordEx.status === "attention" && wordEx.reasons.join("|") === `exbig: published example answer exceeds the marketplace bound (70094 bytes, bound ${BOUND}): every empty request on it is refused 413` && JSON.stringify(appB.gate.exampleTooLarge().map((r) => [r.slug, r.bytes])) === '[["exbig",70094]]', `a buyer's own oversized request raises nothing; the published example run ending 413 puts the slug on the status word (${wordOwn.status} then ${wordEx.status}: ${wordEx.reasons.join("|").slice(0, 140)})`);
+      responses413.push([ex.text, "exbig"]);
+      const noNote = appB.gate.clearExampleByHand("exbig", { note: "" });
+      const wrongSlug = appB.gate.clearExampleByHand("big", { note: "checked the example" });
+      const stillUp = appB.gate.statusWord().status;
+      const cleared = appB.gate.clearExampleByHand("exbig", { note: "the example input was narrowed" });
+      ok(noNote.ok === false && wrongSlug.ok === false && stillUp === "attention" && cleared.ok === true && appB.gate.statusWord().status === "ok" && appB.gate.exampleTooLarge().length === 0, `it stays until the operator clears that slug with a note (${stillUp} then ${appB.gate.statusWord().status})`);
+
+      // THE CDN WINDOW, on the wire. A slow verify (1.2 s) and a slow handler (2.5 s) on a request that must be
+      // answered within 9 s, and a /settle that never answers inside its 20 s wait: the settle is given what
+      // the request has left less the margin (about 2.3 s, never 20), the payment is read from the chain, and
+      // the buyer is answered in doubt before the window ends, with the answer kept for the same payment.
+      {
+        const logMark = logLines.length;
+        const pCdn = await signPayment(accept, { account: newAccount() });
+        const ipCdn = freshIp();
+        fac.mode.verifyDelayMs = 1200;
+        fac.mode.settle = () => ({ hang: true });
+        const t0 = Date.now();
+        const cut = await call(`${appB.url}/ref/slow`, { body: {}, headers: { "payment-signature": pCdn.header, "x-test-ip": ipCdn, "x-test-cdn-ms": "9000" } });
+        const took = Date.now() - t0;
+        fac.mode.verifyDelayMs = 0;
+        const kept = appB.book.get(gateMod.referralReplayKey(pCdn.authorization));
+        const readCut = stateOpts.at(-1);
+        ok(cut.status === 402 && cut.json?.errorReason === "settle_outcome_unknown" && took >= 3_700 + 1_000 && took < 9_000 - 1_000 && kept?.state === "in-doubt", `a settle that cannot answer inside what a CDN request has left is cut there: answered in doubt after ${took} ms of a 9000 ms window (the configured wait alone is 20000 ms), the entry kept in doubt (${cut.status} ${cut.json?.errorReason}, ${kept?.state})`);
+        // The payment landed after all: the same payment sent again gets the kept answer (charged and delivered, once).
+        const txCdn = "0x" + "cd".repeat(32);
+        fac.land(pCdn.authorization, txCdn);
+        fac.mode.settle = settleAsUsual;
+        const salesBefore = sales.length;
+        const again = await call(`${appB.url}/ref/slow`, { body: {}, headers: { "payment-signature": pCdn.header, "x-test-ip": ipCdn, "x-test-cdn-ms": "9000" } });
+        const readAgain = stateOpts.at(-1);
+        // The chain read after the cut settle, and the re-send's, end inside what each request has left; a read with no CDN deadline carries no budget of its own.
+        const unusedAuth = (await signPayment(accept, { account: newAccount() })).authorization;
+        const stateArgs = { from: unusedAuth.from, nonce: unusedAuth.nonce, payTo: PAY_TO, amount: accept.amount, fromBlock: 1 };
+        const tight = await chainB.state(stateArgs, { wait: true, budgetMs: 100 });
+        const roomy = await chainB.state(stateArgs, { wait: false });
+        ok(readCut?.wait === true && readCut.budgetMs >= 250 && readCut.budgetMs <= 2_300 && readAgain !== readCut && readAgain.budgetMs > 250 && readAgain.budgetMs <= 6_000 && tight.used === null && roomy.used === false, `the chain read that follows is handed what the request has left (${readCut?.budgetMs} ms after the cut settle, ${readAgain?.budgetMs} ms on the re-send, of the reader's own 1200), and the reader ends a read inside the budget it is handed (no read made on 100 ms: used ${tight.used}; ${roomy.used} with its own)`);
+        const freeFrom = stateOpts.length;
+        ok(again.status === 200 && again.json?.late === true && again.json.transaction === txCdn && sales.length === salesBefore + 1, `the payment that landed after the cut is delivered on its re-send with the chain's transaction, booked once (${again.status} ${again.text.slice(0, 100)})`);
+        // Control: the same slow call with NO CDN deadline keeps the configured wait (the settle answers after 2.6 s, past the cut above).
+        const pFree = await signPayment(accept, { account: newAccount() });
+        fac.mode.settleDelayMs = 2600;
+        const free = await call(`${appB.url}/ref/slow`, { body: {}, headers: { "payment-signature": pFree.header, "x-test-ip": freshIp() } });
+        fac.mode.settleDelayMs = 0;
+        // (This block's own log lines are read here and left out of the suite's later counts of them.)
+        const cdnLog = logLines.splice(logMark);
+        ok(cdnLog.some((l) => /SETTLE-IN-DOUBT \(slow /.test(l)) && cdnLog.some((l) => /SETTLE-IN-DOUBT resolved by the chain: the payment landed \(slow /.test(l)), "the cut settle is logged as in doubt, and again when the chain resolves it");
+        // (And a read for a request with no CDN deadline is handed no budget: the re-send of the delivered payment below.)
+        fac.mode.settle = () => ({ status: 502, body: "bad gateway", type: "text/plain" });
+        const pPlain = await signPayment(accept, { account: newAccount() });
+        const plain = await call(`${appB.url}/ref/echo`, { body: { text: "plain" }, headers: { "payment-signature": pPlain.header, "x-test-ip": freshIp() } });
+        fac.mode.settle = settleAsUsual;
+        const plainReads = stateOpts.slice(freeFrom);
+        logLines.splice(logMark);
+        ok(plain.status === 402 && plainReads.length >= 1 && plainReads.every((o) => !("budgetMs" in o)), `a request with no CDN deadline hands the chain read no budget of its own (${plain.status}, ${plainReads.length} read)`);
+        ok(free.status === 200 && free.json?.late === true, `control: with no CDN deadline on the request the settle keeps its configured wait and a 2.6 s settle is delivered (${free.status})`);
+      }
+    } finally { fac.mode.verifyDelayMs = 0; fac.mode.settleDelayMs = 0; fac.mode.settle = settleAsUsual; await appB.close(); }
     // A raised setting admits it (the suite's own mounts run with 8 MB).
     const wide = await send(R("big"), { body: { n: 70_000 }, headers: { "payment-signature": (await signPayment(accept, { account: newAccount() })).header, "x-test-ip": freshIp() } });
     ok(wide.status === 200 && wide.json?.blob?.length === 70_000, `with REFERRAL_MAX_ANSWER_BYTES raised the same answer is settled and delivered (${wide.status})`);
@@ -3896,7 +4041,7 @@ try {
       const wordFn = gateText.slice(gateText.indexOf("  function statusWord() {"), gateText.indexOf("  /** An operator acknowledges having read"));
       const raised = (wordFn.match(/reasons\.push\(/g) || []).length;
       const heartbeat = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8"), worker = readFileSync(new URL("../workers/status-probe/src/index.js", import.meta.url), "utf8");
-      const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "under the amount the commission map expects", "product id differs", "under its stop floor", "this server does not serve", "contradicted successes came from several payers", "unsettled runs from many payers", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "failed or were late in the last five minutes", "went without a verdict in the last day", "book is full", "retired at capacity", "closed as unrecognized"];
+      const FAMILIES = ["open past fifteen minutes", "the chain contradicts", "receipt cannot be read", "does not prove the sale", "routed to this merchant", "under the amount the commission map expects", "product id differs", "under its stop floor", "this server does not serve", "published example answer is over the answer bound", "contradicted successes came from several payers", "unsettled runs from many payers", "refused this server's own request", "unanswered over ten minutes", "chain head could not be read", "intent to settle could not be stored", "store is not taking writes", "failed or were late in the last five minutes", "went without a verdict in the last day", "book is full", "retired at capacity", "closed as unrecognized"];
       const missing = FAMILIES.filter((f) => !heartbeat.includes(f) || !worker.includes(f));
       // The raw tag is never output anywhere (an issue, a comment, the job log): every line that
       // names it is its own assignment, its shape check, or the keyed digest made from it.
@@ -3945,7 +4090,7 @@ try {
         ok(step && existsSync(comments) && runs3.every((r) => r.status === 0) && afterSame.length === 1 && /reasons mark [0-9a-f]{24} /.test(afterSame[0]) && afterNew.length === 2 && afterNew[0] !== afterNew[1] && !/aaaaaaaa|bbbbbbbb/.test(printed), `the heartbeat step, run for three cycles on one reasons tag against an open issue, comments once; a new tag adds one more comment; the raw tag is in no output (${afterSame.length} then ${afterNew.length} comments)`);
       }
       const owedWording = "include_repeat_hangups for repeat hang-up debts, include_review_holds for rows a route marked held for review";
-      ok(raised === 22 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && tokenHashed === false && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with a dedicated mark key (never the operator token, which only reads the operator view), never the tag itself (${missing.join("; ") || "all named"})`);
+      ok(raised === 23 && heartbeat.includes(owedWording) && worker.includes(owedWording) && !/include_repeat_hangups for hang-up debts held for review/.test(heartbeat + worker) && missing.length === 0 && !/One of these holds/.test(heartbeat + worker) && tagPosted === false && tokenHashed === false && /reasons mark \$MARK/.test(heartbeat), `the pagers' issue text names every family of reason the status word raises (${raised} reasons in the word; a new one is added to the text and to this list), and the heartbeat posts the reasons tag only keyed with a dedicated mark key (never the operator token, which only reads the operator view), never the tag itself (${missing.join("; ") || "all named"})`);
     }
     // P7. During a drain a settle ends before the database pool starts closing, with room for its book write.
     {
@@ -4935,12 +5080,7 @@ try {
     // NO POINTER to this server's own surfaces, on anything a /ref route of a served slug answers:
     // the 402 (with its example, for an empty request), an input the route refuses unpaid, and the same input paid.
     const hostOf = new URL(srv.url).host;
-    const pointers = (text, slug) => {
-      const found = [];
-      for (const m of String(text).matchAll(new RegExp(`(?:agent402\\.tools|${hostOf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(\\/[^\\s"'\\\\<>)]*)?`, "gi"))) { const path = m[1] || "/"; if (!path.startsWith(`/ref/${slug}`) && !path.startsWith("/api/refunds?tx=")) found.push(m[0]); }
-      for (const m of String(text).matchAll(/(?:^|[\s"'(])(\/(?:api\/(?!refunds\?tx=)[a-z0-9-]+|v1\/[a-z0-9/-]+|openapi\.json|llms[a-z-]*\.txt|\.well-known\/x402|docs|pricing|crawler|tools|catalog)\b[^\s"']*)/gi)) found.push(m[1]);
-      return found;
-    };
+    const pointers = pointerWalk(hostOf);
     ok(pointers(`see https://agent402.tools/api/pricing or /openapi.json, POST /api/hash, https://${hostOf}/docs`, "hash").length === 4 && pointers(`{"url":"https://${hostOf}/ref/hash","endpoint":"/ref/hash","refundStatusUrl":"https://agent402.tools/api/refunds?tx=0xab"}`, "hash").length === 0, "control: the walk's reading finds a pointer to pricing, the spec, a direct route or the docs, and passes the route's own URL and the refund lookup");
     const pointed = [];
     let walked = 0;
@@ -4959,7 +5099,9 @@ try {
         if (hit.length && process.env.WALK_DEBUG) console.log(`# WALK ${slug} ${what}: ${r.text.slice(0, 900)}`);
       }
     }
-    ok(walked >= served.length * 4 && pointed.length === 0, `no answer of a served /ref route points a buyer at this server's catalog, pricing, docs or direct routes: ${walked} answers of ${served.length} slugs walked (${pointed.slice(0, 6).join("; ") || "none"})`);
+    // The 413 bodies (an answer over the bound: the buyer's own request, megabytes, the published example) get the same walk.
+    for (const [text, slug] of responses413) { walked++; const hit = [...pointers(text, slug), ...pointerWalk("shop.example")(text, slug)]; if (hit.length) pointed.push(`${slug} 413: ${hit.slice(0, 2).join(" ")}`); }
+    ok(responses413.length >= 6 && walked >= served.length * 4 + responses413.length && pointed.length === 0, `no answer of a served /ref route points a buyer at this server's catalog, pricing, docs or direct routes: ${walked} answers of ${served.length} slugs walked (${pointed.slice(0, 6).join("; ") || "none"})`);
   }
   ok(/WARNING: referral gate: REFERRAL_SETTLE_MS \(3 s\) is under the 55 s the facilitator's \/settle may take to answer/.test(bootLog) && /Referral gate enabled/.test(bootLog), "a settle wait configured under the facilitator's 55 s is a boot warning that names the setting, and the gate still serves");
   ok(/\[referral\] image-gen is not served under \/ref: its own upstream wait \(60 s\) is past the handler deadline \(4 s\)/.test(bootLog), "image-gen is left out at boot: its own upstream wait is past the handler deadline");

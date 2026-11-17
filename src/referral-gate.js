@@ -98,6 +98,7 @@ import { runAsReferral } from "./referral-run.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { DEFAULT_KEY_BUDGET_USD, DEFAULT_GLOBAL_BUDGET_USD } from "./hangup-forgiveness.js";
 import { SWEEP_CHAIN_BUDGET_MS, SWEEP_UNCONFIRMED_BUDGET_SHARE } from "./referral-book.js";
+import { cdnSyncLeftMs } from "./cdn-sync-window.js";
 
 export const REFERRAL_NETWORK = "eip155:8453";
 export const REFERRAL_CHAIN_ID = 8453;
@@ -110,9 +111,27 @@ export const REFERRAL_MAX_TIMEOUT_SECONDS = 60;
  *  receipt, and answers pending by then). A settle wait under it gives up on
  *  an answer that was still coming. */
 export const REFERRAL_SETTLE_ANSWER_MS = 55_000;
-/** The most bytes of one answer the referral network passes on to a buyer.
- *  An answer over it is never settled (REFERRAL_MAX_ANSWER_BYTES). */
-export const REFERRAL_DELIVERABLE_BYTES = 65_536;
+/** The most bytes of one answer the referral network passes on to a buyer
+ *  ("up to 64 KB", read as 64,000 so no reading of it leaves an answer that
+ *  is settled and arrives cut). An answer over it is never settled
+ *  (REFERRAL_MAX_ANSWER_BYTES). */
+export const REFERRAL_DELIVERABLE_BYTES = 64_000;
+/** A request that came through the CDN proxy is answered this long before
+ *  the deadline its synchronous answer must meet (src/cdn-sync-window.js). */
+export const REFERRAL_CDN_MARGIN_MS = 3_000;
+/**
+ * The /settle wait of ONE request: the configured wait, cut so that the
+ * settle and the read that follows it (`afterMs`: the receipt, or the chain
+ * when the settle gave no answer) end the margin before the CDN deadline.
+ * `leftMs`: what the request has left before that deadline (cdnSyncLeftMs),
+ * null when it did not come through the CDN proxy (no cut). Never under the
+ * settler's own 1 s floor. A wait cut under the facilitator's own answer
+ * time ends in doubt and is read from the chain, as any settle with no answer.
+ */
+export function referralSettleWaitMs(settleMs, leftMs, afterMs = 0) {
+  if (leftMs === null || leftMs === undefined || !Number.isFinite(leftMs)) return settleMs;
+  return Math.max(1_000, Math.min(settleMs, Math.floor(leftMs) - REFERRAL_CDN_MARGIN_MS - Math.max(0, afterMs)));
+}
 export const REFERRAL_DEFAULTS = Object.freeze({
   // The handler's budget.
   deadlineMs: 25_000,
@@ -433,7 +452,9 @@ const REQUIRED_VARS = ["REFERRAL_PAY_TO", "REFERRAL_FACILITATOR_URL", "REFERRAL_
  *   REFERRAL_FEE_BPS            (0) read ONLY to book the net amount
  *   REFERRAL_DEADLINE_MS        (25000) handler budget
  *   REFERRAL_SETTLE_MS          (60000) /settle timeout; under the 55 s the facilitator may take
- *                               to answer, the boot logs a warning (referralTimingWarnings)
+ *                               to answer, the boot logs a warning (referralTimingWarnings). A
+ *                               request through the CDN proxy waits less when its verify and
+ *                               run left less before the proxy's deadline (referralSettleWaitMs)
  *   REFERRAL_VERIFY_MS          (10000) /verify timeout
  *   REFERRAL_SETTLE_RESERVE_MS  (10000) validity kept for the settlement after the handler
  *   REFERRAL_MAX_VALIDITY_MS    (900000) the furthest ahead an authorization may expire
@@ -457,7 +478,7 @@ const REQUIRED_VARS = ["REFERRAL_PAY_TO", "REFERRAL_FACILITATOR_URL", "REFERRAL_
  *                               answer 503; a slug whose tool is model-backed stops at ONE (0: never, for all)
  *   REFERRAL_PRODUCT_IDS        (none) `<slug>:<0x 32-byte id>,...`: the product id the split
  *                               contract's routed event must name for that slug's payment to count
- *   REFERRAL_MAX_ANSWER_BYTES   (65536) the most bytes of one answer the network passes on to a
+ *   REFERRAL_MAX_ANSWER_BYTES   (64000) the most bytes of one answer the network passes on to a
  *                               buyer: a larger answer is refused 413 before settlement, uncharged,
  *                               and a slug whose published example answer is larger is not served
  *   REFERRAL_SEND_IDLE_MS       (15000) an answer's send with no progress for this long is ended
@@ -552,8 +573,17 @@ export function referralConfigProblem(env = process.env) {
 
 /** Timing settings the gate runs with but that do not fit the facilitator's
  *  own bounds, as boot warnings (names and seconds only). */
-export function referralTimingWarnings(config) {
+export function referralTimingWarnings(config, { cdnSyncMs = null } = {}) {
   const out = [];
+  // Through the CDN proxy (`cdnSyncMs`: its answer window, when the proxy is
+  // on) a run that uses its whole verify, handler and intent-write budgets
+  // leaves the settle less than the configured wait (referralSettleWaitMs).
+  if (config && Number.isFinite(cdnSyncMs) && cdnSyncMs > 0) {
+    const worst = referralSettleWaitMs(config.settleMs, cdnSyncMs - config.verifyMs - config.deadlineMs - config.storeWriteMs, config.receiptWaitMs);
+    if (worst < config.settleMs && worst < REFERRAL_SETTLE_ANSWER_MS) {
+      out.push(`through the CDN proxy (an answer within ${Math.round(cdnSyncMs / 1000)} s) a run that uses all of REFERRAL_VERIFY_MS, REFERRAL_DEADLINE_MS and REFERRAL_STORE_WRITE_MS leaves /settle ${Math.round(worst / 1000)} s, under the ${REFERRAL_SETTLE_ANSWER_MS / 1000} s the facilitator's /settle may take to answer: a settle answered after it is read from the chain instead, and its answer is held until then`);
+    }
+  }
   if (config && Number.isFinite(config.settleMs) && config.settleMs < REFERRAL_SETTLE_ANSWER_MS) {
     out.push(`REFERRAL_SETTLE_MS (${Math.round(config.settleMs / 1000)} s) is under the ${REFERRAL_SETTLE_ANSWER_MS / 1000} s the facilitator's /settle may take to answer: a settle answered after it is read from the chain instead, and its answer is held until then`);
   }
@@ -571,6 +601,10 @@ export function referralBodyText(text, wrap, tx) {
 }
 /** The bytes that body takes on the wire (a transaction hash is always 66 characters). */
 export const referralDeliveredBytes = (text, wrap) => Buffer.byteLength(referralBodyText(text, wrap, PLACEHOLDER_TX));
+const TX_TAIL_BYTES = Buffer.byteLength(`"transaction":${JSON.stringify(PLACEHOLDER_TX)}`);
+/** The same figure from the answer's byte length already known (no second
+ *  pass over the text): `empty` says the answer is exactly `{}`. */
+export const referralDeliveredBytesOf = (bytes, wrap, empty = false) => (wrap ? 10 + bytes + 1 + TX_TAIL_BYTES + 1 : empty ? 1 + TX_TAIL_BYTES + 1 : bytes + TX_TAIL_BYTES + 1);
 /** The bytes a published example answer would take as a delivered answer, or
  *  0 when the definition publishes none. */
 export function exampleAnswerBytes(def) {
@@ -1034,6 +1068,8 @@ export function createReferralGate({
     return null;
   };
   const laneLeave = (keys) => { for (const key of keys) { const l = lane.get(key); if (l && l.inflight > 0) l.inflight--; } };
+  /** Slugs whose published example run ended 413 (this process's own record). */
+  const exampleTooLarge = new Map();
   const laneNote = (keys, tag = null) => { const t = now(); for (const key of keys) { const l = laneOf(key, true); if (tag && l.fails.some((n) => n[1] === tag)) continue; l.fails.push([t, tag]); } };
   const laneClear = (keys, tag) => { if (!tag) return; for (const key of keys) { const l = lane.get(key); if (l) l.fails = l.fails.filter((n) => n[1] !== tag); } };
   const laneOk = (keys) => { const t = now(); for (const key of keys) laneOf(key, true).oks.push(t); };
@@ -1741,6 +1777,8 @@ export function createReferralGate({
   function statusWord() {
     const t = now();
     const reasons = [];
+    // An empty request runs the published example: one that ended 413 refuses every such buyer of the slug.
+    for (const [slug, r] of exampleTooLarge) reasons.push(`${slug}: published example answer exceeds the marketplace bound (${r.bytes} bytes, bound ${config.maxAnswerBytes}): every empty request on it is refused 413`);
     const all = book.list();
     const old = all.filter((e) => ["in-doubt", "charged-undelivered", "unconfirmed", "intent"].includes(e.state) && t - (e.at || 0) > 15 * 60_000);
     if (old.length) reasons.push(`${old.length} settlement(s) open past 15 minutes`);
@@ -2110,6 +2148,10 @@ export function createReferralGate({
     try { if (req) onSettledSale(req); } catch { /* a convenience, never a reason to fail */ }
   }
 
+  /** What a request through the CDN proxy has left before its answer must
+   *  start (the proxy's deadline less the margin); null for any other request. */
+  const answerLeftMs = (req) => { const left = cdnSyncLeftMs(req); return left === null ? null : left - REFERRAL_CDN_MARGIN_MS; };
+
   /**
    * Read the chain for a kept answer and act on its one-word verdict
    * (chainVerdict, src/referral-chain.js). Returns "charged" (the receipt
@@ -2118,7 +2160,9 @@ export function createReferralGate({
    */
   async function readChain(entry, req, { wait = false, why = "re-send" } = {}) {
     let c;
-    try { c = await chain.state({ from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, fromBlock: entry.fromBlock ?? book.get(entry.key)?.fromBlock ?? null, minNet: minNetOf(entry.slug, entry.amount), productId: productOf(entry.slug) }, { wait }); }
+    // Through the CDN proxy the read ends inside what the request has left.
+    const cdnLeft = answerLeftMs(req);
+    try { c = await chain.state({ from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, fromBlock: entry.fromBlock ?? book.get(entry.key)?.fromBlock ?? null, minNet: minNetOf(entry.slug, entry.amount), productId: productOf(entry.slug) }, { wait, ...(cdnLeft === null ? {} : { budgetMs: Math.max(250, cdnLeft) }) }); }
     catch { c = { used: null, paid: null, transaction: null, complete: false }; }
     const verdict = chainVerdict(c, { validBeforeMs: entry.validBeforeMs, nowMs: now(), slackMs: 30_000 });
     if (verdict === "paid") {
@@ -2206,7 +2250,12 @@ export function createReferralGate({
     const d = draining();
     // During a drain the call ends inside what the drain has left; the intent
     // above stands for it if the process stops first.
-    const timeoutMs = d.active ? Math.max(2_000, Math.min(config.settleMs, d.leftMs - REFERRAL_DRAIN_SETTLE_MARGIN_MS)) : config.settleMs;
+    // Through the CDN proxy it also ends in time for the read after it and
+    // the answer's first byte to precede the proxy's deadline, from what
+    // THIS request has left (its verify and run are already spent). A wait
+    // cut short of the facilitator's answer ends in doubt, below: the chain
+    // decides, the answer is kept, and nothing is delivered unpaid.
+    const timeoutMs = referralSettleWaitMs(d.active ? Math.max(2_000, Math.min(config.settleMs, d.leftMs - REFERRAL_DRAIN_SETTLE_MARGIN_MS)) : config.settleMs, cdnSyncLeftMs(req), config.receiptWaitMs);
     let s;
     try { s = await settler.settle(entry.payment, entry.requirement, { timeoutMs }); }
     catch { s = { ok: false, inDoubt: true, reason: "settle_error", status: 0, retryable: false }; }
@@ -2229,7 +2278,7 @@ export function createReferralGate({
       //                it is contradicted (unpaid), or it is a shape the rule
       //                does not accept (held in doubt for the operator).
       let proof = "unknown", provenNet = null, moved = false, detail = { read: false, why: null, product: null, routedToUs: false };
-      try { const d = await proveWithDetail(s.transaction, { from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, minNet: minNetOf(entry.slug, entry.amount), productId: productOf(entry.slug) }, { waitMs: config.receiptWaitMs }); proof = d.verdict; provenNet = d.net; moved = d.moved === true; detail = d; }
+      try { const d = await proveWithDetail(s.transaction, { from: entry.payer, nonce: entry.auth.nonce, payTo: config.payTo, amount: entry.amount, minNet: minNetOf(entry.slug, entry.amount), productId: productOf(entry.slug) }, { waitMs: (() => { const left = answerLeftMs(req); return left === null ? config.receiptWaitMs : Math.max(0, Math.min(config.receiptWaitMs, left)); })() }); proof = d.verdict; provenNet = d.net; moved = d.moved === true; detail = d; }
       catch { proof = "unknown"; }
       if (proof === "unpaid") {
         // Contradicted: nothing delivered, nothing booked, and the entry is
@@ -2791,22 +2840,35 @@ export function createReferralGate({
       try { text = JSON.stringify(answer === undefined ? null : answer); if (typeof text !== "string") throw new Error("not JSON"); }
       catch { text = null; }
       const bytes = text === null ? 0 : Buffer.byteLength(text);
-      if (text === null || bytes > REFERRAL_ANSWER_MAX_BYTES) {
+      if (text === null) {
         hold(false);
         settledHooks(false);
         counters.handlerErrors++;
-        return res.status(500).json({ error: text === null ? "This tool's answer could not be serialized; nothing was charged." : "This tool's answer is too large for this route; nothing was charged.", tool: def.slug });
+        return res.status(500).json({ error: "This tool's answer could not be serialized, so this server did not settle the payment.", tool: def.slug });
       }
       // The network passes on at most so many bytes of an answer: a larger
       // one is refused here, before the settlement, so no buyer pays for an
       // answer that would reach it cut short.
-      const outBytes = referralDeliveredBytes(text, wrap);
+      // (Sized from the byte length the serialization gave: no second pass
+      // over the text. An answer of any size over the bound ends here.)
+      const outBytes = referralDeliveredBytesOf(bytes, wrap, text === "{}");
       if (outBytes > config.maxAnswerBytes) {
         hold(false);
         settledHooks(false);
         counters.answerTooLarge++;
-        return res.status(413).json({ error: `This call's answer is ${outBytes} bytes, over the ${config.maxAnswerBytes} bytes one answer may be on this route, so it was not settled and nothing was charged. Ask for less in one call (a narrower query, a lower limit, fewer fields) and sign a new authorization.`, tool: def.slug, reason: "answer_too_large", answerBytes: outBytes, maxAnswerBytes: config.maxAnswerBytes });
+        // A run that was served and not settled: it counts in the payer's
+        // and the address's lane as any unsettled run does, so the same
+        // bound (REFERRAL_UNSETTLED_MAX) ends a wallet that keeps asking for
+        // answers this route cannot carry.
+        laneNote(laneKeys, key);
+        // The published example itself is over the bound: every empty
+        // request on this slug is refused, so the status word names it.
+        if (req.__a402ReferralExample === true) exampleTooLarge.set(def.slug, { at: now(), bytes: outBytes });
+        // The tool's own input fields, by name, are how a request is narrowed.
+        const fields = Object.keys(def.discovery?.inputSchema?.properties || {}).filter((f) => /^[A-Za-z_][A-Za-z0-9_.-]{0,40}$/.test(f)).slice(0, 24);
+        return res.status(413).json({ error: `This call's answer is ${outBytes} bytes, over the ${config.maxAnswerBytes} bytes one answer may be on this route, so this server did not settle the payment. A narrower request gets an answer: ${fields.length ? `ask for less with this tool's own input fields (${fields.join(", ")})` : "ask for less in one call"}, and sign a new authorization.`, tool: def.slug, reason: "answer_too_large", answerBytes: outBytes, maxAnswerBytes: config.maxAnswerBytes, narrowWith: fields });
       }
+      if (req.__a402ReferralExample === true && exampleTooLarge.size) exampleTooLarge.delete(def.slug);
       // What a hang-up from here on is recorded as (the refund run's words):
       // the reason no forgiveness ticket was granted (a spent budget: a repeat
       // hang-up, held for review), else a first one inside the budget.
@@ -3055,6 +3117,15 @@ export function createReferralGate({
 
   /** An operator clears a slug's short-net record (and with it the stop on
    *  that slug), with a note. The next sale under the floor starts it again. */
+  /** An operator clears a slug's oversized-example mark (it also clears on a
+   *  restart, and when an example run of the slug fits again). `{ ok }`. */
+  function clearExampleByHand(slug, { note = "" } = {}) {
+    if (typeof note !== "string" || note.trim().length < 3) return { ok: false, error: "a note saying what was checked is required" };
+    if (!exampleTooLarge.has(slug)) return { ok: false, error: "no oversized published example is recorded for that slug" };
+    exampleTooLarge.delete(slug);
+    line("warn", `an operator cleared the oversized-example mark of ${slug}: ${referralLogText(note.trim()).slice(0, 200)}`);
+    return { ok: true, slug };
+  }
   async function clearShortByHand(slug, { note = "" } = {}) {
     if (typeof slug !== "string" || !slug) return { ok: false, error: "no slug" };
     if (typeof note !== "string" || note.trim().length < 3) return { ok: false, error: "a note saying what was checked is required" };
@@ -3070,7 +3141,7 @@ export function createReferralGate({
   }
 
   return {
-    handler, sweepOnce, statusWord, resolveByHand, resolveManyByHand, acknowledge, reopenByHand, clearShortByHand, shortSales: () => shortNow(),
+    handler, sweepOnce, statusWord, resolveByHand, resolveManyByHand, acknowledge, reopenByHand, clearShortByHand, clearExampleByHand, exampleTooLarge: () => [...exampleTooLarge].map(([slug, r]) => ({ slug, ...r })), shortSales: () => shortNow(),
     stats: () => ({ ...counters, inflight, keptAnswers: kept.size, keptBytes, atRestAnswers: atRest.size, atRestBytes, laneKeys: lane.size, pending, storeHold: { held: (relaxStoreHold(now()), storeHold.blockedUntil > 0), cooldownMs: storeHold.cooldownMs, level: storeHold.level, failuresInWindow: storeFailsIn(now()).length, lateInWindow: storeFailsIn(now()).filter((f) => f.late).length }, coldInflight: Object.fromEntries(rate.inflight), coldSold: Object.fromEntries(rate.sold), ownFaultStreak: own.streak, ownFaultHeldUntil: own.blockedUntil ? new Date(own.blockedUntil).toISOString() : null, forgivenUsd: forgive.abandoned.reduce((a, r) => a + r[1], 0) / MICRO, book: book.counts() }),
     slugs: () => [...defs.keys()],
   };
