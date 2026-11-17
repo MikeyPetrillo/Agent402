@@ -277,5 +277,30 @@ function fresh(opts = {}) {
   ok(!(await load.revisitDue("https://d.example")).due, "and keeps the back-off in its own memory");
 }
 
+// ---- a request is counted on the day of the origin whose crawl sent it ---------
+{
+  const { load, step } = fresh({ dailyBudget: 5 });
+  const B = "https://stays.example", A1 = "https://moved-one.example", A2 = "https://moved-two.example";
+  let sent = 0;
+  for (let i = 0; i < 4; i++) if ((await load.takeBudget(`${B}/api/x`, "quote", { chargeTo: A1 })).ok) sent++;
+  ok(sent === 4 && (await load.budgetSpent(B)).used === 0 && (await load.budgetSpent(A1)).used === 4, "a probe sent to another operator's host for a moved origin is counted on the moved origin's day");
+  for (let i = 0; i < 4; i++) if ((await load.takeBudget(`${B}/api/x`, "quote", { chargeTo: A1 })).ok) sent++;
+  ok(sent === 5 && (await load.budgetSpent(A1)).spent, `past its own day the moved origin's probes are refused (${sent} sent)`);
+  ok((await load.probeRefusal(`${B}/api/x`, "quote", { chargeTo: A2 })) === "budget" && (await load.budgetSpent(A2)).used === 0, "a second moved origin's probe is refused once a day's allowance has landed on the host, and is not counted on its day");
+  ok((await load.takeBudget(`${B}/api/x`, "quote", { essential: true, chargeTo: A2 })).ok === false, "an essential one included");
+  ok((await load.landedToday(B)) === 5 && (await load.budgetSpent(B)).used === 0, "the landings are counted apart from the host's own day");
+  ok((await load.hold(B)) === null && (await load.crawlPlan(B)).skip === null, "the host's own scheduled crawl is not held");
+  for (let i = 0; i < 5; i++) await load.takeBudget(`${B}/openapi.json`, "crawler", { essential: true });
+  ok((await load.budgetSpent(B)).spent && (await load.crawlPlan(B)).skip === "budget", "control: its own requests still spend its own day");
+  ok((await load.takeBudget("https://api.stays.example/x", "quote", { chargeTo: "https://www.stays.example" })).ok === false && (await load.landedToday("https://api.stays.example")) === 5,
+    "a move inside one operator's domain is counted on that operator's day as before, not as a landing");
+  ok((await load.takeBudget(`${B}/api/x`, "router-probe", { essential: true, chargeTo: A1 })).ok && (await load.routerProbesToday(B)) === 1, "the router's probe stays on the host's router count and always goes through");
+  step(24 * H);
+  ok((await load.takeBudget(`${B}/api/x`, "quote", { chargeTo: A2 })).ok, "the next UTC day opens both allowances again");
+  const own = fresh({ dailyBudget: 5 }).load;
+  ok((await own.takeBudget("https://api.stays.example/x", "quote", { chargeTo: "https://www.stays.example" })).ok && (await own.landedToday("https://api.stays.example")) === 0 && (await own.budgetSpent("https://www.stays.example")).used === 1,
+    "and such a move counts no landing");
+}
+
 console.log(`\n${fail ? "FAILED" : "PASSED"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

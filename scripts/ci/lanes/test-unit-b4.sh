@@ -170,6 +170,8 @@ t node scripts/test-seller-load.js
 t node scripts/test-crawl-revisit.js
 # Live price reads keep their weekly clock across crawls; a route above every router tier is read weekly at most; the paywall probe asks the cheapest route (offline)
 t node scripts/test-quote-weekly.js
+# An origin whose documents moved to another seller is counted on its own day; the seller they land on keeps its day and its crawl (offline)
+t node scripts/test-crawl-redirect-budget.js
 # A cycle with healthy origins backed off still measures its health on them: 1000 origins, 200 dark (offline)
 t node scripts/test-crawl-cycle-health.js
 # The MPP index obeys the seller load controls: day budget, Retry-After holds, CRAWL_SLOW_ORIGINS (offline)

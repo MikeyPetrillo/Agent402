@@ -473,16 +473,22 @@ export function __setProbeFetchForTest(fn) { probeFetch = typeof fn === "functio
 export class ProbeSkipped extends Error {
   constructor(reason) { super(`probe not sent: ${reason}`); this.sellerLoadSkip = reason; }
 }
-// `load` = { kind, gate }: every probe is counted against its host's day, and
-// a scheduled crawl's probe (gate) is not sent while the host is held by a
-// Retry-After or past the day's budget. A 429 or 503 answer holds the host.
+// `load` = { kind, gate, chargeTo }: every probe is counted against its host's
+// day, and a scheduled crawl's probe (gate) is not sent while the host is held
+// by a Retry-After or past the day's budget. `chargeTo` is the seller key being
+// crawled: a probe sent to the origin its documents moved to (probeOriginOf) is
+// counted on the key's own day, never on the day of the host it lands on, and
+// is not sent past a day's allowance of such landings on that host. A 429 or
+// 503 answer holds the host.
 async function probeOnce(target, opts, load) {
   if (load?.kind) {
+    const chargeTo = load.chargeTo || null;
     if (load.gate) {
-      const refusal = await sellerLoad.probeRefusal(target, load.kind);
+      const refusal = await sellerLoad.probeRefusal(target, load.kind, { chargeTo });
       if (refusal) throw new ProbeSkipped(refusal);
     } else {
-      await sellerLoad.takeBudget(target, load.kind, { essential: true });
+      const b = await sellerLoad.takeBudget(target, load.kind, { essential: true, chargeTo });
+      if (b?.ok === false) throw new ProbeSkipped("budget");
     }
   }
   const res = await probeFetch(target, opts);
@@ -5368,7 +5374,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
           method,
           headers: { Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
           ...(method === "POST" ? { body: reqBody } : {}),
-          load: { kind: "quote", gate: gated },
+          load: { kind: "quote", gate: gated, chargeTo: originUrl },
         });
         // A GET that returns 200 has ANSWERED: the route is not paywalled, and
         // there is nothing a POST can add. Following it with an unpaid POST is
@@ -5493,7 +5499,7 @@ export async function enrichLiveQuotes(tools, originUrl, { ignoreBudget = false,
         // are relative to its prefix, which URL resolution against the key drops.
         const target = sellerRouteUrl(probeOrigin, tool.route);
         if (!target) throw new Error("route outside the seller");
-        const { res: r } = await probeSellerRoute(target, { method: "GET", headers: { Accept: "application/json" }, load: { kind: "quote", gate: gated } });
+        const { res: r } = await probeSellerRoute(target, { method: "GET", headers: { Accept: "application/json" }, load: { kind: "quote", gate: gated, chargeTo: originUrl } });
         statusByMethod.GET = r.status;
         await r.body?.cancel?.().catch?.(() => {});
       } catch (e) { if (e?.sellerLoadSkip) loadSkipped = true; statusByMethod.GET = 0; }
@@ -5689,7 +5695,7 @@ async function probePaywall(tools, { redirectedTo = null, gated = false } = {}) 
       method,
       headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}) },
       ...(method !== "GET" ? { body: "{}" } : {}),
-      load: { kind: "paywall", gate: gated },
+      load: { kind: "paywall", gate: gated, chargeTo: pick.seller },
     });
     const res = probed.res;
     url = probed.url;

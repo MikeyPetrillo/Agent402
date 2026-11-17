@@ -480,14 +480,24 @@ export function createSellerLoad({
      *  with buyers does not use up the crawl's budget; any other essential
      *  request (a read inside a crawl already started) is counted on the day's
      *  budget and never refused. Never waits on the shared store.
+     *
+     *  `chargeTo` is the origin whose crawl sends the request. When it is
+     *  another operator's than the host of `url` (its discovery documents
+     *  moved there), the request is counted on `chargeTo`'s day, so the host
+     *  it lands on keeps its own day and its own crawl; the requests that
+     *  land on a host this way are counted apart, and past a day's budget of
+     *  them one more is refused, essential or not.
      *  `{ ok, used, budget }`. */
-    async takeBudget(url, kind, { essential = false } = {}) {
+    async takeBudget(url, kind, { essential = false, chargeTo = null } = {}) {
       const k = String(kind || "other");
-      const origin = originOf(url);
+      const target = originOf(url);
+      const cause = chargeTo ? originOf(chargeTo) : null;
+      const moved = Boolean(target && cause && operatorKey(cause) !== operatorKey(target));
+      const origin = moved ? cause : target;
       if (!origin) { bump(counts.requests, k); return { ok: true, used: 0, budget: dailyBudget }; }
       const t = clock();
       if (essential && k === "router-probe") {
-        const key = `${budgetKey(origin, t)}|router`;
+        const key = `${budgetKey(target, t)}|router`;
         const used = await countLocal(key);
         countShared(key);
         bump(counts.requests, k);
@@ -501,6 +511,17 @@ export function createSellerLoad({
         await countLocal(key, -1);
         bump(counts.refused, k);
         return { ok: false, used: used - 1, budget: dailyBudget };
+      }
+      if (moved) {
+        const landedKey = `${budgetKey(target, t)}|landed`;
+        const landed = await countLocal(landedKey);
+        if (landed > dailyBudget) {
+          await countLocal(landedKey, -1);
+          await countLocal(key, -1);
+          bump(counts.refused, `${k}:landed`);
+          return { ok: false, used: used - 1, budget: dailyBudget };
+        }
+        countShared(landedKey);
       }
       countShared(key);
       bump(counts.requests, k);
@@ -521,6 +542,14 @@ export function createSellerLoad({
       const r = await local.counterGet(BUDGET, budgetKey(origin, clock()), { now: clock() });
       const used = Number(r?.value) || 0;
       return { spent: used >= dailyBudget, used, budget: dailyBudget };
+    },
+
+    /** The requests other operators' crawls landed today on the operator of
+     *  `url` (their documents moved there); never part of its own day. */
+    async landedToday(url) {
+      const origin = originOf(url);
+      if (!origin) return 0;
+      return Number((await local.counterGet(BUDGET, `${budgetKey(origin, clock())}|landed`, { now: clock() }))?.value) || 0;
     },
 
     /** The router's probes counted today for the operator of `url`. */
@@ -554,11 +583,11 @@ export function createSellerLoad({
     },
 
     /** Why an unpaid probe to `url` should not be sent, or null; counts it
-     *  against the day's budget when it may be. */
-    async probeRefusal(url, kind) {
+     *  against the day's budget (of `chargeTo`, see takeBudget) when it may be. */
+    async probeRefusal(url, kind, { chargeTo = null } = {}) {
       try {
         if (await this.throttledUntil(url)) { bump(counts.refused, `${kind}:throttled`); return "throttled"; }
-        const b = await this.takeBudget(url, kind);
+        const b = await this.takeBudget(url, kind, { chargeTo });
         return b.ok ? null : "budget";
       } catch { return null; }
     },
