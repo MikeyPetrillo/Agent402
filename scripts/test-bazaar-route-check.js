@@ -9,7 +9,63 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer } from "@x402/express";
 import { x402ResourceServer } from "@x402/core/server";
+import { validateBazaarRouteExtensions } from "@x402/extensions/bazaar";
 import { checkBazaarRoutesInSlices, withBazaarHidden } from "../src/bazaar-route-check.js";
+import { createServer } from "node:http";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { bootServer } from "./lib/boot-server.js";
+import { MCP_X402_SLUGS, MCP_X402_PREFIX } from "../src/mcp-x402-routes.js";
+import { FLAGSHIP_MCP_NAMES } from "../src/mcp-flagship.js";
+import { paymentRequiredOfResult } from "../src/mcp-x402.js";
+
+/** The six MCP tool declarations as a paid boot of the real server serves
+ *  them (src/payments.js builds them from mcpX402PaymentSpecs(catalog) and
+ *  each twin's offer carries its own): { route, toolName, extensions }. */
+async function liveMcpSpecs() {
+  const facilitator = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      if (req.url === "/supported") return res.end(JSON.stringify({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:8453" }], extensions: [], signers: {} }));
+      if (req.url === "/rpc") return res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x0" }));
+      res.end("{}");
+    });
+  });
+  await new Promise((r) => facilitator.listen(0, "127.0.0.1", r));
+  const FAC = `http://127.0.0.1:${facilitator.address().port}`;
+  let srv = null, client = null;
+  try {
+    srv = await bootServer({
+      stores: "bazaar-route-check",
+      args: ["--import", "./scripts/lib/loopback-only-preload.js"],
+      env: {
+        NODE_ENV: "test", BASE_URL: "https://agent402.tools", REDIS_URL: "", STATE_DATABASE_URL: "", TARGET_URL: "", POSTHOG_API_KEY: "",
+        STATS_ALLOW_EPHEMERAL: "true", X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off", MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off",
+        TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "", MPP_SECRET_KEY: "",
+        FREE_MODE: "", TRUST_PROXY_HOPS: "1", BAZAAR_ROUTE_CHECK: "off",
+        WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base", PAYMENT_NETWORKS: "base",
+        FACILITATOR_URL: FAC, PAYAI_FACILITATOR_URL: FAC, AGENT402_BASE_RPC: `${FAC}/rpc`, EVM_RPC_8453: `${FAC}/rpc`, FACILITATOR_GAS_CHECK: "off",
+        CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", SOLVADOR_KEY: "", CIRCLE_FACILITATOR_API_KEY: "",
+        AGENT402_MCP_MAX_PER_MIN: "1000000", AGENT402_MCP_MAX_PER_HOUR: "1000000", AGENT402_MCP_REQ_PER_MIN: "1000000", AGENT402_MCP_REQ_PER_HOUR: "1000000",
+      },
+    });
+    client = new Client({ name: "test-bazaar-route-check", version: "0.0.0" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${srv.url}/mcp`)));
+    const out = [];
+    for (const slug of MCP_X402_SLUGS) {
+      const toolName = FLAGSHIP_MCP_NAMES[slug];
+      const offer = paymentRequiredOfResult(await client.callTool({ name: toolName, arguments: {} }));
+      out.push({ route: `GET ${MCP_X402_PREFIX}${slug}`, toolName, extensions: offer?.extensions || null });
+    }
+    return out;
+  } finally {
+    try { await client?.close(); } catch { /* closed */ }
+    if (srv) await srv.stop();
+    facilitator.closeAllConnections?.();
+    await new Promise((r) => facilitator.close(r));
+  }
+}
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -46,6 +102,31 @@ try {
     ok(r.routes === 2, `the sliced check visits every declared route (${r.routes})`);
     ok(warnings.some((w) => /api\/bad.*invalid bazaar extension/.test(w)) && !warnings.some((w) => /api\/good/.test(w)), "it warns as the vendor does, for the invalid route only");
   }
+  // The connector's MCP tool declarations (src/mcp-x402-routes.js), read from
+  // a paid boot of the real server: valid, so no warning.
+  warnings.length = 0;
+  {
+    const specs = await liveMcpSpecs();
+    const routes = Object.fromEntries(specs.map((sp) => [sp.route, { accepts, description: sp.toolName, extensions: sp.extensions }]));
+    ok(specs.length === 6 && specs.every((sp) => sp.extensions?.bazaar?.info?.input?.type === "mcp"), `the catalog yields the six MCP tool declarations (${specs.map((sp) => sp.toolName).join(", ")})`);
+    const r = await checkBazaarRoutesInSlices(routes);
+    ok(r.routes === 6 && warnings.length === 0, `the sliced check passes every MCP tool declaration without a warning (${warnings.length}: ${warnings[0]?.slice(0, 140) || "none"})`);
+    // Control: the vendor's route check alone reports each of them, which is what the boot logged.
+    warnings.length = 0;
+    validateBazaarRouteExtensions(routes);
+    ok(warnings.length === 6 && warnings.every((w) => /must NOT have additional properties/.test(w)), `control: the vendor's route check alone warns on all six (${warnings.length})`);
+    // Control: an MCP declaration that IS invalid still warns.
+    warnings.length = 0;
+    const [first] = specs;
+    const twin = JSON.parse(JSON.stringify(first.extensions));
+    twin.bazaar.info.input.extra = "not in the schema";
+    const noTool = JSON.parse(JSON.stringify(first.extensions));
+    delete noTool.bazaar.info.input.toolName;
+    const bad = await checkBazaarRoutesInSlices({ [first.route]: { accepts, extensions: twin }, "GET /__mcp-x402/none": { accepts, extensions: noTool }, "POST /api/bad": makeRoutes()["POST /api/bad"] });
+    ok(bad.routes === 3 && warnings.length === 3 && warnings.some((w) => w.includes(first.route) && /additional properties/.test(w)) && warnings.some((w) => /mcp-x402\/none.*invalid bazaar extension/.test(w)) && warnings.some((w) => /api\/bad/.test(w)),
+      `an MCP declaration with an extra input property, one with no tool name, and an invalid HTTP one each still warn (${warnings.length})`);
+  }
+  warnings.length = 0;
   {
     const routes = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`POST /api/r${i}`, { accepts, extensions: { bazaar: bazaar("x") } }]));
     // The slicing is pinned as work first: each check burns 4 ms, so a 15 ms

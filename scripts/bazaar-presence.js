@@ -41,6 +41,17 @@
 //                         previous missing set, buys nothing and closes
 //                         nothing. A reading that has not completed
 //                         within READ_DEADLINE_MS is unreadable.
+//   MCP tool listings     The connector's fixed-price flagship tools are listed
+//                         as MCP tools too (scripts/lib/mcp-listings.js), one
+//                         feed row each at /mcp#<tool>. The check reads them
+//                         beside the routes. One that has never been seen in
+//                         the listing is not yet listed: it is logged and
+//                         counts as nothing. Once seen (the state remembers
+//                         the tool names), a listing that leaves is missing
+//                         like a route and pages on the second check; it is
+//                         never bought here (a payment on the HTTP route does
+//                         not restore it; scripts/refresh-bazaar.js MODE=mcp
+//                         does, through the connector).
 //   lost state            With no saved state and an issue open, a route the
 //                         issue already lists counts as a repeat miss (never
 //                         bought again, the issue updated), and the issue is
@@ -65,6 +76,7 @@ import { walkAgreed, BAZAAR_REGISTRY_URL } from "./listing-coverage.js";
 import {
   exemptKind, aboveCeilingRoutes, usdMicros, microsToUsd, spendCapVerdict, routeCountVerdict,
 } from "./lib/keepalive-plan.js";
+import { mcpListingRoutes, mcpToolOfResource, mcpListingKey, mcpListingSlugOf } from "./lib/mcp-listings.js";
 
 export const DEFAULT_MAX_ROUTES = 10;
 export const DEFAULT_MAX_SPEND_USD = 2;
@@ -78,7 +90,8 @@ export const DEFAULT_READ_DEADLINE_MS = 20 * 60_000;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
 // A path printed into the public issue: our own catalog's shape only.
-const PATH_RE = /^\/[A-Za-z0-9/_.:-]{1,200}$/;
+// An MCP tool listing's is /mcp#<tool name>.
+const PATH_RE = /^\/[A-Za-z0-9/_.:-]{1,200}(?:#[a-z][a-z0-9._-]{0,60})?$/;
 
 /** A listing resource URL -> its path when it is on `host`, else null. */
 export function pathOnHost(resource, host) {
@@ -86,6 +99,19 @@ export function pathOnHost(resource, host) {
     const u = new URL(String(resource));
     return u.host.toLowerCase() === String(host).toLowerCase() ? u.pathname : null;
   } catch { return null; }
+}
+
+/** A listing resource URL -> the key it is read by on `host`: an MCP tool
+ *  listing's /mcp#<tool>, else the route's path; null off the host. */
+export function listingKeyOnHost(resource, host) {
+  const tool = mcpToolOfResource(resource, host);
+  return tool ? mcpListingKey(tool) : pathOnHost(resource, host);
+}
+
+/** The catalog's MCP tool listings, shaped as catalogRows' entries: method
+ *  "MCP", path /mcp#<tool>, `mcp` the tool name. */
+export function mcpCatalogRows(pricing) {
+  return mcpListingRoutes(pricing).map((r) => ({ row: { slug: r.slug, price: r.price }, key: `MCP ${r.key}`, slug: r.slug, path: r.key, method: "MCP", micros: r.micros, mcp: r.toolName }));
 }
 
 /** The catalog's rows as { key, slug, path, method, micros }, one per method
@@ -114,6 +140,7 @@ export function issueListedKeys(body) {
 
 /** Why the presence check does not buy a route, or null when it may. */
 export function presenceExemption(entry, tailSlugs) {
+  if (entry.mcp) return "mcp listing";
   if (!SLUG_RE.test(entry.slug)) return "unreadable slug";
   if (!(entry.micros > 0)) return "unpriced";
   const kind = exemptKind(entry.row);
@@ -139,21 +166,30 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   const lost = !prev || typeof prev !== "object";
   const prevMissing = prev && prev.missing && typeof prev.missing === "object" ? prev.missing : {};
   const prevStreak = Number.isInteger(prev?.unreadable) && prev.unreadable > 0 ? prev.unreadable : 0;
+  const prevSeen = Array.isArray(prev?.mcpSeen) ? prev.mcpSeen.filter((t) => typeof t === "string") : [];
   if (!reading) {
     const streak = prevStreak + 1;
     const page = streak >= unreadablePageAfter;
     return {
-      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [],
-      state: { missing: prevMissing, unreadable: streak },
+      readable: false, buy: [], refused: null, repeat: [], exempt: [], newlyMissing: [], notYetListed: [],
+      state: { missing: prevMissing, unreadable: streak, mcpSeen: prevSeen },
       action: page && !openIssue ? "open" : "none", cause: page ? "unreadable" : null,
     };
   }
-  const catalog = catalogRows(reading.pricing);
+  const mcpRows = mcpCatalogRows(reading.pricing);
+  const catalog = [...catalogRows(reading.pricing), ...mcpRows];
   const tailSlugs = new Set(aboveCeilingRoutes(reading.pricing).map((r) => r.slug));
-  const missing = missingFromEveryPass(catalog, reading.passes);
   // State lost with an issue open: what the issue lists was missing before.
   const inherited = lost && openIssue && issueListed instanceof Set ? issueListed : new Set();
   const wasMissing = (m) => Object.hasOwn(prevMissing, m.key) || inherited.has(m.key);
+  const absent = missingFromEveryPass(catalog, reading.passes);
+  // An MCP tool listing counts as missing only once it has been listed: seen
+  // by a check before, or missing before (a state or an issue that names it).
+  const absentKeys = new Set(absent.map((m) => m.key));
+  const seen = new Set(prevSeen);
+  for (const m of mcpRows) if (!absentKeys.has(m.key)) seen.add(m.mcp);
+  const notYetListed = absent.filter((m) => m.mcp && !seen.has(m.mcp) && !wasMissing(m));
+  const missing = absent.filter((m) => !notYetListed.includes(m));
   const repeat = missing.filter(wasMissing);
   const newlyMissing = missing.filter((m) => !wasMissing(m));
   // State lost and the open issue unreadable: no way to tell a repeat, so no buy.
@@ -174,7 +210,7 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
     else if (!spend.ok) refused = spend.reason;
     if (refused) buy = [];
   }
-  const state = { missing: {}, unreadable: 0 };
+  const state = { missing: {}, unreadable: 0, mcpSeen: [...seen].sort() };
   for (const m of repeat) state.missing[m.key] = Object.hasOwn(prevMissing, m.key) ? prevMissing[m.key] : "listed";
   for (const m of exempt) state.missing[m.key] = m.why;
   // A held route is not remembered: the next check sees it as new and may buy it.
@@ -182,7 +218,7 @@ export function decide({ reading, prev, openIssue = false, issueListed = new Set
   if (refused) for (const m of newlyMissing) if (!Object.hasOwn(state.missing, m.key) && !heldBuy.includes(m)) state.missing[m.key] = "refused";
   // Never close on lost state while a route is missing: the issue may be about it.
   const action = repeat.length ? (openIssue ? "update" : "open") : !openIssue ? "none" : lost && missing.length ? "none" : "close";
-  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, state, action, cause: repeat.length ? "missing" : null };
+  return { readable: true, buy, refused, held: heldBuy, repeat, exempt, newlyMissing, notYetListed, state, action, cause: repeat.length ? "missing" : null };
 }
 
 const NOTE = {
@@ -194,9 +230,18 @@ const NOTE = {
   "route-execute": "not bought here: route-execute tier",
   "lasting-effect": "not bought here: its effect outlives the answer",
   "above the ceiling": "not bought here: the pass above the ceiling buys it",
+  "mcp listing": "not bought here: an MCP tool listing, bought through the connector by the MCP listings pass",
   unpriced: "not bought here: unpriced",
   "unreadable slug": "not bought here: unreadable slug",
 };
+
+/** The catalog slug the MCP listings pass takes for a missing MCP tool
+ *  listing (its line names `MCP /mcp#<tool>`), else null. */
+function mcpRerunSlug(m) {
+  if (m?.method !== "MCP") return null;
+  const tool = String(m.path || "").split("#")[1] || "";
+  return mcpListingSlugOf(tool);
+}
 
 /** The issue body: fixed text and our own route paths, no figure or count. */
 export function issueBody(decision, runUrl = "") {
@@ -206,13 +251,13 @@ export function issueBody(decision, runUrl = "") {
   }
   const lines = decision.repeat
     .filter((m) => PATH_RE.test(m.path))
-    .map((m) => `- \`${m.method} ${m.path}\`: ${NOTE[decision.state.missing[m.key]] || "not bought here"}`);
+    .map((m) => `- \`${m.method} ${m.path}\`: ${NOTE[decision.state.missing[m.key]] || "not bought here"}${mcpRerunSlug(m) ? ` (catalog slug \`${mcpRerunSlug(m)}\`)` : ""}`);
   return [
     "These routes of ours were observed to leave the Bazaar discovery listing and were still missing on the next check (each check reads the listing in two full passes at least, and a route counts as missing only when every pass lacks it).",
     "",
     ...lines,
     "",
-    "A route the check may buy is bought once per absence (scripts/bazaar-presence.js, then scripts/refresh-bazaar.js MODE=missing). A route still missing after that, or one of a kind the check never buys, needs a hand pass: `gh workflow run bazaar-keepalive.yml --ref main -f slugs=<slug>` for a route at or under the ceiling, `gh workflow run bazaar-keepalive-tail.yml --ref main` for one above it. This issue closes on the next readable check with no route missing twice in a row.",
+    "A route the check may buy is bought once per absence (scripts/bazaar-presence.js, then scripts/refresh-bazaar.js MODE=missing). A route still missing after that, or one of a kind the check never buys, needs a hand pass: `gh workflow run bazaar-keepalive.yml --ref main -f slugs=<slug>` for a route at or under the ceiling, `gh workflow run bazaar-keepalive-tail.yml --ref main` for one above it, `gh workflow run bazaar-mcp-listings.yml --ref main -f slugs=<slug>` for an MCP tool listing (`MCP /mcp#<tool>`: the catalog slug named on its line, or the tool name itself). This issue closes on the next readable check with no route missing twice in a row.",
   ].join("\n") + run;
 }
 
@@ -226,6 +271,7 @@ export function logLines(d) {
     out.push(`  missing ${m.method} ${m.path}${ex ? ` (not bought: ${ex.why})` : (d.held || []).includes(m) ? " (held: a keep-alive pass is running or queued, or the open issue could not be read)" : ""}`);
   }
   for (const m of d.repeat) if (PATH_RE.test(m.path)) out.push(`  still missing ${m.method} ${m.path}`);
+  if ((d.notYetListed || []).length) out.push(`MCP tool listings not yet listed (never seen in the listing, so not counted as missing): ${d.notYetListed.length}.`);
   if (d.refused) out.push(`Refusing the buy: ${d.refused}. Nothing bought.`);
   else out.push(`Routes to buy: ${d.buy.length}.`);
   return out;
@@ -255,7 +301,7 @@ export async function readListing({ target, registryUrl = BAZAAR_REGISTRY_URL, f
       if (catalogRows(pricing).length === 0) { say("The catalog lists no routes."); return null; }
       const feed = await walkAgreed(registryUrl, {
         isOurs: (it) => pathOnHost(it?.resource, host) !== null,
-        keyOf: (it) => pathOnHost(it?.resource, host),
+        keyOf: (it) => listingKeyOnHost(it?.resource, host),
         fetchJson: bounded,
       });
       say(`The listing was read in ${feed.passes.length} full passes${feed.agreed ? "; the last two agree" : "; they disagree, so only a route absent from every pass counts as missing"}.`);

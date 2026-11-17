@@ -21,11 +21,18 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
-import { INTEGRATIONS } from "../src/integration-pages.js";
-import { LEARN } from "../src/learn.js";
+import { connectorEnvOf } from "../src/connector-pay.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = await getFreePort();
+// The page modules write per-boot copy (the wires the connector takes), read
+// once at import. The expected text is derived from the SAME environment the
+// server boots with: the variables that copy reads are set here exactly as
+// the child gets them, before the page modules load.
+const SERVER_ENV = { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", BASE_URL: "https://agent402.tools" };
+for (const [k, v] of Object.entries(connectorEnvOf(SERVER_ENV))) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+const { INTEGRATIONS } = await import("../src/integration-pages.js");
+const { LEARN } = await import("../src/learn.js");
 const B = `http://127.0.0.1:${PORT}`;
 const BASE_URL = "https://agent402.tools";
 
@@ -35,7 +42,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const proc = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
   cwd: ROOT,
-  env: { ...process.env, FREE_MODE: "true", PORT: String(PORT), X402_SYNC_ON_START: "false", X402_INDEX_CRAWL: "off", BASE_URL },
+  env: SERVER_ENV,
   stdio: "ignore",
 });
 

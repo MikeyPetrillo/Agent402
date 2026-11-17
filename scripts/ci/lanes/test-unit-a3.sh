@@ -25,12 +25,16 @@ t node scripts/test-mcp-answer-bound.js
 t node scripts/test-mcp-error-redaction.js
 # x402 MCP transport codec: payment-required and invalid-payment results with MPP _meta kept byte for byte (x402/ keys never merged), _meta payment reader refuses malformed input as 400 with size and depth bounded before serialization, PAYMENT-SIGNATURE and PAYMENT-RESPONSE round trips through @x402/core, the official @x402/mcp client (installed --no-save by the step before) pays and re-signs against it (offline, in-memory)
 t node scripts/test-mcp-x402.js
+# x402 MCP wire on the hosted connector: a flagship's first ask carries the twin's PaymentRequired beside the MPP challenges, the official @x402/mcp client (installed --no-save by the step before) pays it and reads the settle receipt, memory.read keyed on the signed payer, replay refused, settle failure and error answers unsettled with no output, MPP wins when both are sent, a free tool at its limit offers x402, paid calls meet their own larger per-IP transport limit, the copy names only the wires offered (paid boot, stub facilitator, in-process mounts)
+t node scripts/test-mcp-x402-connector.js
 
-# @step 2: Offline suites (13 scripts, one process each)
+# @step 2: Offline suites (17 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
 t node scripts/test-llms-txt.js
 # Every HTML page names /llms.txt (head link + Link header); /api/pricing and the x402 manifest name EVM-only routes
 t node scripts/test-llms-link.js
+# Copy about paying on the hosted MCP connector names the wires that boot takes in the call and no other: /llms.txt, /agents.md, /how-to-pay, /quickstart, /learn/mcp-payments, /integrations/mcp and the agent-hosts guide against the connector's own instructions, descriptions, payment.info and first ask, on a paid boot with MPP, a paid boot without, and FREE_MODE; static trees name x402 wherever they name MPP on the connector (three boots, stub facilitator)
+t node scripts/test-connector-pay-copy.js
 # No third-party seller host or counterparty name in any tracked file (hashed list)
 t node scripts/test-no-third-party-names.js
 # No hidden character (TAG text, zero-width, bidi, variation-selector carrier, soft hyphen) in an instruction file: CLAUDE.md, .claude, wiki, docs, READMEs, the MCP instructions module

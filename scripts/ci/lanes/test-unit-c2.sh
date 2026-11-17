@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (18 scripts, one process each)
+# @step 1: Offline suites (19 scripts, one process each)
 # Boot /supported guard (a dead facilitator costs ONE rail, not every paid route — the 2026-08-01 Celo outage; probe-driven drop, fail-open on total blindness, escape hatch — offline)
 t node scripts/test-supported-guard.js
 # A rail dropped at boot on a failed or slow /supported read is read again on a backoff and rejoins the 402 and every derived surface without a restart
@@ -17,6 +17,8 @@ t node scripts/test-bazaar-keepalive.js
 t node scripts/test-keepalive-plan.js
 # The Bazaar presence check every four hours: a route missing from every listing pass is bought once (exempt kinds and caps refuse), an unreadable listing never buys and pages only after three checks, one issue on a repeat miss (offline fixtures, loopback stub)
 t node scripts/test-bazaar-presence.js
+# MCP tool listings in the listing scripts: refresh-bazaar MODE=mcp buys an explicit slug list once each through the connector's x402 transport and refuses any other slug, its dry run prints each price and the total, an offer that is not the tool's MCP listing offer is never signed, a failed settle is not sent again, the presence check finds the listings and never buys one, bazaar-validate --mcp, the plan and the workflow (stub catalog, paid boot with a stub facilitator, throwaway key)
+t node scripts/test-mcp-listing-tools.js
 # Weekly check of our own Bazaar listing: query list from demand, ours by exact host and route, unreadable never pages, the one-issue page with an ack list (offline fixtures)
 t node scripts/test-bazaar-rank-monitor.js
 # verify_failed carries a DERIVED payer id (never an address), so a retry loop can be told from many clients (offline)
