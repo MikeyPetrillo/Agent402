@@ -302,6 +302,13 @@ export function mcpPaymentMethods() {
 }
 
 export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = () => {}, onPaidCutoff = () => {}, getLeaderboard = null, getMppLeaderboard = null, mppLoopback = null, x402Loopback = null, payWires = null, decideFeedback = null, taskStore = null, taskStoreDir = null, path = "/mcp", profile = null, maxToolInputElements = MCP_MAX_TOOL_INPUT_ELEMENTS }) {
+  // The wires this mount takes in the call. `payWires` is the boot's own
+  // account (src/connector-pay.js connectorWires, the source the pages read):
+  // a wire it denies has no loopback here, so the capability advertisement,
+  // the gates, the tasks path and the copy all read one answer. A FREE_MODE
+  // boot with MPP_SECRET_KEY set takes no MPP credential anywhere.
+  if (payWires?.mpp === false) mppLoopback = null;
+  if (payWires?.x402 === false) x402Loopback = null;
   // sellers.list is listed and answered only when the connector opts in (AGENT402_SHOW_ROUTER=1).
   const sellersListed = Boolean(getLeaderboard) && process.env.AGENT402_SHOW_ROUTER === "1";
   const scoped = profile?.metaTools === false;
@@ -406,14 +413,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // The wires a paid tool is payable over in the call on this mount, for the
   // listed descriptions: "x402 or MPP", "x402", "MPP" or "".
   // Every text this connector writes about paying in the call reads these
-  // two, never the loopbacks: `payWires` is the boot's own account
-  // (src/connector-pay.js connectorWires, the source the pages read), so a
-  // FREE_MODE boot that mounts the MPP loopback still offers no payment.
-  const payX402 = Boolean(x402Loopback) && payWires?.x402 !== false;
-  const payMpp = Boolean(mppLoopback) && payWires?.mpp !== false;
+  // two; a wire `payWires` denies has no loopback (top of this function).
+  const payX402 = Boolean(x402Loopback);
+  const payMpp = Boolean(mppLoopback);
   const inCallWires = [payX402 && "x402", payMpp && "MPP"].filter(Boolean).join(" or ");
   // What a tool whose run outlasts the blocking wait takes: the x402 wire is
   // blocking only, so a long call is paid in the call over MPP (as a task).
+  /** True when this tool's run can outlast the blocking wait: the x402 wire
+   *  refuses its signed retry (payOverX402), so no x402 offer is made for it. */
+  const isLongCall = (def) => needsAsyncOrWait(def?.asyncProfile, PAID_LOOPBACK_TIMEOUT_MS / 1000);
   const longCallNote = payX402
     ? `a tool whose run can outlast this connector's blocking wait (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s) is not paid here over x402: ${payMpp ? "pay it here over MPP as an MCP task, or call" : "call"} its HTTP route with Prefer: respond-async`
     : "";
@@ -517,10 +525,23 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
 
   // `x402`: the result this text rides on carries an x402 PaymentRequired;
   // `mpp`: it carries MPP challenges. Each names only the wires on offer.
+  // A long call (isLongCall) is never invited to sign an x402 payment: it is
+  // paid here over MPP as a task, or on its HTTP route as a job.
   function walletRequiredText(def, { x402 = false, mpp = payMpp } = {}) {
+    const lead = `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier.`;
+    if (isLongCall(def)) {
+      const asTask = mpp && Boolean(tasks);
+      return [
+        lead,
+        `It can run up to ${Number(def.asyncProfile?.maxSeconds)} s, longer than this connector's blocking wait (${Math.round(PAID_LOOPBACK_TIMEOUT_MS / 1000)} s)${payX402 ? ", so it is not paid here over x402" : ""}.`,
+        ...(asTask ? [`Pay it RIGHT HERE over MPP as an MCP task: call again declaring the MCP tasks extension on the request (_meta["${CLIENT_CAPABILITIES_META}"].extensions["${TASKS_EXTENSION}"]) with an MPP credential in _meta["org.paymentauth/credential"], and the run is handed back as a task handle to poll.`] : []),
+        `${asTask ? "Or call" : "Call"} its HTTP route ${def.route} with the header Prefer: respond-async and any x402 client: it answers 202 with a job link.`,
+        `Or run the npm server with a funded wallet: npx agent402-mcp with env ${npmEvmSetup}. Docs: ${baseUrl}/tools/${def.slug}`,
+      ].join(" ");
+    }
     const here = x402 || mpp;
     return [
-      `This tool requires payment; see payment.info. "${def.slug}" (${def.price}/call) is not part of this hosted free tier.`,
+      lead,
       ...(x402 ? [`Pay it RIGHT HERE over x402: sign one of the accepts in this result's PaymentRequired (the JSON in its first text block) and call again with the payment in _meta["x402/payment"] - an x402 MCP client does this automatically; the settle receipt comes back in _meta["x402/payment-response"].`] : []),
       ...(mpp ? [`${x402 ? "Or pay it here" : "Pay it RIGHT HERE"} over MPP: call again with an MPP credential in _meta["org.paymentauth/credential"] - mppx's McpClient.wrap() does this automatically (USDC on Base/Celo via evm.charge, or native Tempo via tempo.charge); the receipt comes back in _meta["org.paymentauth/receipt"].`] : []),
       `${here ? "Or, from" : "To pay it from"} Claude or any MCP client, run the npm server with a funded wallet:`,
@@ -883,7 +904,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       // A first ask offers the x402 wire beside MPP: a flagship's twin is
       // asked in parallel (its PaymentRequired names resource /mcp); any
       // other slug's offer is the PAYMENT-REQUIRED header of the same 402.
-      const x402Target = !credentialHeader && x402Loopback ? x402TargetOf(entry.def, isNamed) : null;
+      // A long call gets no x402 offer: its signed retry would be refused.
+      const x402Target = !credentialHeader && x402Loopback && !isLongCall(entry.def) ? x402TargetOf(entry.def, isNamed) : null;
       const twinAsk = x402Target && x402Target !== entry.def ? x402Offer(x402Target, params, ip, signal) : null;
       let r;
       try {
@@ -1084,9 +1106,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         // -32042, which is how a task records a payment ask.
         if (!presented && softAsk) {
           const mppMeta = { [MCP_PAYMENT_REQUIRED_META]: { httpStatus: 402, challenges, ...(problem ? { problem } : {}) } };
-          // Both wires on one result: the x402 PaymentRequired as
-          // structuredContent and the first text block (transports-v2/mcp.md),
-          // the MPP challenges unchanged in _meta, the readable text after.
+          // Both wires on one result: the x402 PaymentRequired as JSON in the
+          // first text block (never structuredContent), the MPP challenges
+          // unchanged in _meta, the readable text after.
           const both = x402Required ? buildPaymentRequiredResult(x402Required, { message: walletRequiredText(entry.def, { x402: true }), mppMeta }) : null;
           if (both) return both;
           return {
@@ -1666,7 +1688,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // (no MPP_SECRET_KEY) the old paid-access instructions stand.
           if (!mppLoopback) {
             // No MPP gates: the x402 offer alone, when this boot has a paywall.
-            const offer = await x402Offer(x402TargetOf(entry.def, isNamed), paidParamsOf(args, isNamed), ip, signal);
+            // A long call gets the text alone (its HTTP route, as a job).
+            const offer = isLongCall(entry.def) ? null : await x402Offer(x402TargetOf(entry.def, isNamed), paidParamsOf(args, isNamed), ip, signal);
             return (offer && buildPaymentRequiredResult(offer, { message: walletRequiredText(entry.def, { x402: true }) }))
               || { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
           }
@@ -1678,7 +1701,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           // A free tool at its limit offers its own x402 challenge (the HTTP
           // route's), so a client that can pay is served now: it pays in
           // _meta["x402/payment"] and the call skips this limiter.
-          const offer = await x402Offer(entry.def, paidParamsOf(args, isNamed), ip, signal);
+          const offer = isLongCall(entry.def) ? null : await x402Offer(entry.def, paidParamsOf(args, isNamed), ip, signal);
           return (offer && buildPaymentRequiredResult(offer, { message: `${limitText} To be served now, pay this call over x402: sign one of the accepts in this result's PaymentRequired and call again with the payment in _meta["x402/payment"] (an x402 MCP client does this automatically). Or pay per call from the npm server: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }))
             || { content: [{ type: "text", text: `${limitText} For unmetered access pay per call via x402: npx agent402-mcp with AGENT_KEY. ${baseUrl}/llms.txt` }], isError: true };
         }

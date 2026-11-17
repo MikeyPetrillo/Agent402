@@ -10307,8 +10307,10 @@ const mcpMountOpts = {
   // Native MPP on /mcp (2026-08-19): paid tools are payable on the connector
   // with an MPP credential in _meta; the call is replayed to our own paid
   // route so the real gates settle (src/mcp-mpp.js). Same rollout switch as
-  // the MPP shim - without MPP_SECRET_KEY there are no challenges to mint.
-  mppLoopback: (process.env.MPP_SECRET_KEY || "").trim() ? createMcpMppLoopback({ port: () => loopbackPort }) : null,
+  // the MPP shim - without MPP_SECRET_KEY there are no challenges to mint -
+  // read through connectorWires(), the one account of what this connector
+  // takes: a FREE_MODE boot has no paywall, so no loopback whatever key is set.
+  mppLoopback: connectorWires().mpp ? createMcpMppLoopback({ port: () => loopbackPort }) : null,
   // The x402 MCP wire on /mcp (src/mcp-x402.js): a payment in
   // _meta["x402/payment"] is replayed to the flagship's internal twin
   // (src/mcp-x402-routes.js) or, for catalog.call, the slug's own route, as a

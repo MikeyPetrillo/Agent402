@@ -287,6 +287,9 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
   const hint = text(r.hint, 1000) || "This payment's settlement is not confirmed yet, so the answer was withheld. Do not sign a new authorization for this call: a second one is a second payment.";
   const wait = Number.isFinite(Number(retryAfterSeconds)) && Number(retryAfterSeconds) > 0 ? Math.min(Math.ceil(Number(retryAfterSeconds)), 3600) : null;
   const transactions = Array.isArray(r.transactions) ? r.transactions.filter((t) => typeof t === "string" && /^0x[0-9a-fA-F]{64}$/.test(t)).slice(0, 8) : [];
+  // The route's hint points at its own body ("listed in transactions"); here
+  // the hashes ride in _meta, so the text names them and says where they are.
+  const where = transactions.length ? ` Transaction${transactions.length > 1 ? "s" : ""} to watch: ${transactions.join(", ")} (also in this result's _meta["${SETTLEMENT_PENDING_META}"].transactions).` : "";
   const structured = {
     reason: text(r.reason, 60) || "settlement-pending",
     ...(retry ? { retry } : {}),
@@ -297,7 +300,7 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
   };
   const resend = retry === "same-payment" ? ` Resend this call with the same _meta["${X402_PAYMENT_META}"]${wait ? ` after about ${wait} s` : ""}.` : "";
   // The fields ride in _meta, never structuredContent (see the wire note above).
-  const result = { isError: true, content: [{ type: "text", text: `${label}: ${hint}${resend}` }], _meta: { [SETTLEMENT_PENDING_META]: structured } };
+  const result = { isError: true, content: [{ type: "text", text: `${label}: ${hint}${where}${resend}` }], _meta: { [SETTLEMENT_PENDING_META]: structured } };
   if (isPlainObject(settleResponse) && settleResponse.success === false) {
     const { copy } = jsonCopy(settleResponse, X402_PAYMENT_MAX_BYTES);
     if (copy && copy.success === false) result._meta[X402_PAYMENT_RESPONSE_META] = copy;

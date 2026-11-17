@@ -146,6 +146,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const uText = JSON.stringify(u.content || "");
     ok(u.isError === true && !("structuredContent" in u) && !PR(u) && u._meta?.[SETTLEMENT_PENDING_META]?.retry === "watch-transaction" && u._meta?.[SETTLEMENT_PENDING_META]?.transactions?.[0] === TX && /new payment/.test(uText) && !/not charged/.test(uText),
       `an unconfirmed broadcast answers the transactions to watch, no fresh offer, never "not charged" (${uText.slice(0, 160)})`);
+    ok(uText.includes(TX) && uText.includes(`_meta[\\"${SETTLEMENT_PENDING_META}\\"].transactions`),
+      `its text names the hash and says where the list is (_meta), since the result has no "transactions" field of its own (${uText.slice(-220)})`);
     // The official client: one payment for the call, and no second signature.
     const payer = new x402Client();
     registerExactEvmScheme(payer, { signer: privateKeyToAccount(generatePrivateKey()) });
@@ -178,15 +180,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     return new Response(JSON.stringify({ error: "Payment required" }), { status: 402, headers: { "content-type": "application/json", "payment-required": encodePaymentRequiredHeader(offerFor(slug)) } });
   };
   // MPP gates that mint no challenge: a bare 402, no WWW-Authenticate.
-  const bareFetch = async () => new Response(JSON.stringify({ error: "Payment required" }), { status: 402, headers: { "content-type": "application/json" } });
+  let bareCalls = 0;
+  const bareFetch = async () => (bareCalls++, new Response(JSON.stringify({ error: "Payment required" }), { status: 402, headers: { "content-type": "application/json" } }));
   const CAT = {
     "POST /api/paid-x": { route: "POST /api/paid-x", slug: "paid-x", name: "paid-x", category: "test", price: "$0.001", description: "paid-x test tool", tags: ["paid-x"], discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => { throw new Error("ran in-process"); } },
+    // A run that can outlast the blocking wait: paid over MPP as a task, or on its HTTP route.
+    "POST /api/long-x": { route: "POST /api/long-x", slug: "long-x", name: "long-x", category: "test", price: "$0.05", description: "long-x test tool", tags: ["long-x"], asyncProfile: { slow: true, maxSeconds: 600 }, discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => { throw new Error("ran in-process"); } },
     "POST /api/free-x": { route: "POST /api/free-x", slug: "free-x", name: "free-x", category: "test", price: "$0.001", description: "free-x test tool", tags: ["free-x"], discovery: { inputSchema: { properties: {} }, input: {} }, handler: async () => ({ ok: true }) },
   };
   const wirings = {
     "x402 only": { x402Loopback: createMcpMppLoopback({ port: 1, fetchImpl: x402Fetch }), mppLoopback: null },
     "neither (FREE_MODE)": { x402Loopback: null, mppLoopback: null },
     "MPP gates, no challenge": { x402Loopback: null, mppLoopback: createMcpMppLoopback({ port: 1, fetchImpl: bareFetch }) },
+    // FREE_MODE with MPP_SECRET_KEY set: the boot's account (payWires) denies
+    // both wires, so a loopback handed to the mount is never used.
+    "loopbacks the boot's account denies": { x402Loopback: createMcpMppLoopback({ port: 1, fetchImpl: x402Fetch }), mppLoopback: createMcpMppLoopback({ port: 1, fetchImpl: bareFetch }), payWires: { x402: false, mpp: false, names: [], phrase: "" } },
   };
   const texts = (r) => (r?.content || []).map((c) => c.text || "").join("\n");
   for (const [label, loops] of Object.entries(wirings)) {
@@ -198,8 +206,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const raw = new Client({ name: `copy-${label}`, version: "0.0.0" });
     try {
       await raw.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${httpSrv.address().port}/mcp`)));
-      const x402 = Boolean(loops.x402Loopback);
-      const mpp = Boolean(loops.mppLoopback);
+      const x402 = Boolean(loops.x402Loopback) && loops.payWires?.x402 !== false;
+      const mpp = Boolean(loops.mppLoopback) && loops.payWires?.mpp !== false;
+      const bare0 = bareCalls;
+      ok(Boolean(raw.getServerCapabilities()?.experimental?.payment) === mpp, `${label}: the payment capability is advertised ${mpp ? "with" : "only with"} the MPP wire (${JSON.stringify(raw.getServerCapabilities()?.experimental || null)})`);
+      const infoDesc = String((await raw.listTools()).tools.find((t) => t.name === "payment.info")?.description || "");
+      ok(/settle in USDC over x402/.test(infoDesc) && /over x402 or MPP/.test(infoDesc) === mpp && (x402 || mpp ? /payable here, in the call, over/.test(infoDesc) : !/payable here/.test(infoDesc)),
+        `${label}: payment.info's listed description says "or MPP" ${mpp ? "" : "only "}where the connector takes MPP (${infoDesc.slice(0, 200)})`);
+      // A long tool: never an x402 offer, never an invitation to sign one.
+      const longAsk = await raw.callTool({ name: "catalog.call", arguments: { slug: "long-x", params: {} } });
+      const longText = texts(longAsk);
+      ok(longAsk.isError === true && !PR(longAsk)?.accepts && !/"accepts"/.test(longText) && !/over x402: sign|x402\/payment|RIGHT HERE over x402/.test(longText)
+        && /Prefer: respond-async/.test(longText) && longText.includes("POST /api/long-x") && /not paid here over x402/.test(longText) === x402,
+        `${label}: a long tool's first ask offers no x402 accepts and names its HTTP route as a job (${longText.slice(0, 260)})`);
+      if (x402) {
+        const signed = await raw.callTool({ name: "catalog.call", arguments: { slug: "long-x", params: {} }, _meta: { [X402_PAYMENT_META]: { x402Version: 2, accepted, payload: { signature: "0x00" } } } });
+        ok(/^respond_async_required/.test(texts(signed)), `${label}: control: a signed x402 retry of the long tool is refused (${texts(signed).slice(0, 80)}), which is why the ask never invites one`);
+      }
       const wires = [x402 && "x402", mpp && "MPP"].filter(Boolean);
       const instructions = String(raw.getInstructions() || "");
       const hosted = instructions.split("\n").find((l) => l.startsWith("Hosted connector")) || "";
@@ -223,6 +246,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const how = String(info.structuredContent?.freeTier?.how ?? JSON.parse(info.content?.[0]?.text || "{}").freeTier?.how ?? "");
       ok(how && (x402 ? /over x402/.test(how) && how.includes("x402/payment") : !/over x402|x402\/payment/.test(how)) && (mpp ? /over MPP/.test(how) : !/over MPP|org\.paymentauth/.test(how)),
         `${label}: payment.info names ${[x402 && "x402", mpp && "MPP"].filter(Boolean).join(" and ") || "no in-call wire"} (${how.slice(0, 160)})`);
+      if (loops.payWires) ok(bareCalls === bare0, `${label}: no call reached a loopback (${bareCalls - bare0} MPP replays)`);
     } catch (e) {
       ok(false, `${label}: ${e?.stack || String(e)}`);
     } finally {
@@ -340,6 +364,22 @@ try {
   const catAsk = await plain.client.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key } } });
   ok(catAsk.isError === true && PR(catAsk)?.resource?.url === "https://agent402.tools/api/memory" && Array.isArray(catAsk._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges),
     `catalog.call's first ask offers the slug's own HTTP challenge (${PR(catAsk)?.resource?.url}) beside the MPP challenges`);
+
+  // A long tool on the boot with both wires: the MPP challenges and the task
+  // path, no x402 accepts (a signed x402 retry is refused, see the control).
+  {
+    const longAsk = await plain.client.callTool({ name: "catalog.call", arguments: { slug: "domain-audit", params: { domain: "example.com" } } });
+    const longText = (longAsk.content || []).map((c) => c.text || "").join("\n");
+    ok(longAsk.isError === true && !PR(longAsk)?.accepts && !/"accepts"/.test(longText) && !/RIGHT HERE over x402|x402\/payment/.test(longText) && Array.isArray(longAsk._meta?.[MCP_PAYMENT_REQUIRED_META]?.challenges),
+      `a long tool's first ask (domain-audit) carries the MPP challenges and no x402 accepts (${longText.slice(0, 200)})`);
+    ok(/not paid here over x402/.test(longText) && /Pay it RIGHT HERE over MPP as an MCP task/.test(longText) && /Prefer: respond-async/.test(longText), "its text names MPP as a task and the HTTP route as a job");
+    const offerElsewhere = PR(await plain.client.callTool({ name: "memory.read", arguments: { key } }));
+    const c1 = { ...counts };
+    const signed = await plain.client.callTool({ name: "catalog.call", arguments: { slug: "domain-audit", params: { domain: "example.com" } }, _meta: { [X402_PAYMENT_META]: { x402Version: 2, accepted: offerElsewhere.accepts[0], payload: { signature: "0x00" } } } });
+    ok(/^respond_async_required/.test(String(signed.content?.[0]?.text)) && counts.verify === c1.verify, `control: a signed x402 retry of domain-audit is refused before the paywall (${String(signed.content?.[0]?.text).slice(0, 60)})`);
+    const listedInfo = listedTools.find((t) => t.name === "payment.info")?.description || "";
+    ok(/settle in USDC over x402 or MPP \(payable here, in the call, over x402 or MPP\)/.test(listedInfo), `payment.info's listed description names x402 or MPP on this boot (${listedInfo.slice(0, 160)})`);
+  }
 
   // 2. The official client pays: memory.write (no twin: the HTTP route), then memory.read on the twin.
   const payA = await connect("203.0.113.11", A);

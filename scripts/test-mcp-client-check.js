@@ -1,7 +1,8 @@
 // test-mcp-client-check - scripts/mcp-client-check.js (the hosted connector
 // read by an independent @modelcontextprotocol/sdk client) passes against a
-// real FREE_MODE boot and against paid boots (x402 and MPP in the call, and
-// x402 alone), and fails against a connector that drifted.
+// real FREE_MODE boot (with and without MPP_SECRET_KEY set: no paywall, so no
+// payment capability either way) and against paid boots (x402 and MPP in the
+// call, and x402 alone), and fails against a connector that drifted.
 //
 // The positive half boots src/server.js on PORT=0, reads the bound port back,
 // and runs the check against it: exit 0, every check line ok, the JSON summary
@@ -92,12 +93,13 @@ function runCheck(baseUrl, outName) {
 
 // ------------------------------------------------------------ real server
 
-async function bootServer() {
+async function bootServer(mppKey = "") {
   const child = spawn(process.execPath, [join(ROOT, "src", "server.js")], {
     cwd: ROOT,
     env: {
       ...process.env,
       FREE_MODE: "true",
+      MPP_SECRET_KEY: mppKey,
       PORT: "0",
       X402_SYNC_ON_START: "false",
       X402_INDEX_CRAWL: "off",
@@ -124,22 +126,30 @@ async function bootServer() {
   return { child, port };
 }
 
-{
+// Twice: with no MPP key, and with MPP_SECRET_KEY set. A FREE_MODE boot has no
+// paywall, so the key changes nothing: no payment capability advertised, no
+// paid tool run, the same setup text.
+for (const [label, mppKey] of [["FREE_MODE", ""], ["FREE_MODE with MPP_SECRET_KEY set", randomBytes(24).toString("hex")]]) {
   let child = null;
   try {
-    const booted = await bootServer();
+    const booted = await bootServer(mppKey);
     child = booted.child;
-    ok(booted.port > 0, `FREE_MODE server booted on PORT=0 and printed the bound port (${booted.port})`);
-    const r = await runCheck(`http://127.0.0.1:${booted.port}`, "real.json");
-    ok(r.status === 0, `the check exits 0 against the real connector${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
+    ok(booted.port > 0, `${label}: server booted on PORT=0 and printed the bound port (${booted.port})`);
+    const r = await runCheck(`http://127.0.0.1:${booted.port}`, `real-${mppKey ? "key" : "nokey"}.json`);
+    ok(r.status === 0, `${label}: the check exits 0 against the real connector${r.status === 0 ? "" : `\n${r.stdout}\n${r.stderr}`}`);
+    const init = await fetch(`http://127.0.0.1:${booted.port}/mcp`, {
+      method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } }),
+    }).then((x) => x.text());
+    ok(/"capabilities"/.test(init) && !/"payment"\s*:\s*\{\s*"methods"/.test(init), `${label}: initialize advertises no payment capability`);
     const lines = r.stdout.split("\n").filter((l) => /^(ok|FAIL) - /.test(l));
-    ok(lines.length >= 10 && lines.every((l) => l.startsWith("ok - ")), `every check line is ok (${lines.length} lines)`);
-    ok(r.summary && r.summary.failed === 0 && r.summary.passed === lines.length && r.summary.target.endsWith("/mcp"), "the JSON summary matches the lines (passed, failed, target)");
+    ok(lines.length >= 10 && lines.every((l) => l.startsWith("ok - ")), `${label}: every check line is ok (${lines.length} lines)`);
+    ok(r.summary && r.summary.failed === 0 && r.summary.passed === lines.length && r.summary.target.endsWith("/mcp"), `${label}: the JSON summary matches the lines (passed, failed, target)`);
     for (const name of ["initialize", "tools/list", "server.describe", "payment.info", "catalog.search", "catalog.find", "sellers.list", "catalog.call", "web.search without payment", "memory.write without payment", "catalog.call search without payment", "tasks"]) {
-      ok((r.summary?.checks || []).some((c) => c.name.startsWith(name) && c.ok), `summary carries a passing "${name}" check`);
+      ok((r.summary?.checks || []).some((c) => c.name.startsWith(name) && c.ok), `${label}: summary carries a passing "${name}" check`);
     }
   } catch (err) {
-    ok(false, `real server: ${err.message}`);
+    ok(false, `${label}: real server: ${err.message}`);
   } finally {
     if (child) { try { child.kill("SIGKILL"); } catch { /* gone */ } }
   }
