@@ -403,6 +403,9 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
   // The twins' unpaid offers (x402Offer): at most one entry per twin route.
   const twinOfferCache = new Map();
   const x402TwinSlugs = new Set(x402Loopback ? mcpX402Entries(catalog).map((e) => e.slug) : []);
+  // The wires a paid tool is payable over in the call on this mount, for the
+  // listed descriptions: "x402 or MPP", "x402", "MPP" or "".
+  const inCallWires = [x402Loopback && "x402", mppLoopback && "MPP"].filter(Boolean).join(" or ");
   /** The route an x402 payment for this call is replayed to. */
   const x402TargetOf = (def, isNamed) => {
     if (!isNamed || !x402TwinSlugs.has(def.slug) || !flagshipSet.has(def.slug)) return def;
@@ -703,7 +706,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
           title: "Payment and wallet setup",
           annotations: { title: "Payment and wallet setup", ...SAFE },
           description:
-            `How paying for Agent402 tools works. This connector holds no wallet: ${freeCount} pure-CPU tools run free through proof-of-work, and the rest settle in USDC over x402${mppLoopback ? " or MPP (payable here)" : ""}. Covers wallet setup, per-call and session spend caps, the payment rails, and checking a wallet's balance. Returns { connector, freeTier, pay, spendControls, balanceAndHistory }.`,
+            `How paying for Agent402 tools works. This connector holds no wallet: ${freeCount} pure-CPU tools run free through proof-of-work, and the rest settle in USDC over x402${mppLoopback ? " or MPP" : ""}${inCallWires ? ` (payable here, in the call, over ${inCallWires})` : ""}. Covers wallet setup, per-call and session spend caps, the payment rails, and checking a wallet's balance. Returns { connector, freeTier, pay, spendControls, balanceAndHistory }.`,
           inputSchema: { type: "object", properties: {} },
           outputSchema: META_OUTPUT_SCHEMAS["payment.info"],
         },
@@ -718,7 +721,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             : `Paid (${def.price}/call):`;
           const walletNote = free
             ? ""
-            : ` This hosted connector holds no wallet: ${mppLoopback ? "pay it here over MPP, or " : ""}run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 client.`;
+            : ` This hosted connector holds no wallet: ${inCallWires ? `pay it here, in the call, over ${inCallWires}, or ` : ""}run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 client.`;
           const outSchema = FLAGSHIP_OUTPUT_SCHEMAS[slug]
             || outputSchemaFromExample(def.discovery?.output?.example);
           return {

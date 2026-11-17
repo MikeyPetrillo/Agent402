@@ -18,6 +18,7 @@ import { ledgerShell, ledgerFooterCompact, esc, breadcrumbLd } from "./ledger-ch
 import { RAILS, railKey, x402EvmOnly, liveRails } from "./rails.js";
 import { mppMethodsSummary } from "./mpp-offers.js";
 import { mppShimEnabled } from "./mpp-shim.js";
+import { connectorWires } from "./connector-pay.js";
 import { mppFlagshipRows, mppFlagshipSnippet, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
 import { STRIPE_MIN_USD } from "./mpp-stripe.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
@@ -282,7 +283,7 @@ const res = await fetch("${baseUrl}/api/hash", {
 ${section("mcp", `
   ${eyebrow("06 / MCP")}
   ${h2("From an MCP host, the payment rides underneath.")}
-  ${p(`The hosted connector at ${code(`${baseUrl}/mcp`)} serves the free tier with no install and no wallet${mppShimEnabled() ? `, and makes the wallet-only tools payable over MPP from an mppx-aware MCP client` : ""}. The npm server pays over x402 from a key you give it, with spend caps checked before any payment is signed.`)}
+  ${p(`The hosted connector at ${code(`${baseUrl}/mcp`)} serves the free tier with no install and no wallet${connectorWires().names.length ? `, and makes the wallet-only tools payable in the call over ${connectorWires().phrase}, from an MCP client that speaks it` : ""}. The npm server pays over x402 from a key you give it, with spend caps checked before any payment is signed.`)}
   ${pre("install lines", `# hosted, no wallet: the proof-of-work tools
 claude mcp add --transport http agent402 ${baseUrl}/mcp
 

@@ -66,8 +66,8 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   `server.describe`, `demand.request` (and `sellers.list` when a wallet is set), plus flagships `web.search`,
   `web.answer`, `web.news`, `browser.render`, `market.quote`, `audio.transcribe`,
   `memory.read`, `memory.write`); wallet-only tools are payable on the connector
-  over MPP (the challenge arrives as a JSON-RPC payment error, the credential
-  goes back in `_meta`). npm: `agent402-mcp` (stdio, pays by
+  in the call, over x402 or MPP (the offer arrives in the tool result, the
+  payment goes back in `_meta`). npm: `agent402-mcp` (stdio, pays by
   wallet or credits key), `agent402-client` (buyer SDK), `agent402-tollbooth`
   (pay-per-crawl: x402 + MPP, native Tempo with split payments).
 - **Maintainer:** Havok Holdings LLC. Open source (AGPL-3.0 server, MIT packages).

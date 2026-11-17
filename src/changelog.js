@@ -8,6 +8,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "Paying on the MCP connector, on every surface",
+    items: [
+      "Surfaces: Every page and text surface that describes paying on the hosted MCP connector (/llms.txt, /llms-full.txt, /agents.md, /how-to-pay, /quickstart, /learn/mcp-payments, /integrations/mcp, the agent-hosts guide, the wiki and the README) names the wires the connector takes in the call on that instance: x402 and MPP on the hosted service, x402 alone where the MPP gates are off, and neither on a FREE_MODE instance, which has no paywall. The listed description of payment.info says the same.",
+      "Operations: The Bazaar listing scripts read the connector's MCP tool listings: a pass that takes an explicit list and buys each listing once through the connector's x402 transport, a presence check that reads the listings beside the routes and pages on one that was listed and left, and a check of each tool's offer.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "The hosted MCP connector accepts x402",
     items: [
       "Surfaces: The hosted MCP connector at /mcp accepts x402 in the call, over the x402 MCP transport: the first ask for a paid tool carries an x402 PaymentRequired beside the MPP challenges, a client sends the signed payment in _meta[\"x402/payment\"], and a paid answer carries the settle receipt in _meta[\"x402/payment-response\"]. Six flagship tools (web.search, web.news, web.answer, market.quote, browser.render and memory.read) are offered with resource /mcp, and catalog.call and the other flagships with the tool's own HTTP route; that route's x402 paywall verifies the payment, runs the tool and settles only a successful answer.",

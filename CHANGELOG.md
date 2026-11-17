@@ -6,6 +6,23 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (paying on the MCP connector, on every surface)
+Surfaces:
+- Every page and text surface that describes paying on the hosted MCP connector
+  (/llms.txt, /llms-full.txt, /agents.md, /how-to-pay, /quickstart,
+  /learn/mcp-payments, /integrations/mcp, the agent-hosts guide, the wiki and
+  the README) names the wires the connector takes in the call on that instance:
+  x402 and MPP on the hosted service, x402 alone where the MPP gates are off,
+  and neither on a FREE_MODE instance, which has no paywall. The listed
+  description of payment.info says the same.
+
+Operations:
+- The Bazaar listing scripts read the connector's MCP tool listings: a pass
+  that takes an explicit list and buys each listing once through the
+  connector's x402 transport, a presence check that reads the listings beside
+  the routes and pages on one that was listed and left, and a check of each
+  tool's offer.
+
 ### 2026-11-16 (the hosted MCP connector accepts x402)
 Surfaces:
 - The hosted MCP connector at /mcp accepts x402 in the call, over the x402 MCP
