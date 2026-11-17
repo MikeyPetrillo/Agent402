@@ -8,6 +8,7 @@
 // exercised but tolerant of upstream/sandbox failures (they need real egress;
 // CI has it). Memory tools get a demo namespace and accept their valid 4xx.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
+import { shedWaitMs, SHED_MAX_ASKS, SHED_MAX_WAIT_MS } from "./lib/shed-answer.js";
 import { missingDocumentedKeys, emptyPromisedArrays } from "./sweep-shape.js";
 import { requestExampleOf, multipartBodyFrom, MULTIPART_TYPE } from "../src/openapi-request.js";
 
@@ -98,8 +99,9 @@ const NETWORK = new Set([
   // Web-content kit: archive.org (archive-snapshot), caller feed URLs
   // (feed-parse), caller redirect chains (unshorten-url) — all live egress.
   "/api/archive-snapshot", "/api/feed-parse", "/api/unshorten-url",
-  // a2a-card-fetch: its example fetches the static sample card on PROD, which
-  // 404s on the CI run that first ships the route — lenient until deployed.
+  // a2a-card-fetch: its example names the static sample card on production;
+  // the CI sweeps' server answers it from itself (own-examples-preload.js),
+  // a local boot without that preload still fetches production - lenient.
   "/api/a2a-card-fetch",
   // seller-payability pays an external seller's probe from the spending
   // wallet - 503 without X402_UPSTREAM_BUYER_KEY (CI boots keyless).
@@ -520,15 +522,7 @@ for (const [path, methods] of paths) {
 // (correctly) read as a failure.
 const CONCURRENCY = Math.max(1, Number(process.env.TEST_ALL_CONCURRENCY) || 8);
 let speechFixture = null;
-const SHED_MAX_ASKS = 3, SHED_MAX_WAIT_MS = 10_000;
-/** How long a load-shed answer asks the caller to wait (ms), or null when the
- *  answer is not one: read from its fields, never from its sentence. */
-function shedWaitMs(status, retryAfterHeader, body) {
-  if (status !== 503 || !body || typeof body !== "object") return null;
-  const header = Number(retryAfterHeader);
-  if (!Number.isFinite(header) || header <= 0 || typeof body.retryAfterSeconds !== "number" || body.retryAfterSeconds !== header) return null;
-  return Math.min(SHED_MAX_WAIT_MS, Math.ceil(header * 1000));
-}
+// The load-shed answer is read from its fields (scripts/lib/shed-answer.js).
 async function runTask(t) {
   let status = 0, body = null, threw = null, shed = 0, stillShed = false;
   const _t0 = Date.now();

@@ -731,6 +731,7 @@ const solTxs = new Map(); // sig -> getTransaction result | "fail"
 const blockhashValid = new Map();
 const algoTxs = new Map(); // id -> indexer transaction | "fail"
 let algoRound = 1000; // the indexer's own indexed round
+let algoHealth = "ok"; // the indexer's /health: "ok", "fail" (HTTP 503) or "garbage" (no readable round)
 // Each stub is matched on its parsed host, never on a string prefix.
 const hostOf = (x) => new URL(x).host;
 const railFetch = async (url, opts) => {
@@ -752,7 +753,11 @@ const railFetch = async (url, opts) => {
     if (t === "fail") return json(503, {});
     return t ? json(200, { transaction: t }) : json(404, { message: "no transaction found" });
   }
-  if (at.host === hostOf(IDX) && at.pathname === "/health") return json(200, { round: algoRound, "is-migrating": false });
+  if (at.host === hostOf(IDX) && at.pathname === "/health") {
+    if (algoHealth === "fail") return json(503, {});
+    if (algoHealth === "garbage") return json(200, { round: "soon" });
+    return json(200, { round: algoRound, "is-migrating": false });
+  }
   return fetchImpl(url, opts);
 };
 const railBook = (over = {}) => makeBook({ fetchImpl: railFetch, svmRpcs: [SOL_RPC], avmIndexers: [IDX], recordOwed: recordRefundOwed, owedRecorded: async (tx) => !!(await refundByEvidenceFresh(tx)), ...over });
@@ -831,6 +836,27 @@ await check("an Algorand transaction an indexer still lagging behind its lastVal
   r = await book.reconcile();
   assert.equal(r.owed, 1);
   assert.equal((await owedFor(algoId(74))).length, 1, "owed exactly once");
+});
+
+await check("an unreadable Algorand indexer keeps a late entry open: a not found it cannot place against lastValid never closes it", async () => {
+  const book = railBook({ recordOwed: async () => { throw new Error("nothing is owed"); } });
+  await book.book(algoEntry(76, { lastValid: 1500 }));
+  await book.book(algoEntry(77, { lastValid: 1500 }));
+  algoRound = 2000; // the round the indexer WOULD report is past lastValid
+  clock += WINDOW_MS + 2 * 60_000;
+  for (const health of ["fail", "garbage"]) {
+    algoHealth = health;
+    const r = await book.reconcile();
+    assert.equal(r.absent, 0, `an indexer whose health read is ${health} never proves absence`);
+    assert.equal(r.unreadable, 2, `both entries are counted unreadable (${health})`);
+    assert.deepEqual(book.list().map((e) => e.tx).sort(), [algoId(76), algoId(77)].sort(), `both entries stay open (${health})`);
+    clock += 30 * 60_000;
+  }
+  // Control: the same entries close once the indexer's round reads past lastValid.
+  algoHealth = "ok";
+  const r = await book.reconcile();
+  assert.equal(r.absent, 2, "control: a readable indexer past lastValid closes them as not landed");
+  assert.equal(book.list().length, 0);
 });
 
 await check("the rail stubs answer only their own host: a look-alike host is not served as the Solana RPC", async () => {

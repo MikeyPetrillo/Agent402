@@ -11,6 +11,7 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { strict as assert } from "node:assert";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { probe, observe, run, solvePow, checkPaidCall, PAID_CALL_MAX_DIFFICULTY, SOLVE_CAP_FACTOR } from "../workers/status-probe/src/index.js";
 
@@ -801,6 +802,16 @@ for (const [name, over, detail] of failCases) {
     assert.match(named, /POST \/__operator\/late-settlements: action resolve/, "the body names the operator action that clears it");
     assert.match(named, /booked_owed/);
     assert.match(named, /acknowledge_unrecorded/);
+    // The book holds Solana and Algorand failures too (src/late-settlements.js),
+    // so the page never says the entry is an EVM one only.
+    assert.match(named, /on an EVM chain, Solana or Algorand/, "the body names every rail the book holds");
+    // heartbeat.yml opens the same issue under the same title: its body is
+    // the Worker's, word for word, with the status word substituted.
+    const yml = readFileSync(new URL("../.github/workflows/heartbeat.yml", import.meta.url), "utf8");
+    const step = yml.slice(yml.indexOf('TITLE="Late settlements need attention"'));
+    const hb = (step.match(/gh issue create [^\n]*--body "([^"]*)"/) || [])[1];
+    assert.ok(hb, "heartbeat.yml's late-settlements issue body is found");
+    assert.equal(hb.replace("$WORD", "unresolved"), named, "heartbeat.yml's body is the Worker's, word for word");
   });
   await acheck("an unresolved late settlement opens the issue; ok closes it", async () => {
     mkGh();

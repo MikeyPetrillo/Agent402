@@ -25,11 +25,12 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { Challenge } from "mppx";
 import Database from "better-sqlite3";
 import { getFreePorts } from "./lib/free-port.js";
+import { ownStoreEnv } from "./lib/own-stores.js";
 import { ttsQuoteUsd, ttsQuoteFormula, TTS_TIERS } from "../src/tools/tts-kit.js";
 import { hashKey } from "../src/credits.js";
 
@@ -40,9 +41,10 @@ const TREASURY = "0x000000000000000000000000000000000000dEaD";
 const BASE_NET = "eip155:8453", OP = "eip155:10", RH = "eip155:4663";
 const PREMIUM_USD = 0.002;
 const TMP = mkdtempSync(join(tmpdir(), "tts-quote-paid-"));
+const STORES = ownStoreEnv("tts-quote-paid");
 let pass = 0, proc = null, facilitator = null, speech = null;
 const serverLog = [];
-const cleanup = () => { proc?.kill("SIGKILL"); facilitator?.close(); speech?.close(); try { rmSync(TMP, { recursive: true, force: true }); } catch { /* gone */ } try { rmSync(CREDITS_FILE, { force: true }); } catch { /* gone */ } };
+const cleanup = () => { proc?.kill("SIGKILL"); facilitator?.close(); speech?.close(); try { rmSync(TMP, { recursive: true, force: true }); } catch { /* gone */ } try { rmSync(dirname(STORES.CREDITS_DIR), { recursive: true, force: true }); } catch { /* gone */ } };
 const fail = (m) => {
   console.error("FAIL:", m);
   if (serverLog.length) { console.error("--- server output (last lines) ---"); for (const l of serverLog) console.error(l); }
@@ -73,9 +75,10 @@ speech = createServer((req, res) => {
 });
 await new Promise((r) => speech.listen(OR_PORT, "127.0.0.1", r));
 
-// A prepaid credits key in the store the server reads (no /data volume: /tmp/credits).
+// A prepaid credits key in the store the server reads: the suite's own
+// directory (CREDITS_DIR), never the shared /tmp/credits another run reads.
 const CREDIT_KEY = `a402_${randomBytes(16).toString("hex")}`;
-const CREDITS_DIR = "/tmp/credits";
+const CREDITS_DIR = STORES.CREDITS_DIR;
 mkdirSync(CREDITS_DIR, { recursive: true });
 const CREDITS_FILE = join(CREDITS_DIR, `k_${hashKey(CREDIT_KEY)}.json`);
 writeFileSync(CREDITS_FILE, JSON.stringify({ keyId: `kid_${randomBytes(4).toString("hex")}`, balanceMicro: 5_000_000, loadedMicro: 5_000_000, spentMicro: 0, calls: 0, createdAt: new Date().toISOString(), pack: "credits-20", sessions: [], paymentIntents: [], lastUsedAt: null }));
@@ -85,7 +88,7 @@ const env = { ...process.env };
 delete env.STATE_DATABASE_URL; delete env.REDIS_URL;
 proc = spawn(process.execPath, ["--import", "./scripts/lib/openrouter-stub-preload.js", "src/server.js"], {
   env: {
-    ...env, PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test",
+    ...env, ...STORES, PORT: String(PORT), FREE_MODE: "", NODE_ENV: "test",
     WALLET_ADDRESS: TREASURY, NETWORK: "base", PAYMENT_NETWORKS: "base,optimism,robinhood",
     FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, SOLVADOR_KEY: "test-key", SOLVADOR_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`, ROBINHOOD_FACILITATOR_URL: `http://127.0.0.1:${FAC_PORT}`,
     NETWORK_PRICE_PREMIUMS: `${OP}=${PREMIUM_USD}`,
