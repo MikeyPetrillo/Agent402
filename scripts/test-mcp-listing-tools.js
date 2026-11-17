@@ -251,22 +251,27 @@ const offerFor = (toolName, micros, over = {}) => ({
   const blindBuy = (offerOf) => async ({ signPayment, route }) => {
     try { const payment = await signPayment(offerOf(route)); return { ok: true, signed: true, sent: true, payment }; } catch (e) { return { ok: false, signed: false, sent: false, why: String(e?.message || e) }; }
   };
+  // The capped client logs each refusal; those lines are kept out of this
+  // suite's output, and every assertion is printed with the real console.
   const origError = console.error, origLog = console.log;
-  console.error = () => {}; console.log = () => {};
+  const mute = () => { console.error = () => {}; console.log = () => {}; };
+  const say = (c, m) => { console.error = origError; console.log = origLog; ok(c, m); mute(); };
+  mute();
   try {
-    // The per-listing hold: one tool's offer asks ten times its list price.
+    // The per-listing hold: the first tool's offer asks ten times its list
+    // price, while nothing is signed yet and the run total would cover it.
     {
-      const routes = mkRoutes();
+      const routes = mkRoutes().reverse();
       const budget = signedSpendBudget(routes.reduce((n, r) => n + r.micros, 0) / 1e6);
       const client = await buildPayClient(budget, { key });
       const seenValues = [];
       const out = await buyMcpListings({ routes, budget, callTool: null, signPayment: async (offer) => { const p = await client.createPaymentPayload(offer); seenValues.push(valueOf(p)); return p; }, origin: ORIGIN, payTo: PAY_TO, ...quiet,
         buy: blindBuy((r) => offerFor(r.toolName, r.toolName === "memory.read" ? 10000 : r.micros)) });
-      ok(out.okCount === 2 && out.failed.join() === "memory.read" && seenValues.join() === "10000,10000" && budget.signatures === 2 && budget.signedMicros === 20000,
+      say(out.okCount === 2 && out.failed.join() === "memory.read" && seenValues.join() === "10000,10000" && budget.signatures === 2 && budget.signedMicros === 20000,
         `an offer asking above its listing's list price is not signed, though the run's total would still cover it (signed ${seenValues.join(",")}; failed ${out.failed.join()})`);
       let after = null;
       try { await client.createPaymentPayload(offerFor("memory.read", 1000)); after = "signed"; } catch { after = "refused"; }
-      ok(after === "refused" && budget.signatures === 2, "once the loop ends nothing more is signable with that client");
+      say(after === "refused" && budget.signatures === 2, "once the loop ends nothing more is signable with that client");
     }
     // The run total: the sum of the listed prices, and no signature past it.
     {
@@ -276,7 +281,7 @@ const offerFor = (toolName, micros, over = {}) => ({
       const asked = [];
       const out = await buyMcpListings({ routes, budget, callTool: null, signPayment: (offer) => client.createPaymentPayload(offer), origin: ORIGIN, payTo: PAY_TO, ...quiet,
         buy: async (o) => { asked.push(o.route.toolName); return blindBuy((r) => offerFor(r.toolName, r.micros))(o); } });
-      ok(out.okCount === 1 && out.failed.join() === "web.news" && asked.join() === "web.search" && budget.signatures === 1 && budget.signedMicros === 10000, `a listing that does not fit under what the run may still sign is not asked for (asked ${asked.join()})`);
+      say(out.okCount === 1 && out.failed.join() === "web.news" && asked.join() === "web.search" && budget.signatures === 1 && budget.signedMicros === 10000, `a listing that does not fit under what the run may still sign is not asked for (asked ${asked.join()})`);
     }
     {
       // The same total held at the signature itself: a second signature of a listing already bought.
@@ -286,7 +291,7 @@ const offerFor = (toolName, micros, over = {}) => ({
       let second = null;
       const out = await buyMcpListings({ routes, budget, callTool: null, signPayment: (offer) => client.createPaymentPayload(offer), origin: ORIGIN, payTo: PAY_TO, ...quiet,
         buy: async (o) => { const first = await blindBuy((r) => offerFor(r.toolName, r.micros))(o); try { await o.signPayment(offerFor(o.route.toolName, o.route.micros)); second = "signed"; } catch { second = "refused"; } return first; } });
-      ok(out.okCount === 1 && second === "refused" && budget.signatures === 1 && budget.signedMicros === 10000, "past the listings' list prices together, a further signature is refused");
+      say(out.okCount === 1 && second === "refused" && budget.signatures === 1 && budget.signedMicros === 10000, "past the listings' list prices together, a further signature is refused");
     }
   } finally { console.error = origError; console.log = origLog; }
 }
@@ -385,6 +390,9 @@ const offerFor = (toolName, micros, over = {}) => ({
   await planRun(["low-water"], { env: { BAZAAR_MCP_KEEPALIVE: "on" }, log: (l) => lowBig.push(l), err: () => {}, fetchPricing: async () => big });
   const tailBig = microsToUsd(passMicros(aboveCeilingRoutes(big)));
   ok(Number(lowBig[0]) === burnerLowWaterUsd(tailBig + microsToUsd(passMicros(mcpPassRoutes(big)))) && Number(lowBig[0]) > burnerLowWaterUsd(tailBig), `a dearer MCP pass raises the figure (${lowBig[0]} over ${burnerLowWaterUsd(tailBig)})`);
+  const lowBigOff = [];
+  await planRun(["low-water"], { env: { BAZAAR_MCP_KEEPALIVE: "" }, log: (l) => lowBigOff.push(l), err: () => {}, fetchPricing: async () => big });
+  ok(Number(lowBigOff[0]) === burnerLowWaterUsd(tailBig) && Number(lowBigOff[0]) < Number(lowBig[0]), `and with the scheduled pass off that dearer MCP pass is not counted (${lowBigOff[0]} under ${lowBig[0]})`);
 }
 
 // ---- the script, as a process ----------------------------------------------------------
