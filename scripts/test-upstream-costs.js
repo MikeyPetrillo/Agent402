@@ -32,7 +32,7 @@ ok(I.linkBounds(I.IMAGE_TIERS["v1-images-fast"].chain[0]) === null && I.videosWo
 ok(I.linkRepriced(I.IMAGE_TIERS["v1-images-fast"].chain[0], [{ provider_tag: "black-forest-labs", pricing: [{ billable: "output_image", unit: "megapixel", cost_usd: 1 }] }]), "a link without bounds counts as repriced (skipped)");
 ok(K.openaiCostRow("gpt-4o") === null && K.openaiCostUsd("gpt-4o", { prompt_tokens: 10, completion_tokens: 10 }) === null, "OpenAI telemetry cost is null, never a guess");
 ok(S.upstreamUsdPerMinute("gpt-transcribe") === null, "STT rate is null");
-ok(U.vendorRate("cdp", "sqlQuery") === null && U.vendorRate("exa", "search") === null, "a vendor rate reads null, never a guess");
+ok(U.vendorRate("cdp", "sqlQuery") === null && U.vendorRate("x", "postRead") === null, "a vendor rate reads null, never a guess");
 
 // ---- a fake table ----
 const FAKE = {
@@ -56,12 +56,12 @@ ok(I.linkBounds(I.IMAGE_TIERS["v1-images-fast"].chain[0])?.worstCaseUsd === 0.5 
 ok(U.upstreamCostsStatus() === "partial", "a table missing required keys reads partial");
 {
   const g = U.upstreamCostsGaps();
-  ok(g.includes("fees.rerankPerUnit") && g.includes("meter.markup") && g.includes("vendor.exa.search") && g.includes("vendor.x.userRead") && g.includes("models[bad/]"), "gaps name the missing keys and the dropped row");
+  ok(g.includes("fees.rerankPerUnit") && g.includes("meter.markup") && g.includes("vendor.x.userRead") && g.includes("models[bad/]"), "gaps name the missing keys and the dropped row");
   ok(!g.includes("fees.webSearchPerUse") && !g.includes("speech"), "gaps leave out what is present");
   // A model gap names an id, which may carry a dotted version (gpt-6.1-terra).
   ok(g.every((x) => !/[0-9]\.[0-9]/.test(x.replace(/^models\[[^\]]*\]$/, "models[]").replace(/^openai\.gpt-[a-z0-9.-]+$/, "openai.id"))), "gaps carry names, never a value");
 }
-const FULL = { ...FAKE, models: [...FAKE.models.slice(0, 2), ...U.REQUIRED_MODEL_ROWS.map((p) => [p, { prompt: 1, completion: 2 }])], speech: { ...FAKE.speech, "mistralai/voxtral-mini-tts-3-0": 0.5 }, openai: { ...FAKE.openai, "gpt-image-2": { completion: 9, prompt: 1 }, "gpt-image-2.6-flare": { completion: 9, prompt: 1 }, "gpt-image-2.6-sunburst": { completion: 9, prompt: 1 } }, media: { ...FAKE.media, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 0.5, listedMaxUsd: 0.5 } }, fees: { ...FAKE.fees, rerankPerUnit: 5, settlementPerCall: 0.5 }, meter: { markup: 1.25 }, vendor: { exa: { search: 0.5, instant: 0.5, lite: 0.5, answer: 0.5, content: 0.5 }, x: { postRead: 0.5, userRead: 0.5 }, decisions: { luna: 0.5, decisionOne: 0.5, gemini: 0.5, jev: 0.5, maxShare: 0.5 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } } };
+const FULL = { ...FAKE, models: [...FAKE.models.slice(0, 2), ...U.REQUIRED_MODEL_ROWS.map((p) => [p, { prompt: 1, completion: 2 }])], speech: { ...FAKE.speech, "mistralai/voxtral-mini-tts-3-0": 0.5 }, openai: { ...FAKE.openai, "gpt-image-2": { completion: 9, prompt: 1 }, "gpt-image-2.6-flare": { completion: 9, prompt: 1 }, "gpt-image-2.6-sunburst": { completion: 9, prompt: 1 } }, media: { ...FAKE.media, "black-forest-labs/flux-3-image-klein": { worstCaseUsd: 0.5, listedMaxUsd: 0.5 } }, fees: { ...FAKE.fees, rerankPerUnit: 5, settlementPerCall: 0.5 }, meter: { markup: 1.25 }, vendor: { x: { postRead: 0.5, userRead: 0.5 }, decisions: { luna: 0.5, decisionOne: 0.5, gemini: 0.5, jev: 0.5, maxShare: 0.5 }, cdp: { sqlQuery: 0.5 }, direct: { minSaving: 0.5 } } };
 U.setUpstreamCostsForTest(FULL);
 ok(U.upstreamCostsStatus() === "ok" && U.upstreamCostsGaps().length === 0, "a complete table reads ok");
 {

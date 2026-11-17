@@ -84,7 +84,7 @@ try {
 
   // Tool pages — sample known-good slugs that span categories. If the tool-
   // page loop dropped, even a handful here would fail.
-  const sampleTools = ["extract", "qr", "geocode", "jwt-decode", "whois", "dns"];
+  const sampleTools = ["extract", "qr", "place-lookup", "jwt-decode", "whois", "dns"];
   const missingTools = [];
   for (const slug of sampleTools) {
     if (!xml.includes(`/tools/${slug}<`)) missingTools.push(slug);

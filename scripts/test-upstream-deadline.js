@@ -25,13 +25,13 @@ for (const [k, v] of Object.entries({
   OPENROUTER_API_KEY: "test-openrouter", TYPESAFE_API_KEY: "test-typesafe", JUPITER_API_BASE: "", SOLANA_RPC_URL: "",
   // The spend-capped kits price a read before it leaves; the stalled reads
   // never book, so the caps only need to admit one priced read.
-  X_DATA_DAILY_MAX_USD: "1000000", EXA_DAILY_MAX_USD: "1000000",
+  X_DATA_DAILY_MAX_USD: "1000000",
 })) process.env[k] = v;
 // The CDP kit signs a JWT per request: a throwaway P-256 key lets it reach its fetch.
 process.env.CDP_API_KEY_ID = "organizations/test/apiKeys/test";
 process.env.CDP_API_KEY_SECRET = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ type: "pkcs8", format: "pem" });
-// The X and Exa kits refuse before any read without a cost table (they cannot
-// enforce their spend caps). With no table configured, the placeholder table
+// The X kit refuses before any read without a cost table (it cannot
+// enforce its spend caps). With no table configured, the placeholder table
 // stands in: the stalled reads are never booked, so no rate is ever read back.
 if (!process.env.UPSTREAM_COSTS_JSON && !process.env.UPSTREAM_COSTS_FILE) {
   process.env.UPSTREAM_COSTS_FILE = fileURLToPath(new URL("../docs/example-upstream-costs.json", import.meta.url));
@@ -212,7 +212,6 @@ const KITS = [
   ["enrich-kit.js", "ENRICH_TOOLS", "github-repo", { owner: "expressjs", repo: "express" }, /^GitHub$/, /^lookup$/],
   ["b2b-enrich-kit.js", "B2B_ENRICH_TOOLS", "hunter-domain-search", { domain: "stripe.com", limit: 10 }, /^[\w .-]+$/, /^lookup$/],
   ["x-data-kit.js", "X_DATA_TOOLS", "x-search-recent", { query: "x402 -is:retweet", max_results: 10 }, /^X API$/, /^tweets search recent$/],
-  ["exa-kit.js", "EXA_TOOLS", "exa-search", { query: "how agent-to-agent micropayment protocols settle onchain", numResults: 5 }, /^Exa$/, /^search$/],
   ["cve-kit.js", "CVE_TOOLS", "cve-lookup", { cve: "CVE-2024-3094" }, /^The NVD API$/, /^lookup$/],
   ["llm-context-kit.js", "LLM_CONTEXT_TOOLS", "llm-context", { query: "x402 payment protocol", maxTokens: 2048 }, /^LLM context$/, /^context$/],
   ["web-kit.js", "WEB_TOOLS", "archive-snapshot", { url: "https://example.com" }, /^Wayback Machine$/, /^availability$/],

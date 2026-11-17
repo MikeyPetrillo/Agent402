@@ -1,5 +1,5 @@
-// The two daily spend ceilings a metered upstream kit reads (the X data kit
-// and the Exa kit): an alarm ceiling the kit keeps serving past, since every
+// The two daily spend ceilings a metered upstream kit reads (the X data
+// kit): an alarm ceiling the kit keeps serving past, since every
 // call there is paid for by its buyer, and a hard ceiling where it refuses.
 //
 //   <ALARM env>  default 1. Blank or malformed reads as the default, never as

@@ -539,7 +539,7 @@
     },
     {
       "slug": "skill-contact-verify",
-      "name": "a second address",
+      "name": "a second place",
       "input": {
         "email": "someone@github.com"
       },
@@ -945,9 +945,9 @@
     },
     {
       "slug": "skill-location-intel",
-      "name": "a second address",
+      "name": "a second place",
       "input": {
-        "address": "350 Fifth Avenue New York NY"
+        "place": "Portland, OR"
       },
       "expect": {
         "equals": {

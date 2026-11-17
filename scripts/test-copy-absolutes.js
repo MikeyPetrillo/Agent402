@@ -588,7 +588,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 
   // A tool whose OWN description says its output is generated must say so in
   // the catalog too: such a tool inside an otherwise deterministic kit declares
-  // `modelBacked: true` on its definition (server.js folds it in). exa-answer
+  // `modelBacked: true` on its definition (server.js folds it in). One such tool
   // said "Model-backed" in its description and published modelBacked:false.
   ok(/def\?\.modelBacked === true/.test(server), "server.js folds a definition's own modelBacked:true into MODEL_BACKED_SLUGS");
   const GENERATED = /Model-backed|AI-generated|answer text is generated/;

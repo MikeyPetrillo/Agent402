@@ -383,10 +383,6 @@ t node scripts/test-x-search-stats.js
 t node scripts/test-x-data-ceilings.js
 # Router per-minute spend ceilings: a purchase past the alarm ceiling is made and the word reads over, the stop refuses 429 before signing, the word clears after its hold, 0 refuses
 t node scripts/test-router-spend-window.js
-# Exa kit (env-gated on EXA_API_KEY; offline, stubbed fetch, nothing spent)
-t node scripts/test-exa-kit.js
-# Exa daily ceilings: served past the alarm ceiling, refused at the hard one, 0 refuses all, allowance word untouched, both observers page (offline)
-t node scripts/test-exa-ceilings.js
 # b2b-enrich kit (offline)
 t node scripts/test-b2b-enrich-kit.js
 # Ox Alpha free-trial safety (fails closed on a repriced upstream, offline)
@@ -403,7 +399,7 @@ t node scripts/test-search-lite.js
 t node scripts/test-brave-leak.js
 # Derived CI-spend exposure: every paid key a TEST lane can reach must have its slugs bounded
 t node scripts/test-ci-key-exposure.js
-# Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, E2B, Neynar, Exa)
+# Daily call budgets for every paid upstream (Brave, Alchemy, CoinGecko, OpenAI, E2B, Neynar)
 t node scripts/test-upstream-budgets.js
 t node scripts/test-upstream-hard-caps.js
 # /api/gateway-status is public: verdicts only, never limits or balances

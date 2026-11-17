@@ -121,7 +121,7 @@ curl -X POST https://agent402.tools/api/hash \\
 <div class="qs-next">
 <div class="qs-next-title">What to try next</div>
 <ul>
-  <li>Use <a href="/api/find?q=geocode">/api/find?q=&lt;task&gt;</a> to discover tools by keyword</li>
+  <li>Use <a href="/api/find?q=weather">/api/find?q=&lt;task&gt;</a> to discover tools by keyword</li>
   <li>Check <a href="/api/pricing">/api/pricing</a> for the full price list</li>
   <li>Add an <code>Idempotency-Key</code> header for safe retries</li>
 </ul>
@@ -164,7 +164,7 @@ console.log(result);</code></pre></div>
 <div class="qs-next">
 <div class="qs-next-title">What to try next</div>
 <ul>
-  <li>Use <code>a.find("geocode")</code> to search tools programmatically</li>
+  <li>Use <code>a.find("weather")</code> to search tools programmatically</li>
   <li>Set <code>maxPerCallUsd</code> and <code>dailyLimitUsd</code> on <code>new Agent402()</code> to cap what the wallet spends</li>
   <li>Enable <a href="/docs/webhooks#idempotent">idempotent retries</a> for production use</li>
 </ul>

@@ -429,20 +429,19 @@ export const PACK_STEPS = {
   },
 
   // Multi-stop trip skeleton: stops is comma-separated. Pack runs the canonical
-  // leg (first two stops) end-to-end — geocode → distance → ETA → business-days
-  // → local-time → weather — and the agent re-calls with shifted stops for the
-  // full route. Two egress tools (geocode, weather-forecast); rest pure-CPU.
+  // leg (first two stops) end-to-end - place-lookup -> distance -> ETA ->
+  // business-days -> local-time -> weather - and the agent re-calls with
+  // shifted stops for the full route. Two egress tools (place-lookup,
+  // weather-daily, both worldwide); rest pure-CPU.
   "trip-planner": {
     mode: "chain",
     steps: [
-      { slug: "geocode",       mapInput: (a) => ({ q: String(a.stops ?? "").split(",")[0]?.trim() || "", limit: 1 }) },
-      // Geocode the second stop inline so geo-distance has both coords. Use the
-      // first geocode result for `from`, and a quick second geocode for `to`
-      // via a chained step would double the egress — instead, geo-distance
-      // takes the SAME coords twice as a placeholder (returns 0 km) and the
-      // agent re-calls with the real pair. Keeps the pack's egress to one geocode.
+      { slug: "place-lookup",  mapInput: (a) => ({ q: String(a.stops ?? "").split(",")[0]?.trim() || "", count: 1 }) },
+      // geo-distance takes the SAME coords twice as a placeholder (returns
+      // 0 km) and the agent re-calls with the real pair. Keeps the pack's
+      // egress to one place lookup.
       { slug: "geo-distance",  mapInput: (_a, p) => {
-          const hit = p["geocode"]?.results?.[0];
+          const hit = p["place-lookup"]?.results?.[0];
           const coord = hit ? { lat: hit.lat, lng: hit.lon } : { lat: 0, lng: 0 };
           return { from: coord, to: coord };
       } },
@@ -457,11 +456,11 @@ export const PACK_STEPS = {
           return { date: a.startIso, duration: `${h}h ${m}m` };
       } },
       { slug: "business-days", mapInput: (a) => ({ from: new Date().toISOString().slice(0, 10), to: String(a.startIso ?? "").slice(0, 10) }) },
-      // Render arrival in America/New_York by default; agent re-calls per stop.
-      { slug: "time-convert",  mapInput: (_a, p) => ({ value: p["add-time"]?.result || "now", tz: "America/New_York" }) },
-      { slug: "weather-forecast", mapInput: (_a, p) => {
-          const hit = p["geocode"]?.results?.[0];
-          return { lat: hit?.lat ?? 40.71, lon: hit?.lon ?? -74.01 };
+      // Render arrival in the first stop's timezone (place-lookup names it).
+      { slug: "time-convert",  mapInput: (_a, p) => ({ value: p["add-time"]?.result || "now", tz: p["place-lookup"]?.results?.[0]?.timezone || "America/New_York" }) },
+      { slug: "weather-daily", mapInput: (_a, p) => {
+          const hit = p["place-lookup"]?.results?.[0];
+          return { lat: hit?.lat ?? 40.71, lon: hit?.lon ?? -74.01, days: 3 };
       } },
     ],
   },
@@ -570,34 +569,32 @@ export const PACK_STEPS = {
     ],
   },
 
-  // Address situational brief: geocode → reverse-geocode (canonical form) →
-  // nearby POIs → weather → US hazards → recent seismic activity. geocode
-  // returns `lon` (NWS); place-search/weather/earthquakes also use `lon`.
+  // Place situational brief: place-lookup -> US county and state (geo-lookup)
+  // -> weather (global) -> US hazards -> recent seismic activity. The two
+  // US-only steps are skipped, not failed, for a place outside the US. The
+  // pack took an `address` before 2026-11-17; that arg is still read.
   "location-intel": {
     mode: "chain",
     steps: [
-      { slug: "geocode",          mapInput: (a) => ({ q: a.address, limit: 1 }) },
-      { slug: "reverse-geocode",  mapInput: (_a, p) => {
-          const hit = p["geocode"]?.results?.[0];
-          return { lat: hit?.lat ?? 38.8977, lon: hit?.lon ?? -77.0365 };
+      { slug: "place-lookup",     mapInput: (a) => ({ q: a.place ?? a.address, count: 1 }) },
+      { slug: "geo-lookup",
+        when: (_a, p) => p["place-lookup"]?.results?.[0]?.countryCode === "US",
+        skipReason: "the place is outside the United States (this step reads US county and state)",
+        mapInput: (_a, p) => {
+          const hit = p["place-lookup"]?.results?.[0];
+          return { lat: hit.lat, lon: hit.lon };
       } },
-      // Nearby food/services — generic "restaurant" query around the resolved point.
-      { slug: "place-search",     mapInput: (_a, p) => {
-          const hit = p["geocode"]?.results?.[0];
-          const bb = hit?.boundingBox;
-          const viewbox = bb ? `${bb.west},${bb.north},${bb.east},${bb.south}` : "";
-          return { q: "restaurant", limit: 5, ...(viewbox ? { viewbox, bounded: "1" } : {}) };
+      { slug: "weather-daily",    mapInput: (_a, p) => {
+          const hit = p["place-lookup"]?.results?.[0];
+          return hit ? { lat: hit.lat, lon: hit.lon, days: 3 } : null;
       } },
-      { slug: "weather-forecast", mapInput: (_a, p) => {
-          const hit = p["geocode"]?.results?.[0];
-          return { lat: hit?.lat ?? 38.8977, lon: hit?.lon ?? -77.0365 };
-      } },
-      // US-only — pull state code from reverse-geocode; default to DC for the
-      // example, agents re-call with the actual state for non-DC addresses.
-      { slug: "weather-alerts",   mapInput: (_a, p) => {
-          const state = p["reverse-geocode"]?.address?.state || "";
-          // Map full state name → two-letter code is handled server-side; pass through.
-          return { area: state || "DC" };
+      // US-only: the state code geo-lookup returned.
+      { slug: "weather-alerts",
+        when: (_a, p) => p["place-lookup"]?.results?.[0]?.countryCode === "US",
+        skipReason: "the place is outside the United States (this step reads US weather alerts)",
+        mapInput: (_a, p) => {
+          const state = p["geo-lookup"]?.state;
+          return state ? { area: state } : null;
       } },
       { slug: "earthquakes",      mapInput: () => ({ period: "week", minMag: "2.5" }) },
     ],

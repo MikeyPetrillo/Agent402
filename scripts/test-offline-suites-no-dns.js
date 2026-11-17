@@ -53,7 +53,6 @@ const SUITES = [
   "test-live-quote-query-params.js",
   "test-load-shed.js",
   "test-mcp-package-kit.js",
-  "test-nominatim-pace.js",
   "test-open-meteo-keyed.js",
   "test-openfda-reference.js",
   "test-page-change-kit.js",
