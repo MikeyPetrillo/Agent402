@@ -51,16 +51,23 @@ export const SETTLE_GRACE_MS = Number(process.env.RECONCILE_GRACE_MS) || 60 * 60
 //   - it is the first row in the window carrying that signature (later rows
 //     are counted as duplicate: one transfer pays for one row);
 //   - getSignatureStatuses reads it confirmed or finalized with no error;
-//   - getTransaction (jsonParsed) shows our payTo owner's USDC balance rising
-//     by at least the row's amount, in atomic units.
+//   - getTransaction (jsonParsed) carries both balance lists and shows our
+//     payTo owner's USDC balance (that mint only) rising by at least the row's
+//     amount, in atomic units;
+//   - the transaction's blockTime is within SOLANA_TX_TIME_WINDOW_MS of the
+//     row's recorded time, so an earlier or later transfer into our payTo is
+//     never taken as this row's payment.
 // Landed but not verifiable (no payTo set, the transaction read failed, was
-// empty, or fell past the pass deadline or read budget) is counted as
+// empty or missing a balance list, has no blockTime or one outside the window,
+// or fell past the pass deadline or read budget) is counted as
 // landedUnverified and the row stays as it was: never confirmed. Not found,
 // failed on chain, or a transfer that did not pay us the amount stays
 // unconfirmed. A status read that fails or answers a malformed list leaves its
 // rows as they were, counted as unread; nothing here moves the top-level
 // status. The pass has one deadline: no read starts after it, a read in flight
-// is cut at it, and every row it did not reach is unread. Reads go through the
+// is cut at it, and every row it did not reach is unread. The deadline counts
+// as passed once its timer fires, whatever the wall clock then reads (a timer
+// can fire a millisecond before Date.now() reaches the deadline). Reads go through the
 // shared Solana RPC list (keyed lane first), so the outbound hard ceilings
 // count each one; they do not go through the history lanes, so these reads
 // never feed that status word either.
@@ -71,6 +78,10 @@ const SOLANA_VERIFY_MAX_READS = 40;          // per pass: transaction reads
 const SOLANA_VERIFY_CONCURRENCY = 4;
 const SOLANA_CONFIRM_TIMEOUT_MS = 6000;
 export const SOLANA_PASS_DEADLINE_MS = 15_000;
+// A row is recorded when its response finishes, right after settlement, so its
+// transfer lands within moments of it; five minutes either side covers a slow
+// confirmation and clock skew, and nothing a day or an hour away.
+export const SOLANA_TX_TIME_WINDOW_MS = 5 * 60_000;
 const USDC_SOL_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 // Base58 alphabet, case preserved (never case-fold a base58 value).
 const SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
@@ -92,10 +103,10 @@ const landedOk = (s) => Boolean(s) && s.err == null && (s.confirmationStatus ===
 /** Atomic USDC credited to `owner` by a parsed transaction; null when unreadable. */
 export function usdcAtomicCredit(txn, owner, mint = USDC_SOL_MINT) {
   const meta = txn?.meta;
-  if (!meta || meta.err != null || !Array.isArray(meta.postTokenBalances)) return null;
+  if (!meta || meta.err != null || !Array.isArray(meta.preTokenBalances) || !Array.isArray(meta.postTokenBalances)) return null;
   const sum = (rows) => {
     let t = 0n;
-    for (const b of rows || []) {
+    for (const b of rows) {
       if (!b || b.owner !== owner || b.mint !== mint) continue;
       const a = b.uiTokenAmount?.amount;
       if (typeof a !== "string" || !/^\d+$/.test(a)) return null;
@@ -109,15 +120,30 @@ export function usdcAtomicCredit(txn, owner, mint = USDC_SOL_MINT) {
 
 const atomicUsdc = (usd) => BigInt(Math.round((Number(usd) || 0) * 1e6));
 
-/** Resolves `p`, or rejects once `deadline` passes (the timer never outlives it). */
-function beforeDeadline(p, deadline) {
-  const left = deadline - Date.now();
-  if (left <= 0) return Promise.reject(new Error("deadline passed"));
-  let t;
-  return Promise.race([
-    Promise.resolve(p).finally(() => clearTimeout(t)),
-    new Promise((_, reject) => { t = setTimeout(() => reject(new Error("deadline passed")), left); }),
-  ]);
+/** True when the transaction's blockTime (unix seconds) is near the row's ts (ms). */
+export const nearRowTime = (txn, ts) =>
+  typeof txn?.blockTime === "number" && Number.isFinite(txn.blockTime) && Number.isFinite(Number(ts)) &&
+  Math.abs(txn.blockTime * 1000 - Number(ts)) <= SOLANA_TX_TIME_WINDOW_MS;
+
+/**
+ * The pass deadline. `passed()` is true once the wall clock reaches it or once
+ * a race against it has been cut by its timer, whichever comes first.
+ */
+function passDeadline(ms) {
+  const at = Date.now() + ms;
+  let fired = false;
+  const passed = () => fired || Date.now() >= at;
+  /** Resolves `p`, or rejects once the deadline passes (the timer never outlives it). */
+  const race = (p) => {
+    const left = at - Date.now();
+    if (fired || left <= 0) { fired = true; return Promise.reject(new Error("deadline passed")); }
+    let t;
+    return Promise.race([
+      Promise.resolve(p).finally(() => clearTimeout(t)),
+      new Promise((_, reject) => { t = setTimeout(() => { fired = true; reject(new Error("deadline passed")); }, left); }),
+    ]);
+  };
+  return { at, passed, race };
 }
 
 async function confirmSolanaRows(rows, { confirm, readTransaction, payTo, batchSize, maxReads, verifyMaxReads, deadlineMs }) {
@@ -126,7 +152,8 @@ async function confirmSolanaRows(rows, { confirm, readTransaction, payTo, batchS
     notSignature: 0, duplicate: 0, txReads: 0, landedUnverified: 0, transferMismatch: 0, deadlineHit: false,
   };
   const verdict = new Map(); // row -> "matched" | "unconfirmed"; absent = as it was
-  const deadline = Date.now() + Math.max(0, Number(deadlineMs ?? SOLANA_PASS_DEADLINE_MS) || 0);
+  const dl = passDeadline(Math.max(0, Number(deadlineMs ?? SOLANA_PASS_DEADLINE_MS) || 0));
+  const deadline = dl.at;
   const size = Math.min(Math.max(1, Math.floor(Number(batchSize)) || SOLANA_CONFIRM_BATCH), SOLANA_CONFIRM_BATCH_MAX);
   const budget = Math.max(0, Math.floor(Number(maxReads ?? SOLANA_CONFIRM_MAX_READS)) || 0);
   const verifyBudget = Math.max(0, Math.floor(Number(verifyMaxReads ?? SOLANA_VERIFY_MAX_READS)) || 0);
@@ -145,12 +172,12 @@ async function confirmSolanaRows(rows, { confirm, readTransaction, payTo, batchS
   for (let i = 0; i < candidates.length; i += size) {
     const batch = candidates.slice(i, i + size);
     if (out.reads >= budget) { out.unread += batch.length; continue; }
-    if (Date.now() >= deadline) { out.deadlineHit = true; out.unread += batch.length; continue; }
+    if (dl.passed()) { out.deadlineHit = true; out.unread += batch.length; continue; }
     out.reads++;
     let statuses;
-    try { statuses = await beforeDeadline(confirm(batch.map((r) => String(r.tx)), { deadline }), deadline); } catch { statuses = null; }
+    try { statuses = await dl.race(confirm(batch.map((r) => String(r.tx)), { deadline })); } catch { statuses = null; }
     if (!Array.isArray(statuses) || statuses.length !== batch.length) {
-      if (Date.now() >= deadline) out.deadlineHit = true;
+      if (dl.passed()) out.deadlineHit = true;
       out.readsFailed++; out.unread += batch.length; continue;
     }
     batch.forEach((r, k) => {
@@ -166,11 +193,14 @@ async function confirmSolanaRows(rows, { confirm, readTransaction, payTo, batchS
   let next = 0;
   const verifyOne = async (r) => {
     if (!payTo || out.txReads >= verifyBudget) { out.landedUnverified++; return; }
-    if (Date.now() >= deadline) { out.deadlineHit = true; out.landedUnverified++; return; }
+    if (dl.passed()) { out.deadlineHit = true; out.landedUnverified++; return; }
     out.txReads++;
     let credit = null;
-    try { credit = usdcAtomicCredit(await beforeDeadline(readTransaction(String(r.tx), { deadline }), deadline), payTo); } catch { credit = null; }
-    if (credit == null) { if (Date.now() >= deadline) out.deadlineHit = true; out.landedUnverified++; return; }
+    try {
+      const txn = await dl.race(readTransaction(String(r.tx), { deadline }));
+      credit = nearRowTime(txn, r.ts) ? usdcAtomicCredit(txn, payTo) : null;
+    } catch { credit = null; }
+    if (credit == null) { if (dl.passed()) out.deadlineHit = true; out.landedUnverified++; return; }
     const owed = atomicUsdc(r.usd);
     if (owed > 0n && credit >= owed) { out.matched++; verdict.set(r, "matched"); }
     else { out.transferMismatch++; verdict.set(r, "unconfirmed"); }

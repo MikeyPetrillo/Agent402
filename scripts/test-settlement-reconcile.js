@@ -165,9 +165,11 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   const PAYTO = "Pay2ourWa11etXyzABCDEFGHJKLMNPQRSTUVWXYZabc";
   const OTHER = "0therWa11etXyzABCDEFGHJKLMNPQRSTUVWXYZabcde";
-  const credit = (owner, atomic) => ({ meta: { err: null,
-    preTokenBalances: [{ owner, mint: USDC, uiTokenAmount: { amount: "5000" } }, { owner: "Buyer", mint: USDC, uiTokenAmount: { amount: "90000" } }],
-    postTokenBalances: [{ owner, mint: USDC, uiTokenAmount: { amount: String(5000 + atomic) } }, { owner: "Buyer", mint: USDC, uiTokenAmount: { amount: String(90000 - atomic) } }] } });
+  const SOL_NOW = NOW + 30 * 86_400_000; // a window that holds only this section's rows
+  const SOL_OLD = SOL_NOW - 3 * 3600_000;
+  const credit = (owner, atomic, { mint = USDC, blockTime = SOL_OLD / 1000 } = {}) => ({ blockTime, meta: { err: null,
+    preTokenBalances: [{ owner, mint, uiTokenAmount: { amount: "5000" } }, { owner: "Buyer", mint, uiTokenAmount: { amount: "90000" } }],
+    postTokenBalances: [{ owner, mint, uiTokenAmount: { amount: String(5000 + atomic) } }, { owner: "Buyer", mint, uiTokenAmount: { amount: String(90000 - atomic) } }] } });
   const LAND = { slot: 9, confirmations: null, err: null, confirmationStatus: "finalized" };
   const onChain = {
     [S.LANDED]: LAND, [S.UNRELATED]: LAND, [S.WRONGTO]: LAND, [S.CASEFOLD]: LAND, [S.SHORT]: LAND, [S.DUP]: LAND,
@@ -176,15 +178,13 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   };
   const txs = {
     [S.LANDED]: credit(PAYTO, 1000),
-    [S.UNRELATED]: { meta: { err: null, preTokenBalances: [], postTokenBalances: [] } }, // a real transaction that moved no USDC
+    [S.UNRELATED]: { blockTime: SOL_OLD / 1000, meta: { err: null, preTokenBalances: [], postTokenBalances: [] } }, // a real transaction that moved no USDC
     [S.WRONGTO]: credit(OTHER, 1000),
     [S.CASEFOLD]: credit(PAYTO.toLowerCase(), 1000),  // base58 is case-sensitive: not our account
     [S.SHORT]: credit(PAYTO, 1000),                    // the row claims 0.002
     [S.DUP]: credit(PAYTO, 1000),
   };
 
-  const SOL_NOW = NOW + 30 * 86_400_000; // a window that holds only this section's rows
-  const SOL_OLD = SOL_NOW - 3 * 3600_000;
   recordTransfer({ chain: "solana", wallet: "w", txid: `${S.LEDGER}:0`, tx_hash: S.LEDGER, block: 1, when_ts: SOL_OLD / 1000, payer: "P", usd: 0.001, asset: "USDC", external: 1 });
   const sale = (slug, usd, tx) => at(SOL_OLD, () => recordSale({ slug, priceUsd: usd, rail: "usdc", network: "solana", payer: "P", tx, synthetic: false }));
   sale("hash", 0.001, S.LEDGER);
@@ -290,6 +290,23 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
   sol = solOf(r);
   ok(calls.length === 0 && sol.signatureReads.reads === 1 && sol.signatureReads.unread === 9 && sol.signatureReads.deadlineHit,
     `no batch starts past the deadline (got ${JSON.stringify(sol.signatureReads)})`);
+  // The deadline is the timer's, not a later clock read: a timer can fire a
+  // millisecond before the wall clock reaches the deadline, so a reader that
+  // holds the clock still (the worst case of that lag) must still end the pass.
+  const stillClock = (fn) => (...a) => { const f = realNow(); Date.now = () => f; return fn(...a); };
+  calls.length = 0;
+  try {
+    r = await pass({ confirmSignatures: stillClock(() => new Promise(() => {})), solanaBatchSize: 2, solanaDeadlineMs: 300 });
+  } finally { Date.now = realNow; }
+  sol = solOf(r);
+  ok(sol.signatureReads.reads === 1 && sol.signatureReads.unread === 9 && sol.signatureReads.deadlineHit === true,
+    `a status read cut by the deadline timer ends the pass even when the clock lags (got ${JSON.stringify(sol.signatureReads)})`);
+  try {
+    r = await pass({ confirmSignatures: reader, readTransaction: stillClock(() => new Promise(() => {})), solanaDeadlineMs: 300 });
+  } finally { Date.now = realNow; }
+  sol = solOf(r);
+  ok(sol.signatureReads.txReads === 4 && sol.signatureReads.landedUnverified === 6 && sol.signatureReads.deadlineHit === true,
+    `a transaction read cut by the deadline timer starts no further read even when the clock lags (got ${JSON.stringify(sol.signatureReads)})`);
   // A transaction read that never answers ends at the deadline too.
   t0 = Date.now();
   r = await pass({ confirmSignatures: reader, readTransaction: () => new Promise(() => {}), solanaDeadlineMs: 300 });
@@ -329,6 +346,38 @@ ok(base3.unconfirmed === 1, "a synthetic (canary) settlement is excluded - payin
     await reconcileSettlements({ days: 1, now: BIG_NOW, dailyCalls: () => [], confirmSignatures: reader, readTransaction: txReader, solanaPayTo: PAYTO, solanaBatchSize: 10_000 });
     ok(SOLANA_CONFIRM_BATCH_MAX <= 256 && calls.length === 2 && calls[0].length === SOLANA_CONFIRM_BATCH_MAX && calls[1].length === 4,
       `a batch never exceeds the method's signature limit (got ${calls.map((c) => c.length).join(",")})`);
+  }
+
+  // The transfer itself must be this row's payment: our USDC (not another
+  // mint), a body that carries both balance lists, and a block time near the
+  // row's own. Its own window, so the counts above stay as they are.
+  {
+    const { SOLANA_TX_TIME_WINDOW_MS } = await import("../src/settlement-reconcile.js");
+    const W_NOW = SOL_NOW + 60 * 86_400_000;
+    const W_OLD = W_NOW - 3 * 3600_000;
+    const T = Object.fromEntries(["GOOD", "MINT", "NOPRE", "NOPOST", "EARLY", "LATE", "NOTIME", "EDGE"].map((k) => [k, sig(`WIN_${k}`)]));
+    const OTHER_MINT = "AnotherMintXyzABCDEFGHJKLMNPQRSTUVWXYZabcde";
+    const good = credit(PAYTO, 1000, { blockTime: W_OLD / 1000 });
+    const wtx = {
+      [T.GOOD]: good,
+      [T.MINT]: credit(PAYTO, 1000, { mint: OTHER_MINT, blockTime: W_OLD / 1000 }), // our owner, another token
+      [T.NOPRE]: { blockTime: W_OLD / 1000, meta: { err: null, postTokenBalances: good.meta.postTokenBalances } },
+      [T.NOPOST]: { blockTime: W_OLD / 1000, meta: { err: null, preTokenBalances: good.meta.preTokenBalances } },
+      [T.EARLY]: credit(PAYTO, 1000, { blockTime: (W_OLD - 3600_000) / 1000 }),    // a real, earlier transfer into our payTo
+      [T.LATE]: credit(PAYTO, 1000, { blockTime: (W_OLD + SOLANA_TX_TIME_WINDOW_MS + 60_000) / 1000 }),
+      [T.NOTIME]: credit(PAYTO, 1000, { blockTime: null }),
+      [T.EDGE]: credit(PAYTO, 1000, { blockTime: (W_OLD - SOLANA_TX_TIME_WINDOW_MS + 1000) / 1000 }), // inside the window
+    };
+    for (const k of Object.keys(T)) at(W_OLD, () => recordSale({ slug: k.toLowerCase(), priceUsd: 0.001, rail: "usdc", network: "solana", payer: "P", tx: T[k], synthetic: false }));
+    const wr = await reconcileSettlements({ days: 1, now: W_NOW, dailyCalls: () => [],
+      confirmSignatures: async (sigs) => sigs.map(() => LAND), readTransaction: async (s) => wtx[s] ?? null, solanaPayTo: PAYTO });
+    const ws = solOf(wr), wd = ws.signatureReads;
+    ok(SOLANA_TX_TIME_WINDOW_MS >= 60_000 && SOLANA_TX_TIME_WINDOW_MS <= 15 * 60_000, `the time window is minutes wide (${SOLANA_TX_TIME_WINDOW_MS} ms)`);
+    ok(ws.confirmed === 2 && wd.matched === 2, `only the in-window transfers of our USDC match (got ${JSON.stringify(wd)})`);
+    ok(wd.transferMismatch === 1, `our owner credited in another mint does not match (got ${JSON.stringify(wd)})`);
+    ok(wd.landedUnverified === 5 && ws.unconfirmed === 6,
+      `a body missing either balance list, a transfer outside the row's time and one with no block time are landedUnverified (got ${JSON.stringify(wd)})`);
+    ok(!ws.samples.some((x) => x.slug === "good" || x.slug === "edge"), "the matched rows are not listed as unconfirmed");
   }
 
   // A budget of zero reads nothing and leaves every row as it was.
