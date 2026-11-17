@@ -649,7 +649,8 @@ Auto-closes when the word is ok.`;
   {
     // A prepaid credits purchase refused by the daily limit or the EU/UK tax
     // ID rule issues no key and is refunded by card; a refund that failed is
-    // owed by hand (creditsRefunds on /api/gateway-status). owed pages; ok
+    // owed by hand (creditsRefunds on /api/gateway-status), as is a refund a
+    // key holder asked for that could not be sent. owed pages; ok
     // clears; unknown or absent does neither.
     title: "A refused credits purchase was not refunded",
     verdict: ({ gateway: b }) => {
@@ -657,7 +658,7 @@ Auto-closes when the word is ok.`;
       if (w === "owed") return "bad";
       return w === "ok" ? "good" : "quiet";
     },
-    body: () => `/api/gateway-status reports creditsRefunds.status=owed: a credits purchase was refused (the daily purchase limit, or an EU or UK billing address without a VAT number), issued no key, and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {"session":"cs_..."}.
+    body: () => `/api/gateway-status reports creditsRefunds.status=owed: a credits purchase was refused (the daily purchase limit, or an EU or UK billing address without a VAT number), issued no key, and its automatic card refund failed. Read the session ids on /__operator/credits.json (refusalsToRefund), refund each payment in the Stripe dashboard, then POST /__operator/credits/refusal-refunded {"session":"cs_..."}. The same word reads owed when a key holder asked for the unspent balance back and the card refund could not be sent: the key ids are on /__operator/credits.json (refundRequestsOwed); refund each in the Stripe dashboard and the charge.refunded webhook records it.
 
 Auto-closes when nothing is owed.`,
   },

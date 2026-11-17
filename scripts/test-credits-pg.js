@@ -299,6 +299,31 @@ try {
     ok((await B.refusalsToRefund()).includes("cs_pgstuck"), "pg: pending past five minutes is owed");
     delete process.env.CREDITS_DAILY_MAX_USD;
   }
+  // ---- refund on request, on the rows: two containers, one refund ---------
+  {
+    const charges = { pi_rr: { amount: 2000, amount_refunded: 0 } };
+    const sends = [], done = {};
+    const rstripe = {
+      checkout: { sessions: { retrieve: async (id) => (id === "cs_rr" ? { id, mode: "payment", payment_status: "paid", payment_intent: "pi_rr", customer_details: { email: "rr@x.com" }, metadata: { credits_pack: "credits-20" } } : (() => { throw new Error("no"); })()) } },
+      paymentIntents: { retrieve: async (id) => ({ id, latest_charge: charges[id] ? { ...charges[id] } : null }) },
+      // Stripe answers a repeated idempotency key with the first result.
+      refunds: { create: async (a, o = {}) => { sends.push({ ...a, idem: o.idempotencyKey }); if (done[o.idempotencyKey]) return done[o.idempotencyKey]; const p = (async () => { await wait(30); const c = charges[a.payment_intent]; if (c.amount_refunded + a.amount > c.amount) throw new Error("over"); c.amount_refunded += a.amount; return { id: `re_${sends.length}` }; })(); done[o.idempotencyKey] = p; return p; } },
+    };
+    const R1 = createCredits({ stripe: rstripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
+    const R2 = createCredits({ stripe: rstripe, baseUrl: "https://agent402.tools", storeDir: DIR, log: quiet });
+    const m = await R1.claim("cs_rr");
+    const h = await R1.authorize(m.key, 2.5);
+    await R1.settle(h.hash, h.heldMicro, "whois");
+    const held = await R2.authorize(m.key, 1);
+    ok((await R1.requestRefund(m.key)).status === "in_flight" && sends.length === 0, "pg: a request while a hold is on the row moves nothing");
+    await R2.release(held.hash, held.heldMicro);
+    const [x, y] = await Promise.all([R1.requestRefund(m.key), R2.requestRefund(m.key)]);
+    ok(x.status === "refunded" && y.status === "refunded" && charges.pi_rr.amount_refunded === 1750, `pg: two containers asking at once refund the unspent $17.50 once (${x.status}, ${y.status}, ${charges.pi_rr.amount_refunded} cents)`);
+    ok(new Set(sends.map((s) => s.idem)).size === 1, `pg: every send of that request carries one idempotency key (${sends.length} send(s))`);
+    const row = await rowRec(hashKey(m.key));
+    ok(row.balanceMicro === 0 && row.disabled === true && row.refundRequest?.state === "done" && row.refundedMicro === 17_500_000, "pg: the row is empty, disabled and records the refund");
+    ok((await R2.authorize(m.key, 0.001)).reason === "disabled" && !(await R2.refundRequestsOwed()).includes(m.keyId), "pg: the key cannot spend and nothing is owed");
+  }
 } finally {
   await sdb.__dropStateSchema().catch(() => {});
   await sdb.closeStateDb();

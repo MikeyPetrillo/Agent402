@@ -364,7 +364,7 @@ import { monitorsPage, monitorThanksPage } from "./monitors-page.js";
 import { createManageLinkHandler, subManageMessage } from "./monitor-manage-link.js";
 import { insiderPage, fundPage, dossierPage, hubPage, loadTeaser, normalizeTicker, normalizeManagerSlug, isSeededTicker, seededManager } from "./programmatic-pages.js";
 import { createMonitorScheduler } from "./monitor-scheduler.js";
-import { createCredits, CREDIT_PACKS } from "./credits.js";
+import { createCredits, sellablePacks } from "./credits.js";
 import { creditsPage, creditsThanksPage } from "./credits-page.js";
 import { sendMonitorEmail, emailSendStatus } from "./email.js";
 import { probeDomain, normDomain } from "./tools/domain-audit-kit.js";
@@ -753,7 +753,7 @@ import { hostFigures, hostFiguresFromPayments, hostIndexEntry, isSelfSellerQuery
 import { standingCountsExcludingHost } from "./standing.js";
 import { ledgerDocsPage } from "./ledger-docs.js";
 import { ledgerIntegrationsPage } from "./ledger-integrations.js";
-import { creditsSalesEnabled, creditsTopupFields } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsTopupFields, creditsBalanceMaxCents } from "./credits-sales.js";
 
 // The /v1 settle breaker reads whether a wallet has ever paid from the sales
 // ledger, handed in here so the breaker never imports it (see the module).
@@ -4383,7 +4383,9 @@ app.get("/api/gateway-status", async (req, res) => {
     // (src/credits.js): owed until refunded by hand and marked on
     // POST /__operator/credits/refusal-refunded. A word only; the session ids
     // are on /__operator/credits.json.
-    creditsRefunds: _credits ? await _credits.refusalsToRefund().then((l) => ({ status: l.length ? "owed" : "ok" })).catch(() => ({ status: "unknown" })) : { status: "ok" },
+    // A refund a key's holder asked for (src/credits.js requestRefund) that
+    // could not be sent folds into the same word (refundRequestsOwed there).
+    creditsRefunds: _credits ? await Promise.all([_credits.refusalsToRefund(), _credits.refundRequestsOwed()]).then(([a, b]) => ({ status: a.length || b.length ? "owed" : "ok" })).catch(() => ({ status: "unknown" })) : { status: "ok" },
     // CDN-range peers that reached the origin without the shared origin
     // secret (src/cdn-client-ip.js): with the resolver on, each such request
     // is keyed on the edge address instead of its client, so a missing or
@@ -5222,9 +5224,36 @@ if (_credits) {
     if (!b) return res.status(401).json({ error: "Send your credits key as Authorization: Bearer a402_…", ...creditsTopupFields(BASE_URL) });
     res.json(b);
   });
+  // Refund on request (src/credits.js requestRefund): the holder presents the
+  // key and its whole unspent balance goes back to the card that bought it,
+  // with no fee, and the key is disabled. Served only while credits are on
+  // sale (the terms that offer it show only then); otherwise the request
+  // falls through as if the route did not exist.
+  const REFUND_HTTP = { refunded: 200, nothing_to_refund: 200, pending: 202, in_flight: 409, disabled: 409, unknown: 401, malformed: 401 };
+  app.post("/api/credits/refund", async (req, res, next) => {
+    if (!creditsSalesEnabled()) return next();
+    res.set("Cache-Control", "no-store");
+    if (checkoutLimiter.check(clientIp(req)).limited) return res.status(429).json({ error: "Too many requests, please slow down." });
+    const auth = String(req.headers.authorization || "");
+    if (!/^Bearer a402_/.test(auth)) return res.status(401).json({ status: "malformed", error: "Send your credits key as Authorization: Bearer a402_…" });
+    let r;
+    try { r = await _credits.requestRefund(auth.slice(7).trim()); }
+    catch (e) { console.warn("[credits] refund request failed:", redactSecrets(String(e?.message || e)).slice(0, 200)); return res.status(503).json({ status: "error", error: "Could not take the refund request right now; nothing moved. Retry shortly." }); }
+    if (r.status === "unknown" || r.status === "malformed") _credits.noteBadKey(req.ip);
+    const said = {
+      refunded: `The unspent balance was refunded to the card that bought this key ($${Number(r.refundedUsd || 0).toFixed(2)}); the key is disabled.`,
+      nothing_to_refund: "This key holds no unspent balance; nothing was refunded.",
+      pending: `The refund of $${Number(r.refundUsd || 0).toFixed(2)} is recorded and the key is disabled, but the card refund has not gone through yet. Send this request again to retry; if it still cannot be sent, we refund it by hand.`,
+      in_flight: "A call on this key is still running; send the request again when it ends. Nothing moved.",
+      disabled: "This key is disabled, so no refund can be requested with it.",
+      unknown: "Unknown credits key.",
+      malformed: "Malformed credits key.",
+    }[r.status];
+    res.status(REFUND_HTTP[r.status] || 500).json({ ...r, ...(said ? { message: said } : {}) });
+  });
   app.get("/__operator/credits.json", async (req, res) => {
     if (!operatorAuthed(req)) return operatorNotFound(req, res);
-    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund() });
+    res.set("Cache-Control", "no-store").json({ ...(await _credits.status()), keyAttempts: _credits.badKeyStats(), refusalsToRefund: await _credits.refusalsToRefund(), refundRequestsOwed: await _credits.refundRequestsOwed() });
   });
   // After refunding a refused purchase by hand in Stripe: clears it from
   // creditsRefunds. Body { session: "cs_..." }.
@@ -10419,12 +10448,15 @@ app.get("/api/pricing", (_req, res) => {
       // Follows the CREDITS_SALES gate: while sales are off the checkout
       // answers 503, so this block must not advertise packs or a checkout an
       // agent would be refused. Existing keys still spend, so it says how.
-      credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(CREDIT_PACKS).map((p) => p.cents / 100),
+      credits: creditsSalesEnabled() ? { onSale: true, how: "buy a pack by card at /credits, then Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", buy: `${BASE_URL}/credits`, packsUsd: Object.values(sellablePacks()).map((p) => p.cents / 100),
         // The IDS, not just the dollar amounts: POST /api/credits/checkout takes
         // {"pack":"credits-20"} and an agent cannot guess that from a bare 20.
-        packs: Object.entries(CREDIT_PACKS).map(([id, p]) => ({ pack: id, label: p.label, priceUsd: p.cents / 100 })),
-        checkout: { method: "POST", url: `${BASE_URL}/api/credits/checkout`, body: { pack: Object.keys(CREDIT_PACKS)[0] } },
-        balance: `${BASE_URL}/api/credits/balance` }
+        packs: Object.entries(sellablePacks()).map(([id, p]) => ({ pack: id, label: p.label, priceUsd: p.cents / 100 })),
+        checkout: { method: "POST", url: `${BASE_URL}/api/credits/checkout`, body: { pack: Object.keys(sellablePacks())[0] } },
+        balance: `${BASE_URL}/api/credits/balance`,
+        // The terms the purchase carries (src/terms.js), as fields.
+        balanceMaxUsd: creditsBalanceMaxCents() / 100, expires: false, feesUsd: 0,
+        refund: { method: "POST", url: `${BASE_URL}/api/credits/refund`, auth: "Authorization: Bearer a402_<key>", returns: "the whole unspent balance, rounded up to the cent, to the card that bought the key; the key is disabled" } }
         : { onSale: false, how: "new credits are not on sale; a key already issued keeps working: Authorization: Bearer a402_<key> on any paid route except the wallet-identity-bound ones and the routes that buy from an outside seller; the list price is held before the call and debited only on a 200", balance: `${BASE_URL}/api/credits/balance` },
       humanProducts: {
         reports: Object.entries(HUMAN_PRODUCTS).map(([k, p]) => ({ product: k, label: p.label, priceUsd: p.price / 100, slug: p.slug, buy: `${BASE_URL}/reports` })),

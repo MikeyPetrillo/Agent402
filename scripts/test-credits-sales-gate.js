@@ -92,13 +92,18 @@ try {
   // redemption must survive: a 404 here would mean an existing key was stranded
   ok((await fetch(`${B}/api/credits/balance`)).status !== 404, "the balance route still exists, so an existing key can still be read");
   ok((await fetch(`${B}/api/credits/claim?session=x`)).status !== 404, "the claim route still exists");
+  // Refund on request is part of the on-sale terms: with sales off the route
+  // answers exactly as a path this server does not serve.
+  const refundOff = await fetch(`${B}/api/credits/refund`, { method: "POST", headers: { authorization: `Bearer a402_${"q".repeat(40)}` } });
+  const noRoute = await fetch(`${B}/api/credits/no-such-route`, { method: "POST" });
+  ok(refundOff.status === 404 && refundOff.status === noRoute.status, `the refund route is not served while sales are off (got ${refundOff.status}, an unserved path ${noRoute.status})`);
 
   // The machine and page surfaces follow the same switch. /api/pricing used to
   // advertise packs and a checkout body that this server answers 503 to, and
   // /credits carried an InStock Offer and a "Buy $20" snippet while refusing.
   const pricingOff = await (await fetch(`${B}/api/pricing`)).json();
   ok(pricingOff.credits && pricingOff.credits.onSale === false, "/api/pricing says credits are not on sale");
-  ok(!pricingOff.credits.checkout && !pricingOff.credits.packs && !pricingOff.credits.buy, "...and offers no packs, buy link or checkout body");
+  ok(!pricingOff.credits.checkout && !pricingOff.credits.packs && !pricingOff.credits.buy && !pricingOff.credits.refund && !("balanceMaxUsd" in pricingOff.credits), "...and offers no packs, buy link, checkout body, refund route or cap");
   ok(/already issued/.test(String(pricingOff.credits.how)) && /balance/.test(String(pricingOff.credits.balance)), "...and still tells an existing key holder how to spend and read it");
   const pageOff = await (await fetch(`${B}/credits`)).text();
   ok(!/InStock/.test(pageOff) && !/Buy \$20/.test(pageOff) && !/data-pack-buy/.test(pageOff), "/credits carries no Offer, buy snippet or buy button while sales are off");
@@ -137,6 +142,10 @@ try {
   ok(on.status !== 503, `selling is reachable when explicitly enabled (got ${on.status}, not the 503 refusal)`);
   const pricingOn = await (await fetch(`${B}/api/pricing`)).json();
   ok(pricingOn.credits?.onSale === true && pricingOn.credits.checkout?.method === "POST", "/api/pricing advertises the checkout when sales are on");
+  ok(pricingOn.credits.balanceMaxUsd === 100 && pricingOn.credits.expires === false && pricingOn.credits.feesUsd === 0 && /\/api\/credits\/refund$/.test(pricingOn.credits.refund?.url) && pricingOn.credits.packs.every((p) => p.priceUsd <= pricingOn.credits.balanceMaxUsd), "/api/pricing states the cap, no expiry, no fees and the refund route, and every pack is within the cap");
+  const refundOn = await fetch(`${B}/api/credits/refund`, { method: "POST" });
+  const refundOnBad = await fetch(`${B}/api/credits/refund`, { method: "POST", headers: { authorization: `Bearer a402_${"q".repeat(40)}` } });
+  ok(refundOn.status === 401 && refundOnBad.status === 401 && (await refundOnBad.json()).status === "unknown", `the refund route is served when sales are on and refuses a missing or unknown key (${refundOn.status}, ${refundOnBad.status})`);
   const pageOnRes = await fetch(`${B}/credits`);
   const pageOn = await pageOnRes.text();
   ok(pageOnRes.status === 200 && !/noindex/.test(robotsMeta(pageOn)), `/credits is 200 and indexable when sales are on (got "${robotsMeta(pageOn)}")`);
@@ -149,6 +158,8 @@ try {
   ok(tOn.status === 200 && tOn.clause.length > 100, "/terms renders its credits clause when sales are on");
   ok(/\bsold by card\b/i.test(tOn.clause) && /href="\/credits"/.test(tOn.clause) && !NOT_SOLD.test(tOn.clause), "/terms offers credits by card at /credits, and does not say they are not sold, when sales are on");
   ok(/Stripe Checkout, for reports and monitors, and for prepaid credits\)/.test(tOn.access), "/terms access line names card for prepaid credits when sales are on");
+  ok(/POST \/api\/credits\/refund/.test(pageOn) && /No fees/.test(pageOn) && /refunded on request/.test(pageOn), "/credits states the refund route and no fees when sales are on");
+  ok(!/api\/credits\/refund/.test(pageOff) && !/No fees/.test(pageOff), "/credits offers neither while sales are off");
 
   // the gate must be read at call time, never latched at boot
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
