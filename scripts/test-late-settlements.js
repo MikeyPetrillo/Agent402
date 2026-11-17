@@ -222,6 +222,48 @@ await check("a booking whose store write fails is kept in the journal, logged, a
   assert.ok(logs.some((m) => /^ALARM .*could NOT be recorded/.test(m)), "an unrecordable booking raises an alarm");
 });
 
+await check("a second booking of the same authorization (again, or landed from the journal) neither writes nor reopens it", async () => {
+  const { writeFileSync, readFileSync } = await import("node:fs");
+  const nonce = txh(9420);
+  const auth = (over = {}) => entry(60, { tx: undefined, nonce, unconfirmed: true, ...over });
+  // The first copy is refused by its store and kept in the journal.
+  const blocker = join(dir, `blocker-again-${Date.now()}`);
+  writeFileSync(blocker, "not a directory");
+  const held = [];
+  const journal = {
+    add: (kind, payload) => { held.push({ id: held.length + 1, kind, payload }); return held.length; },
+    size: () => held.length,
+    drain: async (apply) => { let n = 0; for (const e of [...held]) { const r = await apply(e); if (r === "stop") break; if (r === "landed" || r === "drop") { held.splice(held.indexOf(e), 1); if (r === "landed") n++; } } return n; },
+  };
+  const broken = createLateSettleBook({ file: join(blocker, "late.json"), now, log: () => {}, fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal });
+  assert.equal(await broken.book(auth({ via: "journaled copy" })), true);
+  assert.equal(held.length, 1);
+  // Another replica books the same authorization in the shared store, and a
+  // check moves it on (an unreadable read: checked once, next check later).
+  clock += 1_000;
+  const file = bookFile();
+  const a = createLateSettleBook({ file, now, log: () => {}, fetchImpl, rpcFor: (net) => (net === RH ? RPC : null) });
+  assert.equal(await a.book(auth({ via: "stored copy" })), true);
+  authState.set(nonce, "fail");
+  clock += 2 * 60_000;
+  await a.reconcile();
+  const [moved] = a.list();
+  assert.ok(moved && moved.checks >= 1 && moved.via === "stored copy", "the stored entry has been checked");
+  const bytes = readFileSync(file, "utf8");
+  // Booked again on the same replica: answered as booked, nothing written.
+  assert.equal(await a.book(auth({ via: "again", amount: "9999" })), true);
+  assert.equal(readFileSync(file, "utf8"), bytes, "a repeat booking writes nothing");
+  // The journaled copy lands on a replica sharing the store: dropped from the
+  // journal, the stored entry kept as it was (not reset to a fresh one).
+  const healed = createLateSettleBook({ file, now, log: () => {}, fetchImpl, rpcFor: (net) => (net === RH ? RPC : null), journal });
+  const r = await healed.reconcile();
+  assert.equal(r.journaled, 1);
+  assert.equal(held.length, 0);
+  assert.equal(readFileSync(file, "utf8"), bytes, "the journaled copy writes nothing over the stored entry");
+  assert.deepEqual(healed.list(), [moved], "the entry keeps its checks, schedule and fields");
+  authState.delete(nonce);
+});
+
 await check("an RPC that never answers keeps the entry, then marks it unresolved for a human (never dropped)", async () => {
   const book = makeBook();
   await book.book(entry(8));
