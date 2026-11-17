@@ -306,7 +306,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGINS, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
-import { sellerLoad, bodyHash, landingGate, addressGate, RequestHeld } from "./seller-load.js";
+import { sellerLoad, bodyHash, landingGate, addressGate, RequestHeld, runAsRegistrant } from "./seller-load.js";
 // Reads made for a registration (anyone may register any origin, with no proof
 // of control) run inside this scope: they are counted on a day count of their
 // own (src/seller-load.js takeBudget `unscheduled`), never on the day the
@@ -1711,14 +1711,16 @@ const registerDeadlineMs = () => { const n = Number(process.env.INDEX_REGISTER_D
 const registrationsInFlight = new Map(); // origin + replaces -> the running verification
 const REGISTER_PENDING = Symbol("register-pending");
 const REGISTER_PENDING_NOTE = "verification of this origin is still running (its discovery lists resources that are slow to answer); the listing completes in the background when it finishes. Check GET /api/index?seller=<origin> in a minute or two; if the origin is not listed then, its x402 surface could not be verified, and registering again retries.";
-export async function registerOrigin(origin, { crawl, replaces = null, deadlineMs = registerDeadlineMs() } = {}) {
+export async function registerOrigin(origin, { crawl, replaces = null, deadlineMs = registerDeadlineMs(), registrant = null } = {}) {
   if (isRemovedOrigin(origin) || (replaces && isRemovedOrigin(replaces))) return { listed: false, origin, removed: true, error: REMOVED_ORIGIN_ERROR };
   if (!removalsKnown()) return { listed: false, origin, notLoaded: true, error: REMOVALS_NOT_LOADED_ERROR };
   const key = `${origin} ${replaces || ""}`;
   let run = registrationsInFlight.get(key);
   if (!run) {
     const t0 = Date.now();
-    run = unscheduledReads.run(true, () => registerOriginNow(origin, { crawl, replaces, deadlineAt: t0 + deadlineMs }));
+    // Its reads are counted for the registrant (src/seller-load.js), so one
+    // caller's registrations never spend another's allowance on a host.
+    run = runAsRegistrant(registrant, () => unscheduledReads.run(true, () => registerOriginNow(origin, { crawl, replaces, deadlineAt: t0 + deadlineMs })));
     registrationsInFlight.set(key, run);
     run.then((r) => {
       const ms = Date.now() - t0;
@@ -1736,7 +1738,7 @@ export async function registerOrigin(origin, { crawl, replaces = null, deadlineM
 /** A registration whose reads the host's hourly ceiling held back: nothing
  *  was listed or changed, and the registrant retries after `secs`. */
 function registrationHeld(origin, secs, heldBy = "registration-hour") {
-  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests" : "this host has had this hour's registration reads";
+  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests" : "this caller has had this hour's registration reads of this host";
   return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 
@@ -1878,9 +1880,9 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
     return { listed: false, origin, error: `submission list is full - a slot frees up ${Math.round(RELEASE_AFTER_MS / 86400000)} days after its origin's last successful probe (${Math.round(SETTLED_RELEASE_AFTER_MS / 86400000)} for a seller that has settled payments, ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)} for a quick tunnel); open a GitHub issue to get seeded sooner` };
   }
-  // One host is sent at most an hour's ceiling of registration reads
-  // (src/seller-load.js), whoever registers which origin on it: past it the
-  // registrant is told when to retry, and nothing is sent.
+  // One registrant sends a host at most an hour's ceiling of registration
+  // reads (src/seller-load.js), whichever origins on it it registers: past it
+  // that registrant is told when to retry, and nothing is sent.
   const heldFor = await sellerLoad.registrationHeldFor(origin);
   if (heldFor > 0) return registrationHeld(origin, heldFor);
   const doCrawl = crawl || (async (o, opts) => {

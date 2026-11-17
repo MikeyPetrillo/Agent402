@@ -18,10 +18,15 @@
 //      unpaid probes skip that host until the day rolls; the unpaid probes take
 //      at most PROBE_SHARE of it, so the document reads keep the rest. A read
 //      made for a registration (`unscheduled`) is counted apart and never
-//      spends the day; one operator's host is sent at most
-//      REGISTRATION_HOURLY_MAX of its document reads and paywall checks an
-//      hour (SELLER_REGISTRATION_HOURLY_MAX, default 20), past which the
-//      request is not sent (RequestHeld). The router's probe for
+//      spends the day; one registrant (the caller's address, src/server.js)
+//      sends one operator's host at most REGISTRATION_HOURLY_MAX of its
+//      document reads and paywall checks an hour (SELLER_REGISTRATION_HOURLY_MAX,
+//      default 20), past which that registrant's request is not sent
+//      (RequestHeld), so one registrant never spends another's allowance.
+//      Every registrant together sends the host at most
+//      REGISTRATION_HOST_HOURLY_MAX an hour at full pace; past it the reads
+//      wait in line, one per REGISTRATION_PACE_MS, and are never refused for
+//      it. The router's probe for
 //      a paying caller is counted on a day count of its own, never skipped and
 //      never counted against the crawl's budget. A request that reaches a host
 //      through another operator's redirect (a document read following it, or
@@ -52,6 +57,7 @@
 // never slows a crawl or a buyer's probe. Counts for the operator view:
 // sellerLoadStatus(), on /__operator/seller-load.json.
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { shared as sharedLimits, createMemoryLimits, noteSharedLimitsDegraded } from "./shared-limits.js";
 import { operatorKey, addressSetByName } from "./operator-key.js";
 import { CRAWL_INTERVAL_MS, SLOW_ORIGIN_EVERY_CYCLES, isSlowOrigin } from "./crawl-cadence.js";
@@ -88,6 +94,26 @@ export const DAILY_BUDGET = countKnob("SELLER_PROBE_DAILY_BUDGET", 200);
  *  registration's read is not sent and the registrant is told when to retry
  *  (RequestHeld). 0 = no ceiling. */
 export const REGISTRATION_HOURLY_MAX = countKnob("SELLER_REGISTRATION_HOURLY_MAX", 20);
+/** The registration reads every registrant together sends one operator's host
+ *  per clock hour at full pace (ten registrants' whole allowance). It bounds
+ *  many addresses acting together; it never refuses a read: past it each read
+ *  waits its turn, one per REGISTRATION_PACE_MS per host, so the host is sent
+ *  at most this many plus one per pace interval an hour (200 + 120 by
+ *  default) and a new registrant's first registration is slowed, never held.
+ *  0 = no ceiling. */
+export const REGISTRATION_HOST_HOURLY_MAX = countKnob("SELLER_REGISTRATION_HOST_HOURLY_MAX", 200);
+/** The spacing of registration reads to one host past its hour's ceiling. */
+export const REGISTRATION_PACE_MS = 30_000;
+/** Who a registration's reads are counted for: the registrant key the
+ *  register routes pass (runAsRegistrant). Reads outside one share "-". */
+const registrantScope = new AsyncLocalStorage();
+/** Run `fn` with its registration reads counted for `registrant` (a caller's
+ *  address key; stored only as a short hash). */
+export function runAsRegistrant(registrant, fn) {
+  const key = registrant ? createHash("sha256").update(String(registrant)).digest("hex").slice(0, 16) : "-";
+  return registrantScope.run(key, fn);
+}
+const currentRegistrant = () => registrantScope.getStore() || "-";
 /** The requests that ceiling counts: the ones any registration of any origin
  *  sends (the document reads and the paywall check). The price checks of the
  *  routes a seller's own documents list keep their own per-origin allowance
@@ -202,6 +228,9 @@ export function createSellerLoad({
   probeShare = PROBE_SHARE,
   slowReadIntervalMs = SLOW_READ_INTERVAL_MS,
   registrationHourlyMax = REGISTRATION_HOURLY_MAX,
+  registrationHostHourlyMax = REGISTRATION_HOST_HOURLY_MAX,
+  registrationPaceMs = REGISTRATION_PACE_MS,
+  wait = (ms) => new Promise((r) => { const tm = setTimeout(r, ms); tm.unref?.(); }),
 } = {}) {
   const probeCap = Math.max(1, Math.floor(dailyBudget * probeShare));
   let clock = now;
@@ -277,6 +306,8 @@ export function createSellerLoad({
 
   // ---- the day's counts --------------------------------------------------------
   const budgetKey = (origin, t) => `${dayOf(t)}|${operatorKey(origin)}`;
+  const registrantHourKey = (target, t) => `${hourOf(t)}|${operatorKey(target)}|registration|${currentRegistrant()}`;
+  const paced = new Map();   // operator -> when its next paced registration read may go
   /** Raise this process's count of `key` to `value` when another container's
    *  requests put the shared one higher. */
   async function mergeCount(key, value) {
@@ -554,14 +585,16 @@ export function createSellerLoad({
       // A read we did not schedule (a registration's, which anyone can ask
       // for any origin) is counted on a day count of its own, the crawled
       // origin's: it never spends the day the scheduled crawl and its probes
-      // read. It is refused only past the host's hourly ceiling. One that lands on another operator's host
+      // read. It is refused only past its registrant's hourly ceiling on that
+      // host (paced, never refused, past the host's own). One that lands on another operator's host
       // is held to a landed allowance of its own there, apart from the one
       // the scheduled reads of moved origins share.
       if (unscheduled) {
-        // The host the request reaches is sent at most registrationHourlyMax
-        // of them an hour, however many origins on it are registered, and by
-        // however many callers.
-        const hourKey = registrationHourlyMax > 0 && REGISTRATION_CEILING_KINDS.has(k) ? `${hourOf(t)}|${operatorKey(target)}|registration` : null;
+        // One registrant sends the host the request reaches at most
+        // registrationHourlyMax of them an hour, however many origins on it
+        // it registers; another registrant's allowance is its own.
+        const ceiling = REGISTRATION_CEILING_KINDS.has(k);
+        const hourKey = ceiling && registrationHourlyMax > 0 ? registrantHourKey(target, t) : null;
         if (hourKey && (await countLocal(hourKey)) > registrationHourlyMax) {
           await countLocal(hourKey, -1);
           bump(counts.refused, `${k}:registration-hour`);
@@ -578,6 +611,20 @@ export function createSellerLoad({
             return { ok: false, used: 0, budget: dailyBudget, unscheduled: true };
           }
           countShared(landedKey);
+        }
+        // Every registrant together: past the host's hour at full pace, the
+        // read waits its turn (one per registrationPaceMs), never refused.
+        const hostKey = ceiling && registrationHostHourlyMax > 0 ? `${hourOf(t)}|${operatorKey(target)}|registration` : null;
+        if (hostKey) {
+          countShared(hostKey);
+          if ((await countLocal(hostKey)) > registrationHostHourlyMax) {
+            const host = operatorKey(target);
+            const at = Math.max(clock(), paced.get(host) || 0) + registrationPaceMs;
+            paced.delete(host); paced.set(host, at); bounded(paced);
+            const ms = at - registrationPaceMs - clock();
+            bump(counts.requests, `${k}:registration-paced`);
+            if (ms > 0) await wait(ms);
+          }
         }
         if (hourKey) countShared(hourKey);
         const used = await countLocal(key);
@@ -649,13 +696,14 @@ export function createSellerLoad({
       return { ok: true, used, budget: dailyBudget };
     },
 
-    /** Seconds until a registration's reads may reach the host of `url`
-     *  again, or 0 when this hour's ceiling (registrationHourlyMax) has room. */
+    /** Seconds until this registrant's registration reads may reach the host
+     *  of `url` again, or 0 when its hour (registrationHourlyMax) has room.
+     *  The host's hour across registrants never holds one (it paces). */
     async registrationHeldFor(url) {
       const target = originOf(url);
       if (!target || registrationHourlyMax <= 0) return 0;
       const t = clock();
-      const r = await local.counterGet(BUDGET, `${hourOf(t)}|${operatorKey(target)}|registration`, { now: t });
+      const r = await local.counterGet(BUDGET, registrantHourKey(target, t), { now: t });
       return (Number(r?.value) || 0) >= registrationHourlyMax ? secondsToNextHour(t) : 0;
     },
 
@@ -793,7 +841,7 @@ export function createSellerLoad({
       for (const [, at] of backedOff) if (at > t) backedOffNow++;
       return {
         revisit: { capHours: revisitCapMs / HOUR_MS, firstWaitMinutes: revisitIntervalMs(1, { baseMs: revisitBaseMs, capMs: revisitCapMs }) / 60_000, originsBackedOff: backedOffNow, unchangedReads: counts.unchangedReads, changedReads: counts.changedReads, resets: { ...counts.resets } },
-        budget: { perOperatorPerDay: dailyBudget, probesPerOperatorPerDay: probeCap, registrationReadsPerOperatorPerHour: registrationHourlyMax, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused }, routerProbesCountedApart: true },
+        budget: { perOperatorPerDay: dailyBudget, probesPerOperatorPerDay: probeCap, registrationReadsPerRegistrantPerHour: registrationHourlyMax, registrationReadsPerOperatorPerHourAtFullPace: registrationHostHourlyMax, registrationPaceSeconds: registrationPaceMs / 1000, hostsCountedToday, hostsOverBudgetToday, requests: { ...counts.requests }, refused: { ...counts.refused }, routerProbesCountedApart: true },
         throttle: { defaultMinutes: THROTTLE_DEFAULT_MS / 60_000, maxHours: THROTTLE_MAX_MS / HOUR_MS, ...counts.throttles },
         crawlsSkipped: { ...counts.skipped },
         prefetch: { ...counts.prefetch, waitMs: prefetchWaitMs },
@@ -813,7 +861,7 @@ export function createSellerLoad({
 export class RequestHeld extends Error {
   constructor(heldBy, retryAfterSeconds = 0) {
     super(heldBy === "registration-hour"
-      ? `not sent: this hour's registration reads of that host are spent; retry in ${retryAfterSeconds} s`
+      ? `not sent: this caller's registration reads of that host are spent for this hour; retry in ${retryAfterSeconds} s`
       : `not sent: the day's requests to that host's address are spent; retry in ${retryAfterSeconds} s`);
     this.landingHeld = true;
     this.landingHost = null;

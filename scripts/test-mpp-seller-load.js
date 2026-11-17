@@ -123,7 +123,7 @@ const sentTo = (host) => sent.filter((u) => isHost(u, host)).length;
   const verify = (o) => mpp.verifyMppSeller(o, { probe, fetchDoc, fetchText });
   const answers = [];
   for (let i = 0; i < 300; i++) answers.push(await mpp.registerMppOrigin(`https://q${i}.flood.example`, { verify }));
-  const max = sellerLoad.status().budget.registrationReadsPerOperatorPerHour;
+  const max = sellerLoad.status().budget.registrationReadsPerRegistrantPerHour;
   const held = answers.filter((r) => r?.held);
   ok(max === 20 && onFlood() <= max && onFlood() >= max - 1, `the host is sent at most the hour's ceiling of registration reads (${onFlood()} of ${max})`);
   ok(held.length >= 280 && held.every((r) => r.listed === false && r.retryAfterSeconds > 0 && r.retryAfterSeconds <= 3600 && /register again/.test(r.error)),
@@ -135,6 +135,13 @@ const sentTo = (host) => sent.filter((u) => isHost(u, host)).length;
   const n = onFlood();
   const later = await mpp.registerMppOrigin("https://q500.flood.example", { verify });
   ok(later?.listed === true && onFlood() > n, "the next hour a registration on the host is read again");
+  // One address spends the host's hour; another address's first registration is still read.
+  for (let i = 0; i < 300; i++) await mpp.registerMppOrigin(`https://r${i}.flood.example`, { verify, registrant: "198.51.100.1" });
+  const heldOne = await mpp.registerMppOrigin("https://r900.flood.example", { verify, registrant: "198.51.100.1" });
+  ok(heldOne?.held === true, "one address is held past its own hour on the host");
+  const m = onFlood();
+  const firstOther = await mpp.registerMppOrigin("https://api.flood.example", { verify, registrant: "203.0.113.9" });
+  ok(firstOther?.listed === true && !firstOther.held && onFlood() > m, "another address's first registration of the host is read and listed");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

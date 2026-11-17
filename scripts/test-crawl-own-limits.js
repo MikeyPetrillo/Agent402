@@ -213,7 +213,7 @@ const entry = (o) => idx._cacheForTests().get(o);
   const answers = [];
   for (let i = 0; i < 300; i++) answers.push(await idx.registerOrigin(`${V2}/q${i}`).catch((e) => ({ thrown: String(e?.message || e) })));
   const sent = readsOf(V2) + probesOf(V2) - sent0;
-  const max = sellerLoad.status().budget.registrationReadsPerOperatorPerHour;
+  const max = sellerLoad.status().budget.registrationReadsPerRegistrantPerHour;
   const held = answers.filter((r) => r?.held);
   ok(max === 20 && sent > 0 && sent <= max, `the host is sent at most the hour's ceiling of registration reads (${sent} of ${max})`);
   ok(held.length >= 280 && held.every((r) => r.listed === false && r.retryAfterSeconds > 0 && r.retryAfterSeconds <= 3600 && /register again/.test(r.error)),
@@ -223,6 +223,22 @@ const entry = (o) => idx._cacheForTests().get(o);
   const before = readsOf(V2);
   const later = await idx.registerOrigin(V2);
   ok(later?.listed === true && readsOf(V2) > before, "the next hour a registration on the host is read and listed");
+}
+
+// ---- one registrant's registrations never hold another's ---------------------------
+{
+  // One address spends its hour on path origins under a seller's domain; the
+  // seller's own first registration of its api host, from another address,
+  // is still read and listed.
+  clock = Date.parse("2026-12-03T10:00:00Z");
+  const D = "https://victimco.example", API = "https://api.victimco.example";
+  serve(API);
+  const junk = [];
+  for (let i = 0; i < 5; i++) junk.push(await idx.registerOrigin(`${D}/junk${i}`, { registrant: "198.51.100.1" }));
+  const sixth = await idx.registerOrigin(`${D}/junk5`, { registrant: "198.51.100.1" });
+  ok(sixth?.held === true && sixth.listed === false && /caller/.test(sixth.error), "one address is held past its own hour of registration reads on the host");
+  const own = await idx.registerOrigin(API, { registrant: "203.0.113.9" });
+  ok(own?.listed === true && !own.held, "the seller's own first registration from another address is read and listed");
 }
 
 // ---- names that resolve to one address share its day -------------------------------

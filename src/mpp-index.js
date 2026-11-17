@@ -32,7 +32,7 @@ const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { CRAWLER_UA } from "./user-agents.js";
-import { sellerLoad, landingGate, addressGate, RequestHeld, SLOW_READ_INTERVAL_MS } from "./seller-load.js";
+import { sellerLoad, landingGate, addressGate, RequestHeld, SLOW_READ_INTERVAL_MS, runAsRegistrant } from "./seller-load.js";
 import { isSlowOrigin } from "./crawl-cadence.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
@@ -602,7 +602,12 @@ export async function verifyMppSeller(origin, { probe, fetchText, fetchDoc, gate
 
 /** Probe + list a submitted origin. `verify` is injectable for tests; defaults
  *  to the real verifyMppSeller. Successful probes persist the origin as a seed. */
-export async function registerMppOrigin(origin, { verify, path, method } = {}) {
+export async function registerMppOrigin(origin, { registrant = null, ...opts } = {}) {
+  // Its reads are counted for the registrant (src/seller-load.js), so one
+  // caller's registrations never spend another's allowance on a host.
+  return runAsRegistrant(registrant, () => registerMppOriginNow(origin, opts));
+}
+async function registerMppOriginNow(origin, { verify, path, method } = {}) {
   const existing = cache.get(origin);
   if (existing?.verified) return { listed: true, origin, seller: mppSellerSummary(existing) };
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
@@ -610,8 +615,8 @@ export async function registerMppOrigin(origin, { verify, path, method } = {}) {
   }
   const hint = validateProbeHint({ path, method });
   if (hint.error) return { listed: false, origin, error: hint.error };
-  // One host is sent at most an hour's ceiling of registration reads
-  // (src/seller-load.js): past it the registrant is told when to retry.
+  // One registrant sends a host at most an hour's ceiling of registration
+  // reads (src/seller-load.js): past it that registrant is told when to retry.
   const heldFor = await sellerLoad.registrationHeldFor(origin);
   if (heldFor > 0) return mppRegistrationHeld(origin, heldFor);
   // Stage the hint so this verification probes it; keep it only if it verifies
@@ -646,7 +651,7 @@ export async function registerMppOrigin(origin, { verify, path, method } = {}) {
 }
 
 function mppRegistrationHeld(origin, secs, heldBy = "registration-hour") {
-  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests" : "this host has had this hour's registration reads";
+  const why = heldBy === "address-day" ? "the address this host resolves to has had today's requests" : "this caller has had this hour's registration reads of this host";
   return { listed: false, origin, held: true, retryAfterSeconds: secs, error: `${why}; nothing was listed or changed, register again in ${secs} s` };
 }
 

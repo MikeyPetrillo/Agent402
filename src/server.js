@@ -9276,7 +9276,7 @@ app.post("/api/index/register", async (req, res) => {
     if (isRemovedOrigin(rv.origin)) return res.status(410).json({ error: REMOVED_ORIGIN_ERROR });
     replaces = rv.origin;
   }
-  const result = await registerOrigin(v.origin, { replaces });
+  const result = await registerOrigin(v.origin, { replaces, registrant: ip });
   if (result?.notLoaded) {
     // The removal list has not been read yet (the state database is down):
     // nothing was fetched or listed, so the call gives back both of its
@@ -9284,7 +9284,7 @@ app.post("/api/index/register", async (req, res) => {
     regLimiter.giveBack(slot);
     return res.status(503).set("Retry-After", "30").json(result);
   }
-  // The host has had this hour's registration reads (src/seller-load.js):
+  // This caller has had this hour's registration reads of the host (src/seller-load.js):
   // nothing was sent, so the global slot goes back, and the caller is told
   // when to retry.
   if (result?.held) {
@@ -9317,7 +9317,7 @@ app.post("/api/mpp-index/register", async (req, res) => {
   if (!taken.ok) return res.status(429).json({ error: `rate limit: registration is busy (global cap ${REG_GLOBAL_MAX}/hour), try again later`, retryAfterSeconds: 600 });
   // Optional probe hint: the priced path (and GET/POST) the seller's 402 lives
   // on, for sellers not yet in the registry (validated in registerMppOrigin).
-  const result = await registerMppOrigin(v.origin, { path: req.body?.path, method: req.body?.method });
+  const result = await registerMppOrigin(v.origin, { path: req.body?.path, method: req.body?.method, registrant: ip });
   if (result?.held) {
     mppRegLimiter.giveBackGlobal(taken.slot);
     return res.status(429).set("Retry-After", String(result.retryAfterSeconds || 60)).json(result);

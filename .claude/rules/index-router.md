@@ -110,9 +110,12 @@ Loaded when an index, discovery, router or buyer file is read.
   seller is never dropped because we chose not to read it; once a read has failed
   (`readIncomplete`), the start stays at `holdFromAt`, so a dark origin drops after the hold.
   Registration (`unscheduled`) document reads and paywall/mpp probes (not route quotes, which keep
-  the reprice allowance): at most `SELLER_REGISTRATION_HOURLY_MAX` (default 20) per operator of the
-  target host per clock hour (`RequestHeld` "registration-hour"; the register routes
-  answer 429 with Retry-After). Names under `OWNER_ADDRESSED_SUFFIXES` (src/operator-key.js) are also
+  the reprice allowance): at most `SELLER_REGISTRATION_HOURLY_MAX` (default 20) per registrant
+  (the register route's IP key, `runAsRegistrant`) per operator of the target host per clock hour
+  (`RequestHeld` "registration-hour"; the register routes answer 429 with Retry-After), so one
+  registrant never spends another's. Across registrants, past `SELLER_REGISTRATION_HOST_HOURLY_MAX`
+  (default 200) per host-hour the reads are paced one per `REGISTRATION_PACE_MS` (30 s), never
+  refused. Names under `OWNER_ADDRESSED_SUFFIXES` (src/operator-key.js) are also
   counted per resolved address per day (`takeAddressBudget`, fed by safeFetch/probePublicUrl
   `onResolved` from the SSRF check; "address-day").
   `CRAWL_SLOW_ORIGINS` is by the clock: a slow origin's scheduled read sets a per-lane flag

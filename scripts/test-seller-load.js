@@ -11,7 +11,7 @@
 //   - a shared store that does not answer leaves this process deciding.
 // Offline, on the memory store, with an injected clock.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-const { createSellerLoad, revisitIntervalMs, bodyHash, REVISIT_CAP_MS, DAILY_BUDGET, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, landingGate } = await import("../src/seller-load.js");
+const { createSellerLoad, revisitIntervalMs, bodyHash, REVISIT_CAP_MS, DAILY_BUDGET, THROTTLE_DEFAULT_MS, THROTTLE_MAX_MS, landingGate, runAsRegistrant, REGISTRATION_HOURLY_MAX, REGISTRATION_HOST_HOURLY_MAX, REGISTRATION_PACE_MS } = await import("../src/seller-load.js");
 const { operatorKey } = await import("../src/operator-key.js");
 const { createMemoryLimits } = await import("../src/shared-limits.js");
 const { CRAWL_INTERVAL_MS } = await import("../src/crawl-cadence.js");
@@ -337,6 +337,40 @@ function fresh(opts = {}) {
   ok((load.status().budget.refused["crawler:registration-hour"] || 0) === 1, "the refusal is counted in the operator view");
   step(3_600_000);
   ok((await take(6)).ok && (await load.registrationHeldFor(V)) === 0, "the next hour the host is read again");
+}
+
+// ---- one registrant's reads never spend another's ---------------------------------
+{
+  ok(REGISTRATION_HOURLY_MAX === 20 && REGISTRATION_HOST_HOURLY_MAX === 200 && REGISTRATION_PACE_MS === 30_000, "defaults: 20 an hour per registrant and host, 200 at full pace per host, then one per 30 s");
+  const waits = [];
+  let clockRef;
+  const { load, step, now } = fresh({ dailyBudget: 20, registrationHourlyMax: 5, registrationHostHourlyMax: 12, registrationPaceMs: 30_000, wait: async (ms) => { waits.push(ms); clockRef.step(ms); } });
+  clockRef = { step };
+  const V = "https://victimco.example";
+  const as = (who, fn) => runAsRegistrant(who, fn);
+  const read = (who, url) => as(who, () => load.takeBudget(url, "crawler", { essential: true, unscheduled: true }));
+  // The lockout: one address spends its whole hour on path origins under the domain.
+  const junk = [];
+  for (let i = 0; i < 5; i++) junk.push(await read("198.51.100.1", `${V}/junk${i}/.well-known/x402`));
+  ok(junk.every((b) => b.ok), "one registrant's reads are sent up to its hour on the host");
+  const over = await read("198.51.100.1", `${V}/junk9/.well-known/x402`);
+  ok(over.ok === false && over.heldBy === "registration-hour", "one registrant is still held past its own hour");
+  ok((await as("198.51.100.1", () => load.registrationHeldFor(`${V}/junk10`))) > 0, "and its next registration on the host is held before it starts");
+  ok((await as("203.0.113.9", () => load.registrationHeldFor("https://api.victimco.example"))) === 0, "another registrant's first registration of the host is not held by it");
+  ok((await read("203.0.113.9", "https://api.victimco.example/.well-known/x402")).ok, "and its read is sent");
+  // Many addresses together: none is refused for the host's hour; past it the reads wait in line.
+  const sentAt = [];
+  let refused = 0;
+  for (let ip = 0; ip < 20; ip++) for (let j = 0; j < 5; j++) {
+    const b = await read(`192.0.2.${ip}`, `${V}/m${ip}-${j}/openapi.json`);
+    if (b.ok) sentAt.push(now()); else refused++;
+  }
+  ok(refused === 0, "many registrants: none is refused for the host's hour (first registrations are never held by others)");
+  const paced = load.status().budget.requests["crawler:registration-paced"] || 0;
+  ok(paced === 106 - 12 && waits.length > 0, `past the host's hour at full pace the reads wait in line (${paced} paced)`);
+  const span = sentAt[sentAt.length - 1] - sentAt[0];
+  ok(span >= (paced - 2) * 30_000, `many registrants are bounded to one read per pace interval past the ceiling (${Math.round(span / 1000)} s for ${paced} paced reads)`);
+  ok(waits.every((ms) => ms > 0 && ms <= 30_000), "each wait is at most one pace interval after the read before it");
 }
 
 // ---- names that resolve to one address share its day -------------------------------
