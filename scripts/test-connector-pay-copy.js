@@ -99,7 +99,7 @@ const BOOTS = [
 ];
 
 const wires0 = (boot) => [boot.x402 && "x402", boot.mpp && "MPP"].filter(Boolean).join(" or ");
-const plain = (html) => html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/[ \t]+/g, " ");
+const plain = (html) => html.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>|<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/[ \t]+/g, " ");
 /** The sentences of a text that mention the connector. */
 const connectorLines = (text) => text.split(/\n+/).filter((l) => /connector/i.test(l)).join("\n");
 // What a surface claims about paying in the call.
