@@ -31,7 +31,7 @@
 import { performance } from "node:perf_hooks";
 import { railOf } from "./payment-rail.js";
 import { clientGoneBeforeFirstByte } from "./hangup-settlement.js";
-import { noteSlowPaidCall } from "./slow-paid-calls.js";
+import { noteSlowPaidCall, chatAttemptBoundOf } from "./slow-paid-calls.js";
 
 const KEY = "__a402Phases";
 const windowSize = () => { const n = Number(process.env.PAID_TIMING_WINDOW); return Number.isInteger(n) && n > 0 ? Math.min(n, 5000) : 200; };
@@ -197,7 +197,7 @@ function recordPaidCall(req, res, s) {
     // An unfinished handler (no end mark when the call is recorded) counts
     // with the time it had run so far.
     const endPerf = s.handlerEnd ?? now();
-    noteSlowPaidCall({ slug: row.slug, handlerMs: row.handlerMs, elapsedMs: ms(s.handlerStart, endPerf), endEpochMs: Math.round(performance.timeOrigin + endPerf), status: row.status, synthetic: row.synthetic });
+    noteSlowPaidCall({ slug: row.slug, handlerMs: row.handlerMs, elapsedMs: ms(s.handlerStart, endPerf), endEpochMs: Math.round(performance.timeOrigin + endPerf), status: row.status, synthetic: row.synthetic, ownBoundMs: chatAttemptBoundOf(req) });
   } catch { /* the alarm must never touch a payment */ }
   if (logOn() && !(s.coverLine === false && row.status === 429)) {
     const f = (v) => (v == null ? "-" : `${v}ms`);

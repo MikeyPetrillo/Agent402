@@ -134,6 +134,60 @@ ok(fn(S.slowPaidMsFromEnv) && S.slowPaidMsFromEnv("junk") === 20000, "an unreada
   ok(!JSON.stringify(rows).includes("0xabcd"), "the payer the timer knows never reaches the list");
 }
 
+// --- a chat call is slow only past its own attempt deadline ----------------------
+// The gateway records the deadline it computed for the call (bufferedAttemptMs:
+// up to 110 s under an x402 EVM window, 90 s on every other rail); the alarm
+// holds the call to it.
+{
+  const G = await import("../src/tools/llm-gateway-kit.js");
+  const premium = G.TIERS["v1-chat-premium"];
+  const v = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", maxTimeoutSeconds: 300 },
+    payload: { signature: "0x" + "11".repeat(65), authorization: { from: "0x" + "ab".repeat(20), to: "0x" + "cd".repeat(20), value: "1000", validAfter: "0", validBefore: String(Math.floor(Date.now() / 1000) + 300), nonce: "0x" + "01".repeat(32) } } })).toString("base64");
+  const evmReq = { headers: { "payment-signature": v }, header: (n) => (String(n).toLowerCase() === "payment-signature" ? v : undefined) };
+  const creditsReq = { headers: {}, header: () => undefined, creditsSettling: true };
+  const evmMs = G.bufferedAttemptMs(8000, premium, evmReq);
+  const creditsMs = G.bufferedAttemptMs(8000, premium, creditsReq);
+  ok(evmMs === 110_000 && S.chatAttemptBoundOf(evmReq) === 110_000, `the gateway records the EVM premium call's own deadline (${evmMs}, ${S.chatAttemptBoundOf(evmReq)})`);
+  ok(creditsMs === 90_000 && S.chatAttemptBoundOf(creditsReq) === 90_000, `...and 90 s for a credits call (${creditsMs})`);
+  const at = Date.now();
+  S._resetSlowPaidCalls();
+  const within = S.noteSlowPaidCall({ slug: "v1-chat-premium", handlerMs: 105_000, endEpochMs: at, status: 200, ownBoundMs: S.chatAttemptBoundOf(evmReq) });
+  ok(within === null && S.slowPaidVerdict(3600_000, at).degraded === false, "a 105 s EVM premium call within its 110 s deadline does not degrade serving health");
+  const past = S.noteSlowPaidCall({ slug: "v1-chat-premium", handlerMs: 112_000, endEpochMs: at, status: 200, ownBoundMs: S.chatAttemptBoundOf(evmReq) });
+  ok(past?.boundMs === 110_000 && S.slowPaidVerdict(3600_000, at).degraded === true, "a 112 s EVM premium call past its deadline does");
+  S._resetSlowPaidCalls();
+  const credits = S.noteSlowPaidCall({ slug: "v1-chat-premium-messages", handlerMs: 105_000, endEpochMs: at, status: 200, ownBoundMs: S.chatAttemptBoundOf(creditsReq) });
+  ok(credits?.boundMs === 90_000 && S.slowPaidVerdict(3600_000, at).degraded === true, "a 105 s credits premium call (90 s deadline) does");
+  S._resetSlowPaidCalls();
+  const bare = S.noteSlowPaidCall({ slug: "v1-chat-premium", handlerMs: 95_000, endEpochMs: at, status: 200 });
+  ok(bare?.boundMs === 90_000, "a chat call with no recorded deadline keeps the 90 s bound");
+  S._resetSlowPaidCalls();
+  // The caller path: the phase timer hands the alarm the request's recorded deadline.
+  process.env.ALERT_SLOW_PAID_MS = "60";
+  process.env.PAID_TIMING_LOG = "off";
+  const P = await tryImport("../src/paid-phase-timing.js");
+  const call = async (slug, ownMs, holdMs) => {
+    const req = { headers: { "payment-signature": "x" } };
+    const res = new EventEmitter();
+    res.statusCode = 200; res.writableFinished = false; res.headersSent = false;
+    res.end = function () { this.writableFinished = true; this.headersSent = true; this.emit("close"); return this; };
+    req.res = res;
+    P.phaseArrivalMiddleware()(req, res, () => {});
+    P.markPaidHandlerStart(req, res, slug, { describe: () => ({ payer: null, synthetic: false }) });
+    S.noteChatAttemptBound(req, ownMs);
+    await sleep(holdMs);
+    res.end();
+    await sleep(5);
+  };
+  await call("v1-chat-premium", 400, 150);
+  ok(S.recentSlowPaidCalls().length === 0, "through the phase timer: a chat call inside its recorded deadline is not listed");
+  await call("v1-chat-premium", 100, 150);
+  const rows = S.recentSlowPaidCalls();
+  ok(rows.length === 1 && rows[0].boundMs === 100, `through the phase timer: past its recorded deadline it is listed at that bound (${JSON.stringify(rows)})`);
+  delete process.env.ALERT_SLOW_PAID_MS;
+  S._resetSlowPaidCalls();
+}
+
 // --- serving health, perf.json and the heartbeat are wired --------------------------
 {
   const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
