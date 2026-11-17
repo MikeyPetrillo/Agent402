@@ -701,6 +701,7 @@ ${toolSections}
 - [Integrations](${baseUrl}/integrations): one page per published package (framework adapters, MCP server, buyer SDK, tollbooth, OpenClaw provider) with install line, example and payment modes
 - [llms-full.txt](${baseUrl}/llms-full.txt): this file plus every catalog route (slug, method, route, price, one-line description) and the learn summaries
 - [Maintainer](${REPO_URL}): Havok Holdings LLC, mike@agent402.tools
+- [Ownership and licensing](${REPO_URL}#ownership-and-licensing): owned by Cardhavok LLC (doing business as Havok Holdings LLC); server AGPL-3.0-or-later, published packages MIT; commercial licensing at mike@agent402.tools; outside contributions carry a DCO sign-off and the contributor license agreement (CLA.md)
 `;
 }
 

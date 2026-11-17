@@ -710,6 +710,19 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 | `wiki/` | Source for the [GitHub wiki](https://github.com/MikeyPetrillo/Agent402/wiki) (CI-synced) |
 | `scripts/` | Tests, demos, ops tooling |
 
+## Ownership and licensing
+
+- Agent402 and the "Agent402" name are owned by Cardhavok LLC (doing business as Havok
+  Holdings LLC); outside contributions are used under the terms recorded in [NOTICE](NOTICE).
+- The server is AGPL-3.0-or-later and every published package is MIT (details under Legal
+  below). For commercial licensing, write to [mike@agent402.tools](mailto:mike@agent402.tools)
+  or see [agent402.tools/company](https://agent402.tools/company).
+- Outside contributions carry a DCO sign-off on every commit and the contributor license
+  agreement in [CLA.md](CLA.md); see [CONTRIBUTING.md](CONTRIBUTING.md).
+- [NOTICE](NOTICE) records ownership, contributions and AI-assisted development;
+  [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) lists bundled dependencies and their
+  licenses; [SECURITY.md](SECURITY.md) covers reporting a vulnerability.
+
 ## Legal
 
 - The hosted instance at agent402.tools is provided under its
@@ -733,5 +746,5 @@ translated to `PAYMENT-SIGNATURE` and handed to the same verifier.
 ## Contributing
 
 PRs that add useful tools, fix bugs, or improve docs are very welcome - see
-[CONTRIBUTING.md](CONTRIBUTING.md). Server AGPL-3.0, every published package MIT (see Legal above). Maintained by
+[CONTRIBUTING.md](CONTRIBUTING.md) (DCO sign-off and the [CLA](CLA.md)). Server AGPL-3.0, every published package MIT (see Legal above). Maintained by
 [Havok Holdings LLC](https://github.com/MikeyPetrillo/Agent402).

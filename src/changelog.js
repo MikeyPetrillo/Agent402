@@ -8,6 +8,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
+    title: "Ownership, contributor agreement and third-party notices",
+    items: [
+      "Repository: Outside pull requests carry a DCO sign-off whose email is each commit's author email and the agreement sentence of the new contributor license agreement (CLA.md) in the description or in the author's own comment; the DCO check names the missing record and how to add it. The owner's pull requests and bot updates are unchanged.",
+      "Repository: NOTICE names the owner, records how outside contributions and AI-assisted development are covered, and points to THIRD_PARTY_NOTICES.txt, the npm packages each shipped artifact installs with their licenses, regenerated from the lockfiles by scripts/gen-third-party-notices.js. The README, CONTRIBUTING.md and /llms-full.txt carry the ownership and licensing summary.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "An unconfirmed settlement is answered as unconfirmed",
     items: [
       "Payments: When a backup settler ends a settlement on an answer that does not show whether the transfer was sent (an HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction), the call is answered 402 with reason settlement-unconfirmed: the answer says not to sign a new authorization for that call before the expiry the payment carries (an authorization's validBefore, a time by which a Solana transaction's blockhash has expired, an Algorand lastValid round or a Stellar expiration ledger), or when it carries none, until the paying wallet shows whether the transfer landed, names the transaction to watch and its refund lookup when there is one (retry watch-transaction, otherwise check-wallet), carries no new offer, and its receipt reads settlement_unconfirmed.",

@@ -6,6 +6,20 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (ownership, contributor agreement and third-party notices)
+Repository:
+- Outside pull requests carry a DCO sign-off whose email is each commit's
+  author email and the agreement sentence of the new contributor license
+  agreement (CLA.md) in the description or in the author's own comment; the
+  DCO check names the missing record and how to add it. The owner's pull
+  requests and bot updates are unchanged.
+- NOTICE names the owner, records how outside contributions and AI-assisted
+  development are covered, and points to THIRD_PARTY_NOTICES.txt, the npm
+  packages each shipped artifact installs with their licenses, regenerated
+  from the lockfiles by scripts/gen-third-party-notices.js. The README,
+  CONTRIBUTING.md and /llms-full.txt carry the ownership and licensing
+  summary.
+
 ### 2026-11-17 (an unconfirmed settlement is answered as unconfirmed)
 Payments:
 - When a backup settler ends a settlement on an answer that does not show
