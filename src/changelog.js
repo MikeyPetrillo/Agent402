@@ -29,6 +29,30 @@ const ENTRIES = [
   },
   {
     date: "2026-11-16",
+    title: "An MCP payment ask every client reads",
+    items: [
+      "Surfaces: On the hosted MCP connector, the first ask for a paid tool carries the x402 PaymentRequired as JSON in its first text block and no structuredContent, so a client that checks a tool's output schema reads the ask as an ordinary tool result. A settlement that is not decided yet carries its fields in _meta. The connector's own text names the wires that instance takes in the call, and says that a long-running tool is paid in the call over MPP as an MCP task, or on its HTTP route. The output schema of memory.write allows an expiry of null.",
+      "Operations: The MCP tool listings pass signs only an offer that pays the server's published receiving address, with one plain exact USDC accept on Base at the list price and a validity window of ten minutes or less. It takes dotted tool names as well as catalog slugs, only a run on main buys, and its issue closes when the listings it names are bought. The check of the Bazaar declarations after boot reads an MCP tool declaration with the protocol's validators, so a valid one logs no warning.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "Paying on the MCP connector, on every surface",
+    items: [
+      "Surfaces: Every page and text surface that describes paying on the hosted MCP connector (/llms.txt, /llms-full.txt, /agents.md, /how-to-pay, /quickstart, /learn/mcp-payments, /integrations/mcp, the agent-hosts guide, the wiki and the README) names the wires the connector takes in the call on that instance: x402 and MPP on the hosted service, x402 alone where the MPP gates are off, and neither on a FREE_MODE instance, which has no paywall. The listed description of payment.info says the same.",
+      "Operations: The Bazaar listing scripts read the connector's MCP tool listings: a pass that takes an explicit list and buys each listing once through the connector's x402 transport, a presence check that reads the listings beside the routes and pages on one that was listed and left, and a check of each tool's offer.",
+    ],
+  },
+  {
+    date: "2026-11-16",
+    title: "The hosted MCP connector accepts x402",
+    items: [
+      "Surfaces: The hosted MCP connector at /mcp accepts x402 in the call, over the x402 MCP transport: the first ask for a paid tool carries an x402 PaymentRequired beside the MPP challenges, a client sends the signed payment in _meta[\"x402/payment\"], and a paid answer carries the settle receipt in _meta[\"x402/payment-response\"]. Six flagship tools (web.search, web.news, web.answer, market.quote, browser.render and memory.read) are offered with resource /mcp, and catalog.call and the other flagships with the tool's own HTTP route; that route's x402 paywall verifies the payment, runs the tool and settles only a successful answer.",
+      "Surfaces: On the hosted MCP connector, a payment whose settlement is not decided yet (a Circle Gateway batched payment still settling, or a broadcast transfer not yet confirmed) or did not complete is answered with the paid route's explanation and no new offer, so a client does not sign a second payment for one call. A free tool at its rate limit offers its x402 challenge, so a client that pays is served past the limit. A call carrying a payment has its own, larger per-client request limit when it reaches a paid route; any other call keeps the normal one.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Marketplace answers arrive whole or are not settled",
     items: [
       "Payments: An input a tool refuses on a call bought through a marketplace listing is answered with the tool's expected fields, required fields and example, as on the direct route, and this server does not settle the payment.",
