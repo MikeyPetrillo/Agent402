@@ -424,6 +424,8 @@ import { agenticFinancePage } from "./agentic-finance.js";
 import { x402TestPage } from "./x402-test-page.js";
 import { securityPage } from "./security-page.js";
 import { trustPage } from "./trust-page.js";
+import { markGateMounted } from "./gate-mounts.js";
+import { conformanceDocument, CONFORMANCE_PATH } from "./conformance.js";
 import { crawlerPage } from "./crawler-page.js";
 import { companyPage } from "./company.js";
 import { sampleJson, sampleMeta, midSentence } from "./sample-reports.js";
@@ -4568,6 +4570,9 @@ for (const p of A2A_WELL_KNOWN_PATHS) {
     }));
   });
 }
+// Per payment rail, the protocol features this server implements and the
+// refund terms as data, computed at each request (src/conformance.js).
+app.get(CONFORMANCE_PATH, (_req, res) => res.set("Cache-Control", "public, max-age=300").json(conformanceDocument(BASE_URL)));
 app.get("/.well-known/glama.json", (_req, res) => {
   const email = process.env.GLAMA_MAINTAINER_EMAIL || "mike@agent402.tools";
   res.set("Cache-Control", "public, max-age=86400").json({
@@ -11087,6 +11092,7 @@ if (!FREE_MODE) {
   // that buffers writeHead restores the function it found.
   app.use(answerHeadersGuard());
   app.use(createHangupSettlementHook({ onUndelivered: recordHangupOutcome }));
+  markGateMounted("hangupHook");
 
   // Tempo support for MPP (src/mpp-tempo.js) — a SECOND, independent
   // settlement path alongside the evm shim below: Tempo's TIP-1034/TIP-20
@@ -11163,6 +11169,7 @@ if (!FREE_MODE) {
   });
   if (mppShim) {
     app.use(mppShim);
+    markGateMounted("mppShim");
     console.log("MPP dual-stack shim enabled (WWW-Authenticate/Authorization Payment ↔ x402 headers)");
   }
   // Dedicated replay guard for Tempo credentials — never shared with the
@@ -11240,6 +11247,7 @@ if (!FREE_MODE) {
   if (tempoGate) {
     app.use(tempoGate);
     tempoGateMounted = true;
+    markGateMounted("tempo");
     // A claimed push credential is served only once its owed debt (an
     // earlier input refusal) is voided, in one statement a refund send's
     // claim cannot interleave with (tempoPushDebts.claimForServe). A debt
@@ -11280,6 +11288,7 @@ if (!FREE_MODE) {
   });
   if (stripeGate) {
     app.use(stripeGate);
+    markGateMounted("stripe");
     console.log("Stripe MPP settlement enabled (stripe/charge cards via Shared Payment Tokens)");
   }
   // Prepaid credits gate: `Authorization: Bearer a402_…` on a priced catalog
@@ -11293,6 +11302,7 @@ if (!FREE_MODE) {
       const priceUsd = quotedPriceUsd(def, req);
       return priceUsd ? { priceUsd, slug: def.slug, identityBound: isIdentityBoundRoute(def), paysThirdParty: paysThirdParty(def) } : null;
     }));
+    markGateMounted("credits");
     console.log("Prepaid card credits enabled (Bearer a402_ keys)");
   }
 }
@@ -11385,6 +11395,7 @@ app.use(createIdempotency({
     } };
   },
 }));
+markGateMounted("idempotency");
 
 // x402 paywall for the catalog routes
 if (FREE_MODE) {
@@ -12033,6 +12044,7 @@ if (FREE_MODE) {
     // (src/settle-preference.js).
     return settlePreference(req, res, () => x402mw(req, res, (...args) => (args.length ? next(...args) : x402PayerScreen(req, res, next))));
   });
+  markGateMounted("x402", "x402PayerScreen", "replayGuard", "pow");
   console.log(`x402 payments enabled: ${NETWORK} -> ${WALLET_ADDRESS}; proof-of-work tier on ${POW_SLUGS.size} tools (difficulty ${POW_DIFFICULTY} bits)`);
 }
 

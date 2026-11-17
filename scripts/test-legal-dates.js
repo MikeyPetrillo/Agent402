@@ -15,7 +15,9 @@ import { createHash } from "node:crypto";
 // each page prints the later of this date and FACILITATOR_PUBLIC_INDEX_SINCE
 // (scripts/test-public-index-copy.js).
 const PINS = {
-  "src/terms.js": { date: "2026-11-16", sha: "166ca6211f03d237" },
+  // The refund sentences /terms prints live in src/refund-terms.js (the
+  // conformance document reads them too), so that file is hashed with it.
+  "src/terms.js": { date: "2026-11-17", sha: "8aea4574d7e9ab7a", with: ["src/refund-terms.js"] },
   "src/privacy.js": { date: "2026-11-17", sha: "0d3ff6a7d69851fd" },
 };
 let pass = 0, fail = 0;
@@ -34,7 +36,7 @@ for (const [file, pin] of Object.entries(PINS)) {
   // A page dated ahead of its ship day tells readers (and the sitemap's
   // lastmod) a version exists that does not: never later than today, UTC.
   ok(Boolean(date) && date <= TODAY, `${file}: last updated ${date} is not after today (${TODAY} UTC)`);
-  const h = bodyHash(src);
+  const h = bodyHash([src, ...(pin.with || []).map((f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8"))].join("\n"));
   ok(h === pin.sha, `${file}: text unchanged since ${pin.date} (hash ${h}; if you changed the text, bump the date in the page and set date + sha here)`);
 }
 console.log(`\n${pass} passed, ${fail} failed`);
