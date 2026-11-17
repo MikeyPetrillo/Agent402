@@ -66,7 +66,10 @@ const UNIT_WORDS = new Set(
 // gets the synthetic "forex" term (a curated tag on the fx tools); a verb form
 // of "convert" (or "exchange") also adds "convert" (a curated fx-rate tag). Currency codes and
 // names count only when two appear, and a crypto word anywhere keeps the query
-// with the crypto tools ("convert eth to usd" names one fiat code). Returns
+// with the crypto tools ("convert eth to usd" names one fiat code). The query
+// must also ask for a conversion ("convert" or one of its forms): a text that
+// only names money ("a G10 FX dashboard" inside a pack's description) keeps
+// its own words, so a tool's own description still finds that tool. Returns
 // true when the rule fired; only then do fiat words stop defining the task.
 const CURRENCY_WORDS = new Set(["currency", "currencies", "forex", "fx", "fiat"]);
 const FIAT_CODES = new Set([
@@ -79,6 +82,7 @@ const CRYPTO_WORDS = new Set(["crypto", "cryptocurrency", "cryptocurrencies", "c
 const CONVERT_FORMS = new Set(["exchange", "converter", "converters", "conversion", "conversions", "converting", "converts", "converted"]);
 export function applyCurrencyTerms(terms) {
   if (terms.some((t) => CRYPTO_WORDS.has(t))) return false;
+  if (!terms.includes("convert") && !terms.some((t) => CONVERT_FORMS.has(t))) return false;
   if (!terms.some((t) => CURRENCY_WORDS.has(t)) && terms.filter((t) => FIAT_CODES.has(t)).length < 2) return false;
   if (!terms.includes("forex")) terms.push("forex");
   if (!terms.includes("convert") && terms.some((t) => CONVERT_FORMS.has(t))) terms.push("convert");

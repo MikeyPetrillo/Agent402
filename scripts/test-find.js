@@ -550,6 +550,11 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
     const r = findTools(C, q, {});
     ok(!/^fx-/.test(r.results[0]?.slug || ""), `"${q}" stays with the crypto tools (got ${r.results[0]?.slug})`);
   }
+  // Money named without a conversion keeps every word: no synthetic term.
+  for (const terms of [["g10", "fx", "dashboard", "usd"], ["currency", "usd", "eur", "dashboard"]]) {
+    const t = [...terms];
+    ok(applyCurrencyTerms(t) === false && !t.includes("forex"), `[${terms.join(" ")}] asks for no conversion (terms ${t.join(" ")})`);
+  }
   const named = ["convert", "dollars", "euros"];
   ok(applyCurrencyTerms(named) === true && named.includes("usd") && named.includes("eur") && named.includes("forex"), `currency names read as their codes in a conversion (terms ${named.join(" ")})`);
 }
