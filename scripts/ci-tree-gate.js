@@ -60,6 +60,21 @@ export function decideSkip({ eventName, ref, currentTree, passedTrees } = {}) {
   return { skip: true, reason: `tree ${currentTree.slice(0, 12)} already passed the full suite` };
 }
 
+/**
+ * The gate's deadline in epoch ms: its own read budget, but never later than the
+ * job's limit (counted from the job's first step) less a reserve for writing the
+ * verdict and the post steps. The job limit covers checkout too: on 2026-11-17
+ * (run 44012918430) checkout spent 3m46s on a failed connect and a retried fetch,
+ * and a budget counted from the script's own start ran past the 5-minute limit.
+ * An unreadable job start leaves the budget alone.
+ */
+export function gateDeadline({ nowMs, budgetMs, jobStartS, jobLimitS, reserveMs = 30_000 } = {}) {
+  const own = nowMs + budgetMs;
+  const start = Number(jobStartS), limit = Number(jobLimitS);
+  if (!(start > 0) || !(limit > 0)) return own;
+  return Math.min(own, start * 1000 + limit * 1000 - reserveMs);
+}
+
 // Full 40-hex only. A short hash could collide across the abbreviations git
 // hands out at different repo sizes, and "close enough" is not a property that
 // should be able to skip a test suite.
@@ -75,9 +90,21 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop()
   // green main and skips the published-package verification that keys off it.
   // The gate fails closed on "" anyway, so a timeout costs nothing but the skip.
   const CALL_TIMEOUT_MS = Number(process.env.TREE_GATE_CALL_TIMEOUT_MS || 30_000);
-  const DEADLINE = Date.now() + Number(process.env.TREE_GATE_BUDGET_MS || 150_000);
-  const git = (...a) => { try { return execFileSync("git", a, { encoding: "utf8", timeout: CALL_TIMEOUT_MS }).trim(); } catch { return ""; } };
-  const sh = (cmd, ...a) => { try { return execFileSync(cmd, a, { encoding: "utf8", timeout: CALL_TIMEOUT_MS }); } catch { return ""; } };
+  const DEADLINE = gateDeadline({
+    nowMs: Date.now(),
+    budgetMs: Number(process.env.TREE_GATE_BUDGET_MS || 150_000),
+    jobStartS: process.env.TREE_GATE_JOB_START,
+    jobLimitS: process.env.TREE_GATE_JOB_LIMIT_S,
+  });
+  // A call never outlives the deadline: its timeout is what is left, at least 1 s.
+  const callTimeout = () => Math.max(1000, Math.min(CALL_TIMEOUT_MS, DEADLINE - Date.now()));
+  const git = (...a) => { try { return execFileSync("git", a, { encoding: "utf8", timeout: callTimeout() }).trim(); } catch { return ""; } };
+  const sh = (cmd, ...a) => { try { return execFileSync(cmd, a, { encoding: "utf8", timeout: callTimeout() }); } catch { return ""; } };
+  if (Date.now() > DEADLINE) {
+    console.log("tree-gate: skip=false (the job's time was spent before the gate ran)");
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, "skip=false\nreason=job time spent before the gate\n");
+    process.exit(0);
+  }
 
   const currentTree = git("rev-parse", "HEAD^{tree}");
   const devBranch = process.env.DEV_BRANCH || "claude/sweet-brown-i99jl3";
@@ -135,6 +162,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop()
   for (let attempt = 1; attempt <= 2; attempt++) {
     try { runs = listRuns(); } catch (e) { runs = []; console.log(`  run list failed (attempt ${attempt}): ${String(e?.stderr || e?.message || e).slice(0, 200)}`); }
     if (runs.length) break;
+    if (attempt === 1 && DEADLINE - Date.now() < 30_000) { console.log("  no push runs listed - no time left to retry (fail closed)"); break; }
     if (attempt === 1) { console.log("  no push runs listed - retrying in 20 s"); execFileSync("sleep", ["20"]); }
   }
   console.log(`  push runs listed: ${runs.length}`);

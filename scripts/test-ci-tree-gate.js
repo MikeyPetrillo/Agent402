@@ -10,7 +10,7 @@
 // without tests" guarantee. Both directions are pinned.
 import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
-import { decideSkip, requiredLaneJobs } from "./ci-tree-gate.js";
+import { decideSkip, requiredLaneJobs, gateDeadline } from "./ci-tree-gate.js";
 import { laneJobNames, shardCount } from "./lib/ci-shards.js";
 import { expandedDeployWorkflow } from "./lib/ci-workflow.js";
 
@@ -126,7 +126,31 @@ ok(loop.indexOf("isSha(sha)") < loop.indexOf("git(\"cat-file\""),
 // 5-minute limit, which reads as a cancelled run on a green main. Fail-closed
 // on "" already, so the timeout costs nothing but the skip.
 const helpers = gateSrc.slice(gateSrc.indexOf("const git = "), gateSrc.indexOf("const currentTree"));
-ok((helpers.match(/timeout: CALL_TIMEOUT_MS/g) || []).length === 2, "both subprocess helpers carry a timeout");
+ok((helpers.match(/timeout: callTimeout\(\)/g) || []).length === 2, "both subprocess helpers carry a timeout");
+ok(/const callTimeout = \(\) => Math\.max\(1000, Math\.min\(CALL_TIMEOUT_MS, DEADLINE - Date\.now\(\)\)\)/.test(gateSrc),
+  "a call's timeout is capped by the time left before the deadline");
+
+// The deadline counts from the JOB's start, not the script's (2026-11-17, run
+// 44012918430): checkout spent 3m46s on a failed connect, and a budget counted
+// from the script's own start ran the job past its 5-minute limit, which reads
+// as a cancelled main run while every lane and the deploy went green.
+{
+  const now = 1_000_000_000_000, startS = now / 1000;
+  ok(gateDeadline({ nowMs: now, budgetMs: 150_000 }) === now + 150_000, "no job start: the budget stands");
+  ok(gateDeadline({ nowMs: now, budgetMs: 150_000, jobStartS: startS, jobLimitS: 300 }) === now + 150_000,
+    "a prompt start keeps the full budget");
+  const late = now + 226_000; // checkout took 3m46s
+  const d = gateDeadline({ nowMs: late, budgetMs: 150_000, jobStartS: startS, jobLimitS: 300 });
+  ok(d === now + 270_000, `a late start is held to the job limit less the reserve (got ${d - now})`);
+  ok(gateDeadline({ nowMs: now, budgetMs: 150_000, jobStartS: "", jobLimitS: 300 }) === now + 150_000,
+    "an unreadable job start leaves the budget alone");
+  const tg = jobs["tree-gate"];
+  ok(/TREE_GATE_JOB_START=\$\(date \+%s\)/.test(String(tg.steps[0].run || "")),
+    "the tree-gate's first step records the job start");
+  const gate = tg.steps.find((st) => st.id === "gate");
+  ok(Number(gate?.env?.TREE_GATE_JOB_LIMIT_S) === Number(tg["timeout-minutes"]) * 60,
+    "TREE_GATE_JOB_LIMIT_S equals the tree-gate's timeout-minutes in seconds");
+}
 ok(/for \(const r of runs\) \{\s*\n\s*if \(Date\.now\(\) > DEADLINE\)/.test(gateSrc), "the run-listing loop stops at the deadline");
 ok(/for \(const sha of shas\) \{\s*\n\s*if \(Date\.now\(\) > DEADLINE\)/.test(gateSrc), "the tree-resolving loop stops at the deadline");
 

@@ -231,6 +231,10 @@ jobs:
       skip: ${{ steps.gate.outputs.skip }}
       reason: ${{ steps.gate.outputs.reason }}
     steps:
+      # First step, so the gate's deadline counts checkout and the cache restore
+      # against the job limit (scripts/ci-tree-gate.js gateDeadline).
+      - name: Record the job start
+        run: echo "TREE_GATE_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -265,6 +269,8 @@ jobs:
       - id: gate
         env:
           GH_TOKEN: ${{ github.token }}
+          # Equal to this job's timeout-minutes in seconds (test-ci-tree-gate.js).
+          TREE_GATE_JOB_LIMIT_S: 300
         run: node scripts/ci-tree-gate.js
 
   paytest:
