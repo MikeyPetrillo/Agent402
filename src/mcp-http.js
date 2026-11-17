@@ -73,7 +73,7 @@ import { needsAsyncOrWait } from "./slow-sync-window.js";
 import { PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { paidPriceUsd } from "./paid-price.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { attributionOf, notCallersInput, faultAdvice } from "./tool-error-fields.js";
 import { redactSecrets } from "./tools/redact.js";
 import {
@@ -516,7 +516,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     const rows = scored.slice(0, Math.min(Math.max(Math.trunc(Number(limit)) || 10, 1), SEARCH_LIMIT_MAX)).map(([, def, free]) => ({
       slug: def.slug,
       price: def.price,
-      access: free ? "free here (rate-limited)" : "paid (USDC via x402 / MPP - agent402-mcp with AGENT_KEY, or a prepaid credits key already issued as AGENT402_CREDITS_KEY)",
+      access: free ? "free here (rate-limited)" : `paid (USDC via x402 / MPP - agent402-mcp with AGENT_KEY, or a prepaid credits key${creditsKeyQualifier()} as AGENT402_CREDITS_KEY)`,
       description: def.description.length > 200 ? `${def.description.slice(0, 200)}…` : def.description,
       inputSchema: schemaOf(def),
     }));
@@ -753,7 +753,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             : `Paid (${def.price}/call):`;
           const walletNote = free
             ? ""
-            : ` This hosted connector holds no wallet: ${inCallWires ? `pay it here, in the call, over ${inCallWires}, or ` : ""}run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 client.`;
+            : ` This hosted connector holds no wallet: ${inCallWires ? `pay it here, in the call, over ${inCallWires}, or ` : ""}run npx agent402-mcp with a funded wallet (AGENT_KEY) or a prepaid credits key${creditsKeyQualifier()} (AGENT402_CREDITS_KEY), or any x402 client.`;
           const outSchema = FLAGSHIP_OUTPUT_SCHEMAS[slug]
             || outputSchemaFromExample(def.discovery?.output?.example);
           return {
@@ -1466,7 +1466,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             // The stated conversion direction and whether any tool serves it (src/find.js).
             ...(r.direction ? { direction: r.direction } : {}),
             ...(weak && !relatedSellers && !plan ? { hint: WISH_HINT_TEXT } : {}),
-            usage: `Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are ${inCallWires ? `payable here, in the call, over ${inCallWires}, or` : "paid"} via the agent402-mcp npm server (a wallet, or a prepaid credits key already issued).`,
+            usage: `Run catalog.call with the chosen {slug, params}. Free results execute here; paid tools are ${inCallWires ? `payable here, in the call, over ${inCallWires}, or` : "paid"} via the agent402-mcp npm server (a wallet, or a prepaid credits key${creditsKeyQualifier()}).`,
           });
         }
         if (name === "demand.request") {
@@ -1525,7 +1525,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
                 tagline: p.tagline,
               })),
             },
-            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key already issued (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools ${TYPICAL_PRICE_RANGE.text} per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
+            paidAccess: `Every tool, no rate limit: pay per call in ${RAILS_PAREN} via the x402 protocol - npx agent402-mcp with AGENT_KEY (EVM) and/or SOLANA_AGENT_KEY (Solana), or a prepaid credits key${creditsKeyQualifier()} (AGENT402_CREDITS_KEY), or any x402 HTTP client - or over MPP (Machine Payments Protocol) with an mppx client, settling USDC on Base/Celo or USDC.e (and PathUSD) natively on Tempo. No signup, no API key; most tools ${TYPICAL_PRICE_RANGE.text} per call${gatewayRange ? `, LLM gateway tiers ${gatewayRange}` : ""}, multi-tool skill packs ${PACK_PRICE_RANGE.text}.`,
             ...(sellersListed ? { ecosystem: "Call sellers.list to see which x402 sellers (any wallet, not just this host) are settling the most USDC (primarily on Base) in the last 24h, or sellers.list with wire=mpp for MPP sellers ranked by on-chain USDC.e transfers on Tempo - discovers the live economy beyond this catalog." } : {}),
             missingATool: "Call demand.request (or POST /api/wish) with what you needed. We cluster and track demand - repeated requests get built.",
             docs: `${baseUrl}/llms.txt`,

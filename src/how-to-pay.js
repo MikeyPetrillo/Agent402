@@ -20,7 +20,7 @@ import { mppMethodsSummary } from "./mpp-offers.js";
 import { connectorWires } from "./connector-pay.js";
 import { mppFlagshipRows, mppFlagshipSnippet, MPP_FLAGSHIP_SNIPPET_SLUG } from "./mpp-flagship.js";
 import { STRIPE_MIN_USD } from "./mpp-stripe.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { powCostPhrase, POW_DIFFICULTY, isComputePayable } from "./pow.js";
 import { LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
@@ -290,7 +290,7 @@ claude mcp add --transport http agent402 ${baseUrl}/mcp
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
 claude mcp add agent402 -s user -e AGENT_KEY=0xYOUR_FUNDED_KEY -- npx -y agent402-mcp@0.13.32
 
-# a credits key already issued works there too
+# a credits key${creditsKeyQualifier()} works there too
 claude mcp add agent402 -s user -e AGENT402_CREDITS_KEY=a402_YOUR_KEY -- npx -y agent402-mcp@0.13.32`)}
   ${p(`Every host's verified config block is in the ${link("/guides/agent-hosts", "agent-hosts guide")}; ${link("/quickstart", "/quickstart")} has the same first call for curl, JavaScript and the model gateway.`)}
 `)}

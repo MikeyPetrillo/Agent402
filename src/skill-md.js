@@ -12,7 +12,7 @@
 // prose claim is the evergreen "500+". No secrets, no strategy - this is a
 // public instruction sheet an agent will read verbatim.
 import { REPO_URL } from "./repo-link.js";
-import { creditsSalesEnabled } from "./credits-sales.js";
+import { creditsSalesEnabled, creditsKeyQualifier } from "./credits-sales.js";
 import { isComputePayable, POW_DIFFICULTY, powCostPhrase } from "./pow.js";
 import { RAILS } from "./rails.js";
 import { meteredRoutesInline, meteredFromPrice, meteredQuoteSentence, meteredCurl, flatTiersLine } from "./metered-lead.js";
@@ -46,7 +46,7 @@ description: >
   and macro data, SEC EDGAR, wallet-keyed memory, or any of 500+
   pay-per-call tools. Agent402 needs no account and no API key - you pay per
   request with USDC over x402 or MPP, with proof-of-work (CPU) on the
-  pure-compute tools, or with a prepaid credits key already issued (Bearer a402_...). Triggers: agent402, x402, MPP, pay-per-call API, "I need
+  pure-compute tools, or with a prepaid credits key${creditsKeyQualifier()} (Bearer a402_...). Triggers: agent402, x402, MPP, pay-per-call API, "I need
   a tool for", web search from an agent, 402 Payment Required.
 ---
 
@@ -55,7 +55,7 @@ description: >
 Agent402.Tools is an open-source, pay-per-call tool catalog for AI agents at
 ${baseUrl}. Every priced endpoint answers an unpaid call with HTTP 402: a
 machine-readable price and the ways this instance takes payment (x402, and MPP
-where it is enabled); a prepaid credits key already issued also works
+where it is enabled); a prepaid credits key${creditsKeyQualifier()} also works
 as a Bearer key ${creditsSalesEnabled() ? `(new keys are sold by card at ${baseUrl}/credits)` : "(new credits are not on sale)"}. There is no signup and no human in the loop: the
 payment is the identity. Maintainer: Havok Holdings LLC. Source:
 ${REPO_URL}

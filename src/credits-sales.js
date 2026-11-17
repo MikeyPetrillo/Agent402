@@ -49,6 +49,11 @@ export function creditsPrepaymentPhrase() {
   return `a prepaid credits balance is a prepayment for Agent402's own services, paid up front and spent per call, not a deposit or money held for withdrawal${creditsSalesEnabled() ? "" : " (credits are no longer sold; keys already issued keep spending)"}`;
 }
 
+// How copy names a credits key a caller may hold: while packs are on sale
+// any key ("a prepaid credits key"); while they are not, only one already
+// issued.
+export function creditsKeyQualifier() { return creditsSalesEnabled() ? "" : " already issued"; }
+
 // The pointer a credits refusal carries. While packs are on sale it is the
 // top-up page; while they are not, that page sells nothing, so the answer
 // says so and names the paths that do take payment.

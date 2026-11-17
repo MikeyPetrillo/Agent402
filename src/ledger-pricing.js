@@ -13,6 +13,7 @@ import { tempoEnabled } from "./mpp-tempo.js";
 // exactly this class only inspected meta descriptions, not page bodies.
 import { reportLadderProse } from "./report-tiers.js";
 import { meteredTimeoutSentence } from "./metered-lead.js";
+import { creditsKeyQualifier } from "./credits-sales.js";
 import { MONITOR_PRODUCTS } from "./stripe-subscriptions.js";
 const MONITOR_MONTHLY = reportLadderProse({ monitorProducts: MONITOR_PRODUCTS }).monthly || "see /monitors";
 
@@ -163,7 +164,7 @@ export function ledgerPricingPage(baseUrl, catalog) {
       ${gatewayRows.map((r, i) => receiptRow(r[0], r[1], i === gatewayRows.length - 1)).join("\n      ")}
     </div>
     <div style="font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--faint);margin-top:12px;">full wire format: <a href="/docs#gateway" style="color:var(--faint);">/docs</a></div>
-    <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:8px 0 0;">A credits key already issued also works as the API key.</p>
+    <p style="font-size:var(--fs-sm);line-height:1.5;color:var(--faint);margin:8px 0 0;">A credits key${creditsKeyQualifier()} also works as the API key.</p>
   </section>
 
   <!-- The volume path: an x402 exact payment is one authorization signed and
