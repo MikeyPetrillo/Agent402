@@ -39,7 +39,7 @@ import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { bootServer } from "./lib/boot-server.js";
 
-const { isPreBroadcastSettleRejection, isUnreadableSettleAnswer, isDecidedSettleVerdict, paymentExpiryOf } = await import("../src/payments.js");
+const { isPreBroadcastSettleRejection, isUnreadableSettleAnswer, isDecidedSettleVerdict, isDecidedHttpSettleVerdict, lateAuthOf, paymentExpiryOf } = await import("../src/payments.js");
 
 let pass = 0, failed = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { failed++; console.error(`FAIL - ${m}`); } };
@@ -130,6 +130,25 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
   ok(isDecidedSettleVerdict({ success: false, errorReason: "insufficient_funds", transaction: "" }) && isDecidedSettleVerdict({ success: false, errorReason: "The authorization has expired" })
     && !isDecidedSettleVerdict({ success: false, errorReason: "insufficient_funds", transaction: TX }) && !isDecidedSettleVerdict({ success: false, errorReason: "authorization_already_used" })
     && !isDecidedSettleVerdict({ success: false, errorReason: "unexpected_error" }), "decided verdicts: a buyer verdict with no transaction only");
+  // A fallback's HTTP 4xx that decides the payment (a parsed settle body
+  // naming a buyer verdict and no transaction) reads like the graceful
+  // verdict; a time limit, a rate limit, a 5xx, a body naming a transaction or
+  // an undecided reason does not.
+  const httpErr = (statusCode, errorReason, transaction = "") => Object.assign(new Error(errorReason || "settle failed"), { name: "SettleError", statusCode, errorReason, transaction });
+  ok(isDecidedHttpSettleVerdict(httpErr(400, "insufficient_funds")) && isDecidedHttpSettleVerdict(httpErr(400, "invalid_exact_evm_payload_signature")) && isDecidedHttpSettleVerdict(httpErr(422, "The authorization has expired")),
+    "a fallback's HTTP 4xx naming a buyer verdict and no transaction is a decided verdict");
+  ok(!isDecidedHttpSettleVerdict(httpErr(408, "insufficient_funds")) && !isDecidedHttpSettleVerdict(httpErr(429, "insufficient_funds")) && !isDecidedHttpSettleVerdict(httpErr(500, "insufficient_funds"))
+    && !isDecidedHttpSettleVerdict(httpErr(400, "insufficient_funds", TX)) && !isDecidedHttpSettleVerdict(httpErr(400, "unexpected_settle_error")) && !isDecidedHttpSettleVerdict(httpErr(400, "authorization_already_used"))
+    && !isDecidedHttpSettleVerdict(new Error("Facilitator settle failed (400): insufficient_funds")) && !isDecidedHttpSettleVerdict(null),
+    "never a 408, 429 or 5xx, a body naming a transaction, an undecided or used-authorization reason, or an error with no parsed body");
+  // The authorization booked for the late read is the one the payer signed:
+  // beside a Permit2 payload an `authorization` block is never verified.
+  const SIGNER = `0x${"44".repeat(20)}`;
+  const N = `0x${"55".repeat(32)}`;
+  ok(lateAuthOf({ paymentPayload: { payload: { authorization: { from: SIGNER, nonce: N, validBefore: "2000000000" } } } })?.payer === SIGNER, "an EIP-3009 authorization is booked under its signed from");
+  ok(lateAuthOf({ paymentPayload: { payload: { permit2Authorization: { from: SIGNER, deadline: "2000000000" }, authorization: { from: `0x${"66".repeat(20)}`, nonce: N } } } }) === null
+    && lateAuthOf({ paymentPayload: { payload: { authorization: { from: "not-an-address", nonce: N } } } }) === null,
+    "a crafted Permit2 payload's unsigned authorization block, or a from that is not an address, books nothing");
   const permit2Ctx = { requirements: { network: BASE_NET, payTo: `0x${"11".repeat(20)}`, asset: `0x${"22".repeat(20)}`, amount: "1000" }, paymentPayload: { payload: { permit2Authorization: { from: `0x${"33".repeat(20)}`, deadline: "2000000000" } } }, __a402UnconfirmedStop: { via: "fallback" } };
   ok(lateSettleCandidate(permit2Ctx) === null, "a Permit2 payment with no transaction leaves nothing for the book (its answer promises no record)");
   const now = 1_700_000_000_000;
@@ -278,6 +297,9 @@ const stub = (name) => createServer((req, res) => {
     if (mode === "verdict") return reply(200, refuse("insufficient_funds"));
     if (mode === "expired-words") return reply(200, refuse("The authorization has expired"));
     if (mode === "used") return reply(200, refuse("authorization_already_used"));
+    if (mode === "verdict400") return reply(400, refuse("insufficient_funds"));
+    if (mode === "undecided400") return reply(400, refuse("unexpected_settle_error"));
+    if (mode === "pending") return reply(500, refuse("settlement_pending", { transaction: failTxOf(parsed.paymentPayload?.payload?.authorization?.nonce) }));
     return reply(200, { success: true, transaction: `0x${(++txN).toString(16).padStart(64, "0")}`, network: BASE_NET, payer });
   });
 });
@@ -288,7 +310,7 @@ const PRIMARY = urlOf(servers.primary);
 
 let srv = null;
 try {
-  srv = await bootServer({
+  const bootOpts = {
     stores: "settle-fallback-unconfirmed",
     args: ["--import", "./scripts/lib/loopback-only-preload.js", "--import", "./scripts/lib/openrouter-stub-preload.js"],
     env: {
@@ -304,6 +326,7 @@ try {
       COMPOSITE_GUARD_MAX_FAILS: "3", COMPOSITE_GUARD_WINDOW_MS: "600000", GATEWAY_SETTLE_BREAKER_MAX: "100",
       UPSTREAM_COSTS_FILE: process.env.UPSTREAM_COSTS_FILE || join(process.cwd(), "docs/example-upstream-costs.json"),
       LATE_SETTLE_RECONCILE: "", X402_SYNC_ON_START: "", LATE_SETTLE_RECONCILE_MS: "500", LATE_SETTLE_UNCONFIRMED_PER_PAYER_MAX: "5",
+      PENDING_SETTLE_RECEIPT_WAIT_MS: "1000",
       CDP_API_KEY_ID: "", CDP_API_KEY_SECRET: "", PAYAI_API_KEY_ID: "", PAYAI_API_KEY_SECRET: "", CIRCLE_FACILITATOR_API_KEY: "",
       MPP_SECRET_KEY: "", TEMPO_API_KEY: "", STRIPE_SECRET_KEY: "", ROBINHOOD_RELAYER_KEY: "", POSTHOG_API_KEY: "",
       REDIS_URL: "", STATE_DATABASE_URL: "", TARGET_URL: "",
@@ -311,8 +334,9 @@ try {
       MONITOR_SCHEDULER: "off", FREE_ALERTS: "off", FOLLOWUPS: "off", REVENUE_WARMUP: "off",
       SALES_LEDGER_DB: join(TMP, "sales.db"), REFUND_DB_DIR: TMP, HANGUP_FORGIVE_FILE: join(TMP, "hangup.json"),
     },
-  });
-  const B = srv.url;
+  };
+  srv = await bootServer(bootOpts);
+  let B = srv.url;
   // A wallet-only route (no proof-of-work tier) the settle breaker consults.
   const PATH = "/api/memory";
   const bodyOf = (n = 0) => JSON.stringify({ key: `unconfirmed-${n}`, value: { marker: "stored-value-marker" } });
@@ -399,6 +423,19 @@ try {
     ok(h.status === 402 && h.body?.reason === "facilitator-quota" && !("authorizationValidBefore" in h.body), `a fallback's graceful ${what}: the earlier answer stands (${h.body?.reason})`);
     await sleep(300);
     ok(lateEntries().length === before, `a fallback's graceful ${what}: nothing booked`);
+  }
+  // The same verdict as an HTTP 400 with a parsed body: the earlier answer
+  // stands, nothing booked; control: a 400 naming no verdict stays unconfirmed.
+  {
+    st.primary = "billing"; st.fallback = "verdict400";
+    const before = lateEntries().length;
+    const h = await pay();
+    ok(h.status === 402 && h.body?.reason === "facilitator-quota" && !("authorizationValidBefore" in h.body), `a fallback's HTTP 400 insufficient_funds with no transaction: the earlier answer stands (${h.body?.reason})`);
+    await sleep(300);
+    ok(lateEntries().length === before, "a fallback's HTTP 400 verdict: nothing booked");
+    st.fallback = "undecided400";
+    const u = await pay();
+    ok(u.status === 402 && u.body?.reason === "settlement-unconfirmed" && await waitFor(() => !!bookedFor(u)), `control: a fallback's HTTP 400 with no verdict stays unconfirmed and booked (${u.body?.reason})`);
   }
   {
     st.primary = "billing"; st.fallback = "used";
@@ -487,6 +524,29 @@ try {
     st.primary = "billing";
   }
 
+  // 5c. The PRIMARY answers pending with a transaction the chain read cannot
+  // confirm: the 402 is settlement-unconfirmed / watch-transaction, and the
+  // same payment sent again gets that answer back with no verify, no handler
+  // run and no settle, never duplicate_authorization (which the settle
+  // breaker would count against the wallet).
+  {
+    st.primary = "pending"; st.fallback = "ok";
+    const c0 = snap();
+    const h = await pay();
+    ok(h.status === 402 && h.body?.reason === "settlement-unconfirmed" && h.body.retry === "watch-transaction" && JSON.stringify(h.body.transactions) === JSON.stringify([failTxOf(h.nonce)]) && counts.fallback === c0.fallback,
+      `a primary's pending answer the chain read cannot confirm: settlement-unconfirmed, watch-transaction, no fallback asked (${h.status}/${h.body?.reason}/${h.body?.retry})`);
+    st.primary = "ok";
+    const c1 = snap();
+    const again = [await send(h.header), await send(h.header, bodyOf(3))];
+    ok(again.every((r) => r.status === 402 && r.replayed === "1" && r.body?.reason === "settlement-unconfirmed" && r.body.retry === "watch-transaction" && JSON.stringify(r.body.transactions) === JSON.stringify([failTxOf(h.nonce)]) && !r.offered && !NOT_CHARGED.test(r.text)),
+      `that payment sent again (two bodies): the stored pending answer (${again.map((r) => `${r.status}/${r.replayed}/${r.body?.reason}`).join(" ")})`);
+    ok(counts.verify === c1.verify && asked(c1) === "0/0" && !again.some((r) => /duplicate_authorization/.test(r.text) || r.receipt?.errorReason === "duplicate_authorization"),
+      `the pending payment sent again: no verify, no handler run, no settle, never duplicate_authorization (${counts.verify - c1.verify} verifies, ${asked(c1)} settles)`);
+    const fresh = await pay();
+    ok(fresh.status === 200, `a new payment is served once the primary recovers (${fresh.status})`);
+    st.primary = "billing";
+  }
+
   // 6. Its transfer lands: the reconcile books it owed, exactly once, and the
   // same payment sent again still runs nothing.
   {
@@ -508,6 +568,42 @@ try {
     const c0 = snap();
     const r = await send(held.header);
     ok(r.status === 402 && r.replayed === "1" && counts.verify === c0.verify && asked(c0) === "0/0", `sent again after it landed: nothing run, nothing charged (${r.status})`);
+  }
+
+  // 7. The replay relies on the idempotency store. A store that lost the
+  // stored answer (here: a restart of a server whose store is its own
+  // memory, as a flushed shared store would be) sends the same payment down
+  // the normal path: verified, run and settled once. Its booking is still in
+  // the late-settlement book, and when the chain shows the authorization
+  // used by that settlement, the sale closes the entry: charged once, never
+  // also owed.
+  {
+    st.primary = "billing"; st.fallback = "500";
+    const lost = await pay();
+    ok(lost.status === 402 && lost.body?.reason === "settlement-unconfirmed" && await waitFor(() => !!bookedFor(lost)), "a payment answered unconfirmed and booked by its authorization");
+    ok((await send(lost.header)).replayed === "1", "control: before the store is lost, the same payment is replayed");
+    await srv.stop();
+    srv = await bootServer(bootOpts);
+    B = srv.url;
+    st.fallback = "ok";
+    const c0 = snap();
+    const again = await send(lost.header);
+    const T = String(again.receipt?.transaction || "").toLowerCase();
+    ok(again.status === 200 && again.replayed !== "1" && again.receipt?.success === true && /^0x[0-9a-f]{64}$/.test(T) && counts.verify - c0.verify === 1 && asked(c0) === "1/1",
+      `the store lost: the same payment takes the normal path, verified once and settled once (${again.status}, ${counts.verify - c0.verify} verify, ${asked(c0)} settles)`);
+    ok(!!bookedFor(lost), "its booking is still open in the late-settlement book");
+    const e = bookedFor(lost);
+    const topic = (a) => `0x${String(a).slice(2).toLowerCase().padStart(64, "0")}`;
+    chain.used.set(String(lost.nonce).toLowerCase(), { tx: T, receipt: { status: "0x1", blockNumber: "0x3e0", transactionHash: T, logs: [
+      { address: e.asset, topics: ["0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5", topic(e.payer), String(lost.nonce).toLowerCase()], data: "0x" },
+      { address: e.asset, topics: ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef", topic(e.payer), topic(e.payTo)], data: word(e.amount) },
+    ] } });
+    chain.dark = false;
+    ok(await waitFor(() => !bookedFor(lost), 60_000), "the reconcile finds the settlement that used the authorization and closes the entry");
+    await sleep(1500);
+    const owedLines = srv.log().split("\n").filter((l) => l.includes(`tx ${T} landed after a 402; booked owed`));
+    const look = await (await fetch(`${B}/api/refunds?tx=${T}`)).json().catch(() => ({}));
+    ok(owedLines.length === 0 && !/"owed"/i.test(JSON.stringify(look)), `the served settlement is never also owed (${owedLines.length} owed lines; ${JSON.stringify(look).slice(0, 160)})`);
   }
 } catch (e) {
   ok(false, e?.stack || String(e));

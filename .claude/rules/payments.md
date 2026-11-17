@@ -499,10 +499,13 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   other than a 402, a time limit, a reset, an unreadable answer (`isUnreadableSettleAnswer`, never
   pre-broadcast whatever its excerpt says), a failure naming a transaction, a graceful failed answer
   that is not a decided verdict on the buyer's payment (`isDecidedSettleVerdict`: a verdict code or
-  words with no transaction, never a used authorization), or a fallback's passed-on refusal no read
-  settled. Not our own relayer's `nothingSent` refusal. The earlier refusal no longer describes the
+  words with no transaction, never a used authorization; an HTTP 4xx other than 408 and 429 whose
+  parsed body is such a verdict, `isDecidedHttpSettleVerdict`, reads the same), or a fallback's
+  passed-on refusal no read settled. Not our own relayer's `nothingSent` refusal. The earlier refusal no longer describes the
   payment: a named transaction is noted, otherwise an EIP-3009 authorization is booked by its nonce in
-  the late-settlement book (`unconfirmed: true`; Permit2 and non-EVM with no transaction have nothing
+  the late-settlement book under its signed `from` only (`lateAuthOf`: a payload carrying a
+  `permit2Authorization` books nothing, since an `authorization` block beside it is never verified)
+  (`unconfirmed: true`; Permit2 and non-EVM with no transaction have nothing
   to book and their answer promises no record); the claim stays held. The 402 is restated at send
   time (`unconfirmedSettleRefusal`): `settlement-unconfirmed`, `retry` watch-transaction (a named
   transaction, with `refundStatusUrl`) or check-wallet, `authorizationValidBefore`, "Do not sign a new
@@ -521,7 +524,13 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   never replaces the stored answer; kept until validBefore plus a minute, at least a minute, at most
   30 days, a day when no validBefore is named): the same 402 and receipt with
   `X-Replayed-Answer: 1`, no verify, no handler, no settle, no breaker count. Nothing re-sends or
-  re-takes the authorization (`scripts/test-settle-fallback-unconfirmed.js`).
+  re-takes the authorization (`scripts/test-settle-fallback-unconfirmed.js`). A primary's pending
+  answer that the receipt read did not confirm (`explainPendingRefusal`) keeps its answer the same
+  way. The replay relies on the idempotency store: a store that lost the entry (a flushed Redis, a
+  lone container restarted on its own memory) sends the same payment down the normal path, where it
+  is verified, run and settled at most once; its late-settlement booking stays open and the sales
+  ledger (`wasServed`) closes it once the chain shows the authorization used by that settlement, so
+  it is charged once and never also owed (section 7 of the same suite).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client

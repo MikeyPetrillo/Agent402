@@ -4045,6 +4045,12 @@ export function registerFacilitatorFailureHooks(server, payAiClient, solvadorCli
           { const o = await settleAfterFallbackPending(ctx, err, name); if (o) return o; }
           if (!own) { const o = await settleAfterAmbiguous(ctx, err, name, outageFor); if (o) return o; }
           { const o = await readPassedOn(); if (o) return o; }
+          // An HTTP 4xx (not a time limit or a rate limit) whose body is a
+          // decided verdict on the buyer's payment and names no transaction
+          // reads like the same verdict answered gracefully: the earlier
+          // refusal stands, nothing booked. Any other HTTP error is how the
+          // chain ended.
+          if (isDecidedHttpSettleVerdict(err)) return;
           await markUnconfirmedStop(ctx, err, name);
           return;
         }
@@ -4075,6 +4081,22 @@ export function isDecidedSettleVerdict(result) {
   const reason = String(result.errorReason || "").trim();
   if (!reason || isUsedAuthorizationReason(reason)) return false;
   return isPaymentVerdictReason(reason);
+}
+
+/**
+ * A fallback's HTTP 4xx settle refusal that decides the payment: a parsed
+ * settle body (@x402/core SettleError: statusCode, errorReason, transaction)
+ * whose reason is a decided verdict on the buyer's payment
+ * (isDecidedSettleVerdict) and that names no transaction. Never a 408 or a
+ * 429 (the facilitator did not decide anything), never a 5xx, and never an
+ * error with no parsed body (an unreadable or transport failure).
+ */
+export function isDecidedHttpSettleVerdict(err) {
+  if (!err || typeof err !== "object") return false;
+  const status = Number(err.statusCode ?? err.status);
+  if (!Number.isInteger(status) || status < 400 || status > 499 || status === 408 || status === 429) return false;
+  if (typeof err.errorReason !== "string" || !err.errorReason.trim()) return false;
+  return isDecidedSettleVerdict({ success: false, errorReason: err.errorReason, transaction: err.transaction });
 }
 
 /** A facilitator answer @x402/core could not read as a settle response (its
@@ -4312,7 +4334,9 @@ const PENDING_REFUSAL_SILENT = new Set(["notApplicable", "alreadySold", "heldEls
  * noted transactions. It runs last, after the verify hint and the PoW hint
  * shaped the body, so a primary's quota explanation ("nothing was charged")
  * never stands beside a transfer that may still land. The PAYMENT-RESPONSE
- * header is not touched, and any other status goes out unchanged.
+ * header is not touched, and any other status goes out unchanged. The answer
+ * as sent is left on the request (`__a402UnconfirmedAnswer`) for the replay
+ * of the same payment (src/idempotency.js).
  */
 function explainPendingRefusal(ctx, network, txs) {
   const req = ctx?.transportContext?.request?.adapter?.req;
@@ -4330,8 +4354,18 @@ function explainPendingRefusal(ctx, network, txs) {
       if (r && res.statusCode === 402 && !res.headersSent && typeof chunk === "string" && chunk.trimStart().startsWith("{")) {
         const body = JSON.parse(chunk);
         if (body && typeof body === "object" && !Array.isArray(body)) {
-          chunk = JSON.stringify(withPendingSettleRefusal(body, r));
+          const explained = withPendingSettleRefusal(body, r);
+          chunk = JSON.stringify(explained);
           req.__paymentRejectReason = r.reason;
+          // The answer as sent is kept for the same payment sent again, as an
+          // unconfirmed stop's is (src/idempotency.js): its authorization
+          // stays claimed while the transfer may land, so a re-send that ran
+          // would only meet that claim. An unconfirmed stop's wrapper, when
+          // it ran first, already kept the answer with its restated receipt.
+          if (!req.__a402UnconfirmedAnswer) {
+            const h = res.getHeader("PAYMENT-RESPONSE") ?? res.getHeader("X-PAYMENT-RESPONSE");
+            req.__a402UnconfirmedAnswer = { body: explained, receipt: typeof h === "string" && h ? h : null, validBefore: validBeforeOfPayload(ctx?.paymentPayload) };
+          }
         }
       }
     } catch { /* an explanation must never break a 402 */ }
@@ -4423,9 +4457,19 @@ async function settleAfterAmbiguous(ctx, err, via, outageFor) {
   console.warn(`[payments] ${network} after ${via}'s ambiguous failure: refused (${r.reason})${r.lateAuth ? "; the authorization is booked until it is read on chain" : ""}`);
   return undefined;
 }
-const lateAuthOf = (ctx) => {
-  const a = ctx?.paymentPayload?.payload?.authorization;
-  return a && a.from && a.nonce ? { payer: a.from, nonce: a.nonce, validBefore: a.validBefore ?? null, via: "ambiguous facilitator" } : null;
+/**
+ * The EIP-3009 authorization a refused payment is booked under, or null. Only
+ * a `from` the payer signed: a Permit2 payment is verified on its
+ * permit2Authorization, and an `authorization` block riding beside it is
+ * never checked, so its `from` would book an unsigned address (filling that
+ * address's per-payer bound and promising it an owed record). Such a payment
+ * books nothing here (src/payer.js payerFromRequest reads it the same way).
+ */
+export const lateAuthOf = (ctx) => {
+  const inner = ctx?.paymentPayload?.payload;
+  if (!inner || typeof inner !== "object" || inner.permit2Authorization != null) return null;
+  const a = inner.authorization;
+  return a && typeof a === "object" && /^0x[0-9a-fA-F]{40}$/.test(String(a.from || "")) && a.nonce ? { payer: a.from, nonce: a.nonce, validBefore: a.validBefore ?? null, via: "ambiguous facilitator" } : null;
 };
 
 /** The transaction a stopping fallback named, for the late-settlement hook
