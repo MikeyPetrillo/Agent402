@@ -136,7 +136,15 @@ try {
 // ---- from the source ------------------------------------------------------------------
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 const idx = src("x402-index.js"), mpp = src("mpp-index.js");
-ok(/crawlFetch\(url, \{ \.\.\.opts, userAgent: CRAWLER_UA \}\)/.test(idx), "every x402 index document read asks for the crawler string (crawlRead)");
+// The crawl's document reads have one sender, crawlRead's call of crawlFetch.
+// Its options name the crawler string after the caller's are spread, and
+// nothing later in them (another spread, a second userAgent) can replace it;
+// what else the call carries (a redirect hook) is not this pin's business.
+{
+  const calls = idx.match(/\bcrawlFetch\([^\n]*/g) || [];
+  const rest = /^crawlFetch\(url, \{ \.\.\.opts, userAgent: CRAWLER_UA(?=[ ,}])([^\n]*)$/.exec(calls[0] || "")?.[1];
+  ok(calls.length === 1 && typeof rest === "string" && !/\.\.\.|userAgent|user-agent/i.test(rest), `every x402 index document read asks for the crawler string (crawlRead; ${calls.length} crawlFetch call)`);
+}
 ok((idx.match(/safeFetch\([^;]*\)/g) || []).filter((c) => !/crawlFetch|safeFetch\(url, opts\)/.test(c)).every((c) => c.includes("userAgent: CRAWLER_UA")), "the index's other reads (registries, succession markers) send the crawler string");
 ok(/let probeFetch = \(url, opts\) => probePublicUrl\(url, opts\);/.test(idx), "the index's probes go through probePublicUrl, so they send the probe string");
 ok((mpp.match(/safeFetch\([^)]/g) || []).length > 0 && (mpp.match(/safeFetch\([^)]/g) || []).length === (mpp.match(/userAgent: CRAWLER_UA/g) || []).length, "every MPP index read sends the crawler string");
