@@ -22,6 +22,7 @@
   "924b68a85ca137100ecf",
   "955d3d03f58c01c26cbe",
   "a1bb216b2bbb7eb30b25",
+  "d76719767962ec08da79",
   "e853b4e183ed08708fa4",
   "e9a63a4eb15738ae85cd",
   "f65f1b661dc4029869cb",
@@ -44,6 +45,10 @@
   "955d3d03f58c01c26cbe": [
    "^weather-(current|daily|hourly|history|air-quality|probability|market-brackets|market-board|window|thresholds)$::^description$",
    "^skill-(weather-brief|location-intel|trip-planner)$::^description$"
+  ],
+  "d76719767962ec08da79": [
+   "^place-lookup$::^description$",
+   "^skill-(location-intel|trip-planner)$::^description$"
   ],
   "f80f21938e5248ec70b8": [
    "^eas-attestations$::^description$",
