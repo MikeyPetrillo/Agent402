@@ -41,7 +41,7 @@ const TEMPO_CAIP2 = "eip155:4217";
 
 /** The features, in column order. */
 export const FEATURES = Object.freeze([
-  { id: "settleAfterAnswer", title: "Settle after a successful answer", description: "The payment is settled only after the route answered below 400; an error answer is not charged on x402 (a Tempo push transfer is final before the call; see its row)." },
+  { id: "settleAfterAnswer", title: "Settle after a successful answer", description: "An x402 payment is settled only after the route answered below 400; an error answer is not charged on x402 (a Tempo push transfer is final before the call; see its row)." },
   { id: "idempotencyKey", title: "Idempotency key", description: "An Idempotency-Key header bound to the credential, route and body replays a served answer without a second charge." },
   { id: "paymentIdentifier", title: "x402 payment-identifier", description: "The x402 payment-identifier extension is honored as an idempotency key under the same binding." },
   { id: "replayGuard", title: "Replay guard", description: "A credential already used, or in use, is refused before it can pay for a second run." },
@@ -110,8 +110,8 @@ function idempotencyCell(L, credential) {
 }
 function hangupCell(L, how) {
   return L.hangupOn
-    ? cell(true, `${how} Within a per-wallet, per-IP and service-wide budget; a route whose effect outlives the answer is settled and the undelivered charge recorded as owed.`, "src/hangup-settlement.js")
-    : cell(false, L.hangupHook ? "Off on this server (HANGUP_FORGIVE=off): a charge whose answer was not delivered is recorded as owed." : "No paid gate is mounted on this server.", "src/hangup-forgiveness.js");
+    ? cell(true, `${how} Within a per-wallet, per-IP and service-wide budget; a route whose effect outlives the answer is settled and the undelivered charge recorded as owed; refundOnChargedFailure says how it is repaid.`, "src/hangup-settlement.js")
+    : cell(false, L.hangupHook ? "Off on this server (HANGUP_FORGIVE=off): a charge whose answer was not delivered is recorded as owed; refundOnChargedFailure says how it is repaid." : "No paid gate is mounted on this server.", "src/hangup-forgiveness.js");
 }
 function refundCell(network, how) {
   const family = repaymentFamilyOf(network);
@@ -126,7 +126,7 @@ function x402Row(L, { scheme, network, batched, offered }) {
   const kind = batched ? "gateway-batched" : scheme;
   const settle = batched
     ? cell(true, "Settled at Circle Gateway after the answer; an answer whose payment Gateway has not confirmed is withheld (402 settlement_pending) and served on the resend of the same payment.", "src/gateway-nanopayments.js")
-    : cell(true, "The paywall runs the route first and settles only an answer below 400; a 4xx or 5xx cancels settlement.", "src/payments.js");
+    : cell(true, "The x402 paywall runs the route first and settles only an answer below 400; a 4xx or 5xx cancels settlement.", "src/payments.js");
   return {
     id: `x402:${kind}:${network}`,
     protocol: "x402",
@@ -188,7 +188,7 @@ function tempoRow(L, push) {
     offered: L.tempo,
     features: {
       settleAfterAnswer: push
-        ? cell(false, "A push credential names a transfer already final before the route runs; if the route then fails, the amount is recorded as owed.", "src/mpp-tempo.js")
+        ? cell(false, "A push credential names a transfer already final before the route runs; if the route then fails, the amount is recorded as owed; refundOnChargedFailure says how it is repaid.", "src/mpp-tempo.js")
         : cell(true, "The signed transaction is broadcast only after the route answered below 400.", "src/mpp-tempo.js"),
       idempotencyKey: idempotencyCell(L, "mpp-tempo"),
       paymentIdentifier: NA("An x402 extension; an MPP credential carries none."),
@@ -197,7 +197,7 @@ function tempoRow(L, push) {
         : cell(false, "The Tempo gate is not mounted on this server.", "src/mpp-tempo.js"),
       refundOnChargedFailure: refundCell(TEMPO_CAIP2, push ? "A transfer whose route failed, or whose answer was not delivered:" : "A charge that did not deliver:"),
       hangupForgiveness: push
-        ? cell(false, "The transfer is final before the route runs; an answer not delivered is recorded as owed.", "src/hangup-settlement.js")
+        ? cell(false, "The transfer is final before the route runs; an answer not delivered is recorded as owed; refundOnChargedFailure says how it is repaid.", "src/hangup-settlement.js")
         : hangupCell(L, "The transaction is not broadcast (499, nothing spent)."),
       sanctionsScreening: screened
         ? cell(true, "Direct settlement (TEMPO_RELAY=off) checks every payment party, and the paying wallet's recent funders, before any money moves; no Tempo challenge is offered while the list is not loaded.", "src/mpp-tempo.js")

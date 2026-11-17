@@ -81,7 +81,7 @@ export function refundClauses({ gatewayBatched = false } = {}) {
     {
       id: "ordinary-failure",
       section: "Refunds on-chain",
-      text: "Because settlement happens only after a call succeeds, the ordinary failure case costs nothing and needs no refund.",
+      text: "Because an x402 payment settles only after a call succeeds, the ordinary failure case costs nothing and needs no refund.",
       owed: false,
     },
     {

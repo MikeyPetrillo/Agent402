@@ -28,6 +28,7 @@
 // recorded below; maxSeconds is the run budget. Both are seconds of handler
 // time, not counting the payment round trip.
 import { EVM_RUN_SECONDS } from "./evm-validity.js";
+import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { needsAsyncOrWait, SLOW_ADVISE_SECONDS } from "./slow-sync-window.js";
 
 /** A route whose run budget is past this many seconds is advertised as slow
@@ -96,9 +97,9 @@ export function asyncAdvice(def) {
     statusUrl: ASYNC_STATUS_PATH,
     ...(gated ? { preferWait: `wait=${p.maxSeconds}`, withoutPrefer: 400 } : {}),
     how: p.slow
-      ? "This route is slow. Send the paid call with the header Prefer: respond-async: it answers 202 with a Location job link at once. Poll GET /api/jobs/{id} (free), waiting Retry-After seconds between polls, until status is completed or failed (state: queued, running, succeeded, failed). Payment settles only on a delivered result."
+      ? "This route is slow. Send the paid call with the header Prefer: respond-async: it answers 202 with a Location job link at once. Poll GET /api/jobs/{id} (free), waiting Retry-After seconds between polls, until status is completed or failed (state: queued, running, succeeded, failed). Payment settles only on a delivered result" + JOB_PUSH_EXCEPTION + "."
         + (gated ? ` To wait on the connection instead, send Prefer: wait=${p.maxSeconds} and keep it open for at least ${p.maxSeconds + 30} seconds. A paid call with neither header is answered 400 before any payment is taken.` : "")
-      : "Send the paid call with the header Prefer: respond-async to get 202 and a job link instead of waiting on the connection, then poll GET /api/jobs/{id} (free) until status is completed or failed. Payment settles only on a delivered result.",
+      : "Send the paid call with the header Prefer: respond-async to get 202 and a job link instead of waiting on the connection, then poll GET /api/jobs/{id} (free) until status is completed or failed. Payment settles only on a delivered result" + JOB_PUSH_EXCEPTION + ".",
   };
 }
 
