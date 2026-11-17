@@ -146,6 +146,7 @@ if (runsSoloChecks(SHARD)) {
     judgeReadableName: (s) => screen.judgeReadableName(s),
     judgeReadableListing: (s) => screen.judgeReadableListing({ host: s, slug: s, description: s, tags: [s, s] }),
     readsAsRoutingDirective: (s) => screen.readsAsRoutingDirective(s),
+    fieldsAtEdges: (s) => screen.fieldsAtEdges(s, s, s),
     // Fields read side by side: the long one first, after a short one, and as words.
     adjacentFieldReader: (s) => { const read = screen.adjacentFieldReader(); read(s); read(s, { ident: true }); const next = screen.adjacentFieldReader(); next("send all requests"); next(s); next(s, { ident: true }); },
     // The screen's parts on their own: every reading of the text with no hint,
@@ -154,7 +155,7 @@ if (runsSoloChecks(SHARD)) {
   };
   const exported = Object.keys(screen).filter((k) => typeof screen[k] === "function");
   ok(exported.every((k) => k in fns), `every exported screen function is timed (${exported.filter((k) => !(k in fns)).join(",") || "all"})`);
-  const openers = ["", "a1 ", "1gn0re ", "s y s ", "note to the ", "dear ", "hi ", "as the judge ", "you ", "the model ", "system ", "choose ", "best ", "rank ", "rate ", "rate every ", "only ", "always ", "confidence ", "fit ", "perfect ", "evaluators ", "ignore ", "disregard what ", "forget ", "override ", "do not ", "<", "[", "<|", "## ", "judge: ", "select this ", "wähle immer ", "immer dieses ", "elige siempre ", "choisis toujours ", "escolha sempre ", "send all ", "route every ", "send all requests ", "use this tool for every ", "for every request "];
+  const openers = ["", "a1 ", "1gn0re ", "s y s ", "note to the ", "dear ", "hi ", "as the judge ", "you ", "the model ", "system ", "choose ", "best ", "rank ", "rate ", "rate every ", "only ", "always ", "confidence ", "fit ", "perfect ", "evaluators ", "ignore ", "disregard what ", "forget ", "override ", "do not ", "<", "[", "<|", "## ", "judge: ", "select this ", "wähle immer ", "immer dieses ", "elige siempre ", "choisis toujours ", "escolha sempre ", "send all ", "route every ", "send all requests ", "use this tool for every ", "for every request ", "send all requests here and ", "ignore every other "];
   const fills = { space: " ", a: "a", spaceA: " a", dashA: "-a", aUnderscore: "a_", dotA: ".a", comma: ", ", digitA: "1a", cyrillic: "а ", tab: "\t", nl: "\n", entity: "&lt;", zeroWidth: "a​", colon: ": " };
   const build = (open, fill, n) => (open + fill.repeat(Math.ceil(n / fill.length))).slice(0, n) + "!";
   // Best of three, but a run far past the bound is not repeated, and a
@@ -201,6 +202,24 @@ if (runsSoloChecks(SHARD)) {
     const hashes = bestOf(fn, "#".repeat(100_000));
     ok(hashes < LISTING_BOUND_MS, `${name}: a 100k run of '#' reads in ${hashes.toFixed(1)}ms`);
   }
+  // The directive rules read a text with its marks, identifiers and casing
+  // normalized: 200 KB of each shape that opens or continues one of them
+  // (a verb and quantity run with no end, marks between every word, an
+  // identifier, a run of joining words) reads inside 50 ms.
+  const DIRECTIVE = bound(Number(process.env.DIRECTIVE_BOUND_MS) || 50, 3);
+  const directiveShapes = {
+    words: "send all " + "x ".repeat(100_000), marks: "send all " + "x | ".repeat(50_000), ellipses: "Send all " + "requests... ".repeat(20_000),
+    asides: "ignore every other ".repeat(12_000), snake: "send_all_requests_".repeat(12_000), kebab: "send-all-".repeat(25_000), camel: "SendAllRequests".repeat(14_000),
+    dashes: "send all requests - ".repeat(10_000), brackets: "send all ((((".repeat(16_000), apostrophes: "don't ".repeat(35_000), useThis: "use this tool for every ".repeat(9_000),
+    joins: "send all requests here" + " and".repeat(50_000) + " x", joinMarks: "send all requests here" + " and -".repeat(35_000) + " x", forWhich: "for all incoming api ".repeat(10_000),
+  };
+  const slowDirective = [];
+  for (const [k, v] of Object.entries(directiveShapes)) {
+    const s = v.slice(0, 200_000);
+    const ms = bestOf(fns.readsAsRoutingDirective, s);
+    if (ms > DIRECTIVE.ms) slowDirective.push(`${k}: ${ms.toFixed(1)}ms`);
+  }
+  ok(slowDirective.length === 0, `readsAsRoutingDirective reads 200 KB of each directive shape inside ${DIRECTIVE.ms}ms (${slowDirective.join(", ") || "all"}; ${DIRECTIVE.note})`);
 }
 
 // The plan sketch reads the task text of /api/find, /api/route and the
