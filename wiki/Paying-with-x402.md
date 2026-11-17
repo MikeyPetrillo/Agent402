@@ -46,10 +46,12 @@ A client whose parser caps one header line near 8 KB (Python aiohttp's default `
 and `max_field_size` are 8190) reads the 402 one of two ways. Raise the limit:
 `aiohttp.ClientSession(max_line_size=32768, max_field_size=32768)`. Or send
 `X-Payment-Compact: 1` (a User-Agent that names aiohttp gets the same without it) for a PAYMENT-REQUIRED header
-under 7,500 bytes: the resource and the Bazaar extension unchanged, the Base exact accept first,
+under 7,500 bytes: the resource, the Bazaar extension and the builder code unchanged, the Base exact accept first,
 each other exact accept that fits, and a `compact` field whose `fullOfferIn` names the body,
 which keeps every accept. A payment signed from the compact header settles the same way. The
-paywall's 402 body states the header's size in `paymentRequiredHeader`.
+paywall's 402 body states the header's size in `paymentRequiredHeader`. The compact header and
+`paymentRequiredHeader` are served when enabled, which is the default; a self-hosted server turns
+both off with `PAYMENT_REQUIRED_COMPACT=off`.
 
 ## JavaScript (x402 v2 SDKs)
 

@@ -82,7 +82,7 @@ import { REPORT_TIERS } from "./report-tiers.js";
 import { verifyHintMiddleware } from "./verify-hint.js";
 import { meteredTwinSlug, meteredQuoteSentence, isMeteredChatSlug, meteredClientTimeoutField } from "./metered-lead.js";
 import { paymentRequiredBodyMiddleware, decodePaymentRequired } from "./payment-required-body.js";
-import { paymentRequiredCompactMiddleware } from "./payment-required-compact.js";
+import { paymentRequiredCompactEnabled, paymentRequiredCompactMiddleware } from "./payment-required-compact.js";
 import { avmSubcentOfferStatus } from "./avm-sponsorship.js";
 import { translateV1Accepts, v1AcceptsTranslationEnabled } from "./x402-v1-accepts.js";
 import { mountShortlinks } from "./shortlinks.js";
@@ -2720,7 +2720,7 @@ app.disable("x-powered-by");
 // writeHead hook is mounted FIRST so it runs LAST, after every other reader of
 // the header (the MPP shim mints its challenges from the full one). It needs
 // the body mirror, which decides and keeps the full offer in the body.
-const PAYMENT_REQUIRED_COMPACT_ON = process.env.PAYMENT_REQUIRED_COMPACT !== "off" && process.env.PAYMENT_REQUIRED_BODY !== "off";
+const PAYMENT_REQUIRED_COMPACT_ON = paymentRequiredCompactEnabled();
 if (PAYMENT_REQUIRED_COMPACT_ON) app.use(paymentRequiredCompactMiddleware());
 // Catalog paths are matched exactly by every gate here ("METHOD /path"),
 // while Express routes ignore case and a trailing slash. A request whose path

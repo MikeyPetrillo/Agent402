@@ -7,14 +7,15 @@
 // all, so it can never pay.
 //
 // On request, this serves a shorter header in its place:
-//   - the resource and the Bazaar extension exactly as the full header has them
-//     (the facilitator indexes the listing from what the client copies out of
-//     the header, so it is never reduced);
+//   - the resource, the Bazaar extension and the builder-code extension exactly
+//     as the full header has them (the facilitator indexes the listing, and
+//     reads the app's builder code for the settlement's onchain attribution,
+//     from what the client copies out of the header, so neither is reduced);
 //   - the primary exact accept (Base USDC first), then every other plain exact
 //     accept in the original order that keeps it under
-//     COMPACT_HEADER_MAX_BYTES; upto and Gateway batched accepts are left out,
-//     and so is every extension other than the Bazaar one (builder-code and
-//     payment-identifier are optional for an exact payment);
+//     COMPACT_HEADER_MAX_BYTES (accepts are dropped from the end, never an
+//     extension); upto and Gateway batched accepts are left out, and so is
+//     payment-identifier (optional for an exact payment, never settled on);
 //   - a `compact` field that counts what was left out and names where the full
 //     list is: the 402 body, which keeps the full PaymentRequired object with
 //     every accept (src/payment-required-body.js).
@@ -34,7 +35,9 @@
 // header at writeHead (the MPP shim mints its challenges from it) still reads
 // the full offer. A full header already under the ceiling is served unchanged.
 //
-// Rollback lever: PAYMENT_REQUIRED_COMPACT=off and server.js mounts neither half.
+// Rollback lever: PAYMENT_REQUIRED_COMPACT=off (or PAYMENT_REQUIRED_BODY=off)
+// and server.js mounts neither half; every text surface that describes the
+// compact header reads the same switch (paymentRequiredCompactEnabled).
 import { isGatewayBatchedPayment } from "./gateway-wire.js";
 
 /** The request header that asks for the compact header. */
@@ -48,8 +51,10 @@ export const COMPACT_HEADER_MAX_BYTES = 7500;
 export const COMPACT_VARY = Object.freeze([COMPACT_REQUEST_HEADER, "User-Agent"]);
 /** The primary network: Base. */
 export const PRIMARY_NETWORK = "eip155:8453";
-/** The one extension the compact header keeps. */
-export const KEPT_EXTENSION = "bazaar";
+/** The extensions the compact header keeps: the Bazaar listing and the
+ *  builder code (ERC-8021 attribution the facilitator reads only from the
+ *  extensions the client echoes back). */
+export const KEPT_EXTENSIONS = Object.freeze(["bazaar", "builder-code"]);
 /** Where the full offer is, as the compact header names it. */
 export const FULL_OFFER_IN = "body";
 
@@ -59,6 +64,13 @@ const COMPACT = Symbol.for("agent402.paymentRequiredCompact");
 
 const isPlainObject = (v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);
 const encode = (doc) => Buffer.from(JSON.stringify(doc), "utf8").toString("base64");
+
+/** True when this server serves the compact header: on unless
+ *  PAYMENT_REQUIRED_COMPACT=off, and never without the 402 body mirror
+ *  (PAYMENT_REQUIRED_BODY=off), which keeps the full offer. */
+export function paymentRequiredCompactEnabled(env = process.env) {
+  return env.PAYMENT_REQUIRED_COMPACT !== "off" && env.PAYMENT_REQUIRED_BODY !== "off";
+}
 
 /** True when the request asks for the compact header (the flag, or aiohttp). */
 export function wantsCompactHeader(req) {
@@ -84,8 +96,10 @@ export function compactPaymentRequired(pr, maxBytes = COMPACT_HEADER_MAX_BYTES) 
   const exact = pr.accepts.filter(isPlainExact);
   if (!exact.length) return null;
   const primary = exact.find((a) => a.network === PRIMARY_NETWORK) || exact[0];
-  const extensions = isPlainObject(pr.extensions) && KEPT_EXTENSION in pr.extensions ? { [KEPT_EXTENSION]: pr.extensions[KEPT_EXTENSION] } : undefined;
-  const omittedExtensions = isPlainObject(pr.extensions) ? Object.keys(pr.extensions).filter((k) => k !== KEPT_EXTENSION) : [];
+  const ext = isPlainObject(pr.extensions) ? pr.extensions : {};
+  const keptKeys = Object.keys(ext).filter((k) => KEPT_EXTENSIONS.includes(k));
+  const extensions = keptKeys.length ? Object.fromEntries(keptKeys.map((k) => [k, ext[k]])) : undefined;
+  const omittedExtensions = Object.keys(ext).filter((k) => !KEPT_EXTENSIONS.includes(k));
   const build = (accepts) => {
     const doc = { ...pr, accepts };
     if (extensions) doc.extensions = extensions; else delete doc.extensions;
@@ -151,8 +165,12 @@ export const AIOHTTP_DEFAULT_LINE_BYTES = 8190;
 
 /** One paragraph, for every text surface that tells a client how to read the
  *  402 when its parser caps a header line (/llms-full.txt, the
- *  /how-to-pay page and the wiki copy it). Plain text with backquoted code. */
-export function smallHeaderLimitText() {
-  return `A client whose parser caps one header line near 8 KB (Python aiohttp's default \`max_line_size\` and \`max_field_size\` are ${AIOHTTP_DEFAULT_LINE_BYTES}) reads the 402 one of two ways. Raise the limit: \`aiohttp.ClientSession(max_line_size=32768, max_field_size=32768)\`. Or send \`${COMPACT_REQUEST_EXAMPLE}\` (a User-Agent that names aiohttp gets the same without it) for a PAYMENT-REQUIRED header under ${COMPACT_HEADER_MAX_BYTES.toLocaleString("en-US")} bytes: the resource and the Bazaar extension unchanged, the Base exact accept first, each other exact accept that fits, and a \`compact\` field whose \`fullOfferIn\` names the body, which keeps every accept. A payment signed from the compact header settles the same way. The paywall's 402 body states the header's size in \`paymentRequiredHeader\`.`;
+ *  /how-to-pay page and the wiki copy it). Plain text with backquoted code.
+ *  With the compact header off it offers only the raised limit. */
+export function smallHeaderLimitText(compact = paymentRequiredCompactEnabled()) {
+  const lead = `A client whose parser caps one header line near 8 KB (Python aiohttp's default \`max_line_size\` and \`max_field_size\` are ${AIOHTTP_DEFAULT_LINE_BYTES})`;
+  const raise = `\`aiohttp.ClientSession(max_line_size=32768, max_field_size=32768)\``;
+  if (!compact) return `${lead} reads the 402 by raising the limit: ${raise}.`;
+  return `${lead} reads the 402 one of two ways. Raise the limit: ${raise}. Or send \`${COMPACT_REQUEST_EXAMPLE}\` (a User-Agent that names aiohttp gets the same without it) for a PAYMENT-REQUIRED header under ${COMPACT_HEADER_MAX_BYTES.toLocaleString("en-US")} bytes: the resource, the Bazaar extension and the builder code unchanged, the Base exact accept first, each other exact accept that fits, and a \`compact\` field whose \`fullOfferIn\` names the body, which keeps every accept. A payment signed from the compact header settles the same way. The paywall's 402 body states the header's size in \`paymentRequiredHeader\`.`;
 }
 

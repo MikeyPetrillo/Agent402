@@ -4,8 +4,8 @@
 // Every paid route's full header is 8.5 to 10.5 KB; a client whose parser caps
 // a header line near 8 KB (aiohttp's default max_line_size is 8190) cannot
 // read the 402. A request that sends `X-Payment-Compact: 1`, or whose
-// User-Agent names aiohttp, gets a shorter header: the resource and the Bazaar
-// extension untouched, the Base exact accept first, every other plain exact
+// User-Agent names aiohttp, gets a shorter header: the resource, the Bazaar
+// extension and the builder-code extension untouched, the Base exact accept first, every other plain exact
 // accept that fits, a `compact` field naming the body as the full offer, and
 // the body keeps every accept.
 //
@@ -18,9 +18,11 @@
 // the resource and the Bazaar extension byte-for-byte, keeps Base exact first,
 // leaves the body's full offer and the MPP challenges as they were, and every
 // 402 varies on both request headers. A stock x402 client that asks for the
-// compact header pays from it and settles exactly once.
+// compact header pays from it and settles exactly once, and the payment the
+// facilitator receives carries the app's builder code.
 // Part 3 boots the same server with PAYMENT_REQUIRED_COMPACT=off and requires
-// the default request's header to be byte-identical on every route.
+// the default request's header to be byte-identical on every route, and no
+// text surface to offer the compact header or `paymentRequiredHeader`.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -30,7 +32,7 @@ import { getFreePorts } from "./lib/free-port.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import {
   COMPACT_HEADER_MAX_BYTES, COMPACT_REQUEST_HEADER, COMPACT_REQUEST_EXAMPLE, COMPACT_VARY,
-  compactPaymentRequired, mergeVary, smallHeaderLimitText, wantsCompactHeader,
+  compactPaymentRequired, mergeVary, paymentRequiredCompactEnabled, smallHeaderLimitText, wantsCompactHeader,
 } from "../src/payment-required-compact.js";
 import { HEADER_NOTE_KEY, withoutPaymentRequired } from "../src/payment-required-body.js";
 import { CORS_DEFAULT_ALLOW_HEADERS } from "../src/cors.js";
@@ -83,8 +85,12 @@ const FULL = {
   ok(order.every((v, i) => i === 0 || v > order[i - 1]), "U6 kept accepts keep the full offer's order");
   ok(c.doc.accepts.length > 1, `U7 other exact accepts that fit are kept (${c.doc.accepts.length})`);
   ok(isDeepStrictEqual(c.doc.resource, FULL.resource) && c.doc.extensions.bazaar === FULL.extensions.bazaar && c.doc.error === FULL.error && c.doc.x402Version === 2, "U8 resource, Bazaar extension, error and version are untouched");
-  ok(isDeepStrictEqual(Object.keys(c.doc.extensions), ["bazaar"]), "U9 the only extension kept is bazaar");
-  ok(isDeepStrictEqual(c.doc.compact, { acceptsOmitted: FULL.accepts.length - c.doc.accepts.length, extensionsOmitted: ["builder-code", "payment-identifier"], fullOfferIn: "body" }), `U10 the compact field counts what was left out and names the body (${JSON.stringify(c.doc.compact)})`);
+  ok(isDeepStrictEqual(Object.keys(c.doc.extensions), ["bazaar", "builder-code"]) && c.doc.extensions["builder-code"] === FULL.extensions["builder-code"], "U9 the extensions kept are bazaar and builder-code, the builder code unchanged");
+  ok(isDeepStrictEqual(c.doc.compact, { acceptsOmitted: FULL.accepts.length - c.doc.accepts.length, extensionsOmitted: ["payment-identifier"], fullOfferIn: "body" }), `U10 the compact field counts what was left out and names the body (${JSON.stringify(c.doc.compact)})`);
+  // A ceiling that leaves room for the primary accept only: accepts go, the
+  // builder code stays.
+  const tight = compactPaymentRequired(FULL, enc({ ...FULL, accepts: [FULL.accepts[0]], extensions: { bazaar: BAZAAR, "builder-code": FULL.extensions["builder-code"] }, compact: { acceptsOmitted: FULL.accepts.length - 1, extensionsOmitted: ["payment-identifier"], fullOfferIn: "body" } }).length + 1);
+  ok(tight && tight.doc.accepts.length === 1 && tight.doc.extensions["builder-code"] === FULL.extensions["builder-code"], "U9b under a tight ceiling accepts are dropped from the end and the builder code is kept");
   // Adding any omitted plain exact accept would cross the ceiling.
   const omitted = FULL.accepts.filter((a) => a.scheme === "exact" && a.extra?.name !== "GatewayWalletBatched" && !c.doc.accepts.includes(a));
   ok(omitted.every((a) => enc({ ...c.doc, accepts: [...c.doc.accepts, a], compact: { ...c.doc.compact, acceptsOmitted: c.doc.compact.acceptsOmitted - 1 } }).length >= COMPACT_HEADER_MAX_BYTES), "U11 no omitted exact accept would still fit");
@@ -126,6 +132,22 @@ const FULL = {
   const { howToPayPage } = await import("../src/how-to-pay.js");
   ok(llmsFullTxt("https://agent402.test", {}).includes(text), "U28 /llms-full.txt carries the paragraph");
   ok(howToPayPage("https://agent402.test", {}, { networks: [] }).includes("X-Payment-Compact: 1"), "U29 /how-to-pay carries the paragraph");
+  // The switch: every text surface reads the one server.js mounts on.
+  ok(paymentRequiredCompactEnabled({}) && !paymentRequiredCompactEnabled({ PAYMENT_REQUIRED_COMPACT: "off" }) && !paymentRequiredCompactEnabled({ PAYMENT_REQUIRED_BODY: "off" }), "U30 the compact header is on by default, off with either switch off");
+  ok(/const PAYMENT_REQUIRED_COMPACT_ON = paymentRequiredCompactEnabled\(\);/.test(src), "U31 server.js mounts on the same switch the text surfaces read");
+  const { x402TestPage } = await import("../src/x402-test-page.js");
+  const onPages = [llmsFullTxt("https://agent402.test", {}), howToPayPage("https://agent402.test", {}, { networks: [] }), x402TestPage("https://agent402.test")];
+  ok(onPages.every((t) => t.includes("X-Payment-Compact") && t.includes("paymentRequiredHeader")), "U32 with the switch on, /llms-full.txt, /how-to-pay and /x402-test offer the compact header");
+  for (const [k, v] of [["PAYMENT_REQUIRED_COMPACT", "off"], ["PAYMENT_REQUIRED_BODY", "off"]]) {
+    const prev = process.env[k];
+    process.env[k] = v;
+    try {
+      const offPages = [llmsFullTxt("https://agent402.test", {}), howToPayPage("https://agent402.test", {}, { networks: [] }), x402TestPage("https://agent402.test")];
+      ok(offPages.every((t) => !t.includes("X-Payment-Compact") && !t.includes("paymentRequiredHeader")), `U33 with ${k}=off no text surface offers the compact header or paymentRequiredHeader`);
+      ok(offPages.slice(0, 2).every((t) => t.includes(smallHeaderLimitText(false)) || t.includes("max_line_size=32768")), `U34 with ${k}=off /llms-full.txt and /how-to-pay still say how to raise the limit`);
+    } finally { if (prev === undefined) delete process.env[k]; else process.env[k] = prev; }
+  }
+  ok(!smallHeaderLimitText(false).includes("X-Payment-Compact") && smallHeaderLimitText(false).includes("max_line_size=32768"), "U35 the off paragraph offers only the raised limit");
   const relayed = withoutPaymentRequired({ x402Version: 2, accepts: [], hint: "h", [HEADER_NOTE_KEY]: { bytes: 1 } });
   ok(!(HEADER_NOTE_KEY in relayed) && relayed.hint === "h", "U24 a relayed refusal drops the header note with the offer");
 }
@@ -254,6 +276,7 @@ try {
       const c = dec(got.header);
       const gotBody = JSON.parse(got.text);
       ok(isDeepStrictEqual(c.resource, full.resource) && isDeepStrictEqual(c.extensions?.bazaar, full.extensions?.bazaar), `· ${key} (${label}): resource and Bazaar extension untouched`);
+      ok(full.extensions?.["builder-code"] && isDeepStrictEqual(c.extensions?.["builder-code"], full.extensions["builder-code"]), `· ${key} (${label}): builder-code extension untouched`);
       if (d.header.length >= COMPACT_HEADER_MAX_BYTES) {
         ok(c.accepts[0].scheme === "exact" && c.accepts[0].network === "eip155:8453" && isDeepStrictEqual(c.accepts[0], full.accepts.find((a) => a.scheme === "exact" && a.network === "eip155:8453")), `· ${key} (${label}): Base exact first, unchanged`);
         ok(c.accepts.every((a) => full.accepts.some((x) => isDeepStrictEqual(x, a))), `· ${key} (${label}): every kept accept is one of the full offer's`);
@@ -274,6 +297,7 @@ try {
     const p = compactPaymentRequired(projected(full));
     const pBytes = p ? p.value.length : enc(projected(full)).length;
     ok(pBytes < COMPACT_HEADER_MAX_BYTES, `· ${key}: with every production rail projected in, the compact header is ${pBytes} bytes`);
+    ok(!p || isDeepStrictEqual(p.doc.extensions?.["builder-code"], full.extensions["builder-code"]), `· ${key}: with every production rail projected in, the builder code is kept`);
     projSizes.push(pBytes);
   }
   ok(routes >= 400, `B1 ${routes} priced routes answered 402 with a header (full header up to ${fullMax} bytes)`);
@@ -306,6 +330,13 @@ try {
     ok(isDeepStrictEqual(sent?.accepted, offered.accepts[0]) && sent.accepted.network === "eip155:8453", `B8 ${label}: the payment names the compact header's Base exact accept`);
     ok(isDeepStrictEqual(sent?.resource, offered.resource), `B9 ${label}: the payment carries the resource the facilitator indexes`);
     ok(!!r.headers.get("payment-response"), `B10 ${label}: the answer carries its receipt`);
+    ok(offered.extensions?.["builder-code"]?.info?.a === "agent402" && sent?.extensions?.["builder-code"]?.info?.a === "agent402", `B11 ${label}: the compact header offers the builder code and the payment the facilitator receives carries it (${JSON.stringify(sent?.extensions?.["builder-code"]?.info)})`);
+  }
+
+  // Control for P2: the same pages on this server offer the compact header.
+  for (const path of ["/llms-full.txt", "/how-to-pay", "/x402-test"]) {
+    const t = await (await fetch(`${B}${path}`)).text();
+    ok(t.includes("X-Payment-Compact") && t.includes("paymentRequiredHeader"), `B12 ${path} with the option on offers the compact header and paymentRequiredHeader`);
   }
 
   // Part 3: the default request's header is byte-identical with the option off.
@@ -326,6 +357,12 @@ try {
     same++;
   }
   ok(same === routes, `P1 the default PAYMENT-REQUIRED header is byte-identical on all ${same} routes`);
+  for (const path of ["/llms-full.txt", "/how-to-pay", "/x402-test"]) {
+    const t = await (await fetch(`${OFF_B}${path}`)).text();
+    ok(t.length > 1000 && !t.includes("X-Payment-Compact") && !t.includes("paymentRequiredHeader"), `P2 ${path} with the option off offers neither the compact header nor paymentRequiredHeader`);
+  }
+  const offBody = JSON.parse(off.get([...off.keys()].find((k) => off.get(k).status === 402)).text);
+  ok(!(HEADER_NOTE_KEY in offBody), "P3 with the option off the 402 body carries no paymentRequiredHeader");
 
   console.log(`\nPASS - ${pass} checks (the compact PAYMENT-REQUIRED header)`);
   proc.kill("SIGKILL"); facilitator.close(); process.exit(0);
