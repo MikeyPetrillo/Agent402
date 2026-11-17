@@ -8,6 +8,17 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
+    title: "Package releases: default spend caps, request timeouts, typed APIs",
+    items: [
+      "Packages: agent402-client 0.9.0 holds a paid call to $4 and rolling 24-hour spend to $25 by default (DEFAULT_MAX_PER_CALL_USD and DEFAULT_DAILY_LIMIT_USD): a number sets a cap, null turns it off, and call(slug, params, { maxUsd }) allows one call up to that amount without the default daily cap (a cap the caller set still holds). Each request is given 120 seconds (timeoutMs, the published client timeout for metered calls) and then ends in RequestTimeoutError; a paid request that times out reads paid: \"unknown\" and its amount is held against the caps.",
+      "Packages: agent402-client 0.9.0 signs a Circle Gateway batched accept only when its verifyingContract is the chain's own GatewayWallet contract (GATEWAY_VERIFYING_CONTRACTS, Circle's published address on each mainnet and testnet Gateway serves); gateway.verifyingContracts adds or replaces entries. agent402-client and agent402-mcp 0.14.0 solve proof-of-work on a worker thread and refuse a challenge above 28 bits.",
+      "Packages: agent402-mcp 0.14.0 caps a session at $25 by default (AGENT402_BUDGET; off turns it off), returns at most 25 catalog.search results, takes params as an object or a JSON string of one on catalog.call and router.execute, marks catalog.call, router.execute and memory.write destructive and the catalog lookups read-only as the hosted connector does, names no demand.request in its instructions (it does not list it), names a wallet key that does not parse at start instead of reporting a configured wallet, and runs on MCP SDK v2 (@modelcontextprotocol/server 2.4.0) with the same answers on the 2024-11-05 through 2025-11-25 revisions.",
+      "Packages: agent402-tollbooth 0.12.0 charges every listed AI crawler in strict mode, a browser-like one included; the CLI stops on SIGTERM or SIGINT by letting requests in flight finish and exiting 0 (TOLLBOOTH_SHUTDOWN_GRACE_MS, default 10000, then exit 1); the README settle examples run on Base Sepolia with the x402.org facilitator. agent402-client, agent402-mcp and agent402-tollbooth ship TypeScript declarations.",
+      "MCP: The hosted connector counts each message of a JSON-RPC batch against its per-client request limit.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "The OpenClaw plugin on OpenClaw 2026.11.5",
     items: [
       "Packages: agent402-openclaw 0.5.12 is tested against OpenClaw 2026.11.5 and 2026.11.2. OpenClaw 2026.11.5 installs a bare plugin name from ClawHub, where each release is also published; the README names npm:agent402-openclaw for the npm package on that host, and the real-install test covers the ClawHub and npm installs there.",
