@@ -37,7 +37,22 @@
 // GET /api/jobs/:id sets Retry-After on every state that is not final.
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { carriesPaymentAttempt } from "./payment-attempt.js";
+import { NOT_CHARGED } from "./not-charged.js";
+import { PUSH_FAILURE_NOTE } from "./push-refusal-body.js";
+import { JOB_PUSH_EXCEPTION } from "./tempo-push-debts.js";
 import { PROGRESS_HEADER, registerProgressSink, throttledProgressWriter, progressView } from "./job-progress.js";
+
+/** What a failed run's job says about the charge. The loopback answer is the
+ *  source: a body the Tempo push gate rewrote (src/push-refusal-body.js) says
+ *  the transfer was claimed and is owed, and the summary says the same; any
+ *  other failed run was not settled. Exported for tests. */
+export function failedRunSummary(status, body) {
+  const pushOwed = !!body && typeof body === "object" && (body.transferClaimed === true || body.refundOwed === true || body.charged === true);
+  if (pushOwed) return `The call ended with HTTP ${status}. ${PUSH_FAILURE_NOTE} The answer is in error.body.`;
+  return status === 402
+    ? `The payment was not accepted, so the call did not run. ${NOT_CHARGED} The 402 is in error.body.`
+    : `The call ended with HTTP ${status}. ${NOT_CHARGED}`;
+}
 
 export const LOOPBACK_HEADER = "x-agent402-async-loopback";
 const PREFER_ASYNC = /(^|[\s,;])respond-async(?=$|[\s,;=])/i;
@@ -197,7 +212,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
           await store.complete(rec.taskId, { httpStatus: 200, headers: kept, body: payload }, { receipt, priceUsd: paidUsd(receipt, kept["x-metered-usd"]) });
         } else {
           await store.fail(rec.taskId, { httpStatus: r.status, body: payload, ...(Object.keys(kept).length ? { headers: kept } : {}) },
-            r.status === 402 ? "The payment was not accepted, so the call did not run and nothing was charged. The 402 is in error.body." : `The call ended with HTTP ${r.status} and nothing was charged.`);
+            failedRunSummary(r.status, payload));
         }
       } catch (e) {
         endProgress();
@@ -225,7 +240,7 @@ export function createAsyncJobs({ port, host = "127.0.0.1", asyncRouteOf, store,
     const statusUrl = `${basePath}/${rec.taskId}`;
     const doc = publicJob(rec, { basePath, profile: profileOfSlug(def.slug) });
     res.status(202).set({ Location: statusUrl, "Preference-Applied": "respond-async", "Retry-After": String(doc.pollIntervalSeconds || Math.max(1, Math.round(store.POLL_MS / 1000))), "Cache-Control": "no-store" })
-      .json({ ...doc, message: `Running ${def.slug}. Poll ${statusUrl} (free), waiting Retry-After seconds between polls, until status is completed or failed (state shows queued, running, succeeded or failed). Payment settles only when the result is ready; on x402 a failed run is not charged.` });
+      .json({ ...doc, message: `Running ${def.slug}. Poll ${statusUrl} (free), waiting Retry-After seconds between polls, until status is completed or failed (state shows queued, running, succeeded or failed). Payment settles only when the result is ready${JOB_PUSH_EXCEPTION}; on x402 a failed run is not charged.` });
   }
 
   /** GET /api/jobs/:id - free. */

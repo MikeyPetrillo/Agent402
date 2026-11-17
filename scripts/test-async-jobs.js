@@ -197,7 +197,16 @@ try {
   const j2 = await (await post({ prefer: "respond-async", "x-forwarded-for": "10.9.0.3", "payment-signature": credential(wallet(2)) })).json();
   await waitFor(async () => ["succeeded", "failed"].includes((await job(j2.statusUrl)).state));
   const g2 = await job(j2.statusUrl);
-  ok(g2.status === "failed" && g2.error?.httpStatus >= 500 && /nothing was charged/.test(g2.message || ""), `a failed run ends the job failed and says not charged (error HTTP ${g2.error?.httpStatus})`);
+  ok(g2.status === "failed" && g2.error?.httpStatus >= 500 && /Nothing was charged\./.test(g2.message || ""), `a failed run ends the job failed and says not charged (error HTTP ${g2.error?.httpStatus})`);
+  {
+    // A failed run's summary is read from the loopback answer: a body the
+    // Tempo push gate rewrote says the transfer is owed, and so does the job.
+    const { failedRunSummary } = await import("../src/async-jobs.js");
+    const { PUSH_FAILURE_NOTE } = await import("../src/push-refusal-body.js");
+    const pushed = failedRunSummary(502, { error: "x", transferClaimed: true, refundOwed: true });
+    ok(pushed.includes(PUSH_FAILURE_NOTE) && !/nothing was charged|not charged/i.test(pushed), "a failed run paid with a claimed Tempo transfer says the transfer is owed, never that nothing was charged");
+    ok(failedRunSummary(502, { error: "x" }) === "The call ended with HTTP 502. Nothing was charged." && /did not run\. Nothing was charged\. The 402 is in error\.body\.$/.test(failedRunSummary(402, {})), "any other failed run, and a refused payment, says nothing was charged in the shared sentence");
+  }
   ok(fac.settle === s2, `a failed run settles nothing (settles ${fac.settle - s2})`);
 
   // 2b. An absolute-form request target ("POST http://host/route") matches the

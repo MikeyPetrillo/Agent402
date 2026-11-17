@@ -22,6 +22,9 @@
  *  the call, so such a refusal books the transfer as owed instead. Read by
  *  the MCP connector's slow-call refusal and the HTTP sync windows. */
 export const PUSH_EXCEPTION = ", except a Tempo transfer sent before the call, which is recorded as owed";
+/** The same exception after "payment settles only when the result is ready":
+ *  that transfer is final before the run, and is owed back when the run fails. */
+export const JOB_PUSH_EXCEPTION = `${PUSH_EXCEPTION} if the run fails`;
 
 export const PUSH_INPUT_REFUSED_NOTE = "push unclaimed: input refused";
 // A finalize whose answer was lost (a connection dropped after the request

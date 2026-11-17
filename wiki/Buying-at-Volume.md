@@ -36,7 +36,7 @@ An IPv6 /64 is one address. A stock x402 client sends one unpaid read and one pa
 
 ## Slow calls
 
-A route with an `async` block takes `Prefer: respond-async`: 202 and a `Location` job link at once, `GET /api/jobs/{id}` (free) until `status` is `completed` or `failed`, payment settled only on the delivered result (`src/async-jobs.js`, `src/slow-routes.js`). agent402-client and agent402-mcp switch to jobs on their own.
+A route with an `async` block takes `Prefer: respond-async`: 202 and a `Location` job link at once, `GET /api/jobs/{id}` (free) until `status` is `completed` or `failed`, payment settled only on the delivered result, except a Tempo transfer sent before the call, which is recorded as owed if the run fails (`src/async-jobs.js`, `src/slow-routes.js`). agent402-client and agent402-mcp switch to jobs on their own.
 
 ## Spend caps in the packages
 

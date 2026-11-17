@@ -56,7 +56,7 @@ const REPORT_PAGES = [
     "The buyer sends a request and receives a price. It signs a payment",
     "for that exact amount and sends the request again. The server checks",
     "the signature, runs the tool, and settles the payment only when the",
-    "tool succeeded. A failed call is never charged."],
+    "tool succeeded. A failed x402 call is not charged."],
   ["How a Price Is Chosen", "",
     "Most tools are deterministic code with a fixed price per call.",
     "Model-backed tools are metered: the server quotes a ceiling first",

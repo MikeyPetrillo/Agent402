@@ -430,8 +430,9 @@ the rest the rows mark. Send the paid call with \`Prefer: respond-async\` and it
 answers 202 at once with a \`Location\` job link. Poll \`GET /api/jobs/{id}\`
 (free), waiting \`Retry-After\` between polls, until \`status\` is \`completed\` or
 \`failed\`; \`state\`, \`stage\`, \`progress\` and \`etaSeconds\` say where it is. The
-payment settles only when the result is ready, and on x402 a failed run is not
-charged. A row whose block carries \`preferWait\` also takes
+payment settles only when the result is ready, except a Tempo transfer sent
+before the call, which is recorded as owed if the run fails;
+on x402 a failed run is not charged. A row whose block carries \`preferWait\` also takes
 \`Prefer: wait=<maxSeconds>\` to wait on the connection, and a paid call there
 with neither header is answered 400 before any payment.
 
@@ -1472,7 +1473,7 @@ provenance stays explicit.
 
 - **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller
   down - cancels your settlement, and a Tempo transfer sent before the call is
-  recorded as owed. You pay only for delivered results.
+  recorded as owed. So is a payment that settles after your connection closed.
 - **Spend is bounded on our side** by per-window budgets and per-quote caps,
   so the router cannot be drained into misbehavior.
 - **Receipts are recomputable.** Paid EVM calls carry a \`callRef\` derived
@@ -1652,7 +1653,7 @@ proof-of-work tier, are unaffected.
 
 ## What doesn't change per chain
 
-The settlement rule is the same everywhere: a call that answers an error
+The x402 settlement rule is the same everywhere: a call that answers an error
 status, or whose payment does not match the offer, is not settled, on any of
 the {{railCount}} chains. Chain choice changes *where* the USDC moves, not the rule
 that decides *whether* it moves.

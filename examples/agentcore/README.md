@@ -25,7 +25,7 @@ That's the full flow:
 1. `agent402Tools()` pulls the live Agent402 catalog
 2. The Strands Agent picks the tools from natural-language input
 3. Each call answers 402 with its price; the x402 fetch signs the USDC payment and retries
-4. agent402.tools returns the real, structured result, and settles only on success
+4. agent402.tools returns the real, structured result, and settles the x402 payment only on success
 
 **No wallet yet?** The pure-CPU tools (hash, uuid, base64, markdown, JSON and more) run free with proof-of-work and no wallet. Run `node run.js` with no `AGENT_KEY` and the demo calls `hash` instead:
 
