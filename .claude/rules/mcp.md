@@ -16,11 +16,33 @@ Loaded when a connector or front-door file is read.
   `src/mcp-x402-routes.js` holds internal x402 twins of six fixed-price flagships at `/__mcp-x402/<slug>`:
   reachable only with the loopback secret (anything else is the ordinary 404), rewritten to the tool's route
   and priced by its accepts with resource `/mcp` and an MCP discovery extension; a flagged request the twin
-  paywall does not price runs the route's own paywall. Not yet called by `/mcp`.
+  paywall does not price runs the route's own paywall.
   `src/mcp-x402.js` is the x402 MCP transport codec (`_meta["x402/payment"]` in, payment-required,
-  invalid-payment and settlement-failed results, `x402/payment-response` out): pure, not yet wired to `/mcp`.
-  Its interop suite needs the official `@x402/mcp` client, which CI installs with `--no-save` in the
-  step before the suite and `package.json` never lists (an optional peer of mppx would ship in prod).
+  invalid-payment and settlement-failed results, `x402/payment-response` out), pure.
+  `/mcp` wires both (`x402Loopback`, off in FREE_MODE): a flagship called by its listed name with a twin
+  is asked and paid on the twin, `catalog.call` (and a flagship without a twin) on the slug's own HTTP
+  route; the first ask carries the x402 PaymentRequired (JSON in the first text block, never
+  `structuredContent`: every paid tool lists an `outputSchema`, and the SDK client checks any
+  structuredContent against it, error results included) beside the MPP `_meta` challenges; a
+  settlement-pending result carries its fields in `_meta["org.agent402/settlement-pending"]`; MPP wins when
+  both are sent; x402 is blocking only (a slow route is refused before the payment is presented; it
+  is paid in the call over MPP as a task, and public copy says so). Every text the connector writes
+  about paying in the call reads `payWires` (`connectorWires()`, src/connector-pay.js, never in
+  FREE_MODE), the account the pages read (`scripts/test-connector-pay-copy.js`).
+  A tools/call whose `_meta` holds a plausible payment (`metaCarriesPayment`: an MPP credential that
+  decodes, or an x402 payment on an offered network) is counted on its own per-IP transport bucket
+  (`AGENT402_MCP_PAID_REQ_PER_MIN`/`_HOUR`, default 5x the normal one); unless the call then reaches a
+  paywall replay (`reachesPaidReplay`), the handler also holds it to the normal bucket, so a credential
+  on a discovery tool buys nothing. A free tool at its limit offers its route's x402 challenge. A 402
+  whose settlement is undecided (retry same-payment or watch-transaction, or settlement_pending) is the
+  pending result: the route's hint, no offer. A settle that failed never gets an offer: any 402 carrying a settle
+  receipt marked `success: false`, on either wire, is the route's explanation with no offer and the
+  transaction to watch when one is named (`buildSettlementUnprovenResult`), since the receipt does not
+  say how a settle fallback ended; a 5xx after a payment was presented is the route's answer with no offer
+  (`buildPaidRouteFailedResult`). A verify refusal (no settle receipt) keeps its fresh offer. A long call is refused before its payment is read. A twin's unpaid offer is reused for 30 s
+  (`scripts/test-mcp-x402-connector.js`).
+  The interop suites need the official `@x402/mcp` client, which CI installs with `--no-save` in the
+  step before them and `package.json` never lists (an optional peer of mppx would ship in prod).
 - **Front door:** `src/front-door.js` writes the three lines that lead `/llms.txt`, `/agents.md`
   and `server.describe`; the access line names coins and wires from the rails list and the MPP
   config. The unpaid 402 body carries the access line and the `/agents.md` link only with

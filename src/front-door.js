@@ -21,6 +21,7 @@ import { mppOfferShortProse, mppMethodsSummary } from "./mpp-offers.js";
 import { isComputePayable } from "./pow.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
 import { firstCallAllowanceConfig, allowanceRouteRefusal } from "./first-call-allowance.js";
+import { connectorWires, connectorPayText } from "./connector-pay.js";
 
 /** The first call. Live web search: the widest first job, a flat price with no
  *  model in its serving path, and the start of most research chains. */
@@ -97,7 +98,7 @@ export function paidWiresPhrase() {
 function switchKey() {
   const cfg = firstCallAllowanceConfig();
   const allowance = cfg.enabled ? `on:${cfg.maxMicro}:${[...cfg.slugs].join(",")}` : "off";
-  return `${allowance}|${paidWiresPhrase()}|${mppOfferShortProse()}`;
+  return `${allowance}|${paidWiresPhrase()}|${mppOfferShortProse()}|${connectorWires().phrase}`;
 }
 
 /** The free-tier count: catalog tools that take proof-of-work (src/free-tier.js
@@ -241,7 +242,7 @@ ${recoveryMarkdown(catalog, baseUrl)}
 ## Connect
 
 - **Plain HTTP:** call any route. An unpaid call answers HTTP 402 with the price and ${offers}; pay from your wallet and send the call again with the payment.
-- **MCP, hosted (streamable HTTP, nothing to install):** \`${baseUrl}/mcp\`. The proof-of-work tools run free there with no wallet.
+- **MCP, hosted (streamable HTTP, nothing to install):** \`${baseUrl}/mcp\`. The proof-of-work tools run free there with no wallet. ${connectorPayText({ code: (s) => `\`${s}\`` })}
 - **MCP over stdio, with a wallet for paid tools:** \`npx -y agent402-mcp@${AGENT402_MCP_VERSION}\` with \`AGENT_KEY\` set to a new wallet holding a few dollars of USDC, never your main wallet.
 - **Buyer SDK:** \`npm install agent402-client\` resolves a task to a tool and calls it: proof-of-work is solved for you on the free tools, and paid tools use the payment-aware fetch you pass in.
 

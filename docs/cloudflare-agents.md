@@ -107,13 +107,16 @@ await this.addMcpServer("agent402", "https://agent402.tools/mcp");
 
 The MCP surface handles discovery and invocation - `catalog.call` solves
 proof-of-work automatically for free-tier tools. Wallet-only tools (search,
-browser, PDF, memory) are payable on the connector over MPP: the connector
-answers with an `isError` tool result whose text names every way to pay and
-whose `_meta["org.paymentauth/payment-required"]` carries the challenges (a
+browser, PDF, memory) are payable on the connector in the call. Over x402,
+the connector's `isError` tool result carries the x402 PaymentRequired as JSON
+in its first text block, and an x402 MCP client signs it and calls again with the
+payment in `_meta["x402/payment"]` (settle receipt in
+`_meta["x402/payment-response"]`). Over MPP, the same result names every way to pay and
+its `_meta["org.paymentauth/payment-required"]` carries the challenges (a
 presented credential that is refused answers JSON-RPC `-32043`, and a call on
 the tasks path answers `-32042`, both with `data.challenges`), and an MCP
 client wrapped with `mppx`'s `McpClient.wrap()` pays (USDC on Base/Celo, or
-natively on Tempo) and retries, receipt in `_meta`. To pay over x402 instead, run the `agent402-mcp`
+natively on Tempo) and retries, receipt in `_meta`. To have the payment handled underneath instead, run the `agent402-mcp`
 npm package with a wallet key (or a prepaid credits key, where sold or already issued).
 
 ---

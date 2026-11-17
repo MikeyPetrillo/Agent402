@@ -45,6 +45,8 @@ import {
   readPaymentFromMeta,
   settleResponseFromHeader,
   withPaymentResponse,
+  buildSettlementPendingResult,
+  paymentRequiredOfResult,
 } from "../src/mcp-x402.js";
 import { MCP_PAYMENT_REQUIRED_META } from "../src/mcp-mpp.js";
 import { decodePaymentHeader } from "../src/payment-header.js";
@@ -97,7 +99,7 @@ const MPP_META = {
 {
   const r = buildPaymentRequiredResult(REQUIRED, { message: "This tool costs $0.01 in USDC." });
   ok(r && r.isError === true, "payment-required: isError is true");
-  ok(r.structuredContent === REQUIRED, "payment-required: structuredContent is the PaymentRequired object");
+  ok(!("structuredContent" in r) && same(paymentRequiredOfResult(r), REQUIRED), "payment-required: no structuredContent (a listed outputSchema would be checked against it); the object reads back from the first text block");
   ok(r.content[0].type === "text" && r.content[0].text === JSON.stringify(REQUIRED), "payment-required: content[0].text is JSON.stringify of the same object");
   ok(r.content[1]?.text === "This tool costs $0.01 in USDC.", "payment-required: the readable sentence follows the JSON block");
   ok(r._meta === undefined, "payment-required: no _meta when no MPP challenge is given");
@@ -108,7 +110,7 @@ const MPP_META = {
   ok(Object.keys(MPP_META).every((k) => both._meta[k] === MPP_META[k]), "MPP merge: each value is the same reference");
   ok(Object.keys(MPP_META).every((k) => JSON.stringify(both._meta[k]) === JSON.stringify(MPP_META[k])), "MPP merge: each value serializes byte for byte");
   ok(JSON.stringify(both._meta) === JSON.stringify(MPP_META), "MPP merge: the whole _meta serializes byte for byte");
-  ok(both.structuredContent === REQUIRED, "MPP merge: the x402 body is unchanged beside it");
+  ok(!("structuredContent" in both) && same(paymentRequiredOfResult(both), REQUIRED), "MPP merge: the x402 body is unchanged beside it");
   const poisoned = JSON.parse('{"__proto__":{"polluted":1},"k":1}');
   const p = buildPaymentRequiredResult(REQUIRED, { mppMeta: poisoned });
   ok(p._meta.k === 1 && !Object.hasOwn(p._meta, "__proto__") && ({}).polluted === undefined && Object.getPrototypeOf(p._meta) === Object.prototype, "MPP merge: a __proto__ key is skipped and pollutes nothing");
@@ -135,7 +137,7 @@ const MPP_META = {
   const cyclic = { ...PAYLOAD }; cyclic.self = cyclic;
   const getterThrows = Object.defineProperty({}, X402_PAYMENT_META, { enumerable: true, get() { throw new Error("boom"); } });
   const innerGetter = { ...PAYLOAD, payload: Object.defineProperty({}, "signature", { enumerable: true, get() { throw new Error("boom"); } }) };
-  const deep = { ...PAYLOAD, extensions: {} }; let cur = deep.extensions; for (let i = 0; i < 20; i++) { cur.n = {}; cur = cur.n; }
+  const deep = { ...PAYLOAD, extensions: {} }; let cur = deep.extensions; for (let i = 0; i < 40; i++) { cur.n = {}; cur = cur.n; }
   const big = { ...PAYLOAD, extensions: { pad: "x".repeat(X402_PAYMENT_MAX_BYTES) } };
   // Nesting deep enough that a recursive serializer or walker overflows the stack.
   const abyss = { ...PAYLOAD, extensions: {} }; cur = abyss.extensions; for (let i = 0; i < 20000; i++) { cur.n = {}; cur = cur.n; }
@@ -237,13 +239,13 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
 {
   const failed = { success: false, errorReason: "insufficient_funds", transaction: "", network: "eip155:8453" };
   const r = buildSettlementFailedResult(REQUIRED, { reason: "insufficient_funds", settleResponse: failed, mppMeta: MPP_META });
-  ok(r.isError === true && r.structuredContent.error === "Payment settlement failed: insufficient_funds", "settle failed: isError, and error names the failure");
-  ok(same({ ...r.structuredContent, error: REQUIRED.error }, REQUIRED) && REQUIRED.error === "Payment required", "settle failed: the offer is unchanged, the input not mutated");
-  ok(r.content.length === 1 && r.content[0].text === JSON.stringify(r.structuredContent), "settle failed: content is the payment JSON only (no tool output)");
+  ok(r.isError === true && paymentRequiredOfResult(r).error === "Payment settlement failed: insufficient_funds", "settle failed: isError, and error names the failure");
+  ok(same({ ...paymentRequiredOfResult(r), error: REQUIRED.error }, REQUIRED) && REQUIRED.error === "Payment required", "settle failed: the offer is unchanged, the input not mutated");
+  ok(r.content.length === 1 && r.content[0].text === JSON.stringify(paymentRequiredOfResult(r)), "settle failed: content is the payment JSON only (no tool output)");
   ok(same(r._meta[X402_PAYMENT_RESPONSE_META], failed), "settle failed: the failed SettleResponse rides in _meta");
   ok(r._meta[MCP_PAYMENT_REQUIRED_META] === MPP_META[MCP_PAYMENT_REQUIRED_META], "settle failed: the MPP challenge rides along unchanged");
   const plain = buildSettlementFailedResult(REQUIRED);
-  ok(plain.structuredContent.error === "Payment settlement failed" && plain._meta === undefined, "settle failed: no reason, no receipt -> generic error and no _meta");
+  ok(paymentRequiredOfResult(plain).error === "Payment settlement failed" && plain._meta === undefined, "settle failed: no reason, no receipt -> generic error and no _meta");
   const forgedFail = buildSettlementFailedResult(REQUIRED, { mppMeta: { "x402/payment-response": SETTLED, k: 1 } });
   ok(forgedFail._meta.k === 1 && !(X402_PAYMENT_RESPONSE_META in forgedFail._meta), "settle failed: a success receipt in the caller's meta is never carried");
   ok(buildSettlementFailedResult(REQUIRED, { settleResponse: SETTLED })._meta === undefined, "settle failed: a success receipt is never attached to a failure");
@@ -253,12 +255,12 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
 // --- invalid payment ----------------------------------------------------------------------
 {
   const r = buildInvalidPaymentResult(REQUIRED, { reason: "invalid_exact_evm_payload_signature", mppMeta: { ...MPP_META, "x402/payment-response": SETTLED } });
-  ok(r.isError === true && r.structuredContent.error === "invalid_exact_evm_payload_signature", "invalid payment: isError, and error names the reason");
-  ok(same({ ...r.structuredContent, error: REQUIRED.error }, REQUIRED) && REQUIRED.error === "Payment required", "invalid payment: the offer is unchanged, the input not mutated");
-  ok(r.content.length === 1 && r.content[0].text === JSON.stringify(r.structuredContent), "invalid payment: content[0].text is JSON.stringify of the object");
+  ok(r.isError === true && paymentRequiredOfResult(r).error === "invalid_exact_evm_payload_signature", "invalid payment: isError, and error names the reason");
+  ok(same({ ...paymentRequiredOfResult(r), error: REQUIRED.error }, REQUIRED) && REQUIRED.error === "Payment required", "invalid payment: the offer is unchanged, the input not mutated");
+  ok(r.content.length === 1 && r.content[0].text === JSON.stringify(paymentRequiredOfResult(r)), "invalid payment: content[0].text is JSON.stringify of the object");
   ok(r._meta[MCP_PAYMENT_REQUIRED_META] === MPP_META[MCP_PAYMENT_REQUIRED_META] && !(X402_PAYMENT_RESPONSE_META in r._meta), "invalid payment: the MPP challenge rides along, a forged receipt does not");
-  ok(buildInvalidPaymentResult(REQUIRED).structuredContent.error === "Payment verification failed", "invalid payment: no reason -> a generic error");
-  ok(buildInvalidPaymentResult(REQUIRED, { reason: "x".repeat(500) }).structuredContent.error.length === 200, "invalid payment: the reason is bounded");
+  ok(paymentRequiredOfResult(buildInvalidPaymentResult(REQUIRED)).error === "Payment verification failed", "invalid payment: no reason -> a generic error");
+  ok(paymentRequiredOfResult(buildInvalidPaymentResult(REQUIRED, { reason: "x".repeat(500) })).error.length === 200, "invalid payment: the reason is bounded");
   ok(buildInvalidPaymentResult({ x402Version: 2 }) === null && buildInvalidPaymentResult(null) === null, "invalid payment: an invalid PaymentRequired -> null");
 }
 
@@ -266,8 +268,11 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
 {
   const account = privateKeyToAccount(generatePrivateKey());
   const seen = [];
+  // paid.echo lists an outputSchema, as every paid tool on /mcp does: the SDK
+  // client checks any structuredContent a result carries against it.
+  const ECHO_SCHEMA = { type: "object", properties: { echoed: { type: "object" } }, required: ["echoed"], additionalProperties: false };
   const server = new Server({ name: "mcp-x402-test", version: "0.0.0" }, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: "paid.echo", inputSchema: { type: "object" } }, { name: "paid.fails", inputSchema: { type: "object" } }, { name: "paid.retry", inputSchema: { type: "object" } }] }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: "paid.echo", inputSchema: { type: "object" }, outputSchema: ECHO_SCHEMA }, { name: "paid.fails", inputSchema: { type: "object" } }, { name: "paid.retry", inputSchema: { type: "object" } }] }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const read = readPaymentFromMeta(req.params._meta);
     seen.push({ name: req.params.name, read });
@@ -278,7 +283,7 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
     if (req.params.name === "paid.fails") return buildSettlementFailedResult(REQUIRED, { reason: "insufficient_funds" });
     const decoded = decodePaymentSignatureHeader(paymentSignatureHeader(read.payment));
     const settle = { success: true, transaction: "0x" + "34".repeat(32), network: decoded.accepted.network, payer: decoded.payload.authorization.from };
-    return withPaymentResponse({ content: [{ type: "text", text: JSON.stringify({ echoed: req.params.arguments }) }] }, encodePaymentResponseHeader(settle));
+    return withPaymentResponse({ content: [{ type: "text", text: JSON.stringify({ echoed: req.params.arguments }) }], structuredContent: { echoed: req.params.arguments } }, encodePaymentResponseHeader(settle));
   });
   const [ct, st] = InMemoryTransport.createLinkedPair();
   await server.connect(st);
@@ -292,6 +297,29 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
   });
   const client = new x402MCPClient(new Client({ name: "official-x402-client", version: "0.0.0" }), payments, { autoPayment: true });
   await client.connect(ct);
+
+  // The reference SDK client, tools listed first (which arms its output
+  // validation): the unpaid ask is a readable tool result, not a thrown error.
+  {
+    const [pct, pst] = InMemoryTransport.createLinkedPair();
+    const second = new Server({ name: "mcp-x402-test-plain", version: "0.0.0" }, { capabilities: { tools: {} } });
+    second.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: "paid.echo", inputSchema: { type: "object" }, outputSchema: ECHO_SCHEMA }] }));
+    second.setRequestHandler(CallToolRequestSchema, async (req) => (req.params.arguments?.pending
+      ? buildSettlementPendingResult({ refusal: { retry: "same-payment" } })
+      : req.params.arguments?.invalid ? buildInvalidPaymentResult(REQUIRED, { reason: "nope" })
+        : req.params.arguments?.failed ? buildSettlementFailedResult(REQUIRED, { reason: "insufficient_funds" })
+          : buildPaymentRequiredResult(REQUIRED, { message: "Pay to run this tool.", mppMeta: MPP_META })));
+    await second.connect(pst);
+    const plainClient = new Client({ name: "reference-sdk-client", version: "0.0.0" });
+    await plainClient.connect(pct);
+    await plainClient.listTools();
+    for (const [args, label] of [[{}, "payment-required"], [{ invalid: true }, "invalid-payment"], [{ failed: true }, "settlement-failed"], [{ pending: true }, "settlement-pending"]]) {
+      let res = null, threw = null;
+      try { res = await plainClient.callTool({ name: "paid.echo", arguments: args }); } catch (e) { threw = e; }
+      ok(!threw && res?.isError === true && typeof res.content?.[0]?.text === "string" && res.content[0].text.length > 0, `reference SDK client: a ${label} result on a tool with an outputSchema is read, not thrown${threw ? ` (${String(threw.message).slice(0, 120)})` : ""}`);
+    }
+    await plainClient.close();
+  }
 
   const probe = await client.getToolPaymentRequirements("paid.echo", {});
   ok(probe && probe.x402Version === 2 && same(probe.accepts[0].amount, ACCEPT.amount) && probe.accepts[0].payTo === PAY_TO, "official client: reads our payment-required result");
@@ -316,7 +344,7 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
 
   // A payment our reader refuses comes back as an offer, not a bare error.
   const raw = await client.client.callTool({ name: "paid.echo", arguments: {}, _meta: { [X402_PAYMENT_META]: { ...PAYLOAD, x402Version: 1 } } });
-  ok(raw?.isError === true && raw.structuredContent?.error === "unsupported_version" && same(raw.structuredContent.accepts, REQUIRED.accepts), "reader refusal: the result is the PaymentRequired object with the reason");
+  ok(raw?.isError === true && !("structuredContent" in raw) && paymentRequiredOfResult(raw)?.error === "unsupported_version" && same(paymentRequiredOfResult(raw).accepts, REQUIRED.accepts), "reader refusal: the result is the PaymentRequired object with the reason");
   await client.close();
 }
 
