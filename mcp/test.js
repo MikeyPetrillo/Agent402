@@ -760,7 +760,12 @@ try {
       }
       if (req.url.startsWith("/api/fails-paid")) {
         req.resume();
-        if (req.headers["payment-signature"] || req.headers["x-payment"]) { seen.failsPaidSigned++; return send(500, { error: "internal error" }); }
+        if (req.headers["payment-signature"] || req.headers["x-payment"]) {
+          seen.failsPaidSigned++;
+          // A settle that ended on an answer this server could not read.
+          if (seen.failsPaidUnconfirmed) return send(502, { reason: "settlement-unconfirmed", retry: "check-wallet", network: "eip155:8453", hint: "This payment's settlement is not confirmed, so the answer was withheld. Do not sign a new authorization for this call." });
+          return send(500, { error: "internal error" });
+        }
         return send(402, {}, { "PAYMENT-REQUIRED": signable("/api/fails-paid", 10000) });
       }
       const plain = PLAIN[req.url.split("?")[0]];
@@ -1016,6 +1021,15 @@ globalThis.fetch = async (input, init) => {
         if (!/for this session/.test(look.firstText)) fail(`a look-alike origin keeps the session hold note: ${look.firstText.slice(0, 300)}`);
         if (look.signed !== 1 || !/session budget exhausted/.test(look.afterText) || look.heldAfter !== 0.01) fail(`a look-alike origin keeps the session hold (signed ${look.signed}, held ${look.heldAfter}): ${look.afterText.slice(0, 300)}`);
         console.log("the default host's 500 is held until validBefore + 10 min, then released; a look-alike origin keeps the session hold ✓");
+        // An answer that says the settlement is not confirmed is never worded
+        // as not charged, and its hold lasts until the authorization expires.
+        seen.failsPaidUnconfirmed = true;
+        try {
+          const un = await runHold("https://agent402.tools");
+          if (/never charged|not charged|does not settle a failed answer/.test(un.firstText) || !/settlement is not confirmed/.test(un.firstText) || !/until its authorization expires/.test(un.firstText)) fail(`an unconfirmed settlement must not be worded as not charged: ${un.firstText.slice(0, 400)}`);
+          if (un.signed !== 2) fail(`an unconfirmed settlement's hold ends once its authorization expired (signed ${un.signed})`);
+        } finally { seen.failsPaidUnconfirmed = false; }
+        console.log("an unconfirmed settlement is held until its authorization expires and never worded as not charged ✓");
       } finally { rmSync(dir, { recursive: true, force: true }); }
     }
 

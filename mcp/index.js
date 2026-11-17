@@ -191,6 +191,15 @@ const OWN_HOST_BLIND_HOLD_MS = 15 * 60 * 1000;
 const DEFAULT_ORIGIN = new URL(DEFAULT_URL).origin;
 const holds = []; // [{ usd, until }], until Infinity = the rest of the session
 const holdPayment = (usd, until = Infinity) => { holds.push({ usd, until }); };
+/** True when an error answer's JSON body says the payment's settlement is not
+ *  confirmed (reason settlement-unconfirmed, or the retry verbs
+ *  watch-transaction and check-wallet). Reads a copy; never throws. */
+async function unconfirmedSettlement(res) {
+  try {
+    const body = await res.clone().json();
+    return !!body && typeof body === "object" && (body.reason === "settlement-unconfirmed" || body.retry === "watch-transaction" || body.retry === "check-wallet");
+  } catch { return false; }
+}
 const heldNow = () => { const now = Date.now(); let t = 0; for (const h of holds) if (h.until > now) t += h.usd; return t; };
 /** When a sent payload can no longer settle plus the clock slack: an EIP-3009
  *  validBefore or a Permit2 deadline, in seconds, never later than
@@ -579,7 +588,14 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     // authorization with the seller, so it is held, never released.
     if (entry.sent) {
       if (res.headers.get("payment-response") || res.headers.get("x-payment-response") || res.ok) spentUsd += entry.usd;
-      else if (res.status >= 400 && url.origin === DEFAULT_ORIGIN) {
+      else if (res.status >= 400 && url.origin === DEFAULT_ORIGIN && await unconfirmedSettlement(res)) {
+        // The default host says the settlement is not confirmed: the transfer
+        // may still land, so the hold lasts until the authorization expires
+        // (the rest of the session when that is not readable), and nothing
+        // here says the payment was not charged.
+        holdPayment(entry.usd, entry.until ?? Infinity);
+        heldNote = ` A payment of $${entry.usd} was sent with this request and its settlement is not confirmed: it stays held against AGENT402_BUDGET ${entry.until ? `until its authorization expires (${new Date(entry.until).toISOString()})` : "for this session"}. Do not pay for this call again before then; a transfer that lands is recorded by the server as owed to the paying wallet.`;
+      } else if (res.status >= 400 && url.origin === DEFAULT_ORIGIN) {
         // The default host did not settle it: held until it expires unused.
         const until = entry.until ?? Date.now() + OWN_HOST_BLIND_HOLD_MS;
         holdPayment(entry.usd, until);

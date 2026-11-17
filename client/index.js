@@ -148,6 +148,27 @@ export const DEFAULT_BASE_URL = "https://agent402.tools";
 const DEFAULT_ORIGIN = new URL(DEFAULT_BASE_URL).origin;
 export const DEFAULT_HOST_BLIND_HOLD_MS = 15 * 60 * 1000;
 function isDefaultOrigin(url) { try { return new URL(url).origin === DEFAULT_ORIGIN; } catch { return false; } }
+/** The fields of a seller's refusal body an error carries: `reason`, `retry`
+ *  (what kind of retry is safe: `watch-transaction` and `check-wallet` mean
+ *  the payment's settlement is not confirmed, so do not sign a new one),
+ *  `authorizationValidBefore` (an ISO time after which the signed
+ *  authorization can no longer move money), `transactions`, `refundStatusUrl`. */
+function refusalFields(body) {
+  const out = {};
+  if (!body || typeof body !== "object" || Array.isArray(body)) return out;
+  const code = (v) => (typeof v === "string" && /^[a-z][a-z0-9-]{0,59}$/.test(v) ? v : null);
+  if (code(body.reason)) out.reason = body.reason;
+  if (code(body.retry)) out.retry = body.retry;
+  if (typeof body.authorizationValidBefore === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(body.authorizationValidBefore)) out.authorizationValidBefore = body.authorizationValidBefore;
+  if (Array.isArray(body.transactions)) { const txs = body.transactions.filter((t) => typeof t === "string" && t.length <= 128).slice(0, 8); if (txs.length) out.transactions = txs; }
+  if (typeof body.refundStatusUrl === "string" && body.refundStatusUrl.length <= 300 && /^https:\/\//.test(body.refundStatusUrl)) out.refundStatusUrl = body.refundStatusUrl;
+  return out;
+}
+/** True when a failed paid call's answer says the settlement is not confirmed
+ *  (the transfer may still land), which is never "not settled". */
+function undecidedSettlement(e) {
+  return !!e && (e.retry === "watch-transaction" || e.retry === "check-wallet" || e.reason === "settlement-unconfirmed");
+}
 
 /** Mark an error thrown after a payment header was sent: `paid: "unknown"`
  *  (the seller holds a signed authorization it may still redeem) and
@@ -670,7 +691,7 @@ export class Agent402 {
         let settled = false;
         try {
           const r = await collect(await this._signCtx.run(ctx, () => paidSend(asyncHeaders, this.payFetch)));
-          if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
+          if (!r.ok) { const refusal = {}; throw Object.assign(this._fail(slug, r, await this._failureDetail(slug, r, "", refusal)), refusal); }
           if (!sentPayment()) this._spendRelease(reservation);
           else this._spendHold(reservation, guarded ? ctx.sent : null, { settleLast: true });
           settled = true;
@@ -683,7 +704,22 @@ export class Agent402 {
           // can still redeem, so its signed amount is held, not released. Only
           // a call that sent no payment releases its reservation.
           if (!settled) {
-            if (sentPayment()) markOutcomeUnknown(e, slug, this._spendHold(reservation, guarded ? ctx.sent : null, { ownHost: this._unsettledAnswer(e) }), { seen: guarded });
+            if (sentPayment()) {
+              // An answer that says the settlement is not confirmed is not an
+              // unsettled one: the hold lasts until the authorization can no
+              // longer move money (the signed expiry, or the one the answer
+              // names), never the short blind window.
+              const undecided = undecidedSettlement(e);
+              const until = undecided ? Date.parse(e.authorizationValidBefore) : NaN;
+              let list = guarded ? ctx.sent : null;
+              let ownHost = this._unsettledAnswer(e);
+              if (undecided && ownHost) {
+                const fill = Number.isFinite(until) ? until + HOLD_SLACK_MS : null;
+                list = (list && list.length ? list : [{ usd: reservation.usd, until: null }]).map((p) => (p.until == null ? { ...p, until: fill } : p));
+                if (list.some((p) => p.until == null)) ownHost = false;
+              }
+              markOutcomeUnknown(e, slug, this._spendHold(reservation, list, { ownHost }), { seen: guarded });
+            }
             else this._spendRelease(reservation);
           }
           if (ctx.refusal) {
@@ -824,10 +860,10 @@ export class Agent402 {
         await this._sleep(Math.min(Math.max(0, retryAfterSec) * 1000, GATEWAY_PENDING_MAX_WAIT_MS));
         r = await collect(await paidSend(paidHeaders));
       }
-      if (r.status === 402) throw this._fail(slug, r, gatewayRefusalMessage(slug, body, accept, this.gateway.signer.address));
+      if (r.status === 402) throw Object.assign(this._fail(slug, r, gatewayRefusalMessage(slug, body, accept, this.gateway.signer.address)), refusalFields(body));
       if (!r.ok) throw this._fail(slug, r, await this._failureDetail(slug, r));
     } catch (e) {
-      if (this._unsettledAnswer(e)) this._spendHold(reservation, sent, { ownHost: true });
+      if (this._unsettledAnswer(e) && !undecidedSettlement(e)) this._spendHold(reservation, sent, { ownHost: true });
       markOutcomeUnknown(e, slug, heldUsd);
       throw e;
     }
@@ -985,10 +1021,13 @@ export class Agent402 {
     return Object.assign(new Error(message), { status: r?.status, slug, paid: false });
   }
 
-  async _failureDetail(slug, r, when = "") {
+  async _failureDetail(slug, r, when = "", into = null) {
     let detail = "";
     try {
       const body = await r.json();
+      // The refusal's machine fields ride on the error (reason, retry, the
+      // authorization's last valid time, the transactions to watch).
+      if (into) Object.assign(into, refusalFields(body));
       // A refused payment that says what went wrong carries that sentence in
       // `detail` (an RFC 9457 problem) or `hint` (an x402 refusal), with no
       // `error`; a seller's plain error keeps its place first.

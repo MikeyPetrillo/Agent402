@@ -405,7 +405,13 @@ more than a day (`MAX_VALIDITY_SECONDS`) is refused before anything is signed,
 and a payload signed for longer is refused before it is sent, so no hold
 outlives a day after the send (seven days and an hour for a batched payment). Pass your `x402Client` so the client sees exactly which
 payments were signed; through a pre-wrapped `fetch` alone it cannot tell, so any
-failed paid call is held. A paid HTTP-success response that later fails byte,
+failed paid call is held. An error from a refused payment carries the seller's
+`reason` and `retry` when its body names them: `retry` of `watch-transaction`
+or `check-wallet` (`reason: "settlement-unconfirmed"`) means the settlement is
+not confirmed and the transfer may still land, so do not pay for that call
+again before the error's `authorizationValidBefore` time; the hold lasts until
+then, and `transactions` and `refundStatusUrl` ride on the error when the seller
+sent them. A paid HTTP-success response that later fails byte,
 JSON, or output validation remains settled spend. Free proof-of-work calls are
 never counted. Omit a cap (or leave it `null`) for no limit; with none set,
 behavior is unchanged.

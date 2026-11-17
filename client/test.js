@@ -704,6 +704,8 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   // mode: "500" answers a signed request with HTTP 500, "drop" throws as a
   // dropped connection would, "ok" serves it; "unpaid500" answers the unpaid
   // request itself with 500 (no 402, so nothing is ever signed).
+  // "unconfirmed" answers the signed request 402 with the built-in seller's
+  // settlement-unconfirmed body (the transfer may still land).
   const seller = () => {
     const st = { mode: "500", amount: "10000", paidAmount: null, signed: [], validity: 300 };
     const answer402 = (amount = st.amount) => new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": offer(amount, st.validity) } });
@@ -713,6 +715,11 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       st.signed.push(JSON.parse(Buffer.from(sig, "base64").toString("utf8")).payload.authorization);
       if (st.mode === "drop") throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
       if (st.mode === "ok") return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+      if (st.mode === "unconfirmed") {
+        const a = st.signed[st.signed.length - 1];
+        const body = { reason: "settlement-unconfirmed", retry: st.retry || "check-wallet", network: "eip155:8453", ...(st.nameExpiry === false ? {} : { authorizationValidBefore: new Date(Number(a.validBefore) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z") }), hint: "This payment's settlement is not confirmed, so the answer was withheld. Do not sign a new authorization for this call." };
+        return new Response(JSON.stringify(body), { status: 402, headers: { "content-type": "application/json", "payment-response": Buffer.from(JSON.stringify({ success: false, errorReason: "settlement_unconfirmed", transaction: "", network: "eip155:8453" })).toString("base64") } });
+      }
       return new Response(JSON.stringify({ error: "internal error" }), { status: 500, headers: { "content-type": "application/json" } });
     };
     return { st, inner, preflight: async () => (st.mode === "unpaid500" ? new Response("{}", { status: 500 }) : answer402()) };
@@ -904,6 +911,32 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       const o = build({ guard: false, baseUrl: "https://agent402.tools.evil.example", dailyLimitUsd: 0.015 });
       await at(0, () => callErr(o.c));
       ok((await at(DEFAULT_HOST_BLIND_HOLD_MS + 30000, () => o.c.spendingSummary().heldUsd)) === 0.01, "look-alike host, no x402Client: still held past the short window (24h rule)");
+    }
+    // The default host answering that the settlement is not confirmed (retry
+    // check-wallet or watch-transaction) is not an unsettled answer: without
+    // an x402Client the hold lasts until the authorization's validBefore the
+    // answer names (plus the slack), never the short blind window; with no
+    // time named it keeps the 24h rule. The error carries the fields.
+    for (const retry of ["check-wallet", "watch-transaction"]) {
+      const { c, st } = build({ guard: false, baseUrl: "default", dailyLimitUsd: 0.015 });
+      st.mode = "unconfirmed"; st.retry = retry; st.validity = 3600;
+      const e = await at(0, () => callErr(c));
+      ok(e?.status === 402 && e.paid === "unknown" && e.reason === "settlement-unconfirmed" && e.retry === retry && /^\d{4}-/.test(String(e.authorizationValidBefore)) && c.spendingSummary().heldUsd === 0.01,
+        `default host, ${retry}: the error carries reason, retry and the authorization's last valid time, and the payment is held (${e?.reason}/${e?.retry})`);
+      const until = Date.parse(e.authorizationValidBefore) + HOLD_SLACK_MS;
+      ok((await at(DEFAULT_HOST_BLIND_HOLD_MS + 30000, () => c.spendingSummary().heldUsd)) === 0.01, `default host, ${retry}, no x402Client: still held past the short blind window`);
+      ok((await at(until - realNow() - 30000, () => c.spendingSummary().heldUsd)) === 0.01 && (await at(until - realNow() + 30000, () => c.spendingSummary().heldUsd)) === 0, `default host, ${retry}: held until the authorization's validBefore plus the slack, then released`);
+    }
+    {
+      const { c, st } = build({ guard: false, baseUrl: "default", dailyLimitUsd: 0.015 });
+      st.mode = "unconfirmed"; st.nameExpiry = false;
+      await at(0, () => callErr(c));
+      ok((await at(60 * 60 * 1000, () => c.spendingSummary().heldUsd)) === 0.01 && (await at(DAY + 60000, () => c.spendingSummary().heldUsd)) === 0, "default host, unconfirmed with no time named, no x402Client: the 24h rule, not the short window");
+      const g = build({ baseUrl: "default", dailyLimitUsd: 0.015 });
+      g.st.mode = "unconfirmed";
+      await at(0, () => callErr(g.c));
+      const releaseAt = Number(g.st.signed[0].validBefore) * 1000 + HOLD_SLACK_MS;
+      ok((await at(releaseAt - realNow() - 30000, () => g.c.spendingSummary().heldUsd)) === 0.01 && (await at(releaseAt - realNow() + 30000, () => g.c.spendingSummary().heldUsd)) === 0, "default host, unconfirmed, with the signing guard: held until the signed validBefore plus the slack");
     }
     // A dropped connection on the default host may have settled: 24h rule.
     {
