@@ -49,7 +49,7 @@ try {
   // ---- hosts are derived from the tool definitions in src/tools/
   ok(upstreamHostsForSlug("weather-alerts").has("api.weather.gov"), "weather-alerts' upstream host (api.weather.gov) is read from its definition");
   ok(upstreamHostsForSlug("earthquakes").has("earthquake.usgs.gov"), "earthquakes' upstream host (earthquake.usgs.gov) is read from its definition");
-  ok([...upstreamHostsForSlug("weather-current")].some((h) => h.endsWith("open-meteo.com")), "weather-current's upstream host is an Open-Meteo host from the weather kit");
+  ok([...upstreamHostsForSlug("weather-current")].some((h) => h === "open-meteo.com" || h.endsWith(".open-meteo.com")), "weather-current's upstream host is an Open-Meteo host from the weather kit");
   ok(!upstreamHostsForSlug("weather-alerts").has("earthquake.usgs.gov"), "a tool's hosts are its own definition's, not its kit neighbors'");
   ok(upstreamHostsForSlug("no-such-tool-slug").size === 0, "an unknown slug names no host");
   for (const c of CHECKS) ok(upstreamHostsForSlug(c.slug).size > 0, `the live check for ${c.slug} has a derived upstream host`);
