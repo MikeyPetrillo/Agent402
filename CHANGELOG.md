@@ -24,6 +24,7 @@ Surfaces:
   limit offers its x402 challenge, so a client that pays is served past the
   limit. A call carrying a payment has its own, larger per-client request limit
   when it reaches a paid route; any other call keeps the normal one.
+
 ### 2026-11-16 (weather data reliability and Copernicus credits)
 Tools:
 - The weather tools read their data on a reserved service lane when the server
