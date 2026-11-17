@@ -7,6 +7,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 
 const ENTRIES = [
   {
+    date: "2026-11-17",
+    title: "A conformance document for every payment rail",
+    items: [
+      "Payments: /.well-known/agent402-conformance.json lists each payment rail this server accepts (x402 exact and upto per network, Circle Gateway batched, MPP evm, Tempo pull and push, card over MPP, prepaid credits, card checkout, proof of work) and, for each, whether it settles after a successful answer, honors an Idempotency-Key and the x402 payment-identifier, guards against a replayed credential, repays a charged failure and how, forgives a hang-up, screens the payer and returns a receipt. Each cell is computed at request time from the serving code and its switches. /trust and llms.txt link it.",
+      "Payments: The same document carries the refund terms as data (refundTerms): each clause is the sentence /terms prints, read from one source. /terms, dated 2026-11-17, points to it and states that the terms govern where the two differ.",
+    ],
+  },
+  {
     date: "2026-11-16",
     title: "Marketplace answers arrive whole or are not settled",
     items: [

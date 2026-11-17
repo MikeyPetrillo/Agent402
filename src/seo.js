@@ -1,3 +1,4 @@
+import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { whyPointsPlain } from "./why.js";
 import { networkPriceFloors } from "./network-floors.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
@@ -683,6 +684,7 @@ ${toolSections}
 - [Tool docs](${baseUrl}/tools): human-readable documentation per tool
 - [Security](${baseUrl}/security): disclosure policy with safe harbor, what data is held, key handling, controls in the serving path and on the code
 - [Trust](${baseUrl}/trust): subprocessors, what is stored and where, encryption, nightly backups and restore tests, incident response
+- [Conformance](${baseUrl}${CONFORMANCE_PATH}): per payment rail, the protocol features this server implements (settle after the answer, idempotency key, payment-identifier, replay guard, refund on a charged failure, hang-up forgiveness, payer sanctions screening, receipts) and the refund terms as data, computed from the serving code at each request
 - [Company](${baseUrl}/company): Havok Holdings LLC, what it sells, where the proof is, role mailboxes
 - [Markets](${baseUrl}/markets): the keyless crypto market-data calls (market pulse, perps, options, DeFi, stablecoins, news, indicators) with one curl to copy
 - [Agentic Finance](${baseUrl}/agentic-finance): what the category is and where Agent402 sits in it

@@ -17,6 +17,7 @@ import { ALWAYS_HEADERS } from "./security-headers.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
 import { directUpstreamConfigured, directUpstreamName } from "./gateway-direct-upstream.js";
 import { COMPANY_MAILBOXES } from "./company.js";
+import { CONFORMANCE_PATH } from "./conformance-path.js";
 
 /** The processors the server sends buyer data to, as the privacy policy names
  *  them. `gets` is what each receives; the guard checks every entry of
@@ -116,6 +117,13 @@ export function trustPage(baseUrl) {
         `A paid call that was charged but failed is recorded as a debt in the refund ledger and repaid only after the charge is proven on chain. Once a debt has waited past a short grace period, the ${code("refundsOwed")} word reads ${code("owed")} and pages until it is repaid. A card report that fails to generate is refunded to the card.`,
       ],
       links: [["/status", "Status"], ["/api/gateway-status", "Alarm words"]],
+    },
+    {
+      h: "Payment conformance",
+      p: [
+        `${link(CONFORMANCE_PATH, code(CONFORMANCE_PATH))} lists each payment rail this server accepts and, for each, whether it settles after a successful answer, honors an idempotency key and the x402 payment-identifier, guards against a replayed credential, repays a charged failure and how, forgives a hang-up, screens the payer and returns a receipt. Each cell is computed at request time from the serving code and its switches, and the document carries the refund terms as data, in the words of the ${link("/terms", "terms")}.`,
+      ],
+      links: [[CONFORMANCE_PATH, "Conformance JSON"], [repoUrl("blob/main/src/conformance.js"), "Conformance code"]],
     },
     {
       h: "Security reports",
