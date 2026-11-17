@@ -30,9 +30,10 @@ Index:
   put off, so it never leaves the router because we chose not to read it.
   Once such a read has failed, the turns the site then waits no longer extend
   the hold, so a site that stays unreachable leaves after it.
-- The reads registrations ask for reach one site at most 20 times an hour,
-  whoever registers which origin on it; a registration past that is answered
-  429 with a Retry-After, and nothing is listed or changed. A name under a
+- The document reads and paywall checks registrations ask for reach one site
+  at most 20 times an hour, whoever registers which origin on it; a
+  registration past that is answered 429 with a Retry-After, and nothing is
+  listed or changed. A name under a
   wildcard or dynamic DNS service, which points wherever its owner sets, is
   also counted per address it resolves to: every such name on one address
   shares one allowance of about 200 requests a day.
