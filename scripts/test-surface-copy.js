@@ -92,6 +92,11 @@ ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) ||
   ok(!/<h1[^>]*>[^<]*Agentic Finance/.test(home), "homepage hero H1 is not the category name");
   ok(/title: "Agent402\.tools",/.test(read("src/pages.js")), "openapi.json title is the plain product name Agent402.tools");
   ok(/Agent402\.tools: 500\+ pay-per-call tools for AI agents over x402 \+ MPP\./.test(read("src/pages.js")), "openapi.json description keeps the tagline");
+  {
+    const line = read("src/pages.js").split("\n").find((l) => l.includes("Agent402.tools: 500+ pay-per-call tools")) || "";
+    const n = (line.match(/500\+/g) || []).length;
+    ok(n === 1, `openapi.json description says "500+" once (${n})`);
+  }
   ok(!/AIFI/.test(HOSTED_DESC) && HOSTED_DESC.startsWith("Agent402"), "MCP serverInfo.description leads with Agent402, no acronym");
   for (const d of pkgDirs) ok(!/AIFI/.test(JSON.parse(read(`${d}/package.json`)).description), `${d} description carries no AIFI acronym`);
   ok(!/AIFI/.test(serverJson.description), "mcp/server.json description carries no AIFI acronym");

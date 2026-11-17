@@ -60,7 +60,8 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
 - **Card store directories:** with no state database, `CREDITS_DIR` (default `<data root>/credits`,
   `src/credits.js`) and `HUMAN_CHECKOUT_DIR` (default `<data root>/human-checkout`, `src/human-checkout.js`;
   the legacy `human-checkout.json` is read beside it) hold the card stores' files; the data root is `/data`,
-  else `/tmp`. Test-only in practice: `ownStoreEnv` (`scripts/lib/own-stores.js`) gives each test server its own.
+  else `/tmp`. With a state database the report store's directory still holds `_pending-finals.ndjson`
+  (final records waiting to reach the database). Test-only in practice: `ownStoreEnv` (`scripts/lib/own-stores.js`) gives each test server its own.
 - **Settle-failure breakers:** `src/gateway-settle-breaker.js` (per wallet on `/v1` and other
   wallet-only tools). The key is the signed EVM payer (per network), the verified Tempo sender,
   the credits key, or the signer read from a Solana, Algorand or Stellar payment
