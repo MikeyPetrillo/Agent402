@@ -132,7 +132,10 @@ try {
     const viewerJs = readFileSync("assets/js/report-view.js", "utf8");
     const run = async (html, prep = () => {}) => {
       const calls = [];
-      const dom = new JSDOM(html.replace(/<script\b[^>]*src="[^"]*"[^>]*><\/script>/g, ""), { runScripts: "outside-only", url: `${B}/reports/sample/${drawnPage.product}` });
+      // Drop every external script (any case, any closing-tag form) until none is left, so a nested tag cannot reassemble.
+      let page = html, prev;
+      do { prev = page; page = page.replace(/<script\b[^>]*\bsrc\s*=[^>]*>[\s\S]*?<\/script[^>]*>/gi, ""); } while (page !== prev);
+      const dom = new JSDOM(page, { runScripts: "outside-only", url: `${B}/reports/sample/${drawnPage.product}` });
       prep(dom.window.document.getElementById("app"));
       dom.window.fetch = async (u, o) => { calls.push([String(u), o && o.method]); return { ok: true, json: async () => (String(u).includes("/api/buy") ? {} : drawnPage.j) }; };
       dom.window.eval(viewerJs);

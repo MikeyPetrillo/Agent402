@@ -34,7 +34,8 @@ Surfaces:
   moves into its description.
 - /api/find reads a query that names a currency ("convert currency", "convert
   usd to eur") as a currency conversion and ranks fx-rate first as a strong
-  match; currency codes count as values, not as the task.
+  match; inside a conversion, currency codes and names count as values, not as
+  the task.
 
 ### 2026-11-16 (an MCP payment ask every client reads)
 Surfaces:

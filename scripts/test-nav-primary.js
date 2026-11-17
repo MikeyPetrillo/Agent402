@@ -6,6 +6,8 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { ledgerShell, ledgerFooterCompact, setDecideLive, NAV_PRIMARY_ACTION } from "../src/ledger-chrome.js";
 import { pageCtaHrefs, duplicateCtaTargets } from "./lib/page-ctas.js";
+// Tag text with every tag removed, repeated until stable so a nested tag cannot reassemble, then any stray "<".
+const stripTags = (h) => { let t = String(h), prev; do { prev = t; t = t.replace(/<[^>]*>/g, ""); } while (t !== prev); return t.replace(/</g, ""); };
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
@@ -42,7 +44,7 @@ for (const decide of [false, true]) {
   ok(at >= 0 && want.every((w, i) => plain[at + i] === w), `the bar lists Pricing, Company, Status as plain links${tag} (plain links: ${plain.join(", ")})`);
   ok(["/pricing", "/company", "/status"].every((h) => hrefs(page.mobile).has(h)), `the tap menu lists them too${tag}`);
   // The live payments view is a top-level link in the bar, right after Status, and stays in the tap menu.
-  const items = [...row.slice(0, row.indexOf("</div>")).matchAll(/<a class="(ml-nav-link[^"]*)" href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => ({ cls: m[1], href: m[2], text: m[3].replace(/<[^>]+>/g, "").trim() }));
+  const items = [...row.slice(0, row.indexOf("</div>")).matchAll(/<a class="(ml-nav-link[^"]*)" href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => ({ cls: m[1], href: m[2], text: stripTags(m[3]).trim() }));
   const st = items.findIndex((i) => i.href === "/status");
   const live = items[st + 1];
   ok(st >= 0 && live && live.href === "https://live.agent402.tools" && live.text === "Live" && /ml-nav-live/.test(live.cls), `the bar's link row carries Live (live.agent402.tools) right after Status${tag} (row: ${items.map((i) => i.text).join(", ")})`);
