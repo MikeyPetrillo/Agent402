@@ -49,6 +49,14 @@ Packs:
   and skips its two US-only steps elsewhere; its nearby-places step is gone.
   trip-planner resolves stops by name and forecasts any stop in the world.
 
+### 2026-11-16 (CoinGecko answers carry the source credit)
+Tools:
+- Every answer from a tool that serves CoinGecko data carries a credit field,
+  "Data provided by CoinGecko" with a link to the CoinGecko API page, and each
+  such tool's description ends with the same linked sentence. A market tick
+  answer that includes a coin figure carries it too, and a skill pack that
+  runs a CoinGecko tool prints it once, on the pack's answer.
+
 ### 2026-11-16 (camelCase seller names are read as words)
 Router:
 - /api/route also reads a camelCase seller name as words: an operationId such
@@ -87,14 +95,6 @@ Skill packs:
 - defi-protocol-scanner reads the token's supply and valuation profile
   (coin-profile) where it read locked value, and defi-dashboard reads the DeFi
   market cap and dominance (global-defi); each pack's price follows its parts.
-
-### 2026-11-16 (CoinGecko answers carry the source credit)
-Tools:
-- Every answer from a tool that serves CoinGecko data carries a credit field,
-  "Data provided by CoinGecko" with a link to the CoinGecko API page, and each
-  such tool's description ends with the same linked sentence. A market tick
-  answer that includes a coin figure carries it too, and a skill pack that
-  runs a CoinGecko tool prints it once, on the pack's answer.
 
 ### 2026-11-16 (weather data reliability and Copernicus credits)
 Tools:

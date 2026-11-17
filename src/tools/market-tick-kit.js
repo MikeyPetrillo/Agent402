@@ -216,8 +216,11 @@ export const MARKET_TICK_TOOLS = [
           matched: 3,
           complete: true,
           truncated: false,
-          credit: COINGECKO_CREDIT,
         },
+        // Printed only when a coin figure is served (an equities-only answer,
+        // or one whose coin reads all failed, has none), so it is a declared
+        // optional output and never a key the example promises.
+        optional: { credit: { type: "string", description: `Present when the answer serves a coin figure: ${COINGECKO_CREDIT}` } },
       },
     },
     handler: tick,

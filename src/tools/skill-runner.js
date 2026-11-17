@@ -2215,7 +2215,10 @@ export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
     const exampleArgs = Object.fromEntries(
       (pack.promptArgs || []).map((a) => [a.name, a.substitute])
     );
-    // The source credits the pack's answer carries once (runPack).
+    // The source credits the pack's answer carries once (runPack). A credit
+    // is printed only when a step that reads that source answered, so the
+    // field is a declared optional output, never a key of the example: a
+    // pack whose credited step was refused still answers 200 without it.
     const packCredits = [...new Set(pack.toolSlugs.map((s) => toolBySlug.get(s)?.credit).filter((c) => typeof c === "string" && c))];
     return {
       route,
@@ -2250,8 +2253,8 @@ export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
             args: exampleArgs,
             steps: pack.toolSlugs.map((s) => ({ slug: s, ok: true, result: {} })),
             summary: `${pack.toolSlugs.length}/${pack.toolSlugs.length} steps succeeded`,
-            ...(packCredits.length ? { credit: packCredits.join(" ") } : {}),
           },
+          ...(packCredits.length ? { optional: { credit: { type: "string", description: `Present when a step that reads the credited source answered: ${packCredits.join(" ")}` } } } : {}),
         },
       },
       // Every step runs request-less (handler(input)), inside the dispatching

@@ -20,6 +20,8 @@ import { PRICE_FEED_TOOLS, clearPriceFeedCache } from "../src/tools/price-feed-k
 import { MARKET_TICK_TOOLS, __setMarketTickSources, clearMarketTickCache } from "../src/tools/market-tick-kit.js";
 import { buildSkillTools } from "../src/tools/skill-runner.js";
 import { SKILL_PACKS } from "../src/skills.js";
+import { missingExampleKeys } from "../src/answer-shape.js";
+import { responseSchemaFor } from "../src/openapi-schema.js";
 import { COINGECKO_CREDIT, COINGECKO_ATTRIBUTION, COINGECKO_API_URL, attributionTailOf, creditAnswers, withCredit } from "../src/data-attribution.js";
 
 let pass = 0, fail = 0;
@@ -189,7 +191,7 @@ for (const [mod, call] of MODULES) {
 // equities-only answer does not.
 {
   const tick = MARKET_TICK_TOOLS[0];
-  ok(tick.discovery.output.example.credit === COINGECKO_CREDIT, "market-tick: published example (BTC, ETH, AAPL) carries the credit");
+  ok(!Object.hasOwn(tick.discovery.output.example, "credit") && tick.discovery.output.optional?.credit?.description?.includes(COINGECKO_CREDIT), "market-tick: the credit is a declared optional output (present only with a coin figure), not a key of the example");
   __setMarketTickSources({
     crypto: async ({ coins }) => ({ currency: "usd", coins: Object.fromEntries(String(coins).split(",").map((id) => [id, { price: 1, change24hPct: 0, lastUpdated: "2026-11-16T00:00:00.000Z" }])), credit: COINGECKO_CREDIT }),
     equity: async ({ symbol }) => ({ symbol, price: 2, previousClose: 2, change: 0, changePct: 0, currency: "USD", asOf: "2026-11-13" }),
@@ -214,10 +216,13 @@ for (const [mod, call] of MODULES) {
   ok(withCg.length >= 3, `packs that run a CoinGecko tool are read from their steps (${withCg.length})`);
   for (const p of withCg) {
     const ex = p.discovery.output.example;
-    ok(ex.credit === COINGECKO_CREDIT && ex.steps.every((s) => !Object.hasOwn(s.result || {}, "credit")), `${p.slug}: published example carries the credit once`);
+    const opt = p.discovery.output.optional?.credit;
+    ok(!Object.hasOwn(ex, "credit") && opt?.type === "string" && opt.description.split(COINGECKO_CREDIT).length === 2 && ex.steps.every((s) => !Object.hasOwn(s.result || {}, "credit")), `${p.slug}: the credit is a declared optional output, named once, not a key of the example`);
+    const schema = responseSchemaFor(p.route.split(" ")[1], ex, p.discovery.output.optional);
+    ok(schema.properties?.credit?.type === "string" && !(schema.required || []).includes("credit"), `${p.slug}: the 200 schema types the credit and does not require it`);
     ok(p.description.split(COINGECKO_CREDIT).length === 2, `${p.slug}: description prints the credit once`);
   }
-  for (const p of packs.filter((x) => !withCg.includes(x))) ok(!Object.hasOwn(p.discovery.output.example, "credit"), `${p.slug}: no CoinGecko tool, no credit`);
+  for (const p of packs.filter((x) => !withCg.includes(x))) ok(!Object.hasOwn(p.discovery.output.example, "credit") && !p.discovery.output.optional, `${p.slug}: no CoinGecko tool, no credit`);
   const dossier = packs.find((p) => p.slug === "skill-crypto-dossier") || withCg[0];
   resetAll();
   respond = (u) => {
@@ -229,6 +234,29 @@ for (const [mod, call] of MODULES) {
   const okCg = env.steps.filter((s) => s.ok && !s.skipped && cgSlugs.has(s.slug));
   ok(okCg.length >= 2, `${dossier.slug}: at least two CoinGecko steps answered (${okCg.map((s) => s.slug).join(",")})`);
   ok(env.credit === COINGECKO_CREDIT && env.steps.every((s) => !Object.hasOwn(s.result || {}, "credit")), `${dossier.slug}: the answer prints the credit once, on the envelope`);
+  // Keyless, with the public host rate-limiting every CoinGecko read (what a
+  // shared CI address meets): each pack that mixes CoinGecko steps with other
+  // tools still answers 200, without the credit, and that answer carries
+  // every key its published example documents (the catalog sweeps' rule).
+  // Four packs, since each refused read waits out the kit's own retry.
+  const mixed = withCg.filter((p) => SKILL_PACKS.find((x) => `skill-${x.slug}` === p.slug).toolSlugs.some((s) => !cgSlugs.has(s))).slice(0, 4);
+  ok(mixed.length >= 1, `packs that mix CoinGecko steps with other tools (${mixed.length} read)`);
+  let graded = 0;
+  delete process.env.COINGECKO_API_KEY;
+  delete process.env.COINGECKO_API_TIER;
+  for (const p of mixed) {
+    resetAll();
+    respond = () => jsonRes(429, { status: { error_code: 429, error_message: "rate limited" } });
+    const stubs = Object.fromEntries(SKILL_PACKS.find((x) => `skill-${x.slug}` === p.slug).toolSlugs.filter((s) => !cgSlugs.has(s)).map((s) => [`GET /api/${s}`, { slug: s, route: `GET /api/${s}`, handler: async () => ({ ok: true }) }]));
+    const [tool] = buildSkillTools({ getCatalog: () => ({ ...catalog, ...stubs }) }).filter((x) => x.slug === p.slug);
+    let partial;
+    try { partial = await tool.handler({ ...tool.discovery.input }, null); } catch { continue; }
+    if (partial.steps.some((s) => s.ok && cgSlugs.has(s.slug))) continue;
+    graded++;
+    const missing = missingExampleKeys(tool.discovery.output.example, partial);
+    ok(!Object.hasOwn(partial, "credit") && missing.length === 0, `${p.slug}: with every CoinGecko step rate-limited the 200 has no credit and lacks no documented key (${missing.join(",") || "none missing"})`);
+  }
+  ok(graded >= 1, `at least one partial pack answer was graded against its example (${graded})`);
 }
 
 // ---------------------------------------------------------------------------
