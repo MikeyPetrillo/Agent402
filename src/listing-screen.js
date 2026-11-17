@@ -183,6 +183,9 @@ function injectionForms(text, leetHint = null) {
   for (const f of more) if (!out.includes(f) && (!leetHint || leetHint.test(f))) out.push(f);
   return out;
 }
+// The readings with the ones that came out the same (no markup, no invisible
+// character) left out, for a caller that runs every rule over each.
+const distinctForms = (text) => { const out = injectionForms(text); return out.length > 1 ? [...new Set(out)] : out; };
 const CONFUSABLE_ANY = new RegExp(CONFUSABLE_RE.source);
 const MARKUP_REMOVED = /<!--[\s\S]*?(?:-->|$)|<\/?[a-z][^<>]{0,256}>|!\[[^\[\]\n]{0,200}\]\([^()\n]{0,400}\)/g;
 const MARKDOWN_LINK = /\[([^\[\]\n]{0,200})\]\([^()\n]{0,400}\)/g;
@@ -408,9 +411,9 @@ const directiveForm = (form) => DIRECTIVE_QUANT.test(form) && DIRECTIVE_VERB.tes
 /** True when any reading of the text holds a directive to a router. `forms`
  *  are the text's readings when the caller already has them. A camelCase
  *  identifier is read as its words in one more set of readings. */
-function directiveIn(raw, forms = injectionForms(raw)) {
+function directiveIn(raw, forms = distinctForms(raw)) {
   for (const form of forms) if (directiveForm(form)) return true;
-  if (CAMEL_EDGE.test(raw)) for (const form of injectionForms(raw.replace(CAMEL_EDGES, "$1 "))) if (directiveForm(form)) return true;
+  if (CAMEL_EDGE.test(raw)) for (const form of distinctForms(raw.replace(CAMEL_EDGES, "$1 "))) if (directiveForm(form)) return true;
   return false;
 }
 const READER_PATTERNS = [
@@ -470,7 +473,7 @@ const READER_ANY = new RegExp(READER_PATTERNS.map((re) => `(?:${re.source})`).jo
  *  readings the listing screen takes, or trips the listing screen itself. */
 export function addressesReader(sentence) {
   const s = String(sentence || "");
-  const forms = injectionForms(s);
+  const forms = distinctForms(s);
   for (const form of forms) {
     const t = form.trim();
     if (READER_ANY.test(t) || anyInjection(t)) return true;
