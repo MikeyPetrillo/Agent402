@@ -153,8 +153,8 @@ Every pack is **also a single paid endpoint**, `POST /api/skill/{slug}`, which r
 | Pack | Price | What it solves |
 |---|---|---|
 | [**timezone-planner**](https://agent402.tools/skills/timezone-planner) | $0.003 | Time zone conversion, business-day arithmetic and the next cron fire time. |
-| [**location-intel**](https://agent402.tools/skills/location-intel) | $0.008 | Name a place and assemble the brief - coords, US county and state, weather, NWS alerts, seismic. |
-| [**trip-planner**](https://agent402.tools/skills/trip-planner) | $0.006 | Plan a multi-stop journey - resolve each stop, sum pairwise distances, add travel time, pull weather. |
+| [**location-intel**](https://agent402.tools/skills/location-intel) | $0.009 | Name a place and assemble the brief - coords, US county and state, weather, NWS alerts, seismic. |
+| [**trip-planner**](https://agent402.tools/skills/trip-planner) | $0.007 | Plan a multi-stop journey - resolve each stop, sum pairwise distances, add travel time, pull weather. |
 | [**weather-brief**](https://agent402.tools/skills/weather-brief) | $0.006 | Full weather briefing for a location: current conditions, 7-day forecast, and air quality. |
 | [**locale-brief**](https://agent402.tools/skills/locale-brief) | $0.004 | "Can I reach this counterparty this week?" Country facts, this year's public holidays, working days left this week, and the local time right now. |
 
