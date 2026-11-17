@@ -8,8 +8,9 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+// The MCP SDK v2 client (mcp/package.json devDependencies, `npm --prefix mcp ci`).
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -220,16 +221,15 @@ const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text 
     // credits mode does not list router.execute.
     const credNames = (await jobClient.listTools()).tools.map((t) => t.name);
     if (credNames.includes("router.execute")) fail(`credits mode lists router.execute, which credits do not pay (got: ${credNames.join(", ")})`);
-    const { CallToolResultSchema } = await import("@modelcontextprotocol/sdk/types.js");
     // Whether credits are sold is the server's switch (credits.onSale on
     // /api/pricing): with the stub saying they are not, payment.info offers
     // no buy or topup link and says an issued key keeps working.
-    const infoOut = await jobClient.callTool({ name: "payment.info", arguments: {} }, CallToolResultSchema);
+    const infoOut = await jobClient.callTool({ name: "payment.info", arguments: {} });
     const info = JSON.parse(text(infoOut));
     if (info.credits?.configured !== true || info.credits.onSale !== false || info.credits.topup || info.credits.buy || !/already issued/.test(String(info.credits.note))) fail(`payment.info in credits mode reads the sale switch from the catalog (got ${JSON.stringify(info.credits)})`);
     if (/prepaid card credits|card credits key/i.test(JSON.stringify(info))) fail("payment.info never describes a credits key as a card purchase");
     const notes = [];
-    const out = await jobClient.callTool({ name: "catalog.call", arguments: { slug: "slow-report", params: { query: "q" } } }, CallToolResultSchema, { onprogress: (p) => notes.push(p), timeout: 30_000 });
+    const out = await jobClient.callTool({ name: "catalog.call", arguments: { slug: "slow-report", params: { query: "q" } } }, { onprogress: (p) => notes.push(p), timeout: 30_000 });
     if (out.isError || !text(out).includes("the answer")) fail(`the job's answer is the tool result: ${text(out).slice(0, 200)}`);
     if (seen.prefer !== "respond-async" || seen.auth !== `Bearer ${KEY}`) fail(`the paid call carries Prefer: respond-async and its credential (${seen.prefer}, ${seen.auth ? "auth" : "no auth"})`);
     if (seen.polls !== 3) fail(`the job link is polled until it is final (${seen.polls})`);

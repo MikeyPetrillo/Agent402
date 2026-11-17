@@ -32,16 +32,14 @@ import { parseNetworkPrefs, withNetworkPreference, distrustFetch } from "./netwo
 import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS, jobState } from "./async-job.js";
 import { solvePowAsync } from "./pow-solver.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ListPromptsRequestSchema,
-  GetPromptRequestSchema,
-  McpError,
-  ErrorCode,
-} from "@modelcontextprotocol/sdk/types.js";
+// MCP SDK v2 (@modelcontextprotocol/server, pinned exactly in package.json).
+// Handlers are registered by method name. The server answers the 2024-11-05
+// through 2025-11-25 revisions it did under SDK v1, and the SDK lifts every
+// io.modelcontextprotocol/* key out of params._meta before a handler runs, so
+// a handler that needs one reads it from the raw message (this server reads
+// none: progressToken is not such a key).
+import { Server, ProtocolError, ProtocolErrorCode as ErrorCode } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import {
   FLAGSHIP_MCP_NAMES,
   META_MCP_NAMES,
@@ -58,6 +56,12 @@ import {
   AGENT402_MCP_VERSION,
   clipToolDescription,
 } from "./output-schemas.js";
+
+// A protocol error whose message starts "MCP error <code>: ", as SDK v1's
+// McpError wrote it, so every error answer reads as it did before the move.
+class McpError extends ProtocolError {
+  constructor(code, message, data) { super(code, `MCP error ${code}: ${message}`, data); }
+}
 
 const DEFAULT_URL = "https://agent402.tools";
 const BASE = (process.env.AGENT402_URL || DEFAULT_URL).replace(/\/$/, "");
@@ -436,8 +440,11 @@ function failureText(status, text) {
 /** A job's progress as MCP notifications/progress, when the caller asked for
  *  progress (a progressToken on the tools/call). Progress only ever rises. */
 function progressNotifier(req, extra) {
-  const token = req?.params?._meta?.progressToken;
-  if (token === undefined || token === null || typeof extra?.sendNotification !== "function") return null;
+  const token = req?.params?._meta?.progressToken ?? extra?.mcpReq?._meta?.progressToken;
+  // SDK v2 hands handlers ctx.mcpReq.notify; v1 handed extra.sendNotification.
+  const send = typeof extra?.mcpReq?.notify === "function" ? (n) => extra.mcpReq.notify(n)
+    : typeof extra?.sendNotification === "function" ? (n) => extra.sendNotification(n) : null;
+  if (token === undefined || token === null || !send) return null;
   let last = -1;
   return (doc) => {
     const pct = Number.isFinite(doc?.progress) ? Math.round(doc.progress * 100) : 0;
@@ -447,7 +454,7 @@ function progressNotifier(req, extra) {
     last = value;
     const eta = Number.isFinite(doc?.etaSeconds) ? `, about ${doc.etaSeconds} s left` : "";
     const message = `${jobState(doc) || "running"}${doc?.stage ? `: ${doc.stage}` : ""}${doc?.steps ? ` (${doc.steps.done} of ${doc.steps.total} steps)` : ""}${doc?.progressEstimated ? " (estimated)" : ""}${eta}`;
-    extra.sendNotification({ method: "notifications/progress", params: { progressToken: token, progress: value, total: 100, message } }).catch(() => {});
+    send({ method: "notifications/progress", params: { progressToken: token, progress: value, total: 100, message } }).catch(() => {});
   };
 }
 
@@ -774,7 +781,7 @@ const server = new Server(
 // MCP-aware client. The list is fetched once at boot in loadCatalog(); the
 // per-prompt rendering is delegated to the hosted service so the npm package
 // stays thin and prompt text stays canonical with the website at /skills.
-server.setRequestHandler(ListPromptsRequestSchema, redacted(async () => ({
+server.setRequestHandler("prompts/list", redacted(async () => ({
   prompts: skillPacks.map((p) => ({
     name: p.slug,
     title: p.title,
@@ -786,7 +793,7 @@ server.setRequestHandler(ListPromptsRequestSchema, redacted(async () => ({
     })),
   })),
 })));
-server.setRequestHandler(GetPromptRequestSchema, redacted(async (req) => {
+server.setRequestHandler("prompts/get", redacted(async (req) => {
   const { name, arguments: args = {} } = req.params;
   const pack = skillPacks.find((p) => p.slug === name);
   if (!pack) throw new Error(`Unknown prompt "${name}". List available with prompts/list.`);
@@ -832,7 +839,7 @@ async function ensureCatalog() {
 }
 const withCatalog = (handler) => async (req, extra) => { await ensureCatalog(); return handler(req, extra); };
 
-server.setRequestHandler(ListToolsRequestSchema, redacted(withCatalog(async () => {
+server.setRequestHandler("tools/list", redacted(withCatalog(async () => {
   // The same hints as the hosted connector (src/mcp-http.js). A host may run
   // a read-only tool without asking its user, so readOnlyHint is true only for
   // a tool that never charges and never writes: the local catalog search,
@@ -973,7 +980,7 @@ server.setRequestHandler(ListToolsRequestSchema, redacted(withCatalog(async () =
   return { tools: listed };
 })));
 
-server.setRequestHandler(CallToolRequestSchema, redacted(withCatalog(async (req, extra) => {
+server.setRequestHandler("tools/call", redacted(withCatalog(async (req, extra) => {
   const { name: rawName, arguments: args = {} } = req.params;
   const name = resolveListedName(rawName);
   const overBound = toolInputBoundRefusal(rawName, args);
