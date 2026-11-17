@@ -15,7 +15,7 @@ export interface Agent402McpEnv {
   AGENT402_TOOLS?: string;
   /** Refuse a single call above this many USD (default "4"; "off" disables). */
   AGENT402_MAX_PER_CALL?: string;
-  /** Cap on USD spent this session (default "25"; "off" disables). */
+  /** Optional cap on USD spent this session (no cap unless set; "off" means none). */
   AGENT402_BUDGET?: string;
   /** A prepaid credits key (a402_...). */
   AGENT402_CREDITS_KEY?: string;

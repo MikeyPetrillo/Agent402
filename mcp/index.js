@@ -19,7 +19,7 @@
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (default 4; off disables)
 //   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...); pays per successful call with no wallet,
 //                         on Agent402's own services only (outside-seller routes need a wallet)
-//   AGENT402_BUDGET       hard cap on total USD spent this session (default 25; off disables)
+//   AGENT402_BUDGET       optional hard cap on total USD spent this session (no cap by default)
 //   AGENT402_SHOW_ROUTER  "1" lists router.execute and sellers.list without a wallet (both are listed
 //                         when a wallet or credits key is set)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
@@ -166,12 +166,10 @@ const VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.ur
 // by default, at the dearest list price in the Agent402 catalog rounded up to
 // a whole dollar (mcp/test.js checks it still covers the catalog), and `off`
 // disables it; a malformed value reads as that default, never as off. The
-// session budget is on by default too, at DEFAULT_BUDGET_USD for the life of
-// the process (the same figure as agent402-client's default daily cap), so a
-// model looping on paid calls stops there; `off` disables it and a number
-// sets it.
+// session budget is opt-in: unset (or `off`) is no session cap, so a heavy user
+// is never stopped by a default. The per-call cap above still applies.
 const DEFAULT_MAX_PER_CALL_USD = 4;
-const DEFAULT_BUDGET_USD = 25;
+const DEFAULT_BUDGET_USD = Infinity;
 const capFromEnv = (name, def) => {
   const raw = String(process.env[name] ?? "").trim().toLowerCase();
   if (raw === "") return def;
@@ -504,7 +502,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
       return { content: [{ type: "text", text: `Refused: "${tool.slug}" is quoted $${price} for this request${price !== listUsd ? ` (list price ${tool.price})` : ""}, above the AGENT402_MAX_PER_CALL cap of $${MAX_PER_CALL}.` }], isError: true };
     }
     if (spentUsd + price > BUDGET) {
-      return { content: [{ type: "text", text: `Refused: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request).` }], isError: true };
+      return { content: [{ type: "text", text: `Refused: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent; "${tool.slug}" is quoted $${price} for this request). Raise AGENT402_BUDGET (or set it to off) on this MCP server to continue.` }], isError: true };
     }
     try {
       const first = await ownFetch(url, { ...paidInit, headers: { ...init.headers, ...asyncHeaders, Authorization: `Bearer ${CREDITS_KEY}` } });
@@ -539,7 +537,7 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     const heldUsd = heldNow();
     if (spentUsd + heldUsd + inFlight + price > BUDGET) {
       return {
-        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${heldUsd ? `, $${heldUsd.toFixed(4)} held for sent payments whose outcome is unknown` : ""}${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" lists at ${tool.price}). Restart the MCP server or raise AGENT402_BUDGET.` }],
+        content: [{ type: "text", text: `Refused without paying: session budget exhausted ($${spentUsd.toFixed(4)} of $${BUDGET} spent${heldUsd ? `, $${heldUsd.toFixed(4)} held for sent payments whose outcome is unknown` : ""}${inFlight ? `, $${inFlight.toFixed(4)} in flight` : ""}; "${tool.slug}" lists at ${tool.price}). Raise AGENT402_BUDGET (or set it to off) on this MCP server, or restart it, to continue.` }],
         isError: true,
       };
     }

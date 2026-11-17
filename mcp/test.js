@@ -432,8 +432,8 @@ globalThis.fetch = (...a) => { if (!said && String(a[0]?.url || a[0]).includes("
     const good = await run([EVM_GOOD, CREDITS], { AGENT_KEY: EVM_GOOD, AGENT402_CREDITS_KEY: CREDITS });
     const l4 = leaks(good.all, [EVM_GOOD, CREDITS]).concat(["5eed5eed5eed", "CREDSENTINEL"].filter((x) => good.all.includes(x)));
     if (l4.length) fail(`a valid key echoed back by a seller must be redacted everywhere: ${l4.join(", ")}`);
-    if (!/payment: USDC via x402 \(EVM wallet configured; max\/call \$1, session budget \$25\)/.test(good.err)) fail(`a valid key is logged as configured, with the default $25 session budget: ${good.err.slice(0, 600)}`);
-    if (!/\\"sessionBudgetUsd\\": 25\b/.test(good.out)) fail(`payment.info reports the default $25 session budget: ${good.out.slice(0, 600)}`);
+    if (!/payment: USDC via x402 \(EVM wallet configured; max\/call \$1, session budget unlimited\)/.test(good.err)) fail(`a valid key is logged as configured, with no default session budget: ${good.err.slice(0, 600)}`);
+    if (!/\\"sessionBudgetUsd\\": \\"unlimited\\"/.test(good.out)) fail(`payment.info reports no session budget by default: ${good.out.slice(0, 600)}`);
     if (!/seller echo: \[redacted\]/.test(good.out)) fail(`control: the seller's echo reached the boundary and was redacted: ${good.out.slice(0, 400)}`);
     // A library that writes a configured key to the console (a preload makes
     // the catalog fetch log every key, through console.error and console.warn,
@@ -905,6 +905,8 @@ try {
       let servedCount = 0;
       for (let i = 0; i < 5; i++) { const r = await callFloored(credits); if (!r.isError) servedCount++; }
       if (seen.flooredPaid - before !== 4 || servedCount !== 4) fail(`a $0.004 credits budget must pay four $0.001 calls and refuse the fifth, paid ${seen.flooredPaid - before}`);
+      const fifth = await callFloored(credits);
+      if (!fifth.isError || !/Raise AGENT402_BUDGET/.test(text(fifth))) fail(`a credits call the budget refuses names the setting to raise: ${text(fifth).slice(0, 300)}`);
       console.log("credits: the budget is charged the debit ($0.001 a call), not the dearest accept ✓");
     } finally { await credits.close().catch(() => {}); }
 
@@ -1083,8 +1085,7 @@ globalThis.fetch = async (input, init) => {
 
     // Defaults: with neither variable set, a $5 quote is refused (the default
     // per-call cap), the default covers the dearest tool in the catalog, and
-    // the session budget is $25 (agent402-client's default daily cap); off
-    // turns it off.
+    // there is no session budget by default, so a heavy session is never refused.
     {
       const defaults = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "" });
       try {
@@ -1093,11 +1094,11 @@ globalThis.fetch = async (input, init) => {
         if (seen.signed !== 0 || !r.isError || !/AGENT402_MAX_PER_CALL/.test(text(r))) fail(`the default per-call cap must refuse a $5 quote: ${text(r).slice(0, 300)}`);
         const info = JSON.parse(text(await defaults.callTool({ name: "get_payment_info", arguments: {} })));
         const perCall = info.spendControls?.maxPerCallUsd, budget = info.spendControls?.sessionBudgetUsd;
-        if (!(Number.isFinite(perCall) && budget === 25 && info.spendControls?.remainingUsd === 25)) fail(`a finite default per-call cap and a $25 default session budget expected: ${JSON.stringify(info.spendControls)}`);
+        if (!(Number.isFinite(perCall) && budget === "unlimited" && info.spendControls?.remainingUsd === "unlimited")) fail(`a finite default per-call cap and no default session budget expected: ${JSON.stringify(info.spendControls)}`);
         const pricing = await (await fetch(`${API}/api/pricing`)).json();
         const dearest = Math.max(...pricing.endpoints.map((e) => parseFloat(String(e.price).replace(/[^0-9.]/g, "")) || 0));
         if (!(dearest > 0 && perCall >= dearest)) fail(`the default per-call cap $${perCall} must cover the dearest catalog price $${dearest}`);
-        console.log(`default caps: $${perCall} per call (dearest catalog price $${dearest}), $${budget} session budget ✓`);
+        console.log(`default caps: $${perCall} per call (dearest catalog price $${dearest}), no session budget ✓`);
       } finally { await defaults.close().catch(() => {}); }
       const off = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "off" });
       try {
