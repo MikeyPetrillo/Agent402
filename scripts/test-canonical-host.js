@@ -9,19 +9,16 @@
 //
 //   node scripts/test-canonical-host.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
-import { spawn } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { request as httpRequest } from "node:http";
-import { getFreePort } from "./lib/free-port.js";
-import { ownStoreEnv } from "./lib/own-stores.js";
+import { bootServer } from "./lib/boot-server.js";
 import { mcpShortDescription } from "../src/mcp-flagship.js";
 import { SERVER_CARD_SCHEMA } from "../src/mcp-http.js";
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`FAIL - ${m}`); } };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // Static: no served module writes a URL on the www host, so nothing links it.
@@ -30,7 +27,6 @@ const www = readdirSync(join(ROOT, "src")).filter((f) => f.endsWith(".js") && WW
 ok(www.length === 0, `no src module writes a URL on the www host${www.length ? `: ${www.join(", ")}` : ""}`);
 ok(WWW_URL.test(`canonical: "https://www.agent402.tools/"`) && !WWW_URL.test(`new Set(["www.agent402.tools"])`), "control: a www URL is caught and a bare host name is not");
 
-const PORT = await getFreePort();
 const HOST = "agent402.test";
 const BASE = `http://${HOST}`;
 const get = (path, host = HOST) => new Promise((resolve, reject) => {
@@ -52,19 +48,12 @@ function selfRefs(html) {
 /** A reference that points at this site but not at BASE (another host of ours, or the www twin). */
 const offHost = (refs) => refs.filter(([, u]) => /agent402/i.test(u) && /^https?:/i.test(u) && !u.startsWith(`${BASE}/`) && u !== BASE).map(([k, u]) => `${k} ${u}`);
 
-const child = spawn(process.execPath, ["src/server.js"], {
-  cwd: ROOT,
-  env: { ...process.env, ...ownStoreEnv("canonical-host"), FREE_MODE: "true", PORT: String(PORT), BASE_URL: BASE, X402_SYNC_ON_START: "false" },
-  stdio: ["ignore", "ignore", "pipe"],
-});
-let errLog = "";
-child.stderr.on("data", (d) => { errLog = (errLog + d).slice(-4000); });
-const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.exit(code); };
+let srv = null, PORT = 0;
+const done = async (code) => { try { await srv?.stop(); } catch { /* */ } process.exit(code); };
 try {
-  let up = false;
-  for (let i = 0; i < 120 && !up; i++) { try { up = (await get("/health")).status === 200; } catch { /* */ } if (!up) await sleep(500); }
-  ok(up, "server booted");
-  if (!up) { console.error(errLog); done(1); }
+  srv = await bootServer({ env: { FREE_MODE: "true", BASE_URL: BASE, X402_SYNC_ON_START: "false" }, stores: "canonical-host" });
+  PORT = srv.port;
+  ok(true, "server booted");
 
   // The host that answers, and the one that redirects to it.
   const apex = await get("/");
@@ -132,4 +121,4 @@ try {
   ok(false, `unexpected: ${e.stack || e}`);
 }
 console.log(`\n${pass} passed, ${fail} failed`);
-done(fail ? 1 : 0);
+await done(fail ? 1 : 0);
