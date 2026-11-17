@@ -56,7 +56,7 @@
 // containers never resolve one entry at once, and the owed write is
 // insert-if-absent by transaction (src/refund-ledger.js), so one transfer is
 // never owed twice.
-import { createJsonDocument } from "./json-document.js";
+import { createJsonDocument, SKIP_UPDATE } from "./json-document.js";
 import { shortPayer } from "./verify-failure-log.js";
 import { trackStoreReady } from "./state-db.js";
 import { rpc, evmTransferredInReceipt, verifyInboundPayment, SOLANA_RPCS, ALGORAND_INDEXERS } from "./payment-verify.js";
@@ -113,10 +113,23 @@ export const MAX_BACKOFF_MS = 10 * 60_000;
 // The most open entries one EVM payer may hold, per network, from settle
 // chains that ended unconfirmed (src/payments.js markUnconfirmedStop). Past
 // it a new one is kept in the journal (a record that lands once the payer's
-// open entries fall under the bound; the word reads unresolved meanwhile) and
-// a log line names it: never dropped in silence. The book's own bound
+// open entries fall under the bound; the word reads unresolved only once it
+// has waited JOURNAL_PAGE_AFTER_MS) and a log line names it (one per payer per
+// HELD_LOG_EVERY_MS, with the count since): never dropped in silence. The book's own bound
 // (MAX_ENTRIES) covers everything else.
 export const UNCONFIRMED_PER_PAYER_MAX = Number(process.env.LATE_SETTLE_UNCONFIRMED_PER_PAYER_MAX) > 0 ? Math.floor(Number(process.env.LATE_SETTLE_UNCONFIRMED_PER_PAYER_MAX)) : 25;
+/** The most bookings one reconcile pass tries to land from the journal; the
+ *  rest wait for the next pass. A booking held by its payer's bound is kept
+ *  without a store read once that payer is seen at its bound in the pass. */
+export const DRAIN_MAX_PER_PASS = 50;
+/** A payer's per-payer-bound log line is written at most this often; the
+ *  line names how many were held since the last one. */
+export const HELD_LOG_EVERY_MS = 60_000;
+/** Bookings held by their payer's bound read as unresolved on the status
+ *  word only once the oldest has waited this long or there are this many:
+ *  each lands on its own once one of its payer's open entries closes. */
+export const JOURNAL_PAGE_AFTER_MS = 60 * 60_000;
+export const JOURNAL_PAGE_SIZE = 500;
 /** An entry whose absence is never proven becomes unresolved after this. */
 export const MAX_AGE_MS = 24 * 3600_000;
 /** Consecutive passes whose handling of one entry threw. */
@@ -286,6 +299,8 @@ export function createLateSettleBook({
   // money journals' dead-letter (local disk, or Redis with
   // LEDGER_JOURNAL_REDIS=on), built on first use.
   journal = null,
+  // Where a booking held by its payer's bound waits (see heldJournalOf).
+  heldJournal = null,
   alarm = console.error,
 } = {}) {
   let state = { pending: {} };
@@ -306,18 +321,19 @@ export function createLateSettleBook({
   };
   // Read-modify-write against the stored body, so two containers booking or
   // resolving at once never drop each other's entries.
+  // `fn` returns SKIP_UPDATE when it changed nothing: nothing is written.
   const change = async (fn) => {
     if (!PG) {
       await refresh();
       const next = { pending: { ...state.pending } };
-      fn(next.pending);
+      if (fn(next.pending) === SKIP_UPDATE) return true;
       if (!(await doc.save(next))) return false;
       state = next;
       return true;
     }
     const r = await doc.update((b) => {
       const pending = { ...((b && typeof b === "object" && b.pending) || {}) };
-      fn(pending);
+      if (fn(pending) === SKIP_UPDATE) return SKIP_UPDATE;
       return { pending };
     }, { fallback: null });
     if (r.ok) absorb(r.body);
@@ -382,6 +398,10 @@ export function createLateSettleBook({
     } catch { return []; }
   };
   let wordCache = { at: 0, word: null };
+  // Per payer: when its per-payer-bound line was last written, and how many
+  // bookings were held since (bounded; the oldest payer goes first).
+  const heldLog = new Map();
+  const HELD_LOG_KEYS = 1000;
   let journalImpl = journal;
   const journalOf = async () => {
     if (journalImpl) return journalImpl;
@@ -389,6 +409,19 @@ export function createLateSettleBook({
     const { stateDbSchema } = await import("./state-db.js");
     journalImpl = createDeadLetter({ file: `${file}.pending.ndjson`, name: "lateSettlements", journalKey: PG ? `${stateDbSchema()}:lateSettlements` : "" });
     return journalImpl;
+  };
+  // Bookings held by their payer's bound wait in a journal of their own: they
+  // land by themselves once one of the payer's open entries closes, so they
+  // are not a write that failed. Unnamed, so the money journals' dead-letter
+  // word never reads them; the book's own word reads them only once they
+  // have waited JOURNAL_PAGE_AFTER_MS or reach JOURNAL_PAGE_SIZE.
+  let heldImpl = heldJournal;
+  const heldJournalOf = async () => {
+    if (heldImpl) return heldImpl;
+    const { createDeadLetter } = await import("./ledger-mirror.js");
+    const { stateDbSchema } = await import("./state-db.js");
+    heldImpl = createDeadLetter({ file: `${file}.held.ndjson`, journalKey: PG ? `${stateDbSchema()}:lateSettlementsHeld` : "" });
+    return heldImpl;
   };
   // An EVM payer's open entries from unconfirmed settle chains on one
   // network (an EVM address compares without case; the bound is EVM-only).
@@ -404,9 +437,9 @@ export function createLateSettleBook({
     let wrote = false;
     try {
       wrote = await change((p) => {
-        if (p[entry.key]) { out = "made"; return; }
-        if (entry.unconfirmed === true && railOf(entry.network) === "evm" && unconfirmedOf(p, entry) >= unconfirmedPerPayerMax) { out = "payer_full"; return; }
-        if (openCount(p) >= maxEntries) { out = "full"; return; }
+        if (p[entry.key]) { out = "made"; return SKIP_UPDATE; }
+        if (entry.unconfirmed === true && railOf(entry.network) === "evm" && unconfirmedOf(p, entry) >= unconfirmedPerPayerMax) { out = "payer_full"; return SKIP_UPDATE; }
+        if (openCount(p) >= maxEntries) { out = "full"; return SKIP_UPDATE; }
         p[entry.key] = entry;
         out = "made";
       });
@@ -414,20 +447,53 @@ export function createLateSettleBook({
     if (out === "full" || out === "payer_full") return out;
     return out === "made" && wrote === true ? "made" : "failed";
   };
-  const journalCount = async () => {
-    const j = await journalOf();
+  const stateOf = (j) => {
     const st = typeof j?.state === "function" ? j.state() : null;
-    return Number(st?.total ?? (typeof j?.size === "function" ? j.size() : 0)) || 0;
+    return { total: Number(st?.total ?? (typeof j?.size === "function" ? j.size() : 0)) || 0, oldestAt: st?.oldestAt ?? null };
   };
+  const journalCount = async () => stateOf(await journalOf()).total;
+  const heldCount = async () => stateOf(await heldJournalOf()).total;
   // Lands what the journal holds (a booking whose store write failed earlier,
   // in this process or one that has since stopped).
+  // A record held back by its payer's bound stays until that payer's open
+  // entries fall under it; the others behind it still land. Once a payer is
+  // seen at its bound in a pass, its other held records are kept without a
+  // store read, and a pass tries at most DRAIN_MAX_PER_PASS records: the
+  // rest wait for the next pass.
+  let heldSummaryAt = 0;
   const drainJournal = async () => {
-    let j;
-    try { j = await journalOf(); } catch { return 0; }
-    if (!j || !(j.size?.() > 0)) return 0;
-    // A record held back by its payer's bound stays until that payer's open
-    // entries fall under it; the others behind it still land.
-    try { return await j.drain(async (e) => { if (!e?.payload?.key) return "drop"; const r = await put(e.payload); return r === "made" ? "landed" : r === "payer_full" ? "keep" : "stop"; }); } catch { return 0; }
+    let landed = 0;
+    try {
+      const j = await journalOf();
+      if (j && j.size?.() > 0) landed += await drainOne(j, { summary: false });
+    } catch { /* the next pass */ }
+    try {
+      const h = await heldJournalOf();
+      if (h && h.size?.() > 0) landed += await drainOne(h, { summary: true });
+    } catch { /* the next pass */ }
+    return landed;
+  };
+  const drainOne = async (j, { summary }) => {
+    const atBound = new Set();
+    let tried = 0, held = 0;
+    const payerKey = (e) => `${e.network}\n${String(e.payer || "").toLowerCase()}`;
+    let landed = 0;
+    try {
+      landed = await j.drain(async (e) => {
+        if (!e?.payload?.key) return "drop";
+        if (e.payload.unconfirmed === true && atBound.has(payerKey(e.payload))) { held++; return "keep"; }
+        if (tried >= DRAIN_MAX_PER_PASS) return "stop";
+        tried++;
+        const r = await put(e.payload);
+        if (r === "payer_full") { atBound.add(payerKey(e.payload)); held++; return "keep"; }
+        return r === "made" ? "landed" : "stop";
+      });
+    } catch { return 0; }
+    if (summary && held > 0 && now() - heldSummaryAt >= HELD_LOG_EVERY_MS) {
+      heldSummaryAt = now();
+      log(`[late-settle] ${held} booking(s) wait in the journal behind ${atBound.size} payer(s) at the per-payer bound; each lands once one of that payer's open entries closes`);
+    }
+    return landed;
   };
   const call = (url, method, params) => rpc(url, method, params, fetchImpl, RPC_TIMEOUT_MS, []);
 
@@ -479,7 +545,8 @@ export function createLateSettleBook({
       // once the store takes it, never dropped in silence.
       wordCache = { at: 0, word: null };
       let id = null;
-      try { const j = await journalOf(); id = j ? j.add("late", entry) : null; } catch { id = null; }
+      if (r === "payer_full") { try { const h = await heldJournalOf(); id = h ? h.add("late", entry) : null; } catch { id = null; } }
+      if (id == null) { try { const j = await journalOf(); id = j ? j.add("late", entry) : null; } catch { id = null; } }
       if (id == null) {
         unrecordedAt.push(now());
         unrecordedUnsaved = true;
@@ -488,7 +555,17 @@ export function createLateSettleBook({
         return false;
       }
       if (r === "payer_full") {
-        alarm(`[late-settle] ${network} payer ${shortPayer(c.payer)} holds ${unconfirmedPerPayerMax} open unconfirmed settlements (the per-payer bound); ${byAuth ? `auth ${shortPayer(c.payer)}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}) kept in the journal until one of them closes`);
+        // One line per payer per HELD_LOG_EVERY_MS, naming how many were
+        // held since its last line.
+        const hk = `${network}\n${String(c.payer || "").toLowerCase()}`;
+        const h = heldLog.get(hk) || { at: -Infinity, since: 0 };
+        h.since++;
+        if (now() - h.at >= HELD_LOG_EVERY_MS) {
+          alarm(`[late-settle] ${network} payer ${shortPayer(c.payer)} holds ${unconfirmedPerPayerMax} open unconfirmed settlements (the per-payer bound); ${h.since} booking(s) kept in the journal since the last line, the latest ${byAuth ? `auth ${shortPayer(c.payer)}/${c.nonce}` : `tx ${c.tx}`} (via ${entry.via}); each lands once one of them closes`);
+          h.at = now(); h.since = 0;
+        }
+        heldLog.delete(hk); heldLog.set(hk, h);
+        while (heldLog.size > HELD_LOG_KEYS) heldLog.delete(heldLog.keys().next().value);
         return true;
       }
       log(r === "full"
@@ -502,7 +579,9 @@ export function createLateSettleBook({
      * One word for /api/gateway-status, read from the shared store (reused
      * for STATUS_TTL_MS): full (the open bound is reached, so new bookings
      * wait in the journal), unresolved (an entry waits for a human, a booking
-     * sits in the journal outside the book, or one could not be recorded
+     * sits in the journal outside the book, a booking held by its payer's
+     * bound has waited JOURNAL_PAGE_AFTER_MS or JOURNAL_PAGE_SIZE of them do,
+     * or one could not be recorded
      * anywhere), near_capacity, or ok. Never a number.
      */
     async alarmStatus({ ttlMs = STATUS_TTL_MS } = {}) {
@@ -510,13 +589,24 @@ export function createLateSettleBook({
       if (wordCache.word && t - wordCache.at < ttlMs) return wordCache.word;
       await refresh();
       const open = openCount();
+      // A booking whose store write failed reads unresolved at once. One
+      // held by its payer's bound lands on its own, so the held journal
+      // reads unresolved only once its oldest has waited
+      // JOURNAL_PAGE_AFTER_MS or it holds JOURNAL_PAGE_SIZE; an unreadable
+      // one reads as waiting too long.
       let journaled = 0;
       try { journaled = await journalCount(); } catch { journaled = 1; }
+      let heldStuck = false;
+      try {
+        const { total, oldestAt } = stateOf(await heldJournalOf());
+        const oldest = Number(oldestAt);
+        heldStuck = total > 0 && (total >= JOURNAL_PAGE_SIZE || oldestAt == null || !Number.isFinite(oldest) || t - oldest >= JOURNAL_PAGE_AFTER_MS);
+      } catch { heldStuck = true; }
       let word = "ok";
       if (unrecordedUnsaved && unrecordedRecent() > 0) await saveUnrecorded();
       const unrecorded = Math.max(unrecordedRecent(), await savedUnrecordedRecent());
       if (open >= maxEntries) word = "full";
-      else if (unrecorded > 0 || journaled > 0 || entries().some((e) => e.state === "unresolved")) word = "unresolved";
+      else if (unrecorded > 0 || journaled > 0 || heldStuck || entries().some((e) => e.state === "unresolved")) word = "unresolved";
       else if (open >= Math.ceil(maxEntries * NEAR_CAPACITY_SHARE)) word = "near_capacity";
       wordCache = { at: t, word };
       return word;
@@ -527,12 +617,15 @@ export function createLateSettleBook({
       const all = entries();
       let journaled = null;
       try { journaled = await journalCount(); } catch { journaled = null; }
+      let held = null;
+      try { held = await heldCount(); } catch { held = null; }
       return {
         status: await this.alarmStatus({ ttlMs: 0 }),
         total: all.length,
         bound: maxEntries,
         unresolved: all.filter((e) => e.state === "unresolved").length,
         journaled,
+        held,
         unrecordedInMemory: unrecordedRecent(),
         open: all.map((e) => ({ key: e.key, network: e.network, tx: e.tx, slug: e.slug, via: e.via, state: e.state, at: e.at, checks: e.checks, ...(e.state === "unresolved" ? { unresolvedAt: e.unresolvedAt ?? null, recheckAt: e.recheckAt ?? null } : {}) })),
         // The latest operator resolutions (no amounts), newest last.
