@@ -37,7 +37,7 @@ const h = tool.handler;
 // ----------------------------------------------------------------------------
 ok(LENDING_TOOLS.length === 1 && tool.slug === "lending-rates" && tool.route === "GET /api/lending-rates" && tool.price === "$0.005", "one tool: lending-rates, GET, $0.005");
 ok(tool.attribution === undefined && tool.credit === undefined && !/CoinGecko/i.test(tool.description) && tool.discovery.output.example.source === "onchain", "contract reads carry no market-data credit");
-ok(!/—/.test(tool.description) && /Deterministic code over on-chain state/.test(tool.description) && tool.modelBacked !== true, "description: no em dash, says deterministic code");
+ok(!/\u2014/.test(tool.description) && /Deterministic code over on-chain state/.test(tool.description) && tool.modelBacked !== true, "description: no em dash, says deterministic code");
 ok(!/\b(best|recommend\w*|should|opportunit\w+|safe)\b/i.test(tool.description + JSON.stringify(tool.discovery.output.example)), "no advice wording: the comparison is higher/lower, never best");
 ok(!METERED_SLUGS.has("lending-rates") && tool.endsAtCeiling !== true, "keyless public nodes serve it, so it stays in the sweeps; not declared as ending at a run's ceiling");
 for (const [name, sig] of [["getReserveData", "getReserveData(address)"], ["getUtilization", "getUtilization()"], ["getSupplyRate", "getSupplyRate(uint256)"], ["getBorrowRate", "getBorrowRate(uint256)"], ["getBlockNumber", "getBlockNumber()"]]) {

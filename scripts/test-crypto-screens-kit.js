@@ -69,7 +69,7 @@ for (const t of CRYPTO_SCREENS_TOOLS) {
   ok(t.price === "$0.005", `${t.slug}: priced $0.005`);
   ok(/^GET \/api\/[a-z0-9-]+$/.test(t.route) && t.route === `GET /api/${t.slug}`, `${t.slug}: GET route named after the slug`);
   ok(t.category === "crypto" && Array.isArray(t.tags) && t.tags.length >= 5, `${t.slug}: category and tags`);
-  ok(!/—/.test(t.description) && !/—/.test(JSON.stringify(t.discovery)), `${t.slug}: no em dash`);
+  ok(!/\u2014/.test(t.description) && !/\u2014/.test(JSON.stringify(t.discovery)), `${t.slug}: no em dash`);
   ok(t.attribution === "coingecko" && attributionTailOf(t.description) === COINGECKO_CREDIT && t.description.includes(COINGECKO_API_URL), `${t.slug}: description ends with the linked credit`);
   ok(t.credit === COINGECKO_CREDIT && t.discovery.output.example.credit === COINGECKO_CREDIT, `${t.slug}: published example carries the credit`);
   ok(/Deterministic code over market data/.test(t.description) && t.modelBacked !== true, `${t.slug}: says it is deterministic code, and is not marked model-backed`);
@@ -93,7 +93,7 @@ ok(near(__test.weightedMean([{ v: 1, w: 1 }, { v: 3, w: 3 }], (r) => r.v, (r) =>
 // funding-screener
 // ----------------------------------------------------------------------------
 const perp = (market, symbol, index_id, funding_rate, open_interest, basis = 0.05, extra = {}) =>
-  ({ market, symbol, index_id, funding_rate, open_interest, basis, volume_24h: open_interest * 2, contract_type: "perpetual", expired_at: null, price: "100", ...extra });
+  ({ market, symbol, index_id, funding_rate, open_interest, basis, volume_24h: 1_000_000, contract_type: "perpetual", expired_at: null, price: "100", ...extra });
 const DERIVATIVES = [
   perp("Alpha Futures", "ETHUSDT", "ETH", 0.01, 6_000_000, 0.04),
   perp("Beta Futures", "ETH-PERP", "ETH", -0.02, 2_000_000, 0.06),
@@ -201,12 +201,12 @@ reset();
 // ----------------------------------------------------------------------------
 const tick = (id, name, target, usd, vol, extra = {}) => ({ base: "ETH", target, market: { name, identifier: id }, converted_last: { usd }, converted_volume: { usd: vol }, bid_ask_spread_percentage: 0.02, is_stale: false, is_anomaly: false, ...extra });
 const TICKERS = { name: "Ethereum", tickers: [
+  tick("a", "Venue A", "USDC", 1500, 10),                 // Venue A's smaller market, listed first: not used
   tick("a", "Venue A", "USDT", 1000, 500),
   tick("b", "Venue B", "USDT", 1001, 300),
   tick("c", "Venue C", "USD", 999, 100),
   tick("d", "Venue D", "USDC", 1000.5, 60, { bid_ask_spread_percentage: 0.9 }),
   tick("e", "Venue E", "USDT", 1020, 40),                 // 200 bps above the median
-  tick("a", "Venue A", "USDC", 1500, 10),                 // Venue A's smaller market: not used
   tick("f", "Venue F", "USDT", 900, 999, { is_stale: true }),
   tick("g", "Venue G", "USDT", 2000, 999, { is_anomaly: true }),
   tick("h", "Venue H", "USDT", null, 5),                  // no price
