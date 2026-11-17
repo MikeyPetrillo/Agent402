@@ -146,6 +146,10 @@ async function cgLoad(key, path, reduce = null) {
     try { data = reduce.fromText ? await reduce.fromText(text) : reduce.fn(data); text = JSON.stringify(data); }
     catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned an unexpected shape", 502); }
   }
+  // Every document read here is an object or a list. A body that parses to
+  // anything else (null, a string, a number) is an upstream failure: thrown,
+  // so it is never cached and no handler reads fields off it.
+  if (data === null || typeof data !== "object") throw bad("Market data upstream returned an unexpected shape", 502);
   return { text, data };
 }
 

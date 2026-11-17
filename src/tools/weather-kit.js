@@ -127,11 +127,16 @@ export async function openMeteoJson(api, path, params, env = process.env) {
     throw openMeteoFailure(err, req);
   }
   if (req.keyed) noteKeyedSuccess();
+  let data;
   try {
-    return JSON.parse(html);
+    data = JSON.parse(html);
   } catch {
     throw bad("Upstream returned non-JSON", 502);
   }
+  // Every answer read here is an object or a list of them. A body that parses
+  // to anything else (null, a string, a number) is an upstream failure.
+  if (data === null || typeof data !== "object") throw bad("Upstream returned an unexpected body", 502);
+  return data;
 }
 
 export function requireCoords(i) {
@@ -162,19 +167,27 @@ export const PLACE_CACHE_TTL_MS = 10 * 60_000;
 export const PLACE_CACHE_MAX = 2000;
 const placeCache = new Map(); // key -> { at, rows }
 // One spelling per name, for the upstream read and the key alike: Unicode
-// compatibility forms folded (NFKC: full-width letters, a no-break space),
-// runs of whitespace as one space, trailing punctuation dropped. The upstream
-// matches none of "Paris.", "Paris!" or a doubled space, so the plain
-// spelling is also the one that answers.
+// compatibility forms folded (NFKC: full-width letters, a no-break space, a
+// letter and its combining mark as one), runs of whitespace as one space, and
+// the key also folds case. No character that can be part of a place name is
+// dropped from the name that is sent: "!", "'", "." and "-" stay wherever
+// they sit ("Westward Ho!", "St. John's"), so a name is never read as another
+// place's. Only a trailing semicolon, colon or question mark leaves a name,
+// and a comma separates it from its qualifiers. Qualifiers are compared here
+// and never sent, so their trailing punctuation is dropped.
 const plainText = (s) => String(s ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
-const plainPart = (s) => s.replace(/[\s.,;:!?]+$/u, "").trim();
+const plainName = (s) => s.replace(/[\s;:?]+$/u, "").trim();
+const plainQualifier = (s) => s.replace(/[\s.,;:!?]+$/u, "").trim();
+// A sentence's closing "." or "!" after a name ("Paris."): tried only when
+// the name as given matched nothing.
+const withoutClosingMark = (s) => s.replace(/[\s.!]+$/u, "").trim();
 export function _resetPlaceCache() { placeCache.clear(); }
 async function placeRows(params) {
   const key = [params.get("name").toLowerCase(), params.get("count"), params.get("language"), params.get("countryCode") ?? ""].join("\n");
   const kept = placeCache.get(key);
   if (kept && Date.now() - kept.at < PLACE_CACHE_TTL_MS) return kept.rows;
   const data = await openMeteoJson("geocoding", "/v1/search", params);
-  const rows = (Array.isArray(data?.results) ? data.results : []).map(placeRow).filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
+  const rows = (Array.isArray(data?.results) ? data.results : []).filter((r) => r && typeof r === "object").map(placeRow).filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon));
   placeCache.delete(key);
   placeCache.set(key, { at: Date.now(), rows });
   while (placeCache.size > PLACE_CACHE_MAX) placeCache.delete(placeCache.keys().next().value);
@@ -218,9 +231,12 @@ export async function lookupPlaces({ q, count = 5, country, language } = {}) {
   const query = String(q ?? "").trim();
   if (query.length < 2) throw bad('"q" must be a place name of at least 2 characters');
   if (query.length > PLACE_QUERY_MAX) throw bad(`"q" must be at most ${PLACE_QUERY_MAX} characters`);
-  let [name, ...qualifiers] = plainText(query).split(",").map(plainPart).filter(Boolean);
+  const parts = plainText(query).split(",");
+  const at = parts.findIndex((p) => plainName(p));
+  let name = at < 0 ? "" : plainName(parts[at]);
+  let qualifiers = at < 0 ? [] : parts.slice(at + 1).map(plainQualifier).filter(Boolean);
   // "Pittsburgh PA": a trailing US state code with no comma is a qualifier too.
-  const tail = qualifiers.length ? null : /^(.{2,}?)\s+([A-Z]{2})$/.exec(name ?? "");
+  const tail = qualifiers.length ? null : /^(.{2,}?)\s+([A-Z]{2})[.!]*$/.exec(name);
   if (tail && Object.hasOwn(US_STATES, tail[2])) { name = tail[1].trim(); qualifiers = [tail[2]]; }
   if (!name || name.length < 2) throw bad('"q" must start with a place name of at least 2 characters');
   const n = Math.min(Math.max(parseInt(count, 10) || 5, 1), 10);
@@ -231,6 +247,12 @@ export async function lookupPlaces({ q, count = 5, country, language } = {}) {
   const params = new URLSearchParams({ name, count: qualifiers.length ? 25 : n, language: lang, format: "json" });
   if (cc) params.set("countryCode", cc);
   let rows = await placeRows(params);
+  const bare = rows.length ? name : withoutClosingMark(name);
+  if (bare !== name && bare.length >= 2) {
+    params.set("name", bare);
+    rows = await placeRows(params);
+    if (rows.length) name = bare;
+  }
   for (const token of qualifiers) rows = rows.filter((r) => qualifierMatches(r, token));
   return { query, name, results: rows.slice(0, n) };
 }

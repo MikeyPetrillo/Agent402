@@ -116,21 +116,59 @@ ok(advertisedRetired("/api/business-days /api/skill/company-dossier /api/unit-co
 // --- no doc or pack names a retired tool as one to call ---------------------------
 // The scan above reads routes (/api/<slug>). A tool is also offered by its bare
 // slug: a code-quoted name in a README, the wiki catalog or the listing copy,
-// or a step of a pack's workflow prose ("then geocode the address with
-// geocode"). A retired slug restored there sends a reader to a 410. Every
-// retired slug is matched as a whole word (never inside a longer slug, never as
-// a route, which the scan above reads). A slug that is also an ordinary English
-// word is listed in ORDINARY_WORDS and is matched only where it is code-quoted.
+// or a step of a pack's workflow prose ("resolve each stop with geocode"). A
+// retired slug restored there sends a reader to a 410.
+//   - A hyphenated slug is no English word: it is matched as a whole word
+//     (never inside a longer slug, never as a route, which the scan above reads).
+//   - A one-word slug is also a word a sentence may use ("use place-lookup to
+//     geocode a city", "paid in stablecoins"), so it is matched only where it
+//     is used AS A TOOL NAME: quoted as code or as a string, "the <slug> tool"
+//     (or route, endpoint, API), or after a verb of calling ("call geocode").
+//   - A one-word slug that is not an everyday noun is also matched as the
+//     object of "with", "via" or "using" and as an item of a slug list. The
+//     nouns (ORDINARY_WORDS: a thing a sentence is about with, via or using,
+//     or lists) are read in the tool-name forms above only.
 const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-])`);
 {
-  const ORDINARY_WORDS = new Set(["stablecoins"]);
-  ok([...ORDINARY_WORDS].every((w) => Object.hasOwn(RETIRED_TOOLS, w) && !w.includes("-")), "every allowlisted ordinary word is a one-word retired slug");
-  const NAMED = Object.keys(RETIRED_TOOLS).map((slug) => [slug, ORDINARY_WORDS.has(slug) ? new RegExp(`\`${escRe(slug)}\``) : wholeWord(slug)]);
+  const ORDINARY_WORDS = new Set(["stablecoins", "soundex", "combinatorics", "pbkdf2"]);
+  const oneWord = Object.keys(RETIRED_TOOLS).filter((slug) => !slug.includes("-"));
+  ok([...ORDINARY_WORDS].every((w) => oneWord.includes(w)), "every allowlisted ordinary word is a one-word retired slug");
+  ok(oneWord.join() === "geocode,stablecoins,combinatorics,pbkdf2,soundex", `each one-word retired slug has been read against the ordinary-word list (${oneWord.join()}): a new one is added to this line, and to ORDINARY_WORDS when it is an everyday noun`);
+  const asToolName = (slug) => {
+    const w = escRe(slug), end = "(?![a-z0-9-])", start = "(?<![a-z0-9/-])";
+    const forms = [
+      `[\`"']${w}\\\\?[\`"']`,                                                    // code or string quoted
+      `${start}${w}\\s+(?:tool|route|endpoint|API)\\b`,                            // "the geocode tool"
+      `\\b(?:[Cc]all|[Cc]alls|[Cc]alling|[Rr]un|[Rr]uns|[Rr]unning|[Ii]nvoke|[Ii]nvokes|[Ii]nvoking)\\s+${w}${end}`, // "call geocode"
+    ];
+    if (!ORDINARY_WORDS.has(slug)) {
+      forms.push(`\\b(?:[Ww]ith|[Vv]ia|[Uu]sing)\\s+${w}${end}`);                  // "resolve it with geocode"
+      forms.push(`(?:[,|]\\s*|^\\s*[-*]\\s+)${w}(?=\\s*(?:[,|]|$))`);              // an item of a slug list
+    }
+    return new RegExp(forms.join("|"), "m");
+  };
+  const NAMED = Object.keys(RETIRED_TOOLS).map((slug) => [slug, slug.includes("-") ? wholeWord(slug) : asToolName(slug)]);
   const namedRetired = (text) => NAMED.filter(([, re]) => re.test(text)).map(([slug]) => slug);
-  const planted = "| `defi-yields`, `stablecoins` | then call reverse-geocode with the lat/lon, or l2-tvl; resolve the address with geocode, then hash with pbkdf2.";
+  const planted = "| `defi-yields`, `stablecoins` | then call reverse-geocode with the lat/lon, or l2-tvl; resolve the address with geocode, then hash with `pbkdf2`.";
   ok(namedRetired(planted).join() === "geocode,reverse-geocode,defi-yields,stablecoins,l2-tvl,pbkdf2", `control: a code-quoted slug, a bare hyphenated one and a bare one-word one are found (${namedRetired(planted).join()})`);
   ok(namedRetired("paid in stablecoins by supply; geocoded addresses, a geocoder; `defi-yields-v2`, crypto-orderbook-depth, /api/defi-yields, /api/geocode, skill-defi-yields-watch, reverse-geocoding").length === 0, "control: an allowlisted ordinary word, a longer word or slug and a route (read by the scan above) are not bare retired names");
+  // The same word as a verb or a noun of a sentence is not a tool name.
+  const PROSE = [
+    "Use place-lookup to geocode a city.", "Geocode the address, then forecast.", "It will geocode each stop first.", "geocode a city with `place-lookup`",
+    "Settle with stablecoins on any chain.", "USDC, stablecoins, and cards are accepted.", "Match names using soundex or metaphone.", "- combinatorics", "Keys are stretched with pbkdf2, then compared.", "permutations, combinatorics, and primes",
+  ];
+  const tripped = PROSE.filter((line) => namedRetired(line).length);
+  ok(tripped.length === 0, `control: a one-word slug used as an ordinary verb or noun is not a tool name (tripped: ${tripped.join(" / ") || "none"})`);
+  // Each way of naming a tool is found, for the verb-like slug and for a noun.
+  const AS_TOOL = [
+    ["Call `geocode` with the address.", "geocode"], ["| `geocode` | Address to coordinates |", "geocode"], ['tools: ["geocode", "weather-current"]', "geocode"], ['{"workflow":"run \\"geocode\\" first"}', "geocode"],
+    ["Use the geocode tool for addresses.", "geocode"], ["the geocode endpoint answers in JSON", "geocode"], ["First call geocode, then forecast.", "geocode"], ["Resolve each stop with geocode, then forecast.", "geocode"],
+    ["weather-current, geocode, place-lookup", "geocode"], ["- geocode", "geocode"], ["resolve it via geocode.", "geocode"],
+    ["the `stablecoins` board", "stablecoins"], ["Use the stablecoins tool.", "stablecoins"], ["then call soundex on each name", "soundex"], ["the combinatorics route", "combinatorics"], ['"pbkdf2"', "pbkdf2"],
+  ];
+  const missed = AS_TOOL.filter(([line, slug]) => namedRetired(line).join() !== slug).map(([line]) => line);
+  ok(missed.length === 0, `control: a retired slug used as a tool name is found in each form (missed: ${missed.join(" / ") || "none"})`);
   const tracked = execFileSync("git", ["ls-files"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n")
     .filter((f) => /^(README\.md|llms-install\.md)$|^(wiki|docs)\/.*\.(md|txt)$|^(mcp|client|tollbooth|openclaw|adapters|examples|facilitator)\/(.*\/)?README\.md$/.test(f) && !/(^|\/)CHANGELOG\.md$/.test(f));
   const found = [];

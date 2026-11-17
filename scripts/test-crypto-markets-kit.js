@@ -198,6 +198,19 @@ reset();
 routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(502, "<html>SECRET-UPSTREAM-TEXT</html>") };
 await throws(h("coin-ohlc")({ coin: "bitcoin", days: 1 }), 502, "persistent 5xx -> 502", /^((?!SECRET).)*$/);
 reset();
+// A 200 whose body is JSON but not a document (null, a string, a number) is an
+// upstream failure, never a 500, and is not kept.
+for (const [label, text] of [["null", "null"], ["a string", '"busy"'], ["a number", "7"]]) {
+  routes = { "/api/v3/": jsonRes(200, text) };
+  for (const [slug, input] of [["coin-ohlc", { coin: "bitcoin", days: 1 }], ["coin-profile", { coin: "bitcoin" }], ["global-defi", {}], ["rwa-asset", { id: "gold" }], ["exchange-rates", {}]]) {
+    reset();
+    await throws(h(slug)(input), 502, `${slug}: a 200 whose body is ${label} -> 502`, /unexpected shape/);
+  }
+}
+reset();
+routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(200, [[1787319000000, 1, 2, 0.5, 1.5]]) };
+ok((await h("coin-ohlc")({ coin: "bitcoin", days: 1 })).count === 1, "an unusable body is not kept: the next read answers");
+reset();
 routes = { "/api/v3/coins/bitcoin/history": jsonRes(401, { error: { status: { error_code: 10012, error_message: "SECRET-UPSTREAM-TEXT" } } }) };
 await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 10 }), 422, "401 (plan limit) -> 422", /^((?!SECRET).)*$/);
 reset();

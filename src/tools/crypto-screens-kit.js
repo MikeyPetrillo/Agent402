@@ -175,6 +175,8 @@ const docNumbers = new WeakMap(); // a cached document -> its number (the map ho
 let docCount = 0;
 const docNumber = (doc) => { let n = docNumbers.get(doc); if (n === undefined) { n = ++docCount; docNumbers.set(doc, n); } return n; };
 function answerOnce(question, reads, compute) {
+  // cgGet hands back objects and lists only; anything else is an upstream failure, never a TypeError here.
+  if (reads.some((r) => r.data === null || typeof r.data !== "object")) throw bad("Market data upstream returned an unexpected shape", 502);
   const stamp = reads.map((r) => docNumber(r.data)).join("|");
   const head = { source: SOURCE, fetchedAt: oldest(reads), cached: allCached(reads) };
   const hit = answerMemo.get(question);
@@ -933,7 +935,7 @@ const dexPoolHealth = {
   category: "crypto",
   price: "$0.005",
   description:
-    "Measured health of one DEX pool by network and pool address: liquidity, 24h turnover (volume over liquidity), buy share of trades and of traders, the size distribution of its latest trades (median, 90th percentile, largest, largest as a share of liquidity), how concentrated those trades are among wallets (top wallet's share, share from wallets trading three times or more), buy share of recent volume, a constant-product price-impact estimate for $1,000 and $10,000, the pool's age and locked-liquidity share. Flags name measured conditions with fixed thresholds (thin liquidity, new pool, high churn, one-sided flow, wallet concentration, repeat-wallet flow, no recent trades); measurements only, with no score and no verdict. Networks use on-chain ids such as eth, base, solana. Deterministic code over market data; recent trades refreshed every 5 minutes, the pool's liquidity, 24h volume and 24h counts every 30 minutes.",
+    "Measured health of one DEX pool by network and pool address: liquidity, 24h turnover (volume over liquidity), buy share of trades and of traders, the size distribution of its latest trades (median, 90th percentile, largest, largest as a share of liquidity), how concentrated those trades are among wallets (top wallet's share, share from wallets trading three times or more), buy share of recent volume, a constant-product price-impact estimate for $1,000 and $10,000, the pool's age and locked-liquidity share. `tradesRead` is false, and the recent-trades block null, when the pool's trade list could not be read. Flags name measured conditions with fixed thresholds (thin liquidity, new pool, high churn, one-sided flow, wallet concentration, repeat-wallet flow, no recent trades); measurements only, with no score and no verdict. Networks use on-chain ids such as eth, base, solana. Deterministic code over market data; recent trades refreshed every 5 minutes, the pool's liquidity, 24h volume and 24h counts every 30 minutes.",
   tags: ["crypto", "dex", "pool", "liquidity", "pool-health", "price-impact", "repeat-wallets", "trades", "defi"],
   discovery: {
     input: { network: "eth", pool: "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640" },
@@ -950,7 +952,7 @@ const dexPoolHealth = {
         network: "eth", pool: "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640", name: "WETH / USDC 0.05%", dex: "uniswap_v3", ageDays: 1783,
         liquidityUsd: 76692781, volume24hUsd: 104131045, turnover24h: 1.36, lockedLiquidityPct: 0,
         activity24h: { trades: 6098, buyTradeSharePct: 50.18, buyerSharePct: 48.08 },
-        recentTrades: { count: 300, windowMinutes: 96, medianUsd: 1840.5, p90Usd: 41200, largestUsd: 512000, largestShareOfLiquidityPct: 0.67, buyVolumeSharePct: 47.3, uniqueWallets: 168, topWalletTradeSharePct: 6.33, repeatWalletTradeSharePct: 38.67, anomalous: 0 },
+        tradesRead: true, recentTrades: { count: 300, windowMinutes: 96, medianUsd: 1840.5, p90Usd: 41200, largestUsd: 512000, largestShareOfLiquidityPct: 0.67, buyVolumeSharePct: 47.3, uniqueWallets: 168, topWalletTradeSharePct: 6.33, repeatWalletTradeSharePct: 38.67, anomalous: 0 },
         priceImpactEstimate: { per1kUsdPct: 0.0026, per10kUsdPct: 0.0261, method: "constant-product approximation from total liquidity; a concentrated-liquidity pool trades tighter near the current price" },
         flags: [],
       },
@@ -965,13 +967,19 @@ const dexPoolHealth = {
     const poolKey = `${network}/${pool}`;
     if (unknownPools.has(poolKey)) throw unknownPool(network, pool);
     const reads = [];
-    try {
-      reads.push(await cgGet(base, {}, SCREEN_TTL.pool));
-      reads.push(await cgGet(`${base}/trades`, {}, SCREEN_TTL.poolTrades));
-    } catch (err) {
+    try { reads.push(await cgGet(base, {}, SCREEN_TTL.pool)); } catch (err) {
       if (!err?.unknownId) throw err;
       unknownPools.add(poolKey);
       throw unknownPool(network, pool);
+    }
+    // Only the pool read's own "not found" is a verdict on the pool. The
+    // trades read answering "not found" for a pool that was just read is
+    // answered from the pool's data with the trades absent (`tradesRead`
+    // false); nothing is remembered, so the next call reads the trades again.
+    let tradesRead = true;
+    try { reads.push(await cgGet(`${base}/trades`, {}, SCREEN_TTL.poolTrades)); } catch (err) {
+      if (!err?.unknownId) throw err;
+      tradesRead = false;
     }
     const a = reads[0].data?.data?.attributes;
     if (!a || typeof a !== "object") throw bad("Market data upstream returned an unexpected shape", 502);
@@ -983,7 +991,7 @@ const dexPoolHealth = {
     const ageDays = Number.isFinite(created) ? Math.max(0, Math.floor((Date.now() - created) / 86_400_000)) : null;
     const turnover = liq > 0 && vol != null ? vol / liq : null;
 
-    const trades = (Array.isArray(reads[1].data?.data) ? reads[1].data.data : []).map((t) => t?.attributes).filter((t) => t && num(t.volume_in_usd) != null)
+    const trades = (Array.isArray(reads[1]?.data?.data) ? reads[1].data.data : []).map((t) => t?.attributes).filter((t) => t && num(t.volume_in_usd) != null)
       .map((t) => ({ usd: num(t.volume_in_usd), kind: t.kind, wallet: typeof t.tx_from_address === "string" ? t.tx_from_address : null, at: Date.parse(t.block_timestamp), anomalous: t.is_anomalous === true }));
     let recent = null;
     if (trades.length) {
@@ -1028,7 +1036,7 @@ const dexPoolHealth = {
       liquidityUsd: liq == null ? null : Math.round(liq), volume24hUsd: vol == null ? null : Math.round(vol), turnover24h: round(turnover, 2),
       lockedLiquidityPct: round(num(a.locked_liquidity_percentage), 2),
       activity24h: { trades: buys + sells, buyTradeSharePct: round(buyTradeShare, 2), buyerSharePct: buyers != null && sellers != null ? round(share(buyers, buyers + sellers), 2) : null },
-      recentTrades: recent,
+      tradesRead, recentTrades: recent,
       priceImpactEstimate: { per1kUsdPct: impact(1_000), per10kUsdPct: impact(10_000), method: "constant-product approximation from total liquidity; a concentrated-liquidity pool trades tighter near the current price" },
       flags,
     };

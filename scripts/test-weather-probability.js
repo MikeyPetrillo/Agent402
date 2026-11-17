@@ -100,20 +100,57 @@ reply = (u) => (u.host === "geocoding-api.open-meteo.com" ? json(u.searchParams.
   const after = await lookup({ q: "Outage City" });
   ok(failed && failed.statusCode >= 500 && after.found === true, "place-lookup: a failed read is not remembered");
   // Trivial variants of one name are one entry and one upstream name: width and compatibility forms
-  // (NFKC), runs of inner whitespace, and trailing punctuation.
+  // (NFKC), case, runs of whitespace, and a trailing comma, semicolon, colon or question mark (none
+  // of which is part of a place name).
   _resetPlaceCache();
   fetched.length = 0;
-  const variants = ["New York", "  new   york ", "New\u00a0York", "New\tYork", "New York.", "NEW YORK!!", "New York ,", "\uff2e\uff45\uff57 \uff39\uff4f\uff52\uff4b", "New York?;"];
+  const sentName = (k) => new URL(fetched.at(k)).searchParams.get("name");
+  const variants = ["New York", "  new   york ", "New\u00a0York", "New\tYork", "NEW YORK", "New York ,", "\uff2e\uff45\uff57 \uff39\uff4f\uff52\uff4b", "New York?;", "New York :"];
   const names = [];
   for (const q of variants) names.push((await lookup({ q })).found);
-  ok(fetched.length === 1 && new URL(fetched[0]).searchParams.get("name") === "New York", `place-lookup: ${variants.length} spellings of one name are one upstream read, sent as "New York" (${fetched.length} reads, "${new URL(fetched[0]).searchParams.get("name")}")`);
+  ok(fetched.length === 1 && sentName(0) === "New York", `place-lookup: ${variants.length} spellings of one name are one upstream read, sent as "New York" (${fetched.length} reads, "${sentName(0)}")`);
   ok(names.length === variants.length && names.every((n) => n === true) && (await lookup({ q: "  new   york " })).query === "new   york", "place-lookup: every spelling is answered, and the answer echoes the query as it was sent");
   await lookup({ q: "Austin,  TX." }); await lookup({ q: "austin , tx" }); await lookup({ q: "Austin TX." }); await lookup({ q: "\uff21ustin\uff0c TX" });
-  ok(fetched.length === 2 && new URL(fetched[1]).searchParams.get("name") === "Austin", `place-lookup: a qualified name in other spacing, punctuation or width is the same entry (${fetched.length - 1} read)`);
+  ok(fetched.length === 2 && sentName(1) === "Austin", `place-lookup: a qualified name in other spacing, punctuation or width is the same entry (${fetched.length - 1} read)`);
   await lookup({ q: "Newyork" }); await lookup({ q: "St. Louis" }); await lookup({ q: "St Louis" });
-  ok(fetched.length === 5 && new URL(fetched[3]).searchParams.get("name") === "St. Louis", "place-lookup: a different name is its own entry, and punctuation inside a name is kept");
-  const dots = await errOf(() => lookup({ q: " .,!? " }));
-  ok(dots?.statusCode === 400 && fetched.length === 5, "place-lookup: a query of punctuation alone is a 400 before any read");
+  ok(fetched.length === 5 && sentName(3) === "St. Louis", "place-lookup: a different name is its own entry, and punctuation inside a name is kept");
+  const dots = await errOf(() => lookup({ q: " ,;:? " }));
+  ok(dots?.statusCode === 400 && fetched.length === 5, "place-lookup: a query of separators alone is a 400 before any read");
+  // The name sent upstream keeps every character that can be part of a place name: ! ' . - stay,
+  // wherever they sit, so a name is never read as another place's.
+  for (const [q, want] of [["Westward Ho!", "Westward Ho!"], ["St. John's", "St. John's"], ["S\u00e3o Paulo", "S\u00e3o Paulo"], ["Sa\u0303o Paulo", "S\u00e3o Paulo"], ["Winston-Salem", "Winston-Salem"], ["Saint-Louis-du-Ha! Ha!", "Saint-Louis-du-Ha! Ha!"], ["  westward   ho! ?", "westward ho!"]]) {
+    _resetPlaceCache(); fetched.length = 0;
+    const got = await lookupPlaces({ q });
+    ok(fetched.length === 1 && sentName(0) === want && got.name === want, `place-lookup: ${JSON.stringify(q)} is sent as ${JSON.stringify(want)} ("${sentName(0)}", ${fetched.length} read)`);
+  }
+  _resetPlaceCache(); fetched.length = 0;
+  let dc = await lookupPlaces({ q: "Washington, D.C." });
+  ok(fetched.length === 1 && sentName(0) === "Washington" && dc.name === "Washington", `place-lookup: "Washington, D.C." sends the name before the comma ("${sentName(0)}")`);
+  reply = (u) => json({ results: [{ name: "Washington", latitude: 38.9, longitude: -77, country: "United States", country_code: "US", admin1: "District of Columbia" }, { name: "Washington", latitude: 40.1, longitude: -80.2, country: "United States", country_code: "US", admin1: "Pennsylvania" }] });
+  _resetPlaceCache();
+  dc = await lookupPlaces({ q: "Washington, D.C." });
+  ok(dc.results.length === 1 && dc.results[0].region === "District of Columbia", "place-lookup: the dotted qualifier D.C. keeps the District of Columbia row only");
+  // "Westward Ho!" and "Westward Ho" are two names: each is read, and neither answers for the other.
+  reply = (u) => json({ results: [u.searchParams.get("name") === "Westward Ho!" ? { name: "Westward Ho!", latitude: 51.04, longitude: -4.24, country: "United Kingdom", country_code: "GB", admin1: "England" } : { name: "Westward Ho", latitude: 53.6, longitude: -113.9, country: "Canada", country_code: "CA", admin1: "Alberta" }] });
+  _resetPlaceCache(); fetched.length = 0;
+  const bang = await lookup({ q: "Westward Ho!" }), plain = await lookup({ q: "westward ho" }), bangAgain = await lookup({ q: "WESTWARD HO!" });
+  ok(fetched.length === 2 && bang.results[0].countryCode === "GB" && plain.results[0].countryCode === "CA" && bangAgain.results[0].countryCode === "GB", `place-lookup: a name with "!" and the name without it are separate reads and separate entries (${fetched.length} reads)`);
+  const viaPlace = await resolveLocation({ place: "Westward Ho!" });
+  ok(viaPlace.lat === 51.04 && viaPlace.place.name === "Westward Ho!" && fetched.length === 3, "a tool's `place` resolves the name as given");
+  // A sentence-style trailing "." or "!" on a name the upstream does not know that way: the name
+  // as given is read first, and only when it matches nothing is the name without it read.
+  reply = (u) => json(/[.!]$/.test(u.searchParams.get("name")) ? {} : { results: PLACES });
+  _resetPlaceCache(); fetched.length = 0;
+  const dotted = await lookup({ q: "Springfield." });
+  ok(dotted.found === true && fetched.length === 2 && sentName(0) === "Springfield." && sentName(1) === "Springfield", `place-lookup: "Springfield." is read as given, then without the dot when nothing matched (${fetched.length} reads)`);
+  await lookup({ q: "Springfield." }); await lookup({ q: "springfield!!" });
+  ok(fetched.length === 3 && sentName(2) === "springfield!!", "place-lookup: both reads are kept, and the plain name is not read twice");
+  // A results list holding a row that is not an object is skipped, never a TypeError.
+  reply = () => json({ results: [null, "x", PLACES[0]] });
+  _resetPlaceCache();
+  const odd = await errOf(() => lookup({ q: "Springfield" }));
+  ok(odd === null && (await lookup({ q: "Springfield" })).count === 1, `place-lookup: a row that is not an object is skipped (${odd ? `${odd.statusCode ?? 500} ${odd.message}` : "ok"})`);
+  reply = (u) => json(u.searchParams.get("name") === "Nowhere" ? {} : { results: PLACES });
   _resetPlaceCache();
   for (let k = 0; k < PLACE_CACHE_MAX + 5; k++) await lookup({ q: `Town ${k}` });
   fetched.length = 0;
@@ -122,6 +159,25 @@ reply = (u) => (u.host === "geocoding-api.open-meteo.com" ? json(u.searchParams.
   _resetPlaceCache();
   const t = tool("place-lookup");
   ok(t.attribution === "geonames" && attributionTailOf(t.description) === ATTRIBUTIONS.geonames && t.price === "$0.001", "place-lookup: GeoNames attribution on the listing, listed at its decided price");
+}
+
+// ---------------------------------------------------------------------------
+// 1b. An upstream 200 whose body is JSON but not an object (null, a string, a
+// number) is an upstream failure on every tool here: 502, never a 500 or a 4xx.
+// ---------------------------------------------------------------------------
+{
+  // Every tool that reads the upstream, on its own published example.
+  const cases = [...WEATHER_TOOLS, ...P.WEATHER_PROBABILITY_TOOLS, ...PLAN.WEATHER_PLAN_TOOLS].map((t) => [t.slug, t.discovery.input]);
+  ok(cases.length >= 11, `unusable bodies: ${cases.length} tools exercised`);
+  for (const [label, text] of [["null", "null"], ["a string", '"busy"'], ["a number", "7"]]) {
+    reply = () => new Response(text, { status: 200, headers: { "content-type": "application/json" } });
+    for (const [slug, input] of cases) {
+      _resetPlaceCache(); P._resetEnsembleCache?.();
+      const e = await errOf(() => tool(slug).handler(input));
+      ok(e?.statusCode === 502, `${slug}: a 200 whose body is ${label} is a 502 (${e ? `${e.statusCode ?? 500} ${String(e.message).slice(0, 60)}` : "answered"})`);
+    }
+  }
+  _resetPlaceCache();
 }
 
 // ---------------------------------------------------------------------------

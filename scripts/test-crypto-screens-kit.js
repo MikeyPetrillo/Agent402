@@ -572,6 +572,61 @@ reset();
 }
 
 // ----------------------------------------------------------------------------
+// The trades read answering "not found" after the pool read succeeded says
+// nothing about the pool: it is answered from the pool's own data with the
+// trades absent (and a field saying so), and the pool is never remembered as
+// unknown.
+// ----------------------------------------------------------------------------
+{
+  reset();
+  const keep = routes;
+  let tradesStatus = 404;
+  routes = [[(u) => u.pathname === poolPath, () => jsonRes(200, POOL())], [(u) => u.pathname === `${poolPath}/trades`, () => (tradesStatus === 200 ? jsonRes(200, TRADES) : jsonRes(tradesStatus, {}))]];
+  const first = await h("dex-pool-health")({ network: "eth", pool: PA }).catch((e) => e);
+  ok(!(first instanceof Error) && first.name === "WETH / USDC 0.05%" && first.liquidityUsd === 2_000_000 && first.activity24h.trades === 100, `a trades 404 after a good pool read is answered from the pool's data (${first instanceof Error ? `${first.statusCode} ${first.message}` : "200"})`);
+  ok(first.recentTrades === null && first.tradesRead === false && !first.flags.includes("wallet-concentration"), "the trades are absent and a field says they were not read");
+  const second = await h("dex-pool-health")({ network: "eth", pool: PA }).catch((e) => e);
+  ok(!(second instanceof Error) && calls.length === 3 && calls[2].url.pathname.endsWith("/trades"), `the pool is not remembered as unknown: the next call reads the trades again (${calls.length} reads${second instanceof Error ? `, ${second.statusCode}` : ""})`);
+  tradesStatus = 200;
+  const third = await h("dex-pool-health")({ network: "eth", pool: PA });
+  ok(third.recentTrades?.count === 40 && third.tradesRead === true && third.flags.join() === "wallet-concentration", "once the trades answer, the full answer is computed (no kept trades-absent answer)");
+  reset();
+  tradesStatus = 500;
+  await throws(h("dex-pool-health")({ network: "eth", pool: PA }), 502, "a failed trades read is an upstream failure");
+  tradesStatus = 200;
+  ok((await h("dex-pool-health")({ network: "eth", pool: PA })).recentTrades?.count === 40, "and nothing is remembered from it");
+  ok(CRYPTO_SCREENS_TOOLS.find((t) => t.slug === "dex-pool-health").discovery.output.example.tradesRead === true, "the published example carries the field");
+  routes = keep; reset();
+}
+
+// ----------------------------------------------------------------------------
+// An upstream 200 whose body is JSON but not a document (null, a string, a
+// number) is an upstream failure: 502 with the usual wording, never a 500, and
+// nothing of it is kept.
+// ----------------------------------------------------------------------------
+{
+  const keep = routes;
+  const inputs = { "funding-screener": {}, "stablecoin-depeg-watch": {}, "exchange-spread": { coin: "ethereum" }, "defi-screener": {}, "chain-board": {}, "dex-volume-board": { network: "base" }, "dex-pool-health": { network: "eth", pool: PA } };
+  for (const [label, text] of [["null", "null"], ["a string", '"busy"'], ["a number", "7"]]) {
+    routes = [[() => true, () => jsonRes(200, text)]];
+    for (const [slug, input] of Object.entries(inputs)) {
+      reset();
+      await throws(h(slug)(input), 502, `${slug}: a 200 whose body is ${label}`, /^Market data upstream returned (an unexpected shape|non-JSON)$/);
+    }
+  }
+  // One of several documents unusable (chain-board's market totals; the pool's trades).
+  reset();
+  routes = [[path("/global"), () => jsonRes(200, "null")], [path("/coins/markets"), () => jsonRes(200, MARKETS)], [path("/asset_platforms"), () => jsonRes(200, PLATFORMS)]];
+  await throws(h("chain-board")({}), 502, "chain-board: the market totals alone are null", /unexpected shape/);
+  reset();
+  routes = [[(u) => u.pathname === poolPath, () => jsonRes(200, POOL())], [(u) => u.pathname === `${poolPath}/trades`, () => jsonRes(200, "null")]];
+  await throws(h("dex-pool-health")({ network: "eth", pool: PA }), 502, "dex-pool-health: the trades alone are null", /unexpected shape/);
+  routes = [[(u) => u.pathname === poolPath, () => jsonRes(200, POOL())], [(u) => u.pathname === `${poolPath}/trades`, () => jsonRes(200, TRADES)]];
+  ok((await h("dex-pool-health")({ network: "eth", pool: PA })).recentTrades?.count === 40, "an unusable body is not kept: the next read answers");
+  routes = keep; reset();
+}
+
+// ----------------------------------------------------------------------------
 // A deployment without a key: the pool endpoints answer 401, which is a 503
 // (nothing charged) that relays nothing of the upstream body.
 // ----------------------------------------------------------------------------
