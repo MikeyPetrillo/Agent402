@@ -209,7 +209,9 @@ const turn = async (o) => idx.__crawlScheduledForTest(o);
   // Spend the rest of the host's day.
   let refused = false;
   for (let i = 0; i < 80 && !refused; i++) refused = !(await sellerLoad.takeBudget(`${O}/x`, "quote")).ok;
-  ok(refused, "the host's day is spent");
+  // The probes stop at their share of the day; the documents' reads spend the rest.
+  for (let i = 0; i < 80 && !(await sellerLoad.budgetSpent(O)).spent; i++) await sellerLoad.takeBudget(`${O}/openapi.json`, "crawler", { essential: true });
+  ok(refused && (await sellerLoad.budgetSpent(O)).spent, "the host's day is spent");
   clock += CYCLE;
   const n = fetchedFrom(O);
   ok((await turn(O)) === "budget" && fetchedFrom(O) === n, "a scheduled crawl of a spent host waits and sends nothing");

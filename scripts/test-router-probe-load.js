@@ -43,7 +43,7 @@ const reply = (status, headers = {}) => new Response("{}", { status, headers });
 {
   const load = createSellerLoad({ store: createMemoryLimits(), now: () => T0, dailyBudget: 3 });
   const U = "https://busy-seller.example/api/paid";
-  for (let i = 0; i < 3; i++) await load.takeBudget(U, "quote");
+  for (let i = 0; i < 3; i++) await load.takeBudget(U, "crawler", { essential: true }); // the crawl's reads spend the day (probes stop at their share)
   ok((await load.budgetSpent(U)).spent && (await load.probeRefusal(U, "quote")) === "budget", "control: the host's day is spent and an unpaid probe is refused");
   let sent = 0;
   const p = await sendRouterProbe(U, async () => { sent++; return reply(402); }, { load });
@@ -99,7 +99,7 @@ const reply = (status, headers = {}) => new Response("{}", { status, headers });
   const a = createSellerLoad({ store, now: () => T0, dailyBudget: 4 });
   const b = createSellerLoad({ store, now: () => T0, dailyBudget: 4 });
   const O = "https://shared.example";
-  for (let i = 0; i < 4; i++) await a.takeBudget(`${O}/x`, "quote");
+  for (let i = 0; i < 4; i++) await a.takeBudget(`${O}/x`, "crawler", { essential: true });
   await a.noteThrottle(`${O}/x`, 429, "300");
   await a.noteDiscoveryRead(O, { manifestHash: "m" });
   await a.noteDiscoveryRead(O, { manifestHash: undefined });
