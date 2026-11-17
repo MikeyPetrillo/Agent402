@@ -2818,8 +2818,8 @@ function isDevServerHost(h) {
 
 /** The documentation link an OpenAPI operation names (`externalDocs.url`),
  *  kept only when it is an https URL on exactly the seller origin's host (no
- *  www folding, no subdomain), with no credentials or fragment, printable
- *  ASCII throughout and at most SELLER_DOCS_URL_MAX characters before and
+ *  www folding, no subdomain) and, for a path seller, under its path, with
+ *  no credentials or fragment, printable ASCII throughout and at most SELLER_DOCS_URL_MAX characters before and
  *  after it is re-serialized through URL. Anything else is null. The link is
  *  seller-supplied and never fetched by the index; `externalDocs.description`
  *  is not read. Served on the exact ?seller= record only (sellerDetail). */
@@ -2831,24 +2831,85 @@ export function sellerDocsUrlFor(raw, sellerOrigin) {
   try { u = new URL(raw); o = new URL(String(sellerOrigin || "")); } catch { return null; }
   if (u.protocol !== "https:" || u.username || u.password || u.hash) return null;
   if (!u.host || u.host !== o.host) return null;
+  // A path seller shares its host with other sellers: the link stays under
+  // its own prefix, on a segment boundary, read after URL resolved dot
+  // segments, with no encoded dot, slash or backslash left to re-route it.
+  const prefix = o.pathname.replace(/\/+$/, "");
+  if (prefix) {
+    if (u.pathname !== prefix && !u.pathname.startsWith(`${prefix}/`)) return null;
+    if (/%(?:2e|2f|5c)/i.test(u.pathname)) return null;
+  }
   const out = u.href;
   return out.length <= SELLER_DOCS_URL_MAX && PRINTABLE_ASCII_RE.test(out) ? out : null;
 }
-export const SELLER_DOCS_URL_LEGEND = "Per tool: sellerDocsUrl = the documentation link the seller's own OpenAPI gives this operation (externalDocs.url). It is seller-supplied and unverified: this index never fetches it, it does not change price, quote, routing or payment, and it is kept only as an https link on this seller's exact host. A row the listing screen flags is served without it.";
-/** True when a stored docs link trips the listing screen, as written or
- *  percent-decoded. */
+export const SELLER_DOCS_URL_LEGEND = "Per tool: sellerDocsUrl = the documentation link the seller's own OpenAPI gives this operation (externalDocs.url). It is seller-supplied and unverified: this index never fetches it, it does not change price, quote, routing or payment, and it is kept only as an https link on this seller's exact host (under its own path for a seller listed with one). A row the listing screen flags is served without it.";
+/** The link with its percent escapes decoded one level, as UTF-8; throws
+ *  when the bytes are not UTF-8. Escape by escape, so one bad escape does not
+ *  leave the rest undecoded. */
+const DOCS_UTF8 = new TextDecoder("utf-8", { fatal: true });
+const DOCS_UTF8_ENC = new TextEncoder();
+function decodeDocsEscapesOnce(s) {
+  const bytes = [];
+  for (const part of s.split(/(%[0-9a-fA-F]{2})/)) {
+    if (/^%[0-9a-fA-F]{2}$/.test(part)) bytes.push(parseInt(part.slice(1), 16));
+    else for (const b of DOCS_UTF8_ENC.encode(part)) bytes.push(b);
+  }
+  return DOCS_UTF8.decode(Uint8Array.from(bytes));
+}
+/** The link fully percent-decoded (repeated until stable, at most
+ *  DOCS_DECODE_ROUNDS levels), or null when it does not decode cleanly: a
+ *  "%" that is not an escape, bytes that are not UTF-8, or more levels than
+ *  the bound. */
+const DOCS_DECODE_ROUNDS = 4;
+function decodedDocsUrl(url) {
+  let s = url;
+  for (let i = 0; i <= DOCS_DECODE_ROUNDS; i++) {
+    if (/%(?![0-9a-fA-F]{2})/.test(s)) return null;
+    if (!/%[0-9a-fA-F]{2}/.test(s)) return s;
+    if (i === DOCS_DECODE_ROUNDS) return null;
+    try { s = decodeDocsEscapesOnce(s); } catch { return null; }
+  }
+  return null;
+}
+/** True when a docs link must not be stored or served: it trips the listing
+ *  screen as written, it does not decode cleanly, or its decoded text trips
+ *  the screen read as words (every non-alphanumeric run and every camelCase
+ *  boundary a space). */
 function sellerDocsUrlFlagged(url) {
   if (typeof url !== "string") return true;
   if (listingInjectionFinding(url)) return true;
-  let decoded = url;
-  try { decoded = decodeURIComponent(url); } catch { /* not decodable: the raw text is read spaced */ }
-  // Path separators read as spaces, so a phrase spelled as a slug is seen.
-  return listingInjectionFinding(decoded.replace(/[-_/+.=&?:]+/g, " ")) != null;
+  const decoded = decodedDocsUrl(url);
+  if (decoded == null) return true;
+  if (listingInjectionFinding(decoded)) return true;
+  const spaced = decoded.replace(/[^\p{L}\p{N}]+/gu, " ");
+  if (listingInjectionFinding(spaced)) return true;
+  const split = decoded.replace(/(\p{Ll}|\p{N})(\p{Lu})/gu, "$1 $2").replace(/(\p{Lu})(\p{Lu}\p{Ll})/gu, "$1 $2").replace(/[^\p{L}\p{N}]+/gu, " ");
+  return split !== spaced && listingInjectionFinding(split) != null;
+}
+/** A docs link fit to keep: on the seller (sellerDocsUrlFor) and not flagged
+ *  (sellerDocsUrlFlagged). Read where the row is built, never per request. */
+export function cleanSellerDocsUrl(raw, sellerOrigin) {
+  const url = sellerDocsUrlFor(raw, sellerOrigin);
+  return url && !sellerDocsUrlFlagged(url) ? url : null;
+}
+/** The link a served record carries for one crawled row: cleanSellerDocsUrl,
+ *  computed once per row object and origin and kept beside it, so a repeated
+ *  ?seller= lookup does no per-row link work. A row loaded from the store is
+ *  checked on its first lookup, under this build's rules. */
+const sellerDocsServeMemo = new WeakMap();
+function servedSellerDocsUrl(t, origin) {
+  const raw = t.sellerDocsUrl;
+  if (raw === undefined) return null;
+  const hit = sellerDocsServeMemo.get(t);
+  if (hit && hit.raw === raw && hit.origin === origin) return hit.value;
+  const value = cleanSellerDocsUrl(raw, origin);
+  sellerDocsServeMemo.set(t, { raw, origin, value });
+  return value;
 }
 /** An operation's externalDocs.url, validated against the seller origin. */
 function operationDocsUrl(op, originUrl) {
   const docs = op && typeof op === "object" ? op.externalDocs : null;
-  return docs && typeof docs === "object" && !Array.isArray(docs) ? sellerDocsUrlFor(docs.url, originUrl) : null;
+  return docs && typeof docs === "object" && !Array.isArray(docs) ? cleanSellerDocsUrl(docs.url, originUrl) : null;
 }
 
 export function normaliseOpenapiTools(openapi, originUrl) {
@@ -4538,8 +4599,8 @@ function* mergeOpenapiIntoBazaarSteps(openapiTools = [], bazaarTools = [], { all
     const requestContract = ownContractTuple(o, "requestContract");
     const responseContract = ownContractTuple(o, "responseContract");
     // The operation's own documentation link, an own string re-checked
-    // against the row's seller origin (sellerDocsUrlFor).
-    const sellerDocsUrl = ownKey.call(o, "sellerDocsUrl") ? sellerDocsUrlFor(o.sellerDocsUrl, o.seller) : null;
+    // against the row's seller origin and the screen (cleanSellerDocsUrl).
+    const sellerDocsUrl = ownKey.call(o, "sellerDocsUrl") ? cleanSellerDocsUrl(o.sellerDocsUrl, o.seller) : null;
     const bazaarMicro = priceToMicroUsd(b.price);
     const originMicro = priceToMicroUsd(o.price);
     const priceConflict = bazaarMicro != null && originMicro != null && bazaarMicro !== originMicro;
@@ -9786,7 +9847,7 @@ export function sellerDetail(originOrHost) {
         // (externalDocs.url), re-checked against this origin. This record
         // alone carries it; screenSellerDetailForServe withholds it on a
         // flagged row. Legend: sellerDocsUrlLegend.
-        ...(() => { const d = sellerDocsUrlFor(t.sellerDocsUrl, origin); return d ? { sellerDocsUrl: d } : {}; })(),
+        ...(() => { const d = servedSellerDocsUrl(t, origin); return d ? { sellerDocsUrl: d } : {}; })(),
       })),
       sellerDocsUrlLegend: SELLER_DOCS_URL_LEGEND,
     };
@@ -9820,9 +9881,10 @@ export function screenSellerDetailForServe(d) {
       const s = memoServeScreen(rawRow || t, "detailListing", [t.name, t.description, category, t.tags, t.route || null, t.slug ?? null],
         () => screenListingForServe({ name: t.name, description: t.description, category, tags: t.tags, slug: t.slug ?? null, route: t.route ?? null }, { fallbackName: t.route || null }));
       const row = { ...t, name: s.name ?? null, description: s.description ? s.description : null };
-      // A flagged row's documentation link is withheld with its text, and a
-      // link that itself reads as an instruction is never served.
-      if ("sellerDocsUrl" in row && (s.finding || sellerDocsUrlFlagged(row.sellerDocsUrl))) delete row.sellerDocsUrl;
+      // A flagged row's documentation link is withheld with its text; a link
+      // that itself reads as an instruction never reached the record
+      // (servedSellerDocsUrl).
+      if ("sellerDocsUrl" in row && s.finding) delete row.sellerDocsUrl;
       if (t.slug !== undefined) row.slug = s.slug ?? null;
       if (t.tags !== undefined) row.tags = s.tags.length ? s.tags : undefined;
       return { ...row, ...untrustedMarker(s.finding) };

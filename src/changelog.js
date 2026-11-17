@@ -10,7 +10,7 @@ const ENTRIES = [
     date: "2026-11-17",
     title: "Seller documentation links on the exact seller record",
     items: [
-      "Surfaces: An exact seller record (/api/index?seller=<host>) carries an operation's documentation link as sellerDocsUrl when the seller's own OpenAPI names one (externalDocs.url) as an https link on the seller's exact host, with no credentials or fragment, ASCII only and 200 characters at most. The link is seller-supplied and unverified: it is never fetched, changes no price, quote or routing, and is withheld on a row the listing screen flags. No other surface carries it.",
+      "Surfaces: An exact seller record (/api/index?seller=<host>) carries an operation's documentation link as sellerDocsUrl when the seller's own OpenAPI names one (externalDocs.url) as an https link on the seller's exact host (under its own path for a seller listed with one), with no credentials or fragment, ASCII only and 200 characters at most. The link is seller-supplied and unverified: it is never fetched, changes no price, quote or routing, and is withheld when it or its row reads as an instruction to the listing screen. No other surface carries it.",
     ],
   },
   {
