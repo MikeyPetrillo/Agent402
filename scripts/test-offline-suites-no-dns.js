@@ -32,6 +32,7 @@ const PRELOAD = join(ROOT, "scripts/lib/dns-refuse-preload.js");
 
 const SUITES = [
   "test-capped-body-reads.js",
+  "test-coingecko-endpoint.js",
   "test-coingecko-rate.js",
   "test-crawl-conditional.js",
   "test-crawl-kit.js",

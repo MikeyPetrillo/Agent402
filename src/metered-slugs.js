@@ -14,6 +14,10 @@ export const METERED_SLUGS = new Set([
   // Reads stock-quote (and crypto-price) in-process: the same key dependency.
   // Listed only with MARKET_TICK=on (src/market-tick-switch.js).
   "market-tick",
+  // CoinGecko's on-chain pool endpoints answer only to a key (401 keyless),
+  // and CI holds none: these 503 on an unkeyed sweep. Offline coverage is
+  // scripts/test-crypto-screens-kit.js.
+  "dex-volume-board", "dex-pool-health",
   // Brave Search subscription
   "search", "search-lite", "search-news", "search-images", "search-videos", "search-suggest", "answer", "multi-search",
   "llm-context",      // Brave /llm/context - same subscription, billed per call

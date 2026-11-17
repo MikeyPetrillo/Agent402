@@ -320,7 +320,10 @@ file before changing a subsystem it names. The batch procedure is the `/batch` s
 Configuration and secrets are set on Railway (and, where a workflow needs them, as GitHub
 Actions secrets), never in the repo. Rollout switches are generally "key present = feature on"
 (for example `MPP_SECRET_KEY`, `TEMPO_API_KEY`, `STRIPE_SECRET_KEY`, `OPENROUTER_API_KEY`,
-`X_BEARER_TOKEN`). `OPEN_METEO_API_KEY` present = the weather tools read Open-Meteo's keyed
+`X_BEARER_TOKEN`). `COINGECKO_API_TIER` (`demo`, the default, or `pro`) picks the CoinGecko
+host and key header for `COINGECKO_API_KEY` (`src/tools/coingecko-endpoint.js`, the only file
+that names them): a paid key needs `pro`, and a keyless call uses the public host whatever the
+tier. `OPEN_METEO_API_KEY` present = the weather tools read Open-Meteo's keyed
 hosts; unset = its public hosts. Per-variable notes and thresholds live in `CLAUDE.local.md`. The backup
 bucket credentials (`BACKUP_S3_*`) live on Railway only, shown by `railway bucket credentials` and pasted by the operator
 into the service variables, never in Actions: the deploy job's variable upsert must not name a

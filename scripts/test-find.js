@@ -122,7 +122,7 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   // The invariant that matters: the DOMAIN tool still wins. route-execute may
   // appear lower down (it carries buy/purchase tags and genuinely can buy
   // these), but it must never displace the tool that actually answers.
-  for (const [q, want] of [["buy bitcoin price", "crypto-price"], ["purchase price of ethereum", "crypto-price"], ["order book for a token", "crypto-orderbook"]]) {
+  for (const [q, want] of [["buy bitcoin price", "crypto-price"], ["purchase price of ethereum", "crypto-price"]]) {
     ok(top(q)[0] === want, `ordinary commerce query still resolves to ${want}: "${q}" -> ${JSON.stringify(top(q))}`);
   }
 }
@@ -339,18 +339,14 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
 // --- The catalog must answer in the ASKER's vocabulary ----------------------
 //
 // A tool we already ship is worth nothing if the words a domain-fluent agent
-// uses reach none of it. Measured against the live catalog, with `l2-tvl`
-// shipping the whole time:
+// uses reach none of it. Measured against the live catalog:
 //
-//   l2beat          -> ZERO results
-//   rollup tvs      -> l2-tvl at 22 (weak)
-//   rollup risk tvs -> l2-tvl at 22 (weak)
 //   layer 2 updates -> sql-guard at 4 (wrong tool entirely)
 //
-// L2Beat is the canonical rollup-data site and TVS (Total Value Secured) is
-// its metric; "layer 2" is the spelled-out form, and its digit is a 1-char
-// token dropped before ranking, so only "layer" survives to match on. None of
-// those words appeared in any tool record.
+// "layer 2" is the spelled-out form of the l2 tag, and its digit is a 1-char
+// token dropped before ranking, so only "layer" survives to match on. (The
+// rollup locked-value ranking, l2-tvl, was retired 2026-11-16 with its
+// vocabulary; a locked-value query now has no L2 tool to land on.)
 //
 // Asserted against the REAL kit records rather than a fixture, because the
 // thing under test IS the curated vocabulary on those records - a fixture
@@ -361,36 +357,29 @@ JSON.parse(JSON.stringify(findTools(CATALOG, "extract", { baseUrl: "https://agen
   const f = (q) => findTools(C, q, { baseUrl: "https://agent402.tools" });
   const top1 = (q) => f(q).results[0]?.slug;
 
-  ok(f("l2beat").count > 0, `"l2beat" returns SOMETHING (it returned nothing at all while l2-tvl shipped)`);
-  ok(top1("l2beat") === "l2-tvl", `"l2beat" -> l2-tvl (got ${top1("l2beat")})`);
-  ok(top1("rollup tvs") === "l2-tvl", `"rollup tvs" -> l2-tvl (got ${top1("rollup tvs")})`);
-  ok(top1("rollup risk tvs") === "l2-tvl", `"rollup risk tvs" -> l2-tvl (got ${top1("rollup risk tvs")})`);
+  // A retired route is never a find result, whatever the query.
+  for (const q of ["l2beat", "rollup tvs", "total value locked on rollups"]) {
+    ok(!f(q).results.some((r) => r.slug === "l2-tvl"), `"${q}" does not resolve to the retired l2-tvl`);
+  }
   ok(String(top1("layer 2 updates") || "").startsWith("l2-"), `"layer 2 updates" -> an L2 tool (got ${top1("layer 2 updates")})`);
   ok(String(top1("layer-2 gas costs") || "").startsWith("l2-"), `hyphenated "layer-2" also expands (got ${top1("layer-2 gas costs")})`);
 
   // ...and ONLY as a phrase. Tagging bare "layer" on the L2 tools was the first
   // attempt and it hijacked ordinary English: "osi model layer" and "layer of
-  // encryption" both resolved to l2-tvl at high confidence. These two assert
+  // encryption" both resolved to an L2 tool at high confidence. These two assert
   // the narrower rule, so reintroducing the broad tag fails here.
   ok(!String(top1("layer of encryption") || "").startsWith("l2-"),
     `bare "layer" does NOT reach the L2 tools (got ${top1("layer of encryption")})`);
   ok(!String(top1("osi model layer") || "").startsWith("l2-"),
     `a networking "layer" question does NOT reach the L2 tools (got ${top1("osi model layer")})`);
 
-  // ...and the routing terms must not smear across the two L2 tools. A gas
-  // question still belongs to the gas tool: widening vocabulary is only a fix
-  // if it does not trade a zero-result miss for a confidently wrong answer,
-  // which is the more expensive failure - the agent PAYS for that one.
+  // A gas question belongs to the gas tool, and a locked-value question must
+  // not land there: a zero-result miss is cheaper than a confidently wrong
+  // answer - the agent PAYS for that one.
   ok(top1("compare l2 gas fees across chains") === "l2-gas-comparison",
     `a gas query still resolves to l2-gas-comparison (got ${top1("compare l2 gas fees across chains")})`);
-  ok(top1("total value locked on rollups") === "l2-tvl",
-    `a TVL query still resolves to l2-tvl (got ${top1("total value locked on rollups")})`);
-
-  // The miss signal is what recorded this in the first place. Covering the
-  // vocabulary must also stop it re-recording, or the board keeps reporting a
-  // gap that no longer exists and buries the ones that do.
-  ok(f("l2beat").rarestTermCovered === true,
-    `"l2beat" no longer registers as a find-miss (rarest=${f("l2beat").rarestTerm})`);
+  ok(top1("total value locked on rollups") !== "l2-gas-comparison",
+    `a locked-value query does not land on the gas tool (got ${top1("total value locked on rollups")})`);
 }
 
 // --- Front door: search / answer / news phrasing ----------------------------

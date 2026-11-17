@@ -1249,14 +1249,14 @@ export const PACK_STEPS = {
     ],
   },
 
-  // DeFi protocol scanner: price, market scale, real usage (TVL), news.
+  // DeFi protocol scanner: price, market scale, token fundamentals, news.
   // Independent reads, so fan out.
   "defi-protocol-scanner": {
     mode: "fanout",
     steps: [
       { slug: "crypto-price",  mapInput: (a) => ({ coins: a.protocol, currency: "usd" }) },
       { slug: "crypto-market", mapInput: () => ({ limit: 10, currency: "usd" }) },
-      { slug: "defi-tvl",      mapInput: (a) => ({ protocol: a.protocol }) },
+      { slug: "coin-profile",  mapInput: (a) => ({ coin: a.protocol, currency: "usd" }) },
       { slug: "search",        mapInput: (a) => ({ q: `${a.protocol} defi protocol audit security incident`, count: 5 }) },
     ],
   },
@@ -1331,12 +1331,11 @@ export const PACK_STEPS = {
     ],
   },
 
-  // DeFi dashboard: TVL + ETH price + Base gas + global stats.
-  // defi-tvl requires a protocol slug — "aave" as the default reference protocol.
+  // DeFi dashboard: DeFi market cap and dominance + ETH price + Base gas + global stats.
   "defi-dashboard": {
     mode: "fanout",
     steps: [
-      { slug: "defi-tvl",      mapInput: () => ({ protocol: "aave" }) },
+      { slug: "global-defi",   mapInput: () => ({}) },
       { slug: "crypto-price",  mapInput: () => ({ coins: "ETH", currency: "usd" }) },
       { slug: "gas-snapshot",  mapInput: () => ({ network: "base" }) },
       { slug: "crypto-global", mapInput: () => ({ currency: "usd" }) },
@@ -2173,6 +2172,17 @@ async function runPack(packSlug, args, ctx) {
       { statusCode: allClientErrors ? 400 : 502 }
     );
   }
+  // A step whose tool credits its source (a `credit` field, src/data-
+  // attribution.js) has that sentence moved to the envelope, which prints
+  // each distinct credit once however many steps read the same source.
+  const credits = [];
+  const shown = steps.map((s) => {
+    const r = s.result;
+    if (!s.ok || !r || typeof r !== "object" || Array.isArray(r) || typeof r.credit !== "string") return s;
+    if (!credits.includes(r.credit)) credits.push(r.credit);
+    const { credit: _credit, ...rest } = r;
+    return { ...s, result: rest };
+  });
   return {
     pack: packSlug,
     // Echo the caller's args back MINUS anything named as a secret. The pack that
@@ -2182,8 +2192,9 @@ async function runPack(packSlug, args, ctx) {
     // MCP logs. Only ever visible to the caller who supplied it, so not an
     // escalation; it is a stated guarantee the code did not keep.
     args: redactSecretArgs(args),
-    steps,
+    steps: shown,
     summary: `${okCount}/${attempted.length} steps succeeded${steps.length > attempted.length ? ` (${steps.length - attempted.length} skipped as not applicable)` : ""}`,
+    ...(credits.length ? { credit: credits.join(" ") } : {}),
   };
 }
 
@@ -2204,6 +2215,8 @@ export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
     const exampleArgs = Object.fromEntries(
       (pack.promptArgs || []).map((a) => [a.name, a.substitute])
     );
+    // The source credits the pack's answer carries once (runPack).
+    const packCredits = [...new Set(pack.toolSlugs.map((s) => toolBySlug.get(s)?.credit).filter((c) => typeof c === "string" && c))];
     return {
       route,
       name: `Skill: ${pack.title}`,
@@ -2237,6 +2250,7 @@ export function buildSkillTools({ getCatalog, inlineHandlers = {} }) {
             args: exampleArgs,
             steps: pack.toolSlugs.map((s) => ({ slug: s, ok: true, result: {} })),
             summary: `${pack.toolSlugs.length}/${pack.toolSlugs.length} steps succeeded`,
+            ...(packCredits.length ? { credit: packCredits.join(" ") } : {}),
           },
         },
       },

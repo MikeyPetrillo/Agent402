@@ -189,14 +189,12 @@ globalThis.fetch = stall;
 const KITS = [
   // [module, export, slug, input, label regex, step regex]
   ["price-feed-kit.js", "PRICE_FEED_TOOLS", "price-coingecko", { ids: ["bitcoin", "ethereum"] }, /^Price feed$/, /^simple price$/],
-  ["dex-kit.js", "DEX_TOOLS", "dex-top-pools", { chain: "Base", project: "uniswap-v3", limit: 5 }, /^DeFiLlama$/, /^pools$/],
   ["dex-kit.js", "DEX_TOOLS", "dex-pool", { poolAddress: "0xd0b53d9277642d899df5c87a3966a349a798f224", network: "base" }, /^Chain RPC$/, /^eth_call$/],
   ["chain-kit.js", "CHAIN_TOOLS", "wallet-balance", { address: "0xaBF4FAbd7c416fB67202E5f9002389Fc75e2a9D0", network: "base" }, /^Chain$/, /^eth_getBalance$/],
   ["chain-kit.js", "CHAIN_TOOLS", "block-number", { network: "base" }, /^Chain RPC$/, /^eth_blockNumber$/],
   ["alchemy-data-kit.js", "ALCHEMY_DATA_TOOLS", "tx-receipt", { hash: "0x214b3526ee64f7eabfc94ea536b8680bd95a2da634ebf5149aea189d311be56b", network: "ethereum" }, /^Chain data$/, /^batch of 2 calls$/],
   ["nft-market-kit.js", "NFT_MARKET_TOOLS", "nft-floor", { contract: "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d" }, /^Alchemy NFT$/, /^getFloorPrice$/],
   ["mev-and-l2-kit.js", "MEV_AND_L2_TOOLS", "mev-recent-blocks", { limit: 5 }, /^MEV relay [\w.-]+$/, /^bidtraces$/],
-  ["mev-and-l2-kit.js", "MEV_AND_L2_TOOLS", "l2-tvl", { limit: 10 }, /^DeFiLlama$/, /^chains$/],
   ["onchain-identity-kit.js", "ONCHAIN_IDENTITY_TOOLS", "eas-attestations", { address: "0xd8da6bf26964af9d7eed9e03e53415d37aa96045", network: "mainnet", limit: 5 }, /^EAS$/, /^attestations$/],
   ["onchain-identity-kit.js", "ONCHAIN_IDENTITY_TOOLS", "ens-bulk-resolve", { addresses: ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045", "0x000000000000000000000000000000000000dead"] }, /^ENS resolver$/, /^resolve$/],
   ["prediction-market-kit.js", "PREDICTION_MARKET_TOOLS", "kalshi-markets", { status: "open", limit: 5 }, /^Kalshi$/, /^markets$/],
@@ -205,7 +203,8 @@ const KITS = [
   ["tts-kit.js", "TTS_TOOLS", "tts-lite", { text: "Hello from Agent402!", voice: "alloy", format: "mp3" }, /^Speech upstream$/, /^speech$/],
   ["crypto-signals-kit.js", "CRYPTO_SIGNALS_TOOLS", "crypto-indicators", { coin: "BTC", interval: "1h", limit: 200, points: 5 }, /^Hyperliquid$/, /^\w+$/],
   ["derivatives-kit.js", "DERIVATIVES_TOOLS", "perp-markets", { limit: 10 }, /^Hyperliquid$/, /^\w+$/],
-  ["defi-kit.js", "DEFI_TOOLS", "defi-protocols", { category: "Lending", limit: 5 }, /^DefiLlama$/, /^document$/],
+  ["crypto-screens-kit.js", "CRYPTO_SCREENS_TOOLS", "exchange-spread", { coin: "ethereum" }, /^Market data upstream$/, /^coins ethereum tickers$/],
+  ["lending-rates-kit.js", "LENDING_TOOLS", "lending-rates", { network: "ethereum" }, /^Chain RPC$/, /^eth_call$/],
   ["crypto-markets-kit.js", "CRYPTO_MARKETS_TOOLS", "exchange-rates", { currencies: "usd,eur,eth,xau" }, /^Market data upstream$/, /^exchange rates$/],
   ["farcaster-social-kit.js", "FARCASTER_SOCIAL_TOOLS", "fc-channel", { id: "base" }, /^Farcaster upstream$/, /^channel$/],
   ["contract-kit.js", "CONTRACT_TOOLS", "contract-abi", { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", network: "base" }, /^[\w .-]+$/, /^lookup$/],
@@ -240,10 +239,6 @@ ok(PAYMENT_WINDOW_BUDGET_MS === (DEFAULT_MAX_TIMEOUT_SECONDS - SETTLE_RULE_SECON
 for (const [file, , slug] of KITS) {
   const tool = (mods.get(file) || []).find((t) => t.slug === slug);
   ok(tool?.handler?.__budgetMs === PAYMENT_WINDOW_BUDGET_MS, `${slug}: runs under the payment-window budget in production (${tool?.handler?.__budgetMs} ms)`);
-}
-{
-  const tvl = (mods.get("price-feed-kit.js") || []).find((t) => t.slug === "defi-tvl");
-  ok(tvl?.handler?.__budgetMs === PAYMENT_WINDOW_BUDGET_MS, "defi-tvl, whose protocol document keeps its 25 s cap, runs under the payment-window budget");
 }
 // Every kit's call runs together: each is its own handler call with its own budget.
 const runs = await Promise.all(KITS.map(([file, , slug, input]) => {

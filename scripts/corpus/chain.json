@@ -1,5 +1,5 @@
 {
- "about": "Chain reads over public RPCs, CoinGecko demo, DefiLlama, ENS, Sourcify (tier 1). Alchemy-backed tools skip on a keyless boot.",
+ "about": "Chain reads over public RPCs, CoinGecko demo, ENS, Sourcify (tier 1). Alchemy-backed tools skip on a keyless boot.",
  "cases": [
   {
    "slug": "crypto-price",
@@ -213,110 +213,6 @@
    },
    "paceKey": "coingecko",
    "pace": 5000
-  },
-  {
-   "slug": "defi-yields",
-   "name": "ethereum, min apy, sorted by tvl",
-   "input": {
-    "chain": "Ethereum",
-    "minApy": 3,
-    "minTvlUsd": 10000000,
-    "sort": "tvl",
-    "limit": 3
-   },
-   "expect": {
-    "equals": {
-     "count": 3
-    },
-    "gt": {
-     "matched": 3,
-     "pools[0].tvlUsd": 10000000
-    },
-    "gte": {
-     "pools[0].apy": 3
-    }
-   }
-  },
-  {
-   "slug": "defi-yields",
-   "name": "impossible filter is an honest zero",
-   "_why": "The filter must be impossible for a STRUCTURAL reason, not a numerically extreme one. This case used minApy 5000 and broke on 2026-09-12 when a real Uniswap v3 WSTETH-USDC pool on Ethereum hit 5,656% APY on $84k of TVL: APY is an unbounded RATIO, so a tiny pool with a volatile fee week can exceed any threshold, and the tool was right to return it. TVL is bounded by money that actually exists - total DeFi TVL is ~$100B - so a quadrillion-dollar floor is impossible in a way no APY number is.",
-   "input": {
-    "chain": "Ethereum",
-    "minTvlUsd": 1000000000000000,
-    "limit": 3
-   },
-   "expect": {
-    "equals": {
-     "count": 0,
-     "matched": 0
-    },
-    "empty": [
-     "pools"
-    ]
-   }
-  },
-  {
-   "slug": "defi-tvl",
-   "name": "uniswap",
-   "input": {
-    "protocol": "uniswap"
-   },
-   "expect": {
-    "gt": {
-     "tvlUsd": 100000000
-    },
-    "populated": [
-     "name",
-     "category",
-     "chainTvls"
-    ]
-   }
-  },
-  {
-   "slug": "defi-tvl",
-   "name": "unknown protocol is a 404, not a 500",
-   "input": {
-    "protocol": "zzq-not-a-protocol"
-   },
-   "expect": {
-    "status": 404
-   }
-  },
-  {
-   "slug": "dex-top-pools",
-   "name": "aerodrome on base",
-   "input": {
-    "chain": "Base",
-    "project": "aerodrome-v1",
-    "limit": 3
-   },
-   "expect": {
-    "gte": {
-     "count": 1
-    },
-    "populated": [
-     "pools[0]"
-    ]
-   }
-  },
-  {
-   "slug": "l2-tvl",
-   "name": "top 3",
-   "input": {
-    "limit": 3
-   },
-   "expect": {
-    "equals": {
-     "count": 3
-    },
-    "gt": {
-     "totalTvlUsd": 1000000000
-    },
-    "populated": [
-     "chains[0]"
-    ]
-   }
   },
   {
    "slug": "l2-gas-comparison",
@@ -1107,6 +1003,75 @@
    },
    "expect": {
     "status": 422
+   }
+  },
+  {
+   "slug": "lending-rates",
+   "name": "base, every asset",
+   "input": {
+    "network": "base"
+   },
+   "expect": {
+    "equals": {
+     "source": "onchain",
+     "network": "base",
+     "chainId": 8453
+    },
+    "minCount": {
+     "markets": 3,
+     "byAsset": 2
+    },
+    "gt": {
+     "blockNumber": 1000000,
+     "markets[0].borrowApyPct": 0
+    },
+    "populated": [
+     "markets[0].protocol",
+     "markets[0].contract",
+     "byAsset[0].higherSupply.protocol",
+     "method"
+    ]
+   }
+  },
+  {
+   "slug": "lending-rates",
+   "name": "one asset on arbitrum, both protocols",
+   "input": {
+    "network": "arbitrum",
+    "asset": "usdc"
+   },
+   "expect": {
+    "equals": {
+     "network": "arbitrum",
+     "count": 2,
+     "byAsset[0].asset": "USDC",
+     "byAsset[0].protocols": 2
+    },
+    "populated": [
+     "byAsset[0].supplyGapPct",
+     "byAsset[0].lowerBorrow.protocol"
+    ]
+   }
+  },
+  {
+   "slug": "lending-rates",
+   "name": "an asset not read on the network is a 422 naming what is",
+   "input": {
+    "network": "base",
+    "asset": "DAI"
+   },
+   "expect": {
+    "status": 422
+   }
+  },
+  {
+   "slug": "lending-rates",
+   "name": "an unsupported network is a 400",
+   "input": {
+    "network": "solana"
+   },
+   "expect": {
+    "status": 400
    }
   }
  ],

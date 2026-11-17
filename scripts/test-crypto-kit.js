@@ -8,6 +8,7 @@
 // break the build if EVERY one fails — that would mean our integration broke.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CRYPTO_TOOLS } from "../src/tools/crypto-kit.js";
+import { COINGECKO_CREDIT } from "../src/data-attribution.js";
 
 const h = (slug) => CRYPTO_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
@@ -27,10 +28,6 @@ for (const [slug, args, label] of [
   ["crypto-history", { coin: "BTC", days: "week" }, "crypto-history rejects non-numeric days"],
   ["crypto-history", { coin: "BTC", days: "0" }, "crypto-history rejects days 0"],
   ["crypto-history", { coin: "B@D" }, "crypto-history rejects coin with invalid char"],
-  ["crypto-orderbook", {}, "crypto-orderbook rejects missing pair"],
-  ["crypto-orderbook", { pair: "BTCUSD" }, "crypto-orderbook rejects pair without separator"],
-  ["crypto-orderbook", { pair: "BTC-USD", depth: 0 }, "crypto-orderbook rejects depth 0"],
-  ["crypto-orderbook", { pair: "BTC-USD", depth: 101 }, "crypto-orderbook rejects depth 101"],
   ["stablecoin-peg", { coins: "USDT USDC" }, "stablecoin-peg rejects coins with space"],
   ["stablecoin-peg", { coins: Array(16).fill("USDT").join(",") }, "stablecoin-peg rejects >15 coins"],
 ]) {
@@ -42,6 +39,9 @@ for (const [slug, args, label] of [
 async function live(slug, args, check, label) {
   try {
     const r = await h(slug)(args);
+    // Every CoinGecko answer carries the source credit with its link.
+    const credited = r?.credit === COINGECKO_CREDIT;
+    if (!credited) { assertFail++; console.error(`ASSERT FAIL - ${label}: credit ${JSON.stringify(r?.credit)}`); }
     if (check(r)) { liveOk++; console.log(`ok - ${label}: ${JSON.stringify(r).slice(0, 140)}`); }
     else { assertFail++; console.error(`ASSERT FAIL - ${label}: unexpected shape ${JSON.stringify(r).slice(0, 240)}`); }
   } catch (e) {
@@ -83,14 +83,6 @@ await live("crypto-trending", {},
 await live("crypto-global", { currency: "usd" },
   (r) => r.currency === "usd" && r.totalMarketCap > 1e11 && r.totalMarketCap < 1e14 && r.btcDominancePct > 20 && r.btcDominancePct < 80,
   "crypto-global usd");
-
-// Order book — BTC-USD is Coinbase's deepest market: both sides always
-// populated, best ask strictly above best bid, levels sorted best-first.
-await live("crypto-orderbook", { pair: "BTC-USD", depth: 5 },
-  (r) => r.pair === "BTC-USD" && r.bids.length === 5 && r.asks.length === 5 &&
-    r.bestAsk > r.bestBid && r.spread > 0 &&
-    r.bids.every((l) => typeof l.price === "number" && typeof l.size === "number"),
-  "crypto-orderbook BTC-USD depth 5");
 
 // Stablecoin peg — default set covers the top USD stables. In any plausible
 // market USDT and USDC sit within ±2% of $1; assert the deviation math and

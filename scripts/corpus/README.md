@@ -5,7 +5,7 @@ no canary: a case asserts the answer is *populated* (values, counts, honest empt
 refusals), not merely shaped. Tiers are derived from the live catalog, never declared here:
 
 - **T0** pure-CPU tools: every push, $0.
-- **T1** free public upstreams (SEC, FRED-less macro, openFDA, DefiLlama, Hyperliquid, CoinGecko demo, open-meteo,
+- **T1** free public upstreams (SEC, FRED-less macro, openFDA, Hyperliquid, CoinGecko demo, open-meteo,
   public RPCs, Kalshi): nightly (`corpus-nightly.yml`), $0, upstream failures reported not fatal.
 - **T2** paid upstreams (`METERED_SLUGS`): `--tier 2` by hand with a separate OpenRouter key, cheap links only.
 

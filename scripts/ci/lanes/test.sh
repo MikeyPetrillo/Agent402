@@ -19,8 +19,9 @@ t node scripts/test-paid-canary.js
 t node scripts/test-derivatives-kit.js
 # solana-intel kit (offline)
 t node scripts/test-solana-intel-kit.js
-# defi kit (offline)
-t node scripts/test-defi-kit.js
+# computed crypto answers and the lending-rate contract reads (offline, stubbed)
+t node scripts/test-crypto-screens-kit.js
+t node scripts/test-lending-rates-kit.js
 # market tick: stubbed sources, the per-symbol cache, partial marking, and the MARKET_TICK switch (offline)
 t node scripts/test-market-tick.js
 t node scripts/test-cve-kit.js
@@ -38,5 +39,7 @@ t node scripts/test-ecosystem-category.js
 t node scripts/test-token-brief-kit.js
 # crypto-markets kit (offline)
 t node scripts/test-crypto-markets-kit.js
+# CoinGecko host and key header per COINGECKO_API_TIER, every calling kit (offline)
+t node scripts/test-coingecko-endpoint.js
 # Offline suites that stub an upstream pass with every real name lookup refused (the address guard's resolver; booted servers inherit the preload)
 t node scripts/test-offline-suites-no-dns.js

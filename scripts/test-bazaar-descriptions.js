@@ -176,6 +176,16 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   ok(midText.length === 0, `no attribution sentence sits anywhere but the end of a description (${midText.join(", ") || "none"})`);
   const counts = Object.fromEntries(Object.keys(ATTRIBUTIONS).map((k) => [k, (bySource[k] || []).length]));
   ok(Object.values(counts).every((n) => n > 0) && counts.fred >= 9 && counts["us-treasury"] >= 3 && counts.ecb >= 4 && counts.coingecko >= 24 && counts.jupiter >= 5, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
+  // The longest credited texts: at both cuts the text before the credit is the
+  // catalog text up to one of its own sentence ends, never a clause cut short
+  // with a period put after it.
+  for (const slug of ["coin-market-chart-range", "exchange-tickers", "coins-list", "coin-profile"]) {
+    const t = tools.get(slug);
+    const want = ATTRIBUTIONS[t?.attribution];
+    const r = listingEnds(slug, t?.description || "", [want]);
+    const whole = (x) => { const lead = x.slice(0, x.length - want.length).trim(); return lead.length > 0 && /[.!?]$/.test(lead) && t.description.startsWith(`${lead} `); };
+    ok(!!t && !!want && r.ok && whole(r.listed) && whole(r.cut), `${slug}: both cuts end the text before the credit at a whole sentence (${JSON.stringify(r.cut.slice(-(want.length + 40)))})`);
+  }
   // Skill packs: the sources of the tools each pack runs, in pack order.
   const catalog = Object.fromEntries([...tools.values()].map((t) => [t.route, t]));
   const packTools = new Map(buildSkillTools({ getCatalog: () => catalog }).map((t) => [t.slug, t]));

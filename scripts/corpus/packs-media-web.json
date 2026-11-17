@@ -644,9 +644,9 @@
     },
     {
       "slug": "skill-defi-protocol-scanner",
-      "name": "a second protocol",
+      "name": "a second protocol token",
       "input": {
-        "protocol": "lido"
+        "protocol": "uniswap"
       },
       "expect": {
         "equals": {

@@ -1,10 +1,7 @@
 // Derivatives kit - crypto perpetuals and options market data from public,
 // keyless APIs. Perp data (funding, open interest, mark/oracle, candles,
 // order book, predicted funding) comes from the Hyperliquid info API; options
-// data (index, DVOL, book summaries, tickers) from Deribit's public API; the
-// onchain options protocol volume ranking from DefiLlama's free options
-// overview (the perps/derivatives overview is behind their paid plan and is
-// deliberately not used here).
+// data (index, DVOL, book summaries, tickers) from Deribit's public API.
 //
 // Every handler validates its inputs (400), bounds list sizes (limit <= 500),
 // ends a read at its deadline as a 503 naming the upstream and the step
@@ -21,8 +18,6 @@ import { hlSharedInfo, labelHlStaleness, HL_HISTORY_TTL_MS, __hlShared } from ".
 const TIMEOUT_MS = 10_000;
 const HL_INFO = "https://api.hyperliquid.xyz/info";
 const DERIBIT = "https://www.deribit.com/api/v2/public";
-const LLAMA_OPTIONS =
-  "https://api.llama.fi/overview/options?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true";
 const UA = "Mozilla/5.0 (compatible; Agent402/1.0; +https://agent402.tools)";
 
 const MAX_LIMIT = 500;
@@ -157,15 +152,6 @@ async function deribit(method, params = {}) {
   if (status >= 400) throw bad("Deribit rejected the request", 422);
   if (json == null || !("result" in json)) throw bad("Deribit returned an unexpected response shape", 502);
   return json.result;
-}
-
-async function llamaOptionsOverview() {
-  const { status, text } = await rawFetch(LLAMA_OPTIONS, { label: "DefiLlama", step: "options overview" });
-  if (status >= 500) throw bad(`DefiLlama upstream HTTP ${status} - try again later`, 502);
-  if (status >= 400) throw bad("DefiLlama refused the request", 502);
-  const json = parseJson(text, "DefiLlama");
-  if (!json || !Array.isArray(json.protocols)) throw bad("DefiLlama returned an unexpected response shape", 502);
-  return json;
 }
 
 // --- Hyperliquid helpers ----------------------------------------------------
@@ -1319,76 +1305,6 @@ const DERIVATIVES_TOOLS_RAW = [
     },
   },
 
-  // ===========================================================================
-  // options-volume - DefiLlama onchain options protocols ranked by volume.
-  // ===========================================================================
-  {
-    route: "POST /api/options-volume",
-    name: "Onchain options volume by protocol",
-    slug: "options-volume",
-    category: "crypto",
-    price: "$0.002",
-    description:
-      "Onchain options protocols ranked by 24h notional volume from an open DeFi analytics options overview: per-protocol 24h, 7d and 30d volume with 1d/7d change and chains, plus sector totals and the list of chains with options volume. limit caps rows (default 25, max 100). Keyless public data.",
-    tags: ["crypto", "derivatives", "options", "volume", "defi", "ranking"],
-    discovery: {
-      bodyType: "json",
-      input: { limit: 10 },
-      inputSchema: {
-        properties: {
-          limit: { type: "number", description: "Protocols to return (default 25, max 100)." },
-          chain: { type: "string", description: "Optional chain name filter, e.g. Arbitrum (case-insensitive)." },
-        },
-        required: [],
-      },
-      output: {
-        example: {
-          source: "defillama-options",
-          totals: { volume24hUsd: 5093016, volume7dUsd: 11148265.31, volume30dUsd: 30971390.66, change1dPct: 10.03, change7dPct: 4.1 },
-          chains: ["Derive Chain", "Hyperliquid L1", "Base"],
-          count: 1,
-          protocols: [{ name: "Derive", slug: "derive", category: "Options", chains: ["Derive Chain"], volume24hUsd: 3000000, volume7dUsd: 7000000, volume30dUsd: 20000000, change1dPct: 12.5, change7dPct: 3.2 }],
-          fetchedAt: "2026-08-22T12:00:00.000Z",
-        },
-      },
-    },
-    handler: async (i = {}) => {
-      const limit = takeLimit(i.limit, 25, 100);
-      let chain = null;
-      if (i.chain != null && i.chain !== "") {
-        if (typeof i.chain !== "string" || i.chain.length > 40 || !/^[A-Za-z0-9 .\-]+$/.test(i.chain)) throw bad('"chain" must be a chain name such as "Arbitrum"');
-        chain = i.chain.trim().toLowerCase();
-      }
-      const json = await llamaOptionsOverview();
-      let protocols = json.protocols.map((p) => ({
-        name: p.displayName || p.name || null,
-        slug: p.module || p.slug || null,
-        category: p.category || null,
-        chains: Array.isArray(p.chains) ? p.chains : [],
-        volume24hUsd: num(p.total24h),
-        volume7dUsd: num(p.total7d),
-        volume30dUsd: num(p.total30d),
-        change1dPct: num(p.change_1d),
-        change7dPct: num(p.change_7d),
-      }));
-      if (chain) protocols = protocols.filter((p) => p.chains.some((c) => String(c).toLowerCase() === chain));
-      protocols.sort((a, b) => (b.volume24hUsd ?? 0) - (a.volume24hUsd ?? 0));
-      return {
-        source: "defillama-options",
-        totals: {
-          volume24hUsd: num(json.total24h),
-          volume7dUsd: num(json.total7d),
-          volume30dUsd: num(json.total30d),
-          change1dPct: num(json.change_1d),
-          change7dPct: num(json.change_7d),
-        },
-        chains: Array.isArray(json.allChains) ? json.allChains : [],
-        count: Math.min(protocols.length, limit),
-        protocols: protocols.slice(0, limit),
-        fetchedAt: nowIso(),
-      };
-    },
-  },
 ];
 // An answer built from a stale shared read says so in fields.
 export const DERIVATIVES_TOOLS = labelHlStaleness(DERIVATIVES_TOOLS_RAW);
@@ -1405,7 +1321,6 @@ export const __test = {
   INTERVALS,
   HL_INFO,
   DERIBIT,
-  LLAMA_OPTIONS,
 };
 
 // Every handler runs under one budget (src/upstream-deadline.js).

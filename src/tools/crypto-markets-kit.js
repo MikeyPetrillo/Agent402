@@ -9,19 +9,19 @@
 // exchange rates, full-text search and the full coin list with platform
 // contracts. Same slug-style ids as the rest of the catalog.
 //
-// Upstream: api.coingecko.com/api/v3 (fixed host; every caller-supplied value
-// rides as an encoded path segment or query parameter, never a URL). The Demo
-// API key (`COINGECKO_API_KEY`, read at call time, sent as
-// `x-cg-demo-api-key`) moves metering from a shared per-IP bucket to our own
-// quota: 30 calls/min, 10k calls/month. That monthly budget is the reason
-// every response is cached in-process (60s for prices, 5 min for lists and
-// profiles, 10 min for the coin list): a second identical call inside the
-// window costs the buyer the same and costs the quota nothing. Live-verified
-// 2026-08-22: every endpoint below answers on the Demo plan; the
-// gainers/losers endpoint is paid-plan only (401, error 10005) and is not
-// offered; history/ohlc/range are limited to the past 365 days on this plan
-// (401, error 10012), which the handlers enforce locally so a buyer gets a
-// 400 with the rule instead of a wasted round-trip.
+// Upstream: CoinGecko API v3 (fixed host per tier; every caller-supplied value
+// rides as an encoded path segment or query parameter, never a URL). The API
+// key (`COINGECKO_API_KEY`, read at call time; host and header per
+// `COINGECKO_API_TIER`, src/tools/coingecko-endpoint.js) moves metering from
+// a shared per-IP bucket to the key's own per-minute and monthly quota, whose
+// size depends on the plan (the shared minute bucket is in coingecko-rate.js).
+// That monthly quota is the reason every response is cached in-process (60s
+// for prices, 5 min for lists and profiles, 10 min for the coin list): a
+// second identical call inside the window costs the buyer the same and costs
+// the quota nothing. Every endpoint below was live-verified on 2026-08-22;
+// the gainers/losers endpoint is not offered; history/ohlc/range are held to
+// the past 365 days (MAX_HISTORY_DAYS), which the handlers enforce locally so
+// a buyer gets a 400 with the rule instead of a wasted round-trip.
 //
 // Error mapping (never relays an upstream body): 404 / unknown id -> 422,
 // 429 -> 503 with a retry hint, 5xx -> 502, 401/403 -> 422 (plan limit),
@@ -32,7 +32,7 @@ function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-export const CG_BASE = "https://api.coingecko.com/api/v3";
+import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 const SOURCE = "coingecko";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read under its own cap and the
@@ -47,7 +47,7 @@ const RETRY_BACKOFF_MS = 1500;
 // text plus the fetch time (src/tools/coingecko-cache.js shares it across
 // replicas with the same TTL); the parsed JSON is memoized on the entry, and
 // handlers project from it every time, never mutate it.
-const TTL = Object.freeze({ price: 60_000, list: 300_000, coinList: 600_000 });
+export const TTL = Object.freeze({ price: 60_000, list: 300_000, coinList: 600_000 });
 const MAX_ENTRIES = 256;
 const cache = createCgCache("markets", { max: MAX_ENTRIES, keepParsed: true });
 
@@ -58,42 +58,46 @@ function userAgent() {
 }
 
 function headers() {
-  const key = (process.env.COINGECKO_API_KEY || "").trim();
   return {
     "User-Agent": userAgent(),
     Accept: "application/json",
-    ...(key ? { "x-cg-demo-api-key": key } : {}),
+    ...cgKeyHeaders(),
   };
 }
 
 // One upstream GET with the cache in front. `ttlMs` picks the cache class.
 // Returns { data, fetchedAt, cached }.
-// Demo plan allows 30 requests a minute for the whole deployment, so paid
+// The key's per-minute limit covers the whole deployment, so paid
 // traffic has to be paced here rather than discovered at the upstream 429. A
 // caller that arrives with an empty bucket gets 503 (capacity) and is not
 // charged; a cache hit never takes a token.
 // The bucket is SHARED with crypto-kit since 2026-09-03 (src/tools/coingecko-rate.js):
-// one Demo key, one minute budget, whichever kit spends it.
+// one key, one minute budget, whichever kit spends it.
 import { cgTake, cgRefusal, resetCgRateLimit } from "./coingecko-rate.js";
-import { attribute } from "../data-attribution.js";
+import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 export { resetCgRateLimit };
 
-async function cgGet(path, params, ttlMs) {
-  const url = new URL(CG_BASE + path);
+// `reduce` (optional): { name, fn }. The upstream body is passed through fn
+// once, when it is fetched, and only the reduced value is cached (under its
+// own key, so the same URL read whole elsewhere keeps its own entry): a large
+// document a tool computes over is kept as the few fields it reads.
+export async function cgGet(path, params, ttlMs, reduce = null) {
+  const url = new URL(cgBase() + path);
   for (const [k, v] of Object.entries(params || {})) {
     if (v === undefined || v === null || v === "") continue;
     url.searchParams.set(k, String(v));
   }
   const key = url.toString();
-  const { entry, cached } = await cache.through(key, ttlMs, () => cgLoad(key, path));
+  const cacheKey = reduce ? `${key}#${reduce.name}` : key;
+  const { entry, cached } = await cache.through(cacheKey, ttlMs, () => cgLoad(key, path, reduce));
   entry.data ??= JSON.parse(entry.text);
   return { data: entry.data, fetchedAt: entry.fetchedAt, cached };
 }
 
 // One upstream read for cgGet: the body text of a 200 that parses as JSON, or
 // a thrown refusal (never cached).
-async function cgLoad(key, path) {
+async function cgLoad(key, path, reduce = null) {
   const why = await cgTake(Date.now());
   if (why) throw cgRefusal(why, "Market data");
   // The ctx of the read that answered is kept, so its body read runs under
@@ -101,8 +105,8 @@ async function cgLoad(key, path) {
   const ctxOf = new WeakMap();
   const attempt = () => { const c = { label: "Market data upstream", step: stepOf(path), timeoutMs: TIMEOUT_MS, tag: "[crypto-markets]" }; return upstreamFetch(key, { headers: headers() }, c).then((r) => { ctxOf.set(r, c); return r; }); };
   let res = await attempt();
-  // One retry on 429/5xx after a short backoff: the Demo bucket is 30/min and
-  // a chained agent call can brush it; a second failure of the same class maps
+  // One retry on 429/5xx after a short backoff: the key's minute bucket is
+  // shared and a chained agent call can brush it; a second failure of the same class maps
   // below.
   // The retry is a second request, so it takes its own token.
   // The retry is taken only when the handler budget can hold the backoff and
@@ -134,6 +138,10 @@ async function cgLoad(key, path) {
   let text, data;
   try { text = await bodyUnderDeadline(res.text(), ctxOf.get(res) || {}); data = JSON.parse(text); }
   catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned non-JSON", 502); }
+  if (reduce) {
+    try { data = reduce.fn(data); text = JSON.stringify(data); }
+    catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned an unexpected shape", 502); }
+  }
   return { text, data };
 }
 
@@ -214,7 +222,7 @@ function takeContracts(raw, max = 25) {
 }
 
 const DAY_MS = 86_400_000;
-const MAX_HISTORY_DAYS = 365; // Demo-plan window, enforced locally
+const MAX_HISTORY_DAYS = 365; // history window, enforced locally
 
 // Accepts unix seconds (number or numeric string) or an ISO-8601 / YYYY-MM-DD
 // string. Returns unix seconds.
@@ -340,7 +348,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.008",
     description:
-      "Full profile of one coin by id: name/symbol, description, categories, contract addresses per platform, links (homepage, explorers, repos, social), hashing algorithm, genesis date, and a market snapshot in your currency: price, rank, market cap, fully diluted valuation, 24h volume, ATH/ATL with dates and distance, circulating/total/max supply, 24h/7d/30d/1y change. One call for the metadata a token-risk or research agent otherwise assembles from five. Cached in-process for 5 minutes.",
+      "Full profile of one coin by id: name/symbol, description, categories, contract addresses per platform, links (homepage, explorers, repos, social), hashing algorithm and genesis date. Adds a market snapshot in your currency: price, rank, market cap, fully diluted valuation, 24h volume, ATH/ATL with dates and distance, circulating/total/max supply, 24h/7d/30d/1y change. One call for the metadata a token-risk or research agent otherwise assembles from five. Cached in-process for 5 minutes.",
     tags: ["crypto", "coin", "profile", "metadata", "market-data", "supply", "ath", "links"],
     discovery: {
       input: { coin: "ethereum", currency: "usd" },
@@ -679,7 +687,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Global DeFi snapshot: DeFi market cap (USD), ETH market cap, DeFi-to-ETH ratio, 24h DeFi trading volume, DeFi dominance % of the whole crypto market, and the top DeFi coin with its share of DeFi. The DeFi companion of crypto-global (whole-market caps and BTC/ETH dominance) and of defi-tvl (locked value, a different measure). Cached in-process for 5 minutes.",
+      "Global DeFi snapshot: DeFi market cap (USD), ETH market cap, DeFi-to-ETH ratio, 24h DeFi trading volume, DeFi dominance % of the whole crypto market, and the top DeFi coin with its share of DeFi. The DeFi companion of crypto-global (whole-market caps and BTC/ETH dominance); this is token market value, not locked value. Cached in-process for 5 minutes.",
     tags: ["crypto", "defi", "global", "dominance", "market-cap", "macro"],
     discovery: {
       input: {},
@@ -929,7 +937,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "The complete list of tracked coins (~18k) as {id, symbol, name}, paged: `page` + `perPage` (1-500, default 250). `includePlatforms: true` adds each coin's contract address per platform; `platform` (e.g. base, solana, ethereum) keeps only coins with a contract there; `symbol` keeps one ticker (exact, case-insensitive) across all its namesakes. For bulk id resolution, building a local symbol map, or enumerating every token on one chain; for a single lookup use coin-search. The upstream list is fetched once and cached in-process for 10 minutes, so paging through it costs the shared quota one call.",
+      "The complete list of tracked coins (~18k) as {id, symbol, name}, paged: `page` + `perPage` (1-500, default 250). Set `includePlatforms: true` to add each coin's contract address per platform. Pass `platform` (e.g. base, solana, ethereum) to keep only coins with a contract there, or `symbol` to keep one ticker (exact, case-insensitive) across all its namesakes. For bulk id resolution, building a local symbol map, or enumerating every token on one chain; for a single lookup use coin-search. The upstream list is fetched once and cached in-process for 10 minutes, so paging through it costs the shared quota one call.",
     tags: ["crypto", "coins", "list", "ids", "symbols", "platforms", "contracts", "bulk"],
     discovery: {
       input: { symbol: "usdc", includePlatforms: true },
@@ -1205,8 +1213,9 @@ const RWA_TOOLS = [
 ];
 CRYPTO_MARKETS_TOOLS.push(...RWA_TOOLS);
 // Every tool here reads CoinGecko, whose terms require the attribution (see
-// COINGECKO_ATTRIBUTION in coingecko-rate.js).
-for (const t of CRYPTO_MARKETS_TOOLS) attribute(t, "coingecko");
+// COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
+// `credit` field of every answer.
+for (const t of CRYPTO_MARKETS_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, takeContracts, takeTime, takeLookback, cgGet, TTL, MAX_ENTRIES, MAX_HISTORY_DAYS, takeRwaType, shapeRwaMarket };
 
