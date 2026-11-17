@@ -108,6 +108,33 @@ ok(advertisedRetired("/api/business-days /api/skill/company-dossier /api/unit-co
   ok(found.length === 0, `no doc, package or manifest advertises a retired route (found: ${found.join(", ") || "none"})`);
 }
 
+// --- no doc or pack names a retired tool as one to call ---------------------------
+// The scan above reads routes (/api/<slug>). A tool is also offered by its bare
+// slug: a code-quoted name in the README, the wiki catalog or the listing copy,
+// or a step of a pack's workflow prose. A retired slug restored there sends a
+// reader to a 410. A hyphenated slug is matched as a whole token; a one-word
+// slug (stablecoins, geocode) is an ordinary word in prose, so it is matched
+// only where it is code-quoted.
+{
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const NAMED = Object.keys(RETIRED_TOOLS).map((slug) => [slug, slug.includes("-") ? new RegExp(`(?<![a-z0-9/-])${esc(slug)}(?![a-z0-9-])`) : new RegExp(`\`${esc(slug)}\``)]);
+  const namedRetired = (text) => NAMED.filter(([, re]) => re.test(text)).map(([slug]) => slug);
+  ok(namedRetired("| `defi-yields`, `stablecoins` | then call reverse-geocode with the lat/lon, or l2-tvl.").join() === "reverse-geocode,defi-yields,stablecoins,l2-tvl", `control: a code-quoted slug and a bare hyphenated one are found (${namedRetired("| \`defi-yields\`, \`stablecoins\` | then call reverse-geocode with the lat/lon, or l2-tvl.").join()})`);
+  ok(namedRetired("stablecoins by supply; geocode the address; `defi-yields-v2`, crypto-orderbook-depth, /api/defi-yields, skill-defi-yields-watch").length === 0, "control: an ordinary word, a longer slug and a route (read by the scan above) are not bare retired names");
+  const tracked = execFileSync("git", ["ls-files", "README.md", "llms-install.md", "wiki", "docs"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n").filter((f) => /\.(md|txt)$/.test(f) && !/(^|\/)CHANGELOG\.md$/.test(f));
+  const found = [];
+  for (const f of tracked) for (const slug of namedRetired(readTextSync(new URL(`../${f}`, import.meta.url), "utf8"))) found.push(`${f}: ${slug}`);
+  ok(tracked.includes("README.md") && tracked.includes("wiki/Tool-Catalog.md") && tracked.includes("docs/ecosystem-listings.md") && tracked.length >= 20, `the README, the wiki and the listing copy are read (${tracked.length} files)`);
+  ok(found.length === 0, `no doc names a retired tool by its slug (found: ${found.join(", ") || "none"})`);
+  const { SKILL_PACKS } = await import("../src/skills.js");
+  const inPacks = [];
+  for (const pack of SKILL_PACKS) {
+    for (const slug of pack.toolSlugs || []) if (Object.hasOwn(RETIRED_TOOLS, slug)) inPacks.push(`${pack.slug}: step ${slug}`);
+    for (const slug of namedRetired(JSON.stringify({ ...pack, slug: undefined, toolSlugs: undefined }))) inPacks.push(`${pack.slug}: prose names ${slug}`);
+  }
+  ok(SKILL_PACKS.length >= 50 && inPacks.length === 0, `no pack runs or names a retired tool in its steps, workflow or prompt (found: ${inPacks.join(", ") || "none"}; ${SKILL_PACKS.length} packs)`);
+}
+
 // --- the published-routes snapshot rule (scripts/published-slugs.js) --------------
 // Drive the accounting with planted cases first, so a clean run below means
 // something: a published route that is neither live nor retired is reported,
