@@ -6,7 +6,7 @@
 // accepted chain. Each entry's `summary` is reused verbatim by /llms-full.txt.
 import { siteOrgRef } from "./site-org.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
-import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
+import { LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
@@ -185,7 +185,7 @@ export const LEARN = [
         P(`Reading a 402 is free. It is a quote, not a charge, and no payment is taken until a request arrives carrying a signed payment that matches one of the offers. That makes the 402 a useful discovery step: an agent can learn the price of any route before deciding to buy.`),
       ]],
       ["Was I charged?", [
-        P(`On this server settlement runs after the tool, and only for a successful response. So for a wallet payment the answer you hold tells you: a 200 with a ${C("PAYMENT-RESPONSE")} header (x402) or a ${C("Payment-Receipt")} header (MPP) was paid; a failed call is answered with no receipt header, or with an x402 receipt that reads ${C("success: false")}, and is not charged. ${LATE_SETTLE_EXCEPTION} A Tempo push payment is sent before the call runs, so one that is not served is recorded as a refund owed and the 402 says so (${C("refundOwed")}). A payment that is refused comes back as another 402, and when the refusal is about the credential the body says why in plain words.`),
+        P(`On this server settlement runs after the tool, and only for a successful response. So for a wallet payment the answer you hold tells you: a 200 with a ${C("PAYMENT-RESPONSE")} header (x402) or a ${C("Payment-Receipt")} header (MPP) was paid; a failed call is answered with no receipt header, or with an x402 receipt that reads ${C("success: false")}, and is not charged. ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION} A Tempo push payment is sent before the call runs, so one that is not served is recorded as a refund owed and the 402 says so (${C("refundOwed")}). A payment that is refused comes back as another 402, and when the refusal is about the credential the body says why in plain words.`),
       ]],
     ],
     links: [["/x402-test", "See why a payment was refused"], ["/learn/x402", "x402"], ["/learn/mpp", "MPP"], ["/integrations/tollbooth", "Answer 402s on your own site"], ["/tools", "Every priced route"]],

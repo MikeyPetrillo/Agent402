@@ -866,5 +866,36 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   ok(bad.length === 0, `every refusal that prints the shared sentence reads as one statement to each payer class${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
 }
 
+// A success:false receipt is not always "not charged, safe to retry": a
+// settle chain that ended unconfirmed (settlement_unconfirmed) and the same
+// authorization settling for another request (duplicate_authorization) may
+// still move money. Every copy surface that says such a receipt was not
+// charged, moved nothing or is safe to retry carries the shared clause
+// (src/front-door.js UNCONFIRMED_RECEIPT_EXCEPTION) right after the claim: by
+// interpolation in a module, word for word in markdown.
+{
+  const { UNCONFIRMED_RECEIPT_EXCEPTION: UNC } = await import("../src/front-door.js");
+  const CLAIM = /success: ?false\\?`?[\s\S]{0,200}?(?:not charged|nothing moved|moved no money|safe to retry|retry with a fresh authorization)/gi;
+  const carries = (after) => after.includes(UNC) || after.includes("${UNCONFIRMED_RECEIPT_EXCEPTION}");
+  let claims = 0;
+  const bare = [];
+  for (const rel of files.filter((f) => COPY_SURFACES.test(f))) {
+    const text = read(rel);
+    if (!text) continue;
+    for (const m of text.matchAll(CLAIM)) {
+      const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
+      if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
+      claims++;
+      const after = text.slice(m.index, m.index + m[0].length + 900).replace(/\\?\n\s*/g, " ");
+      if (!carries(after)) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
+    }
+  }
+  ok(/settlement_unconfirmed/.test(UNC) && /duplicate_authorization/.test(UNC) && /do not sign a new authorization/.test(UNC) && /check-wallet/.test(UNC) && /watch-transaction/.test(UNC), "the shared clause names both receipts, the instruction and both retry verbs");
+  ok(claims >= 8, `the success:false not-charged claim is found where it is made (${claims} places)`);
+  ok(bare.length === 0, `every success:false not-charged claim carries the unconfirmed-receipt clause${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
+  ok("a PAYMENT-RESPONSE with success: false means settlement was refused, you were not charged on x402.".match(CLAIM) && !carries("receipt success:false, safe to retry."),
+    "control: the unscoped sentence is matched and is not taken as carrying the clause");
+}
+
 console.log(`test-copy-absolutes: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

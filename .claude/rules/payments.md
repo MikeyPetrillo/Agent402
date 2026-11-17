@@ -493,6 +493,31 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `PENDING_SETTLE_MAX_INFLIGHT` (default 8) reads run per process; past it, or after an RPC 429
   or rate-limit error, the read ends. Outcomes by network and facilitator are on
   `/__operator/tool-failures.json` (`pendingSettles`; `scripts/test-pending-settle.js`).
+- **A settle chain a FALLBACK ends unconfirmed** (`markUnconfirmedStop`, src/payments.js): the chain
+  was opened by a refusal made before sending (a billing refusal, a 402, a revert, a passed-on
+  refusal) and a fallback then answers something that does not prove nothing was sent: an HTTP error
+  other than a 402, a time limit, a reset, an unreadable answer (`isUnreadableSettleAnswer`, never
+  pre-broadcast whatever its excerpt says), a failure naming a transaction, a graceful failed answer
+  that is not a decided verdict on the buyer's payment (`isDecidedSettleVerdict`: a verdict code or
+  words with no transaction, never a used authorization), or a fallback's passed-on refusal no read
+  settled. Not our own relayer's `nothingSent` refusal. The earlier refusal no longer describes the
+  payment: a named transaction is noted, otherwise an EIP-3009 authorization is booked by its nonce in
+  the late-settlement book (`unconfirmed: true`; Permit2 and non-EVM with no transaction have nothing
+  to book and their answer promises no record); the claim stays held. The 402 is restated at send
+  time (`unconfirmedSettleRefusal`): `settlement-unconfirmed`, `retry` watch-transaction (a named
+  transaction, with `refundStatusUrl`) or check-wallet, `authorizationValidBefore`, "Do not sign a new
+  authorization", the owed sentence only when `ctx.__a402LateBooked`, no offer, `Cache-Control:
+  no-store`; the receipt's errorReason becomes `settlement_unconfirmed` (NOT_BUYER_CODE in
+  src/settle-fault.js: never counted against the wallet), and the facilitator's raw words kept for the
+  breaker (`RAW_SETTLE_RECEIPT`) are put back after the restated header passes the guard. One EVM
+  payer holds at most `LATE_SETTLE_UNCONFIRMED_PER_PAYER_MAX` (default 25) open unconfirmed entries
+  per network; past it the booking waits in the book's journal (drained once the payer is under the
+  bound; the `lateSettlements` word reads unresolved meanwhile) with an error line each, never
+  dropped. **The same payment sent again** is answered from the idempotency store before the paywall
+  (src/idempotency.js: keyed on a digest of the payment header alone, any route or body, kept until
+  validBefore plus a minute, at least a minute, at most a day): the same 402 and receipt with
+  `X-Replayed-Answer: 1`, no verify, no handler, no settle, no breaker count. Nothing re-sends or
+  re-takes the authorization (`scripts/test-settle-fallback-unconfirmed.js`).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client

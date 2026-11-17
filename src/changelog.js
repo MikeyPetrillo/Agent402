@@ -7,6 +7,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 
 const ENTRIES = [
   {
+    date: "2026-11-17",
+    title: "An unconfirmed settlement is answered as unconfirmed",
+    items: [
+      "Payments: When a backup settler ends a settlement on an answer that does not show whether the transfer was sent (an HTTP error, a dropped connection, an unreadable answer, or a failure naming a transaction), the call is answered 402 with reason settlement-unconfirmed: the answer says not to sign a new authorization for that call before the authorization's validBefore, names the transaction to watch and its refund lookup when there is one (retry watch-transaction, otherwise check-wallet), carries no new offer, and its receipt reads settlement_unconfirmed.",
+      "Payments: Such a payment signed as an EIP-3009 authorization is recorded for the on-chain read, so a transfer that lands is booked once as owed to the paying wallet and repaid after on-chain proof. The same payment sent again gets the same answer back without the call running, and these answers never count against the paying wallet.",
+    ],
+  },
+  {
     date: "2026-11-16",
     title: "Marketplace answers arrive whole or are not settled",
     items: [

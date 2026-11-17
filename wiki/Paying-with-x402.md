@@ -25,7 +25,13 @@ on a route priced from its body (the model, request size and output cap you sent
 `/llms.txt`, the pay section of `/agents.md` and the MCP connector. A refused payment's body leaves out the
 header's one-line `error`: its `hint` (or, for an MPP credential, the problem's `detail`) says
 what went wrong, and a client that reads `error` first reads that instead. `retry` says what kind of
-change helps; `fund-wallet` means the paying wallet holds too little of the asset (`reason:
+change helps: `same-payment` means send the same payment again after `Retry-After`, with no new
+signature; `watch-transaction` (the body lists `transactions`) and `check-wallet` (it lists none) mean
+the settlement is not confirmed (`reason: "settlement-unconfirmed"`) and the transfer may still land, so
+do not sign a new authorization for that call before the `authorizationValidBefore` time when the body
+names one, and read `refundStatusUrl` (a free refund lookup) when it is there; the same payment sent
+again gets the same answer without the call running; `fresh-authorization` means sign a new payment;
+`fund-wallet` means the paying wallet holds too little of the asset (`reason:
 "insufficient-funds"`) or has no account for it yet (`reason: "no-token-account"`: no USDC token account
 on Solana, no trustline on Stellar, not opted in on Algorand), so a new signature alone is refused the
 same way: fund the wallet or pay on another listed network, and wait the `Retry-After` before trying the

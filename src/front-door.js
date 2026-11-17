@@ -15,6 +15,7 @@
 // surface in both switch states.
 import { FLAGSHIP_MCP_NAMES, FLAGSHIP_SLUGS, AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
+import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { RAILS_OR, liveRails } from "./rails.js";
 import { mppOfferShortProse, mppMethodsSummary } from "./mpp-offers.js";
 import { isComputePayable } from "./pow.js";
@@ -63,6 +64,15 @@ export const RECOVERY_ANCHOR = `#${RECOVERY_HEADING.toLowerCase().replace(/\s+/g
  *  receipt was not read in time (src/pending-settle.js), while the transfer
  *  still lands. Every surface that says no PAYMENT-RESPONSE means nothing
  *  settled carries it (scripts/test-front-door.js scans for the claim). */
+/** The receipts that read success:false and still do not mean "not charged,
+ *  safe to retry": a settle chain that ended without showing whether the
+ *  transfer was sent (settlement_unconfirmed, src/payments.js), and the same
+ *  authorization settling for another request (duplicate_authorization,
+ *  src/settlement-claims.js). Every surface that says a success:false receipt
+ *  was not charged carries it (scripts/test-copy-absolutes.js scans for the
+ *  claim); a markdown file carries its text word for word. */
+export const UNCONFIRMED_RECEIPT_EXCEPTION = "Not so for a receipt whose errorReason is settlement_unconfirmed (a settle that ended without showing whether the transfer was sent) or duplicate_authorization (the same authorization is settling for another request): the transfer may still land, so do not sign a new authorization for that call before the authorization's validBefore, and follow the answer's retry (watch-transaction: watch the named transaction; check-wallet: check the paying wallet).";
+
 export const LATE_SETTLE_EXCEPTION = "One exception, on the EVM chains: a transfer that lands after a timed-out settle, a disconnect during settle, or a settle the facilitator answered as pending whose receipt was not read in time, is booked as a refund owed and repaid after on-chain proof.";
 
 /** What the paid tier settles in and over which wires, from the live config:
@@ -141,8 +151,9 @@ export function frontDoor(catalog, baseUrl, { code = (s) => s, link = (text) => 
     use: `You need live web data newer than your training, or a capability your sandbox lacks (a headless browser, OCR, PDF and media processing, market data); not when you already hold the URL (${readClause}) or the work is a local computation you can run yourself. When a call fails: ${link(AGENTS_MD_PATH)}.`,
     allowance,
     recovery: [
-      `On x402 a call the tool fails is not charged: settlement runs after the tool and only for a response under 400, and no ${code("PAYMENT-RESPONSE")} header means nothing settled. ${LATE_SETTLE_EXCEPTION}${tempoOn ? " On MPP a Tempo push payment is sent before the call, so a failure there is booked as a refund owed." : ""}`,
+      `On x402 a call the tool fails is not charged: settlement runs after the tool and only for a response under 400, and no ${code("PAYMENT-RESPONSE")} header means nothing settled. ${LATE_SETTLE_EXCEPTION} ${UNCONFIRMED_RECEIPT_EXCEPTION}${tempoOn ? " On MPP a Tempo push payment is sent before the call, so a failure there is booked as a refund owed." : ""}`,
       `On an EVM x402 payment, re-send the same request with the same signed payment inside the replay window for the first answer (${code("X-Replayed-Answer: 1")}) with no second settlement; not on identity-bound routes, routes with a lasting effect or streamed calls${allowance ? ", nor for a free first call (a re-send of its payment inside the replay window is refused and not charged)" : ""}.`,
+      PAYMENT_RETRY_VERBS_NOTE,
       `Send an ${code("Idempotency-Key")}: the same key with the same credential (an x402 payment, a proof-of-work token or a credits key), route and body returns the first 200 answer (up to ${IDEM_MAX_BODY_LABEL}) without a second charge.`,
       `On a slow route, send the paid call with ${code("Prefer: respond-async")} for a 202 and a job link, then poll ${code("GET /api/jobs/{id}")} (free); payment settles only on the delivered answer.`,
     ],

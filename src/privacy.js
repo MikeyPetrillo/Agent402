@@ -101,7 +101,7 @@ export function privacyPage(baseUrl) {
 <section>
 <div class="pv-eyebrow">$ GET /privacy</div>
 <h1 class="pv-h1">Privacy policy</h1>
-<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-16.</p>
+<p class="pv-updated">Agent402 (agent402.tools) - last updated 2026-11-17.</p>
 </section>
 
 <section>
@@ -290,6 +290,12 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   as a keyed hash), the source address of a Tempo credential, a Tempo pull credential answered 402 after its
   broadcast failed (kept with its route, amount and payer until the check for a late landing ends: minutes,
   at most 24 hours while the chain cannot be read, so a transfer that lands after the 402 is booked as owed),
+  an EIP-3009 authorization on an EVM chain whose settlement was answered unconfirmed (its payer, nonce,
+  route, amount and validBefore, kept until the check for a late landing ends: minutes, or while the chain
+  cannot be read up to 24 hours and then until we resolve it by hand; past a per-wallet bound on open
+  records it waits in our journal until it fits; a transfer that lands is booked as owed), and the 402
+  answer that payment got, kept under a digest of the payment header until the authorization's validBefore
+  plus one minute (at least one minute, at most a day) so the same payment sent again gets that answer back,
   the payer the settlement receipt names,${referralOn ? " on a referral link the referral token and the buyer agent id (see referral links above)," : ""} and,
   on a refused payment, the resource URL it names (see telemetry above). When a served call's settlement
   fails, we count it per signed authorization (its payer, network and nonce) in our shared store for
