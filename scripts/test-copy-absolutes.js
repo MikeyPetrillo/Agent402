@@ -63,8 +63,8 @@ function walk(rel, out, depth = 0) {
 // carried forbidden claims for months because neither folder was on the list.
 // What is left out is named, with the reason.
 const NOT_SURFACES = [
-  [/^scripts\/(?!.*card.*\.js$)/, "tests and ops scripts quote the forbidden sentences as fixtures; card generators ARE surfaces and stay in"],
-  [/^\.github\//, "CI configuration, not copy"],
+  [/^scripts\/(?!.*card.*\.js$|build-fixtures\.js$)/, "tests and ops scripts quote the forbidden sentences as fixtures; card generators and the sample document builder ARE surfaces and stay in"],
+  [/^\.github\/(?!ISSUE_TEMPLATE\/|workflows\/heartbeat\.yml$)/, "CI configuration, not copy; the issue forms and the heartbeat's issue bodies are read by people and stay in"],
   [/^CLAUDE\.md$/, "the rulebook quotes the forbidden sentences to forbid them"],
   [/(^|\/)CHANGELOG\.md$/, "dated history records what shipped when, including the old wording"],
   [/(^|\/)package-lock\.json$|(^|\/)node_modules\//, "generated"],
@@ -72,7 +72,10 @@ const NOT_SURFACES = [
 ];
 const TEXT = /\.(?:js|mjs|cjs|md|json|toml|txt|ya?ml|html)$/;
 const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).split("\0").filter(Boolean);
-const files = tracked.filter((f) => TEXT.test(f) && !NOT_SURFACES.some(([re]) => re.test(f)));
+// The sample document is a PDF whose text streams are stored plain, so it is
+// read like any page (scripts/build-fixtures.js writes it).
+const SAMPLE_PDF = "assets/fixtures/sample-report.pdf";
+const files = tracked.filter((f) => (TEXT.test(f) || f === SAMPLE_PDF) && !NOT_SURFACES.some(([re]) => re.test(f)));
 const read = (rel) => { try { return readFileSync(join(root, rel), "utf8"); } catch { return null; } };
 
 // Rail counts are DERIVED here from src/rails.js, so a rail added there moves
@@ -86,8 +89,33 @@ const ALL_RAILS = RAILS.length;
 // credits), or the push exception. A bare "MPP" is not a rail: MPP carries
 // the Tempo push method the claim is false for. "Owed" beside the claim is
 // not the exception either, and a free tier (proof-of-work) says nothing
-// about what a paid rail charges.
-const NOT_CHARGED_SCOPE = /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b|\bMPP evm\b|\bpush\b|\bunpaid\b/i;
+// about what a paid rail charges. A style token (var(--card)) is not the rail.
+const NOT_CHARGED_SCOPE = /\bx402\b|\bTempo\b|(?<!-)\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b|\bMPP evm\b|\bpush\b|\bunpaid\b/i;
+// The "settles only" form of the claim takes the same scope words, the
+// protocol library's own name (a sentence about what @x402/express does), and
+// Circle Gateway (a batched payment is judged on its own page), and the
+// shared exception clause where a module prints it (src/tempo-push-debts.js).
+const SETTLES_ONLY_SCOPE = new RegExp(`${NOT_CHARGED_SCOPE.source}|@x402\\/|\\bevm method\\b|\\bCircle Gateway\\b|PUSH_EXCEPTION|\\bpushClause\\(`, "i");
+// A wiki or README paragraph is one line, so "the same line" is too wide a
+// scope for these two rules and "the same sentence" too narrow (the rail is
+// often named in the clause before): the scope word counts within this many
+// characters before and after the claim, the line above included. After the
+// claim the scope ends with the claim's own clause, at the first ".", ";", ": " or ", and":
+// a rail named in the sentence that follows is about something else.
+const SCOPE_NEAR = [240, 160];
+const clauseEnd = (after) => { const at = after.search(/[.;]|:\s|,\s+and\b/); return at < 0 ? after : after.slice(0, at); };
+// "Recorded as owed" says a debt exists, not what becomes of it: the same
+// clause, or the one beside it, says how it is repaid (the shared words are
+// OWED_REPAID in src/tempo-push-debts.js) or points at /terms.
+const OWED_REPAID_SCOPE = /\brepa(?:id|y|ys|yment)\b|\brefund(?!Owed)|\/terms\b|OWED_REPAID|PUSH_EXCEPTION|\bretried\b/i;
+// "A failed x402 call is not charged" holds with two exceptions /terms lists
+// (a payment that lands on chain after the error answer, a batched payment
+// still settling): the claim carries one beside it, or points at /terms.
+const X402_EXCEPTION_SCOPE = /\bexceptions?\b|\blands? (?:late|later|after)\b|\/terms\b|\bowed\b|\brepaid\b|LATE_SETTLE_EXCEPTION/i;
+// The published packages' code pays over x402 or a credits key only, and
+// neither is final before the call; their READMEs are read like any page.
+const PACKAGE_CODE = ["mcp/index.js", "mcp/async-job.js", "client/index.js", "client/async-job.js", "client/reset-retry.js"];
+const PACKAGE_CODE_WHY = "package code: the package pays over x402 or a credits key, never with a transfer sent before the call";
 // Copy surfaces: every tracked text file outside src, every markdown file,
 // and the src modules that render pages or documents rather than answer a
 // paid request (their names say so). Pinned below against the known ones.
@@ -147,6 +175,88 @@ const FORBIDDEN = [
     skipComments: true,
     skipLine: /\bbad\(|\bthrow\b|new Error\(|\.status\(\d{3}\)\.json\(|mppProblem\(/,
     only: COPY_SURFACES,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
+    // The same claim stated from the other side: "payment settles only when
+    // the result is ready", "settled only on a successful response", "charged
+    // only if it succeeds". True where settlement runs after the handler
+    // (x402, MPP evm, a Tempo pull credential, a card, credits) and false for a
+    // Tempo transfer the buyer sent before the call, which is final before the
+    // handler runs. The sentence names the rail it holds on, or that exception.
+    re: /\b(?:settle[sd]?|settlement (?:happens|runs))\s+(?:the (?:x402 )?payment\s+|a payment\s+)?only\b|\bonly\b[^.;]{0,30}\b(?:is|are|gets?) settled\b|\b(?:charged|billed) only (?:if|when|on|once|after|for)\b|\bonly (?:charged|billed) (?:if|when|on|once|after|for)\b|\b(?:call|request|run|payment)s?\b[^.;]{0,90}\b(?:is|are) not settled\b/i,
+    why: "unscoped: a Tempo transfer sent before the call is final before the handler runs; name the rail (x402, MPP evm, card, credits) or that exception in the same sentence",
+    scopedBy: SETTLES_ONLY_SCOPE,
+    scopeNear: SCOPE_NEAR,
+    ownLine: true,
+    skipComments: true,
+    exempt: new Map([
+      ["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"],
+      ...PACKAGE_CODE.map((f) => [f, PACKAGE_CODE_WHY]),
+    ]),
+  },
+  {
+    // "Uncharged" is the same claim as an adjective: "it fails uncharged",
+    // "an uncharged error", "so no buyer is charged".
+    re: /\b(?:fails?|failures?|errors?|refus\w+|[45]\d\d)\b[^.;]{0,40}\buncharged\b|\buncharged (?:error|failure|refusal|answer)s?\b|\bno buyer is charged\b/i,
+    why: "unscoped: a Tempo transfer sent before the call is recorded as owed when the call fails; name the rail (x402, MPP evm, card, credits) or that exception in the same sentence",
+    scopedBy: SETTLES_ONLY_SCOPE,
+    scopeNear: SCOPE_NEAR,
+    ownLine: true,
+    skipComments: true,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
+    // No rail makes this one true, so no scope word excuses it: a payment
+    // that settles after the buyer's connection closed (no forgiveness ticket,
+    // or a close during the settle call) is charged and recorded as owed, and
+    // so is a Tempo transfer sent before a call that fails.
+    re: /\bpay only for (?:delivered|successful|completed) (?:results?|answers?|calls?|work)\b|\bonly (?:ever )?pay for (?:delivered|successful|what you (?:get|receive))\b|\bnever pay for (?:a |an )?(?:failed|failure|error)/i,
+    why: "false on every rail: a payment that settles after the buyer's connection closed, or a Tempo transfer sent before a call that fails, is charged and recorded as owed; say what happens to it instead",
+    skipComments: true,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
+    // The same claim about buyers, in a pager body or a page: the rail is
+    // named right beside it ("x402 buyers are not charged"), since a wallet's
+    // name earlier in the sentence is about something else.
+    re: /\bbuyers? (?:(?:is|are) )?(?:not|never) charged\b|[;(]\s*(?:never|not) charged\b/i,
+    why: "unscoped: a Tempo transfer sent before the call is recorded as owed when the call fails; name the rail right beside the claim (x402 buyers are not charged; not charged on x402)",
+    scopedBy: SETTLES_ONLY_SCOPE,
+    scopeNear: [24, 40],
+    ownLine: true,
+    only: /^(?!src\/|services\/)/,
+    skipComments: true,
+    skipLine: /\bbad\(|\bthrow\b|new Error\(|\.status\(\d{3}\)\.json\(|mppProblem\(/,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
+    // A storefront card is charged at Checkout and refunded when the report
+    // fails; it does not settle on delivery.
+    re: /\bcard\b[^.;]{0,40}\bpayments?\s+settles?\s+only\b/i,
+    why: "false for a storefront card: Checkout charges first and a failed report is refunded; name the rails that settle after the run",
+    skipComments: true,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
+    // A debt named with no word on its repayment.
+    re: /(?<!\bnot )\brecorded as owed\b(?! and repaid)/i,
+    why: "says a payment is recorded as owed and not how it is repaid: use the shared clause (OWED_REPAID, src/tempo-push-debts.js: recorded as owed and repaid after on-chain proof) or point at /terms",
+    scopedBy: OWED_REPAID_SCOPE,
+    scopeNear: [200, 200, "open"],
+    ownLine: true,
+    skipComments: true,
+    skipLine: /console\.(?:warn|log|error)\(|\blog\(|\bline\(/,
+    exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
+  },
+  {
+    // The x402 claim with nothing beside it on the payments /terms excepts.
+    re: /\bfailed x402 (?:call|request|run)s? (?:is|are) (?:not|never) charged\b/i,
+    why: "absolute: /terms lists exceptions (a payment that lands on chain after the error answer is recorded as owed and repaid); say so beside the claim or point at /terms",
+    scopedBy: X402_EXCEPTION_SCOPE,
+    scopeLines: 3,
+    ownLine: true,
+    skipComments: true,
     exempt: new Map([["src/changelog.js", "dated release notes are a historical record: each entry describes what shipped on its date"]]),
   },
   {
@@ -351,7 +461,7 @@ function sweep(entries) {
   for (const [rel, text] of entries) {
     if (text == null) continue;
     const lines = text.split("\n");
-    for (const { re, why, scopedBy, exempt, requires, scopeWindow = 0, scopeSentence = false, only = null, skipComments = false, skipLine = null } of FORBIDDEN) {
+    for (const { re, why, scopedBy, exempt, requires, scopeWindow = 0, scopeSentence = false, only = null, skipComments = false, skipLine = null, ownLine = false, scopeNear = null, scopeLines = 0 } of FORBIDDEN) {
       if (exempt?.has(rel)) continue;
       if (only && !only.test(rel)) continue;
       for (let i = 0; i < lines.length; i++) {
@@ -362,7 +472,16 @@ function sweep(entries) {
         const m = sentence.match(re);
         if (!m) continue;
         if (requires && !requires.test(sentence)) continue;      // a different subject entirely
-        const near = scopeSentence
+        // A claim that begins on the next line is judged there, with that
+        // line's own neighbors as its scope.
+        if (ownLine && m.index > lines[i].length) continue;
+        const above = i > 0 && !isComment(lines[i - 1]) ? `${lines[i - 1]} ` : "";
+        const near = scopeNear
+          ? `${above}${sentence}`.slice(Math.max(0, above.length + m.index - scopeNear[0]), above.length + m.index + m[0].length)
+            + (scopeNear[2] === "open" ? (x) => x : clauseEnd)(sentence.slice(m.index + m[0].length, m.index + m[0].length + scopeNear[1]))
+          : scopeLines
+          ? lines.slice(Math.max(0, i - 1), i + 1 + scopeLines).filter((l) => !isComment(l)).join(" ")
+          : scopeSentence
           ? sentenceAround(sentence, m.index, m[0].length)
           : scopeWindow
             ? lines.slice(Math.max(0, i - scopeWindow), i + 2).join(" ")
@@ -398,13 +517,18 @@ const control = sweep([["<control>", "Only sellers with proven on-chain settleme
                        ["<control>", "500+ strong: 400+ pay-per-call tools (x402 or MPP) + 70+ skill packs"],
                        ["<control>", "Text-to-video over x402 - one clip. The call returns when ready; a failed or timed-out generation is never charged."],
                        ["<control>", "Why pay here (a failed call is not charged and the receipt proves it, keyed retries never pay twice, one key for tools + models + reports, or a report by card)"],
+                       ["<control>", "Poll the job link until it is completed. Payment settles only on a delivered result."],
+                       ["<control>", "The server runs your call and settles only on a successful result."],
+                       ["<control>", "A 200 is charged only if its settlement then succeeds."],
+                       ["<control>", "A call that timed out is not retried; it fails uncharged."],
+                       ["<control>", "Over x402 a failure cancels settlement. You pay only for delivered results."],
                        ["<control>", "<h3>Is this Solana token safe to touch</h3>"],
                        ["<control>", "Site pages meet WCAG 2.1 AA on contrast, labels, links and keyboard access."],
                        ["src/<control>.js", "<p><strong>Twelve chains.</strong> A buyer pays on whichever chain"],
                        ["src/<control>.js", "settling USDC on Base (plus eleven more rails), across all twelve chains"],
                        ["src/<control>.js", "// a comment that says twelve chains is not served copy"]]);
-const CONTROL_EXPECTED = 33;
-ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 24 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
+const CONTROL_EXPECTED = 38;
+ok(control.length === CONTROL_EXPECTED, `control: the sweep reports all 29 planted copy lines (and skips the planted comment) (${CONTROL_EXPECTED} rule hits; a line can match more than one rule) through its real code path (got ${control.length})`);
 
 for (const hit of sweep(files.map((rel) => [rel, read(rel)]))) { fail++; console.error(`FAIL - ${hit}`); }
 ok(files.length >= 300, `swept ${files.length} copy surfaces (a collapsed file list must fail, not pass quietly)`);
@@ -613,6 +737,41 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
 // to pass; otherwise the next author suppresses it and the guard is decoration.
 {
   const MUST_FAIL = [
+    // The "settles only" and "uncharged" forms, each as it shipped.
+    "Poll GET /api/jobs/{id} (free) until status is completed or failed. Payment settles only on a delivered result.",
+    "is. Payment settles only on the answer.",
+    "Either way the payment settles only on a delivered report.",
+    "Because settlement happens only after a call succeeds, the ordinary failure case costs nothing and needs no refund.",
+    "4. agent402.tools returns the real, structured result, and settles only on success",
+    "A call that timed out or came back empty is not retried, since it may already have been generated; it fails uncharged.",
+    "none: one model at one price, and an upstream failure is an uncharged error",
+    "the route answers 503 before any upstream call (a >=400 cancels settlement, so no buyer is charged)",
+    // A rail named a paragraph away does not scope the claim (SCOPE_NEAR).
+    `The npm server pays over x402 from a key you give it. ${"A caller that sends a progressToken gets progress notifications from the job's stage, steps and ETA. ".repeat(3)}Payment settles only on the delivered answer.`,
+    "it fails uncharged. `/api/gateway-status` reports `speechUpstream` as `ok`, `cooling` or `probing`.",
+    "cancels your settlement, and a Tempo transfer sent before the call is recorded as owed. You pay only for delivered results.",
+    // A rail named in the NEXT sentence does not scope the claim: each of
+    // these is a served line with its exception clause taken out.
+    "say where it is. Payment settles only on the delivered answer; agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request.",
+    "until status is completed or failed (state shows queued, running, succeeded or failed). Payment settles only when the result is ready; on x402 a failed run is not charged.",
+    "payment settles only when the result is ready, and\na refused payment ends the job with its 402. On x402 a failed run is not charged.",
+    "your payment and **settles only when the answer is ready**: a failed run is not charged on x402, and a refused payment ends the job with its `402`.",
+    "runs the call with your payment, and settles only on a successful result. A run that fails is not charged on x402, and the job says so.</p>",
+    // A style token beside the claim is not a rail.
+    "<code style=\"font-family:var(--font-mono);background:var(--card);border:1px solid var(--hairline);\">GET /api/jobs/{id}</code> until it is completed or failed. Payment settles only when the result is ready.</p>",
+    // The same rule said as "is not settled", with no rail beside it.
+    "The settlement rule is the same everywhere: a call that answers an error\nstatus, or whose payment does not match the offer, is not settled, on any of",
+    // A storefront card is charged at Checkout, not on delivery.
+    "Either way an x402, MPP evm or card payment settles only on a delivered report.",
+    // A debt with no word on how it is repaid.
+    "- **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller\n  down - cancels your settlement, and a Tempo transfer sent before the call is recorded as owed.",
+    "Payment settles only when the result is ready, except a Tempo transfer sent before the call, which is recorded as owed if the run fails.",
+    // The x402 claim with neither exception /terms lists beside it.
+    "the signature, runs the tool, and settles an x402 payment only when the\ntool succeeded. A failed x402 call is not charged.",
+    "authorization from its own wallet and retries, and the server settles only when\nthe response succeeds, so a failed x402 call is not charged. The headers, step",
+    // The issue form and a pager body, as they read before they named a rail.
+    "A failed call is never charged, so a receipt on a non-200 is itself a bug.",
+    "When it empties, route-execute external buys and seller-payability refuse (buyers are never charged, but those paths go dark).",
     "the Smart Order Router resolves the best-matching external seller. Sellers qualify only with proven on-chain settled volume.",
     // The two sentences a plugin registry displayed in full from SKILL.md.
     "500+ deterministic web tools an agent can call over plain HTTP, paid per call.\nNo LLM sits in the serving path on Agent402's side; every response is a",
@@ -704,8 +863,8 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "500+ pay-per-call tools and skill packs",
     "the 150+ pure-CPU tools are free via proof-of-work",
     // The same claims with their rail, or the push exception, beside them.
-    "- **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller\n  down - cancels your settlement, and a Tempo transfer sent before the call is recorded as owed.",
-    "and a run where no step succeeds is not charged, except a Tempo transfer sent before the call, which is recorded as owed.",
+    "- **Failures are not charged on x402.** Any 4xx/5xx - no match, over-cap, seller\n  down - cancels your settlement, and a Tempo transfer sent before the call is recorded as owed and repaid after on-chain proof.",
+    "and a run where no step succeeds is not charged, except a Tempo transfer sent before the call, which is recorded as owed and repaid after on-chain proof.",
     "A 4xx/5xx is not charged on x402: settlement runs after the handler and only on a response under 400.",
     "A paid call that ends in any status of 400 or above is not charged over x402, MPP and a prepaid credits key: settlement is canceled when the tool fails.",
     // The shared footnote (src/settlement-footnote.js) every tool and integration page renders.
@@ -716,12 +875,35 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     failedCallFootnote({ rails: ["x402", "MPP"], tempoPush: true }),
     // A handler's refusal is restated per rail at send, so its line is not copy.
     "    throw bad(\"The decision service failed - not charged; retry shortly\", 502);",
+    // The "settles only" form with its rail or the push exception beside it.
+    "Payment settles only when the result is ready, except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails.",
+    "The x402 payment settles only on the delivered answer.",
+    "Either way an x402 or MPP evm payment settles only on a delivered report.",
+    "   `@x402/express` verifies the payment, runs the handler, and settles only a\n   response below 400.",
+    "a prepaid credits key is debited only on success",
+    "it fails, and on x402 that failure is not charged.",
+    "export AGENT402_NETWORKS=solana       # pay only on these chains, in this order",
+    "Pay for what the model used, with the ceiling quoted first.",
   ];
   const hits = (t) => sweep([["<case>", t]]).length;
   const missed = MUST_FAIL.filter((t) => hits(t) === 0);
   const wrong = MUST_PASS.filter((t) => hits(t) > 0);
   ok(missed.length === 0, `every known phrasing of the class is caught${missed.length ? ` - MISSED: ${missed.join(" | ")}` : ""}`);
   ok(wrong.length === 0, `honest, scoped phrasings are NOT caught${wrong.length ? ` - FALSE POSITIVE: ${wrong.join(" | ")}` : ""}`);
+
+  // The shared exception clauses are read as the sentences they print. A line
+  // that names PUSH_EXCEPTION is scoped by the token (the definitions too), so
+  // the sweep never reads the words behind it: each value is swept here in the
+  // sentence a module builds with it, and must say how the transfer is repaid.
+  const { OWED_REPAID, PUSH_EXCEPTION, JOB_PUSH_EXCEPTION } = await import("../src/tempo-push-debts.js");
+  const REPAID = /\brepaid after on-chain proof\b/;
+  const printed = [
+    ["OWED_REPAID", OWED_REPAID, `A Tempo transfer sent before the call is ${OWED_REPAID}.`],
+    ["PUSH_EXCEPTION", PUSH_EXCEPTION, `This call was refused before any payment was taken${PUSH_EXCEPTION}.`],
+    ["JOB_PUSH_EXCEPTION", JOB_PUSH_EXCEPTION, `Payment settles only when the result is ready${JOB_PUSH_EXCEPTION}.`],
+  ];
+  const unrepaid = printed.filter(([, value, sentence]) => typeof value !== "string" || !REPAID.test(value) || hits(sentence) > 0).map(([name, value]) => `${name}: ${value}`);
+  ok(PUSH_EXCEPTION.includes(OWED_REPAID) && unrepaid.length === 0, `each shared exception clause says how the transfer is repaid, read from its own value${unrepaid.length ? ` - ${unrepaid.join(" | ")}` : ""}`);
 }
 
 // --- a handler's "not charged" is restated for a Tempo push payer at send -----
@@ -734,18 +916,24 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   const PHRASE = /\b(?:not|never) charged\b|\bnothing (?:is|was|has been) charged\b|\bno charge\b/i;
   const SCOPED = /\bx402\b|\bTempo\b|\bcard\b|\bcredits?\b|\bStripe\b|\bEVM\b|\bMPP\b|\bpush\b|\bowed\b|\bunpaid\b/i;
   const unhandled = [];
+  const unrepaid = [];
   let checked = 0;
   for (const rel of files.filter((f) => /^src\/.*\.js$/.test(f) && f !== "src/push-refusal-body.js")) {
     const text = read(rel) || "";
     for (const line of text.split("\n")) {
       if (/^\s*(?:\/\/|\*|\/\*)/.test(line) || !PHRASE.test(line) || SCOPED.test(line)) continue;
       checked++;
-      if (rewriteNotChargedForPush(line) === line) unhandled.push(`${rel}: ${line.trim().slice(0, 100)}`);
+      const restated = rewriteNotChargedForPush(line);
+      if (restated === line) unhandled.push(`${rel}: ${line.trim().slice(0, 100)}`);
+      else if (/\brecorded as owed\b(?! and repaid after on-chain proof)/.test(restated)) unrepaid.push(`${rel}: ${restated.trim().slice(0, 140)}`);
     }
   }
   ok(rewriteNotChargedForPush("Bad input. Nothing was charged.") !== "Bad input. Nothing was charged." && rewriteNotChargedForPush("This call is not charged on x402.") === "This call is not charged on x402.", "control: the push rewriter restates an unscoped sentence and keeps a scoped one");
   ok(checked >= 40, `the push rewriter was run against ${checked} unscoped handler phrasings (a collapsed count must fail)`);
   ok(unhandled.length === 0, `every unscoped "not charged" a served module throws is one the push gate restates${unhandled.length ? ` - UNHANDLED: ${unhandled.join(" | ")}` : ""}`);
+  const clause = rewriteNotChargedForPush("The upstream did not answer in time, so nothing was charged.");
+  ok(clause === "The upstream did not answer in time, so the transfer you sent is recorded as owed and repaid after on-chain proof." && unrepaid.length === 0,
+    `a restated clause that says the transfer is recorded as owed says how it is repaid (${clause})${unrepaid.length ? ` - NO REPAYMENT: ${unrepaid.join(" | ")}` : ""}`);
 }
 
 // --- a converted module says "not charged" through the shared sentence only ---
@@ -859,7 +1047,7 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   }
   const sample = "The decision service did not answer in time. Nothing was charged. Retry shortly.";
   ok(sharedSentenceMessages("    throw bad(`The decision service did not answer in time.${notChargedOn(req)} Retry shortly.`, 503);")[0] === sample
-     && malformed("The decision service did not answer in time. the transfer you sent is recorded as owed, except a Tempo transfer sent before the call, which is recorded as owed. Retry shortly.", "push") !== null
+     && malformed("The decision service did not answer in time. the transfer you sent is recorded as owed, except a Tempo transfer sent before the call, which is recorded as owed and repaid after on-chain proof. Retry shortly.", "push") !== null
      && malformed(renderRefusal(sample, "push"), "push") === null,
      "control: a refusal's message is read from its template, a doubled clause is malformed, and the composed rendering is not");
   ok(rendered >= 45, `rendered ${rendered} shared-sentence refusals for each payer class (a collapsed reader must fail)`);

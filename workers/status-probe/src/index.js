@@ -416,7 +416,7 @@ export const ALARMS = [
     title: "Gateway credits LOW (OpenRouter)",
     verdict: ({ gateway: b }) => (b.status === "low" ? "bad" : b.status === "ok" ? "good" : "quiet"),
     body: () =>
-      "The OpenRouter balance behind the /v1 gateway is below the low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly USD limit has under 25% left (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is cancelled, so buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402).",
+      "The OpenRouter balance behind the /v1 gateway is below the low-water mark (OPENROUTER_LOW_CREDITS_USD) OR the production key's own monthly USD limit has under 25% left (OPENROUTER_LOW_KEY_LIMIT_FRACTION). Either ceiling stops the gateway: upstream refuses, we answer 502, settlement is canceled, so x402 buyers are NOT charged but every /v1 sale is lost until it is topped up. Auto top-up is on for this account, so a low balance means a refill did not land (declined card, or auto top-up switched off): check https://openrouter.ai/settings/credits. Raise the key limit: https://openrouter.ai/settings/keys (key: Agent402).",
   },
   {
     title: "Gateway balance UNREADABLE (OpenRouter)",
@@ -431,7 +431,7 @@ export const ALARMS = [
     title: "Upstream buyer wallet LOW (x402)",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyer?.status),
     body: () =>
-      "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (x402 buyers are never charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address (see CLAUDE.md env docs).",
+      "The x402 upstream spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD). When it empties, route-execute external buys and seller-payability refuse (x402 buyers are not charged, but those paths go dark). attest signs from the same wallet but pays Base gas in ETH, which this alarm reads nothing about. Top up: send USDC on Base to the upstream buyer address (see CLAUDE.md env docs).",
   },
   // The same wallet on each other chain SOR_EVM_CHAINS enables: one word for
   // all of them ("off" with none enabled never pages). Titles match
@@ -443,7 +443,7 @@ export const ALARMS = [
       return s === "low" ? "bad" : s === "ok" || s === "off" ? "good" : "quiet";
     },
     body: () =>
-      "The x402 spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD_<CHAIN>, else UPSTREAM_BUYER_LOW_USD) on at least one chain SOR_EVM_CHAINS enables; the operator view of /api/gateway-status names which. External routing on that chain refuses 503 while it reads low (buyers are never charged). Top up: send that chain's stablecoin to the spending wallet address on that chain.",
+      "The x402 spending wallet (X402_UPSTREAM_BUYER_KEY) is below the low-water mark (UPSTREAM_BUYER_LOW_USD_<CHAIN>, else UPSTREAM_BUYER_LOW_USD) on at least one chain SOR_EVM_CHAINS enables; the operator view of /api/gateway-status names which. External routing on that chain refuses 503 while it reads low (x402 buyers are not charged). Top up: send that chain's stablecoin to the spending wallet address on that chain.",
   },
   {
     title: "EVM chains upstream buyer wallet UNREADABLE (x402)",
@@ -472,13 +472,13 @@ export const ALARMS = [
     title: "Algorand upstream buyer wallet LOW (x402)",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerAvm?.status),
     body: () =>
-      "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD, default $0.50) - or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (x402 buyers are never charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address (see CLAUDE.md env docs).",
+      "The Algorand x402 spending wallet (ALGORAND_UPSTREAM_BUYER_MNEMONIC) behind the SOR's Algorand external routing is below the low-water mark (ALGORAND_UPSTREAM_BUYER_LOW_USD, default $0.50) - or not yet opted in to USDC ASA 31566704 (check /api/gateway-status upstreamBuyerAvm.optedIn). When it empties, Algorand external routing fails 502 (x402 buyers are not charged, but the path goes dark). Top up: send USDC on Algorand to the AVM spending wallet address (see CLAUDE.md env docs).",
   },
   {
     title: "Tempo upstream buyer wallet LOW (MPP)",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerTempo?.status),
     body: () =>
-      "The Tempo (MPP) spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's Tempo external leg is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD, default $0.50). It is funded in USDC.e on Tempo. When it empties, MPP external routing goes dark (a pull buyer is never charged; a push transfer sent before the call is recorded as owed). Top up with fund-tempo-fee-payer.yml (token=usdc) or directly.",
+      "The Tempo (MPP) spending wallet (TEMPO_UPSTREAM_BUYER_KEY) behind the SOR's Tempo external leg is below the low-water mark (TEMPO_UPSTREAM_BUYER_LOW_USD, default $0.50). It is funded in USDC.e on Tempo. When it empties, MPP external routing goes dark (a pull buyer is not charged on Tempo; a push transfer sent before the call is recorded as owed and repaid). Top up with fund-tempo-fee-payer.yml (token=usdc) or directly.",
   },
   {
     title: "Subscription gas sponsor LOW (PathUSD)",
@@ -870,7 +870,7 @@ Auto-closes when nothing is owed.`,
     // heartbeat.yml's.
     title: "onchainSqlBusy: a top paying buyer was told the query service is busy",
     verdict: ({ gateway: b }) => wordVerdict(b.onchainSqlBusy?.status, ["alert"], ["ok"]),
-    body: () => "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week got the busy refusal of the onchain query tool (the server-wide limit on queries in flight; never charged, told to retry in a few seconds) inside TOP_BUYER_FAIL_HOLD_MS. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok.",
+    body: () => "/api/gateway-status reports onchainSqlBusy.status=alert: one of our top outside payers by paid spend over the last week got the busy refusal of the onchain query tool (the server-wide limit on queries in flight; refused before settlement, told to retry in a few seconds) inside TOP_BUYER_FAIL_HOLD_MS. The payer's short id, its spend rank and the refusal times are on the operator view of /api/gateway-status (onchainSqlBusy, operator token); the daily busy counts by caller are on /__operator/tool-failures.json (onchainSqlQueries, operator token). Read them and decide whether the in-flight limit should rise. Nothing is refused for this alarm. Auto-closes when the word reads ok.",
   },
   {
     // Redis persistence (redisPersistence on /api/gateway-status,
@@ -925,13 +925,13 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     title: "Solana upstream buyer wallet LOW (x402)",
     verdict: ({ gateway: b }) => lowOk(b.upstreamBuyerSvm?.status),
     body: () =>
-      "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (x402 buyers are never charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address.",
+      "The Solana x402 spending wallet (SOLANA_UPSTREAM_BUYER_KEY) behind the SOR's Solana external routing is below the low-water mark (SOLANA_UPSTREAM_BUYER_LOW_USD). When it empties, Solana external routing fails 502 (x402 buyers are not charged, but the path goes dark). Top up: send USDC on Solana to the SVM spending wallet address.",
   },
   {
     title: "Stellar facilitator fee account LOW (XLM)",
     verdict: ({ gateway: b }) => lowOk(b.stellarFacilitator?.status),
     body: () =>
-      "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - x402 buyers are never charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers.",
+      "The self-hosted Stellar facilitator's signing account is below its low-water mark (FACILITATOR_LOW_BALANCE_XLM on the agent402-facilitator service). That account pays the transaction fee on every Stellar settlement, so when it empties, Stellar settlements stop landing - x402 buyers are not charged, but the rail goes dark and the paid canary reports it as a rail failure rather than as an empty wallet. Top up: send XLM to the address on the facilitator's GET /health (signerAddress). Auto-closes when the balance recovers.",
   },
   {
     title: "Upstream call budget ELEVATED",
@@ -943,7 +943,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     title: "Upstream hard ceiling REACHED",
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamHardCaps?.status, ["capped"], ["ok"]),
     body: () =>
-      "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (uncharged) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
+      "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (not charged on x402) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
   },
   {
     title: "X data daily spend OVER its ceiling",
@@ -952,7 +952,7 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     // owner's switch and does not page.
     verdict: ({ gateway: b }) => wordVerdict(b.xDataSpend?.status, ["over", "capped"], ["ok", "off"]),
     body: () =>
-      "`/api/gateway-status.xDataSpend` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `X_DATA_DAILY_HARD_MAX_USD` was refused 503 (uncharged) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `X_DATA_DAILY_MAX_USD`, otherwise the next UTC day.",
+      "`/api/gateway-status.xDataSpend` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `X_DATA_DAILY_HARD_MAX_USD` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `X_DATA_DAILY_MAX_USD`, otherwise the next UTC day.",
   },
   {
     title: "Router spend per minute OVER its ceiling",
@@ -1154,6 +1154,16 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     verdict: ({ gateway: b }) => wordVerdict(b.upstreamCosts?.status, ["missing", "partial"], ["ok"]),
     body: ({ gateway: b }) =>
       `/api/gateway-status reports upstreamCosts.status=${b.upstreamCosts?.status === "partial" ? "partial" : "missing"}. partial: the private cost table loaded but lacks a key a serving path reads (that path refuses with 503, nobody is charged) or has a model row that did not parse. missing: production is running without the private cost table, so the metered tier, embeddings, images, video, Exa and X reads refuse (503, nobody is charged) and the flat chat tiers price at their caps. The boot log line [upstream-costs] names what is missing. Update the UPSTREAM_COSTS_JSON variable on Railway (and the Actions secret). Auto-closes when it reads ok.`,
+  },
+  {
+    // The reconciler's own run word (mppReconcile.run, src/mpp-reconcile.js):
+    // stale pages (no run has finished inside its gap, so the mismatch words
+    // read unknown and page nothing); ok and off clear; unknown (no run yet)
+    // and absent do neither. Title and body match heartbeat.yml's.
+    title: "MPP daily reconciliation is NOT RUNNING",
+    verdict: ({ gateway: b }) => wordVerdict(b.mppReconcile?.run, ["stale"], ["ok", "off"]),
+    body: () =>
+      "/api/gateway-status reports mppReconcile.run=stale: the daily MPP reconciliation (src/mpp-reconcile.js) has not finished a run inside its allowed gap, so MPP sales are not being checked against the chain and the mismatch alarms read unknown. Read /__operator/mpp-reconcile.json (operator token) and the [mpp-reconcile] lines in the server log on Railway. A run that failed is tried again on the hourly check and can be started from the operator endpoint. A run that never ended holds every later one, an operator's included (it joins the run in flight): restart the service. Auto-closes when the word reads ok or off.",
   },
   {
     // The daily MPP reconciliation (src/mpp-reconcile.js): the latest
