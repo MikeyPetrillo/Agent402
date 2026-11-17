@@ -16,7 +16,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getFreePort } from "./lib/free-port.js";
-import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage } from "../src/pages.js";
+import { toolPage, toolTitle, toolMetaDescription, relatedTools, powSnippetRequest, displayPrice, categoryPage, objectFieldsSample } from "../src/pages.js";
 import { mppOffersFor, mppRailsPhrase } from "../src/mpp-offers.js";
 import { creditsSalesEnabled } from "../src/credits-sales.js";
 import { stripScripts, stripTags as stripTagsWith } from "./lib/html-text.js";
@@ -37,6 +37,25 @@ const mainOf = (html) => (html.match(/<main[^>]*>([\s\S]*?)<\/main>/i) || [, htm
 const titleOf = (html) => decode((html.match(/<title>([^<]*)<\/title>/) || [])[1] || "");
 const descOf = (html) => decode((html.match(/<meta name="description" content="([^"]*)"/) || [])[1] || "");
 const h1Count = (html) => (html.match(/<h1\b/gi) || []).length;
+
+// 0. An object in the example is described by its field names, whole: a name
+//    is never cut mid-word, and names left out are counted in three short
+//    words ("and 2 more"), which a narrow cell keeps together on its last line.
+{
+  const five = { marketCapUsd: 1, turnoverPct: 1, capWeightedChange24hPct: 1, tokensUpSharePct: 1, top10CapSharePct: 1 };
+  const s5 = objectFieldsSample(five);
+  ok(s5 === "5 fields: marketCapUsd, turnoverPct, capWeightedChange24hPct and 2 more", `a long field list ends on whole names and a count (${s5})`);
+  ok(objectFieldsSample({ a: 1 }) === "1 field: a" && objectFieldsSample({ a: 1, bb: 2 }) === "2 fields: a, bb" && objectFieldsSample({}) === "0 fields", "a short list is given whole");
+  const eight = Object.fromEntries(Array.from({ length: 8 }, (_, k) => [`k${k}`, k]));
+  ok(objectFieldsSample(eight) === "8 fields: k0, k1, k2, k3, k4, k5 and 2 more", "at most six names are listed, and the rest are counted");
+  const wide = objectFieldsSample({ ["x".repeat(90)]: 1, y: 2 });
+  ok(wide === `2 fields: ${"x".repeat(90)} and 1 more`, "the first name is always given, whatever its length");
+  for (const o of [five, eight, { alphaBetaGammaDelta: 1, epsilonZetaEtaTheta: 2, iotaKappaLambdaMu: 3, nuXiOmicronPi: 4 }]) {
+    const s = objectFieldsSample(o), keys = Object.keys(o);
+    const listed = s.replace(/^\d+ fields?: /, "").replace(/ and \d+ more$/, "").split(", ");
+    ok(listed.every((name, k) => name === keys[k]) && !/\.\.\.$/.test(s) && (s.length <= 80 || listed.length === 1), `every listed name is a whole field name, in order (${s})`);
+  }
+}
 
 // ---- 1. Offline: a hostile def renders inert. ----
 const hostile = {

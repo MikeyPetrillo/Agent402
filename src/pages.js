@@ -291,6 +291,21 @@ function curlExample(baseUrl, tool) {
   return `curl -i -X ${tool.method} ${baseUrl}${tool.path} \\\n  -H "Content-Type: application/json" \\\n  -d '${body}'`;
 }
 
+/** How an object in a tool's example is described in the response table: its
+ *  field count and its first names, each whole. At most six names, and as many
+ *  as keep the text within 80 characters (the first is always given); the rest
+ *  are counted ("and 2 more"), three short words a narrow cell keeps together
+ *  on its last line, where a name cut mid-word left one fragment alone. */
+export function objectFieldsSample(v, max = 80) {
+  const keys = Object.keys(v);
+  const head = `${keys.length} field${keys.length === 1 ? "" : "s"}`;
+  if (!keys.length) return head;
+  const tail = (shown) => (shown < keys.length ? ` and ${keys.length - shown} more` : "");
+  let shown = 1;
+  while (shown < Math.min(keys.length, 6) && `${head}: ${keys.slice(0, shown + 1).join(", ")}${tail(shown + 1)}`.length <= max) shown += 1;
+  return `${head}: ${keys.slice(0, shown).join(", ")}${tail(shown)}`;
+}
+
 export function toolPage(baseUrl, tool, related, { computePayable = false, powDifficulty = 0, cacheTtl = null, otherMethodRouted = false, mpp = true } = {}) {
   // MPP rides the shim, which mounts only with MPP_SECRET_KEY: a self-host
   // without it offers x402 alone, so the page names only the rails it has.
@@ -378,8 +393,9 @@ export function toolPage(baseUrl, tool, related, { computePayable = false, powDi
   const optionalOut = !binaryTypes && tool.discovery?.output?.optional && typeof tool.discovery.output.optional === "object" ? Object.entries(tool.discovery.output.optional).filter(([k]) => !outKeys.includes(k)) : [];
   const respRows = [...outKeys.map((k) => {
     const v = example[k];
-    let sample = typeof v === "string" ? v : v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `${v.length} item${v.length === 1 ? "" : "s"} in the example` : `${Object.keys(v).length} field${Object.keys(v).length === 1 ? "" : "s"}: ${Object.keys(v).slice(0, 6).join(", ")}`;
-    if (sample && sample.length > 80) sample = sample.slice(0, 77) + "...";
+    let sample = typeof v === "string" ? v : v === null || typeof v !== "object" ? JSON.stringify(v) : Array.isArray(v) ? `${v.length} item${v.length === 1 ? "" : "s"} in the example` : null;
+    if (sample === null) sample = objectFieldsSample(v);
+    else if (sample && sample.length > 80) sample = sample.slice(0, 77) + "...";
     return `<tr><td><code>${e(k)}</code></td><td>${e(exampleValueType(v))}</td><td>${respRequired.has(k) ? "yes" : "no"}</td><td>${e(sample ?? "")}</td></tr>`;
   }), ...optionalOut.map(([k, v]) => `<tr><td><code>${e(k)}</code></td><td>${e(String(v?.type || ""))}</td><td>no</td><td>${e(String(v?.description || ""))}</td></tr>`)].join("\n");
 
