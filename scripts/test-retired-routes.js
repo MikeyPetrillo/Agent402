@@ -110,29 +110,103 @@ ok(advertisedRetired("/api/business-days /api/skill/company-dossier /api/unit-co
 
 // --- no doc or pack names a retired tool as one to call ---------------------------
 // The scan above reads routes (/api/<slug>). A tool is also offered by its bare
-// slug: a code-quoted name in the README, the wiki catalog or the listing copy,
-// or a step of a pack's workflow prose. A retired slug restored there sends a
-// reader to a 410. A hyphenated slug is matched as a whole token; a one-word
-// slug (stablecoins, geocode) is an ordinary word in prose, so it is matched
-// only where it is code-quoted.
+// slug: a code-quoted name in a README, the wiki catalog or the listing copy,
+// or a step of a pack's workflow prose ("then geocode the address with
+// geocode"). A retired slug restored there sends a reader to a 410. Every
+// retired slug is matched as a whole word (never inside a longer slug, never as
+// a route, which the scan above reads). A slug that is also an ordinary English
+// word is listed in ORDINARY_WORDS and is matched only where it is code-quoted.
+const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-])`);
 {
-  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const NAMED = Object.keys(RETIRED_TOOLS).map((slug) => [slug, slug.includes("-") ? new RegExp(`(?<![a-z0-9/-])${esc(slug)}(?![a-z0-9-])`) : new RegExp(`\`${esc(slug)}\``)]);
+  const ORDINARY_WORDS = new Set(["stablecoins"]);
+  ok([...ORDINARY_WORDS].every((w) => Object.hasOwn(RETIRED_TOOLS, w) && !w.includes("-")), "every allowlisted ordinary word is a one-word retired slug");
+  const NAMED = Object.keys(RETIRED_TOOLS).map((slug) => [slug, ORDINARY_WORDS.has(slug) ? new RegExp(`\`${escRe(slug)}\``) : wholeWord(slug)]);
   const namedRetired = (text) => NAMED.filter(([, re]) => re.test(text)).map(([slug]) => slug);
-  ok(namedRetired("| `defi-yields`, `stablecoins` | then call reverse-geocode with the lat/lon, or l2-tvl.").join() === "reverse-geocode,defi-yields,stablecoins,l2-tvl", `control: a code-quoted slug and a bare hyphenated one are found (${namedRetired("| \`defi-yields\`, \`stablecoins\` | then call reverse-geocode with the lat/lon, or l2-tvl.").join()})`);
-  ok(namedRetired("stablecoins by supply; geocode the address; `defi-yields-v2`, crypto-orderbook-depth, /api/defi-yields, skill-defi-yields-watch").length === 0, "control: an ordinary word, a longer slug and a route (read by the scan above) are not bare retired names");
-  const tracked = execFileSync("git", ["ls-files", "README.md", "llms-install.md", "wiki", "docs"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n").filter((f) => /\.(md|txt)$/.test(f) && !/(^|\/)CHANGELOG\.md$/.test(f));
+  const planted = "| `defi-yields`, `stablecoins` | then call reverse-geocode with the lat/lon, or l2-tvl; resolve the address with geocode, then hash with pbkdf2.";
+  ok(namedRetired(planted).join() === "geocode,reverse-geocode,defi-yields,stablecoins,l2-tvl,pbkdf2", `control: a code-quoted slug, a bare hyphenated one and a bare one-word one are found (${namedRetired(planted).join()})`);
+  ok(namedRetired("paid in stablecoins by supply; geocoded addresses, a geocoder; `defi-yields-v2`, crypto-orderbook-depth, /api/defi-yields, /api/geocode, skill-defi-yields-watch, reverse-geocoding").length === 0, "control: an allowlisted ordinary word, a longer word or slug and a route (read by the scan above) are not bare retired names");
+  const tracked = execFileSync("git", ["ls-files"], { cwd: new URL("..", import.meta.url), encoding: "utf8" }).split("\n")
+    .filter((f) => /^(README\.md|llms-install\.md)$|^(wiki|docs)\/.*\.(md|txt)$|^(mcp|client|tollbooth|openclaw|adapters|examples|facilitator)\/(.*\/)?README\.md$/.test(f) && !/(^|\/)CHANGELOG\.md$/.test(f));
   const found = [];
   for (const f of tracked) for (const slug of namedRetired(readTextSync(new URL(`../${f}`, import.meta.url), "utf8"))) found.push(`${f}: ${slug}`);
-  ok(tracked.includes("README.md") && tracked.includes("wiki/Tool-Catalog.md") && tracked.includes("docs/ecosystem-listings.md") && tracked.length >= 20, `the README, the wiki and the listing copy are read (${tracked.length} files)`);
+  const must = ["README.md", "mcp/README.md", "client/README.md", "tollbooth/README.md", "wiki/Tool-Catalog.md", "docs/ecosystem-listings.md", "llms-install.md"];
+  ok(must.every((f) => tracked.includes(f)) && tracked.length >= 30, `the README, each package README, the wiki and the listing copy are read (${tracked.length} files; missing: ${must.filter((f) => !tracked.includes(f)).join(", ") || "none"})`);
   ok(found.length === 0, `no doc names a retired tool by its slug (found: ${found.join(", ") || "none"})`);
   const { SKILL_PACKS } = await import("../src/skills.js");
   const inPacks = [];
+  const proseOf = (pack) => JSON.stringify({ ...pack, slug: undefined, toolSlugs: undefined });
   for (const pack of SKILL_PACKS) {
     for (const slug of pack.toolSlugs || []) if (Object.hasOwn(RETIRED_TOOLS, slug)) inPacks.push(`${pack.slug}: step ${slug}`);
-    for (const slug of namedRetired(JSON.stringify({ ...pack, slug: undefined, toolSlugs: undefined }))) inPacks.push(`${pack.slug}: prose names ${slug}`);
+    for (const slug of namedRetired(proseOf(pack))) inPacks.push(`${pack.slug}: prose names ${slug}`);
   }
+  ok(namedRetired(proseOf({ slug: "skill-x", toolSlugs: ["geocode"], workflow: "Resolve each stop with geocode, then forecast." })).join() === "geocode", "control: a pack's workflow that names a one-word retired tool is found");
   ok(SKILL_PACKS.length >= 50 && inPacks.length === 0, `no pack runs or names a retired tool in its steps, workflow or prompt (found: ${inPacks.join(", ") || "none"}; ${SKILL_PACKS.length} packs)`);
+}
+
+// --- the changelog's retirement sentences say what the registry says ----------------
+// A changelog item that announces retirements names, for each route, the
+// replacement its 410 carries, or says it names none. The sentence forms read:
+//   "<slug> names <replacement> as the replacement"      "<slug> (<replacement>)"
+//   "<a>, <b> and <c> are retired and answer 410 naming <x>, <y> and <z>."  (in order)
+//   "<a> and <b> name none"                              "name none: <a>, <b> and <c>."
+// and the counts a sentence states in words ("Fifteen routes are retired", "Two
+// name a replacement", "The other thirteen name none"). Each is held to
+// src/retired-tools.js, for every route retired on or after 2026-11-16.
+{
+  const NUMBER = Object.fromEntries("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(" ").map((w, k) => [w, k + 1]));
+  const LIST = "(?:[a-z0-9-]+(?:, | and ))*[a-z0-9-]+";
+  const listOf = (x) => x.split(/, | and /);
+  const problemsIn = (text, registry) => {
+    const problems = [];
+    const mentioned = Object.keys(registry).filter((slug) => wholeWord(slug).test(text));
+    const pairs = new Map(), none = new Set();
+    for (const m of text.matchAll(/([a-z0-9-]+) names ([a-z0-9-]+) as the replacement/g)) pairs.set(m[1], m[2]);
+    for (const m of text.matchAll(/([a-z0-9-]+) \(([a-z0-9-]+)\)/g)) pairs.set(m[1], m[2]);
+    for (const m of text.matchAll(new RegExp(`(${LIST}) are retired and answer 410 naming (${LIST})\\.`, "g"))) {
+      const from = listOf(m[1]), to = listOf(m[2]);
+      if (from.length !== to.length) problems.push(`"${m[0].slice(0, 60)}" lists ${from.length} routes and ${to.length} replacements`);
+      else from.forEach((slug, k) => pairs.set(slug, to[k]));
+    }
+    for (const m of text.matchAll(new RegExp(`(${LIST}) names? none`, "g"))) for (const slug of listOf(m[1])) none.add(slug);
+    for (const m of text.matchAll(new RegExp(`names? none: (${LIST})\\.`, "g"))) for (const slug of listOf(m[1])) none.add(slug);
+    for (const slug of mentioned) {
+      const want = registry[slug].replacement;
+      if (want && pairs.get(slug) !== want) problems.push(`${slug}: the registry names ${want}, the sentence ${pairs.get(slug) ?? "none"}`);
+      if (want && none.has(slug)) problems.push(`${slug}: listed as naming none, the registry names ${want}`);
+      if (!want && pairs.has(slug)) problems.push(`${slug}: the registry names no replacement, the sentence ${pairs.get(slug)}`);
+      if (!want && !none.has(slug)) problems.push(`${slug}: the registry names no replacement and the sentence does not say so`);
+    }
+    const count = (re, actual, what) => { const m = re.exec(text); if (m && NUMBER[m[1].toLowerCase()] !== actual) problems.push(`"${m[0]}" but ${actual} ${what}`); };
+    count(/\b([A-Za-z]+) routes are retired/, mentioned.length, "are named");
+    count(/\b([A-Za-z]+) name a replacement/, mentioned.filter((slug) => registry[slug].replacement).length, "do");
+    count(/other ([a-z]+) name none/, mentioned.filter((slug) => !registry[slug].replacement).length, "do");
+    return { mentioned, problems };
+  };
+  const { CHANGELOG_ENTRIES } = await import("../src/changelog.js");
+  const SINCE = "2026-11-16";
+  const items = CHANGELOG_ENTRIES.filter((entry) => entry.date >= SINCE).flatMap((entry) => entry.items).filter((item) => /\bretired and answer 410\b/.test(item));
+  const covered = new Set(), problems = [];
+  for (const item of items) { const r = problemsIn(item, RETIRED_TOOLS); r.mentioned.forEach((slug) => covered.add(slug)); problems.push(...r.problems); }
+  const due = Object.entries(RETIRED_TOOLS).filter(([, e]) => e.retiredAt >= SINCE);
+  const unsaid = due.filter(([slug]) => !covered.has(slug)).map(([slug]) => slug);
+  const pointers = due.filter(([, e]) => e.replacement).length;
+  ok(items.length >= 2 && problems.length === 0, `each changelog retirement sentence matches the registry (${problems.join("; ") || `${items.length} items`})`);
+  ok(unsaid.length === 0, `every route retired since ${SINCE} is announced in a changelog retirement sentence (missing: ${unsaid.join(", ") || "none"})`);
+  ok(due.length === 21 && pointers === 6 && due.length - pointers === 15, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
+  // Controls: each way a sentence can part from the registry is reported.
+  const REG = { geocode: { replacement: "place-lookup" }, "reverse-geocode": { replacement: null }, "place-search": { replacement: null }, "exa-search": { replacement: "search" }, "exa-answer": { replacement: "answer" } };
+  const good = "geocode, reverse-geocode and place-search are retired and answer 410: geocode names place-lookup as the replacement, and reverse-geocode and place-search name none. exa-search and exa-answer are retired and answer 410 naming search and answer.";
+  ok(problemsIn(good, REG).problems.length === 0 && problemsIn(good, REG).mentioned.length === 5, "control: sentences that match the registry report nothing");
+  const bad = (text, re, what) => { const p = problemsIn(text, REG).problems; ok(p.length > 0 && p.some((x) => re.test(x)), `control: ${what} is reported (${p.join("; ").slice(0, 110) || "nothing"})`); };
+  bad(good.replace("names place-lookup", "names geo-lookup"), /geocode: the registry names place-lookup, the sentence geo-lookup/, "a wrong replacement");
+  bad(good.replace("naming search and answer", "naming answer and search"), /exa-search: the registry names search, the sentence answer/, "replacements listed out of order");
+  bad(good.replace("and reverse-geocode and place-search name none", "and reverse-geocode names place-lookup as the replacement"), /reverse-geocode: the registry names no replacement, the sentence place-lookup/, "a pointer the registry does not carry");
+  bad(good.replace("geocode names place-lookup as the replacement, and reverse-geocode and place-search name none", "geocode, reverse-geocode and place-search name none"), /geocode: listed as naming none/, "a route with a replacement listed as naming none");
+  bad("geocode (place-lookup) is retired; reverse-geocode is retired too.", /reverse-geocode: the registry names no replacement and the sentence does not say so/, "a route whose missing replacement goes unsaid");
+  bad("Four routes are retired and answer 410. One names a replacement: geocode (place-lookup). The other two name none: reverse-geocode and place-search.", /"Four routes are retired" but 3 are named/, "a count that does not match the routes named");
+  bad("Three routes are retired. geocode (place-lookup). The other three name none: reverse-geocode and place-search.", /"other three name none" but 2 do/, "a none-count that does not match");
+  bad("exa-search and exa-answer are retired and answer 410 naming search.", /lists 2 routes and 1 replacements/, "a replacement list shorter than the routes");
 }
 
 // --- the published-routes snapshot rule (scripts/published-slugs.js) --------------
