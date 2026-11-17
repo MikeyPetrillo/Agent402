@@ -7,6 +7,13 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 
 const ENTRIES = [
   {
+    date: "2026-11-17",
+    title: "The OpenClaw plugin on OpenClaw 2026.11.5",
+    items: [
+      "Packages: agent402-openclaw 0.5.12 is tested against OpenClaw 2026.11.5 and 2026.11.2. OpenClaw 2026.11.5 installs a bare plugin name from ClawHub, where each release is also published; the README names npm:agent402-openclaw for the npm package on that host, and the real-install test covers the ClawHub and npm installs there.",
+    ],
+  },
+  {
     date: "2026-11-16",
     title: "Settlement wording per rail, and a page for a stopped reconciliation",
     items: [

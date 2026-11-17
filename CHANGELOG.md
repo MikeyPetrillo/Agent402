@@ -6,6 +6,14 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (the OpenClaw plugin on OpenClaw 2026.11.5)
+Packages:
+- agent402-openclaw 0.5.12 is tested against OpenClaw 2026.11.5 and 2026.11.2.
+  OpenClaw 2026.11.5 installs a bare plugin name from ClawHub, where each
+  release is also published; the README names `npm:agent402-openclaw` for the
+  npm package on that host, and the real-install test covers the ClawHub and
+  npm installs there.
+
 ### 2026-11-16 (settlement wording per rail, and a page for a stopped reconciliation)
 Payments:
 - Every sentence that said a payment settles only on a delivered result names
