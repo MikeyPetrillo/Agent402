@@ -116,6 +116,7 @@ export const ENSEMBLE_CACHE_TTL_MS = 10 * 60_000;
 export const ENSEMBLE_CACHE_MAX = 2000;
 const ensembleCache = new Map(); // key -> { at, value }
 export function _resetEnsembleCache() { ensembleCache.clear(); }
+export function _ensembleCacheSize() { return ensembleCache.size; }
 const coordKey = (l) => `${Number(l.lat).toFixed(4)},${Number(l.lon).toFixed(4)}`;
 
 /** Both ensembles for one date at each location: kept answers first, then one
@@ -123,22 +124,29 @@ const coordKey = (l) => `${Number(l.lat).toFixed(4)},${Number(l.lon).toFixed(4)}
 async function readEnsembles(locations, opts) {
   const prefix = `${opts.date}|${opts.variable}|${opts.tempUnit}|`;
   const now = Date.now();
-  const held = (l) => { const e = ensembleCache.get(prefix + coordKey(l)); return e && now - e.at < ENSEMBLE_CACHE_TTL_MS ? e.value : null; };
+  // The kept values are taken here, before the read: the read below can push
+  // the oldest entries out, and this call still answers from what it held.
+  const answers = new Map(); // key -> value
   const firstOf = new Map();
-  for (const l of locations) if (!held(l) && !firstOf.has(coordKey(l))) firstOf.set(coordKey(l), l);
+  for (const l of locations) {
+    const key = prefix + coordKey(l);
+    if (answers.has(key) || firstOf.has(key)) continue;
+    const e = ensembleCache.get(key);
+    if (e && now - e.at < ENSEMBLE_CACHE_TTL_MS) answers.set(key, e.value);
+    else firstOf.set(key, l);
+  }
   const missing = [...firstOf.values()];
-  const fresh = new Map();
   if (missing.length) {
     const read = await fetchEnsembles(missing, opts);
     missing.forEach((l, k) => {
       const key = prefix + coordKey(l);
-      fresh.set(key, read[k]);
+      answers.set(key, read[k]);
       ensembleCache.delete(key);
       ensembleCache.set(key, { at: Date.now(), value: read[k] });
     });
     while (ensembleCache.size > ENSEMBLE_CACHE_MAX) ensembleCache.delete(ensembleCache.keys().next().value);
   }
-  return locations.map((l) => fresh.get(prefix + coordKey(l)) ?? held(l));
+  return locations.map((l) => answers.get(prefix + coordKey(l)));
 }
 
 /** Read both ensembles for one date at each location (one upstream call). */

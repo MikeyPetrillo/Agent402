@@ -295,6 +295,21 @@ const RATING_WORDS = /\b(edge|mispric\w*|underpric\w*|overpric\w*|undervalu\w*|o
   const down = await errOf(() => board({ cities: five }));
   reply = (u) => { const n = u.searchParams.get("latitude").split(",").length; return json(n === 1 ? cityBody(0) : Array.from({ length: n }, (_, k) => cityBody(k))); };
   ok(down?.statusCode >= 500 && (await board({ cities: five })).count === 5, "weather-market-board: a failed read is not kept");
+  // At the cap: a board that mixes the oldest kept cities with new ones is answered whole (the kept
+  // values are taken before the read that pushes them out), and the set never passes its bound.
+  P._resetEnsembleCache();
+  const cap = P.ENSEMBLE_CACHE_MAX, at = (i) => ({ label: `k${i}`, lat: Number((i * 0.01).toFixed(2)), lon: 5 });
+  for (let i = 0; i < cap; i += 20) await board({ cities: Array.from({ length: 20 }, (_, k) => at(i + k)) });
+  ok(P._ensembleCacheSize() === cap, `weather-market-board: the kept set fills to its bound (${P._ensembleCacheSize()})`);
+  fetched.length = 0;
+  const mixedCities = [...Array.from({ length: 10 }, (_, k) => at(k)), ...Array.from({ length: 10 }, (_, k) => ({ label: `n${k}`, lat: 40 + k, lon: 5 }))];
+  const mixedErr = await errOf(async () => { out = await board({ cities: mixedCities }); });
+  ok(!mixedErr && out.count === 20 && out.cities[0].label === "k0" && out.cities[0].distribution && out.cities[19].distribution && fetched.length === 1 && new URL(fetched[0]).searchParams.get("latitude").split(",").length === 10,
+    `weather-market-board: at the bound, the oldest kept cities and new ones answer together (${mixedErr ? mixedErr.name + ": " + mixedErr.message : "ok"})`);
+  ok(P._ensembleCacheSize() === cap, `weather-market-board: a read at the bound leaves the kept set at its bound (${P._ensembleCacheSize()})`);
+  fetched.length = 0;
+  await board({ cities: [at(0)] }); await board({ cities: [at(cap - 1)] });
+  ok(fetched.length === 1 && new URL(fetched[0]).searchParams.get("latitude") === "0", "weather-market-board: the oldest entry left first and is read again; the newest is still kept");
   P._resetEnsembleCache();
   reply = (u) => {
     if (u.host === "geocoding-api.open-meteo.com") return json(u.searchParams.get("name") === "Nowhere" ? {} : { results: PLACES });
