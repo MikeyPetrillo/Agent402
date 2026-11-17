@@ -46,7 +46,12 @@ ok(text.includes(`No request to a site in our index, or to a URL a caller names,
   for (const [what, ms] of [["revisit cap", SL.REVISIT_CAP_MS], ["default hold", SL.THROTTLE_DEFAULT_MS], ["longest hold", SL.THROTTLE_MAX_MS], ["request log", SL.REQUEST_LOG_KEEP_MS], ["price re-read", LIVE_QUOTE_MAX_AGE_MS]]) {
     ok(text.includes(spanLabel(ms)), `the page prints the ${what} from code (${spanLabel(ms)})`);
   }
-  ok(text.includes(`at most ${SL.DAILY_BUDGET.toLocaleString("en-US")} requests a day`) && text.includes(slowOriginIntervalLabel()), "the daily budget and the slow cycle are printed from code");
+  ok(text.includes(`at most ${SL.DAILY_BUDGET.toLocaleString("en-US")} requests a day to one site on its own account`) && text.includes(slowOriginIntervalLabel()), "the daily budget and the slow cycle are printed from code");
+  // The rule for requests that follow a redirect onto another site
+  // (src/seller-load.js landingGate; scripts/test-crawl-redirect-budget.js
+  // holds the code to it): the page states it, with the figure from code.
+  ok(text.includes(`Every request that follows such a move to the other site, a document read or a price check, is held to ${SL.DAILY_BUDGET.toLocaleString("en-US")} more a day there, apart from that site's own allowance: past it those requests are not sent until the next day, and the moved site's listing stays as it was.`), "the page states the allowance for requests that follow a moved site's documents, from code");
+  ok(!text.includes("a separate allowance of the same size"), "the earlier wording of that allowance is gone");
   // Typed figures: the prose of the page module and of the changelog's
   // seller-request entries, with every \${...} interpolation removed, names no
   // count of time or requests in digits or words.

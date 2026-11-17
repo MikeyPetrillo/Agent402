@@ -625,11 +625,15 @@ export async function retryTransient(fn, { retries = 1, backoffMs = 300 } = {}) 
  *  reset or TLS-failed connection does. */
 export const OUR_EGRESS_CONNECT_CODES = Object.freeze(new Set(["EADDRNOTAVAIL"]));
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECT_HOPS = 20; // as the fetch itself follows
+const CROSS_ORIGIN_DROPPED_HEADERS = new Set(["authorization", "proxy-authorization", "cookie"]);
+
 /**
  * Fetch a public http(s) URL with SSRF protection, size cap, and timeout.
  * Returns { finalUrl, html } — or { finalUrl, buffer } with `binary: true`.
  */
-export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream, userAgent = FETCH_UA, errorBodyMaxBytes = 0 } = {}) {
+export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, headers = {}, method = "GET", body, timeoutMs = FETCH_TIMEOUT_MS, validators = null, allowNotModified = false, ownUpstream, userAgent = FETCH_UA, errorBodyMaxBytes = 0, beforeRedirect = null } = {}) {
   const url = await assertPublicUrl(rawUrl).catch((err) => { throw ownUpstream ? asOwnUpstreamRefusal(err) : err; });
   // `ownUpstream`: the URL is one this server chose (a kit's fixed API host),
   // not one the caller supplied, so a host that does not resolve is our 503.
@@ -648,10 +652,21 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
   // In the request log /crawler describes (src/seller-load.js): a catalog
   // tool's fetch. The index crawler's reads are counted where they are budgeted.
   if (userAgent !== CRAWLER_UA) noteHostRequest(String(url), "fetch");
+  // `beforeRedirect(nextUrl, fromUrl)`: a caller that must decide each
+  // redirect hop before it is sent (the index crawler counts a hop against the
+  // host it lands on, src/seller-load.js landingGate). The hops are then
+  // followed here one at a time, through the same dispatcher, and whatever the
+  // check throws is thrown as it is, with the hop not sent. For a GET with no
+  // body only; without the check the fetch follows redirects itself.
+  const stepwise = typeof beforeRedirect === "function" && method === "GET" && body === undefined;
+  let hopRefusal = null;
   try {
   let response;
   try {
-    response = await fetch(url, {
+    let target = url;
+    let sendHeaders = headers;
+    for (let hops = 0; ; hops++) {
+    response = await fetch(target, {
       method,
       // Optional request body (e.g. a JSON POST to a search API). The method and
       // body never change the connection TARGET — assertPublicUrl already pinned
@@ -659,7 +674,7 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       // safety is identical to a GET.
       ...(body !== undefined ? { body } : {}),
       signal: controller.signal,
-      redirect: "follow",
+      redirect: stepwise ? "manual" : "follow",
       dispatcher: ssrfDispatcher,
       // Caller headers (e.g. an upstream API key) merge over the defaults;
       // headers don't change the connection target, so SSRF safety is unaffected.
@@ -673,9 +688,24 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
         Accept: "text/html,application/xhtml+xml,*/*",
         ...(validators?.etag ? { "If-None-Match": validators.etag } : {}),
         ...(validators?.lastModified ? { "If-Modified-Since": validators.lastModified } : {}),
-        ...headers,
+        ...sendHeaders,
       },
     });
+    if (!stepwise || !REDIRECT_STATUSES.has(response.status)) break;
+    const location = response.headers.get("location");
+    if (!location) break;
+    let next;
+    try { next = new URL(location, response.url || String(target)); } catch { throw new TypeError("redirect to an unreadable location"); }
+    if (next.protocol !== "http:" && next.protocol !== "https:") throw new TypeError("redirect to a location that is not http(s)");
+    if (hops >= MAX_REDIRECT_HOPS) throw new TypeError("redirect count exceeded");
+    await response.body?.cancel?.().catch?.(() => {});
+    try { await beforeRedirect(next.href, String(target)); } catch (e) { hopRefusal = e || new Error("redirect not followed"); break; }
+    // A hop to another origin never carries the caller's credentials.
+    if (next.origin !== new URL(String(target)).origin) {
+      sendHeaders = Object.fromEntries(Object.entries(sendHeaders).filter(([k]) => !CROSS_ORIGIN_DROPPED_HEADERS.has(k.toLowerCase())));
+    }
+    target = next;
+    }
   } catch (err) {
     // Every hop, the first included: a refused connection (no answer for the
     // name, or a private one) is one 400 with one sentence.
@@ -705,6 +735,8 @@ export async function safeFetch(rawUrl, { binary = false, maxBytes = MAX_BYTES, 
       { statusCode: 504, attribution: "unknown", hint: timedOut ? "source-timeout" : "source-unreachable", ...(code ? { transportCode: String(code).slice(0, 40) } : {}) }
     );
   }
+
+  if (hopRefusal) throw hopRefusal;
 
   // 304 Not Modified is a SUCCESS, and it must be handled before the !ok check
   // below - `response.ok` is false for 304, so without this a conditional

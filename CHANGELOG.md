@@ -48,12 +48,15 @@ Index:
   regular cycle (every 30 minutes); a waiting origin's listing stays as it
   was.
 - The crawler, the unpaid price checks and the MPP index's reads send at most
-  200 requests a day to one site, counted per registrable domain or per
-  hostname on shared hosting; past that they wait for the next UTC day. A site
-  whose documents moved to another site is counted on its own allowance; the
-  requests that reach the other site that way have a separate allowance of the
-  same size and never use up that site's own. The router's request before a
-  purchase for a paying caller is counted on its own and always goes through.
+  200 requests a day to one site on its own account, counted per registrable
+  domain or per hostname on shared hosting; past that they wait for the next
+  UTC day. A site whose documents moved to another site is counted on its own
+  allowance. Every request that follows such a move to the other site, a
+  document read or a price check, is held to 200 more a day there, apart from
+  that site's own allowance: past it those requests are not sent until the
+  next day, and the moved site's listing stays as it was. The router's request
+  before a purchase for a paying caller is counted on its own and always goes
+  through.
 - A 429 or 503 from a seller pauses the crawl and the unpaid price checks for
   that host until its Retry-After, 30 minutes when it names none, and never
   longer than a day.

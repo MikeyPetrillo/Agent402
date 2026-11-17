@@ -17,7 +17,12 @@
 //      DAILY_BUDGET (SELLER_PROBE_DAILY_BUDGET, default 200) the crawl and the
 //      unpaid probes skip that host until the day rolls. The router's probe for
 //      a paying caller is counted on a day count of its own, never skipped and
-//      never counted against the crawl's budget.
+//      never counted against the crawl's budget. A request that reaches a host
+//      through another operator's redirect (a document read following it, or
+//      a probe sent where the documents moved) is counted on the crawled
+//      origin's day and on the landing host's landed count, which has a day's
+//      budget of its own: past it the request is not made (LandingHeld), and
+//      the landing host's own day, crawl and router probes never read it.
 //   3. Retry-After. A 429 or 503 from a seller to the crawler or a probe holds
 //      that host's crawl and probes until its Retry-After (or THROTTLE_DEFAULT_MS
 //      when it names none), never past THROTTLE_MAX_MS. A router purchase is
@@ -167,7 +172,7 @@ export function createSellerLoad({
   const shares = store && store !== local;
   const counts = {
     unchangedReads: 0, changedReads: 0,
-    skipped: { unchanged: 0, throttled: 0, budget: 0 },
+    skipped: { unchanged: 0, throttled: 0, budget: 0, landing: 0 },
     resets: {},
     throttles: { noted: 0, withRetryAfter: 0 },
     requests: {}, refused: {},
@@ -552,6 +557,15 @@ export function createSellerLoad({
       return Number((await local.counterGet(BUDGET, `${budgetKey(origin, clock())}|landed`, { now: clock() }))?.value) || 0;
     },
 
+    /** Whether a request `chargeTo`'s crawl would land on the operator of
+     *  `url` has no room left today: another operator's host, and the day's
+     *  landed allowance there is spent. Reads only. */
+    async landingSpent(url, chargeTo) {
+      const target = originOf(url), cause = originOf(chargeTo);
+      if (!target || !cause || dailyBudget <= 0 || operatorKey(cause) === operatorKey(target)) return false;
+      return (await this.landedToday(target)) >= dailyBudget;
+    },
+
     /** The router's probes counted today for the operator of `url`. */
     async routerProbesToday(url) {
       const origin = originOf(url);
@@ -569,13 +583,17 @@ export function createSellerLoad({
 
     /** The scheduled crawl's plan for `origin`: `skip` is why it waits this
      *  cycle ("throttled" for a Retry-After, "budget" for a spent day,
-     *  "unchanged" for a back-off) or null, and `intervalMs` the back-off the
-     *  origin is on (0 on the normal cycle). Never throws, and an unreadable
-     *  state crawls. */
-    async crawlPlan(origin) {
+     *  "landing" when its documents are read from another operator's host
+     *  (`landsOn`) whose landed allowance is spent, "unchanged" for a
+     *  back-off) or null, and `intervalMs` the back-off the origin is on (0 on
+     *  the normal cycle). Never throws, and an unreadable state crawls. */
+    async crawlPlan(origin, { landsOn = null } = {}) {
       try {
         const held = await this.hold(origin);
         if (held) { counts.skipped[held]++; return { skip: held, intervalMs: 0 }; }
+        for (const to of [].concat(landsOn || [])) {
+          if (await this.landingSpent(to, origin)) { counts.skipped.landing++; return { skip: "landing", intervalMs: 0 }; }
+        }
         const due = await this.revisitDue(origin);
         if (!due.due) { counts.skipped.unchanged++; return { skip: "unchanged", intervalMs: due.intervalMs }; }
         return { skip: null, intervalMs: due.intervalMs };
@@ -656,6 +674,27 @@ export async function sendRouterProbe(url, send, { load = sellerLoad } = {}) {
 
 /** The process's controls, over the shared limits store. */
 export const sellerLoad = createSellerLoad();
+
+/** Thrown instead of following a redirect onto another operator's host whose
+ *  landed allowance for the day is spent: the request was not made. Our own
+ *  limit, never the crawled origin's answer. */
+export class LandingHeld extends Error {
+  constructor(host) {
+    super(`not sent: the day's allowance of requests reaching ${host || "that host"} through other sites' redirects is spent`);
+    this.landingHeld = true;
+    this.landingHost = host || null;
+  }
+}
+/** The check a redirect-following read of `chargeTo`'s documents makes before
+ *  each hop (safeFetch `beforeRedirect`): the hop is counted on `chargeTo`'s
+ *  day, and one onto another operator's host also on that host's landed
+ *  allowance, past which it throws LandingHeld and nothing is sent. */
+export function landingGate(chargeTo, kind, { load = sellerLoad } = {}) {
+  return async (nextUrl) => {
+    const b = await load.takeBudget(nextUrl, kind, { essential: true, chargeTo });
+    if (b?.ok === false) throw new LandingHeld(hostnameOf(nextUrl));
+  };
+}
 
 /** Note one request a component of ours sent the host of `url`, in the
  *  request log only (host, component and minute; never a path or a caller):

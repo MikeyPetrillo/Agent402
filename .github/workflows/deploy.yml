@@ -1998,7 +1998,7 @@ jobs:
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
-      - name: Offline suites (35 scripts, one process each)
+      - name: Offline suites (41 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b4 1
 
       - name: "Redis integration (the REAL client against a REAL server — cap-of-1, refund, cache round trip; the gap that made a redis major bump undecidable)"
@@ -2021,7 +2021,7 @@ jobs:
         if: matrix.shard == 1
         run: X402_INDEX_CRAWL=off node scripts/test-crawl-robots.js
 
-      - name: Offline suites (105 scripts, one process each)
+      - name: Offline suites (121 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b4 3
 
   test-unit-d:

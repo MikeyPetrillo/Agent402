@@ -32,7 +32,7 @@ const { docs, docFor } = createDocumentCache();
 import { timedSync } from "./boot-timing.js";
 import { safeFetch, probePublicUrl } from "./tools/fetch-guard.js";
 import { CRAWLER_UA } from "./user-agents.js";
-import { sellerLoad } from "./seller-load.js";
+import { sellerLoad, landingGate } from "./seller-load.js";
 import { CRAWL_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES } from "./crawl-cadence.js";
 import { validateOriginInput, isMppChallenge, mppDualStackOrigins, listingInjectionFinding, servedSellerName, cleanListingText, untrustedMarker, LISTING_NAME_MAX, memoServeScreen } from "./x402-index.js";
 import { registerMemoryStore } from "./memory-stores.js";
@@ -380,7 +380,9 @@ async function loadGate(url, kind, gate) {
 function noteHold(url, status, retryAfter) {
   if (status === 429 || status === 503) void Promise.resolve().then(() => sellerLoad.noteThrottle(url, status, retryAfter)).catch(() => {});
 }
-const fetchDiscoveryDoc = (url) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA });
+// A redirect hop is counted before it is sent, and one onto another operator's
+// host is not sent past that host's landed allowance (landingGate).
+const fetchDiscoveryDoc = (url) => safeFetch(url, { maxBytes: MAX_DISCOVERY_DOC_BYTES, headers: { Accept: "application/json" }, timeoutMs: PROBE_TIMEOUT_MS, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "mpp-crawler") });
 
 /** Fetch `${origin}/openapi.json` (guarded, capped, cached 1h) and derive a
  *  probe target. null on any failure; throws only when the load controls held
@@ -396,6 +398,8 @@ async function discoveryProbeTarget(origin, { gate = false, fetchDoc = fetchDisc
     const t = probeTargetFromDiscovery(JSON.parse(html));
     if (t) target = { method: t.method, url: `${origin}${t.path}` };
   } catch (e) {
+    // A hop that was not sent is no answer: nothing is cached.
+    if (e?.landingHeld) throw new MppRequestHeld("budget");
     noteHold(url, Number(e?.upstreamStatus), e?.retryAfter ?? e?.upstreamRetryAfter ?? null);
     target = null;
   }

@@ -4,7 +4,7 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (35 scripts, one process each)
+# @step 1: Offline suites (41 scripts, one process each)
 # "Router Sybil resistance (M6 — Attack IV: per-seller diversity cap, metadata-injection listings dropped)"
 t node scripts/test-router-sybil.js
 # Data-kit tests (barcode-lookup, fx-rate, weather-forecast — live keyless APIs)
@@ -105,7 +105,7 @@ t node scripts/test-operator-seed.js
 # "MPP self-registration probe hint (optional path/method: validated, probed, kept only on success, persisted with the seed - offline)"
 t node scripts/test-mpp-index-hint.js
 
-# @step 3: Offline suites (105 scripts, one process each)
+# @step 3: Offline suites (121 scripts, one process each)
 # Tollbooth CLI settles x402 + MPP from env (real CLI process vs stub facilitator; mppx + @x402/fetch buys settle once each; misconfig fails closed)
 t node scripts/test-tollbooth-cli.js
 # /tollbooth install snippet runs against the package for every mode (observe, bots, strict, all; PoW unlock, stock x402 buy vs stub facilitator)

@@ -305,7 +305,7 @@ export function isSelfSeller(origin, { baseUrl = "", redirectedTo = null } = {})
 import { CRAWL_INTERVAL_MS, DISCOVERY_INTERVAL_MS, isSlowOrigin, SLOW_ORIGIN_EVERY_CYCLES, LIVE_QUOTE_MAX_AGE_MS, NETWORKS_VERIFY_AGE_MS } from "./crawl-cadence.js";
 import { operatorKey } from "./operator-key.js";
 import { CRAWLER_UA, CRAWLER_TOKEN } from "./user-agents.js";
-import { sellerLoad, bodyHash } from "./seller-load.js";
+import { sellerLoad, bodyHash, landingGate } from "./seller-load.js";
 import { routeTiebreakLabels } from "./route-order.js";
 import { routeExcludedCategory } from "./route-category.js";
 import { withoutAttributions } from "./data-attribution.js";
@@ -1620,7 +1620,12 @@ async function readMarker(origin, fetchImpl) {
     // `fetchImpl` remains only for tests and is never the network path.
     const res = fetchImpl
       ? await fetchImpl(url).then(async (r) => (r.ok ? { html: await r.text(), finalUrl: r.url || url } : null))
-      : await safeFetch(url, { headers: { accept: "application/json" }, maxBytes: 4096, userAgent: CRAWLER_UA }).catch(() => null);
+      : await safeFetch(url, {
+        headers: { accept: "application/json" }, maxBytes: 4096, userAgent: CRAWLER_UA,
+        // A marker served from another origin is never a proof (below), so a
+        // redirect that leaves this origin is not followed at all.
+        beforeRedirect: (next) => { if (!sameOrigin(next, origin)) throw new Error("the marker redirects off its origin"); },
+      }).catch(() => null);
     if (!res) return null;
     // THE MARKER MUST BE SERVED BY THE ORIGIN ITSELF.
     //
@@ -1851,7 +1856,7 @@ async function registerOriginNow(origin, { crawl, replaces = null, deadlineAt = 
   if (!submittedSeeds.has(origin) && submittedSeeds.size >= submittedSeedsCap) {
     return { listed: false, origin, error: `submission list is full - a slot frees up ${Math.round(RELEASE_AFTER_MS / 86400000)} days after its origin's last successful probe (${Math.round(SETTLED_RELEASE_AFTER_MS / 86400000)} for a seller that has settled payments, ${Math.round(TUNNEL_RELEASE_AFTER_MS / 86400000)} for a quick tunnel); open a GitHub issue to get seeded sooner` };
   }
-  const doCrawl = crawl || (async (o, opts) => { await crawlSeller(o, opts); return cache.get(o); });
+  const doCrawl = crawl || (async (o, opts) => { const read = await crawlSeller(o, opts); return cache.get(o) || (read?.landingHeld ? { error: read.error } : undefined); });
   let v;
   // A first registration reads the paywall on its first crawl, as a re-registration does.
   try { v = await doCrawl(origin, { deadlineAt, forcePaywall: true }); } catch (e) { v = { error: String(e?.message || e) }; }
@@ -6023,7 +6028,10 @@ async function robotsGroupsFor(sellerKey, fetchText) {
       ? await fetchText(`${originUrl}/robots.txt`)
       : (await crawlRead(`${originUrl}/robots.txt`, { maxBytes: ROBOTS_MAX_BYTES })).html;
     groups = parseRobots(String(text || ""));
-  } catch {
+  } catch (e) {
+    // A read we did not send (its redirect lands on a host past its landed
+    // allowance) is no answer: nothing is cached, and the crawl waits.
+    if (e?.landingHeld) throw e;
     groups = [];   // unreachable, 404, oversize: nothing to honour
   }
   robotsCache.set(originUrl, { groups, at: Date.now() });
@@ -6087,26 +6095,45 @@ let crawlFetch = (url, opts) => safeFetch(url, opts);
 export function __setCrawlFetchForTest(fn) { crawlFetch = typeof fn === "function" ? fn : (url, opts) => safeFetch(url, opts); }
 /** One crawler read of a seller document: counted against the host's day
  *  (src/seller-load.js; a read inside a crawl already started is never
- *  refused), and a 429 or 503 holds the host until its Retry-After. */
+ *  refused), and a 429 or 503 holds the host until its Retry-After. Each
+ *  redirect hop is a request of its own, counted on the same day before it is
+ *  sent; a hop onto another operator's host is also counted on that host's
+ *  landed allowance and is not sent past it (LandingHeld, landingGate). */
 async function crawlRead(url, opts) {
   await sellerLoad.takeBudget(url, "crawler", { essential: true });
   try {
-    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA });
+    return await crawlFetch(url, { ...opts, userAgent: CRAWLER_UA, beforeRedirect: landingGate(url, "crawler") });
   } catch (e) {
+    if (e?.landingHeld) throw e;
     const st = Number(e?.upstreamStatus);
     if (st === 429 || st === 503) await sellerLoad.noteThrottle(url, st, Number(e?.retryAfter || e?.upstreamRetryAfter) || null);
     throw e;
   }
 }
 export async function __crawlSellerForTest(originUrl, opts) { return crawlSeller(originUrl, opts); }
+// Where an origin's read was last held back (LandingHeld): the host its
+// documents redirect to. Its scheduled crawl then waits, without a request to
+// either host, until that host's landed allowance has room (the next UTC day).
+const landingHeldOn = new Map();   // origin -> the landing host's origin
+const LANDING_HELD_CAP = 5_000;
+function noteLandingHeld(origin, host) {
+  if (!host) return;
+  landingHeldOn.delete(origin);
+  landingHeldOn.set(origin, `https://${host}`);
+  while (landingHeldOn.size > LANDING_HELD_CAP) landingHeldOn.delete(landingHeldOn.keys().next().value);
+}
 /** One origin's turn in a scheduled crawl cycle: its load controls
  *  (src/seller-load.js) decide whether it is read; null when it was, else why
- *  it waits ("throttled", "budget" or "unchanged"). */
+ *  it waits ("throttled", "budget", "landing" or "unchanged"). "landing": its
+ *  documents are read from another operator's host whose landed allowance for
+ *  the day is spent; the entry stays as the last completed read left it. */
 async function crawlScheduled(origin, outcome = { ours: false }) {
-  const plan = await sellerLoad.crawlPlan(origin);
+  const landsOn = [cache.get(origin)?.redirectedTo, landingHeldOn.get(origin)].filter(Boolean);
+  const plan = await sellerLoad.crawlPlan(origin, { landsOn });
   if (plan.skip) return plan.skip;
-  await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
-  return null;
+  landingHeldOn.delete(origin);
+  const read = await crawlSeller(origin, { scheduled: true, revisitIntervalMs: plan.intervalMs }, outcome);
+  return read?.landingHeld ? "landing" : null;
 }
 export async function __crawlScheduledForTest(originUrl) { return crawlScheduled(originUrl); }
 /** Test seam: one whole crawl cycle (no lease), and the summary it logged. */
@@ -6123,6 +6150,7 @@ export async function __runCrawlCycleForTest() { await runCrawl(); return lastCy
  *  answer near the host can carry) are the seller's host and read false. Exported for the test. */
 export function crawlReadFailureIsOurs(e) {
   if (!e || typeof e !== "object") return false;
+  if (e.landingHeld) return true;                // a hop we did not send (src/seller-load.js LandingHeld)
   if (e.upstreamStatus != null || e.robotsBlocked) return false;
   if (e.hint === "source-timeout") return true;
   if (e.code === "EDNSUNAVAILABLE") return true; // fetch-guard's lookupUnavailable: our resolver
@@ -6235,6 +6263,8 @@ async function probePath(originUrl, path, { manifestPublished = false, condition
     rememberValidator(originUrl, path, conditional ? res.validators || null : null);
     return res;
   } catch (e) {
+    // A hop we did not send says nothing about this path: no backoff step.
+    if (e?.landingHeld) throw e;
     if (!crawlReadFailureIsOurs(e)) noteProbeOutcome(originUrl, path, false);
     else noteProbeOursFailure(originUrl, path);
     throw e;
@@ -6394,9 +6424,24 @@ function oncePerCrawl() {
   };
 }
 
+/** One crawl of an origin. A crawl one of whose reads was not sent because
+ *  its redirect lands on a host past its landed allowance (LandingHeld) is not
+ *  a read at all: the entry, its history and its revisit wait stay as they
+ *  were, the cycle's tally does not count it, and `{ landingHeld, error }` is
+ *  returned. The validators kept during it are dropped, so the next read
+ *  derives every document afresh rather than pairing a 304 with an entry this
+ *  crawl never wrote. */
 async function crawlSeller(originUrl, opts = {}, outcome = { ours: false }) {
+  let read = true;
   try { return await crawlSellerOnce(originUrl, opts, outcome); }
-  finally { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; }
+  catch (e) {
+    if (!e?.landingHeld) throw e;
+    read = false;
+    clearValidatorsFor(originUrl);
+    noteLandingHeld(originUrl, e.landingHost);
+    return { landingHeld: e.landingHost || true, error: String(e.message || e) };
+  }
+  finally { if (read) { crawlCycleTally.done++; if (outcome.ours) crawlCycleTally.ours++; } }
 }
 async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false, scheduled = false, revisitIntervalMs = 0 } = {}, outcome = { ours: false }) {
   const pastDeadline = () => deadlineAt > 0 && Date.now() >= deadlineAt;
@@ -6476,7 +6521,8 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
         tools = openapiTools;
         openapiExamples = openapiProbeExamples(openapi, originUrl, new Map());
       }
-    } catch {
+    } catch (e) {
+      if (e?.landingHeld) throw e;
       /* manifest-only seller — fine */
     }
 
@@ -6566,6 +6612,9 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // Outcome recording moved into probePath, which records every path it
     // fetches. Recording again here would double-count the manifest failure
     // and deepen its backoff twice per cycle.
+    // A read that was not sent (LandingHeld) ends the crawl with nothing
+    // changed; crawlSeller answers for it.
+    if (e?.landingHeld) throw e;
     // No manifest this crawl (or the read failed): the origin is back on the
     // normal cycle, so a seller who fixes or publishes one is read promptly.
     await sellerLoad.resetRevisit(originUrl, "listing-failure");
@@ -6583,6 +6632,7 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
     // is kept as it was (crawlHoldsLastGood).
     let oursFailed = crawlReadFailureIsOurs(e);
     const noteFallback = (path, err) => {
+      if (err?.landingHeld) throw err;
       if (crawlReadFailureIsOurs(err)) oursFailed = true;
       fallbackErrors.push({ path, error: String(err?.message || err).slice(0, 160) });
     };

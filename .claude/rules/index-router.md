@@ -78,11 +78,19 @@ Loaded when an index, discovery, router or buyer file is read.
   its paywall and quote probes and the MPP index's crawl reads wait, while reads inside a started
   crawl and a registration's reads are counted and never refused. The router's pre-payment probe
   (`sendRouterProbe`) has its own day count, is never refused and never counts against the crawl's
-  budget. A 429 or 503 on a crawler read or
+  budget. A request that reaches another operator's host through a redirect (a probe sent where
+  the documents moved, `chargeTo`; a document read's hop, `landingGate` through safeFetch's
+  `beforeRedirect`, the MPP index's document read included) is counted on the crawled origin's day
+  and on the landing host's landed count, a second day's budget there: past it the request is not
+  sent (`LandingHeld`), the crawl ends with the entry, history and revisit wait untouched and no
+  vote in the cycle tally, and the origin's scheduled turn reads `landing` until the day rolls.
+  The landing host's own day, crawl and router probes never read the landed count; a new
+  redirect-following crawler read passes the gate (`scripts/test-crawl-redirect-budget.js`).
+  A 429 or 503 on a crawler read or
   a probe holds that hostname's scheduled crawl and probes until Retry-After (30 minutes without
   one, at most a day), the MPP index's included; a router purchase is never held. A skipped origin
   keeps its entry; one backed off for unchanged documents votes healthy (not our side) in
-  `cycleOkFraction` and the cycle tally, a throttled or budgeted one is left out, and an origin read
+  `cycleOkFraction` and the cycle tally, a throttled, budgeted or landing-held one is left out, and an origin read
   after a wait gets the hold window (`INDEX_CRAWL_HOLD_HOURS`) counted from the end of that wait.
   `CRAWL_SLOW_ORIGINS` applies to the MPP index too (`mppCrawlDue`). Counts on
   `/__operator/seller-load.json`; `?host=` gives the request log (per component and minute, two
