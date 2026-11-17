@@ -273,7 +273,9 @@ export function buildInvalidPaymentResult(paymentRequired, { reason, message, mp
  * The result for a payment whose settlement is not decided yet: Circle
  * Gateway still settling a batched payment (retry same-payment: the SAME
  * payment resent later is served with no new charge), or a broadcast transfer
- * not yet confirmed on chain (retry watch-transaction). It carries the
+ * not yet confirmed on chain (retry watch-transaction), or a settle that
+ * ended without showing whether a transfer was sent (retry watch-transaction
+ * when a transaction is named, check-wallet when none is). It carries the
  * route's own explanation and NO PaymentRequired: a client that signed a
  * fresh offer here could pay twice. `refusal` is the route's 402 body
  * ({reason, retry, hint, network, transactions}); `settleResponse`, when
@@ -296,6 +298,8 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
     ...(wait ? { retryAfterSeconds: wait } : {}),
     ...(text(r.network, 80) ? { network: text(r.network, 80) } : {}),
     ...(transactions.length ? { transactions } : {}),
+    ...(isoTime(r.authorizationValidBefore) ? { authorizationValidBefore: isoTime(r.authorizationValidBefore) } : {}),
+    ...(refundUrl(r.refundStatusUrl) ? { refundStatusUrl: refundUrl(r.refundStatusUrl) } : {}),
     hint,
   };
   const resend = retry === "same-payment" ? ` Resend this call with the same _meta["${X402_PAYMENT_META}"]${wait ? ` after about ${wait} s` : ""}.` : "";
@@ -306,6 +310,27 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
     if (copy && copy.success === false) result._meta[X402_PAYMENT_RESPONSE_META] = copy;
   }
   return result;
+}
+
+// Two fields of a route's refusal, copied only in their own shapes.
+const isoTime = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(v) ? v : null);
+const refundUrl = (v) => (typeof v === "string" && /^https?:\/\/[A-Za-z0-9.:-]{1,253}\/api\/refunds\?tx=0x[0-9a-f]{64}$/.test(v) ? v : null);
+
+/**
+ * The result for a payment whose transfer landed after an earlier request
+ * with it was refused as unconfirmed (the route's settled-refund-owed
+ * answer): the amount is owed back, the call was not run for it, and the text
+ * never says the payment was not charged. It carries no PaymentRequired; the
+ * next call without a payment gets a fresh one. Never throws.
+ */
+export function buildRefundOwedResult({ label = "Agent402", refusal = {} } = {}) {
+  const r = isPlainObject(refusal) ? refusal : {};
+  const hint = typeof r.hint === "string" && r.hint.trim() ? r.hint.trim().slice(0, 1000) : "This payment already moved on chain and the call was not served for it; its amount is recorded as owed to the paying wallet and repaid after on-chain proof.";
+  const transaction = typeof r.transaction === "string" && TX_ID.test(r.transaction) ? r.transaction : null;
+  const url = refundUrl(r.refundStatusUrl);
+  const network = typeof r.network === "string" && /^[a-z0-9-]{1,32}:[A-Za-z0-9-]{1,64}$/.test(r.network) ? r.network : null;
+  const structured = { reason: "settled-refund-owed", retry: "fresh-authorization", ...(network ? { network } : {}), ...(transaction ? { transactions: [transaction] } : {}), ...(url ? { refundStatusUrl: url } : {}), hint };
+  return { isError: true, content: [{ type: "text", text: `${label}: ${hint}${transaction ? ` Transfer: ${transaction}.` : ""}${url ? ` Refund status: ${url}` : ""}` }], _meta: { [SETTLEMENT_PENDING_META]: structured } };
 }
 
 // A transaction id as each rail writes it: an EVM hash, a Solana signature, an
@@ -358,11 +383,11 @@ export function buildSettlementUnprovenResult({ label = "Agent402", refusal = {}
 
 /** True for a paid route's 402 that says the payment's settlement is not
  *  decided yet (buildSettlementPendingResult): its body's retry verb is
- *  same-payment or watch-transaction, or its settle answer reads
- *  settlement_pending. Never throws. */
+ *  same-payment, watch-transaction or check-wallet, or its settle answer
+ *  reads settlement_pending. Never throws. */
 export function isSettlementUndecided(body, settleResponse) {
   try {
-    if (isPlainObject(body) && (body.retry === "same-payment" || body.retry === "watch-transaction")) return true;
+    if (isPlainObject(body) && (body.retry === "same-payment" || body.retry === "watch-transaction" || body.retry === "check-wallet")) return true;
     return isPlainObject(settleResponse) && settleResponse.success === false && settleResponse.errorReason === "settlement_pending";
   } catch { return false; }
 }

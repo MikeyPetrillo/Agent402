@@ -106,7 +106,7 @@ import { decodePaymentResponseHeader } from "@x402/core/http";
 import {
   readPaymentFromMeta, paymentSignatureHeader, paymentRequiredFromHeader,
   buildPaymentRequiredResult, buildInvalidPaymentResult, buildSettlementFailedResult, withPaymentResponse,
-  buildSettlementPendingResult, buildSettlementUnprovenResult, isSettlementUndecided,
+  buildSettlementPendingResult, buildSettlementUnprovenResult, buildRefundOwedResult, isSettlementUndecided,
 } from "./mcp-x402.js";
 import { mcpX402Entries, mcpX402PathOf, MCP_X402_PREFIX } from "./mcp-x402-routes.js";
 import { decodesAsMppCredential, decodesAsX402Payment } from "./payment-attempt.js";
@@ -1024,10 +1024,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
      *  402 and whose body reads settlement-unconfirmed: the route's settle
      *  ended on an answer it could not read (src/payments.js
      *  markUnprovenStop), so the payment may have settled. Never "not
-     *  charged", and nothing to sign again. null for every other answer. */
+     *  charged", and nothing to sign again. Also the route's
+     *  settled-refund-owed answer (the same payment sent again after its
+     *  transfer landed): charged, owed back, never "not charged". null for
+     *  every other answer. */
     function unconfirmedErrorResult(def, r) {
       const body = r.json && typeof r.json === "object" && !Array.isArray(r.json) ? r.json : null;
+      if (body?.reason === "settled-refund-owed") return buildRefundOwedResult({ label: `Agent402 (${def.slug})`, refusal: body });
       if (!body || body.reason !== "settlement-unconfirmed") return null;
+      if (isSettlementUndecided(body, null)) return buildSettlementPendingResult({ label: `Agent402 (${def.slug})`, refusal: body });
       return buildSettlementUnprovenResult({ label: `Agent402 (${def.slug})`, refusal: body, settleResponse: null });
     }
 

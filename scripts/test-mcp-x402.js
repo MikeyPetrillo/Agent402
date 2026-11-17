@@ -348,5 +348,32 @@ const SETTLED = { success: true, transaction: "0x" + "12".repeat(32), network: "
   await client.close();
 }
 
+// A settle that ended without showing whether a transfer was sent (the
+// route's retry verb check-wallet) is undecided exactly like
+// watch-transaction: the route's own explanation once, no offer, and _meta
+// carrying its reason and verb. A payment whose transfer landed after the
+// refusal reads as owed back, never as not charged.
+{
+  const { isSettlementUndecided, buildRefundOwedResult, SETTLEMENT_PENDING_META: META } = await import("../src/mcp-x402.js");
+  const HINT = "This payment's settlement is not confirmed, so the answer was withheld. Do not sign a new authorization for this call before 2026-11-17T00:00:00Z.";
+  const body = { reason: "settlement-unconfirmed", retry: "check-wallet", network: "eip155:8453", authorizationValidBefore: "2026-11-17T00:00:00Z", hint: HINT };
+  ok(isSettlementUndecided(body, null) === true && isSettlementUndecided({ retry: "watch-transaction" }, null) === true && isSettlementUndecided({ retry: "other-network" }, null) === false && isSettlementUndecided({ retry: "fresh-authorization" }, null) === false,
+    "check-wallet is undecided like watch-transaction (controls: other-network and fresh-authorization are not)");
+  const r = buildSettlementPendingResult({ label: "T", refusal: body, settleResponse: { success: false, errorReason: "settlement_unconfirmed", transaction: "" } });
+  const text = r.content[0].text, meta = r._meta[META];
+  ok(r.isError === true && text.split(HINT).length === 2 && !/did not settle/.test(text) && !/Resend this call/.test(text) && !("x402/payment-required" in r._meta) && !("structuredContent" in r),
+    `check-wallet: the route's hint once, no "did not settle", no resend line, no offer (${text.slice(0, 120)})`);
+  ok(meta.reason === "settlement-unconfirmed" && meta.retry === "check-wallet" && meta.authorizationValidBefore === "2026-11-17T00:00:00Z" && !("transactions" in meta) && !("refundStatusUrl" in meta),
+    `check-wallet: _meta carries the reason, the verb and the authorization's last valid time (${JSON.stringify(meta).slice(0, 160)})`);
+  const TXL = `0x${"cd".repeat(32)}`;
+  const named = buildSettlementPendingResult({ refusal: { ...body, retry: "watch-transaction", transactions: [TXL], refundStatusUrl: `https://agent402.tools/api/refunds?tx=${TXL}` } })._meta[META];
+  ok(named.retry === "watch-transaction" && named.refundStatusUrl === `https://agent402.tools/api/refunds?tx=${TXL}`, "watch-transaction: the refund lookup rides in _meta");
+  ok(!("refundStatusUrl" in buildSettlementPendingResult({ refusal: { ...body, refundStatusUrl: "https://evil.example/x?tx=1", authorizationValidBefore: "soon" } })._meta[META])
+    && !("authorizationValidBefore" in buildSettlementPendingResult({ refusal: { ...body, authorizationValidBefore: "soon" } })._meta[META]), "a refund link or a time in another shape is not copied");
+  const owed = buildRefundOwedResult({ label: "T", refusal: { reason: "settled-refund-owed", network: "eip155:8453", transaction: TXL, refundStatusUrl: `https://agent402.tools/api/refunds?tx=${TXL}`, hint: "This payment already moved on chain; its amount is recorded as owed." } });
+  ok(owed.isError === true && owed.content[0].text.includes(TXL) && /recorded as owed/.test(owed.content[0].text) && !/not charged|never charged/i.test(owed.content[0].text) && owed._meta[META].reason === "settled-refund-owed" && owed._meta[META].retry === "fresh-authorization" && !("x402/payment-required" in owed._meta),
+    `a payment that landed after the refusal: the owed record, the transfer and the lookup, never "not charged" (${owed.content[0].text.slice(0, 120)})`);
+}
+
 console.log(`\n${fail ? "FAIL" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
