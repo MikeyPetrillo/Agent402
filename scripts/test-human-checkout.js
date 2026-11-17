@@ -6,11 +6,16 @@
 // chunking, and the legacy single-file import. Offline, in CI.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { createHumanCheckout, HUMAN_PRODUCTS, humanCheckoutEnabled, chunkInput, unchunkInput, STALE_CLAIM_MS, isReportPurchase } from "../src/human-checkout.js";
-import { rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { rmSync, mkdirSync, mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const DIR = join("/tmp", `test-human-checkout-${process.pid}`);
-try { rmSync(DIR, { recursive: true, force: true }); } catch { /* first run */ }
+// Every store this suite writes lives under one fresh temp root of its own,
+// the legacy single-file store included (read beside HUMAN_CHECKOUT_DIR), so
+// two runs, or a booted server, never read or migrate each other's files.
+const ROOT = mkdtempSync(join(tmpdir(), "a402-human-checkout-"));
+const DIR = join(ROOT, "human-checkout");
+process.env.HUMAN_CHECKOUT_DIR = DIR;
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log((c ? "ok" : "NOT OK") + " - " + m); };
@@ -230,7 +235,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
 // used by the next read of the list. (The list's own bounded wait for the
 // reads it started is set to 0 here; the block after this one covers it.)
 {
-  const DIR2 = join("/tmp", `test-human-checkout-owed-${process.pid}`);
+  const DIR2 = join(ROOT, "owed");
   rmSync(DIR2, { recursive: true, force: true });
   mkdirSync(DIR2, { recursive: true });
   const at = new Date(clock - 3600_000).toISOString();
@@ -283,7 +288,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
 // more than run at once) and lists the report; with one that never answers
 // the first read still returns, every record listed.
 {
-  const DIR3 = join("/tmp", `test-human-checkout-owedwait-${process.pid}`);
+  const DIR3 = join(ROOT, "owedwait");
   rmSync(DIR3, { recursive: true, force: true });
   mkdirSync(DIR3, { recursive: true });
   const at = new Date(clock - 3600_000).toISOString();
@@ -322,7 +327,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
 // idempotency key as the call that was never answered, and a late answer to
 // that first call (a success, or a failure) changes nothing.
 {
-  const DIR4 = join("/tmp", `test-human-checkout-poll-${process.pid}`);
+  const DIR4 = join(ROOT, "poll");
   rmSync(DIR4, { recursive: true, force: true });
   mkdirSync(DIR4, { recursive: true });
   const at = new Date(clock - 3600_000).toISOString();
@@ -405,7 +410,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
 // is the "not found" a read that fails in time is; and a read given up is
 // replaced by one new read whose report is the only one made.
 {
-  const DIR5 = join("/tmp", `test-human-checkout-read-${process.pid}`);
+  const DIR5 = join(ROOT, "read");
   rmSync(DIR5, { recursive: true, force: true });
   mkdirSync(DIR5, { recursive: true });
   const paid = (id) => ({ id, mode: "payment", payment_status: "paid", payment_intent: `pi_${id}`, amount_total: 500, metadata: { product: "dossier", input: "AAPL" } });
@@ -486,7 +491,7 @@ ok(refunds.length === 3, "...and not refunded again on the next poll");
 // a refund another retry recorded. A pushed-out session read's late failure is
 // not "not found". A session kept from a late read is used only for a minute.
 {
-  const DIR6 = join("/tmp", `test-human-checkout-late-${process.pid}`);
+  const DIR6 = join(ROOT, "late");
   rmSync(DIR6, { recursive: true, force: true });
   mkdirSync(DIR6, { recursive: true });
   const at = new Date(clock - 3600_000).toISOString();
@@ -598,20 +603,13 @@ ok(rec.length === 1 && rec[0].id === "cs_paid" && genCalls === gBefore + 2, "the
 ok((await settle("cs_paid")).status === "done", "...and it completes");
 
 // Legacy single-file store is imported once into per-session files.
-const LEG = join(DIR, "..", `legacy-${process.pid}`);
-mkdirSync(LEG, { recursive: true });
-// (the importer reads /data|/tmp/human-checkout.json - exercise the same code path by pointing storeDir at a dir whose sibling legacy file we plant)
+// The importer reads human-checkout.json beside the record directory: the
+// suite's own root here, never the shared /data or /tmp file.
 try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
-const legacyPath = join(existsSync("/data") ? "/data" : "/tmp", "human-checkout.json");
-const hadLegacy = existsSync(legacyPath);
-if (!hadLegacy) {
-  writeFileSync(legacyPath, JSON.stringify({ cs_old: { status: "done", kind: "research", slug: "research", input: "old", report: "# OLD", title: "old", sources: [], tables: [], at: "2026-08-21T00:00:00.000Z" } }));
-  hc = mk();
-  ok(hc.peek("cs_old")?.report === "# OLD" && !existsSync(legacyPath) && existsSync(legacyPath + ".migrated"), "a legacy single-file store is imported into per-session files once (old report links keep resolving)");
-  try { rmSync(legacyPath + ".migrated"); } catch { /* ignore */ }
-} else {
-  ok(true, "legacy import skipped: a real legacy store exists on this machine (not touched)");
-}
+const legacyPath = join(ROOT, "human-checkout.json");
+writeFileSync(legacyPath, JSON.stringify({ cs_old: { status: "done", kind: "research", slug: "research", input: "old", report: "# OLD", title: "old", sources: [], tables: [], at: "2026-08-21T00:00:00.000Z" } }));
+hc = mk();
+ok(hc.peek("cs_old")?.report === "# OLD" && !existsSync(legacyPath) && existsSync(legacyPath + ".migrated"), "a legacy single-file store beside HUMAN_CHECKOUT_DIR is imported into per-session files once (old report links keep resolving)");
 
 // --- the Stripe webhook fulfills a paid report session: a buyer who closed the
 // tab before the success redirect still gets one generation and one delivery,
@@ -620,7 +618,7 @@ if (!hadLegacy) {
   const { createStripeSubscriptions } = await import("../src/stripe-subscriptions.js");
   sessions.cs_hook = { id: "cs_hook", mode: "payment", payment_status: "paid", payment_intent: "pi_hook", customer_details: { email: "hook@example.com" }, metadata: { product: "dossier", input: "NVDA" } };
   const hookStripe = { ...stripe, webhooks: { constructEvent: (body, sig, secret) => { if (sig !== "goodsig" || secret !== "whsec_test") throw new Error("bad signature"); return JSON.parse(body.toString()); } } };
-  const subsStore = join("/tmp", `test-human-checkout-subs-${process.pid}.json`);
+  const subsStore = join(ROOT, "subscriptions.json");
   // The same hook expression server.js wires: a credits pack claims, a report fulfills.
   const credits = { claim: async () => { throw new Error("not a credits session"); } };
   const subs = createStripeSubscriptions({ stripe: hookStripe, baseUrl: "https://agent402.tools", storePath: subsStore,
@@ -659,6 +657,6 @@ if (!hadLegacy) {
   ok(other?.status === "done" && genCalls === before + 1, "a different address is unaffected by the breaker");
 }
 
-try { rmSync(DIR, { recursive: true, force: true }); rmSync(LEG, { recursive: true, force: true }); } catch { /* ignore */ }
+try { rmSync(ROOT, { recursive: true, force: true }); } catch { /* ignore */ }
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
