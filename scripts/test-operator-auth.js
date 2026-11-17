@@ -386,6 +386,16 @@ const done = (code) => { try { child.kill("SIGKILL"); } catch { /* */ } process.
       await wait((IDLE_S + 1.5) * 1000);
       ok((await page2()) === 404, "a session unused for longer than the idle window has ended");
       ok((await (await fetch(`${base2}/__operator`, { headers: { "x-operator-token": TOKEN } })).status) === 200, "control: the header token on the same server still authenticates");
+      // Cookie scope and transport: the cookie is scoped to /__operator, and a
+      // login that reached us over HTTPS (the proxy's X-Forwarded-Proto) gets
+      // the Secure attribute, on the session cookie and on the logout's clear.
+      const plainCookie = login2.headers.get("set-cookie") || "";
+      ok(/;\s*Path=\/__operator(;|$)/i.test(plainCookie), `the session cookie is scoped to Path=/__operator (${plainCookie.replace(/a402_op=[^;]*/, "a402_op=<sid>")})`);
+      const tlsLogin = await fetch(`${base2}/__operator/login`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-proto": "https" }, body: JSON.stringify({ token: TOKEN }) });
+      const tlsCookie = tlsLogin.headers.get("set-cookie") || "";
+      ok(tlsLogin.status === 200 && /;\s*Secure(;|$)/i.test(tlsCookie) && /HttpOnly/i.test(tlsCookie) && /SameSite=Strict/i.test(tlsCookie), "a login over HTTPS sets a Secure, HttpOnly, SameSite=Strict cookie");
+      const tlsOut = await fetch(`${base2}/__operator/logout`, { method: "POST", headers: { cookie: tlsCookie.split(";")[0], "x-forwarded-proto": "https", "sec-fetch-site": "same-origin", origin: base2 }, redirect: "manual" });
+      ok(tlsOut.status === 303 && /;\s*Secure(;|$)/i.test(tlsOut.headers.get("set-cookie") || "") && /Max-Age=0/.test(tlsOut.headers.get("set-cookie") || ""), "the logout over HTTPS clears the cookie with the same Secure attribute");
     } finally { try { child2.kill("SIGKILL"); } catch { /* */ } }
   }
 
