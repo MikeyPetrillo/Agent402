@@ -237,6 +237,93 @@ const advisoryWarnings = [];
   }
 }
 
+// Offline: index.d.ts (package.json "types") declares every runtime export,
+// so a TypeScript consumer sees the whole API.
+{
+  const mod = await import("./index.js");
+  const dts = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "index.d.ts"), "utf8");
+  const declared = new Set([...dts.matchAll(/^export (?:declare )?(?:class|const|function|let) ([A-Za-z0-9_]+)/gm)].map((m) => m[1]));
+  if (/^export default /m.test(dts)) declared.add("default");
+  const missing = Object.keys(mod).filter((k) => !declared.has(k));
+  const stale = [...declared].filter((k) => !(k in mod));
+  const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "package.json"), "utf8"));
+  ok(missing.length === 0 && stale.length === 0, `index.d.ts declares every export and nothing else (missing ${missing.join(",") || "none"}, stale ${stale.join(",") || "none"})`);
+  ok(pkg.types === "index.d.ts" && pkg.exports["."].types === "./index.d.ts" && pkg.files.includes("index.d.ts"), "package.json points types at index.d.ts and ships it");
+}
+
+// Offline: every request is given DEFAULT_REQUEST_TIMEOUT_MS, the published
+// client timeout for metered calls (src: meteredClientTimeoutMs), so the SDK
+// never hangs up before the server's own deadline and never waits forever.
+{
+  const { DEFAULT_REQUEST_TIMEOUT_MS, RequestTimeoutError } = await import("./index.js");
+  const { execFileSync } = await import("node:child_process");
+  const { ownStoreEnv: storeEnv } = await import("../scripts/lib/own-stores.js");
+  const published = Number(execFileSync(process.execPath, ["--input-type=module", "-e",
+    "const m = await import('./src/tools/llm-gateway-kit.js'); process.stdout.write(String(m.meteredClientTimeoutMs())); process.exit(0);"],
+    { cwd: ROOT, env: { ...process.env, ...storeEnv("client-test-timeout") }, encoding: "utf8" }).trim());
+  ok(DEFAULT_REQUEST_TIMEOUT_MS === 120_000 && DEFAULT_REQUEST_TIMEOUT_MS === published, `the default request timeout is the server's published metered client timeout (${DEFAULT_REQUEST_TIMEOUT_MS} vs ${published})`);
+  const hang = (_url, init = {}) => new Promise((_, reject) => {
+    if (!init.signal) return; // never answers: only a timeout ends it
+    init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+  });
+  ok(new Agent402({ fetchImpl: hang }).timeoutMs === 120_000 && new Agent402({ fetchImpl: hang, timeoutMs: null }).timeoutMs === null && new Agent402({ fetchImpl: hang, timeoutMs: 5000 }).timeoutMs === 5000, "timeoutMs defaults to 120 s, null turns it off, a number sets it");
+  {
+    const c = new Agent402({ baseUrl: "https://slow.example", fetchImpl: hang, timeoutMs: 50, retryResets: false });
+    const t0 = Date.now();
+    let e = null; try { await c.find("anything"); } catch (err) { e = err; }
+    ok(e instanceof RequestTimeoutError && e.timeoutMs === 50 && Date.now() - t0 < 2000, `a discovery read that never answers ends in RequestTimeoutError after timeoutMs (${e?.name}, ${Date.now() - t0} ms)`);
+  }
+  {
+    let signals = 0;
+    const seen = async (_url, init = {}) => { if (init.signal) signals++; return { ok: true, status: 200, json: async () => ({ results: [] }) }; };
+    await new Agent402({ baseUrl: "https://x.example", fetchImpl: seen, timeoutMs: null }).find("x");
+    await new Agent402({ baseUrl: "https://x.example", fetchImpl: seen }).find("x");
+    ok(signals === 1, "with timeoutMs null no timeout signal is attached; by default one is");
+  }
+  {
+    // A paid request that times out may have carried a payment: its amount is
+    // held against the caps and the error says the outcome is unknown.
+    const c = new Agent402({ baseUrl: "https://slow.example", cache: false, fetch: hang, fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }), timeoutMs: 50, maxPerCallUsd: null, dailyLimitUsd: 1 });
+    c._catalog = new Map([["chat", { method: "POST", path: "/v1/chat", computePayable: false, price: "$0.01" }]]);
+    let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+    ok(e instanceof RequestTimeoutError && e.paid === "unknown" && c.spendingSummary().heldUsd === 0.01, `a paid call that times out is marked paid: "unknown" and its amount held (${e?.name}, ${e?.paid}, held ${c.spendingSummary().heldUsd})`);
+    let e2 = null; const t0 = Date.now(); try { await c.call("chat", { n: 2 }, { timeoutMs: 120 }); } catch (err) { e2 = err; }
+    ok(e2 instanceof RequestTimeoutError && e2.timeoutMs === 120 && Date.now() - t0 >= 100, "a per-call timeoutMs replaces the client's for that call");
+  }
+}
+
+// Offline: proof-of-work difficulty is bounded and solving runs off the event loop.
+{
+  const { MAX_POW_DIFFICULTY } = await import("./index.js");
+  const { solvePowAsync: rawAsync, leadingZeroBits } = await import("./pow-solver.js");
+  const solved = (challenge, nonce, d) => leadingZeroBits(createHash("sha256").update(`${challenge}:${nonce}`).digest()) >= d;
+  ok(MAX_POW_DIFFICULTY === 28, "the solver's ceiling is 28 bits, the most an Agent402 server asks for");
+  for (const difficulty of [29, 60, 1.5, -1, "16", null]) {
+    const t0 = Date.now();
+    let sync = null, async_ = null;
+    try { Agent402.solvePow({ challenge: "c", difficulty, token: "t" }); } catch (err) { sync = err; }
+    try { await Agent402.solvePowAsync({ challenge: "c", difficulty, token: "t" }); } catch (err) { async_ = err; }
+    ok(sync && async_ && /difficulty/.test(sync.message) && Date.now() - t0 < 500, `difficulty ${JSON.stringify(difficulty)} is refused at once, sync and async (${sync?.message?.slice(0, 60)})`);
+  }
+  let noToken = null; try { await Agent402.solvePowAsync({ challenge: "c", difficulty: 4 }); } catch (err) { noToken = err; }
+  ok(noToken && /token/.test(noToken.message), "a challenge without a token is refused");
+  const sol = await Agent402.solvePowAsync({ challenge: "abc", difficulty: 14, token: "tok" });
+  ok(sol.startsWith("tok:") && solved("abc", sol.slice(4), 14), `solvePowAsync returns a valid token:nonce (${sol})`);
+  ok(Agent402.solvePow({ challenge: "abc", difficulty: 14, token: "tok" }) === sol, "the sync and worker solvers agree on the first solution");
+  // The event loop keeps turning while a worker solves; the sync solver, the
+  // control, holds it for the whole search.
+  let ticks = 0;
+  const iv = setInterval(() => { ticks++; }, 2);
+  Agent402.solvePow({ challenge: "loop-sync", difficulty: 17, token: "t" });
+  const syncTicks = ticks;
+  await rawAsync({ challenge: "loop-worker", difficulty: 19 });
+  const workerTicks = ticks - syncTicks;
+  clearInterval(iv);
+  ok(syncTicks === 0 && workerTicks >= 3, `a timer fires while the worker solves (${workerTicks} ticks) and not during the sync control (${syncTicks})`);
+  const sliced = await rawAsync({ challenge: "sliced", difficulty: 12 }, { useWorker: false });
+  ok(solved("sliced", sliced, 12), "the sliced main-thread fallback finds a valid nonce");
+}
+
 // Offline: the cap is enforced against the amount the 402 ACTUALLY QUOTES, not
 // the catalog price. A route may quote per request from the body (a token-
 // metered route, or a chat route priced by the model named in it), so a client
@@ -293,11 +380,53 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(c.spendingSummary().dailyUsd === 0.05, `settled spend is the quote, not the catalog price (${c.spendingSummary().dailyUsd})`);
   }
 
-  // no caps configured -> no preflight at all (the round trip buys nothing)
+  // caps turned off -> no preflight at all (the round trip buys nothing)
   {
-    const { c, counters } = mk(0.5, {});
+    const { c, counters } = mk(0.5, { maxPerCallUsd: null, dailyLimitUsd: null });
     await c.call("chat", {});
-    ok(counters.preflights === 0 && counters.paid === 1, "with no cap configured nothing is preflighted");
+    ok(counters.preflights === 0 && counters.paid === 1, "with both caps turned off (null) nothing is preflighted");
+  }
+
+  // Default caps: a client built with no cap option is held to
+  // DEFAULT_MAX_PER_CALL_USD per call and DEFAULT_DAILY_LIMIT_USD a day, and a
+  // call the caller allows by name (maxUsd) is never blocked by a default.
+  {
+    const { DEFAULT_MAX_PER_CALL_USD, DEFAULT_DAILY_LIMIT_USD } = await import("./index.js");
+    ok(DEFAULT_MAX_PER_CALL_USD === 4 && DEFAULT_DAILY_LIMIT_USD === 25, `the default caps are $4 a call and $25 a day (${DEFAULT_MAX_PER_CALL_USD}, ${DEFAULT_DAILY_LIMIT_USD})`);
+    const plain = mk(0.5, {}).c.spendingSummary().limits;
+    ok(plain.maxPerCallUsd === 4 && plain.dailyLimitUsd === 25 && plain.maxPerHostUsd === null, `a client with no cap option reports the defaults (${JSON.stringify(plain)})`);
+    {
+      const { c, counters } = mk(0.5, {});
+      const before = advisoryWarnings.length;
+      await c.call("chat", {});
+      ok(counters.preflights === 1 && counters.paid === 1 && c.spendingSummary().dailyUsd === 0.5, "under the default caps a quote is preflighted and paid");
+      ok(advisoryWarnings.length === before, "default caps alone print no pre-wrapped-fetch notice");
+    }
+    {
+      const { c, counters } = mk(5, {});
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(e?.name === "SpendingLimitError" && e.limit === "maxPerCallUsd" && e.cap === 4 && counters.paid === 0, `a $5 quote is refused by the default per-call cap before signing (${e?.message})`);
+      ok(/default cap/.test(e?.message || "") && /maxUsd/.test(e?.message || ""), "the refusal says the cap is a default and how to allow the call");
+      const out = await c.call("chat", {}, { maxUsd: 6 });
+      ok(out?.ok === true && counters.paid === 1, "the same call with maxUsd: 6 is paid");
+      let tight = null; try { await c.call("chat", {}, { maxUsd: 1 }); } catch (err) { tight = err; }
+      ok(tight?.name === "SpendingLimitError" && tight.limit === "maxPerCallUsd" && tight.cap === 1 && counters.paid === 1, "a maxUsd below the quote refuses the call");
+      let bad = null; try { await c.call("chat", {}, { maxUsd: -1 }); } catch (err) { bad = err; }
+      ok(bad instanceof TypeError && counters.paid === 1, "a negative maxUsd is refused before anything is sent");
+    }
+    {
+      // The default daily cap: allowed calls are not held to it, capped ones are.
+      const { c, counters } = mk(3, {});
+      for (let i = 0; i < 8; i++) await c.call("chat", {});
+      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
+      ok(counters.paid === 8 && e?.limit === "dailyLimitUsd" && e.cap === 25 && /default cap/.test(e.message), `the ninth $3 call is refused by the default $25 daily cap (${e?.message})`);
+      await c.call("chat", {}, { maxUsd: 3 });
+      ok(counters.paid === 9, "a call allowed by maxUsd is not held to the default daily cap");
+      const own = mk(3, { dailyLimitUsd: 4 });
+      await own.c.call("chat", {});
+      let e2 = null; try { await own.c.call("chat", {}, { maxUsd: 3 }); } catch (err) { e2 = err; }
+      ok(e2?.limit === "dailyLimitUsd" && e2.cap === 4 && own.counters.paid === 1, "a daily cap the caller set still holds an allowed call");
+    }
   }
 
   // credits: the gate holds and debits the quote too, so the cap reads it
@@ -576,7 +705,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   // the unknown one, for an amount this client never priced.
   {
     const oddFirst = [...odd, ...cheap];
-    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, guard: false });
+    const { c, seen } = build({ preflight: oddFirst, paid: oddFirst, guard: false, maxPerCallUsd: null, dailyLimitUsd: null });
     await c.call("chat", {});
     ok(seen.signed.length === 1 && seen.signed[0].amount === "1", "control: a stock x402 client signs the unknown-asset accept when it is listed first");
   }
@@ -1073,6 +1202,9 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       baseUrl: "https://seller.example",
       outputValidator,
       creditsKey,
+      // Caps off: every send through fetchImpl counts as a paid one here, and
+      // a capped client would add an unpaid preflight to the count.
+      maxPerCallUsd: null, dailyLimitUsd: null,
       fetch: creditsKey ? undefined : async () => { paid++; return bodyResponse({ value: 42 }); },
       fetchImpl: async () => { paid++; return bodyResponse({ value: 42 }); },
     });
@@ -1185,6 +1317,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   let n = 0;
   const c = new Agent402({
     baseUrl: "https://seller.example", creditsKey: `a402_${"C".repeat(32)}`,
+    maxPerCallUsd: null, dailyLimitUsd: null, // counts sends: no capped preflight
     fetchImpl: async (url, init) => { keys.push(init.headers["Idempotency-Key"]); if (++n === 1) throw new Error("socket hang up"); return { ok: true, status: 200, json: async () => ({ value: 9 }) }; },
   });
   c._catalog = new Map([["answer", { method: "POST", path: "/answer", computePayable: false, price: "$0.01" }]]);
@@ -1206,6 +1339,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     const c = new Agent402({
       baseUrl: "https://seller.example",
       creditsKey,
+      maxPerCallUsd: null, dailyLimitUsd: null, // counts sends: no capped preflight
       // The framework-level retry is what this case drives, so the SDK's own
       // resend of a reset is off here (the case after this block covers it).
       retryResets: false,
@@ -1603,7 +1737,7 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     const send = (status, body, headers = {}) => { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
     if (req.url === "/api/pricing") return send(200, { endpoints: [{ slug: "thing", method: "GET", path: "/api/thing", computePayable: false, price: "$0.005" }] });
     if (!req.url.startsWith("/api/thing")) return send(404, {});
-    const accepts = st.offer === "both" ? [plainAccept, batchedAccept] : st.offer === "plain" ? [plainAccept] : st.offer === "long" ? [plainAccept, { ...batchedAccept, maxTimeoutSeconds: 365 * 24 * 3600 }] : st.offer === "dear" ? [plainAccept, { ...batchedAccept, amount: "20000" }] : [plainAccept, arcBatched];
+    const accepts = st.offer === "both" ? [plainAccept, batchedAccept] : st.offer === "plain" ? [plainAccept] : st.offer === "long" ? [plainAccept, { ...batchedAccept, maxTimeoutSeconds: 365 * 24 * 3600 }] : st.offer === "dear" ? [plainAccept, { ...batchedAccept, amount: "20000" }] : st.offer === "rogue" ? [plainAccept, { ...batchedAccept, extra: { ...batchedAccept.extra, verifyingContract: "0x1111111111111111111111111111111111111111" } }] : [plainAccept, arcBatched];
     const offer = { x402Version: st.version ?? 2, resource: { url: `http://127.0.0.1:${port}/api/thing`, description: "thing", mimeType: "application/json" }, accepts };
     const header = req.headers["payment-signature"];
     if (!header) return send(402, {}, { "payment-required": b64(offer) });
@@ -1661,6 +1795,27 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     let bad = null; try { new Agent402({ baseUrl: base, fetchImpl: fetch, gateway: { signer: { address: "nope" } } }); } catch (e) { bad = e; }
     ok(bad instanceof TypeError, "a gateway option without an EIP-712 signer is refused at construction");
 
+    // The verifyingContract is pinned per chain: a batched accept naming
+    // another contract, or on a chain the table does not list, is never a
+    // candidate and never signed; a caller's own entry admits it.
+    {
+      const { GATEWAY_VERIFYING_CONTRACTS } = await import("./index.js");
+      const ROGUE = "0x1111111111111111111111111111111111111111";
+      ok(GATEWAY_VERIFYING_CONTRACTS["eip155:8453"].toLowerCase() === GW_WALLET && GATEWAY_VERIFYING_CONTRACTS["eip155:5042"].toLowerCase() === GW_WALLET, "the pinned table names Circle's GatewayWallet on Base and Arc");
+      const rogue = { ...batchedAccept, extra: { ...batchedAccept.extra, verifyingContract: ROGUE } };
+      const offTable = { ...batchedAccept, network: "eip155:4663" };
+      ok(gatewayAcceptOf([rogue]) === null, "a batched accept naming another verifyingContract is never a candidate");
+      ok(gatewayAcceptOf([offTable]) === null, "a batched accept on a chain with no pinned contract is never a candidate");
+      ok(gatewayAcceptOf([rogue], null, { ...GATEWAY_VERIFYING_CONTRACTS, "eip155:8453": ROGUE }) === rogue, "a caller's own table admits the contract it names");
+      const before = signs;
+      let e = null; try { await signGatewayPayment(rogue, { signer }); } catch (err) { e = err; }
+      ok(e instanceof TypeError && signs === before, "signGatewayPayment refuses an unpinned verifyingContract before signing");
+      let badTable = null; try { new Agent402({ baseUrl: base, fetchImpl: fetch, gateway: { signer, verifyingContracts: { base: ROGUE } } }); } catch (err) { badTable = err; }
+      ok(badTable instanceof TypeError, "a gateway.verifyingContracts entry that is not eip155:<id> -> 0x address is refused at construction");
+      const own = new Agent402({ baseUrl: base, fetchImpl: fetch, gateway: { signer, verifyingContracts: { "eip155:8453": ROGUE } } });
+      ok(own.gateway.verifyingContracts["eip155:8453"] === ROGUE && own.gateway.verifyingContracts["eip155:5042"].toLowerCase() === GW_WALLET, "a caller's entry replaces that chain's and keeps the rest");
+    }
+
     // Off by default: the payment fetch pays the plain accept.
     {
       const c = mk({ fetch: plainFetch() });
@@ -1701,6 +1856,20 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       e = null; try { await dear.call("thing", { q: 18 }); } catch (err) { e = err; }
       ok(e instanceof SpendingLimitError && e.limit === "maxPerCallUsd" && e.priceUsd === 0.02 && e.listPriceUsd === 0.005 && /quoted \$0\.02; the catalog lists \$0\.005/.test(e.message), `a batched accept quoting more than the catalog price is held to the cap at the quoted amount (${e?.message?.slice(0, 110)})`);
       ok(signs === before2.signs && st.paid.length === before2.sent, "and nothing was signed or sent");
+      st.offer = "both";
+    }
+    // A batched accept naming a contract that is not the chain's GatewayWallet:
+    // never signed; the payment fetch pays the plain accept, and with no fetch
+    // the call is refused with nothing signed.
+    {
+      st.offer = "rogue";
+      const before = { signs, sent: st.paid.length };
+      const c = mk({ gateway: { signer }, fetch: plainFetch() });
+      const out = await c.call("thing", { q: 40 });
+      ok(out.paid === "plain" && signs === before.signs, `a rogue verifyingContract is not signed; the plain accept is paid instead (${out.paid})`);
+      const bare = mk({ gateway: { signer } });
+      let e = null; try { await bare.call("thing", { q: 41 }); } catch (err) { e = err; }
+      ok(e?.status === 402 && e.paid === false && signs === before.signs, "with no payment fetch the call is refused and the gateway signer signs nothing");
       st.offer = "both";
     }
     // No batched accept this signer may pay: the plain paths, as without the option.
