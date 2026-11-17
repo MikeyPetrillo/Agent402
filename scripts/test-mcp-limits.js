@@ -126,6 +126,15 @@ if (srv) {
     const waitHi = Math.max(1, Math.ceil((call1At[1] + 60_000 - call2At[0]) / 1000));
     ok(call2?.result?.isError === true && !!m && Number(m[1]) >= waitLo && Number(m[1]) <= waitHi, `the refused tool call says when there is room again, the limiter's own whole seconds (${m?.[1]} in ${waitLo}..${waitHi}: ${text.slice(0, 110)})`);
 
+    // A JSON-RPC batch counts one hit per message: three requests have been
+    // counted so far, so a batch of CAP initialize messages crosses the cap
+    // and is refused whole, where counted once it would be served.
+    {
+      const batch = await post(Array.from({ length: CAP }, (_, i) => initBody(50 + i)));
+      ok(batch.status === 429, `a batch of ${CAP} messages is counted per message and refused past the cap (got ${batch.status})`);
+      await batch.arrayBuffer();
+    }
+
     // Flood well past the per-IP cap; the tail must be 429 with a JSON-RPC error.
     let saw429 = false, sawJsonRpc429 = false;
     const badRetryAfter = [];

@@ -2005,7 +2005,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // this bucket too unless the call reaches a paywall replay, so a junk or
     // misplaced credential buys nothing over an unpaid call.
     const paymentCall = carriesPayment(req.body);
-    const reqBudget = (paymentCall ? mcpPaidReqLimiter : mcpReqLimiter).check(ip);
+    // A JSON-RPC batch (an array body) is counted one hit per message, so a
+    // batch cannot carry more messages past the cap than single requests
+    // could. The count stops at the first refusal.
+    const limiter = paymentCall ? mcpPaidReqLimiter : mcpReqLimiter;
+    const messages = Array.isArray(req.body) ? Math.max(1, req.body.length) : 1;
+    let reqBudget = limiter.check(ip);
+    for (let i = 1; i < messages && !reqBudget.limited; i++) reqBudget = limiter.check(ip);
     if (reqBudget.limited) {
       // A client that is told when to come back waits; one that is not retries at once.
       res.setHeader("Retry-After", String(reqBudget.retryAfterSeconds));
