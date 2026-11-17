@@ -26,6 +26,7 @@ import { LIMITS_LABEL as POW_LIMITS_LABEL } from "./rate-limit.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { gatewayOfferPublic } from "./gateway-nanopayments.js";
+import { smallHeaderLimitText } from "./payment-required-compact.js";
 import { listAnd, mono, eyebrow, h2, h3, p, link, code, pre, section, th, thead, td, row, table as sharedTable } from "./page-html.js";
 
 const NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen"];
@@ -189,6 +190,8 @@ ${section("x402", `
 #   "amount":"${probeAmount}","asset":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 #   "payTo":"0x…","maxTimeoutSeconds":…}, … one entry per chain …]}`)}
   ${p(`${code("amount")} is in the asset's smallest unit (six decimals for USDC), so ${probePrice ? `${esc(probePrice)} reads as ${code(probeAmount)}` : `a price reads as its micro-units`}. Every accept entry names its own ${code("network")}, ${code("asset")} and ${code("payTo")}; a client picks the one it can sign.`)}
+  ${h3("A small header limit")}
+  ${p(smallHeaderLimitText().split("`").map((seg, i) => (i % 2 ? code(seg) : esc(seg))).join(""))}
   ${h3("Pay it")}
   ${pre("JavaScript, EVM chains", `import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";

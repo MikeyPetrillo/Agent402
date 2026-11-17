@@ -144,3 +144,14 @@ export function paymentRequiredCompactMiddleware() {
     next();
   };
 }
+
+/** Python aiohttp's default cap on one header line, in bytes (its
+ *  max_line_size and max_field_size defaults). */
+export const AIOHTTP_DEFAULT_LINE_BYTES = 8190;
+
+/** One paragraph, for every text surface that tells a client how to read the
+ *  402 when its parser caps a header line (llms.txt, llms-full.txt, the
+ *  /how-to-pay page and the wiki copy it). Plain text with backquoted code. */
+export function smallHeaderLimitText() {
+  return `A client whose parser caps one header line near 8 KB (Python aiohttp's default \`max_line_size\` and \`max_field_size\` are ${AIOHTTP_DEFAULT_LINE_BYTES}) reads the 402 one of two ways. Raise the limit: \`aiohttp.ClientSession(max_line_size=32768, max_field_size=32768)\`. Or send \`${COMPACT_REQUEST_EXAMPLE}\` (a User-Agent that names aiohttp gets the same without it) for a PAYMENT-REQUIRED header under ${COMPACT_HEADER_MAX_BYTES.toLocaleString("en-US")} bytes: the resource and the Bazaar extension unchanged, the Base exact accept first, each other exact accept that fits, and a \`compact\` field whose \`fullOfferIn\` names the body, which keeps every accept. A payment signed from the compact header settles the same way. The paywall's 402 body states the header's size in \`paymentRequiredHeader\`.`;
+}

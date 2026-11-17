@@ -25,11 +25,12 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { isDeepStrictEqual } from "node:util";
+import { readFileSync } from "node:fs";
 import { getFreePorts } from "./lib/free-port.js";
 import { ownStoreEnv } from "./lib/own-stores.js";
 import {
   COMPACT_HEADER_MAX_BYTES, COMPACT_REQUEST_HEADER, COMPACT_REQUEST_EXAMPLE, COMPACT_VARY,
-  compactPaymentRequired, mergeVary, wantsCompactHeader,
+  compactPaymentRequired, mergeVary, smallHeaderLimitText, wantsCompactHeader,
 } from "../src/payment-required-compact.js";
 import { HEADER_NOTE_KEY, withoutPaymentRequired } from "../src/payment-required-body.js";
 import { CORS_DEFAULT_ALLOW_HEADERS } from "../src/cors.js";
@@ -73,6 +74,10 @@ const FULL = {
   ok(c && c.value.length < COMPACT_HEADER_MAX_BYTES && c.value === enc(c.doc), `U2 the compact header is under ${COMPACT_HEADER_MAX_BYTES} bytes (${c?.value.length})`);
   ok(isDeepStrictEqual(c.doc.accepts[0], FULL.accepts[0]), "U3 the Base exact accept is first and unchanged (its outputSchema kept)");
   ok(c.doc.accepts.every((a) => a.scheme === "exact" && a.extra?.name !== "GatewayWalletBatched"), "U4 upto and Gateway batched accepts are left out");
+  // With room for them, upto and batched accepts are still left out.
+  const three = { ...FULL, accepts: [FULL.accepts[0], FULL.accepts[11], FULL.accepts[15]] };
+  const c3 = compactPaymentRequired(three, enc(three).length - 1);
+  ok(c3 && c3.doc.accepts.length === 1 && c3.doc.accepts[0] === FULL.accepts[0] && c3.doc.compact.acceptsOmitted === 2, "U4b upto and batched accepts are left out even when they would fit");
   ok(c.doc.accepts.every((a) => FULL.accepts.includes(a)), "U5 every kept accept is the full offer's own object");
   const order = c.doc.accepts.map((a) => FULL.accepts.indexOf(a));
   ok(order.every((v, i) => i === 0 || v > order[i - 1]), "U6 kept accepts keep the full offer's order");
@@ -105,6 +110,22 @@ const FULL = {
   ok(mergeVary("Origin") === `Origin, ${COMPACT_VARY.join(", ")}` && mergeVary(`user-agent, ${COMPACT_REQUEST_HEADER}`) === `user-agent, ${COMPACT_REQUEST_HEADER}` && mergeVary("*") === "*" && mergeVary(undefined) === COMPACT_VARY.join(", "), "U21 Vary gains each token once and keeps its own");
   ok(CORS_DEFAULT_ALLOW_HEADERS.includes(COMPACT_REQUEST_HEADER), "U22 a browser may send the flag (CORS allow list)");
   ok(COMPACT_REQUEST_EXAMPLE === "X-Payment-Compact: 1", "U23 the documented request is X-Payment-Compact: 1");
+  // The writeHead hook is mounted before every other middleware, so it runs
+  // after every other reader of the header (the MPP shim mints from the full one).
+  const src = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+  const at = (needle) => src.indexOf(needle);
+  const mount = at("app.use(paymentRequiredCompactMiddleware())");
+  const appAt = at("const app = express()");
+  ok(appAt > 0 && mount > appAt && mount < at("app.use(stripMcpMarker)") && mount < src.indexOf("createMppShim(", appAt), "U25 the compact hook is the first middleware on the app (before the MPP shim)");
+  // The text surfaces say the same thing, from the module's own figures.
+  const flat = (t) => t.replace(/\s+/g, " ").trim();
+  const text = smallHeaderLimitText();
+  ok(text.includes(COMPACT_REQUEST_EXAMPLE) && text.includes(COMPACT_HEADER_MAX_BYTES.toLocaleString("en-US")) && !/—/.test(text), "U26 the small-header paragraph names the request and the ceiling");
+  ok(flat(readFileSync(new URL("../wiki/Paying-with-x402.md", import.meta.url), "utf8")).includes(flat(text)), "U27 the wiki carries the paragraph word for word");
+  const { llmsTxt, llmsFullTxt } = await import("../src/seo.js");
+  const { howToPayPage } = await import("../src/how-to-pay.js");
+  ok(llmsTxt("https://agent402.test", {}).includes(text) && llmsFullTxt("https://agent402.test", {}).includes(text), "U28 /llms.txt and /llms-full.txt carry the paragraph");
+  ok(howToPayPage("https://agent402.test", {}, { networks: [] }).includes("X-Payment-Compact: 1"), "U29 /how-to-pay carries the paragraph");
   const relayed = withoutPaymentRequired({ x402Version: 2, accepts: [], hint: "h", [HEADER_NOTE_KEY]: { bytes: 1 } });
   ok(!(HEADER_NOTE_KEY in relayed) && relayed.hint === "h", "U24 a relayed refusal drops the header note with the offer");
 }
