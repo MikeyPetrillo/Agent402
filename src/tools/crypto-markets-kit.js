@@ -73,7 +73,7 @@ function headers() {
 // charged; a cache hit never takes a token.
 // The bucket is SHARED with crypto-kit since 2026-09-03 (src/tools/coingecko-rate.js):
 // one key, one minute budget, whichever kit spends it.
-import { cgTake, cgRefusal, resetCgRateLimit } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, resetCgRateLimit, cgUnsettledSpent, cgScopeAll } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 export { resetCgRateLimit };
@@ -93,6 +93,28 @@ export async function cgGet(path, params, ttlMs, reduce = null) {
   const { entry, cached } = await cache.through(cacheKey, ttlMs, () => cgLoad(key, path, reduce));
   entry.data ??= JSON.parse(entry.text);
   return { data: entry.data, fetchedAt: entry.fetchedAt, cached };
+}
+
+// --- ids confirmed before they are read ---------------------------------------
+// Once the reads of calls that ended unsettled have spent their share of the
+// day (src/tools/coingecko-rate.js), an id that one list document names in
+// full is checked against that list before the id's own read: an id the list
+// does not name is answered 422 with no read, so made-up ids cannot keep
+// spending the part of the day paid calls run on. The list is read at most
+// once an hour and only while that share is spent; a list that cannot be read
+// decides nothing (the id's own read goes ahead). Network and pool ids have no
+// single list; the screens that read them are held to their own share.
+const ID_LISTS = Object.freeze({ coin: "/coins/list", exchange: "/exchanges/list", platform: "/asset_platforms" });
+export const ID_LIST_TTL_MS = 60 * 60_000;
+const idListReduce = { name: "ids", fn: (d) => (Array.isArray(d) ? d.map((r) => r?.id).filter((x) => typeof x === "string") : []) };
+const idSets = new WeakMap(); // a cached id list -> its Set
+export async function knownIdGate(kind, id) {
+  if (!ID_LISTS[kind] || !(await cgUnsettledSpent())) return;
+  let read;
+  try { read = await cgGet(ID_LISTS[kind], {}, ID_LIST_TTL_MS, idListReduce); } catch { return; }
+  let set = idSets.get(read.data);
+  if (!set) { set = new Set(read.data); idSets.set(read.data, set); }
+  if (set.size > 0 && !set.has(id)) throw Object.assign(bad("Unknown id: the coin, exchange or platform is not tracked upstream", 422), { unknownId: true });
 }
 
 // One upstream read for cgGet: the body text of a 200 that parses as JSON, or
@@ -322,6 +344,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       const platform = takeId(i.platform, "platform");
       const contracts = takeContracts(i.contracts, 25);
       const currency = takeCurrency(i.currency);
+      await knownIdGate("platform", platform);
       const { data, fetchedAt, cached } = await cgGet(`/simple/token_price/${encodeURIComponent(platform)}`, {
         contract_addresses: contracts.join(","), vs_currencies: currency,
         include_market_cap: "true", include_24hr_vol: "true", include_24hr_change: "true", include_last_updated_at: "true",
@@ -384,6 +407,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     handler: async (i) => {
       const coin = takeId(i.coin, "coin");
       const currency = takeCurrency(i.currency);
+      await knownIdGate("coin", coin);
       const { data: d, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}`, {
     // CoinGecko removes the community_data and developer_data BLOCKS on
     // 2026-08-28 (their changelog, 2026-08-14). The two figures this tool
@@ -489,6 +513,7 @@ export const CRYPTO_MARKETS_TOOLS = [
         dateStr = new Date(Date.now() - daysAgo * DAY_MS).toISOString().slice(0, 10);
       }
       const [y, m, dd] = dateStr.split("-");
+      await knownIdGate("coin", coin);
       const { data: d, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/history`, { date: `${dd}-${m}-${y}`, localization: "false" }, TTL.list);
       if (!d || typeof d !== "object" || !d.id) throw bad("Market data upstream returned an unexpected shape", 502);
       const md = d.market_data;
@@ -542,6 +567,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       const allowed = [1, 7, 14, 30, 90, 180, 365];
       const days = takeInt(i.days, "days", { min: 1, max: 365, dflt: 7 });
       if (!allowed.includes(days)) throw bad(`"days" must be one of ${allowed.join(", ")}`);
+      await knownIdGate("coin", coin);
       const { data, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/ohlc`, { vs_currency: currency, days }, TTL.price);
       if (!Array.isArray(data)) throw bad("Market data upstream returned an unexpected shape", 502);
       const bars = data.filter((r) => Array.isArray(r) && r.length >= 5).map(([t, o, h, l, c]) => ({ time: iso(t), open: num(o), high: num(h), low: num(l), close: num(c) }));
@@ -608,6 +634,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       if (to > nowSec + 60) throw bad('"to" is in the future');
       if (from >= to) throw bad('"from" must be before "to"');
       if ((nowSec - from) * 1000 > MAX_HISTORY_DAYS * DAY_MS + DAY_MS) throw bad(`the window must lie within the past ${MAX_HISTORY_DAYS} days on this plan`);
+      await knownIdGate("coin", coin);
       const { data, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/market_chart/range`, { vs_currency: currency, from, to }, TTL.price);
       const prices = Array.isArray(data?.prices) ? data.prices : null;
       if (!prices) throw bad("Market data upstream returned an unexpected shape", 502);
@@ -756,6 +783,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     handler: async (i) => {
       const exchange = takeId(i.exchange, "exchange", { required: false });
       if (exchange) {
+        await knownIdGate("exchange", exchange);
         const { data: d, fetchedAt, cached } = await cgGet(`/exchanges/${encodeURIComponent(exchange)}`, {}, TTL.list);
         if (!d || typeof d !== "object" || !d.name) throw bad("Market data upstream returned an unexpected shape", 502);
         return {
@@ -826,6 +854,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       const coins = i.coins == null || i.coins === "" ? null : takeIdList(i.coins, "coins", 10);
       const page = takeInt(i.page, "page", { min: 1, max: 100, dflt: 1 });
       const limit = takeInt(i.limit, "limit", { min: 1, max: 100, dflt: 50 });
+      await knownIdGate("exchange", exchange);
       const { data: d, fetchedAt, cached } = await cgGet(`/exchanges/${encodeURIComponent(exchange)}/tickers`, { coin_ids: coins ? coins.join(",") : undefined, page, include_exchange_logo: "false" }, TTL.price);
       if (!d || !Array.isArray(d.tickers)) throw bad("Market data upstream returned an unexpected shape", 502);
       const tickers = d.tickers.slice(0, limit).map((t) => ({
@@ -1230,5 +1259,6 @@ export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, tak
 // The step a buyer reads in a deadline 503, from the upstream path.
 function stepOf(path) { return String(path || "").replace(/^\/api\/v3\//, "").split("?")[0].split("/").filter((seg) => /^[a-z_]+$/.test(seg)).join(" ").replace(/_/g, " ") || "market data"; }
 
-// Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CRYPTO_MARKETS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+// Every handler runs under one budget (src/upstream-deadline.js), and a call
+// that ends in a 4xx moves its reads to the unsettled share of the day.
+underBudgetAll(cgScopeAll(CRYPTO_MARKETS_TOOLS), PAYMENT_WINDOW_BUDGET_MS);

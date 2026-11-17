@@ -5,7 +5,7 @@
 // Wallet-only (each call costs egress + counts against the upstream's public
 // rate limit), never PoW-eligible. Covered by scripts/test-price-feed-kit.js.
 
-import { cgTake, cgRefusal, isCoinGeckoHost } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
@@ -161,4 +161,6 @@ export const PRICE_FEED_TOOLS = [
 for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(PRICE_FEED_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+// A call that ends in a 4xx moves its CoinGecko reads to the unsettled share
+// of the day (src/tools/coingecko-rate.js).
+underBudgetAll(cgScopeAll(PRICE_FEED_TOOLS), PAYMENT_WINDOW_BUDGET_MS);

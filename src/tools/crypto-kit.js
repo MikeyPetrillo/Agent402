@@ -20,7 +20,7 @@ import { assertPublicUrl } from "./fetch-guard.js";
 import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, currentBudget } from "../upstream-deadline.js";
 const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
-import { cgTake, cgRefusal, isCoinGeckoHost } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll } from "./coingecko-rate.js";
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
@@ -544,4 +544,6 @@ export const CRYPTO_TOOLS = [
 for (const t of CRYPTO_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CRYPTO_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+// A call that ends in a 4xx moves its CoinGecko reads to the unsettled share
+// of the day (src/tools/coingecko-rate.js).
+underBudgetAll(cgScopeAll(CRYPTO_TOOLS), PAYMENT_WINDOW_BUDGET_MS);

@@ -676,7 +676,7 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
   Date.now = realNow;
   const want = Object.fromEntries(SLUGS.map((s) => [s, readsPerDay(s)]));
   ok(JSON.stringify(spent) === JSON.stringify(want), `a day of one-minute polls spends each tool's stated reads (${JSON.stringify(spent)})`);
-  ok(calls.length <= 1200 && calls.length === 1156, `a day of one-minute polls of all seven tools is ${calls.length} upstream reads`);
+  ok(calls.length === 1156, `a day of one-minute polls of all seven tools, one fixed input each, is ${calls.length} upstream reads (not a ceiling: inputs that change each call miss the cache; the screens' share of the day bounds those, test-coingecko-rate.js)`);
   ok(__test.memoCounts.computed === 864 && __test.memoCounts.kept === 1440 * 7 - 864, `and an answer was worked out only when one of its documents was read again (${__test.memoCounts.computed} of ${1440 * 7} calls)`);
   reset();
 }

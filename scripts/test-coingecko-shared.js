@@ -14,6 +14,8 @@
 //   2. On one Redis, an answer fetched on A is served on B with zero upstream
 //      requests (crypto-markets-kit, price-feed-kit and crypto-kit caches), and
 //      the daily ceiling holds across both.
+//   2a. On one Redis, a flood of made-up ids (unsettled 422s) spends only its
+//      own share of the day, and paid calls after it still answer.
 //   3. Without Redis, each server holds its RATE_LIMIT_REPLICAS share of the
 //      caps, so two servers together still send no more than the cap; a
 //      control with RATE_LIMIT_REPLICAS=1 shows one server alone takes it all.
@@ -88,6 +90,9 @@ const stub = createServer((req, res) => {
   else if (u.pathname.endsWith("/simple/price")) {
     for (const id of String(u.searchParams.get("ids") || "").split(",").filter(Boolean)) body[id] = { usd: 1, usd_24h_change: 0, usd_24h_vol: 0, usd_market_cap: 0, last_updated_at: 1_700_000_000 };
   }
+  else if (/\/coins\/made-up-/.test(u.pathname)) { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "coin not found" })); return; }
+  else if (u.pathname.endsWith("/coins/list")) body = [{ id: "bitcoin", symbol: "btc", name: "Bitcoin" }];
+  else if (u.pathname.endsWith("/coins/bitcoin")) body = { id: "bitcoin", symbol: "btc", name: "Bitcoin", market_data: {} };
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
 });
@@ -196,6 +201,26 @@ const okCount = (rs) => rs.filter((r) => r.status === 200).length;
   const onB = await Promise.all(Array.from({ length: 4 }, (_, i) => search(B, `dayB${i}`)));
   ok(okCount(onB) === 0 && onB.every((r) => r.status === 503 && /daily .* allowance is used up/.test(JSON.stringify(r.body))), "then B refuses with the daily wording (our own allowance)");
   ok(upstream === DAY, `upstream requests across both servers for the day: ${upstream} (ceiling ${DAY})`);
+  stop();
+}
+
+// ---- 2a. calls that end unsettled hold their own share of the day, on one Redis -------------
+// Made-up coin ids answer 422 (never settled) on both servers. Their reads move
+// to the unsettled share (10% of the day); once it is spent, an id is checked
+// against the coin list first, so the flood cannot leave paid calls a 503.
+{
+  const DAY = 40;
+  const { servers: [A, B], stop } = await boot(2, { redis: true, vars: { COINGECKO_MAX_PER_MIN: "100000", COINGECKO_DAILY_MAX: String(DAY), COINGECKO_API_KEY: "cg-test-key-not-real", RATE_LIMIT_REPLICAS: "2" } });
+  upstream = 0; seen.length = 0;
+  const profile = (s, coin) => fetch(`${s.url}/api/coin-profile?coin=${encodeURIComponent(coin)}`).then((r) => r.status);
+  const flood = [];
+  for (let k = 0; k < 120; k++) flood.push(await profile(k % 2 ? B : A, `made-up-${k}`));
+  ok(flood.every((st) => st === 422), `120 made-up ids over both servers are each a 422 (${[...new Set(flood)].join(",")})`);
+  const madeUpReads = seen.filter((p) => p.includes("/coins/made-up-")).length;
+  ok(madeUpReads === DAY / 10, `only the unsettled share's reads reached the upstream (${madeUpReads} of ${DAY / 10}); one coin list read per server stood in for the rest (${seen.filter((p) => p.includes("/coins/list")).length})`);
+  const paid = [];
+  for (let k = 0; k < 20; k++) paid.push(await profile(k % 2 ? B : A, "bitcoin"));
+  ok(paid.every((st) => st === 200), `paid calls for a real coin after the flood all answer 200 (${[...new Set(paid)].join(",")})`);
   stop();
 }
 

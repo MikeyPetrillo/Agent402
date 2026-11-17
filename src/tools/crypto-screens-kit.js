@@ -27,7 +27,8 @@
 // Every tool carries the credit CoinGecko's terms require, in its description
 // and as the `credit` field of every answer (src/data-attribution.js).
 
-import { cgGet } from "./crypto-markets-kit.js";
+import { cgGet, knownIdGate } from "./crypto-markets-kit.js";
+import { cgScopeAll } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { partialFields } from "../partial-answer.js";
@@ -38,9 +39,15 @@ const SOURCE = "coingecko";
 // normalized input, bounded, shared across replicas). The key's daily budget
 // is one number for every tool that reads this upstream, so a window is as
 // long as the data behind it allows: one caller polling a tool every minute
-// spends (documents read) x (86400 / window) reads a day on it, and the seven
-// tools polled that way together stay near a thousand (the table in
-// scripts/test-crypto-screens-kit.js works the sum out and bounds it).
+// spends (documents read) x (86400 / window) reads a day on it (the table in
+// scripts/test-crypto-screens-kit.js works the sum out for one such caller
+// per tool). That is not a ceiling: callers that change the input each call
+// (network after network, pool after pool, pools=100 at five pages a call)
+// miss the cache every time. The ceiling is the screens' own share of the
+// day (cgScopeAll at the end of this file, cgShareCap in coingecko-rate.js:
+// COINGECKO_SCREENS_SHARE of the part of COINGECKO_DAILY_MAX left after the
+// unsettled share), whatever the inputs, so the other CoinGecko tools keep
+// the rest.
 //   funding rates settle every one to eight hours           30 minutes
 //   the stablecoin page (now, 24-hour and 7-day ranges)     15 minutes
 //   one coin's venue tickers move fastest                    5 minutes
@@ -565,6 +572,7 @@ const exchangeSpread = {
     }
     const limit = takeInt(i.limit, "limit", { min: 1, max: 50, dflt: 20 });
     if (unknownCoins.has(coin)) throw unknownCoin(coin);
+    try { await knownIdGate("coin", coin); } catch (err) { if (err?.unknownId) unknownCoins.add(coin); throw err?.unknownId ? unknownCoin(coin) : err; }
     let read;
     try { read = await cgGet(`/coins/${encodeURIComponent(coin)}/tickers`, { order: "volume_desc", page: 1 }, SCREEN_TTL.spread); } catch (err) {
       if (!err?.unknownId) throw err;
@@ -1058,4 +1066,7 @@ for (const t of CRYPTO_SCREENS_TOOLS) creditAnswers(attribute(t, "coingecko"), C
 export const __test = { memoCounts, answerMemoSize: () => answerMemo.size, median, quantile, stdev, weightedMean, hhi, reducePerps, reduceStables, reduceCategoryPage, reducePlatforms, reducePoolPage, FUNDING_MIN_OI_USD, PEG_CLASS_BAND, LIST_SLICE_CHARS };
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-underBudgetAll(CRYPTO_SCREENS_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
+// The screens read several documents a call: they draw on a share of the
+// day of their own (src/tools/coingecko-rate.js), so the other CoinGecko tools
+// keep theirs whatever the screens are asked.
+underBudgetAll(cgScopeAll(CRYPTO_SCREENS_TOOLS, { share: "screens" }), PAYMENT_WINDOW_BUDGET_MS);
