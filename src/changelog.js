@@ -8,6 +8,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-16",
+    title: "An MCP payment ask every client reads",
+    items: [
+      "Surfaces: On the hosted MCP connector, the first ask for a paid tool carries the x402 PaymentRequired as JSON in its first text block and no structuredContent, so a client that checks a tool's output schema reads the ask as an ordinary tool result. A settlement that is not decided yet carries its fields in _meta. The connector's own text names the wires that instance takes in the call, and says that a long-running tool is paid in the call over MPP as an MCP task, or on its HTTP route. The output schema of memory.write allows an expiry of null.",
+      "Operations: The MCP tool listings pass signs only an offer that pays the server's published receiving address, with one plain exact USDC accept on Base at the list price and a validity window of ten minutes or less. It takes dotted tool names as well as catalog slugs, only a run on main buys, and its issue closes when the listings it names are bought. The check of the Bazaar declarations after boot reads an MCP tool declaration with the protocol's validators, so a valid one logs no warning.",
+    ],
+  },
+  {
+    date: "2026-11-16",
     title: "Paying on the MCP connector, on every surface",
     items: [
       "Surfaces: Every page and text surface that describes paying on the hosted MCP connector (/llms.txt, /llms-full.txt, /agents.md, /how-to-pay, /quickstart, /learn/mcp-payments, /integrations/mcp, the agent-hosts guide, the wiki and the README) names the wires the connector takes in the call on that instance: x402 and MPP on the hosted service, x402 alone where the MPP gates are off, and neither on a FREE_MODE instance, which has no paywall. The listed description of payment.info says the same.",

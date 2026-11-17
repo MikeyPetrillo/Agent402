@@ -28,7 +28,7 @@ t node scripts/test-mcp-x402.js
 # x402 MCP wire on the hosted connector: a flagship's first ask carries the twin's PaymentRequired beside the MPP challenges, the official @x402/mcp client (installed --no-save by the step before) pays it and reads the settle receipt, memory.read keyed on the signed payer, replay refused, settle failure and error answers unsettled with no output, MPP wins when both are sent, a free tool at its limit offers x402, paid calls meet their own larger per-IP transport limit, the copy names only the wires offered (paid boot, stub facilitator, in-process mounts)
 t node scripts/test-mcp-x402-connector.js
 
-# @step 2: Offline suites (14 scripts, one process each)
+# @step 2: Offline suites (17 scripts, one process each)
 # /llms.txt content lock (tool count + discovery URLs + PoW/MCP/wallet signals)
 t node scripts/test-llms-txt.js
 # Every HTML page names /llms.txt (head link + Link header); /api/pricing and the x402 manifest name EVM-only routes
