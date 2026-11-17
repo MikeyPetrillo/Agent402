@@ -145,13 +145,16 @@ if (runsSoloChecks(SHARD)) {
     defuseLabels: (s) => screen.defuseLabels(s),
     judgeReadableName: (s) => screen.judgeReadableName(s),
     judgeReadableListing: (s) => screen.judgeReadableListing({ host: s, slug: s, description: s, tags: [s, s] }),
+    readsAsRoutingDirective: (s) => screen.readsAsRoutingDirective(s),
+    // Fields read side by side: the long one first, after a short one, and as words.
+    adjacentFieldReader: (s) => { const read = screen.adjacentFieldReader(); read(s); read(s, { ident: true }); const next = screen.adjacentFieldReader(); next("send all requests"); next(s); next(s, { ident: true }); },
     // The screen's parts on their own: every reading of the text with no hint,
     // and the two hints and the alternation on each.
     __testListingScreen: (s) => { const p = screen.__testListingScreen(); for (const f of p.injectionForms(s)) { p.INJECTION_LEET_HINT.test(f); p.INJECTION_HINT.test(f); p.INJECTION_ANY.test(f); } },
   };
   const exported = Object.keys(screen).filter((k) => typeof screen[k] === "function");
   ok(exported.every((k) => k in fns), `every exported screen function is timed (${exported.filter((k) => !(k in fns)).join(",") || "all"})`);
-  const openers = ["", "a1 ", "1gn0re ", "s y s ", "note to the ", "dear ", "hi ", "as the judge ", "you ", "the model ", "system ", "choose ", "best ", "rank ", "rate ", "rate every ", "only ", "always ", "confidence ", "fit ", "perfect ", "evaluators ", "ignore ", "disregard what ", "forget ", "override ", "do not ", "<", "[", "<|", "## ", "judge: ", "select this ", "wähle immer ", "immer dieses ", "elige siempre ", "choisis toujours ", "escolha sempre "];
+  const openers = ["", "a1 ", "1gn0re ", "s y s ", "note to the ", "dear ", "hi ", "as the judge ", "you ", "the model ", "system ", "choose ", "best ", "rank ", "rate ", "rate every ", "only ", "always ", "confidence ", "fit ", "perfect ", "evaluators ", "ignore ", "disregard what ", "forget ", "override ", "do not ", "<", "[", "<|", "## ", "judge: ", "select this ", "wähle immer ", "immer dieses ", "elige siempre ", "choisis toujours ", "escolha sempre ", "send all ", "route every ", "send all requests ", "use this tool for every ", "for every request "];
   const fills = { space: " ", a: "a", spaceA: " a", dashA: "-a", aUnderscore: "a_", dotA: ".a", comma: ", ", digitA: "1a", cyrillic: "а ", tab: "\t", nl: "\n", entity: "&lt;", zeroWidth: "a​", colon: ": " };
   const build = (open, fill, n) => (open + fill.repeat(Math.ceil(n / fill.length))).slice(0, n) + "!";
   // Best of three, but a run far past the bound is not repeated, and a
