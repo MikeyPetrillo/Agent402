@@ -158,6 +158,17 @@ ok(JSON.stringify(p.knownFrom) === '["owner"]' && p.returnsBy === "owner" && /ow
 idx.removeOrigin(OWN);
 r = idx.restoreOrigin(OWN);
 ok(r.restored === true && r.returnsBy === "owner", "restore: the owner-submitted origin waits for its owner");
+// A fallback entry still held after its registry rows rotated out is registry provenance.
+const FB = `https://fallback-${TAG}.example.com`;
+idx.__testSeedCache([[FB, { ...entry, source: "bazaar-fallback" }]]);
+p = idx.removalPreview(FB);
+ok(JSON.stringify(p.knownFrom) === '["registry"]' && p.held.registryRows === 0, "preview: a held registry-fallback entry reads registry with no rows left");
+// Owner-submitted AND listed in a registry: it returns by itself, so registry wins.
+ok((await idx.registerOrigin(OWN, { crawl })).listed === true, "precondition: the owner registers again after restore");
+idx.__testSetBazaarTools(OWN, regTools);
+p = idx.removalPreview(OWN);
+ok(JSON.stringify(p.knownFrom) === '["registry","owner"]' && p.returnsBy === "registry", "preview: a registry listing outranks the owner's submission");
+idx.__testSetBazaarTools(OWN, null);
 p = idx.removalPreview(`https://nothing-${TAG}.example.com`);
 ok(p.knownFrom.length === 0 && p.returnsBy === null && p.held.cached === false, "preview: an origin the index never held");
 // A stored record written before provenance existed reads as unknown.
