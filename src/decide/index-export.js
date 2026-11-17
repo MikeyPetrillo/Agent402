@@ -15,7 +15,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { localToolRow, remoteToolRow } from "./tool-rows.js";
 import { routableRemoteEntriesSliced, looksLikeListingInjection, liveProofAt, mppDualStackOrigins, indexReadiness } from "../x402-index.js";
-import { readsAsRoutingDirective, fieldsAtEdges } from "../listing-screen.js";
+import { readsAsRoutingDirective, fieldsAtEdges, fieldsGlued } from "../listing-screen.js";
 import { unpackRequestContract } from "../request-contract.js";
 import { dispatchable } from "../tools/route-execute.js";
 import { routeExcludedCategory } from "../route-category.js";
@@ -64,10 +64,11 @@ export function fromPrivateNetwork(req) {
  *  tell a router where to send all its traffic, or that read as an
  *  instruction once the marks where the name meets the description are left
  *  out (a sentence begun in the name and finished in the description is in
- *  neither alone). */
+ *  neither alone), or that do so with a word cut across the two ("Send all
+ *  re" then "quests here."). */
 export function remoteRowOf(t, ctx = {}) {
   const text = `${t?.name || ""} ${t?.description || ""} ${t?.sellerName || ""} ${t?.category || ""} ${t?.route || ""}`;
-  const injected = looksLikeListingInjection(text) || readsAsRoutingDirective(text) || looksLikeListingInjection(fieldsAtEdges(t?.name, t?.description));
+  const injected = looksLikeListingInjection(text) || readsAsRoutingDirective(text) || looksLikeListingInjection(fieldsAtEdges(t?.name, t?.description)) || readsAsRoutingDirective(fieldsGlued(t?.name, t?.description));
   return remoteToolRow(t, { ...ctx, injected });
 }
 

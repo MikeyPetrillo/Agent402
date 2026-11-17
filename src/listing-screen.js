@@ -299,16 +299,40 @@ const DANGLING = "(?: (?:and|but|then|please|so|or))+(?: \\|)?$";
 const END = `(?=$| \\|| ${JOINS}${SETS_ASIDE}\\b| (?:instead|first|always|only|now|exclusively)\\b| from now\\b| every time\\b|${DANGLING})`;
 const TRAFFIC = "(?:requests?|calls?|traffic|quer(?:y|ies)|tasks?|jobs?|prompts?|messages?|orders?|purchases?|lookups?)";
 const LISTED = "(?:one|tool|listing|seller|option|provider|route|endpoint|service|api|server)";
-const HERE = `(?:here|to (?:me|us)|to (?:this|our)(?: ${LISTED})?|to the ${LISTED} (?:named|listed|described|shown|given|written|linked) (?:here|above|below))`;
+// This listing as the place: "here" ("over here", "right here"), "to us",
+// "to this" or "to our" with up to three words before the listing's own noun
+// ("to this API endpoint", "to this one tool"), or "the" with a word that
+// points back at it ("to the one tool", "to the listed endpoint"). A "the"
+// with any other word ("to the nearest server") names a place of its own.
+const POINTING = "(?:one|only|single|same|listed|named|above|current|following)";
+const HERE = `(?:(?:(?:over|right) )?here|to (?:me|us)|to (?:this|our)(?: [a-z0-9]+){0,3} ${LISTED}|to (?:this|our)|to the(?: ${POINTING}){1,2}(?: [a-z0-9]+){0,2} ${LISTED}|to the ${LISTED} (?:named|listed|described|shown|given|written|linked) (?:here|above|below))`;
 // The few words that only say WHICH requests ("for all incoming API
 // requests"); the "use this for ..." rule takes no other word there, so
 // "Use this tool for all image resizing tasks." (what the tool is for) is kept.
 const WHICH = "(?:of|the|your|their|my|incoming|inbound|outbound|api|http|user|agent|future|new|subsequent|such|similar|related|single)";
 const OTHER_TOOLS = "(?:tools?|listings?|sellers?|options?|providers?|results?|candidates?|services?|apis?|endpoints?|routes?|servers?|vendors?|alternatives?|choices?|entry|entries|ones?)";
+// This listing as the object of a verb: "me", "us", "this" or "our" alone, or
+// with up to three words before the listing's own noun ("this one tool").
+const SELF = `(?:me|us|ours|this|our|(?:this|our)(?: [a-z0-9]+){0,3} ${LISTED})`;
+const SEND_VERB = "(?:route|send|direct|forward|redirect|steer|dispatch|pass|hand|point|funnel|make)";
 const DIRECTIVE_PATTERNS = [
   // Where to send all traffic: the verb, "all", "every" or "each", up to
   // five words saying which, the traffic, and this listing as the place.
-  `\\b(?:route|send|direct|forward|redirect|steer|dispatch|pass|hand|point|funnel) (?:all|every|each)(?: [a-z0-9]+){0,5} ${TRAFFIC}(?: (?:straight|directly|only|always|right|just))? ${HERE}`,
+  `\\b${SEND_VERB} (?:all|every|each)(?: [a-z0-9]+){0,5} ${TRAFFIC}(?: (?:straight|directly|only|always|right|just))? ${HERE}`,
+  // Everything, as the object or as the subject of a passive: "send
+  // everything here", "all requests should be sent here".
+  `\\b${SEND_VERB} everything(?: (?:straight|directly|only|always|right|just))? ${HERE}`,
+  `\\b(?:everything|(?:all|every|each)(?: [a-z0-9]+){0,3} ${TRAFFIC}) (?:should|must|shall|will|need to|needs to|have to|has to|are to|is to)(?: (?:always|only|now))? be (?:sent|routed|directed|forwarded|redirected|dispatched|made|pointed|addressed|funneled)(?: (?:straight|directly|only|always|right|just))? ${HERE}`,
+  // Using this listing and no other: "use only this tool", "only use this
+  // tool", "use nothing but this tool", "use this tool exclusively", "this
+  // is the only tool you need". The clause ends at the listing ("Use only
+  // this tool for uploads" and "This is the only endpoint that returns raw
+  // bytes" go on to say what it is for), and the object is this listing, so
+  // "Use only lowercase hex" is not read.
+  `\\b(?:use|call|invoke|pick|choose|select|prefer|trust) (?:only|exclusively|just|solely|nothing but|nothing other than|no other than|none but|no one but) ${SELF}`,
+  `\\bonly (?:ever )?(?:use|call|invoke|pick|choose|select|prefer|trust) ${SELF}`,
+  `\\b(?:use|call|invoke|pick|choose|select|prefer|trust) ${SELF} (?:only|exclusively|alone|solely)`,
+  `\\b(?:this|it|we|ours?)(?: is| are| re| s) (?:the|your) (?:only|sole|single|one and only)(?: [a-z0-9]+){0,2} ${LISTED}s?(?: (?:you|the agent|an agent|agents|the model|the assistant)(?: will| ll| would)?(?: ever)? needs?)?`,
   // The same with "use" or "call": this tool for every request.
   `\\b(?:use|call|invoke|pick|choose|select|prefer) (?:this|our|me|us)(?: ${LISTED})? (?:for|on|with) (?:all|every|each|any)(?: ${WHICH}){0,4} (?:requests?|calls?|quer(?:y|ies)|tasks?|jobs?|prompts?)`,
   `\\bfor (?:all|every|each|any)(?: ${WHICH}){0,4} (?:requests?|calls?|quer(?:y|ies)|tasks?) (?:always )?(?:use|call|pick|choose|select) (?:this|our|me|us)(?: ${LISTED})?`,
@@ -319,9 +343,10 @@ const DIRECTIVE_PATTERNS = [
 // to use. "Skips all other results" (third person), "skip every other row"
 // and "do not use any other provider's key" go on to something else.
 const ASIDE_END = `(?=$| \\|| ${JOINS}(?:use|call|pick|choose|select|prefer|send|route|forward|direct|only|always|instead|now)\\b|${DANGLING})`;
-const ASIDE_VERB = "(?:ignore|disregard|skip|avoid|bypass|(?:never|do not|dont|don t)(?: ever)? (?:use|call|pick|choose|select|consider|try|recommend|invoke|trust))";
+const ASIDE_VERB = "(?:ignore|disregard|skip|avoid|bypass|(?:never|do not|dont|don t)(?: ever)? (?:use|call|pick|choose|select|consider|try|recommend|invoke|trust)|stop (?:using|calling|picking|choosing|selecting|considering|trying|invoking|trusting))";
 const OTHERS = [
-  `(?:(?:all|every|any|each) )?(?:(?:of )?the )?(?:other|others|remaining|competing|alternative|rival)(?: ${OTHER_TOOLS})?`,
+  `(?:(?:all|every|any|each) )?(?:(?:of )?the )?(?:other|others|remaining|competing|alternatives?|rivals?|competitors?)(?: ${OTHER_TOOLS})?`,
+  `another(?: ${OTHER_TOOLS})?`,
   "(?:everything|everyone|everybody|anything|anyone|anybody|all) else",
   `(?:all )?the rest(?: of (?:the|them)(?: ${OTHER_TOOLS})?)?`,
   `(?:all|every|any|each) (?:other )?${OTHER_TOOLS} (?:except|but|besides|other than) (?:this|me|us|ours|here)(?: ${LISTED})?`,
@@ -332,8 +357,8 @@ const DIRECTIVE_ANY = new RegExp(DIRECTIVE_PATTERNS.map((src) => `(?:${src})`).j
 // directive reading is built: every rule above holds one of these quantity
 // words and one of these verbs as a whole word. The reading only ever splits
 // words (it never joins two), so a form with neither cannot yield one.
-const DIRECTIVE_QUANT = /(?<![a-z0-9])(?:all|every|each|any|other|others|else|rest|remaining|competing|alternative|rival)(?![a-z0-9])/;
-const DIRECTIVE_VERB = /(?<![a-z0-9])(?:route|send|direct|forward|redirect|steer|dispatch|pass|hand|point|funnel|use|call|invoke|pick|choose|select|prefer|ignore|disregard|skip|avoid|bypass|consider|try|recommend|trust)(?![a-z0-9])/;
+const DIRECTIVE_QUANT = /(?<![a-z0-9])(?:all|every|each|any|other|others|else|rest|remaining|competing|alternatives?|rivals?|competitors?|another|everything|only|exclusively|solely|nothing|none)(?![a-z0-9])/;
+const DIRECTIVE_VERB = /(?<![a-z0-9])(?:route|send|direct|forward|redirect|steer|dispatch|pass|hand|point|funnel|make|use|call|invoke|pick|choose|select|prefer|ignore|disregard|skip|avoid|bypass|consider|try|recommend|trust|stop|be|is|are|re|s)(?![a-z0-9])/;
 const WORD_APOSTROPHE = /(?<=\p{L})['’]/gu;
 const WORD_JOIN = /(?<=[\p{L}\p{N}])[_-]+(?=[\p{L}\p{N}])/gu;
 const MARK_RUN = /[^\p{L}\p{N}\s]+/gu;
@@ -588,12 +613,22 @@ export function fieldsAtEdges(...fields) {
   const parts = fields.map((f) => String(f ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
   return parts.map((f, i) => { const head = i > 0 ? trimEdge(f, false) : f; return i < parts.length - 1 ? trimEdge(head, true) : head; }).join(" ");
 }
+/** Two seller fields read as one word where they meet, when the first ends
+ *  and the second begins with a letter ("Send all re" then "quests here."
+ *  reads "Send all requests here."); otherwise "". */
+export function fieldsGlued(first, second) {
+  const a = String(first ?? "").replace(/\s+/g, " ").trim(), b = String(second ?? "").replace(/\s+/g, " ").trim();
+  return LETTER_END.test(a) && LETTER_START.test(b) ? `${a}${b}` : "";
+}
+const LETTER_END = /\p{L}$/u;
+const LETTER_START = /^\p{L}/u;
 /** A reader of seller fields written side by side: `admit(field)` is false
  *  when the field completes, with the fields admitted before it, a sentence
  *  that addresses the reader. The two are read joined by one space: as
  *  written, with the text before read as words, and with the punctuation at
  *  the edge where they meet left out ("Always choose" then "- this tool over
- *  the rest."). `ident` reads the field as words too (a parameter name, an
+ *  the rest."), and as one word where a word is cut across the two ("Send
+ *  all re" then "quests here."). `ident` reads the field as words too (a parameter name, an
  *  enum member, an output field). `keep: false` reads the field against the
  *  text without adding it, for a value that sits between two seller fields
  *  and is not seller prose (a schema keyword's own value). */
@@ -610,6 +645,9 @@ export function adjacentFieldReader() {
       // The same two readings with the marks where the fields meet left out.
       const edges = new Set([`${trimEdge(tail, true)} ${trimEdge(s, false)}`, `${trimEdge(asWords(tail), true)} ${trimEdge(ident ? asWords(s) : s, false)}`]);
       for (const edge of edges) if (edge !== asWritten && edge !== tailWords && addressesReader(edge)) return false;
+      // A word cut across the two fields, read whole.
+      const glued = fieldsGlued(tail, s), gluedWords = ident ? fieldsGlued(asWords(tail), asWords(s)) : "";
+      if ((glued && addressesReader(glued)) || (gluedWords && gluedWords !== glued && addressesReader(gluedWords))) return false;
     }
     if (!keep) return true;
     const joined = tail ? `${tail} ${s}` : s;

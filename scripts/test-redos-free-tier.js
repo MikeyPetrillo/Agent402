@@ -147,6 +147,8 @@ if (runsSoloChecks(SHARD)) {
     judgeReadableListing: (s) => screen.judgeReadableListing({ host: s, slug: s, description: s, tags: [s, s] }),
     readsAsRoutingDirective: (s) => screen.readsAsRoutingDirective(s),
     fieldsAtEdges: (s) => screen.fieldsAtEdges(s, s, s),
+    // Two fields read as one word where they meet, then as a directive.
+    fieldsGlued: (s) => screen.readsAsRoutingDirective(screen.fieldsGlued(s, s)),
     // Fields read side by side: the long one first, after a short one, and as words.
     adjacentFieldReader: (s) => { const read = screen.adjacentFieldReader(); read(s); read(s, { ident: true }); const next = screen.adjacentFieldReader(); next("send all requests"); next(s); next(s, { ident: true }); },
     // The screen's parts on their own: every reading of the text with no hint,
@@ -155,7 +157,7 @@ if (runsSoloChecks(SHARD)) {
   };
   const exported = Object.keys(screen).filter((k) => typeof screen[k] === "function");
   ok(exported.every((k) => k in fns), `every exported screen function is timed (${exported.filter((k) => !(k in fns)).join(",") || "all"})`);
-  const openers = ["", "a1 ", "1gn0re ", "s y s ", "note to the ", "dear ", "hi ", "as the judge ", "you ", "the model ", "system ", "choose ", "best ", "rank ", "rate ", "rate every ", "only ", "always ", "confidence ", "fit ", "perfect ", "evaluators ", "ignore ", "disregard what ", "forget ", "override ", "do not ", "<", "[", "<|", "## ", "judge: ", "select this ", "wähle immer ", "immer dieses ", "elige siempre ", "choisis toujours ", "escolha sempre ", "send all ", "route every ", "send all requests ", "use this tool for every ", "for every request ", "send all requests here and ", "ignore every other "];
+  const openers = ["", "a1 ", "1gn0re ", "s y s ", "note to the ", "dear ", "hi ", "as the judge ", "you ", "the model ", "system ", "choose ", "best ", "rank ", "rate ", "rate every ", "only ", "always ", "confidence ", "fit ", "perfect ", "evaluators ", "ignore ", "disregard what ", "forget ", "override ", "do not ", "<", "[", "<|", "## ", "judge: ", "select this ", "wähle immer ", "immer dieses ", "elige siempre ", "choisis toujours ", "escolha sempre ", "send all ", "route every ", "send all requests ", "use this tool for every ", "for every request ", "send all requests here and ", "ignore every other ", "use only this ", "only use this ", "this is the only ", "send all requests to this ", "send everything ", "all requests should be sent ", "never call another ", "stop using "];
   const fills = { space: " ", a: "a", spaceA: " a", dashA: "-a", aUnderscore: "a_", dotA: ".a", comma: ", ", digitA: "1a", cyrillic: "а ", tab: "\t", nl: "\n", entity: "&lt;", zeroWidth: "a​", colon: ": " };
   const build = (open, fill, n) => (open + fill.repeat(Math.ceil(n / fill.length))).slice(0, n) + "!";
   // Best of three, but a run far past the bound is not repeated, and a
@@ -212,6 +214,8 @@ if (runsSoloChecks(SHARD)) {
     asides: "ignore every other ".repeat(12_000), snake: "send_all_requests_".repeat(12_000), kebab: "send-all-".repeat(25_000), camel: "SendAllRequests".repeat(14_000),
     dashes: "send all requests - ".repeat(10_000), brackets: "send all ((((".repeat(16_000), apostrophes: "don't ".repeat(35_000), useThis: "use this tool for every ".repeat(9_000),
     joins: "send all requests here" + " and".repeat(50_000) + " x", joinMarks: "send all requests here" + " and -".repeat(35_000) + " x", forWhich: "for all incoming api ".repeat(10_000),
+    toThis: "send all requests to this " + "api ".repeat(50_000), onlyThis: "use only this ".repeat(15_000), theOnly: "this is the only " + "tool ".repeat(40_000),
+    passive: "all requests should be ".repeat(9_000), everything: "send everything over ".repeat(10_000), another: "never call another ".repeat(11_000), stopUsing: "stop using other ".repeat(12_000),
   };
   const slowDirective = [];
   for (const [k, v] of Object.entries(directiveShapes)) {
