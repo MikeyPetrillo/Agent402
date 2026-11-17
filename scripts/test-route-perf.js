@@ -34,12 +34,13 @@
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/uncapped-sellers.js"; // every seeded tool is kept: the large sellers here are the point
 process.env.X402_INDEX_CRAWL = "off";
-import { oursMs, bound, gapMeter } from "./lib/ours-clock.js";
+import { oursMs, bound, gapMeter, timeOurs, leastOurs } from "./lib/ours-clock.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 const here = path.dirname(fileURLToPath(import.meta.url));
-const { routeQuery, _cacheForTests, _setBazaarQualityForTest, _routeIndexStatsForTest, warmRouteIndex, _routeIndexSettledForTest, computeAliasOrigins } = await import("../src/x402-index.js");
+const { routeQuery, _cacheForTests, _setBazaarQualityForTest, _routeIndexStatsForTest, warmRouteIndex, _routeIndexSettledForTest, computeAliasOrigins, __testSetBazaarTools, _cleanSellerEntryForTests } = await import("../src/x402-index.js");
+const { capSellerEntry } = await import("../src/seller-tool-cap.js");
 const { buildRoutePerfFixture, GOLDEN_QUERIES } = await import("./lib/route-perf-fixture.js");
 
 let pass = 0, fail = 0;
@@ -54,6 +55,13 @@ const ROUTE_PERF_BOUND_MS = ROUTE.ms;
 const MEMO = bound(10, 0.6);
 const BG_GAP = bound(100, 6);
 const REBUILD_GAP = bound(150, 9);
+// The store's synchronous turn at production's per-seller cap (the default in
+// src/seller-tool-cap.js; this suite lifts the live one).
+const PROD_SELLER_TOOL_CAP = 5000;
+const STORE_TURN = bound(25, 1.5);
+// Registry rows seeded for the large seller, so the seller-context walk in one
+// turn (the pre-fold code) is several times BG_GAP on any machine.
+const REGISTRY_ROWS = 4_000_000;
 console.log(`# route ${ROUTE.note}; memo ${MEMO.note}; background gap ${BG_GAP.note}; rebuild gap ${REBUILD_GAP.note}`);
 const cache = _cacheForTests();
 
@@ -240,13 +248,57 @@ const cache = _cacheForTests();
     const bigEntry = (origin, n) => ({ manifest: { name: "huge", homepage: origin }, tools: Array.from({ length: n }, (_, k) => ({ seller: origin, method: "POST", route: `/r${k}`, slug: `zanzibar-${k}`, name: `Zanzibar ${k}`, description: `zanzibar tool number ${k} quux${k}`, category: "data", tags: [], price: 0.001, networks: ["eip155:8453"] })), fetchedAt: Date.now(), error: null, history: [1, 1, 1] });
     const big = "https://huge-seller.example";
     // Build the 80,000 rows BEFORE the gap meter starts, so the meter times the
-    // indexer and not the fixture.
+    // store and the indexer and not the fixture.
     const bigValue = bigEntry(big, 80000);
+    delete bigValue.tools[79999].networks; // the last row reads the seller's union
+    // The registry's rows for the same origin: the seller-level networks and
+    // signing domains are a union over the entry's rows AND these, so the
+    // walk's length is theirs too. One row object repeated (the walk reads
+    // each slot; the fixture costs nothing), enough of them that the walk in
+    // one turn is several times the bound.
+    const registryRows = new Array(REGISTRY_ROWS).fill({ seller: big, route: "/listed", networks: ["eip155:8453", "eip155:137"], evmDomainByNetwork: { "eip155:8453": { asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", name: "USD Coin" } } });
+    // Every 128th row of both lists names a network of its own (one a bare
+    // string, as some listings carry it), and one late row a second signing
+    // domain: the fold stops and resumes on a row whose index is a multiple of
+    // 256 in the joined walk, so a resume that skipped, repeated or reordered
+    // a row changes the union below.
+    for (let i = 0; i < bigValue.tools.length - 1; i += 128) bigValue.tools[i].networks = ["eip155:8453", `eip155:${100000 + i}`];
+    for (let i = 0; i < REGISTRY_ROWS; i += 128) registryRows[i] = { seller: big, route: `/listed${i}`, networks: i % 256 ? `eip155:${5000000 + i}` : [`eip155:${5000000 + i}`] };
+    registryRows[REGISTRY_ROWS - 1] = { seller: big, route: "/last", networks: [], evmDomainByNetwork: { "eip155:8453": { asset: "0xdead", name: "Second" }, "eip155:137": { asset: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", name: "USD Coin" } } };
+    __testSetBazaarTools(big, registryRows);
+    const onePassNets = [...new Set([...bigValue.tools.flatMap((t) => t.networks || []), ...registryRows.flatMap((t) => t.networks || [])])];
+    // The window opens BEFORE cache.set: the store's own work on the caller's
+    // turn (the cap, then a synchronous clean of every kept row) is inside it,
+    // with the indexer's slices after it. This suite lifts the per-seller cap
+    // (scripts/lib/uncapped-sellers.js), so that clean is of all 80,000 rows
+    // here; it is timed on its own below as well, and at production's cap.
     const meter = gapMeter();
-    cache.set(big, bigValue);
+    const setMs = timeOurs(() => cache.set(big, bigValue)).ms;
     for (let i = 0; i < 400 && (_routeIndexStatsForTest().pending || _routeIndexStatsForTest().partial); i++) await new Promise((r) => setTimeout(r, 5));
     const { worst, worstWall } = meter.stop();
-    ok(!_routeIndexStatsForTest().partial && worst < BG_GAP.ms, `an 80,000-tool seller indexes in the background without a long event-loop gap (worst ${worst.toFixed(0)} ms ours, ${worstWall.toFixed(0)} ms wall; ${BG_GAP.note})`);
+    ok(!_routeIndexStatsForTest().partial && worst < BG_GAP.ms, `an 80,000-tool seller with ${REGISTRY_ROWS} registry rows is stored and indexed in the background without a long event-loop gap (worst ${worst.toFixed(0)} ms ours, ${worstWall.toFixed(0)} ms wall; ${BG_GAP.note})`);
+    ok(setMs < BG_GAP.ms, `...of which the store's own turn, the clean of all 80,000 rows with the cap lifted, is ${setMs.toFixed(0)} ms (${BG_GAP.note})`);
+    const served = routeQuery({ query: "quux79999", top: 5, include: "external", ...ctx }).results.find((x) => x.slug === "zanzibar-79999");
+    ok(served && onePassNets.length > 16000 && JSON.stringify(served.networks) === JSON.stringify(onePassNets), `...and a row with no networks of its own reads the folded union exactly as one pass over the entry's rows and then the registry's gives it (${served?.networks?.length} networks, ${onePassNets.length} in one pass)`);
+    ok(JSON.stringify(served?.evmDomainByNetwork) === JSON.stringify({ "eip155:8453": { asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", name: "USD Coin" }, "eip155:137": { asset: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", name: "USD Coin" } }), "...and the seller's signing domains, the first seen per network, the last row's included");
+    // What production's store does with the same listing. IndexCache.set caps
+    // an entry at SELLER_TOOL_CAP tools (5,000, src/seller-tool-cap.js) BEFORE
+    // it cleans, so the synchronous clean is of 5,000 rows whatever the
+    // listing's size: the cap is what bounds the store's turn. Timed here as
+    // the store runs it (cap, then clean) on the 80,000-row listing, and as a
+    // whole set of an entry AT the cap inside a gap meter of its own.
+    const capped = leastOurs(() => _cleanSellerEntryForTests(capSellerEntry(bigValue, PROD_SELLER_TOOL_CAP)), { enough: STORE_TURN.ms });
+    ok(capped.value.tools.length === PROD_SELLER_TOOL_CAP && capped.value.toolsCapped === true && capped.ms < STORE_TURN.ms, `the store's turn on an 80,000-row listing at production's cap of ${PROD_SELLER_TOOL_CAP} (cut, then cleaned) is ${capped.ms.toFixed(1)} ms (${STORE_TURN.note})`);
+    const atCap = "https://at-cap-seller.example";
+    const atCapValue = bigEntry(atCap, PROD_SELLER_TOOL_CAP);
+    __testSetBazaarTools(atCap, new Array(REGISTRY_ROWS).fill({ seller: atCap, route: "/listed", networks: ["eip155:8453"] }));
+    await new Promise((r) => setTimeout(r, 10));
+    const capMeter = gapMeter();
+    const capSetMs = timeOurs(() => cache.set(atCap, atCapValue)).ms;
+    for (let i = 0; i < 400 && (_routeIndexStatsForTest().pending || _routeIndexStatsForTest().partial); i++) await new Promise((r) => setTimeout(r, 5));
+    const capGap = capMeter.stop();
+    ok(capSetMs < STORE_TURN.ms && capGap.worst < BG_GAP.ms, `a seller at the cap is stored in ${capSetMs.toFixed(1)} ms (${STORE_TURN.note}) and indexed with no long gap (worst ${capGap.worst.toFixed(0)} ms; ${BG_GAP.note})`);
+    __testSetBazaarTools(big, null); __testSetBazaarTools(atCap, null); cache.delete(atCap);
     ok(routeQuery({ query: "quux79999", top: 5, include: "external", ...ctx }).results.some((x) => x.slug === "zanzibar-79999"), "...and all of its rows are served once indexed");
     const big2 = "https://huge-seller-2.example";
     cache.set(big2, bigEntry(big2, 40000));

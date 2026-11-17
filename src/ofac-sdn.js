@@ -104,6 +104,30 @@ export function* sortSteps(items) {
   return a;
 }
 
+/** A stored copy's body `{ ...head, [key]: rows }` (the list last) and its
+ *  JSON text, as a step generator: `rows` is `items` through `toRow`, and
+ *  `pieces` concatenate to exactly JSON.stringify(body), JSON_STEP rows per
+ *  piece and per step, so a large list is never serialized in one turn
+ *  (json-document saveSerialized writes the pieces off the loop). */
+const JSON_STEP = 2048;
+export function* storedBodySteps(head, key, items, toRow = (v) => v) {
+  const open = JSON.stringify(head);
+  const pieces = [`${open.length > 2 ? `${open.slice(0, -1)},` : "{"}${JSON.stringify(key)}:[`];
+  const rows = [];
+  let chunk = [];
+  const flush = () => { pieces.push((rows.length > chunk.length ? "," : "") + chunk.join(",")); chunk = []; };
+  for (const v of items) {
+    const row = toRow(v);
+    rows.push(row);
+    chunk.push(JSON.stringify(row));
+    if (chunk.length === JSON_STEP) { flush(); yield; }
+  }
+  if (chunk.length) flush();
+  pieces.push("]}");
+  yield;
+  return { body: { ...head, [key]: rows }, pieces };
+}
+
 /** Run a step generator across event-loop turns: each slice about `sliceMs`
  *  of loop time (measured, not counted) on a loop pass of its own, never the
  *  caller's turn. Resolves its return value, the same one runWhole gives.
