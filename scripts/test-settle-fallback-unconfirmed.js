@@ -327,7 +327,7 @@ try {
     const more = [];
     for (let i = 0; i < 6; i++) more.push(await send(held.header, bodyOf(i % 2)));
     ok(more.every((r) => r.status === 402 && r.replayed === "1" && r.body?.reason === "settlement-unconfirmed" && r.body.retry === "check-wallet" && !r.offered && !NOT_CHARGED.test(r.text)
-      && r.receipt?.errorReason === "settlement_unconfirmed" && r.body.authorizationValidBefore === isoOf(held.validBefore) && /Do not sign a new authorization/.test(r.body.hint)),
+      && r.receipt?.errorReason === "settlement_unconfirmed" && /no-store/.test(String(r.cache)) && r.body.authorizationValidBefore === isoOf(held.validBefore) && /Do not sign a new authorization/.test(r.body.hint)),
       `the same payment sent six times (two bodies): the unconfirmed answer each time (${more.map((r) => `${r.status}/${r.body?.reason}`).join(" ")})`);
     ok(counts.verify === c0.verify && asked(c0) === "0/0", `the same payment sent again: no verify, no handler run, no settle (${counts.verify - c0.verify} verifies, ${asked(c0)} settles)`);
     const fresh = await pay();

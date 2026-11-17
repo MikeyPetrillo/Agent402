@@ -4179,7 +4179,6 @@ function explainUnconfirmedStop(ctx, network, txs) {
               chunk = JSON.stringify(body);
               req.__paymentRejectReason = refusal.reason;
             }
-            res.setHeader("Cache-Control", "no-store");
             // The pending explanation (its wrapper runs after this one) shapes
             // the body the same way for the copy kept for a replay.
             req.__a402UnconfirmedAnswer = { body: pending ? withPendingSettleRefusal(body, pending) : body, receipt: receiptHeader, validBefore: validBeforeOfPayload(u.ctx?.paymentPayload) };
