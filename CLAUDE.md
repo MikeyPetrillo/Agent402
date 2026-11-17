@@ -323,7 +323,8 @@ Actions secrets), never in the repo. Rollout switches are generally "key present
 `X_BEARER_TOKEN`). `COINGECKO_API_TIER` (`demo`, the default, or `pro`) picks the CoinGecko
 host and key header for `COINGECKO_API_KEY` (`src/tools/coingecko-endpoint.js`, the only file
 that names them): a paid key needs `pro`, and a keyless call uses the public host whatever the
-tier. Per-variable notes and thresholds live in `CLAUDE.local.md`. The backup
+tier. `OPEN_METEO_API_KEY` present = the weather tools read Open-Meteo's keyed
+hosts; unset = its public hosts. Per-variable notes and thresholds live in `CLAUDE.local.md`. The backup
 bucket credentials (`BACKUP_S3_*`) live on Railway only, shown by `railway bucket credentials` and pasted by the operator
 into the service variables, never in Actions: the deploy job's variable upsert must not name a
 variable whose source of truth is Railway (`scripts/test-ci-secretless-install.js`).

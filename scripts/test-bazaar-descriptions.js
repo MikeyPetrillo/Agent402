@@ -29,6 +29,14 @@ for (const must of ["search", "answer", "extract", "render", "vin-decode", "geo-
 // curated copy says what a read returns and whose namespace it reads.
 {
   const mr = BAZAAR_DESCRIPTIONS["memory-read"] || "";
+  {
+    const cutOpen = bazaarCapDescription("Pack runs 3 underlying tools (alpha-tool, beta-tool, gamma-tool, delta-tool); partial-success per step and more words here.", 70);
+    const joiner = bazaarCapDescription("Price history for a coin between two times given as unix seconds or ISO dates, or as a number of days back from now with hourly points.", 82);
+    ok(!/\b(and|or|with|of|the|to|for)\.$/i.test(joiner) && !/,\.$/.test(joiner), `a cut never ends on a joining word (${joiner})`);
+    const eg = bazaarCapDescription("Lists every coin id with its symbol and name. Pass a platform (e.g. ethereum, solana, base, arbitrum, optimism) to filter results by chain and more.", 90);
+    ok(!/\([^)]*$/.test(eg) && !/e\.g\.$/.test(eg), `a cut never ends on an abbreviation inside a bracket (${eg})`);
+    ok(!/\([^)]*$/.test(cutOpen) && /tools\.$/.test(cutOpen), `a cut never leaves a bracket open (${cutOpen})`);
+  }
   ok(bazaarCapDescription(mr) === mr && /paying wallet/.test(mr) && /omit it to list/.test(mr) && /own namespace by default/.test(mr) && /granted/.test(mr) && !/\?[a-z]+=/.test(mr), "memory-read: curated copy reads whole and names the key read, the key list, the payer's own namespace and a granted one");
 }
 // The cut runs in linear time: long runs of whitespace, separators or hints
@@ -168,6 +176,16 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   ok(midText.length === 0, `no attribution sentence sits anywhere but the end of a description (${midText.join(", ") || "none"})`);
   const counts = Object.fromEntries(Object.keys(ATTRIBUTIONS).map((k) => [k, (bySource[k] || []).length]));
   ok(Object.values(counts).every((n) => n > 0) && counts.fred >= 9 && counts["us-treasury"] >= 3 && counts.ecb >= 4 && counts.coingecko >= 24 && counts.jupiter >= 5, `every source is marked on the tools that serve it (${JSON.stringify(counts)})`);
+  // The longest credited texts: at both cuts the text before the credit is the
+  // catalog text up to one of its own sentence ends, never a clause cut short
+  // with a period put after it.
+  for (const slug of ["coin-market-chart-range", "exchange-tickers", "coins-list", "coin-profile"]) {
+    const t = tools.get(slug);
+    const want = ATTRIBUTIONS[t?.attribution];
+    const r = listingEnds(slug, t?.description || "", [want]);
+    const whole = (x) => { const lead = x.slice(0, x.length - want.length).trim(); return lead.length > 0 && /[.!?]$/.test(lead) && t.description.startsWith(`${lead} `); };
+    ok(!!t && !!want && r.ok && whole(r.listed) && whole(r.cut), `${slug}: both cuts end the text before the credit at a whole sentence (${JSON.stringify(r.cut.slice(-(want.length + 40)))})`);
+  }
   // Skill packs: the sources of the tools each pack runs, in pack order.
   const catalog = Object.fromEntries([...tools.values()].map((t) => [t.route, t]));
   const packTools = new Map(buildSkillTools({ getCatalog: () => catalog }).map((t) => [t.slug, t]));
@@ -178,7 +196,11 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
     const tail = attributionTailOf(def?.description || "") || "";
     if (!keys.length) { ok(!tail, `skill-${pack.slug}: no tool it runs needs an attribution, and its text carries none`); continue; }
     packsWithSources++;
-    const want = keys.map((k) => ATTRIBUTIONS[k]);
+    // A combined key's sentence holds a shorter key's (open-meteo-cams holds
+    // open-meteo's): the pack carries the longer one only, once.
+    const all = keys.map((k) => ATTRIBUTIONS[k]);
+    const want = all.filter((x) => !all.some((y) => y !== x && y.includes(x)));
+    ok(!/Open-Meteo\.com \(CC BY 4\.0\)\..*Open-Meteo\.com \(CC BY 4\.0\)\./.test(tail), `skill-${pack.slug}: no attribution sentence is repeated`);
     ok(want.every((w) => tail.includes(w)) && tail.length === want.join(" ").length, `skill-${pack.slug}: the pack text ends with the ${keys.join(" + ")} attribution`);
     const r = listingEnds(def.slug, def.description, want);
     ok(r.ok, `skill-${pack.slug}: the listing keeps the ${keys.join(" + ")} attribution at both cuts (${r.listed.length} / ${r.cut.length} chars)`);

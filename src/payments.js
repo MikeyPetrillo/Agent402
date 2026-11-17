@@ -1179,8 +1179,11 @@ function dropQueryHints(s) {
   return kept.join(" ").trim();
 }
 
-// The least room a kept attribution sentence leaves for the text before it.
+// The least room a kept attribution sentence leaves for the text before it;
+// a run of sentences too long for that (a credit that carries a required
+// disclaimer) keeps itself whole over any lead of ATTRIBUTION_SHORT_LEAD or more.
 const ATTRIBUTION_MIN_LEAD = 80;
+const ATTRIBUTION_SHORT_LEAD = 12;
 export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (!s) return s;
   // A catalog description often carries query-parameter hints ("?bytes=1..1024
@@ -1196,13 +1199,26 @@ export function bazaarCapDescription(s, max = BAZAAR_DESCRIPTION_MAX) {
   if (tail && s.length > tail.length) {
     const room = max - tail.length - 1;
     const lead = s.slice(0, s.length - tail.length).trim();
-    if (room >= ATTRIBUTION_MIN_LEAD) return `${bazaarCapDescription(lead, room)} ${tail}`;
+    if (room >= ATTRIBUTION_MIN_LEAD || (room >= ATTRIBUTION_SHORT_LEAD && tail.length + 1 + ATTRIBUTION_MIN_LEAD > max)) return `${bazaarCapDescription(lead, room)} ${tail}`;
   }
   const head = s.slice(0, max);
-  const sentenceEnd = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "), head.endsWith(".") ? head.length - 1 : -1);
-  if (sentenceEnd >= Math.floor(max * 0.5)) return head.slice(0, sentenceEnd + 1).trim();
+  // An abbreviation ("e.g. ", "i.e. ") is not a sentence end.
+  const masked = head.replace(/\b(e\.g|i\.e|etc|vs)\. /gi, (m) => m.replace(/\. $/, "_ "));
+  const sentenceEnd = Math.max(masked.lastIndexOf(". "), masked.lastIndexOf("! "), masked.lastIndexOf("? "), masked.endsWith(".") ? masked.length - 1 : -1);
+  // A cut inside a bracket leaves it open ("runs 3 tools (a, b."): end before it.
+  const closeBracket = (t) => { const open = t.lastIndexOf("("); return open > 0 && open > t.lastIndexOf(")") ? t.slice(0, open).trim().replace(/[,;:\-]+$/, "") : t; };
+  if (sentenceEnd >= Math.floor(max * 0.5)) {
+    const sentence = head.slice(0, sentenceEnd + 1).trim();
+    const closed = closeBracket(sentence);
+    if (closed === sentence) return sentence;
+    if (closed.length >= Math.floor(max * 0.5)) return closed.replace(/[.!?]?$/, ".");
+  }
   const wordEnd = head.lastIndexOf(" ");
-  return (wordEnd > 0 ? head.slice(0, wordEnd) : head).trim().replace(/[,;:\-]+$/, "") + ".";
+  let cut = closeBracket((wordEnd > 0 ? head.slice(0, wordEnd) : head).trim()).replace(/[,;:\-]+$/, "");
+  // A cut that ends on a joining word ("dates, or", "price and") leaves a
+  // dangling clause: drop the joiner and the comma before it.
+  for (let i = 0; i < 3 && /\s(and|or|with|of|the|a|an|to|for|in|by|from|as|plus|because|any|its|their|that|which|when|where|whose|each|every|than|via|per|at|on|into)$/i.test(cut); i++) cut = cut.replace(/\s+\S+$/, "").replace(/[,;:\-]+$/, "").trim();
+  return cut + ".";
 }
 
 // The listing icon: the 512px PNG mark (server.js), on a path whose extension

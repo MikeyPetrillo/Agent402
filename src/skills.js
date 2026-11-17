@@ -1320,7 +1320,7 @@ export const SKILL_PACKS = [
     slug: "weather-brief",
     title: "Weather briefing",
     tagline:
-      "Full weather briefing for a location: current conditions, 7-day forecast, and air quality index in one pass.",
+      "Weather briefing: current conditions, 7-day forecast and air quality for a location in one call.",
     useCase:
       "An agent needs a comprehensive weather picture for a location - not just 'is it raining now?' but 'what's the full outlook?' Common triggers: a user asks about weather before a trip, a scheduling agent needs to warn about upcoming severe weather, or a logistics system needs outdoor conditions + AQI for worker safety. Running the three weather tools individually loses the composite picture; this pack sequences them and produces a unified briefing with current snapshot, daily forecast, and air quality side-by-side.",
     toolSlugs: [
