@@ -10,9 +10,11 @@ import { Agent402, OutputValidationError, withNetworkPreference, withPayeeAllowl
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // The server binds an OS-assigned port (PORT=0) and keeps its stores in a
-// temp directory of its own, so two copies of this suite never meet.
+// temp directory of its own, so two copies of this suite never meet. It runs
+// on this suite's own Node (process.execPath), never the first `node` on PATH:
+// native modules are built for one Node, and another exits the server at boot.
 const { ownStoreEnv } = await import("../scripts/lib/own-stores.js");
-const proc = spawn("node", ["src/server.js"], {
+const proc = spawn(process.execPath, ["src/server.js"], {
   cwd: ROOT,
   env: { ...process.env, ...ownStoreEnv("client-test"), WALLET_ADDRESS: "0x000000000000000000000000000000000000dEaD", NETWORK: "base",
     FACILITATOR_URL: "https://facilitator.payai.network", X402_SYNC_ON_START: "false",
@@ -20,8 +22,12 @@ const proc = spawn("node", ["src/server.js"], {
     // cases run would change what route() ranks by the time they finish.
     X402_INDEX_CRAWL: "off", MPP_INDEX_CRAWL: "off",
     POW_DIFFICULTY: "12", PORT: "0", FREE_MODE: "" },
-  stdio: ["ignore", "pipe", "ignore"],
+  stdio: ["ignore", "pipe", "pipe"],
 });
+// The server's last stderr, printed when it never listens, so a boot failure
+// names its cause.
+let serverStderr = "";
+proc.stderr.on("data", (c) => { serverStderr = (serverStderr + c).slice(-4000); });
 // The port the server bound, read back from its listening line (null if it
 // exits or never listens).
 const boundPort = new Promise((resolve) => {
@@ -1967,7 +1973,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
   const PORT = await boundPort;
-  if (!PORT) fail("the server never reported the port it bound");
+  if (!PORT) fail(`the server never reported the port it bound (exit ${proc.exitCode ?? proc.signalCode ?? "none"}); its stderr:\n${serverStderr || "(empty)"}`);
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`http://localhost:${PORT}/api/pow`)).ok) break; } catch {} await sleep(500); }
   const a = new Agent402({ baseUrl: `http://localhost:${PORT}` });
 
