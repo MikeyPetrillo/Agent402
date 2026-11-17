@@ -93,7 +93,8 @@ ok(hi === si, "hosted and stdio initialize instructions are byte-identical");
   ok(HOSTED_CONNECTOR_WIRES.x402 === true && HOSTED_CONNECTOR_WIRES.mpp === true, "the package names both wires for the hosted service");
   const published = hostedLine(stdioInstructions("https://example.test", HOSTED_CONNECTOR_WIRES));
   ok(published.includes("other tools paid in the call over x402 or MPP from a wallet)") && !/wallet on the npm package/.test(published), `the published hosted line names both wires (${published.slice(0, 100)})`);
-  ok(/const INIT_INSTRUCTIONS = mcpInitializeInstructions\(BASE, hostedConnectorWiresFor\(BASE\)\);/.test(read("mcp/index.js")), "the stdio server renders its instructions with the wires of the server it points at");
+  ok(/const INIT_INSTRUCTIONS = mcpInitializeInstructions\(BASE, \{ \.\.\.hostedConnectorWiresFor\(BASE\), demand: false \}\);/.test(read("mcp/index.js")), "the stdio server renders its instructions with the wires of the server it points at, and without demand.request (it does not list it)");
+  ok(!/demand\.request/.test(stdioInstructions("https://example.test", { demand: false })) && /demand\.request/.test(stdioInstructions("https://example.test")) && hostedInstructions("https://example.test", { demand: false }) === stdioInstructions("https://example.test", { demand: false }), "demand: false drops demand.request from both copies alike");
   const { hostedConnectorWiresFor, HOSTED_SERVICE_URL } = await import("../mcp/output-schemas.js");
   ok(HOSTED_SERVICE_URL === "https://agent402.tools" && hostedConnectorWiresFor("https://agent402.tools") === HOSTED_CONNECTOR_WIRES && hostedConnectorWiresFor("https://agent402.tools/") === HOSTED_CONNECTOR_WIRES,
     "the hosted service's URL gets both wires");

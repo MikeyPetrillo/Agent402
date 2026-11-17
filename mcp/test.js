@@ -56,6 +56,22 @@ const fail = (msg) => { console.error("FAIL:", msg); process.exit(1); };
   eq(seen[0], ["usdg"], "client sees only the preferred accept");
   console.log("networks.js unit tests \u2713 (parse, filter, preference order, no-match throw, client wrap)");
 }
+// 0a) index.d.ts (package.json "types") describes configuration and tool
+// results only: the package is a command and exports no runtime value, so
+// the declarations must declare none either.
+{
+  const { readFileSync } = await import("node:fs");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const dts = readFileSync(join(here, "index.d.ts"), "utf8");
+  const pkg = JSON.parse(readFileSync(join(here, "package.json"), "utf8"));
+  const values = [...dts.matchAll(/^export (?:declare )?(?:class|const|function|let|var|default) /gm)];
+  if (values.length) fail(`mcp/index.d.ts declares a runtime value the package does not export (${values.length})`);
+  if (pkg.types !== "index.d.ts" || !pkg.files.includes("index.d.ts")) fail("mcp/package.json must point types at index.d.ts and ship it");
+  for (const name of ["catalog.search", "catalog.find", "catalog.call", "payment.info", "server.describe", "sellers.list", "router.execute"]) {
+    if (!dts.includes(`"${name}"`)) fail(`mcp/index.d.ts names every listed meta tool (${name} missing)`);
+  }
+  console.log("index.d.ts declares types only and names every meta tool ✓");
+}
 const text = (result) => result.content?.map((c) => (c.type === "text" ? c.text : `<${c.type}>`)).join("\n") ?? "";
 
 // 0b) Shed-503 retry on discovery reads (./discovery.js): a 503 that names
@@ -405,6 +421,9 @@ globalThis.fetch = (...a) => { if (!said && String(a[0]?.url || a[0]).includes("
     const l1 = leaks(bad.all, [EVM_BAD, SOL_BAD, CREDITS]).concat(["c0ffeec0ffee", "SOLSENT", "CREDSENTINEL"].filter((x) => bad.all.includes(x)));
     if (l1.length) fail(`malformed keys must never appear in any output: ${l1.join(", ")}`);
     if (!/AGENT_KEY is set but is not/.test(bad.out)) fail(`a malformed AGENT_KEY is named, not quoted: ${bad.out.slice(0, 400)}`);
+    // At start, a key that does not parse is named in the log and never
+    // reported as a configured wallet.
+    if (!/payment: AGENT_KEY and SOLANA_AGENT_KEY are set but do not parse as a key/.test(bad.err) || /wallet configured/.test(bad.err)) fail(`malformed keys must be named at start, never logged as a configured wallet: ${bad.err.slice(0, 600)}`);
     const sol = await run([SOL_BAD], { SOLANA_AGENT_KEY: SOL_BAD });
     if (sol.all.includes("SOLSENT") || leaks(sol.all, [SOL_BAD]).length) fail(`a malformed SOLANA_AGENT_KEY (byte array) must never appear in any output: ${sol.out.slice(0, 400)}`);
     if (!/SOLANA_AGENT_KEY is set but is not/.test(sol.out)) fail(`a malformed SOLANA_AGENT_KEY is named, not quoted: ${sol.out.slice(0, 400)}`);
@@ -413,6 +432,8 @@ globalThis.fetch = (...a) => { if (!said && String(a[0]?.url || a[0]).includes("
     const good = await run([EVM_GOOD, CREDITS], { AGENT_KEY: EVM_GOOD, AGENT402_CREDITS_KEY: CREDITS });
     const l4 = leaks(good.all, [EVM_GOOD, CREDITS]).concat(["5eed5eed5eed", "CREDSENTINEL"].filter((x) => good.all.includes(x)));
     if (l4.length) fail(`a valid key echoed back by a seller must be redacted everywhere: ${l4.join(", ")}`);
+    if (!/payment: USDC via x402 \(EVM wallet configured; max\/call \$1, session budget \$25\)/.test(good.err)) fail(`a valid key is logged as configured, with the default $25 session budget: ${good.err.slice(0, 600)}`);
+    if (!/\\"sessionBudgetUsd\\": 25\b/.test(good.out)) fail(`payment.info reports the default $25 session budget: ${good.out.slice(0, 600)}`);
     if (!/seller echo: \[redacted\]/.test(good.out)) fail(`control: the seller's echo reached the boundary and was redacted: ${good.out.slice(0, 400)}`);
     // A library that writes a configured key to the console (a preload makes
     // the catalog fetch log every key, through console.error and console.warn,
@@ -510,6 +531,47 @@ try {
     fail("every tools/list entry must carry a named-field outputSchema");
   }
   console.log(`tools/list → ${tools.length} tools, flagship set + meta + outputSchema ✓`);
+
+  // Annotations match the hosted connector's: read-only only where nothing
+  // can charge or write; catalog.call can run a tool that writes or deletes;
+  // memory.write replaces a value.
+  {
+    const ann = (n) => tools.find((t) => t.name === n)?.annotations || {};
+    const is = (n, want) => Object.entries(want).every(([k, v]) => ann(n)[k] === v);
+    if (!is("catalog.search", { readOnlyHint: true, destructiveHint: false, openWorldHint: false })) fail(`catalog.search is a read-only local lookup: ${JSON.stringify(ann("catalog.search"))}`);
+    if (!is("catalog.find", { readOnlyHint: true, destructiveHint: false, openWorldHint: true })) fail(`catalog.find is a read-only open-world lookup: ${JSON.stringify(ann("catalog.find"))}`);
+    if (!is("catalog.call", { readOnlyHint: false, destructiveHint: true, openWorldHint: true })) fail(`catalog.call can charge and write: ${JSON.stringify(ann("catalog.call"))}`);
+    if (!is("memory.write", { readOnlyHint: false, destructiveHint: true })) fail(`memory.write replaces a value: ${JSON.stringify(ann("memory.write"))}`);
+    if (!is("web.search", { readOnlyHint: false, destructiveHint: false, openWorldHint: true })) fail(`a paid flagship is not read-only: ${JSON.stringify(ann("web.search"))}`);
+    if (!is("payment.info", { readOnlyHint: true }) || !is("server.describe", { readOnlyHint: true })) fail("payment.info and server.describe are read-only");
+    console.log("tool annotations: lookups read-only, catalog.call and memory.write destructive ✓");
+  }
+
+  // The instructions name only tools this server lists: no demand.request.
+  {
+    const instr = client.getInstructions() || "";
+    if (!/catalog\.search/.test(instr) || /demand\.request/.test(instr) || names.includes("demand.request")) fail(`the stdio instructions must not name demand.request, which it does not list: ${instr.slice(0, 400)}`);
+    console.log("initialize instructions name no unlisted tool ✓");
+  }
+
+  // catalog.search's limit is a whole number from 1 to 25; anything else reads as the default.
+  {
+    const count = async (limit) => JSON.parse(text(await client.callTool({ name: "catalog.search", arguments: { query: "convert text hash encode decode json date", limit } }))).results.length;
+    const [three, huge, neg, str, junk] = [await count(3), await count(100000), await count(-5), await count("2"), await count("lots")];
+    if (three !== 3 || huge !== 25 || neg !== 10 || str !== 2 || junk !== 10) fail(`catalog.search limit clamp: 3->${three}, 100000->${huge}, -5->${neg}, "2"->${str}, "lots"->${junk}`);
+    console.log("catalog.search clamps limit to 1..25 ✓");
+  }
+
+  // catalog.call takes params as an object or as a JSON string of one.
+  {
+    const asString = await client.callTool({ name: "catalog.call", arguments: { slug: "hash", params: JSON.stringify({ text: "hello world" }) } });
+    if (asString.isError || !text(asString).includes("b94d27b9")) fail(`catalog.call with stringified params must run: ${text(asString).slice(0, 300)}`);
+    const notJson = await client.callTool({ name: "catalog.call", arguments: { slug: "hash", params: "text=hello" } });
+    if (!notJson.isError || !/"params" must be an object/.test(text(notJson))) fail(`catalog.call with a params string that is not a JSON object must say what it expects: ${text(notJson).slice(0, 300)}`);
+    const arr = await client.callTool({ name: "catalog.call", arguments: { slug: "hash", params: "[1,2]" } });
+    if (!arr.isError || !/an object/.test(text(arr))) fail(`a JSON array is not an object of inputs: ${text(arr).slice(0, 300)}`);
+    console.log("catalog.call accepts stringified params and explains a bad one ✓");
+  }
 
   // search_tools finds catalog tools that are not first-class
   const search = await client.callTool({ name: "search_tools", arguments: { query: "convert miles to kilometers" } });
@@ -1021,7 +1083,8 @@ globalThis.fetch = async (input, init) => {
 
     // Defaults: with neither variable set, a $5 quote is refused (the default
     // per-call cap), the default covers the dearest tool in the catalog, and
-    // there is no session budget by default, so a heavy session is never refused.
+    // the session budget is $25 (agent402-client's default daily cap); off
+    // turns it off.
     {
       const defaults = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "" });
       try {
@@ -1030,12 +1093,18 @@ globalThis.fetch = async (input, init) => {
         if (seen.signed !== 0 || !r.isError || !/AGENT402_MAX_PER_CALL/.test(text(r))) fail(`the default per-call cap must refuse a $5 quote: ${text(r).slice(0, 300)}`);
         const info = JSON.parse(text(await defaults.callTool({ name: "get_payment_info", arguments: {} })));
         const perCall = info.spendControls?.maxPerCallUsd, budget = info.spendControls?.sessionBudgetUsd;
-        if (!(Number.isFinite(perCall) && budget === "unlimited" && info.spendControls?.remainingUsd === "unlimited")) fail(`a finite default per-call cap and no default session budget expected: ${JSON.stringify(info.spendControls)}`);
+        if (!(Number.isFinite(perCall) && budget === 25 && info.spendControls?.remainingUsd === 25)) fail(`a finite default per-call cap and a $25 default session budget expected: ${JSON.stringify(info.spendControls)}`);
         const pricing = await (await fetch(`${API}/api/pricing`)).json();
         const dearest = Math.max(...pricing.endpoints.map((e) => parseFloat(String(e.price).replace(/[^0-9.]/g, "")) || 0));
         if (!(dearest > 0 && perCall >= dearest)) fail(`the default per-call cap $${perCall} must cover the dearest catalog price $${dearest}`);
-        console.log(`default caps: $${perCall} per call (dearest catalog price $${dearest}), no session budget ✓`);
+        console.log(`default caps: $${perCall} per call (dearest catalog price $${dearest}), $${budget} session budget ✓`);
       } finally { await defaults.close().catch(() => {}); }
+      const off = await connect({ AGENT_KEY: "0x" + "11".repeat(32), AGENT402_MAX_PER_CALL: "", AGENT402_BUDGET: "off" });
+      try {
+        const info = JSON.parse(text(await off.callTool({ name: "get_payment_info", arguments: {} })));
+        if (info.spendControls?.sessionBudgetUsd !== "unlimited" || info.spendControls?.remainingUsd !== "unlimited") fail(`AGENT402_BUDGET=off turns the session budget off: ${JSON.stringify(info.spendControls)}`);
+        console.log("AGENT402_BUDGET=off turns the default session budget off ✓");
+      } finally { await off.close().catch(() => {}); }
     }
     await new Promise((r) => stub.close(r));
   }

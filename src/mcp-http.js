@@ -1703,7 +1703,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
               ...(gatewayOfferPublic() ? { batched: `on ${gatewayOfferNetworkNames().join(" and ")} the 402 also carries a Circle Gateway batched accept (extra.name ${gatewayOfferPublic().kind}) at the same price: after a USDC deposit into Circle Gateway, each payment is a signature against that balance with no gas per call, settled off chain in batches. agent402-mcp and agent402-client pay the plain accept; a client that signs under the Gateway domain can choose the batched one` } : {}),
             },
             ...(mppStartHere.length ? { mppStartHere: { what: `fast, low-priced routes that ${mppFlagshipOffersPhrase()}: a good first call for a new MPP client (call by slug with catalog.call, or pay the HTTP route with mppx)`, routes: mppStartHere, more: `${baseUrl}/what-is-mpp#start-here` } } : {}),
-            spendControls: { perCall: "AGENT402_MAX_PER_CALL caps any single call (on by default; off disables)", totalBudget: "AGENT402_BUDGET caps cumulative spend for the session (opt-in; unset means no session cap)", enforced: "on the payment that is signed" },
+            spendControls: { perCall: "AGENT402_MAX_PER_CALL caps any single call (on by default; off disables)", totalBudget: "AGENT402_BUDGET caps cumulative spend for the session (25 USD by default; off disables)", enforced: "on the payment that is signed" },
             balanceAndHistory: {
               balance: "check a wallet's USDC balance via catalog.call with slug wallet-balances (multi-chain) or wallet-balance (single)",
               transactions: "pull a wallet's transaction history via catalog.call with slug wallet-transactions",

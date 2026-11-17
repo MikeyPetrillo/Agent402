@@ -1,6 +1,6 @@
 {
   "name": "agent402-mcp",
-  "version": "0.13.32",
+  "version": "0.14.0",
   "mcpName": "io.github.MikeyPetrillo/agent402",
   "author": "Havok Holdings LLC <mike@agent402.tools> (https://agent402.tools)",
   "homepage": "https://agent402.tools",
@@ -16,12 +16,14 @@
   },
   "files": [
     "index.js",
+    "index.d.ts",
     "async-job.js",
     "known-assets.js",
     "networks.js",
     "discovery.js",
     "output-schemas.js",
-    "README.md"
+    "README.md",
+    "pow-solver.js"
   ],
   "engines": {
     "node": ">=20"
@@ -96,5 +98,6 @@
     "@modelcontextprotocol/sdk": {
       "zod": "4.6.7"
     }
-  }
+  },
+  "types": "index.d.ts"
 }

@@ -478,13 +478,13 @@ bun add @x402/fetch @x402/evm viem
     pkg: "agent402-mcp",
     dir: "mcp",
     what: "An MCP server for any MCP client (Claude Desktop, Claude Code, Cursor and others). Flagship tools are listed as first-class MCP tools and the rest of the catalog is reachable through `catalog.search`, `catalog.find` and `catalog.call`, with skill packs surfaced as MCP prompts. The hosted connector at /mcp needs no install at all.",
-    install: "npx -y agent402-mcp@0.13.32",
+    install: "npx -y agent402-mcp@0.14.0",
     lang: "json",
     example: `{
   "mcpServers": {
     "agent402": {
       "command": "npx",
-      "args": ["-y", "agent402-mcp@0.13.32"],
+      "args": ["-y", "agent402-mcp@0.14.0"],
       "env": { "AGENT_KEY": "0xYOUR_EVM_PRIVATE_KEY" }
     }
   }
@@ -497,7 +497,7 @@ claude mcp add --transport http agent402 https://agent402.tools/mcp
 
 # Claude Code, local server paying from a wallet
 # Use a new wallet holding only a few dollars of USDC. Never your main wallet.
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.32
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.14.0
 
 # no AGENT_KEY: the local server still runs the pure-CPU tools by proof-of-work`,
     exposes: [
@@ -510,7 +510,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.32
       "`AGENT_KEY` (EVM) or `SOLANA_AGENT_KEY`: the server signs an x402 payment on a chain the tool accepts and retries.",
       `\`AGENT402_CREDITS_KEY\`: ${CREDITS_HELD}, sent as \`Authorization: Bearer a402_...\`; the list price is debited only on a 200.`,
       "Neither: the pure-CPU tools pay with proof-of-work (about 0.2 s of CPU).",
-      "`AGENT402_MAX_PER_CALL` is on by default ($4 per call, `off` disables it) and `AGENT402_BUDGET` is an opt-in session cap; both are enforced on the payment that is signed." + (connectorWires().names.length ? ` The hosted /mcp connector is also payable in the call over ${connectorWires().phrase}, from an MCP client that speaks it.` : ""),
+      "`AGENT402_MAX_PER_CALL` is on by default ($4 per call, `off` disables it) and `AGENT402_BUDGET` caps the session ($25 by default, `off` disables it); both are enforced on the payment that is signed." + (connectorWires().names.length ? ` The hosted /mcp connector is also payable in the call over ${connectorWires().phrase}, from an MCP client that speaks it.` : ""),
     ],
     tools: ["search", "answer", "search-news", "render", "stock-quote", "transcribe"],
     guides: ["agent-hosts", "x402-and-mpp", "buying-at-volume"],

@@ -19,12 +19,11 @@
 //   AGENT402_MAX_PER_CALL refuse any single call priced above this many USD (default 4; off disables)
 //   AGENT402_CREDITS_KEY  a prepaid credits key (a402_...); pays per successful call with no wallet,
 //                         on Agent402's own services only (outside-seller routes need a wallet)
-//   AGENT402_BUDGET       optional hard cap on total USD spent this session (no cap by default)
+//   AGENT402_BUDGET       hard cap on total USD spent this session (default 25; off disables)
 //   AGENT402_SHOW_ROUTER  "1" lists router.execute and sellers.list without a wallet (both are listed
 //                         when a wallet or credits key is set)
 //   AGENT402_NETWORKS     restrict + order the chains to pay on (e.g. "robinhood" for USDG on
 //                         Robinhood Chain, "base,solana", or a raw CAIP-2 like eip155:4663), optional
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { format } from "node:util";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -32,6 +31,7 @@ import { quoteOf, guardSigning, signedExpirySeconds, MAX_VALIDITY_SECONDS } from
 import { parseNetworkPrefs, withNetworkPreference, distrustFetch } from "./networks.js";
 import { fetchDiscovery, discoveryFailure, getDiscoveryJson } from "./discovery.js";
 import { awaitJob, shouldRequestAsync, AsyncJobPendingError, DEFAULT_ASYNC_TIMEOUT_MS, jobState } from "./async-job.js";
+import { solvePowAsync } from "./pow-solver.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -162,10 +162,12 @@ const VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.ur
 // by default, at the dearest list price in the Agent402 catalog rounded up to
 // a whole dollar (mcp/test.js checks it still covers the catalog), and `off`
 // disables it; a malformed value reads as that default, never as off. The
-// session budget is opt-in: unset (or `off`) is no session cap, so a heavy user
-// is never stopped by a default. The per-call cap above still applies.
+// session budget is on by default too, at DEFAULT_BUDGET_USD for the life of
+// the process (the same figure as agent402-client's default daily cap), so a
+// model looping on paid calls stops there; `off` disables it and a number
+// sets it.
 const DEFAULT_MAX_PER_CALL_USD = 4;
-const DEFAULT_BUDGET_USD = Infinity;
+const DEFAULT_BUDGET_USD = 25;
 const capFromEnv = (name, def) => {
   const raw = String(process.env[name] ?? "").trim().toLowerCase();
   if (raw === "") return def;
@@ -346,21 +348,6 @@ function solanaSigner() {
     }
   })();
   return solanaSignerPromise;
-}
-
-function solvePow(challenge) {
-  const leadingZeroBits = (buf) => {
-    let total = 0;
-    for (const byte of buf) {
-      if (byte === 0) { total += 8; continue; }
-      total += Math.clz32(byte) - 24;
-      break;
-    }
-    return total;
-  };
-  let nonce = 0;
-  while (leadingZeroBits(createHash("sha256").update(`${challenge.challenge}:${nonce}`).digest()) < challenge.difficulty) nonce++;
-  return nonce;
 }
 
 function walletRequiredText(tool) {
@@ -591,7 +578,11 @@ async function callEndpoint(tool, args = {}, { onProgress = null } = {}) {
     // No wallet: pay with compute up front, solving before the call skips the
     // 402 round-trip entirely (challenges are single-use and tool-scoped).
     const challenge = await getDiscoveryJson(`proof-of-work challenge for "${tool.slug}"`, `${BASE}/api/pow/challenge?slug=${encodeURIComponent(tool.slug)}`);
-    const nonce = solvePow(challenge);
+    // Solved on a worker thread (./pow-solver.js), so this server keeps
+    // answering the client while it searches; a difficulty above 28 bits is
+    // refused rather than searched.
+    const nonce = await solvePowAsync(challenge);
+    if (typeof challenge.token !== "string" || !challenge.token) throw new Error(`the proof-of-work challenge for "${tool.slug}" carried no token`);
     res = await ownFetch(url, { ...init, headers: { ...init.headers, "X-Pow-Solution": `${challenge.token}:${nonce}` } });
   } else {
     return { content: [{ type: "text", text: walletRequiredText(tool) }], isError: true };
@@ -670,6 +661,29 @@ function applyFrontDoorTerms(terms, q) {
   }
 }
 
+/** catalog.search's limit: a whole number from 1 to MAX_SEARCH_RESULTS, the
+ *  default for anything else (a string that reads as a number counts). */
+const MAX_SEARCH_RESULTS = 25;
+function searchLimit(raw) {
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, MAX_SEARCH_RESULTS) : 10;
+}
+
+/** A tool's `params` as an object: a JSON string that encodes an object (a
+ *  host that serializes nested arguments sends one) is parsed; anything else
+ *  that is not an object is refused with what was expected. */
+function paramsObject(raw, where) {
+  if (raw === undefined || raw === null || raw === "") return { ok: true, value: {} };
+  if (typeof raw === "object" && !Array.isArray(raw)) return { ok: true, value: raw };
+  if (typeof raw === "string") {
+    try {
+      const v = JSON.parse(raw);
+      if (v && typeof v === "object" && !Array.isArray(v)) return { ok: true, value: v };
+    } catch { /* falls through to the refusal */ }
+  }
+  return { ok: false, text: `${where} "params" must be an object of the tool's inputs, or a JSON string of one (got ${Array.isArray(raw) ? "an array" : typeof raw}).` };
+}
+
 function searchTools(query, limit = 10) {
   const q = String(query || "");
   const terms = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
@@ -742,7 +756,8 @@ function rankWorkflows(query, k = 2) {
 // MCP wiring
 // Initialize instructions mirror src/mcp-flagship.js mcpInitializeInstructions
 // (stdio package cannot import src/ when published). Keep tool names listed-only.
-const INIT_INSTRUCTIONS = mcpInitializeInstructions(BASE, hostedConnectorWiresFor(BASE));
+// This server lists no demand.request, so its instructions do not name it.
+const INIT_INSTRUCTIONS = mcpInitializeInstructions(BASE, { ...hostedConnectorWiresFor(BASE), demand: false });
 
 const server = new Server(
   {
@@ -818,15 +833,23 @@ async function ensureCatalog() {
 const withCatalog = (handler) => async (req, extra) => { await ensureCatalog(); return handler(req, extra); };
 
 server.setRequestHandler(ListToolsRequestSchema, redacted(withCatalog(async () => {
-  // Read-only only for lookups that stay on this machine (describe, payment
-  // info). Anything that reaches the network or can spend is NET: not read-only,
-  // open-world. A host reads readOnlyHint to decide whether to ask first.
+  // The same hints as the hosted connector (src/mcp-http.js). A host may run
+  // a read-only tool without asking its user, so readOnlyHint is true only for
+  // a tool that never charges and never writes: the local catalog search,
+  // describe and payment info (closed-world), and the free lookups that read
+  // the service (catalog.find, sellers.list: open-world). Every tool that can
+  // charge is not read-only; catalog.call and router.execute can run a tool
+  // that writes, deletes or buys, so they are marked destructive, and
+  // memory.write replaces the value a key held.
   const SAFE = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+  const OPEN = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
   const NET = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+  const CALL_PAID = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
+  const OVERWRITE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
   const tools = curated.map((t) => {
     // verb_noun exposed names (match hosted /mcp). CallTool accepts kebab + plain snake too.
     const name = FLAGSHIP_MCP_NAMES[t.slug] || t.slug.replace(/-/g, "_");
-    const ann = NET;
+    const ann = t.slug === "memory-write" ? OVERWRITE : NET;
     return {
       name,
       title: t.slug,
@@ -840,14 +863,14 @@ server.setRequestHandler(ListToolsRequestSchema, redacted(withCatalog(async () =
     {
       name: META_MCP_NAMES.search_tools,
       title: "Search the Agent402 tool catalog",
-      annotations: { title: "Search the Agent402 tool catalog", ...NET },
+      annotations: { title: "Search the Agent402 tool catalog", ...SAFE },
       description:
         `Keyword search over the Agent402 catalog of 500+ tools (${catalog.size} loaded by this server). Returns matching tools and workflow templates; run one with catalog.call. Pure-CPU tools are free through proof-of-work; the others are paid per call in USDC when a wallet key is set.`,
       inputSchema: {
         type: "object",
         properties: {
           query: { type: "string", description: "What you need, e.g. \"search the web for x402\", \"answer a question with citations\", \"convert miles to km\"" },
-          limit: { type: "number", description: "Max results (default 10)" },
+          limit: { type: "number", minimum: 1, maximum: MAX_SEARCH_RESULTS, description: `Max results (default 10, at most ${MAX_SEARCH_RESULTS})` },
         },
         required: ["query"],
       },
@@ -856,7 +879,7 @@ server.setRequestHandler(ListToolsRequestSchema, redacted(withCatalog(async () =
     {
       name: META_MCP_NAMES.find_tool,
       title: "Resolve a task to the one best Agent402 tool",
-      annotations: { title: "Resolve a task to the one best Agent402 tool", ...NET },
+      annotations: { title: "Resolve a task to the one best Agent402 tool", ...OPEN },
       description:
         "Resolve a plain-language task to the single best-matching Agent402 tool through the hosted /api/find resolver. Returns { task, matches } with the top pick first. Run the pick with catalog.call and the slug and params it lists. Use catalog.search to compare several candidates.",
       inputSchema: {
@@ -872,14 +895,14 @@ server.setRequestHandler(ListToolsRequestSchema, redacted(withCatalog(async () =
     {
       name: META_MCP_NAMES.call_tool,
       title: "Run an Agent402 tool",
-      annotations: { title: "Run an Agent402 tool", ...NET },
+      annotations: { title: "Run an Agent402 tool", ...CALL_PAID },
       description:
         "Call any Agent402 tool by slug (find slugs with catalog.find or catalog.search). Payment is handled automatically: USDC via x402 if this server has a wallet key, otherwise free proof-of-work on eligible pure-CPU tools (no wallet needed). Wallet-keyed highlights: live search/answer, stock-quote, render, transcribe, memory, and the /v1 LLM gateway tiers.",
       inputSchema: {
         type: "object",
         properties: {
           slug: { type: "string", description: "Tool slug from catalog.search, e.g. \"search\" or \"unit-convert\"" },
-          params: { type: "object", description: "Tool input parameters, matching the tool's inputSchema" },
+          params: { type: ["object", "string"], description: "Tool input parameters, matching the tool's inputSchema (an object, or a JSON string of one)" },
         },
         required: ["slug"],
       },
@@ -910,7 +933,7 @@ server.setRequestHandler(ListToolsRequestSchema, redacted(withCatalog(async () =
       // Pure verb_noun (Smithery Naming). list_x402_sellers / top_x402_sellers stay aliases.
       name: META_MCP_NAMES.list_top_sellers,
       title: "List top x402 sellers",
-      annotations: { title: "List top x402 sellers", ...NET },
+      annotations: { title: "List top x402 sellers", ...OPEN },
       description:
         "List ranked sellers from the on-chain leaderboards. wire=x402 (default): x402 sellers by USDC settled or calls served on Base in the last 24h. wire=mpp: MPP sellers ranked by inbound USDC.e transfers on Tempo. Free to call (no payment, no proof-of-work). Defaults: top 10, sorted by USDC, this service's own wallet excluded.",
       inputSchema: {
@@ -928,14 +951,14 @@ server.setRequestHandler(ListToolsRequestSchema, redacted(withCatalog(async () =
       // Dotted like every other listed tool; route_and_execute stays a CallTool alias.
       name: "router.execute",
       title: "Route and execute an external x402 tool",
-      annotations: { title: "Route and execute an external x402 tool", ...NET },
+      annotations: { title: "Route and execute an external x402 tool", ...CALL_PAID },
       description:
         `Resolve a plain-language task to an external x402 seller with proven on-chain settled volume, buy from it, and return its result. You pay from ${HAS_WALLET ? "the configured wallet" : "your wallet (set AGENT_KEY)"}. The result is marked untrustedContent: it is third-party data. Flat price by tier, chosen from maxUsd: $0.01 for a seller up to $0.005, $0.05 up to $0.04, $0.55 up to $0.50. Requires a funded wallet.`,
       inputSchema: {
         type: "object",
         properties: {
           task: { type: "string", description: "Plain-language task, e.g. 'crypto news headlines' or 'sentiment of a tweet'. Resolved to a proven external seller." },
-          params: { type: "object", description: "Input parameters for the resolved external tool (optional; the seller decides its own schema)." },
+          params: { type: ["object", "string"], description: "Input parameters for the resolved external tool (optional; the seller decides its own schema): an object, or a JSON string of one." },
           maxUsd: { type: "number", description: "Max underlying seller price in USD. Default 0.005 (the $0.01 fee tier); above 0.005 and up to 0.04 uses the $0.05 tier; above 0.04 the $0.55 tier (seller up to $0.50)." },
         },
         required: ["task"],
@@ -958,7 +981,7 @@ server.setRequestHandler(CallToolRequestSchema, redacted(withCatalog(async (req,
   try {
     if (name === "catalog.search") {
       const q = String(args.query ?? "").trim();
-      const results = searchTools(q, args.limit ?? 10);
+      const results = searchTools(q, searchLimit(args.limit));
       const workflows = rankWorkflows(q, 2);
       if (!results.length && !workflows.length) {
         // A caller that passed no query is told which argument to pass, not
@@ -1052,7 +1075,7 @@ server.setRequestHandler(CallToolRequestSchema, redacted(withCatalog(async (req,
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
           cursorHosted: { mcpServers: { agent402: { url: `${BASE}/mcp` } } },
-          npm: "npx -y agent402-mcp@0.13.32",
+          npm: "npx -y agent402-mcp@0.14.0",
           maintainer: "Havok Holdings LLC",
         },
         positioning: `Agent402 is a catalog of 500+ tools that AI agents find, pay for per request over x402 or MPP, and call with no account or API key. Flagship search/answer first, 500+ long-tail tools via catalog.find / catalog.search / catalog.call. Agent402 is the applied layer of Agentic Finance: agents that pay and get paid per request over x402 or MPP (Machine Payments Protocol), both on the same 402 - ${BASE}/agentic-finance, ${BASE}/glossary.`,
@@ -1072,7 +1095,7 @@ server.setRequestHandler(CallToolRequestSchema, redacted(withCatalog(async (req,
         install: {
           claudeCodeHosted: `claude mcp add --transport http agent402 ${BASE}/mcp`,
           claudeCodeNpm: `claude mcp add agent402 -s user -- npx -y agent402-mcp@${AGENT402_MCP_VERSION}`,
-          npm: "npx -y agent402-mcp@0.13.32",
+          npm: "npx -y agent402-mcp@0.14.0",
           maintainer: "Havok Holdings LLC",
         },
         tools: catalog.size,
@@ -1187,7 +1210,9 @@ server.setRequestHandler(CallToolRequestSchema, redacted(withCatalog(async (req,
       if (!tool) return { content: [{ type: "text", text: `External routing (${slug}) is not in the catalog from ${BASE} yet. It may be rolling out; retry shortly.` }], isError: true };
       // Body matches the route-execute input schema; include:"external" is what
       // pays an OUTSIDE seller (vs this host's catalog). Paid via callEndpoint.
-      return await callEndpoint(tool, { task, include: "external", maxUsd, ...(args.params && typeof args.params === "object" ? { params: args.params } : {}) }, { onProgress: progressNotifier(req, extra) });
+      const routed = paramsObject(args.params, "router.execute");
+      if (!routed.ok) return { content: [{ type: "text", text: routed.text }], isError: true };
+      return await callEndpoint(tool, { task, include: "external", maxUsd, ...(Object.keys(routed.value).length ? { params: routed.value } : {}) }, { onProgress: progressNotifier(req, extra) });
     }
     // Curated tools are exposed verb_noun for tools/list consistency, but the
     // real slug is kebab, accept exposed name, plain snake, or raw slug.
@@ -1200,7 +1225,13 @@ server.setRequestHandler(CallToolRequestSchema, redacted(withCatalog(async (req,
     if (!tool) {
       return { content: [{ type: "text", text: `Unknown tool slug "${wanted}". Use catalog.search to find the right slug.` }], isError: true };
     }
-    const out = await callEndpoint(tool, name === "catalog.call" ? (args.params ?? {}) : args, { onProgress: progressNotifier(req, extra) });
+    let input = args;
+    if (name === "catalog.call") {
+      const p = paramsObject(args.params, "catalog.call");
+      if (!p.ok) return { content: [{ type: "text", text: p.text }], isError: true };
+      input = p.value;
+    }
+    const out = await callEndpoint(tool, input, { onProgress: progressNotifier(req, extra) });
     // call_tool: wrap structuredContent in {slug, result} to match META_OUTPUT_SCHEMAS["catalog.call"]
     // while keeping content text as the native tool JSON.
     if (name === "catalog.call" && !out.isError && out.structuredContent) {
@@ -1231,10 +1262,26 @@ const requested = (process.env.AGENT402_TOOLS || DEFAULT_CURATED.join(","))
   .split(",").map((s) => s.trim()).filter(Boolean);
 curated = requested.map((slug) => catalog.get(slug)).filter(Boolean);
 log(`catalog: ${catalog.size} tools from ${BASE}; ${curated.length} first-class, rest via catalog.search/catalog.call`);
-log(
-  HAS_WALLET
-    ? `payment: USDC via x402 (${[AGENT_KEY && "EVM", SOLANA_AGENT_KEY && "Solana"].filter(Boolean).join(" + ")} wallet configured; max/call ${MAX_PER_CALL === Infinity ? "unlimited" : `$${MAX_PER_CALL}`}, budget ${BUDGET === Infinity ? "unlimited" : `$${BUDGET}`})`
-    : "payment: proof-of-work on eligible tools (no AGENT_KEY / SOLANA_AGENT_KEY)"
-);
+// A key is reported configured only once it parses: a key that does not
+// parse is named (never printed) so the operator sees it before the first
+// paid call fails on it.
+{
+  const parsed = [], broken = [];
+  if (AGENT_KEY) {
+    try { const { privateKeyToAccount } = await import("viem/accounts"); evmAccount(privateKeyToAccount); parsed.push("EVM"); } catch { broken.push("AGENT_KEY"); }
+  }
+  if (SOLANA_AGENT_KEY) {
+    try { await solanaSigner(); parsed.push("Solana"); } catch { broken.push("SOLANA_AGENT_KEY"); }
+  }
+  const caps = `max/call ${MAX_PER_CALL === Infinity ? "unlimited" : `$${MAX_PER_CALL}`}, session budget ${BUDGET === Infinity ? "unlimited" : `$${BUDGET}`}`;
+  if (broken.length) log(`payment: ${broken.join(" and ")} ${broken.length > 1 ? "are set but do" : "is set but does"} not parse as a key (the value is never printed); paid calls that need ${broken.length > 1 ? "them fail until they are" : "it fail until it is"} fixed`);
+  log(parsed.length
+    ? `payment: USDC via x402 (${parsed.join(" + ")} wallet configured; ${caps})`
+    : HAS_WALLET
+      ? "payment: no usable wallet key"
+      : HAS_CREDITS
+        ? `payment: credits key configured (${caps})`
+        : "payment: proof-of-work on eligible tools (no AGENT_KEY / SOLANA_AGENT_KEY)");
+}
 
 await server.connect(new StdioServerTransport());

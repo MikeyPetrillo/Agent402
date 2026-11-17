@@ -24,6 +24,16 @@ for (const p of COPIES) {
   const pkg = JSON.parse(readFileSync(join(ROOT, p.split("/")[0], "package.json"), "utf8"));
   ok((pkg.files || []).includes("known-assets.js"), `${pkg.name} ships known-assets.js in its "files"`);
 }
+// The proof-of-work solver ships the same way in the client and the MCP server.
+{
+  const POW = ["client/pow-solver.js", "mcp/pow-solver.js"];
+  const powTexts = POW.map((p) => readFileSync(join(ROOT, p), "utf8"));
+  ok(powTexts[1] === powTexts[0], `${POW[1]} is byte-identical to ${POW[0]}`);
+  for (const p of POW) {
+    const pkg = JSON.parse(readFileSync(join(ROOT, p.split("/")[0], "package.json"), "utf8"));
+    ok((pkg.files || []).includes("pow-solver.js"), `${pkg.name} ships pow-solver.js in its "files"`);
+  }
+}
 
 const { KNOWN_ASSETS, acceptUsd, knownAsset } = await import(join(ROOT, "client/known-assets.js"));
 const { RAILS } = await import(join(ROOT, "src/rails.js"));

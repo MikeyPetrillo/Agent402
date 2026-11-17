@@ -114,9 +114,9 @@ Run these in order. Do not skip steps.
 
 \`\`\`bash
 # free tier (proof-of-work tools only)
-claude mcp add agent402 -- npx -y agent402-mcp@0.13.32
+claude mcp add agent402 -- npx -y agent402-mcp@0.14.0
 # full catalog: add a wallet (EVM key with USDC) via env
-claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.32
+claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.14.0
 \`\`\`
 
 **Use a new wallet holding only a few dollars of USDC. Never your main wallet.**
@@ -124,7 +124,7 @@ claude mcp add agent402 -e AGENT_KEY=0x... -- npx -y agent402-mcp@0.13.32
 Generic MCP host config:
 
 \`\`\`json
-{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.13.32"],
+{ "mcpServers": { "agent402": { "command": "npx", "args": ["-y", "agent402-mcp@0.14.0"],
   "env": { "AGENT_KEY": "0x...", "AGENT402_MAX_PER_CALL": "0.05", "AGENT402_BUDGET": "1.00" } } } }
 \`\`\`
 
@@ -132,7 +132,7 @@ Generic MCP host config:
 
 \`AGENT402_MAX_PER_CALL\` refuses any single call above that price and
 \`AGENT402_BUDGET\` caps total spend for the session. The per-call cap is on
-by default ($4; \`off\` disables it) and the session budget is opt-in; both
+by default ($4; \`off\` disables it) and so is the session budget ($25); both
 are held on the payment that is signed, so set them to your own ceilings.
 
 **Option B - Node SDK (any agent written in JS/TS).**
