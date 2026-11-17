@@ -6149,7 +6149,8 @@ async function crawlScheduled(origin, outcome = { ours: false }) {
 // limit of ours (a spent day, a Retry-After, a landing allowance, the slow
 // cycle, a back-off, a shared turn that ended): the hold of its last good
 // listing (crawlHoldsLastGood) counts from then, so a seller is never dropped
-// from the router because we chose not to read it.
+// from the router because we chose not to read it. Only until a read of it
+// fails: the hold start is then fixed (holdOnOurs in crawlSeller).
 const turnNotReadAt = new Map();   // origin -> ms
 function noteTurnNotRead(origin, at = Date.now()) {
   turnNotReadAt.delete(origin);
@@ -6665,10 +6666,15 @@ async function crawlSellerOnce(originUrl, { deadlineAt = 0, forcePaywall = false
       // and keeps counting from there on the failed reads that follow (the
       // first one put the origin back on the cycle, with no wait of its own).
       // A scheduled turn we passed over since that read moves the start to
-      // that turn (turnNotReadAt).
-      const holdFromAt = Math.max(revisitIntervalMs > 0
-        ? Math.min(Date.now(), (Number(prev?.fetchedAt) || 0) + revisitIntervalMs)
-        : (Number(prev?.holdFromAt) || 0), Number(turnNotReadAt.get(originUrl)) || 0);
+      // that turn (turnNotReadAt), up to the first read that failed: from
+      // then on the start stays where that read put it, so turns an origin
+      // waits after a failed read never renew its hold, and an origin that
+      // stays dark drops once the hold runs out.
+      const holdFromAt = prev?.readIncomplete
+        ? (Number(prev?.holdFromAt) || 0)
+        : Math.max(revisitIntervalMs > 0
+          ? Math.min(Date.now(), (Number(prev?.fetchedAt) || 0) + revisitIntervalMs)
+          : (Number(prev?.holdFromAt) || 0), Number(turnNotReadAt.get(originUrl)) || 0);
       if (!crawlHoldsLastGood(prev, Date.now(), holdFromAt)) return false;
       cache.set(originUrl, { ...heldEntry(prev, e?.message || e), ...(holdFromAt > 0 ? { holdFromAt } : {}) });
       return true;

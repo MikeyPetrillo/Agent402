@@ -19,8 +19,8 @@ import { ownStoreEnv } from "./lib/own-stores.js";
 Object.assign(process.env, ownStoreEnv("crawl-own-limits"));
 process.env.X402_INDEX_CRAWL = "off";
 process.env.SELLER_PROBE_DAILY_BUDGET = "60";
-process.env.CRAWL_SLOW_ORIGINS = "https://slowpoke.example,https://slowcycle.example";
-process.env.X402_INDEX_SEEDS = "https://slowcycle.example";
+process.env.CRAWL_SLOW_ORIGINS = "https://slowpoke.example,https://slowcycle.example,https://slowfine.example";
+process.env.X402_INDEX_SEEDS = "https://slowcycle.example,https://slowfine.example";
 // A hold window shorter than the slow cycle, so a hold that counted from the
 // last read alone would have ended by the slow origin's next read.
 process.env.INDEX_CRAWL_HOLD_HOURS = "5";
@@ -157,7 +157,7 @@ const entry = (o) => idx._cacheForTests().get(o);
   // and each of those cycles is a turn we put off, so the hold of its last
   // good listing counts from the last of them.
   const SC = "https://slowcycle.example";
-  serve(SC);
+  serve(SC); serve("https://slowfine.example");
   idx.__setLastCycleOursShareForTest(0);
   const start = Date.parse("2026-11-27T00:00:00Z");
   clock = start;
@@ -173,6 +173,23 @@ const entry = (o) => idx._cacheForTests().get(o);
   const e = entry(SC);
   ok(readsOf(SC) > r0 && e && !e.error && e.readIncomplete && e.tools?.length === 1,
     "read when its cycle comes, a read of ours that does not complete keeps its listing, six hours after the last read");
+
+  // It stays dark. The turns it waits after a failed read are no longer turns
+  // we chose to skip a working seller on: the hold runs from where the first
+  // failed read put it, so the listing ends after the hold, not never.
+  const SF = "https://slowfine.example";
+  let droppedAt = 0, fineKept = true;
+  for (let m = 6 * 60 + 30; m <= 72 * 60; m += 30) {
+    clock = start + m * 60_000;
+    idx.__setLastCycleOursShareForTest(0);
+    await idx.__runCrawlCycleForTest();
+    if (!droppedAt && entry(SC)?.error) droppedAt = clock;
+    const f = entry(SF);
+    if (!f || f.error || f.readIncomplete || f.tools?.length !== 1) fineKept = false;
+  }
+  ok(droppedAt > 0 && droppedAt - start <= 6 * H + 2 * 6 * H,
+    `a slow origin that stays dark drops after the hold (${droppedAt ? ((droppedAt - start) / H).toFixed(1) + " h" : "never"} after its last good read)`);
+  ok(fineKept, "a working slow origin waiting the same turns keeps its listing for three days");
 }
 
 Date.now = realNow;
