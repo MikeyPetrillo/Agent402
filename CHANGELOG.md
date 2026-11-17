@@ -10,8 +10,10 @@ carries its own version on npm.
 Tools:
 - weather-probability gives the chance that a day's high, low, mean
   temperature, rain total or peak wind meets a threshold or falls in a range,
-  as the share of 82 ensemble forecast members (ECMWF IFS and NOAA GEFS), with
-  each model's count and the spread, for any place up to 15 days ahead.
+  as the share of up to 82 ensemble forecast members (ECMWF IFS and NOAA GEFS),
+  with each model's count and the spread, for any place up to 15 days ahead:
+  all 82 reach about 13 days ahead, and the last days answer from the 31 NOAA
+  GEFS members, with the model left out named in the answer.
   weather-market-brackets takes the brackets of a weather market and the price
   the caller holds for each and returns each bracket's forecast probability
   with that price beside it, and weather-market-board does the same for many

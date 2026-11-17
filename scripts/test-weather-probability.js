@@ -367,6 +367,20 @@ for (const slug of ["place-lookup", "weather-probability", "weather-market-brack
   }
   ok(!t.modelBacked, `${slug}: deterministic code, not model-backed`);
 }
+// The member count is a ceiling, not a constant: the two ensembles reach different horizons, so the
+// last days of the range answer from one of them (the answer names the model left out).
+{
+  const { readFileSync } = await import("node:fs");
+  const bare = /(?<!up to )(?<!all )\b82 (?:ensemble |forecast |ensemble forecast )?members|\(82 members/;
+  ok(bare.test("from 82 ensemble members") && bare.test("(82 members, A and B)") && !bare.test("from up to 82 ensemble members") && !bare.test("all 82 members reach"), "control: the scan finds a bare member count and passes a ceiling");
+  const surfaces = { "src/changelog.js": readFileSync(new URL("../src/changelog.js", import.meta.url), "utf8"), "CHANGELOG.md": readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8").replace(/\s+/g, " "), "wiki/Tool-Catalog.md": readFileSync(new URL("../wiki/Tool-Catalog.md", import.meta.url), "utf8") };
+  for (const slug of ["weather-probability", "weather-market-brackets", "weather-market-board"]) surfaces[`${slug} listing`] = `${tool(slug).description} ${JSON.stringify(tool(slug).discovery.inputSchema)}`;
+  const stated = Object.entries(surfaces).filter(([, text]) => bare.test(text)).map(([name]) => name);
+  ok(stated.length === 0, `no surface states the member count as a constant (${stated.join(", ") || "none"})`);
+  ok(Object.values(surfaces).every((t) => /up to 82/.test(t)), "each surface says up to 82 members");
+  const horizon = /about 13 days/;
+  ok(horizon.test(tool("weather-probability").description) && horizon.test(surfaces["src/changelog.js"]) && horizon.test(surfaces["CHANGELOG.md"]) && ["weather-probability", "weather-market-brackets", "weather-market-board"].every((s) => horizon.test(tool(s).discovery.inputSchema.properties.date.description)), "where the 15-day range is stated, so is the shorter reach of the full set");
+}
 ok(/reads no market feed/.test(tool("weather-market-brackets").description) && /reads no market feed/.test(tool("weather-market-board").description), "the market tools' listings say the caller supplies brackets and prices and no market feed is read");
 
 globalThis.fetch = realFetch;
