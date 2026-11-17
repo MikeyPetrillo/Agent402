@@ -27,14 +27,32 @@
 // Every tool carries the credit CoinGecko's terms require, in its description
 // and as the `credit` field of every answer (src/data-attribution.js).
 
-import { cgGet, TTL } from "./crypto-markets-kit.js";
+import { cgGet } from "./crypto-markets-kit.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 import { partialFields } from "../partial-answer.js";
 
 const SOURCE = "coingecko";
 /** The longest any document these tools read is kept (the chain list). */
-export const SCREENS_MAX_TTL_MS = Math.max(TTL.price, TTL.list, TTL.coinList);
+// How long each tool's upstream documents are kept (the shared response cache
+// in crypto-markets-kit.js: keyed on the upstream URL built from the
+// normalized input, bounded, shared across replicas). A window follows how
+// fast the data behind it moves, and none is under a minute: a caller polling
+// every minute spends at most 86400 / window reads of the daily budget on one
+// document. Funding rates settle over hours; the stablecoin page, the DeFi and
+// chain pages and a network's pool pages move over minutes; venue tickers and
+// a pool's trades move fastest.
+export const SCREEN_TTL = Object.freeze({
+  funding: 600_000,        // funding-screener: the derivatives list
+  depeg: 300_000,          // stablecoin-depeg-watch: the stablecoin page with its 7-day series
+  spread: 120_000,         // exchange-spread: one coin's venue tickers
+  defi: 300_000,           // defi-screener: the DeFi category page
+  chainMarkets: 300_000,   // chain-board: the market page and the global totals
+  chainPlatforms: 600_000, // chain-board: the chain list
+  dexBoard: 300_000,       // dex-volume-board: a network's pool pages
+  pool: 60_000,            // dex-pool-health: one pool and its latest trades
+});
+export const SCREENS_MAX_TTL_MS = Math.max(...Object.values(SCREEN_TTL));
 
 function bad(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -125,18 +143,61 @@ const allCached = (reads) => reads.every((r) => r.cached);
 // funding_rate and basis arrive in percent; open interest and volume in USD.
 const FUNDING_MIN_OI_USD = 100_000;
 const FUNDING_INTERVALS_PER_YEAR = 3 * 365;
+function perpFields(t) {
+  if (!t || typeof t !== "object" || t.contract_type !== "perpetual" || t.expired_at != null) return null;
+  const f = num(t.funding_rate), oi = num(t.open_interest);
+  if (f == null || oi == null || oi < FUNDING_MIN_OI_USD) return null;
+  if (typeof t.index_id !== "string" || !t.index_id || typeof t.market !== "string") return null;
+  return [t.market, String(t.symbol ?? ""), t.index_id.toUpperCase(), f, oi, num(t.basis), num(t.volume_24h)];
+}
+
+// The derivatives list is one JSON array of several megabytes. Parsed whole it
+// holds the event loop for the length of the parse, so it is read in slices:
+// the text is scanned for the array's top-level objects, each is parsed on its
+// own, and the loop is yielded once a slice's worth of text has been read. A
+// body that is not one complete JSON array is refused, and one over the cap is
+// not scanned at all.
+export const LIST_SLICE_CHARS = 131_072;
+export const LIST_MAX_CHARS = 48 * 1024 * 1024;
+const isSpace = (c) => c === 32 || c === 10 || c === 13 || c === 9;
+export async function eachListObject(text, onObject, sliceChars = LIST_SLICE_CHARS) {
+  const n = text.length;
+  if (n > LIST_MAX_CHARS) throw new Error("list too large");
+  let i = 0;
+  while (i < n && isSpace(text.charCodeAt(i))) i++;
+  if (text.charCodeAt(i) !== 91) throw new Error("not a list");
+  let depth = 1, inString = false, start = -1, closed = false, sliceEnd = i + sliceChars;
+  for (i += 1; i < n; i++) {
+    const c = text.charCodeAt(i);
+    if (inString) { if (c === 92) i++; else if (c === 34) inString = false; continue; }
+    if (c === 34) inString = true;
+    else if (c === 123 || c === 91) { if (depth === 1 && c === 123) start = i; depth++; }
+    else if (c === 125 || c === 93) {
+      depth--;
+      if (depth === 0) { closed = c === 93; i++; break; }
+      if (depth === 1 && start >= 0) {
+        onObject(JSON.parse(text.slice(start, i + 1)));
+        start = -1;
+        if (i >= sliceEnd) { await new Promise((r) => setImmediate(r)); sliceEnd = i + sliceChars; }
+      }
+    }
+  }
+  while (i < n && isSpace(text.charCodeAt(i))) i++;
+  if (!closed || inString || i !== n) throw new Error("not a complete list");
+}
+
 const reducePerps = {
   name: "perps",
   fn(doc) {
     if (!Array.isArray(doc)) throw new Error("not a list");
     const rows = [];
-    for (const t of doc) {
-      if (!t || t.contract_type !== "perpetual" || t.expired_at != null) continue;
-      const f = num(t.funding_rate), oi = num(t.open_interest);
-      if (f == null || oi == null || oi < FUNDING_MIN_OI_USD) continue;
-      if (typeof t.index_id !== "string" || !t.index_id || typeof t.market !== "string") continue;
-      rows.push([t.market, String(t.symbol ?? ""), t.index_id.toUpperCase(), f, oi, num(t.basis), num(t.volume_24h)]);
-    }
+    for (const t of doc) { const r = perpFields(t); if (r) rows.push(r); }
+    return rows;
+  },
+  // The same reduction from the body text, in slices (cgLoad calls this one).
+  async fromText(text) {
+    const rows = [];
+    await eachListObject(text, (t) => { const r = perpFields(t); if (r) rows.push(r); });
     return rows;
   },
 };
@@ -164,7 +225,7 @@ const fundingScreener = {
   category: "crypto",
   price: "$0.005",
   description:
-    "Perpetual funding for one coin across every listed derivatives venue, computed in one call: open-interest-weighted and median funding, the dispersion between the highest and lowest venue, annualized carry, the share of venues paying positive funding, basis, and how concentrated open interest is, with the highest and lowest venues ranked against the median. Omit `coin` for a board of coins ranked by open interest, dispersion or funding. Venues under the open-interest floor are left out. Flags name measured conditions (wide dispersion, a sign split, concentrated open interest). Deterministic code over market data; cached 60 seconds.",
+    "Perpetual funding for one coin across every listed derivatives venue, computed in one call: open-interest-weighted and median funding, the dispersion between the highest and lowest venue, annualized carry, the share of venues paying positive funding, basis, and how concentrated open interest is, with the highest and lowest venues ranked against the median. Omit `coin` for a board of coins ranked by open interest, dispersion or funding. Venues under the open-interest floor are left out. Flags name measured conditions (wide dispersion, a sign split, concentrated open interest). Deterministic code over market data; cached 10 minutes.",
   tags: ["crypto", "derivatives", "perpetuals", "funding", "funding-rate", "basis", "carry", "screener", "cross-exchange"],
   discovery: {
     input: { coin: "ETH" },
@@ -197,7 +258,7 @@ const fundingScreener = {
       coin = i.coin.trim().toUpperCase();
     }
     const sort = takeChoice(i.sort, "sort", ["open_interest", "dispersion", "funding"], "open_interest");
-    const read = await cgGet("/derivatives", {}, TTL.price, reducePerps);
+    const read = await cgGet("/derivatives", {}, SCREEN_TTL.funding, reducePerps);
     const all = read.data.map(perpRow).filter((r) => r.oi >= minOi);
     const head = { source: SOURCE, fetchedAt: read.fetchedAt, cached: read.cached };
     const annual = (pct) => round(pct * FUNDING_INTERVALS_PER_YEAR, 4);
@@ -296,7 +357,7 @@ const depegWatch = {
   category: "crypto",
   price: "$0.005",
   description:
-    "Every USD stablecoin above a market-cap floor in one call, flagged ones first: deviation from $1 now in basis points, the worst deviation over 24 hours and over 7 days, an on-peg / stressed / depegged status (within 50 bps, within 200 bps, beyond), each coin's share of the watched market cap, and how much of that cap sits on peg. A coin counts as USD-pegged when its 7-day median price is within 2% of $1; the rest of the category (other currencies, value-accruing tokens, pegs lost more than a week ago) is listed separately with its distance from $1, never dropped silently. The whole-market sibling of stablecoin-peg, which checks a named list. Deterministic code over market data; cached 60 seconds.",
+    "Every USD stablecoin above a market-cap floor in one call, flagged ones first: deviation from $1 now in basis points, the worst deviation over 24 hours and over 7 days, an on-peg / stressed / depegged status (within 50 bps, within 200 bps, beyond), each coin's share of the watched market cap, and how much of that cap sits on peg. A coin counts as USD-pegged when its 7-day median price is within 2% of $1; the rest of the category (other currencies, value-accruing tokens, pegs lost more than a week ago) is listed separately with its distance from $1, never dropped silently. The whole-market sibling of stablecoin-peg, which checks a named list. Deterministic code over market data; cached 5 minutes.",
   tags: ["crypto", "stablecoin", "depeg", "peg", "risk", "monitoring", "usdt", "usdc", "screener"],
   discovery: {
     input: { minMarketCapUsd: 100000000 },
@@ -326,7 +387,7 @@ const depegWatch = {
     const floor = takeNumber(i.minMarketCapUsd, "minMarketCapUsd", { min: 1_000_000, max: 1e13, dflt: 100_000_000 });
     const threshold = takeNumber(i.thresholdBps, "thresholdBps", { min: 1, max: 5000, dflt: 50 });
     const limit = takeInt(i.limit, "limit", { min: 1, max: 100, dflt: 25 });
-    const read = await cgGet("/coins/markets", { vs_currency: "usd", category: "stablecoins", order: "market_cap_desc", per_page: DEPEG_PAGE, page: 1, sparkline: "true" }, TTL.price, reduceStables);
+    const read = await cgGet("/coins/markets", { vs_currency: "usd", category: "stablecoins", order: "market_cap_desc", per_page: DEPEG_PAGE, page: 1, sparkline: "true" }, SCREEN_TTL.depeg, reduceStables);
     const page = read.data.map(stableRow);
     const inScope = page.filter((c) => c.cap >= floor);
     // The page holds the 250 largest; a floor under the smallest row on a full
@@ -389,7 +450,7 @@ const exchangeSpread = {
   category: "crypto",
   price: "$0.005",
   description:
-    "One coin's price across every major venue, measured against the cross-venue median: each venue's deviation in basis points, the high-to-low and interquartile spread, volume-weighted versus median price, each venue's quoted bid-ask spread and share of volume, and flags for stale, anomalous, wide-quote and outlier tickers. Takes the venue's largest market per coin from the 100 largest tickers by volume; pass `quote` to compare one quote currency only (USDT, USD, USDC). Measured facts only, no trade direction. Deterministic code over market data; cached 60 seconds.",
+    "One coin's price across every major venue, measured against the cross-venue median: each venue's deviation in basis points, the high-to-low and interquartile spread, volume-weighted versus median price, each venue's quoted bid-ask spread and share of volume, and flags for stale, anomalous, wide-quote and outlier tickers. Takes the venue's largest market per coin from the 100 largest tickers by volume; pass `quote` to compare one quote currency only (USDT, USD, USDC). Measured facts only, no trade direction. Deterministic code over market data; cached 2 minutes.",
   tags: ["crypto", "exchange", "spread", "price-dispersion", "cross-exchange", "venue", "bid-ask", "liquidity"],
   discovery: {
     input: { coin: "ethereum" },
@@ -423,7 +484,7 @@ const exchangeSpread = {
       quote = i.quote.trim().toUpperCase();
     }
     const limit = takeInt(i.limit, "limit", { min: 1, max: 50, dflt: 20 });
-    const read = await cgGet(`/coins/${encodeURIComponent(coin)}/tickers`, { order: "volume_desc", page: 1 }, TTL.price);
+    const read = await cgGet(`/coins/${encodeURIComponent(coin)}/tickers`, { order: "volume_desc", page: 1 }, SCREEN_TTL.spread);
     const doc = read.data;
     if (!doc || !Array.isArray(doc.tickers)) throw bad("Market data upstream returned an unexpected shape", 502);
     let stale = 0, anomalous = 0;
@@ -526,7 +587,7 @@ const defiScreener = {
     const minCap = takeNumber(i.minMarketCapUsd, "minMarketCapUsd", { min: 0, max: 1e13, dflt: 0 });
     const minTurnover = takeNumber(i.minTurnoverPct, "minTurnoverPct", { min: 0, max: 100000, dflt: 0 });
     const limit = takeInt(i.limit, "limit", { min: 1, max: 100, dflt: 25 });
-    const read = await cgGet("/coins/markets", { vs_currency: "usd", category: DEFI_CATEGORY, order: "market_cap_desc", per_page: DEFI_PAGE, page: 1, price_change_percentage: "7d" }, TTL.list, reduceCategoryPage);
+    const read = await cgGet("/coins/markets", { vs_currency: "usd", category: DEFI_CATEGORY, order: "market_cap_desc", per_page: DEFI_PAGE, page: 1, price_change_percentage: "7d" }, SCREEN_TTL.defi, reduceCategoryPage);
     const all = read.data.map(screenRow).sort((a, b) => b.cap - a.cap);
     if (all.length === 0) throw bad("Market data upstream returned no tokens for the category", 502);
     const capTotal = sum(all.map((c) => c.cap));
@@ -617,9 +678,9 @@ const chainBoard = {
     const sort = takeChoice(i.sort, "sort", CHAIN_SORTS, "market_cap");
     const limit = takeInt(i.limit, "limit", { min: 1, max: 100, dflt: 20 });
     const reads = await Promise.all([
-      cgGet("/asset_platforms", {}, TTL.coinList, reducePlatforms),
-      cgGet("/coins/markets", { vs_currency: "usd", order: "market_cap_desc", per_page: 250, page: 1 }, TTL.list, reduceCategoryPage),
-      cgGet("/global", {}, TTL.list),
+      cgGet("/asset_platforms", {}, SCREEN_TTL.chainPlatforms, reducePlatforms),
+      cgGet("/coins/markets", { vs_currency: "usd", order: "market_cap_desc", per_page: 250, page: 1 }, SCREEN_TTL.chainMarkets, reduceCategoryPage),
+      cgGet("/global", {}, SCREEN_TTL.chainMarkets),
     ]);
     const [platforms, markets, global] = reads;
     const g = global.data?.data;
@@ -687,7 +748,7 @@ const reducePoolPage = {
 // the same id sent again makes no upstream read. Only the upstream's own
 // "unknown id" answer is remembered, never a failed read; the oldest id leaves
 // first once the set is full.
-export const UNKNOWN_NETWORK_TTL_MS = TTL.list;
+export const UNKNOWN_NETWORK_TTL_MS = SCREEN_TTL.dexBoard;
 export const UNKNOWN_NETWORK_MAX = 500;
 const unknownNetworks = new Map(); // network id -> remembered until (ms)
 export function resetUnknownNetworks() { unknownNetworks.clear(); }
@@ -729,7 +790,7 @@ const dexVolumeBoard = {
     if (want % POOLS_PER_PAGE !== 0) throw bad('"pools" must be 20, 40, 60, 80 or 100');
     const limit = takeInt(i.limit, "limit", { min: 1, max: 50, dflt: 15 });
     if ((unknownNetworks.get(network) ?? 0) > Date.now()) throw unknownNetwork(network);
-    const readPage = (page) => cgGet(`/onchain/networks/${encodeURIComponent(network)}/pools`, { include: "dex", sort: "h24_volume_usd_desc", page }, TTL.list, reducePoolPage);
+    const readPage = (page) => cgGet(`/onchain/networks/${encodeURIComponent(network)}/pools`, { include: "dex", sort: "h24_volume_usd_desc", page }, SCREEN_TTL.dexBoard, reducePoolPage);
     // The first page is read alone: an unknown network, or one with no pools,
     // ends there, whatever `pools` asks for.
     let first;
@@ -818,7 +879,7 @@ const dexPoolHealth = {
     const raw = i.pool.trim();
     const pool = /^0x/i.test(raw) ? raw.toLowerCase() : raw; // base58 addresses are case-sensitive
     const base = `/onchain/networks/${encodeURIComponent(network)}/pools/${encodeURIComponent(pool)}`;
-    const reads = await Promise.all([cgGet(base, {}, TTL.price), cgGet(`${base}/trades`, {}, TTL.price)]);
+    const reads = await Promise.all([cgGet(base, {}, SCREEN_TTL.pool), cgGet(`${base}/trades`, {}, SCREEN_TTL.pool)]);
     const a = reads[0].data?.data?.attributes;
     if (!a || typeof a !== "object") throw bad("Market data upstream returned an unexpected shape", 502);
     const liq = num(a.reserve_in_usd), vol = num(a.volume_usd?.h24);

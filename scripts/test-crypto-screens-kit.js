@@ -17,7 +17,7 @@ import "./lib/offline-stores.js"; // per-process and file backends whatever the 
 //   - wording: no advice, rating or trade-direction words in any description,
 //     flag or published example.
 
-import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, UNKNOWN_NETWORK_MAX, resetUnknownNetworks, __test } from "../src/tools/crypto-screens-kit.js";
+import { CRYPTO_SCREENS_TOOLS, KEY_ONLY_SCREEN_SLUGS, SCREENS_MAX_TTL_MS, SCREEN_TTL, UNKNOWN_NETWORK_MAX, resetUnknownNetworks, __test } from "../src/tools/crypto-screens-kit.js";
 import { clearCryptoMarketsCache, resetCgRateLimit, TTL } from "../src/tools/crypto-markets-kit.js";
 import { COINGECKO_CREDIT, COINGECKO_API_URL, attributionTailOf } from "../src/data-attribution.js";
 import { METERED_SLUGS } from "../src/metered-slugs.js";
@@ -81,7 +81,17 @@ for (const t of CRYPTO_SCREENS_TOOLS) {
 ok(ADVICE.test("a strong buy") && ADVICE.test("an arbitrage opportunity") && !ADVICE.test("buy share of trades"), "control: the wording check catches advice and passes a measured buy share");
 ok(KEY_ONLY_SCREEN_SLUGS.length === 2 && KEY_ONLY_SCREEN_SLUGS.every((s) => METERED_SLUGS.has(s)), "the two key-only pool tools are in METERED_SLUGS (CI holds no key)");
 ok(SLUGS.filter((s) => !KEY_ONLY_SCREEN_SLUGS.includes(s)).every((s) => !METERED_SLUGS.has(s)), "the keyless tools are not in METERED_SLUGS");
-ok(SCREENS_MAX_TTL_MS === Math.max(TTL.price, TTL.list, TTL.coinList), "the longest cache window the kit reports is the longest it uses");
+ok(SCREENS_MAX_TTL_MS === Math.max(...Object.values(SCREEN_TTL)) && SCREENS_MAX_TTL_MS === 600_000, "the longest cache window the kit reports is the longest it uses");
+// Each tool's documents are kept for as long as the data behind them moves:
+// one caller polling every minute spends at most 86400 / window reads a day.
+ok(JSON.stringify(SCREEN_TTL) === JSON.stringify({ funding: 600_000, depeg: 300_000, spread: 120_000, defi: 300_000, chainMarkets: 300_000, chainPlatforms: 600_000, dexBoard: 300_000, pool: 60_000 }) && Object.values(SCREEN_TTL).every((ms) => ms >= 60_000), `the cache windows: funding 10 min, depeg, DeFi screen, chain and DEX boards 5 min, spread 2 min, pool health 60 s (${JSON.stringify(SCREEN_TTL)})`);
+{
+  const said = (slug) => /cached (\d+) (seconds|minutes)\./.exec(CRYPTO_SCREENS_TOOLS.find((t) => t.slug === slug).description);
+  const ms = (m) => (m ? Number(m[1]) * (m[2] === "minutes" ? 60_000 : 1000) : null);
+  const want = { "funding-screener": SCREEN_TTL.funding, "stablecoin-depeg-watch": SCREEN_TTL.depeg, "exchange-spread": SCREEN_TTL.spread, "defi-screener": SCREEN_TTL.defi, "chain-board": SCREEN_TTL.chainMarkets, "dex-volume-board": SCREEN_TTL.dexBoard, "dex-pool-health": SCREEN_TTL.pool };
+  const off = Object.entries(want).filter(([slug, w]) => ms(said(slug)) !== w).map(([slug]) => slug);
+  ok(off.length === 0, `each listing states its own cache window (${off.join(", ") || "all seven"})`);
+}
 
 // pure helpers
 ok(__test.median([3, 1, 2]) === 2 && __test.median([4, 1, 3, 2]) === 2.5 && __test.median([]) === null, "median: odd, even, empty");
@@ -141,6 +151,45 @@ reset();
   ok(byDisp.coins.length === 1 && byDisp.coins[0].coin === "ETH" && byDisp.truncated === true, "board sorts by dispersion and marks a capped list");
   ok(calls.length === 1, "still one upstream read");
 
+  // The derivatives document is kept ten minutes: a caller polling every minute reads it upstream six times an hour, not sixty.
+  {
+    const realNow = Date.now, t0 = realNow();
+    let polls = 0;
+    for (let minute = 1; minute <= 60; minute++) { Date.now = () => t0 + minute * 60_000; await h("funding-screener")({ coin: "ETH" }); polls++; }
+    Date.now = realNow;
+    ok(polls === 60 && calls.length === 1 + 6, `sixty one-minute polls spend six upstream reads (${calls.length - 1})`);
+    reset();
+    await h("funding-screener")({ coin: "ETH" }); await h("funding-screener")({ coin: "eth", minOpenInterestUsd: 100000 }); await h("funding-screener")({ sort: "funding" });
+    ok(calls.length === 1, "any coin, floor or sort is answered from the one kept document");
+  }
+  // The document is read in slices and never parsed whole: a body the size of the live one (about 12 MB)
+  // is reduced with the event loop free between slices.
+  {
+    const big = [];
+    for (let k = 0; big.length < 40_000; k++) big.push(perp(`Venue ${k % 90} "Pro" {x}`, `C${k}USDT`, `C${k % 400}`, (k % 7) / 100, 150_000 + k, 0.05, { price: "12345.678901", price_percentage_change_24h: 1.2345678, index: 12345.678, spread: 0.0001234, last_traded_at: 1763300000 + k, note: "a string with ] } [ { and a \\\" quote \\\\" }));
+    const text = JSON.stringify(big);
+    const whole = __test.reducePerps.fn(JSON.parse(text));
+    let worst = 0, last = performance.now();
+    const tick = setInterval(() => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; }, 1);
+    const started = performance.now();
+    const sliced = await __test.reducePerps.fromText(text);
+    const took = performance.now() - started;
+    clearInterval(tick);
+    ok(text.length > 11_000_000 && JSON.stringify(sliced) === JSON.stringify(whole) && sliced.length === 40_000, `a ${(text.length / 1e6).toFixed(1)} MB document read in slices reduces to the same rows as a whole parse (${sliced.length})`);
+    console.log(`# sliced reduce of ${(text.length / 1e6).toFixed(1)} MB: ${took.toFixed(0)} ms in all, longest event-loop turn ${worst.toFixed(1)} ms`);
+    ok(worst < 40, `no turn of the sliced read holds the event loop 40 ms (longest ${worst.toFixed(1)} ms)`);
+    const one = await __test.reducePerps.fromText(` \n[ ${JSON.stringify(DERIVATIVES[0])} , 7, "x", null, [1, {"a": 2}], ${JSON.stringify(DERIVATIVES[1])} ]\n`);
+    ok(one.length === 2 && one[0][0] === "Alpha Futures" && one[1][0] === "Beta Futures", "whitespace and non-object elements are passed over");
+    for (const [badText, why] of [['{"a":1}', "an object"], ["", "an empty body"], ['[{"market":"x"', "a truncated list"], ["<html>", "a page"], ['[{"market":"x"}] trailing', "text after the list"]]) {
+      let threw = false; try { await __test.reducePerps.fromText(badText); } catch { threw = true; }
+      ok(threw, `${why} is refused, never read as an empty list`);
+    }
+    reset();
+    routes = [[path("/derivatives"), () => jsonRes(200, "<html>busy</html>")]];
+    await throws(h("funding-screener")({ coin: "ETH" }), 502, "a derivatives body that is not a list");
+    routes = [[path("/derivatives"), () => jsonRes(200, DERIVATIVES)]];
+    reset();
+  }
   await throws(h("funding-screener")({ coin: "DOGE" }), 422, "a ticker no venue lists", /DOGE/);
   await throws(h("funding-screener")({ coin: "E T H" }), 400, "a malformed ticker");
   await throws(h("funding-screener")({ coin: "ETH", minOpenInterestUsd: 10 }), 400, "a floor under the minimum");

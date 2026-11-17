@@ -136,11 +136,14 @@ async function cgLoad(key, path, reduce = null) {
     if (s >= 500) throw bad(`Market data upstream HTTP ${s} - try again later`, 502);
     throw bad(`Market data upstream rejected the request (HTTP ${s}) - check the inputs`, 422);
   }
+  // A reducer with `fromText` reads the body itself (a large list, in slices
+  // that leave the event loop free between them); the body is then never
+  // parsed whole.
   let text, data;
-  try { text = await bodyUnderDeadline(res.text(), ctxOf.get(res) || {}); data = JSON.parse(text); }
+  try { text = await bodyUnderDeadline(res.text(), ctxOf.get(res) || {}); if (!reduce?.fromText) data = JSON.parse(text); }
   catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned non-JSON", 502); }
   if (reduce) {
-    try { data = reduce.fn(data); text = JSON.stringify(data); }
+    try { data = reduce.fromText ? await reduce.fromText(text) : reduce.fn(data); text = JSON.stringify(data); }
     catch (err) { if (err?.statusCode) throw err; throw bad("Market data upstream returned an unexpected shape", 502); }
   }
   return { text, data };
