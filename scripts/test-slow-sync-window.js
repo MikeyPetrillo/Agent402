@@ -239,7 +239,7 @@ try {
     else {
     await final(j.statusUrl);
     const g = await job(j.statusUrl);
-    ok(g.state === "failed" && g.error?.httpStatus >= 500 && /nothing was charged/.test(g.message || ""), `a failed run ends the job failed (state ${g.state}, error HTTP ${g.error?.httpStatus}, ${g.message || ""})`);
+    ok(g.state === "failed" && g.error?.httpStatus >= 500 && /Nothing was charged\./.test(g.message || ""), `a failed run ends the job failed (state ${g.state}, error HTTP ${g.error?.httpStatus}, ${g.message || ""})`);
     ok(fac.settle === c.s, `a failed run after the 202 settles nothing (settle +${fac.settle - c.s})`);
     }
   }
