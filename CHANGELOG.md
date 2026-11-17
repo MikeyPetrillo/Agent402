@@ -14,6 +14,17 @@ Tools:
   answer that includes a coin figure carries it too, and a skill pack that
   runs a CoinGecko tool prints it once, on the pack's answer.
 
+### 2026-11-16 (large seller indexes and sanctions list copies no longer hold the server)
+Operations:
+- The seller index reads a very large seller's networks and signing domains
+  across turns, in the same order as before, so a seller with tens of thousands
+  of listed routes no longer holds other requests while the router's index of
+  its routes is built.
+- The stored copies of the sanctions lists are serialized across turns and
+  written off the event loop, to the state database and to disk alike, one
+  write at a time in the order the lists were loaded, so a large list or a
+  busy disk no longer holds other requests.
+
 ### 2026-11-16 (camelCase seller names are read as words)
 Router:
 - /api/route also reads a camelCase seller name as words: an operationId such
