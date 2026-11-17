@@ -62,5 +62,15 @@ try {
 } finally {
   await srv.stop();
 }
+
+// Only this server's own origin is redirected: the same /samples/ path on
+// another host, or on plain http, goes to the network untouched.
+{
+  const { ownExampleUrl, EXAMPLE_ORIGIN } = await import("./lib/own-examples-preload.js");
+  ok(ownExampleUrl(`${EXAMPLE_ORIGIN}/samples/a2a-agent-card.json`, 4321) === "http://127.0.0.1:4321/samples/a2a-agent-card.json", "control: this origin's /samples/ file maps to the loopback");
+  for (const other of ["https://other.example/samples/a2a-agent-card.json", "http://agent402.tools/samples/a2a-agent-card.json", "https://agent402.tools.evil.example/samples/a2a-agent-card.json", "https://other.example/fixtures/sample-invoice.pdf"]) {
+    ok(ownExampleUrl(other, 4321) === null, `another origin's sample path is not redirected (${other})`);
+  }
+}
 console.log(`\n${fail ? "FAILED" : "OK"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

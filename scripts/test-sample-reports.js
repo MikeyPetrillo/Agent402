@@ -27,6 +27,40 @@ ok(files.length >= 4, `at least four sample fixtures exist (${files.length})`);
 // RUGCHECK_TOOLS=on) is not served; every other fixture loads.
 const onSale = files.filter((f) => Object.hasOwn(HUMAN_PRODUCTS, f.replace(/\.json$/, "")));
 ok(SAMPLE_PRODUCTS.length === onSale.length, `every fixture for a product on sale loads (${SAMPLE_PRODUCTS.length} of ${onSale.length})`);
+
+// ---- hostile record fields through the server-side draw (offline) ----
+// The sample page's report is drawn on the server by the viewer's own
+// renderer (src/report-prerender.js). Every record field it prints and the
+// markdown body must arrive as text: no tag, event attribute or script URL.
+{
+  const { reportDoneHtml } = await import("../src/report-prerender.js");
+  const tag = '"><script>alert(1)</script><img src=x onerror=alert(2)>';
+  const hostile = {
+    status: "done", sample: true, kind: "research", priceUsd: 5, at: "2026-11-17T00:00:00Z",
+    title: `Title ${tag}`,
+    input: `input ${tag}`,
+    disclaimer: `note ${tag}`,
+    report: [
+      `## Heading ${tag}`,
+      "",
+      `Body <script>alert(3)</script> and <img src=x onerror=alert(4)> [x](https://evil.example/"onmouseover=alert(5)) [y](javascript:alert(6)) [1]`,
+      "",
+      "- item <svg onload=alert(7)>",
+      "",
+      "| head <b onclick=alert(8)> | b |",
+      "|---|---|",
+      "| <img src=x onerror=alert(9)> | d |",
+    ].join("\n"),
+    sources: [{ url: "https://evil.example/", title: `src ${tag}` }],
+    tables: [{ label: `Rows: label ${tag}`, rows: [{ a: 1 }] }],
+  };
+  const html = reportDoneHtml(hostile, { origin: "https://agent402.tools" });
+  const bad = [/<script/i, /<img\b/i, /<svg\b/i, /<b onclick/i, /<[^>]*\son[a-z]+\s*=/i, /href\s*=\s*["']?\s*javascript:/i];
+  const hit = bad.filter((re) => re.test(html)).map(String);
+  ok(hit.length === 0, `a hostile record draws no tag, event attribute or script URL (${hit.join(", ") || "none"})`);
+  ok(html.includes("Title &quot;&gt;&lt;script&gt;") && html.includes("Body &lt;script&gt;alert(3)&lt;/script&gt;") && html.includes("&lt;img src=x onerror=alert(9)&gt;"), "control: the hostile title, body and table cell are drawn as escaped text");
+  ok(/<a href="https:\/\/evil\.example\/&quot;onmouseover=alert\(5"/.test(html), "control: a cited-host link is drawn with its quote escaped inside href");
+}
 for (const product of SAMPLE_PRODUCTS) {
   const s = SAMPLES[product];
   const raw = JSON.parse(readFileSync(`assets/samples/${product}.json`, "utf8"));
