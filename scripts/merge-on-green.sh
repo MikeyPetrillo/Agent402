@@ -328,7 +328,22 @@ for _ in $(seq 1 30); do
 done
 [[ "$MAIN" =~ ^[0-9]+$ ]] || { echo "no main run found for ${MERGE:0:8} yet; check gh run list"; exit 0; }
 echo "main run: $MAIN (waiting)"
-gh run watch "$MAIN" --exit-status --interval 30 >/dev/null 2>&1 && echo "main run green" || echo "main run NOT green (may be a Railway race - trust /health below)"
+if gh run watch "$MAIN" --exit-status --interval 30 >/dev/null 2>&1; then
+  echo "main run green"
+else
+  echo "main run NOT green (may be a Railway race - trust /health below)"
+  # The tree-gate fails closed, so a tree-gate that did not finish still runs
+  # every lane and the deploy. Name that case apart from a real failure.
+  NOTOK=$(gh api --paginate "repos/{owner}/{repo}/actions/runs/$MAIN/jobs?per_page=100" \
+          --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | .name' 2>/dev/null | sort -u | tr '\n' ' ' || true)
+  DEPLOYED=$(gh api --paginate "repos/{owner}/{repo}/actions/runs/$MAIN/jobs?per_page=100" \
+          --jq '.jobs[] | select(.name == "deploy") | .conclusion' 2>/dev/null || true)
+  if [ "$NOTOK" = "tree-gate " ] && [ "$DEPLOYED" = "success" ]; then
+    echo "  only tree-gate did not finish (cancelled or failed); every lane green and deploy succeeded"
+  elif [ -n "$NOTOK" ]; then
+    echo "  jobs not green: $NOTOK"
+  fi
+fi
 H=""
 for _ in $(seq 1 60); do
   H=$(curl -s --max-time 8 "${TARGET_URL:-https://agent402.tools}/health" || true)
