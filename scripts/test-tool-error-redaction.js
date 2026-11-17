@@ -98,6 +98,7 @@ const OP_TOKEN = ["op", "Canary", "Token", RUN].join("");
   process.env.PROBE_RPC_FALLBACK_URLS = `https://fb.example.test/${SFX("l")}`;
   process.env.PROBE_HOOK_URL_8453 = `https://hooks.example.test/services/${SFX("m")}?fmt=json`;
   process.env.PROBE_DATABASE_URL_REPLICA = `postgres://app:${SFX("n")}@db2.example.test:5432/app`;
+  process.env.PROBE_PGURL_REPLICA = `postgres://app:${SFX("o")}@db3.example.test:5432/app`;
   process.env.PROBE_RPC_METHODS = "eth_getBalance,eth_blockNumber,eth_getTransactionReceipt";
   process.env.PROBE_RPC_TIMEOUT_NOTE = "milliseconds";
   process.env.PROBE_RPC_DOCS = "see-the-wiki-page";
@@ -114,6 +115,7 @@ const OP_TOKEN = ["op", "Canary", "Token", RUN].join("");
   ok(!r(`post https://hooks.example.test/services/${SFX("m")}?fmt=json`).includes(SFX_TAG), "a *_URL_<suffix> name gives up its key-like path segment");
   ok(r("post https://hooks.example.test/services/ok?fmt=json").includes("hooks.example.test/services/ok?fmt=json"), "...and the rest of that URL stays readable");
   ok(!r(`connect postgres://app:${SFX("n")}@db2.example.test:5432/app`).includes("db2.example.test"), "a database URL name with a suffix is redacted whole");
+  ok(!r(`connect postgres://app:${SFX("o")}@db3.example.test:5432/app`).includes("db3.example.test"), "...and one that joins the word to its prefix (PGURL_<suffix>)");
   for (const plain of ["method eth_getBalance is not allowed", "eth_getTransactionReceipt returned null", "timeout in milliseconds", "see-the-wiki-page", "GET https://warp.example.test/open/path", `GET https://curl.example.test/${OPEN_SEG}`, `dial https://grpc.example.test/${OPEN_SEG}x`]) ok(r(plain) === plain, `a setting that shares the word RPC or URL flags no ordinary text ("${plain}")`);
   // The name rule runs over every variable name on each call: a long hostile
   // name costs time in its length, not its square.

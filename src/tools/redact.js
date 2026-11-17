@@ -73,7 +73,8 @@ function endpointName(name) {
   const rpcWord = !rpcEnd && RPC_WORD_RE.test(name);
   const urlEnd = URL_NAME_RE.test(name);
   const urlWord = !urlEnd && URL_WORD_RE.test(name);
-  if (!rpcEnd && !rpcWord && !urlEnd && !urlWord) return null;
+  // A database name can join the word to its prefix (PGURL_REPLICA).
+  if (!rpcEnd && !rpcWord && !urlEnd && !urlWord && !DB_URL_NAME_RE.test(name)) return null;
   return { rpc: rpcEnd || rpcWord, suffixed: !rpcEnd && (rpcWord || !urlEnd) };
 }
 const PATH_SEGMENT_RE = /^[A-Za-z0-9_-]{16,}$/;
