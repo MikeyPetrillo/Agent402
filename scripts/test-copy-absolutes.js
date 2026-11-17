@@ -686,6 +686,8 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
     "A call that timed out or came back empty is not retried, since it may already have been generated; it fails uncharged.",
     "none: one model at one price, and an upstream failure is an uncharged error",
     "the route answers 503 before any upstream call (a >=400 cancels settlement, so no buyer is charged)",
+    // A rail named a paragraph away does not scope the claim (SCOPE_NEAR).
+    `The npm server pays over x402 from a key you give it. ${"A caller that sends a progressToken gets progress notifications from the job's stage, steps and ETA. ".repeat(3)}Payment settles only on the delivered answer.`,
     "it fails uncharged. `/api/gateway-status` reports `speechUpstream` as `ok`, `cooling` or `probing`.",
     "cancels your settlement, and a Tempo transfer sent before the call is recorded as owed. You pay only for delivered results.",
     "the Smart Order Router resolves the best-matching external seller. Sellers qualify only with proven on-chain settled volume.",
