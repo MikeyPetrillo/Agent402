@@ -1724,7 +1724,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             const rep = gone.replacement ? tools.get(gone.replacement) : null;
             try { capturePostHogToolGone({ route: gone.route, replacement: rep ? rep.def.route : "GET /api/find", source: toolGoneSourceOf({ headers: reqHeaders, surface: "mcp" }) }); } catch { /* telemetry never breaks a response */ }
             const what = gone.kind === "pack" ? "Skill pack" : "Tool";
-            return { content: [{ type: "text", text: `${what} ${gone.slug} was retired on ${gone.retiredAt}. ${rep ? `Use slug ${rep.def.slug} instead (${rep.def.route}).` : "There is no direct replacement; use catalog.search to find the closest live tool."}` }], isError: true };
+            return { content: [{ type: "text", text: `${what} ${gone.slug} was retired on ${gone.retiredAt}. ${rep ? `Use slug ${rep.def.slug} instead (${rep.def.route}).` : "There is no direct replacement; use catalog.search to find the closest live tool."}${!rep && gone.note ? ` ${gone.note}` : ""}` }], isError: true };
           }
           return { content: [{ type: "text", text: `Unknown slug ${quotedEcho(resolvedSlug)}. Use catalog.search to find the right slug.` }], isError: true };
         }

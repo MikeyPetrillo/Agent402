@@ -265,7 +265,7 @@ export function findTools(catalog, query, { k = 5, baseUrl = "", powSlugs } = {}
   // above, leaving bare "layer" - which reached nothing ("layer 2 updates"
   // resolved to sql-guard at 4). Matched as a PHRASE, never as the word alone:
   // tagging "layer" on the L2 tools was tried first and sent "osi model layer"
-  // and "layer of encryption" to l2-tvl at high confidence. "layer" is ordinary
+  // and "layer of encryption" to an L2 tool at high confidence. "layer" is ordinary
   // English; "layer 2" is not.
   if (!terms.includes("l2") && /\blayer[\s-]*2\b/.test(q.toLowerCase())) terms.push("l2");
   // Front-door bias (search / answer / news): common agent jobs should land on

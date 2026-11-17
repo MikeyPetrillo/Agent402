@@ -2496,6 +2496,253 @@
           "steps": 1
         }
       }
+    },
+    {
+      "slug": "sun-times",
+      "name": "equinox at Greenwich: a twelve-hour day",
+      "input": {
+        "lat": 51.4779,
+        "lon": 0,
+        "date": "2026-03-20"
+      },
+      "expect": {
+        "matches": {
+          "sunrise": "^2026-03-20T06:0",
+          "sunset": "^2026-03-20T18:1",
+          "solarNoon": "^2026-03-20T12:0"
+        },
+        "gte": {
+          "dayLengthMinutes": 725
+        },
+        "lte": {
+          "dayLengthMinutes": 735
+        }
+      }
+    },
+    {
+      "slug": "sun-times",
+      "name": "midsummer above the Arctic Circle says polar day",
+      "input": {
+        "lat": 78.22,
+        "lon": 15.65,
+        "date": "2026-06-21"
+      },
+      "expect": {
+        "equals": {
+          "sunrise": null,
+          "sunset": null,
+          "dayLengthMinutes": 1440
+        },
+        "matches": {
+          "note": "polar day"
+        }
+      }
+    },
+    {
+      "slug": "sun-times",
+      "name": "midwinter there says polar night",
+      "input": {
+        "lat": 78.22,
+        "lon": 15.65,
+        "date": "2026-12-21"
+      },
+      "expect": {
+        "equals": {
+          "dayLengthMinutes": 0
+        },
+        "matches": {
+          "note": "polar night"
+        }
+      }
+    },
+    {
+      "slug": "sun-times",
+      "name": "a missing longitude is a 400",
+      "input": {
+        "lat": 10
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "lon"
+        }
+      }
+    },
+    {
+      "slug": "heat-index-calc",
+      "name": "the NWS chart cell for 96 F at 65 percent",
+      "input": {
+        "temperature": 96,
+        "humidity": 65,
+        "units": "fahrenheit"
+      },
+      "expect": {
+        "equals": {
+          "heatIndex": 121,
+          "heatIndexBand": "Danger",
+          "unit": "\u00b0F"
+        }
+      }
+    },
+    {
+      "slug": "heat-index-calc",
+      "name": "wind chill at 20 F and 20 mph; no heat index in the cold",
+      "input": {
+        "temperature": 20,
+        "humidity": 40,
+        "windSpeed": 20,
+        "units": "fahrenheit"
+      },
+      "expect": {
+        "equals": {
+          "windChill": 4.2,
+          "heatIndex": null
+        },
+        "populated": [
+          "heatIndexNote"
+        ]
+      }
+    },
+    {
+      "slug": "heat-index-calc",
+      "name": "humidity over 100 is a 400",
+      "input": {
+        "temperature": 30,
+        "humidity": 140
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "humidity"
+        }
+      }
+    },
+    {
+      "slug": "aqi-calc",
+      "name": "breakpoint edges: 9.0 is 50, 9.1 is 51",
+      "input": {
+        "pm25": 9.1,
+        "co": 4.4
+      },
+      "expect": {
+        "equals": {
+          "aqi": 51,
+          "dominantPollutant": "pm25",
+          "pollutants[1].aqi": 50,
+          "category": "Moderate"
+        }
+      }
+    },
+    {
+      "slug": "aqi-calc",
+      "name": "above the table holds at the top and says so",
+      "input": {
+        "no2": 5000
+      },
+      "expect": {
+        "equals": {
+          "aqi": 500,
+          "pollutants[0].beyondScale": true,
+          "category": "Hazardous"
+        }
+      }
+    },
+    {
+      "slug": "aqi-calc",
+      "name": "no concentration is a 400",
+      "input": {},
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "pm25"
+        }
+      }
+    },
+    {
+      "slug": "degree-days-calc",
+      "name": "fahrenheit means with a growing cap",
+      "input": {
+        "days": [
+          40,
+          65,
+          90
+        ],
+        "units": "fahrenheit",
+        "growingCap": 86
+      },
+      "expect": {
+        "equals": {
+          "totals.heatingDegreeDays": 25,
+          "totals.coolingDegreeDays": 25,
+          "totals.growingDegreeDays": 51,
+          "count": 3,
+          "unit": "\u00b0F"
+        }
+      }
+    },
+    {
+      "slug": "degree-days-calc",
+      "name": "a pair with max under min is a 400",
+      "input": {
+        "days": [
+          {
+            "min": 20,
+            "max": 10
+          }
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "days\\[0\\]"
+        }
+      }
+    },
+    {
+      "slug": "wmo-weather-code",
+      "name": "freezing rain carries both flags",
+      "input": {
+        "code": 67
+      },
+      "expect": {
+        "equals": {
+          "found": true,
+          "condition": "Heavy freezing rain",
+          "category": "rain",
+          "freezing": true,
+          "precipitation": true
+        }
+      }
+    },
+    {
+      "slug": "wmo-weather-code",
+      "name": "a code outside the table says so",
+      "input": {
+        "code": 42
+      },
+      "expect": {
+        "equals": {
+          "found": false,
+          "code": 42
+        },
+        "populated": [
+          "note",
+          "knownCodes"
+        ]
+      }
+    },
+    {
+      "slug": "wmo-weather-code",
+      "name": "no code returns the whole table",
+      "input": {},
+      "expect": {
+        "equals": {
+          "count": 28
+        },
+        "count": {
+          "codes": 28
+        }
+      }
     }
   ]
 }

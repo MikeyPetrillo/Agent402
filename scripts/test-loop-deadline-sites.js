@@ -12,7 +12,6 @@
 //   - the Redis persistence read (src/redis-persistence.js),
 //   - an idempotency store read (src/idempotency-store.js),
 //   - the first-call allowance's day read (src/first-call-allowance.js),
-//   - the Nominatim shared slot (src/tools/nominatim-pace.js),
 //   - a database status ping (src/db-status.js),
 //   - the tool response cache read (src/cache.js),
 //   - the shared market-data copy (src/tools/databento.js),
@@ -69,7 +68,6 @@ const { createRedisJournal, __setJournalRedisForTest } = await import("../src/le
 const { createPersistenceMonitor } = await import("../src/redis-persistence.js");
 const { createIdempotencyStore, createLocalIdempotencyStore } = await import("../src/idempotency-store.js");
 const { firstCallAllowanceStatus, firstCallAllowanceConfig } = await import("../src/first-call-allowance.js");
-const { nominatimSlot, nominatimPaceCounts, _resetNominatimPace } = await import("../src/tools/nominatim-pace.js");
 const { databasesStatus, resetDatabasesStatusCache } = await import("../src/db-status.js");
 
 let pass = 0, fail = 0;
@@ -177,14 +175,6 @@ if (firstCallAllowanceConfig().enabled) {
   __setTestClient(null);
 } else {
   ok(false, "first-call allowance: FIRST_CALL_ALLOWANCE=on did not enable it, so its read is not exercised");
-}
-// 7. Nominatim: the shared slot.
-{
-  _resetNominatimPace();
-  __setTestClient({ set: () => answerSoon("OK"), pTTL: () => answerSoon(0) });
-  const got = await held(() => nominatimSlot());
-  ok(got === true && nominatimPaceCounts().shared === 1, `nominatim: a slot granted during a hold is the shared slot (${JSON.stringify(nominatimPaceCounts())})`);
-  __setTestClient(null);
 }
 // 8. Database status: a ping answered during a stall reads ok.
 {

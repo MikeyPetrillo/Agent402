@@ -1,7 +1,7 @@
 // Tool response cache — Redis-backed, per-route, optional.
 //
 // Wraps the central handler dispatch in src/server.js so that for a known set
-// of "expensive upstream" tools (whois, dns, ip-info, geocode, fx, etc.) we
+// of "expensive upstream" tools (whois, dns, ip-info, place lookup, fx, etc.) we
 // can return a cached JSON body without hitting the third-party API again.
 //
 // Design notes:
@@ -82,6 +82,13 @@ export function cacheEnabled() {
 //               checks each against the tool's inputSchema). They document
 //               the policy and /api/cacheable lists them; the key itself is
 //               built from every field the call carries (cacheKeyFor).
+//   clockSlotSeconds: optional. For a route whose answer is anchored on the
+//               clock (a default date of tomorrow, a series that starts today
+//               or this hour at the place), the key also carries the current
+//               slot of this many seconds, so an entry written before a day
+//               or hour change never answers a call made after it. 900 puts
+//               every local midnight and hour change on a slot boundary
+//               (every UTC offset in use is a multiple of 15 minutes).
 //   fallbackTtl / fallbackSource: optional. An answer whose `source` starts
 //               with fallbackSource came from a backup provider and is kept
 //               for fallbackTtl seconds instead of ttl (cacheTtlFor).
@@ -100,11 +107,21 @@ export const CACHEABLE_ROUTES = {
   // http-check) or a route the server defines itself never belongs here.
   "/api/ens-resolve":    { ttl:  3600, keyFields: ["name"] },
 
-  // Geo — almost never changes.
-  // An answer from the backup geocoder (source photon...) is kept briefly.
-  "/api/geocode":         { ttl: 86400, keyFields: ["q", "limit", "countryCodes"], fallbackSource: "photon", fallbackTtl: 600 },
-  "/api/reverse-geocode": { ttl: 86400, keyFields: ["lat", "lon", "zoom"], fallbackSource: "photon", fallbackTtl: 600 },
-  "/api/place-search":    { ttl:  3600, keyFields: ["q", "limit", "countryCodes", "viewbox", "bounded"], fallbackSource: "photon", fallbackTtl: 600 },
+  // Places: almost never change.
+  "/api/place-lookup":    { ttl: 86400, keyFields: ["q", "count", "country", "language"] },
+
+  // Global weather (src/tools/weather-kit.js): a forecast is kept for ten
+  // minutes, the probability and planning answers for the same (the models
+  // run a few times a day). The key carries every input field, so lat/lon,
+  // place, units and limits each get their own entry.
+  "/api/weather-current":     { ttl: 600, keyFields: ["lat", "lon", "place", "units"] },
+  // Daily and hourly series start today or this hour at the place, and the
+  // probability's date defaults to tomorrow (UTC), so those keys carry the
+  // clock slot.
+  "/api/weather-daily":       { ttl: 600, clockSlotSeconds: 900, keyFields: ["lat", "lon", "place", "days", "units"] },
+  "/api/weather-hourly":      { ttl: 600, clockSlotSeconds: 900, keyFields: ["lat", "lon", "place", "hours", "units"] },
+  "/api/weather-air-quality": { ttl: 600, keyFields: ["lat", "lon", "place"] },
+  "/api/weather-probability": { ttl: 600, clockSlotSeconds: 900, keyFields: ["lat", "lon", "place", "date", "variable", "units", "op", "value", "min", "max", "rounding"] },
 
   // Time-sensitive but coarsely cacheable.
   "/api/fx-rate":          { ttl:   300, keyFields: ["from", "to", "amount"] },
@@ -159,8 +176,9 @@ export const CACHEABLE_ROUTES = {
 // two calls that differ in any field never share an entry. Values are kept as
 // sent (no case folding: base58 addresses and signatures are case-sensitive),
 // and the whole field list is hashed so long URL inputs neither collide on a
-// shared prefix nor exceed Redis key limits.
-export function cacheKeyFor(path, input, keyFields) {
+// shared prefix nor exceed Redis key limits. With clockSlotSeconds the key
+// also carries the current clock slot (see the policy notes above).
+export function cacheKeyFor(path, input, keyFields, { clockSlotSeconds, now = Date.now() } = {}) {
   const fields = new Set(keyFields);
   if (input && typeof input === "object") for (const f of Object.keys(input)) fields.add(f);
   const parts = [];
@@ -169,6 +187,7 @@ export function cacheKeyFor(path, input, keyFields) {
     if (raw == null || raw === "") continue;
     parts.push([f, typeof raw === "object" ? JSON.stringify(raw) : String(raw)]);
   }
+  if (clockSlotSeconds > 0) parts.push(["@clockSlot", String(Math.floor(now / (clockSlotSeconds * 1000)))]);
   return `a402:${path}|${createHash("sha256").update(JSON.stringify(parts)).digest("hex")}`;
 }
 

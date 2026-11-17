@@ -274,7 +274,7 @@ console.log("\nunresolved host: caller URL vs our own upstream:");
       "weather-forecast": [(await import("../src/tools/data-kit.js")).DATA_TOOLS, { lat: 40.71, lon: -74.01 }],
       "earthquakes": [(await import("../src/tools/gov-kit.js")).GOV_TOOLS, { minMag: "2.5", period: "week" }],
       "fx-historical": [(await import("../src/tools/macro-kit.js")).MACRO_TOOLS, { from: "USD", to: "JPY", date: "2024-03-04" }],
-      "reverse-geocode": [(await import("../src/tools/geo-kit.js")).GEO_TOOLS, { lat: 48.8584, lon: 2.2945 }],
+      "place-lookup": [(await import("../src/tools/weather-kit.js")).WEATHER_TOOLS, { q: "Paris" }],
       "mcp-package-check": [(await import("../src/tools/mcp-package-kit.js")).MCP_PACKAGE_TOOLS, { package: "left-pad" }],
       "crypto-global": [(await import("../src/tools/crypto-kit.js")).CRYPTO_TOOLS, {}],
       "edgar-filings": [(await import("../src/tools/edgar-kit.js")).EDGAR_TOOLS, { ticker: "AAPL" }],

@@ -56,7 +56,6 @@ export async function envGatedSegments() {
     import("../src/tools/llm-gateway-kit.js").then((m) => m.LLM_GATEWAY_TOOLS),
     import("../src/tools/farcaster-social-kit.js").then((m) => m.FARCASTER_SOCIAL_TOOLS),
     import("../src/tools/x-data-kit.js").then((m) => m.X_DATA_TOOLS),
-    import("../src/tools/exa-kit.js").then((m) => m.EXA_TOOLS),
     import("../src/tools/judge-kit.js").then((m) => m.JUDGE_TOOLS),
     import("../src/tools/b2b-enrich-kit.js").then((m) => m.B2B_ENRICH_TOOLS),
     // Listed only with RUGCHECK_TOOLS=on.

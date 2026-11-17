@@ -1,6 +1,6 @@
 // scripts/test-spend-words-shared-redis.js
-// The exaSpend, xDataSpend and routerSpendWindow status words survive a new
-// process, over a REAL Redis (src/tools/exa-kit.js, src/tools/x-data-kit.js,
+// The xDataSpend and routerSpendWindow status words survive a new
+// process, over a REAL Redis (src/tools/x-data-kit.js,
 // src/daily-ceilings.js, src/router-spend-window.js).
 //
 // Each kit keeps the day's spend in its own process and in a shared day
@@ -37,7 +37,6 @@ const SELF = fileURLToPath(import.meta.url);
 // ---- a child: one container -------------------------------------------------
 if (process.env.SPEND_WORDS_CHILD) {
   const job = JSON.parse(process.env.SPEND_WORDS_CHILD);
-  process.env.EXA_API_KEY = "test-key";
   process.env.X_BEARER_TOKEN = "test-bearer";
   console.warn = () => {};
   // The direct upstream's day books the upstream's own reported charge, so it needs no table.
@@ -60,12 +59,6 @@ if (process.env.SPEND_WORDS_CHILD) {
     const w = await import("../src/router-spend-window.js");
     const E = 1000;
     kit = { E, alarm: "SOR_SPEND_CAP_ATOMIC", hard: "SOR_SPEND_HARD_CAP_ATOMIC", call: async () => { await b.reserveSpend(String(E)); }, book: () => {}, refresh: () => w.refreshSpendWindowShared(), status: () => w.spendWindowStatus() };
-  } else if (job.kit === "exa") {
-    const m = await import("../src/tools/exa-kit.js");
-    const E = m.estimateExaUsd("/search", { numResults: 10 });
-    const search = m.EXA_TOOLS.find((t) => t.slug === "exa-search").handler;
-    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ results: [{ url: "https://a.example", title: "t" }], costDollars: { total: E } }), headers: { get: () => null } });
-    kit = { E, alarm: "EXA_DAILY_MAX_USD", hard: "EXA_DAILY_HARD_MAX_USD", call: () => search({ query: "agent payments" }), book: m._exaSpendBook, refresh: m.refreshExaSpendShared, status: m.exaSpendStatus };
   } else {
     const m = await import("../src/tools/x-data-kit.js");
     const E = m.estimateXReadUsd("/tweets/search/recent", { max_results: 10 });
@@ -166,7 +159,7 @@ async function muteStore() {
 // A prefix of its own per run, so reruns and parallel lanes never share a day.
 const prefix = `spend-words-${randomBytes(5).toString("hex")}`;
 let ran = 0;
-for (const kit of ["exa", "x"]) {
+for (const kit of ["x"]) {
   const base = { kit, alarm: 2, hard: 4.5 };
   const run = (steps, opts = {}) => container({ ...base, steps }, { prefix, ...opts });
 
@@ -326,27 +319,27 @@ for (const kit of ["exa", "x"]) {
 // A booted server on the same counters (its own process, its own empty day)
 // answers the two words the pagers read. The refusals above are inside their
 // hold, so both read capped; another prefix is the control.
-if (ran === 2) {
-  const exa = await import("../src/tools/exa-kit.js");
+if (ran === 1) {
   const x = await import("../src/tools/x-data-kit.js");
-  const eE = exa.estimateExaUsd("/search", { numResults: 10 }), eX = x.estimateXReadUsd("/tweets/search/recent", { max_results: 10 });
-  const ceilings = { EXA_DAILY_MAX_USD: String(2 * eE), EXA_DAILY_HARD_MAX_USD: String(4.5 * eE), X_DATA_DAILY_MAX_USD: String(2 * eX), X_DATA_DAILY_HARD_MAX_USD: String(4.5 * eX) };
+  const eX = x.estimateXReadUsd("/tweets/search/recent", { max_results: 10 });
+  const ceilings = { X_DATA_DAILY_MAX_USD: String(2 * eX), X_DATA_DAILY_HARD_MAX_USD: String(4.5 * eX) };
   const words = async (label, sharedPrefix) => {
     const srv = await bootServer({ stores: label, env: { FREE_MODE: "true", ...ceilings, SHARED_LIMITS_PREFIX: sharedPrefix, SHARED_LIMITS: "" } });
     try {
       const t = performance.now();
       const r = await fetch(`${srv.url}/api/gateway-status`, { signal: AbortSignal.timeout(20_000) });
       const j = await r.json();
-      return { status: r.status, exa: j.exaSpend, x: j.xDataSpend, router: j.routerSpendWindow, ms: Math.round(performance.now() - t) };
+      return { status: r.status, x: j.xDataSpend, router: j.routerSpendWindow, gone: ["exaSpend", "exaAllowance"].filter((k) => k in j), ms: Math.round(performance.now() - t) };
     } finally { await srv.stop(); }
   };
   const live = await words("spend-words", prefix);
-  ok(live.status === 200 && live.exa?.status === "capped" && live.x?.status === "capped", `a new server that made no call answers capped for both words on /api/gateway-status (exaSpend ${live.exa?.status}, xDataSpend ${live.x?.status})`);
-  ok([live.exa, live.x].every((w) => w && Object.keys(w).sort().join() === "day,status" && Object.values(w).every((v) => typeof v === "string")), "and the public answer carries the day and the word only, no figure");
+  ok(live.status === 200 && live.x?.status === "capped", `a new server that made no call answers capped for xDataSpend on /api/gateway-status (${live.x?.status})`);
+  ok([live.x].every((w) => w && Object.keys(w).sort().join() === "day,status" && Object.values(w).every((v) => typeof v === "string")), "and the public answer carries the day and the word only, no figure");
+  ok(live.gone.length === 0, `the retired search provider's words are gone from /api/gateway-status (${live.gone.join(",") || "none"})`);
   ok(live.router?.status === "capped" && Object.keys(live.router).join() === "status", `and capped for routerSpendWindow, the word alone (${JSON.stringify(live.router)})`);
   const quiet = await words("spend-words-control", `${prefix}-quiet`);
   ok(quiet.router?.status === "ok", `control: routerSpendWindow reads ok there (${quiet.router?.status})`);
-  ok(quiet.exa?.status === "ok" && quiet.x?.status === "ok", `control: the same server on counters nobody spent reads ok (exaSpend ${quiet.exa?.status}, xDataSpend ${quiet.x?.status})`);
+  ok(quiet.x?.status === "ok", `control: the same server on counters nobody spent reads ok (xDataSpend ${quiet.x?.status})`);
 }
 
 // ---- jevSpend: the first /api/gateway-status read after a boot --------------

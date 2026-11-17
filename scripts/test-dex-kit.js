@@ -19,7 +19,7 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-ok(DEX_TOOLS.length === 4, `4 tools exported (got ${DEX_TOOLS.length})`);
+ok(DEX_TOOLS.length === 3, `3 tools exported (got ${DEX_TOOLS.length})`);
 for (const t of DEX_TOOLS) {
   ok(typeof t.slug === "string" && t.slug.startsWith("dex-"), `${t.slug}: dex- prefix`);
   ok(t.route?.startsWith("POST /api/"), `${t.slug}: POST /api/ route`);
@@ -143,8 +143,6 @@ delete process.env.ALCHEMY_API_KEY;
 }
 if (stashedKey) process.env.ALCHEMY_API_KEY = stashedKey;
 
-// dex-top-pools is keyless — doesn't require ALCHEMY_API_KEY. We don't hit
-// the live DeFiLlama endpoint in CI (slow + flaky); shape covered in canary.
 
 // ----------------------------------------------------------------------------
 // Live live opt-in

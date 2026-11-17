@@ -22,7 +22,6 @@
   "media": { "your/image-model": { "worstCaseUsd": 1, "listedMaxUsd": 1 }, "black-forest-labs/flux-3-image-klein": { "worstCaseUsd": 1, "listedMaxUsd": 1 }, "google/veo-3.1-lite": { "worstCaseUsd": 1, "listedMaxUsd": 1 } },
   "meter": { "markup": 2 },
   "vendor": {
-    "exa": { "search": 1, "instant": 1, "lite": 1, "answer": 1, "content": 1 },
     "x": { "postRead": 1, "userRead": 1 },
     "decisions": { "luna": 1, "decisionOne": 1,
       "gemini": 1, "jev": 1, "maxShare": 1 },

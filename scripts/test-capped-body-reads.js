@@ -290,7 +290,6 @@ const buyer = await import("../src/x402-buyer.js");
 {
   const kits = [
     ["crypto-signals-kit", "CRYPTO_SIGNALS_TOOLS", "crypto-indicators", { coin: "BTC", interval: "1h", limit: 200, points: 5 }, 2_000_000, /Hyperliquid response is larger than/],
-    ["defi-kit", "DEFI_TOOLS", "defi-protocols", { category: "Lending", limit: 5 }, HUGE, /response is larger than the 24MB cap/],
     ["solana-intel-kit", "SOLANA_INTEL_TOOLS", "sol-token-search", { query: "JUP", limit: 5 }, HUGE, /DexScreener response is larger than the 24MB cap/],
   ];
   for (const [file, exp, slug, input, cap, msg] of kits) {
