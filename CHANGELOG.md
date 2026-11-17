@@ -6,6 +6,28 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (Live in the header, sample reports served whole)
+Site:
+- The header bar carries Live, the live view of x402 and MPP payments as they
+  settle, after Status at every desktop width; the tap menu keeps it, and the
+  Marketplace menu no longer repeats it.
+- With no theme chosen, the site follows the device's dark setting; a choice
+  made with the theme toggle is kept and wins.
+- Each header menu tells assistive technology whether it is open, Escape
+  closes an open menu with focus kept on its trigger, and the header is named
+  as the main navigation.
+- Sample reports are served as finished pages: the report arrives with the
+  page and reads with no script; its downloads and buy box work as before.
+- The /tools search no longer lists word matches as tools when no tool does
+  the task: it says so and, when an indexed seller does it, links the seller
+  directory's search for the same words.
+- Footer link rows wrap into even lines, and the current page's name in a
+  breadcrumb sits on the line of its links.
+Tools:
+- seller-dossier names each route's delivery record responseDelivery, as the
+  index's rows do (it was ourPaidCalls), and its delivery summary says the
+  count includes our router's unpaid non-answers.
+
 ### 2026-11-16 (marketplace answers arrive whole or are not settled)
 Payments:
 - An input a tool refuses on a call bought through a marketplace listing is

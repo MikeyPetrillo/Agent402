@@ -224,7 +224,7 @@ check("a refusal memo on a chain is surfaced with the chain and time", () => {
   assert.ok(plain.flags.some((f) => /noted two refusals .* on base/.test(f)) && !plain.flags.some((f) => /paid retries/.test(f)));
 });
 
-// --- our own paid calls -------------------------------------------------------
+// --- our router's calls to the seller ---------------------------------------------
 check("delivery observations attach to their route and a low keep rate is flagged, a 1-of-1 is not", () => {
   const d = new Map([["POST /api/a", { calls: 5, kept: 3, keptRate: 0.6, lastMissing: ["result"], lastSeenAt: "2026-09-07T00:00:00.000Z" }], ["POST /api/b", { calls: 1, kept: 1, keptRate: 1, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }]]);
   const r = base({ deliveries: d });
@@ -232,6 +232,12 @@ check("delivery observations attach to their route and a low keep rate is flagge
   assert.equal(r.delivery.calls, 6);
   assert.ok(r.flags.some((f) => /delivered less than 80%.*\/api\/a/.test(f)));
   assert.ok(!r.flags.some((f) => /\/api\/b/.test(f) && /delivered less/.test(f)));
+  // The row carries the record under the index's name for it, and the summary
+  // says the record counts more than paid calls.
+  const rowA = r.catalog.tools.find((t) => t.route === "/api/a");
+  assert.equal(rowA.responseDelivery.calls, 5);
+  assert.ok(!("ourPaidCalls" in rowA), "the row's delivery record is named responseDelivery, as on the index's rows");
+  assert.match(r.delivery.source, /unpaid non-answers included/);
 });
 check("answers past our read limit that could not be checked are counted and flagged, never read as kept", () => {
   const d = new Map([["POST /api/a", { calls: 2, kept: 2, keptRate: 1, unverifiable: 4, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }], ["POST /api/b", { calls: 0, kept: 0, keptRate: null, unverifiable: 1, lastMissing: [], lastSeenAt: "2026-09-07T00:00:00.000Z" }]]);

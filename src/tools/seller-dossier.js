@@ -83,6 +83,9 @@ const TOOL_ROWS_MAX = 50;
  * @param {boolean} a.self
  * @param {number} a.now
  */
+/** What the `delivery` summary counts: our router's calls to the seller's paid routes, the unpaid non-answers included. */
+export const DELIVERY_SOURCE = "route-and-execute calls to paid routes (ours, unpaid non-answers included)";
+
 export function composeSellerDossier(a) {
   const {
     host, detail, entry, dispatch, evidenceBinding, leaderboardRow, bazaar, solana, mpp,
@@ -120,7 +123,7 @@ export function composeSellerDossier(a) {
       howToList: "POST /api/index/register with {\"origin\":\"https://<host>\"} (free, self-serve)",
       flags: ["origin is not indexed: no crawl, no catalog, no router verdict"],
       caveats,
-      evidenceSource: "x402 seller crawl + on-chain settlement + Bazaar + MPP index + our own paid calls",
+      evidenceSource: "x402 seller crawl + on-chain settlement + Bazaar + MPP index + our router's calls",
       generatedAt,
     };
   }
@@ -228,7 +231,10 @@ export function composeSellerDossier(a) {
       networksVerificationDue: needsVerify,
       urlTemplate: t.urlTemplate || null,
       dispatch: t.routerDispatchReason || null,
-      ourPaidCalls: delivery || null,
+      // The route's delivery record, under the name the index's rows give it
+      // (responseDelivery): the router's calls to this paid route, the unpaid
+      // non-answers included, so it is not a count of paid calls alone.
+      responseDelivery: delivery || null,
     };
   });
   const catalog = {
@@ -451,10 +457,10 @@ export function composeSellerDossier(a) {
   if (!self && dispatch?.routerDispatchEligible !== true && lanes?.unproven?.eligible === true) flags.push(unprovenLaneFlag(lanes));
   if (prices.length && thresholds.sorCap != null && prices[0] > thresholds.sorCap) flags.push(`the cheapest priced route ($${prices[0]}) is above the router's $${thresholds.sorCap} underlying cap for the cheapest tier`);
 
-  // -------------------------------------------------------- our paid calls
-  const observed = toolRows.filter((t) => t.ourPaidCalls).map((t) => ({ method: t.method, route: t.route, ...t.ourPaidCalls }));
+  // -------------------------------------------------- our router's calls
+  const observed = toolRows.filter((t) => t.responseDelivery).map((t) => ({ method: t.method, route: t.route, ...t.responseDelivery }));
   const delivery = {
-    source: "route-and-execute paid calls (ours)",
+    source: DELIVERY_SOURCE,
     routesObserved: observed.length,
     calls: observed.reduce((n, o) => n + (o.calls || 0), 0),
     kept: observed.reduce((n, o) => n + (o.kept || 0), 0),
@@ -479,7 +485,7 @@ export function composeSellerDossier(a) {
     delivery,
     flags,
     caveats,
-    evidenceSource: "x402 seller crawl + on-chain settlement + Bazaar + MPP index + our own paid calls",
+    evidenceSource: "x402 seller crawl + on-chain settlement + Bazaar + MPP index + our router's calls",
     // Every line above is an OBSERVATION we made, at generatedAt, by the method
     // named in evidenceSource - not a conclusion about the business, its
     // operators or their conduct. Published about named third parties, so it
@@ -553,14 +559,14 @@ export function buildSellerDossierTool({
           listed: true,
           identity: { displayName: "Example Seller", homepage: "https://seller.example", discoveryPath: "/.well-known/x402", mppDualStack: false, originResponded: true, crawlError: null, crawlErrorKind: null, lastReadIncomplete: null, robotsBlocked: false, lastCrawledAt: "2026-09-08T01:00:00.000Z", firstRegisteredAt: "2026-08-01T00:00:00.000Z", lastRoutableSeenAt: "2026-09-08T01:00:00.000Z", lastSettledSeenAt: null, listingTextLooksInjected: false },
           health: { crawlHealthScore: 1, routable: true, paywallProbe: { ok: true, unknown: false, status: 402, url: "https://seller.example/api/x", at: "2026-09-08T01:00:00.000Z", mpp: false, error: null }, note: "crawlHealthScore says recent completed crawls read a catalog from the seller's own documents; paywallProbe says a paid route answered a real 402. Read both." },
-          catalog: { toolCount: 2, paidToolCount: 2, priceRangeUsd: { min: 0.01, max: 0.04 }, networksAdvertised: ["eip155:8453"], tools: [{ method: "POST", route: "/api/x", name: "X", priceUsd: 0.01, networks: ["eip155:8453"], price: { source: "live-402", observedAt: "2026-09-08T01:00:00.000Z", carriedForward: false, stale: false, originDeclaredUsd: 0.01, disagreesWithOrigin: false, conflict: null }, method_provenance: { inferred: false, correctedFrom: null }, networksVerifiedAt: null, networksVerificationDue: false, urlTemplate: null, dispatch: "settlement_required", ourPaidCalls: null }], toolsTruncated: false, priceProvenance: { stale: 0, carriedForward: 0, disagreeWithOrigin: 0, unpriced: 0, urlTemplates: 0, methodInferred: 0, methodCorrected: 0, networksVerificationDue: 0 } },
+          catalog: { toolCount: 2, paidToolCount: 2, priceRangeUsd: { min: 0.01, max: 0.04 }, networksAdvertised: ["eip155:8453"], tools: [{ method: "POST", route: "/api/x", name: "X", priceUsd: 0.01, networks: ["eip155:8453"], price: { source: "live-402", observedAt: "2026-09-08T01:00:00.000Z", carriedForward: false, stale: false, originDeclaredUsd: 0.01, disagreesWithOrigin: false, conflict: null }, method_provenance: { inferred: false, correctedFrom: null }, networksVerifiedAt: null, networksVerificationDue: false, urlTemplate: null, dispatch: "settlement_required", responseDelivery: null }], toolsTruncated: false, priceProvenance: { stale: 0, carriedForward: 0, disagreeWithOrigin: 0, unpriced: 0, urlTemplates: 0, methodInferred: 0, methodCorrected: 0, networksVerificationDue: 0 } },
           wallets: { advertisedByNetwork: { "eip155:8453": ["0x1111111111111111111111111111111111111111"] }, base: { advertised: "0x1111111111111111111111111111111111111111", ownEvidence: { settled: 12, payers: 4, note: "chain join on this origin's OWN advertised address, plus any committed seed" }, inheritedFrom: [], inheritedNote: null, sharedWithOrigins: [] }, routerDispatchDetail: null },
           settlementEvidence: { base: { source: "on-chain leaderboard (Base USDC, ours)", callsSettled: 12, uniqueBuyers: 4, totalUsd: 0.18, wallets: ["0x1111111111111111111111111111111111111111"], window: null }, bazaar: { source: "Coinbase Bazaar, last 30 days (their measurement, not ours)", calls30d: 30, payers30d: 5, lastCalledAt: "2026-09-07T20:00:00.000Z", payTos: ["0x1111111111111111111111111111111111111111"] }, solana: { source: "Solana SPL leaderboard", observed: false }, mpp: { source: "MPP index", observed: false } },
           router: { eligible: false, reason: "settlement_required", byChain: { base: { eligible: false, reason: "settlement_required" } }, executeVia: null, executeViaCallableNow: false, lanes: { proven: { eligible: false, chain: "base", toolCount: 0, cheapestUsd: null, cheapestTier: null, tiers: [], blockers: ["settlement_required: on Base the router pays sellers with on-chain settlement history above the floor from enough distinct payers; a seller below it is tried only under the small unproven ceiling when its verdict carries unprovenTier"] }, unproven: exampleUnprovenLane({ priceUsd: 0.01, execTiers: execTiers || [] }) }, routable: true, routableVia: "unproven", gate: { settlementThreshold: 50, distinctPayersThreshold: 3, underlyingCapUsd: 0.005, cheapestPaidToolUsd: 0.01 }, refusals: [], deliveryFailures: [] },
-          delivery: { source: "route-and-execute paid calls (ours)", routesObserved: 0, calls: 0, kept: 0, rows: [] },
+          delivery: { source: DELIVERY_SOURCE, routesObserved: 0, calls: 0, kept: 0, rows: [] },
           flags: ["router verdict: settlement_required", unprovenLaneFlag({ unproven: exampleUnprovenLane({ priceUsd: 0.01, execTiers: execTiers || [] }) }), "the cheapest priced route ($0.01) is above the router's $0.005 underlying cap for the cheapest tier"],
           caveats: ["every count here is a floor: it is what our crawl, probes and chain reads have observed, never the seller's total"],
-          evidenceSource: "x402 seller crawl + on-chain settlement + Bazaar + MPP index + our own paid calls",
+          evidenceSource: "x402 seller crawl + on-chain settlement + Bazaar + MPP index + our router's calls",
           generatedAt: "2026-09-08T02:00:00.000Z",
         },
       },
