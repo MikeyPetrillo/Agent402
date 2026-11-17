@@ -51,6 +51,7 @@ Packs:
   region) in place of an address, adds the US county and state for a US place,
   and skips its two US-only steps elsewhere; its nearby-places step is gone.
   trip-planner resolves stops by name and forecasts any stop in the world.
+  Each pack's price follows its new parts, so both cost more.
 
 ### 2026-11-16 (computed market answers replace the DeFi analytics routes)
 Tools:
