@@ -1,6 +1,7 @@
 import { CONFORMANCE_PATH } from "./conformance-path.js";
 import { whyPointsPlain } from "./why.js";
 import { networkPriceFloors } from "./network-floors.js";
+import { PAYMENT_RETRY_VERBS_NOTE } from "./tool-error-fields.js";
 import { publicPremiumClause as premiumClause } from "./public-networks.js";
 import { erc8004AgentId, ERC8004_IDENTITY_REGISTRY } from "./tools/a2a-card.js";
 import { toolList, CATEGORIES } from "./pages.js";
@@ -33,7 +34,7 @@ import { REPO_URL } from "./repo-link.js";
 import { slowRouteMarker } from "./slow-routes.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { fromPriceLabel } from "./quoted-from.js";
-import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION } from "./front-door.js";
+import { frontDoorMarkdown, AGENTS_MD_PATH, LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { connectorPayShort, connectorWires } from "./connector-pay.js";
 import { publicIndexChains, PUBLIC_INDEX_ANCHOR } from "./facilitator-public-index.js";
 // A catalog line's price: a route quoted per request lists its floor as "from".
@@ -607,11 +608,13 @@ ${reportsParagraph(baseUrl, tools)}
 Determine it from the response you already hold, without asking us:
 
 - **No \`PAYMENT-RESPONSE\` header** - nothing settled. You were not charged on x402. Safe to retry. ${LATE_SETTLE_EXCEPTION}
-- **\`PAYMENT-RESPONSE\` present, receipt \`success: false\`** - settlement was attempted and REJECTED (a facilitator declining produces a 402 with this shape). You were not charged on x402. Safe to retry with a fresh authorization.
+- **\`PAYMENT-RESPONSE\` present, receipt \`success: false\`** - settlement was attempted and REJECTED (a facilitator declining produces a 402 with this shape). You were not charged on x402. Safe to retry with a fresh authorization. ${UNCONFIRMED_RECEIPT_EXCEPTION}
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status under 400** - charged and served. Normal.
 - **\`PAYMENT-RESPONSE\` present, receipt not \`success: false\`, status 400 or above** - the residual case: a settlement completed without a successful response. Do NOT blind-retry; this is the one shape where money may have moved without service. We count and alarm on it as an incident rather than claim it cannot happen.
 
-Every x402 authorization is single-use, so any retry needs a fresh signature. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again. A request re-sent with the same signed EVM payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer too, marked \`X-Replayed-Answer: 1\`, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted). **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails; agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key already issued also skips the per-call signature.
+${PAYMENT_RETRY_VERBS_NOTE}
+
+Every x402 authorization is single-use, so a retry needs a fresh signature unless the refusal's retry is same-payment, watch-transaction or check-wallet. Send an \`Idempotency-Key\` header and a retry of an already-served paid call replays the original result instead of charging again. A request re-sent with the same signed EVM payment (same nonce, route and body) inside the replay window (answers up to ${IDEM_MAX_BODY_LABEL}) is answered from its first answer too, marked \`X-Replayed-Answer: 1\`, with no second settlement (identity-bound routes, routes with a lasting effect and streamed calls excepted). **Slow routes** (marked "slow" in the tool lines below, with their typical and maximum seconds; \`async\` on each /api/pricing row) run longer than many HTTP clients wait: send the paid call with \`Prefer: respond-async\` to get \`202\` and a job link at once, then poll \`GET /api/jobs/{id}\` (free, honor \`Retry-After\`) until \`status\` is \`completed\` or \`failed\`; \`state\` (queued, running, succeeded, failed), \`stage\`, \`progress\` and \`etaSeconds\` say where it is. Payment settles only on the delivered answer, except a Tempo transfer sent before the call, which is repaid after on-chain proof if the run fails; agent402-client and agent402-mcp do this on their own. **Making many calls? Pay once instead of signing each one.** Exact x402 is one signature and one settlement per request, which is the wrong shape at volume. On the metered gateway, a one-time Permit2 approval for USDC on Base makes the per-request quote a CEILING and the call settles at actual usage under it (\`npx agent402-openclaw permit2-approve\`); it stays per-request priced and settles only on a 200. A prepaid credits key already issued also skips the per-call signature.
 
 The settlement rule: on x402 a response of 400 or above is not settled, and each response shows whether anything settled, so you can check it yourself.
 

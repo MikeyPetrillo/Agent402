@@ -29,7 +29,7 @@ import { ASYNC_JOBS_PER_CLIENT } from "./async-jobs.js";
 import * as inflightCover from "./inflight-cover.js";
 import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
-import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
+import { LATE_SETTLE_EXCEPTION, UNCONFIRMED_RECEIPT_EXCEPTION } from "./front-door.js";
 import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
 import { connectorWires } from "./connector-pay.js";
 import { OCR_LARGE_PIXELS } from "./tools/ocr-kit.js";
@@ -424,7 +424,7 @@ Each answer says whether it settled:
 
 - No \`PAYMENT-RESPONSE\` header: nothing settled.
 - \`PAYMENT-RESPONSE\` whose receipt reads \`success: false\`: settlement was
-  refused, nothing moved.
+  refused, nothing moved. ${UNCONFIRMED_RECEIPT_EXCEPTION}
 - \`PAYMENT-RESPONSE\` with a status under 400: charged and served.
 
 ${LATE_SETTLE_EXCEPTION}

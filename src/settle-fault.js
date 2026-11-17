@@ -11,7 +11,8 @@
 //                connection or DNS error, our store or a hook of ours, our
 //                relayer, our credentials refused, our requirements, a
 //                facilitator's HTTP error, a billing limit on this server's
-//                account. Never counted against the wallet.
+//                account, a settle chain that ended unconfirmed
+//                (settlement_unconfirmed). Never counted against the wallet.
 //   "unknown"    neither: a revert or failed simulation that names no
 //                balance, a bare settlement_failed, a 402 with no receipt, a
 //                settle still pending. Counted against the wallet at a higher
@@ -31,7 +32,12 @@ import { classifySvmFundingRefusal } from "./svm-funding-refusal.js";
 export const RAW_SETTLE_RECEIPT = "__settleReceiptRaw";
 
 const TEXT_MAX = 2000;
-const NOT_BUYER_CODE = /^(?:timeout|network_error|non_json_response|redirect_refused|client_disconnected|own_relayer_refused|relayer_error)$|_check_failed$|_hook_error$|_mark_failed$|_unverifiable$|^invalid_(?:network|scheme|payment_requirements|x402_version)$|_requirements$|_not_configured$|_auth_store$|_unauthenticated$|_verifier_error$|^unsupported_|^(?:circle|gateway)_http_(?:5\d\d|401|403|408|429)$/i;
+const NOT_BUYER_CODE = /^(?:timeout|network_error|non_json_response|redirect_refused|client_disconnected|own_relayer_refused|relayer_error|settlement_unconfirmed)$|_check_failed$|_hook_error$|_mark_failed$|_unverifiable$|^invalid_(?:network|scheme|payment_requirements|x402_version)$|_requirements$|_not_configured$|_auth_store$|_unauthenticated$|_verifier_error$|^unsupported_|^(?:circle|gateway)_http_(?:5\d\d|401|403|408|429)$/i;
+// settlement_unconfirmed is this server's own receipt for a settle chain that
+// ended on an answer showing nothing either way (src/payments.js
+// markUnconfirmedStop: a fallback's HTTP error, time limit, reset, unreadable
+// answer, or a failure naming a transaction); a transfer that lands is owed
+// back. Read first, whatever the kept words say.
 // circle_http_NNN / gateway_http_NNN are the codes those settle clients give a
 // 4xx/5xx whose body names no reason (src/circle-facilitator.js,
 // src/gateway-nanopayments.js). Only a 5xx, our credentials refused (401,

@@ -1066,6 +1066,13 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       const failed = Boolean(settle) && typeof settle === "object" && settle.success === false;
       const bare = !settle && !r.headers.get("payment-required") && body?.error === "settlement_failed";
       if (!failed && !bare) return null;
+      // A settle chain the route answered as not confirmed (retry
+      // watch-transaction or check-wallet): the transfer may still land, so
+      // it is the pending result with the route's verb and expiry, never
+      // "did not settle".
+      if (isSettlementUndecided(body, null) && body?.reason === "settlement-unconfirmed") {
+        return buildSettlementPendingResult({ label: `Agent402 (${def.slug})`, refusal: body, retryAfterSeconds: r.headers.get("retry-after"), settleResponse: failed ? settle : null });
+      }
       return buildSettlementUnprovenResult({ label: `Agent402 (${def.slug})`, refusal: body, settleResponse: failed ? settle : null });
     }
 

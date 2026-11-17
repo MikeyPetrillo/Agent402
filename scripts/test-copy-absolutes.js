@@ -1054,5 +1054,73 @@ ok(["src/guides.js", "src/seo.js", "src/pages.js", "src/learn.js", "src/skill-md
   ok(bad.length === 0, `every refusal that prints the shared sentence reads as one statement to each payer class${bad.length ? ` - ${bad.join(" | ")}` : ""}`);
 }
 
+// A success:false receipt is not always "not charged, safe to retry": a
+// settle chain that ended unconfirmed (settlement_unconfirmed) may still
+// move money. Every copy surface that says such a receipt was not
+// charged, moved nothing or is safe to retry carries the shared clause
+// (src/front-door.js UNCONFIRMED_RECEIPT_EXCEPTION) right after the claim: by
+// interpolation in a module, word for word in markdown.
+{
+  const { UNCONFIRMED_RECEIPT_EXCEPTION: UNC } = await import("../src/front-door.js");
+  const CLAIM = /success: ?false\\?`?[\s\S]{0,200}?(?:not charged|nothing moved|moved no money|safe to retry|retry with a fresh authorization)/gi;
+  const carries = (after) => after.includes(UNC) || after.includes("${UNCONFIRMED_RECEIPT_EXCEPTION}");
+  let claims = 0;
+  const bare = [];
+  for (const rel of files.filter((f) => COPY_SURFACES.test(f))) {
+    const text = read(rel);
+    if (!text) continue;
+    for (const m of text.matchAll(CLAIM)) {
+      const line = text.slice(text.lastIndexOf("\n", m.index) + 1, m.index);
+      if (/^\s*(?:\/\/|\/?\*)/.test(line)) continue;
+      claims++;
+      const after = text.slice(m.index, m.index + m[0].length + 900).replace(/\\?\n\s*/g, " ");
+      if (!carries(after)) bare.push(`${rel}:${text.slice(0, m.index).split("\n").length}`);
+    }
+  }
+  // duplicate_authorization is not named: its receipt asks for a new payment
+  // (src/settlement-claims.js), and a re-sent unconfirmed payment is answered
+  // from its stored answer before it could reach that refusal.
+  ok(/settlement_unconfirmed/.test(UNC) && !/duplicate_authorization/.test(UNC) && /do not sign a new authorization/.test(UNC) && /check-wallet/.test(UNC) && /watch-transaction/.test(UNC)
+    && /authorizationValidBefore/.test(UNC) && /lastValidRound/.test(UNC) && /expirationLedger/.test(UNC) && /names none, before the paying wallet shows/.test(UNC),
+    "the shared clause names the unconfirmed receipt only, the instruction scoped to the answer's expiry or the wallet, and both retry verbs");
+  ok(claims >= 8, `the success:false not-charged claim is found where it is made (${claims} places)`);
+  ok(bare.length === 0, `every success:false not-charged claim carries the unconfirmed-receipt clause${bare.length ? ` (missing: ${bare.join(", ")})` : ""}`);
+  ok("a PAYMENT-RESPONSE with success: false means settlement was refused, you were not charged on x402.".match(CLAIM) && !carries("receipt success:false, safe to retry."),
+    "control: the unscoped sentence is matched and is not taken as carrying the clause");
+}
+
+// The retry verbs a refused payment names (src/tool-error-fields.js
+// PAYMENT_RETRY_VERBS_NOTE) reach every surface an agent reads them on: the
+// served 402 description in /openapi.json, /llms-full.txt, the front door's
+// recovery list on /agents.md, and the hand-written copies in the client README and the
+// wiki. A surface that drops the note teaches a buyer to sign a second
+// payment for a call whose transfer may still land.
+{
+  const { PAYMENT_RETRY_VERBS_NOTE: NOTE } = await import("../src/tool-error-fields.js");
+  const { openapiSpec } = await import("../src/pages.js");
+  const { llmsFullTxt } = await import("../src/seo.js");
+  const { frontDoor, agentsMd } = await import("../src/front-door.js");
+  const B = "http://unit.test";
+  const c = { "GET /api/front-door-probe": { slug: "front-door-probe", route: "GET /api/front-door-probe", price: "$0.01", category: "web", description: "probe", tags: [] } };
+  const flat = (s) => String(s).replace(/\s+/g, " ");
+  ok(/same-payment/.test(NOTE) && /watch-transaction/.test(NOTE) && /check-wallet/.test(NOTE) && /fresh-authorization/.test(NOTE) && /settlement-unconfirmed/.test(NOTE),
+    "the retry-verbs note names same-payment, watch-transaction, check-wallet and fresh-authorization");
+  let spec = null; try { spec = openapiSpec(B, c); } catch (e) { spec = { error: String(e?.message || e) }; }
+  ok(JSON.stringify(spec).includes(JSON.stringify(NOTE).slice(1, -1)), "/openapi.json's 402 description carries the retry-verbs note");
+  let full = ""; try { full = llmsFullTxt(B, c); } catch (e) { full = String(e?.message || e); }
+  ok(full.includes(NOTE), "/llms-full.txt carries the retry-verbs note");
+  let door = null; try { door = frontDoor(c, B); } catch { door = null; }
+  let agents = ""; try { agents = agentsMd(B, c); } catch (e) { agents = String(e?.message || e); }
+  ok(Array.isArray(door?.recovery) && door.recovery.includes(NOTE) && agents.includes(NOTE), "the front door's recovery list, as /agents.md serves it, carries the retry-verbs note");
+  const readme = flat(readFileSync(join(root, "client/README.md"), "utf8"));
+  ok(/A refused payment's body names a `retry` verb: `watch-transaction` or `check-wallet` \(`reason: "settlement-unconfirmed"`\) means the settlement is not confirmed/.test(readme)
+    && /`same-payment` means send the same payment again, and `fresh-authorization` means sign a new one/.test(readme),
+    "the client README names the retry verbs and the unconfirmed settlement");
+  const wiki = flat(readFileSync(join(root, "wiki/Paying-with-x402.md"), "utf8"));
+  ok(/`same-payment` means send the same payment again after `Retry-After`, with no new signature; `watch-transaction` \(the body lists `transactions`\) and `check-wallet` \(it lists none\) mean the settlement is not confirmed/.test(wiki)
+    && /`fresh-authorization` means sign a new payment/.test(wiki),
+    "the wiki's Paying-with-x402 page names the retry verbs and the unconfirmed settlement");
+}
+
 console.log(`test-copy-absolutes: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
