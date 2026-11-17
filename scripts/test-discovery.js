@@ -61,6 +61,19 @@ ok(m.payment.dataHandling?.readsAnnotationFields === false && m.payment.dataHand
   const hold = `or until the authorization's own validBefore plus ${Math.round(rg.CONSUMED_VALIDITY_MARGIN_MS / 60000)} minutes when that is later (at most ${rg.settledValidityHoldText()} after the call)`;
   ok(reads.includes(hold), `dataHandling.readsOnly states the settled replay mark's validBefore hold and its bound (${hold})`);
   ok(/payer/.test(String(m.payment.dataHandling?.retains || "")), "dataHandling says the sales ledger keeps the payer of a sale");
+  // An unconfirmed settlement's reads (src/payments.js markUnconfirmedStop,
+  // src/idempotency.js): the authorization booked for the late-landing read
+  // at the book's own bounds, the expiry each rail's payment names, and the
+  // stored answer with the payer's signature digest and its hold.
+  const ls = await import("../src/late-settlements.js");
+  for (const [needle, what] of [
+    ["an EIP-3009 authorization on an EVM chain whose settlement was answered unconfirmed, with its payer, nonce, route, amount and validBefore", "the booked authorization"],
+    [`at least ${Math.round(ls.WINDOW_MS / 60000)} minutes, and never before its validBefore has passed; one still open after ${Math.round(ls.MAX_AGE_MS / 3600000)} hours`, "the book's hold, from its constants"],
+    ["a Permit2 deadline, an Algorand transaction's lastValid round, the expiration ledger of a Stellar payer's signed authorization entries", "the expiry each rail names"],
+    ["the 402 answer and settle receipt of an x402 payment whose settlement was answered unconfirmed", "the stored unconfirmed answer"],
+    ["with a digest of the payer's signature", "the stored signature digest"],
+    [`at most ${rg.settledValidityHoldText()}), or a day for a payment off an EVM chain`, "the stored answer's hold and its bound"],
+  ]) ok(reads.includes(needle), `dataHandling.readsOnly names ${what}`);
 }
 // The heartbeat figure is the interval of the observer that actually keeps it:
 // the Cloudflare cron in workers/status-probe/wrangler.toml. It said 15, the

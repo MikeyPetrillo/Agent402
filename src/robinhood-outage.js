@@ -89,7 +89,10 @@ export function isAmbiguousSettleFailure(err, { isPreBroadcast = () => false, is
   return !isPaymentVerdict(err.errorReason, graceful);
 }
 
+// Only an authorization the payer signed: beside a Permit2 payment's
+// permit2Authorization an `authorization` block is never verified.
 const authOf = (payload) => {
+  if (payload?.payload?.permit2Authorization != null) return null;
   const a = payload?.payload?.authorization;
   if (!a || !ADDR.test(String(a.from || "")) || !NONCE.test(String(a.nonce || ""))) return null;
   return a;

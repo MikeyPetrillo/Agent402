@@ -11,6 +11,7 @@
 // hash.
 
 import { decodePaymentHeader } from "./payment-header.js";
+import { RETRY_SAME_PAYMENT } from "./payment-reject.js";
 
 export const GATEWAY_WIRE = "gateway-batched";
 export const GATEWAY_KIND_NAME = "GatewayWalletBatched";
@@ -87,7 +88,7 @@ export function isGatewayPendingAnswer(req, receipt) {
 export function classifySettlementPending(receipt) {
   if (!isSettlementPendingReceipt(receipt)) return null;
   const network = typeof receipt.network === "string" && receipt.network ? receipt.network : null;
-  return { reason: "settlement-pending", retry: "same-payment", network, retryAfterSeconds: PENDING_RETRY_AFTER_SECONDS, detail: SETTLEMENT_PENDING_DETAIL };
+  return { reason: "settlement-pending", retry: RETRY_SAME_PAYMENT, network, retryAfterSeconds: PENDING_RETRY_AFTER_SECONDS, detail: SETTLEMENT_PENDING_DETAIL };
 }
 
 /** Set on the request (by the Gateway client) when a pending batched payment
