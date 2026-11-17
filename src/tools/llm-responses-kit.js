@@ -29,7 +29,7 @@ import {
   clampToMargin, assertMeteredAvailable, attemptsFor, serviceTierFor, validateServiceTier, cacheControlPref, upstreamUserId, PROVIDER_SORT_ENABLED,
   fetchOpenRouter, upstreamHttpError, refuseUnlistedMeteredModel, isInputTooLarge, streamOpenRouterTo, bad, MAX_IMAGES, maxInputCharsFor, inputTooLargeError,
   failoverChain, modelFallbackPref, availabilitySubstitution, retryRateLimited,
-  rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, UPSTREAM_TIMEOUT_MS,
+  rateLimitDelaysFor, paymentWindowTimeoutMs, timedOutBudget, streamClientWatch, STREAM_TIMEOUT_MS, bufferedAttemptMs, readUpstreamBody,
   createAnswerWatch, EMPTY_REFUSAL_MESSAGE,
   validateReasoning, reasoningForLink, lowestEffortRetry, recoveryRunAffordable, retryEmptyAtLowestEffort,
   setReasoningAdjustedHeader, REASONING_ADJUSTED, LINK_PROBE,
@@ -518,13 +518,15 @@ export function makeResponsesHandler(routeTier) {
       if (model === refusedModel) continue;
       let outbound;
       try { outbound = outboundFor(model, flex); } catch (e) { if (!lastErr) lastErr = e; continue; }
-      const timeoutMs = paymentWindowTimeoutMs(req, UPSTREAM_TIMEOUT_MS);
+      // This attempt's own deadline, sized to the output cap it was sent with.
+      const ownMs = bufferedAttemptMs(outbound.max_output_tokens, tier);
+      const timeoutMs = paymentWindowTimeoutMs(req, ownMs);
       const attemptStarted = Date.now();
       try {
         const callOnce = (sendBody, ms) => retryRateLimited(async () => {
           const res = await fetchOpenRouter(sendBody, { url: OPENROUTER_RESPONSES_URL, timeoutMs: ms });
           if (!res.ok) await upstreamHttpError(res, sendBody?.model);
-          const text = await res.text();
+          const text = await readUpstreamBody(res, { req });
           let parsed;
           try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
           return assertUpstreamBody(parsed, { model: sendBody?.model });
@@ -538,7 +540,7 @@ export function makeResponsesHandler(routeTier) {
         if (isEmptyIncomplete(data)) {
           const plan = lowestEffortRetry(outbound.reasoning, body.reasoning, model);
           const again = await retryEmptyAtLowestEffort({
-            once: recovery, plan, req, timeouts,
+            once: recovery, plan, req, timeouts, defaultMs: ownMs,
             affordable: () => recoveryRunAffordable(outbound[LINK_PROBE], tier, imageCount, data?.usage?.cost, req?.__meteredQuoteUsd),
             run: (p, ms) => callOnce({ ...outbound, reasoning: p.reasoning }, ms),
             usable: (d) => !(d?.status === "failed" || d?.error) && !isEmptyIncomplete(d) && !isEmptyFilteredIncomplete(d),

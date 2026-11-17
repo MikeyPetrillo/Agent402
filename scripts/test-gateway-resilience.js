@@ -6,6 +6,9 @@
 //   - an EVM authorization bounds each attempt: too little settleable life left
 //     means no new attempt (504, not charged), otherwise the per-attempt
 //     timeout is cut to fit; with no EVM authorization nothing changes;
+//   - a buffered attempt's own deadline is sized to its output cap (about
+//     277 s for 8000 tokens), within the floor and ceiling knobs, and the CDN
+//     wait and the payment window still cap it, on every wire;
 //   - an unusable upstream 200 (no message, no content array, an empty
 //     content_filter incomplete, no embeddings, no image, no choice) is a 502,
 //     while an empty end_turn / stop stays a 200;
@@ -257,6 +260,53 @@ for (const w of wires) {
   rec.restore();
   ok(a.out?.__binary && cut.some((ms) => ms < 60_000 && ms > 40_000) && !cut.includes(60_000), `speech: a 66 s authorization cuts the 60 s timeout (${cut.join(",")})`);
   ok(b.out?.__binary && rec.seen.includes(60_000), "speech control: no EVM authorization keeps the 60 s timeout");
+}
+
+// ---- 5b. a buffered attempt's deadline is sized to its output cap ----------
+// max(floor, 10 s + max_tokens / 30 tokens per second), never past the ceiling,
+// then shortened by the payment window and the CDN proxy's wait as before.
+{
+  const { bufferedAttemptMs, TIERS, UPSTREAM_TIMEOUT_MS } = G;
+  const premium = TIERS["v1-chat-premium"];
+  const t8k = bufferedAttemptMs(8000, premium);
+  ok(t8k > 276_000 && t8k < 278_000, `an 8000-token cap gets about 277 s (${t8k} ms)`);
+  ok(bufferedAttemptMs(200, premium) === UPSTREAM_TIMEOUT_MS && UPSTREAM_TIMEOUT_MS === 90_000, "a short cap keeps the 90 s floor");
+  ok(bufferedAttemptMs(undefined, premium) === bufferedAttemptMs(premium.defaultMaxTokens, premium) && bufferedAttemptMs(undefined, premium) > 90_000, `no cap: sized at the tier's default output cap (${bufferedAttemptMs(undefined, premium)} ms)`);
+  ok(bufferedAttemptMs(100_000, premium) === 300_000, "the ceiling (300 s) bounds any cap");
+  process.env.LLM_ATTEMPT_TOKENS_PER_SEC = "60"; process.env.LLM_ATTEMPT_FLOOR_MS = "120000"; process.env.LLM_ATTEMPT_MAX_MS = "200000";
+  const knobs = [bufferedAttemptMs(8000, premium), bufferedAttemptMs(200, premium), bufferedAttemptMs(20_000, premium)];
+  delete process.env.LLM_ATTEMPT_TOKENS_PER_SEC; delete process.env.LLM_ATTEMPT_FLOOR_MS; delete process.env.LLM_ATTEMPT_MAX_MS;
+  ok(knobs[0] > 143_000 && knobs[0] < 144_000 && knobs[1] === 120_000 && knobs[2] === 200_000, `the rate, floor and ceiling knobs apply (${knobs.join(",")})`);
+  process.env.LLM_ATTEMPT_TOKENS_PER_SEC = "abc"; process.env.LLM_ATTEMPT_FLOOR_MS = "-5";
+  const junk = bufferedAttemptMs(8000, premium);
+  delete process.env.LLM_ATTEMPT_TOKENS_PER_SEC; delete process.env.LLM_ATTEMPT_FLOOR_MS;
+  ok(junk === t8k, "an unreadable knob reads its default");
+  // Through each wire's premium handler, on the timeout the attempt is sent with.
+  const premiumWires = [
+    { name: "chat", run: (extra, req) => tool("v1-chat-premium").handler({ messages: [{ role: "user", content: "hi" }], ...extra }, req), okBody: chatOk, cap: "max_tokens" },
+    { name: "messages", run: (extra, req) => makeMessagesHandler("v1-chat-premium")({ messages: [{ role: "user", content: "hi" }], max_tokens: extra.max_tokens ?? 4096, ...extra }, req), okBody: msgOk, cap: "max_tokens" },
+    { name: "responses", run: (extra, req) => makeResponsesHandler("v1-chat-premium")({ input: "hi", ...(extra.max_tokens ? { max_output_tokens: extra.max_tokens } : {}) }, req), okBody: respOk, cap: "max_output_tokens" },
+  ];
+  const sent = async (w, extra, req) => {
+    const seen = []; const caps = [];
+    const at = AbortSignal.timeout;
+    AbortSignal.timeout = (ms) => { seen.push(ms); return at.call(AbortSignal, ms); };
+    globalThis.fetch = async (url, init) => { const b = JSON.parse(init.body); caps.push(b[w.cap]); return w.okBody(b); };
+    const { err } = await settle(() => w.run(extra, req));
+    AbortSignal.timeout = at;
+    return { ms: seen[0], cap: caps[0], err };
+  };
+  const cdnReq = (secs) => Object.assign(evmReq(300), { viaCdn: true, cdnSyncDeadlineMs: Date.now() + secs * 1000 });
+  for (const w of premiumWires) {
+    const open = await sent(w, { max_tokens: 8000 }, evmReq(300));
+    ok(!open.err && open.cap === 8000 && open.ms > 276_000 && open.ms < 278_000, `${w.name} premium: 8000 tokens under a stock 300 s authorization, off the CDN path, gets about 277 s (${open.ms} ms, cap ${open.cap}, ${open.err?.message || "200"})`);
+    const cdn = await sent(w, { max_tokens: 8000 }, cdnReq(90));
+    ok(!cdn.err && cdn.ms <= 85_000 && cdn.ms > 80_000, `${w.name} premium: on the CDN path the proxy's wait still caps it (${cdn.ms} ms)`);
+    const short = await sent(w, { max_tokens: 8000 }, evmReq(66));
+    ok(!short.err && short.ms < 60_000 - PAYMENT_WINDOW_TAIL_MS + 1 && short.ms > 40_000, `${w.name} premium: the payment window always caps it (${short.ms} ms)`);
+    const none = await sent(w, {}, evmReq(300));
+    ok(!none.err && none.ms === bufferedAttemptMs(none.cap, premium) && none.ms > 90_000, `${w.name} premium: no cap sent -> sized at the cap the attempt carries, the tier default (${none.ms} ms, cap ${none.cap})`);
+  }
 }
 
 // ---- 4. unusable 200s ------------------------------------------------------

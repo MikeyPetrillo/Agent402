@@ -65,6 +65,7 @@ import { cacheGet, cacheSet } from "../cache.js";
 import { unknownModelVerdict, isListedModel, contextTokensOf, listedModelsWithContext, MAX_SUGGESTIONS } from "../model-catalog.js";
 import { stripControlChars } from "../prepayment-refusal.js";
 import { notChargedOn } from "../not-charged.js";
+import { envPositive } from "../env-num.js";
 import { routeHint, inReferralRun } from "../referral-run.js";
 
 const OPENROUTER_KEY = () => (process.env.OPENROUTER_API_KEY || "").trim();
@@ -3122,6 +3123,50 @@ export function createSseUsageScrubber({ onUsage, vendorKeys = false, modelAs } 
  */
 
 export const UPSTREAM_TIMEOUT_MS = 90_000;
+
+/** One buffered (non-stream) model attempt's own deadline, sized to the
+ *  output it may produce: the first-token allowance plus `maxTokens` at a
+ *  floor generation rate, never under the floor and never over the ceiling.
+ *  The caller's payment window and the CDN proxy's wait still shorten it
+ *  (paymentWindowTimeoutMs). A request with no cap is sized at the tier's
+ *  default output cap.
+ *    LLM_ATTEMPT_FLOOR_MS          floor (default UPSTREAM_TIMEOUT_MS, 90 s)
+ *    LLM_ATTEMPT_TOKENS_PER_SEC    floor generation rate (default 30)
+ *    LLM_ATTEMPT_MAX_MS            ceiling (default 300 s, the life of a
+ *                                  stock EVM authorization); wins over the floor
+ *  Only an attempt the provider generates slower than the floor rate runs
+ *  out; the upstream stops billing when the attempt is cut. */
+export const ATTEMPT_FIRST_TOKEN_MS = 10_000;
+export const attemptFloorMs = () => envPositive("LLM_ATTEMPT_FLOOR_MS", UPSTREAM_TIMEOUT_MS);
+export const attemptTokensPerSec = () => envPositive("LLM_ATTEMPT_TOKENS_PER_SEC", 30);
+export const attemptCeilingMs = () => envPositive("LLM_ATTEMPT_MAX_MS", 300_000);
+export function bufferedAttemptMs(maxTokens, tier = null) {
+  const asked = Number(maxTokens);
+  const fallback = Number(tier?.defaultMaxTokens) > 0 ? Math.min(Number(tier.defaultMaxTokens), Number(tier.maxTokens) || Infinity) : Number(tier?.maxTokens) || 0;
+  const cap = Number.isFinite(asked) && asked > 0 ? asked : fallback;
+  const sized = ATTEMPT_FIRST_TOKEN_MS + Math.ceil((cap / attemptTokensPerSec()) * 1000);
+  return Math.round(Math.min(attemptCeilingMs(), Math.max(attemptFloorMs(), sized)));
+}
+
+/** A buffered answer's body, read under the attempt's own signal. OpenRouter
+ *  commits its 200 headers early (keep-alive whitespace while the model
+ *  works), so the attempt's timer usually fires during this read, not during
+ *  fetch(): that is our own timeout, a 504 (not charged) marked
+ *  upstreamTimeout so the chain walk counts it in the timed-out budget. An
+ *  abort reason we raised ourselves (the client-gone 499, a drain abort)
+ *  carries its own status and is rethrown as it is, as is any other failure.
+ *  `as: "bytes"` reads a Buffer. */
+export async function readUpstreamBody(res, { req = null, as = "text" } = {}) {
+  try {
+    return as === "bytes" ? Buffer.from(await res.arrayBuffer()) : await res.text();
+  } catch (e) {
+    if (!Number.isInteger(e?.statusCode) && (e?.name === "TimeoutError" || e?.name === "AbortError")) {
+      throw Object.assign(bad(`Upstream did not finish the answer within this attempt's time limit.${notChargedOn(req)}`, 504), { upstreamTimeout: true });
+    }
+    throw e;
+  }
+}
+
 export async function fetchOpenRouter(body, { timeoutMs, signal, url = OPENROUTER_URL } = {}) {
   const key = OPENROUTER_KEY();
   if (!key) throw bad("LLM gateway not configured (OPENROUTER_API_KEY unset)", 503);
@@ -3235,7 +3280,7 @@ export function assertUpstreamBody(data, { model } = {}) {
 async function callOpenRouter(body, { timeoutMs, req = null } = {}) {
   const res = await fetchOpenRouter(body, { timeoutMs });
   if (!res.ok) await upstreamHttpError(res, body?.model);
-  const text = await res.text();
+  const text = await readUpstreamBody(res, { req });
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data, { model: body?.model });
@@ -3925,7 +3970,7 @@ async function embeddingsHandler(input, req) {
     throw bad(`Upstream request failed: ${e.message}`, 504);
   }
   if (!res.ok) await throwUpstreamError(res);
-  const text = await res.text();
+  const text = await readUpstreamBody(res, { req });
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data);
@@ -4033,7 +4078,7 @@ async function rerankHandler(input, req) {
     throw bad(`Upstream request failed: ${e.message}`, 504);
   }
   if (!res.ok) await throwUpstreamError(res);
-  const text = await res.text();
+  const text = await readUpstreamBody(res, { req });
   let data;
   try { data = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
   assertUpstreamBody(data);
@@ -4334,7 +4379,7 @@ async function speechHandler(input, req) {
         throw err;
       }
       if (!res.ok) await throwUpstreamError(res);
-      const buffer = Buffer.from(await res.arrayBuffer());
+      const buffer = await readUpstreamBody(res, { req, as: "bytes" });
       if (buffer.length === 0) throw bad("Upstream returned no audio - retry, or rephrase the input", 502);
       // Speech bills per input character at the served link's private rate
       // (the wire reports no cost); the same meter and margin event as the
@@ -4657,7 +4702,9 @@ function makeHandler(routeTier) {
       const directBody = directPlan ? directPlan.body : null;
       const abListed = !!directModelFor(model, directCfg);
       const abLabel = directBody ? "direct" : "openrouter";
-      const timeoutMs = attemptTimeoutMs(directPlan, UPSTREAM_TIMEOUT_MS);
+      // This attempt's own deadline, sized to the output cap it was sent with.
+      const ownMs = bufferedAttemptMs(outbound.max_tokens ?? outbound.max_completion_tokens, TIERS[tierSlug]);
+      const timeoutMs = attemptTimeoutMs(directPlan, ownMs);
       const attemptStarted = Date.now();
       try {
         // usage.include once asked OpenRouter for the exact upstream bill;
@@ -4679,7 +4726,7 @@ function makeHandler(routeTier) {
         if (!directBody && isEmptyLength(data)) {
           const plan = lowestEffortRetry(outbound.reasoning, body.reasoning, model);
           const again = await retryEmptyAtLowestEffort({
-            once: recovery, plan, req, timeouts,
+            once: recovery, plan, req, timeouts, defaultMs: ownMs,
             affordable: () => recoveryRunAffordable(outbound[LINK_PROBE], TIERS[tierSlug], imageCount, data?.usage?.cost, req?.__meteredQuoteUsd, discardedUsd),
             run: (p, ms) => retryRateLimited(() => callOpenRouter({ ...outbound, reasoning: p.reasoning, usage: { include: true } }, { timeoutMs: ms, req }), { delays: rateLimitDelaysFor(flex) }),
             usable: (d) => !isEmptyLength(d) && !isEmptyRefusal(d),
@@ -4772,7 +4819,7 @@ function makeHandler(routeTier) {
         return data;
       } catch (e) {
         if (abListed) noteDirectAb(abLabel, { ok: false, reason: failureBucket(e) });
-        if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody, UPSTREAM_TIMEOUT_MS));
+        if (directBody) noteDirectOutcome(false, failureBucket(e), undefined, directOpts(model, timeoutMs, directBody, ownMs));
         if (![502, 503, 504].includes(e?.statusCode)) throw e;
         if (!directBody || !lastErr) lastErr = e;
         // Not counted for a direct attempt (see the stream walk above).

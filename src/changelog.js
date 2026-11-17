@@ -8,6 +8,14 @@ const mins = (ms) => { const n = Math.round(ms / 60_000); return n === 1 ? "a mi
 const ENTRIES = [
   {
     date: "2026-11-17",
+    title: "A non-streamed model call's time limit follows its max_tokens",
+    items: [
+      "Gateway: A non-streamed call on the chat completions, Messages or Responses routes waits on the model for 10 seconds plus one second per 30 tokens of its max_tokens (the tier's default output cap when none is sent), at least 90 seconds and at most 300; the payment window and the time a connection through the CDN waits for an answer still end it sooner.",
+      "Gateway: A model answer that runs out that time while its body is still arriving is answered 504 and says it was not charged, and counts as a timed-out attempt in the model chain, as a timeout before the first byte already did.",
+    ],
+  },
+  {
+    date: "2026-11-17",
     title: "Weather probabilities, place names, and six retired routes",
     items: [
       "Tools: weather-probability gives the chance that a day's high, low, mean temperature, rain total or peak wind meets a threshold or falls in a range, as the share of up to 82 ensemble forecast members (ECMWF IFS and NOAA GEFS), with each model's count and the spread, for any place up to 15 days ahead: all 82 reach about 13 days ahead, and the last days answer from the 31 NOAA GEFS members, with the model left out named in the answer. weather-market-brackets takes the brackets of a weather market and the price the caller holds for each and returns each bracket's forecast probability with that price beside it, and weather-market-board does the same for many cities on one date (13 large US cities by default, or up to 20 the caller names). The caller supplies every bracket and price: the tools read no market feed, compare nothing and give no rating or recommendation, and each answer says the figures are raw model output, not calibrated to a station.",

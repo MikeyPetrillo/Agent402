@@ -96,6 +96,18 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   client's own waits) is given up so a later poll starts another. Every refund create carries the
   payment's idempotency key, so two calls are one refund, and a late failure never writes over a
   recorded refund (`scripts/test-human-checkout.js`, `scripts/test-refund-owed-card.js`).
+- **Buffered attempt deadline** (chat, Messages, Responses; `bufferedAttemptMs` in
+  `llm-gateway-kit.js`): each non-stream attempt's own timeout is 10 s plus the output cap it is
+  sent with (the tier's default cap when the buyer sent none) at `LLM_ATTEMPT_TOKENS_PER_SEC`
+  (default 30), never under `LLM_ATTEMPT_FLOOR_MS` (default `UPSTREAM_TIMEOUT_MS`, 90 s) and never
+  over `LLM_ATTEMPT_MAX_MS` (default 300 s; it wins over the floor); `paymentWindowTimeoutMs` then
+  shortens it to the EVM authorization's settleable life and the CDN sync window as before. The
+  body read is under the same signal: a timeout or abort while reading a buffered answer
+  (`readUpstreamBody`, every gateway wire, embeddings, rerank, speech, images) is a 504 marked
+  `upstreamTimeout`, carrying `notChargedOn(req)` on a route call, and counts in
+  `LLM_MAX_TIMED_OUT_ATTEMPTS`; an
+  abort reason we raised (client gone, drain) is rethrown as it is. Suites:
+  `scripts/test-gateway-resilience.js`, `scripts/test-llm-timed-out-budget.js`.
 - **Metered client timeout:** `meteredTimeoutSentence()` (`src/metered-lead.js`, from
   `UPSTREAM_TIMEOUT_MS`) is the one wording on every surface that describes a metered call: the
   metered tool pages, `/pricing`, `/docs`, the guides, and a metered route's first-contact 402

@@ -47,7 +47,7 @@
 // would expose our job ids.
 import { parseMultipartFile } from "../multipart.js";
 import { imageSize, examplePngBase64 } from "./judge-preview-kit.js";
-import { bad, fetchOpenRouter, throwUpstreamError, assertUpstreamBody, MARGIN, OPENROUTER_ATTRIBUTION, upstreamUserId, IMAGES_PATH, IMAGES_PRICE, stripBilling } from "./llm-gateway-kit.js";
+import { bad, fetchOpenRouter, readUpstreamBody, throwUpstreamError, assertUpstreamBody, MARGIN, OPENROUTER_ATTRIBUTION, upstreamUserId, IMAGES_PATH, IMAGES_PRICE, stripBilling } from "./llm-gateway-kit.js";
 import { redactSecrets } from "./redact.js";
 import { upstreamCosts } from "../upstream-costs.js";
 import { createHash } from "node:crypto";
@@ -388,7 +388,7 @@ export async function imageTierHandler(tierSlug, input, req, { zdr = false, jimp
       started++;
       const res = await fetchOpenRouter(body, { url: OPENROUTER_IMAGES_URL, timeoutMs: linkTimeoutMs });
       if (!res.ok) await throwUpstreamError(res);
-      const text = await res.text();
+      const text = await readUpstreamBody(res, { req });
       let parsed;
       try { parsed = JSON.parse(text); } catch { throw bad("Upstream returned non-JSON", 502); }
         assertUpstreamBody(parsed);

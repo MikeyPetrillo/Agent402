@@ -7,8 +7,12 @@
 //     502 streamOpenRouterTo throws, marked upstreamTimeout) counts;
 //   - a 504 with no timeout mark counts when it ran out nearly the whole
 //     timeout (the elapsed rule), and not when it failed fast;
+//   - a buffered answer whose body stalls after its headers until the attempt's
+//     deadline (real fetch against a local stub) is a 504 marked upstreamTimeout
+//     that says it was not charged, and counts; the buyer leaving mid-read is
+//     still the 499;
 //   - provider errors with no timeout still walk the whole chain.
-// Offline: stub fetch, no network, no keys.
+// Offline: stub fetch and a loopback stub, no network, no keys.
 //
 //   node scripts/test-llm-timed-out-budget.js
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -127,6 +131,79 @@ globalThis.setTimeout = realSetTimeout;
   const fast = await attempts(w, { stream: false, fetchImpl: async () => { throw new TypeError("fetch failed"); } });
   ok(fast.n > 2, `elapsed rule: a 504 that failed fast does not count (attempts ${fast.n})`);
   Date.now = realNow;
+}
+
+// ---- plain calls: headers sent, then the body stalls past the attempt's deadline ----
+// The upstream commits its 200 headers early and the attempt's own timer fires
+// during the body read (real fetch against a local stub, a short ceiling). That
+// is our own timeout: a 504 marked upstreamTimeout that says it was not charged,
+// counted in the timed-out budget, never a raw error (a 500 and a tool failure).
+{
+  const { createServer } = await import("node:http");
+  const held = new Set();
+  const stub = createServer((rq, rs) => {
+    rq.resume();
+    rq.on("end", () => {
+      rs.writeHead(200, { "content-type": "application/json" });
+      rs.write(" ");
+      if (rq.url === "/slow-ok") setTimeout(() => rs.end(JSON.stringify(rs.__okBody || {})), 100);
+      else held.add(rs);
+    });
+  });
+  await new Promise((r) => stub.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${stub.address().port}`;
+  const routeReq = () => ({ headers: {}, ip: "203.0.113.9" });
+  process.env.LLM_ATTEMPT_MAX_MS = "400";
+  const stalled = async (w, max) => {
+    let n = 0;
+    if (max) process.env.LLM_MAX_TIMED_OUT_ATTEMPTS = max;
+    globalThis.fetch = async (url, init = {}) => { n++; return realFetch(`${base}/stall`, init); };
+    let err = null;
+    try { await w.tool.handler(w.input({}), routeReq()); } catch (e) { err = e; }
+    delete process.env.LLM_MAX_TIMED_OUT_ATTEMPTS;
+    return { n, err };
+  };
+  for (const w of WIRES) {
+    const capped = await stalled(w);
+    ok(capped.n === 2 && capped.err?.statusCode === 504 && capped.err?.upstreamTimeout === true && /Nothing was charged\./.test(capped.err?.message || ""),
+      `${w.name} plain: a body that stalls after the headers is a 504 not charged, two of them end the walk (attempts ${capped.n}, ${capped.err?.statusCode} ${capped.err?.message})`);
+    const one = await stalled(w, "1");
+    ok(one.n === 1 && one.err?.statusCode === 504 && one.err?.upstreamTimeout === true, `${w.name} plain: with a budget of one, the first stalled body ends the walk (attempts ${one.n})`);
+    const uncapped = await stalled(w, "99");
+    ok(uncapped.n > 2 && uncapped.err?.statusCode === 504, `${w.name} plain: a stalled body walks on to the next link while the budget lasts (attempts ${uncapped.n})`);
+  }
+  // Control: a body that finishes inside the deadline is served.
+  {
+    const w = WIRES[0];
+    let n = 0;
+    globalThis.fetch = async (url, init = {}) => {
+      n++;
+      const b = JSON.parse(init.body);
+      const r = await realFetch(`${base}/slow-ok`, init);
+      return { ok: true, status: 200, headers: r.headers, text: async () => { await r.text(); return JSON.stringify({ id: "g", model: b.model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }); } };
+    };
+    let out = null, err = null;
+    try { out = await w.tool.handler(w.input({}), routeReq()); } catch (e) { err = e; }
+    ok(!err && n === 1 && out?.choices?.[0]?.message?.content === "OK", `control: a body that finishes inside the deadline is served (attempts ${n}, ${err?.message || "200"})`);
+  }
+  // The buyer leaving mid-read is still the 499, not a timed-out attempt.
+  {
+    const { runInAbortableScope } = await import("../src/drain-abort.js");
+    const { clientGoneError, isClientGoneAbort } = await import("../src/hangup-settlement.js");
+    const ctl = new AbortController();
+    let n = 0;
+    globalThis.fetch = async (url, init = {}) => { n++; return realFetch(`${base}/stall`, init); };
+    process.env.LLM_ATTEMPT_MAX_MS = "5000";
+    const t0 = Date.now();
+    setTimeout(() => ctl.abort(clientGoneError()), 150);
+    let err = null;
+    try { await runInAbortableScope(() => WIRES[0].tool.handler(WIRES[0].input({}), routeReq()), { signal: ctl.signal }); } catch (e) { err = e; }
+    ok(isClientGoneAbort(err) && err.statusCode === 499 && !err.upstreamTimeout && n === 1 && Date.now() - t0 < 2000, `the buyer leaving during the body read is still the 499, one attempt, no timed-out mark (${err?.statusCode} ${err?.message?.slice(0, 60)}, attempts ${n})`);
+  }
+  delete process.env.LLM_ATTEMPT_MAX_MS;
+  for (const rs of held) rs.destroy();
+  stub.closeAllConnections?.();
+  await new Promise((r) => stub.close(r));
 }
 
 // ---- provider errors (no generation) walk the whole chain ----
