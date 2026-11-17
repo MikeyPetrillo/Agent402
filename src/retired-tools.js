@@ -28,10 +28,11 @@ export const RETIRED_TOOLS = Object.freeze({
   // stated narrower range). A tool that answers a neighboring question is not
   // one: that route retires with no pointer.
   //
-  // 2026-11-17: the three open-map geocoding tools. place-lookup resolves a
-  // place name to coordinates (not a street address); nothing live turns
-  // coordinates into a postal address or searches points of interest.
-  geocode: { retiredAt: "2026-11-17", replacement: "place-lookup" },
+  // 2026-11-17: the three open-map geocoding tools. geocode took a street
+  // address; place-lookup finds places (cities, towns, regions), and answers
+  // a street address found: false, so it is not a replacement. Nothing live
+  // turns coordinates into a postal address or searches points of interest.
+  geocode: { retiredAt: "2026-11-17", replacement: null },
   "reverse-geocode": { retiredAt: "2026-11-17", replacement: null },
   "place-search": { retiredAt: "2026-11-17", replacement: null },
   // 2026-11-17: the three second-provider search tools; the first-party
@@ -40,8 +41,10 @@ export const RETIRED_TOOLS = Object.freeze({
   "exa-answer": { retiredAt: "2026-11-17", replacement: "answer" },
   "exa-contents": { retiredAt: "2026-11-17", replacement: "extract" },
   // 2026-11-16: the routes that read an open DeFi analytics source, and the
-  // spot exchange order book. The stablecoin list and the per-network DEX
-  // volume ranking have a live tool that answers the same question. Locked
+  // spot exchange order book. The per-network DEX volume ranking has a live
+  // tool that answers the same question. The stablecoin list ranked every
+  // peg by circulating supply, per chain; the depeg watch carries no supply
+  // figure and covers USD pegs only, so it is not a replacement. Locked
   // value (by protocol, chain or rollup), pool yields and their history,
   // protocol fees, supply history, on-chain options volume and a spot order
   // book have none: the market-cap screens, lending rates and the perpetual
@@ -52,7 +55,7 @@ export const RETIRED_TOOLS = Object.freeze({
   "defi-protocol": { retiredAt: "2026-11-16", replacement: null },
   "defi-chains": { retiredAt: "2026-11-16", replacement: null },
   "defi-chain-tvl-history": { retiredAt: "2026-11-16", replacement: null },
-  "stablecoins": { retiredAt: "2026-11-16", replacement: "stablecoin-depeg-watch" },
+  "stablecoins": { retiredAt: "2026-11-16", replacement: null },
   "stablecoin-supply-history": { retiredAt: "2026-11-16", replacement: null },
   "defi-fees": { retiredAt: "2026-11-16", replacement: null },
   "defi-dex-volume": { retiredAt: "2026-11-16", replacement: "dex-volume-board" },

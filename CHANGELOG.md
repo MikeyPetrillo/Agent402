@@ -35,9 +35,10 @@ Tools:
   the first and last hour each is met. Five calculators run on the free
   proof-of-work tier with no data source behind them: sun-times,
   heat-index-calc, aqi-calc, degree-days-calc and wmo-weather-code.
-- geocode, reverse-geocode and place-search are retired and answer 410: geocode
-  names place-lookup as the replacement, and reverse-geocode and place-search
-  name none.
+- geocode, reverse-geocode and place-search are retired and answer 410, and
+  name none: place-lookup finds places (cities, towns, regions and postal
+  codes), not street addresses, and nothing live turns coordinates into an
+  address or searches points of interest.
   exa-search, exa-answer and exa-contents are retired and answer 410 naming
   search, answer and extract. /api/gateway-status no longer carries exaSpend or
   exaAllowance.
@@ -97,13 +98,12 @@ Tools:
   Each market-data listing states how often its figures are refreshed: every
   5 minutes for exchange-spread and for a pool's recent trades, every 15 for
   stablecoin-depeg-watch, and every 30 for the rest.
-- Fifteen routes are retired and answer 410 Gone with a Sunset date. Two name
-  a replacement that answers the same question: stablecoins
-  (stablecoin-depeg-watch) and defi-dex-volume (dex-volume-board). The other
-  thirteen name none: defi-yields, defi-yield-history, defi-protocols,
-  defi-protocol, defi-chains, defi-chain-tvl-history,
-  stablecoin-supply-history, defi-fees, defi-tvl, dex-top-pools, l2-tvl,
-  options-volume and crypto-orderbook.
+- Fifteen routes are retired and answer 410 Gone with a Sunset date. One names
+  a replacement that answers the same question: defi-dex-volume
+  (dex-volume-board). The other fourteen name none: defi-yields,
+  defi-yield-history, defi-protocols, defi-protocol, defi-chains,
+  defi-chain-tvl-history, stablecoins, stablecoin-supply-history, defi-fees,
+  defi-tvl, dex-top-pools, l2-tvl, options-volume and crypto-orderbook.
 
 Skill packs:
 - defi-protocol-scanner reads the token's supply and valuation profile

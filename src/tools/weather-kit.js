@@ -677,7 +677,7 @@ export const WEATHER_TOOLS = [
     category: "data",
     price: "$0.001",
     description:
-      `Resolve a city, town, region or postal-code name to coordinates worldwide: latitude and longitude, country, region, timezone, population, elevation and postcodes, best match first. Add a qualifier after a comma ("Austin, TX", "Paris, France") or a two-letter country filter. Place names only, not street addresses. ?q=Pittsburgh&country=US. ${GEONAMES_ATTRIBUTION}`,
+      `Resolve a city, town, region or postal-code name to coordinates worldwide: latitude and longitude, country, region, timezone, population, elevation and postcodes, best match first. Add a qualifier after a comma ("Austin, TX", "Paris, France") or a two-letter country filter. It finds places (cities, towns, regions and postal codes), not street addresses: a street address answers found: false. ?q=Pittsburgh&country=US. ${GEONAMES_ATTRIBUTION}`,
     tags: ["place", "geocode", "city", "coordinates", "timezone", "location"],
     discovery: {
       input: { q: "Pittsburgh", country: "US" },

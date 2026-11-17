@@ -29,16 +29,21 @@ ok(Object.values(RETIRED_TOOLS).every((e) => /^\d{4}-\d{2}-\d{2}$/.test(e.retire
 // retirements are pinned whole, so a pointer added back is a decision made here.
 {
   const POINTERS_2026_11 = {
-    geocode: "place-lookup", "reverse-geocode": null, "place-search": null,
+    geocode: null, "reverse-geocode": null, "place-search": null,
     "exa-search": "search", "exa-answer": "answer", "exa-contents": "extract",
     "defi-yields": null, "defi-yield-history": null, "defi-protocols": null, "defi-protocol": null, "defi-chains": null,
-    "defi-chain-tvl-history": null, stablecoins: "stablecoin-depeg-watch", "stablecoin-supply-history": null, "defi-fees": null,
+    "defi-chain-tvl-history": null, stablecoins: null, "stablecoin-supply-history": null, "defi-fees": null,
     "defi-dex-volume": "dex-volume-board", "defi-tvl": null, "dex-top-pools": null, "l2-tvl": null, "options-volume": null, "crypto-orderbook": null,
   };
   const batch = Object.entries(RETIRED_TOOLS).filter(([, e]) => e.retiredAt === "2026-11-16" || e.retiredAt === "2026-11-17");
   const wrong = batch.filter(([slug, e]) => !(slug in POINTERS_2026_11) || e.replacement !== POINTERS_2026_11[slug]).map(([slug, e]) => `${slug} -> ${e.replacement}`);
   ok(batch.length === Object.keys(POINTERS_2026_11).length && wrong.length === 0, `the 21 routes retired on 2026-11-16 and 2026-11-17 name exactly the reviewed replacements (${wrong.join(", ") || "all match"})`);
   ok(["l2-tvl", "stablecoin-supply-history", "dex-top-pools", "reverse-geocode"].every((s) => RETIRED_TOOLS[s].replacement === null), "locked value by rollup, supply history, pools by locked value and reverse geocoding name no replacement: no live tool answers them");
+  // geocode took a street address, which the place lookup answers found: false; the stablecoin list
+  // ranked every peg by circulating supply per chain, which the USD depeg watch does not carry.
+  ok(RETIRED_TOOLS.geocode.replacement === null && RETIRED_TOOLS.stablecoins.replacement === null, "street-address geocoding and the stablecoin supply ranking name no replacement");
+  const named = batch.filter(([, e]) => e.replacement).map(([slug, e]) => `${slug} -> ${e.replacement}`).sort().join(", ");
+  ok(named === "defi-dex-volume -> dex-volume-board, exa-answer -> answer, exa-contents -> extract, exa-search -> search", `four of the 21 name a replacement, seventeen none (${named})`);
   ok(retiredEntryFor("/api/l2-tvl")?.replacement === null && !("Link" in retirementHeaders(RETIRED_TOOLS["l2-tvl"].retiredAt, null)), "such a route answers 410 with a Sunset date and no successor link");
 }
 
@@ -150,6 +155,7 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
 //   "<slug> names <replacement> as the replacement"      "<slug> (<replacement>)"
 //   "<a>, <b> and <c> are retired and answer 410 naming <x>, <y> and <z>."  (in order)
 //   "<a> and <b> name none"                              "name none: <a>, <b> and <c>."
+//   "<a>, <b> and <c> are retired and answer 410, and name none"
 // and the counts a sentence states in words ("Fifteen routes are retired", "Two
 // name a replacement", "The other thirteen name none"). Each is held to
 // src/retired-tools.js, for every route retired on or after 2026-11-16.
@@ -170,6 +176,7 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
     }
     for (const m of text.matchAll(new RegExp(`(${LIST}) names? none`, "g"))) for (const slug of listOf(m[1])) none.add(slug);
     for (const m of text.matchAll(new RegExp(`names? none: (${LIST})\\.`, "g"))) for (const slug of listOf(m[1])) none.add(slug);
+    for (const m of text.matchAll(new RegExp(`(${LIST}) are retired and answer 410,? and name none`, "g"))) for (const slug of listOf(m[1])) none.add(slug);
     for (const slug of mentioned) {
       const want = registry[slug].replacement;
       if (want && pairs.get(slug) !== want) problems.push(`${slug}: the registry names ${want}, the sentence ${pairs.get(slug) ?? "none"}`);
@@ -177,9 +184,9 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
       if (!want && pairs.has(slug)) problems.push(`${slug}: the registry names no replacement, the sentence ${pairs.get(slug)}`);
       if (!want && !none.has(slug)) problems.push(`${slug}: the registry names no replacement and the sentence does not say so`);
     }
-    const count = (re, actual, what) => { const m = re.exec(text); if (m && NUMBER[m[1].toLowerCase()] !== actual) problems.push(`"${m[0]}" but ${actual} ${what}`); };
+    const count = (re, actual, what) => { const m = re.exec(text); if (m && NUMBER[m[1].toLowerCase()] !== undefined && NUMBER[m[1].toLowerCase()] !== actual) problems.push(`"${m[0]}" but ${actual} ${what}`); };
     count(/\b([A-Za-z]+) routes are retired/, mentioned.length, "are named");
-    count(/\b([A-Za-z]+) name a replacement/, mentioned.filter((slug) => registry[slug].replacement).length, "do");
+    count(/\b([A-Za-z]+) names? a replacement/, mentioned.filter((slug) => registry[slug].replacement).length, "do");
     count(/other ([a-z]+) name none/, mentioned.filter((slug) => !registry[slug].replacement).length, "do");
     return { mentioned, problems };
   };
@@ -193,7 +200,7 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
   const pointers = due.filter(([, e]) => e.replacement).length;
   ok(items.length >= 2 && problems.length === 0, `each changelog retirement sentence matches the registry (${problems.join("; ") || `${items.length} items`})`);
   ok(unsaid.length === 0, `every route retired since ${SINCE} is announced in a changelog retirement sentence (missing: ${unsaid.join(", ") || "none"})`);
-  ok(due.length === 21 && pointers === 6 && due.length - pointers === 15, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
+  ok(due.length === 21 && pointers === 4 && due.length - pointers === 17, `those sentences cover ${due.length} routes: ${pointers} with a replacement, ${due.length - pointers} with none`);
   // Controls: each way a sentence can part from the registry is reported.
   const REG = { geocode: { replacement: "place-lookup" }, "reverse-geocode": { replacement: null }, "place-search": { replacement: null }, "exa-search": { replacement: "search" }, "exa-answer": { replacement: "answer" } };
   const good = "geocode, reverse-geocode and place-search are retired and answer 410: geocode names place-lookup as the replacement, and reverse-geocode and place-search name none. exa-search and exa-answer are retired and answer 410 naming search and answer.";
@@ -207,6 +214,9 @@ const wholeWord = (slug) => new RegExp(`(?<![a-z0-9/-])${escRe(slug)}(?![a-z0-9-
   bad("Four routes are retired and answer 410. One names a replacement: geocode (place-lookup). The other two name none: reverse-geocode and place-search.", /"Four routes are retired" but 3 are named/, "a count that does not match the routes named");
   bad("Three routes are retired. geocode (place-lookup). The other three name none: reverse-geocode and place-search.", /"other three name none" but 2 do/, "a none-count that does not match");
   bad("exa-search and exa-answer are retired and answer 410 naming search.", /lists 2 routes and 1 replacements/, "a replacement list shorter than the routes");
+  ok(problemsIn("reverse-geocode and place-search are retired and answer 410, and name none: nothing live answers them.", REG).problems.length === 0, "control: routes retired with no replacement in one sentence report nothing");
+  bad("geocode, reverse-geocode and place-search are retired and answer 410, and name none.", /geocode: listed as naming none/, "a route with a replacement swept into such a sentence");
+  bad("Two name a replacement: geocode (place-lookup). reverse-geocode and place-search name none.", /"Two name a replacement" but 1 do/, "a pointer count that does not match");
 }
 
 // --- the published-routes snapshot rule (scripts/published-slugs.js) --------------
