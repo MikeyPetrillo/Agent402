@@ -305,13 +305,13 @@ whole API: `Agent402Options`, `CallOptions`, the error classes and the helpers.
 
 | Method | What |
 |---|---|
-| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent?, timeoutMs? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks?, verifyingContracts? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; the three USD caps set spending limits, `maxPerCallUsd` ($4) and `dailyLimitUsd` ($25) on by default (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent; `timeoutMs` (default 120000, `null` to wait without one) abandons a request that has not answered with `RequestTimeoutError` |
+| `new Agent402({ baseUrl?, fetch?, x402Client?, creditsKey?, gateway?, cache?, fetchImpl?, maxPerCallUsd?, dailyLimitUsd?, maxPerHostUsd?, payNetworks?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, userAgent?, timeoutMs? })` | `fetch` is your x402- or MPP-wrapped fetch for paid tools (optional); `x402Client` is the `@x402/core` client that `fetch` wraps, so the caps are enforced on the payment that is signed (see below); `payNetworks` (for example `["base"]`, the names `withNetworkPreference` takes) tells the caps which chains a pre-wrapped `fetch` without an `x402Client` pays on, so a call is counted at the dearest option on those chains (when none of a 402's options is on them, the dearest of all counts); `creditsKey` is a prepaid credits key (`a402_...`) used for paid tools when no `fetch` is given; `gateway` (`{ signer, networks?, verifyingContracts? }`) pays the Circle Gateway batched accept where a 402 offers one, from the signer's Gateway deposit (see above); `cache` (default `true`) memoizes deterministic results; the three USD caps set optional spending limits, none set by default (see below); `maxResponseBytes` (default 32MB, `null` to disable) refuses an oversized response body before it is parsed; `outputValidator` binds a caller-supplied delivery check; `respondAsync` (default `"auto"`), `asyncTimeoutMs` (default 15 minutes) and `onProgress` control slow routes run as jobs (see above); `userAgent` (`"name/version"`) is a calling package's own product token, sent before `agent402-client/<version>` in the User-Agent; `timeoutMs` (default 120000, `null` to wait without one) abandons a request that has not answered with `RequestTimeoutError` |
 | `await a.find(task, { k = 5 })` | Resolve a plain-language task to the best-matching tools on **this host** (route, price, schema, example) |
 | `await a.route(task, { k?, include?, network? })` | Cross-seller Smart Order Router: rank eligible/routable seller rows from the host's current index (free, read-only; opaque results may include server-reported `executeVia`) |
 | `await a.findWorkflows(task, { k = 2 })` | Resolve a task to matching multi-tool workflow templates (skill packs) |
 | `await a.getWorkflowPrompt(slug, args)` | Fetch the rendered prompt messages for a skill pack with arguments substituted in |
 | `await a.topSellers({ limit?, sort?, include? })` | Live x402 leaderboard: which sellers are settling the most USDC (primarily on Base) in the last ~24h (free, no payment) |
-| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, maxUsd?, timeoutMs? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); a slow route runs as a job and is collected for you; returns the JSON result. `maxUsd` allows this call to pay up to that amount (see Spending caps); `timeoutMs` replaces the client's for this call |
+| `await a.call(slug, params, { idempotencyKey?, cache?, maxResponseBytes?, outputValidator?, respondAsync?, asyncTimeoutMs?, onProgress?, maxUsd?, timeoutMs? })` | Call a tool; auto-pays (PoW for free tools; your payment `fetch` or the credits key for wallet-only); a slow route runs as a job and is collected for you; returns the JSON result. `maxUsd` allows this call to pay up to that amount when you set a per-call cap (see Spending caps); `timeoutMs` replaces the client's for this call |
 | `await a.collectJob(jobUrl, { timeoutMs?, onProgress? })` | Collect a job link (from `AsyncJobPendingError.jobUrl`) until it has the answer |
 | `Agent402.solvePow(pow)` / `await Agent402.solvePowAsync(pow)` | Solve a proof-of-work challenge object → an `X-Pow-Solution` value, on the calling thread or on a worker thread; a difficulty above 28 bits is refused |
 | `a.guardX402Client(client)` | Enforce this client's caps on every payment the given `@x402/core` client signs (the same as passing `x402Client`); returns the client |
@@ -390,17 +390,14 @@ Keep it cheap, or accept that cost knowingly.
 
 ## Spending caps (never overpay)
 
-A paid call that would exceed a ceiling is **refused before any payment is
-signed** (it throws `SpendingLimitError` - no funds move). Two ceilings are on by
-default (since 0.9.0): `maxPerCallUsd` at $4 (`DEFAULT_MAX_PER_CALL_USD`, above
-every list price in the Agent402 catalog) and `dailyLimitUsd` at $25
-(`DEFAULT_DAILY_LIMIT_USD`). Set your own numbers, pass `null` to turn one off,
-or allow one call by name with `a.call(slug, params, { maxUsd })`: that amount
-replaces the per-call cap for the call, and the default daily cap does not apply
-to it (a `dailyLimitUsd` or `maxPerHostUsd` you set yourself still does). Under
-any cap, each payment is priced from the known-asset table, so a seller that
-asks for an asset the table does not know is refused; construct with
-`{ maxPerCallUsd: null, dailyLimitUsd: null }` to pay one.
+Spending caps are opt-in: by default the client pays whatever a tool costs and
+never refuses a purchase. Set a ceiling and a call that would exceed it is
+**refused before any payment is signed** (it throws `SpendingLimitError` - no
+funds move). `a.call(slug, params, { maxUsd })` allows one call up to that
+amount: it replaces the per-call cap for that call (a `dailyLimitUsd` or
+`maxPerHostUsd` you set still holds). Under a cap, each payment is priced from
+the known-asset table, so a seller that asks for an asset the table does not
+know is refused.
 
 ```js
 import { Agent402, SpendingLimitError } from "agent402-client";

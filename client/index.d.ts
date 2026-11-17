@@ -57,11 +57,11 @@ export interface Agent402Options {
   tlsDistrust?: boolean;
   /** Resend the SDK's own request once on a connection reset (default true). */
   retryResets?: boolean;
-  /** Per-call ceiling in USD. Default DEFAULT_MAX_PER_CALL_USD (4); null turns it off. */
+  /** Opt-in per-call ceiling in USD (no cap unless set). */
   maxPerCallUsd?: number | null;
-  /** Rolling-24h ceiling in USD. Default DEFAULT_DAILY_LIMIT_USD (25); null turns it off. */
+  /** Opt-in rolling-24h ceiling in USD (no cap unless set). */
   dailyLimitUsd?: number | null;
-  /** Rolling-24h ceiling per seller host in USD (no default). */
+  /** Opt-in rolling-24h ceiling per seller host in USD (no cap unless set). */
   maxPerHostUsd?: number | null;
   /** The @x402/core x402Client your fetch wraps: the caps are then enforced at signing. */
   x402Client?: unknown;
@@ -91,7 +91,7 @@ export interface CallOptions {
   respondAsync?: "auto" | boolean;
   asyncTimeoutMs?: number;
   onProgress?: ((doc: JobProgress) => void) | null;
-  /** Allow this call to pay up to this many USD: replaces the per-call cap, lifts the default daily cap. */
+  /** Allow this call to pay up to this many USD: replaces the per-call cap for the call. */
   maxUsd?: number;
   /** Replaces the client's per-request timeout for this call; null waits without one. */
   timeoutMs?: number | null;
@@ -229,8 +229,6 @@ export class AsyncJobPendingError extends Error {
 }
 
 export const DEFAULT_BASE_URL: string;
-export const DEFAULT_MAX_PER_CALL_USD: number;
-export const DEFAULT_DAILY_LIMIT_USD: number;
 export const DEFAULT_REQUEST_TIMEOUT_MS: number;
 export const DEFAULT_HOST_BLIND_HOLD_MS: number;
 export const HOLD_SLACK_MS: number;

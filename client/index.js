@@ -47,14 +47,6 @@ const userAgentOf = (product) => (typeof product === "string" && PRODUCT_TOKEN_R
 // by default protects nobody, so this one is on; pass null to disable it.
 const DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
-// Spending caps on by default. A client constructed without a cap option gets
-// these two: a single paid call above DEFAULT_MAX_PER_CALL_USD (above every
-// list price in the Agent402 catalog, the same figure agent402-mcp uses) or
-// rolling-24h spend above DEFAULT_DAILY_LIMIT_USD is refused before anything
-// is signed. Pass a number to set your own, null to turn one off, or
-// call(slug, params, { maxUsd }) to allow one call above them.
-export const DEFAULT_MAX_PER_CALL_USD = 4;
-export const DEFAULT_DAILY_LIMIT_USD = 25;
 // Each request the SDK sends is given this long before it is abandoned: the
 // published client timeout for metered calls on Agent402 (src/metered-lead.js
 // meteredClientTimeoutMs), so the client never hangs up before the server's
@@ -220,10 +212,9 @@ export class Agent402 {
    *                                         chain through a distrusted intermediate CA); false sends it as is
    * @param {boolean} [opts.retryResets=true] resend the SDK's own request once when its connection failed
    *                                         before any answer (see resetRetryFetch); false sends each once
-   * @param {number|null} [opts.maxPerCallUsd=4]  hard ceiling on a single paid call (USD); over → SpendingLimitError
-   *                                         before paying. Default DEFAULT_MAX_PER_CALL_USD; null turns it off
-   * @param {number|null} [opts.dailyLimitUsd=25]  hard ceiling on rolling-24h paid spend (USD). Default
-   *                                         DEFAULT_DAILY_LIMIT_USD; null turns it off
+   * @param {number|null} [opts.maxPerCallUsd]  opt-in ceiling on a single paid call (USD); over → SpendingLimitError
+   *                                         before paying. No cap unless set
+   * @param {number|null} [opts.dailyLimitUsd]  opt-in ceiling on rolling-24h paid spend (USD). No cap unless set
    * @param {number} [opts.maxPerHostUsd]    hard ceiling on rolling-24h paid spend to one seller host (USD)
    * @param {object} [opts.x402Client]       the @x402/core x402Client your `fetch` wraps: the caps are then
    *                                         enforced on the payment that is signed (see guardX402Client)
@@ -256,7 +247,7 @@ export class Agent402 {
    *        abandoned (RequestTimeoutError); null waits as long as the connection stays open
    */
   constructor({ baseUrl = DEFAULT_BASE_URL, fetch: payFetch, cache = true, fetchImpl = undefined, tlsDistrust = true,
-    maxPerCallUsd = undefined, dailyLimitUsd = undefined, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
+    maxPerCallUsd = null, dailyLimitUsd = null, maxPerHostUsd = null, creditsKey = null, x402Client = null, payNetworks = null,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES, outputValidator = null,
     respondAsync = "auto", asyncTimeoutMs = DEFAULT_ASYNC_TIMEOUT_MS, onProgress = null, gateway = null, userAgent = null, retryResets = true,
     timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
@@ -298,20 +289,17 @@ export class Agent402 {
     // Spending policy (defends the x402 "wallet drain via uncapped spending"
     // failure mode): hard ceilings enforced BEFORE any payment is signed. A
     // malicious or misconfigured 402 that quotes an inflated price is refused
-    // instead of paid. An option left out takes its default (the per-call and
-    // daily caps are on by default); null = no limit.
+    // instead of paid. Every cap is opt-in: null (the default) is no limit,
+    // so a client nobody configured never refuses a purchase.
     // A call refused before any payment left this process never counts. Once
     // a payment header has been sent, its signed amount counts whatever the
     // seller answers: "settled" on a delivered answer, otherwise "held" (the
     // authorization can still be redeemed) until it can no longer settle and
     // the rolling window has passed it.
     this._spend = {
-      maxPerCall: maxPerCallUsd === undefined ? DEFAULT_MAX_PER_CALL_USD : numOrNull(maxPerCallUsd),
-      daily: dailyLimitUsd === undefined ? DEFAULT_DAILY_LIMIT_USD : numOrNull(dailyLimitUsd),
+      maxPerCall: numOrNull(maxPerCallUsd),
+      daily: numOrNull(dailyLimitUsd),
       perHost: numOrNull(maxPerHostUsd),
-      // Which caps are the defaults rather than the caller's own: a call the
-      // caller allows by name (call(..., { maxUsd })) is not held to them.
-      defaults: { maxPerCall: maxPerCallUsd === undefined, daily: dailyLimitUsd === undefined },
       log: [], // [{ ts, host, usd, state: "reserved"|"held"|"settled", until? }]
     };
     // The paid call being signed right now, so the signing guard can tell this
@@ -614,8 +602,8 @@ export class Agent402 {
    * wallet-only) and returns the parsed JSON result.
    *
    * `maxUsd` allows this one call to pay up to that amount: it replaces the
-   * per-call cap for the call, and the default daily cap does not apply to
-   * it (a dailyLimitUsd or maxPerHostUsd you set yourself still does).
+   * per-call cap for the call (a dailyLimitUsd or maxPerHostUsd you set
+   * still holds).
    * `timeoutMs` replaces the client's per-request timeout for the call.
    */
   async call(slug, params = {}, { idempotencyKey, cache = true, maxResponseBytes, outputValidator, respondAsync, asyncTimeoutMs, onProgress, maxUsd, timeoutMs } = {}) {
@@ -716,7 +704,7 @@ export class Agent402 {
         // (FREE_MODE / non-402 / unparseable) falls back to the advertised
         // price - never block a legitimate payment on a parse miss.
         const guarded = this._guarded;
-        if (!guarded && this._spendCapsConfigured(limits) && !this._onlyDefaultCaps(limits)) warnAdvisoryCaps();
+        if (!guarded && this._spendCapsConfigured(limits)) warnAdvisoryCaps();
         const usd = await this._quotedUsd(paidSend, listUsd, { slug, mode: guarded ? "guarded" : "wallet", limits });
         // Reserve the amount synchronously (before the await) so concurrent calls
         // can't each observe the pre-commit total and collectively blow a rolling
@@ -975,11 +963,10 @@ export class Agent402 {
     const unpriceable = q.max == null || (mode === "wallet" && q.unknown > 0);
     if (unpriceable) {
       if (mode === "credits") return listUsd;
-      const byDefault = this._onlyDefaultCaps(limits) ? "; the caps are this client's defaults, so construct with { maxPerCallUsd: null, dailyLimitUsd: null } to pay an asset it cannot price" : "";
-      throw new SpendingLimitError((q.max == null
+      throw new SpendingLimitError(q.max == null
         ? `refusing to pay for "${slug}" - no payment option it offers is in an asset this client can price, and a capped wallet signs only what it can price${mode === "wallet" ? " (pass your x402Client to guard signing and pay the options it can price)" : ""}`
-        : `refusing to pay for "${slug}" - ${q.unknown} of its ${q.total} payment options ${q.unknown === 1 ? "is" : "are"} in an asset this client cannot price, and without the signing guard the wallet may sign any of them (pass your x402Client to guard signing and pay the options it can price)`) + byDefault,
-      { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown, ...(this._onlyDefaultCaps(limits) ? { defaultCaps: true } : {}) });
+        : `refusing to pay for "${slug}" - ${q.unknown} of its ${q.total} payment options ${q.unknown === 1 ? "is" : "are"} in an asset this client cannot price, and without the signing guard the wallet may sign any of them (pass your x402Client to guard signing and pay the options it can price)`,
+      { limit: "knownAsset", slug, priceUsd: null, unknownOptions: q.unknown });
     }
     const quoted = mode === "wallet" ? q.max : q.min;
     // Larger of the two: an understated catalog must not lower the ceiling
@@ -988,22 +975,14 @@ export class Agent402 {
   }
 
   /** The caps one call is held to: this client's, or, for a call the caller
-   *  allowed by name (`maxUsd`), that amount as the per-call cap with the
-   *  default daily cap lifted (caps the caller set themselves still hold). */
+   *  allowed by name (`maxUsd`), that amount as the per-call cap (the daily
+   *  and per-host caps the caller set still hold). */
   _limitsFor(maxUsd) {
     const s = this._spend;
     const allow = maxUsd == null ? null : numOrNull(maxUsd);
     if (maxUsd != null && allow == null) throw new TypeError("maxUsd must be a non-negative number of USD");
     if (allow == null) return s;
-    return { maxPerCall: allow, daily: s.defaults.daily ? null : s.daily, perHost: s.perHost, defaults: { maxPerCall: false, daily: false }, allowed: true };
-  }
-
-  /** True when every cap in `limits` is one of this client's defaults (none
-   *  set by the caller), so the pre-wrapped-fetch notice is not printed for
-   *  a client that never asked for caps. */
-  _onlyDefaultCaps(limits = this._spend) {
-    if (limits.allowed || limits.perHost != null) return false;
-    return (limits.maxPerCall == null || limits.defaults.maxPerCall) && (limits.daily == null || limits.defaults.daily);
+    return { maxPerCall: allow, daily: s.daily, perHost: s.perHost, allowed: true };
   }
 
   /** Throw SpendingLimitError if paying `usd` to `host` now would break a cap.
@@ -1019,11 +998,8 @@ export class Agent402 {
       ? ` (this request is quoted $${usd}; the catalog lists $${listUsd})` : "";
     if (s.maxPerCall != null && usd > s.maxPerCall) {
       const name = limits.allowed ? "maxUsd" : "maxPerCallUsd";
-      const how = limits.allowed ? "" : limits.defaults?.maxPerCall
-        ? `; this is the default cap: pass { maxUsd: ${usd} } to call() to allow this call, or set maxPerCallUsd (null turns it off)`
-        : "";
       throw new SpendingLimitError(
-        `refusing to pay $${usd} for "${slug}" - exceeds ${name} $${s.maxPerCall}${quotedNote}${how}`,
+        `refusing to pay $${usd} for "${slug}" - exceeds ${name} $${s.maxPerCall}${quotedNote}`,
         { limit: "maxPerCallUsd", slug, priceUsd: usd, cap: s.maxPerCall, ...(listUsd != null ? { listPriceUsd: listUsd } : {}) });
     }
     // Held payments count: each is a signed authorization that was sent and
@@ -1035,7 +1011,7 @@ export class Agent402 {
       if (spent + usd > s.daily) {
         const held = heldOf(s.log);
         throw new SpendingLimitError(
-          `refusing to pay $${usd} for "${slug}" - would bring 24h spend to $${(spent + usd).toFixed(6)}${heldNote(held)}, over dailyLimitUsd $${s.daily}${limits.defaults?.daily ? "; this is the default cap: pass { maxUsd } to call() to allow this call, or set dailyLimitUsd (null turns it off)" : ""}`,
+          `refusing to pay $${usd} for "${slug}" - would bring 24h spend to $${(spent + usd).toFixed(6)}${heldNote(held)}, over dailyLimitUsd $${s.daily}`,
           { limit: "dailyLimitUsd", slug, priceUsd: usd, spent, heldUsd: Number(held.toFixed(6)), cap: s.daily });
       }
     }

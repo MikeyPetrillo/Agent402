@@ -387,45 +387,37 @@ const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     ok(counters.preflights === 0 && counters.paid === 1, "with both caps turned off (null) nothing is preflighted");
   }
 
-  // Default caps: a client built with no cap option is held to
-  // DEFAULT_MAX_PER_CALL_USD per call and DEFAULT_DAILY_LIMIT_USD a day, and a
-  // call the caller allows by name (maxUsd) is never blocked by a default.
+  // Caps are opt-in: a client built with no cap option never refuses a
+  // purchase (no preflight, no ceiling), and a cap the caller sets still holds.
   {
+    const plain = mk(3.3, {}).c.spendingSummary().limits;
+    ok(plain.maxPerCallUsd === null && plain.dailyLimitUsd === null && plain.maxPerHostUsd === null, `a client with no cap option has no caps (${JSON.stringify(plain)})`);
     const { DEFAULT_MAX_PER_CALL_USD, DEFAULT_DAILY_LIMIT_USD } = await import("./index.js");
-    ok(DEFAULT_MAX_PER_CALL_USD === 4 && DEFAULT_DAILY_LIMIT_USD === 25, `the default caps are $4 a call and $25 a day (${DEFAULT_MAX_PER_CALL_USD}, ${DEFAULT_DAILY_LIMIT_USD})`);
-    const plain = mk(0.5, {}).c.spendingSummary().limits;
-    ok(plain.maxPerCallUsd === 4 && plain.dailyLimitUsd === 25 && plain.maxPerHostUsd === null, `a client with no cap option reports the defaults (${JSON.stringify(plain)})`);
+    ok(DEFAULT_MAX_PER_CALL_USD === undefined && DEFAULT_DAILY_LIMIT_USD === undefined, "no default cap is exported");
     {
-      const { c, counters } = mk(0.5, {});
-      const before = advisoryWarnings.length;
-      await c.call("chat", {});
-      ok(counters.preflights === 1 && counters.paid === 1 && c.spendingSummary().dailyUsd === 0.5, "under the default caps a quote is preflighted and paid");
-      ok(advisoryWarnings.length === before, "default caps alone print no pre-wrapped-fetch notice");
+      const { c, counters } = mk(3.3, {});
+      c._catalog.set("pro", { method: "POST", path: "/api/route-execute-pro", computePayable: false, price: "$3.30" });
+      const out = await c.call("pro", { task: "t" });
+      ok(out?.ok === true && counters.paid === 1 && counters.preflights === 0, "an uncapped default client pays a $3.30 call with no refusal and no preflight");
+      for (let i = 0; i < 100; i++) await c.call("chat", { n: i });
+      ok(counters.paid === 101 && counters.preflights === 0, `the same client pays 100 more calls in a day with no refusal (${counters.paid} paid)`);
     }
     {
-      const { c, counters } = mk(5, {});
+      const { c, counters } = mk(5, { maxPerCallUsd: 4 });
       let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
-      ok(e?.name === "SpendingLimitError" && e.limit === "maxPerCallUsd" && e.cap === 4 && counters.paid === 0, `a $5 quote is refused by the default per-call cap before signing (${e?.message})`);
-      ok(/default cap/.test(e?.message || "") && /maxUsd/.test(e?.message || ""), "the refusal says the cap is a default and how to allow the call");
+      ok(e?.name === "SpendingLimitError" && e.limit === "maxPerCallUsd" && e.cap === 4 && counters.paid === 0, `a caller-set per-call cap refuses a $5 quote before signing (${e?.message})`);
       const out = await c.call("chat", {}, { maxUsd: 6 });
       ok(out?.ok === true && counters.paid === 1, "the same call with maxUsd: 6 is paid");
       let tight = null; try { await c.call("chat", {}, { maxUsd: 1 }); } catch (err) { tight = err; }
-      ok(tight?.name === "SpendingLimitError" && tight.limit === "maxPerCallUsd" && tight.cap === 1 && counters.paid === 1, "a maxUsd below the quote refuses the call");
+      ok(tight?.name === "SpendingLimitError" && tight.cap === 1 && counters.paid === 1, "a maxUsd below the quote refuses the call");
       let bad = null; try { await c.call("chat", {}, { maxUsd: -1 }); } catch (err) { bad = err; }
       ok(bad instanceof TypeError && counters.paid === 1, "a negative maxUsd is refused before anything is sent");
     }
     {
-      // The default daily cap: allowed calls are not held to it, capped ones are.
-      const { c, counters } = mk(3, {});
-      for (let i = 0; i < 8; i++) await c.call("chat", {});
-      let e = null; try { await c.call("chat", {}); } catch (err) { e = err; }
-      ok(counters.paid === 8 && e?.limit === "dailyLimitUsd" && e.cap === 25 && /default cap/.test(e.message), `the ninth $3 call is refused by the default $25 daily cap (${e?.message})`);
-      await c.call("chat", {}, { maxUsd: 3 });
-      ok(counters.paid === 9, "a call allowed by maxUsd is not held to the default daily cap");
       const own = mk(3, { dailyLimitUsd: 4 });
       await own.c.call("chat", {});
       let e2 = null; try { await own.c.call("chat", {}, { maxUsd: 3 }); } catch (err) { e2 = err; }
-      ok(e2?.limit === "dailyLimitUsd" && e2.cap === 4 && own.counters.paid === 1, "a daily cap the caller set still holds an allowed call");
+      ok(e2?.limit === "dailyLimitUsd" && e2.cap === 4 && own.counters.paid === 1, "a caller-set daily cap holds, an allowed call included");
     }
   }
 
