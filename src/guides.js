@@ -16,7 +16,7 @@ import { RAILS_COUNT, RAILS_COUNT_MD, resolveRailCountTokens, chainDisplayName }
 import { routerPayChains } from "./tools/route-execute.js";
 import { TIERS, METERED_MAX_QUOTE_USD, EMBEDDINGS_PRICE, METERED_MAX_INPUT_CHARS_CEILING } from "./tools/llm-gateway-kit.js";
 import { routingProofSentence, routerRankingSentence } from "./routing-proof.js";
-import { mppEvmDiscoveryRails, mppShimEnabled } from "./mpp-shim.js";
+import { mppEvmDiscoveryRails } from "./mpp-shim.js";
 import { FLAGSHIP_SLUGS, FLAGSHIP_MCP_NAMES } from "./mcp-flagship.js";
 import { creditsSalesEnabled, creditsPrepaymentPhrase } from "./credits-sales.js";
 import { TYPICAL_PRICE_RANGE } from "./typical-price-range.js";
@@ -31,6 +31,7 @@ import { IDEM_TTL_MS } from "./idempotency-store.js";
 import { IDEM_MAX_BODY_LABEL } from "./idempotency-limits.js";
 import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
 import { AGENT402_MCP_VERSION } from "./mcp-flagship.js";
+import { connectorWires } from "./connector-pay.js";
 import { OCR_LARGE_PIXELS } from "./tools/ocr-kit.js";
 import { CODE_RUN_PER_PAYER_MAX, CODE_RUN_PER_IP_MAX } from "./tools/code-run-kit.js";
 import { asyncProfileOf } from "./slow-routes.js";
@@ -129,11 +130,16 @@ function resolveGuideTokens(text, catalog) {
       const slugs = bySlug ? FLAGSHIP_SLUGS.filter((slug) => bySlug.has(slug)) : FLAGSHIP_SLUGS.filter((slug) => !slug.startsWith("decide"));
       return slugs.map((slug) => "`" + FLAGSHIP_MCP_NAMES[slug] + "`").join(", ");
     })
-    // The connector pays a wallet-only tool over MPP only while MPP is on
-    // (the same MPP_SECRET_KEY switch the connector's loopback reads).
-    .replace(/\{\{connectorPaidAnswer\}\}/g, () => (mppShimEnabled()
-      ? "answer with their MPP payment challenge instead of a result: an MCP client that pays MPP settles it in the same call"
-      : "answer with payment setup instead of a result"))
+    // A wallet-only tool is paid on the connector over the wires this boot
+    // mounts (src/connector-pay.js): x402 on every boot with a paywall, MPP
+    // while its gates are on.
+    .replace(/\{\{connectorPaidAnswer\}\}/g, () => {
+      const w = connectorWires();
+      if (w.x402 && w.mpp) return "answer with their payment offer instead of a result (an x402 PaymentRequired beside the MPP challenges): an MCP client that pays x402 or MPP settles it in the same call";
+      if (w.x402) return "answer with their x402 payment offer instead of a result: an MCP client that pays x402 settles it in the same call";
+      if (w.mpp) return "answer with their MPP payment challenge instead of a result: an MCP client that pays MPP settles it in the same call";
+      return "answer with payment setup instead of a result";
+    })
     .replace(/\{\{routingProof\}\}/g, () => routingProofSentence())
     .replace(/\{\{routerRanking\}\}/g, () => routerRankingSentence())
     // The router's other chains, read from route-execute (its fixed map plus

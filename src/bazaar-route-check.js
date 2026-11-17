@@ -13,7 +13,26 @@
 // back on the same objects before the call returns, so every 402 still
 // carries them), and the same vendor check runs here instead: one route at a
 // time, a short slice per event-loop turn, after the server is up.
-import { validateBazaarRouteExtensions } from "@x402/extensions/bazaar";
+//
+// An MCP tool declaration (info.input.type "mcp") is checked with the
+// vendor's two validators directly: its route check writes an HTTP `method`
+// into any input that has none before validating, and an MCP input schema
+// allows no such property, so that check reports every valid MCP declaration
+// as invalid.
+import { validateBazaarRouteExtensions, validateDiscoveryExtension, validateDiscoveryExtensionSpec } from "@x402/extensions/bazaar";
+
+/** One route's check: the vendor's route check for an HTTP declaration, the
+ *  vendor's validators (protocol shape, then info against its own schema) for
+ *  an MCP one. Warns in the vendor's words; never throws for a bad shape. */
+export function validateBazaarRoute(routes) {
+  for (const [pattern, cfg] of Object.entries(routes || {})) {
+    const ext = cfg?.extensions?.bazaar;
+    if (!(ext && typeof ext === "object" && ext.info?.input?.type === "mcp" && "schema" in ext)) { validateBazaarRouteExtensions({ [pattern]: cfg }); continue; }
+    const spec = validateDiscoveryExtensionSpec(ext);
+    const result = spec.valid ? validateDiscoveryExtension(ext) : spec;
+    if (!result.valid) console.warn(`x402: Route "${pattern}" has an invalid bazaar extension: ${result.errors?.join(", ")}`);
+  }
+}
 
 /**
  * Run `build()` with each route config's `bazaar` extension hidden, then put
@@ -37,7 +56,7 @@ export function withBazaarHidden(routes, build) {
  * The vendor's check over `routes`, `sliceMs` of work per turn. Resolves
  * { routes, ms, longestTurnMs }. `validate` is injectable for tests.
  */
-export async function checkBazaarRoutesInSlices(routes, { sliceMs = 15, validate = validateBazaarRouteExtensions, yieldTurn = () => new Promise((r) => setTimeout(r, 0)) } = {}) {
+export async function checkBazaarRoutesInSlices(routes, { sliceMs = 15, validate = validateBazaarRoute, yieldTurn = () => new Promise((r) => setTimeout(r, 0)) } = {}) {
   const entries = Object.entries(routes || {}).filter(([, cfg]) => cfg?.extensions && "bazaar" in cfg.extensions);
   const t0 = performance.now();
   let longest = 0, i = 0;

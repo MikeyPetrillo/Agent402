@@ -64,7 +64,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           BUSY=false
-          for WF in bazaar-keepalive.yml bazaar-keepalive-tail.yml; do
+          for WF in bazaar-keepalive.yml bazaar-keepalive-tail.yml bazaar-mcp-listings.yml; do
             N=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WF" --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo unreadable)
             if [ "$N" != "0" ]; then BUSY=true; echo "$WF: active or unreadable ($N); this check waits for the next slot."; fi
           done
@@ -117,7 +117,7 @@ jobs:
           # main: buy nothing now.
           HOLD=0
           [ "$GITHUB_REF" = "refs/heads/main" ] || HOLD=1
-          for WF in bazaar-keepalive.yml bazaar-keepalive-tail.yml; do
+          for WF in bazaar-keepalive.yml bazaar-keepalive-tail.yml bazaar-mcp-listings.yml; do
             N=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WF" --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo unreadable)
             [ "$N" = "0" ] || HOLD=1
           done

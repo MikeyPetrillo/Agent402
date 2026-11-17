@@ -14,6 +14,7 @@
 //   node scripts/bazaar-validate.js --all            # every catalog endpoint (500+ calls - rate-paced)
 //   node scripts/bazaar-validate.js --sample 40      # flagship + 40 random others
 //   node scripts/bazaar-validate.js --routes /api/hash,/api/search
+//   node scripts/bazaar-validate.js --mcp            # the connector's MCP tool listings (below)
 // Exit 0 = every probed route readable AND valid; 1 = at least one route
 // INVALID (our 402 shape / listing defect); 2 = no invalid route but at least
 // one was unreadable (CDP-side: rate limit / outage - the check was partially
@@ -24,8 +25,22 @@
 // probe/heartbeat leg), never against a CI localhost boot. Method comes from
 // the catalog (/api/pricing): the first manual probe POSTed a GET route and
 // read a 405 as "not x402" - the exact mistake this script exists to not make.
+//
+// --mcp checks the MCP tool listings instead (scripts/lib/mcp-listings.js).
+// The CDP validator probes an HTTP route for a 402, and the connector answers
+// its offer inside a tool result, so this check reads each offer itself: one
+// unpaid tools/call per listed tool on TARGET_URL's /mcp, then the offer must
+// name the resource `${LISTING_ORIGIN or TARGET_URL}/mcp`, carry a discovery
+// extension of type "mcp" for that tool (toolName, an object inputSchema,
+// transport streamable-http) that passes the protocol's own validators, and
+// ask the list price on Base. It pays nothing and works against a local boot.
+// Same exit codes: 1 = an offer that is not a valid MCP listing offer (a boot
+// with no x402 on the connector included), 2 = the connector or the catalog
+// could not be read. A listed tool the catalog does not carry is skipped with
+// a note.
 import { pathToFileURL } from "node:url";
 import "../src/tls-distrust-boot.js"; // refuse TLS chains through a distrusted intermediate CA
+import { mcpListingRoutes, mcpOfferProblems, MCP_LISTING_TOOLS } from "./lib/mcp-listings.js";
 const TARGET = (process.env.TARGET_URL || "https://agent402.tools").replace(/\/$/, "");
 const VALIDATE_URL = process.env.BAZAAR_VALIDATE_URL || "https://api.cdp.coinbase.com/platform/v2/x402/validate";
 const CONCURRENCY = Math.max(1, Number(process.env.BAZAAR_VALIDATE_CONCURRENCY) || (process.argv.includes("--all") ? 1 : 3));
@@ -81,7 +96,7 @@ export function defaultEndpoints(all) {
 
 function args() {
   const a = process.argv.slice(2);
-  const out = { all: a.includes("--all"), sample: 0, routes: null, json: a.includes("--json") };
+  const out = { all: a.includes("--all"), sample: 0, routes: null, json: a.includes("--json"), mcp: a.includes("--mcp") };
   const si = a.indexOf("--sample"); if (si >= 0) out.sample = Math.max(0, Number(a[si + 1]) || 0);
   const ri = a.indexOf("--routes"); if (ri >= 0) out.routes = String(a[ri + 1] || "").split(",").map((s) => s.trim()).filter(Boolean);
   return out;
@@ -147,6 +162,71 @@ export async function validateOne(endpoint, { fetchImpl = fetch, validateUrl = V
   };
 }
 
+/** Why an offer is not a valid MCP listing offer for a tool ([] when it is):
+ *  the listing's own shape (mcpOfferProblems) and the protocol's validators
+ *  over its discovery extension. `validators` is @x402/extensions/bazaar's
+ *  { validateDiscoveryExtension, validateDiscoveryExtensionSpec }. Exported
+ *  for the test. */
+export function mcpListingOfferProblems(offer, { toolName, origin, micros = null }, validators) {
+  const out = mcpOfferProblems(offer, { toolName, origin, micros });
+  const ext = offer?.extensions?.bazaar;
+  if (ext && typeof ext === "object") {
+    for (const [name, fn] of Object.entries(validators || {})) {
+      let r;
+      try { r = fn(ext); } catch (e) { r = { valid: false, errors: [String(e?.message || e)] }; }
+      if (!r?.valid) out.push(`${name}: ${(r?.errors || ["invalid"]).join(", ").slice(0, 200)}`);
+    }
+  }
+  return out;
+}
+
+/** The --mcp run; returns the exit code. Every dependency is injectable so
+ *  scripts/test-mcp-listing-tools.js runs it against a local server. */
+export async function runMcpValidation({ target = TARGET, env = process.env, log = console.log, connect = null, fetchJson = null, validators = null } = {}) {
+  const origin = String(env.LISTING_ORIGIN || target).replace(/\/+$/, "");
+  const getJson = fetchJson || (async (url) => { const r = await fetch(url, { signal: AbortSignal.timeout(30_000) }); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+  let pricing, spec;
+  try { [pricing, spec] = await Promise.all([getJson(`${target}/api/pricing`), getJson(`${target}/openapi.json`)]); } catch (e) {
+    log(`VALIDATOR UNREADABLE - the catalog could not be read (${String(e?.message || e).slice(0, 120)})`);
+    return 2;
+  }
+  const routes = mcpListingRoutes(pricing);
+  const absent = Object.keys(MCP_LISTING_TOOLS).filter((s) => !routes.some((r) => r.slug === s));
+  if (absent.length) log(`note - MCP listing tools not in the live catalog (skipped): ${absent.map((s) => MCP_LISTING_TOOLS[s]).join(", ")}`);
+  log(`bazaar-validate: ${routes.length} MCP tool listing offer(s) on ${target}/mcp, resource origin ${origin}`);
+  const v = validators || await (async () => {
+    const m = await import("@x402/extensions/bazaar");
+    return { validateDiscoveryExtension: m.validateDiscoveryExtension, validateDiscoveryExtensionSpec: m.validateDiscoveryExtensionSpec };
+  })();
+  const { examplesFromOpenapi } = await import("./listing-coverage.js");
+  const examples = examplesFromOpenapi(spec);
+  const { connectMcp, askMcpOffer } = await import("./lib/mcp-x402-client.js");
+  let mcp;
+  try { mcp = await (connect || connectMcp)(target, { name: "agent402-bazaar-validate" }); } catch (e) {
+    log(`VALIDATOR UNREADABLE - the connector could not be reached (${String(e?.message || e).slice(0, 120)})`);
+    return 2;
+  }
+  let invalid = 0, unreadable = 0, valid = 0;
+  try {
+    for (const r of routes) {
+      const tag = `MCP ${r.toolName}`;
+      let asked;
+      try { asked = await askMcpOffer(mcp.callTool, r.toolName, examples.get(`${r.method} ${r.path}`) || {}); } catch (e) {
+        unreadable++; log(`??  ${tag} - the call did not answer (${String(e?.message || e).slice(0, 120)})`); continue;
+      }
+      const problems = asked.offer ? mcpListingOfferProblems(asked.offer, { toolName: r.toolName, origin, micros: r.micros }, v) : [`no x402 offer: ${asked.why}`];
+      if (problems.length) { invalid++; log(`FAIL ${tag} - ${problems.join("; ")}`); continue; }
+      valid++; log(`ok   ${tag} - valid MCP listing offer (resource ${origin}/mcp, type mcp, list price on Base)`);
+    }
+  } finally { await mcp.close(); }
+  log(`\nsummary: ${JSON.stringify({ target, probed: routes.length, valid, invalid, unreadable })}`);
+  if (invalid > 0) { log(`BAZAAR VALIDATION FAILED: ${invalid} invalid MCP listing offer(s)`); return 1; }
+  if (unreadable > 0) { log(`VALIDATOR UNREADABLE for ${unreadable}/${routes.length} MCP listing offer(s)`); return 2; }
+  if (!routes.length) { log("VALIDATOR UNREADABLE - the catalog carries no MCP listing tool"); return 2; }
+  log("BAZAAR VALIDATION OK");
+  return 0;
+}
+
 async function mapLimit(items, limit, fn) {
   const out = new Array(items.length); let i = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -157,6 +237,7 @@ async function mapLimit(items, limit, fn) {
 
 async function main() {
   const opt = args();
+  if (opt.mcp) process.exit(await runMcpValidation());
   const all = await catalogEndpoints();
   const byPath = new Map(all.map((e) => [e.path, e]));
   let chosen;

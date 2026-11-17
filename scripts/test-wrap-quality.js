@@ -338,7 +338,10 @@ function audit({ exclude, width, ragFrac, ragWords }) {
 async function settle(page) {
   // Scroll the whole page so scroll-reveal sections render, then return to the top.
   // Returns false when API-drawn content never replaced its spinner.
+  // Each phase is marked on the page, so a page past its deadline is failed
+  // with the phase it stopped in (settlePhase), not only the deadline.
   return page.evaluate(async () => {
+    window.__wrapPhase = "scroll";
     const step = Math.max(200, Math.floor(innerHeight * 0.8));
     // Bounded: a page that grows as it scrolls cannot keep this loop going.
     for (let y = 0, k = 0; y < document.documentElement.scrollHeight && k < 600; y += step, k++) { scrollTo(0, y); await new Promise((r) => setTimeout(r, 40)); }
@@ -348,10 +351,14 @@ async function settle(page) {
     // until it lands, then binds widows after its own fonts load. Wait for the
     // spinner to go (bounded), then for fonts, then one frame, so the audit
     // measures the bound text and never a page whose content has not arrived.
+    window.__wrapPhase = "spinner";
     for (let k = 0; k < 150 && document.querySelector("#app[data-api] > .status .spin"); k++) await new Promise((r) => setTimeout(r, 100));
     const drawn = !document.querySelector("#app[data-api] > .status .spin");
+    window.__wrapPhase = "fonts";
     await document.fonts.ready;
+    window.__wrapPhase = "frame";
     await new Promise((r) => requestAnimationFrame(() => r()));
+    window.__wrapPhase = "audit";
     return drawn;
   });
 }
@@ -443,7 +450,8 @@ try {
             found = await withDeadline((async () => { if (!(await settle(page))) return null; return page.evaluate(audit, { exclude: EXCLUDE, width, ragFrac: RAG_MIN_FRACTION, ragWords: RAG_MIN_WORDS }); })(), PAGE_DEADLINE_MS);
           } catch (e) {
             if (!e.deadline) throw e;
-            const msg = `FAIL - ${key} did not settle and audit within ${PAGE_DEADLINE_MS} ms`;
+            const phase = await withDeadline(page.evaluate(() => `${window.__wrapPhase || "not started"}; fonts ${document.fonts.status}; pending ${[...document.fonts].filter((f) => f.status === "loading").map((f) => `${f.family} ${f.weight}`).join(", ") || "none"}`), 5000).catch(() => "the page did not answer");
+            const msg = `FAIL - ${key} did not settle and audit within ${PAGE_DEADLINE_MS} ms (stopped in: ${phase})`;
             console.log(msg);
             log.push(msg); failures++; counts[key] = "hang";
             try { await page.close(); } catch {}

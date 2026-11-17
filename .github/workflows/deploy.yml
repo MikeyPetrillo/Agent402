@@ -1123,7 +1123,8 @@ jobs:
           E2B_API_KEY: ""
           COINGECKO_API_KEY: ""
         run: npm ci
-      # The official x402 MCP client, for test-mcp-x402.js alone. It is not in
+      # The official x402 MCP client, for test-mcp-x402.js and
+      # test-mcp-x402-connector.js alone. It is not in
       # package.json: mppx names it as an optional peer, so a dev dependency
       # would be kept by `npm ci --omit=dev` and ship in the production image.
       # Pinned, scripts off, keys shadowed as in the install above; it runs on
@@ -1161,7 +1162,7 @@ jobs:
           E2B_LIVE_TEST: ${{ secrets.E2B_API_KEY && '1' || '' }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
 
-      - name: Offline suites (13 scripts, one process each)
+      - name: Offline suites (17 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-a3 2
 
   test-unit-a2:
@@ -3530,7 +3531,7 @@ jobs:
           for i in $(seq 1 40); do curl -sf http://127.0.0.1:3000/health >/dev/null 2>&1 && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/health >/dev/null || { echo "server never became healthy"; tail -40 /tmp/unit-c-srv.log; exit 1; }
 
-      - name: Offline suites (18 scripts, one process each)
+      - name: Offline suites (19 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-c2 1
 
   publish-gate:
