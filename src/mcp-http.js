@@ -1020,6 +1020,17 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       return buildSettlementUnprovenResult({ label: `Agent402 (${def.slug})`, refusal: body, settleResponse: failed ? settle : null });
     }
 
+    /** The no-offer result for a paid loopback's error answer that is not a
+     *  402 and whose body reads settlement-unconfirmed: the route's settle
+     *  ended on an answer it could not read (src/payments.js
+     *  markUnprovenStop), so the payment may have settled. Never "not
+     *  charged", and nothing to sign again. null for every other answer. */
+    function unconfirmedErrorResult(def, r) {
+      const body = r.json && typeof r.json === "object" && !Array.isArray(r.json) ? r.json : null;
+      if (!body || body.reason !== "settlement-unconfirmed") return null;
+      return buildSettlementUnprovenResult({ label: `Agent402 (${def.slug})`, refusal: body, settleResponse: null });
+    }
+
     /** Turn the route's answer to an x402-paid loopback into the MCP result:
      *  a <400 answer is the tool result plus the settle receipt in
      *  _meta["x402/payment-response"]; a settlement not decided yet is the
@@ -1029,7 +1040,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
      *  (isPreBroadcastSettleRejection), and otherwise the route's explanation
      *  with no offer (unprovenSettleResult); any other 402 is the
      *  invalid-payment result (a fresh PaymentRequired to sign again); any
-     *  other status is an error that was not charged. */
+     *  other status is an error that was not charged, except one whose body
+     *  reads settlement-unconfirmed (unconfirmedErrorResult). */
     async function translateX402Response(entry, target, params, isNamed, r, ip, signal) {
       const def = entry.def;
       if (r.status === 402) {
@@ -1057,6 +1069,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         return out || { content: [{ type: "text", text: `Agent402 (${def.slug}): the payment was refused${why ? ` (${String(why).slice(0, 200)})` : ""} - not charged.` }], isError: true };
       }
       if (r.status >= 400) {
+        const unconfirmed = unconfirmedErrorResult(def, r);
+        if (unconfirmed) return unconfirmed;
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
         return { content: [{ type: "text", text: `Agent402 (${def.slug}) HTTP ${r.status} - not charged${r.status >= 500 ? " (settlement runs only after a successful handler)" : ""}: ${detail}` }], isError: true };
       }
@@ -1158,6 +1172,8 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         throw new McpError(presented ? MCP_PAYMENT_VERIFICATION_FAILED_CODE : MCP_PAYMENT_REQUIRED_CODE, problem?.detail || `Payment Required: ${walletRequiredText(entry.def)}`, { httpStatus: 402, challenges, ...(problem ? { problem } : {}) });
       }
       if (r.status >= 400) {
+        const unconfirmed = unconfirmedErrorResult(entry.def, r);
+        if (unconfirmed) return unconfirmed;
         const detail = r.json ? JSON.stringify(withoutPaymentRequired(r.json)) : String(r.text || "").slice(0, 500);
         return { content: [{ type: "text", text: `Agent402 (${entry.def.slug}) HTTP ${r.status}${r.status >= 400 && r.status < 500 ? ` - not charged${pushClause(entry.def)}` : ` - not charged (settlement runs only after a successful handler)${pushClause(entry.def)}`}: ${detail}` }], isError: true };
       }

@@ -68,7 +68,7 @@ export const REJECTION_REASONS = Object.freeze([
   { reason: "unclassified", means: "It decoded and still matched nothing, in a way this server has no name for. The refusal lists the field NAMES received so you can compare them yourself, and we would like to hear about it: an unclassified refusal is as likely to be our defect as yours." },
   { reason: "not-checked", means: "The payment never got a verdict: this server's verify request to the facilitator did not complete (a connection error or this server's own time limit), the facilitator answered with an HTTP error, or an on-chain signature check could not finish. Nothing was charged and nothing is known to be wrong with the payment. retry is same-payment: send the same payment again after Retry-After, with no new signature, while its authorization is still valid." },
   { reason: "facilitator-quota", means: "The payment verified and the call ran, then the facilitator for that network refused to settle it under a billing quota on this server's own account. Nothing was charged and nothing is wrong with your wallet. Ask the route for a fresh 402 without paying and pay on another network it lists." },
-  { reason: "settlement-unconfirmed", means: "A facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait, so the answer was withheld. The transfer may still land. If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof. Watch the listed transaction; a new authorization for the same call is a new payment, not a step in that repayment." },
+  { reason: "settlement-unconfirmed", means: "The payment's settlement is not confirmed, so the answer was withheld. Either a facilitator broadcast the transfer and answered that it was still pending, and the transaction listed in `transactions` was not confirmed on chain within this server's wait (retry is watch-transaction); or a settle attempt ended on an answer that does not show whether a transfer was sent (a facilitator's HTTP error, a dropped connection, an unreadable body, a failure naming a transaction): retry is watch-transaction when a transaction is named and check-wallet when none is. The transfer may still land. If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof. Watch the listed transaction or the paying wallet; a new authorization for the same call is a new payment, not a step in that repayment." },
 ]);
 
 // A verify failure that carries no verdict on the payment. Read from the
@@ -153,7 +153,67 @@ export function pendingSettleRefusal({ network = null, transactions = [] } = {})
 export function withPendingSettleRefusal(body, refusal) {
   if (!refusal || !body || typeof body !== "object" || Array.isArray(body)) return body;
   const { error: _error, reason: _reason, retry: _retry, hint: _hint, network: _network, transactions: _txs, ...rest } = body;
-  return { ...rest, reason: refusal.reason, retry: refusal.retry, ...(refusal.network ? { network: refusal.network } : {}), transactions: refusal.transactions, hint: refusal.detail };
+  return { ...rest, reason: refusal.reason, retry: refusal.retry, ...(refusal.network ? { network: refusal.network } : {}), ...(Array.isArray(refusal.transactions) ? { transactions: refusal.transactions } : {}), hint: refusal.detail };
+}
+
+/** The settle receipt's reason once a settle attempt ended without showing
+ *  whether a transfer was sent. Not a billing refusal and not a verdict about
+ *  the payment, so no reader takes it for a refusal made before sending. */
+export const SETTLEMENT_UNCONFIRMED = "settlement_unconfirmed";
+
+/**
+ * The refusal a buyer gets when the settle chain stopped on an answer that
+ * does not prove nothing was sent: a facilitator's HTTP error, a dropped
+ * connection, a time limit, an unreadable body, or a failure that names a
+ * transaction (src/payments.js). An earlier facilitator's refusal made before
+ * sending (a billing quota on this server's account) no longer describes the
+ * payment, so this never says the buyer was not charged and never points at
+ * another way to pay. `transactions` are the ones a settle answer named;
+ * `booked` says the authorization or a named transaction is in the
+ * late-settlement book (src/late-settlements.js), which is what makes the
+ * owed sentence true.
+ */
+export function unprovenSettleRefusal({ network = null, transactions = [], booked = false } = {}) {
+  const txs = [];
+  for (const t of Array.isArray(transactions) ? transactions : []) {
+    const tx = String(t || "").toLowerCase();
+    if (TX_HASH.test(tx) && !txs.includes(tx)) txs.push(tx);
+    if (txs.length >= PENDING_REFUSAL_MAX_TXS) break;
+  }
+  const net = typeof network === "string" && /^[a-z0-9-]{1,32}:[A-Za-z0-9-]{1,64}$/.test(network) ? network : null;
+  const one = txs.length === 1;
+  return {
+    reason: "settlement-unconfirmed",
+    retry: txs.length ? "watch-transaction" : "check-wallet",
+    network: net,
+    ...(txs.length ? { transactions: txs } : {}),
+    detail:
+      "This payment's settlement is not confirmed, so the answer was withheld. "
+      + (txs.length
+        ? `A settle answer named ${one ? "a transaction" : "transactions"} and did not show a completed transfer. `
+        : "A settle attempt ended without showing whether the transfer was sent. ")
+      + "The transfer may still land. "
+      + (booked ? "If it does, the amount is booked as owed to the paying wallet and repaid after on-chain proof, with nothing more for you to send. " : "")
+      + "Do not sign a new authorization for this call: a second one is a second payment. "
+      + (txs.length ? `Watch the transaction${one ? "" : "s"} listed in transactions${net ? ` on ${net}` : ""}.` : `Check the paying wallet${net ? ` on ${net}` : ""} before paying for this call again.`),
+  };
+}
+
+/** A failed settle receipt restated for a chain that stopped unproven: the
+ *  payer and network kept, the reason SETTLEMENT_UNCONFIRMED, the named
+ *  transaction (or none). Null when `receipt` is not a failed receipt. */
+export function unprovenSettleReceipt(receipt, { transaction = null, network = null } = {}) {
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt) || receipt.success !== false) return null;
+  const tx = TX_HASH.test(String(transaction || "")) ? String(transaction).toLowerCase() : "";
+  const net = typeof receipt.network === "string" && receipt.network ? receipt.network : (typeof network === "string" && network ? network : undefined);
+  return {
+    success: false,
+    errorReason: SETTLEMENT_UNCONFIRMED,
+    errorMessage: "A settle attempt ended without showing whether the transfer was sent",
+    ...(typeof receipt.payer === "string" && receipt.payer ? { payer: receipt.payer } : {}),
+    ...(net ? { network: net } : {}),
+    transaction: tx,
+  };
 }
 
 /**

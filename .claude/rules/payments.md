@@ -493,6 +493,15 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   `PENDING_SETTLE_MAX_INFLIGHT` (default 8) reads run per process; past it, or after an RPC 429
   or rate-limit error, the read ends. Outcomes by network and facilitator are on
   `/__operator/tool-failures.json` (`pendingSettles`; `scripts/test-pending-settle.js`).
+  A settle chain that a fallback stops on an answer proving nothing (an HTTP error, a time limit,
+  a reset, an unreadable body, a failure naming a transaction), and any settler's unreadable HTTP
+  200, is marked (`markUnprovenStop`, `src/payments.js`): the named transaction, or with none the
+  authorization, is booked for the late-settlement read, and the answer is restated
+  (`unprovenSettleRefusal`, `src/payment-reject.js`): reason `settlement-unconfirmed`, retry
+  `watch-transaction` or `check-wallet`, no sentence that the call went uncharged, and a PAYMENT-RESPONSE whose
+  reason is `settlement_unconfirmed`, so no reader (the connector's offer rule included) takes
+  the primary's billing refusal for the payment's outcome
+  (`scripts/test-settle-fallback-unproven.js`).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
   payment header counts as an attempt (`src/payment-attempt.js`) only when it decodes to an offered
   network or an MPP credential; bytes that do not decode are an unpaid read. The key is the client

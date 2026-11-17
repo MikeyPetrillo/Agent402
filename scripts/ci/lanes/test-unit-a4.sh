@@ -107,6 +107,8 @@ t node scripts/test-revenue-shared-scan.js
 t node scripts/test-tempo-paging-oracle.js
 # Settle-fallback chain (Solvador first on its advertised networks -> PayAI -> Solvador last resort; double-settle gate between fallbacks - offline)
 t node scripts/test-settle-fallback.js
+# A settle fallback that stops the chain on an answer proving nothing (HTTP 500, reset, a named transaction, an unreadable 200): no offer and no "not charged" on the HTTP route or /mcp, the authorization booked; billing refusals everywhere still re-offer; a settling fallback settles once (paid boot vs stub facilitators - offline)
+t node scripts/test-settle-fallback-unproven.js
 # A listed Robinhood settle fallback is tried only after its /supported confirms eip155:4663 (paid-mode boot vs stub facilitators - offline)
 t node scripts/test-rh-fallback-confirm.js
 # Robinhood boot order: the first listed facilitator whose /supported confirms eip155:4663 settles first; a 200 refusal in words with no verdict goes to the next listed, a verdict

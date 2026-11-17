@@ -17,6 +17,17 @@ Surfaces:
   on its HTTP route. The output schema of memory.write allows an expiry of
   null.
 
+Payments:
+- When a settle fallback answers with an HTTP error, a dropped connection, an
+  unreadable body or a failure that names a transaction, the refusal says the
+  settlement is not confirmed (reason settlement-unconfirmed, retry
+  watch-transaction when a transaction is named and check-wallet when none is)
+  and carries no offer to sign, on the HTTP route and on the hosted MCP
+  connector. The authorization or the named transaction is booked, and a
+  transfer that lands is owed to the paying wallet and repaid after on-chain
+  proof. A facilitator's HTTP 200 answer that cannot be read is answered the
+  same way.
+
 Operations:
 - The MCP tool listings pass signs only an offer that pays the server's
   published receiving address, with one plain exact USDC accept on Base at the
