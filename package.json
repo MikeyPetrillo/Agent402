@@ -61,7 +61,6 @@
   "dependencies": {
     "@e2b/code-interpreter": "^2.9.0",
     "@modelcontextprotocol/node": "2.1.2",
-    "@modelcontextprotocol/sdk": "^1.32.2",
     "@modelcontextprotocol/server": "2.4.0",
     "@mozilla/readability": "^0.6.0",
     "@payai/facilitator": "^2.4.6",
@@ -142,6 +141,7 @@
     }
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.4.0"
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/sdk": "^1.32.2"
   }
 }

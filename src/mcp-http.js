@@ -37,7 +37,7 @@ class McpError extends ProtocolError {
 // (initialize and the 2025-era stateless calls after it, 2024-10-07 through
 // 2025-11-25) is served by a per-request Node transport exactly as before.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Server, ProtocolError, ProtocolErrorCode as ErrorCode, createMcpHandler, isLegacyRequest, CLIENT_INFO_META_KEY } from "@modelcontextprotocol/server";
+import { Server, ProtocolError, ProtocolErrorCode as ErrorCode, createMcpHandler, isLegacyRequest, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY } from "@modelcontextprotocol/server";
 import { NodeStreamableHTTPServerTransport, toWebRequest } from "@modelcontextprotocol/node";
 import {
   MCP_PAYMENT_REQUIRED_CODE, MCP_PAYMENT_VERIFICATION_FAILED_CODE, MCP_RECEIPT_META, MCP_PAYMENT_REQUIRED_META, MCP_CREDENTIAL_META, credentialHeaderFromMeta, challengesFromHeader, receiptFromHeader, settleReceiptFromHeader, tempoSettleProof, credentialSignedUsd, challengeIdFromMeta,
@@ -658,11 +658,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     } catch { return false; }
   }
 
-  // `declaredCapabilities`: the client capabilities THIS request declared in
-  // _meta["io.modelcontextprotocol/clientCapabilities"], read from the raw
-  // body. The SDK lifts that key out of params._meta before a handler runs (on
-  // both eras), so the tasks check reads it from here.
-  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false, declaredCapabilities = undefined } = {}) {
+  function buildServer(ip, signal, heartbeatToken = null, { skillsCaps = false, reqHeaders = {}, paymentCall = false } = {}) {
     const server = new Server(
       {
         name: profile?.serverName || "agent402",
@@ -936,7 +932,12 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
      *  settlement. A cancelled or timed-out wait only stops THIS connector
      *  waiting: the paid request runs on and settles on a <400, and a charge
      *  that never reached the buyer is owed in the refund ledger. */
-    async function payOverMpp(entry, reqParams, args, isNamed, ip, signal) {
+    /** `declaredCapabilities`: the client capabilities THIS message declared
+     *  in _meta["io.modelcontextprotocol/clientCapabilities"]. The SDK lifts
+     *  that key out of params._meta before a handler runs (on both eras) and
+     *  hands it back per message in ctx.mcpReq.envelope, so each call of a
+     *  2025-era batch reads its own. */
+    async function payOverMpp(entry, reqParams, args, isNamed, ip, signal, declaredCapabilities) {
       const meta = reqParams?._meta;
       const credentialHeader = credentialHeaderFromMeta(meta);
       // Same params shaping as the free path (flagship: args IS params;
@@ -1404,7 +1405,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
       return createTaskResult(rec);
     }
 
-    server.setRequestHandler("tools/call", async (req) => {
+    server.setRequestHandler("tools/call", async (req, ctx) => {
       const { name: rawName, arguments: args = {} } = req.params;
       const name = resolveListedName(rawName);
       const overBound = toolInputBoundRefusal(rawName, args, maxToolInputElements);
@@ -1819,7 +1820,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
             return (offer && buildPaymentRequiredResult(offer, { message: walletRequiredText(entry.def, { x402: true }) }))
               || { content: [{ type: "text", text: walletRequiredText(entry.def) }], isError: true };
           }
-          return await payOverMpp(entry, req.params, args, isNamed, ip, signal);
+          return await payOverMpp(entry, req.params, args, isNamed, ip, signal, ctx?.mcpReq?.envelope?.[CLIENT_CAPABILITIES_META]);
         }
         const toolBudget = mcpLimiter.check(ip);
         if (toolBudget.limited) {
@@ -2063,6 +2064,28 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     const c = mcpRequestContext.getStore();
     return buildServer(c.ip, c.signal, c.heartbeatToken, c.serverOpts);
   }, { legacy: "reject", onerror: (err) => console.warn(`[mcp] 2026-07-28 request refused or failed: ${logSafe(mcpErrorText(err, 160), 160)}`) }));
+  // The same SDK ladder for the 2026-07-28 methods answered ahead of it
+  // (tasks/*, skills/*): the envelope, the revision, MCP-Protocol-Version,
+  // Mcp-Method and Mcp-Name are checked exactly as on every other modern
+  // request. This handler's factory is reached only once every rung passed;
+  // it marks the pass and ends the exchange, so a refusal is the SDK's own.
+  const LADDER_PASSED = "mcp-ladder-passed";
+  const ladderContext = new AsyncLocalStorage();
+  let _ladderHandler = null;
+  const ladderHandler = () => (_ladderHandler ||= createMcpHandler(() => {
+    ladderContext.getStore().passed = true;
+    throw Object.assign(new Error(LADDER_PASSED), { [LADDER_PASSED]: true });
+  }, { legacy: "reject", onerror: (err) => { if (!err?.[LADDER_PASSED]) console.warn(`[mcp] 2026-07-28 request refused or failed: ${logSafe(mcpErrorText(err, 160), 160)}`); } }));
+  /** null when a 2026-07-28 request passes the SDK's validation ladder, else
+   *  the SDK's refusal (a web Response). */
+  async function modernLadderRefusal(req, signal) {
+    const probe = { passed: false };
+    const webReq = await toWebRequest(req, req.body, { signal });
+    const response = await ladderContext.run(probe, () => ladderHandler().fetch(webReq, { parsedBody: req.body }));
+    if (!probe.passed) return response;
+    try { await response.body?.cancel(); } catch { /* nothing to drain */ }
+    return null;
+  }
 
   // Stateless mode: a fresh server+transport per POST, no session table. Every
   // JSON-RPC message (including initialize) is self-contained, which survives
@@ -2096,6 +2119,20 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     // classification, from the parsed body and the standard headers.
     // A request it cannot classify is served as 2025-era traffic.
     const modern = !(await isLegacyRequest(eraProbeOf(req), req.body ?? undefined).catch(() => true));
+    // Only a request that claims 2026-07-28 (the envelope, or a modern
+    // MCP-Protocol-Version header) meets the ladder here; a malformed 2025-era
+    // body keeps the answers below.
+    const claimsModern = () => {
+      const meta = req.body?.params?._meta;
+      const header = req.headers["mcp-protocol-version"];
+      return (meta && typeof meta === "object" && !Array.isArray(meta) && Object.hasOwn(meta, PROTOCOL_VERSION_META_KEY)) || (typeof header === "string" && header.trim() >= "2026-07-28");
+    };
+    if (modern && ((tasks && isTaskMethod(req.body?.method)) || (skillSet && isSkillMethod(req.body?.method))) && claimsModern()) {
+      const lac = new AbortController();
+      res.on("close", () => lac.abort());
+      const refusal = await modernLadderRefusal(req, lac.signal);
+      if (refusal) return writeWebResponse(res, refusal, lac.signal);
+    }
     if (tasks && isTaskMethod(req.body?.method)) {
       const handled = await handleTaskRpc(req.body);
       // 2026-07-28 HTTP: a missing required client capability is a 400; every
@@ -2140,9 +2177,7 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
     let run = null;
     try {
       const heartbeatToken = typeof req.headers["x-heartbeat-token"] === "string" ? req.headers["x-heartbeat-token"] : null;
-      const rawMeta = req.body?.params?._meta;
-      const declaredCapabilities = rawMeta && typeof rawMeta === "object" ? rawMeta[CLIENT_CAPABILITIES_META] : undefined;
-      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall, declaredCapabilities };
+      const serverOpts = { skillsCaps, reqHeaders: req.headers, paymentCall };
       // Client disconnect: abort in-flight handler work AND close the transport
       // (F14) — not just close the transport while the handler keeps running.
       res.on("close", () => { ac.abort(); try { transport?.close(); } catch { /* already closing */ } });
@@ -2181,10 +2216,15 @@ export function mountMcp(app, catalog, { baseUrl, isComputePayable, onServed = (
         const cls = err.__deadline ? "deadline" : "internal";
         console.warn(`[mcp] ${logSafe(method, 40)} failed class=${cls}${tool ? ` tool=${tool}` : ""}`);
         if (method === "tools/call" && req.body?.id != null) {
-          // Only a call that carried no payment credential is certainly
-          // uncharged; a paid call may have settled server-side.
+          // Only a call that carried no payment is certainly uncharged; a
+          // call with an MPP credential or an x402 payment the reader accepts
+          // (the one payOverX402 replays) may have settled server-side, and
+          // is answered as the paid loopback's own cut-off is.
           let paid = false;
-          try { paid = Boolean(credentialHeaderFromMeta(req.body?.params?._meta)); } catch { paid = false; }
+          try {
+            const meta = req.body?.params?._meta;
+            paid = Boolean(credentialHeaderFromMeta(meta)) || (Boolean(x402Loopback) && Boolean(readPaymentFromMeta(meta).payment));
+          } catch { paid = false; }
           const label = `Agent402${tool ? ` (${tool})` : ""}`;
           const text = err.__deadline
             ? connectorCutoffText({ label, seconds: Math.round(MCP_REQ_DEADLINE_MS / 1000), paid })

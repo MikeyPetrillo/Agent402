@@ -268,6 +268,24 @@ try {
     ok(dPlain.result?.instructions === plain.result?.instructions, "2026-07-28: discover carries the initialize instructions");
     const mList = await mrpc("/mcp", "skills/list", {}, DECLARE);
     ok(JSON.stringify(mList.result) === JSON.stringify(list.result), "2026-07-28: skills/list answers the 2025-era listing byte for byte");
+    // The standard headers and the envelope are checked on skills/* as on
+    // every other 2026-07-28 request.
+    const rawSkills = async (headers, version = "2026-07-28") => {
+      const res = await fetch(`${BASE}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...headers },
+        body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "skills/list", params: { _meta: { ...ENV(DECLARE), "io.modelcontextprotocol/protocolVersion": version } } }),
+      });
+      return { status: res.status, body: await res.json() };
+    };
+    const sNoMethod = await rawSkills({ "MCP-Protocol-Version": "2026-07-28" });
+    ok(sNoMethod.status === 400 && sNoMethod.body.error?.code === -32020 && !sNoMethod.body.result, `2026-07-28: skills/list with no Mcp-Method is the 400 -32020 (${sNoMethod.status} ${sNoMethod.body.error?.code})`);
+    const sWrongMethod = await rawSkills({ "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/list" });
+    ok(sWrongMethod.status === 400 && sWrongMethod.body.error?.code === -32020, `2026-07-28: skills/list under another Mcp-Method is the 400 -32020 (${sWrongMethod.status} ${sWrongMethod.body.error?.code})`);
+    const sUnserved = await rawSkills({ "MCP-Protocol-Version": "2099-01-01", "Mcp-Method": "skills/list" }, "2099-01-01");
+    ok(sUnserved.status === 400 && sUnserved.body.error?.code === -32022, `2026-07-28: skills/list naming an unserved revision is the 400 -32022 (${sUnserved.status} ${sUnserved.body.error?.code})`);
+    const sGood = await rawSkills({ "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "skills/list" });
+    ok(sGood.status === 200 && JSON.stringify(sGood.body.result) === JSON.stringify(list.result), "2026-07-28: the same skills/list with matching headers is answered");
     const mRead = await mrpc("/mcp", "resources/read", { uri: packUri }, DECLARE, packUri);
     ok(mRead.result?.resultType === "complete" && mRead.result?.contents?.[0]?.text === body, "2026-07-28: resources/read returns the same SKILL.md");
     const v2 = await import("@modelcontextprotocol/client");

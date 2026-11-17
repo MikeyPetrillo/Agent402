@@ -13,7 +13,7 @@
 // the thread, on the clock a busy host does not inflate
 // (scripts/lib/ours-clock.js). Each call sends one header one shape, filled to
 // the server's header limit, to one unpaid surface: a page, a free API route,
-// a paid route's 402, /api/find, /api/route, /mcp, an unknown API path (the
+// a paid route's 402, /api/find, /api/route, /mcp on both protocol eras, an unknown API path (the
 // retired-route answer reads the client from its headers) and the model
 // tiers' flat and metered 402. A call whose
 // turn runs past the bound is repeated, and fails if the least of its readings
@@ -93,12 +93,17 @@ function shaped(n) {
     "if-none-match": { tags: fit("\"a\", ", n), weak: fit("W/\"a\",", n), star: fit("*,", n), open: "\"" + "a".repeat(n - 1), spaces: "\"a\"," + " ".repeat(n - 8) + "\"b\"" },
     range: { many: "bytes=" + fit("0-1,", n - 6), overlapping: "bytes=" + fit("0-999,", n - 6), suffix: "bytes=" + fit("-1,", n - 6), digits: "bytes=0-" + fit("9", n - 8), spaces: "bytes=" + fit(" ,", n - 8) + "0-1", unit: fit("a", n - 4) + "=0-1" },
     "idempotency-key": { long: "a".repeat(n), dashes: fit("a-", n), spaces: "a" + " ".repeat(n - 2) + "a", colons: fit("a:", n) },
+    // The 2026-07-28 standard headers the MCP SDK's ladder reads (Mcp-Name may
+    // carry a =?base64?...?= sentinel the ladder decodes).
+    "mcp-method": { slashes: fit("tools/", n), spaces: " ".repeat(n - 10) + "tools/call", tabs: "\t".repeat(n - 10) + "tools/call", nearMethod: "tools/call" + fit("l", n - 10) },
+    "mcp-name": { sentinel: "=?base64?" + fit("QUFB", n - 11) + "?=", nearSentinel: "=?base64?" + fit("QUFB", n - 12) + "!?=", openSentinel: "=?base64?" + fit("QUFB", n - 9), spaces: " ".repeat(n - 15) + "server.describe", tabs: "\t".repeat(n - 15) + "server.describe", dots: fit("server.", n) },
+    "mcp-protocol-version": { dates: fit("2026-07-28,", n), dashes: "2026" + fit("-", n - 4), spaces: " ".repeat(n - 10) + "2026-07-28", digits: "2026-07-" + fit("2", n - 8) },
   };
 }
 const HEADERS = ["user-agent", "accept", "accept-language", "referer", "origin", "x-forwarded-for", "authorization", "x-payment", "payment-signature", "x-operator-token", "cookie", "if-none-match", "range", "idempotency-key"];
 // Further headers a gate, the connector or the edge code reads; each gets the
 // general shapes.
-const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt"];
+const MORE_HEADERS = ["x-referrer-token", "x-referrer-buyer-agent-id", "prefer", "x-pow-solution", "x-forwarded-host", "x-forwarded-proto", "forwarded", "mcp-session-id", "mcp-protocol-version", "mcp-method", "mcp-name", "last-event-id", "x-request-id", "cf-connecting-ip", "x-origin-auth", "if-modified-since", "accept-encoding", "x-credits-key", "payment-receipt"];
 
 // --- the readers the surfaces do not reach, timed directly --------------------
 // Synchronous functions, so a reading is the time this thread had a core.
@@ -190,6 +195,9 @@ const SURFACES = [
   { name: "find", method: "GET", path: "/api/find?q=hash%20a%20string", expect: [200] },
   { name: "route", method: "GET", path: "/api/route?q=hash%20a%20string", expect: [200] },
   { name: "mcp", method: "POST", path: "/mcp", headers: { accept: "application/json, text/event-stream" }, body: { jsonrpc: "2.0", id: 1, method: "tools/list" }, expect: [200] },
+  // 2026-07-28 (the per-request envelope, no initialize): the SDK's ladder
+  // reads MCP-Protocol-Version, Mcp-Method and Mcp-Name before it serves the call.
+  { name: "mcp 2026-07-28", method: "POST", path: "/mcp", headers: { accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": "server.describe" }, body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "server.describe", arguments: {}, _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "redos-headers", version: "1" } } } }, expect: [200] },
   { name: "unknown API path", method: "GET", path: "/api/no-such-tool-here", expect: [404] },
   { name: "model tier 402", method: "POST", path: "/v1/chat/completions", body: { model: "agent402/auto", messages: [{ role: "user", content: "hi" }] }, expect: [402] },
   { name: "metered quote", method: "POST", path: "/v1/metered/chat/completions", body: { model: "agent402/auto", messages: [{ role: "user", content: "hi" }] }, expect: [402] },

@@ -6,6 +6,25 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-17 (the MCP connector serves protocol revision 2026-07-28)
+Surfaces:
+- /mcp serves MCP revision 2026-07-28 (the per-request envelope and
+  server/discover, with no initialize) beside the 2025 revisions on the same
+  URL. A valid request on an older revision is answered as before, and tools,
+  payments over x402 and MPP, tasks and skills answer the same on both
+  revisions.
+- A malformed request now gets a clearer refusal: an empty batch is a 400 with
+  -32600, a body with no jsonrpc member is -32600 with its id, a tools/call
+  with no params or with arguments that are not an object is -32602 naming the
+  problem, and an MCP-Protocol-Version header naming an unknown version on a
+  request with no envelope is -32602 naming the missing envelope.
+- A 2026-07-28 tasks or skills request meets the same Mcp-Method, Mcp-Name and
+  MCP-Protocol-Version checks as every other 2026-07-28 request, and each
+  tools/call in a 2025-era batch reads the tasks extension its own message
+  declares.
+- A tools/call paid over x402 in the call that the connector stops waiting on
+  says it may have been charged, as an MPP-paid one does.
+
 ### 2026-11-17 (an unconfirmed settlement is answered as unconfirmed)
 Payments:
 - When a backup settler ends a settlement on an answer that does not show

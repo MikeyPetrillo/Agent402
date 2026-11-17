@@ -614,6 +614,45 @@ ok(ct.resultType === "task" && ct.result === undefined, "CreateTaskResult carrie
   plan = { research: { delayMs: 50, res: jsonRes(200, { report: "blocking" }) } };
   const blocking = await mrpc("tools/call", { name: "catalog.call", arguments: { slug: "research", params: { q: "hello" } } }, "catalog.call");
   ok(blocking.status === 200 && blocking.body.result?.resultType !== "task", "a 2026-07-28 call that did not declare the extension never gets a task handle");
+
+  // The standard headers and the envelope are checked on tasks/* as on every
+  // other 2026-07-28 request, ahead of the task store.
+  const tid = mh.body.result.taskId;
+  const raw = async (headers, body) => {
+    const res = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers }, body: JSON.stringify(body) });
+    return { status: res.status, body: await res.json() };
+  };
+  const getBody = (v = "2026-07-28") => ({ jsonrpc: "2.0", id: ++rpcId, method: "tasks/get", params: { taskId: tid, _meta: { ...ENVELOPE, "io.modelcontextprotocol/protocolVersion": v, ...CLIENT_CAPS } } });
+  const wrongName = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-method": "tasks/get", "mcp-name": "not-this-task" }, getBody());
+  ok(wrongName.status === 400 && wrongName.body.error?.code === -32020 && wrongName.body.result === undefined, `an Mcp-Name that is not the taskId is the 400 -32020 (${wrongName.status} ${wrongName.body.error?.code})`);
+  const noName = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-method": "tasks/get" }, getBody());
+  ok(noName.status === 400 && noName.body.error?.code === -32020, `a tasks/get with no Mcp-Name is the 400 -32020 (${noName.status} ${noName.body.error?.code})`);
+  const noMethod = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-name": tid }, getBody());
+  ok(noMethod.status === 400 && noMethod.body.error?.code === -32020, `a tasks/get with no Mcp-Method is the 400 -32020 (${noMethod.status} ${noMethod.body.error?.code})`);
+  const wrongMethod = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list", "mcp-name": tid }, getBody());
+  ok(wrongMethod.status === 400 && wrongMethod.body.error?.code === -32020, `an Mcp-Method that is not the body's method is the 400 -32020 (${wrongMethod.status} ${wrongMethod.body.error?.code})`);
+  const unserved = await raw({ "mcp-protocol-version": "2099-01-01", "mcp-method": "tasks/get", "mcp-name": tid }, getBody("2099-01-01"));
+  ok(unserved.status === 400 && unserved.body.error?.code === -32022 && unserved.body.error?.data?.supported?.includes("2026-07-28"), `an envelope naming an unserved revision is the 400 -32022 (${unserved.status} ${unserved.body.error?.code})`);
+  const good = await raw({ "mcp-protocol-version": "2026-07-28", "mcp-method": "tasks/get", "mcp-name": tid }, getBody());
+  ok(good.status === 200 && good.body.result?.status === "completed", `the same tasks/get with matching headers is answered (${good.status})`);
+
+  // A 2025-era batch: each tools/call reads the tasks extension its own
+  // message declared, as one message on its own does.
+  plan = { research: { delayMs: 300, res: jsonRes(200, { report: "batched" }, { "payment-receipt": "" }) } };
+  const batchRes = await fetch(`${BASE}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify([
+      { jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "research", params: { q: "a" } }, _meta: CLIENT_CAPS } },
+      { jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name: "catalog.call", arguments: { slug: "research", params: { q: "b" } } } },
+    ]),
+  });
+  const batchText = await batchRes.text();
+  let batch = null;
+  try { batch = JSON.parse(batchText); } catch { batch = (batchText.split("\n").filter((l) => l.startsWith("data:")).map((l) => JSON.parse(l.slice(5).trim()))).flat(); }
+  const [declared, undeclared] = [rpcId - 1, rpcId].map((id) => (Array.isArray(batch) ? batch : [batch]).find((m) => m?.id === id));
+  ok(declared?.result?.task?.taskId?.length === 48 || declared?.result?.taskId?.length === 48, `in a 2025-era batch, the call that declared tasks gets a task handle (${JSON.stringify(declared).slice(0, 160)})`);
+  ok(undeclared?.result && !undeclared.result.task && undeclared.result.resultType !== "task", `in the same batch, the call that did not declare tasks is answered blocking (${JSON.stringify(undeclared).slice(0, 160)})`);
 }
 
 // ---------------------------------------------------------------- teardown
