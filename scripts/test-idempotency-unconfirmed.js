@@ -5,13 +5,17 @@
 //     with nothing run; another nonce runs;
 //   - kept until the authorization's validBefore plus a minute when that is
 //     later than a day (at most 30 days), a day when it names none;
+//   - replayed only under the payer's own signature: a header naming the same
+//     identity with no signature or another one takes the normal path and
+//     leaves the payer's answer in place; for a signed transaction, its
+//     decoded bytes;
 //   - on the shared store (a real Redis, REDIS_URL; required under CI): the
 //     entry carries that TTL in Redis, another container replays it, and it
 //     is gone once the TTL has passed.
 import "./lib/own-stats.js"; // a stats store of this suite's own (see the file)
 import { randomBytes } from "node:crypto";
 import express from "express";
-import { createIdempotency, unconfirmedKeyOf, unconfirmedReplayMs } from "../src/idempotency.js";
+import { createIdempotency, unconfirmedKeyOf, unconfirmedReplayMs, unconfirmedSignatureOf } from "../src/idempotency.js";
 import { createLocalIdempotencyStore, createIdempotencyStore } from "../src/idempotency-store.js";
 
 let pass = 0, fail = 0;
@@ -21,9 +25,10 @@ const DAY = 86_400_000;
 const NET = "eip155:8453";
 const PAYER = `0x${randomBytes(20).toString("hex")}`;
 
+const GOOD_SIG = `0x${"11".repeat(65)}`;
 const payloadOf = ({ nonce, validBefore, resource = "https://agent402.tools/api/memory" }) => ({
   x402Version: 2, resource: { url: resource }, accepted: { scheme: "exact", network: NET, amount: "1000", payTo: `0x${"bb".repeat(20)}`, asset: `0x${"cc".repeat(20)}` },
-  payload: { signature: `0x${"11".repeat(65)}`, authorization: { from: PAYER, to: `0x${"bb".repeat(20)}`, value: "1000", validAfter: "0", validBefore: String(validBefore), nonce } },
+  payload: { signature: GOOD_SIG, authorization: { from: PAYER, to: `0x${"bb".repeat(20)}`, value: "1000", validAfter: "0", validBefore: String(validBefore), nonce } },
 });
 const enc = (o, space = 0) => Buffer.from(JSON.stringify(o, null, space)).toString("base64");
 const newNonce = () => `0x${randomBytes(32).toString("hex")}`;
@@ -38,6 +43,13 @@ async function serve(store) {
   app.post("/api/memory", (req, res) => {
     runs.n++;
     const p = JSON.parse(Buffer.from(req.header("payment-signature"), "base64").toString("utf8"));
+    // The verify step: a payment without the payer's signature is refused.
+    // It leaves an unconfirmed answer of its own on the request, so a store
+    // step that let another signature replace the payer's would show.
+    if (String(p.payload?.signature || "").toLowerCase() !== GOOD_SIG) {
+      req.__a402UnconfirmedAnswer = { body: { reason: "settlement-unconfirmed", impostor: true }, validBefore: p.payload?.authorization?.validBefore };
+      return res.status(402).json({ error: "invalid_payment", reason: "invalid_exact_evm_payload_signature" });
+    }
     const body = { reason: "settlement-unconfirmed", retry: "check-wallet", hint: "Do not sign a new authorization." };
     req.__a402UnconfirmedAnswer = { body, receipt: enc({ success: false, errorReason: "settlement_unconfirmed" }), validBefore: p.payload.authorization.validBefore };
     res.status(402).json(body);
@@ -53,6 +65,8 @@ async function serve(store) {
 }
 // Let the finish-time write land.
 const settle = () => sleep(50);
+const unsignedOf = (p) => { const { signature, ...rest } = p.payload; void signature; return { ...p, payload: rest }; };
+const resignedOf = (p) => ({ ...p, payload: { ...p.payload, signature: `0x${"22".repeat(65)}` } });
 
 const realNow = Date.now;
 // ---- per process -----------------------------------------------------------
@@ -69,6 +83,19 @@ const realNow = Date.now;
     const again = [await s.send(header), await s.send(enc(p, 2)), await s.send(enc({ payload: p.payload, ...p })), await s.send(enc({ ...p, resource: { url: "https://agent402.tools/api/other?x=1" } }), { key: "other" })];
     ok(again.every((r) => r.status === 402 && r.replayed === "1" && /settlement-unconfirmed/.test(r.text) && r.receipt) && s.runs.n === 1,
       `the same authorization as sent, re-spaced, re-ordered, and with another resource and body: the stored answer, nothing run (${again.map((r) => `${r.status}/${r.replayed}`).join(" ")}; ${s.runs.n} runs)`);
+    const upper = await s.send(enc({ ...p, payload: { ...p.payload, signature: `0x${"11".repeat(65).toUpperCase()}` } }));
+    ok(upper.replayed === "1" && s.runs.n === 1, "the same signature in upper-case hex replays");
+    // Another header naming the same (network, payer, nonce) without the payer's signature.
+    const unsigned = await s.send(enc(unsignedOf(p)));
+    await settle();
+    ok(unsigned.status === 402 && unsigned.replayed !== "1" && !/settlement-unconfirmed/.test(unsigned.text) && /invalid_exact_evm_payload_signature/.test(unsigned.text) && s.runs.n === 2,
+      `an unsigned header naming the payment's identity: not the stored answer, the normal refusal (${unsigned.status}/${unsigned.replayed}; ${s.runs.n} runs)`);
+    const wrong = await s.send(enc(resignedOf(p)));
+    await settle();
+    ok(wrong.replayed !== "1" && /invalid_exact_evm_payload_signature/.test(wrong.text) && s.runs.n === 3, "a header with another signature for the same identity: the normal refusal");
+    const own = await s.send(enc(p, 4));
+    ok(own.status === 402 && own.replayed === "1" && /settlement-unconfirmed/.test(own.text) && !/impostor/.test(own.text) && s.runs.n === 3, "the payer's own re-send still gets its stored answer after those");
+    s.runs.n = 1;
     const other = await s.send(enc(payloadOf({ nonce: newNonce(), validBefore: vb })));
     await settle();
     ok(other.status === 402 && other.replayed !== "1" && s.runs.n === 2, "control: another nonce is another payment and runs");
@@ -96,6 +123,15 @@ const realNow = Date.now;
     const fake = (h) => ({ header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined) });
     ok(unconfirmedKeyOf(fake(enc(p)), enc(p)) === unconfirmedKeyOf(fake(enc(p, 3)), enc(p, 3)) && unconfirmedKeyOf(fake("not-a-payment"), "not-a-payment") !== unconfirmedKeyOf(fake("other-text"), "other-text"),
       "the key is the payment's identity; an unreadable credential keys on its text");
+    // A signed transaction: the digest is of its decoded bytes.
+    const txA = randomBytes(200), txB = Buffer.from(txA); txB[1] ^= 0xff;
+    const svm = (tx, url = false) => { const t = tx.toString("base64"); return enc({ x402Version: 2, accepted: { scheme: "exact", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }, payload: { transaction: url ? t.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") : t } }); };
+    const sigOf = (h) => unconfirmedSignatureOf(fake(h), h);
+    ok(sigOf(svm(txA)) === sigOf(svm(txA, true)) && sigOf(svm(txA)) !== sigOf(svm(txB)) && typeof sigOf(svm(txA)) === "string",
+      "a signed transaction binds on its decoded bytes: re-encoded matches, other signature bytes do not");
+    const avm = (tx) => enc({ x402Version: 2, accepted: { scheme: "exact", network: "algorand:mainnet" }, payload: { paymentGroup: [tx.toString("base64")], paymentIndex: 0 } });
+    ok(sigOf(avm(txA)) !== sigOf(avm(txB)) && sigOf(avm(txA)) === sigOf(avm(txA)), "an Algorand payment binds on its signed transaction bytes");
+    ok(sigOf(enc(unsignedOf(p))) === null && sigOf(enc(p)) === sigOf(enc(p, 2)) && sigOf(enc(p)) !== sigOf(enc(resignedOf(p))), "an EVM payment binds on its signature; none named binds nothing");
   } finally { Date.now = realNow; await s.close(); local.stop?.(); }
 }
 
@@ -130,6 +166,14 @@ if (!url) {
     try {
       const r = await sb.send(enc(p, 2));
       ok(r.status === 402 && r.replayed === "1" && sb.runs.n === 0, "another container replays the stored answer from Redis for a re-encoded send");
+      const ru = await sb.send(enc(unsignedOf(p)));
+      await settle();
+      ok(ru.replayed !== "1" && /invalid_exact_evm_payload_signature/.test(ru.text) && sb.runs.n === 1, "on Redis, an unsigned header naming the identity takes the normal path");
+      const rw = await sb.send(enc(resignedOf(p), 1));
+      await settle();
+      ok(rw.replayed !== "1" && sb.runs.n === 2, "on Redis, another signature for the identity takes the normal path");
+      const rown = await sb.send(enc(p, 3));
+      ok(rown.replayed === "1" && /settlement-unconfirmed/.test(rown.text) && !/impostor/.test(rown.text) && sb.runs.n === 2, "on Redis, the payer's own re-send still gets the stored answer");
       // Honored: once the TTL passes, a third container (empty local store) runs the call.
       await sleep(ttlQ + 1500);
       ok((await c.exists(kq)) === 0, "Redis dropped the entry at its TTL");

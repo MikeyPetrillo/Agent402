@@ -9,6 +9,8 @@ import { onResponseEnd } from "./hangup-settlement.js";
 import { allowanceServed } from "./allowance-state.js";
 import { isX402McpRequest } from "./mcp-x402-routes.js";
 import { MAX_SETTLED_VALIDITY_HOLD_MS, paymentReplayKey } from "./replay-guard.js";
+import { decodePaymentHeader } from "./payment-header.js";
+import { base64BytesOf } from "./base64-bytes.js";
 
 // A stored answer is the body as served, or, when it was charged but never
 // delivered (the buyer left while the payment settled), the body under this
@@ -29,7 +31,9 @@ const unwrapStored = (hit) => (hit && typeof hit === "object" && !Array.isArray(
 // (paymentNonceIdentityOf), so the same authorization re-encoded or naming
 // another `resource` is the same payment; for any other rail the identity the
 // replay guard reads from what its chain consumes (paymentReplayKey), else
-// the credential text. The same payment sent again gets it back before the
+// the credential text. It is stored with a digest of the payer's signature
+// (unconfirmedSignatureOf), and the same payment sent again under that
+// signature gets it back before the
 // paywall: no handler run, no verify, no settle, nothing counted against the
 // wallet. Kept until the authorization's validBefore (past it the
 // authorization can no longer move money, and a new one is safe) plus a
@@ -59,6 +63,45 @@ export function unconfirmedKeyOf(req, cred) {
     if (typeof k === "string" && !k.startsWith("c:")) id = `replay\n${k.split(":").slice(0, 2).join(":")}`;
   }
   return createHash("sha256").update(`unconfirmed-settle\n${id || `cred\n${cred}`}`).digest("hex");
+}
+/** What binds a stored unconfirmed answer to the payer's own signature. The
+ *  key above is the payment's identity, which anyone can name without the
+ *  payer's key (a header with no valid signature naming its network, payer
+ *  and nonce); the answer is replayed only to a header whose signature digest
+ *  matches the one stored with it. An EVM payment: its signature (hex read
+ *  in one case). A signed-transaction payment (Solana, Stellar, Algorand):
+ *  the signed transaction bytes the chain consumes, decoded, so the same
+ *  transaction re-encoded matches and one with other signatures does not.
+ *  Anything else: its identity, or the credential text, which are themselves
+ *  the whole signed payload. Null when no signature is named: never replayed. */
+export function unconfirmedSignatureOf(req, cred) {
+  const digest = (tag, v) => createHash("sha256").update(`${tag}\n`).update(v).digest("hex");
+  let p = null;
+  try { p = decodePaymentHeader(cred); } catch { p = null; }
+  if (!p || typeof p !== "object") return digest("cred", String(cred));
+  const inner = p.payload && typeof p.payload === "object" ? p.payload : null;
+  const sigOf = () => {
+    const s = typeof inner?.signature === "string" ? inner.signature.trim() : "";
+    if (!s) return null;
+    return digest("sig", /^0x[0-9a-fA-F]+$/.test(s) ? s.toLowerCase() : s);
+  };
+  if (paymentNonceIdentityOf(req)) return sigOf();
+  const network = String(p.accepted?.network || p.network || inner?.network || "");
+  if (inner && (network.startsWith("solana") || network.startsWith("stellar"))) {
+    const bytes = base64BytesOf(inner.transaction);
+    return bytes ? digest(`tx\n${network.split(":")[0]}`, bytes) : null;
+  }
+  if (inner && network.startsWith("algorand")) {
+    const group = inner.paymentGroup;
+    if (!Array.isArray(group) || !Number.isInteger(inner.paymentIndex)) return null;
+    const bytes = base64BytesOf(group[inner.paymentIndex]);
+    return bytes ? digest(`tx\nalgorand\n${inner.paymentIndex}`, bytes) : null;
+  }
+  const sig = sigOf();
+  if (sig) return sig;
+  let k = null;
+  try { k = paymentReplayKey(req); } catch { k = null; }
+  return typeof k === "string" && k ? digest("replay", k) : digest("cred", String(cred));
 }
 
 /** Whether a re-sent x402 payment on `def`'s route may replay its first
@@ -203,14 +246,15 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
   };
   // Keep this request's unconfirmed answer (set on the request by the
   // paywall when it sent one) for the same payment sent again.
-  const keepUnconfirmed = (req, res, uKey) => {
+  const keepUnconfirmed = (req, res, uKey, sig) => {
     let done = false;
     const keep = () => {
       if (done) return;
       done = true;
       const a = req.__a402UnconfirmedAnswer;
       if (res.statusCode !== 402 || !a || typeof a !== "object" || !a.body || typeof a.body !== "object") return;
-      const rec = { [UNCONFIRMED]: 1, body: a.body, receipt: typeof a.receipt === "string" ? a.receipt : null };
+      if (typeof sig !== "string" || !sig) return;
+      const rec = { [UNCONFIRMED]: 1, body: a.body, receipt: typeof a.receipt === "string" ? a.receipt : null, sig };
       let bytes = 0;
       try { bytes = Buffer.byteLength(JSON.stringify(rec), "utf8"); } catch { bytes = 0; }
       if (!bytes || bytes > IDEM_MAX_BODY_BYTES) return;
@@ -229,8 +273,13 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
       uKey ? Promise.resolve().then(() => store.get(uKey)).catch(() => null) : null,
       bound ? Promise.resolve().then(() => store.get(bound.key)).catch(() => null) : null,
     ]);
-    if (uHit && typeof uHit === "object" && uHit[UNCONFIRMED] === 1 && uHit.body && typeof uHit.body === "object") return replayUnconfirmed(req, res, uHit);
-    if (uKey) keepUnconfirmed(req, res, uKey);
+    const uSig = uKey ? unconfirmedSignatureOf(req, cred) : null;
+    const uStored = Boolean(uHit && typeof uHit === "object" && uHit[UNCONFIRMED] === 1 && uHit.body && typeof uHit.body === "object");
+    // Only the payer's own signature gets its answer back; any other header
+    // naming the same payment takes the normal path (verify refuses it), and
+    // never replaces the payer's stored answer.
+    if (uStored && typeof uSig === "string" && uSig && uHit.sig === uSig) return replayUnconfirmed(req, res, uHit);
+    if (uKey && !uStored) keepUnconfirmed(req, res, uKey, uSig);
     if (!bound) return next();
     const { key, kind, implicit } = bound;
     let hit = hit0;

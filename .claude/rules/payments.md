@@ -514,8 +514,12 @@ Loaded when a payment-path file is read. The settlement-ordering rule in the roo
   per network; past it the booking waits in the book's journal (drained once the payer is under the
   bound; the `lateSettlements` word reads unresolved meanwhile) with an error line each, never
   dropped. **The same payment sent again** is answered from the idempotency store before the paywall
-  (src/idempotency.js: keyed on a digest of the payment header alone, any route or body, kept until
-  validBefore plus a minute, at least a minute, at most a day): the same 402 and receipt with
+  (src/idempotency.js: keyed on the payment's identity, any route or body: an EVM payment's network,
+  signed payer and nonce, any other rail the replay guard's identity; stored with a digest of the
+  payer's signature, or of the signed transaction bytes, and replayed only to a header whose digest
+  matches, so a header naming the identity with no or another signature takes the normal path and
+  never replaces the stored answer; kept until validBefore plus a minute, at least a minute, at most
+  30 days, a day when no validBefore is named): the same 402 and receipt with
   `X-Replayed-Answer: 1`, no verify, no handler, no settle, no breaker count. Nothing re-sends or
   re-takes the authorization (`scripts/test-settle-fallback-unconfirmed.js`).
 - **Unpaid quote budget:** `src/unpaid-quote-budget.js` bounds bursts of unpaid 402 reads. A
