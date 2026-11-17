@@ -545,6 +545,15 @@ export function mcpInstallHints(baseUrl) {
 // and MPP): this package describes that service, so its hosted line names
 // both, as src/mcp-flagship.js renders it for a boot with both wires on.
 export const HOSTED_CONNECTOR_WIRES = Object.freeze({ x402: true, mpp: true });
+// The hosted service's origin. A package pointed at any other server
+// (AGENT402_URL, a self-host) names no wire on its hosted line: that server's
+// own wires are not known here.
+export const HOSTED_SERVICE_URL = "https://agent402.tools";
+/** The wires the hosted line names for `baseUrl`: both for the hosted
+ *  service, none for any other server. */
+export function hostedConnectorWiresFor(baseUrl) {
+  return String(baseUrl || "").replace(/\/+$/, "") === HOSTED_SERVICE_URL ? HOSTED_CONNECTOR_WIRES : {};
+}
 
 export function mcpInitializeInstructions(baseUrl, { decide = false, mpp = false, x402 = false } = {}) {
   const install = mcpInstallHints(baseUrl);

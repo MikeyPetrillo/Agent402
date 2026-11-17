@@ -270,14 +270,23 @@ assert(paidKind !== null,
 assert(!ranForFree(paid), "wallet-only tool did NOT execute");
 
 // The paid boot: the refusal a server with a paywall and the MPP gates (the
-// production configuration) answers, read by the same function. Skipped
-// only when TARGET_URL is a remote host (the deploy job's production read),
-// where the boot would add nothing to what was just asserted there.
+// production configuration) answers, read by the same function. The target's
+// own wires are asserted only when the caller names them
+// (MCP_HTTP_EXPECT_WIRES, e.g. "mpp+x402": the deploy job's production read),
+// never guessed from the host: a self-host or staging target in FREE_MODE
+// answers no wire. Named, the boot is skipped (it would add nothing to what
+// was just asserted there); unnamed, the paid boot runs whatever the target.
 {
-  const target = new URL(BASE);
-  const remote = !["127.0.0.1", "localhost", "[::1]"].includes(target.hostname);
-  if (remote) {
-    assert(paidKind === "mpp+x402", `production's refusal carries both wires (${paidKind})`);
+  const expectWires = String(process.env.MCP_HTTP_EXPECT_WIRES || "").trim();
+  // The deploy job's production read names both wires, so production's are asserted.
+  {
+    const { readFileSync } = await import("node:fs");
+    const deploy = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+    const prodCalls = deploy.split("\n").filter((l) => /TARGET_URL=\$PROD node scripts\/test-mcp-http\.js/.test(l));
+    assert(prodCalls.length > 0 && prodCalls.every((l) => /MCP_HTTP_EXPECT_WIRES=mpp\+x402 /.test(l)), `the deploy job's production read of /mcp names both wires (${prodCalls.length} call(s))`);
+  }
+  if (expectWires) {
+    assert(paidKind === expectWires, `the target's refusal carries the wires named by MCP_HTTP_EXPECT_WIRES (${expectWires}; got ${paidKind})`);
   } else {
     const { createServer } = await import("node:http");
     const { mkdtempSync } = await import("node:fs");

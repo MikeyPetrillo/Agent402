@@ -53,7 +53,7 @@ import {
   mcpJsonResult,
   outputSchemaFromExample,
   mcpInitializeInstructions,
-  HOSTED_CONNECTOR_WIRES,
+  hostedConnectorWiresFor,
   toolInputBoundRefusal,
   AGENT402_MCP_VERSION,
   clipToolDescription,
@@ -742,7 +742,7 @@ function rankWorkflows(query, k = 2) {
 // MCP wiring
 // Initialize instructions mirror src/mcp-flagship.js mcpInitializeInstructions
 // (stdio package cannot import src/ when published). Keep tool names listed-only.
-const INIT_INSTRUCTIONS = mcpInitializeInstructions(BASE, HOSTED_CONNECTOR_WIRES);
+const INIT_INSTRUCTIONS = mcpInitializeInstructions(BASE, hostedConnectorWiresFor(BASE));
 
 const server = new Server(
   {

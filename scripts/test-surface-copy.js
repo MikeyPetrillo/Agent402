@@ -93,7 +93,14 @@ ok(hi === si, "hosted and stdio initialize instructions are byte-identical");
   ok(HOSTED_CONNECTOR_WIRES.x402 === true && HOSTED_CONNECTOR_WIRES.mpp === true, "the package names both wires for the hosted service");
   const published = hostedLine(stdioInstructions("https://example.test", HOSTED_CONNECTOR_WIRES));
   ok(published.includes("other tools paid in the call over x402 or MPP from a wallet)") && !/wallet on the npm package/.test(published), `the published hosted line names both wires (${published.slice(0, 100)})`);
-  ok(/const INIT_INSTRUCTIONS = mcpInitializeInstructions\(BASE, HOSTED_CONNECTOR_WIRES\);/.test(read("mcp/index.js")), "the stdio server renders its instructions with the hosted service's wires");
+  ok(/const INIT_INSTRUCTIONS = mcpInitializeInstructions\(BASE, hostedConnectorWiresFor\(BASE\)\);/.test(read("mcp/index.js")), "the stdio server renders its instructions with the wires of the server it points at");
+  const { hostedConnectorWiresFor, HOSTED_SERVICE_URL } = await import("../mcp/output-schemas.js");
+  ok(HOSTED_SERVICE_URL === "https://agent402.tools" && hostedConnectorWiresFor("https://agent402.tools") === HOSTED_CONNECTOR_WIRES && hostedConnectorWiresFor("https://agent402.tools/") === HOSTED_CONNECTOR_WIRES,
+    "the hosted service's URL gets both wires");
+  for (const self of ["https://my-agent402.example", "http://127.0.0.1:3000", "https://agent402.tools.evil.example", ""]) {
+    const line = hostedLine(stdioInstructions(self || "https://x.example", hostedConnectorWiresFor(self)));
+    ok(!/x402|MPP/.test(line) && /others need a wallet on the npm package/.test(line), `a self-host URL's hosted line names no wire (${self || "empty"}: ${line.slice(0, 90)})`);
+  }
 }
 ok(/positioning: `\$\{leadSentence\(\{ mpp: mppMethodsSummary\(\)\.enabled \}\)\} It is the applied layer of Agentic Finance/.test(read("src/mcp-http.js")), "hosted describe_server carries a positioning field that leads with the lead sentence and names Agentic Finance");
 ok((read("mcp/index.js").match(/positioning: `[^`]*Agentic Finance[^`]*MPP/g) || []).length >= 2, "stdio describe payloads (both aliases) carry Agentic Finance + MPP positioning");
