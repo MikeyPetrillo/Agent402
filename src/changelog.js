@@ -18,7 +18,7 @@ const ENTRIES = [
       "Site: Footer link rows wrap into even lines, and the current page's name in a breadcrumb sits on the line of its links.",
       "Tools: seller-dossier names each route's delivery record responseDelivery, as the index's rows do; ourPaidCalls stays beside it with the same value and is deprecated. Its delivery summary says the count includes our router's unpaid non-answers, and its description and flags name the routes our router called rather than routes it paid.",
       "Surfaces: /openapi.json names the service Agent402.tools in its title; the tagline moves into its description.",
-      "Surfaces: /api/find reads a query that names a currency (\"convert currency\", \"convert usd to eur\") as a currency conversion and ranks fx-rate first as a strong match; inside a conversion, currency codes and names count as values, not as the task.",
+      "Surfaces: /api/find reads a query that asks to convert a currency (\"convert currency\", \"convert usd to eur\") as a currency conversion and ranks fx-rate first as a strong match; inside a conversion, currency codes and names count as values, not as the task.",
     ],
   },
   {
