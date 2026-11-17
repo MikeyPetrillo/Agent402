@@ -24,6 +24,7 @@ import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll } from "./coingecko-rate
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
+import { knownIdsGate, knownIdGate } from "./crypto-markets-kit.js";
 import { upstreamErrorText } from "./redact.js";
 
 function bad(message, statusCode = 400) {
@@ -100,6 +101,16 @@ function normalizeCurrency(raw, dflt = "usd") {
   const s = raw.trim().toLowerCase();
   if (!/^[a-z0-9]{2,8}$/.test(s)) throw bad('"currency" must be a 2-8 char alphanumeric code (e.g. "usd", "eur", "btc")');
   return s;
+}
+
+// The coin and currency gates in this kit's own words (status and message):
+// the list check is crypto-markets-kit's, the refusal reads as this kit's
+// upstream 404 and currency refusals always have.
+async function coinGate(id) {
+  try { await knownIdGate("coin", id); } catch (err) { if (err?.unknownId) throw bad("CoinGecko returned 404 - unknown coin or market", 422); throw err; }
+}
+async function currencyGate(currency) {
+  try { await knownIdGate("currency", currency); } catch (err) { if (err?.unknownId) throw bad(`currency "${currency}" is not supported by CoinGecko (try usd, eur, gbp, btc, eth)`); throw err; }
 }
 
 // Short cache for CoinGecko reads, keyed on the exact URL. An identical
@@ -239,7 +250,13 @@ export const CRYPTO_TOOLS = [
     handler: async (i) => {
       const ids = resolveCoinList(i.coins, 25);
       const currency = normalizeCurrency(i.currency);
-      const url = `${cgBase()}/simple/price?ids=${encodeURIComponent(ids.join(","))}&vs_currencies=${encodeURIComponent(currency)}&include_24hr_change=true&include_24hr_vol=true&include_market_cap=true&include_last_updated_at=true`;
+      // Ids and the currency are checked against their lists first once the
+      // share of the day kept for unpaid calls is full (crypto-markets-kit
+      // knownIdsGate): nothing known is answered with no read.
+      const gate = await knownIdsGate("coin", ids);
+      if (!gate.known.length) throw bad(`unknown coin(s): ${gate.unknown.join(", ")} - use a CoinGecko id or a listed symbol`, 404);
+      await currencyGate(currency);
+      const url = `${cgBase()}/simple/price?ids=${encodeURIComponent(gate.known.join(","))}&vs_currencies=${encodeURIComponent(currency)}&include_24hr_change=true&include_24hr_vol=true&include_market_cap=true&include_last_updated_at=true`;
       const data = await jsonGet(url);
       // CoinGecko's response shape is { id: { usd: 123, usd_24h_change: 1.4, ... } }.
       // Flatten to { id: { price, change24hPct, volume24h, marketCap } } so the
@@ -298,6 +315,7 @@ export const CRYPTO_TOOLS = [
       const limit = Number.isFinite(i.limit) ? Math.floor(i.limit) : (typeof i.limit === "string" ? parseInt(i.limit, 10) : 10);
       if (!Number.isFinite(limit) || limit < 1 || limit > 100) throw bad('"limit" must be an integer 1-100');
       const currency = normalizeCurrency(i.currency);
+      await currencyGate(currency);
       const url = `${cgBase()}/coins/markets?vs_currency=${encodeURIComponent(currency)}&order=market_cap_desc&per_page=${limit}&page=1&price_change_percentage=24h,7d`;
       const data = await jsonGet(url);
       if (!Array.isArray(data)) throw bad("CoinGecko returned unexpected shape for /coins/markets", 502);
@@ -358,6 +376,8 @@ export const CRYPTO_TOOLS = [
       // is an agent-input bug — reject before burning the round-trip.
       if (daysRaw !== "max" && !/^\d+$/.test(daysRaw)) throw bad('"days" must be a positive integer or "max"');
       if (daysRaw !== "max" && (parseInt(daysRaw, 10) < 1 || parseInt(daysRaw, 10) > 3650)) throw bad('"days" out of range (1-3650 or "max")');
+      await coinGate(id);
+      await currencyGate(currency);
       const url = `${cgBase()}/coins/${encodeURIComponent(id)}/market_chart?vs_currency=${encodeURIComponent(currency)}&days=${encodeURIComponent(daysRaw)}`;
       const data = await jsonGet(url);
       const prices = Array.isArray(data?.prices) ? data.prices : [];
@@ -503,7 +523,9 @@ export const CRYPTO_TOOLS = [
         "tether", "usd-coin", "usds", "dai", "ethena-usde",
         "paypal-usd", "usdd", "true-usd", "first-digital-usd",
       ];
-      const ids = i.coins != null && i.coins !== "" ? resolveCoinList(i.coins, 15) : DEFAULT_STABLECOINS;
+      const asked = i.coins != null && i.coins !== "" ? resolveCoinList(i.coins, 15) : DEFAULT_STABLECOINS;
+      const { known: ids } = asked === DEFAULT_STABLECOINS ? { known: asked } : await knownIdsGate("coin", asked);
+      if (!ids.length) throw bad("No CoinGecko data for the requested coins - check the ids/symbols", 422);
       const url = `${cgBase()}/coins/markets?vs_currency=usd&ids=${encodeURIComponent(ids.join(","))}&order=market_cap_desc`;
       const data = await jsonGet(url);
       if (!Array.isArray(data)) throw bad("CoinGecko returned unexpected shape for /coins/markets", 502);
@@ -544,6 +566,6 @@ export const CRYPTO_TOOLS = [
 for (const t of CRYPTO_TOOLS) creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-// A call that ends in a 4xx moves its CoinGecko reads to the unsettled share
-// of the day (src/tools/coingecko-rate.js).
+// A call that ends in an error counts its CoinGecko reads on the unsettled
+// share of the day (src/tools/coingecko-rate.js).
 underBudgetAll(cgScopeAll(CRYPTO_TOOLS), PAYMENT_WINDOW_BUDGET_MS);

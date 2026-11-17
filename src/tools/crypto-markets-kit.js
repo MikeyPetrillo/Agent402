@@ -73,7 +73,7 @@ function headers() {
 // charged; a cache hit never takes a token.
 // The bucket is SHARED with crypto-kit since 2026-09-03 (src/tools/coingecko-rate.js):
 // one key, one minute budget, whichever kit spends it.
-import { cgTake, cgRefusal, resetCgRateLimit, cgUnsettledSpent, cgScopeAll } from "./coingecko-rate.js";
+import { cgTake, cgRefusal, resetCgRateLimit, cgReserveUnconfirmed, cgScopeAll } from "./coingecko-rate.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 export { resetCgRateLimit };
@@ -96,25 +96,44 @@ export async function cgGet(path, params, ttlMs, reduce = null) {
 }
 
 // --- ids confirmed before they are read ---------------------------------------
-// Once the reads of calls that ended unsettled have spent their share of the
-// day (src/tools/coingecko-rate.js), an id that one list document names in
-// full is checked against that list before the id's own read: an id the list
-// does not name is answered 422 with no read, so made-up ids cannot keep
-// spending the part of the day paid calls run on. The list is read at most
-// once an hour and only while that share is spent; a list that cannot be read
-// decides nothing (the id's own read goes ahead). Network and pool ids have no
-// single list; the screens that read them are held to their own share.
-const ID_LISTS = Object.freeze({ coin: "/coins/list", exchange: "/exchanges/list", platform: "/asset_platforms" });
+// A call whose ids no list has confirmed reserves a place in the share of the
+// day kept for calls that end unsettled (src/tools/coingecko-rate.js
+// cgReserveUnconfirmed) and reads them as asked. Once that share is full, an
+// id that one list document names in full (a coin, an exchange, a platform, a
+// quote currency) is checked against that list before the id's own read: an
+// id the list does not name is answered with no read, so made-up ids cannot
+// keep spending the day paid calls run on, and a real id is read as before.
+// The list is read at most once an hour and only while the share is full; a
+// list that cannot be read decides nothing (the id's own read goes ahead).
+// Network and pool ids have no single list; the screens that read them stop
+// short of the reserve kept for the other tools.
+const idsOf = (d) => (Array.isArray(d) ? d.map((r) => r?.id).filter((x) => typeof x === "string") : []);
+const ID_LISTS = Object.freeze({
+  coin: { path: "/coins/list", reduce: { name: "ids", fn: idsOf } },
+  exchange: { path: "/exchanges/list", reduce: { name: "ids", fn: idsOf } },
+  platform: { path: "/asset_platforms", reduce: { name: "ids", fn: idsOf } },
+  currency: { path: "/simple/supported_vs_currencies", reduce: { name: "codes", fn: (d) => (Array.isArray(d) ? d.filter((x) => typeof x === "string").map((x) => x.toLowerCase()) : []) } },
+});
 export const ID_LIST_TTL_MS = 60 * 60_000;
-const idListReduce = { name: "ids", fn: (d) => (Array.isArray(d) ? d.map((r) => r?.id).filter((x) => typeof x === "string") : []) };
 const idSets = new WeakMap(); // a cached id list -> its Set
-export async function knownIdGate(kind, id) {
-  if (!ID_LISTS[kind] || !(await cgUnsettledSpent())) return;
+const unknownIdError = (kind) => Object.assign(bad(kind === "currency" ? "Unknown currency: the quote currency is not listed upstream" : "Unknown id: the coin, exchange or platform is not tracked upstream", 422), { unknownId: true });
+/** Split `ids` into the ones that may be read and the ones the list does not
+ *  name. Every id may be read while the call holds a place in the unsettled
+ *  share (or when the list cannot be read). */
+export async function knownIdsGate(kind, ids) {
+  const list = ID_LISTS[kind];
+  if (!list || !ids.length || (await cgReserveUnconfirmed())) return { known: ids, unknown: [] };
   let read;
-  try { read = await cgGet(ID_LISTS[kind], {}, ID_LIST_TTL_MS, idListReduce); } catch { return; }
+  try { read = await cgGet(list.path, {}, ID_LIST_TTL_MS, list.reduce); } catch { return { known: ids, unknown: [] }; }
   let set = idSets.get(read.data);
   if (!set) { set = new Set(read.data); idSets.set(read.data, set); }
-  if (set.size > 0 && !set.has(id)) throw Object.assign(bad("Unknown id: the coin, exchange or platform is not tracked upstream", 422), { unknownId: true });
+  if (set.size === 0) return { known: ids, unknown: [] };
+  return { known: ids.filter((id) => set.has(id)), unknown: ids.filter((id) => !set.has(id)) };
+}
+/** One id: answered 422 (`unknownId`) with no read when the list does not name it. */
+export async function knownIdGate(kind, id) {
+  const { unknown } = await knownIdsGate(kind, [id]);
+  if (unknown.length) throw unknownIdError(kind);
 }
 
 // One upstream read for cgGet: the body text of a 200 that parses as JSON, or
@@ -474,7 +493,7 @@ export const CRYPTO_MARKETS_TOOLS = [
     category: "crypto",
     price: "$0.005",
     description:
-      "Price, market cap and 24h volume of a coin on ONE past date (00:00 UTC snapshot), in every currency at once plus your chosen one called out. Pass `date` (YYYY-MM-DD) or `daysAgo` (1-365). The point-in-time sibling of crypto-history (which returns a series): use it to value a position as of a date, compute a since-date return, or check a tax-lot basis. Historical range on this plan is the past 365 days, enforced before the call. Cached in-process for 5 minutes.",
+      "Price, market cap and 24h volume of a coin on ONE past date (00:00 UTC snapshot), in every currency at once plus your chosen one called out. Pass `date` (YYYY-MM-DD) or `daysAgo` (1-365). The point-in-time sibling of crypto-history (which returns a series): use it to value a position as of a date, compute a since-date return, or check a tax-lot basis. Historical range on this plan is the past 365 days, enforced before the call. A date with no market data recorded for the coin (before it traded) answers recorded false with null values. Cached in-process for 5 minutes.",
     tags: ["crypto", "history", "snapshot", "price", "date", "market-cap", "tax"],
     discovery: {
       input: { coin: "bitcoin", daysAgo: 30, currency: "usd" },
@@ -490,7 +509,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       output: {
         example: {
           source: "coingecko", fetchedAt: "2026-08-22T13:20:00.000Z", cached: false,
-          id: "bitcoin", symbol: "BTC", name: "Bitcoin", date: "2026-07-23", currency: "usd",
+          id: "bitcoin", symbol: "BTC", name: "Bitcoin", date: "2026-07-23", currency: "usd", recorded: true,
           price: 118412.55, marketCap: 2356000000000, volume24h: 41000000000,
           allCurrencies: { price: { usd: 118412.55, eur: 100812.3, btc: 1 }, marketCap: { usd: 2356000000000 }, volume24h: { usd: 41000000000 } },
         },
@@ -517,11 +536,22 @@ export const CRYPTO_MARKETS_TOOLS = [
       const { data: d, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/history`, { date: `${dd}-${m}-${y}`, localization: "false" }, TTL.list);
       if (!d || typeof d !== "object" || !d.id) throw bad("Market data upstream returned an unexpected shape", 502);
       const md = d.market_data;
-      if (!md) throw bad("No market data recorded for that coin on that date", 422);
+      // A listed coin with no market data that day (a date before it traded)
+      // is an answer, not a refused input: the date was read, so it is a 200
+      // with recorded false and null values. A 422 here was a read nobody paid
+      // for, and a coin and date pair sent fresh each call spent the day free.
       const numMap = (o) => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [k, num(v)]).filter(([, v]) => v != null));
+      if (!md) {
+        return {
+          source: SOURCE, fetchedAt, cached,
+          id: d.id, symbol: upper(d.symbol), name: d.name ?? null, date: dateStr, currency, recorded: false,
+          price: null, marketCap: null, volume24h: null,
+          allCurrencies: { price: {}, marketCap: {}, volume24h: {} },
+        };
+      }
       return {
         source: SOURCE, fetchedAt, cached,
-        id: d.id, symbol: upper(d.symbol), name: d.name ?? null, date: dateStr, currency,
+        id: d.id, symbol: upper(d.symbol), name: d.name ?? null, date: dateStr, currency, recorded: true,
         price: num(md.current_price?.[currency]),
         marketCap: num(md.market_cap?.[currency]),
         volume24h: num(md.total_volume?.[currency]),
@@ -568,6 +598,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       const days = takeInt(i.days, "days", { min: 1, max: 365, dflt: 7 });
       if (!allowed.includes(days)) throw bad(`"days" must be one of ${allowed.join(", ")}`);
       await knownIdGate("coin", coin);
+      await knownIdGate("currency", currency);
       const { data, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/ohlc`, { vs_currency: currency, days }, TTL.price);
       if (!Array.isArray(data)) throw bad("Market data upstream returned an unexpected shape", 502);
       const bars = data.filter((r) => Array.isArray(r) && r.length >= 5).map(([t, o, h, l, c]) => ({ time: iso(t), open: num(o), high: num(h), low: num(l), close: num(c) }));
@@ -635,6 +666,7 @@ export const CRYPTO_MARKETS_TOOLS = [
       if (from >= to) throw bad('"from" must be before "to"');
       if ((nowSec - from) * 1000 > MAX_HISTORY_DAYS * DAY_MS + DAY_MS) throw bad(`the window must lie within the past ${MAX_HISTORY_DAYS} days on this plan`);
       await knownIdGate("coin", coin);
+      await knownIdGate("currency", currency);
       const { data, fetchedAt, cached } = await cgGet(`/coins/${encodeURIComponent(coin)}/market_chart/range`, { vs_currency: currency, from, to }, TTL.price);
       const prices = Array.isArray(data?.prices) ? data.prices : null;
       if (!prices) throw bad("Market data upstream returned an unexpected shape", 502);
@@ -1260,5 +1292,5 @@ export const __test = { takeId, takeCurrency, takeInt, takeBool, takeIdList, tak
 function stepOf(path) { return String(path || "").replace(/^\/api\/v3\//, "").split("?")[0].split("/").filter((seg) => /^[a-z_]+$/.test(seg)).join(" ").replace(/_/g, " ") || "market data"; }
 
 // Every handler runs under one budget (src/upstream-deadline.js), and a call
-// that ends in a 4xx moves its reads to the unsettled share of the day.
+// that ends in an error counts its reads on the unsettled share of the day.
 underBudgetAll(cgScopeAll(CRYPTO_MARKETS_TOOLS), PAYMENT_WINDOW_BUDGET_MS);

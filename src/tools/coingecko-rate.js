@@ -37,50 +37,67 @@ let cgTokens = null, cgRefilledAt = 0;
 // use up the key's allowance early. Applies while a key is configured.
 // Counted per UTC day. COINGECKO_DAILY_MAX tunes it.
 const cgDailyMax = () => Math.max(1, parseInt(process.env.COINGECKO_DAILY_MAX || "300", 10) || 300);
-const cgDay = { day: "", used: 0, unsettled: 0, shares: Object.create(null) };
+const cgDay = { day: "", used: 0, unsettled: 0 };
 
-// SHARES OF THE DAY. A read is counted on the day when it is taken, before
-// anyone knows how the call ends. A call that ends in a 4xx is never settled,
-// so reads spent on calls nobody pays for (made-up ids, refused inputs) would
-// otherwise use up the allowance paid calls run on. Those reads are moved, when
-// the call ends, from the day counter to their own counter, which holds a small
-// share of the day (COINGECKO_UNSETTLED_SHARE, default 10%); the day counter
-// keeps the rest, so the reads of calls that end unsettled can never take more
-// than that share from paid calls. Once that share is spent, an id that a list
-// document can confirm (a coin, an exchange, a platform) is checked against
-// that list before any read (src/tools/crypto-markets-kit.js knownIdGate).
-// A kit can also be held to a share of the day (`share` on cgScopeAll): the
-// market screens read several documents a call, and their share
-// (COINGECKO_SCREENS_SHARE, default 40% of the paid part) keeps the other
-// CoinGecko tools' part whatever the screens are asked.
+// THE DAY AND WHAT UNPAID CALLS MAY HOLD OF IT. Every read counts on the day
+// counter, and a read is refused only when that counter reaches the whole
+// ceiling: a paid call can use every read of the day nobody else used. A read
+// is counted before anyone knows how its call ends, and a call that ends in an
+// error is never settled, so reads spent on calls nobody pays for (made-up ids,
+// a currency the upstream does not list) are also counted on their own
+// counter, which holds a share of the day (COINGECKO_UNSETTLED_SHARE, default
+// 10%). That share caps those reads only, never the reads of paid calls:
+//   - A call whose inputs no list has confirmed reserves one place in the
+//     share before its first read (cgReserveUnconfirmed, one atomic step on
+//     the shared store, so a parallel burst cannot pass a check that the
+//     moves of earlier calls have not reached yet). A call that ends settled
+//     gives its place back; one that ends in an error keeps it and adds any
+//     further reads it took.
+//   - Once the share is full, no place is left: the kit checks each id (and
+//     currency) against the list document that names them all before any read
+//     (src/tools/crypto-markets-kit.js knownIdsGate), so a made-up id is
+//     answered with no read of its own and a real one is read as before.
+//   - A call whose inputs were confirmed and still ends in an error (an
+//     upstream failure) adds its reads too, so the share fills sooner.
+// The market screens read several documents a call; they are held below the
+// whole ceiling by a reserve kept for every other CoinGecko tool
+// (COINGECKO_OTHERS_RESERVE, default 20% of the day; `ceiling: "screens"` on
+// cgScopeAll), so the screens can use the rest of the day when the others are
+// quiet and the others always keep that reserve.
 const shareOf = (env, dflt) => { const f = Number(process.env[env]); return Number.isFinite(f) && f >= 0 && f < 1 ? f : dflt; };
-/** The day's caps: the whole ceiling, the part reads of unsettled calls may
- *  hold, and what is left for every other read. */
+/** The day's caps: the whole ceiling (every read), the share reads of unpaid
+ *  calls may hold, and the ceiling the screens stop at (the day less the
+ *  reserve kept for the other tools). */
 export function cgDayCaps(dayMax = cgDailyMax()) {
   const unsettled = Math.floor(dayMax * shareOf("COINGECKO_UNSETTLED_SHARE", 0.1));
-  return { day: dayMax, unsettled, paid: Math.max(1, dayMax - unsettled) };
+  const reserve = Math.floor(dayMax * shareOf("COINGECKO_OTHERS_RESERVE", 0.2));
+  return { day: dayMax, unsettled, reserve, screens: Math.max(1, dayMax - reserve) };
 }
-const SHARES = { screens: () => shareOf("COINGECKO_SCREENS_SHARE", 0.4) };
-/** A kit share's cap: a fraction of the paid part, never below one read. */
-export function cgShareCap(share, dayMax = cgDailyMax()) {
-  const f = SHARES[share]?.();
-  return f == null ? 0 : Math.max(1, Math.floor(cgDayCaps(dayMax).paid * f));
+/** The day ceiling a call's reads stop at: the whole day, or a lower one a
+ *  kit is held to (`ceiling` on cgScopeAll). */
+export function cgCeiling(ceiling = null, dayMax = cgDailyMax()) {
+  const caps = cgDayCaps(dayMax);
+  return ceiling === "screens" ? caps.screens : caps.day;
 }
 
-// The call a read is taken for (cgScoped): how many day reads it took, and
-// the kit share it draws on.
+// The call a read is taken for (cgScoped): how many reads it took, whether it
+// holds a place in the unsettled share, and the ceiling it is held to.
 const calls = new AsyncLocalStorage();
-/** Wrap a tool handler: reads taken inside it are counted for the call, and a
- *  call that ends in a 4xx (never settled) moves them to the unsettled share. */
-export function cgScoped(handler, { share = null } = {}) {
+/** Wrap a tool handler: reads taken inside it are counted for the call; a call
+ *  that ends in an error (never settled) counts them on the unsettled share,
+ *  and a call that ends settled gives back the place it reserved there. */
+export function cgScoped(handler, { ceiling = null } = {}) {
   const scoped = async function cgScopedHandler(...args) {
-    const ctx = { taken: 0, share };
+    const ctx = { taken: 0, reserved: 0, ceiling };
+    let failed = false;
     try {
       return await calls.run(ctx, () => handler.apply(this, args));
     } catch (err) {
-      const s = Number(err?.statusCode);
-      if (ctx.taken > 0 && s >= 400 && s < 500) await cgMoveUnsettled(ctx.taken, share).catch(() => {});
+      failed = true;
       throw err;
+    } finally {
+      const delta = (failed ? ctx.taken : 0) - ctx.reserved;
+      if (delta !== 0) await cgCountUnsettled(delta).catch(() => {});
     }
   };
   return Object.assign(scoped, { __cgScoped: true });
@@ -99,7 +116,7 @@ export const cgLocalShare = (cap) => Math.max(1, Math.floor(cap / replicas()));
 
 function localDay(now) {
   const d = utcDay(now);
-  if (cgDay.day !== d) { cgDay.day = d; cgDay.used = 0; cgDay.unsettled = 0; cgDay.shares = Object.create(null); }
+  if (cgDay.day !== d) { cgDay.day = d; cgDay.used = 0; cgDay.unsettled = 0; }
 }
 function localRefill(now) {
   const cap = cgLocalShare(cgRatePerMin());
@@ -124,19 +141,17 @@ export { COINGECKO_ATTRIBUTION } from "../data-attribution.js";
  *  a shared store. Takes one request's worth of budget. Returns null when
  *  taken, else the reason it was refused: "day" (daily ceiling spent) or
  *  "minute". Synchronous; the request path calls cgTake(). */
-export function cgTokenRefusal(now = Date.now(), share = calls.getStore()?.share ?? null) {
+export function cgTokenRefusal(now = Date.now(), ceiling = calls.getStore()?.ceiling ?? null) {
   localDay(now);
-  if (keyed() && cgDay.used >= cgLocalShare(cgDayCaps().paid)) return "day";
-  if (keyed() && share && (cgDay.shares[share] || 0) >= cgLocalShare(cgShareCap(share))) return "day";
+  if (keyed() && cgDay.used >= cgLocalShare(cgCeiling(ceiling))) return "day";
   localRefill(now);
   if (cgTokens < 1) return "minute";
   cgTokens -= 1;
-  if (keyed()) localCount(share);
+  if (keyed()) localCount();
   return null;
 }
-function localCount(share) {
+function localCount() {
   cgDay.used += 1;
-  if (share) cgDay.shares[share] = (cgDay.shares[share] || 0) + 1;
   const ctx = calls.getStore();
   if (ctx) ctx.taken += 1;
 }
@@ -145,49 +160,44 @@ function localCount(share) {
 export function takeCgToken(now = Date.now()) { return cgTokenRefusal(now) === null; }
 
 // The shared half. KEYS[1] = the minute window (ZSET, score = server time in
-// ms), KEYS[2] = the day counter (the paid part), KEYS[3] = the kit share's
-// counter. ARGV: windowMs, minuteCap, dayCap (0 = no daily ceiling), member,
-// dayTtlMs, shareCap (0 = no kit share). The server's clock scores the window,
-// so replicas with skewed clocks still agree on what a minute is. Nothing is
-// written unless every cap has room.
+// ms), KEYS[2] = the day counter (every read). ARGV: windowMs, minuteCap,
+// dayCap (the ceiling this call is held to; 0 = no daily ceiling), member,
+// dayTtlMs. The server's clock scores the window, so replicas with skewed
+// clocks still agree on what a minute is. Nothing is written unless both caps
+// have room.
 const TAKE_SCRIPT = `
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local windowMs = tonumber(ARGV[1])
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - windowMs)
 local dayCap = tonumber(ARGV[3])
-local shareCap = tonumber(ARGV[6])
 if dayCap > 0 and tonumber(redis.call('GET', KEYS[2]) or '0') >= dayCap then return 'day' end
-if dayCap > 0 and shareCap > 0 and tonumber(redis.call('GET', KEYS[3]) or '0') >= shareCap then return 'day' end
 if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[2]) then return 'minute' end
 redis.call('ZADD', KEYS[1], now, ARGV[4])
 redis.call('PEXPIRE', KEYS[1], windowMs)
 if dayCap > 0 then
   redis.call('INCR', KEYS[2])
   if tonumber(redis.call('PTTL', KEYS[2])) < 0 then redis.call('PEXPIRE', KEYS[2], ARGV[5]) end
-  if shareCap > 0 then
-    redis.call('INCR', KEYS[3])
-    if tonumber(redis.call('PTTL', KEYS[3])) < 0 then redis.call('PEXPIRE', KEYS[3], ARGV[5]) end
-  end
 end
 return 'ok'`;
 
-// KEYS[1] = the day counter, KEYS[2] = the unsettled counter, KEYS[3] = the
-// kit share's counter. ARGV: reads, unsettledCap, dayTtlMs, hasShare. Moves as
-// many of the reads as the unsettled share has room for; returns how many.
-const MOVE_SCRIPT = `
-local n = tonumber(ARGV[1])
-local room = tonumber(ARGV[2]) - tonumber(redis.call('GET', KEYS[2]) or '0')
-local m = math.min(n, room, tonumber(redis.call('GET', KEYS[1]) or '0'))
-if m <= 0 then return 0 end
-redis.call('DECRBY', KEYS[1], m)
-redis.call('INCRBY', KEYS[2], m)
-if tonumber(redis.call('PTTL', KEYS[2])) < 0 then redis.call('PEXPIRE', KEYS[2], ARGV[3]) end
-if ARGV[4] == '1' then
-  local s = tonumber(redis.call('GET', KEYS[3]) or '0')
-  redis.call('DECRBY', KEYS[3], math.min(m, s))
-end
-return m`;
+// KEYS[1] = the unsettled counter. ARGV: cap, dayTtlMs. Takes one place when
+// the counter is under the cap: the check and the take are one step, so two
+// replicas racing for the last place cannot both have it. Returns 1 or 0.
+const RESERVE_SCRIPT = `
+if tonumber(redis.call('GET', KEYS[1]) or '0') >= tonumber(ARGV[1]) then return 0 end
+redis.call('INCR', KEYS[1])
+if tonumber(redis.call('PTTL', KEYS[1])) < 0 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) end
+return 1`;
+
+// KEYS[1] = the unsettled counter. ARGV: delta, dayTtlMs. Adds the reads of a
+// call that ended unsettled less the place it held (a negative delta gives a
+// place back), never below zero. Returns the new count.
+const COUNT_SCRIPT = `
+local v = redis.call('INCRBY', KEYS[1], tonumber(ARGV[1]))
+if v < 0 then redis.call('SET', KEYS[1], '0'); v = 0 end
+if tonumber(redis.call('PTTL', KEYS[1])) < 0 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) end
+return v`;
 
 /** How long one shared command may take before this process decides alone. */
 export const CG_SHARED_DEADLINE_MS = () => Math.max(10, Number(process.env.COINGECKO_SHARED_DEADLINE_MS) || 250);
@@ -200,6 +210,7 @@ export function cgWithin(p, ms = CG_SHARED_DEADLINE_MS()) {
 
 let takeSeq = 0;
 const counts = { shared: 0, local: 0, fallback: 0 };
+const DAY_TTL_MS = String(48 * 3_600_000);
 
 /**
  * Take one request's worth of the service-wide budget. Resolves null when
@@ -212,20 +223,18 @@ export async function cgTake(now = Date.now()) {
     try {
       const c = await getSharedRedisClient();
       if (!c) throw new Error("redis unavailable");
-      const dayCap = keyed() ? cgDayCaps().paid : 0;
-      const share = calls.getStore()?.share ?? null;
-      const shareCap = keyed() && share ? cgShareCap(share) : 0;
+      const dayCap = keyed() ? cgCeiling(calls.getStore()?.ceiling ?? null) : 0;
       const member = `${process.pid}:${now}:${++takeSeq}`;
       const r = await cgWithin(c.eval(TAKE_SCRIPT, {
-        keys: [keyOf("cg-minute", "all"), keyOf("cg-day", utcDay(now)), keyOf(`cg-share-${share || "none"}`, utcDay(now))],
-        arguments: ["60000", String(cgRatePerMin()), String(dayCap), member, String(48 * 3_600_000), String(shareCap)],
+        keys: [keyOf("cg-minute", "all"), keyOf("cg-day", utcDay(now))],
+        arguments: ["60000", String(cgRatePerMin()), String(dayCap), member, DAY_TTL_MS],
       }));
       if (r === "ok") {
         counts.shared++;
         // Mirror the grant into this process's bucket (floored at empty).
         localDay(now); localRefill(now);
         cgTokens = Math.max(0, cgTokens - 1);
-        if (keyed()) localCount(share);
+        if (keyed()) localCount();
         return null;
       }
       if (r === "day" || r === "minute") { counts.shared++; return r; }
@@ -238,44 +247,67 @@ export async function cgTake(now = Date.now()) {
   return cgTokenRefusal(now);
 }
 
-/** Move `n` reads of a call that ended unsettled from the day counter to the
- *  unsettled share, as far as that share has room (the rest stay counted on
- *  the day). Resolves how many moved. Never rejects. */
-export async function cgMoveUnsettled(n, share = null, now = Date.now()) {
-  if (!keyed() || !(n > 0)) return 0;
+/** Reserve the current call's place in the unsettled share before it reads
+ *  inputs no list has confirmed. True when the call holds a place (now or
+ *  from an earlier gate in the same call), or when no daily ceiling applies
+ *  (no key); false when the share is full, or outside a scoped call: the
+ *  inputs must then be checked against their lists first. Never rejects. */
+export async function cgReserveUnconfirmed(now = Date.now()) {
+  if (!keyed()) return true;
+  const ctx = calls.getStore();
+  if (!ctx) return false;
+  if (ctx.reserved > 0) return true;
   const cap = cgDayCaps().unsettled;
+  if (cap === 0) return false;
   localDay(now);
+  let got = null;
   if (sharedLimitsEnabled()) {
     try {
       const c = await getSharedRedisClient();
       if (!c) throw new Error("redis unavailable");
-      const d = utcDay(now);
-      const m = Number(await cgWithin(c.eval(MOVE_SCRIPT, {
-        keys: [keyOf("cg-day", d), keyOf("cg-unsettled", d), keyOf(`cg-share-${share || "none"}`, d)],
-        arguments: [String(n), String(cap), String(48 * 3_600_000), share ? "1" : "0"],
-      }))) || 0;
-      localMove(Math.min(m, n), share, Number.MAX_SAFE_INTEGER);
-      return m;
+      got = Number(await cgWithin(c.eval(RESERVE_SCRIPT, { keys: [keyOf("cg-unsettled", utcDay(now))], arguments: [String(cap), DAY_TTL_MS] }))) === 1;
+      if (got) cgDay.unsettled += 1;
+    } catch (e) {
+      noteSharedLimitsDegraded("coingecko-rate", { error: e?.message });
+      got = null;
+    }
+  }
+  if (got === null) {
+    got = cgDay.unsettled < cgLocalShare(cap);
+    if (got) cgDay.unsettled += 1;
+  }
+  if (got) ctx.reserved = 1;
+  return got;
+}
+
+/** Count `delta` on the unsettled share: the reads of a call that ended
+ *  unsettled less the place it reserved (negative when a settled call gives
+ *  its place back). Never below zero; never rejects. Resolves the new count. */
+export async function cgCountUnsettled(delta, now = Date.now()) {
+  if (!keyed() || !Number.isFinite(delta) || delta === 0) return null;
+  localDay(now);
+  const local = () => { cgDay.unsettled = Math.max(0, cgDay.unsettled + delta); return cgDay.unsettled; };
+  if (sharedLimitsEnabled()) {
+    try {
+      const c = await getSharedRedisClient();
+      if (!c) throw new Error("redis unavailable");
+      const v = Number(await cgWithin(c.eval(COUNT_SCRIPT, { keys: [keyOf("cg-unsettled", utcDay(now))], arguments: [String(Math.trunc(delta)), DAY_TTL_MS] })));
+      local();
+      return v;
     } catch (e) {
       noteSharedLimitsDegraded("coingecko-rate", { error: e?.message });
     }
   }
-  return localMove(n, share, cgLocalShare(cap));
-}
-function localMove(n, share, cap) {
-  const m = Math.max(0, Math.min(n, cap - cgDay.unsettled, cgDay.used));
-  cgDay.used -= m; cgDay.unsettled += m;
-  if (share) cgDay.shares[share] = Math.max(0, (cgDay.shares[share] || 0) - m);
-  return m;
+  return local();
 }
 
-/** True when the reads of calls that ended unsettled have used up their share
- *  of the day: an id a list can confirm is then checked before it is read.
- *  False without a key (no daily ceiling) or with a share of zero. */
+/** True when the unsettled share is full: a call whose inputs no list has
+ *  confirmed can then no longer reserve a place. False without a key (no
+ *  daily ceiling). */
 export async function cgUnsettledSpent(now = Date.now()) {
   if (!keyed()) return false;
   const cap = cgDayCaps().unsettled;
-  if (cap === 0) return false;
+  if (cap === 0) return true;
   localDay(now);
   if (sharedLimitsEnabled()) {
     try {
@@ -335,7 +367,7 @@ export function cgRefusal(reason, label = "CoinGecko", now = Date.now()) {
 /** Test seam: refill this process's bucket (offline suites make dozens of
  *  stubbed calls). A test against a shared store namespaces its run with
  *  SHARED_LIMITS_PREFIX instead. */
-export function resetCgRateLimit() { cgTokens = null; cgRefilledAt = 0; cgDay.day = ""; cgDay.used = 0; cgDay.unsettled = 0; cgDay.shares = Object.create(null); }
+export function resetCgRateLimit() { cgTokens = null; cgRefilledAt = 0; cgDay.day = ""; cgDay.used = 0; cgDay.unsettled = 0; }
 
 /** True for coingecko.com and its subdomains (api., pro-api.) and nothing
  *  else: this decides whether the API KEY rides the request, so a host that

@@ -345,7 +345,10 @@ const histByDate = await h("coin-history")({ coin: "bitcoin", date: expectDate }
 ok(histByDate.cached === true && histByDate.date === expectDate, "coin-history: explicit date hits the same cache entry as daysAgo");
 reset();
 routes = { "/api/v3/coins/bitcoin/history": jsonRes(200, { id: "bitcoin", symbol: "btc", name: "Bitcoin" }) };
-await throws(h("coin-history")({ coin: "bitcoin", daysAgo: 5 }), 422, "coin-history: no market_data on that date -> 422");
+{
+  const none = await h("coin-history")({ coin: "bitcoin", daysAgo: 5 });
+  ok(none.recorded === false && none.price === null && none.marketCap === null && none.volume24h === null && Object.keys(none.allCurrencies.price).length === 0, "coin-history: no market_data on that date -> 200 with recorded false and null values (a settled answer, not a free read)");
+}
 
 reset();
 routes = { "/api/v3/coins/bitcoin/ohlc": jsonRes(200, [[1787319000000, 100, 110, 90, 105], [1787320800000, 105, 120, 100, 115], [1787322600000, 115, 118, 95, 98], ["junk"]]) };

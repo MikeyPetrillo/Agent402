@@ -9,6 +9,7 @@ import { cgTake, cgRefusal, isCoinGeckoHost, cgScopeAll } from "./coingecko-rate
 import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
 import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
+import { knownIdsGate } from "./crypto-markets-kit.js";
 import { upstreamFetch, bodyUnderDeadline, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS } from "../upstream-deadline.js";
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, and a read that outlives it is a 503 naming the
@@ -128,7 +129,13 @@ export const PRICE_FEED_TOOLS = [
         ? i.vsCurrency.trim().toLowerCase()
         : "usd";
       const wantChange = i.include24hChange === true;
-      const url = `${cgBase()}/simple/price?ids=${ids.join(",")}&vs_currencies=${vs}&include_last_updated_at=true` +
+      // Ids and the currency are checked against their lists first once the
+      // share of the day kept for unpaid calls is full (crypto-markets-kit
+      // knownIdsGate): nothing known is answered with no read.
+      const gate = await knownIdsGate("coin", ids);
+      if (!gate.known.length) throw bad(`unknown CoinGecko id(s): ${gate.unknown.join(", ")}`, 404);
+      if ((await knownIdsGate("currency", [vs])).unknown.length) throw bad(`vsCurrency "${vs}" is not supported by CoinGecko's simple price endpoint (try usd, eur, gbp, btc, eth)`);
+      const url = `${cgBase()}/simple/price?ids=${gate.known.join(",")}&vs_currencies=${vs}&include_last_updated_at=true` +
         (wantChange ? `&include_24hr_change=true` : "");
       const data = await feedFetch(url, { step: "simple price" });
       const prices = ids.map((id) => {
@@ -161,6 +168,6 @@ export const PRICE_FEED_TOOLS = [
 for (const t of PRICE_FEED_TOOLS) if (t.slug === "price-coingecko") creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
-// A call that ends in a 4xx moves its CoinGecko reads to the unsettled share
-// of the day (src/tools/coingecko-rate.js).
+// A call that ends in an error counts its CoinGecko reads on the unsettled
+// share of the day (src/tools/coingecko-rate.js).
 underBudgetAll(cgScopeAll(PRICE_FEED_TOOLS), PAYMENT_WINDOW_BUDGET_MS);
