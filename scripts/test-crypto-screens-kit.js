@@ -388,11 +388,11 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
 // With a key and the pro tier, the same reads carry the key header on the pro host.
 {
   reset();
-  process.env.COINGECKO_API_KEY = "CG-test-key-000"; process.env.COINGECKO_API_TIER = "pro";
+  process.env.COINGECKO_API_KEY = "placeholder-not-a-key"; process.env.COINGECKO_API_TIER = "pro";
   routes = [[(u) => u.pathname === poolPath, () => jsonRes(200, POOL())], [(u) => u.pathname === `${poolPath}/trades`, () => jsonRes(200, TRADES)]];
   const out = await h("dex-pool-health")({ network: "eth", pool: PA });
-  ok(out.liquidityUsd === 2_000_000 && calls.length === 2 && calls.every((c) => c.url.hostname === "pro-api.coingecko.com" && c.headers["x-cg-pro-api-key"] === "CG-test-key-000"), "keyed: the pro host with the key in its header");
-  ok(!JSON.stringify(out).includes("CG-test-key-000") && calls.every((c) => !c.url.href.includes("CG-test-key-000")), "the key is in no URL and no answer");
+  ok(out.liquidityUsd === 2_000_000 && calls.length === 2 && calls.every((c) => c.url.hostname === "pro-api.coingecko.com" && c.headers["x-cg-pro-api-key"] === "placeholder-not-a-key"), "keyed: the pro host with the key in its header");
+  ok(!JSON.stringify(out).includes("placeholder-not-a-key") && calls.every((c) => !c.url.href.includes("placeholder-not-a-key")), "the key is in no URL and no answer");
   delete process.env.COINGECKO_API_KEY; delete process.env.COINGECKO_API_TIER;
 }
 
@@ -420,7 +420,7 @@ ok(calls.every((c) => Object.keys(c.headers).every((k) => !/^x-cg-/i.test(k))), 
 {
   reset();
   routes = [[path("/derivatives"), () => jsonRes(200, DERIVATIVES)]];
-  process.env.COINGECKO_API_KEY = "CG-test-key-000"; process.env.COINGECKO_DAILY_MAX = "1";
+  process.env.COINGECKO_API_KEY = "placeholder-not-a-key"; process.env.COINGECKO_DAILY_MAX = "1";
   resetCgRateLimit();
   await raw("funding-screener")({ coin: "ETH" });
   clearCryptoMarketsCache();
