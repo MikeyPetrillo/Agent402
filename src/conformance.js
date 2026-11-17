@@ -40,7 +40,7 @@ const TEMPO_CAIP2 = "eip155:4217";
 
 /** The features, in column order. */
 export const FEATURES = Object.freeze([
-  { id: "settleAfterAnswer", title: "Settle after a successful answer", description: "The payment is settled only after the route answered below 400; an error answer is not charged." },
+  { id: "settleAfterAnswer", title: "Settle after a successful answer", description: "The payment is settled only after the route answered below 400; an error answer is not charged on x402 (a Tempo push transfer is final before the call; see its row)." },
   { id: "idempotencyKey", title: "Idempotency key", description: "An Idempotency-Key header bound to the credential, route and body replays a served answer without a second charge." },
   { id: "paymentIdentifier", title: "x402 payment-identifier", description: "The x402 payment-identifier extension is honored as an idempotency key under the same binding." },
   { id: "replayGuard", title: "Replay guard", description: "A credential already used, or in use, is refused before it can pay for a second run." },
