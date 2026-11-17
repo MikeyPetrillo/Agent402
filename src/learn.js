@@ -7,6 +7,7 @@
 import { siteOrgRef } from "./site-org.js";
 import { creditsSalesEnabled } from "./credits-sales.js";
 import { LATE_SETTLE_EXCEPTION } from "./front-door.js";
+import { connectorWires, connectorPayText, connectorLongCallText, X402_MCP_PAYMENT_KEY, X402_MCP_RECEIPT_KEY } from "./connector-pay.js";
 // Copy that names a prepaid key as a way in reads the switch that sells it:
 // while sales are off, a key is something a buyer already holds.
 const PREPAID = creditsSalesEnabled() ? "a prepaid key" : "a prepaid key bought earlier";
@@ -119,6 +120,30 @@ const MCP_ASK = `// tools/call on https://agent402.tools/mcp for a wallet-only t
 
 // the retry carries the credential in params._meta["org.paymentauth/credential"];
 // the paid result carries _meta["org.paymentauth/receipt"]`;
+
+// The x402 MCP transport's first ask, as the connector answers it.
+const MCP_X402_ASK = `// tools/call on https://agent402.tools/mcp for a wallet-only tool, no payment yet
+{
+  "content": [
+    { "type": "text", "text": "{\\"x402Version\\":2,\\"accepts\\":[ ... ]}" },
+    { "type": "text", "text": "This tool needs payment ..." }
+  ],
+  "isError": true
+}
+
+// the first text block, parsed: the x402 PaymentRequired
+{
+  "x402Version": 2,
+  "resource": { "url": "...", "description": "..." },
+  "accepts": [{ "scheme": "exact", "network": "eip155:8453", "amount": "...", "asset": "0x...", "payTo": "0x..." }]
+}
+
+// the retry carries the signed payment in params._meta["x402/payment"];
+// the paid result carries the settle receipt in _meta["x402/payment-response"]`;
+
+// The wires the hosted connector takes in the call on this boot.
+const CONNECTOR = connectorWires();
+const CONNECTOR_PAYMENT = CONNECTOR.x402 && CONNECTOR.mpp ? "an x402 payment or an MPP credential" : CONNECTOR.x402 ? "an x402 payment" : CONNECTOR.mpp ? "an MPP credential" : "a payment";
 
 const PRICING_ENTRY = `$ curl -s https://agent402.tools/api/find?q=hash+some+text
 # each match carries route, price, input schema and a ready example
@@ -281,12 +306,12 @@ export const LEARN = [
     alt: ["paid MCP tools", "MCP tool payments"],
     glossary: "mcp",
     title: "MCP payments: how an MCP client pays for a tool call",
-    description: "How paid tools work over the Model Context Protocol: a local MCP server that pays underneath with a wallet or credits key, or a hosted connector that asks for payment in the tool result and accepts an MPP credential on the retry.",
-    summary: `MCP payments let an assistant pay for a tool call made over the Model Context Protocol, either through a local MCP server that signs payments underneath (a wallet, or ${PREPAID}) or through a hosted connector that returns MPP challenges in the tool result and accepts a credential in _meta on the retry.`,
+    description: "How paid tools work over the Model Context Protocol: a local MCP server that pays underneath with a wallet or credits key, or a hosted connector that asks for payment in the tool result and accepts the payment on the retry.",
+    summary: `MCP payments let an assistant pay for a tool call made over the Model Context Protocol, either through a local MCP server that signs payments underneath (a wallet, or ${PREPAID}) or through a hosted connector that asks for payment in the tool result and accepts ${CONNECTOR_PAYMENT} in _meta on the retry.`,
     sections: [
       ["Two places payment can happen", [
         P(`The Model Context Protocol lets an assistant discover and call tools. It does not itself say how a tool gets paid for, so there are two practical patterns, and this server supports both.`),
-        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.13.32")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment challenges attached, and a client that speaks MPP pays and repeats the call.</li></ol>`,
+        `<ol><li><strong>A local MCP server pays underneath.</strong> The assistant talks to a stdio server on your machine (${C("npx -y agent402-mcp@0.13.32")}). When a tool call hits a 402, that server pays it with the key you configured and returns the result. The assistant never sees the payment.</li><li><strong>A hosted connector asks, and the client pays.</strong> The assistant talks to a remote MCP endpoint (${C("https://agent402.tools/mcp")}). A wallet-only tool answers with the payment offer attached, and a client that speaks ${CONNECTOR.phrase || "x402 or MPP, where the instance takes one in the call,"} pays and repeats the call.</li></ol>`,
       ]],
       ["The local server", [
         P(`Configure one of three things: ${C("AGENT_KEY")} (an EVM key holding USDC, signing x402 payments), ${C("AGENT402_CREDITS_KEY")} (${creditsSalesEnabled() ? "a prepaid card-credits key" : "a prepaid card-credits key bought earlier"}, sent as a Bearer token and debited only on success), or nothing, in which case the pure-CPU tools pay with proof-of-work. ${C("AGENT402_MAX_PER_CALL")} and ${C("AGENT402_BUDGET")} are checked before any payment is signed.`),
@@ -302,8 +327,15 @@ export const LEARN = [
         P(`<strong>Use a new wallet holding only a few dollars of USDC. Never your main wallet.</strong>`),
       ]],
       ["The hosted connector", [
-        P(`On the hosted connector the pure-CPU tools run free (rate-limited). A wallet-only tool called without payment returns a readable tool result with the MPP challenges in ${C('_meta["org.paymentauth/payment-required"]')}, so a host that does not speak MPP still shows the user something useful. An MCP client wrapped with mppx's ${C("McpClient.wrap()")} reads the challenges, pays, and retries with the credential in ${C('_meta["org.paymentauth/credential"]')}; the result comes back with ${C('_meta["org.paymentauth/receipt"]')}. A credential that is refused is JSON-RPC error ${C("-32043")}.`),
-        { code: MCP_ASK },
+        P(`On the hosted connector the pure-CPU tools run free (rate-limited). A wallet-only tool called without payment returns a readable tool result, so a host that pays neither wire still shows the user something useful.${CONNECTOR.names.length ? "" : ` ${connectorPayText({ code: C })}`}`),
+        ...(CONNECTOR.x402 ? [
+          P(`<strong>Over x402.</strong> That first result is an error result whose first text block is the x402 PaymentRequired as JSON. An x402 MCP client signs one of its accepts and calls again with the payment in ${C(X402_MCP_PAYMENT_KEY)}; the paid result carries the settle receipt in ${C(X402_MCP_RECEIPT_KEY)}. A free tool at its rate limit answers with its x402 offer too, so a call that pays is served past the limit.${connectorLongCallText({ code: C })}`),
+          { code: MCP_X402_ASK },
+        ] : []),
+        ...(CONNECTOR.mpp ? [
+          P(`<strong>Over MPP.</strong> The same result carries the MPP challenges in ${C('_meta["org.paymentauth/payment-required"]')}. An MCP client wrapped with mppx's ${C("McpClient.wrap()")} reads the challenges, pays, and retries with the credential in ${C('_meta["org.paymentauth/credential"]')}; the result comes back with ${C('_meta["org.paymentauth/receipt"]')}. A credential that is refused is JSON-RPC error ${C("-32043")}.${CONNECTOR.x402 ? " A call that carries both is settled over MPP." : ""}`),
+          { code: MCP_ASK },
+        ] : []),
         P(`Behind the connector the call is replayed against the same paid HTTP route an HTTP client would use, so the price, the settlement rules and the receipt are identical either way.`),
       ]],
     ],

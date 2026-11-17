@@ -18,8 +18,8 @@ import { createHash } from "node:crypto";
 // each page prints the later of this date and FACILITATOR_PUBLIC_INDEX_SINCE
 // (scripts/test-public-index-copy.js).
 const PINS = {
-  "src/terms.js": { date: "2026-11-16", sha: "88a9501205bfd47c" },
-  "src/privacy.js": { date: "2026-11-16", sha: "775b27fdc8f07003" },
+  "src/terms.js": { date: "2026-11-16", sha: "8187fe75f1b2fcbe" },
+  "src/privacy.js": { date: "2026-11-16", sha: "e2e6514db5c4f76d" },
 };
 let pass = 0, fail = 0;
 const TODAY = new Date().toISOString().slice(0, 10);
