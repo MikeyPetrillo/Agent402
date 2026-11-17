@@ -8,6 +8,7 @@
 // break the build if EVERY one fails — that would mean our integration broke.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { CRYPTO_TOOLS } from "../src/tools/crypto-kit.js";
+import { COINGECKO_CREDIT } from "../src/data-attribution.js";
 
 const h = (slug) => CRYPTO_TOOLS.find((t) => t.slug === slug).handler;
 let assertFail = 0, liveOk = 0, liveErr = 0;
@@ -42,6 +43,10 @@ for (const [slug, args, label] of [
 async function live(slug, args, check, label) {
   try {
     const r = await h(slug)(args);
+    // Every CoinGecko answer carries the source credit with its link;
+    // crypto-orderbook reads an exchange and carries none.
+    const credited = slug === "crypto-orderbook" ? !Object.hasOwn(r || {}, "credit") : r?.credit === COINGECKO_CREDIT;
+    if (!credited) { assertFail++; console.error(`ASSERT FAIL - ${label}: credit ${JSON.stringify(r?.credit)}`); }
     if (check(r)) { liveOk++; console.log(`ok - ${label}: ${JSON.stringify(r).slice(0, 140)}`); }
     else { assertFail++; console.error(`ASSERT FAIL - ${label}: unexpected shape ${JSON.stringify(r).slice(0, 240)}`); }
   } catch (e) {

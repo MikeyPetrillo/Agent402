@@ -3,7 +3,7 @@
 // price point; this kit unlocks the richer crypto-native surface: 24h volume,
 // market cap rank, historical OHLC, trending coins, and global market metrics.
 //
-// Upstream: CoinGecko's public API (api.coingecko.com/api/v3). Keyless,
+// Upstream: CoinGecko's API (host and key header from coingecko-endpoint.js). Keyless,
 // generous rate limits (~30 req/min from a single IP, no per-account cap),
 // stable JSON shapes since 2018.
 //
@@ -21,7 +21,8 @@ import { upstreamFetch, underBudgetAll, PAYMENT_WINDOW_BUDGET_MS, budgetSpent, c
 const CRYPTO_READ_MS = 10_000;
 const CRYPTO_RETRY_READ_MS = 12_000;
 import { cgTake, cgRefusal, isCoinGeckoHost } from "./coingecko-rate.js";
-import { attribute } from "../data-attribution.js";
+import { cgBase, cgKeyHeaders } from "./coingecko-endpoint.js";
+import { attribute, creditAnswers, COINGECKO_CREDIT } from "../data-attribution.js";
 import { createCgCache } from "./coingecko-cache.js";
 import { upstreamErrorText } from "./redact.js";
 
@@ -128,17 +129,15 @@ async function jsonGet(url, host = "CoinGecko") {
   // to our own quota. Gated to CoinGecko hosts only: this shared
   // helper also hits Coinbase Exchange (crypto-orderbook), and the key must
   // never ride a request to another host.
-  const cgKey = process.env.COINGECKO_API_KEY;
   const isCg = isCoinGeckoHost(safeUrl.hostname);
-  const sendCgKey = Boolean(cgKey) && isCg;
-  if (!isCg) return (await jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey })).data;
-  const { entry } = await cgCache.through(safeUrl.toString(), CG_CACHE_TTL_MS, () => jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey }));
+  if (!isCg) return (await jsonLoad(safeUrl, host, { isCg })).data;
+  const { entry } = await cgCache.through(safeUrl.toString(), CG_CACHE_TTL_MS, () => jsonLoad(safeUrl, host, { isCg }));
   return JSON.parse(entry.text);
 }
 
 // One upstream read for jsonGet: the body of a 200 that parses as JSON, as
 // { text, data }, or a thrown refusal (never cached).
-async function jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey }) {
+async function jsonLoad(safeUrl, host, { isCg }) {
   // The key's budget is ONE bucket shared with crypto-markets-kit
   // (coingecko-rate.js). Refuse before the upstream call when it is spent:
   // 503 is never charged. Every request that goes out takes a token,
@@ -157,7 +156,9 @@ async function jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey }) {
       headers: {
         "User-Agent": cryptoUserAgent(),
         Accept: "application/json",
-        ...(sendCgKey ? { "x-cg-demo-api-key": cgKey.trim() } : {}),
+        // Key header for the configured tier (coingecko-endpoint.js), only
+        // on a CoinGecko host.
+        ...(isCg ? cgKeyHeaders() : {}),
       },
     }, { label: host, step: "query", timeoutMs: timeout, tag: "[crypto]" });
   const mayRetry = async () => !isCg || (await cgTake(Date.now())) === null;
@@ -204,7 +205,6 @@ async function jsonLoad(safeUrl, host, { isCg, sendCgKey, cgKey }) {
   return { text, data };
 }
 
-const CG = "https://api.coingecko.com/api/v3";
 
 export const CRYPTO_TOOLS = [
   {
@@ -240,7 +240,7 @@ export const CRYPTO_TOOLS = [
     handler: async (i) => {
       const ids = resolveCoinList(i.coins, 25);
       const currency = normalizeCurrency(i.currency);
-      const url = `${CG}/simple/price?ids=${encodeURIComponent(ids.join(","))}&vs_currencies=${encodeURIComponent(currency)}&include_24hr_change=true&include_24hr_vol=true&include_market_cap=true&include_last_updated_at=true`;
+      const url = `${cgBase()}/simple/price?ids=${encodeURIComponent(ids.join(","))}&vs_currencies=${encodeURIComponent(currency)}&include_24hr_change=true&include_24hr_vol=true&include_market_cap=true&include_last_updated_at=true`;
       const data = await jsonGet(url);
       // CoinGecko's response shape is { id: { usd: 123, usd_24h_change: 1.4, ... } }.
       // Flatten to { id: { price, change24hPct, volume24h, marketCap } } so the
@@ -299,7 +299,7 @@ export const CRYPTO_TOOLS = [
       const limit = Number.isFinite(i.limit) ? Math.floor(i.limit) : (typeof i.limit === "string" ? parseInt(i.limit, 10) : 10);
       if (!Number.isFinite(limit) || limit < 1 || limit > 100) throw bad('"limit" must be an integer 1-100');
       const currency = normalizeCurrency(i.currency);
-      const url = `${CG}/coins/markets?vs_currency=${encodeURIComponent(currency)}&order=market_cap_desc&per_page=${limit}&page=1&price_change_percentage=24h,7d`;
+      const url = `${cgBase()}/coins/markets?vs_currency=${encodeURIComponent(currency)}&order=market_cap_desc&per_page=${limit}&page=1&price_change_percentage=24h,7d`;
       const data = await jsonGet(url);
       if (!Array.isArray(data)) throw bad("CoinGecko returned unexpected shape for /coins/markets", 502);
       const coins = data.map((c) => ({
@@ -359,7 +359,7 @@ export const CRYPTO_TOOLS = [
       // is an agent-input bug — reject before burning the round-trip.
       if (daysRaw !== "max" && !/^\d+$/.test(daysRaw)) throw bad('"days" must be a positive integer or "max"');
       if (daysRaw !== "max" && (parseInt(daysRaw, 10) < 1 || parseInt(daysRaw, 10) > 3650)) throw bad('"days" out of range (1-3650 or "max")');
-      const url = `${CG}/coins/${encodeURIComponent(id)}/market_chart?vs_currency=${encodeURIComponent(currency)}&days=${encodeURIComponent(daysRaw)}`;
+      const url = `${cgBase()}/coins/${encodeURIComponent(id)}/market_chart?vs_currency=${encodeURIComponent(currency)}&days=${encodeURIComponent(daysRaw)}`;
       const data = await jsonGet(url);
       const prices = Array.isArray(data?.prices) ? data.prices : [];
       const caps = Array.isArray(data?.market_caps) ? data.market_caps : [];
@@ -400,7 +400,7 @@ export const CRYPTO_TOOLS = [
       },
     },
     handler: async () => {
-      const data = await jsonGet(`${CG}/search/trending`);
+      const data = await jsonGet(`${cgBase()}/search/trending`);
       const items = Array.isArray(data?.coins) ? data.coins : [];
       const coins = items.map((entry) => {
         const c = entry?.item ?? {};
@@ -449,7 +449,7 @@ export const CRYPTO_TOOLS = [
     },
     handler: async (i) => {
       const currency = normalizeCurrency(i.currency);
-      const data = await jsonGet(`${CG}/global`);
+      const data = await jsonGet(`${cgBase()}/global`);
       const d = data?.data;
       if (!d) throw bad("CoinGecko returned unexpected shape for /global", 502);
       // total_market_cap and total_volume are objects keyed by currency.
@@ -593,7 +593,7 @@ export const CRYPTO_TOOLS = [
         "paypal-usd", "usdd", "true-usd", "first-digital-usd",
       ];
       const ids = i.coins != null && i.coins !== "" ? resolveCoinList(i.coins, 15) : DEFAULT_STABLECOINS;
-      const url = `${CG}/coins/markets?vs_currency=usd&ids=${encodeURIComponent(ids.join(","))}&order=market_cap_desc`;
+      const url = `${cgBase()}/coins/markets?vs_currency=usd&ids=${encodeURIComponent(ids.join(","))}&order=market_cap_desc`;
       const data = await jsonGet(url);
       if (!Array.isArray(data)) throw bad("CoinGecko returned unexpected shape for /coins/markets", 502);
       if (data.length === 0) throw bad("No CoinGecko data for the requested coins - check the ids/symbols", 422);
@@ -628,8 +628,9 @@ export const CRYPTO_TOOLS = [
   },
 ];
 // The CoinGecko-backed tools carry the attribution its terms require (see
-// COINGECKO_ATTRIBUTION in coingecko-rate.js); crypto-orderbook reads an exchange.
-for (const t of CRYPTO_TOOLS) if (t.slug !== "crypto-orderbook") attribute(t, "coingecko");
+// COINGECKO_ATTRIBUTION in coingecko-rate.js), in the description and as the
+// `credit` field of every answer; crypto-orderbook reads an exchange.
+for (const t of CRYPTO_TOOLS) if (t.slug !== "crypto-orderbook") creditAnswers(attribute(t, "coingecko"), COINGECKO_CREDIT);
 
 // Every handler runs under one budget (src/upstream-deadline.js).
 underBudgetAll(CRYPTO_TOOLS, PAYMENT_WINDOW_BUDGET_MS);
