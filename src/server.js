@@ -588,7 +588,7 @@ import { PREDICTION_MARKET_TOOLS } from "./tools/prediction-market-kit.js";
 import { MEV_AND_L2_TOOLS } from "./tools/mev-and-l2-kit.js";
 import { ONCHAIN_IDENTITY_TOOLS } from "./tools/onchain-identity-kit.js";
 import { NFT_MARKET_TOOLS } from "./tools/nft-market-kit.js";
-import { WEATHER_TOOLS } from "./tools/weather-kit.js";
+import { WEATHER_TOOLS, openMeteoStatus } from "./tools/weather-kit.js";
 import { DATE_TIME_TOOLS } from "./tools/date-time-kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "./tools/text-analysis-kit.js";
 import { VALIDATION_TOOLS } from "./tools/validation-kit.js";
@@ -4230,6 +4230,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // ok / alert past X_SEARCH_AUTHOR_DAILY_ALERT / unknown. An alarm only,
     // nothing is refused. One word publicly; the figures for the operator.
     xSearchAuthors: await xSearchAuthorsStatus({ full }).catch(() => ({ status: "unknown" })),
+    // The weather kit's Open-Meteo reads (src/tools/weather-kit.js): off (no
+    // OPEN_METEO_API_KEY, public hosts) / ok / refused (a keyed request was
+    // refused in the last 15 minutes: buyers got a 503, not charged). One word.
+    openMeteo: (() => { try { return openMeteoStatus(); } catch { return { status: "unknown" }; } })(),
     // The router's per-minute holds for outside sellers
     // (src/router-spend-window.js): ok / over (past the alarm, still serving)
     // / capped (a purchase was refused at the stop inside the last hour) /

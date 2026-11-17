@@ -164,6 +164,8 @@ const NEW_WORDS = [
   ["MPP subscription engine FAILED to start", "mppSubscriptions", ["failed"], ["on", "off"], ["unknown"]],
   // The referral gate's settlements (present only while the gate is mounted).
   ["referralSettlement: referral settlements need attention", "referralSettlement", ["attention"], ["ok"], ["unknown"]],
+  // The weather kit's keyed Open-Meteo reads (src/tools/weather-kit.js).
+  ["Open-Meteo keyed reads REFUSED", "openMeteo", ["refused"], ["ok", "off"], ["unknown"]],
 ];
 const j = (gateway) => judge({ gateway });
 
@@ -405,6 +407,7 @@ const HB = [
   ["X search author reads check", NEW_WORDS[6][0], "xSearchAuthors", { status: "alert" }, [{ status: "unknown" }], [{ status: "ok" }]],
   ["MPP subscription engine check", NEW_WORDS[7][0], "mppSubscriptions", { status: "failed" }, [{ status: "unknown" }], [{ status: "on" }, { status: "off" }]],
   ["Referral settlement check", NEW_WORDS[8][0], "referralSettlement", { status: "attention" }, [{ status: "unknown" }], [{ status: "ok" }]],
+  ["Open-Meteo keyed reads check", NEW_WORDS[9][0], "openMeteo", { status: "refused" }, [{ status: "unknown" }], [{ status: "ok" }, { status: "off" }]],
   ["Coverage balance reads check", CRT, "coverageReads", { status: "degraded", alert: "sustained" }, [{ status: "degraded" }, { status: "unknown" }], [{ status: "degraded", alert: "ok" }, { status: "ok", alert: "ok" }, { status: "off", alert: "ok" }]],
 ];
 for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
