@@ -29,6 +29,7 @@ import {
   encodePaymentSignatureHeader,
 } from "@x402/core/http";
 import { parsePaymentPayload, parsePaymentRequired } from "@x402/core/schemas";
+import { RETRY_SAME_PAYMENT, RETRY_WATCH_TRANSACTION, UNDECIDED_RETRY_VERBS } from "./payment-reject.js";
 
 export const X402_PAYMENT_META = "x402/payment";
 export const X402_PAYMENT_RESPONSE_META = "x402/payment-response";
@@ -271,6 +272,11 @@ export function buildInvalidPaymentResult(paymentRequired, { reason, message, mp
   return requiredShape({ ...paymentRequired, error: why }, { message, meta: mppMeta });
 }
 
+// A transaction id as each rail writes it (src/payment-reject.js railTxOf): an
+// EVM hash, a Stellar hash, a Solana signature, an Algorand id. Kept exactly
+// as written.
+const TX_ID = /^(?:0x[0-9a-fA-F]{64}|[0-9a-fA-F]{64}|[1-9A-HJ-NP-Za-km-z]{64,88}|[A-Z2-7]{52})$/;
+
 /**
  * The result for a payment whose settlement is not decided yet: Circle
  * Gateway still settling a batched payment (retry same-payment: the SAME
@@ -288,7 +294,13 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
   const retry = text(r.retry, 40);
   const hint = text(r.hint, 1000) || "This payment's settlement is not confirmed yet, so the answer was withheld. Do not sign a new authorization for this call: a second one is a second payment.";
   const wait = Number.isFinite(Number(retryAfterSeconds)) && Number(retryAfterSeconds) > 0 ? Math.min(Math.ceil(Number(retryAfterSeconds)), 3600) : null;
-  const transactions = Array.isArray(r.transactions) ? r.transactions.filter((t) => typeof t === "string" && /^0x[0-9a-fA-F]{64}$/.test(t)).slice(0, 8) : [];
+  const transactions = Array.isArray(r.transactions) ? r.transactions.filter((t) => typeof t === "string" && TX_ID.test(t)).slice(0, 8) : [];
+  // The payment's own expiry and the refund lookup, as the route's body names
+  // them (src/payment-reject.js unconfirmedSettleRefusal): the point a new
+  // payment is safe, and where a repayment shows.
+  const validBefore = typeof r.authorizationValidBefore === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(r.authorizationValidBefore) ? r.authorizationValidBefore : null;
+  const roundOf = (v) => (Number.isSafeInteger(v) && v > 0 ? v : null);
+  const refundStatusUrl = typeof r.refundStatusUrl === "string" && r.refundStatusUrl.length <= 300 && /^https?:\/\/[^\s"<>]+$/.test(r.refundStatusUrl) ? r.refundStatusUrl : null;
   // The route's hint points at its own body ("listed in transactions"); here
   // the hashes ride in _meta, so the text names them and says where they are.
   const where = transactions.length ? ` Transaction${transactions.length > 1 ? "s" : ""} to watch: ${transactions.join(", ")} (also in this result's _meta["${SETTLEMENT_PENDING_META}"].transactions).` : "";
@@ -298,9 +310,13 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
     ...(wait ? { retryAfterSeconds: wait } : {}),
     ...(text(r.network, 80) ? { network: text(r.network, 80) } : {}),
     ...(transactions.length ? { transactions } : {}),
+    ...(validBefore ? { authorizationValidBefore: validBefore } : {}),
+    ...(roundOf(r.lastValidRound) ? { lastValidRound: roundOf(r.lastValidRound) } : {}),
+    ...(roundOf(r.expirationLedger) ? { expirationLedger: roundOf(r.expirationLedger) } : {}),
+    ...(refundStatusUrl ? { refundStatusUrl } : {}),
     hint,
   };
-  const resend = retry === "same-payment" ? ` Resend this call with the same _meta["${X402_PAYMENT_META}"]${wait ? ` after about ${wait} s` : ""}.` : "";
+  const resend = retry === RETRY_SAME_PAYMENT ? ` Resend this call with the same _meta["${X402_PAYMENT_META}"]${wait ? ` after about ${wait} s` : ""}.` : "";
   // The fields ride in _meta, never structuredContent (see the wire note above).
   const result = { isError: true, content: [{ type: "text", text: `${label}: ${hint}${where}${resend}` }], _meta: { [SETTLEMENT_PENDING_META]: structured } };
   if (isPlainObject(settleResponse) && settleResponse.success === false) {
@@ -309,10 +325,6 @@ export function buildSettlementPendingResult({ label = "Agent402", refusal = {},
   }
   return result;
 }
-
-// A transaction id as each rail writes it: an EVM hash, a Solana signature, an
-// Algorand id. Kept exactly as written.
-const TX_ID = /^(?:0x[0-9a-fA-F]{64}|[1-9A-HJ-NP-Za-km-z]{64,88}|[A-Z2-7]{52})$/;
 
 /**
  * The result for a settle that failed, whatever its answer reads as: a
@@ -346,7 +358,7 @@ export function buildSettlementUnprovenResult({ label = "Agent402", refusal = {}
   const routeHint = text(r.hint, 1000);
   const structured = {
     reason: "settlement-failed",
-    ...(transactions.length ? { retry: "watch-transaction" } : {}),
+    ...(transactions.length ? { retry: RETRY_WATCH_TRANSACTION } : {}),
     ...(network ? { network } : {}),
     ...(transactions.length ? { transactions } : {}),
     hint,
@@ -382,12 +394,13 @@ export function buildPaidRouteFailedResult({ label = "Agent402", status = 500, d
 }
 
 /** True for a paid route's 402 that says the payment's settlement is not
- *  decided yet (buildSettlementPendingResult): its body's retry verb is
- *  same-payment or watch-transaction, or its settle answer reads
- *  settlement_pending. Never throws. */
+ *  decided yet (buildSettlementPendingResult): its body's retry verb is one
+ *  of UNDECIDED_RETRY_VERBS (src/payment-reject.js: same-payment,
+ *  watch-transaction, check-wallet) or its reason is settlement-unconfirmed,
+ *  or its settle answer reads settlement_pending. Never throws. */
 export function isSettlementUndecided(body, settleResponse) {
   try {
-    if (isPlainObject(body) && (body.retry === "same-payment" || body.retry === "watch-transaction")) return true;
+    if (isPlainObject(body) && (UNDECIDED_RETRY_VERBS.includes(body.retry) || body.reason === "settlement-unconfirmed")) return true;
     return isPlainObject(settleResponse) && settleResponse.success === false && settleResponse.errorReason === "settlement_pending";
   } catch { return false; }
 }

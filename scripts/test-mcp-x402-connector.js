@@ -50,7 +50,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { x402Client } from "@x402/core/client";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import express from "express";
-import { encodePaymentRequiredHeader, encodePaymentResponseHeader } from "@x402/core/http";
+import { encodePaymentRequiredHeader, encodePaymentResponseHeader, encodePaymentSignatureHeader } from "@x402/core/http";
 import { bootServer } from "./lib/boot-server.js";
 
 const MCP_CLIENT_VERSION = "2.30.0";
@@ -139,6 +139,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // The paid route answered 5xx after the payment was presented.
     route500: { status: 500, settle: null, body: { error: "upstream_failed", hint: "ROUTE-500-HINT" } },
     route503Tx: { status: 503, settle: null, body: { error: "unavailable", transactions: [TX] } },
+    // A settle chain that ended unconfirmed (src/payment-reject.js
+    // unconfirmedSettleRefusal): naming no transaction (check-wallet), and
+    // naming a Solana signature with no expiry but a lastValid-style bound.
+    unconfirmedWallet: { settle: { success: false, errorReason: "settlement_unconfirmed", transaction: "", network: "eip155:8453", payer: payer1 }, body: { reason: "settlement-unconfirmed", retry: "check-wallet", network: "eip155:8453", authorizationValidBefore: "2031-01-02T03:04:05Z", hint: "UNCONFIRMED-WALLET-HINT: the transfer may still land." } },
+    unconfirmedSol: { settle: { success: false, errorReason: "settlement_unconfirmed", transaction: SOL_SIG, network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", payer: payer1 }, body: { reason: "settlement-unconfirmed", retry: "watch-transaction", network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", transactions: [SOL_SIG], authorizationValidBefore: "2031-01-02T03:04:05Z", hint: "UNCONFIRMED-SOL-HINT" } },
     // Control: a payment the route's verify refused. Never settled, no receipt.
     verifyRefused: { settle: null, body: { error: "invalid_exact_evm_payload_signature" } },
   });
@@ -226,6 +231,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const mText = JSON.stringify(m1?.content || "");
       ok(!mErr && m1?.isError === true && !PR(m1) && !/"accepts"/.test(mText) && !m1._meta?.[MCP_PAYMENT_REQUIRED_META] && /Do not sign a new authorization/.test(mText) && (tx ? mText.includes(tx) : true),
         `${m} over MPP: a credential whose settle failed answers no challenge and no offer${tx ? ", and names the transaction" : ""} (${mErr ? mErr.message : mText.slice(0, 200)})`);
+    }
+    // A settle chain the route answered unconfirmed: the pending result with
+    // the route's verb and expiry over x402 and over MPP, never "did not
+    // settle", never an offer or a challenge.
+    for (const [m, verb, tx] of [["unconfirmedWallet", "check-wallet", null], ["unconfirmedSol", "watch-transaction", SOL_SIG]]) {
+      mode = m;
+      const cred = `Payment ${Buffer.from(JSON.stringify({ challenge: { id: "c1", method: "evm", intent: "charge" }, payload: { signature: "0x00" } })).toString("base64url")}`;
+      for (const [wire, send] of [["x402", call], ["MPP", () => raw.callTool({ name: "catalog.call", arguments: { slug: "paid-x", params: {} }, _meta: { [MCP_CREDENTIAL_META]: cred } })]]) {
+        const u = await send();
+        const um = u._meta?.[SETTLEMENT_PENDING_META] || {};
+        const t = JSON.stringify(u.content || "");
+        ok(u.isError === true && !PR(u) && !/"accepts"|x402Version/.test(t + JSON.stringify(u._meta || {})) && !u._meta?.[MCP_PAYMENT_REQUIRED_META]
+          && um.reason === "settlement-unconfirmed" && um.retry === verb && um.authorizationValidBefore === "2031-01-02T03:04:05Z" && (tx ? um.transactions?.[0] === tx && t.includes(tx) : !um.transactions)
+          && !/did not settle/.test(t) && t.includes(variants[m].body.hint.split(":")[0]) && u._meta?.[X402_PAYMENT_RESPONSE_META]?.errorReason === "settlement_unconfirmed",
+          `${m} over ${wire}: the route's unconfirmed answer keeps reason, retry ${verb}, authorizationValidBefore${tx ? " and the signature as written" : ""} in _meta, no offer, never "did not settle" (${JSON.stringify(um).slice(0, 240)})`);
+      }
     }
     // The official client: one payment for the call, and no second signature.
     {
@@ -395,6 +416,7 @@ const fallbackFacilitator = createServer((req, res) => {
     if (req.url === "/settle") {
       fallback.settles++;
       if (fallback.mode === "500") return reply({ error: "internal error" }, 500);
+      if (fallback.mode === "failtx") return reply({ success: false, errorReason: "transaction_failed", transaction: `0x${"fd".repeat(28)}${(++txN).toString(16).padStart(8, "0")}`, network: BASE_NET, payer });
       if (fallback.mode === "ok") return reply({ success: true, transaction: `0x${"fb".repeat(28)}${(++txN).toString(16).padStart(8, "0")}`, network: BASE_NET, payer });
       return reply({ success: false, errorReason: "free_tier_exhausted", transaction: "", network: BASE_NET, payer });
     }
@@ -591,6 +613,38 @@ try {
     const receipt = recovered._meta?.[X402_PAYMENT_RESPONSE_META];
     ok(recovered.isError !== true && JSON.stringify(recovered.content).includes("hello") && receipt?.success === true && /^0xfb/.test(String(receipt.transaction)) && fallback.settles === f0 + 1,
       `control: the same refusal completed by the fallback is served with the fallback's receipt in _meta (${JSON.stringify(receipt)})`);
+  }
+  // A settle chain that ended unconfirmed (the primary's refusal, then a
+  // fallback's 500 or a failure naming a transaction): over /mcp the result
+  // means what the HTTP route's 402 means. Reason settlement-unconfirmed, the
+  // retry verb (check-wallet with no transaction, watch-transaction with one),
+  // the authorization's validBefore and, for a named transaction, the refund
+  // lookup; never "did not settle", never an offer.
+  {
+    const httpReq = PR(await plain.client.callTool({ name: "catalog.call", arguments: { slug: "memory-read", params: { key } } }));
+    for (const [mode, verb] of [["500", "check-wallet"], ["failtx", "watch-transaction"]]) {
+      stub.settleRefuse = "free_tier_exhausted";
+      fallback.mode = mode;
+      c0 = { ...counts };
+      const paid = await payA.payments.createPaymentPayload(offer);
+      const r = await sendRaw(payA.raw, paid);
+      const hp = await payA.payments.createPaymentPayload(httpReq);
+      const hr = await fetch(`${B}/api/memory?key=${encodeURIComponent(key)}`, { headers: { "payment-signature": encodePaymentSignatureHeader(hp), "X-Forwarded-For": "203.0.113.11" } });
+      const hb = await hr.json().catch(() => ({}));
+      stub.settleRefuse = null;
+      fallback.mode = "refuse";
+      const m = r._meta?.[SETTLEMENT_PENDING_META] || {};
+      const t = (r.content || []).map((c) => c.text || "").join("\n");
+      const vbOf = (p) => new Date(Number(p.payload.authorization.validBefore) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+      ok(hr.status === 402 && hb.reason === "settlement-unconfirmed" && hb.retry === verb && hb.authorizationValidBefore === vbOf(hp) && (verb === "watch-transaction") === Boolean(hb.refundStatusUrl),
+        `control: the HTTP route answers a fallback ${mode} with settlement-unconfirmed, retry ${verb}, the validBefore${verb === "watch-transaction" ? " and refundStatusUrl" : ""} (${JSON.stringify(hb).slice(0, 300)})`);
+      ok(noOffer(r) && m.reason === "settlement-unconfirmed" && m.retry === verb && m.authorizationValidBefore === vbOf(paid)
+        && (verb === "watch-transaction" ? /^https:\/\/agent402\.tools\/api\/refunds\?tx=0xfd/.test(String(m.refundStatusUrl)) && /^0xfd/.test(String(m.transactions?.[0])) : !m.refundStatusUrl && !m.transactions),
+        `over /mcp a fallback ${mode} carries reason settlement-unconfirmed, retry ${verb}, authorizationValidBefore${verb === "watch-transaction" ? ", the transaction and refundStatusUrl" : ""} in _meta, no offer (${JSON.stringify(m).slice(0, 400)})`);
+      ok(!/did not settle/.test(t) && /may still land/.test(t) && t.includes(vbOf(paid)) && (verb === "check-wallet" ? /paying wallet/.test(t) : t.includes(m.transactions?.[0] || "-")),
+        `its text says the transfer may still land and names the expiry${verb === "watch-transaction" ? " and the transaction" : " and the wallet check"}, never "did not settle" (${t.slice(0, 300)})`);
+      ok(counts.settle === c0.settle + 2, `one primary settle per payment, MCP and HTTP (${counts.settle - c0.settle})`);
+    }
   }
 
   // 6. Invalid payments: the reader's refusal and the facilitator's.

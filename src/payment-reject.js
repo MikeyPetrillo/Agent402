@@ -24,6 +24,18 @@
 // the facilitator's own hint (src/verify-hint.js) is the better answer whenever
 // the payment actually reached it.
 
+/** The retry verbs a 402 body carries while the payment's settlement is not
+ *  decided: same-payment (a payment not checked, a Gateway batched payment
+ *  still settling: send the same payment again), watch-transaction and
+ *  check-wallet (a settlement not confirmed: the transfer may still land).
+ *  The one list every writer and reader shares (src/gateway-wire.js,
+ *  src/verify-hint.js, src/mcp-x402.js isSettlementUndecided): a payment
+ *  answered with one of these is never offered for a new signature. */
+export const RETRY_SAME_PAYMENT = "same-payment";
+export const RETRY_WATCH_TRANSACTION = "watch-transaction";
+export const RETRY_CHECK_WALLET = "check-wallet";
+export const UNDECIDED_RETRY_VERBS = Object.freeze([RETRY_SAME_PAYMENT, RETRY_WATCH_TRANSACTION, RETRY_CHECK_WALLET]);
+
 /** Decode a base64(url) JSON header. Null on anything unreadable. Shared
  *  with src/payment-required-body.js, so the 402 body mirror reads the header
  *  with the same decoder the classifier uses. */
@@ -97,7 +109,7 @@ export function notCheckedRefusal(reason, { chain = "" } = {}) {
   if (!r) return null;
   const on = typeof chain === "string" && chain ? ` on ${chain}` : "";
   const again = "Nothing was charged. Send the same payment again in a few seconds; it needs no new signature while its authorization is still valid.";
-  const out = (why) => ({ reason: "not-checked", retry: "same-payment", retryAfterSeconds: NOT_CHECKED_RETRY_AFTER_SECONDS, detail: `${why}, so the payment was not checked. ${again}` });
+  const out = (why) => ({ reason: "not-checked", retry: RETRY_SAME_PAYMENT, retryAfterSeconds: NOT_CHECKED_RETRY_AFTER_SECONDS, detail: `${why}, so the payment was not checked. ${again}` });
   if (NOT_CHECKED_UNVERIFIABLE.test(r)) return out(`This server could not finish its own on-chain check of the payment's signature${on}`);
   const m = NOT_CHECKED_STATUS.exec(r);
   const status = m ? Number(m[1] || m[2] || m[3]) : 0;
@@ -135,7 +147,7 @@ export function pendingSettleRefusal({ network = null, transactions = [] } = {})
   const one = txs.length === 1;
   return {
     reason: "settlement-unconfirmed",
-    retry: "watch-transaction",
+    retry: RETRY_WATCH_TRANSACTION,
     network: net,
     transactions: txs,
     detail:
@@ -259,7 +271,7 @@ export function unconfirmedSettleRefusal({ network = null, transactions = [], bo
   const expiry = !!(until || round || ledger);
   return {
     reason: "settlement-unconfirmed",
-    retry: txs.length ? "watch-transaction" : "check-wallet",
+    retry: txs.length ? RETRY_WATCH_TRANSACTION : RETRY_CHECK_WALLET,
     network: net,
     ...(txs.length ? { transactions: txs } : {}),
     ...(until ? { authorizationValidBefore: until } : {}),
