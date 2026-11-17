@@ -1004,6 +1004,29 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "mppSubscriptions is ${STATUS}; closing." || true
           fi
 
+      # The weather kit's Open-Meteo reads (openMeteo, server.js): refused
+      # pages (the last keyed outcome was a refusal); ok and off
+      # clear; unknown and absent do neither.
+      # The status Worker runs the same check under the same title.
+      - name: Open-Meteo keyed reads check (alarm when a keyed request is refused)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.openMeteo.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "openMeteo: $STATUS"
+          TITLE="Open-Meteo keyed reads REFUSED"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "refused" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports openMeteo.status=refused: Open-Meteo refused the weather tools' keyed requests (two in a row, or one bad-request answer naming the API key) with no keyed success since (the key was not accepted, or does not cover that API), so those calls answer a temporary service error. Read the [open-meteo] keyed request refused line in the server log on Railway, then check OPEN_METEO_API_KEY and the Open-Meteo account. Auto-closes when the word reads ok or off." || true
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "openMeteo is ${STATUS}; closing." || true
+          fi
+
       # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
       # Apart from the prepaid allowance step above, which reads exaAllowance.
       - name: Exa daily spend over its ceiling
@@ -1630,7 +1653,9 @@ jobs:
       # robinhoodSettler pages on relayer (ok
       # and off close); subscriptionRenewals pages on unconfirmed (ok and off
       # close); directUpstream pages on degraded (ok and off close,
-      # starting does neither); ok closes; unknown does neither. The issues are public, so a body carries
+      # starting does neither); directUpstreamSpend on high and
+      # directUpstreamBalance on exhausted (ok and off close; unknown and
+      # starting do neither); ok closes; unknown does neither. The issues are public, so a body carries
       # the word and the operator endpoint only: slugs, upstreams, facilitators
       # and reasons stay on /__operator/tool-failures.json. The status Worker
       # runs the same checks every five minutes under the same titles.
@@ -1717,6 +1742,17 @@ jobs:
           # close; starting does neither.
           TITLE="directUpstream: the direct upstream is degraded"
           check_word directUpstream "degraded" "ok off" "/__operator/direct-upstream.json"
+          # The direct upstream's spend for the UTC day passed
+          # DIRECT_UPSTREAM_DAILY_ALERT_USD (src/direct-upstream-spend.js): high
+          # pages (an alarm only, every call is still served); ok and off close;
+          # unknown (the shared day not read yet) does neither.
+          TITLE="directUpstreamSpend: the direct upstream's daily spend is high"
+          check_word directUpstreamSpend "high" "ok off" "/__operator/direct-upstream.json"
+          # Its latest answer was a 402 balance refusal (those calls were served
+          # by OpenRouter): exhausted pages; ok and off close; starting (a new
+          # process has seen neither outcome) does neither.
+          TITLE="directUpstreamBalance: the direct upstream's prepaid balance is exhausted"
+          check_word directUpstreamBalance "exhausted" "ok off" "/__operator/direct-upstream.json"
 
       # Paid 200s whose body is empty or error-shaped (src/answer-shape.js,
       # counted by src/tool-failure-monitor.js): one word on

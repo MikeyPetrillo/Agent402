@@ -123,7 +123,7 @@ const port = await getFreePort();
 const proc = spawn(process.execPath, ["src/server.js"], {
   env: {
     ...process.env, FREE_MODE: "true", PORT: String(port), INDEX_CACHE_FILE: join(dir, "x402-index-cache.json"), INDEX_FIRST_CRAWL_DELAY_MS: "999999999",
-    X402_INDEX_CRAWL: "", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"),
+    X402_INDEX_CRAWL: "on", X402_SYNC_ON_START: "false", MPP_INDEX_CRAWL: "off", REDIS_URL: "", STATE_DATABASE_URL: "", X402_ECONOMY_DB: join(dir, "econ.db"),
     ROUTER_WORKERS: "0", AGENT402_OPERATOR_TOKEN: TOKEN, LOAD_SHED: "off",
   },
   stdio: ["ignore", "ignore", "inherit"],

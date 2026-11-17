@@ -320,7 +320,11 @@ file before changing a subsystem it names. The batch procedure is the `/batch` s
 Configuration and secrets are set on Railway (and, where a workflow needs them, as GitHub
 Actions secrets), never in the repo. Rollout switches are generally "key present = feature on"
 (for example `MPP_SECRET_KEY`, `TEMPO_API_KEY`, `STRIPE_SECRET_KEY`, `OPENROUTER_API_KEY`,
-`X_BEARER_TOKEN`). Per-variable notes and thresholds live in `CLAUDE.local.md`. The backup
+`X_BEARER_TOKEN`). `OPEN_METEO_API_KEY` present = the weather tools read Open-Meteo's keyed
+hosts; unset = its public hosts. Per-variable notes and thresholds live in `CLAUDE.local.md`. The backup
 bucket credentials (`BACKUP_S3_*`) live on Railway only, shown by `railway bucket credentials` and pasted by the operator
 into the service variables, never in Actions: the deploy job's variable upsert must not name a
 variable whose source of truth is Railway (`scripts/test-ci-secretless-install.js`).
+The direct inference upstream's daily spend alarm reads `DIRECT_UPSTREAM_DAILY_ALERT_USD`
+(Railway; `0` or `off` turns it off; `src/direct-upstream-spend.js`): an alarm only, it never
+refuses, caps or reroutes a call.

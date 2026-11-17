@@ -806,6 +806,27 @@ Auto-closes when nothing is owed.`,
     body: () => "/api/gateway-status reports directUpstream.status=degraded. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
   },
   {
+    // The direct upstream's spend for the UTC day (directUpstreamSpend,
+    // src/direct-upstream-spend.js) reached DIRECT_UPSTREAM_DAILY_ALERT_USD:
+    // high pages, ok and off clear, anything else (unknown: the shared day
+    // not read yet) does neither. An alarm only: every call is still served.
+    // Title matches heartbeat.yml's.
+    title: "directUpstreamSpend: the direct upstream's daily spend is high",
+    verdict: ({ gateway: b }) => wordVerdict(b.directUpstreamSpend?.status, ["high"], ["ok", "off"]),
+    body: () => "/api/gateway-status reports directUpstreamSpend.status=high. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
+  },
+  {
+    // The direct upstream refused on its balance (HTTP 402) and has served
+    // nothing since (directUpstreamBalance, src/direct-upstream-spend.js):
+    // exhausted pages, ok and off clear, anything else (starting: a new
+    // process has seen neither outcome yet) does neither, so a deploy never
+    // closes it while the balance is still empty. Those calls were served by
+    // OpenRouter. Title matches heartbeat.yml's.
+    title: "directUpstreamBalance: the direct upstream's prepaid balance is exhausted",
+    verdict: ({ gateway: b }) => wordVerdict(b.directUpstreamBalance?.status, ["exhausted"], ["ok", "off"]),
+    body: () => "/api/gateway-status reports directUpstreamBalance.status=exhausted. The detail is on the operator endpoint, /__operator/direct-upstream.json (operator token). Auto-closes when the word is ok.",
+  },
+  {
     // Paid 200s whose body is empty or error-shaped (toolAnswers,
     // src/answer-shape.js): degraded pages, ok clears, unknown does neither.
     // Title matches heartbeat.yml's.
@@ -1108,6 +1129,15 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     verdict: ({ gateway: b }) => wordVerdict(b.mppSubscriptions?.status, ["failed"], ["on", "off"]),
     body: () =>
       "/api/gateway-status reports mppSubscriptions.status=failed: MPP recurring subscriptions are configured but the engine did not build at boot (the installed mppx has no subscription method, or the build threw or refused), so the recurring-monitor routes are not mounted and renewals of existing subscriptions do not run. Read the [mpp-subs] init failed line in the boot log on Railway, then fix and redeploy. Auto-closes when the word reads on or off.",
+  },
+  {
+    // The weather kit's Open-Meteo reads (openMeteo, server.js): refused
+    // pages (the last keyed outcome was a refusal); ok and off
+    // clear; unknown and absent do neither. Title and body match heartbeat.yml's.
+    title: "Open-Meteo keyed reads REFUSED",
+    verdict: ({ gateway: b }) => wordVerdict(b.openMeteo?.status, ["refused"], ["ok", "off"]),
+    body: () =>
+      "/api/gateway-status reports openMeteo.status=refused: Open-Meteo refused the weather tools' keyed requests (two in a row, or one bad-request answer naming the API key) with no keyed success since (the key was not accepted, or does not cover that API), so those calls answer a temporary service error. Read the [open-meteo] keyed request refused line in the server log on Railway, then check OPEN_METEO_API_KEY and the Open-Meteo account. Auto-closes when the word reads ok or off.",
   },
   {
     title: "State database DEGRADED (Postgres)",

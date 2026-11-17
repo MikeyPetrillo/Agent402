@@ -210,7 +210,12 @@ export function cdnClientIpMiddleware({ enabled = cdnProxyEnabled(), secret = cd
     // buyer's resolved address in X-Forwarded-For and no origin secret: it is
     // not a CDN peer reaching the origin, so it is never counted. `isReplay`
     // proves the replay (a per-process secret) on a loopback socket.
-    if (!authed && inCdnRanges(edgeIp, list) && !isOwnReplay(req, isReplay)) noteUnauthenticatedCdnPeer();
+    // A CDN peer with no valid origin secret proves nothing about its client:
+    // its address is the edge's, shared by every client behind it, so a
+    // per-caller key never uses it (src/dispatch-caller.js callerKeysOf).
+    const unproven = !authed && inCdnRanges(edgeIp, list);
+    if (unproven) req.cdnUnproven = true;
+    if (unproven && !isOwnReplay(req, isReplay)) noteUnauthenticatedCdnPeer();
     const { ip, viaCdn } = resolveClientIp(edgeIp, req.headers["cf-connecting-ip"], list, authed);
     if (viaCdn) {
       Object.defineProperty(req, "ip", { value: ip, configurable: true, enumerable: true, writable: true });

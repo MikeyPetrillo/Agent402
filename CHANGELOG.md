@@ -6,6 +6,27 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (weather data reliability and Copernicus credits)
+Tools:
+- The weather tools read their data on a reserved service lane when the server
+  holds a weather data key, and a refusal of that key answers a temporary
+  error that names our side, not the buyer's input, while /api/gateway-status
+  reports openMeteo (off, unknown, ok or refused) and the operator is paged on
+  refused.
+- weather-air-quality credits the Copernicus Atmosphere Monitoring Service and
+  weather-history credits the Copernicus Climate Change Service, each with the
+  Copernicus disclaimer, in each tool's description and in a credit field on
+  each answer, beside the Open-Meteo credit; weather-history states its range
+  as 1940 to the most recent days.
+
+### 2026-11-16 (test and CI servers no longer crawl seller hosts)
+Operations:
+- Test and CI servers no longer crawl seller hosts: the x402 and MPP index
+  crawlers start on a production boot only (NODE_ENV=production, which the
+  image sets, or the platform's production environment), never under FREE_MODE
+  or CI, unless X402_INDEX_CRAWL=on or MPP_INDEX_CRAWL=on says so. Before,
+  a local, test or CI server without the switch set ran its own pass over every indexed seller.
+
 ### 2026-11-16 (a card refund made by hand is recorded)
 Payments:
 - A failed card report whose payment was already refunded outside the server

@@ -70,7 +70,7 @@ try {
   }
   ok(up, "instrumented server booted");
   if (!up) throw new Error(`server never came up:\n${srvLog.slice(-800)}`);
-  ok(/crawler disabled/.test(srvLog), "the index crawler is off, so background egress cannot mask a leak");
+  ok(/\[index\] crawler off/.test(srvLog), "the index crawler is off, so background egress cannot mask a leak");
 
   // Sanity check FIRST: the probe must be able to SEE egress, or a clean run
   // below would prove nothing. http-check is the control because it fetches a

@@ -469,6 +469,7 @@ import { priceUsdOf } from "./price-usd.js";
 import { submissionSlotStatus } from "./x402-index.js";
 import { startRouterPool, routerPoolStatus } from "./router-pool.js";
 import { allPayToOriginsAsync, allPayToPricesAsync, indexMemoryFigures, indexSnapshot, indexSnapshotAsync, warmStartSnapshot, indexCacheVersion, crawlInProgress, sellerDetail, sellerEntry, routableSellerSummaries, routeQueryAsync, startCrawler, validateOriginInput, registerOrigin, allIndexedToolsAsync, indexRowsReady, warmRoutableSellerSummaries, indexedToolCategoriesAsync, configureListingsStore, bazaarQualityEntries, bazaarQualityFor, indexWarmStartInProgress, indexReadiness, quoteIsStale, priceDisagreesWithOrigin, networksNeedLiveVerify, looksLikeListingInjection, screenSellerDetailForServe, servedSellerNameOn, crawlToolsByOrigin, listSuccessions, revokeSuccession, quoteProbeStatsSnapshot, removeOrigin, restoreOrigin, listRemovedOrigins, isRemovedOrigin, REMOVED_ORIGIN_ERROR, brokenListingsSummary, brokenListingsStatus } from "./x402-index.js";
+import { crawlSwitch } from "./crawl-switch.js";
 import { startMppCrawler, registerMppOrigin, validateOriginInput as validateMppOriginInput, mppIndexSnapshot, screenMppSellerForServe } from "./mpp-index.js";
 import { startMppLeaderboard, mppLeaderboardSnapshot } from "./mpp-leaderboard.js";
 import { tempoSelfRecipient, tempoDiscoveryInfo, tempoEnabled, tempoSettlementMode, tempoRefusalProblem } from "./mpp-tempo.js";
@@ -587,7 +588,7 @@ import { PREDICTION_MARKET_TOOLS } from "./tools/prediction-market-kit.js";
 import { MEV_AND_L2_TOOLS } from "./tools/mev-and-l2-kit.js";
 import { ONCHAIN_IDENTITY_TOOLS } from "./tools/onchain-identity-kit.js";
 import { NFT_MARKET_TOOLS } from "./tools/nft-market-kit.js";
-import { WEATHER_TOOLS } from "./tools/weather-kit.js";
+import { WEATHER_TOOLS, openMeteoStatus } from "./tools/weather-kit.js";
 import { DATE_TIME_TOOLS } from "./tools/date-time-kit.js";
 import { TEXT_ANALYSIS_TOOLS } from "./tools/text-analysis-kit.js";
 import { VALIDATION_TOOLS } from "./tools/validation-kit.js";
@@ -925,6 +926,7 @@ import { registerMemoryStore, memoryStoreFigures } from "./memory-stores.js";
 import { publicIndexBootWarnings } from "./facilitator-public-index.js";
 import { directUpstreamBootWarnings, directUpstreamReport } from "./gateway-direct-upstream.js";
 import { directPriceBookBootWarnings, directPriceBookReport, directUpstreamStatus, startDirectPriceBook } from "./gateway-direct-pricebook.js";
+import { directUpstreamSpendStatus, directUpstreamBalanceStatus, refreshDirectSpendShared } from "./direct-upstream-spend.js";
 
 // FACILITATOR_PUBLIC_INDEX_*: a disclosure switch that cannot say what its
 // value asks (an unknown chain, no host to name, an invalid policy URL or
@@ -3257,7 +3259,7 @@ app.get("/__operator/discovery-refusals.json", async (req, res) => {
 // bucket and p50/p90 latency per upstream for the listed model ids.
 app.get("/__operator/direct-upstream.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
-  res.set("Cache-Control", "private, no-store").json({ ...directUpstreamReport(), priceBook: directPriceBookReport() });
+  res.set("Cache-Control", "private, no-store").json({ ...directUpstreamReport(), priceBook: directPriceBookReport(), spend: directUpstreamSpendStatus({ full: true }), balance: directUpstreamBalanceStatus({ full: true }) });
 });
 app.get("/__operator/tweet-queue.json", (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
@@ -4209,7 +4211,7 @@ app.get("/api/gateway-status", async (req, res) => {
   // process's own counters start empty, so each word is built from the larger
   // of the two (one bounded read each, reused for a few seconds; never
   // rejects). jevSpend reads unknown until its shared day has been read once.
-  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared()]);
+  await Promise.all([refreshOperatorAuthShared(), refreshCdnOriginShared(), refreshXDataSpendShared(), refreshExaSpendShared(), refreshJevSpendShared(), refreshSpendWindowShared(), refreshDirectSpendShared()]);
   const spend = { xDataSpend: xDataSpendStatus(), exaSpend: exaSpendStatus(), exaAllowance: exaAllowanceStatus(), jevSpend: jevSpendStatus() };
   const budgets = upstreamBudgetStatus();
   // The global unsettled external-spend ceiling: one word, never a figure.
@@ -4227,6 +4229,10 @@ app.get("/api/gateway-status", async (req, res) => {
     // ok / alert past X_SEARCH_AUTHOR_DAILY_ALERT / unknown. An alarm only,
     // nothing is refused. One word publicly; the figures for the operator.
     xSearchAuthors: await xSearchAuthorsStatus({ full }).catch(() => ({ status: "unknown" })),
+    // The weather kit's Open-Meteo reads (src/tools/weather-kit.js): off (no
+    // OPEN_METEO_API_KEY, public hosts) / ok / refused (a keyed request was
+    // refused in the last 15 minutes: buyers got a 503, not charged). One word.
+    openMeteo: (() => { try { return openMeteoStatus(); } catch { return { status: "unknown" }; } })(),
     // The router's per-minute holds for outside sellers
     // (src/router-spend-window.js): ok / over (past the alarm, still serving)
     // / capped (a purchase was refused at the stop inside the last hour) /
@@ -4496,6 +4502,13 @@ app.get("/api/gateway-status", async (req, res) => {
     // breaker is open). The word publicly; the operator read adds a reason
     // code while degraded; the figures are on /__operator/direct-upstream.json.
     directUpstream: (() => { try { return directUpstreamStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    // The direct upstream's day spend (src/direct-upstream-spend.js): off, ok
+    // or high (past DIRECT_UPSTREAM_DAILY_ALERT_USD; an alarm only, every call
+    // is still served). And its balance: off, ok or exhausted (its latest
+    // answer was a 402 balance refusal; those calls were served by OpenRouter).
+    // The word publicly; the figures for the operator.
+    directUpstreamSpend: (() => { try { return directUpstreamSpendStatus({ full }); } catch { return { status: "unknown" }; } })(),
+    directUpstreamBalance: (() => { try { return directUpstreamBalanceStatus({ full }); } catch { return { status: "unknown" }; } })(),
     ...(await toolFailureMonitor().status({ full }).catch(() => ({ toolFailures: { status: "unknown" }, upstreamHealth: { status: "unknown" }, facilitatorFunds: { status: "unknown" }, toolAnswers: { status: "unknown" }, buyerRefusals: { status: "unknown" } }))),
   };
   // An operator-authed read must not land in a shared cache.
@@ -13276,17 +13289,19 @@ else console.log(`[posthog] disabled (${posthogInit.reason || "unknown"})`);
 // origins pulled from public x402 registries (Coinbase CDP Bazaar, etc.).
 // selfOrigin is passed so the discovery feeder skips our own listings. Fire-and-
 // forget so a slow upstream can't delay boot or /health.
-// X402_INDEX_CRAWL=off skips it entirely. Two reasons this switch exists: a
-// test that must attribute outbound traffic to a specific handler cannot do so
-// while a background crawler is dialling thousands of origins, and CI booted a
-// server on every run and crawled the whole third-party index for nothing -
-// outbound load on other people's hosts that no test ever looked at.
+// It runs on a production boot only (src/crawl-switch.js): NODE_ENV=production
+// or Railway's production environment, never under CI or FREE_MODE, unless
+// X402_INDEX_CRAWL=on says so (a test crawling a local stub); =off always
+// skips it. Every CI server, spawned test server and local boot used to crawl
+// the whole third-party index, each one a full pass over other people's hosts
+// that nothing read.
 // The tool directory in the state database (INDEX_LISTINGS_STORE=pg; off by
 // default): configured before the warm start, so every origin it loads is
 // written as it lands and this server's own origin is never listed.
 if (configureListingsStore({ excludeOrigin: BASE_URL })) console.log("[index] tool directory served from the state database (INDEX_LISTINGS_STORE=pg)");
-if (String(process.env.X402_INDEX_CRAWL || "").toLowerCase() === "off") {
-  console.log("[index] crawler disabled (X402_INDEX_CRAWL=off)");
+const x402Crawl = crawlSwitch("X402_INDEX_CRAWL");
+if (!x402Crawl.on) {
+  console.log(`[index] crawler off (${x402Crawl.reason})`);
   loadRemovedOrigins(); // the operator's removals load regardless, so a removal never saves over a list nobody read
 } else {
   // Once the warm start is in, the index snapshot, the seller summaries and
@@ -13324,10 +13339,11 @@ if (shadowLedgerEnabled()) {
 // MPP Index crawler: an independent seller directory for the MPP protocol,
 // parallel to the x402 crawler above but a different seller population.
 // Seeds come from the public mpp.dev services registry, live-verified before
-// ever being shown (src/mpp-index.js). Same reasoning for the disable switch
-// as X402_INDEX_CRAWL - outbound load on third-party hosts that no test looks at.
-if (String(process.env.MPP_INDEX_CRAWL || "").toLowerCase() === "off") {
-  console.log("[mpp-index] crawler disabled (MPP_INDEX_CRAWL=off)");
+// ever being shown (src/mpp-index.js). Same rule as the x402 crawler
+// (src/crawl-switch.js): a production boot, or MPP_INDEX_CRAWL=on.
+const mppCrawl = crawlSwitch("MPP_INDEX_CRAWL");
+if (!mppCrawl.on) {
+  console.log(`[mpp-index] crawler off (${mppCrawl.reason})`);
 } else {
   startMppCrawler();
   // MPP leaderboard: on-chain ranking of the verified sellers above by inbound

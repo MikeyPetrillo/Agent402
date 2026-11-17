@@ -167,6 +167,26 @@ Loaded when a gateway, metering, model-catalog or report file is read.
   direct answer included, walks to the same model on OpenRouter, and the buyer is settled once,
   from the answer that served. The Actions secrets `DIRECT_UPSTREAM_URL` and
   `DIRECT_UPSTREAM_MODELS` turn on the listing check in `model-drift.yml` (optional).
+- **Direct upstream spend and balance words (alarms only):** `src/direct-upstream-spend.js`. Every
+  answer the direct upstream billed (served, or discarded as empty; `callDirectUpstream` and the
+  stream's `onUsage` in `streamDirectUpstreamTo`) books its cost to the UTC day: the upstream's own
+  reported charge, else its usage tokens at the private table's model row (longest prefix), else it
+  counts as unpriced. The day is this process's and a shared day counter's
+  (`createSharedDailySpend("direct-upstream-day")`), the word reads the larger; one shared write
+  is in flight at a time, later bookings are carried behind it (a hung store holds one command).
+  `directUpstreamSpend`: off (unconfigured, or `DIRECT_UPSTREAM_DAILY_ALERT_USD` 0/off), unknown
+  (a shared store whose day this process has not read yet), ok, high (at or past the threshold,
+  default 5; malformed reads the default). `directUpstreamBalance`: off (unconfigured or share 0),
+  starting (no served direct answer and no 402 in this process yet), ok, exhausted (the latest of a
+  402 balance refusal and a served direct answer is the refusal; per process,
+  `directBalanceState`). The pagers page on high and exhausted, close on ok and off, and do neither
+  on unknown or starting, so a deploy never closes a balance issue the new process cannot judge.
+  Rollback: a build before these words publishes neither field, so the pagers do nothing for them
+  and an open spend or balance issue stays open until closed by hand. A 402 is a counted breaker failure:
+  the call walks to OpenRouter and is served, and three in a row open the breaker
+  (`directUpstream` degraded). Neither word refuses, caps or reroutes anything. Words publicly;
+  figures on the operator view and `/__operator/direct-upstream.json`. Suite:
+  `scripts/test-direct-upstream-spend.js`.
 - **Direct upstream price guard:** `src/gateway-direct-pricebook.js`. A direct attempt is taken only
   when a per-call eligibility check passes: the kit's input estimate (the clamp's own estimate for
   the link; `estimateInputTokens` of the direct body on the metered tier) times prompt price plus
