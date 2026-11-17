@@ -42,27 +42,36 @@ const unwrapStored = (hit) => (hit && typeof hit === "object" && !Array.isArray(
 const UNCONFIRMED = "__a402Unconfirmed";
 const UNCONFIRMED_MIN_MS = 60_000;
 const UNCONFIRMED_NO_EXPIRY_MS = 24 * 3600_000;
+// A header field read as text: a string as is, a number as its digits,
+// anything else (an object, including one whose own toString or valueOf is
+// not a function, which String() throws on) as "". Every parse of a payment
+// below reads a field through this, so a malformed header is a payment with
+// no identity (the normal path and its 402), never a thrown error.
+const textOf = (v) => (typeof v === "string" ? v : typeof v === "number" || typeof v === "bigint" ? String(v) : "");
 /** How long an unconfirmed answer is kept for an authorization whose
  *  validBefore is `validBefore` (unix seconds; none or unreadable reads as a
  *  payment that names no validBefore). */
 export function unconfirmedReplayMs(validBefore, now = Date.now()) {
-  const vb = validBefore === null || validBefore === undefined || validBefore === "" ? NaN : Number(validBefore);
+  const t = textOf(validBefore).trim();
+  const vb = t === "" ? NaN : Number(t);
   if (!Number.isFinite(vb) || vb <= 0) return UNCONFIRMED_NO_EXPIRY_MS;
   return Math.min(MAX_SETTLED_VALIDITY_HOLD_MS, Math.max(UNCONFIRMED_MIN_MS, vb * 1000 - now + UNCONFIRMED_MIN_MS));
 }
 /** The key an unconfirmed answer is kept under for this request's payment. */
 export function unconfirmedKeyOf(req, cred) {
   let id = null;
-  const n = paymentNonceIdentityOf(req);
-  if (n) id = `nonce\n${n.network}\n${n.from}\n${n.nonce}`;
-  else {
-    let k = null;
-    try { k = paymentReplayKey(req); } catch { k = null; }
-    // "<kind>:<identity>:<legacy>": the identity half is what the chain
-    // consumes; a raw-credential key ("c:") is the text itself.
-    if (typeof k === "string" && !k.startsWith("c:")) id = `replay\n${k.split(":").slice(0, 2).join(":")}`;
-  }
-  return createHash("sha256").update(`unconfirmed-settle\n${id || `cred\n${cred}`}`).digest("hex");
+  try {
+    const n = paymentNonceIdentityOf(req);
+    if (n && typeof n.network === "string" && typeof n.from === "string" && typeof n.nonce === "string") id = `nonce\n${n.network}\n${n.from}\n${n.nonce}`;
+    else {
+      let k = null;
+      try { k = paymentReplayKey(req); } catch { k = null; }
+      // "<kind>:<identity>:<legacy>": the identity half is what the chain
+      // consumes; a raw-credential key ("c:") is the text itself.
+      if (typeof k === "string" && !k.startsWith("c:")) id = `replay\n${k.split(":").slice(0, 2).join(":")}`;
+    }
+  } catch { id = null; }
+  return createHash("sha256").update(`unconfirmed-settle\n${id || `cred\n${textOf(cred)}`}`).digest("hex");
 }
 /** What binds a stored unconfirmed answer to the payer's own signature. The
  *  key above is the payment's identity, which anyone can name without the
@@ -75,10 +84,13 @@ export function unconfirmedKeyOf(req, cred) {
  *  Anything else: its identity, or the credential text, which are themselves
  *  the whole signed payload. Null when no signature is named: never replayed. */
 export function unconfirmedSignatureOf(req, cred) {
+  try { return signatureDigestOf(req, cred); } catch { return null; }
+}
+function signatureDigestOf(req, cred) {
   const digest = (tag, v) => createHash("sha256").update(`${tag}\n`).update(v).digest("hex");
   let p = null;
   try { p = decodePaymentHeader(cred); } catch { p = null; }
-  if (!p || typeof p !== "object") return digest("cred", String(cred));
+  if (!p || typeof p !== "object") return textOf(cred) ? digest("cred", textOf(cred)) : null;
   const inner = p.payload && typeof p.payload === "object" ? p.payload : null;
   const sigOf = () => {
     const s = typeof inner?.signature === "string" ? inner.signature.trim() : "";
@@ -86,7 +98,8 @@ export function unconfirmedSignatureOf(req, cred) {
     return digest("sig", /^0x[0-9a-fA-F]+$/.test(s) ? s.toLowerCase() : s);
   };
   if (paymentNonceIdentityOf(req)) return sigOf();
-  const network = String(p.accepted?.network || p.network || inner?.network || "");
+  const accepted = p.accepted && typeof p.accepted === "object" ? p.accepted : null;
+  const network = textOf(accepted?.network) || textOf(p.network) || textOf(inner?.network);
   if (inner && (network.startsWith("solana") || network.startsWith("stellar"))) {
     const bytes = base64BytesOf(inner.transaction);
     return bytes ? digest(`tx\n${network.split(":")[0]}`, bytes) : null;
@@ -101,7 +114,7 @@ export function unconfirmedSignatureOf(req, cred) {
   if (sig) return sig;
   let k = null;
   try { k = paymentReplayKey(req); } catch { k = null; }
-  return typeof k === "string" && k ? digest("replay", k) : digest("cred", String(cred));
+  return typeof k === "string" && k ? digest("replay", k) : textOf(cred) ? digest("cred", textOf(cred)) : null;
 }
 
 /** Whether a re-sent x402 payment on `def`'s route may replay its first
@@ -251,6 +264,10 @@ export function createIdempotency({ isCatalogRoute, freeMode = false, store = cr
     const keep = () => {
       if (done) return;
       done = true;
+      // A listener: a throw here would be uncaught.
+      try { keepNow(); } catch { /* nothing kept: the next send takes the normal path */ }
+    };
+    const keepNow = () => {
       const a = req.__a402UnconfirmedAnswer;
       if (res.statusCode !== 402 || !a || typeof a !== "object" || !a.body || typeof a.body !== "object") return;
       if (typeof sig !== "string" || !sig) return;

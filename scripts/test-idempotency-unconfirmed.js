@@ -147,6 +147,90 @@ const realNow = Date.now;
   } finally { Date.now = realNow; await s.close(); local.stop?.(); }
 }
 
+// ---- hostile payment headers -----------------------------------------------
+// Every parse of a payment here (identity key, signature digest, the kept
+// answer's life) reads a malformed header as a payment with no identity: no
+// throw, the normal path and its 402. A field whose own toString or valueOf
+// is not a function is what String() and Number() throw on.
+{
+  const TRAP = { toString: 1 };
+  const TRAP2 = { toString: 1, valueOf: 1 };
+  const SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+  const base = payloadOf({ nonce: newNonce(), validBefore: Math.floor(realNow() / 1000) + 600 });
+  const huge = "A".repeat(200_000);
+  const hostile = [
+    ["network trap", { ...base, accepted: { ...base.accepted, network: TRAP } }],
+    ["network trap with valueOf", { ...base, accepted: { ...base.accepted, network: TRAP2 } }],
+    ["top-level network trap", { x402Version: 1, network: TRAP, payload: { signature: GOOD_SIG } }],
+    ["inner network trap", { x402Version: 1, payload: { network: TRAP2, signature: GOOD_SIG } }],
+    ["accepted a string", { ...base, accepted: "eip155:8453" }],
+    ["network a number", { ...base, accepted: { ...base.accepted, network: 8453 } }],
+    ["network an array", { ...base, accepted: { ...base.accepted, network: ["solana:x"] } }],
+    ["payer trap", { ...base, payload: { ...base.payload, authorization: { ...base.payload.authorization, from: TRAP } } }],
+    ["nonce trap", { ...base, payload: { ...base.payload, authorization: { ...base.payload.authorization, nonce: TRAP } } }],
+    ["validBefore trap", { ...base, payload: { ...base.payload, authorization: { ...base.payload.authorization, validBefore: TRAP2 } } }],
+    ["signature trap", { ...base, payload: { ...base.payload, signature: TRAP } }],
+    ["signature a number", { ...base, payload: { ...base.payload, signature: 7 } }],
+    ["payload a string", { ...base, payload: "x" }],
+    ["payload missing", { x402Version: 2, accepted: base.accepted }],
+    ["accepted missing", { x402Version: 2, payload: base.payload }],
+    ["svm transaction trap", { x402Version: 2, accepted: { scheme: "exact", network: SOL }, payload: { transaction: TRAP } }],
+    ["svm transaction not base64", { x402Version: 2, accepted: { scheme: "exact", network: SOL }, payload: { transaction: "!!!not~base58~or~64!!!" } }],
+    ["svm transaction huge", { x402Version: 2, accepted: { scheme: "exact", network: SOL }, payload: { transaction: huge } }],
+    ["svm transaction missing", { x402Version: 2, accepted: { scheme: "exact", network: SOL }, payload: {} }],
+    ["svm wrong network", { x402Version: 2, accepted: { scheme: "exact", network: "solana:nope" }, payload: { transaction: TRAP } }],
+    ["stellar transaction trap", { x402Version: 2, accepted: { scheme: "exact", network: "stellar:pubnet" }, payload: { transaction: TRAP2 } }],
+    ["algorand index trap", { x402Version: 2, accepted: { scheme: "exact", network: "algorand:mainnet" }, payload: { paymentGroup: [TRAP], paymentIndex: TRAP } }],
+    ["algorand group trap", { x402Version: 2, accepted: { scheme: "exact", network: "algorand:mainnet" }, payload: { paymentGroup: [TRAP2], paymentIndex: 0 } }],
+    ["algorand group not an array", { x402Version: 2, accepted: { scheme: "exact", network: "algorand:mainnet" }, payload: { paymentGroup: TRAP, paymentIndex: 0 } }],
+  ];
+  const fake = (h) => ({ header: (n) => (String(n).toLowerCase() === "payment-signature" ? h : undefined) });
+  const threw = [];
+  for (const [label, obj] of hostile) {
+    const h = enc(obj);
+    try {
+      const k = unconfirmedKeyOf(fake(h), h);
+      const sg = unconfirmedSignatureOf(fake(h), h);
+      if (typeof k !== "string" || !(sg === null || typeof sg === "string")) threw.push(`${label}: ${typeof k}/${typeof sg}`);
+    } catch (e) { threw.push(`${label}: ${e.message}`); }
+  }
+  for (const h of ["", "not base64 !!", huge, Buffer.from("[1,2]").toString("base64"), Buffer.from("null").toString("base64")]) {
+    try { unconfirmedKeyOf(fake(h), h); unconfirmedSignatureOf(fake(h), h); } catch (e) { threw.push(`raw ${h.slice(0, 12)}: ${e.message}`); }
+  }
+  for (const c of [TRAP, TRAP2, 5, null, undefined, ["a"]]) {
+    try { unconfirmedKeyOf(fake(c), c); unconfirmedSignatureOf(fake(c), c); } catch (e) { threw.push(`credential ${typeof c}: ${e.message}`); }
+  }
+  ok(threw.length === 0, `every hostile header is read without a throw (${threw.join("; ") || "none"})`);
+  const lives = [TRAP, TRAP2, ["1"], {}, "  ", "abc", -5, Infinity, NaN, 10n ** 30n].map((v) => { try { return unconfirmedReplayMs(v); } catch { return "threw"; } });
+  ok(lives.every((ms) => ms === DAY || (Number.isFinite(ms) && ms >= 60_000 && ms <= 30 * DAY)), `an unreadable validBefore keeps the answer a day, never a throw (${lives.join(",")})`);
+  const sgTrap = (() => { const h = enc(hostile[0][1]); return unconfirmedSignatureOf(fake(h), h); })();
+  ok(sgTrap === null || typeof sgTrap === "string", "control: a network trap reads as a payment with no rail");
+
+  // Through the middleware: each answers the paywall's 402, and a kept answer
+  // whose validBefore cannot be read does not break the response's finish.
+  const app = express();
+  let runs = 0;
+  app.use(express.json());
+  app.use(createIdempotency({ isCatalogRoute: () => true, store: createLocalIdempotencyStore({ maxEntries: 100 }) }));
+  app.post("/api/memory", (req, res) => {
+    runs++;
+    req.__a402UnconfirmedAnswer = { body: { reason: "settlement-unconfirmed" }, validBefore: TRAP2 };
+    res.status(402).json({ error: "invalid_payment" });
+  });
+  const srv = await new Promise((r) => { const x = app.listen(0, "127.0.0.1", () => r(x)); });
+  try {
+    const statuses = [];
+    for (const [, obj] of hostile.filter(([l]) => !/huge/.test(l))) {
+      const r = await fetch(`http://127.0.0.1:${srv.address().port}/api/memory`, { method: "POST", headers: { "content-type": "application/json", "payment-signature": enc(obj) }, body: "{}" });
+      await r.arrayBuffer();
+      statuses.push(r.status);
+    }
+    // (One that names a readable EVM identity and signature is kept, and its
+    // re-send under that signature is that kept 402: the same payment.)
+    ok(statuses.every((st) => st === 402) && runs >= 1, `through the middleware every hostile header is answered 402, never a 500 (${statuses.join(",")}; ${runs} runs)`);
+  } finally { await new Promise((r) => srv.close(r)); }
+}
+
 // ---- shared, real Redis ------------------------------------------------------
 const url = String(process.env.REDIS_URL || "").trim();
 if (!url) {

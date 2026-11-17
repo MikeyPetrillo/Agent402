@@ -149,6 +149,35 @@ const NOT_CHARGED = /not charged|nothing (?:was|is) charged|never charged/i;
   ok(lateAuthOf({ paymentPayload: { payload: { permit2Authorization: { from: SIGNER, deadline: "2000000000" }, authorization: { from: `0x${"66".repeat(20)}`, nonce: N } } } }) === null
     && lateAuthOf({ paymentPayload: { payload: { authorization: { from: "not-an-address", nonce: N } } } }) === null,
     "a crafted Permit2 payload's unsigned authorization block, or a from that is not an address, books nothing");
+  const now0 = 1_700_000_000_000;
+  // Hostile fields (an object whose own toString or valueOf is not a
+  // function, a number, an array, a huge string) read as nothing, never a throw.
+  {
+    const TRAP = { toString: 1 }, TRAP2 = { toString: 1, valueOf: 1 };
+    const { validBeforeIso, refundStatusUrlOf } = await import("../src/payment-reject.js");
+    const bad = [TRAP, TRAP2, ["1"], {}, 7, null, undefined, "x".repeat(100_000)];
+    const threw = [];
+    const tryIt = (label, fn) => { try { fn(); } catch (e) { threw.push(`${label}: ${e.message}`); } };
+    for (const v of bad) {
+      tryIt("lateAuthOf from", () => { if (lateAuthOf({ paymentPayload: { payload: { authorization: { from: v, nonce: N } } } }) !== null) threw.push("lateAuthOf booked a bad from"); });
+      tryIt("lateAuthOf nonce", () => { if (lateAuthOf({ paymentPayload: { payload: { authorization: { from: SIGNER, nonce: v } } } }) !== null && typeof v !== "string") threw.push("lateAuthOf booked a bad nonce"); });
+      tryIt("lateAuthOf validBefore", () => { const r = lateAuthOf({ paymentPayload: { payload: { authorization: { from: SIGNER, nonce: N, validBefore: v } } } }); if (r && r.validBefore !== null && typeof r.validBefore === "object") threw.push("lateAuthOf kept an object validBefore"); });
+      tryIt("validBeforeIso", () => { if (v !== 7 && validBeforeIso(v) !== null) threw.push("validBeforeIso read a bad value"); });
+      tryIt("refundStatusUrlOf", () => { if (refundStatusUrlOf("https://a.example", v) !== null) threw.push("refundStatusUrlOf read a bad tx"); });
+      tryIt("railTxOf", () => { if (railTxOf(v, v) !== null || railTxOf("solana:x", v) !== null) threw.push("railTxOf read a bad tx"); });
+      tryIt("unconfirmedSettleRefusal", () => { const r = unconfirmedSettleRefusal({ network: v, transactions: [v, TX], validBefore: v, lastValidRound: v, expirationLedger: v, origin: v }); if (r.reason !== "settlement-unconfirmed") threw.push("refusal lost its reason"); });
+      tryIt("unconfirmedSettleReceipt", () => { unconfirmedSettleReceipt({ success: false, network: v, payer: v }, { transaction: v, network: v }); });
+      tryIt("unconfirmedReplayMs", () => { const ms = unconfirmedReplayMs(v, now0); if (!Number.isFinite(ms)) threw.push("replay life not finite"); });
+    }
+    for (const v of [TRAP, TRAP2, ["eip155:8453"], 8453]) {
+      try { await paymentExpiryOf({ requirements: { network: v }, paymentPayload: { payload: { authorization: { validBefore: "2000000000" } } } }); } catch (e) { threw.push(`paymentExpiryOf network: ${e.message}`); }
+      try { await paymentExpiryOf({ requirements: { network: "stellar:pubnet" }, paymentPayload: { payload: { transaction: v } } }); } catch (e) { threw.push(`paymentExpiryOf stellar: ${e.message}`); }
+      try { await paymentExpiryOf({ requirements: { network: "algorand:mainnet" }, paymentPayload: { payload: { paymentGroup: [v], paymentIndex: v } } }); } catch (e) { threw.push(`paymentExpiryOf algorand: ${e.message}`); }
+    }
+    ok(threw.length === 0, `the settle-path parsers read hostile fields as nothing, never a throw (${threw.join("; ") || "none"})`);
+    ok(validBeforeIso("2000000000") === "2033-05-18T03:33:20Z" && validBeforeIso(2_000_000_000) === "2033-05-18T03:33:20Z" && refundStatusUrlOf("https://a.example", TX) === `https://a.example/api/refunds?tx=${TX}`,
+      "control: a readable validBefore and transaction still read");
+  }
   const permit2Ctx = { requirements: { network: BASE_NET, payTo: `0x${"11".repeat(20)}`, asset: `0x${"22".repeat(20)}`, amount: "1000" }, paymentPayload: { payload: { permit2Authorization: { from: `0x${"33".repeat(20)}`, deadline: "2000000000" } } }, __a402UnconfirmedStop: { via: "fallback" } };
   ok(lateSettleCandidate(permit2Ctx) === null, "a Permit2 payment with no transaction leaves nothing for the book (its answer promises no record)");
   const now = 1_700_000_000_000;

@@ -195,7 +195,9 @@ export function isSettlementUnconfirmedReceipt(receipt) {
  *  it is missing, unreadable or past any date a clock reaches. */
 export function validBeforeIso(v) {
   let n;
-  try { n = BigInt(String(v ?? "").trim()); } catch { return null; }
+  const t = typeof v === "string" ? v.trim() : typeof v === "number" || typeof v === "bigint" ? String(v) : "";
+  if (!/^[0-9]{1,20}$/.test(t)) return null;
+  try { n = BigInt(t); } catch { return null; }
   if (n <= 0n || n > 10_000_000_000n) return null;
   return new Date(Number(n) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
@@ -203,7 +205,7 @@ export function validBeforeIso(v) {
 /** The free refund lookup for one EVM transaction on this server, or null. */
 export function refundStatusUrlOf(origin, tx) {
   const o = typeof origin === "string" ? origin.replace(/\/+$/, "") : "";
-  return /^https?:\/\/[^\s/?#]+$/.test(o) && TX_HASH.test(String(tx || "")) ? `${o}/api/refunds?tx=${String(tx).toLowerCase()}` : null;
+  return /^https?:\/\/[^\s/?#]+$/.test(o) && typeof tx === "string" && TX_HASH.test(tx) ? `${o}/api/refunds?tx=${tx.toLowerCase()}` : null;
 }
 
 /** A transaction id as its rail names it, or null: an EVM hash (0x and 64
@@ -223,7 +225,7 @@ export function railTxOf(network, tx) {
 
 /** An Algorand round or Stellar ledger number, or null. */
 const roundOf = (v) => {
-  const s = String(v ?? "").trim();
+  const s = typeof v === "string" ? v.trim() : typeof v === "number" ? String(v) : "";
   return /^[1-9][0-9]{0,14}$/.test(s) ? Number(s) : null;
 };
 

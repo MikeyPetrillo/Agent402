@@ -4167,7 +4167,7 @@ const SVM_BLOCKHASH_BOUND_SECONDS = 120;
  */
 export async function paymentExpiryOf(ctx) {
   const payload = ctx?.paymentPayload;
-  const network = String(ctx?.requirements?.network || "");
+  const network = typeof ctx?.requirements?.network === "string" ? ctx.requirements.network : "";
   if (network.startsWith("eip155:")) { const vb = validBeforeOfPayload(payload); return vb != null ? { validBefore: vb } : null; }
   if (network.startsWith("solana:")) return payload?.payload?.transaction ? { validBefore: Math.floor(Date.now() / 1000) + SVM_BLOCKHASH_BOUND_SECONDS } : null;
   if (network.startsWith("algorand:")) {
@@ -4468,7 +4468,9 @@ export const lateAuthOf = (ctx) => {
   const inner = ctx?.paymentPayload?.payload;
   if (!inner || typeof inner !== "object" || inner.permit2Authorization != null) return null;
   const a = inner.authorization;
-  return a && typeof a === "object" && /^0x[0-9a-fA-F]{40}$/.test(String(a.from || "")) && a.nonce ? { payer: a.from, nonce: a.nonce, validBefore: a.validBefore ?? null, via: "ambiguous facilitator" } : null;
+  if (!a || typeof a !== "object" || typeof a.from !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(a.from) || typeof a.nonce !== "string" || !a.nonce) return null;
+  const vb = typeof a.validBefore === "string" || typeof a.validBefore === "number" ? a.validBefore : null;
+  return { payer: a.from, nonce: a.nonce, validBefore: vb, via: "ambiguous facilitator" };
 };
 
 /** The transaction a stopping fallback named, for the late-settlement hook
