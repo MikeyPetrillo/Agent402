@@ -113,8 +113,9 @@ LLC: credit the entity, never a personal name.
   `scripts/published-slugs.json` records every route ever published; after adding a tool or
   pack run `node scripts/published-slugs.js --write` (`test-retired-routes.js` fails otherwise,
   and fails when a published route is neither live, key-gated nor retired).
-- **Upstream costs are private.** Model, speech, embedding, media and STT rates, vendor cards
-  (Exa, X) and fixed fees live in `src/upstream-costs.js`'s table, loaded
+- **Upstream costs are private.** Model, speech, embedding, media and STT rates, the vendor
+  card (X) and fixed fees (among them the per-use fee of the web search that report products and
+  `/v1` web searches make through the model aggregator) live in `src/upstream-costs.js`'s table, loaded
   from `UPSTREAM_COSTS_JSON` (Railway; Actions secret) or `UPSTREAM_COSTS_FILE`, as does the
   meter markup (a buyer can derive it from any metered 402, so it is not a secret; it is kept
   in the table and never printed). Never commit a

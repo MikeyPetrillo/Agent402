@@ -333,7 +333,8 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   contact those sites from our server with the URL you provided. Tools that read a third-party data
   source send it what the lookup needs (a ticker, a token or wallet address, a domain, a query).</li>
   <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
-  The <code>/api/x-*</code> tools send the handle, post id or query to the X API.</li>
+  The <code>/api/x-*</code> tools send the handle, post id or query to the X API.
+  Report products and <code>/v1</code> calls that search the web send their search queries to Exa, through OpenRouter's web search.</li>
   <li>The <code>/api/code-run</code> tools run the code you send in a sandbox operated by E2B.</li>
   <li><code>/api/route</code>, <code>/api/route/execute</code> and <code>/api/decide</code> may send the
   task text you give them to a judgment model operated by TypeSafe to choose among candidate tools;
