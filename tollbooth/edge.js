@@ -208,7 +208,9 @@ export function createEdgeTollbooth(config = {}) {
       if (typeof charge === "function") return Boolean(charge(request));
     } catch { return true; /* fail closed: charge on predicate error */ }
     if (mode === "all") return true;
-    if (mode === "strict") return !looksHuman(request);
+    // strict: a known AI crawler pays even when it sends a browser-like UA and
+    // an HTML Accept; anything else that does not look like a browser pays too.
+    if (mode === "strict") return isBot(request.headers.get("user-agent") || "") || !looksHuman(request);
     return isBot(request.headers.get("user-agent") || ""); // "bots" (default)
   };
 

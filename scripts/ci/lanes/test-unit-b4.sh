@@ -114,6 +114,8 @@ t node scripts/test-mpp-index-hint.js
 # @step 3: Offline suites (105 scripts, one process each)
 # Tollbooth CLI settles x402 + MPP from env (real CLI process vs stub facilitator; mppx + @x402/fetch buys settle once each; misconfig fails closed)
 t node scripts/test-tollbooth-cli.js
+# Tollbooth CLI stops cleanly on SIGTERM/SIGINT: a request in flight is answered, exit 0; past the grace period it is cut, exit 1 (real CLI process)
+t node scripts/test-tollbooth-sigterm.js
 # /tollbooth install snippet runs against the package for every mode (observe, bots, strict, all; PoW unlock, stock x402 buy vs stub facilitator)
 t node scripts/test-tollbooth-landing.js
 # /crawler claims vs the real crawl (robots exemptions, fallback documents, User-Agent on every probe - offline stub origins)

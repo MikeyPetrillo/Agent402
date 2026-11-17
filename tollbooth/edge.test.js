@@ -17,6 +17,21 @@ const req = (ua, extra = {}) => new Request("https://site.test/article", { heade
 const HUMAN = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 const BOT = "Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)";
 
+// 0. strict mode consults the bot list: a listed crawler with a browser-like
+// UA and an HTML Accept pays; a real browser page load passes.
+{
+  const GPT = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)";
+  const strict = createEdgeTollbooth({ secret: "test-secret", powDifficulty: 8, mode: "strict" });
+  const html = { accept: "text/html,application/xhtml+xml" };
+  const charged = await strict(new Request("https://site.test/a", { headers: { "user-agent": GPT, ...html } }));
+  if (!charged || charged.status !== 402) fail(`strict: GPTBot with a browser-like UA must be charged, got ${charged && charged.status}`);
+  const human = await strict(new Request("https://site.test/a", { headers: { "user-agent": "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/124.0 Safari/537.36", ...html } }));
+  if (human !== null) fail("strict: a browser page load passes free");
+  const noList = createEdgeTollbooth({ secret: "test-secret", powDifficulty: 8, mode: "strict", botUserAgents: [] });
+  if (await noList(new Request("https://site.test/a", { headers: { "user-agent": GPT, ...html } })) !== null) fail("control: with an empty bot list the same request passes");
+  console.log("0. strict mode charges a listed crawler that looks like a browser ✓");
+}
+
 // 1. Human allowed (gate returns null).
 let res = await gate(req(HUMAN));
 if (res !== null) fail("human should be allowed (null)");

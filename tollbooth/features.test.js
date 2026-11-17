@@ -36,6 +36,10 @@ gate = createTollbooth({ mode: "strict", powDifficulty: 12 });
 ok(run(gate, mockReq({ "user-agent": humanUA, accept: "text/html,application/xhtml+xml" })).nexted === true, "strict: browser + html accept passes free");
 ok(run(gate, mockReq({ "user-agent": "curl/8.0", accept: "*/*" })).status === 402, "strict: curl charged");
 ok(run(gate, mockReq({ "user-agent": humanUA, accept: "application/json" })).status === 402, "strict: browser UA without html accept charged");
+// A listed AI crawler pays in strict mode even with a browser-like UA and an HTML Accept.
+const gptBrowserLike = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)";
+ok(run(gate, mockReq({ "user-agent": gptBrowserLike, accept: "text/html,application/xhtml+xml" })).status === 402, "strict: GPTBot with a Mozilla UA and an HTML Accept is charged (the bot list is consulted)");
+ok(run(createTollbooth({ mode: "strict", powDifficulty: 12, botUserAgents: [] }), mockReq({ "user-agent": gptBrowserLike, accept: "text/html" })).nexted === true, "control: with an empty bot list the same request passes as browser-like");
 
 // --- explicit charge()/free() still win over mode ---
 gate = createTollbooth({ mode: "all", free: () => true });
@@ -514,6 +518,40 @@ ok(html.includes("initProbes") && html.includes("navigator.clipboard"), "probes 
   ok(blocks.length >= 1, "README: an x402 middleware example exists");
   ok(blocks.every((b) => !/"(GET|HEAD) \/\*"/.test(b)), "README: the x402 example does not price GET alone");
   ok(/^## Upgrading from 0\.10\.8 or earlier$/m.test(readme) && /gets the\s+gate's 402/.test(readme), "README: the upgrade note names the 402 on an unpriced method");
+}
+
+// --- index.d.ts and edge.d.ts declare every runtime export, and nothing else ---
+{
+  const { readFileSync } = await import("node:fs");
+  const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+  for (const [file, dts] of [["./index.js", "./index.d.ts"], ["./edge.js", "./edge.d.ts"]]) {
+    const mod = await import(file);
+    const text = readFileSync(new URL(dts, import.meta.url), "utf8");
+    const declared = new Set([...text.matchAll(/^export (?:declare )?(?:class|const|function|let) ([A-Za-z0-9_]+)/gm)].map((m) => m[1]));
+    const missing = Object.keys(mod).filter((k) => !declared.has(k));
+    const stale = [...declared].filter((k) => !(k in mod));
+    ok(missing.length === 0 && stale.length === 0, `${dts} declares every export of ${file} (missing ${missing.join(",") || "none"}, stale ${stale.join(",") || "none"})`);
+    ok(pkg.files.includes(dts.slice(2)), `${dts.slice(2)} ships in "files"`);
+  }
+  ok(pkg.types === "index.d.ts" && pkg.exports["."].types === "./index.d.ts" && pkg.exports["./edge"].types === "./edge.d.ts", "package.json points types at the declarations");
+}
+
+// --- README settle examples run as written ---
+// x402.org's facilitator settles Base Sepolia only: an example that pairs it
+// with Base mainnet (the CLI's default network, or eip155:8453 registered)
+// throws at its first request ("Facilitator does not support scheme exact on
+// network eip155:8453"). Every README block that names that facilitator names
+// the testnet too, and none registers mainnet with it.
+{
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("./README.md", import.meta.url), "utf8");
+  const blocks = [...readme.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]).filter((b) => b.includes("x402.org/facilitator"));
+  ok(blocks.length >= 2, `the README's settle examples are found (${blocks.length})`);
+  for (const b of blocks) {
+    const testnet = /TOLLBOOTH_NETWORK=base-sepolia|"eip155:84532"/.test(b);
+    const mainnet = /"eip155:8453"/.test(b);
+    ok(testnet && !mainnet, `a README example using x402.org's facilitator settles on Base Sepolia (${b.split("\n").find((l) => /facilitator/.test(l))?.trim().slice(0, 80)})`);
+  }
 }
 
 console.log(`\n${pass} passed`);

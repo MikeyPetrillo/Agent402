@@ -93,11 +93,18 @@ exact URL.
 Point it at your existing site - no code changes there:
 
 ```bash
+# A dry run on Base Sepolia: x402.org's facilitator settles testnet USDC only.
 TOLLBOOTH_UPSTREAM=https://your-site.com \
 TOLLBOOTH_PAYTO=0xYourWallet \
+TOLLBOOTH_NETWORK=base-sepolia \
 TOLLBOOTH_FACILITATOR_URL=https://x402.org/facilitator \
 npx agent402-tollbooth          # listens on :4021, proxies humans free, charges bots
 ```
+
+For real money, drop `TOLLBOOTH_NETWORK` (Base is the default) and point
+`TOLLBOOTH_FACILITATOR_URL` at a facilitator that settles Base mainnet, or set
+`TOLLBOOTH_CDP_API_KEY_ID` and `TOLLBOOTH_CDP_API_KEY_SECRET` to settle through
+Coinbase's facilitator.
 
 With `TOLLBOOTH_PAYTO` **and** `TOLLBOOTH_FACILITATOR_URL` set, the proxy
 settles real money over **both wires** from env alone (0.8.0): it builds the
@@ -183,10 +190,14 @@ import { paymentMiddleware } from "@x402/express";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 
+// Base Sepolia (eip155:84532) for a dry run: x402.org's facilitator settles
+// testnet USDC only. For real money use eip155:8453 (Base) with a facilitator
+// that settles it.
+const NETWORK = "eip155:84532";
 const server = new x402ResourceServer(new HTTPFacilitatorClient({ url: "https://x402.org/facilitator" }))
-  .register("eip155:8453", new ExactEvmScheme());
+  .register(NETWORK, new ExactEvmScheme());
 const x402 = paymentMiddleware(
-  { "/*": { accepts: [{ scheme: "exact", network: "eip155:8453", price: "$0.001", payTo: "0xYourWallet" }] } },
+  { "/*": { accepts: [{ scheme: "exact", network: NETWORK, price: "$0.001", payTo: "0xYourWallet" }] } },
   server,
 );
 
@@ -313,7 +324,7 @@ live incident transaction in the tests).
 | `network` | `"base"` | x402 network |
 | `pow` | `true` | Enable the free proof-of-work rail |
 | `powDifficulty` | `18` | PoW difficulty in leading zero bits (~0.1–0.5s of CPU) |
-| `mode` | `"bots"` | Who pays: `"bots"` (AI-crawler UAs) · `"all"` (everyone but `free()`) · `"strict"` (anything that isn't a real-browser request) |
+| `mode` | `"bots"` | Who pays: `"bots"` (AI-crawler UAs) · `"all"` (everyone but `free()`) · `"strict"` (AI-crawler UAs and anything that isn't a real-browser request) |
 | `adaptive` | `false` | Raise PoW difficulty as charged-request load climbs (anti-abuse under traffic spikes) |
 | `maxDifficulty` | `base+6` | Ceiling for adaptive difficulty |
 | `adaptivePerBit` | `300` | +1 difficulty bit per N charged requests/min |
@@ -361,6 +372,7 @@ Read by the bundled proxy / Express entry point (`index.js`):
 | `TOLLBOOTH_ADAPTIVE` | `false` | Raise PoW difficulty as charged-request load climbs |
 | `TOLLBOOTH_ADAPTIVE_PER_BIT` | `300` | +1 difficulty bit per N charged requests/min |
 | `TOLLBOOTH_SECRET` | random | HMAC secret binding PoW challenges (set it to survive restarts / run multiple instances) |
+| `TOLLBOOTH_SHUTDOWN_GRACE_MS` | `10000` | On SIGTERM or SIGINT the CLI stops taking connections, lets requests in flight finish and exits 0; a request still running after this many ms (at most 120000) is cut and the exit code is 1. A second signal exits at once |
 | `TOLLBOOTH_REPLAY_SQLITE` | – | Path to a SQLite file every process shares as the single-use PoW record. Set it whenever more than one process serves the same `TOLLBOOTH_SECRET`. Needs Node 22.5+ (built-in `node:sqlite`) or an installed `better-sqlite3`; refuses to start if neither can open the file |
 | `TOLLBOOTH_RESOURCE_BASE` | `TOLLBOOTH_UPSTREAM` | Absolute base used for the `resource` field / PoW binding |
 | `TOLLBOOTH_VERIFY_TIMEOUT_MS` | `10000` | Abort an x402 settlement check after this long |
@@ -391,11 +403,12 @@ something*:
 - `mode: "all"` charges every client (except a `free()` match). A "more
   sophisticated" bot gains nothing by disguising itself - everyone pays or solves
   a proof-of-work.
-- `mode: "strict"` charges anything that isn't a real-browser request (browser-like
-  UA **and** an HTML `Accept`), letting genuine human page-loads through free.
-  Heads-up: that's a heuristic, not a security boundary - a bot that sets
-  `User-Agent: Mozilla/5.0 …` + `Accept: text/html` gets the same free pass a
-  human gets. Use `mode: "all"` (or your own `charge:` predicate) for hard
+- `mode: "strict"` charges every known AI crawler (the same bot list as the
+  default mode, even when it sends a browser-like UA) and anything else that
+  isn't a real-browser request (browser-like UA **and** an HTML `Accept`),
+  letting genuine human page-loads through free. Heads-up: that's a heuristic,
+  not a security boundary - an unlisted bot that sets `User-Agent: Mozilla/5.0 …`
+  + `Accept: text/html` gets the same free pass a human gets. Use `mode: "all"` (or your own `charge:` predicate) for hard
   guarantees.
 - `adaptive: true` makes proof-of-work **harder as load climbs**, so a high-volume
   scraper pays escalating CPU per request regardless of how it looks - detection is
