@@ -1,6 +1,6 @@
 // Words on /api/gateway-status and their two observers: gatewayBalance
 // (withdraw), topBuyerFailures (alert), onchainSqlBusy (alert), sharedLimits (degraded),
-// replayStore (pending) and coverageReads (degraded). Also the spend words (xDataSpend, exaSpend,
+// replayStore (pending) and coverageReads (degraded). Also the spend words (xDataSpend,
 // routerSpendWindow: over and capped), and upstreamHealth and facilitatorFunds
 // driven end to end from the monitor (our own timeouts, DNS failures and
 // unread balances page nothing), and upstreamHealth=unanswered (a hung
@@ -449,7 +449,7 @@ for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
   });
 }
 
-// The daily spend words (xDataSpend, exaSpend): over still serves and capped
+// The daily spend words (xDataSpend): over still serves and capped
 // refuses, and the heartbeat pages on both under one issue per upstream. The
 // steps are run as written, like the three above.
 // routerSpendWindow (src/router-spend-window.js) carries the same two words for
@@ -457,7 +457,6 @@ for (const [prefix, T, field, alertRow, quietRows, goodRows] of HB) {
 const SPEND = [
   // [step name, title, field, the body is the Worker's]
   ["X data daily spend over its ceiling", "X data daily spend OVER its ceiling", "xDataSpend"],
-  ["Exa daily spend over its ceiling", "Exa daily spend OVER its ceiling", "exaSpend"],
   ["Router spend per minute over its ceiling", RSW, "routerSpendWindow", true],
 ];
 for (const [name, T, field, sameBody] of SPEND) {

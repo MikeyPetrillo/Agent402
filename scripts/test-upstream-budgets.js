@@ -70,29 +70,27 @@ const rep = (hosts) => ({ day: "2026-09-14", hosts });
 {
   const exposure = readFileSync(new URL("./test-ci-key-exposure.js", import.meta.url), "utf8");
   const names = new Set(UPSTREAM_BUDGETS.map((b) => b.name));
-  for (const [cred, name] of [["BRAVE_API_KEY","brave"],["ALCHEMY_API_KEY","alchemy"],["COINGECKO_API_KEY","coingecko"],["E2B_API_KEY","e2b"],["OPENAI_API_KEY","openai"],["NEYNAR_API_KEY","neynar"],["EXA_KEY","exa"]]) {
+  for (const [cred, name] of [["BRAVE_API_KEY","brave"],["ALCHEMY_API_KEY","alchemy"],["COINGECKO_API_KEY","coingecko"],["E2B_API_KEY","e2b"],["OPENAI_API_KEY","openai"],["NEYNAR_API_KEY","neynar"]]) {
     ok(exposure.includes(cred) && names.has(name), `${cred} is both leak-guarded and budget-alarmed`);
   }
 }
 
 // A vendor that is also an indexed seller: crawler reads of its domain are not
-// tool use. 621 unpaid crawler calls to api.exa.ai tripped the Exa budget on
-// 2026-09-26 with $0 spent. With the kit's own counter registered, only tool
+// tool use (621 unpaid crawler calls to one such vendor tripped its budget on
+// 2026-09-26 with $0 spent). With a kit's own counter registered, only tool
 // calls count - and tool calls over the budget still trip it.
 {
   const { registerUpstreamCounter } = await import("../src/upstream-budgets.js");
   let toolCalls = 3;
-  registerUpstreamCounter("exa", () => toolCalls);
-  const crawled = rep([{ host: "api.exa.ai", calls: 621 }]);
+  registerUpstreamCounter("neynar", () => toolCalls);
+  const crawled = rep([{ host: "api.neynar.com", calls: 6210 }]);
   let s = upstreamBudgetStatus(crawled);
-  ok(s.upstreams.exa.status === "ok" && s.upstreams.exa.callsToday === 3, `crawler traffic to an indexed seller does not trip its budget (${JSON.stringify(s.upstreams.exa)})`);
-  ok(s.upstreams.exa.counts === "tool calls only", "and the row says what it counts");
-  toolCalls = 600;
+  ok(s.upstreams.neynar.status === "ok" && s.upstreams.neynar.callsToday === 3, `crawler traffic to an indexed seller does not trip its budget (${JSON.stringify(s.upstreams.neynar)})`);
+  ok(s.upstreams.neynar.counts === "tool calls only", "and the row says what it counts");
+  toolCalls = 6000;
   s = upstreamBudgetStatus(crawled);
-  ok(s.upstreams.exa.status === "elevated", "real tool calls over the budget still trip it");
+  ok(s.upstreams.neynar.status === "elevated", "real tool calls over the budget still trip it");
   ok(upstreamBudgetStatus(rep([{ host: "api.search.brave.com", calls: 5000 }])).upstreams.brave.status === "elevated", "a budget with no registered counter still reads host traffic");
-  const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  ok(/registerUpstreamCounter\("exa", exaCallsToday\)/.test(server), "the server registers the Exa kit's own counter");
 }
 
 // --- the per-lookup enrichment vendors are budgeted too ---------------------

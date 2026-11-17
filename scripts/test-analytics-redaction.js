@@ -44,7 +44,7 @@ const populated = () => ({
     { slug: "transcribe", calls: 2211, cached: 221, client_errored: 3, server_errored: 1, p50_ms: 900, p95_ms: 4100 },
     { slug: "search", calls: 1804, cached: 722, client_errored: 9, server_errored: 0, p50_ms: 220, p95_ms: 700 },
   ],
-  errorTools: [{ slug: "defi-tvl", calls: 40, cached: 0, client_errored: 0, server_errored: 17, p50_ms: 3000, p95_ms: 8800 }],
+  errorTools: [{ slug: "global-defi", calls: 40, cached: 0, client_errored: 0, server_errored: 17, p50_ms: 3000, p95_ms: 8800 }],
   timeseries: [{ t: "2026-07-30T00:00:00Z", calls: 400 }],
 });
 
@@ -58,7 +58,7 @@ const populated = () => ({
   const blob = JSON.stringify(out);
   ok(!blob.includes("2211") && !blob.includes("1804"), "no per-tool call count survives");
   ok(out.topTools === undefined && out.errorTools === undefined && out.toolsCount === undefined, "no per-tool table or count survives");
-  ok(!blob.includes("transcribe") && !blob.includes("defi-tvl"), "no tool name from the busiest-N selection survives");
+  ok(!blob.includes("transcribe") && !blob.includes("global-defi"), "no tool name from the busiest-N selection survives");
   ok(out.totals && out.totals.calls === 9812, "aggregate totals survive redaction");
   ok(Array.isArray(out.timeseries) && out.timeseries.length === 1, "the timeseries survives redaction");
   ok(typeof out.perToolNote === "string" && /operator-only/.test(out.perToolNote), "the payload states plainly that the tables are withheld");

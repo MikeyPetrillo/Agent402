@@ -95,7 +95,8 @@ const MICRO = 1_000_000;
 export const ROLL_FORWARD_GRACE_MS = 60_000;
 
 const DATA_ROOT = () => (existsSync("/data") ? "/data" : "/tmp");
-const DEFAULT_DIR = () => join(DATA_ROOT(), "credits");
+// CREDITS_DIR points the key files elsewhere (a test server keeps its own).
+const DEFAULT_DIR = () => String(process.env.CREDITS_DIR || "").trim() || join(DATA_ROOT(), "credits");
 const readJson = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
 function writeJsonAtomic(p, obj) {
   try { const tmp = `${p}.${process.pid}.tmp`; writeFileSync(tmp, JSON.stringify(obj)); renameSync(tmp, p); return true; } catch { return false; }

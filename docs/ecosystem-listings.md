@@ -20,9 +20,10 @@ claim below is served live; verify prices against `/api/pricing` before pasting.
   (`perp-markets`, `perp-funding`, `perp-funding-screener`, `perp-basis`,
   `perp-open-interest`, `perp-klines`, `perp-orderbook`, $0.001 to $0.003) and the
   options book (`options-summary`, `crypto-options-chain`, `options-ticker`,
-  `options-volume`, $0.002 to $0.005); DeFi yields, TVL, fees, DEX volume and
-  stablecoin supply with history siblings (`defi-*`, `stablecoins`, $0.001 to
-  $0.003); Solana token markets (pairs, search, trending, prices, swap
+  $0.002 to $0.005); computed market answers at $0.005 a call (`lending-rates`
+  from the Aave v3 and Compound v3 contracts, `funding-screener` across venues,
+  `stablecoin-depeg-watch`, `exchange-spread`, `dex-pool-health`,
+  `dex-volume-board`, `defi-screener`, `chain-board`); Solana token markets (pairs, search, trending, prices, swap
   quotes);
   crypto news, computed technical indicators and a whole-market pulse
   ($0.002 to $0.004); broad coin/exchange coverage including price by token

@@ -59,7 +59,7 @@ async function rpc(method, params) {
 const TOP1 = [
   ["qr code",                       "qr"],
   ["whois lookup",                  "whois"],
-  ["geocode address",                "geocode"],
+  ["geocode city",                   "place-lookup"],
   ["validate email",                "email-validate"],
   ["stock quote",                   "stock-quote"],
   ["weather forecast",              "weather-forecast"],

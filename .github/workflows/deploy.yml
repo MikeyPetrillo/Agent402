@@ -1999,7 +1999,7 @@ jobs:
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
             X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
-      - name: Offline suites (35 scripts, one process each)
+      - name: Offline suites (36 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b4 1
 
       - name: "Redis integration (the REAL client against a REAL server — cap-of-1, refund, cache round trip; the gap that made a redis major bump undecidable)"
@@ -2160,7 +2160,7 @@ jobs:
 
   test:
     # UPSTREAM AFFINITY, not just time. Balancing by duration alone put suites
-    # that call the SAME free rate-limited providers (CoinGecko, DefiLlama,
+    # that call the SAME free rate-limited providers (CoinGecko,
     # DexScreener, data.gov) into all three lanes. They had been serial in one
     # job; running them concurrently tripled the load on providers that limit by
     # IP, and eight tools failed on 504s in the first real run while both
@@ -2856,8 +2856,12 @@ jobs:
         run: |
           # Raise the MCP rate limit so the full-catalog connector test can sweep
           # every tool (production keeps the default 20/min, 120/hr).
+          # The examples that fetch this server's own /samples/ and /fixtures/ files are
+          # answered by this server, never production (own-examples-preload.js).
+          # Failed upstream requests are logged for the strict sweep's outage
+          # check (upstream-failure-log-preload.js, scripts/lib/upstream-outage.js).
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
-            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
+            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/own-examples-preload.js --import ./scripts/lib/upstream-failure-log-preload.js src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Crypto-kit tests (CoinGecko price/market/history/trending/global — keyless live API)
         # Keyless on purpose: the job-scope key is for the sampled sweep only,
@@ -3055,8 +3059,10 @@ jobs:
         run: |
           # Raise the MCP rate limit so the full-catalog connector test can sweep
           # every tool (production keeps the default 20/min, 120/hr).
+          # Failed upstream requests are logged for the live public-data check
+          # (upstream-failure-log-preload.js, scripts/live-public-data-check.js).
           AGENT402_MCP_MAX_PER_MIN=1000000 AGENT402_MCP_MAX_PER_HOUR=1000000 \
-            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node src/server.js &
+            X402_SYNC_ON_START=false FREE_MODE=true X402_PAYWALL_PROBES_PER_CYCLE=0 PORT=3000 node --import ./scripts/lib/upstream-failure-log-preload.js src/server.js &
           for i in $(seq 1 20); do curl -s localhost:3000/health >/dev/null && break; sleep 1; done
       - name: Exercise tools against live sites
         run: |
@@ -3127,14 +3133,13 @@ jobs:
           echo "=== live public data (data.gov / NWS / USGS) ==="
           # data.gov has frequent upstream outages — exercise gov-data but don't
           # hard-fail the suite on its availability (the tool returns an honest
-          # 502 when data.gov is down). NWS + USGS below are reliable and strict.
+          # 502 when data.gov is down). NWS + USGS below are strict: a failure
+          # passes only as a keyless upstream's outage the runner sees too
+          # (scripts/live-public-data-check.js); our own failure fails the step.
           GD=$(curl -s 'localhost:3000/api/gov-data?q=electric+vehicle+charging&rows=3')
           echo "$GD" | jq '{totalFound, top: .results[0].title, error}'
           echo "$GD" | jq -e '.totalFound >= 1' >/dev/null && echo "  gov-data OK" || echo "  (gov-data upstream flaky right now — not failing the suite)"
-          curl -s 'localhost:3000/api/weather-alerts?area=CA' | jq '{count, top: .alerts[0].event}'
-          curl -s 'localhost:3000/api/weather-alerts?area=CA' | jq -e 'has("alerts")' >/dev/null || { echo "weather-alerts malformed"; exit 1; }
-          curl -s 'localhost:3000/api/earthquakes?minMag=2.5&period=day' | jq '{count, top: .quakes[0].place}'
-          curl -s 'localhost:3000/api/earthquakes?minMag=2.5&period=day' | jq -e '.count >= 1' >/dev/null || { echo "earthquakes returned nothing"; exit 1; }
+          TARGET_URL=http://127.0.0.1:3000 node scripts/live-public-data-check.js
           echo "=== kit: live network tools ==="
           curl -s -X POST localhost:3000/api/http-check -H 'Content-Type: application/json' -d '{"url":"https://example.com"}' | jq -c '{up, status, latencyMs}'
           curl -s -X POST localhost:3000/api/tls-cert -H 'Content-Type: application/json' -d '{"host":"github.com"}' | jq -c '{subject, issuer, daysRemaining, chainTrusted}'
@@ -5140,7 +5145,7 @@ jobs:
           # people learn to ignore. Any other failure still fails the deploy.
           MCP_OK=0; MCP_ONLY_429=1
           for i in $(seq 1 5); do
-            OUT=$(TARGET_URL=$PROD node scripts/test-mcp-http.js 2>&1) && { echo "$OUT"; MCP_OK=1; break; }
+            OUT=$(MCP_HTTP_EXPECT_WIRES=mpp+x402 TARGET_URL=$PROD node scripts/test-mcp-http.js 2>&1) && { echo "$OUT"; MCP_OK=1; break; }
             echo "$OUT" | tail -5
             if echo "$OUT" | grep -q "HTTP 429"; then
               echo "  attempt $i: throttled by OUR OWN /mcp limiter — backing off 65s past the per-minute window…"

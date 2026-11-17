@@ -48,7 +48,7 @@
       },
       "expect": {
         "gt": {
-          "rate": 1.0
+          "rate": 1
         },
         "lt": {
           "rate": 1.2
@@ -523,6 +523,588 @@
         "falsy": [
           "complete"
         ]
+      }
+    },
+    {
+      "slug": "place-lookup",
+      "name": "a qualified name resolves to the named state",
+      "input": {
+        "q": "Springfield, IL",
+        "count": 1
+      },
+      "expect": {
+        "equals": {
+          "count": 1,
+          "found": true,
+          "results[0].region": "Illinois",
+          "results[0].countryCode": "US"
+        },
+        "populated": [
+          "results[0].lat",
+          "results[0].lon",
+          "results[0].timezone",
+          "credit"
+        ]
+      }
+    },
+    {
+      "slug": "place-lookup",
+      "name": "a trailing state code with no comma is a qualifier",
+      "input": {
+        "q": "Portland ME",
+        "count": 1
+      },
+      "expect": {
+        "equals": {
+          "results[0].region": "Maine"
+        },
+        "populated": [
+          "results[0].lat"
+        ]
+      }
+    },
+    {
+      "slug": "place-lookup",
+      "name": "nonsense is an honest zero",
+      "input": {
+        "q": "zzqx qqzx nowhere"
+      },
+      "expect": {
+        "equals": {
+          "count": 0,
+          "found": false
+        },
+        "empty": [
+          "results"
+        ],
+        "populated": [
+          "note"
+        ]
+      }
+    },
+    {
+      "slug": "place-lookup",
+      "name": "a one-letter name is a 400",
+      "input": {
+        "q": "a"
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "q"
+        }
+      }
+    },
+    {
+      "slug": "place-lookup",
+      "name": "a bad country code is a 400",
+      "input": {
+        "q": "Paris",
+        "country": "FRA"
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "country"
+        }
+      }
+    },
+    {
+      "slug": "weather-current",
+      "name": "a place name resolves and is echoed",
+      "input": {
+        "place": "Nairobi"
+      },
+      "expect": {
+        "equals": {
+          "place.name": "Nairobi",
+          "place.countryCode": "KE"
+        },
+        "populated": [
+          "current.temperature",
+          "place.timezone",
+          "place.credit",
+          "lat",
+          "lon"
+        ]
+      }
+    },
+    {
+      "slug": "weather-current",
+      "name": "an unknown place is a 404 that names the place",
+      "input": {
+        "place": "zzqx qqzx nowhere"
+      },
+      "expect": {
+        "status": 404,
+        "matches": {
+          "error": "No place matched"
+        }
+      }
+    },
+    {
+      "slug": "weather-current",
+      "name": "no location at all is a 400",
+      "input": {
+        "units": "celsius"
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "place"
+        }
+      }
+    },
+    {
+      "slug": "weather-daily",
+      "name": "lat and lon win over place",
+      "input": {
+        "lat": 35.6762,
+        "lon": 139.6503,
+        "place": "Paris",
+        "days": 2
+      },
+      "expect": {
+        "equals": {
+          "lat": 35.6762
+        },
+        "count": {
+          "days": 2
+        }
+      }
+    },
+    {
+      "slug": "weather-probability",
+      "name": "a range over rounded values, by place",
+      "input": {
+        "place": "Madrid",
+        "variable": "temperature_max",
+        "min": -60,
+        "max": 60,
+        "rounding": "integer"
+      },
+      "expect": {
+        "equals": {
+          "probability": 1,
+          "place.countryCode": "ES",
+          "variable": "temperature_max",
+          "unit": "°C"
+        },
+        "gte": {
+          "members.total": 31
+        },
+        "populated": [
+          "distribution.median",
+          "members.byModel[0].model",
+          "method",
+          "source",
+          "date"
+        ]
+      }
+    },
+    {
+      "slug": "weather-probability",
+      "name": "an impossible threshold is probability 0",
+      "input": {
+        "lat": -33.8688,
+        "lon": 151.2093,
+        "variable": "precipitation_sum",
+        "op": "<",
+        "value": 0
+      },
+      "expect": {
+        "equals": {
+          "probability": 0,
+          "members.meeting": 0,
+          "unit": "mm"
+        },
+        "gte": {
+          "members.total": 31
+        }
+      }
+    },
+    {
+      "slug": "weather-probability",
+      "name": "no condition is a 400",
+      "input": {
+        "lat": 1,
+        "lon": 2
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "threshold"
+        }
+      }
+    },
+    {
+      "slug": "weather-probability",
+      "name": "a date past the horizon is a 400",
+      "input": {
+        "lat": 1,
+        "lon": 2,
+        "value": 10,
+        "date": "2031-01-01"
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "date"
+        }
+      }
+    },
+    {
+      "slug": "weather-probability",
+      "name": "an unknown variable is a 400",
+      "input": {
+        "lat": 1,
+        "lon": 2,
+        "value": 10,
+        "variable": "humidity"
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "variable"
+        }
+      }
+    },
+    {
+      "slug": "weather-market-brackets",
+      "name": "brackets that cover every value sum to all members; prices echo",
+      "input": {
+        "lat": 51.5074,
+        "lon": -0.1278,
+        "variable": "temperature_min",
+        "brackets": [
+          {
+            "label": "freezing or below",
+            "max": 0,
+            "price": 0.2
+          },
+          {
+            "label": "above freezing",
+            "min": 0.0001,
+            "price": 0.8
+          }
+        ]
+      },
+      "expect": {
+        "count": {
+          "brackets": 2
+        },
+        "equals": {
+          "brackets[0].marketPrice": 0.2,
+          "brackets[1].marketPrice": 0.8,
+          "membersOutsideBrackets": 0,
+          "brackets[0].label": "freezing or below"
+        },
+        "gte": {
+          "members.total": 31
+        },
+        "populated": [
+          "marketPriceNote",
+          "distribution.median",
+          "source"
+        ]
+      }
+    },
+    {
+      "slug": "weather-market-brackets",
+      "name": "a price above 1 is a 400",
+      "input": {
+        "lat": 51.5,
+        "lon": -0.12,
+        "brackets": [
+          {
+            "min": 0,
+            "max": 5,
+            "price": 42
+          }
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "price"
+        }
+      }
+    },
+    {
+      "slug": "weather-market-brackets",
+      "name": "no brackets is a 400",
+      "input": {
+        "lat": 51.5,
+        "lon": -0.12
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "brackets"
+        }
+      }
+    },
+    {
+      "slug": "weather-market-board",
+      "name": "two caller cities, one by name, one with its own brackets",
+      "input": {
+        "variable": "temperature_max",
+        "units": "celsius",
+        "cities": [
+          {
+            "label": "Lisbon",
+            "place": "Lisbon, Portugal"
+          },
+          {
+            "label": "Oslo point",
+            "lat": 59.9139,
+            "lon": 10.7522,
+            "brackets": [
+              {
+                "label": "below 100",
+                "max": 100,
+                "price": 0.5
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "equals": {
+          "count": 2,
+          "unit": "°C",
+          "cities[0].label": "Lisbon",
+          "cities[1].brackets[0].forecastProbability": 1,
+          "cities[1].brackets[0].marketPrice": 0.5
+        },
+        "populated": [
+          "cities[0].brackets[0].label",
+          "cities[0].place.name",
+          "cities[0].distribution.median"
+        ]
+      }
+    },
+    {
+      "slug": "weather-market-board",
+      "name": "too many cities is a 400",
+      "input": {
+        "cities": [
+          {
+            "lat": 0,
+            "lon": 0
+          },
+          {
+            "lat": 1,
+            "lon": 1
+          },
+          {
+            "lat": 2,
+            "lon": 2
+          },
+          {
+            "lat": 3,
+            "lon": 3
+          },
+          {
+            "lat": 4,
+            "lon": 4
+          },
+          {
+            "lat": 5,
+            "lon": 5
+          },
+          {
+            "lat": 6,
+            "lon": 6
+          },
+          {
+            "lat": 7,
+            "lon": 7
+          },
+          {
+            "lat": 8,
+            "lon": 8
+          },
+          {
+            "lat": 9,
+            "lon": 9
+          },
+          {
+            "lat": 10,
+            "lon": 10
+          },
+          {
+            "lat": 11,
+            "lon": 11
+          },
+          {
+            "lat": 12,
+            "lon": 12
+          },
+          {
+            "lat": 13,
+            "lon": 13
+          },
+          {
+            "lat": 14,
+            "lon": 14
+          },
+          {
+            "lat": 15,
+            "lon": 15
+          },
+          {
+            "lat": 16,
+            "lon": 16
+          },
+          {
+            "lat": 17,
+            "lon": 17
+          },
+          {
+            "lat": 18,
+            "lon": 18
+          },
+          {
+            "lat": 19,
+            "lon": 19
+          },
+          {
+            "lat": 20,
+            "lon": 20
+          }
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "cities"
+        }
+      }
+    },
+    {
+      "slug": "weather-window",
+      "name": "limits nothing can meet say why",
+      "input": {
+        "place": "Reykjavik",
+        "days": 2,
+        "minHours": 24,
+        "maxPrecipProbability": 0,
+        "maxWind": 0
+      },
+      "expect": {
+        "equals": {
+          "found": false,
+          "count": 0
+        },
+        "empty": [
+          "windows"
+        ],
+        "populated": [
+          "noWindow.reason",
+          "noWindow.hoursRuledOutBy",
+          "place.name"
+        ]
+      }
+    },
+    {
+      "slug": "weather-window",
+      "name": "no limits beyond the defaults, any hour",
+      "input": {
+        "lat": -23.5505,
+        "lon": -46.6333,
+        "days": 16,
+        "minHours": 1,
+        "maxPrecipProbability": 100,
+        "daylightOnly": "false"
+      },
+      "expect": {
+        "equals": {
+          "found": true,
+          "days": 16
+        },
+        "gte": {
+          "count": 1,
+          "windows[0].hours": 1
+        },
+        "populated": [
+          "windows[0].start",
+          "timezone"
+        ]
+      }
+    },
+    {
+      "slug": "weather-window",
+      "name": "minHours out of range is a 400",
+      "input": {
+        "lat": 1,
+        "lon": 2,
+        "minHours": 99
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "minHours"
+        }
+      }
+    },
+    {
+      "slug": "weather-thresholds",
+      "name": "a rule that always holds and one that never does",
+      "input": {
+        "lat": 64.1466,
+        "lon": -21.9426,
+        "hours": 24,
+        "rules": [
+          {
+            "variable": "humidity",
+            "op": ">=",
+            "value": 0
+          },
+          {
+            "variable": "temperature",
+            "op": ">",
+            "value": 70
+          }
+        ]
+      },
+      "expect": {
+        "count": {
+          "rules": 2
+        },
+        "equals": {
+          "rules[0].met": true,
+          "rules[0].hoursMet": 24,
+          "rules[1].met": false,
+          "rules[1].firstAt": null,
+          "anyMet": true,
+          "period.hours": 24
+        },
+        "populated": [
+          "rules[0].firstAt",
+          "rules[1].highest.value"
+        ]
+      }
+    },
+    {
+      "slug": "weather-thresholds",
+      "name": "an unknown variable is a 400 naming the rule",
+      "input": {
+        "lat": 1,
+        "lon": 2,
+        "rules": [
+          {
+            "variable": "vibes",
+            "op": ">",
+            "value": 1
+          }
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "matches": {
+          "error": "rules\\[0\\]"
+        }
       }
     }
   ]

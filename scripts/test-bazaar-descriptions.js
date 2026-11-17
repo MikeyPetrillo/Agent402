@@ -217,14 +217,14 @@ ok(bazaarCapDescription("Series data. ?id=GDPC1&units=pc1. This product is not e
   // further before it gives up its sample output, and keeps the sentence.
   const declare = (bl) => ({ bazaar: { info: { input: bl.input, output: bl.output } } });
   const block = { input: { q: "x" }, output: { type: "json", example: { rows: [1, 2, 3, 4, 5, 6, 7, 8] } } };
-  const text = `${lead2()} ${ATTRIBUTIONS.openstreetmap}`;
+  const text = `${lead2()} ${ATTRIBUTIONS.coingecko}`;
   const short = bazaarCapDescription(text, CHALLENGE_SHORT_DESCRIPTION_MAX);
   const budget = JSON.stringify(declare(block)).length + short.length - 40;
   const f = fitChallenge(block, text, declare, budget);
-  ok(f.trimmed.includes("description-lead") && !isExamplePointer(f.slim.output.example) && f.description.endsWith(ATTRIBUTIONS.openstreetmap) && f.bytes <= budget,
+  ok(f.trimmed.includes("description-lead") && !isExamplePointer(f.slim.output.example) && f.description.endsWith(ATTRIBUTIONS.coingecko) && f.bytes <= budget,
     `budget: an attributed listing shortens its lead, keeps the sentence and its sample output (${f.trimmed.join()}; ${f.description.length} chars)`);
   const tight = fitChallenge(block, text, declare, JSON.stringify(declare(block)).length + 60);
-  ok(isExamplePointer(tight.slim.output.example) && tight.description.endsWith(ATTRIBUTIONS.openstreetmap), "budget: with no room for a lead the sample output gives way and the sentence stays");
+  ok(isExamplePointer(tight.slim.output.example) && tight.description.endsWith(ATTRIBUTIONS.coingecko), "budget: with no room for a lead the sample output gives way and the sentence stays");
 }
 {
   const { bazaarTagsFor, BAZAAR_ICON_PATH } = await import("../src/payments.js");

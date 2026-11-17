@@ -1,6 +1,6 @@
 // scripts/test-price-feed-kit.js
 // Offline tests for src/tools/price-feed-kit.js. Upstreams are keyless public
-// APIs (Pyth Hermes, CoinGecko public, DeFiLlama) — live calls are opt-in via
+// APIs (CoinGecko public) — live calls are opt-in via
 // PRICE_FEED_LIVE_TEST=1 to keep CI off the public quotas.
 
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
@@ -11,7 +11,7 @@ let fail = 0, pass = 0, liveOk = 0, liveErr = 0;
 const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail++; console.error(`ASSERT FAIL - ${m}`); } };
 
 // Catalog envelope
-ok(PRICE_FEED_TOOLS.length === 2, `2 tools exported, price-pyth retired 2026-08-26 (got ${PRICE_FEED_TOOLS.length})`);
+ok(PRICE_FEED_TOOLS.length === 1, `1 tool exported (price-pyth retired 2026-08-26, defi-tvl 2026-11-16; got ${PRICE_FEED_TOOLS.length})`);
 for (const t of PRICE_FEED_TOOLS) {
   ok(t.route?.startsWith("POST /api/"), `${t.slug}: POST /api/ route`);
   ok(t.category === "crypto", `${t.slug}: category=crypto`);
@@ -57,11 +57,6 @@ await throws(h("price-coingecko")({ ids: " , " }), 400, "price-coingecko: blank 
   } finally { globalThis.fetch = realFetch; }
 }
 
-// defi-tvl
-await throws(h("defi-tvl")({}), 400, "defi-tvl: missing protocol");
-await throws(h("defi-tvl")({ protocol: "" }), 400, "defi-tvl: empty protocol");
-await throws(h("defi-tvl")({ protocol: "Bad Slug!" }), 400, "defi-tvl: invalid slug chars");
-
 // Live opt-in
 async function live(slug, args, check, label) {
   try {
@@ -78,9 +73,6 @@ if (process.env.PRICE_FEED_LIVE_TEST === "1") {
   await live("price-coingecko", { ids: ["bitcoin", "ethereum"] },
     (r) => r.count === 2 && r.prices.every((p) => p.id === "bitcoin" || p.id === "ethereum"),
     "price-coingecko bitcoin+ethereum");
-  await live("defi-tvl", { protocol: "aave" },
-    (r) => r.protocol === "aave" && typeof r.tvlUsd === "number" && r.tvlUsd > 0,
-    "defi-tvl aave");
 }
 
 console.log(`\n${pass} passed, ${fail} failed, live: ${liveOk} ok / ${liveErr} err`);

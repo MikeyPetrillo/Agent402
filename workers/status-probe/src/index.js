@@ -581,8 +581,8 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     },
   },
   {
-    // EVM settlements that failed naming a transaction or an authorization
-    // (src/late-settlements.js): the reconcile pass reads each on chain and
+    // Settlements that failed naming a transaction or an authorization, on an
+    // EVM chain, Solana or Algorand (src/late-settlements.js): the reconcile pass reads each on chain and
     // books a landed, unserved one as an owed debt (refundsOwed covers it).
     // unresolved (kept for a human, or outside the book) and full page; ok
     // and near_capacity clear (an operator resolution can leave the book near
@@ -595,7 +595,7 @@ The server log carries a [tweet-queue] line for every outcome (ids and status co
     },
     body: ({ gateway: b }) => {
       const w = b.lateSettlements?.status === "full" ? "full" : "unresolved";
-      return `/api/gateway-status reports lateSettlements.status=${w}. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity.`;
+      return `/api/gateway-status reports lateSettlements.status=${w}. unresolved: a failed settlement that named a transaction or an authorization, on an EVM chain, Solana or Algorand, could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity.`;
     },
   },
   {
@@ -946,12 +946,6 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
       "`/api/gateway-status.upstreamHardCaps` reports **capped**: at least one pay-as-you-go upstream reached its hard daily ceiling, and the tools behind it answer 503 (not charged on x402) until 00:00 UTC. The per-upstream rows are on the operator view. Find what drove the volume, then fix the cause or raise that ceiling's variable.",
   },
   {
-    title: "Exa prepaid allowance LOW",
-    verdict: ({ gateway: b }) => wordVerdict(b.exaAllowance?.status, ["low"], ["ok", "unconfigured"]),
-    body: () =>
-      "`/api/gateway-status.exaAllowance` reports **low**: cumulative spend on that upstream has passed the configured share of its funded total. Top up in the upstream's console and raise `EXA_CREDITS_USD` on Railway to the new funded total. Note the counter is in memory and resets on deploy, so real remaining credit is at or below what is reported.",
-  },
-  {
     title: "X data daily spend OVER its ceiling",
     // over: past the alarm ceiling and still serving. capped: the hard
     // ceiling refuses, or refused a call within the last hour. off is the
@@ -959,14 +953,6 @@ Read /__operator/backup.json (lastError, lastHeld, lastHeldState) and the [backu
     verdict: ({ gateway: b }) => wordVerdict(b.xDataSpend?.status, ["over", "capped"], ["ok", "off"]),
     body: () =>
       "`/api/gateway-status.xDataSpend` reports **over** or **capped**. On **over** the day's booked spend on the X data tools passed `X_DATA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `X_DATA_DAILY_HARD_MAX_USD` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Read the day's X calls on the operator view, check the prepaid balance in the upstream's console, then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `X_DATA_DAILY_MAX_USD`, otherwise the next UTC day.",
-  },
-  {
-    title: "Exa daily spend OVER its ceiling",
-    // Same words as xDataSpend (src/daily-ceilings.js); apart from the
-    // prepaid allowance alarm above, which reads exaAllowance.
-    verdict: ({ gateway: b }) => wordVerdict(b.exaSpend?.status, ["over", "capped"], ["ok", "off"]),
-    body: () =>
-      "`/api/gateway-status.exaSpend` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed `EXA_DAILY_MAX_USD` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past `EXA_DAILY_HARD_MAX_USD` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; `exaAllowance` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under `EXA_DAILY_MAX_USD`, otherwise the next UTC day.",
   },
   {
     title: "Router spend per minute OVER its ceiling",

@@ -12,7 +12,6 @@
     "test-databento-fallback.js": 1,
     "test-decide-cost.js": 1,
     "test-decide-instrumentation.js": 1,
-    "test-defi-kit.js": 4,
     "test-direct-upstream-cost-guard.js": 3,
     "test-direct-upstream.js": 3,
     "test-email-guard.js": 1,

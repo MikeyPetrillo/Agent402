@@ -15,9 +15,9 @@ const ok = (c, m) => { if (c) { pass++; console.log(`ok - ${m}`); } else { fail+
 // ----------------------------------------------------------------------------
 // Catalog envelope
 // ----------------------------------------------------------------------------
-ok(MEV_AND_L2_TOOLS.length === 5, `5 tools exported (got ${MEV_AND_L2_TOOLS.length})`);
+ok(MEV_AND_L2_TOOLS.length === 4, `4 tools exported (got ${MEV_AND_L2_TOOLS.length})`);
 
-const expectedSlugs = ["mev-recent-blocks", "mev-builder-share", "mev-block-payment", "l2-tvl", "l2-gas-comparison"];
+const expectedSlugs = ["mev-recent-blocks", "mev-builder-share", "mev-block-payment", "l2-gas-comparison"];
 for (const slug of expectedSlugs) {
   ok(!!MEV_AND_L2_TOOLS.find((t) => t.slug === slug), `slug present: ${slug}`);
 }
@@ -109,10 +109,6 @@ if (process.env.MEV_LIVE_TEST === "1") {
     const share = await h("mev-builder-share")({ window: 50 });
     ok(typeof share.uniqueBuilders === "number" && share.uniqueBuilders > 0, `live mev-builder-share: uniqueBuilders=${share.uniqueBuilders}`);
     ok(Array.isArray(share.builders), "live mev-builder-share: builders array");
-
-    const tvl = await h("l2-tvl")({ limit: 5 });
-    ok(typeof tvl.count === "number" && tvl.count > 0, `live l2-tvl: count=${tvl.count}`);
-    ok(Array.isArray(tvl.chains), "live l2-tvl: chains array");
 
     if (process.env.ALCHEMY_API_KEY) {
       const gas = await h("l2-gas-comparison")({ networks: ["base", "arbitrum"] });

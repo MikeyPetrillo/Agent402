@@ -67,7 +67,8 @@ const CALL_SITE = {
   OpenAI: "api.openai.com",
   OpenRouter: "openrouter.ai/api",
   "Brave Search API": "api.search.brave.com",
-  Exa: "api.exa.ai",
+  // No direct call: report products and /v1 web searches reach it through the model aggregator's web search, by this engine name.
+  Exa: 'engine: "exa"',
   "X API": "api.x.com",
   E2B: "api.e2b.dev",
   TypeSafe: "api.typesafe.ai",
@@ -95,6 +96,17 @@ for (const s of subs) {
     if (site) ok(srcAll.includes(site), `"${part}" is called from src/ (${site})`);
     ok(privacy.includes(part), `"${part}" is named in the privacy policy`);
   }
+}
+// The search engine the report products and /v1 web searches reach through the
+// model aggregator stays named on both pages for as long as any call site names
+// it, whether or not a tool of its own is in the catalog.
+{
+  const reportSearchSites = srcFiles.filter((f) => !/\/(privacy|trust-page)\.js$/.test(f) && readFileSync(f, "utf8").includes(CALL_SITE.Exa)).length;
+  const row = subs.find((s) => s.providers.includes("Exa"));
+  ok(reportSearchSites >= 2, `control: report and model web searches name their search engine in src/ (${reportSearchSites} files)`);
+  ok(Boolean(row) && row.providers.includes("OpenRouter") && /report/i.test(row.gets) && /search quer/i.test(row.gets), "/trust lists the report search engine, reached through the model aggregator, with what it gets");
+  ok(/report products[^<]{0,200}search quer[^<]{0,80}Exa[^<]{0,40}OpenRouter/i.test(privacy.replace(/\s+/g, " ")), "/privacy says report and model web searches send their search queries to it through the model aggregator");
+  ok(!/exa-search|exa-answer|exa-contents/.test(privacy) && !/exa-search|exa-answer|exa-contents/.test(trust), "neither page names a retired search route");
 }
 ok(subs.some((s) => s.name === "Cloudflare") && /Cloudflare[\s\S]{0,200}IP address/.test(trust), "the network edge in front of the site is a row, with what it sees");
 {

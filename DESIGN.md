@@ -4,7 +4,7 @@ version: 1
 source: src/ledger-chrome.js   # LEDGER_CSS: the only place a color or size is defined
 guard: scripts/test-design-tokens.js
 themes:
-  default: light               # bare :root; dark is :root[data-theme="dark"], set by /js/site-chrome.js
+  default: light               # bare :root; dark is :root[data-theme="dark"], set by /js/theme-init.js from the stored choice, else the OS preference
 colors:
   # token: { light, dark }  (both themes define every token; test-theme.js enforces parity)
   page:

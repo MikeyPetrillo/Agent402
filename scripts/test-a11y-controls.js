@@ -245,6 +245,45 @@ try {
     ok(checkoutCalls === 0, `[${theme}] no checkout request was sent (${checkoutCalls})`);
     await ctx.close();
   }
+
+  // Header dropdowns: each trigger's aria-expanded follows whether its panel
+  // shows (hover, keyboard focus), and Escape closes an open panel with focus
+  // kept on the trigger.
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/pricing`, { waitUntil: "load" });
+    await page.waitForTimeout(0);
+    const state = () => page.evaluate(() => { const t = document.querySelector('.mlnav-g a[aria-controls="mlnav-dd-tools"]'); const dd = document.getElementById("mlnav-dd-tools"); return { expanded: t && t.getAttribute("aria-expanded"), shown: !!dd && getComputedStyle(dd).display !== "none", focused: document.activeElement === t }; });
+    const settle = () => page.waitForTimeout(60);
+    const s0 = await state();
+    ok(s0.expanded === "false" && !s0.shown, `dropdown: a closed panel reads aria-expanded="false" (${JSON.stringify(s0)})`);
+    await page.hover('.mlnav-g a[aria-controls="mlnav-dd-tools"]'); await settle();
+    const s1 = await state();
+    await page.mouse.move(5, 800); await settle();
+    const s2 = await state();
+    ok(s1.expanded === "true" && s1.shown && s2.expanded === "false" && !s2.shown, `dropdown: hover opens it and reads "true"; leaving reads "false" (${JSON.stringify([s1, s2])})`);
+    await page.focus('.mlnav-g a[aria-controls="mlnav-dd-tools"]'); await settle();
+    const s3 = await state();
+    await page.keyboard.press("Escape"); await settle();
+    const s4 = await state();
+    ok(s3.expanded === "true" && s3.shown && s4.expanded === "false" && !s4.shown && s4.focused, `dropdown: keyboard focus opens it; Escape closes it and keeps focus on the trigger (${JSON.stringify([s3, s4])})`);
+    await page.keyboard.press("Tab"); await page.keyboard.press("Shift+Tab"); await settle();
+    const s5 = await state();
+    ok(s5.expanded === "true" && s5.shown, `dropdown: focus leaving and coming back opens it again (${JSON.stringify(s5)})`);
+    await ctx.close();
+  }
+
+  // The OS dark preference sets the theme when no choice is stored; a stored choice wins.
+  for (const [stored, scheme, want] of [[null, "dark", "dark"], [null, "light", null], ["light", "dark", null], ["dark", "light", "dark"]]) {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: scheme });
+    if (stored) await ctx.addInitScript((t) => { try { localStorage.setItem("a402-theme", t); } catch {} }, stored);
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/pricing`, { waitUntil: "load" });
+    const got = await page.evaluate(() => ({ theme: document.documentElement.getAttribute("data-theme"), paper: getComputedStyle(document.body).backgroundColor }));
+    ok(got.theme === want, `theme: stored ${stored || "nothing"}, OS ${scheme} -> ${want || "light"} (${JSON.stringify(got)})`);
+    await ctx.close();
+  }
 } finally {
   await browser.close();
 }

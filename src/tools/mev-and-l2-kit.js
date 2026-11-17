@@ -15,10 +15,9 @@
 //   • MEV-Boost relay chain (keyless): Flashbots → Ultrasound → Agnostic — all
 //     major relays serve the SAME data API (/relay/v1/data/bidtraces/*), so a
 //     per-IP limit or outage on one relay walks to the next (see MEV_RELAYS)
-//   • DeFiLlama chains (keyless):    https://api.llama.fi/v2/chains
 //   • Alchemy multichain RPC (key):  eth_gasPrice + eth_blockNumber across L2s
 //
-// All 5 tools are wallet-only — every handler hits an external API and shares
+// All 4 tools are wallet-only — every handler hits an external API and shares
 // a per-IP rate limit (Flashbots relay) or our compute-unit quota (Alchemy).
 
 import { redactSecrets, upstreamErrorText } from "./redact.js";
@@ -28,12 +27,10 @@ import { upstreamFetch, bodyUnderDeadline, underBudgetAll, isUpstreamFailure, bu
 // DEADLINES (src/upstream-deadline.js): each read has its own cap, composed
 // with the handler budget, so the relay walk (three relays in turn) ends
 // inside it instead of running one cap per relay; a read that outlives its
-// cap is a 503 naming the upstream and the step, never a 504. The relay and
-// chains reads answered in 0.04 to 0.14 s when measured (2026-10-14).
+// cap is a 503 naming the upstream and the step, never a 504. The relay
+// reads answered in 0.04 to 0.14 s when measured (2026-10-14).
 const RELAY_READ_MS = 12_000;
-const LLAMA_READ_MS = 12_000;
 const ALCHEMY_READ_MS = 12_000;
-const LLAMA = "https://api.llama.fi/v2/chains";
 
 // All major MEV-Boost relays implement the identical data API. Ordered by
 // preference; verified live 2026-07-21 that each answers
@@ -47,16 +44,16 @@ const MEV_RELAYS = [
 
 // Same chain map as chain-kit/dex-kit so an agent can pivot freely between them.
 const NETWORKS = {
-  ethereum: { subdomain: "eth-mainnet", chainId: 1,     llamaName: "Ethereum" },
-  base:     { subdomain: "base-mainnet", chainId: 8453, llamaName: "Base" },
-  polygon:  { subdomain: "polygon-mainnet", chainId: 137, llamaName: "Polygon" },
-  arbitrum: { subdomain: "arb-mainnet", chainId: 42161, llamaName: "Arbitrum" },
-  optimism: { subdomain: "opt-mainnet", chainId: 10,    llamaName: "Optimism" },
+  ethereum: { subdomain: "eth-mainnet", chainId: 1 },
+  base:     { subdomain: "base-mainnet", chainId: 8453 },
+  polygon:  { subdomain: "polygon-mainnet", chainId: 137 },
+  arbitrum: { subdomain: "arb-mainnet", chainId: 42161 },
+  optimism: { subdomain: "opt-mainnet", chainId: 10 },
 };
 
 // L2Beat-style classification — we don't query L2Beat directly (their API is
 // historically unstable for third-party callers), instead we tag each chain
-// from the NETWORKS map. Used by l2-tvl filter.
+// from the NETWORKS map. Used by l2-gas-comparison's isL2 field.
 const IS_L2 = new Set(["base", "polygon", "arbitrum", "optimism"]);
 
 function bad(message, statusCode = 400) {
@@ -282,49 +279,7 @@ async function mevBlockPayment({ slot, blockNumber } = {}) {
 }
 
 // ----------------------------------------------------------------------------
-// 4. l2-tvl — L2 TVL ranking via DeFiLlama
-// ----------------------------------------------------------------------------
-async function l2Tvl({ limit } = {}) {
-  const lim = Math.max(1, Math.min(50, Number.parseInt(limit, 10) || 15));
-  const raw = await fetchJson(LLAMA, "DeFiLlama", undefined, "chains", LLAMA_READ_MS);
-  const arr = Array.isArray(raw) ? raw : [];
-  // DeFiLlama tags chains with categories. The reliable signal for "is L2"
-  // is when chain.parent.chain === "Ethereum" AND chain.parent.types
-  // includes "L2"/"Rollup". As a safety net we also flag well-known L2s
-  // by name (e.g. Base, Arbitrum, Optimism, zkSync Era, Linea, Scroll, Mantle).
-  const KNOWN_L2 = new Set([
-    "Arbitrum", "Optimism", "Base", "zkSync Era", "Linea", "Scroll", "Mantle",
-    "Polygon zkEVM", "Starknet", "Blast", "Mode", "Manta", "Metis",
-    "Polygon", "Immutable zkEVM", "Taiko", "World Chain",
-  ]);
-  const filtered = arr.filter((c) => {
-    const parentTypes = c.chainAssets?.parent?.types || c.parent?.types || [];
-    const isParentL2 = Array.isArray(parentTypes) && parentTypes.some((t) => /l2|rollup/i.test(String(t)));
-    return isParentL2 || KNOWN_L2.has(c.name);
-  });
-  const sorted = filtered
-    .map((c) => ({
-      name: c.name,
-      tvlUsd: typeof c.tvl === "number" ? c.tvl : null,
-      tokenSymbol: c.tokenSymbol ?? null,
-      gecko: c.gecko_id ?? null,
-      cmcId: c.cmcId ?? null,
-    }))
-    .filter((c) => c.tvlUsd != null)
-    .sort((a, b) => b.tvlUsd - a.tvlUsd)
-    .slice(0, lim);
-  const totalTvl = sorted.reduce((acc, c) => acc + c.tvlUsd, 0);
-  return {
-    count: sorted.length,
-    totalTvlUsd: Math.round(totalTvl),
-    chains: sorted,
-    source: "defillama",
-    note: "TVL is the cross-DeFi snapshot from DeFiLlama; L2 classification combines parent-chain hint + a curated list of well-known L2s.",
-  };
-}
-
-// ----------------------------------------------------------------------------
-// 5. l2-gas-comparison — current gas snapshot across L1 + supported L2s
+// 4. l2-gas-comparison — current gas snapshot across L1 + supported L2s
 // ----------------------------------------------------------------------------
 async function l2GasComparison({ networks } = {}) {
   const named = Array.isArray(networks) && networks.length ? networks.map((n) => String(n).toLowerCase().trim()) : null;
@@ -501,60 +456,6 @@ export const MEV_AND_L2_TOOLS = [
       },
     },
     handler: mevBlockPayment,
-  },
-  {
-    route: "POST /api/l2-tvl",
-    name: "L2 TVL ranking",
-    slug: "l2-tvl",
-    category: "crypto",
-    price: "$0.002",
-    description:
-      "Top L2s by Total Value Locked (TVL) from an open DeFi analytics API. Returns each L2 with TVL in USD, native token symbol, and market-data coin ids. Classification combines the source's parent-chain hint with a curated list of well-known L2s (Arbitrum, Optimism, Base, zkSync Era, Linea, Scroll, Mantle, Polygon zkEVM, Starknet, Blast, Mode, Manta, Metis, Polygon, Taiko, Immutable zkEVM, World Chain).",
-    // Vocabulary the ASKERS use, not just ours. Measured against the live
-    // catalog: `l2beat` resolved to ZERO results while this tool shipped, and
-    // `rollup tvs` scraped a weak 22. L2Beat is the canonical rollup-data site
-    // and TVS (Total Value Secured) is its metric name, so an agent fluent in
-    // the domain reaches for words no tool record contained. Ranking cannot
-    // recover a word that appears nowhere, however good the scorer is.
-    // The spelled-out "layer 2" form is
-    // handled in find.js instead, NOT by a "layer" tag here: bare "layer" is an
-    // ordinary English word, and tagging it sent "osi model layer" and "layer
-    // of encryption" straight to this tool at high confidence. A zero-result
-    // miss traded for a confidently wrong answer is a worse bug, not a fix -
-    // the agent pays for that one.
-    //
-    // These are ROUTING terms, not a claim of equivalence: the source stays
-    // DeFiLlama TVL, stated in the description and in the payload's `source`,
-    // and TVS is a related-but-distinct measure. Returning the closest real
-    // answer with its provenance on it beats returning nothing.
-    // "rollups" is listed beside "rollup" deliberately: tag matching is exact
-    // per token, so the plural reached NOTHING here and "total value locked on
-    // rollups" resolved to crypto-global at score 2 (pre-existing, found by the
-    // test below). The description now spells TVL out for the same reason.
-    tags: ["l2", "tvl", "rollup", "rollups", "ranking", "l2beat", "tvs"],
-    discovery: {
-      bodyType: "json",
-      input: { limit: 10 },
-      inputSchema: {
-        type: "object",
-        properties: {
-          limit: { type: "number", description: "Number of L2s to return (1-50, default 15)." },
-        },
-      },
-      output: {
-        example: {
-          count: 2,
-          totalTvlUsd: 5500000000,
-          chains: [
-            { name: "Arbitrum", tvlUsd: 3000000000, tokenSymbol: "ARB", gecko: "arbitrum", cmcId: 11841 },
-            { name: "Base", tvlUsd: 2500000000, tokenSymbol: "ETH", gecko: "base", cmcId: null },
-          ],
-          source: "defillama",
-          note: "TVL is the cross-DeFi snapshot from DeFiLlama; L2 classification combines parent-chain hint + a curated list of well-known L2s.",
-        },
-      },
-    },
-    handler: l2Tvl,
   },
   {
     route: "POST /api/l2-gas-comparison",

@@ -514,28 +514,6 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "upstreamHardCaps is ok; closing." || true
           fi
 
-      - name: Exa prepaid allowance low
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Exa publishes NO balance endpoint (42 endpoints in their public
-          # OpenAPI, none for credits), so this alarms on OUR OWN cumulative
-          # spend against EXA_CREDITS_USD. The count is in memory and resets on
-          # deploy, so it under-reports - which is why the threshold is a
-          # fraction remaining and not "near zero".
-          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.exaAllowance.status // "unknown"' 2>/dev/null || echo unknown)
-          TITLE="Exa prepaid allowance LOW"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
-          if [ "$STATUS" = "low" ]; then
-            if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.exaAllowance\` reports **low**: cumulative spend on that upstream has passed the configured share of its funded total. Top up in the upstream's console and raise \`EXA_CREDITS_USD\` on Railway to the new funded total. Note the counter is in memory and resets on deploy, so real remaining credit is at or below what is reported."
-            fi
-          elif [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaAllowance is ${STATUS}; closing." || true
-          fi
-
       # X data daily spend (src/tools/x-data-kit.js): over = past the alarm
       # ceiling and still serving; capped = the hard ceiling refuses, or
       # refused a call within the last hour. off is the switch and never pages.
@@ -1053,27 +1031,6 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "mppReconcile.run is ${STATUS}; closing." || true
           fi
 
-      # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
-      # Apart from the prepaid allowance step above, which reads exaAllowance.
-      - name: Exa daily spend over its ceiling
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.exaSpend.status // "unknown"' 2>/dev/null || echo unknown)
-          echo "exa spend: $STATUS"
-          TITLE="Exa daily spend OVER its ceiling"
-          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
-          if [ "$STATUS" = "over" ] || [ "$STATUS" = "capped" ]; then
-            if [ -z "$EXISTING" ]; then
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-                --body "\`/api/gateway-status.exaSpend\` reports **over** or **capped**. On **over** the day's booked spend on the Exa tools passed \`EXA_DAILY_MAX_USD\` and every call is still served (each one is paid for by its buyer). On **capped** a call that would take the day past \`EXA_DAILY_HARD_MAX_USD\` was refused 503 (not charged on x402) within the last hour, or the day's spend reached that ceiling; a call that fits under it is still served, and the day's count starts again at 00:00 UTC. Check the prepaid balance in the upstream's console (a spent balance stops the tools whatever the ceilings say; \`exaAllowance\` is the word for that), then raise the ceilings on Railway or leave them. Closes when the word reads ok or off: an hour after the last refusal when the day's spend is under \`EXA_DAILY_MAX_USD\`, otherwise the next UTC day."
-            fi
-          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
-            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "exaSpend is ${STATUS}; closing." || true
-          fi
-
       # The router's per-minute holds for outside sellers
       # (src/router-spend-window.js): over = a minute passed the alarm ceiling
       # and every purchase was made; capped = a purchase was refused at the
@@ -1492,8 +1449,8 @@ jobs:
               ;;
           esac
 
-      # EVM settlements that failed naming a transaction or an authorization
-      # (src/late-settlements.js): one word on /api/gateway-status. A landed,
+      # Settlements that failed naming a transaction or an authorization, on an
+      # EVM chain, Solana or Algorand (src/late-settlements.js): one word on /api/gateway-status. A landed,
       # unserved one becomes an owed debt (refundsOwed covers it).
       # unresolved / full page; ok and near_capacity close; unknown does neither.
       - name: Late settlements check (alarm when one needs an operator)
@@ -1507,7 +1464,7 @@ jobs:
           case "$WORD" in
             unresolved|full)
               if [ -z "$OPEN" ]; then
-                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports lateSettlements.status=$WORD. unresolved: an EVM settlement that failed naming a transaction or an authorization could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity." >/dev/null 2>&1 || echo "issue create failed"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "/api/gateway-status reports lateSettlements.status=$WORD. unresolved: a failed settlement that named a transaction or an authorization, on an EVM chain, Solana or Algorand, could not be proven landed or absent within a day (or the reads kept failing) and is kept, never dropped; or a booking sits in the journal outside the book; or a booking could not be recorded anywhere in the last day. Unresolved entries are read on chain again every few hours and close themselves once the chain answers. Read them on /__operator/refunds.json (unconfirmedSettlements) and look each transaction up on the chain's explorer, then clear each one with POST /__operator/late-settlements: action resolve, the entry key, an outcome (booked_owed writes the refund debt, paid needs the refund transaction, dismissed when nothing moved to us) and a note saying what was checked. An unrecorded booking (the server log names it) is cleared with action acknowledge_unrecorded and a note. full: the book holds its bound of open entries, and new bookings wait in the journal until there is room (the server log names each). Auto-closes when the word is ok or near_capacity." >/dev/null 2>&1 || echo "issue create failed"
               else
                 gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still $WORD at $(date -u +%FT%TZ)." >/dev/null 2>&1 || true
               fi
@@ -2048,7 +2005,7 @@ jobs:
           esac
 
       # Private upstream-cost table (src/upstream-costs.js). Without it the
-      # metered tier, embeddings, images, Exa and X reads refuse and the flat
+      # metered tier, embeddings, images and X reads refuse and the flat
       # tiers price at their caps. "partial" means it loaded without a key some
       # path reads (that path refuses) or with a model row that did not parse.
       # One word only, never a value. Two readings 30 s apart, because a

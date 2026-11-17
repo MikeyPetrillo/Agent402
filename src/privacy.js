@@ -137,7 +137,7 @@ so every claim below is verifiable in code.</p>
   <ul>
     <li>the <code>/api/memory</code> tools, whose purpose <i>is</i> storage (see below);</li>
     <li>some tools that read public data cache their answer for between one minute and one day, keyed
-    by the input that produced it (a domain, an address to geocode, a URL), so a repeat call is faster;
+    by the input that produced it (a domain, a place name, a URL), so a repeat call is faster;
     identical repeat calls to the AI gateway, identical retries carrying an
     <code>Idempotency-Key</code> (or the x402 payment-identifier), and the JSON answer of a call paid
     with a signed EVM x402 payment (keyed by that payment's nonce, so a re-sent copy is answered without
@@ -337,8 +337,8 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   contact those sites from our server with the URL you provided. Tools that read a third-party data
   source send it what the lookup needs (a ticker, a token or wallet address, a domain, a query).</li>
   <li><code>/api/search</code> and the other web search tools forward the query to the Brave Search API to produce results.
-  <code>/api/exa-search</code>, <code>/api/exa-answer</code> and <code>/api/exa-contents</code> send it to Exa, whose model
-  writes the <code>/api/exa-answer</code> response. The <code>/api/x-*</code> tools send the handle, post id or query to the X API.</li>
+  The <code>/api/x-*</code> tools send the handle, post id or query to the X API.
+  Report products and <code>/v1</code> calls that search the web send their search queries to Exa, through OpenRouter's web search.</li>
   <li>The <code>/api/code-run</code> tools run the code you send in a sandbox operated by E2B.</li>
   <li><code>/api/route</code>, <code>/api/route/execute</code> and <code>/api/decide</code> may send the
   task text you give them to a judgment model operated by TypeSafe to choose among candidate tools;
