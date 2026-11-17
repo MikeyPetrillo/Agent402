@@ -13,7 +13,9 @@
 //     sent past it; the redirecting origin keeps its listing and is read
 //     again the next day;
 //   * fifty origins redirecting to one host, listed or not, land no more than
-//     one allowance there in a day.
+//     one allowance there in a day (whole cycles over three hundred such
+//     origins: test-crawl-landing-turns.js);
+//   * a succession marker that redirects off its origin is not followed.
 // Offline: no network, no server.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import "./lib/guard-dns-offline.js"; // the guard's name lookups answer here, not from the machine's resolver (see the file)
@@ -281,6 +283,40 @@ await fiftyOnto(U, "stray", { listed: false });
       `the next day it is, counted on the landed allowance (${await sellerLoad.landedToday(T)})`);
     await idx.__crawlSellerForTest(Q);
     ok(entry(Q)?.tools?.length === ROUTES.length, "and the origin whose rules could not be read is read and listed");
+
+    // A succession marker is proof only when its origin serves it: a marker
+    // read that is redirected to another origin is not followed there.
+    const OLD = "https://old-home.example", NEW = "https://new-home.example", OFF = "https://marker-host.example";
+    const marker = idx.SUCCESSION_PATH;
+    const served = new Map([[`${NEW}${marker}`, JSON.stringify({ succeeds: OLD })], [`${OLD}${marker}`, JSON.stringify({ succeededBy: NEW })]]);
+    const moved = new Set();
+    const under = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      const u = String(url);
+      if (new URL(u).pathname !== marker) return under(url, init);
+      wire.push({ url: u, redirect: init?.redirect });
+      const respond = (body, status, headers) => { const r = new Response(body, { status, headers }); Object.defineProperty(r, "url", { value: u }); return r; };
+      const respondFrom = (at) => { const r = new Response(JSON.stringify({ succeededBy: NEW }), { status: 200, headers: { "content-type": "application/json" } }); Object.defineProperty(r, "url", { value: at }); return r; };
+      if (hostOf(u) === OFF) return respondFrom(u);
+      if (moved.has(hostOf(u))) {
+        // As fetch does: a request sent with redirects followed goes on to
+        // the other origin by itself; one sent "manual" gets the 302 back.
+        if (init?.redirect === "manual") return respond(null, 302, { location: `${OFF}${marker}` });
+        wire.push({ url: `${OFF}${marker}`, redirect: init?.redirect });
+        return respondFrom(`${OFF}${marker}`);
+      }
+      const d = served.get(u);
+      return d ? respond(d, 200, { "content-type": "application/json" }) : respond("no", 404, {});
+    };
+    const m0 = wire.length;
+    const proved = await idx.verifySuccessionMarkers(NEW, OLD);
+    ok(proved.ok === true && wire.slice(m0).length === 2, `control: markers each origin serves itself are read through the guarded fetch and prove the succession (${wire.slice(m0).length} requests)`);
+    moved.add(OLD);
+    const m1 = wire.length;
+    const refused = await idx.verifySuccessionMarkers(NEW, OLD);
+    const after = wire.slice(m1);
+    ok(refused.ok === false && after.some((w) => w.url === `${OLD}${marker}`), "a marker the old origin redirects to another origin proves nothing");
+    ok(!after.some((w) => hostOf(w.url) === OFF), `and the redirect is not followed: no request reaches the other origin (${after.filter((w) => hostOf(w.url) === OFF).length})`);
   } finally { globalThis.fetch = realFetch; }
 }
 
