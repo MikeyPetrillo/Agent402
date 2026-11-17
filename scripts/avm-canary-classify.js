@@ -4,6 +4,7 @@
 // scripts/test-algorand-canary-classify.js.
 import { railsReportSubcentPause, sponsorshipRowMonth } from "../src/avm-sponsorship.js";
 import { REJECTION_REASONS } from "../src/payment-reject.js";
+import algosdk from "algosdk";
 
 /**
  * What a SUB-CENT route's missing Algorand accept means (the paid canary's
@@ -96,7 +97,7 @@ export const isGateRefusal = (status, body) => GATE_REASONS.has(refusalReasonOf(
 export const isBuyerUnfunded = (status, body) => FUNDING_REASONS.has(refusalReasonOf(status, body));
 
 // Terminal shape of one paid attempt:
-// "ok" | "empty" | "breaker" | "unfunded" | "fast-402" | "throttle" | "slow-402" | "other".
+// "ok" | "empty" | "breaker" | "unfunded" | "fast-402" | "throttle" | "slow-402" | "no-answer" | "other".
 //
 // `breaker` and `unfunded` are tested BEFORE the 402 shapes and before
 // isThrottle, because they are the outcomes that say nothing about the tool
@@ -112,19 +113,117 @@ export const outcomeOf = (a) =>
       : a.status === 402 && a.elapsedMs < FAST_REJECT_MS ? "fast-402"
         : isThrottle(a.status, a.body) ? "throttle"
           : a.status === 402 ? "slow-402"
-            : "other";
+            : a.noAnswer ? "no-answer"
+              : "other";
 
 // A paid request that THREW (no HTTP answer: a dropped connection, a reset, the
-// request's own deadline) shaped as an attempt, so it takes the same one fresh
-// retry and the same upstream-versus-tool split as an answered failure. Status
-// 0 is "no answer"; the body names the error and its cause code, which is what
-// isUpstreamOutage reads. A throw recorded on first sight, without the retry,
-// failed the weekly gate on one dropped connection.
-export const transportAttempt = (e, elapsedMs = 0) => {
+// request's own deadline) shaped as an attempt. Status 0 is "no answer" and
+// outcomeOf names it `no-answer`: the one outcome where the payment's fate is
+// unknown, because the server settles a connection that closes during its
+// settle call. `kind` is "timeout" for the request's own deadline and
+// "connection" for everything else; `txid` is the signed payment's id, which
+// is what the sweep looks up on chain before it signs again.
+export const transportAttempt = (e, elapsedMs = 0, txid = null) => {
   const cause = e?.cause?.code || e?.cause?.message || "";
   const text = `${e?.name && e.name !== "Error" ? `${e.name}: ` : ""}${e?.message || String(e)}${cause ? ` (${cause})` : ""}`;
-  return { status: 0, body: `no HTTP answer: ${text}`.slice(0, 300), tx: null, elapsedMs, retryAfterMs: null };
+  const kind = e?.name === "TimeoutError" || e?.name === "AbortError" || /aborted due to timeout/i.test(String(e?.message || "")) ? "timeout" : "connection";
+  return { status: 0, noAnswer: true, kind, txid, body: `no HTTP answer: ${text}`.slice(0, 300), tx: null, elapsedMs, retryAfterMs: null };
 };
+
+/** The id of the payment transaction inside a signed AVM payment payload
+ *  (`payload.paymentGroup[payload.paymentIndex]`, base64 msgpack), the id the
+ *  chain files it under whether or not it rides in a group. Null when the
+ *  payload cannot be read: the caller then cannot prove anything about it. */
+export function avmPaymentTxid(payload) {
+  try {
+    const inner = payload?.payload || payload;
+    const group = inner?.paymentGroup;
+    if (!Array.isArray(group) || !group.length) return null;
+    const idx = Number.isInteger(inner.paymentIndex) ? inner.paymentIndex : 0;
+    if (idx < 0 || idx >= group.length || typeof group[idx] !== "string") return null;
+    const raw = new Uint8Array(Buffer.from(group[idx], "base64"));
+    let txn;
+    try { txn = algosdk.decodeSignedTransaction(raw).txn; } catch { txn = algosdk.decodeUnsignedTransaction(raw); }
+    const id = txn?.txID();
+    return typeof id === "string" && /^[A-Z2-7]{52}$/.test(id) ? id : null;
+  } catch { return null; }
+}
+
+/**
+ * Where a signed payment stands on chain, read from algod and the indexers:
+ *   "landed"      a node or an indexer holds it with a confirmed round;
+ *   "pending"     algod holds it in its pool, unconfirmed and not refused;
+ *   "absent"      algod answered and does not hold it (404, or a pool error),
+ *                 AND every indexer answered 404;
+ *   "unreadable"  anything else: a read that failed proves nothing.
+ * Absence is a reading at one moment, not a proof for later: a server still
+ * inside its settle call can broadcast after it. The sweep reads again at the
+ * end of the run (recheckVerdict).
+ */
+export async function readPaymentOnChain({ txid, algodUrl, indexers = [], fetchImpl = globalThis.fetch, timeoutMs = 15000 } = {}) {
+  if (typeof txid !== "string" || !/^[A-Z2-7]{52}$/.test(txid) || !algodUrl || !indexers.length) return "unreadable";
+  const read = async (url) => {
+    try {
+      const res = await fetchImpl(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
+      if (res.status === 404) return { found: false };
+      if (!res.ok) return null;
+      const body = await res.json();
+      return body && typeof body === "object" ? { found: true, body } : null;
+    } catch { return null; }
+  };
+  const base = (u) => String(u).replace(/\/+$/, "");
+  const node = await read(`${base(algodUrl)}/v2/transactions/pending/${txid}`);
+  if (node?.found && Number(node.body["confirmed-round"]) > 0) return "landed";
+  let indexed = 0;
+  for (const idx of indexers) {
+    const r = await read(`${base(idx)}/v2/transactions/${txid}`);
+    if (r?.found && Number(r.body?.transaction?.["confirmed-round"]) > 0) return "landed";
+    if (r && !r.found) indexed++;
+  }
+  if (!node) return "unreadable";
+  if (node.found && !String(node.body["pool-error"] || "")) return "pending";
+  return indexed === indexers.length ? "absent" : "unreadable";
+}
+
+/** readPaymentOnChain, read again while the payment sits in the pool: a
+ *  pooled transaction confirms or drops within a few rounds. Still pooled
+ *  after `polls` reads stays "pending". */
+export async function settledChainReading({ read, sleep, polls = 4, pollMs = 4000 } = {}) {
+  let v = await read();
+  for (let i = 1; i < polls && v === "pending"; i++) { await sleep(pollMs); v = await read(); }
+  return v;
+}
+
+/**
+ * THE RULE for a paid request that got no HTTP answer. Never exit 0 after a
+ * possible charge:
+ *   - the payment landed                       -> "charged": the spend is
+ *     counted, nothing is signed again, the run fails (charged, no answer);
+ *   - the chain could not be read, the payment has no readable id, or it is
+ *     still pooled                             -> "unverified": nothing is
+ *     signed again, the run fails (a charge cannot be ruled out);
+ *   - the payment is absent and this was the first attempt -> "retry": one
+ *     fresh signature;
+ *   - the payment is absent and this was the tool's last attempt ->
+ *     "no-answer": the run fails whatever the error's kind.
+ * So the only no-answer a passing run can hold is a first attempt whose
+ * payment is absent, whose retry settled and answered, and whose payment is
+ * still absent at the end of the run (recheckVerdict).
+ */
+export function noAnswerVerdict({ chain, retried = false } = {}) {
+  if (chain === "landed") return "charged";
+  if (chain !== "absent") return "unverified";
+  return retried ? "no-answer" : "retry";
+}
+
+/** The end-of-run reading of a payment that was absent when its request got
+ *  no answer. `delivered`: the same transaction id later answered 200 (two
+ *  signatures in one round can share an id), so it is that buy's payment. */
+export function recheckVerdict({ chain, delivered = false } = {}) {
+  if (delivered) return "clear";
+  if (chain === "landed") return "charged";
+  return chain === "absent" ? "clear" : "unverified";
+}
 
 // ---------------------------------------------------------------------------
 // SUB-CENT BUDGET (2026-09-22). GoPlausible sponsors the Algorand fee on every
