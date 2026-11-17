@@ -12,7 +12,7 @@ import { childJson } from "./lib/child-json.js";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { originsDueThisCycle, operatorKey } from "../src/x402-index.js";
+import { originsDueThisCycle, operatorKey, landingTurns } from "../src/x402-index.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`ok - ${msg}`); } else { fail++; console.log(`FAIL - ${msg}`); } };
@@ -102,8 +102,19 @@ ok(/const crawled = skipped\.size \? due\.filter\(\(o\) => !skipped\.has\(o\)\) 
    "the outage guard scores the crawled set and the origins backed off unchanged, not the full seed list nor the origins held back");
 ok(/const due = originsDueThisCycle\(ordered, crawlCycle\)/.test(index),
    "runCrawl actually applies the per-operator filter");
-ok(/runPool\(due, CRAWL_CONCURRENCY, async \(origin\) => \{\n\s+const outcome = \{ ours: false \};\n\s+const skip = await crawlScheduled\(origin, outcome\);/.test(index) && /await crawlSeller\(origin, \{ scheduled: true/.test(index),
+// The pool runs the turns made from the filtered list (landingTurns groups the
+// origins behind one landing host; it adds and drops none), and each turn is
+// the scheduled crawl of its origin.
+ok(/const turns = landingTurns\(due, \{/.test(index) && /await runPool\(turns, CRAWL_CONCURRENCY, async \(turn\) => \{/.test(index)
+   && /const takeTurn = async \(origin\) => \{\n\s+const outcome = \{ ours: false \};\n\s+const skip = await crawlScheduled\(origin, outcome\);/.test(index) && /await crawlSeller\(origin, \{ scheduled: true/.test(index),
    "and crawls the FILTERED list, not the full one");
+{
+  const due = ordered.slice();
+  const turns = landingTurns(due, { landingOf: (o) => (/\d[05]\./.test(o) || o.length % 3 === 0 ? "https://landing-host.example" : null), readAt: (o) => o.length });
+  const flat = turns.flat();
+  ok(turns.some(Array.isArray) && flat.length === due.length && new Set(flat).size === due.length && flat.every((o) => due.includes(o)),
+     `and the turns hold every origin of the filtered list once (${flat.length} of ${due.length}, ${turns.filter(Array.isArray).length} shared turn)`);
+}
 
 // THE ROTATION INDEX SURVIVES A RESTART. The cycle number picks which slice of
 // a large operator's list is due, so an index that starts at 0 on every boot

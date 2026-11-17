@@ -105,7 +105,7 @@ t node scripts/test-operator-seed.js
 # "MPP self-registration probe hint (optional path/method: validated, probed, kept only on success, persisted with the seed - offline)"
 t node scripts/test-mpp-index-hint.js
 
-# @step 3: Offline suites (121 scripts, one process each)
+# @step 3: Offline suites (122 scripts, one process each)
 # Tollbooth CLI settles x402 + MPP from env (real CLI process vs stub facilitator; mppx + @x402/fetch buys settle once each; misconfig fails closed)
 t node scripts/test-tollbooth-cli.js
 # /tollbooth install snippet runs against the package for every mode (observe, bots, strict, all; PoW unlock, stock x402 buy vs stub facilitator)
@@ -172,6 +172,8 @@ t node scripts/test-crawl-revisit.js
 t node scripts/test-quote-weekly.js
 # An origin whose documents moved to another seller is counted on its own day; the seller they land on keeps its day and its crawl (offline)
 t node scripts/test-crawl-redirect-budget.js
+# 300 origins behind one landing host are read in turn, oldest read first, one after another; a held crawl casts no tally vote and its turn reads landing (offline)
+t node scripts/test-crawl-landing-turns.js
 # A cycle with healthy origins backed off still measures its health on them: 1000 origins, 200 dark (offline)
 t node scripts/test-crawl-cycle-health.js
 # The MPP index obeys the seller load controls: day budget, Retry-After holds, CRAWL_SLOW_ORIGINS (offline)

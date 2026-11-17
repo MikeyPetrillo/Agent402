@@ -2021,7 +2021,7 @@ jobs:
         if: matrix.shard == 1
         run: X402_INDEX_CRAWL=off node scripts/test-crawl-robots.js
 
-      - name: Offline suites (121 scripts, one process each)
+      - name: Offline suites (122 scripts, one process each)
         run: bash scripts/ci/run-step.sh test-unit-b4 3
 
   test-unit-d:

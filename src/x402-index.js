@@ -7390,6 +7390,44 @@ export function originsDueThisCycle(origins, cycle = 0, cap = CRAWL_ORIGINS_PER_
   return origins.filter((o) => due.has(o) && !slowWait(o));
 }
 
+/** The cycle's turns. Origins whose documents are read from one other
+ *  operator's host share that host's landed allowance for the day
+ *  (src/seller-load.js), and a cycle spends it first come. Such origins take
+ *  one turn together, at the place of the first of them: an array, least
+ *  recently read first (`readAt`, 0 for one never read; equal times keep the
+ *  cycle's order), read one after another. So when the allowance ends before
+ *  the last of them, each is refreshed in turn and none is read again while
+ *  another still waits; read side by side, a later one could finish while an
+ *  earlier one was held at its last request. Every other origin is its own
+ *  turn, in its place. `landingOf(origin)` is the host its documents were last
+ *  read from or held at, null when they are its own operator's. Exported for
+ *  the test. */
+export function landingTurns(due, { landingOf, readAt }) {
+  const groups = new Map();
+  for (const o of due) {
+    const to = landingOf(o);
+    const k = to ? operatorKey(to) : null;
+    if (!k || k === operatorKey(o)) continue;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(o);
+  }
+  const shared = new Map();   // origin -> its group's turn
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const turn = list.map((o, n) => ({ o, at: Number(readAt(o)) || 0, n })).sort((a, b) => a.at - b.at || a.n - b.n).map((x) => x.o);
+    for (const o of list) shared.set(o, turn);
+  }
+  if (!shared.size) return due;
+  const placed = new Set();
+  const turns = [];
+  for (const o of due) {
+    const turn = shared.get(o);
+    if (!turn) turns.push(o);
+    else if (!placed.has(turn)) { placed.add(turn); turns.push(turn); }
+  }
+  return turns;
+}
+
 /** True while a crawl cycle is running (every entry is being replaced). */
 export function crawlInProgress() { return !!crawlInFlight; }
 const runCrawlLeased = leased("x402-index-crawl", { ttlMs: 60 * 60_000, failOpen: true }, () => runCrawl());
@@ -7437,10 +7475,21 @@ async function runCrawl() {
     // before any is decided (bounded: a slow store costs the cycle its wait).
     await sellerLoad.prefetch(due);
     const oursByOrigin = new Map();
-    await runPool(due, CRAWL_CONCURRENCY, async (origin) => {
+    const takeTurn = async (origin) => {
       const outcome = { ours: false };
       const skip = await crawlScheduled(origin, outcome);
       if (skip) skipped.set(origin, skip); else oursByOrigin.set(origin, outcome.ours);
+    };
+    // Origins that share one landing host's allowance are read one after
+    // another, least recently read first (landingTurns): the rotation above
+    // alone handed each day's allowance to the same few of them.
+    const turns = landingTurns(due, {
+      landingOf: (o) => landingHeldOn.get(o) || cache.get(o)?.redirectedTo || null,
+      readAt: (o) => cache.get(o)?.fetchedAt,
+    });
+    await runPool(turns, CRAWL_CONCURRENCY, async (turn) => {
+      if (!Array.isArray(turn)) return takeTurn(turn);
+      for (const origin of turn) { try { await takeTurn(origin); } catch { /* one origin's failure does not end the others' turns */ } }
     });
     const crawled = skipped.size ? due.filter((o) => !skipped.has(o)) : due;
     // An origin backed off because its documents did not change votes as the

@@ -84,6 +84,9 @@ Loaded when an index, discovery, router or buyer file is read.
   and on the landing host's landed count, a second day's budget there: past it the request is not
   sent (`LandingHeld`), the crawl ends with the entry, history and revisit wait untouched and no
   vote in the cycle tally, and the origin's scheduled turn reads `landing` until the day rolls.
+  Origins known to land on one such host take one turn in the cycle together, read one after
+  another, least recently read first (`landingTurns`, `scripts/test-crawl-landing-turns.js`), so a
+  day's allowance refreshes each in turn and ends partway through at most one read.
   The landing host's own day, crawl and router probes never read the landed count; a new
   redirect-following crawler read passes the gate (`scripts/test-crawl-redirect-budget.js`).
   A 429 or 503 on a crawler read or

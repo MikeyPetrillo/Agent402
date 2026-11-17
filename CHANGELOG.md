@@ -54,9 +54,10 @@ Index:
   allowance. Every request that follows such a move to the other site, a
   document read or a price check, is held to 200 more a day there, apart from
   that site's own allowance: past it those requests are not sent until the
-  next day, and the moved site's listing stays as it was. The router's request
-  before a purchase for a paying caller is counted on its own and always goes
-  through.
+  next day, and the moved site's listing stays as it was. Sites that moved to
+  the same site are read one after another, the one read longest ago first, so
+  each is refreshed in turn. The router's request before a purchase for a
+  paying caller is counted on its own and always goes through.
 - A 429 or 503 from a seller pauses the crawl and the unpaid price checks for
   that host until its Retry-After, 30 minutes when it names none, and never
   longer than a day.
