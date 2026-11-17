@@ -6,6 +6,27 @@ carries its own version on npm.
 
 ## Unreleased
 
+### 2026-11-16 (settlement wording per rail, and a page for a stopped reconciliation)
+Payments:
+- Every sentence that said a payment settles only on a delivered result names
+  the rail it holds on or its exception: a Tempo transfer sent before the call
+  is final before the run and is recorded as owed if the run fails. This
+  covers the tool pages, llms.txt, skill.md, the async job answers and hints,
+  the buying-at-volume guide, the webhooks page, the wiki and the client and
+  MCP package READMEs.
+- A failed async job paid with a Tempo transfer sent before the call says the
+  transfer is recorded as owed; any other failed job says nothing was charged.
+- The /terms refunds paragraph names x402 where it says a payment settles only
+  after a call succeeds; the payments paragraph above it already stated the
+  payments that are final before a call.
+Operations:
+- /api/gateway-status reports mppReconcile.run (ok, stale, off or unknown)
+  beside the reconciliation's result, and the operator is paged when the daily
+  MPP reconciliation has run before and stops completing runs.
+- Relayed upstream error text is cleared of configured endpoint values whose
+  variable names carry a suffix after RPC or URL, such as a chain id; a
+  setting that only shares the word is left as written.
+
 ### 2026-11-16 (weather data reliability and Copernicus credits)
 Tools:
 - The weather tools read their data on a reserved service lane when the server
