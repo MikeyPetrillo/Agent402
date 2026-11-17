@@ -5568,12 +5568,12 @@ app.get("/api/sales", async (_req, res) => {
 // payment that never lands is silent by construction — the buyer got their
 // answer and nobody complains — so it needs a monitor, not a bug report.
 // Operator-gated: it names our own revenue shortfall per rail.
-app.get("/__operator/settlement-reconciliation.json", (req, res) => {
+app.get("/__operator/settlement-reconciliation.json", async (req, res) => {
   if (!operatorAuthed(req)) return operatorNotFound(req, res);
   res.set("Cache-Control", "no-store");
   try {
     const days = Math.min(Math.max(parseInt(req.query?.days, 10) || 7, 1), 60);
-    res.json(reconcileSettlements({ days }));
+    res.json(await reconcileSettlements({ days }));
   } catch (err) {
     res.status(500).json({ error: redactSecrets(err?.message) });
   }
