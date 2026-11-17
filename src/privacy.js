@@ -296,8 +296,8 @@ ${referralOn ? `  <li id="referral-links"><b>Referral links.</b> Some tools can 
   never before its validBefore has passed; one still open after ${Math.round(LATE_SETTLE_MAX_AGE_MS / 3600000)} hours, because the chain cannot be read
   or the authorization is still valid, is kept until it closes or we resolve it by hand; past a per-wallet bound on open
   records it waits in our journal until it fits; a transfer that lands is booked as owed), the 402 answer
-  and settle receipt of any x402 payment whose settlement was answered unconfirmed (other than a batched
-  payment), kept under a digest of the payment's identity (network, signed payer and nonce on an EVM chain,
+  and settle receipt of any x402 payment whose settlement was answered unconfirmed${gatewayBatched ? " (other than a batched payment)" : ""},
+  kept under a digest of the payment's identity (network, signed payer and nonce on an EVM chain,
   the transaction its chain consumes on any other) with a digest of the payer's signature (on Solana,
   Stellar and Algorand, of the signed transaction), until the authorization's validBefore plus one minute (at
   least one minute, at most ${settledValidityHoldText()}), or a day for a payment off an EVM chain or one that names no validBefore, so the same payment
