@@ -206,7 +206,7 @@ import { evmDomainsOfAccepts, domainTruthFor } from "./evm-usdc-domain.js";
 import { priceToMicroUsd, priceUsdOf, isPricedAboveZero, atomicContext, atomicAmountToDollars, tokenDecimalsOf } from "./price-usd.js";
 // Re-exported: the dataset snapshot, the server and the tests import it from here.
 export { priceToMicroUsd };
-import { queryTerms, isCjkTerm, splitTokens } from "./query-terms.js";
+import { queryTerms, isCjkTerm, splitTokens, caseRuns } from "./query-terms.js";
 import { canonicalHost, getLeaderboardSnapshot, getLeaderboardCircularWallets } from "./leaderboard.js";
 import { routeExecuteHint } from "./tools/route-execute.js";
 import { recordSellerRegistrationSeen, getSellerRegistrations, deleteSellerRegistration, ensureSellerRegistrations } from "./stats.js";
@@ -10248,6 +10248,7 @@ function decorateRemoteToolsStep(v, until = Infinity, origin = null) {
   return p.out;
 }
 const NO_ALIASES = Object.freeze([]); // shared by the 100k+ tools with none
+const NO_NAME_PARTS = Object.freeze([]); // likewise: no name with a camelCase run
 const tokenIntern = new Map();
 const TOKEN_INTERN_MAX = 500_000; // past it, tokens are kept as they come
 function internToken(tok) {
@@ -10361,7 +10362,7 @@ export function brokenListingsSummary() {
   return { total: brokenListingsTotal, origins: brokenListings.size, overflow: brokenListingsOverflow, toolsSkipped: brokenToolsSkipped, status: brokenListingsStatus().status, byOrigin };
 }
 export function _resetBrokenListingsForTest() { brokenListings.clear(); brokenRecent.clear(); brokenListingsTotal = 0; brokenListingsOverflow = 0; brokenToolsSkipped = 0; }
-const BROKEN_STATICS = Object.freeze({ broken: true, slug: "", name: "", hay: "", injected: true, excluded: true, priceRank: Infinity, aliases: NO_ALIASES, nameSlug: null, names: Object.freeze([]), nameToks: Object.freeze([]) });
+const BROKEN_STATICS = Object.freeze({ broken: true, slug: "", name: "", hay: "", injected: true, excluded: true, priceRank: Infinity, aliases: NO_ALIASES, nameSlug: null, names: Object.freeze([]), nameToks: Object.freeze([]), nameParts: NO_NAME_PARTS });
 function toolStatics(t, origin = null) {
   let st = t[TOOL_STATICS] || toolStaticsMemo.get(t);
   if (st) return st;
@@ -10469,6 +10470,7 @@ function computeToolStatics(t) {
   let st;
   const name = sellerText(t.name), slug = sellerText(t.slug);
   const tags = Array.isArray(t.tags) ? t.tags.map(sellerText) : [];
+  const rawAliases = Array.isArray(t.aliases) && t.aliases.length ? t.aliases.map(sellerText).filter(Boolean) : NO_ALIASES;
   const description = sellerText(t.description);
   const hay = `${name} ${description} ${sellerText(t.category)} ${tags.join(" ")}`.toLowerCase();
   // Our own rows are scored without their attribution sentences (legal
@@ -10515,7 +10517,7 @@ function computeToolStatics(t) {
     // (max over slug + aliases per term, never additive). Our asn-info IS an IP
     // geolocation tool but its slug says neither word, so "ip geolocation"
     // routed to a $0.05 external seller above our $0.003 one (2026-08-28).
-    aliases: Array.isArray(t.aliases) && t.aliases.length ? t.aliases.map((a) => sellerText(a).toLowerCase()).filter(Boolean) : NO_ALIASES,
+    aliases: rawAliases.length ? rawAliases.map((a) => a.toLowerCase()) : NO_ALIASES,
     // The row's own NAME in slug form ("Cron next runs" -> cron-next-runs) is an
     // implicit alias: a query that covers every word of the name is an exact
     // match for the name. Applied to EVERY row, ours and the index's alike. It
@@ -10531,8 +10533,30 @@ function computeToolStatics(t) {
     // to buy today" ranked a marketplace-crowding tool first on its name
     // sentence (2026-11-09). Every one of our own 628 names is 9 words or
     // fewer, so the rule above keeps working for every row it was built for.
-    nameSlug: (() => { const toks = splitTokens(name); const ns = toks.join("-"); return toks.length > 1 && toks.length <= NAME_SLUG_MAX_TOKENS && ns !== slug.toLowerCase() ? ns : null; })(),
+    //
+    // The word count is the name's whole folded runs: a camelCase run's parts
+    // (caseRuns) are extra words for coverage only, so "webPageToMarkdown" is
+    // one word here and "GitHub repo enrichment" stays three.
+    nameSlug: null,
+    // Index into names of a one-run camelCase name alias, or -1.
+    partsOnly: -1,
   };
+  const nameRuns = caseRuns(name);
+  {
+    const ns = nameRuns.toks.join("-");
+    // Words a reader sees: a camelCase run counts each of its parts, so a long
+    // camelCase sentence meets the same word limit as a spaced one.
+    const words = nameRuns.toks.reduce((n, _t, j) => n + ((nameRuns.parts && nameRuns.parts[j]) ? nameRuns.parts[j].length : 1), 0);
+    if (words > 1 && words <= NAME_SLUG_MAX_TOKENS && ns !== st.slug) {
+      st.nameSlug = ns;
+      // A one-run camelCase name ("GitHub", "webPageToMarkdown") scores only
+      // when the query covers every part: its whole run alone ("github") is a
+      // brand word, not a slug, and earns nothing here (main never made a
+      // one-word name an alias).
+      if (nameRuns.toks.length === 1) st.partsOnly = 1 + st.aliases.length;
+    }
+  }
+  const aliasRuns = rawAliases.map(caseRuns);
   // Every name the slug rule scores: slug, curated aliases, the name in slug
   // form. Built once here rather than per row per query.
   st.names = [st.slug, ...st.aliases, ...(st.nameSlug ? [st.nameSlug] : [])];
@@ -10540,7 +10564,12 @@ function computeToolStatics(t) {
   // repeat across 100k+ tools, and a private copy of each per tool was the
   // single largest thing the router held (63 MB of 164 MB on the
   // production-sized fixture, 2026-09-25).
-  st.nameToks = st.names.map((n) => splitTokens(n).map(internToken));
+  const runs = [caseRuns(slug), ...aliasRuns, ...(st.nameSlug ? [nameRuns] : [])];
+  st.nameToks = runs.map((r) => r.toks.map(internToken));
+  // A name's camelCase parts, aligned with nameToks (null for a name with no
+  // case boundary, the usual row): read only by the coverage rule, never
+  // scored on their own and never posted to the candidate index.
+  st.nameParts = runs.some((r) => r.parts) ? runs.map((r) => r.parts && r.parts.map((p) => p && p.map(internToken))) : NO_NAME_PARTS;
   return st;
 }
 // Whole-token test for a SHORT term (the "ip" rule) without tokenizing the
@@ -11197,7 +11226,8 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     if (st.broken) { brokenToolsSkipped++; return; } // its statics threw: never scored
     if (st.injected) return;
     if (st.offSeller) return;
-    const { name, hay, names, nameToks } = st;
+    const { name, hay, names, nameToks, nameParts } = st;
+    const partsOnly = st.partsOnly ?? -1;
     let score = 0, mSlug = 0, mName = 0, mText = 0;
     // A slug (or alias) EVERY token of which appears in the query is an exact
     // match for each of those tokens, not a substring one. Before 2026-09-10 a
@@ -11206,14 +11236,26 @@ function* routeQuerySteps({ query, top, include, networkFilter, strictNetwork = 
     // single-word slug sharing one of its words - measured on 79 of our own
     // 585 tool names, and it bites every multi-word slug in the index the same
     // way. Neutral: any row's csv-to-json is fully covered by "csv to json" too.
-    const covered = nameToks.map((toks) => toks.length > 1 && toks.every((tok) => termSet.has(tok)));
+    //
+    // A camelCase run counts as covered when the query carries the whole run
+    // or every one of its parts (caseRuns): "web page to markdown" covers
+    // webPageToMarkdown, while "github repository" scores GitHub on its whole
+    // run exactly as before, and a part alone ("ai" of OpenAI) scores nothing.
+    const covered = nameToks.map((toks, i) => {
+      const parts = nameParts[i];
+      if (i === partsOnly) return parts && parts[0] ? parts[0].every((p) => termSet.has(p)) : false;
+      if (!parts) return toks.length > 1 && toks.every((tok) => termSet.has(tok));
+      return toks.every((tok, j) => termSet.has(tok) || (parts[j] && parts[j].every((p) => termSet.has(p))));
+    });
     for (let k = 0; k < nTerms; k++) {
       const term = terms[k], short = shortTerm[k], hit = hitTerm[k];
       let slugScore = 0;
       for (let i = 0; i < names.length && slugScore < 10; i++) {
         const n = names[i];
         let s = 0;
-        if (n === term || (covered[i] && nameToks[i].includes(term))) s = 10;
+        if (i === partsOnly) {
+          if (covered[i] && nameParts[i][0].includes(term)) s = 10;
+        } else if (n === term || (covered[i] && (nameToks[i].includes(term) || (nameParts[i] && nameParts[i].some((p) => p !== null && p.includes(term)))))) s = 10;
         else if (short ? nameToks[i].includes(term) : n.includes(term)) s = 4;
         if (s > slugScore) slugScore = s;
       }

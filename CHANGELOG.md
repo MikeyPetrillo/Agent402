@@ -61,6 +61,16 @@ Operations:
   holds, without naming a seller; with ?host= it lists the requests we sent
   that host per component and minute over the last 2 days.
 
+### 2026-11-16 (camelCase seller names are read as words)
+Router:
+- /api/route also reads a camelCase seller name as words: an operationId such
+  as webPageToMarkdown or getUSDCPrice splits at its capitals (get usdc price),
+  so a multi-word query covers the name as it covers a snake_case or
+  kebab-case one. The parts are extra words beside the whole name: a
+  brand-cased name (GitHub, OpenAI, DeFi) still matches as one word and scores
+  as before, and a fragment of two letters scores nothing on its own. Query
+  words are read as before.
+
 ### 2026-11-16 (weather data reliability and Copernicus credits)
 Tools:
 - The weather tools read their data on a reserved service lane when the server
