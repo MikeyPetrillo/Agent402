@@ -109,6 +109,17 @@ export function cardPayClause({ credits = creditsSalesEnabled(), storefront = hu
   return "";
 }
 
+/** The social card's subtitle and rail tag (/card.png, /card.svg): the card
+ *  clause is scoped by cardPayClause, like the meta description. */
+export function socialCardText(toolCount, opts) {
+  const card = cardPayClause(opts);
+  const pay = card === "or by card" ? ", or by card" : card ? `; ${card}` : "";
+  return {
+    subtitle: `${Number(toolCount).toLocaleString("en-US")} tools priced in cents. USDC over x402 / MPP${pay}.`,
+    railsTag: card ? "x402 · MPP · card" : "x402 · MPP",
+  };
+}
+
 /** The home meta description: the snippet most listings copy, so its card
  *  clause is scoped by cardPayClause. */
 export function homeDescription(opts) {

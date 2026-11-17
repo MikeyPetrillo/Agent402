@@ -5,7 +5,7 @@
 // rule, JSON-LD honesty, and copy hygiene.
 import "./lib/offline-stores.js"; // per-process and file backends whatever the caller exports (see the file)
 import { stripTags } from "./lib/html-text.js";
-import { ledgerHomePage, cardPayClause, homeDescription } from "../src/ledger-home.js";
+import { ledgerHomePage, cardPayClause, homeDescription, socialCardText } from "../src/ledger-home.js";
 import { WALLET_ONLY_SLUGS } from "../src/pow.js";
 import { CATEGORY_LINE, LEAD_SENTENCE } from "../src/positioning.js";
 import { homeProofFigures } from "../src/home-proof.js";
@@ -302,6 +302,12 @@ const catalog = {
   const meta = (ledgerHomePage(BASE_URL, catalog, {}, {}, []).match(/<meta name="description" content="([^"]*)"/) || [])[1] || "";
   ok(/reports and monitors also by card/.test(meta) && !/, or by card/.test(meta), `the rendered home description reads the switches (${meta})`);
   for (const [k, v] of [["CREDITS_SALES", saved.c], ["STRIPE_SECRET_KEY", saved.s]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  // The social card (/card.png) reads the same switches.
+  const cs = socialCardText(537, { credits: false, storefront: true });
+  ok(cs.subtitle === "537 tools priced in cents. USDC over x402 / MPP; reports and monitors also by card." && cs.railsTag === "x402 · MPP · card", `social card, storefront on: card scoped to reports and monitors (${cs.subtitle})`);
+  ok(/USDC over x402 \/ MPP, or by card\.$/.test(socialCardText(537, { credits: true, storefront: true }).subtitle), "social card, credits on sale: any tool by card");
+  const cn = socialCardText(537, { credits: false, storefront: false });
+  ok(!/card/i.test(cn.subtitle) && cn.railsTag === "x402 · MPP" && /USDC over x402 \/ MPP\.$/.test(cn.subtitle), `social card, no card sale: no card on it (${cn.subtitle} | ${cn.railsTag})`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

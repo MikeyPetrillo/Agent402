@@ -708,7 +708,7 @@ import { badgeSvg } from "./badges.js";
 import { adapterDocsIndex, adapterRedirectTarget } from "./adapter-docs.js";
 import { webhooksPage } from "./webhooks.js";
 import { setOgImageVersion, setNavIndexProvider, setDecideLive, ledgerShell, ledgerFooterCompact, esc as escHtml, renderPathStore, ASSET_VERSION } from "./ledger-chrome.js";
-import { ledgerHomePage } from "./ledger-home.js";
+import { ledgerHomePage, socialCardText } from "./ledger-home.js";
 import { proofCell, homeProofFigures } from "./home-proof.js";
 import { ledgerCatalogPage } from "./ledger-catalog.js";
 import { ledgerPricingPage } from "./ledger-pricing.js";
@@ -9848,6 +9848,7 @@ const cardSvg = (width = 1200, height = 630) => {
   const ty = (height - 630 * s) / 2;
   const mono = JSON.stringify(BRAND.mono);
   const display = JSON.stringify(BRAND.display);
+  const { subtitle, railsTag } = socialCardText(n);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${BRAND_FONT_STYLE}${BRAND_DEFS}
   <rect width="${width}" height="${height}" fill="${BRAND.paper}"/>
   <g transform="translate(${tx},${ty}) scale(${s})">
@@ -9858,17 +9859,21 @@ const cardSvg = (width = 1200, height = 630) => {
   <!-- headline -->
   <text x="72" y="238" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.ink}">The web's paid door,</text>
   <text x="72" y="330" font-size="86" font-weight="600" font-family=${display} letter-spacing="-3.5" fill="${BRAND.faint}">finally open.</text>
-  <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${n.toLocaleString("en-US")} tools priced in cents. USDC over x402 / MPP; reports and monitors also by card.</text>
+  <text x="72" y="392" font-size="23" font-family=${display} fill="${BRAND.muted}">${subtitle}</text>
   <!-- handshake panel -->
   <rect x="72" y="430" width="1056" height="140" rx="16" fill="url(#panel)" stroke="${BRAND.hairline}" stroke-width="1.5"/>
   <text x="100" y="472" font-size="19" font-family=${mono} fill="${BRAND.faint}">$ curl agent402.tools/api/whois?domain=example.com</text>
   <text x="100" y="506" font-size="19" font-family=${mono} fill="${BRAND.amber}">HTTP/2 402  <tspan fill="${BRAND.muted}">payment-required: usdc · base · 0.001</tspan></text>
   <text x="100" y="540" font-size="19" font-family=${mono} fill="${BRAND.accent}">HTTP/2 200  <tspan fill="${BRAND.muted}">payment-response: settled · tx 0x9ec4…</tspan></text>
-  <text x="1100" y="472" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">x402 · MPP · card</text>
+  <text x="1100" y="472" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${railsTag}</text>
   <text x="1100" y="506" font-size="15" font-family=${mono} text-anchor="end" fill="${BRAND.faint}">${RAILS.length} rails · USDC · USDG</text>
   </g>
 </svg>`;
 };
+// The card URL's version (set at boot by tool count, above) also carries a
+// short hash of the card itself, so a crawler refetches when its text changes
+// (the card clause follows the sales switches) and not only its count.
+setOgImageVersion(`${Object.keys(CATALOG).length}.${createHash("sha256").update(cardSvg()).digest("hex").slice(0, 8)}`);
 // X (Twitter) profile header, 1500x500 - the platform's own spec. Designed for
 // how X actually crops it: the avatar sits over the BOTTOM-LEFT, the sides are
 // shaved on narrow viewports, and the bottom strip is covered by profile text
