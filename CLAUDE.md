@@ -68,8 +68,10 @@ LLC: credit the entity, never a personal name.
   (`markEndsAtCeiling`, `src/run-ceiling.js`), set beside the handler, slug by slug; the mark is what
   lets `/ref` serve it, so a handler that gains a wait the ceiling cannot end loses the mark in the
   same change (`scripts/test-run-ceiling.js`).
-- A sale on `/ref` is booked on the private rail `referral` (`src/paid-rails.js`): no public reader
-  of the ledger returns it, and the direct routes' breakers, counters and status words do not count it.
+- A sale on `/ref` is booked once on the private rail `referral` (`src/paid-rails.js`): every public
+  sales figure (`/api/sales`, rankings, the scorecard) counts it at the buyer's price and names the rail
+  `marketplace`, `/api/stats` counts it as a paid call, only the operator's margin view reads its net,
+  and the direct routes' settle breaker, status words, tool-call log and failure monitor do not count it.
 - Nothing a `/ref` route answers points a buyer at this server's own surfaces (catalog, prices, docs,
   a direct route), and a `/ref` copy is sold at the price listed for the same call on the public
   route: a slug whose published example names this host, or that the public route gives for less

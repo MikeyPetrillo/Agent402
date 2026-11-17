@@ -177,15 +177,17 @@ export function createReferralChainReader({ rpcUrls = null, rpcUrl = null, publi
    * `fromBlock`: the head when the intent was written; the search runs from
    * there to the head, so a late read still finds an early payment.
    * `wait`: keep reading for a spent nonce until the budget ends.
+   * `budgetMs`: this call's own budget, when under the reader's.
    */
-  async function state({ from, nonce, payTo, amount, fromBlock = null, minNet = null, productId = null }, { wait = false } = {}) {
+  async function state({ from, nonce, payTo, amount, fromBlock = null, minNet = null, productId = null }, { wait = false, budgetMs: callBudgetMs = null } = {}) {
     const none = { used: null, paid: null, transaction: null, complete: false };
     // A search is complete only from a head recorded before the payment could be spent.
     const anchored = Number.isSafeInteger(fromBlock) && fromBlock > 0;
     let data;
     try { data = authorizationStateCalldata(from, nonce); } catch { return none; }
     const started = now();
-    const deadline = started + budgetMs;
+    // `budgetMs` of one call: a caller with less time than the reader's own budget.
+    const deadline = started + (Number.isFinite(callBudgetMs) && callBudgetMs > 0 ? Math.min(budgetMs, callBudgetMs) : budgetMs);
     let last = null;
     for (let i = 0; i < tries; i++) {
       const left = deadline - now();
