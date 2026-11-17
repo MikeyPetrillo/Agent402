@@ -13,7 +13,7 @@
 import { loadTesseract } from "./lazy-deps.js";
 import { safeFetch } from "./fetch-guard.js";
 import { admissionCallerOf } from "../dispatch-caller.js";
-import { createCallerPlaces } from "../caller-places.js";
+import { createCallerPlaces, placeKeysOf } from "../caller-places.js";
 import { notChargedOn } from "../not-charged.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -416,9 +416,13 @@ export const DECODE_FAILURE = /attempting to read image|pixRead|Aborted\(|ERR_OU
 // images never wait here. The slot is held until the worker that read the
 // image has terminated (its memory is gone), up to OCR_LARGE_RETIRE_WAIT_MS.
 //
-// Admission is per caller (the signed payer, a credits key, a Tempo sender,
-// else the client address; for a step an in-process executor runs, the caller
-// of the call that dispatched it, src/dispatch-caller.js): a caller with nothing in the slot or its queue
+// Admission is per caller (every key its request carries: the signed payer, a
+// credits key, a Tempo sender and the client address; for a step an
+// in-process executor runs, those of the call that dispatched it,
+// src/dispatch-caller.js), counted under each key (src/caller-places.js). A
+// queued place is taken back only by the holder's strongest key (its signed
+// payer, credits key or Tempo sender; the address only for a caller that signs
+// nothing), so buyers who share an address never bump each other: a caller with nothing in the slot or its queue
 // is never refused for want of room while a queued place belongs to a caller
 // that already holds the slot or another place. That place goes to it, and
 // the caller it was taken from is answered 503 (not charged), so one caller's
@@ -480,7 +484,7 @@ function releaseLargeSlot(who = null) {
 /** Test hook for the large-image slot. */
 export const __ocrLargeTest = {
   acquire: acquireLargeSlot,
-  state: () => ({ busy: largeBusy, waiting: largeWaiters.length, holder: largeHolder, callers: largeCallers.callers() }),
+  state: () => ({ busy: largeBusy, waiting: largeWaiters.length, holder: largeHolder == null ? null : placeKeysOf(largeHolder)[0], callers: largeCallers.callers() }),
   recognize: doRecognize,
 };
 

@@ -13,7 +13,7 @@ import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir, availableParallelism } from "node:os";
 import { join } from "node:path";
 import { safeFetch } from "./fetch-guard.js";
-import { currentDispatchCaller, IN_PROCESS_CALLER } from "../dispatch-caller.js";
+import { currentDispatchCallerKeys, IN_PROCESS_CALLER } from "../dispatch-caller.js";
 import { createCallerPlaces } from "../caller-places.js";
 
 const MAX_MEDIA_BYTES = 30 * 1024 * 1024;
@@ -375,8 +375,9 @@ export function measureQueueMaxBytes(size = measurePoolSize()) {
 }
 let measureQueuedBytes = 0;
 // Admission is per caller (`who`: src/dispatch-caller.js admissionCallerOf,
-// the signed payer, a credits key, a Tempo sender, else the client address
-// with an IPv6 one folded to its /64; for a step an in-process executor runs,
+// every key the request carries: the signed payer, a credits key, a Tempo
+// sender and the client address with an IPv6 one folded to its /64, each
+// counted, src/caller-places.js; for a step an in-process executor runs,
 // the caller that dispatched it). Each caller's slots and queued places are
 // counted (src/caller-places.js): when the queue is full, a caller holding
 // nothing takes the newest queued places of callers holding more than one
@@ -503,7 +504,7 @@ export const AUDIO_DEMUXERS = Object.freeze(["mp3", "aac", "mov", "matroska", "o
 async function decodeInMeasurePool(buffer, prefix, outArgs, done, { format = null, counter = false, deadlineAt = null, who = null } = {}) {
   // The caller the place is held for: the one passed in, else the caller an
   // in-process executor runs this call for, else the one shared key.
-  const caller = who || currentDispatchCaller() || IN_PROCESS_CALLER;
+  const caller = who || currentDispatchCallerKeys() || IN_PROCESS_CALLER;
   const first = format || inputFormatOf(buffer);
   const order = [...(first ? [first] : []), ...AUDIO_DEMUXERS.filter((f) => f !== first)];
   const budgeted = Number.isFinite(deadlineAt);

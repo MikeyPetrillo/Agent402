@@ -17,7 +17,17 @@
 // cited as the source of its reference rates
 // (https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html),
 // in src/tools/frankfurter.js; the U.S. Treasury's yield curve (a U.S.
-// government work, credit requested) in src/tools/macro-kit.js.
+// government work, credit requested) in src/tools/macro-kit.js. Open-Meteo's
+// air quality and reanalysis data come from Copernicus services, whose
+// licences ask for their own credit beside Open-Meteo's: the air quality API
+// docs (open-meteo.com/en/docs/air-quality-api) require attribution to the
+// CAMS ENSEMBLE data provider, and the Copernicus licence (open-meteo.com/en/licence)
+// asks for "Contains modified Copernicus ... information" where the data is
+// processed (air quality answers carry a computed AQI; the archive is ERA5
+// reanalysis) and, in clause 5.1.3, the disclaimer that neither the European
+// Commission nor ECMWF is responsible for any use of it. Those tools carry a
+// combined key (Open-Meteo's sentence, the Copernicus one, the disclaimer),
+// so the run of sentences stays one tail.
 export const FRED_NOTICE ="This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.";
 // CoinGecko's API terms ask for the credit with a link to its API page,
 // shown next to the data: the description sentence carries the link, and
@@ -32,6 +42,12 @@ export const OPEN_METEO_ATTRIBUTION = "Weather data by Open-Meteo.com (CC BY 4.0
 export const NVD_NOTICE = "This product uses the NVD API but is not endorsed or certified by the NVD.";
 export const ECB_ATTRIBUTION = "Source: European Central Bank.";
 export const US_TREASURY_ATTRIBUTION = "Source: U.S. Treasury.";
+export const CAMS_ATTRIBUTION = "Contains modified Copernicus Atmosphere Monitoring Service information (CAMS ENSEMBLE data provider).";
+export const C3S_ATTRIBUTION = "Contains modified Copernicus Climate Change Service information.";
+export const COPERNICUS_DISCLAIMER = "Neither the European Commission nor ECMWF is responsible for any use that may be made of the Copernicus information or data it contains.";
+/** The Copernicus credit an answer carries: its sentence, then the disclaimer. */
+export const CAMS_CREDIT = `${CAMS_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
+export const C3S_CREDIT = `${C3S_ATTRIBUTION} ${COPERNICUS_DISCLAIMER}`;
 
 /** Source key (a tool's `attribution` field) -> the sentence its terms require. */
 export const ATTRIBUTIONS = Object.freeze({
@@ -43,6 +59,8 @@ export const ATTRIBUTIONS = Object.freeze({
   nvd: NVD_NOTICE,
   ecb: ECB_ATTRIBUTION,
   "us-treasury": US_TREASURY_ATTRIBUTION,
+  "open-meteo-cams": `${OPEN_METEO_ATTRIBUTION} ${CAMS_CREDIT}`,
+  "open-meteo-c3s": `${OPEN_METEO_ATTRIBUTION} ${C3S_CREDIT}`,
 });
 
 /** Every sentence the listing cut keeps when a description ends with it. */
@@ -83,7 +101,9 @@ export function packAttributions(toolSlugs, toolBySlug) {
     const key = toolBySlug(slug)?.attribution;
     if (key && ATTRIBUTIONS[key] && !keys.includes(key)) keys.push(key);
   }
-  return keys.map((k) => ATTRIBUTIONS[k]);
+  const sentences = keys.map((k) => ATTRIBUTIONS[k]);
+  // A combined key holds a shorter one's sentence: keep only the longer.
+  return sentences.filter((x) => !sentences.some((y) => y !== x && y.includes(x)));
 }
 
 /** `text` followed by each of `sentences` it does not already end with. */
@@ -100,7 +120,8 @@ export function withAttributions(text, sentences) {
  *  matches a tool by its notice. */
 export function withoutAttributions(text) {
   let s = String(text ?? "");
-  for (const t of ATTRIBUTION_TAILS) if (s.includes(t)) s = s.split(t).join(" ");
+  // Longest first, so a combined sentence leaves no part of itself behind.
+  for (const t of [...ATTRIBUTION_TAILS].sort((a, b) => b.length - a.length)) if (s.includes(t)) s = s.split(t).join(" ");
   return s;
 }
 

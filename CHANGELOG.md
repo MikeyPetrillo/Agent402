@@ -14,6 +14,19 @@ Tools:
   answer that includes a coin figure carries it too, and a skill pack that
   runs a CoinGecko tool prints it once, on the pack's answer.
 
+### 2026-11-16 (weather data reliability and Copernicus credits)
+Tools:
+- The weather tools read their data on a reserved service lane when the server
+  holds a weather data key, and a refusal of that key answers a temporary
+  error that names our side, not the buyer's input, while /api/gateway-status
+  reports openMeteo (off, unknown, ok or refused) and the operator is paged on
+  refused.
+- weather-air-quality credits the Copernicus Atmosphere Monitoring Service and
+  weather-history credits the Copernicus Climate Change Service, each with the
+  Copernicus disclaimer, in each tool's description and in a credit field on
+  each answer, beside the Open-Meteo credit; weather-history states its range
+  as 1940 to the most recent days.
+
 ### 2026-11-16 (test and CI servers no longer crawl seller hosts)
 Operations:
 - Test and CI servers no longer crawl seller hosts: the x402 and MPP index

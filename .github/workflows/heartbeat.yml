@@ -1004,6 +1004,29 @@ jobs:
             gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "mppSubscriptions is ${STATUS}; closing." || true
           fi
 
+      # The weather kit's Open-Meteo reads (openMeteo, server.js): refused
+      # pages (the last keyed outcome was a refusal); ok and off
+      # clear; unknown and absent do neither.
+      # The status Worker runs the same check under the same title.
+      - name: Open-Meteo keyed reads check (alarm when a keyed request is refused)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$(curl -s --max-time 15 "$PROD/api/gateway-status" | jq -r '.openMeteo.status // "unknown"' 2>/dev/null || echo unknown)
+          echo "openMeteo: $STATUS"
+          TITLE="Open-Meteo keyed reads REFUSED"
+          EXISTING=$(ISSUE_TITLE="$TITLE" gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number,title --jq '[.[] | select(.title == env.ISSUE_TITLE)][0].number // empty' 2>/dev/null || echo "")
+          if [ "$STATUS" = "refused" ]; then
+            if [ -z "$EXISTING" ]; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+                --body "/api/gateway-status reports openMeteo.status=refused: Open-Meteo refused the weather tools' keyed requests (two in a row, or one bad-request answer naming the API key) with no keyed success since (the key was not accepted, or does not cover that API), so those calls answer a temporary service error. Read the [open-meteo] keyed request refused line in the server log on Railway, then check OPEN_METEO_API_KEY and the Open-Meteo account. Auto-closes when the word reads ok or off." || true
+            fi
+          elif { [ "$STATUS" = "ok" ] || [ "$STATUS" = "off" ]; } && [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" --comment "openMeteo is ${STATUS}; closing." || true
+          fi
+
       # Exa daily spend (src/tools/exa-kit.js): the same words as xDataSpend.
       # Apart from the prepaid allowance step above, which reads exaAllowance.
       - name: Exa daily spend over its ceiling

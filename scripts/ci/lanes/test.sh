@@ -4,13 +4,15 @@
 # scripts/ci/run-step.sh defines `t` and evaluates the section, so each line runs
 # exactly as it would inside the step's own run block.
 
-# @step 1: Offline suites (16 scripts, one process each)
+# @step 1: Offline suites (17 scripts, one process each)
 # Deterministic correctness proofs run FIRST — a flaky live upstream
 # (e.g. data.gov downtime) must never mask whether the tools actually work.
 # Secret-leak guard (canary keys never reach responses, caches, or errors; gateway cost-strip — offline)
 t node scripts/test-leak-guard.js
 # Tool errors: the route binder and the error log scrub configured secrets and credential-bearing URLs (own port-0 boot)
 t node scripts/test-tool-error-redaction.js
+# Weather kit: keyed Open-Meteo hosts and apikey only with the key, a keyed 429 is an uncharged 503 with no public-host fallback, no key in errors or logs (offline)
+t node scripts/test-open-meteo-keyed.js
 # Paid-canary verdict (pages on real buying breaks, warns on upstream)
 t node scripts/test-paid-canary.js
 # derivatives kit (offline)
