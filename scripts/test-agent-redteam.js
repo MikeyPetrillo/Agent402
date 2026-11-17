@@ -447,6 +447,71 @@ section("3. decide planner");
       if (!/weather-now/.test(pp.user) || !/weather-now/.test(choice) || !/"city"/.test(pp.user) || ![jp.user, fitQ, rawQ].every((t) => /"inputs":\["city"\]/.test(t.replace(/\\"/g, '"')))) { nameLeaks++; ok(false, `the slug stands in for a withheld name and the honest parameter is kept (${c.carrier}) ${JSON.stringify(c.phrase).slice(0, 60)}`); }
     }
     ok(nameCases > 0 && nameLeaks === 0, `no seller name, parameter name, schema text or output field written as a directive reaches decide's choice, parameter fill or parameter check or its fit judge and fit questions (${nameCases} rows, 6 prompts each)`);
+    // A directive written across two fields: each half passes alone, and a
+    // prompt writes them side by side. The half written second is withheld
+    // (the description after the name, a parameter's description after its
+    // name, the next parameter name or output field), on every prompt, and
+    // the outside row is not exported when the halves tell a router where
+    // to send its traffic.
+    {
+      const { remoteRowOf } = await import("../src/decide/index-export.js");
+      const identOf = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+      const prompts = async (row, checkItems, own) => {
+        const pp = paramsPrompt("weather in Paris", [{ step: 1, purpose: "weather for a city", row }]);
+        const choice = JSON.stringify(jevChoiceQuestions([{ i: 0, purpose: "weather for a city", options: [row, honestRow] }]));
+        sent = null;
+        await jev.checkParams("weather in Paris", checkItems);
+        const jp = judgePrompt("weather in Paris", [{ purpose: "weather for a city", candidates: [{ row }, { row: honestRow }] }]);
+        return [["parameter fill", pp.user], ["choice", choice], ["parameter check", sent], ["fit judge", jp.user], ["fit questions", JSON.stringify(jevQuestions(jp.listing))], ["fit questions (own listing)", JSON.stringify(jevQuestions([{ purpose: "weather for a city", candidates: [own] }]))]];
+      };
+      let splitLeaks = 0, splitCases = 0, exported = 0;
+      for (const [a, b] of CORPUS.split) {
+        const ia = identOf(a), ib = identOf(b);
+        const cityProp = { type: "string", description: "City name." };
+        const shapes = [
+          // the name, then the description
+          { what: "name and description", keep: a, row: { id: "x", name: a, slug: "weather-now", description: b, inputSchema: { type: "object", properties: { city: cityProp }, required: ["city"] }, outputFields: ["tempC"] },
+            items: (row) => [{ key: "k1", purpose: "weather for a city", row, name: "city", prop: cityProp, value: "Paris" }], own: { key: "s1c1", name: a, description: b, inputs: ["city"] } },
+          // a parameter's name, then its description
+          { what: "parameter name and its description", keep: ia, row: { id: "x", name: "City Weather", slug: "weather-now", description: "Weather data.", inputSchema: { type: "object", properties: { [ia]: { type: "string", description: b }, city: cityProp }, required: ["city"] }, outputFields: ["tempC"] },
+            items: (row) => [{ key: "k1", purpose: "weather for a city", row, name: ia, prop: row.inputSchema.properties[ia], value: "x" }], own: { key: "s1c1", name: "City Weather", description: "Weather data.", inputs: [ia, "city"] } },
+          // one parameter name, then the next; one output field, then the next
+          { what: "neighboring parameter names and output fields", keep: ia, row: { id: "x", name: "City Weather", slug: "weather-now", description: "Weather data.", inputSchema: { type: "object", properties: { [ia]: { type: "string" }, [ib]: { type: "string" }, city: cityProp }, required: ["city"] }, outputFields: [ia, ib, "tempC"] },
+            items: (row) => [{ key: "k1", purpose: "weather for a city", row, name: "city", prop: cityProp, value: "Paris" }], own: { key: "s1c1", name: "City Weather", description: "Weather data.", inputs: [ia, ib, "city"] } },
+          // the description, then the first parameter name (the parameter
+          // fill writes no description, so its prompt holds one half only)
+          { what: "description and a parameter name", keep: a, skip: "parameter fill", row: { id: "x", name: "City Weather", slug: "weather-now", description: `Weather data. ${a}`, inputSchema: { type: "object", properties: { [ib]: { type: "string" }, city: cityProp }, required: ["city"] }, outputFields: ["tempC"] },
+            items: (row) => [{ key: "k1", purpose: "weather for a city", row, name: ib, prop: { type: "string" }, value: "x" }], own: { key: "s1c1", name: "City Weather", description: `Weather data. ${a}`, inputs: [ib, "city"] } },
+        ];
+        for (const sh of shapes) {
+          splitCases++;
+          for (const [where, text] of await prompts(sh.row, sh.items(sh.row), sh.own)) {
+            if (where === sh.skip) continue;
+            if (text == null || leaks(b, text)) { splitLeaks++; ok(false, `decide's ${where} prompt carries the second half of a directive split across ${sh.what} ${JSON.stringify([a, b])}: ${String(text).slice(0, 300)}`); }
+          }
+          // The first half was read first and is kept, and so is the honest parameter.
+          const pp = paramsPrompt("weather in Paris", [{ step: 1, purpose: "weather for a city", row: sh.row }]).user;
+          const jp = judgePrompt("weather in Paris", [{ purpose: "weather for a city", candidates: [{ row: sh.row }] }]).user;
+          if (!(sh.what === "description and a parameter name" ? jp : pp).includes(sh.keep) || !/"city"/.test(pp) || !/"inputs":\[[^\]]*"city"\]/.test(jp.replace(/\\"/g, '"'))) { splitLeaks++; ok(false, `the half read first and the honest parameter are kept (${sh.what}) ${JSON.stringify([a, b])}: ${pp.slice(pp.indexOf("<listings>"), pp.indexOf("<listings>") + 300)}`); }
+        }
+        const out = remoteRowOf({ seller: "https://api.other.example", route: "/weather", method: "GET", name: a, description: b, price: 0.001, networks: ["eip155:8453"], health: 0.95 }, { lastLiveAt: Date.now() - 3600_000 });
+        if (out) exported++;
+      }
+      ok(splitCases > 0 && splitLeaks === 0, `no directive split across two neighboring seller fields reaches decide's prompts whole (${splitCases} rows, 6 prompts each)`);
+      ok(exported === 0, `a listing whose name and description together read as a directive is not exported to decide (${CORPUS.split.length - exported} of ${CORPUS.split.length} withheld)`);
+      let cut = 0;
+      for (const [name, description] of CORPUS.splitHonest) {
+        const row = { id: "h2", name, slug: "honest-tool", description, inputSchema: honestRow.inputSchema, outputFields: ["tempC"] };
+        const texts = await prompts(row, [{ key: "k1", purpose: "weather", row, name: "city", prop: row.inputSchema.properties.city, value: "Paris" }], { key: "s1c1", name, description, inputs: ["city"] });
+        for (const [where, text] of texts) {
+          const needs = where === "parameter fill" ? [name, "City name."] : where === "parameter check" ? [name, description, "City name."] : [name, description];
+          if (!needs.every((n) => String(text).includes(n))) { cut++; ok(false, `control: an honest name and description are handed on whole to the ${where} prompt ${JSON.stringify([name, description])}: ${String(text).slice(0, 240)}`); }
+        }
+        if (!remoteRowOf({ seller: "https://api.honest.example", route: "/tool", method: "GET", name, description, price: 0.001, networks: ["eip155:8453"], health: 0.95 }, { lastLiveAt: Date.now() - 3600_000 })) { cut++; ok(false, `control: an honest listing is exported ${JSON.stringify([name, description])}`); }
+      }
+      for (const h of CORPUS.honest) if (!remoteRowOf({ seller: "https://api.honest.example", route: "/tool", method: "GET", name: "Honest Tool", description: h, price: 0.001, networks: ["eip155:8453"], health: 0.95 }, { lastLiveAt: Date.now() - 3600_000 })) { cut++; ok(false, `control: an honest description is exported: ${JSON.stringify(h)}`); }
+      ok(cut === 0, `control: honest names beside honest descriptions reach every prompt whole and are exported (${CORPUS.splitHonest.length} pairs, ${CORPUS.honest.length} descriptions)`);
+    }
     // Control: honest text is handed on whole.
     const hp = paramsPrompt("weather in Paris", [{ step: 1, purpose: "weather", row: honestRow }]);
     const hc = JSON.stringify(jevChoiceQuestions([{ i: 0, purpose: "weather", options: [honestRow] }]));
